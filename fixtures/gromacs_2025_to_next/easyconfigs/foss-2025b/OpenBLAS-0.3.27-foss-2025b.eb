@@ -1,0 +1,5 @@
+name = 'OpenBLAS'
+version = '0.3.27'
+toolchain = {'name': 'foss', 'version': '2025b'}
+dependencies = [
+]

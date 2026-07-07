@@ -1,0 +1,21 @@
+{
+  "toolchain": {
+    "name": "foss",
+    "version": "2025b"
+  },
+  "roots": [
+    "GROMACS"
+  ],
+  "pins": [
+    {
+      "name": "OpenBLAS",
+      "version_req": "==0.3.24"
+    }
+  ],
+  "forbid": [],
+  "objective": "prefer_newer",
+  "require_upgrade": {
+    "name": "GROMACS",
+    "relative_to_baseline": true
+  }
+}

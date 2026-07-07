@@ -1,0 +1,167 @@
+{
+  "toolchain": {
+    "name": "foss",
+    "version": "2025b"
+  },
+  "generation_label": "2025b-next-stack",
+  "candidates": [
+    {
+      "name": "OpenBLAS",
+      "version": "0.3.23",
+      "toolchain": {
+        "name": "foss",
+        "version": "2025b"
+      },
+      "versionsuffix": null,
+      "easyconfig_path": "o/OpenBLAS/OpenBLAS-0.3.23-foss-2025b.eb",
+      "dependencies": []
+    },
+    {
+      "name": "OpenBLAS",
+      "version": "0.3.24",
+      "toolchain": {
+        "name": "foss",
+        "version": "2025b"
+      },
+      "versionsuffix": null,
+      "easyconfig_path": "o/OpenBLAS/OpenBLAS-0.3.24-foss-2025b.eb",
+      "dependencies": []
+    },
+    {
+      "name": "OpenBLAS",
+      "version": "0.3.27",
+      "toolchain": {
+        "name": "foss",
+        "version": "2025b"
+      },
+      "versionsuffix": null,
+      "easyconfig_path": "o/OpenBLAS/OpenBLAS-0.3.27-foss-2025b.eb",
+      "dependencies": []
+    },
+    {
+      "name": "FFTW",
+      "version": "3.3.10",
+      "toolchain": {
+        "name": "foss",
+        "version": "2025b"
+      },
+      "versionsuffix": null,
+      "easyconfig_path": "f/FFTW/FFTW-3.3.10-foss-2025b.eb",
+      "dependencies": [
+        {
+          "name": "OpenBLAS",
+          "version_req": ">=0.3.23"
+        },
+        {
+          "name": "OpenMPI",
+          "version_req": ">=4.1.5"
+        }
+      ]
+    },
+    {
+      "name": "OpenMPI",
+      "version": "4.1.5",
+      "toolchain": {
+        "name": "foss",
+        "version": "2025b"
+      },
+      "versionsuffix": null,
+      "easyconfig_path": "o/OpenMPI/OpenMPI-4.1.5-foss-2025b.eb",
+      "dependencies": []
+    },
+    {
+      "name": "OpenMPI",
+      "version": "4.1.6",
+      "toolchain": {
+        "name": "foss",
+        "version": "2025b"
+      },
+      "versionsuffix": null,
+      "easyconfig_path": "o/OpenMPI/OpenMPI-4.1.6-foss-2025b.eb",
+      "dependencies": []
+    },
+    {
+      "name": "OpenMPI",
+      "version": "5.0.3",
+      "toolchain": {
+        "name": "foss",
+        "version": "2025b"
+      },
+      "versionsuffix": null,
+      "easyconfig_path": "o/OpenMPI/OpenMPI-5.0.3-foss-2025b.eb",
+      "dependencies": []
+    },
+    {
+      "name": "GROMACS",
+      "version": "2024.1",
+      "toolchain": {
+        "name": "foss",
+        "version": "2025b"
+      },
+      "versionsuffix": null,
+      "easyconfig_path": "g/GROMACS/GROMACS-2024.1-foss-2025b.eb",
+      "dependencies": [
+        {
+          "name": "OpenBLAS",
+          "version_req": ">=0.3.23"
+        },
+        {
+          "name": "OpenMPI",
+          "version_req": ">=4.1.5"
+        },
+        {
+          "name": "FFTW",
+          "version_req": ">=3.3.10"
+        }
+      ]
+    },
+    {
+      "name": "GROMACS",
+      "version": "2024.4",
+      "toolchain": {
+        "name": "foss",
+        "version": "2025b"
+      },
+      "versionsuffix": null,
+      "easyconfig_path": "g/GROMACS/GROMACS-2024.4-foss-2025b.eb",
+      "dependencies": [
+        {
+          "name": "OpenBLAS",
+          "version_req": ">=0.3.24"
+        },
+        {
+          "name": "OpenMPI",
+          "version_req": ">=4.1.6"
+        },
+        {
+          "name": "FFTW",
+          "version_req": ">=3.3.10"
+        }
+      ]
+    },
+    {
+      "name": "GROMACS",
+      "version": "2025.0",
+      "toolchain": {
+        "name": "foss",
+        "version": "2025b"
+      },
+      "versionsuffix": null,
+      "easyconfig_path": "g/GROMACS/GROMACS-2025.0-foss-2025b.eb",
+      "dependencies": [
+        {
+          "name": "OpenBLAS",
+          "version_req": ">=0.3.27"
+        },
+        {
+          "name": "OpenMPI",
+          "version_req": ">=4.1.6"
+        },
+        {
+          "name": "FFTW",
+          "version_req": ">=3.3.10"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "toolchain": {
+    "name": "foss",
+    "version": "2025b"
+  },
+  "roots": [
+    "GROMACS"
+  ],
+  "pins": [
+    {
+      "name": "OpenMPI",
+      "version_req": "==4.1.5"
+    },
+    {
+      "name": "GROMACS",
+      "version_req": ">=2025.0"
+    }
+  ],
+  "forbid": [],
+  "objective": "prefer_newer",
+  "require_upgrade": null
+}

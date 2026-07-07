@@ -1,0 +1,6 @@
+name = 'ExactPinDemo'
+version = '1.0'
+toolchain = {'name': 'foss', 'version': '2025b'}
+dependencies = [
+    ('OpenMPI', '4.1.6'),
+]

@@ -1,0 +1,146 @@
+{
+  "bomFormat": "CycloneDX",
+  "components": [
+    {
+      "bom-ref": "pkg:generic/FFTW@3.3.10?toolchain=foss-2025b",
+      "name": "FFTW",
+      "properties": [
+        {
+          "name": "easybuild:toolchain",
+          "value": "foss-2025b"
+        },
+        {
+          "name": "easybuild:easyconfig_path",
+          "value": "foss-2025b/FFTW-3.3.10-foss-2025b.eb"
+        },
+        {
+          "name": "eb_stack:lifecycle",
+          "value": "pre-install-plan"
+        }
+      ],
+      "purl": "pkg:generic/FFTW@3.3.10?toolchain=foss-2025b",
+      "type": "library",
+      "version": "3.3.10"
+    },
+    {
+      "bom-ref": "pkg:generic/GROMACS@2025.0?toolchain=foss-2025b",
+      "name": "GROMACS",
+      "properties": [
+        {
+          "name": "easybuild:toolchain",
+          "value": "foss-2025b"
+        },
+        {
+          "name": "easybuild:easyconfig_path",
+          "value": "foss-2025b/GROMACS-2025.0-foss-2025b.eb"
+        },
+        {
+          "name": "eb_stack:lifecycle",
+          "value": "pre-install-plan"
+        }
+      ],
+      "purl": "pkg:generic/GROMACS@2025.0?toolchain=foss-2025b",
+      "type": "library",
+      "version": "2025.0"
+    },
+    {
+      "bom-ref": "pkg:generic/OpenBLAS@0.3.27?toolchain=foss-2025b",
+      "name": "OpenBLAS",
+      "properties": [
+        {
+          "name": "easybuild:toolchain",
+          "value": "foss-2025b"
+        },
+        {
+          "name": "easybuild:easyconfig_path",
+          "value": "foss-2025b/OpenBLAS-0.3.27-foss-2025b.eb"
+        },
+        {
+          "name": "eb_stack:lifecycle",
+          "value": "pre-install-plan"
+        }
+      ],
+      "purl": "pkg:generic/OpenBLAS@0.3.27?toolchain=foss-2025b",
+      "type": "library",
+      "version": "0.3.27"
+    },
+    {
+      "bom-ref": "pkg:generic/OpenMPI@5.0.3?toolchain=foss-2025b",
+      "name": "OpenMPI",
+      "properties": [
+        {
+          "name": "easybuild:toolchain",
+          "value": "foss-2025b"
+        },
+        {
+          "name": "easybuild:easyconfig_path",
+          "value": "foss-2025b/OpenMPI-5.0.3-foss-2025b.eb"
+        },
+        {
+          "name": "eb_stack:lifecycle",
+          "value": "pre-install-plan"
+        }
+      ],
+      "purl": "pkg:generic/OpenMPI@5.0.3?toolchain=foss-2025b",
+      "type": "library",
+      "version": "5.0.3"
+    }
+  ],
+  "dependencies": [
+    {
+      "dependsOn": [
+        "pkg:generic/OpenBLAS@0.3.27?toolchain=foss-2025b",
+        "pkg:generic/OpenMPI@5.0.3?toolchain=foss-2025b"
+      ],
+      "ref": "pkg:generic/FFTW@3.3.10?toolchain=foss-2025b"
+    },
+    {
+      "dependsOn": [
+        "pkg:generic/OpenBLAS@0.3.27?toolchain=foss-2025b",
+        "pkg:generic/OpenMPI@5.0.3?toolchain=foss-2025b",
+        "pkg:generic/FFTW@3.3.10?toolchain=foss-2025b"
+      ],
+      "ref": "pkg:generic/GROMACS@2025.0?toolchain=foss-2025b"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:generic/OpenBLAS@0.3.27?toolchain=foss-2025b"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:generic/OpenMPI@5.0.3?toolchain=foss-2025b"
+    }
+  ],
+  "metadata": {
+    "component": {
+      "description": "Planned EasyBuild stack inventory from eb-stack lock (pre-install; not a post-build compliance scan)",
+      "name": "easybuild-stack-foss-2025b",
+      "type": "application",
+      "version": "foss-2025b"
+    },
+    "properties": [
+      {
+        "name": "eb_stack:document_kind",
+        "value": "planned-sbom-from-lock"
+      },
+      {
+        "name": "eb_stack:solver_engine",
+        "value": "resolvo_cdcl_sat"
+      },
+      {
+        "name": "eb_stack:toolchain",
+        "value": "foss-2025b"
+      }
+    ],
+    "timestamp": "STABLE",
+    "tools": [
+      {
+        "name": "eb-stack",
+        "vendor": "SURF",
+        "version": "resolvo+eb_stack-0.2.0"
+      }
+    ]
+  },
+  "specVersion": "1.5",
+  "version": 1
+}

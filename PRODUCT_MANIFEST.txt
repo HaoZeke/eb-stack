@@ -1,0 +1,5 @@
+product=eb-stack
+repo=private standalone (not a monorepo member)
+package=eb_stack
+binary=eb-stack
+engine=resolvo_cdcl_sat

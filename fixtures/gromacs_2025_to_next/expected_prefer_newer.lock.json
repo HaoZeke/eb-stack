@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "toolchain": {
+    "name": "foss",
+    "version": "2025b"
+  },
+  "generation_label": "foss-2025b",
+  "packages": [
+    {
+      "name": "FFTW",
+      "version": "3.3.10",
+      "toolchain": {
+        "name": "foss",
+        "version": "2025b"
+      },
+      "versionsuffix": null,
+      "easyconfig_path": "foss-2025b/FFTW-3.3.10-foss-2025b.eb"
+    },
+    {
+      "name": "GROMACS",
+      "version": "2025.0",
+      "toolchain": {
+        "name": "foss",
+        "version": "2025b"
+      },
+      "versionsuffix": null,
+      "easyconfig_path": "foss-2025b/GROMACS-2025.0-foss-2025b.eb"
+    },
+    {
+      "name": "OpenBLAS",
+      "version": "0.3.27",
+      "toolchain": {
+        "name": "foss",
+        "version": "2025b"
+      },
+      "versionsuffix": null,
+      "easyconfig_path": "foss-2025b/OpenBLAS-0.3.27-foss-2025b.eb"
+    },
+    {
+      "name": "OpenMPI",
+      "version": "5.0.3",
+      "toolchain": {
+        "name": "foss",
+        "version": "2025b"
+      },
+      "versionsuffix": null,
+      "easyconfig_path": "foss-2025b/OpenMPI-5.0.3-foss-2025b.eb"
+    }
+  ],
+  "solver": {
+    "engine": "resolvo_cdcl_sat",
+    "engine_version": "resolvo+eb_stack-0.2.0",
+    "timestamp": "STABLE"
+  }
+}
