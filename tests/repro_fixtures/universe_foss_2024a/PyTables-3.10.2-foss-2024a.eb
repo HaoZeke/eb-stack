@@ -1,0 +1,5 @@
+name = 'PyTables'
+version = '3.10.2'
+homepage = 'https://example.invalid/PyTables'
+description = "Repro universe stub for foss-2024a hierarchy resolve."
+toolchain = {'name': 'foss', 'version': '2024a'}

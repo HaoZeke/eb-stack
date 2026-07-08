@@ -1,0 +1,5 @@
+name = 'networkx'
+version = '3.4.2'
+homepage = 'https://example.invalid/networkx'
+description = "Hierarchy-resolve universe stub."
+toolchain = {'name': 'gfbf', 'version': '2024a'}

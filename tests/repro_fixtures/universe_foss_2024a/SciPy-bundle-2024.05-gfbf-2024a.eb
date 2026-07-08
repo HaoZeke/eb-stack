@@ -1,0 +1,5 @@
+name = 'SciPy-bundle'
+version = '2024.05'
+homepage = 'https://example.invalid/SciPy-bundle'
+description = "Repro universe stub for foss-2024a hierarchy resolve."
+toolchain = {'name': 'gfbf', 'version': '2024a'}

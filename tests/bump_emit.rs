@@ -1,7 +1,8 @@
 //! Integration tests for next-generation easyconfig emit (library + CLI).
 
 use eb_stack::{
-    emit_next_generation, emit_next_generation_from_path, easyconfig_filename, EmitParams, Toolchain,
+    easyconfig_filename, emit_next_generation, emit_next_generation_auto_from_path,
+    emit_next_generation_from_path, EmitParams, Toolchain,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -144,4 +145,118 @@ fn cli_bump_toolchain_only_twice_idempotent_content() {
             assert_eq!(first, text, "two CLI runs must produce identical content");
         }
     }
+}
+
+fn hierarchy_universe() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/hierarchy_resolve/easyconfigs")
+}
+
+fn gromacs_repro_source() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb")
+}
+
+fn gromacs_repro_universe() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/repro_fixtures/universe_foss_2024a")
+}
+
+/// Library auto-resolve fills dep versions from a multi-subtoolchain universe
+/// with an empty hand override map.
+#[test]
+fn library_auto_resolve_gromacs_deps_from_universe() {
+    let empty = HashMap::new();
+    let r = emit_next_generation_auto_from_path(
+        &gromacs_repro_source(),
+        &foss("2024a"),
+        &gromacs_repro_universe(),
+        None,
+        None,
+        &empty,
+        None,
+        None,
+    )
+    .expect("auto emit");
+    assert_eq!(r.filename, "GROMACS-2024.4-foss-2024a.eb");
+    assert!(r
+        .text
+        .contains("toolchain = {'name': 'foss', 'version': '2024a'}"));
+    assert!(r.text.contains("('CMake', '3.29.3')"));
+    assert!(r.text.contains("('scikit-build-core', '0.11.1')"));
+    assert!(r.text.contains("('Python', '3.12.3')"));
+    assert!(r.text.contains("('SciPy-bundle', '2024.05')"));
+    assert!(r.text.contains("('networkx', '3.4.2')"));
+    assert!(r.text.contains("('mpi4py', '4.0.1')"));
+    // pybind11 is maintainer-added; source does not list it.
+    assert!(!r.text.contains("pybind11"));
+}
+
+/// CLI `bump --easyconfigs` with no `--dep` resolves versions from the universe.
+#[test]
+fn cli_bump_auto_resolve_from_easyconfigs() {
+    let bin = env!("CARGO_BIN_EXE_eb-stack");
+    let src = gromacs_repro_source();
+    let universe = gromacs_repro_universe();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let out = tmp.path().join("out.eb");
+
+    let status = Command::new(bin)
+        .args([
+            "bump",
+            "--source",
+            src.to_str().unwrap(),
+            "--toolchain-name",
+            "foss",
+            "--toolchain-version",
+            "2024a",
+            "--easyconfigs",
+            universe.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .status()
+        .expect("spawn eb-stack bump --easyconfigs");
+    assert!(status.success(), "auto bump failed: {status}");
+    let text = std::fs::read_to_string(&out).expect("read");
+    assert!(text.contains("toolchain = {'name': 'foss', 'version': '2024a'}"));
+    assert!(text.contains("('Python', '3.12.3')"));
+    assert!(text.contains("('mpi4py', '4.0.1')"));
+    assert!(text.contains("('CMake', '3.29.3')"));
+}
+
+/// Hierarchy unit universe: multi-level resolve picks generation members, not
+/// exact foss-only filtering (also exercised in hierarchy module tests).
+#[test]
+fn library_auto_resolve_uses_hierarchy_not_exact_toolchain_only() {
+    // Minimal source that lists only Python + SciPy-bundle.
+    let src = "\
+name = 'Demo'
+version = '1.0'
+toolchain = {'name': 'foss', 'version': '2023b'}
+homepage = 'https://example.invalid'
+dependencies = [
+    ('Python', '3.11.5'),
+    ('SciPy-bundle', '2023.11'),
+]
+";
+    let tmp = tempfile::tempdir().unwrap();
+    let src_path = tmp.path().join("Demo-1.0-foss-2023b.eb");
+    std::fs::write(&src_path, src).unwrap();
+    let empty = HashMap::new();
+    let r = emit_next_generation_auto_from_path(
+        &src_path,
+        &foss("2024a"),
+        &hierarchy_universe(),
+        None,
+        None,
+        &empty,
+        None,
+        None,
+    )
+    .expect("auto");
+    assert!(r.text.contains("('Python', '3.12.3')"));
+    assert!(r.text.contains("('SciPy-bundle', '2024.05')"));
+    // Decoys at GCCcore-14.2.0 / gfbf-2025a must not win.
+    assert!(!r.text.contains("3.13.1"));
+    assert!(!r.text.contains("2025.06"));
 }

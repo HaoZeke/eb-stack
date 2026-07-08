@@ -1,0 +1,5 @@
+name = 'CMake'
+version = '3.29.3'
+homepage = 'https://example.invalid/CMake'
+description = "Repro universe stub for foss-2024a hierarchy resolve."
+toolchain = {'name': 'GCCcore', 'version': '13.3.0'}

@@ -1,0 +1,5 @@
+name = 'scikit-build-core'
+version = '0.11.1'
+homepage = 'https://example.invalid/scikit-build-core'
+description = "Repro universe stub for foss-2024a hierarchy resolve."
+toolchain = {'name': 'GCCcore', 'version': '13.3.0'}

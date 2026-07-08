@@ -1,0 +1,5 @@
+name = 'SciPy-bundle'
+version = '2024.05'
+homepage = 'https://example.invalid/scipy-bundle'
+description = "Hierarchy-resolve universe stub."
+toolchain = {'name': 'gfbf', 'version': '2024a'}

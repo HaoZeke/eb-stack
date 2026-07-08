@@ -1,0 +1,5 @@
+name = 'Python'
+version = '3.13.1'
+homepage = 'https://example.invalid/python'
+description = "Wrong-generation decoy; must not be selected for foss-2024a."
+toolchain = {'name': 'GCCcore', 'version': '14.2.0'}

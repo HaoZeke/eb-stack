@@ -1,0 +1,5 @@
+name = 'GLPK'
+version = '5.0'
+homepage = 'https://example.invalid/GLPK'
+description = "Repro universe stub for foss-2024a hierarchy resolve."
+toolchain = {'name': 'GCCcore', 'version': '13.3.0'}

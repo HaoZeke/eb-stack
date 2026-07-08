@@ -1,0 +1,5 @@
+name = 'Cython'
+version = '3.0.10'
+homepage = 'https://example.invalid/Cython'
+description = "Repro universe stub for foss-2024a hierarchy resolve."
+toolchain = {'name': 'GCCcore', 'version': '13.3.0'}

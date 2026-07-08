@@ -5,16 +5,18 @@
 //!
 //! Each fixture pair is a real `(source, target)` easyconfig lifted from a
 //! local EasyBuild checkout: same application version, adjacent `foss`
-//! toolchain generation (`2023b` -> `2024a`). The library is driven with
-//! exactly the toolchain + per-dependency version map that the diff between
-//! source and target actually shows; the emitted text is then compared
-//! against the real target text line-for-line.
+//! toolchain generation (`2023b` -> `2024a`).
 //!
-//! A pair only belongs here if it reproduces cleanly: every allowed
-//! addition below was verified (before this file was committed) to be the
-//! *entire* residual between the mechanical bump and the real PR.
+//! Two drive modes:
+//! 1. **Hand map** (historical): explicit per-dependency version map.
+//! 2. **Auto-resolve** (hierarchy-aware): only source, target generation, and
+//!    a bundled easyconfig universe — no hand-fed dep versions. Versions are
+//!    resolved by accepting recipes whose toolchain is any member of the
+//!    target generation's sub-toolchain hierarchy.
 
-use eb_stack::{emit_next_generation_from_path, EmitParams, Toolchain};
+use eb_stack::{
+    emit_next_generation_auto_from_path, emit_next_generation_from_path, EmitParams, Toolchain,
+};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -22,6 +24,10 @@ fn fixture(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/repro_fixtures")
         .join(rel)
+}
+
+fn universe_foss_2024a() -> PathBuf {
+    fixture("universe_foss_2024a")
 }
 
 fn foss(ver: &str) -> Toolchain {
@@ -50,6 +56,43 @@ fn assert_reproduces(
 ) {
     let result = emit_next_generation_from_path(source, params)
         .unwrap_or_else(|e| panic!("emit failed for {}: {e}", source.display()));
+    assert_emitted_matches_target(&result.text, target, allowed_additions, source);
+}
+
+fn assert_reproduces_auto(
+    source: &Path,
+    target: &Path,
+    toolchain: &Toolchain,
+    universe: &Path,
+    allowed_additions: &[&str],
+) {
+    let empty = HashMap::new();
+    let result = emit_next_generation_auto_from_path(
+        source,
+        toolchain,
+        universe,
+        None,
+        None,
+        &empty,
+        None,
+        None,
+    )
+    .unwrap_or_else(|e| {
+        panic!(
+            "auto emit failed for {} with universe {}: {e}",
+            source.display(),
+            universe.display()
+        )
+    });
+    assert_emitted_matches_target(&result.text, target, allowed_additions, source);
+}
+
+fn assert_emitted_matches_target(
+    emitted_text: &str,
+    target: &Path,
+    allowed_additions: &[&str],
+    source: &Path,
+) {
     let target_text = std::fs::read_to_string(target)
         .unwrap_or_else(|e| panic!("read {}: {e}", target.display()));
 
@@ -67,7 +110,7 @@ fn assert_reproduces(
         }
     }
     let target_stripped = target_lines.join("\n");
-    let emitted: Vec<&str> = result.text.lines().collect();
+    let emitted: Vec<&str> = emitted_text.lines().collect();
     let emitted_joined = emitted.join("\n");
 
     assert_eq!(
@@ -80,12 +123,12 @@ fn assert_reproduces(
     );
 }
 
-/// GROMACS-2024.4: foss/2023b -> foss/2024a.
+/// GROMACS-2024.4: foss/2023b -> foss/2024a (hand dep map; historical).
 ///
 /// Real maintainer PR bumps CMake, scikit-build-core (builddeps) and
 /// Python, SciPy-bundle, networkx, mpi4py (deps), and hand-adds a new
 /// `('pybind11', '2.12.0')` runtime dependency that no mechanical
-/// toolchain-bump can invent. This is the proven exemplar for the method.
+/// toolchain-bump can invent.
 #[test]
 fn reproduces_gromacs_2024_4_foss_2023b_to_2024a() {
     let source = fixture("gromacs/GROMACS-2024.4-foss-2023b.eb");
@@ -107,6 +150,24 @@ fn reproduces_gromacs_2024_4_foss_2023b_to_2024a() {
         &source,
         &target,
         &params,
+        &["    ('pybind11', '2.12.0'),"],
+    );
+}
+
+/// GROMACS-2024.4 auto-resolve: zero hand-fed dependency versions.
+///
+/// Universe holds real generation recipes at GCCcore/GCC/gfbf/gompi levels;
+/// hierarchy-aware resolve fills every dep/builddep version. Residual is only
+/// the maintainer-added `pybind11` line (not present in the source recipe).
+#[test]
+fn reproduces_gromacs_2024_4_foss_2023b_to_2024a_auto() {
+    let source = fixture("gromacs/GROMACS-2024.4-foss-2023b.eb");
+    let target = fixture("gromacs/GROMACS-2024.4-foss-2024a.eb");
+    assert_reproduces_auto(
+        &source,
+        &target,
+        &foss("2024a"),
+        &universe_foss_2024a(),
         &["    ('pybind11', '2.12.0'),"],
     );
 }
@@ -133,6 +194,19 @@ fn reproduces_scafacos_1_0_4_foss_2023b_to_2024a() {
     assert_reproduces(&source, &target, &params, &[]);
 }
 
+#[test]
+fn reproduces_scafacos_1_0_4_foss_2023b_to_2024a_auto() {
+    let source = fixture("scafacos/ScaFaCoS-1.0.4-foss-2023b.eb");
+    let target = fixture("scafacos/ScaFaCoS-1.0.4-foss-2024a.eb");
+    assert_reproduces_auto(
+        &source,
+        &target,
+        &foss("2024a"),
+        &universe_foss_2024a(),
+        &[],
+    );
+}
+
 /// MDTraj-1.10.3: foss/2023b -> foss/2024a.
 ///
 /// Bumps Python, SciPy-bundle, zlib, networkx, PyTables; netcdf4-python
@@ -156,6 +230,19 @@ fn reproduces_mdtraj_1_10_3_foss_2023b_to_2024a() {
     assert_reproduces(&source, &target, &params, &[]);
 }
 
+#[test]
+fn reproduces_mdtraj_1_10_3_foss_2023b_to_2024a_auto() {
+    let source = fixture("mdtraj/MDTraj-1.10.3-foss-2023b.eb");
+    let target = fixture("mdtraj/MDTraj-1.10.3-foss-2024a.eb");
+    assert_reproduces_auto(
+        &source,
+        &target,
+        &foss("2024a"),
+        &universe_foss_2024a(),
+        &[],
+    );
+}
+
 /// Fiona-1.10.1: foss/2023b -> foss/2024a.
 ///
 /// Bumps Python and a major-version jump on GDAL (3.9.0 -> 3.10.0);
@@ -171,6 +258,19 @@ fn reproduces_fiona_1_10_1_foss_2023b_to_2024a() {
         dep_versions: deps(&[("Python", "3.12.3"), ("GDAL", "3.10.0")]),
     };
     assert_reproduces(&source, &target, &params, &[]);
+}
+
+#[test]
+fn reproduces_fiona_1_10_1_foss_2023b_to_2024a_auto() {
+    let source = fixture("fiona/Fiona-1.10.1-foss-2023b.eb");
+    let target = fixture("fiona/Fiona-1.10.1-foss-2024a.eb");
+    assert_reproduces_auto(
+        &source,
+        &target,
+        &foss("2024a"),
+        &universe_foss_2024a(),
+        &[],
+    );
 }
 
 /// PuLP-2.8.0: foss/2023b -> foss/2024a.
@@ -189,6 +289,19 @@ fn reproduces_pulp_2_8_0_foss_2023b_to_2024a() {
     assert_reproduces(&source, &target, &params, &[]);
 }
 
+#[test]
+fn reproduces_pulp_2_8_0_foss_2023b_to_2024a_auto() {
+    let source = fixture("pulp/PuLP-2.8.0-foss-2023b.eb");
+    let target = fixture("pulp/PuLP-2.8.0-foss-2024a.eb");
+    assert_reproduces_auto(
+        &source,
+        &target,
+        &foss("2024a"),
+        &universe_foss_2024a(),
+        &[],
+    );
+}
+
 /// numba-0.60.0: foss/2023b -> foss/2024a.
 ///
 /// Bumps Python and SciPy-bundle. Zero residual.
@@ -203,4 +316,17 @@ fn reproduces_numba_0_60_0_foss_2023b_to_2024a() {
         dep_versions: deps(&[("Python", "3.12.3"), ("SciPy-bundle", "2024.05")]),
     };
     assert_reproduces(&source, &target, &params, &[]);
+}
+
+#[test]
+fn reproduces_numba_0_60_0_foss_2023b_to_2024a_auto() {
+    let source = fixture("numba/numba-0.60.0-foss-2023b.eb");
+    let target = fixture("numba/numba-0.60.0-foss-2024a.eb");
+    assert_reproduces_auto(
+        &source,
+        &target,
+        &foss("2024a"),
+        &universe_foss_2024a(),
+        &[],
+    );
 }

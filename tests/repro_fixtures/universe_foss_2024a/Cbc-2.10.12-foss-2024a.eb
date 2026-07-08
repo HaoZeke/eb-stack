@@ -1,0 +1,5 @@
+name = 'Cbc'
+version = '2.10.12'
+homepage = 'https://example.invalid/Cbc'
+description = "Repro universe stub for foss-2024a hierarchy resolve."
+toolchain = {'name': 'foss', 'version': '2024a'}

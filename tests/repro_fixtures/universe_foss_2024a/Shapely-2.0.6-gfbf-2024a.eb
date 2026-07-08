@@ -1,0 +1,5 @@
+name = 'Shapely'
+version = '2.0.6'
+homepage = 'https://example.invalid/Shapely'
+description = "Repro universe stub for foss-2024a hierarchy resolve."
+toolchain = {'name': 'gfbf', 'version': '2024a'}

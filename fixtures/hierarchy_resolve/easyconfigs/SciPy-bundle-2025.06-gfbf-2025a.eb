@@ -1,0 +1,5 @@
+name = 'SciPy-bundle'
+version = '2025.06'
+homepage = 'https://example.invalid/scipy-bundle'
+description = "Wrong-generation decoy; must not be selected for foss-2024a."
+toolchain = {'name': 'gfbf', 'version': '2025a'}

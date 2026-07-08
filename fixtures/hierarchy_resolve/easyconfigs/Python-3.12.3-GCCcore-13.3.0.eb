@@ -1,0 +1,5 @@
+name = 'Python'
+version = '3.12.3'
+homepage = 'https://example.invalid/python'
+description = "Hierarchy-resolve universe stub."
+toolchain = {'name': 'GCCcore', 'version': '13.3.0'}

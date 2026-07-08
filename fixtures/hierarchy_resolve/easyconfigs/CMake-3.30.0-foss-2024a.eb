@@ -1,0 +1,5 @@
+name = 'CMake'
+version = '3.30.0'
+homepage = 'https://example.invalid/cmake'
+description = "Same generation but rare foss-level CMake; newer than GCCcore one — prefer_newer may pick this."
+toolchain = {'name': 'foss', 'version': '2024a'}

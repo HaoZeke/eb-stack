@@ -1,0 +1,5 @@
+name = 'mpi4py'
+version = '4.0.1'
+homepage = 'https://example.invalid/mpi4py'
+description = "Hierarchy-resolve universe stub."
+toolchain = {'name': 'gompi', 'version': '2024a'}

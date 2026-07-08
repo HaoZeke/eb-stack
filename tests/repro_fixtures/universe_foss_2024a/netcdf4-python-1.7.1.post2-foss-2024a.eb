@@ -1,0 +1,5 @@
+name = 'netcdf4-python'
+version = '1.7.1.post2'
+homepage = 'https://example.invalid/netcdf4-python'
+description = "Repro universe stub for foss-2024a hierarchy resolve."
+toolchain = {'name': 'foss', 'version': '2024a'}

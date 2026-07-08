@@ -5,7 +5,12 @@
 //! All other source bytes stay verbatim.
 
 use crate::domain::Toolchain;
+use crate::eb_parse::{parse_easyconfig_tree, ParseError};
+use crate::hierarchy::{
+    hierarchy_for, resolve_dep_versions_in_hierarchy, HierarchyError, ToolchainHierarchy,
+};
 use std::collections::HashMap;
+use std::path::Path;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -18,6 +23,10 @@ pub enum EmitError {
     MissingToolchain,
     #[error("rewrite failed: {0}")]
     Rewrite(String),
+    #[error("hierarchy: {0}")]
+    Hierarchy(#[from] HierarchyError),
+    #[error("parse: {0}")]
+    Parse(#[from] ParseError),
 }
 
 /// Parameters for producing a next-generation easyconfig.
@@ -137,6 +146,127 @@ pub fn emit_next_generation_from_path(
         EmitError::Rewrite(format!("read {}: {}", path.display(), e))
     })?;
     emit_next_generation(&source, params)
+}
+
+/// Auto-resolve dependency / build-dependency versions from an easyconfig universe
+/// using the target toolchain generation's sub-toolchain hierarchy, then emit.
+///
+/// `hand_overrides` win over auto-resolved versions (same keys). Names present in
+/// the source recipe but absent from the universe are left at their source versions.
+///
+/// When `hierarchy` is `None`, uses [`hierarchy_for`] (built-in fixture or
+/// `hierarchy_fixture` path).
+pub fn emit_next_generation_auto(
+    source: &str,
+    target_toolchain: &Toolchain,
+    easyconfigs_dir: &Path,
+    hierarchy: Option<&ToolchainHierarchy>,
+    hierarchy_fixture: Option<&Path>,
+    hand_overrides: &HashMap<String, String>,
+    version: Option<String>,
+    source_checksum: Option<String>,
+) -> Result<EmitResult, EmitError> {
+    let resolved = resolve_dep_versions_for_source(
+        source,
+        target_toolchain,
+        easyconfigs_dir,
+        hierarchy,
+        hierarchy_fixture,
+    )?;
+    let mut dep_versions = resolved;
+    for (k, v) in hand_overrides {
+        dep_versions.insert(k.clone(), v.clone());
+    }
+    let params = EmitParams {
+        toolchain: target_toolchain.clone(),
+        version,
+        dep_versions,
+        source_checksum,
+    };
+    emit_next_generation(source, &params)
+}
+
+/// Path-based form of [`emit_next_generation_auto`].
+pub fn emit_next_generation_auto_from_path(
+    source_path: &Path,
+    target_toolchain: &Toolchain,
+    easyconfigs_dir: &Path,
+    hierarchy: Option<&ToolchainHierarchy>,
+    hierarchy_fixture: Option<&Path>,
+    hand_overrides: &HashMap<String, String>,
+    version: Option<String>,
+    source_checksum: Option<String>,
+) -> Result<EmitResult, EmitError> {
+    let source = std::fs::read_to_string(source_path).map_err(|e| {
+        EmitError::Rewrite(format!("read {}: {}", source_path.display(), e))
+    })?;
+    emit_next_generation_auto(
+        &source,
+        target_toolchain,
+        easyconfigs_dir,
+        hierarchy,
+        hierarchy_fixture,
+        hand_overrides,
+        version,
+        source_checksum,
+    )
+}
+
+/// Resolve dep + builddep versions named in `source` against `easyconfigs_dir`
+/// under the target generation's hierarchy.
+///
+/// Dependency **names** are taken surgically from `dependencies` /
+/// `builddependencies` list tuples (no full EasyBuild DSL evaluation), so
+/// real recipes with `SOURCELOWER_TAR_GZ` and similar constants still work.
+pub fn resolve_dep_versions_for_source(
+    source: &str,
+    target_toolchain: &Toolchain,
+    easyconfigs_dir: &Path,
+    hierarchy: Option<&ToolchainHierarchy>,
+    hierarchy_fixture: Option<&Path>,
+) -> Result<HashMap<String, String>, EmitError> {
+    let owned;
+    let h = match hierarchy {
+        Some(h) => h,
+        None => {
+            owned = hierarchy_for(target_toolchain, hierarchy_fixture)?;
+            &owned
+        }
+    };
+    let names = dep_names_from_source(source)?;
+    let cands = parse_easyconfig_tree(easyconfigs_dir)?;
+    Ok(resolve_dep_versions_in_hierarchy(names, &cands, h))
+}
+
+/// Collect package names from top-level `dependencies` and `builddependencies`
+/// 2+-tuples `('Name', ...)` / `("Name", ...)`. Does not evaluate the full
+/// easyconfig DSL (templates, locals, EasyBuild constants).
+fn dep_names_from_source(source: &str) -> Result<Vec<String>, EmitError> {
+    let mut names = Vec::new();
+    for key in ["dependencies", "builddependencies"] {
+        let Some((list_open_end, list_close_start)) = find_list_span(source, key)? else {
+            continue;
+        };
+        let body = &source[list_open_end..list_close_start];
+        // First string of each tuple is the package name.
+        let re = regex::Regex::new(r#"\(\s*'(?P<n1>[^']+)'|\(\s*"(?P<n2>[^"]+)""#)
+            .map_err(|e| EmitError::Rewrite(e.to_string()))?;
+        for caps in re.captures_iter(body) {
+            let name = caps
+                .name("n1")
+                .or_else(|| caps.name("n2"))
+                .map(|m| m.as_str().to_string())
+                .unwrap();
+            // Skip template-only names like %(namelower)s if any appear as deps.
+            if name.contains('%') {
+                continue;
+            }
+            names.push(name);
+        }
+    }
+    names.sort();
+    names.dedup();
+    Ok(names)
 }
 
 fn assign_string_raw(src: &str, key: &str) -> Option<String> {
@@ -834,5 +964,39 @@ dependencies = [
         ));
         assert!(r.text.contains("'OpenMPI-5.0.3_fix_hle_make_errors.patch',"));
         assert!(r.warnings.is_empty(), "warnings: {:?}", r.warnings);
+    }
+
+    #[test]
+    fn dep_names_from_source_finds_deps_and_builddeps() {
+        let names = dep_names_from_source(WITH_BUILDDEPS).expect("names");
+        assert_eq!(names, vec!["CMake".to_string(), "OpenMPI".to_string()]);
+    }
+
+    #[test]
+    fn dep_names_from_source_skips_easybuild_constants_in_rest_of_file() {
+        // Real GROMACS recipes use SOURCELOWER_TAR_GZ; name extraction must
+        // not require evaluating that constant.
+        let src = "\
+name = 'GROMACS'
+version = '2024.4'
+toolchain = {'name': 'foss', 'version': '2023b'}
+sources = [SOURCELOWER_TAR_GZ]
+builddependencies = [
+    ('CMake', '3.27.6'),
+]
+dependencies = [
+    ('Python', '3.11.5'),
+    ('mpi4py', '3.1.5'),
+]
+";
+        let names = dep_names_from_source(src).expect("names");
+        assert_eq!(
+            names,
+            vec![
+                "CMake".to_string(),
+                "Python".to_string(),
+                "mpi4py".to_string()
+            ]
+        );
     }
 }

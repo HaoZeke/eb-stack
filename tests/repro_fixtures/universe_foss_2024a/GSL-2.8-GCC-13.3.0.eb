@@ -1,0 +1,5 @@
+name = 'GSL'
+version = '2.8'
+homepage = 'https://example.invalid/GSL'
+description = "Repro universe stub for foss-2024a hierarchy resolve."
+toolchain = {'name': 'GCC', 'version': '13.3.0'}

@@ -3,6 +3,7 @@
 pub mod domain;
 pub mod eb_emit;
 pub mod eb_parse;
+pub mod hierarchy;
 pub mod report;
 pub mod resolvo_provider;
 pub mod sbom;
@@ -11,8 +12,14 @@ pub mod version;
 
 pub use domain::*;
 pub use eb_emit::{
-    easyconfig_filename, emit_next_generation, emit_next_generation_from_path, EmitError,
-    EmitParams, EmitResult,
+    easyconfig_filename, emit_next_generation, emit_next_generation_auto,
+    emit_next_generation_auto_from_path, emit_next_generation_from_path,
+    resolve_dep_versions_for_source, EmitError, EmitParams, EmitResult,
+};
+pub use hierarchy::{
+    filter_candidates_in_hierarchy, hierarchy_for, is_system_toolchain, known_hierarchy,
+    load_hierarchy_fixture, resolve_dep_version_in_hierarchy, resolve_dep_versions_in_hierarchy,
+    resolve_dep_versions_in_hierarchy_strict, toolchains_match, HierarchyError, ToolchainHierarchy,
 };
 pub use eb_parse::{
     filter_toolchain, lock_from_candidates, parse_easyconfig_file, parse_easyconfig_tree,

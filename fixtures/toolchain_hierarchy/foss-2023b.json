@@ -1,0 +1,34 @@
+{
+  "parent": {
+    "name": "foss",
+    "version": "2023b"
+  },
+  "members": [
+    {
+      "name": "system",
+      "version": ""
+    },
+    {
+      "name": "GCCcore",
+      "version": "13.2.0"
+    },
+    {
+      "name": "GCC",
+      "version": "13.2.0"
+    },
+    {
+      "name": "gfbf",
+      "version": "2023b"
+    },
+    {
+      "name": "gompi",
+      "version": "2023b"
+    },
+    {
+      "name": "foss",
+      "version": "2023b"
+    }
+  ],
+  "source": "easybuild.framework.easyconfig.easyconfig.get_toolchain_hierarchy",
+  "add_system_to_minimal_toolchains": true
+}

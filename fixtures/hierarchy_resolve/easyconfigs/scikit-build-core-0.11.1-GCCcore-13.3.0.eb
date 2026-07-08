@@ -1,0 +1,5 @@
+name = 'scikit-build-core'
+version = '0.11.1'
+homepage = 'https://example.invalid/scikit-build-core'
+description = "Hierarchy-resolve universe stub."
+toolchain = {'name': 'GCCcore', 'version': '13.3.0'}

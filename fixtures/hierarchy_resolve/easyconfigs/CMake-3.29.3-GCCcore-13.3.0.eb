@@ -1,0 +1,5 @@
+name = 'CMake'
+version = '3.29.3'
+homepage = 'https://example.invalid/cmake'
+description = "Hierarchy-resolve universe stub."
+toolchain = {'name': 'GCCcore', 'version': '13.3.0'}

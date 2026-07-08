@@ -3,7 +3,8 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use eb_stack::{
-    emit_next_generation_from_path, load_json_file, lock_to_cyclonedx, parse_easyconfig_tree,
+    emit_next_generation_auto_from_path, emit_next_generation_from_path, load_json_file,
+    lock_to_cyclonedx, parse_easyconfig_tree,
     solve_from_easyconfigs_with_baseline_version_and_extras, solve_to_files_with_extras,
     EmitParams, SolveExtraOut, StackLock, Toolchain,
 };
@@ -115,8 +116,20 @@ enum Cmd {
         /// Also applied to `builddependencies`. If `version` includes an
         /// operator (`>=`, `==`, …) it replaces the whole version field;
         /// otherwise any operator on the source entry is preserved.
+        /// When `--easyconfigs` is set, these override auto-resolved versions.
         #[arg(long = "dep", value_name = "NAME=VERSION")]
         deps: Vec<String>,
+        /// Directory of easyconfigs used to auto-resolve dependency and
+        /// build-dependency versions for the target toolchain generation
+        /// (hierarchy-aware: GCCcore/GCC/gfbf/gompi/… members count).
+        /// When set, hand `--dep` overrides are optional.
+        #[arg(long, value_name = "DIR")]
+        easyconfigs: Option<PathBuf>,
+        /// Optional hierarchy fixture JSON (EasyBuild `get_toolchain_hierarchy`
+        /// capture). Default: built-in fixture for known generations
+        /// (e.g. foss-2024a).
+        #[arg(long, value_name = "PATH")]
+        hierarchy_fixture: Option<PathBuf>,
         /// Output directory; file is written as the conventional basename
         #[arg(long, conflicts_with = "out")]
         out_dir: Option<PathBuf>,
@@ -261,20 +274,44 @@ fn main() -> Result<()> {
             version,
             source_checksum,
             deps,
+            easyconfigs,
+            hierarchy_fixture,
             out_dir,
             out,
         } => {
-            let params = EmitParams {
-                toolchain: Toolchain {
-                    name: toolchain_name,
-                    version: toolchain_version,
-                },
-                version,
-                dep_versions: parse_dep_overrides(&deps)?,
-                source_checksum,
+            let toolchain = Toolchain {
+                name: toolchain_name,
+                version: toolchain_version,
             };
-            let result = emit_next_generation_from_path(&source, &params)
-                .with_context(|| format!("bump {}", source.display()))?;
+            let hand = parse_dep_overrides(&deps)?;
+            let result = if let Some(ec_dir) = easyconfigs {
+                emit_next_generation_auto_from_path(
+                    &source,
+                    &toolchain,
+                    &ec_dir,
+                    None,
+                    hierarchy_fixture.as_deref(),
+                    &hand,
+                    version,
+                    source_checksum,
+                )
+                .with_context(|| {
+                    format!(
+                        "bump {} with auto-resolve from {}",
+                        source.display(),
+                        ec_dir.display()
+                    )
+                })?
+            } else {
+                let params = EmitParams {
+                    toolchain,
+                    version,
+                    dep_versions: hand,
+                    source_checksum,
+                };
+                emit_next_generation_from_path(&source, &params)
+                    .with_context(|| format!("bump {}", source.display()))?
+            };
             for w in &result.warnings {
                 eprintln!("WARNING: {w}");
             }

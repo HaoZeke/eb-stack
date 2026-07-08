@@ -1,0 +1,5 @@
+name = 'GMP'
+version = '6.3.0'
+homepage = 'https://example.invalid/GMP'
+description = "Repro universe stub for foss-2024a hierarchy resolve."
+toolchain = {'name': 'GCCcore', 'version': '13.3.0'}
