@@ -26,9 +26,11 @@ struct Cli {
 enum Cmd {
     /// Parse a tree of `.eb` files, solve with resolvo, write lock (+ optional SBOM).
     Solve {
-        /// Root directory of easyconfigs (walked recursively for `*.eb`)
-        #[arg(long)]
-        easyconfigs: PathBuf,
+        /// Easyconfig tree(s) (walked recursively for `*.eb`). Repeatable: later
+        /// paths override earlier ones for the same name+version+toolchain
+        /// (site overlay on upstream).
+        #[arg(long, required = true)]
+        easyconfigs: Vec<PathBuf>,
         /// Policy JSON (toolchain, roots, pins, require_upgrade)
         #[arg(long)]
         policy: PathBuf,
@@ -170,9 +172,15 @@ fn main() -> Result<()> {
             build_list_out,
             stack_diff_out,
         } => {
-            let baseline = baseline_easyconfigs.unwrap_or_else(|| easyconfigs.clone());
+            if easyconfigs.is_empty() {
+                bail!("at least one --easyconfigs path is required");
+            }
+            let baseline = baseline_easyconfigs
+                .unwrap_or_else(|| easyconfigs[0].clone());
+            let roots: Vec<&std::path::Path> =
+                easyconfigs.iter().map(|p| p.as_path()).collect();
             let lock = solve_from_easyconfigs_with_baseline_version_and_extras(
-                &easyconfigs,
+                &roots,
                 &policy,
                 Some(&baseline),
                 baseline_toolchain_version.as_deref(),
@@ -183,9 +191,14 @@ fn main() -> Result<()> {
                     stack_diff_out: stack_diff_out.as_deref(),
                 },
             )?;
+            let roots_disp = easyconfigs
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
             println!(
-                "parsed easyconfigs under {} -> lock {} ({} packages, engine={})",
-                easyconfigs.display(),
+                "parsed easyconfigs under [{}] -> lock {} ({} packages, engine={})",
+                roots_disp,
                 lock_out.display(),
                 lock.packages.len(),
                 lock.solver.engine

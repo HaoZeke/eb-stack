@@ -288,6 +288,49 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr(&mut self) -> Result<Value, String> {
+        let mut left = self.parse_primary()?;
+        // String / value binary ops used in real easyconfigs: `+` concat, `%` format.
+        loop {
+            self.skip_ws();
+            match self.peek() {
+                Some(b'+') => {
+                    self.pos += 1;
+                    let right = self.parse_primary()?;
+                    left = match (left, right) {
+                        (Value::Str(a), Value::Str(b)) => Value::Str(a + &b),
+                        (Value::Str(a), Value::Int(b)) => Value::Str(format!("{a}{b}")),
+                        (Value::Int(a), Value::Str(b)) => Value::Str(format!("{a}{b}")),
+                        (a, b) => {
+                            return Err(self.err(format!(
+                                "unsupported + operands: {a:?} + {b:?}"
+                            )));
+                        }
+                    };
+                }
+                Some(b'%') => {
+                    self.pos += 1;
+                    let right = self.parse_primary()?;
+                    left = match (left, right) {
+                        (Value::Str(fmt), Value::Str(arg)) => {
+                            Value::Str(python_percent_format_one(&fmt, &arg))
+                        }
+                        (Value::Str(fmt), Value::Int(arg)) => {
+                            Value::Str(python_percent_format_one(&fmt, &arg.to_string()))
+                        }
+                        (a, b) => {
+                            return Err(self.err(format!(
+                                "unsupported % operands: {a:?} % {b:?}"
+                            )));
+                        }
+                    };
+                }
+                _ => break,
+            }
+        }
+        Ok(left)
+    }
+
+    fn parse_primary(&mut self) -> Result<Value, String> {
         self.skip_ws();
         let Some(c) = self.peek() else {
             return Err(self.err("expected expression, got EOF"));
@@ -392,6 +435,9 @@ impl<'a> Parser<'a> {
             "False" => Ok(Value::Bool(false)),
             "None" => Ok(Value::None),
             "SYSTEM" => Ok(system_toolchain_value()),
+            // EasyBuild built-in source filename constants (need name/version already set).
+            "SOURCE_TAR_GZ" | "SOURCELOWER_TAR_GZ" | "SOURCE_TAR_BZ2" | "SOURCELOWER_TAR_BZ2"
+            | "SOURCE_TAR_XZ" | "SOURCELOWER_TAR_XZ" => self.eb_source_constant(&name),
             other => {
                 if let Some(v) = self.env.get(other) {
                     Ok(v.clone())
@@ -400,6 +446,32 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+    }
+
+    fn eb_source_constant(&self, which: &str) -> Result<Value, String> {
+        let pkg = self
+            .env
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| self.err(format!("{which} requires name = ... first")))?;
+        let ver = match self.env.get("version") {
+            Some(Value::Str(s)) => s.clone(),
+            Some(Value::Int(i)) => i.to_string(),
+            _ => return Err(self.err(format!("{which} requires version = ... first"))),
+        };
+        let base = if which.contains("LOWER") {
+            pkg.to_ascii_lowercase()
+        } else {
+            pkg.to_string()
+        };
+        let ext = if which.ends_with("BZ2") {
+            "tar.bz2"
+        } else if which.ends_with("XZ") {
+            "tar.xz"
+        } else {
+            "tar.gz"
+        };
+        Ok(Value::Str(format!("{base}-{ver}.{ext}")))
     }
 
     fn parse_list(&mut self) -> Result<Value, String> {
@@ -531,6 +603,26 @@ impl<'a> Parser<'a> {
 fn unescape_python_str(s: &str) -> String {
     // Triple-quoted bodies are stored raw except common escapes if present.
     s.to_string()
+}
+
+/// Minimal Python-style `%s` / `%d` single-arg formatting used in easyconfigs.
+fn python_percent_format_one(fmt: &str, arg: &str) -> String {
+    if let Some(idx) = fmt.find("%s") {
+        let mut out = String::with_capacity(fmt.len() + arg.len());
+        out.push_str(&fmt[..idx]);
+        out.push_str(arg);
+        out.push_str(&fmt[idx + 2..]);
+        return out;
+    }
+    if let Some(idx) = fmt.find("%d") {
+        let mut out = String::with_capacity(fmt.len() + arg.len());
+        out.push_str(&fmt[..idx]);
+        out.push_str(arg);
+        out.push_str(&fmt[idx + 2..]);
+        return out;
+    }
+    // No conversion: return format string unchanged (caller may use templates later).
+    fmt.to_string()
 }
 
 // --- template resolution ---------------------------------------------------------
@@ -867,13 +959,48 @@ pub fn parse_easyconfig_tree(root: &Path) -> Result<Vec<Candidate>, ParseError> 
             }
         }
     }
-    out.sort_by(|a, b| {
+    sort_candidates(&mut out);
+    Ok(out)
+}
+
+fn candidate_identity_key(c: &Candidate) -> (String, String, String) {
+    (c.name.clone(), c.version.clone(), c.toolchain.label())
+}
+
+fn sort_candidates(cands: &mut [Candidate]) {
+    cands.sort_by(|a, b| {
         a.name
             .cmp(&b.name)
             .then_with(|| a.version.cmp(&b.version))
             .then_with(|| a.toolchain.version.cmp(&b.toolchain.version))
+            .then_with(|| a.versionsuffix.cmp(&b.versionsuffix))
     });
-    Ok(out)
+}
+
+/// Merge candidate layers with **later-layer precedence**: when two candidates
+/// share the same name + version + toolchain, the later layer wins (overlay).
+///
+/// Used for site overlays on top of an upstream easyconfigs tree.
+pub fn merge_candidates_with_precedence(layers: &[Vec<Candidate>]) -> Vec<Candidate> {
+    use std::collections::BTreeMap;
+    let mut map: BTreeMap<(String, String, String), Candidate> = BTreeMap::new();
+    for layer in layers {
+        for c in layer {
+            map.insert(candidate_identity_key(c), c.clone());
+        }
+    }
+    let mut out: Vec<Candidate> = map.into_values().collect();
+    sort_candidates(&mut out);
+    out
+}
+
+/// Parse multiple easyconfig trees and merge with later-path precedence.
+pub fn parse_easyconfig_trees(roots: &[&Path]) -> Result<Vec<Candidate>, ParseError> {
+    let mut layers = Vec::with_capacity(roots.len());
+    for root in roots {
+        layers.push(parse_easyconfig_tree(root)?);
+    }
+    Ok(merge_candidates_with_precedence(&layers))
 }
 
 pub fn filter_toolchain(cands: &[Candidate], tc: &Toolchain) -> Vec<Candidate> {
@@ -1011,7 +1138,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_gromacs_2025b_maps_range_requirements() {
+    fn parse_gromacs_2025b_maps_exact_pin_requirements() {
         let p = fixture_eb_root().join("foss-2025b/GROMACS-2025.0-foss-2025b.eb");
         let c = parse_easyconfig_file(&p).expect("parse");
         assert_eq!(c.name, "GROMACS");
@@ -1023,13 +1150,19 @@ mod tests {
             .iter()
             .find(|d| d.name == "OpenMPI")
             .expect("OpenMPI dep");
-        assert_eq!(mpi.version_req, ">=4.1.6");
+        assert_eq!(mpi.version_req, "==5.0.3");
         let blas = c
             .dependencies
             .iter()
             .find(|d| d.name == "OpenBLAS")
             .expect("OpenBLAS dep");
-        assert_eq!(blas.version_req, ">=0.3.27");
+        assert_eq!(blas.version_req, "==0.3.27");
+        let py = c
+            .dependencies
+            .iter()
+            .find(|d| d.name == "Python")
+            .expect("Python dep (real GROMACS has a hard Python dependency)");
+        assert_eq!(py.version_req, "==3.12.3");
     }
 
     #[test]
@@ -1086,7 +1219,7 @@ mod tests {
                 .find(|d| d.name == "OpenBLAS")
                 .unwrap()
                 .version_req,
-            ">=0.3.23"
+            "==0.3.27"
         );
         assert_eq!(build_names, vec!["FFTW"]);
         assert_eq!(
@@ -1095,7 +1228,7 @@ mod tests {
                 .find(|d| d.name == "FFTW")
                 .unwrap()
                 .version_req,
-            ">=3.3.10"
+            "==3.3.10"
         );
         // Roles must not be collapsed into one list.
         assert!(
@@ -1321,6 +1454,180 @@ mod tests {
         assert!(
             msg.contains("unknown name") || msg.contains("missing_var"),
             "{msg}"
+        );
+    }
+
+    fn repro_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/repro_fixtures")
+    }
+
+    /// Real maintainer GROMACS easyconfig: DSL resolve (not bump/rewrite) must
+    /// surface exact deps including Python.
+    #[test]
+    fn resolve_real_gromacs_repro_fixture() {
+        let p = repro_root().join("gromacs/GROMACS-2024.4-foss-2024a.eb");
+        let r = resolve_easyconfig_file(&p).expect("resolve real GROMACS");
+        assert_eq!(r.name, "GROMACS");
+        assert_eq!(r.version, "2024.4");
+        assert_eq!(r.toolchain.name, "foss");
+        assert_eq!(r.toolchain.version, "2024a");
+        let py = r
+            .dependencies
+            .iter()
+            .find(|d| d.name == "Python")
+            .expect("Python hard dep");
+        assert_eq!(py.version, "3.12.3");
+        // Exact co-pins (no operator in source → solver sees ==).
+        let c = r.to_candidate();
+        let py_req = c
+            .dependencies
+            .iter()
+            .find(|d| d.name == "Python")
+            .unwrap();
+        assert_eq!(py_req.version_req, "==3.12.3");
+        let scipy = c
+            .dependencies
+            .iter()
+            .find(|d| d.name == "SciPy-bundle")
+            .unwrap();
+        assert_eq!(scipy.version_req, "==2024.05");
+        // Build deps also exact.
+        let cmake = c
+            .builddependencies
+            .iter()
+            .find(|d| d.name == "CMake")
+            .unwrap();
+        assert_eq!(cmake.version_req, "==3.29.3");
+        // gmxapi extension from exts_list.
+        assert!(
+            r.exts_list.iter().any(|e| e.name == "gmxapi"),
+            "expected gmxapi in exts_list: {:?}",
+            r.exts_list
+        );
+    }
+
+    #[test]
+    fn parse_real_fiona_and_mdtraj_repro_fixtures() {
+        let fiona = parse_easyconfig_file(&repro_root().join("fiona/Fiona-1.10.1-foss-2024a.eb"))
+            .expect("parse Fiona");
+        assert_eq!(fiona.name, "Fiona");
+        assert_eq!(fiona.version, "1.10.1");
+        assert_eq!(fiona.toolchain.label(), "foss-2024a");
+        let py = fiona
+            .dependencies
+            .iter()
+            .find(|d| d.name == "Python")
+            .unwrap();
+        assert_eq!(py.version_req, "==3.12.3");
+        assert_eq!(
+            fiona
+                .dependencies
+                .iter()
+                .find(|d| d.name == "GDAL")
+                .unwrap()
+                .version_req,
+            "==3.10.0"
+        );
+        assert!(
+            fiona.exts_list.iter().any(|e| e.name == "cligj"),
+            "Fiona bundles cligj: {:?}",
+            fiona.exts_list
+        );
+
+        let md = parse_easyconfig_file(&repro_root().join("mdtraj/MDTraj-1.10.3-foss-2024a.eb"))
+            .expect("parse MDTraj");
+        assert_eq!(md.name, "MDTraj");
+        assert_eq!(md.version, "1.10.3");
+        assert_eq!(
+            md.dependencies
+                .iter()
+                .find(|d| d.name == "Python")
+                .unwrap()
+                .version_req,
+            "==3.12.3"
+        );
+        assert_eq!(
+            md.dependencies
+                .iter()
+                .find(|d| d.name == "SciPy-bundle")
+                .unwrap()
+                .version_req,
+            "==2024.05"
+        );
+    }
+
+    #[test]
+    fn parse_real_pulp_with_source_tar_gz_constant() {
+        let c = parse_easyconfig_file(&repro_root().join("pulp/PuLP-2.8.0-foss-2024a.eb"))
+            .expect("parse PuLP (uses SOURCE_TAR_GZ)");
+        assert_eq!(c.name, "PuLP");
+        assert_eq!(c.version, "2.8.0");
+        assert_eq!(c.toolchain.label(), "foss-2024a");
+        assert_eq!(
+            c.dependencies
+                .iter()
+                .find(|d| d.name == "Python")
+                .unwrap()
+                .version_req,
+            "==3.12.3"
+        );
+        assert_eq!(
+            c.dependencies
+                .iter()
+                .find(|d| d.name == "Cbc")
+                .unwrap()
+                .version_req,
+            "==2.10.12"
+        );
+    }
+
+    #[test]
+    fn merge_candidates_overlay_wins_same_identity() {
+        let tc = Toolchain {
+            name: "foss".into(),
+            version: "2025b".into(),
+        };
+        let upstream = vec![
+            Candidate {
+                name: "Lib".into(),
+                version: "1.0".into(),
+                toolchain: tc.clone(),
+                versionsuffix: None,
+                easyconfig_path: "upstream/Lib-1.0.eb".into(),
+                dependencies: vec![],
+                builddependencies: vec![],
+                exts_list: vec![],
+            },
+            Candidate {
+                name: "Keep".into(),
+                version: "2.0".into(),
+                toolchain: tc.clone(),
+                versionsuffix: None,
+                easyconfig_path: "upstream/Keep-2.0.eb".into(),
+                dependencies: vec![],
+                builddependencies: vec![],
+                exts_list: vec![],
+            },
+        ];
+        let overlay = vec![Candidate {
+            name: "Lib".into(),
+            version: "1.0".into(),
+            toolchain: tc.clone(),
+            versionsuffix: None,
+            easyconfig_path: "overlay/Lib-1.0.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+        }];
+        let merged = merge_candidates_with_precedence(&[upstream, overlay]);
+        assert_eq!(merged.len(), 2);
+        let lib = merged.iter().find(|c| c.name == "Lib").unwrap();
+        assert_eq!(lib.easyconfig_path, "overlay/Lib-1.0.eb");
+        assert!(
+            merged
+                .iter()
+                .any(|c| c.name == "Keep" && c.easyconfig_path.contains("upstream")),
+            "non-overridden upstream must remain"
         );
     }
 }

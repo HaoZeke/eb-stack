@@ -22,9 +22,10 @@ pub use hierarchy::{
     resolve_dep_versions_in_hierarchy_strict, toolchains_match, HierarchyError, ToolchainHierarchy,
 };
 pub use eb_parse::{
-    filter_toolchain, lock_from_candidates, parse_easyconfig_file, parse_easyconfig_tree,
-    resolve_easyconfig_file, resolve_easyconfig_str, validate_lock_deps, version_field_to_req,
-    ResolvedDep, ResolvedEasyconfig, ResolvedExt,
+    filter_toolchain, lock_from_candidates, merge_candidates_with_precedence,
+    parse_easyconfig_file, parse_easyconfig_tree, parse_easyconfig_trees, resolve_easyconfig_file,
+    resolve_easyconfig_str, validate_lock_deps, version_field_to_req, ResolvedDep,
+    ResolvedEasyconfig, ResolvedExt,
 };
 pub use report::{
     classify_stack_diff, format_build_list, format_stack_diff_markdown, ordered_build_paths,
@@ -218,22 +219,25 @@ fn write_lock_sbom_and_extras(
     Ok(())
 }
 
-/// Parse easyconfigs dir, filter to policy toolchain, solve with resolvo, write lock
+/// Parse easyconfigs dir(s), filter to policy toolchain, solve with resolvo, write lock
 /// (and optional CycloneDX SBOM when `sbom_out` is `Some`).
+///
+/// `easyconfigs_roots` may list multiple trees; later paths override earlier ones for
+/// the same name+version+toolchain (site overlay on upstream).
 ///
 /// When `baseline_easyconfigs` is set and that tree holds multiple generations of the
 /// policy toolchain family, the baseline generation is chosen by
 /// [`select_baseline_generation`]: optional `baseline_toolchain_version` override, else
 /// the nearest lower generation than the policy target.
 pub fn solve_from_easyconfigs(
-    easyconfigs_root: &Path,
+    easyconfigs_roots: &[&Path],
     policy_path: &Path,
     baseline_easyconfigs: Option<&Path>,
     lock_out: &Path,
     sbom_out: Option<&Path>,
 ) -> Result<StackLock> {
     solve_from_easyconfigs_with_baseline_version_and_extras(
-        easyconfigs_root,
+        easyconfigs_roots,
         policy_path,
         baseline_easyconfigs,
         None,
@@ -245,7 +249,7 @@ pub fn solve_from_easyconfigs(
 
 /// Like [`solve_from_easyconfigs`], with an optional explicit baseline toolchain version.
 pub fn solve_from_easyconfigs_with_baseline_version(
-    easyconfigs_root: &Path,
+    easyconfigs_roots: &[&Path],
     policy_path: &Path,
     baseline_easyconfigs: Option<&Path>,
     baseline_toolchain_version: Option<&str>,
@@ -253,7 +257,7 @@ pub fn solve_from_easyconfigs_with_baseline_version(
     sbom_out: Option<&Path>,
 ) -> Result<StackLock> {
     solve_from_easyconfigs_with_baseline_version_and_extras(
-        easyconfigs_root,
+        easyconfigs_roots,
         policy_path,
         baseline_easyconfigs,
         baseline_toolchain_version,
@@ -265,7 +269,7 @@ pub fn solve_from_easyconfigs_with_baseline_version(
 
 /// Like [`solve_from_easyconfigs`], optionally writing build-list and stack-diff files.
 pub fn solve_from_easyconfigs_with_extras(
-    easyconfigs_root: &Path,
+    easyconfigs_roots: &[&Path],
     policy_path: &Path,
     baseline_easyconfigs: Option<&Path>,
     lock_out: &Path,
@@ -273,7 +277,7 @@ pub fn solve_from_easyconfigs_with_extras(
     extra: SolveExtraOut<'_>,
 ) -> Result<StackLock> {
     solve_from_easyconfigs_with_baseline_version_and_extras(
-        easyconfigs_root,
+        easyconfigs_roots,
         policy_path,
         baseline_easyconfigs,
         None,
@@ -286,8 +290,10 @@ pub fn solve_from_easyconfigs_with_extras(
 /// Full form: explicit baseline toolchain generation selection (see
 /// [`select_baseline_generation`]) plus optional operator artifacts (build list /
 /// stack diff, see [`SolveExtraOut`]). SBOM is written only when `sbom_out` is `Some`.
+///
+/// Multiple `easyconfigs_roots` are merged with later-path overlay precedence.
 pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
-    easyconfigs_root: &Path,
+    easyconfigs_roots: &[&Path],
     policy_path: &Path,
     baseline_easyconfigs: Option<&Path>,
     baseline_toolchain_version: Option<&str>,
@@ -295,15 +301,23 @@ pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
     sbom_out: Option<&Path>,
     extra: SolveExtraOut<'_>,
 ) -> Result<StackLock> {
+    if easyconfigs_roots.is_empty() {
+        bail!("at least one --easyconfigs path is required");
+    }
     let policy: Policy = load_json_file(policy_path)?;
-    let all = parse_easyconfig_tree(easyconfigs_root).map_err(|e| anyhow::anyhow!(e))?;
+    let all = parse_easyconfig_trees(easyconfigs_roots).map_err(|e| anyhow::anyhow!(e))?;
     let universe_cands = filter_toolchain(&all, &policy.toolchain);
     if universe_cands.is_empty() {
+        let roots_disp = easyconfigs_roots
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         bail!(
-            "no easyconfigs for toolchain {}-{} under {}",
+            "no easyconfigs for toolchain {}-{} under [{}]",
             policy.toolchain.name,
             policy.toolchain.version,
-            easyconfigs_root.display()
+            roots_disp
         );
     }
     let universe = Universe {
@@ -486,7 +500,7 @@ mod tests {
         let lock_out = tmp.path().join("stack.lock.json");
 
         let lock = solve_from_easyconfigs_with_baseline_version(
-            &easyconfigs,
+            &[easyconfigs.as_path()],
             &policy,
             Some(&easyconfigs),
             None,
@@ -533,7 +547,7 @@ mod tests {
         let policy = root.join("policies/prefer_newer.json");
         let tmp = tempfile::tempdir().unwrap();
         let err = solve_from_easyconfigs_with_baseline_version(
-            &easyconfigs,
+            &[easyconfigs.as_path()],
             &policy,
             Some(&easyconfigs),
             Some("2024b"),
@@ -558,7 +572,7 @@ mod tests {
         let policy = root.join("policies/prefer_newer.json");
         let tmp = tempfile::tempdir().unwrap();
         let lock = solve_from_easyconfigs_with_baseline_version(
-            &easyconfigs,
+            &[easyconfigs.as_path()],
             &policy,
             Some(&easyconfigs),
             Some("2025a"),
@@ -577,7 +591,7 @@ mod tests {
         let policy = root.join("policies/prefer_newer.json");
         let tmp = tempfile::tempdir().unwrap();
         let lock = solve_from_easyconfigs(
-            &easyconfigs,
+            &[easyconfigs.as_path()],
             &policy,
             Some(&easyconfigs),
             &tmp.path().join("lock.json"),
@@ -597,7 +611,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let lock_out = tmp.path().join("stack.lock.json");
         let _ = solve_from_easyconfigs(
-            &easyconfigs,
+            &[easyconfigs.as_path()],
             &policy,
             Some(&easyconfigs),
             &lock_out,
@@ -625,7 +639,7 @@ mod tests {
         let lock_out = tmp.path().join("stack.lock.json");
         let sbom_out = tmp.path().join("stack.cdx.json");
         let _ = solve_from_easyconfigs(
-            &easyconfigs,
+            &[easyconfigs.as_path()],
             &policy,
             Some(&easyconfigs),
             &lock_out,
@@ -634,5 +648,94 @@ mod tests {
         .expect("solve with SBOM");
         assert!(lock_out.is_file());
         assert!(sbom_out.is_file(), "explicit --sbom-out must write the file");
+    }
+
+    /// Overlay tree wins on name+version+toolchain; non-overridden upstream remains.
+    #[test]
+    fn solve_overlay_easyconfigs_precedence() {
+        let root = two_gen_root();
+        let upstream = root.join("easyconfigs");
+        let policy = root.join("policies/prefer_newer.json");
+        let tmp = tempfile::tempdir().unwrap();
+        let overlay = tmp.path().join("overlay");
+        let overlay_gen = overlay.join("foss-2025b");
+        std::fs::create_dir_all(&overlay_gen).unwrap();
+        // Overlay only replaces GROMACS 2025.0 (same name/version/toolchain) with a
+        // path that marks the overlay identity; deps stay exact-pin compatible.
+        std::fs::write(
+            overlay_gen.join("GROMACS-2025.0-foss-2025b.eb"),
+            r#"name = 'GROMACS'
+version = '2025.0'
+toolchain = {'name': 'foss', 'version': '2025b'}
+homepage = 'https://example.invalid/overlay-gromacs'
+description = "Overlay wins for GROMACS 2025.0"
+dependencies = [
+    ('OpenBLAS', '0.3.27'),
+    ('OpenMPI', '5.0.3'),
+    ('FFTW', '3.3.10'),
+    ('Python', '3.12.3'),
+]
+"#,
+        )
+        .unwrap();
+        // Non-overridden leaf unique to overlay still appears.
+        std::fs::write(
+            overlay_gen.join("SiteOnly-1.0-foss-2025b.eb"),
+            r#"name = 'SiteOnly'
+version = '1.0'
+toolchain = {'name': 'foss', 'version': '2025b'}
+dependencies = []
+"#,
+        )
+        .unwrap();
+
+        let merged = parse_easyconfig_trees(&[upstream.as_path(), overlay.as_path()])
+            .expect("merge trees");
+        let g = merged
+            .iter()
+            .find(|c| c.name == "GROMACS" && c.version == "2025.0" && c.toolchain.version == "2025b")
+            .expect("GROMACS 2025.0 present once");
+        assert!(
+            g.easyconfig_path.contains("overlay"),
+            "overlay path must win: {}",
+            g.easyconfig_path
+        );
+        assert!(
+            merged
+                .iter()
+                .any(|c| c.name == "OpenBLAS" && c.version == "0.3.27"),
+            "upstream OpenBLAS must remain"
+        );
+        assert!(
+            merged.iter().any(|c| c.name == "SiteOnly"),
+            "overlay-only package must appear"
+        );
+        // Exactly one GROMACS 2025.0-foss-2025b identity.
+        let g_count = merged
+            .iter()
+            .filter(|c| {
+                c.name == "GROMACS" && c.version == "2025.0" && c.toolchain.version == "2025b"
+            })
+            .count();
+        assert_eq!(g_count, 1);
+
+        let lock = solve_from_easyconfigs(
+            &[upstream.as_path(), overlay.as_path()],
+            &policy,
+            Some(&upstream),
+            &tmp.path().join("lock.json"),
+            None,
+        )
+        .expect("solve with overlay");
+        assert_eq!(lock.package("GROMACS").unwrap().version, "2025.0");
+        assert!(
+            lock.package("GROMACS")
+                .unwrap()
+                .easyconfig_path
+                .contains("overlay"),
+            "selected GROMACS must be the overlay recipe"
+        );
+        // Non-overridden upstream still co-selected.
+        assert_eq!(lock.package("OpenBLAS").unwrap().version, "0.3.27");
     }
 }
