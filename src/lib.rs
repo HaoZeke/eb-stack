@@ -20,12 +20,12 @@ pub use eb_emit::{
     EmitError, EmitParams, EmitResult,
 };
 pub use hierarchy::{
-    filter_candidates_in_hierarchy, hierarchy_for, hierarchy_member_rank, is_system_toolchain,
-    known_hierarchy, load_hierarchy_fixture, resolve_dep_version_in_hierarchy,
+    count_generation_dep_versions, filter_candidates_in_hierarchy, hierarchy_for,
+    hierarchy_member_rank, is_system_toolchain, known_hierarchy, load_hierarchy_fixture,
+    pick_consensus_version, resolve_dep_version_in_hierarchy,
     resolve_dep_version_in_hierarchy_opts, resolve_dep_versions_for_specs,
     resolve_dep_versions_in_hierarchy, resolve_dep_versions_in_hierarchy_strict, toolchains_match,
-    HierarchyError, ResolveDepOpts,
-    SourceDepSpec, ToolchainHierarchy,
+    HierarchyError, ResolveDepOpts, SourceDepSpec, ToolchainHierarchy,
 };
 pub use eb_parse::{
     candidate_matches_dep, check_recipe_deps, companion_easyconfig_basename, easyconfig_letter_dir,

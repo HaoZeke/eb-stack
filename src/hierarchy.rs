@@ -17,6 +17,17 @@ use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
 
+/// Minimum share of generation-scoped dependency pins a version must hold to
+/// count as a **clear** consensus (modal). Below this, the signal is treated as
+/// weak and we fall back to newest-among-used (still ≥ floor).
+///
+/// Rationale: pure plurality can favor an older back-ported pin that many
+/// packages still list (scikit-build-core 0.10.6) while maintainers of key
+/// apps (GROMACS) already moved to 0.11.1. Clear majority (CMake 3.29.3 at
+/// ~97%) still wins; weak plurality falls through to newest-in-generation.
+const CONSENSUS_CLEAR_MAJORITY_NUM: usize = 4;
+const CONSENSUS_CLEAR_MAJORITY_DEN: usize = 5; // 4/5 = 80%
+
 /// Ordered sub-toolchain hierarchy for one parent toolchain generation.
 ///
 /// Member order matches EasyBuild: most minimal first, parent last
@@ -154,6 +165,10 @@ pub struct ResolveDepOpts<'a> {
     /// When the source pins a non-empty versionsuffix, callers should typically
     /// **not bump** the dep at all (see [`resolve_dep_versions_for_specs`]).
     pub versionsuffix: Option<&'a str>,
+    /// When true (generation bump), prefer generation-consensus version selection
+    /// among eligible install candidates (see [`resolve_dep_version_in_hierarchy_opts`]).
+    /// Default false preserves prefer_newer among ranks when no floor is set.
+    pub use_consensus: bool,
 }
 
 /// Among hierarchy members for `name`, pick a safe version for the target generation.
@@ -165,12 +180,15 @@ pub struct ResolveDepOpts<'a> {
 /// 3. Optional `floor_version`: never pick a version **older** than the floor.
 /// 4. Prefer candidates on the hierarchy **parent** toolchain when present,
 ///    otherwise the highest (deepest) hierarchy member that has a candidate.
-/// 5. Among the same hierarchy rank:
-///    - if `floor_version` is set (generation bump from a source pin): pick the
-///      **oldest** version still ≥ floor (minimal upgrade / generation-freeze
-///      friendly — matches maintainer CMake 3.29.3 over later 3.31.8 on the
-///      same GCCcore);
-///    - if no floor: pick the **newest** version by [`cmp_version`].
+/// 5. Among the same hierarchy rank (or when `use_consensus` / floor is set):
+///    - **Generation consensus** (when `use_consensus` or a floor is set):
+///      count which version of `name` other recipes in the hierarchy depend on
+///      (runtime + build deps). If a version has a clear majority (≥ 80% of
+///      pins) and is eligible, pick it. Otherwise fall back to the **newest**
+///      eligible version that has at least one generation pin (else newest
+///      eligible). This matches maintainer CMake 3.29.3 (clear majority) and
+///      scikit-build-core 0.11.1 (weak plurality → newest used).
+///    - if no floor and not consensus: pick the **newest** version by [`cmp_version`].
 ///
 /// Returns `None` when no candidate satisfies the filters.
 pub fn resolve_dep_version_in_hierarchy(
@@ -192,6 +210,116 @@ pub fn hierarchy_member_rank(hierarchy: &ToolchainHierarchy, tc: &Toolchain) -> 
         .map(|(i, _)| i)
 }
 
+/// Normalize a solver `version_req` to a bare exact version for consensus
+/// counting. Accepts EasyBuild pins after [`crate::eb_parse::version_field_to_req`]
+/// (`==3.29.3` → `3.29.3`) and bare versions. Returns `None` for ranges / globs.
+fn exact_pin_version(version_req: &str) -> Option<&str> {
+    let ver = version_req.trim();
+    if ver.is_empty() || ver == "*" {
+        return None;
+    }
+    // Exact equality pin from version_field_to_req.
+    if let Some(rest) = ver.strip_prefix("==") {
+        let rest = rest.trim();
+        if rest.is_empty() || rest.contains(',') {
+            return None;
+        }
+        return Some(rest);
+    }
+    // Loose / range requirements — not consensus-countable.
+    if ver.starts_with(">=")
+        || ver.starts_with("<=")
+        || ver.starts_with("!=")
+        || ver.starts_with('>')
+        || ver.starts_with('<')
+        || ver.starts_with('~')
+        || ver.starts_with('^')
+        || ver.starts_with('=')
+        || ver.contains(',')
+    {
+        return None;
+    }
+    Some(ver)
+}
+
+/// Count exact version pins of dependency `name` among recipes whose **own**
+/// toolchain is in `hierarchy` (generation-scoped reverse-deps).
+///
+/// Both `dependencies` and `builddependencies` are counted. Only exact version
+/// pins are tallied (`3.29.3` or solver form `==3.29.3`); empty/range reqs skip.
+///
+/// Pure function for unit tests: pass a synthetic `[Candidate]` universe.
+pub fn count_generation_dep_versions(
+    name: &str,
+    cands: &[Candidate],
+    hierarchy: &ToolchainHierarchy,
+) -> HashMap<String, usize> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for consumer in cands {
+        if hierarchy_member_rank(hierarchy, &consumer.toolchain).is_none() {
+            continue;
+        }
+        for dep in consumer.dependencies.iter().chain(consumer.builddependencies.iter()) {
+            if dep.name != name {
+                continue;
+            }
+            let Some(ver) = exact_pin_version(&dep.version_req) else {
+                continue;
+            };
+            *counts.entry(ver.to_string()).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
+/// Pick a generation-consensus version of `name` among `eligible` install versions.
+///
+/// - Clear majority (≥ 80% of generation pins of `name` that land in `eligible`):
+///   that modal version.
+/// - Else: **newest** among eligible versions that appear in the pin counts
+///   (weak signal / no unique consensus).
+/// - If no pin counts hit eligible: **newest** eligible (true no-signal fallback).
+///
+/// `eligible` must already be floor/suffix/hierarchy filtered. Empty → `None`.
+pub fn pick_consensus_version(
+    counts: &HashMap<String, usize>,
+    eligible: &[String],
+) -> Option<String> {
+    if eligible.is_empty() {
+        return None;
+    }
+    // Restrict counts to eligible install versions.
+    let mut filtered: Vec<(&str, usize)> = eligible
+        .iter()
+        .filter_map(|v| counts.get(v).map(|c| (v.as_str(), *c)))
+        .filter(|(_, c)| *c > 0)
+        .collect();
+    if filtered.is_empty() {
+        // No consensus signal at all → newest eligible.
+        return eligible
+            .iter()
+            .max_by(|a, b| cmp_version(a, b))
+            .cloned();
+    }
+    let total: usize = filtered.iter().map(|(_, c)| c).sum();
+    // Modal: highest count; ties broken by newer version.
+    filtered.sort_by(|(va, ca), (vb, cb)| {
+        cb.cmp(ca).then_with(|| cmp_version(va, vb))
+    });
+    let (modal_ver, modal_count) = filtered[0];
+    let clear = modal_count.saturating_mul(CONSENSUS_CLEAR_MAJORITY_DEN)
+        >= total.saturating_mul(CONSENSUS_CLEAR_MAJORITY_NUM);
+    if clear {
+        return Some(modal_ver.to_string());
+    }
+    // Weak plurality: newest among versions that have pins.
+    filtered
+        .into_iter()
+        .map(|(v, _)| v)
+        .max_by(|a, b| cmp_version(a, b))
+        .map(|s| s.to_string())
+}
+
 /// Like [`resolve_dep_version_in_hierarchy`] with floor / versionsuffix filters.
 ///
 /// **Strict hierarchy:** only candidates whose toolchain name **and** version
@@ -205,17 +333,16 @@ pub fn resolve_dep_version_in_hierarchy_opts(
     opts: &ResolveDepOpts<'_>,
 ) -> Option<String> {
     let want_suffix = opts.versionsuffix.unwrap_or("");
-    let mut best: Option<&Candidate> = None;
-    let mut best_rank: usize = 0;
+    let mut eligible: Vec<&Candidate> = Vec::new();
 
     for c in cands {
         if c.name != name {
             continue;
         }
         // Strict: name+version membership; out-of-generation GCCcore/GCC excluded.
-        let Some(rank) = hierarchy_member_rank(hierarchy, &c.toolchain) else {
+        if hierarchy_member_rank(hierarchy, &c.toolchain).is_none() {
             continue;
-        };
+        }
         let got_suffix = c.versionsuffix.as_deref().unwrap_or("");
         if got_suffix != want_suffix {
             continue;
@@ -225,30 +352,46 @@ pub fn resolve_dep_version_in_hierarchy_opts(
                 continue;
             }
         }
+        eligible.push(c);
+    }
+    if eligible.is_empty() {
+        return None;
+    }
+
+    let use_consensus = opts.use_consensus || opts.floor_version.is_some();
+    if use_consensus {
+        let versions: Vec<String> = {
+            let mut v: Vec<String> = eligible.iter().map(|c| c.version.clone()).collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        let counts = count_generation_dep_versions(name, cands, hierarchy);
+        if let Some(picked) = pick_consensus_version(&counts, &versions) {
+            return Some(picked);
+        }
+    }
+
+    // Legacy prefer_newer / rank walk (no floor, no consensus).
+    let mut best: Option<&Candidate> = None;
+    let mut best_rank: usize = 0;
+    for c in eligible {
+        let rank = hierarchy_member_rank(hierarchy, &c.toolchain).unwrap_or(0);
         best = match best {
             None => {
                 best_rank = rank;
                 Some(c)
             }
             Some(prev) => {
-                // Prefer higher hierarchy rank (closer to / equal parent).
                 if rank > best_rank {
                     best_rank = rank;
                     Some(c)
                 } else if rank < best_rank {
                     Some(prev)
+                } else if cmp_version(&c.version, &prev.version) == Ordering::Greater {
+                    Some(c)
                 } else {
-                    // Same rank: minimal upgrade when floor is set, else prefer_newer.
-                    let better = if opts.floor_version.is_some() {
-                        cmp_version(&c.version, &prev.version) == Ordering::Less
-                    } else {
-                        cmp_version(&c.version, &prev.version) == Ordering::Greater
-                    };
-                    if better {
-                        Some(c)
-                    } else {
-                        Some(prev)
-                    }
+                    Some(prev)
                 }
             }
         };
@@ -381,6 +524,7 @@ pub fn resolve_dep_versions_for_specs(
         let opts = ResolveDepOpts {
             floor_version: Some(spec.version.as_str()),
             versionsuffix: None,
+            use_consensus: true,
         };
         match resolve_dep_version_in_hierarchy_opts(&spec.name, cands, hierarchy, &opts) {
             Some(ver) => {
@@ -542,6 +686,38 @@ mod tests {
         }
     }
 
+    fn dep_pin(name: &str, ver: &str) -> crate::domain::DepReq {
+        crate::domain::DepReq {
+            name: name.into(),
+            // Mirror version_field_to_req: exact pins become ==V in Candidates.
+            version_req: format!("=={ver}"),
+            versionsuffix: None,
+            toolchain: None,
+        }
+    }
+
+    #[test]
+    fn exact_pin_version_strips_double_equals() {
+        assert_eq!(exact_pin_version("==3.29.3"), Some("3.29.3"));
+        assert_eq!(exact_pin_version("3.29.3"), Some("3.29.3"));
+        assert_eq!(exact_pin_version(">=3.29"), None);
+        assert_eq!(exact_pin_version("*"), None);
+    }
+
+    /// Consumer recipe in the generation that pins `dep_name` at `dep_ver` (builddep).
+    fn consumer_pinning(
+        pkg: &str,
+        pkg_ver: &str,
+        tc_name: &str,
+        tc_ver: &str,
+        dep_name: &str,
+        dep_ver: &str,
+    ) -> Candidate {
+        let mut c = cand(pkg, pkg_ver, tc_name, tc_ver, None);
+        c.builddependencies = vec![dep_pin(dep_name, dep_ver)];
+        c
+    }
+
     #[test]
     fn resolve_never_returns_older_than_floor() {
         let h = known_hierarchy(&foss("2024a")).unwrap();
@@ -554,6 +730,7 @@ mod tests {
         let opts = ResolveDepOpts {
             floor_version: Some("3.0.0"),
             versionsuffix: None,
+            use_consensus: true,
         };
         assert_eq!(
             resolve_dep_version_in_hierarchy_opts("Cython", &cands, &h, &opts).as_deref(),
@@ -579,6 +756,7 @@ mod tests {
         let plain = ResolveDepOpts {
             floor_version: Some("14.0.0"),
             versionsuffix: None,
+            use_consensus: true,
         };
         assert_eq!(
             resolve_dep_version_in_hierarchy_opts("LLVM", &cands, &h, &plain).as_deref(),
@@ -588,6 +766,7 @@ mod tests {
         let llvmlite = ResolveDepOpts {
             floor_version: Some("14.0.0"),
             versionsuffix: Some("-llvmlite"),
+            use_consensus: true,
         };
         assert_eq!(
             resolve_dep_version_in_hierarchy_opts("LLVM", &cands, &h, &llvmlite).as_deref(),
@@ -685,37 +864,142 @@ mod tests {
     }
 
     #[test]
-    fn resolve_with_floor_picks_minimal_upgrade_not_global_newest_in_generation() {
+    fn resolve_with_floor_uses_generation_consensus_not_blind_newest() {
         let h = known_hierarchy(&foss("2024a")).unwrap();
         // Real tree: both CMake 3.29.3 and 3.31.8 ship on GCCcore-13.3.0.
-        // Generation bump from 3.27.6 must prefer 3.29.3 (maintainer) over 3.31.8.
-        let cands = vec![
+        // Clear majority of generation consumers pin 3.29.3 → consensus wins.
+        let mut cands = vec![
             cand("CMake", "3.29.3", "GCCcore", "13.3.0", None),
             cand("CMake", "3.31.8", "GCCcore", "13.3.0", None),
             cand("CMake", "3.31.8", "GCCcore", "14.3.0", None),
         ];
+        for i in 0..10 {
+            cands.push(consumer_pinning(
+                &format!("App{i}"),
+                "1.0",
+                "foss",
+                "2024a",
+                "CMake",
+                "3.29.3",
+            ));
+        }
+        cands.push(consumer_pinning("NewApp", "1.0", "foss", "2024a", "CMake", "3.31.8"));
         let opts = ResolveDepOpts {
             floor_version: Some("3.27.6"),
             versionsuffix: None,
+            use_consensus: true,
         };
         assert_eq!(
             resolve_dep_version_in_hierarchy_opts("CMake", &cands, &h, &opts).as_deref(),
             Some("3.29.3")
         );
-        // scikit-learn same rank on gfbf-2024a: minimal upgrade from 1.4.0 → 1.5.2 not 1.6.1.
-        let sk = vec![
+        // scikit-learn: clear majority pins 1.5.2 → not newest 1.6.1.
+        let mut sk = vec![
             cand("scikit-learn", "1.5.2", "gfbf", "2024a", None),
             cand("scikit-learn", "1.6.1", "gfbf", "2024a", None),
             cand("scikit-learn", "1.7.0", "gfbf", "2025a", None),
         ];
+        for i in 0..8 {
+            sk.push(consumer_pinning(
+                &format!("Sci{i}"),
+                "1.0",
+                "gfbf",
+                "2024a",
+                "scikit-learn",
+                "1.5.2",
+            ));
+        }
+        sk.push(consumer_pinning("SciNew", "1.0", "gfbf", "2024a", "scikit-learn", "1.6.1"));
         let opts_sk = ResolveDepOpts {
             floor_version: Some("1.4.0"),
             versionsuffix: None,
+            use_consensus: true,
         };
         assert_eq!(
             resolve_dep_version_in_hierarchy_opts("scikit-learn", &sk, &h, &opts_sk).as_deref(),
             Some("1.5.2")
         );
+    }
+
+    #[test]
+    fn consensus_modal_clear_majority_wins() {
+        let mut counts = HashMap::new();
+        counts.insert("3.29.3".into(), 20);
+        counts.insert("3.31.8".into(), 2);
+        let eligible = vec!["3.29.3".into(), "3.31.8".into()];
+        assert_eq!(
+            pick_consensus_version(&counts, &eligible).as_deref(),
+            Some("3.29.3")
+        );
+    }
+
+    #[test]
+    fn consensus_weak_plurality_falls_back_to_newest_used() {
+        // scikit-build-core style: 17 vs 5 is only ~77% — not a clear majority.
+        let mut counts = HashMap::new();
+        counts.insert("0.10.6".into(), 17);
+        counts.insert("0.11.1".into(), 5);
+        let eligible = vec!["0.10.6".into(), "0.11.1".into()];
+        assert_eq!(
+            pick_consensus_version(&counts, &eligible).as_deref(),
+            Some("0.11.1"),
+            "weak plurality → newest among used"
+        );
+    }
+
+    #[test]
+    fn consensus_empty_signal_falls_back_to_newest_eligible() {
+        let counts = HashMap::new();
+        let eligible = vec!["0.10.6".into(), "0.11.1".into()];
+        assert_eq!(
+            pick_consensus_version(&counts, &eligible).as_deref(),
+            Some("0.11.1")
+        );
+    }
+
+    #[test]
+    fn consensus_respects_floor_via_eligible_filter() {
+        let h = known_hierarchy(&foss("2024a")).unwrap();
+        let mut cands = vec![
+            cand("CMake", "3.29.3", "GCCcore", "13.3.0", None),
+            cand("CMake", "3.31.8", "GCCcore", "13.3.0", None),
+        ];
+        // Majority pins old 3.29.3, but floor at 3.30.0 excludes it.
+        for i in 0..10 {
+            cands.push(consumer_pinning(
+                &format!("App{i}"),
+                "1.0",
+                "foss",
+                "2024a",
+                "CMake",
+                "3.29.3",
+            ));
+        }
+        let opts = ResolveDepOpts {
+            floor_version: Some("3.30.0"),
+            versionsuffix: None,
+            use_consensus: true,
+        };
+        assert_eq!(
+            resolve_dep_version_in_hierarchy_opts("CMake", &cands, &h, &opts).as_deref(),
+            Some("3.31.8"),
+            "floor must exclude older consensus pin"
+        );
+    }
+
+    #[test]
+    fn count_generation_dep_versions_scopes_to_hierarchy_only() {
+        let h = known_hierarchy(&foss("2024a")).unwrap();
+        let cands = vec![
+            cand("CMake", "3.29.3", "GCCcore", "13.3.0", None),
+            consumer_pinning("InGen", "1.0", "foss", "2024a", "CMake", "3.29.3"),
+            // Out-of-generation consumer must NOT count.
+            consumer_pinning("OutGen", "1.0", "foss", "2025a", "CMake", "3.31.8"),
+            consumer_pinning("InGen2", "1.0", "gfbf", "2024a", "CMake", "3.29.3"),
+        ];
+        let counts = count_generation_dep_versions("CMake", &cands, &h);
+        assert_eq!(counts.get("3.29.3").copied(), Some(2));
+        assert!(!counts.contains_key("3.31.8"), "out-of-gen pins must not count: {counts:?}");
     }
 
     #[test]
