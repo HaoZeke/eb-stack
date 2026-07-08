@@ -43,6 +43,10 @@ pub struct ResolvedExt {
 }
 
 /// Fully resolved easyconfig fields (templates and locals applied).
+///
+/// Solver-facing co-selection uses [`Self::to_candidate`]. Packaging /
+/// contribution checks also use the optional metadata fields below
+/// (`easyblock`, `configopts`, `moduleclass`, …).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedEasyconfig {
     pub name: String,
@@ -59,6 +63,21 @@ pub struct ResolvedEasyconfig {
     /// Path of the source `.eb` when parsed from disk (empty for in-memory text).
     #[serde(default)]
     pub easyconfig_path: String,
+    /// EasyBuild easyblock class name (`MesonNinja`, `CMakeMake`, …).
+    #[serde(default)]
+    pub easyblock: Option<String>,
+    /// Meson/CMake/configure flags string after template expansion.
+    #[serde(default)]
+    pub configopts: Option<String>,
+    /// EasyBuild moduleclass (`chem`, `lib`, `tools`, …).
+    #[serde(default)]
+    pub moduleclass: Option<String>,
+    /// Homepage URL when set.
+    #[serde(default)]
+    pub homepage: Option<String>,
+    /// Source checksums list (strings), when present — used for packaging gates.
+    #[serde(default)]
+    pub checksums: Vec<String>,
 }
 
 impl ResolvedEasyconfig {
@@ -1068,6 +1087,12 @@ pub fn resolve_easyconfig_str(src: &str) -> Result<ResolvedEasyconfig, ParseErro
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| ParseError::Parse("<string>".into(), e))?;
 
+    let easyblock = opt_str_field(&parser.env, "easyblock", &templates);
+    let configopts = opt_str_field(&parser.env, "configopts", &templates);
+    let moduleclass = opt_str_field(&parser.env, "moduleclass", &templates);
+    let homepage = opt_str_field(&parser.env, "homepage", &templates);
+    let checksums = opt_str_list_field(&parser.env, "checksums", &templates);
+
     Ok(ResolvedEasyconfig {
         name,
         version,
@@ -1077,7 +1102,44 @@ pub fn resolve_easyconfig_str(src: &str) -> Result<ResolvedEasyconfig, ParseErro
         builddependencies,
         exts_list,
         easyconfig_path: String::new(),
+        easyblock,
+        configopts,
+        moduleclass,
+        homepage,
+        checksums,
     })
+}
+
+fn opt_str_field(
+    env: &HashMap<String, Value>,
+    key: &str,
+    templates: &HashMap<String, String>,
+) -> Option<String> {
+    env.get(key).and_then(|v| {
+        let v = apply_templates_value(v, templates);
+        v.expect_str(key).ok().map(|s| s)
+    })
+}
+
+fn opt_str_list_field(
+    env: &HashMap<String, Value>,
+    key: &str,
+    templates: &HashMap<String, String>,
+) -> Vec<String> {
+    let Some(v) = env.get(key) else {
+        return Vec::new();
+    };
+    let v = apply_templates_value(v, templates);
+    match value_list_as_slice(Some(&v)) {
+        Ok(items) => items
+            .iter()
+            .filter_map(|i| i.expect_str(key).ok())
+            .collect(),
+        Err(_) => match v.expect_str(key) {
+            Ok(s) => vec![s],
+            Err(_) => Vec::new(),
+        },
+    }
 }
 
 /// Resolve one `.eb` file to fully expanded fields.
@@ -1176,6 +1238,147 @@ pub fn parse_easyconfig_tree(root: &Path) -> Result<ParseTreeResult, ParseError>
 /// [`parse_easyconfig_tree`] when skip reporting matters.
 pub fn parse_easyconfig_tree_candidates(root: &Path) -> Result<Vec<Candidate>, ParseError> {
     Ok(parse_easyconfig_tree(root)?.candidates)
+}
+
+/// One missing (or unmatched) dependency from a packaging/robot check.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MissingDep {
+    pub name: String,
+    pub version: String,
+    pub versionsuffix: Option<String>,
+    pub toolchain: Option<Toolchain>,
+    /// Runtime vs build-time role in the recipe.
+    pub role: String,
+    pub reason: String,
+}
+
+/// Result of checking that a recipe's deps exist somewhere in a robot universe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecipeDepCheck {
+    pub recipe: String,
+    pub name: String,
+    pub version: String,
+    pub toolchain: Toolchain,
+    pub easyblock: Option<String>,
+    pub configopts: Option<String>,
+    pub moduleclass: Option<String>,
+    pub checksum_count: usize,
+    pub missing: Vec<MissingDep>,
+    pub found: Vec<String>,
+}
+
+impl RecipeDepCheck {
+    pub fn ok(&self) -> bool {
+        self.missing.is_empty()
+    }
+}
+
+/// Whether a universe candidate satisfies a resolved dep (name + version +
+/// optional versionsuffix + optional per-dep toolchain). Cross-toolchain
+/// deps (e.g. eOn/gfbf depending on quill/GCCcore) are first-class here —
+/// unlike [`filter_toolchain`] which keeps only the policy toolchain.
+pub fn candidate_matches_dep(c: &Candidate, dep: &ResolvedDep) -> bool {
+    if c.name != dep.name {
+        return false;
+    }
+    if !matches_req(&c.version, &version_field_to_req(&dep.version)) {
+        return false;
+    }
+    let want_vs = dep.versionsuffix.as_deref().unwrap_or("");
+    let got_vs = c.versionsuffix.as_deref().unwrap_or("");
+    if want_vs != got_vs {
+        return false;
+    }
+    if let Some(tc) = &dep.toolchain {
+        if c.toolchain.name != tc.name || c.toolchain.version != tc.version {
+            return false;
+        }
+    }
+    true
+}
+
+/// Check that every runtime/build dep of `recipe` appears as a candidate in
+/// `universe` (any tree layer already merged). Does **not** run the SAT
+/// solver — this is the packaging/robot completeness gate used before `eb`.
+pub fn check_recipe_deps(recipe: &ResolvedEasyconfig, universe: &[Candidate]) -> RecipeDepCheck {
+    let mut missing = Vec::new();
+    let mut found = Vec::new();
+    for (role, deps) in [
+        ("runtime", recipe.dependencies.as_slice()),
+        ("build", recipe.builddependencies.as_slice()),
+    ] {
+        for d in deps {
+            if universe.iter().any(|c| candidate_matches_dep(c, d)) {
+                found.push(format!(
+                    "{role}:{}-{}{}",
+                    d.name,
+                    d.version,
+                    d.toolchain
+                        .as_ref()
+                        .map(|t| format!(" ({})", t.label()))
+                        .unwrap_or_default()
+                ));
+            } else {
+                missing.push(MissingDep {
+                    name: d.name.clone(),
+                    version: d.version.clone(),
+                    versionsuffix: d.versionsuffix.clone(),
+                    toolchain: d.toolchain.clone(),
+                    role: role.into(),
+                    reason: format!(
+                        "no candidate for {} {}{} in robot universe",
+                        d.name,
+                        d.version,
+                        d.toolchain
+                            .as_ref()
+                            .map(|t| format!(" toolchain={}", t.label()))
+                            .unwrap_or_default()
+                    ),
+                });
+            }
+        }
+    }
+    RecipeDepCheck {
+        recipe: recipe.easyconfig_path.clone(),
+        name: recipe.name.clone(),
+        version: recipe.version.clone(),
+        toolchain: recipe.toolchain.clone(),
+        easyblock: recipe.easyblock.clone(),
+        configopts: recipe.configopts.clone(),
+        moduleclass: recipe.moduleclass.clone(),
+        checksum_count: recipe.checksums.len(),
+        missing,
+        found,
+    }
+}
+
+/// Packaging gate: checksum present, easyblock/moduleclass set, and optional
+/// required configopts substrings (e.g. `-Dwith_tests=false`).
+pub fn packaging_gate(
+    recipe: &ResolvedEasyconfig,
+    required_configopts: &[&str],
+) -> Result<(), Vec<String>> {
+    let mut errs = Vec::new();
+    if recipe.easyblock.as_deref().unwrap_or("").is_empty() {
+        errs.push("missing easyblock".into());
+    }
+    if recipe.moduleclass.as_deref().unwrap_or("").is_empty() {
+        errs.push("missing moduleclass".into());
+    }
+    if recipe.checksums.is_empty() {
+        errs.push("missing checksums".into());
+    }
+    let opts = recipe.configopts.as_deref().unwrap_or("");
+    for need in required_configopts {
+        if !opts.contains(need) {
+            errs.push(format!("configopts missing required flag {need:?}"));
+        }
+    }
+    if errs.is_empty() {
+        Ok(())
+    } else {
+        Err(errs)
+    }
 }
 
 fn candidate_identity_key(c: &Candidate) -> (String, String, String) {
@@ -1345,10 +1548,16 @@ mod tests {
     }
 
     fn assert_resolved_matches_golden(eb_name: &str, golden_name: &str) {
-        let got = resolve_easyconfig_file(&hardcase_eb(eb_name)).expect("resolve");
+        let mut got = resolve_easyconfig_file(&hardcase_eb(eb_name)).expect("resolve");
         let mut expect = load_golden(golden_name);
         // Compare semantic fields; path is set on `got` only.
         expect.easyconfig_path = got.easyconfig_path.clone();
+        // Packaging metadata (easyblock/configopts/…) is additive; goldens predate it.
+        got.easyblock = expect.easyblock.clone();
+        got.configopts = expect.configopts.clone();
+        got.moduleclass = expect.moduleclass.clone();
+        got.homepage = expect.homepage.clone();
+        got.checksums = expect.checksums.clone();
         assert_eq!(got, expect, "mismatch for {eb_name}");
         // No unresolved templates in resolved fields.
         let dump = serde_json::to_string(&got).unwrap();
@@ -1641,6 +1850,11 @@ mod tests {
                 version: "0.1".into(),
             }],
             easyconfig_path: "App.eb".into(),
+            easyblock: None,
+            configopts: None,
+            moduleclass: None,
+            homepage: None,
+            checksums: vec![],
         };
         let c = resolved.to_candidate();
         let cuda = c.dependencies.iter().find(|d| d.name == "CudaLib").unwrap();
@@ -1935,5 +2149,112 @@ builddependencies = [
                 .any(|c| c.name == "Keep" && c.easyconfig_path.contains("upstream")),
             "non-overridden upstream must remain"
         );
+    }
+
+    fn blank_recipe() -> ResolvedEasyconfig {
+        ResolvedEasyconfig {
+            name: "X".into(),
+            version: "1.0".into(),
+            versionsuffix: None,
+            toolchain: Toolchain {
+                name: "gfbf".into(),
+                version: "2024a".into(),
+            },
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+            easyconfig_path: "X.eb".into(),
+            easyblock: None,
+            configopts: None,
+            moduleclass: None,
+            homepage: None,
+            checksums: vec![],
+        }
+    }
+
+    #[test]
+    fn packaging_gate_requires_easyblock_moduleclass_checksums() {
+        let mut r = blank_recipe();
+        let errs = packaging_gate(&r, &[]).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("easyblock")));
+        assert!(errs.iter().any(|e| e.contains("moduleclass")));
+        assert!(errs.iter().any(|e| e.contains("checksums")));
+
+        r.easyblock = Some("MesonNinja".into());
+        r.moduleclass = Some("chem".into());
+        r.checksums = vec!["deadbeef".into()];
+        r.configopts = Some("-Dwith_fortran=true -Dwith_tests=false".into());
+        packaging_gate(&r, &["-Dwith_fortran=true", "-Dwith_tests=false"]).unwrap();
+        let miss = packaging_gate(&r, &["-Dwith_metatomic=true"]).unwrap_err();
+        assert!(miss.iter().any(|e| e.contains("with_metatomic")));
+    }
+
+    #[test]
+    fn candidate_matches_dep_cross_toolchain() {
+        let dep = ResolvedDep {
+            name: "quill".into(),
+            version: "11.1.0".into(),
+            versionsuffix: None,
+            toolchain: Some(Toolchain {
+                name: "GCCcore".into(),
+                version: "13.3.0".into(),
+            }),
+        };
+        let ok = Candidate {
+            name: "quill".into(),
+            version: "11.1.0".into(),
+            toolchain: Toolchain {
+                name: "GCCcore".into(),
+                version: "13.3.0".into(),
+            },
+            versionsuffix: None,
+            easyconfig_path: "quill.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+        };
+        let wrong_tc = Candidate {
+            toolchain: Toolchain {
+                name: "gfbf".into(),
+                version: "2024a".into(),
+            },
+            ..ok.clone()
+        };
+        assert!(candidate_matches_dep(&ok, &dep));
+        assert!(!candidate_matches_dep(&wrong_tc, &dep));
+    }
+
+    #[test]
+    fn check_recipe_deps_reports_missing_and_found() {
+        let mut r = blank_recipe();
+        r.dependencies = vec![ResolvedDep {
+            name: "Python".into(),
+            version: "3.12.3".into(),
+            versionsuffix: None,
+            toolchain: None,
+        }];
+        r.builddependencies = vec![ResolvedDep {
+            name: "Meson".into(),
+            version: "1.4.0".into(),
+            versionsuffix: None,
+            toolchain: None,
+        }];
+        let universe = vec![Candidate {
+            name: "Python".into(),
+            version: "3.12.3".into(),
+            toolchain: Toolchain {
+                name: "GCCcore".into(),
+                version: "13.3.0".into(),
+            },
+            versionsuffix: None,
+            easyconfig_path: "Python.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+        }];
+        let check = check_recipe_deps(&r, &universe);
+        assert!(!check.ok());
+        assert!(check.found.iter().any(|f| f.contains("Python")));
+        assert!(check.missing.iter().any(|m| m.name == "Meson" && m.role == "build"));
     }
 }

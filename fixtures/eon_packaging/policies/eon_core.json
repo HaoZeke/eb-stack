@@ -1,0 +1,8 @@
+{
+  "toolchain": { "name": "gfbf", "version": "2024a" },
+  "roots": ["eOn"],
+  "pins": [],
+  "forbid": [],
+  "objective": "prefer_newer",
+  "require_upgrade": null
+}

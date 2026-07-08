@@ -27,11 +27,11 @@ pub use hierarchy::{
     SourceDepSpec, ToolchainHierarchy,
 };
 pub use eb_parse::{
-    filter_toolchain, lock_from_candidates, merge_candidates_with_precedence,
-    parse_easyconfig_file, parse_easyconfig_tree, parse_easyconfig_tree_candidates,
-    parse_easyconfig_trees, resolve_easyconfig_file, resolve_easyconfig_str, validate_lock_deps,
-    version_field_to_req, ParseTreeResult, ResolvedDep, ResolvedEasyconfig, ResolvedExt,
-    SkippedEasyconfig,
+    candidate_matches_dep, check_recipe_deps, filter_toolchain, lock_from_candidates,
+    merge_candidates_with_precedence, packaging_gate, parse_easyconfig_file, parse_easyconfig_tree,
+    parse_easyconfig_tree_candidates, parse_easyconfig_trees, resolve_easyconfig_file,
+    resolve_easyconfig_str, validate_lock_deps, version_field_to_req, MissingDep, ParseTreeResult,
+    RecipeDepCheck, ResolvedDep, ResolvedEasyconfig, ResolvedExt, SkippedEasyconfig,
 };
 pub use report::{
     classify_stack_diff, format_build_list, format_stack_diff_markdown, ordered_build_paths,

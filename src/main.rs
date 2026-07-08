@@ -3,8 +3,9 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use eb_stack::{
-    emit_next_generation_auto_from_path_with_opts, emit_next_generation_from_path, load_json_file,
-    lock_to_cyclonedx, parse_easyconfig_tree,
+    check_recipe_deps, emit_next_generation_auto_from_path_with_opts,
+    emit_next_generation_from_path, load_json_file, lock_to_cyclonedx, packaging_gate,
+    parse_easyconfig_tree, parse_easyconfig_trees, resolve_easyconfig_file,
     solve_from_easyconfigs_with_baseline_version_and_extras, solve_to_files_with_extras,
     AutoResolveOpts, EmitParams, SolveExtraOut, StackLock, Toolchain,
 };
@@ -62,6 +63,25 @@ enum Cmd {
         toolchain_name: Option<String>,
         #[arg(long)]
         toolchain_version: Option<String>,
+    },
+    /// Packaging check: resolve one recipe and verify deps exist in robot tree(s).
+    ///
+    /// Cross-toolchain deps (e.g. `quill` on GCCcore while the recipe is `gfbf`)
+    /// are matched by identity, not policy-toolchain filter. Exit 1 if any dep
+    /// is missing or packaging gates fail.
+    CheckRecipe {
+        /// Recipe `.eb` to validate
+        #[arg(long)]
+        recipe: PathBuf,
+        /// Robot easyconfig tree(s); later paths override earlier (draft overlay).
+        #[arg(long, required = true)]
+        easyconfigs: Vec<PathBuf>,
+        /// Require these substrings in configopts (repeatable)
+        #[arg(long = "require-configopt")]
+        require_configopts: Vec<String>,
+        /// Skip the missing-dep robot check (only packaging metadata gates)
+        #[arg(long)]
+        metadata_only: bool,
     },
     /// Legacy: solve from pre-baked universe JSON (still tested).
     SolveJson {
@@ -251,6 +271,92 @@ fn main() -> Result<()> {
                 cands.retain(|c| c.toolchain.name == n && c.toolchain.version == v);
             }
             println!("{}", serde_json::to_string_pretty(&cands)?);
+        }
+        Cmd::CheckRecipe {
+            recipe,
+            easyconfigs,
+            require_configopts,
+            metadata_only,
+        } => {
+            let resolved =
+                resolve_easyconfig_file(&recipe).map_err(|e| anyhow::anyhow!(e))?;
+            let reqs: Vec<&str> = require_configopts.iter().map(String::as_str).collect();
+            let gate = packaging_gate(&resolved, &reqs);
+            if !metadata_only {
+                let roots: Vec<&std::path::Path> =
+                    easyconfigs.iter().map(|p| p.as_path()).collect();
+                let tree = parse_easyconfig_trees(&roots).map_err(|e| anyhow::anyhow!(e))?;
+                if !tree.skipped.is_empty() {
+                    eprintln!(
+                        "robot parse: skipped {} ({:.1}% coverage)",
+                        tree.skip_count(),
+                        100.0 * tree.coverage()
+                    );
+                }
+                let check = check_recipe_deps(&resolved, &tree.candidates);
+                println!("{}", serde_json::to_string_pretty(&check)?);
+                if let Err(errs) = &gate {
+                    for e in errs {
+                        eprintln!("packaging-gate: {e}");
+                    }
+                }
+                if !check.ok() || gate.is_err() {
+                    for m in &check.missing {
+                        eprintln!(
+                            "missing-dep [{}] {} {}: {}",
+                            m.role, m.name, m.version, m.reason
+                        );
+                    }
+                    bail!(
+                        "check-recipe failed: {} missing dep(s), packaging_gate={}",
+                        check.missing.len(),
+                        gate.is_ok()
+                    );
+                }
+                eprintln!(
+                    "check-recipe OK: {} {} ({}) easyblock={:?} moduleclass={:?} checksums={} found={}",
+                    check.name,
+                    check.version,
+                    check.toolchain.label(),
+                    check.easyblock,
+                    check.moduleclass,
+                    check.checksum_count,
+                    check.found.len()
+                );
+            } else if let Err(errs) = gate {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "name": resolved.name,
+                        "version": resolved.version,
+                        "toolchain": resolved.toolchain,
+                        "easyblock": resolved.easyblock,
+                        "configopts": resolved.configopts,
+                        "moduleclass": resolved.moduleclass,
+                        "checksums": resolved.checksums,
+                        "homepage": resolved.homepage,
+                    }))?
+                );
+                for e in &errs {
+                    eprintln!("packaging-gate: {e}");
+                }
+                bail!("check-recipe metadata-only failed: {} issue(s)", errs.len());
+            } else {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "name": resolved.name,
+                        "version": resolved.version,
+                        "toolchain": resolved.toolchain,
+                        "easyblock": resolved.easyblock,
+                        "configopts": resolved.configopts,
+                        "moduleclass": resolved.moduleclass,
+                        "checksums": resolved.checksums,
+                        "homepage": resolved.homepage,
+                    }))?
+                );
+                eprintln!("check-recipe metadata OK");
+            }
         }
         Cmd::SolveJson {
             universe,
