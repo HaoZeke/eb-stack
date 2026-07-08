@@ -1,11 +1,12 @@
 //! eb-stack: parse EasyBuild easyconfigs, resolvo SAT co-select, planned CycloneDX SBOM.
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use eb_stack::{
-    load_json_file, lock_to_cyclonedx, parse_easyconfig_tree, solve_from_easyconfigs, solve_to_files,
-    StackLock,
+    emit_next_generation_from_path, load_json_file, lock_to_cyclonedx, parse_easyconfig_tree,
+    solve_from_easyconfigs, solve_to_files, EmitParams, StackLock, Toolchain,
 };
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -66,6 +67,54 @@ enum Cmd {
         #[arg(long, default_value = "stack.cdx.json")]
         out: PathBuf,
     },
+    /// Produce a next-generation easyconfig from an existing recipe.
+    ///
+    /// Rewrites `toolchain`, optional application `version`, and named
+    /// dependency / build-dependency versions; preserves all other source
+    /// content. Writes `{name}-{version}-{tcname}-{tcver}.eb` under `--out-dir`
+    /// (or to an explicit `--out` file path).
+    Bump {
+        /// Source easyconfig (`.eb`) to rewrite
+        #[arg(long)]
+        source: PathBuf,
+        /// Target toolchain name (e.g. foss)
+        #[arg(long)]
+        toolchain_name: String,
+        /// Target toolchain version / generation (e.g. 2025b)
+        #[arg(long)]
+        toolchain_version: String,
+        /// Optional new application version
+        #[arg(long)]
+        version: Option<String>,
+        /// Dependency version override as `Name=version` (repeatable).
+        /// Also applied to `builddependencies`. If `version` includes an
+        /// operator (`>=`, `==`, …) it replaces the whole version field;
+        /// otherwise any operator on the source entry is preserved.
+        #[arg(long = "dep", value_name = "NAME=VERSION")]
+        deps: Vec<String>,
+        /// Output directory; file is written as the conventional basename
+        #[arg(long, conflicts_with = "out")]
+        out_dir: Option<PathBuf>,
+        /// Explicit output file path (overrides conventional directory write)
+        #[arg(long, conflicts_with = "out_dir")]
+        out: Option<PathBuf>,
+    },
+}
+
+fn parse_dep_overrides(deps: &[String]) -> Result<HashMap<String, String>> {
+    let mut map = HashMap::new();
+    for d in deps {
+        let Some((name, ver)) = d.split_once('=') else {
+            bail!("--dep expects NAME=VERSION, got {d:?}");
+        };
+        let name = name.trim();
+        let ver = ver.trim();
+        if name.is_empty() || ver.is_empty() {
+            bail!("--dep expects non-empty NAME=VERSION, got {d:?}");
+        }
+        map.insert(name.to_string(), ver.to_string());
+    }
+    Ok(map)
 }
 
 fn main() -> Result<()> {
@@ -153,6 +202,45 @@ fn main() -> Result<()> {
             let sbom = lock_to_cyclonedx(&lock);
             eb_stack::write_json_pretty(&out, &sbom)?;
             println!("wrote {}", out.display());
+        }
+        Cmd::Bump {
+            source,
+            toolchain_name,
+            toolchain_version,
+            version,
+            deps,
+            out_dir,
+            out,
+        } => {
+            let params = EmitParams {
+                toolchain: Toolchain {
+                    name: toolchain_name,
+                    version: toolchain_version,
+                },
+                version,
+                dep_versions: parse_dep_overrides(&deps)?,
+            };
+            let result = emit_next_generation_from_path(&source, &params)
+                .with_context(|| format!("bump {}", source.display()))?;
+            let dest = if let Some(path) = out {
+                path
+            } else if let Some(dir) = out_dir {
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("create out-dir {}", dir.display()))?;
+                dir.join(&result.filename)
+            } else {
+                // Default: write beside CWD using conventional name.
+                PathBuf::from(&result.filename)
+            };
+            if let Some(parent) = dest.parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent)
+                        .with_context(|| format!("create parent {}", parent.display()))?;
+                }
+            }
+            std::fs::write(&dest, &result.text)
+                .with_context(|| format!("write {}", dest.display()))?;
+            println!("wrote {} (from {})", dest.display(), source.display());
         }
     }
     Ok(())
