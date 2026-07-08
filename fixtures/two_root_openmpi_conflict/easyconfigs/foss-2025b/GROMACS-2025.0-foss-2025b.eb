@@ -1,0 +1,8 @@
+name = 'GROMACS'
+version = '2025.0'
+toolchain = {'name': 'foss', 'version': '2025b'}
+homepage = 'https://www.gromacs.org'
+description = "Newest GROMACS: exact older OpenMPI pin (multi-root conflict fixture)."
+dependencies = [
+    ('OpenMPI', '==4.1.6'),
+]

@@ -1,0 +1,8 @@
+name = 'LAMMPS'
+version = '2024.08'
+toolchain = {'name': 'foss', 'version': '2025b'}
+homepage = 'https://www.lammps.org'
+description = "Newest LAMMPS: requires newer OpenMPI (multi-root conflict fixture)."
+dependencies = [
+    ('OpenMPI', '>=5.0.3'),
+]

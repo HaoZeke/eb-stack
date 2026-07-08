@@ -197,6 +197,7 @@ mod tests {
         let policy = Policy {
             toolchain: tc,
             roots: vec!["App".into()],
+            root_priority: None,
             pins: vec![],
             forbid: vec![],
             objective: "prefer_newer".into(),
@@ -241,6 +242,7 @@ mod tests {
         let policy = Policy {
             toolchain: tc,
             roots: vec!["App".into()],
+            root_priority: None,
             pins: vec![],
             forbid: vec![],
             objective: "prefer_newer".into(),
@@ -283,6 +285,7 @@ mod tests {
         let policy = Policy {
             toolchain: universe.toolchain.clone(),
             roots: vec!["BuildDepRoot".into()],
+            root_priority: None,
             pins: vec![],
             forbid: vec![],
             objective: "prefer_newer".into(),
@@ -298,5 +301,163 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert!(lock.package("OpenBLAS").is_some());
+    }
+
+    // --- Multi-root shared-dep conflict: priority, not list order, decides ---
+
+    fn two_root_fixture_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/two_root_openmpi_conflict")
+    }
+
+    fn load_two_root_policy(name: &str) -> Policy {
+        let p = two_root_fixture_root().join("policies").join(name);
+        serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
+    }
+
+    fn two_root_universe() -> Universe {
+        let root = two_root_fixture_root().join("easyconfigs");
+        let all = parse_easyconfig_tree(&root).expect("parse two-root tree");
+        let policy_tc = Toolchain {
+            name: "foss".into(),
+            version: "2025b".into(),
+        };
+        let cands = filter_toolchain(&all, &policy_tc);
+        Universe {
+            toolchain: policy_tc,
+            generation_label: Some("foss-2025b-two-root".into()),
+            candidates: cands,
+        }
+    }
+
+    /// Newest GROMACS pins OpenMPI==4.1.6; newest LAMMPS needs OpenMPI>=5.0.3.
+    /// Declared priority for GROMACS must keep GROMACS 2025.0 and yield LAMMPS,
+    /// for both root list orders.
+    #[test]
+    fn multi_root_priority_gromacs_stable_under_root_list_order() {
+        let universe = two_root_universe();
+        for policy_name in [
+            "priority_gromacs_roots_gromacs_first.json",
+            "priority_gromacs_roots_lammps_first.json",
+        ] {
+            let policy = load_two_root_policy(policy_name);
+            assert_eq!(
+                policy.effective_root_priority(),
+                vec!["GROMACS".to_string(), "LAMMPS".to_string()],
+                "{policy_name}"
+            );
+            let lock = select_stack(&universe, &policy, None)
+                .unwrap_or_else(|e| panic!("{policy_name}: {e}"));
+            assert_eq!(
+                lock.package("GROMACS").unwrap().version,
+                "2025.0",
+                "{policy_name}: prioritized GROMACS must keep newest"
+            );
+            assert_eq!(
+                lock.package("LAMMPS").unwrap().version,
+                "2023.08",
+                "{policy_name}: non-prioritized LAMMPS must yield"
+            );
+            assert_eq!(
+                lock.package("OpenMPI").unwrap().version,
+                "4.1.6",
+                "{policy_name}: shared dep forced by GROMACS exact pin"
+            );
+        }
+    }
+
+    /// Declared priority for LAMMPS must keep LAMMPS 2024.08 and yield GROMACS,
+    /// for both root list orders.
+    #[test]
+    fn multi_root_priority_lammps_stable_under_root_list_order() {
+        let universe = two_root_universe();
+        for policy_name in [
+            "priority_lammps_roots_gromacs_first.json",
+            "priority_lammps_roots_lammps_first.json",
+        ] {
+            let policy = load_two_root_policy(policy_name);
+            assert_eq!(
+                policy.effective_root_priority(),
+                vec!["LAMMPS".to_string(), "GROMACS".to_string()],
+                "{policy_name}"
+            );
+            let lock = select_stack(&universe, &policy, None)
+                .unwrap_or_else(|e| panic!("{policy_name}: {e}"));
+            assert_eq!(
+                lock.package("LAMMPS").unwrap().version,
+                "2024.08",
+                "{policy_name}: prioritized LAMMPS must keep newest"
+            );
+            assert_eq!(
+                lock.package("GROMACS").unwrap().version,
+                "2024.4",
+                "{policy_name}: non-prioritized GROMACS must yield"
+            );
+            assert_eq!(
+                lock.package("OpenMPI").unwrap().version,
+                "5.0.3",
+                "{policy_name}: shared dep forced by newest LAMMPS"
+            );
+        }
+    }
+
+    /// Omitting `root_priority` defaults priority to roots list order.
+    #[test]
+    fn multi_root_default_priority_follows_roots_list_order() {
+        let universe = two_root_universe();
+
+        let g_first = load_two_root_policy("default_priority_gromacs_listed_first.json");
+        assert!(g_first.root_priority.is_none());
+        assert_eq!(
+            g_first.effective_root_priority(),
+            vec!["GROMACS".to_string(), "LAMMPS".to_string()]
+        );
+        let lock_g = select_stack(&universe, &g_first, None).expect("default gromacs-first");
+        assert_eq!(lock_g.package("GROMACS").unwrap().version, "2025.0");
+        assert_eq!(lock_g.package("LAMMPS").unwrap().version, "2023.08");
+
+        let l_first = load_two_root_policy("default_priority_lammps_listed_first.json");
+        assert!(l_first.root_priority.is_none());
+        assert_eq!(
+            l_first.effective_root_priority(),
+            vec!["LAMMPS".to_string(), "GROMACS".to_string()]
+        );
+        let lock_l = select_stack(&universe, &l_first, None).expect("default lammps-first");
+        assert_eq!(lock_l.package("LAMMPS").unwrap().version, "2024.08");
+        assert_eq!(lock_l.package("GROMACS").unwrap().version, "2024.4");
+    }
+
+    /// Candidate list order must not change the priority-optimal selection.
+    #[test]
+    fn multi_root_priority_stable_under_candidate_shuffle() {
+        let mut universe = two_root_universe();
+        // Reverse candidate order (incidental input ordering).
+        universe.candidates.reverse();
+        let policy = load_two_root_policy("priority_gromacs_roots_lammps_first.json");
+        let lock = select_stack(&universe, &policy, None).expect("shuffled candidates");
+        assert_eq!(lock.package("GROMACS").unwrap().version, "2025.0");
+        assert_eq!(lock.package("LAMMPS").unwrap().version, "2023.08");
+        assert_eq!(lock.package("OpenMPI").unwrap().version, "4.1.6");
+
+        // Also reverse again after partial sort by path to vary HashMap insert order.
+        universe.candidates.sort_by(|a, b| b.easyconfig_path.cmp(&a.easyconfig_path));
+        let lock2 = select_stack(&universe, &policy, None).expect("resorted candidates");
+        assert_eq!(lock2.package("GROMACS").unwrap().version, "2025.0");
+        assert_eq!(lock2.package("LAMMPS").unwrap().version, "2023.08");
+    }
+
+    #[test]
+    fn policy_root_priority_deserializes_and_defaults() {
+        let with = load_two_root_policy("priority_lammps_roots_gromacs_first.json");
+        assert_eq!(
+            with.root_priority.as_ref().unwrap(),
+            &vec!["LAMMPS".to_string(), "GROMACS".to_string()]
+        );
+        // Existing single-root policies omit the field and still deserialize.
+        let single = load_policy("prefer_newer.json");
+        assert!(single.root_priority.is_none());
+        assert_eq!(
+            single.effective_root_priority(),
+            vec!["GROMACS".to_string()]
+        );
     }
 }

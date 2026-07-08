@@ -233,6 +233,7 @@ mod tests {
         let policy = Policy {
             toolchain: tc,
             roots: vec!["App".into()],
+            root_priority: None,
             pins: vec![],
             forbid: vec![],
             objective: "prefer_newer".into(),

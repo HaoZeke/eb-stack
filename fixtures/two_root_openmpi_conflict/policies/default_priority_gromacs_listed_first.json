@@ -1,0 +1,14 @@
+{
+  "toolchain": {
+    "name": "foss",
+    "version": "2025b"
+  },
+  "roots": [
+    "GROMACS",
+    "LAMMPS"
+  ],
+  "pins": [],
+  "forbid": [],
+  "objective": "prefer_newer",
+  "require_upgrade": null
+}
