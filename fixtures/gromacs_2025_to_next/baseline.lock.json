@@ -7,16 +7,6 @@
   "generation_label": "2025-software-stack",
   "packages": [
     {
-      "name": "OpenBLAS",
-      "version": "0.3.23",
-      "toolchain": {
-        "name": "foss",
-        "version": "2025a"
-      },
-      "versionsuffix": null,
-      "easyconfig_path": "o/OpenBLAS/OpenBLAS-0.3.23-foss-2025a.eb"
-    },
-    {
       "name": "FFTW",
       "version": "3.3.10",
       "toolchain": {
@@ -25,6 +15,26 @@
       },
       "versionsuffix": null,
       "easyconfig_path": "f/FFTW/FFTW-3.3.10-foss-2025a.eb"
+    },
+    {
+      "name": "GROMACS",
+      "version": "2024.1",
+      "toolchain": {
+        "name": "foss",
+        "version": "2025a"
+      },
+      "versionsuffix": null,
+      "easyconfig_path": "g/GROMACS/GROMACS-2024.1-foss-2025a.eb"
+    },
+    {
+      "name": "OpenBLAS",
+      "version": "0.3.23",
+      "toolchain": {
+        "name": "foss",
+        "version": "2025a"
+      },
+      "versionsuffix": null,
+      "easyconfig_path": "o/OpenBLAS/OpenBLAS-0.3.23-foss-2025a.eb"
     },
     {
       "name": "OpenMPI",
@@ -37,14 +47,14 @@
       "easyconfig_path": "o/OpenMPI/OpenMPI-4.1.5-foss-2025a.eb"
     },
     {
-      "name": "GROMACS",
-      "version": "2024.1",
+      "name": "Python",
+      "version": "3.12.3",
       "toolchain": {
         "name": "foss",
         "version": "2025a"
       },
       "versionsuffix": null,
-      "easyconfig_path": "g/GROMACS/GROMACS-2024.1-foss-2025a.eb"
+      "easyconfig_path": "p/Python/Python-3.12.3-foss-2025a.eb"
     }
   ],
   "solver": {

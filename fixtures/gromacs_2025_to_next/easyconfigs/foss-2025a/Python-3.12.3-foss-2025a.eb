@@ -1,0 +1,7 @@
+name = 'Python'
+version = '3.12.3'
+toolchain = {'name': 'foss', 'version': '2025a'}
+homepage = 'https://www.python.org'
+description = "Python fixture candidate for baseline generation."
+dependencies = [
+]

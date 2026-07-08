@@ -115,11 +115,9 @@ mod tests {
         assert_eq!(cmp_version(&g.version, "2024.1"), Ordering::Greater);
         // co-selected from parsed dependencies, not hard-coded roots
         assert_eq!(lock.package("OpenBLAS").unwrap().version, "0.3.27");
-        assert!(matches!(
-            cmp_version(&lock.package("OpenMPI").unwrap().version, "4.1.6"),
-            Ordering::Equal | Ordering::Greater
-        ));
+        assert_eq!(lock.package("OpenMPI").unwrap().version, "5.0.3");
         assert!(lock.package("FFTW").is_some());
+        assert_eq!(lock.package("Python").unwrap().version, "3.12.3");
     }
 
     #[test]
@@ -147,7 +145,7 @@ mod tests {
         assert!(low.contains("unsatisfiable") || low.contains("unsat"), "{msg}");
         // Human-readable versions, not raw resolvo ranks ("GROMACS 2", "OpenMPI 1 | 2").
         assert!(
-            msg.contains("2025.0") && (msg.contains("4.1.6") || msg.contains("5.0.3")),
+            msg.contains("2025.0") && (msg.contains("4.1.5") || msg.contains("5.0.3")),
             "unsat must name real package versions, got: {msg}"
         );
         assert!(

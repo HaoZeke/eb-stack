@@ -4,8 +4,8 @@ toolchain = {'name': 'foss', 'version': '2025b'}
 homepage = 'https://example.invalid/builddep-fixture'
 description = "Fixture whose co-selection edge to FFTW is only via builddependencies."
 dependencies = [
-    ('OpenBLAS', '>=0.3.23'),
+    ('OpenBLAS', '0.3.27'),
 ]
 builddependencies = [
-    ('FFTW', '>=3.3.10'),
+    ('FFTW', '3.3.10'),
 ]

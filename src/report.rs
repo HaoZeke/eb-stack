@@ -370,7 +370,7 @@ mod tests {
         }
         assert_eq!(seen.len(), lock.packages.len());
 
-        // GROMACS depends on OpenBLAS, OpenMPI, FFTW — application last among co-deps.
+        // GROMACS depends on Python, OpenBLAS, OpenMPI, FFTW — application last.
         let idx = |name: &str| {
             let path = &lock.package(name).unwrap().easyconfig_path;
             lines.iter().position(|l| *l == path).unwrap()
@@ -379,9 +379,7 @@ mod tests {
         assert!(idx("OpenBLAS") < g, "OpenBLAS before GROMACS");
         assert!(idx("OpenMPI") < g, "OpenMPI before GROMACS");
         assert!(idx("FFTW") < g, "FFTW before GROMACS");
-        // FFTW depends on OpenBLAS and OpenMPI in the fixture universe.
-        assert!(idx("OpenBLAS") < idx("FFTW"), "OpenBLAS before FFTW");
-        assert!(idx("OpenMPI") < idx("FFTW"), "OpenMPI before FFTW");
+        assert!(idx("Python") < g, "Python before GROMACS");
     }
 
     #[test]

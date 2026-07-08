@@ -1,0 +1,7 @@
+name = 'Python'
+version = '3.12.3'
+toolchain = {'name': 'foss', 'version': '2025b'}
+homepage = 'https://www.python.org'
+description = "Python fixture candidate for GROMACS co-selection."
+dependencies = [
+]

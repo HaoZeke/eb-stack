@@ -4,7 +4,8 @@ toolchain = {'name': 'foss', 'version': '2025b'}
 homepage = 'https://www.gromacs.org'
 description = "GROMACS molecular dynamics (fixture for stack upgrade)."
 dependencies = [
-    ('OpenBLAS', '>=0.3.27'),
-    ('OpenMPI', '>=4.1.6'),
-    ('FFTW', '>=3.3.10'),
+    ('Python', '3.12.3'),
+    ('OpenBLAS', '0.3.27'),
+    ('OpenMPI', '5.0.3'),
+    ('FFTW', '3.3.10'),
 ]

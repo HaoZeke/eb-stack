@@ -160,23 +160,31 @@ mod tests {
         let map = dep_map_from_universe(&lock, &universe);
         let sbom = lock_to_cyclonedx_with_deps(&lock, Some(&map));
         let deps = sbom["dependencies"].as_array().unwrap();
-        // FFTW should depend on OpenBLAS and OpenMPI per universe, not empty
+        // GROMACS declares real co-deps (Python + stack libs), not empty/hardcoded.
+        let g_ref = deps
+            .iter()
+            .find(|d| d["ref"].as_str().unwrap().contains("GROMACS@"))
+            .unwrap();
+        let g_on = g_ref["dependsOn"].as_array().unwrap();
+        assert!(
+            g_on.iter().any(|x| x.as_str().unwrap().contains("OpenBLAS")),
+            "GROMACS must list OpenBLAS dep: {g_on:?}"
+        );
+        assert!(
+            g_on.iter().any(|x| x.as_str().unwrap().contains("Python")),
+            "GROMACS must list Python dep: {g_on:?}"
+        );
+        assert!(g_on.len() >= 3, "GROMACS dependsOn co-deps: {g_on:?}");
+        // Leaf FFTW has no runtime deps in the realistic fixture.
         let fftw_ref = deps
             .iter()
             .find(|d| d["ref"].as_str().unwrap().contains("FFTW@"))
             .unwrap();
         let fftw_on = fftw_ref["dependsOn"].as_array().unwrap();
         assert!(
-            fftw_on.iter().any(|x| x.as_str().unwrap().contains("OpenBLAS")),
-            "FFTW must list OpenBLAS dep: {fftw_on:?}"
+            fftw_on.is_empty(),
+            "FFTW leaf should have empty dependsOn: {fftw_on:?}"
         );
-        // GROMACS lists co-deps from its candidate
-        let g_ref = deps
-            .iter()
-            .find(|d| d["ref"].as_str().unwrap().contains("GROMACS@"))
-            .unwrap();
-        let g_on = g_ref["dependsOn"].as_array().unwrap();
-        assert!(g_on.len() >= 2, "GROMACS dependsOn co-deps: {g_on:?}");
         // Lock-only path: no all-to-all co-stack edges (empty when map unknown).
         let co = lock_to_cyclonedx(&lock);
         for d in co["dependencies"].as_array().unwrap() {

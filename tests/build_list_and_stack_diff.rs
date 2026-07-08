@@ -230,3 +230,51 @@ fn cli_solve_with_sbom_flag_writes_sbom() {
     assert!(lock_out.is_file());
     assert!(sbom_out.is_file());
 }
+
+/// End-to-end CLI: `solve --baseline-easyconfigs` asserts lock *content* and
+/// stack-diff text for the known prefer_newer upgrade outcome (not mere file existence).
+#[test]
+fn cli_solve_baseline_asserts_lock_versions_and_stack_diff() {
+    let bin = env!("CARGO_BIN_EXE_eb-stack");
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let lock_out = tmp.path().join("stack.lock.json");
+    let stack_diff_out = tmp.path().join("stack.diff.md");
+    let status = Command::new(bin)
+        .args([
+            "solve",
+            "--easyconfigs",
+            fixture("easyconfigs").to_str().unwrap(),
+            "--policy",
+            fixture("policies/prefer_newer.json").to_str().unwrap(),
+            "--baseline-easyconfigs",
+            fixture("easyconfigs").to_str().unwrap(),
+            "--lock-out",
+            lock_out.to_str().unwrap(),
+            "--stack-diff-out",
+            stack_diff_out.to_str().unwrap(),
+        ])
+        .status()
+        .expect("spawn eb-stack solve");
+    assert!(status.success(), "eb-stack solve failed: {status}");
+    assert!(lock_out.is_file());
+    assert!(stack_diff_out.is_file());
+
+    let lock: StackLock =
+        serde_json::from_str(&std::fs::read_to_string(&lock_out).unwrap()).expect("lock json");
+    assert_eq!(lock.toolchain.name, "foss");
+    assert_eq!(lock.toolchain.version, "2025b");
+    assert_eq!(lock.solver.engine, "resolvo_cdcl_sat");
+    // prefer_newer + require_upgrade from 2025a baseline → documented stack.
+    assert_eq!(lock.package("GROMACS").unwrap().version, "2025.0");
+    assert_eq!(lock.package("OpenBLAS").unwrap().version, "0.3.27");
+    assert_eq!(lock.package("OpenMPI").unwrap().version, "5.0.3");
+    assert_eq!(lock.package("FFTW").unwrap().version, "3.3.10");
+    assert_eq!(lock.package("Python").unwrap().version, "3.12.3");
+
+    let md = std::fs::read_to_string(&stack_diff_out).expect("stack diff");
+    assert!(md.contains("version-bumped") || md.contains("**version-bumped**"), "{md}");
+    assert!(md.contains("GROMACS"), "diff must mention GROMACS:\n{md}");
+    assert!(md.contains("2024.1"), "diff must show baseline GROMACS 2024.1:\n{md}");
+    assert!(md.contains("2025.0"), "diff must show selected GROMACS 2025.0:\n{md}");
+    assert!(md.contains("OpenBLAS"), "{md}");
+}

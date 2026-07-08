@@ -47,16 +47,7 @@
       },
       "versionsuffix": null,
       "easyconfig_path": "f/FFTW/FFTW-3.3.10-foss-2025b.eb",
-      "dependencies": [
-        {
-          "name": "OpenBLAS",
-          "version_req": ">=0.3.23"
-        },
-        {
-          "name": "OpenMPI",
-          "version_req": ">=4.1.5"
-        }
-      ]
+      "dependencies": []
     },
     {
       "name": "OpenMPI",
@@ -92,6 +83,17 @@
       "dependencies": []
     },
     {
+      "name": "Python",
+      "version": "3.12.3",
+      "toolchain": {
+        "name": "foss",
+        "version": "2025b"
+      },
+      "versionsuffix": null,
+      "easyconfig_path": "p/Python/Python-3.12.3-foss-2025b.eb",
+      "dependencies": []
+    },
+    {
       "name": "GROMACS",
       "version": "2024.1",
       "toolchain": {
@@ -102,16 +104,20 @@
       "easyconfig_path": "g/GROMACS/GROMACS-2024.1-foss-2025b.eb",
       "dependencies": [
         {
+          "name": "Python",
+          "version_req": "==3.12.3"
+        },
+        {
           "name": "OpenBLAS",
-          "version_req": ">=0.3.23"
+          "version_req": "==0.3.23"
         },
         {
           "name": "OpenMPI",
-          "version_req": ">=4.1.5"
+          "version_req": "==4.1.5"
         },
         {
           "name": "FFTW",
-          "version_req": ">=3.3.10"
+          "version_req": "==3.3.10"
         }
       ]
     },
@@ -126,16 +132,20 @@
       "easyconfig_path": "g/GROMACS/GROMACS-2024.4-foss-2025b.eb",
       "dependencies": [
         {
+          "name": "Python",
+          "version_req": "==3.12.3"
+        },
+        {
           "name": "OpenBLAS",
-          "version_req": ">=0.3.24"
+          "version_req": "==0.3.24"
         },
         {
           "name": "OpenMPI",
-          "version_req": ">=4.1.6"
+          "version_req": "==4.1.6"
         },
         {
           "name": "FFTW",
-          "version_req": ">=3.3.10"
+          "version_req": "==3.3.10"
         }
       ]
     },
@@ -150,16 +160,20 @@
       "easyconfig_path": "g/GROMACS/GROMACS-2025.0-foss-2025b.eb",
       "dependencies": [
         {
+          "name": "Python",
+          "version_req": "==3.12.3"
+        },
+        {
           "name": "OpenBLAS",
-          "version_req": ">=0.3.27"
+          "version_req": "==0.3.27"
         },
         {
           "name": "OpenMPI",
-          "version_req": ">=4.1.6"
+          "version_req": "==5.0.3"
         },
         {
           "name": "FFTW",
-          "version_req": ">=3.3.10"
+          "version_req": "==3.3.10"
         }
       ]
     }

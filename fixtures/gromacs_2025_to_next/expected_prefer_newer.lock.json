@@ -45,6 +45,16 @@
       },
       "versionsuffix": null,
       "easyconfig_path": "foss-2025b/OpenMPI-5.0.3-foss-2025b.eb"
+    },
+    {
+      "name": "Python",
+      "version": "3.12.3",
+      "toolchain": {
+        "name": "foss",
+        "version": "2025b"
+      },
+      "versionsuffix": null,
+      "easyconfig_path": "foss-2025b/Python-3.12.3-foss-2025b.eb"
     }
   ],
   "solver": {

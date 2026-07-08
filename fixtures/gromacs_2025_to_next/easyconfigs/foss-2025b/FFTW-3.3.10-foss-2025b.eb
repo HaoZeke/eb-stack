@@ -1,7 +1,6 @@
 name = 'FFTW'
 version = '3.3.10'
 toolchain = {'name': 'foss', 'version': '2025b'}
+# foss already provides BLAS/MPI; keep deps empty like many real FFTW recipes.
 dependencies = [
-    ('OpenBLAS', '>=0.3.23'),
-    ('OpenMPI', '>=4.1.5'),
 ]
