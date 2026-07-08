@@ -348,88 +348,105 @@ pub fn dep_names_from_source(source: &str) -> Result<Vec<String>, EmitError> {
     Ok(specs.into_iter().map(|s| s.name).collect())
 }
 
-/// Drop `# ...` comments outside quotes so commented-out deps are not scraped.
-fn strip_line_comments(src: &str) -> String {
-    let mut out = String::with_capacity(src.len());
-    for line in src.lines() {
-        let mut in_s = false;
-        let mut in_d = false;
-        let mut cut = line.len();
-        let b = line.as_bytes();
-        let mut i = 0usize;
-        while i < b.len() {
-            let c = b[i] as char;
-            if c == '\'' && !in_d {
-                in_s = !in_s;
-            } else if c == '"' && !in_s {
-                in_d = !in_d;
-            } else if c == '#' && !in_s && !in_d {
-                cut = i;
-                break;
-            }
-            i += 1;
+/// Split a source line into (code_before_comment, comment_body_without_hash).
+/// Comments inside quotes are ignored.
+fn split_line_comment(line: &str) -> (&str, Option<&str>) {
+    let mut in_s = false;
+    let mut in_d = false;
+    let b = line.as_bytes();
+    let mut i = 0usize;
+    while i < b.len() {
+        let c = b[i] as char;
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+        } else if c == '"' && !in_s {
+            in_d = !in_d;
+        } else if c == '#' && !in_s && !in_d {
+            let code = line[..i].trim_end();
+            let comment = line[i + 1..].trim();
+            return (code, Some(comment));
         }
-        out.push_str(line[..cut].trim_end());
-        out.push('\n');
+        i += 1;
     }
-    out
+    (line.trim_end(), None)
 }
 
-/// Scrape name + version + optional versionsuffix from dep list tuples.
+/// True when a trailing easyconfig comment marks the dependency optional.
+fn comment_marks_optional(comment: &str) -> bool {
+    let c = comment.to_ascii_lowercase();
+    // Common EB patterns: "# optional", "# optional dependency", "# needed by X (optional)"
+    c.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-' && ch != '_')
+        .any(|tok| tok == "optional")
+}
+
+/// Scrape name + version + optional versionsuffix / SYSTEM / optional flag from dep lists.
 /// Does not evaluate the full EasyBuild DSL.
 pub fn dep_specs_from_source(source: &str) -> Result<Vec<SourceDepSpec>, EmitError> {
-    let source = strip_line_comments(source);
     let mut specs = Vec::new();
-    // Tuple: ('Name', '1.2.3') or ('Name', '1.2.3', '-suffix') or with SYSTEM/4th elem.
+    // Tuple forms:
+    //   ('Name', '1.2.3')
+    //   ('Name', '1.2.3', '-suffix')
+    //   ('Name', '1.2.3', '', SYSTEM)
+    //   ('Name', '1.2.3', '-suffix', SYSTEM)
+    //   ('Name', '1.2.3', SYSTEM)
+    // Trailing `# optional` on the same line is preserved via line-wise scan.
     let re = regex::Regex::new(
         r#"(?x)
         \(\s*
         (?:'(?P<n1>[^']+)'|"(?P<n2>[^"]+)")
         \s*,\s*
         (?:'(?P<v1>[^']*)'|"(?P<v2>[^"]*)")
-        (?:
-            \s*,\s*
-            (?:'(?P<s1>[^']*)'|"(?P<s2>[^"]*)")
-        )?
+        (?P<rest>
+            (?:\s*,\s*[^)]*)*
+        )
+        \s*\)
         "#,
     )
     .map_err(|e| EmitError::Rewrite(e.to_string()))?;
 
     for key in ["dependencies", "builddependencies"] {
-        let Some((list_open_end, list_close_start)) = find_list_span(&source, key)? else {
+        let Some((list_open_end, list_close_start)) = find_list_span(source, key)? else {
             continue;
         };
         let body = &source[list_open_end..list_close_start];
-        for caps in re.captures_iter(body) {
-            let name = caps
-                .name("n1")
-                .or_else(|| caps.name("n2"))
-                .map(|m| m.as_str().to_string())
-                .unwrap();
-            if name.contains('%') {
+        // Line-wise so we can attach trailing `# optional` to the dep on that line.
+        for line in body.lines() {
+            let (code, comment) = split_line_comment(line);
+            let optional = comment.is_some_and(comment_marks_optional);
+            if code.trim().is_empty() {
                 continue;
             }
-            let version = caps
-                .name("v1")
-                .or_else(|| caps.name("v2"))
-                .map(|m| m.as_str().to_string())
-                .unwrap_or_default();
-            // Strip leading operators for floor comparisons.
-            let version = version
-                .trim()
-                .trim_start_matches(['>', '<', '=', '!'])
-                .trim()
-                .to_string();
-            let versionsuffix = caps
-                .name("s1")
-                .or_else(|| caps.name("s2"))
-                .map(|m| m.as_str().to_string())
-                .filter(|s| !s.is_empty());
-            specs.push(SourceDepSpec {
-                name,
-                version,
-                versionsuffix,
-            });
+            for caps in re.captures_iter(code) {
+                let name = caps
+                    .name("n1")
+                    .or_else(|| caps.name("n2"))
+                    .map(|m| m.as_str().to_string())
+                    .unwrap();
+                if name.contains('%') {
+                    continue;
+                }
+                let version = caps
+                    .name("v1")
+                    .or_else(|| caps.name("v2"))
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default();
+                let version = version
+                    .trim()
+                    .trim_start_matches(['>', '<', '=', '!'])
+                    .trim()
+                    .to_string();
+                let rest = caps.name("rest").map(|m| m.as_str()).unwrap_or("");
+                let system_toolchain = tuple_rest_is_system(rest);
+                let versionsuffix = tuple_rest_versionsuffix(rest);
+
+                specs.push(SourceDepSpec {
+                    name,
+                    version,
+                    versionsuffix,
+                    system_toolchain,
+                    optional,
+                });
+            }
         }
     }
     // Prefer first occurrence (runtime over build when same name twice).
@@ -442,6 +459,69 @@ pub fn dep_specs_from_source(source: &str) -> Result<Vec<SourceDepSpec>, EmitErr
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
+}
+
+/// `rest` is everything after the version in a dep tuple (leading commas included).
+fn tuple_rest_is_system(rest: &str) -> bool {
+    // SYSTEM as a bare token (not inside a quoted versionsuffix).
+    let mut in_s = false;
+    let mut in_d = false;
+    let bytes = rest.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+        } else if c == '"' && !in_s {
+            in_d = !in_d;
+        } else if !in_s && !in_d {
+            // Match SYSTEM / system as a word token.
+            if rest[i..].starts_with("SYSTEM")
+                || rest[i..].to_ascii_lowercase().starts_with("system")
+            {
+                let tok = if rest[i..].starts_with("SYSTEM") {
+                    "SYSTEM"
+                } else {
+                    // length of "system"
+                    "system"
+                };
+                let end = i + tok.len();
+                let before_ok = i == 0
+                    || rest.as_bytes()[i - 1].is_ascii_whitespace()
+                    || rest.as_bytes()[i - 1] == b',';
+                let after_ok = end >= rest.len()
+                    || !rest.as_bytes()[end].is_ascii_alphanumeric();
+                if before_ok && after_ok {
+                    // Avoid matching versionsuffix strings that already closed.
+                    return true;
+                }
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// First quoted string after the version comma is treated as versionsuffix
+/// (empty string → None). Bare SYSTEM is not a versionsuffix.
+fn tuple_rest_versionsuffix(rest: &str) -> Option<String> {
+    let rest = rest.trim_start_matches(|c: char| c == ',' || c.is_whitespace());
+    if rest.is_empty() {
+        return None;
+    }
+    let bytes = rest.as_bytes();
+    let q = bytes[0];
+    if q != b'\'' && q != b'"' {
+        return None;
+    }
+    if let Some(end) = rest[1..].find(q as char) {
+        let s = &rest[1..1 + end];
+        if s.is_empty() {
+            return None;
+        }
+        return Some(s.to_string());
+    }
+    None
 }
 
 fn assign_string_raw(src: &str, key: &str) -> Option<String> {
@@ -1239,5 +1319,151 @@ dependencies = [
                 "mpi4py".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn dep_specs_recognize_system_toolchain_and_optional_comment() {
+        let src = "\
+name = 'PhyloPhlAn'
+version = '3.1.1'
+toolchain = {'name': 'foss', 'version': '2023b'}
+dependencies = [
+    ('Python', '3.11.5'),
+    ('USEARCH', '11.0.667-i86linux32', '', SYSTEM),
+    ('ASE', '3.23.0'),  # optional
+    ('MDTraj', '1.10.3'),  # optional
+]
+";
+        let specs = dep_specs_from_source(src).expect("specs");
+        let by: HashMap<_, _> = specs.iter().map(|s| (s.name.as_str(), s)).collect();
+        assert!(!by["Python"].system_toolchain && !by["Python"].optional);
+        assert!(
+            by["USEARCH"].system_toolchain,
+            "USEARCH must be SYSTEM pin: {:?}",
+            by["USEARCH"]
+        );
+        assert_eq!(by["USEARCH"].version, "11.0.667-i86linux32");
+        assert!(by["ASE"].optional, "ASE # optional: {:?}", by["ASE"]);
+        assert!(by["MDTraj"].optional);
+        assert!(!by["ASE"].system_toolchain);
+    }
+
+    #[test]
+    fn auto_resolve_preserves_system_and_optional_without_unresolved_error() {
+        let src = "\
+name = 'PhyloPhlAn'
+version = '3.1.1'
+toolchain = {'name': 'foss', 'version': '2023b'}
+dependencies = [
+    ('Python', '3.11.5'),
+    ('USEARCH', '11.0.667-i86linux32', '', SYSTEM),
+    ('ASE', '3.23.0'),  # optional
+]
+";
+        let tmp = tempfile::tempdir().unwrap();
+        let src_path = tmp.path().join("PhyloPhlAn.eb");
+        std::fs::write(&src_path, src).unwrap();
+        let uni = tmp.path().join("uni");
+        std::fs::create_dir_all(&uni).unwrap();
+        // Only Python in universe — USEARCH/ASE must not cause UnresolvedDep.
+        std::fs::write(
+            uni.join("Python-3.12.3-GCCcore-13.3.0.eb"),
+            "name = 'Python'\nversion = '3.12.3'\ntoolchain = {'name': 'GCCcore', 'version': '13.3.0'}\ndependencies = []\n",
+        )
+        .unwrap();
+        // Out-of-generation decoy ASE must not be applied to optional pin.
+        std::fs::write(
+            uni.join("ASE-3.24.0-foss-2025a.eb"),
+            "name = 'ASE'\nversion = '3.24.0'\ntoolchain = {'name': 'foss', 'version': '2025a'}\ndependencies = []\n",
+        )
+        .unwrap();
+        let empty = HashMap::new();
+        let tc = Toolchain {
+            name: "foss".into(),
+            version: "2024a".into(),
+        };
+        let r = emit_next_generation_auto_from_path(
+            &src_path,
+            &tc,
+            &uni,
+            None,
+            None,
+            &empty,
+            None,
+            None,
+        )
+        .expect("SYSTEM + optional must not hard-fail");
+        assert!(r.text.contains("toolchain = {'name': 'foss', 'version': '2024a'}"));
+        assert!(r.text.contains("('Python', '3.12.3')"));
+        // SYSTEM pin preserved; ASE optional has no foss-2024a candidate → keep source.
+        assert!(r.text.contains("('USEARCH', '11.0.667-i86linux32', '', SYSTEM)"));
+        assert!(r.text.contains("('ASE', '3.23.0')"));
+        assert!(
+            r.warnings.iter().any(|w| w.contains("USEARCH") && w.contains("SYSTEM")),
+            "warnings: {:?}",
+            r.warnings
+        );
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.contains("ASE") && w.contains("optional")),
+            "warnings: {:?}",
+            r.warnings
+        );
+    }
+
+    #[test]
+    fn auto_resolve_cmake_ignores_out_of_generation_gcccore() {
+        let src = "\
+name = 'FLANN'
+version = '1.9.2'
+toolchain = {'name': 'foss', 'version': '2023b'}
+builddependencies = [
+    ('CMake', '3.27.6'),
+]
+dependencies = []
+";
+        let tmp = tempfile::tempdir().unwrap();
+        let src_path = tmp.path().join("FLANN.eb");
+        std::fs::write(&src_path, src).unwrap();
+        let uni = tmp.path().join("uni");
+        std::fs::create_dir_all(&uni).unwrap();
+        std::fs::write(
+            uni.join("CMake-3.29.3-GCCcore-13.3.0.eb"),
+            "name = 'CMake'\nversion = '3.29.3'\ntoolchain = {'name': 'GCCcore', 'version': '13.3.0'}\ndependencies = []\n",
+        )
+        .unwrap();
+        std::fs::write(
+            uni.join("CMake-3.31.8-GCCcore-14.3.0.eb"),
+            "name = 'CMake'\nversion = '3.31.8'\ntoolchain = {'name': 'GCCcore', 'version': '14.3.0'}\ndependencies = []\n",
+        )
+        .unwrap();
+        std::fs::write(
+            uni.join("CMake-3.31.8.eb"),
+            "name = 'CMake'\nversion = '3.31.8'\ntoolchain = SYSTEM\ndependencies = []\n",
+        )
+        .unwrap();
+        let empty = HashMap::new();
+        let tc = Toolchain {
+            name: "foss".into(),
+            version: "2024a".into(),
+        };
+        let r = emit_next_generation_auto_from_path(
+            &src_path,
+            &tc,
+            &uni,
+            None,
+            None,
+            &empty,
+            None,
+            None,
+        )
+        .expect("FLANN bump");
+        assert!(
+            r.text.contains("('CMake', '3.29.3')"),
+            "must pick hierarchy-native CMake 3.29.3, got:\n{}",
+            r.text
+        );
+        assert!(!r.text.contains("3.31.8"));
     }
 }

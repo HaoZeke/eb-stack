@@ -159,12 +159,18 @@ pub struct ResolveDepOpts<'a> {
 /// Among hierarchy members for `name`, pick a safe version for the target generation.
 ///
 /// Selection rules (in order):
-/// 1. Candidate must be in `hierarchy` and match `name`.
+/// 1. Candidate must be in `hierarchy` and match `name` (strict name+version
+///    membership — out-of-generation GCCcore/GCC never qualify).
 /// 2. Optional `versionsuffix` must match (empty/`None` matches candidates with no suffix).
 /// 3. Optional `floor_version`: never pick a version **older** than the floor.
 /// 4. Prefer candidates on the hierarchy **parent** toolchain when present,
-///    otherwise the highest (deepest) hierarchy member that has a candidate,
-///    then the newest version by [`cmp_version`].
+///    otherwise the highest (deepest) hierarchy member that has a candidate.
+/// 5. Among the same hierarchy rank:
+///    - if `floor_version` is set (generation bump from a source pin): pick the
+///      **oldest** version still ≥ floor (minimal upgrade / generation-freeze
+///      friendly — matches maintainer CMake 3.29.3 over later 3.31.8 on the
+///      same GCCcore);
+///    - if no floor: pick the **newest** version by [`cmp_version`].
 ///
 /// Returns `None` when no candidate satisfies the filters.
 pub fn resolve_dep_version_in_hierarchy(
@@ -175,21 +181,29 @@ pub fn resolve_dep_version_in_hierarchy(
     resolve_dep_version_in_hierarchy_opts(name, cands, hierarchy, &ResolveDepOpts::default())
 }
 
+/// Rank of `tc` in `hierarchy` (parent last = highest). Uses [`toolchains_match`]
+/// so SYSTEM empty/`system` labels compare equal. Out-of-hierarchy → `None`.
+pub fn hierarchy_member_rank(hierarchy: &ToolchainHierarchy, tc: &Toolchain) -> Option<usize> {
+    hierarchy
+        .members
+        .iter()
+        .enumerate()
+        .find(|(_, m)| toolchains_match(m, tc))
+        .map(|(i, _)| i)
+}
+
 /// Like [`resolve_dep_version_in_hierarchy`] with floor / versionsuffix filters.
+///
+/// **Strict hierarchy:** only candidates whose toolchain name **and** version
+/// are exact members of `hierarchy` (via [`ToolchainHierarchy::contains`] /
+/// [`toolchains_match`]) are eligible. A newer package on GCCcore-14.x is
+/// **not** valid for foss-2024a (GCCcore-13.3.0 only), even if the name matches.
 pub fn resolve_dep_version_in_hierarchy_opts(
     name: &str,
     cands: &[Candidate],
     hierarchy: &ToolchainHierarchy,
     opts: &ResolveDepOpts<'_>,
 ) -> Option<String> {
-    // Rank hierarchy members: parent last in EB order = highest preference index.
-    let member_rank: HashMap<String, usize> = hierarchy
-        .members
-        .iter()
-        .enumerate()
-        .map(|(i, t)| (t.label(), i))
-        .collect();
-
     let want_suffix = opts.versionsuffix.unwrap_or("");
     let mut best: Option<&Candidate> = None;
     let mut best_rank: usize = 0;
@@ -198,9 +212,10 @@ pub fn resolve_dep_version_in_hierarchy_opts(
         if c.name != name {
             continue;
         }
-        if !hierarchy.contains(&c.toolchain) {
+        // Strict: name+version membership; out-of-generation GCCcore/GCC excluded.
+        let Some(rank) = hierarchy_member_rank(hierarchy, &c.toolchain) else {
             continue;
-        }
+        };
         let got_suffix = c.versionsuffix.as_deref().unwrap_or("");
         if got_suffix != want_suffix {
             continue;
@@ -210,25 +225,30 @@ pub fn resolve_dep_version_in_hierarchy_opts(
                 continue;
             }
         }
-        let rank = member_rank
-            .get(&c.toolchain.label())
-            .copied()
-            .unwrap_or(0);
         best = match best {
             None => {
                 best_rank = rank;
                 Some(c)
             }
             Some(prev) => {
-                // Prefer higher hierarchy rank (closer to / equal parent), then newer version.
-                if rank > best_rank
-                    || (rank == best_rank
-                        && cmp_version(&c.version, &prev.version) == Ordering::Greater)
-                {
+                // Prefer higher hierarchy rank (closer to / equal parent).
+                if rank > best_rank {
                     best_rank = rank;
                     Some(c)
-                } else {
+                } else if rank < best_rank {
                     Some(prev)
+                } else {
+                    // Same rank: minimal upgrade when floor is set, else prefer_newer.
+                    let better = if opts.floor_version.is_some() {
+                        cmp_version(&c.version, &prev.version) == Ordering::Less
+                    } else {
+                        cmp_version(&c.version, &prev.version) == Ordering::Greater
+                    };
+                    if better {
+                        Some(c)
+                    } else {
+                        Some(prev)
+                    }
                 }
             }
         };
@@ -284,11 +304,42 @@ pub struct SourceDepSpec {
     pub name: String,
     pub version: String,
     pub versionsuffix: Option<String>,
+    /// 4th tuple element is EasyBuild `SYSTEM` (pseudo-external / binary pin).
+    pub system_toolchain: bool,
+    /// Trailing comment marks the dep optional (e.g. `# optional`).
+    pub optional: bool,
+}
+
+impl SourceDepSpec {
+    /// Convenience constructor for tests / simple name+version pins.
+    pub fn plain(name: impl Into<String>, version: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            version: version.into(),
+            versionsuffix: None,
+            system_toolchain: false,
+            optional: false,
+        }
+    }
+
+    /// Whether auto-resolve must leave the source version untouched (SYSTEM /
+    /// versionsuffix). Optional deps may still bump when a hierarchy candidate
+    /// exists; they only force keep-old when unresolved.
+    pub fn is_preserve_pin(&self) -> bool {
+        self.system_toolchain
+            || self
+                .versionsuffix
+                .as_deref()
+                .is_some_and(|vs| !vs.is_empty())
+    }
 }
 
 /// Resolve many [`SourceDepSpec`]s with floor + versionsuffix safety.
 ///
 /// - Deps with a **non-empty versionsuffix** are not bumped (caller keeps source).
+/// - Deps with **SYSTEM** 4th-tuple toolchain are not bumped (keep source pin).
+/// - Deps marked **optional** in a trailing comment still bump when a hierarchy
+///   candidate exists; if unresolved they keep the source pin and never hard-fail.
 /// - Resolved versions are never older than the source version.
 /// - Missing candidates yield [`HierarchyError::MissingDep`] unless `keep_old` is true
 ///   (then the source version is kept and the name is listed in `kept_old`).
@@ -311,6 +362,14 @@ pub fn resolve_dep_versions_for_specs(
                 continue;
             }
         }
+        // SYSTEM 4th-tuple (e.g. USEARCH): external/binary pin, not a generation bump.
+        if spec.system_toolchain {
+            kept_old.push(format!(
+                "{} (SYSTEM toolchain pin {}; not bumped)",
+                spec.name, spec.version
+            ));
+            continue;
+        }
         let opts = ResolveDepOpts {
             floor_version: Some(spec.version.as_str()),
             versionsuffix: None,
@@ -320,14 +379,26 @@ pub fn resolve_dep_versions_for_specs(
                 out.insert(spec.name.clone(), ver);
             }
             None => {
-                if keep_old {
-                    kept_old.push(format!(
-                        "{} (no candidate under {}-{}; keeping source {})",
-                        spec.name,
-                        hierarchy.parent.name,
-                        hierarchy.parent.version,
-                        spec.version
-                    ));
+                // Optional deps: never hard-fail; keep source pin when unresolved.
+                if spec.optional || keep_old {
+                    let why = if spec.optional {
+                        format!(
+                            "{} (optional; no candidate under {}-{}; keeping source {})",
+                            spec.name,
+                            hierarchy.parent.name,
+                            hierarchy.parent.version,
+                            spec.version
+                        )
+                    } else {
+                        format!(
+                            "{} (no candidate under {}-{}; keeping source {})",
+                            spec.name,
+                            hierarchy.parent.name,
+                            hierarchy.parent.version,
+                            spec.version
+                        )
+                    };
+                    kept_old.push(why);
                 } else {
                     return Err(HierarchyError::MissingDep(
                         spec.name.clone(),
@@ -533,17 +604,17 @@ mod tests {
                 name: "LLVM".into(),
                 version: "14.0.6".into(),
                 versionsuffix: Some("-llvmlite".into()),
+                system_toolchain: false,
+                optional: false,
             },
             SourceDepSpec {
                 name: "ASE".into(),
                 version: "3.22.1".into(),
                 versionsuffix: Some("-Python-3.12".into()),
+                system_toolchain: false,
+                optional: false,
             },
-            SourceDepSpec {
-                name: "Python".into(),
-                version: "3.12.0".into(),
-                versionsuffix: None,
-            },
+            SourceDepSpec::plain("Python", "3.12.0"),
         ];
         let cands2 = {
             let mut v = cands;
@@ -562,11 +633,7 @@ mod tests {
     fn resolve_missing_is_error_unless_keep_old() {
         let h = known_hierarchy(&foss("2024a")).unwrap();
         let cands = vec![cand("Python", "3.12.3", "GCCcore", "13.3.0", None)];
-        let specs = vec![SourceDepSpec {
-            name: "MissingPkg".into(),
-            version: "1.0".into(),
-            versionsuffix: None,
-        }];
+        let specs = vec![SourceDepSpec::plain("MissingPkg", "1.0")];
         let err = resolve_dep_versions_for_specs(&specs, &cands, &h, false).unwrap_err();
         assert!(
             matches!(err, HierarchyError::MissingDep(ref n, _, _) if n == "MissingPkg"),
@@ -590,5 +657,146 @@ mod tests {
             Some("3.0.10"),
             "must pick target-generation Cython, not legacy GCCcore-12.3.0"
         );
+    }
+
+    #[test]
+    fn resolve_excludes_newer_gcccore_outside_generation_even_if_globally_newest() {
+        let h = known_hierarchy(&foss("2024a")).unwrap();
+        // Scale-study failure mode: CMake 3.31.8 only on GCCcore-14.x must not win
+        // over hierarchy-native CMake 3.29.3 at GCCcore-13.3.0 for foss-2024a.
+        let cands = vec![
+            cand("CMake", "3.29.3", "GCCcore", "13.3.0", None),
+            cand("CMake", "3.31.8", "GCCcore", "14.3.0", None),
+            cand("CMake", "3.31.11", "GCCcore", "15.2.0", None),
+            cand("CMake", "3.31.8", "system", "system", None),
+        ];
+        // SYSTEM is in hierarchy (rank 0); GCCcore-13.3.0 ranks higher → 3.29.3
+        // beats SYSTEM 3.31.8. Out-of-gen 14.x/15.x must never be selected.
+        assert_eq!(
+            resolve_dep_version_in_hierarchy("CMake", &cands, &h).as_deref(),
+            Some("3.29.3"),
+            "must pick GCCcore-13.3.0 CMake, not GCCcore-14+/SYSTEM global newest"
+        );
+        // If only out-of-generation candidates exist, resolve returns None.
+        let only_new = vec![
+            cand("CMake", "3.31.8", "GCCcore", "14.3.0", None),
+            cand("CMake", "4.0.3", "GCCcore", "15.2.0", None),
+        ];
+        assert!(
+            resolve_dep_version_in_hierarchy("CMake", &only_new, &h).is_none(),
+            "no in-hierarchy CMake → None (not a silent global pick)"
+        );
+    }
+
+    #[test]
+    fn resolve_with_floor_picks_minimal_upgrade_not_global_newest_in_generation() {
+        let h = known_hierarchy(&foss("2024a")).unwrap();
+        // Real tree: both CMake 3.29.3 and 3.31.8 ship on GCCcore-13.3.0.
+        // Generation bump from 3.27.6 must prefer 3.29.3 (maintainer) over 3.31.8.
+        let cands = vec![
+            cand("CMake", "3.29.3", "GCCcore", "13.3.0", None),
+            cand("CMake", "3.31.8", "GCCcore", "13.3.0", None),
+            cand("CMake", "3.31.8", "GCCcore", "14.3.0", None),
+        ];
+        let opts = ResolveDepOpts {
+            floor_version: Some("3.27.6"),
+            versionsuffix: None,
+        };
+        assert_eq!(
+            resolve_dep_version_in_hierarchy_opts("CMake", &cands, &h, &opts).as_deref(),
+            Some("3.29.3")
+        );
+        // scikit-learn same rank on gfbf-2024a: minimal upgrade from 1.4.0 → 1.5.2 not 1.6.1.
+        let sk = vec![
+            cand("scikit-learn", "1.5.2", "gfbf", "2024a", None),
+            cand("scikit-learn", "1.6.1", "gfbf", "2024a", None),
+            cand("scikit-learn", "1.7.0", "gfbf", "2025a", None),
+        ];
+        let opts_sk = ResolveDepOpts {
+            floor_version: Some("1.4.0"),
+            versionsuffix: None,
+        };
+        assert_eq!(
+            resolve_dep_version_in_hierarchy_opts("scikit-learn", &sk, &h, &opts_sk).as_deref(),
+            Some("1.5.2")
+        );
+    }
+
+    #[test]
+    fn resolve_specs_preserve_system_and_optional_unresolved() {
+        let h = known_hierarchy(&foss("2024a")).unwrap();
+        let cands = vec![
+            cand("Python", "3.12.3", "GCCcore", "13.3.0", None),
+            cand("ASE", "3.24.0", "foss", "2024a", None),
+            cand("USEARCH", "12.0", "GCCcore", "13.3.0", None), // decoy — must not bump SYSTEM pin
+        ];
+        let specs = vec![
+            SourceDepSpec {
+                name: "USEARCH".into(),
+                version: "11.0.667-i86linux32".into(),
+                versionsuffix: None,
+                system_toolchain: true,
+                optional: false,
+            },
+            // Optional with an in-hierarchy candidate: still bumped (minimal upgrade).
+            SourceDepSpec {
+                name: "ASE".into(),
+                version: "3.23.0".into(),
+                versionsuffix: None,
+                system_toolchain: false,
+                optional: true,
+            },
+            SourceDepSpec::plain("Python", "3.12.0"),
+        ];
+        let (map, kept) = resolve_dep_versions_for_specs(&specs, &cands, &h, false).unwrap();
+        assert!(
+            !map.contains_key("USEARCH"),
+            "SYSTEM pin must not be bumped: {map:?}"
+        );
+        assert_eq!(
+            map.get("ASE").map(String::as_str),
+            Some("3.24.0"),
+            "optional still bumps when hierarchy has a candidate"
+        );
+        assert_eq!(map.get("Python").map(String::as_str), Some("3.12.3"));
+        assert!(kept.iter().any(|k| k.contains("USEARCH") && k.contains("SYSTEM")));
+        // Missing non-optional still errors.
+        let bad = vec![SourceDepSpec::plain("MissingPkg", "1.0")];
+        assert!(resolve_dep_versions_for_specs(&bad, &cands, &h, false).is_err());
+        // Missing optional never errors.
+        let opt_missing = vec![SourceDepSpec {
+            name: "OptionalGhost".into(),
+            version: "0.1".into(),
+            versionsuffix: None,
+            system_toolchain: false,
+            optional: true,
+        }];
+        let (m2, k2) = resolve_dep_versions_for_specs(&opt_missing, &cands, &h, false).unwrap();
+        assert!(m2.is_empty());
+        assert!(k2.iter().any(|k| k.contains("OptionalGhost") && k.contains("optional")));
+    }
+
+    #[test]
+    fn hierarchy_member_rank_matches_system_normalization() {
+        let h = known_hierarchy(&foss("2024a")).unwrap();
+        let sys_empty = Toolchain {
+            name: "system".into(),
+            version: "".into(),
+        };
+        let sys_sys = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let gcc = Toolchain {
+            name: "GCCcore".into(),
+            version: "13.3.0".into(),
+        };
+        let gcc14 = Toolchain {
+            name: "GCCcore".into(),
+            version: "14.3.0".into(),
+        };
+        assert_eq!(hierarchy_member_rank(&h, &sys_empty), hierarchy_member_rank(&h, &sys_sys));
+        assert!(hierarchy_member_rank(&h, &gcc).unwrap() > hierarchy_member_rank(&h, &sys_sys).unwrap());
+        assert!(hierarchy_member_rank(&h, &gcc14).is_none());
     }
 }
