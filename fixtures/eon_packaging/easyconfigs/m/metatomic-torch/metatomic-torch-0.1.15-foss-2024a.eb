@@ -33,7 +33,8 @@ dependencies = [
 
 start_dir = 'metatomic-torch'
 
-preconfigopts = 'export CMAKE_PREFIX_PATH=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch:$EBROOTMETATENSOR:$EBROOTMETATENSORTORCH${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
+# convert_name: metatensor-torch → EBROOTMETATENSORMINTORCH (hyphen → min)
+preconfigopts = 'export CMAKE_PREFIX_PATH=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch:$EBROOTMETATENSOR:$EBROOTMETATENSORMINTORCH${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
 configopts = '-GNinja -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release -DMETATOMIC_TORCH_TESTS=OFF -DTorch_DIR=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch/share/cmake/Torch '
 
 sanity_check_paths = {

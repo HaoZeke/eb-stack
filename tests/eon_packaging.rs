@@ -106,6 +106,41 @@ fn resolve_eon_full_product_foss_2024a_feedstock_parity() {
     assert_eq!(mta.version, "0.1.15");
 }
 
+/// EasyBuild `convert_name`: `-` → `min` (e.g. SciPy-bundle → EBROOTSCIPYMINBUNDLE).
+/// Hyphenated module roots must use EBROOTMETATENSORMINTORCH / EBROOTMETATOMICMINTORCH,
+/// not the silent-empty EBROOTMETATENSORTORCH / EBROOTMETATOMICTORCH.
+#[test]
+fn eon_and_companions_use_ebroot_min_for_hyphenated_deps() {
+    let drafts = root().join("easyconfigs");
+    let eon = std::fs::read_to_string(drafts.join("e/eOn/eOn-2.16.0-foss-2024a.eb")).unwrap();
+    assert!(
+        eon.contains("$EBROOTMETATENSORMINTORCH"),
+        "eOn preconfigopts must use convert_name EBROOTMETATENSORMINTORCH"
+    );
+    assert!(
+        eon.contains("$EBROOTMETATOMICMINTORCH"),
+        "eOn preconfigopts must use convert_name EBROOTMETATOMICMINTORCH"
+    );
+    // Wrong forms (missing 'MIN') must not appear as env refs.
+    assert!(
+        !eon.contains("$EBROOTMETATENSORTORCH") && !eon.contains("$EBROOTMETATOMICTORCH"),
+        "eOn must not use wrong EBROOT* without MIN for hyphenated deps"
+    );
+
+    let mta = std::fs::read_to_string(
+        drafts.join("m/metatomic-torch/metatomic-torch-0.1.15-foss-2024a.eb"),
+    )
+    .unwrap();
+    assert!(
+        mta.contains("$EBROOTMETATENSORMINTORCH"),
+        "metatomic-torch companion must use EBROOTMETATENSORMINTORCH"
+    );
+    assert!(
+        !mta.contains("$EBROOTMETATENSORTORCH"),
+        "metatomic-torch must not use wrong EBROOTMETATENSORTORCH"
+    );
+}
+
 #[test]
 fn scaffold_missing_preps_companion_easyconfigs_for_overlay() {
     // Simulate robot hole: no metatomic-torch → eb-stack writes companion scaffold.

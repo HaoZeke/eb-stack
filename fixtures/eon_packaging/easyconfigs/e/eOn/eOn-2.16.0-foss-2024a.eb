@@ -99,7 +99,9 @@ dependencies = [
 # so meson does not try wrap-git/network. Keep nlohmann_json wrap (header-only).
 # Siesta-style $EBROOT* expansion at configure time.
 preconfigopts = 'rm -f subprojects/xtb.wrap subprojects/vesin.wrap subprojects/rgpot.wrap subprojects/readcon-core.wrap && '
-preconfigopts += 'export CMAKE_PREFIX_PATH=$EBROOTPYTORCH:$EBROOTMETATENSOR:$EBROOTMETATENSORTORCH:$EBROOTMETATOMICTORCH:$EBROOTXTB:$EBROOTCAPNPROTO:$EBROOTQUILL:$EBROOTEIGEN:$EBROOTHIGHWAY:$EBROOTINIH${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
+# EasyBuild convert_name: '-' → 'min' → EBROOTMETATENSORMINTORCH / EBROOTMETATOMICMINTORCH
+# (SciPy-bundle → EBROOTSCIPYMINBUNDLE). Wrong names silently empty the path.
+preconfigopts += 'export CMAKE_PREFIX_PATH=$EBROOTPYTORCH:$EBROOTMETATENSOR:$EBROOTMETATENSORMINTORCH:$EBROOTMETATOMICMINTORCH:$EBROOTXTB:$EBROOTCAPNPROTO:$EBROOTQUILL:$EBROOTEIGEN:$EBROOTHIGHWAY:$EBROOTINIH${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
 preconfigopts += 'export PKG_CONFIG_PATH=$EBROOTXTB/lib/pkgconfig:$EBROOTCAPNPROTO/lib/pkgconfig:$EBROOTQUILL/lib/pkgconfig:$EBROOTMETATENSOR/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH} && '
 preconfigopts += 'export PYTHONPATH=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH} && '
 # feedstock: force generic libtorch.so for CPU/CUDA runtime switch
