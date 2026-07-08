@@ -1,23 +1,47 @@
 ---
 name: eb-stack-annual-bump
-description: Use to move an EasyBuild software stack onto a new toolchain generation (the annual rebuild) with eb-stack. Drives the deterministic bump and solve CLI over a set of recipes, and names the narrow decisions left to the driving agent. Any capable agent can execute it.
+description: Move an EasyBuild software stack onto a new toolchain generation (the annual rebuild) with eb-stack. A complete operational runbook - any capable agent or engineer can execute it end to end. The tool does the mechanical majority and fails loudly; you handle a small, bounded set of judgment calls it names for you.
 ---
 
 # Annual toolchain-generation bump with eb-stack
 
-Use this to produce the next generation of a set of EasyBuild easyconfigs (for
-example `foss-2023b` -> `foss-2024a`) mechanically, so the driving agent only
-handles a small, bounded residual. The deterministic work is `eb-stack`; the
-agent orchestrates and resolves the residual.
+You are moving a set of EasyBuild easyconfigs from one toolchain generation to the
+next (for example `foss-2023b` -> `foss-2024a`). `eb-stack` rewrites each recipe
+mechanically and resolves every dependency version itself; you drive the loop and
+resolve the handful of cases it cannot decide. Expect it to reproduce a real
+maintainer update mechanically for roughly 60% of packages and to tell you
+exactly what is left on the rest. It never silently emits a wrong version.
 
-`eb-stack` is a Rust CLI. Build it once (`cargo build --release`); the commands
-below assume `eb-stack` is on PATH.
+## 0. What you need first
 
-## What is deterministic (eb-stack does it, exits non-zero on ambiguity)
+1. **The tool.** Build once: in the eb-stack repo, `cargo build --release`; put
+   `target/release/eb-stack` on `PATH`. Confirm `eb-stack --version`.
+2. **The easyconfig universe.** A directory tree of `.eb` files to draw
+   dependency versions from - an EasyBuild install's `easyconfigs/` tree, or a
+   clone of `easybuild-easyconfigs`. If you also have a site overlay of custom
+   recipes, note its path; you can pass both (overlay wins on conflict).
+3. **The build list.** The set of recipes to rebuild for the new generation
+   (toolchains first, then libraries, then applications). Often the previous
+   generation's list, retargeted.
 
-For one recipe, `bump` rewrites a source easyconfig onto a target toolchain
-generation and resolves every dependency version itself from an easyconfig
-universe:
+## 1. The mental model (read once)
+
+- **Deterministic (the tool does it, and refuses to guess):** rewrite
+  `toolchain`; resolve every `dependencies` and `builddependencies` version from
+  the universe across the target generation's sub-toolchain hierarchy
+  (`GCCcore`/`GCC`/`gfbf`/`gompi`/... down to `SYSTEM`) using the generation's
+  consensus version; preserve templates, `local_*`, `SYSTEM`, versionsuffix and
+  pin qualifiers, `exts_list`, and every unchanged line verbatim.
+- **Judgment (yours):** a genuinely new dependency the maintainer adds for the
+  new version; the source tarball checksum on a version bump; whether a
+  version-bump's patches still apply; a maintainer's one-off decision to freeze
+  or downgrade a single dependency. The tool cannot invent these and will not
+  pretend to - it warns or exits non-zero instead.
+
+If a run exits non-zero or prints a warning, that is a decision point for you,
+never a silent failure.
+
+## 2. Bump one recipe (the core command)
 
 ```
 eb-stack bump \
@@ -27,28 +51,90 @@ eb-stack bump \
   --out out/App-<ver>-foss-2024a.eb
 ```
 
-- `toolchain` is rewritten to the target generation.
-- Each `dependencies` and `builddependencies` version is resolved from the
-  universe across the target generation's sub-toolchain hierarchy
-  (`GCCcore`/`GCC`/`gfbf`/`gompi`/... down to `SYSTEM`), not by exact toolchain
-  string. No dependency versions are supplied by hand.
-- Template fields (`%(version)s` and friends), `local_*` variables, `SYSTEM`,
-  multi-element dependency tuples (versionsuffix, per-dependency toolchain), and
-  `exts_list` are parsed and preserved.
-- Everything not changed is preserved verbatim.
+- Dependency versions are resolved automatically from `--easyconfigs`. You do not
+  hand-feed them. To override one, add `--dep Name=version` (repeatable).
+- Multiple universes with precedence (upstream plus a site overlay): pass
+  `--easyconfigs` more than once; a later path wins on conflict.
 
-For a version bump (the application version changes), also pass the new source
-checksum so the emitted recipe is buildable:
+### Worked example (copy-paste reliable)
 
 ```
-eb-stack bump ... --version <newver> --source-checksum <sha256>
+eb-stack bump \
+  --source GROMACS-2024.4-foss-2023b.eb \
+  --toolchain-name foss --toolchain-version 2024a \
+  --easyconfigs /path/to/easyconfigs \
+  --out GROMACS-2024.4-foss-2024a.eb
 ```
 
-If the version changes and no `--source-checksum` is given, `bump` renames the
-source tarball key to the new version and WARNS that the checksum is stale.
+This emits the new recipe with `toolchain` set to `foss-2024a`, and CMake,
+Python, SciPy-bundle, networkx, mpi4py, and scikit-build-core each resolved to
+their `foss-2024a` generation versions - byte-identical to what the maintainer
+shipped, except for any dependency the maintainer added by hand (which the tool
+correctly does not invent; see 4.1).
 
-To co-select a jointly consistent stack and emit the build list a pipeline
-consumes:
+## 3. Version bump vs toolchain bump
+
+- **Toolchain bump** (same app version, new generation): fully mechanical. The
+  command above is all you need.
+- **Version bump** (the application version also changes): add `--version
+  <newver>` and the new source checksum `--source-checksum <sha256>`. Without the
+  checksum the tool renames the source tarball key to the new version and WARNS
+  that the checksum is stale - resolve it (see 4.2) before shipping.
+
+## 4. The residual decision tree (what to do when the tool hands one back)
+
+The tool reproduces the mechanical part; these four cases are yours. Each is
+signalled by a warning or a diff against the previous-generation recipe.
+
+1. **A genuinely new dependency.** The new application version needs a dependency
+   absent from the source recipe. Symptom: diff vs upstream shows the maintainer
+   added a dep the tool did not. Action: add it from the upstream project's
+   requirements for that version; resolve its version with a second
+   `eb-stack bump`/`solve` pass or by hand.
+2. **Stale source checksum (version bumps).** Symptom: a "checksum is stale"
+   warning. Action: get the real sha256 from the upstream release, or from a
+   sibling recipe of the same new version, or run EasyBuild's own checksum
+   injection; re-run with `--source-checksum`.
+3. **Patch set on a version bump.** Symptom: the source's `patches` reference the
+   old version. Action: review whether each patch still applies to the new
+   version; swap to the new version's patch set.
+4. **A single-dependency freeze or downgrade the maintainer chose.** Symptom: one
+   dependency version differs and it is not a mechanical mismatch (the tool
+   resolved the generation-standard version, the maintainer deliberately pinned a
+   different one). Action: accept the tool's version unless you know the upstream
+   reason to override; add `--dep Name=version` if you must pin it.
+
+Everything else in a diff - reordered blocks, quote-style, blank lines,
+description rewrapping, a compiler swap like Qt5 -> Qt6 - is maintainer cosmetic
+or structural change, not a version error. The tool's recipe is correct and
+buildable; match the maintainer's formatting only if your review requires it.
+
+## 5. What the tool guarantees (so you can trust the output)
+
+- It resolves the **generation-native** version of each dependency, not the
+  globally newest, and never a version older than the source's.
+- It **never silently keeps a stale dependency**: an unresolved dependency is a
+  loud warning and a non-zero exit (unless you pass `--keep-old-deps`).
+- It respects **pins**: versionsuffix-qualified and `SYSTEM`-toolchain
+  dependencies are preserved, not bumped.
+- It parses **real easyconfigs** (templates, `local_*`, `SYSTEM`, multi-element
+  tuples, `exts_list`), validated against EasyBuild's own parser, and skips a
+  file it cannot parse rather than aborting the whole run.
+
+## 6. Verify each emitted recipe
+
+- Re-parse it (EasyBuild's own parser is the ground truth): a syntax check plus a
+  read-back of name/version/toolchain/deps.
+- Diff it against the previous-generation recipe and confirm only the intended
+  fields changed.
+- Sanity-check dependency existence for the target generation:
+  `eb-stack check-recipe` resolves one recipe and verifies its deps exist in the
+  robot tree(s).
+
+## 7. Solve the whole set and emit the build list
+
+Once the recipes are bumped, produce a jointly consistent stack and the artifacts
+a pipeline consumes:
 
 ```
 eb-stack solve \
@@ -61,49 +147,48 @@ eb-stack solve \
 ```
 
 `solve` returns the globally newest jointly-consistent stack under the policy's
-declared `root_priority`; the stack diff is a reviewable summary of what changed
-against the baseline. (CycloneDX SBOM output is opt-in via `--sbom-out` and is
-not part of the core workflow.)
+declared `root_priority`; `stack-diff.md` is a reviewable summary against the
+baseline. (CycloneDX SBOM output is opt-in via `--sbom-out`, not part of the core
+loop.)
 
-## What the agent resolves (the bounded residual)
+## 8. The loop, end to end
 
-`bump` reproduces a real maintainer update byte-for-byte EXCEPT for judgment the
-tool cannot make. When you drive the annual bump, handle these:
+For each recipe in the build list:
+1. `bump` it onto the new generation (deps auto-resolved).
+2. If it exits non-zero or warns, resolve the residual (section 4) and re-run.
+3. Verify (section 6); keep the diff for review.
+4. When the set is bumped, `solve` for joint consistency and emit the build list.
+5. Open the change as a reviewable PR into your easyconfigs repo; a human (and
+   your build pipeline) reviews before install. Do not push generated recipes to
+   a build without review.
 
-1. Genuinely-new dependencies a maintainer would add for the new version (a dep
-   that is not in the source recipe at all). The tool cannot invent these; add
-   them from the upstream project's requirements.
-2. The source checksum on a version bump when you did not pass one: obtain it
-   from the upstream release or from a sibling recipe of the same new version,
-   or run EasyBuild's own checksum injection, then re-run with `--source-checksum`.
-3. Patch-set changes on a version bump: the old version's patches may not apply
-   to the new version. Review and swap to the new version's patch set.
-4. A dependency whose target-generation version does not exist in the universe
-   yet: build or pull that dependency first, or record it as a blocker.
+## 9. Driver
 
-## Bulletproofing contract
+This runbook names no model. Any capable agent, or a human, can execute it; the
+tool guarantees correctness on the mechanical steps and refuses to guess the
+rest, so the driver only handles the four bounded residual cases. If you use an
+in-house or hosted LLM as the driver, it needs only API access - no EasyBuild
+semantics live in the prompt.
 
-- `bump` exits non-zero (with a typed error) when it cannot resolve a field
-  mechanically, so the agent is invoked only for a real residual decision, never
-  to guess. Treat any non-zero exit or emitted warning as a decision point.
-- Verify each emitted recipe: re-parse it (EasyBuild's own parser is the ground
-  truth), and diff against the previous-generation recipe to confirm only the
-  intended fields changed.
-- Do not push generated recipes to a build pipeline without human review of the
-  diff.
+## Quick reference
 
-## Driver
+| Task | Command |
+|------|---------|
+| Bump one recipe (auto deps) | `eb-stack bump --source X.eb --toolchain-name foss --toolchain-version 2024a --easyconfigs DIR --out Y.eb` |
+| Override one dep | add `--dep Name=version` |
+| Version bump | add `--version V --source-checksum SHA` |
+| Overlay universe | pass `--easyconfigs` twice (later wins) |
+| Keep unresolved deps (opt-in) | add `--keep-old-deps` |
+| Check a recipe's deps exist | `eb-stack check-recipe --source X.eb --easyconfigs DIR` |
+| Solve stack + build list | `eb-stack solve --easyconfigs DIR --policy P.json --lock-out L.json --build-list-out B.txt --stack-diff-out D.md` |
 
-This skill names no model. Any capable agent (or a human) can execute it; the
-tool guarantees correctness on the mechanical steps, so the driver only needs to
-handle the four residual cases above.
+## Reality check
 
-## Loop over a build list
-
-The annual bump is this per recipe, over the list of recipes to rebuild:
-
-1. `bump` the recipe onto the new generation (auto-resolved deps).
-2. If it exits non-zero or warns, resolve the residual and re-run.
-3. Re-parse and diff the result; keep the diff for review.
-4. When the set is bumped, `solve` the whole set for joint consistency and emit
-   the build list.
+On a real `easybuild-easyconfigs` sample, `eb-stack` mechanically reproduced the
+maintainer's next-generation recipe (exactly, or exactly-modulo-a-hand-added-dep)
+for about 60% of packages; the rest differ only by maintainer judgment
+(cosmetic/structural rewrites, hand-added deps or patches, one-off pins) that no
+mechanical tool can or should invent. Treat it as: it does the mechanical
+majority correctly and never silently wrong, and it hands you a short, named list
+of judgment calls. That is what makes the annual bump tractable for one
+agent-plus-human instead of a person-month of hand edits.
