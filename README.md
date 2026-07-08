@@ -19,5 +19,13 @@ cargo build --release
   --sbom-out stack.cdx.json
 ```
 
+When the baseline tree contains **multiple generations** of the same toolchain family as
+the policy target, `solve` picks the baseline generation as follows:
+
+1. If `--baseline-toolchain-version VERSION` is set, that generation is used (must exist
+   in the baseline tree for the policy toolchain name).
+2. Otherwise, the **nearest lower** generation than the policy target is used (EasyBuild-style
+   version order, e.g. target `2025b` with `2024b` and `2025a` present → baseline `2025a`).
+
 `prefer_newer` co-selects GROMACS 2025.0 with OpenBLAS 0.3.27, OpenMPI 5.0.3,
 FFTW 3.3.10. Design notes (if any) live in a separate notes vault, not this repo.

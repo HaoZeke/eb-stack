@@ -1,0 +1,7 @@
+name = 'FFTW'
+version = '3.3.10'
+toolchain = {'name': 'foss', 'version': '2025a'}
+dependencies = [
+    ('OpenBLAS', '0.3.23'),
+    ('OpenMPI', '4.1.5'),
+]

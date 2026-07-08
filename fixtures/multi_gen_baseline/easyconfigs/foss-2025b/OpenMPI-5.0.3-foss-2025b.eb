@@ -1,0 +1,5 @@
+name = 'OpenMPI'
+version = '5.0.3'
+toolchain = {'name': 'foss', 'version': '2025b'}
+dependencies = [
+]

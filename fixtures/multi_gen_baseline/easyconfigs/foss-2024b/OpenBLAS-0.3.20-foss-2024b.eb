@@ -1,0 +1,6 @@
+name = 'OpenBLAS'
+version = '0.3.20'
+toolchain = {'name': 'foss', 'version': '2024b'}
+homepage = 'https://www.openblas.net'
+dependencies = [
+]

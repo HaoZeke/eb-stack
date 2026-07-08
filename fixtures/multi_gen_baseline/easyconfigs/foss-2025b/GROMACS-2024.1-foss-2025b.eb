@@ -1,0 +1,8 @@
+name = 'GROMACS'
+version = '2024.1'
+toolchain = {'name': 'foss', 'version': '2025b'}
+dependencies = [
+    ('OpenBLAS', '>=0.3.23'),
+    ('OpenMPI', '>=4.1.5'),
+    ('FFTW', '>=3.3.10'),
+]

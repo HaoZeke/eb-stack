@@ -1,0 +1,6 @@
+name = 'FFTW'
+version = '3.3.10'
+toolchain = {'name': 'foss', 'version': '2024b'}
+homepage = 'http://www.fftw.org'
+dependencies = [
+]
