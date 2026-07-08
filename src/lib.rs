@@ -22,7 +22,7 @@ pub use eb_emit::{
 pub use hierarchy::{
     count_generation_dep_versions, filter_candidates_in_hierarchy, hierarchy_for,
     hierarchy_member_rank, is_system_toolchain, known_hierarchy, load_hierarchy_fixture,
-    pick_consensus_version, resolve_dep_version_in_hierarchy,
+    pick_consensus_version, prefer_non_system_candidates, resolve_dep_version_in_hierarchy,
     resolve_dep_version_in_hierarchy_opts, resolve_dep_versions_for_specs,
     resolve_dep_versions_in_hierarchy, resolve_dep_versions_in_hierarchy_strict, toolchains_match,
     HierarchyError, ResolveDepOpts, SourceDepSpec, ToolchainHierarchy,

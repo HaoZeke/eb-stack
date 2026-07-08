@@ -272,6 +272,27 @@ pub fn count_generation_dep_versions(
     counts
 }
 
+/// Prefer generation-compiler / composite toolchains over SYSTEM among already
+/// hierarchy-eligible install candidates.
+///
+/// SYSTEM remains a hierarchy member (for rare binary-only build tools), but when
+/// a GCCcore/GCC/gfbf/… candidate exists it must win empty-consensus “newest”
+/// fallbacks (e.g. CMake 3.29.3 @ GCCcore-13.3.0 over CMake 3.31.8 @ SYSTEM).
+///
+/// Returns `eligible` unchanged when every candidate is SYSTEM (or the list is empty).
+pub fn prefer_non_system_candidates<'a>(eligible: &[&'a Candidate]) -> Vec<&'a Candidate> {
+    let non_sys: Vec<&'a Candidate> = eligible
+        .iter()
+        .copied()
+        .filter(|c| !is_system_toolchain(&c.toolchain))
+        .collect();
+    if non_sys.is_empty() {
+        eligible.to_vec()
+    } else {
+        non_sys
+    }
+}
+
 /// Pick a generation-consensus version of `name` among `eligible` install versions.
 ///
 /// - Clear majority (≥ 80% of generation pins of `name` that land in `eligible`):
@@ -281,6 +302,8 @@ pub fn count_generation_dep_versions(
 /// - If no pin counts hit eligible: **newest** eligible (true no-signal fallback).
 ///
 /// `eligible` must already be floor/suffix/hierarchy filtered. Empty → `None`.
+/// Callers that hold full [`Candidate`]s should first run
+/// [`prefer_non_system_candidates`] so SYSTEM does not beat GCCcore on version alone.
 pub fn pick_consensus_version(
     counts: &HashMap<String, usize>,
     eligible: &[String],
@@ -358,10 +381,14 @@ pub fn resolve_dep_version_in_hierarchy_opts(
         return None;
     }
 
+    // Prefer GCCcore/GCC/gfbf/… over SYSTEM before consensus/newest (SYSTEM only
+    // when no compiler-toolchain candidate remains).
+    let preferred = prefer_non_system_candidates(&eligible);
+
     let use_consensus = opts.use_consensus || opts.floor_version.is_some();
     if use_consensus {
         let versions: Vec<String> = {
-            let mut v: Vec<String> = eligible.iter().map(|c| c.version.clone()).collect();
+            let mut v: Vec<String> = preferred.iter().map(|c| c.version.clone()).collect();
             v.sort();
             v.dedup();
             v
@@ -375,7 +402,7 @@ pub fn resolve_dep_version_in_hierarchy_opts(
     // Legacy prefer_newer / rank walk (no floor, no consensus).
     let mut best: Option<&Candidate> = None;
     let mut best_rank: usize = 0;
-    for c in eligible {
+    for c in preferred {
         let rank = hierarchy_member_rank(hierarchy, &c.toolchain).unwrap_or(0);
         best = match best {
             None => {
@@ -985,6 +1012,46 @@ mod tests {
             Some("3.31.8"),
             "floor must exclude older consensus pin"
         );
+    }
+
+    #[test]
+    fn empty_consensus_prefers_gcccore_over_system_newest() {
+        // Mirrors auto_resolve_cmake_ignores_out_of_generation_gcccore universe:
+        // no reverse-dep pins → empty consensus → must not pick SYSTEM 3.31.8.
+        let h = known_hierarchy(&foss("2024a")).unwrap();
+        let cands = vec![
+            cand("CMake", "3.29.3", "GCCcore", "13.3.0", None),
+            cand("CMake", "3.31.8", "GCCcore", "14.3.0", None), // out of gen
+            cand("CMake", "3.31.8", "system", "system", None),
+        ];
+        let opts = ResolveDepOpts {
+            floor_version: Some("3.27.6"),
+            versionsuffix: None,
+            use_consensus: true,
+        };
+        assert_eq!(
+            resolve_dep_version_in_hierarchy_opts("CMake", &cands, &h, &opts).as_deref(),
+            Some("3.29.3"),
+            "empty consensus must prefer GCCcore-13.3.0 over SYSTEM 3.31.8"
+        );
+        // SYSTEM-only eligible still resolves.
+        let only_sys = vec![cand("CMake", "3.31.8", "system", "system", None)];
+        assert_eq!(
+            resolve_dep_version_in_hierarchy_opts("CMake", &only_sys, &h, &opts).as_deref(),
+            Some("3.31.8")
+        );
+    }
+
+    #[test]
+    fn prefer_non_system_candidates_keeps_system_when_alone() {
+        let gcc = cand("CMake", "3.29.3", "GCCcore", "13.3.0", None);
+        let sys = cand("CMake", "3.31.8", "system", "system", None);
+        let both = prefer_non_system_candidates(&[&gcc, &sys]);
+        assert_eq!(both.len(), 1);
+        assert_eq!(both[0].version, "3.29.3");
+        let only = prefer_non_system_candidates(&[&sys]);
+        assert_eq!(only.len(), 1);
+        assert_eq!(only[0].version, "3.31.8");
     }
 
     #[test]
