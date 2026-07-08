@@ -493,10 +493,13 @@ impl SourceDepSpec {
     }
 
     /// Whether auto-resolve must leave the source version untouched:
-    /// SYSTEM 4th-tuple, non-empty versionsuffix, or `# optional` comment.
+    /// SYSTEM 4th-tuple or non-empty versionsuffix.
+    ///
+    /// A `# optional` comment marks the dependency optional **to include**,
+    /// not frozen: real maintainers still bump optional deps to the
+    /// generation version, so `optional` does not count as a pin here.
     pub fn is_preserve_pin(&self) -> bool {
         self.system_toolchain
-            || self.optional
             || self
                 .versionsuffix
                 .as_deref()
@@ -508,8 +511,9 @@ impl SourceDepSpec {
 ///
 /// - Deps with a **non-empty versionsuffix** are not bumped (caller keeps source).
 /// - Deps with **SYSTEM** 4th-tuple toolchain are not bumped (keep source pin).
-/// - Deps marked **optional** in a trailing comment are not bumped and never
-///   hard-fail (same preserve path as SYSTEM / versionsuffix).
+/// - Deps marked **optional** in a trailing comment resolve/bump like any other
+///   dep: `# optional` means optional *to include*, not frozen. The comment
+///   text itself is preserved verbatim by the emitter; only the version bumps.
 /// - Resolved versions are never older than the source version.
 /// - Missing candidates yield [`HierarchyError::MissingDep`] unless `keep_old` is true
 ///   (then the source version is kept and the name is listed in `kept_old`).
@@ -540,14 +544,9 @@ pub fn resolve_dep_versions_for_specs(
             ));
             continue;
         }
-        // `# optional` comment: preserve source pin even when hierarchy candidates exist.
-        if spec.optional {
-            kept_old.push(format!(
-                "{} (optional; keeping source {})",
-                spec.name, spec.version
-            ));
-            continue;
-        }
+        // `# optional` marks the dep optional-to-include, not frozen: it
+        // resolves/bumps like any other dep below (comment text is preserved
+        // by the emitter regardless of whether the version changes).
         let opts = ResolveDepOpts {
             floor_version: Some(spec.version.as_str()),
             versionsuffix: None,
@@ -1070,11 +1069,11 @@ mod tests {
     }
 
     #[test]
-    fn resolve_specs_preserve_system_and_optional_pins() {
+    fn resolve_specs_preserve_system_pin_but_bump_optional() {
         let h = known_hierarchy(&foss("2024a")).unwrap();
         let cands = vec![
             cand("Python", "3.12.3", "GCCcore", "13.3.0", None),
-            // In-hierarchy newer ASE — must still NOT bump optional source pin.
+            // In-hierarchy newer ASE — optional now bumps like a normal dep.
             cand("ASE", "3.24.0", "foss", "2024a", None),
             cand("USEARCH", "12.0", "GCCcore", "13.3.0", None), // decoy — must not bump SYSTEM pin
         ];
@@ -1100,28 +1099,41 @@ mod tests {
             !map.contains_key("USEARCH"),
             "SYSTEM pin must not be bumped: {map:?}"
         );
-        assert!(
-            !map.contains_key("ASE"),
-            "optional with candidates must keep source pin: {map:?}"
+        assert_eq!(
+            map.get("ASE").map(String::as_str),
+            Some("3.24.0"),
+            "optional dep must resolve to the in-hierarchy generation version: {map:?}"
         );
         assert_eq!(map.get("Python").map(String::as_str), Some("3.12.3"));
         assert!(kept.iter().any(|k| k.contains("USEARCH") && k.contains("SYSTEM")));
         assert!(
-            kept.iter().any(|k| k.contains("ASE") && k.contains("optional") && k.contains("3.23.0")),
-            "kept notes: {kept:?}"
+            !kept.iter().any(|k| k.contains("ASE")),
+            "optional dep with a candidate must not be listed as kept-old: {kept:?}"
         );
         assert!(SourceDepSpec {
-            name: "ASE".into(),
-            version: "3.23.0".into(),
+            name: "USEARCH".into(),
+            version: "11.0.667-i86linux32".into(),
             versionsuffix: None,
-            system_toolchain: false,
-            optional: true,
+            system_toolchain: true,
+            optional: false,
         }
         .is_preserve_pin());
+        assert!(
+            !SourceDepSpec {
+                name: "ASE".into(),
+                version: "3.23.0".into(),
+                versionsuffix: None,
+                system_toolchain: false,
+                optional: true,
+            }
+            .is_preserve_pin(),
+            "optional alone must not count as a pin"
+        );
         // Missing non-optional still errors.
         let bad = vec![SourceDepSpec::plain("MissingPkg", "1.0")];
         assert!(resolve_dep_versions_for_specs(&bad, &cands, &h, false).is_err());
-        // Missing optional never errors (same preserve path).
+        // Missing optional now errors too (same code path as any other dep)
+        // unless the caller opts into `keep_old`.
         let opt_missing = vec![SourceDepSpec {
             name: "OptionalGhost".into(),
             version: "0.1".into(),
@@ -1129,9 +1141,10 @@ mod tests {
             system_toolchain: false,
             optional: true,
         }];
-        let (m2, k2) = resolve_dep_versions_for_specs(&opt_missing, &cands, &h, false).unwrap();
+        assert!(resolve_dep_versions_for_specs(&opt_missing, &cands, &h, false).is_err());
+        let (m2, k2) = resolve_dep_versions_for_specs(&opt_missing, &cands, &h, true).unwrap();
         assert!(m2.is_empty());
-        assert!(k2.iter().any(|k| k.contains("OptionalGhost") && k.contains("optional")));
+        assert!(k2.iter().any(|k| k.contains("OptionalGhost")));
     }
 
     #[test]

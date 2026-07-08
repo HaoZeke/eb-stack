@@ -1349,7 +1349,7 @@ dependencies = [
     }
 
     #[test]
-    fn auto_resolve_preserves_system_and_optional_without_unresolved_error() {
+    fn auto_resolve_preserves_system_pin_but_bumps_optional() {
         let src = "\
 name = 'PhyloPhlAn'
 version = '3.1.1'
@@ -1365,16 +1365,23 @@ dependencies = [
         std::fs::write(&src_path, src).unwrap();
         let uni = tmp.path().join("uni");
         std::fs::create_dir_all(&uni).unwrap();
-        // Only Python in universe — USEARCH/ASE must not cause UnresolvedDep.
+        // Only Python in universe — USEARCH must not cause UnresolvedDep.
         std::fs::write(
             uni.join("Python-3.12.3-GCCcore-13.3.0.eb"),
             "name = 'Python'\nversion = '3.12.3'\ntoolchain = {'name': 'GCCcore', 'version': '13.3.0'}\ndependencies = []\n",
         )
         .unwrap();
-        // Out-of-generation decoy ASE must not be applied to optional pin.
+        // In-generation ASE candidate: `# optional` means optional-to-include,
+        // not frozen, so it must bump to this generation version.
         std::fs::write(
-            uni.join("ASE-3.24.0-foss-2025a.eb"),
-            "name = 'ASE'\nversion = '3.24.0'\ntoolchain = {'name': 'foss', 'version': '2025a'}\ndependencies = []\n",
+            uni.join("ASE-3.24.0-foss-2024a.eb"),
+            "name = 'ASE'\nversion = '3.24.0'\ntoolchain = {'name': 'foss', 'version': '2024a'}\ndependencies = []\n",
+        )
+        .unwrap();
+        // Out-of-generation decoy must still not be picked (generation-scoped consensus).
+        std::fs::write(
+            uni.join("ASE-3.25.0-foss-2025a.eb"),
+            "name = 'ASE'\nversion = '3.25.0'\ntoolchain = {'name': 'foss', 'version': '2025a'}\ndependencies = []\n",
         )
         .unwrap();
         let empty = HashMap::new();
@@ -1392,26 +1399,25 @@ dependencies = [
             None,
             None,
         )
-        .expect("SYSTEM + optional must not hard-fail");
+        .expect("SYSTEM freeze + optional bump must not hard-fail");
         assert!(r.text.contains("toolchain = {'name': 'foss', 'version': '2024a'}"));
         assert!(r.text.contains("('Python', '3.12.3')"));
-        // SYSTEM + optional preserved even if hierarchy has decoys (ASE-3.24 foss-2025a).
+        // SYSTEM pin still frozen at the source version.
         assert!(r.text.contains("('USEARCH', '11.0.667-i86linux32', '', SYSTEM)"));
+        // Optional ASE bumps to the in-generation candidate; the `# optional`
+        // comment is preserved verbatim, only the version token changes.
         assert!(
-            r.text.contains("('ASE', '3.23.0')"),
-            "optional ASE must keep source pin, got:\n{}",
+            r.text.contains("('ASE', '3.24.0'),  # optional"),
+            "optional ASE must bump to the generation version with comment preserved, got:\n{}",
             r.text
         );
-        assert!(!r.text.contains("3.24.0"));
         assert!(
-            r.warnings.iter().any(|w| w.contains("USEARCH") && w.contains("SYSTEM")),
-            "warnings: {:?}",
-            r.warnings
+            !r.text.contains("3.25.0"),
+            "out-of-generation decoy must not be used, got:\n{}",
+            r.text
         );
         assert!(
-            r.warnings
-                .iter()
-                .any(|w| w.contains("ASE") && w.contains("optional") && w.contains("keeping source")),
+            r.warnings.iter().any(|w| w.contains("USEARCH") && w.contains("SYSTEM")),
             "warnings: {:?}",
             r.warnings
         );
