@@ -108,6 +108,34 @@ An unsatisfiable policy (a pin no candidate can meet, together with a root
 that needs it) fails with a message naming the real package versions
 involved, not internal solver ranks.
 
+* Layer a site overlay on top of upstream
+
+~--easyconfigs~ is repeatable. Pass the upstream tree first and a site
+overlay second, and the overlay wins wherever it declares the same
+package identity (name + version + toolchain); everything the overlay
+does not touch still comes from upstream:
+
+#+begin_src bash
+eb-stack solve \
+  --easyconfigs vendor/easybuild-easyconfigs/easybuild/easyconfigs \
+  --easyconfigs site/easyconfigs \
+  --policy policies/prefer_newer.json \
+  --lock-out stack.lock.json
+#+end_src
+
+Precedence is by *path order*, not alphabetical or mtime: later
+~--easyconfigs~ paths override earlier ones for the same name+version+
+toolchain identity. A site recipe for ~GROMACS-2025.0-foss-2025b.eb~ that
+patches in a local build option replaces the upstream recipe of the same
+identity in the solved universe; a site-only package with no upstream
+counterpart is simply added, and it participates in co-selection like any
+other candidate. ~eb-stack bump --easyconfigs~ (the auto-resolve universe,
+see [[file:bump-recipe.org][how to bump a recipe]]) and ~eb-stack parse
+--easyconfigs~ each take a single directory, not a repeatable list -- point
+either at a directory that already contains the overlay merged in, or at
+the overlay directory alone if it is self-sufficient for the dependencies
+being resolved.
+
 * Next steps
 
 - [[file:emit-reports.org][Emit a build list and stack diff]] alongside the lock.

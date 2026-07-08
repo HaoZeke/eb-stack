@@ -1,0 +1,168 @@
+#+TITLE: Reproduction fidelity and limitations
+#+OPTIONS: toc:t num:nil
+
+~eb-stack~ is assistive tooling for a toolchain-generation rebuild, not an
+unattended pipeline. This page states how much of a real maintainer bump
+it reproduces, measured against real EasyBuild recipes, and what kind of
+residual to expect when it does not reproduce one exactly. Both numbers
+below move as the parser and the hierarchy resolver improve; this page is
+updated alongside the code that moves them.
+
+* Parser coverage on a real, unfiltered checkout
+
+~eb-stack parse~ / ~solve~ / ~bump --easyconfigs~ all walk a directory tree
+and evaluate every ~.eb~ file with the restricted-Python evaluator
+described in [[file:parser-approach.org][the parser approach]]. Measured
+against a real, unfiltered local checkout of
+~easybuilders/easybuild-easyconfigs~ (spanning toolchain generations from
+roughly ~2021a~ to ~2025b~, just under eleven thousand ~.eb~ files, no
+pre-filtering or hand-curation): *99.55%* of files parse (10,942 of
+10,992). The remaining 0.45% use constructs outside the restricted DSL --
+multi-statement ~configopts~/~buildopts~ built from ~+=~ lines with
+embedded ~if~/~for~, plus a small set of edge-case string literal forms --
+and are skipped individually, not fatal to the walk (see
+[[file:parser-approach.org][the parser approach]] for how the tree walk
+recovers from a single bad file instead of aborting).
+~tests/real_tree_scale.rs~ exercises this same measurement whenever a real
+checkout is available locally (set ~EB_EASYCONFIGS~) and asserts coverage
+stays above 90%.
+
+Coverage matters beyond the parse step itself: every dependency name
+~bump --easyconfigs~ cannot find a hierarchy-compatible candidate for is
+either a loud failure (default) or a version left unchanged with a printed
+warning (~--keep-old-deps~) -- see the next section. A large gap in parser
+coverage does not show up as a crash; it shows up as dependencies missing
+from the universe with no error naming which ones. Closing the coverage
+gap from a much lower
+starting point (below a third of this same checkout, before the
+restricted evaluator replaced an earlier regex-only extractor) is the main
+reason the reproduction rate in the next section moved from single digits
+into the fifties.
+
+* Mechanical reproduction of real maintainer toolchain bumps
+
+Measured on a sample of 34 real ~foss-2023b~ -> ~foss-2024a~ toolchain-bump
+pairs: applications present under both generations in the same real
+checkout, same application version on both sides, excluding CUDA/PLUMED
+build-variant suffixes. For each pair, ~bump --easyconfigs~ ran against the
+full raw checkout (no pre-sanitizing, no hand-fed ~--dep~ overrides,
+default loud-fail-on-unresolved), and the emitted file was diffed against
+the real target file the maintainer committed.
+
+| Class         | Count | Share |
+|---------------+-------+-------|
+| EXACT         |    15 |   44% |
+| ADDITIVE-ONLY |     3 |    9% |
+| RESIDUAL      |    15 |   44% |
+| ERROR (loud)  |     1 |    3% |
+|---------------+-------+-------|
+| Total         |    34 |  100% |
+
+*Reproduction rate (EXACT + ADDITIVE-ONLY) / N = 53%* (18 of 34).
+"ADDITIVE-ONLY" means the real target equals the emitted file plus lines
+the maintainer inserted -- e.g. an attribution comment, or a
+~builddependencies~ entry unknowable from the source recipe -- with nothing
+removed and nothing else changed: the tool did not reproduce the whole
+diff, but it did not get anything *wrong* either.
+
+** What the 15 RESIDUAL pairs look like
+
+A pair can land in more than one category; the largest by pair count is
+listed first.
+
+1. *"Newest that exists today" is not "newest that existed when the target
+   generation released"* (9 of 15 pairs, the largest remaining gap). The
+   hierarchy resolver picks the newest hierarchy-compatible candidate in
+   whatever universe it is pointed at. When that universe has since
+   accumulated a newer easyconfig than existed at the time the target
+   generation was actually released -- a later ~CMake~ or ~scikit-learn~
+   build added to the same checkout well after ~foss-2024a~'s own release -- the
+   resolver correctly finds it and correctly prefers it, but that is not
+   what the maintainer's PR used. This gap sits entirely in
+   generation-native version selection; parser coverage and hierarchy
+   membership are both already correct here. It is the area receiving
+   active work: a time-boundary-aware candidate filter, or at minimum a
+   per-dependency warning distinguishing "resolved cleanly, one candidate"
+   from "resolved to the newest of several, verify against upstream."
+2. *Pin recognition is not yet complete.* A dependency pinned by a literal
+   ~versionsuffix~ (e.g. ~('LLVM', '14.0.6', '-llvmlite')~) is correctly
+   left untouched. A pin expressed only as a trailing comment
+   (~('ASE', '3.23.0'),  # optional~) or as a ~SYSTEM~-toolchain
+   pseudo-version dependency (a platform-qualified build tag rather than a
+   real version, which by construction has no hierarchy-compatible
+   candidate) is not yet recognized as a pin, so the resolver either bumps
+   it when it should not, or fails loudly when the correct behavior would
+   have been to leave it alone. The loud ERROR in the table above is
+   exactly this case: a ~SYSTEM~-toolchain dependency the resolver could
+   not place in any hierarchy tier, correctly reported as a failure rather
+   than emitted with a wrong version and no indication anything went
+   wrong -- but a false negative, in
+   the sense that a smarter default (treat ~SYSTEM~-toolchain and
+   comment-annotated deps as implicitly pinned, the same as a
+   ~versionsuffix~ pin) would have produced the exact right answer with no
+   manual intervention. ~--keep-old-deps~ is today's one-flag workaround
+   for this specific shape.
+3. *Inherent maintainer judgment.* The remaining residual content is
+   cosmetic or structural work no mechanical version-bump tool can or
+   should invent: quote-style changes, description reformatting,
+   dependency-list restructuring the maintainer did by hand, and new
+   dependencies or patches added specifically for the new version
+   (unknowable from a source recipe that predates them), plus outright
+   structural swaps such
+   as a build moving from Qt5 to Qt6 with a different ~easyblock~
+   entirely. These account for most of the line-level diff in the residual
+   pairs and are explicitly out of scope for a targeted rewrite tool by
+   design -- see
+   [[file:parser-approach.org][the parser approach]] for why ~bump~
+   rewrites targeted spans rather than re-serializing the file.
+
+** Unresolved dependencies fail loudly, with no quiet fallback
+
+Earlier revisions of the hierarchy resolver left an unresolved dependency
+at its source version with no warning, which is worse than either
+succeeding or failing cleanly: a diff review sees a stack that looks fully
+bumped, but is not, with nothing in the output saying so. The current
+default inverts that: ~bump~ aborts with a named, non-zero-exit error the
+moment any dependency (other than a recognized pin) has no
+hierarchy-compatible candidate, and ~--keep-old-deps~ is required to opt
+back into "leave the source version and keep going," with a warning
+printed for every dependency that path takes. Across the 34-pair sample,
+zero of the RESIDUAL pairs show a stale dependency version with no warning
+attached; the corresponding cases now surface as either the ERROR row
+above or a correctly-resolved version.
+
+* What this means for using eb-stack on a real rebuild
+
+Read this as: *~eb-stack~ turns most of a toolchain-generation bump into a
+mechanical, reviewable diff, and names the exact reason when it could
+not.* It
+is not a substitute for reviewing that diff. The
+[[https://github.com/HaoZeke/eb-stack/blob/main/skills/annual-bump/SKILL.md][annual-bump
+skill]] (~skills/annual-bump/SKILL.md~ in the repository) encodes this
+split directly: the deterministic steps (~bump~, ~solve~) run
+unattended and exit non-zero or warn exactly when a residual decision is
+needed, and its own bulletproofing contract says a generated recipe never
+goes to a build pipeline without a human reviewing the diff. Budget human
+review time for:
+
+- Any warning ~bump~ prints (stale checksum, patches needing review, a
+  dependency kept at its old version).
+- A version-bumped dependency where more than one candidate existed in the
+  universe at that hierarchy tier -- verify it against the versions that
+  actually existed when the target generation released, since the
+  resolver only sees what is in today's local checkout.
+- New dependencies or patches the target application version needs that
+  the source recipe never declared -- these cannot be mechanically
+  inferred from the old recipe at all.
+- Structural swaps (a different ~easyblock~, a dependency family change) --
+  these are maintainer judgment calls a version-bump tool is not designed
+  to make.
+
+* Next steps
+
+- [[file:parser-approach.org][The parser approach]] -- what the restricted
+  evaluator does and does not model.
+- [[file:../howto/bump-recipe.org][How to bump a recipe]] -- ~--keep-old-deps~,
+  ~--source-checksum~, and every other ~bump~ flag.
+- [[file:../tutorial.org][Tutorial]] -- a worked zero-hand-fed bump, including
+  the one line it correctly does not invent.
