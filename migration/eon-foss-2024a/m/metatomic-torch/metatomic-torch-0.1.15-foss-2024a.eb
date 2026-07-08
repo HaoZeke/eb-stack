@@ -1,0 +1,45 @@
+# Companion: metatomic Torch C++ library (libmetatomic_torch).
+# Required by eOn with_metatomic / feedstock libmetatomic-torch pin.
+easyblock = 'CMakeMake'
+
+name = 'metatomic-torch'
+version = '0.1.15'
+
+homepage = 'https://docs.metatensor.org/metatomic/'
+description = """Metatomic Torch C++ library for running metatomic models via
+TorchScript. Requires metatensor-torch and PyTorch (foss-2024a)."""
+
+toolchain = {'name': 'foss', 'version': '2024a'}
+toolchainopts = {'pic': True, 'openmp': True}
+
+source_urls = ['https://github.com/metatensor/metatomic/archive/refs/tags/']
+sources = ['metatomic-torch-v%(version)s.tar.gz']
+checksums = [
+    {'metatomic-torch-v0.1.15.tar.gz': '89bae80e9be74636089c367c847421395cc6fbe8488af184ed5875da9d7c9847'},
+]
+
+builddependencies = [
+    ('CMake', '3.29.3'),
+    ('pkgconf', '2.2.0'),
+    ('Ninja', '1.12.1'),
+]
+
+dependencies = [
+    ('Python', '3.12.3'),
+    ('PyTorch', '2.6.0'),
+    ('metatensor', '0.1.17', '', ('GCCcore', '13.3.0')),
+    ('metatensor-torch', '0.10.0'),
+]
+
+start_dir = 'metatomic-torch'
+
+# convert_name: metatensor-torch → EBROOTMETATENSORMINTORCH (hyphen → min)
+preconfigopts = 'export CMAKE_PREFIX_PATH=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch:$EBROOTMETATENSOR:$EBROOTMETATENSORMINTORCH${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
+configopts = '-GNinja -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release -DMETATOMIC_TORCH_TESTS=OFF -DTorch_DIR=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch/share/cmake/Torch '
+
+sanity_check_paths = {
+    'files': ['lib/libmetatomic_torch.%s' % SHLIB_EXT],
+    'dirs': ['include', 'lib', 'lib/cmake'],
+}
+
+moduleclass = 'lib'

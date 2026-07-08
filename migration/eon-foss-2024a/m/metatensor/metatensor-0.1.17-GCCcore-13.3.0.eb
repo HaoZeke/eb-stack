@@ -1,0 +1,38 @@
+# Companion: metatensor-core C library for eOn / metatensor-torch.
+# Not yet in easybuild-easyconfigs; lives under eOn overlay robot path.
+easyblock = 'CMakeMake'
+
+name = 'metatensor'
+version = '0.1.17'
+
+homepage = 'https://docs.metatensor.org/'
+description = """Metatensor core C library: sparse storage for atomistic
+machine learning. Built from the metatensor-core tree of the monorepo tag."""
+
+toolchain = {'name': 'GCCcore', 'version': '13.3.0'}
+toolchainopts = {'pic': True}
+
+source_urls = ['https://github.com/metatensor/metatensor/archive/refs/tags/']
+sources = ['metatensor-core-v%(version)s.tar.gz']
+checksums = [
+    {'metatensor-core-v0.1.17.tar.gz': '1ec640ec00ae8977fa9dfda93fd7347d4977a673811493bf2787883fc20fe0b4'},
+]
+
+builddependencies = [
+    ('binutils', '2.42'),
+    ('CMake', '3.29.3'),
+    ('pkgconf', '2.2.0'),
+    # metatensor-core builds a Rust staticlib
+    ('Rust', '1.83.0'),
+]
+
+start_dir = 'metatensor-core'
+
+configopts = '-DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release '
+
+sanity_check_paths = {
+    'files': ['include/metatensor.h', 'lib/libmetatensor.%s' % SHLIB_EXT],
+    'dirs': ['include', 'lib', 'lib/cmake'],
+}
+
+moduleclass = 'lib'

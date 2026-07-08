@@ -316,3 +316,67 @@ fn eon_full_recipe_deps_found_in_drafts_plus_real_robot() {
     assert!(check.found.iter().any(|f| f.contains("xtb") || f.contains("XTB") || f.contains("xtb")));
     assert!(check.found.iter().any(|f| f.contains("PyTorch") || f.contains("pytorch") || f.contains("PyTorch")));
 }
+
+/// Migration overlay under `migration/eon-foss-2024a/` is the installable robot
+/// overlay for foss-2024a: eOn + companions not in upstream at required pins.
+#[test]
+fn migration_eon_foss_2024a_overlay_closes_recipe_against_real_robot() {
+    let mig = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migration/eon-foss-2024a");
+    assert!(
+        mig.is_dir(),
+        "expected migration/eon-foss-2024a overlay directory"
+    );
+    let recipe_path = mig.join("e/eOn/eOn-2.16.0-foss-2024a.eb");
+    assert!(recipe_path.is_file(), "missing eOn product recipe in migration overlay");
+    for rel in [
+        "m/Meson/Meson-1.8.2-GCCcore-13.3.0.eb",
+        "r/Rust/Rust-1.88.0-GCCcore-13.3.0.eb",
+        "q/quill/quill-11.1.0-GCCcore-13.3.0.eb",
+        "m/metatensor/metatensor-0.1.17-GCCcore-13.3.0.eb",
+        "m/metatensor-torch/metatensor-torch-0.10.0-foss-2024a.eb",
+        "m/metatomic-torch/metatomic-torch-0.1.15-foss-2024a.eb",
+    ] {
+        assert!(
+            mig.join(rel).is_file(),
+            "migration overlay missing companion {rel}"
+        );
+    }
+
+    let recipe = resolve_easyconfig_file(&recipe_path).expect("resolve migration eOn.eb");
+    assert_eq!(recipe.name, "eOn");
+    assert_eq!(recipe.version, "2.16.0");
+    assert_eq!(recipe.toolchain.label(), "foss-2024a");
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let real = PathBuf::from(&home).join(".venvs/easybuild/easybuild/easyconfigs");
+    if !real.is_dir() {
+        // Structural presence of companions is still asserted above; robot merge needs site tree.
+        eprintln!("skip robot∪migration check: {real:?} missing");
+        let draft_only = parse_easyconfig_trees(&[&mig]).unwrap();
+        let check = check_recipe_deps(&recipe, &draft_only.candidates);
+        assert!(
+            check.found.iter().any(|f| f.contains("quill")),
+            "overlay alone must at least resolve companions: {:?}",
+            check.found
+        );
+        return;
+    }
+
+    let merged = parse_easyconfig_trees(&[real.as_path(), mig.as_path()]).expect("robot∪migration");
+    let check = check_recipe_deps(&recipe, &merged.candidates);
+    eprintln!(
+        "migration overlay check: found={} missing={:?}",
+        check.found.len(),
+        check.missing.iter().map(|m| format!("{} {}", m.name, m.version)).collect::<Vec<_>>()
+    );
+    assert!(
+        check.ok(),
+        "eOn must fully resolve with robot + migration/eon-foss-2024a: missing={:?}",
+        check.missing
+    );
+    assert!(
+        check.found.len() >= 19,
+        "expected full direct dep closure (>=19), got {}",
+        check.found.len()
+    );
+}
