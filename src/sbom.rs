@@ -8,15 +8,18 @@ fn bom_ref(name: &str, version: &str, toolchain_label: &str) -> String {
     format!("pkg:generic/{name}@{version}?toolchain={toolchain_label}")
 }
 
-/// Build a CycloneDX JSON document from a lock only (co-stack edges: each package
-/// lists every other co-selected package as dependsOn — weak co-install inventory).
+/// Build a CycloneDX JSON document from a lock only (no dependency map).
+///
+/// Without declared edges each component gets an empty `dependsOn` list —
+/// never all-to-all co-stack edges (those create invalid cyclic BOMs).
 pub fn lock_to_cyclonedx(lock: &StackLock) -> Value {
     lock_to_cyclonedx_with_deps(lock, None)
 }
 
 /// Preferred: when the selected candidates (or full universe selection map) are known,
 /// emit dependsOn from each package's *declared* EasyBuild-style dependency list
-/// intersected with co-selected lock members. Falls back to co-stack edges if no map.
+/// intersected with co-selected lock members. When `selected_dep_map` is `None`,
+/// each package's `dependsOn` is empty (unknown), not all-to-all.
 pub fn lock_to_cyclonedx_with_deps(
     lock: &StackLock,
     selected_dep_map: Option<&HashMap<String, Vec<String>>>,
@@ -52,12 +55,8 @@ pub fn lock_to_cyclonedx_with_deps(
                 .filter_map(|dep_name| package_refs.get(dep_name).cloned())
                 .collect()
         } else {
-            // co-selected stack inventory: every package depends on all *other* co-selected
-            package_refs
-                .iter()
-                .filter(|(n, _)| *n != &p.name)
-                .map(|(_, br)| br.clone())
-                .collect()
+            // No declared map: empty edges (unknown), never all-to-all cycles.
+            Vec::new()
         };
         deps.push(json!({
             "ref": r,
@@ -178,12 +177,61 @@ mod tests {
             .unwrap();
         let g_on = g_ref["dependsOn"].as_array().unwrap();
         assert!(g_on.len() >= 2, "GROMACS dependsOn co-deps: {g_on:?}");
-        // co-stack fallback also non-empty for leaf without hardcoding only GROMACS
+        // Lock-only path: no all-to-all co-stack edges (empty when map unknown).
         let co = lock_to_cyclonedx(&lock);
         for d in co["dependencies"].as_array().unwrap() {
             let on = d["dependsOn"].as_array().unwrap();
-            assert_eq!(on.len(), lock.packages.len() - 1);
+            assert!(
+                on.is_empty(),
+                "lock-only SBOM must not invent all-to-all dependsOn: {on:?}"
+            );
         }
+        // And never every-other-package.
+        let others = lock.packages.len().saturating_sub(1);
+        if others > 0 {
+            for d in co["dependencies"].as_array().unwrap() {
+                let on = d["dependsOn"].as_array().unwrap();
+                assert_ne!(
+                    on.len(),
+                    others,
+                    "dependsOn must not be all other packages"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn lock_only_sbom_depends_on_is_empty_not_all_to_all() {
+        let lock: StackLock = load_json("expected_prefer_newer.lock.json");
+        assert!(
+            lock.packages.len() >= 3,
+            "fixture must have several packages so all-to-all would be visible"
+        );
+        let sbom = lock_to_cyclonedx(&lock);
+        let deps = sbom["dependencies"].as_array().expect("dependencies array");
+        assert_eq!(deps.len(), lock.packages.len());
+        for d in deps {
+            let on = d["dependsOn"].as_array().expect("dependsOn");
+            assert!(
+                on.is_empty(),
+                "without a dep map dependsOn must be empty, got {on:?} for {}",
+                d["ref"]
+            );
+        }
+        // Real declared-map path still has non-empty edges for GROMACS.
+        let universe: Universe = load_json("universe_next.json");
+        let map = dep_map_from_universe(&lock, &universe);
+        let with_map = lock_to_cyclonedx_with_deps(&lock, Some(&map));
+        let g = with_map["dependencies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["ref"].as_str().unwrap().contains("GROMACS@"))
+            .unwrap();
+        assert!(
+            !g["dependsOn"].as_array().unwrap().is_empty(),
+            "declared map must still emit real edges"
+        );
     }
 
     #[test]
