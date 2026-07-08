@@ -2,7 +2,7 @@
 //!
 //! Easyconfigs are a restricted Python-like DSL. We do **not** eval Python.
 //! Extracted fields: `name`, `version`, `versionsuffix`, `toolchain`,
-//! `dependencies` (and optional list helpers).
+//! `dependencies`, `builddependencies` (and optional list helpers).
 
 use crate::domain::{Candidate, DepReq, LockPackage, SolverMeta, StackLock, Toolchain};
 use crate::version::matches_req;
@@ -216,6 +216,10 @@ pub fn parse_easyconfig_file(path: &Path) -> Result<Candidate, ParseError> {
     if let Some(body) = assign_list_body(&src, "dependencies") {
         dependencies.extend(parse_dep_list_body(&body));
     }
+    let mut builddependencies = Vec::new();
+    if let Some(body) = assign_list_body(&src, "builddependencies") {
+        builddependencies.extend(parse_dep_list_body(&body));
+    }
 
     Ok(Candidate {
         name,
@@ -224,6 +228,7 @@ pub fn parse_easyconfig_file(path: &Path) -> Result<Candidate, ParseError> {
         versionsuffix,
         easyconfig_path: path.display().to_string(),
         dependencies,
+        builddependencies,
     })
 }
 
@@ -314,18 +319,23 @@ pub fn validate_lock_deps(lock: &StackLock, cands: &[Candidate]) -> Result<(), S
         }) else {
             continue;
         };
-        for d in &c.dependencies {
-            let Some(v) = by_name.get(d.name.as_str()) else {
-                return Err(format!(
-                    "{}={} missing co-selected dep {}",
-                    p.name, p.version, d.name
-                ));
-            };
-            if !matches_req(v, &d.version_req) {
-                return Err(format!(
-                    "{}={} requires {} {} but co-selected {}",
-                    p.name, p.version, d.name, d.version_req, v
-                ));
+        for (role, deps) in [
+            ("dep", c.dependencies.as_slice()),
+            ("builddep", c.builddependencies.as_slice()),
+        ] {
+            for d in deps {
+                let Some(v) = by_name.get(d.name.as_str()) else {
+                    return Err(format!(
+                        "{}={} missing co-selected {role} {}",
+                        p.name, p.version, d.name
+                    ));
+                };
+                if !matches_req(v, &d.version_req) {
+                    return Err(format!(
+                        "{}={} requires {role} {} {} but co-selected {}",
+                        p.name, p.version, d.name, d.version_req, v
+                    ));
+                }
             }
         }
     }
@@ -395,5 +405,97 @@ mod tests {
         let t = strip_comments(s);
         assert!(t.contains("foo#bar"));
         assert!(!t.contains("comment"));
+    }
+
+    #[test]
+    fn parse_builddependencies_separate_from_runtime() {
+        let p = fixture_eb_root().join("foss-2025b/BuildDepRoot-1.0-foss-2025b.eb");
+        let c = parse_easyconfig_file(&p).expect("parse BuildDepRoot");
+        assert_eq!(c.name, "BuildDepRoot");
+        assert_eq!(c.version, "1.0");
+
+        let runtime_names: Vec<&str> = c.dependencies.iter().map(|d| d.name.as_str()).collect();
+        let build_names: Vec<&str> = c
+            .builddependencies
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect();
+
+        assert_eq!(runtime_names, vec!["OpenBLAS"]);
+        assert_eq!(
+            c.dependencies
+                .iter()
+                .find(|d| d.name == "OpenBLAS")
+                .unwrap()
+                .version_req,
+            ">=0.3.23"
+        );
+        assert_eq!(build_names, vec!["FFTW"]);
+        assert_eq!(
+            c.builddependencies
+                .iter()
+                .find(|d| d.name == "FFTW")
+                .unwrap()
+                .version_req,
+            ">=3.3.10"
+        );
+        // Roles must not be collapsed into one list.
+        assert!(
+            !c.dependencies.iter().any(|d| d.name == "FFTW"),
+            "FFTW must not appear in runtime dependencies"
+        );
+        assert!(
+            !c.builddependencies.iter().any(|d| d.name == "OpenBLAS"),
+            "OpenBLAS must not appear in builddependencies"
+        );
+    }
+
+    #[test]
+    fn runtime_only_easyconfig_has_empty_builddependencies() {
+        let p = fixture_eb_root().join("foss-2025b/GROMACS-2025.0-foss-2025b.eb");
+        let c = parse_easyconfig_file(&p).expect("parse");
+        assert!(!c.dependencies.is_empty());
+        assert!(
+            c.builddependencies.is_empty(),
+            "runtime-only .eb must leave builddependencies empty"
+        );
+    }
+
+    #[test]
+    fn validate_lock_deps_requires_builddependencies() {
+        let tc = Toolchain {
+            name: "foss".into(),
+            version: "2025b".into(),
+        };
+        let root = Candidate {
+            name: "Root".into(),
+            version: "1.0".into(),
+            toolchain: tc.clone(),
+            versionsuffix: None,
+            easyconfig_path: "Root-1.0.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![DepReq {
+                name: "Tool".into(),
+                version_req: "==1.0".into(),
+            }],
+        };
+        let tool = Candidate {
+            name: "Tool".into(),
+            version: "1.0".into(),
+            toolchain: tc.clone(),
+            versionsuffix: None,
+            easyconfig_path: "Tool-1.0.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![],
+        };
+        let lock_ok = lock_from_candidates(&[root.clone(), tool.clone()], None, "test");
+        assert!(validate_lock_deps(&lock_ok, &[root.clone(), tool.clone()]).is_ok());
+
+        let lock_missing = lock_from_candidates(&[root.clone()], None, "test");
+        let err = validate_lock_deps(&lock_missing, &[root, tool]).unwrap_err();
+        assert!(
+            err.contains("builddep") && err.contains("Tool"),
+            "expected builddep failure, got: {err}"
+        );
     }
 }

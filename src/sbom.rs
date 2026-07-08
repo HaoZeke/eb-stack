@@ -93,8 +93,28 @@ pub fn lock_to_cyclonedx_with_deps(
     })
 }
 
-/// Build dep map name -> dependency names from universe candidates matching the lock.
+/// Build dep map name -> **runtime** dependency names from universe candidates
+/// matching the lock. Build-time deps are intentionally omitted here so SBOM
+/// `dependsOn` edges stay role-specific; use [`build_dep_map_from_universe`] for
+/// the build-time list (same shape, separate map).
 pub fn dep_map_from_universe(lock: &StackLock, universe: &Universe) -> HashMap<String, Vec<String>> {
+    dep_names_map_from_universe(lock, universe, false)
+}
+
+/// Build dep map name -> **build-time** dependency names (`builddependencies`)
+/// from universe candidates matching the lock.
+pub fn build_dep_map_from_universe(
+    lock: &StackLock,
+    universe: &Universe,
+) -> HashMap<String, Vec<String>> {
+    dep_names_map_from_universe(lock, universe, true)
+}
+
+fn dep_names_map_from_universe(
+    lock: &StackLock,
+    universe: &Universe,
+    build_time: bool,
+) -> HashMap<String, Vec<String>> {
     let mut map = HashMap::new();
     for p in &lock.packages {
         if let Some(c) = universe.candidates.iter().find(|c| {
@@ -103,10 +123,12 @@ pub fn dep_map_from_universe(lock: &StackLock, universe: &Universe) -> HashMap<S
                 && c.toolchain.name == p.toolchain.name
                 && c.toolchain.version == p.toolchain.version
         }) {
-            map.insert(
-                p.name.clone(),
-                c.dependencies.iter().map(|d| d.name.clone()).collect(),
-            );
+            let names: Vec<String> = if build_time {
+                c.builddependencies.iter().map(|d| d.name.clone()).collect()
+            } else {
+                c.dependencies.iter().map(|d| d.name.clone()).collect()
+            };
+            map.insert(p.name.clone(), names);
         } else {
             map.insert(p.name.clone(), Vec::new());
         }
@@ -161,6 +183,90 @@ mod tests {
         for d in co["dependencies"].as_array().unwrap() {
             let on = d["dependsOn"].as_array().unwrap();
             assert_eq!(on.len(), lock.packages.len() - 1);
+        }
+    }
+
+    #[test]
+    fn dep_maps_keep_build_and_runtime_distinct() {
+        let tc = Toolchain {
+            name: "foss".into(),
+            version: "2025b".into(),
+        };
+        let app = Candidate {
+            name: "App".into(),
+            version: "1.0".into(),
+            toolchain: tc.clone(),
+            versionsuffix: None,
+            easyconfig_path: "App.eb".into(),
+            dependencies: vec![DepReq {
+                name: "Lib".into(),
+                version_req: "==1.0".into(),
+            }],
+            builddependencies: vec![DepReq {
+                name: "Tool".into(),
+                version_req: "==1.0".into(),
+            }],
+        };
+        let lib = Candidate {
+            name: "Lib".into(),
+            version: "1.0".into(),
+            toolchain: tc.clone(),
+            versionsuffix: None,
+            easyconfig_path: "Lib.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![],
+        };
+        let tool = Candidate {
+            name: "Tool".into(),
+            version: "1.0".into(),
+            toolchain: tc.clone(),
+            versionsuffix: None,
+            easyconfig_path: "Tool.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![],
+        };
+        let universe = Universe {
+            toolchain: tc.clone(),
+            generation_label: None,
+            candidates: vec![app, lib, tool],
+        };
+        let policy = Policy {
+            toolchain: tc,
+            roots: vec!["App".into()],
+            pins: vec![],
+            forbid: vec![],
+            objective: "prefer_newer".into(),
+            require_upgrade: None,
+        };
+        let lock = select_stack(&universe, &policy, None).unwrap();
+        let runtime = dep_map_from_universe(&lock, &universe);
+        let build = build_dep_map_from_universe(&lock, &universe);
+        assert_eq!(runtime.get("App").unwrap(), &vec!["Lib".to_string()]);
+        assert_eq!(build.get("App").unwrap(), &vec!["Tool".to_string()]);
+        assert!(
+            !runtime.get("App").unwrap().contains(&"Tool".to_string()),
+            "runtime map must not include build-only deps"
+        );
+        assert!(
+            !build.get("App").unwrap().contains(&"Lib".to_string()),
+            "build map must not include runtime-only deps"
+        );
+        // Serialized candidate still carries both roles separately.
+        let app_c = universe.candidates.iter().find(|c| c.name == "App").unwrap();
+        let json = serde_json::to_value(app_c).unwrap();
+        assert_eq!(json["dependencies"][0]["name"], "Lib");
+        assert_eq!(json["builddependencies"][0]["name"], "Tool");
+    }
+
+    #[test]
+    fn universe_json_without_builddependencies_deserializes() {
+        let universe: Universe = load_json("universe_next.json");
+        for c in &universe.candidates {
+            assert!(
+                c.builddependencies.is_empty(),
+                "legacy universe JSON should default builddependencies to empty for {}",
+                c.name
+            );
         }
     }
 }

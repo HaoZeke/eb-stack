@@ -327,7 +327,9 @@ impl DependencyProvider for EbProvider {
     async fn get_dependencies(&self, solvable: SolvableId) -> Dependencies {
         let c = self.candidate_for_solvable(solvable);
         let mut known = KnownDependencies::default();
-        for d in &c.dependencies {
+        // Runtime and build-time deps are co-selection requirements the same way;
+        // role distinction lives on Candidate for outputs, not in resolvo edges.
+        for d in c.dependencies.iter().chain(c.builddependencies.iter()) {
             let Some(&dep_name_id) = self.name_ids.get(&d.name) else {
                 let reason = self
                     .pool

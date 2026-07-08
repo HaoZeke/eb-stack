@@ -159,4 +159,144 @@ mod tests {
             "unsat must not leak rank ids: {msg}"
         );
     }
+
+    /// Co-select a package that is only linked via `builddependencies` (no runtime edge).
+    #[test]
+    fn co_select_via_builddependencies_only() {
+        let tc = Toolchain {
+            name: "foss".into(),
+            version: "2025b".into(),
+        };
+        // Leaf has no deps; root links to it only as a build dep.
+        let leaf = Candidate {
+            name: "BuildTool".into(),
+            version: "2.0".into(),
+            toolchain: tc.clone(),
+            versionsuffix: None,
+            easyconfig_path: "BuildTool-2.0-foss-2025b.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![],
+        };
+        let root = Candidate {
+            name: "App".into(),
+            version: "1.0".into(),
+            toolchain: tc.clone(),
+            versionsuffix: None,
+            easyconfig_path: "App-1.0-foss-2025b.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![DepReq {
+                name: "BuildTool".into(),
+                version_req: ">=2.0".into(),
+            }],
+        };
+        let universe = Universe {
+            toolchain: tc.clone(),
+            generation_label: Some("builddep-co-select".into()),
+            candidates: vec![root, leaf],
+        };
+        let policy = Policy {
+            toolchain: tc,
+            roots: vec!["App".into()],
+            pins: vec![],
+            forbid: vec![],
+            objective: "prefer_newer".into(),
+            require_upgrade: None,
+        };
+        let lock = select_stack(&universe, &policy, None).expect("solve via builddependencies");
+        assert!(
+            lock.package("BuildTool").is_some(),
+            "BuildTool must co-select from builddependencies only; packages={:?}",
+            lock.packages
+                .iter()
+                .map(|p| format!("{}={}", p.name, p.version))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(lock.package("BuildTool").unwrap().version, "2.0");
+        assert_eq!(lock.package("App").unwrap().version, "1.0");
+    }
+
+    #[test]
+    fn unsat_when_builddependency_missing() {
+        let tc = Toolchain {
+            name: "foss".into(),
+            version: "2025b".into(),
+        };
+        let root = Candidate {
+            name: "App".into(),
+            version: "1.0".into(),
+            toolchain: tc.clone(),
+            versionsuffix: None,
+            easyconfig_path: "App-1.0-foss-2025b.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![DepReq {
+                name: "MissingTool".into(),
+                version_req: "==1.0".into(),
+            }],
+        };
+        let universe = Universe {
+            toolchain: tc.clone(),
+            generation_label: None,
+            candidates: vec![root],
+        };
+        let policy = Policy {
+            toolchain: tc,
+            roots: vec!["App".into()],
+            pins: vec![],
+            forbid: vec![],
+            objective: "prefer_newer".into(),
+            require_upgrade: None,
+        };
+        let err = select_stack(&universe, &policy, None).unwrap_err();
+        let msg = err.to_string();
+        let low = msg.to_lowercase();
+        assert!(
+            low.contains("unsatisfiable")
+                || low.contains("unsat")
+                || low.contains("missing"),
+            "builddep miss should fail like runtime dep miss: {msg}"
+        );
+    }
+
+    #[test]
+    fn fixture_builddep_root_co_selects_fftw() {
+        let (universe, _) = universe_next_from_eb();
+        assert!(
+            universe
+                .candidates
+                .iter()
+                .any(|c| c.name == "BuildDepRoot"),
+            "BuildDepRoot fixture must be in parsed universe"
+        );
+        let root = universe
+            .candidates
+            .iter()
+            .find(|c| c.name == "BuildDepRoot")
+            .unwrap();
+        assert!(
+            root.builddependencies.iter().any(|d| d.name == "FFTW"),
+            "fixture must declare FFTW as builddependency"
+        );
+        assert!(
+            !root.dependencies.iter().any(|d| d.name == "FFTW"),
+            "FFTW must not be a runtime dep on the fixture"
+        );
+        let policy = Policy {
+            toolchain: universe.toolchain.clone(),
+            roots: vec!["BuildDepRoot".into()],
+            pins: vec![],
+            forbid: vec![],
+            objective: "prefer_newer".into(),
+            require_upgrade: None,
+        };
+        let lock = select_stack(&universe, &policy, None).expect("BuildDepRoot solve");
+        assert!(
+            lock.package("FFTW").is_some(),
+            "FFTW co-selected via builddependencies; packages={:?}",
+            lock.packages
+                .iter()
+                .map(|p| &p.name)
+                .collect::<Vec<_>>()
+        );
+        assert!(lock.package("OpenBLAS").is_some());
+    }
 }

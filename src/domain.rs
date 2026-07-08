@@ -30,6 +30,11 @@ pub struct Candidate {
     pub easyconfig_path: String,
     #[serde(default)]
     pub dependencies: Vec<DepReq>,
+    /// Build-time-only requirements (`builddependencies` in the easyconfig).
+    /// Same `DepReq` semantics as runtime `dependencies`; kept separate so
+    /// lock/SBOM/serialized outputs can distinguish build vs runtime roles.
+    #[serde(default)]
+    pub builddependencies: Vec<DepReq>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

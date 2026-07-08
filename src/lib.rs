@@ -17,7 +17,10 @@ pub use eb_parse::{
     filter_toolchain, lock_from_candidates, parse_easyconfig_file, parse_easyconfig_tree,
     validate_lock_deps,
 };
-pub use sbom::{dep_map_from_universe, lock_to_cyclonedx, lock_to_cyclonedx_with_deps};
+pub use sbom::{
+    build_dep_map_from_universe, dep_map_from_universe, lock_to_cyclonedx,
+    lock_to_cyclonedx_with_deps,
+};
 pub use select::{select_stack, SelectError};
 
 use anyhow::{bail, Context, Result};
