@@ -232,14 +232,47 @@ fn reproduces_mdtraj_1_10_3_foss_2023b_to_2024a() {
 
 #[test]
 fn reproduces_mdtraj_1_10_3_foss_2023b_to_2024a_auto() {
+    // networkx / PyTables are `# optional` in the source: policy preserves those
+    // source pins (AC: optional not bumped). Maintainer recipe bumps them —
+    // residual is intentional. Hand-map test above still proves full PR when
+    // versions are supplied explicitly.
     let source = fixture("mdtraj/MDTraj-1.10.3-foss-2023b.eb");
-    let target = fixture("mdtraj/MDTraj-1.10.3-foss-2024a.eb");
-    assert_reproduces_auto(
+    let empty = HashMap::new();
+    let result = emit_next_generation_auto_from_path(
         &source,
-        &target,
         &foss("2024a"),
         &universe_foss_2024a(),
-        &[],
+        None,
+        None,
+        &empty,
+        None,
+        None,
+    )
+    .expect("MDTraj auto emit");
+    assert!(result.text.contains("toolchain = {'name': 'foss', 'version': '2024a'}"));
+    for pin in [
+        "('Python', '3.12.3')",
+        "('SciPy-bundle', '2024.05')",
+        "('zlib', '1.3.1')",
+    ] {
+        assert!(
+            result.text.contains(pin),
+            "missing required pin {pin} in:\n{}",
+            result.text
+        );
+    }
+    // Optional: keep source versions, do not bump to maintainer 3.4.2 / 3.10.2.
+    assert!(result.text.contains("('networkx', '3.2.1')"));
+    assert!(result.text.contains("('PyTables', '3.9.2')"));
+    assert!(!result.text.contains("('networkx', '3.4.2')"));
+    assert!(!result.text.contains("('PyTables', '3.10.2')"));
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.contains("networkx") && w.contains("optional")),
+        "warnings: {:?}",
+        result.warnings
     );
 }
 

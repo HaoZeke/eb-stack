@@ -1395,9 +1395,14 @@ dependencies = [
         .expect("SYSTEM + optional must not hard-fail");
         assert!(r.text.contains("toolchain = {'name': 'foss', 'version': '2024a'}"));
         assert!(r.text.contains("('Python', '3.12.3')"));
-        // SYSTEM pin preserved; ASE optional has no foss-2024a candidate → keep source.
+        // SYSTEM + optional preserved even if hierarchy has decoys (ASE-3.24 foss-2025a).
         assert!(r.text.contains("('USEARCH', '11.0.667-i86linux32', '', SYSTEM)"));
-        assert!(r.text.contains("('ASE', '3.23.0')"));
+        assert!(
+            r.text.contains("('ASE', '3.23.0')"),
+            "optional ASE must keep source pin, got:\n{}",
+            r.text
+        );
+        assert!(!r.text.contains("3.24.0"));
         assert!(
             r.warnings.iter().any(|w| w.contains("USEARCH") && w.contains("SYSTEM")),
             "warnings: {:?}",
@@ -1406,7 +1411,7 @@ dependencies = [
         assert!(
             r.warnings
                 .iter()
-                .any(|w| w.contains("ASE") && w.contains("optional")),
+                .any(|w| w.contains("ASE") && w.contains("optional") && w.contains("keeping source")),
             "warnings: {:?}",
             r.warnings
         );
