@@ -104,6 +104,30 @@ fn resolve_eon_full_product_foss_2024a_feedstock_parity() {
         .find(|d| d.name == "metatomic-torch")
         .unwrap();
     assert_eq!(mta.version, "0.1.15");
+    // readcon-core v0.13.1 MSRV 1.88; cargo-c feedstock-style C-API install.
+    let rust = r
+        .builddependencies
+        .iter()
+        .find(|d| d.name == "Rust")
+        .expect("Rust builddep");
+    assert!(
+        version_meets_floor(&rust.version, (1, 88, 0)),
+        "Rust {} must be >= 1.88.0 for readcon-core",
+        rust.version
+    );
+    assert!(
+        r.builddependencies.iter().any(|d| d.name == "cargo-c"),
+        "cargo-c required for feedstock-style readcon cinstall"
+    );
+    let eon_txt = std::fs::read_to_string(&p).unwrap();
+    assert!(
+        eon_txt.contains("cargo cinstall"),
+        "preconfigopts must cargo-c install staged readcon-core"
+    );
+    assert!(
+        !eon_txt.contains("('Rust', '1.83"),
+        "must not pin Rust 1.83 (below readcon MSRV)"
+    );
 }
 
 /// EasyBuild `convert_name`: `-` → `min` (e.g. SciPy-bundle → EBROOTSCIPYMINBUNDLE).

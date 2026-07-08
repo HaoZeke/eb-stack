@@ -70,8 +70,12 @@ builddependencies = [
     ('Ninja', '1.12.1'),
     ('pkgconf', '2.2.0'),
     ('CMake', '3.29.3'),
-    # readcon-core subproject is a Rust crate (cargo).
-    ('Rust', '1.83.0'),
+    # readcon-core v0.13.1: rust-version = 1.88; robot max on GCCcore-13.3.0 is 1.86.0
+    # without a companion (Rust-1.88.0-GCCcore-13.3.0.eb under easyconfigs/r/Rust/).
+    ('Rust', '1.88.0', '', ('GCCcore', '13.3.0')),
+    # Feedstock-style C-API install of staged readcon-core (avoids meson subproject
+    # path that also requires cbindgen >= 0.29.0). Robot has cargo-c on 13.3.0.
+    ('cargo-c', '0.9.32', '', ('GCCcore', '13.3.0')),
 ]
 
 dependencies = [
@@ -95,14 +99,17 @@ dependencies = [
     ('metatomic-torch', '0.1.15'),
 ]
 
-# Feedstock pattern: drop wraps for deps provided by modules or staged sources
-# so meson does not try wrap-git/network. Keep nlohmann_json wrap (header-only).
-# Siesta-style $EBROOT* expansion at configure time.
-preconfigopts = 'rm -f subprojects/xtb.wrap subprojects/vesin.wrap subprojects/rgpot.wrap subprojects/readcon-core.wrap && '
-# EasyBuild convert_name: '-' → 'min' → EBROOTMETATENSORMINTORCH / EBROOTMETATOMICMINTORCH
-# (SciPy-bundle → EBROOTSCIPYMINBUNDLE). Wrong names silently empty the path.
-preconfigopts += 'export CMAKE_PREFIX_PATH=$EBROOTPYTORCH:$EBROOTMETATENSOR:$EBROOTMETATENSORMINTORCH:$EBROOTMETATOMICMINTORCH:$EBROOTXTB:$EBROOTCAPNPROTO:$EBROOTQUILL:$EBROOTEIGEN:$EBROOTHIGHWAY:$EBROOTINIH${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
-preconfigopts += 'export PKG_CONFIG_PATH=$EBROOTXTB/lib/pkgconfig:$EBROOTCAPNPROTO/lib/pkgconfig:$EBROOTQUILL/lib/pkgconfig:$EBROOTMETATENSOR/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH} && '
+# Feedstock-style readcon-core C-API via cargo-c (needs Rust >= 1.88), then drop
+# wraps so meson uses system/pkg-config deps. Keep nlohmann_json wrap (header-only).
+# Multi-source stages readcon under subprojects/; cargo-c installs to a build-dir
+# prefix and the tree is removed so meson does not take the subproject path
+# (which requires cbindgen >= 0.29 and re-checks rustc MSRV).
+preconfigopts = 'cd %(builddir)s/eOn-%(version)s/subprojects/readcon-core && cargo cinstall --locked --release --prefix %(builddir)s/readcon-prefix --libdir lib --includedir include --pkgconfigdir lib/pkgconfig && cd %(builddir)s/eOn-%(version)s && rm -f subprojects/xtb.wrap subprojects/vesin.wrap subprojects/rgpot.wrap subprojects/readcon-core.wrap && rm -rf subprojects/readcon-core && '
+preconfigopts += 'export PKG_CONFIG_PATH=%(builddir)s/readcon-prefix/lib/pkgconfig:$EBROOTXTB/lib/pkgconfig:$EBROOTCAPNPROTO/lib/pkgconfig:$EBROOTQUILL/lib/pkgconfig:$EBROOTMETATENSOR/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH} && '
+preconfigopts += 'export LIBRARY_PATH=%(builddir)s/readcon-prefix/lib${LIBRARY_PATH:+:$LIBRARY_PATH} && '
+preconfigopts += 'export LD_LIBRARY_PATH=%(builddir)s/readcon-prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} && '
+# EasyBuild convert_name: '-' → 'min' → EBROOTMETATENSORMINTORCH / EBROOTMETATOMICMINTORCH.
+preconfigopts += 'export CMAKE_PREFIX_PATH=%(builddir)s/readcon-prefix:$EBROOTPYTORCH:$EBROOTMETATENSOR:$EBROOTMETATENSORMINTORCH:$EBROOTMETATOMICMINTORCH:$EBROOTXTB:$EBROOTCAPNPROTO:$EBROOTQUILL:$EBROOTEIGEN:$EBROOTHIGHWAY:$EBROOTINIH${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
 preconfigopts += 'export PYTHONPATH=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH} && '
 # feedstock: force generic libtorch.so for CPU/CUDA runtime switch
 preconfigopts += 'export LDFLAGS="$LDFLAGS -Wl,--no-as-needed,$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch/lib/libtorch.so -Wl,--as-needed" && '
