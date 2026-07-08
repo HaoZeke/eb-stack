@@ -124,8 +124,12 @@ sanity_check_commands = [
     "eonclient --help",
     "eonclient --version",
     # FEATURES_STRING is generated before -DWITH_* in client/meson.build, so
-    # --features can lie; assert linked engine libs (feedstock surface).
-    "bash -c \"ldd $(which eonclient) | grep -Ei 'libxtb|metatomic|capnp|torch'\"",
+    # --features can lie. Require AND evidence for the feedstock surface:
+    # xTB + metatomic + Cap'n Proto serve + torch.
+    "bash -c \"ldd $(which eonclient) | grep -Ei 'libxtb'\"",
+    "bash -c \"ldd $(which eonclient) | grep -Ei 'metatomic'\"",
+    "bash -c \"ldd $(which eonclient) | grep -Ei 'capnp'\"",
+    "bash -c \"ldd $(which eonclient) | grep -Ei 'torch'\"",
     "python -c \"import eon; print(getattr(eon, '__version__', 'ok'))\"",
 ]
 
