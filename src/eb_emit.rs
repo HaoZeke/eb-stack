@@ -7,7 +7,8 @@
 use crate::domain::Toolchain;
 use crate::eb_parse::{parse_easyconfig_tree, ParseError};
 use crate::hierarchy::{
-    hierarchy_for, resolve_dep_versions_in_hierarchy, HierarchyError, ToolchainHierarchy,
+    hierarchy_for, resolve_dep_versions_for_specs, HierarchyError, SourceDepSpec,
+    ToolchainHierarchy,
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -27,6 +28,8 @@ pub enum EmitError {
     Hierarchy(#[from] HierarchyError),
     #[error("parse: {0}")]
     Parse(#[from] ParseError),
+    #[error("unresolved dependency {0} under target toolchain {1}-{2}")]
+    UnresolvedDep(String, String, String),
 }
 
 /// Parameters for producing a next-generation easyconfig.
@@ -148,11 +151,19 @@ pub fn emit_next_generation_from_path(
     emit_next_generation(&source, params)
 }
 
+/// Options for auto-resolve when emitting the next generation.
+#[derive(Debug, Clone, Default)]
+pub struct AutoResolveOpts {
+    /// When true, unresolved deps keep the source version (with a loud warning).
+    /// Default false: unresolved deps fail the auto-bump.
+    pub keep_old: bool,
+}
+
 /// Auto-resolve dependency / build-dependency versions from an easyconfig universe
 /// using the target toolchain generation's sub-toolchain hierarchy, then emit.
 ///
-/// `hand_overrides` win over auto-resolved versions (same keys). Names present in
-/// the source recipe but absent from the universe are left at their source versions.
+/// `hand_overrides` win over auto-resolved versions (same keys). Unresolved
+/// dependencies **fail** unless [`AutoResolveOpts::keep_old`] is set.
 ///
 /// When `hierarchy` is `None`, uses [`hierarchy_for`] (built-in fixture or
 /// `hierarchy_fixture` path).
@@ -166,12 +177,38 @@ pub fn emit_next_generation_auto(
     version: Option<String>,
     source_checksum: Option<String>,
 ) -> Result<EmitResult, EmitError> {
-    let resolved = resolve_dep_versions_for_source(
+    emit_next_generation_auto_with_opts(
         source,
         target_toolchain,
         easyconfigs_dir,
         hierarchy,
         hierarchy_fixture,
+        hand_overrides,
+        version,
+        source_checksum,
+        &AutoResolveOpts::default(),
+    )
+}
+
+/// Like [`emit_next_generation_auto`] with explicit [`AutoResolveOpts`].
+pub fn emit_next_generation_auto_with_opts(
+    source: &str,
+    target_toolchain: &Toolchain,
+    easyconfigs_dir: &Path,
+    hierarchy: Option<&ToolchainHierarchy>,
+    hierarchy_fixture: Option<&Path>,
+    hand_overrides: &HashMap<String, String>,
+    version: Option<String>,
+    source_checksum: Option<String>,
+    opts: &AutoResolveOpts,
+) -> Result<EmitResult, EmitError> {
+    let (resolved, mut warnings) = resolve_dep_versions_for_source_with_opts(
+        source,
+        target_toolchain,
+        easyconfigs_dir,
+        hierarchy,
+        hierarchy_fixture,
+        opts,
     )?;
     let mut dep_versions = resolved;
     for (k, v) in hand_overrides {
@@ -183,7 +220,10 @@ pub fn emit_next_generation_auto(
         dep_versions,
         source_checksum,
     };
-    emit_next_generation(source, &params)
+    let mut result = emit_next_generation(source, &params)?;
+    warnings.append(&mut result.warnings);
+    result.warnings = warnings;
+    Ok(result)
 }
 
 /// Path-based form of [`emit_next_generation_auto`].
@@ -197,10 +237,35 @@ pub fn emit_next_generation_auto_from_path(
     version: Option<String>,
     source_checksum: Option<String>,
 ) -> Result<EmitResult, EmitError> {
+    emit_next_generation_auto_from_path_with_opts(
+        source_path,
+        target_toolchain,
+        easyconfigs_dir,
+        hierarchy,
+        hierarchy_fixture,
+        hand_overrides,
+        version,
+        source_checksum,
+        &AutoResolveOpts::default(),
+    )
+}
+
+/// Path-based form of [`emit_next_generation_auto_with_opts`].
+pub fn emit_next_generation_auto_from_path_with_opts(
+    source_path: &Path,
+    target_toolchain: &Toolchain,
+    easyconfigs_dir: &Path,
+    hierarchy: Option<&ToolchainHierarchy>,
+    hierarchy_fixture: Option<&Path>,
+    hand_overrides: &HashMap<String, String>,
+    version: Option<String>,
+    source_checksum: Option<String>,
+    opts: &AutoResolveOpts,
+) -> Result<EmitResult, EmitError> {
     let source = std::fs::read_to_string(source_path).map_err(|e| {
         EmitError::Rewrite(format!("read {}: {}", source_path.display(), e))
     })?;
-    emit_next_generation_auto(
+    emit_next_generation_auto_with_opts(
         &source,
         target_toolchain,
         easyconfigs_dir,
@@ -209,15 +274,12 @@ pub fn emit_next_generation_auto_from_path(
         hand_overrides,
         version,
         source_checksum,
+        opts,
     )
 }
 
 /// Resolve dep + builddep versions named in `source` against `easyconfigs_dir`
-/// under the target generation's hierarchy.
-///
-/// Dependency **names** are taken surgically from `dependencies` /
-/// `builddependencies` list tuples (no full EasyBuild DSL evaluation), so
-/// real recipes with `SOURCELOWER_TAR_GZ` and similar constants still work.
+/// under the target generation's hierarchy (strict: error on missing).
 pub fn resolve_dep_versions_for_source(
     source: &str,
     target_toolchain: &Toolchain,
@@ -225,6 +287,27 @@ pub fn resolve_dep_versions_for_source(
     hierarchy: Option<&ToolchainHierarchy>,
     hierarchy_fixture: Option<&Path>,
 ) -> Result<HashMap<String, String>, EmitError> {
+    let (map, _warn) = resolve_dep_versions_for_source_with_opts(
+        source,
+        target_toolchain,
+        easyconfigs_dir,
+        hierarchy,
+        hierarchy_fixture,
+        &AutoResolveOpts::default(),
+    )?;
+    Ok(map)
+}
+
+/// Resolve with options; returns (version map, warnings) including parse-skip notes
+/// and keep-old / versionsuffix pin messages.
+pub fn resolve_dep_versions_for_source_with_opts(
+    source: &str,
+    target_toolchain: &Toolchain,
+    easyconfigs_dir: &Path,
+    hierarchy: Option<&ToolchainHierarchy>,
+    hierarchy_fixture: Option<&Path>,
+    opts: &AutoResolveOpts,
+) -> Result<(HashMap<String, String>, Vec<String>), EmitError> {
     let owned;
     let h = match hierarchy {
         Some(h) => h,
@@ -233,40 +316,132 @@ pub fn resolve_dep_versions_for_source(
             &owned
         }
     };
-    let names = dep_names_from_source(source)?;
-    let cands = parse_easyconfig_tree(easyconfigs_dir)?;
-    Ok(resolve_dep_versions_in_hierarchy(names, &cands, h))
+    let specs = dep_specs_from_source(source)?;
+    let tree = parse_easyconfig_tree(easyconfigs_dir)?;
+    let mut warnings = Vec::new();
+    if !tree.skipped.is_empty() {
+        warnings.push(format!(
+            "parse: skipped {} unparseable easyconfig(s) under {} ({:.1}% coverage of this tree)",
+            tree.skip_count(),
+            easyconfigs_dir.display(),
+            100.0 * tree.coverage()
+        ));
+    }
+    let (map, kept) =
+        resolve_dep_versions_for_specs(&specs, &tree.candidates, h, opts.keep_old).map_err(
+            |e| match e {
+                HierarchyError::MissingDep(name, tn, tv) => {
+                    EmitError::UnresolvedDep(name, tn, tv)
+                }
+                other => EmitError::Hierarchy(other),
+            },
+        )?;
+    for note in kept {
+        warnings.push(format!("auto-resolve: {note}"));
+    }
+    Ok((map, warnings))
 }
 
-/// Collect package names from top-level `dependencies` and `builddependencies`
-/// 2+-tuples `('Name', ...)` / `("Name", ...)`. Does not evaluate the full
-/// easyconfig DSL (templates, locals, EasyBuild constants).
-fn dep_names_from_source(source: &str) -> Result<Vec<String>, EmitError> {
-    let mut names = Vec::new();
+/// Collect package names from top-level `dependencies` and `builddependencies`.
+pub fn dep_names_from_source(source: &str) -> Result<Vec<String>, EmitError> {
+    let specs = dep_specs_from_source(source)?;
+    Ok(specs.into_iter().map(|s| s.name).collect())
+}
+
+/// Drop `# ...` comments outside quotes so commented-out deps are not scraped.
+fn strip_line_comments(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    for line in src.lines() {
+        let mut in_s = false;
+        let mut in_d = false;
+        let mut cut = line.len();
+        let b = line.as_bytes();
+        let mut i = 0usize;
+        while i < b.len() {
+            let c = b[i] as char;
+            if c == '\'' && !in_d {
+                in_s = !in_s;
+            } else if c == '"' && !in_s {
+                in_d = !in_d;
+            } else if c == '#' && !in_s && !in_d {
+                cut = i;
+                break;
+            }
+            i += 1;
+        }
+        out.push_str(line[..cut].trim_end());
+        out.push('\n');
+    }
+    out
+}
+
+/// Scrape name + version + optional versionsuffix from dep list tuples.
+/// Does not evaluate the full EasyBuild DSL.
+pub fn dep_specs_from_source(source: &str) -> Result<Vec<SourceDepSpec>, EmitError> {
+    let source = strip_line_comments(source);
+    let mut specs = Vec::new();
+    // Tuple: ('Name', '1.2.3') or ('Name', '1.2.3', '-suffix') or with SYSTEM/4th elem.
+    let re = regex::Regex::new(
+        r#"(?x)
+        \(\s*
+        (?:'(?P<n1>[^']+)'|"(?P<n2>[^"]+)")
+        \s*,\s*
+        (?:'(?P<v1>[^']*)'|"(?P<v2>[^"]*)")
+        (?:
+            \s*,\s*
+            (?:'(?P<s1>[^']*)'|"(?P<s2>[^"]*)")
+        )?
+        "#,
+    )
+    .map_err(|e| EmitError::Rewrite(e.to_string()))?;
+
     for key in ["dependencies", "builddependencies"] {
-        let Some((list_open_end, list_close_start)) = find_list_span(source, key)? else {
+        let Some((list_open_end, list_close_start)) = find_list_span(&source, key)? else {
             continue;
         };
         let body = &source[list_open_end..list_close_start];
-        // First string of each tuple is the package name.
-        let re = regex::Regex::new(r#"\(\s*'(?P<n1>[^']+)'|\(\s*"(?P<n2>[^"]+)""#)
-            .map_err(|e| EmitError::Rewrite(e.to_string()))?;
         for caps in re.captures_iter(body) {
             let name = caps
                 .name("n1")
                 .or_else(|| caps.name("n2"))
                 .map(|m| m.as_str().to_string())
                 .unwrap();
-            // Skip template-only names like %(namelower)s if any appear as deps.
             if name.contains('%') {
                 continue;
             }
-            names.push(name);
+            let version = caps
+                .name("v1")
+                .or_else(|| caps.name("v2"))
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default();
+            // Strip leading operators for floor comparisons.
+            let version = version
+                .trim()
+                .trim_start_matches(['>', '<', '=', '!'])
+                .trim()
+                .to_string();
+            let versionsuffix = caps
+                .name("s1")
+                .or_else(|| caps.name("s2"))
+                .map(|m| m.as_str().to_string())
+                .filter(|s| !s.is_empty());
+            specs.push(SourceDepSpec {
+                name,
+                version,
+                versionsuffix,
+            });
         }
     }
-    names.sort();
-    names.dedup();
-    Ok(names)
+    // Prefer first occurrence (runtime over build when same name twice).
+    let mut seen = HashMap::new();
+    let mut out = Vec::new();
+    for s in specs {
+        if seen.insert(s.name.clone(), ()).is_none() {
+            out.push(s);
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
 }
 
 fn assign_string_raw(src: &str, key: &str) -> Option<String> {
@@ -970,6 +1145,72 @@ dependencies = [
     fn dep_names_from_source_finds_deps_and_builddeps() {
         let names = dep_names_from_source(WITH_BUILDDEPS).expect("names");
         assert_eq!(names, vec!["CMake".to_string(), "OpenMPI".to_string()]);
+    }
+
+    #[test]
+    fn auto_resolve_fails_loudly_on_missing_dep_unless_keep_old() {
+        let src = "\
+name = 'App'
+version = '1.0'
+toolchain = {'name': 'foss', 'version': '2023b'}
+dependencies = [
+    ('Python', '3.11.5'),
+    ('MissingThing', '1.0'),
+]
+";
+        let tmp = tempfile::tempdir().unwrap();
+        let src_path = tmp.path().join("App.eb");
+        std::fs::write(&src_path, src).unwrap();
+        // Universe with only Python.
+        let uni = tmp.path().join("uni");
+        std::fs::create_dir_all(&uni).unwrap();
+        std::fs::write(
+            uni.join("Python-3.12.3-GCCcore-13.3.0.eb"),
+            "name = 'Python'\nversion = '3.12.3'\ntoolchain = {'name': 'GCCcore', 'version': '13.3.0'}\ndependencies = []\n",
+        )
+        .unwrap();
+        let empty = HashMap::new();
+        let tc = Toolchain {
+            name: "foss".into(),
+            version: "2024a".into(),
+        };
+        let err = emit_next_generation_auto_from_path(
+            &src_path,
+            &tc,
+            &uni,
+            None,
+            None,
+            &empty,
+            None,
+            None,
+        )
+        .expect_err("must fail without keep_old");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("MissingThing") || msg.contains("unresolved"),
+            "{msg}"
+        );
+
+        let ok = emit_next_generation_auto_from_path_with_opts(
+            &src_path,
+            &tc,
+            &uni,
+            None,
+            None,
+            &empty,
+            None,
+            None,
+            &AutoResolveOpts { keep_old: true },
+        )
+        .expect("keep_old allows emit");
+        assert!(ok.text.contains("('Python', '3.12.3')"));
+        // MissingThing kept at source version (not rewritten away silently with a wrong new ver).
+        assert!(ok.text.contains("('MissingThing', '1.0')"));
+        assert!(
+            ok.warnings.iter().any(|w| w.contains("MissingThing")),
+            "warnings: {:?}",
+            ok.warnings
+        );
     }
 
     #[test]

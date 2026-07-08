@@ -81,7 +81,7 @@ mod tests {
 
     fn universe_next_from_eb() -> (Universe, StackLock) {
         let root = fixture_root().join("easyconfigs");
-        let all = parse_easyconfig_tree(&root).expect("parse tree");
+        let all = parse_easyconfig_tree(&root).expect("parse tree").candidates;
         let policy_tc = Toolchain {
             name: "foss".into(),
             version: "2025b".into(),
@@ -321,7 +321,7 @@ mod tests {
 
     fn two_root_universe() -> Universe {
         let root = two_root_fixture_root().join("easyconfigs");
-        let all = parse_easyconfig_tree(&root).expect("parse two-root tree");
+        let all = parse_easyconfig_tree(&root).expect("parse two-root tree").candidates;
         let policy_tc = Toolchain {
             name: "foss".into(),
             version: "2025b".into(),

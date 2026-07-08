@@ -3,6 +3,7 @@
 pub mod domain;
 pub mod eb_emit;
 pub mod eb_parse;
+pub mod eb_template_constants;
 pub mod hierarchy;
 pub mod report;
 pub mod resolvo_provider;
@@ -12,20 +13,25 @@ pub mod version;
 
 pub use domain::*;
 pub use eb_emit::{
-    easyconfig_filename, emit_next_generation, emit_next_generation_auto,
-    emit_next_generation_auto_from_path, emit_next_generation_from_path,
-    resolve_dep_versions_for_source, EmitError, EmitParams, EmitResult,
+    dep_specs_from_source, easyconfig_filename, emit_next_generation, emit_next_generation_auto,
+    emit_next_generation_auto_from_path, emit_next_generation_auto_from_path_with_opts,
+    emit_next_generation_auto_with_opts, emit_next_generation_from_path,
+    resolve_dep_versions_for_source, resolve_dep_versions_for_source_with_opts, AutoResolveOpts,
+    EmitError, EmitParams, EmitResult,
 };
 pub use hierarchy::{
     filter_candidates_in_hierarchy, hierarchy_for, is_system_toolchain, known_hierarchy,
-    load_hierarchy_fixture, resolve_dep_version_in_hierarchy, resolve_dep_versions_in_hierarchy,
-    resolve_dep_versions_in_hierarchy_strict, toolchains_match, HierarchyError, ToolchainHierarchy,
+    load_hierarchy_fixture, resolve_dep_version_in_hierarchy, resolve_dep_version_in_hierarchy_opts,
+    resolve_dep_versions_for_specs, resolve_dep_versions_in_hierarchy,
+    resolve_dep_versions_in_hierarchy_strict, toolchains_match, HierarchyError, ResolveDepOpts,
+    SourceDepSpec, ToolchainHierarchy,
 };
 pub use eb_parse::{
     filter_toolchain, lock_from_candidates, merge_candidates_with_precedence,
-    parse_easyconfig_file, parse_easyconfig_tree, parse_easyconfig_trees, resolve_easyconfig_file,
-    resolve_easyconfig_str, validate_lock_deps, version_field_to_req, ResolvedDep,
-    ResolvedEasyconfig, ResolvedExt,
+    parse_easyconfig_file, parse_easyconfig_tree, parse_easyconfig_tree_candidates,
+    parse_easyconfig_trees, resolve_easyconfig_file, resolve_easyconfig_str, validate_lock_deps,
+    version_field_to_req, ParseTreeResult, ResolvedDep, ResolvedEasyconfig, ResolvedExt,
+    SkippedEasyconfig,
 };
 pub use report::{
     classify_stack_diff, format_build_list, format_stack_diff_markdown, ordered_build_paths,
@@ -305,7 +311,21 @@ pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
         bail!("at least one --easyconfigs path is required");
     }
     let policy: Policy = load_json_file(policy_path)?;
-    let all = parse_easyconfig_trees(easyconfigs_roots).map_err(|e| anyhow::anyhow!(e))?;
+    let tree = parse_easyconfig_trees(easyconfigs_roots).map_err(|e| anyhow::anyhow!(e))?;
+    if !tree.skipped.is_empty() {
+        eprintln!(
+            "parse: skipped {} unparseable easyconfig(s) across {} tree(s)",
+            tree.skip_count(),
+            easyconfigs_roots.len()
+        );
+        for s in tree.skipped.iter().take(20) {
+            eprintln!("  skip {}: {}", s.path, s.error);
+        }
+        if tree.skipped.len() > 20 {
+            eprintln!("  ... and {} more", tree.skipped.len() - 20);
+        }
+    }
+    let all = tree.candidates;
     let universe_cands = filter_toolchain(&all, &policy.toolchain);
     if universe_cands.is_empty() {
         let roots_disp = easyconfigs_roots
@@ -330,7 +350,8 @@ pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
     };
 
     let baseline = if let Some(base_root) = baseline_easyconfigs {
-        let base_all = parse_easyconfig_tree(base_root).map_err(|e| anyhow::anyhow!(e))?;
+        let base_tree = parse_easyconfig_tree(base_root).map_err(|e| anyhow::anyhow!(e))?;
+        let base_all = base_tree.candidates;
         let base_cands =
             filter_baseline_candidates(&base_all, &policy.toolchain, baseline_toolchain_version)?;
         if base_cands.is_empty() {
@@ -460,7 +481,7 @@ mod tests {
     #[test]
     fn filter_baseline_candidates_picks_nearest_lower_on_multi_gen_tree() {
         let root = multi_gen_root().join("easyconfigs");
-        let all = parse_easyconfig_tree(&root).expect("parse multi-gen");
+        let all = parse_easyconfig_tree(&root).expect("parse multi-gen").candidates;
         let policy_tc = Toolchain {
             name: "foss".into(),
             version: "2025b".into(),
@@ -514,7 +535,7 @@ mod tests {
         assert_eq!(lock.solver.engine, "resolvo_cdcl_sat");
 
         // Explicitly re-drive the same generation filter the solve path used and pin it.
-        let all = parse_easyconfig_tree(&easyconfigs).unwrap();
+        let all = parse_easyconfig_tree(&easyconfigs).unwrap().candidates;
         let filtered = filter_baseline_candidates(
             &all,
             &Toolchain {
@@ -690,7 +711,8 @@ dependencies = []
         .unwrap();
 
         let merged = parse_easyconfig_trees(&[upstream.as_path(), overlay.as_path()])
-            .expect("merge trees");
+            .expect("merge trees")
+            .candidates;
         let g = merged
             .iter()
             .find(|c| c.name == "GROMACS" && c.version == "2025.0" && c.toolchain.version == "2025b")

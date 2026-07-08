@@ -7,6 +7,7 @@
 //! core template set used for fixture goldens under `fixtures/parser_hardcases/`.
 
 use crate::domain::{Candidate, DepReq, ExtEntry, LockPackage, SolverMeta, StackLock, Toolchain};
+use crate::eb_template_constants::EB_TEMPLATE_CONSTANTS;
 use crate::version::matches_req;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -196,10 +197,15 @@ struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     fn new(src: &'a str) -> Self {
+        let mut env = HashMap::new();
+        // Seed full EasyBuild TEMPLATE_CONSTANTS (%(…)s applied later).
+        for (name, value) in EB_TEMPLATE_CONSTANTS {
+            env.insert((*name).to_string(), Value::Str((*value).to_string()));
+        }
         Self {
             src: src.as_bytes(),
             pos: 0,
-            env: HashMap::new(),
+            env,
         }
     }
 
@@ -234,26 +240,190 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_file(&mut self) -> Result<(), String> {
+        // Tolerant: extract every assignment we can; skip unmodeled statements
+        // (if/for/configopts expressions, etc.) so required fields still parse.
         loop {
             self.skip_ws();
             if self.pos >= self.src.len() {
                 break;
             }
-            self.parse_assignment()?;
+            if self.at_control_keyword() {
+                self.skip_compound_or_line();
+                continue;
+            }
+            let start = self.pos;
+            match self.parse_assignment() {
+                Ok(()) => {}
+                Err(_) => {
+                    self.pos = start;
+                    if !self.skip_one_statement() {
+                        break;
+                    }
+                }
+            }
         }
         Ok(())
+    }
+
+    fn at_control_keyword(&self) -> bool {
+        const KWS: &[&[u8]] = &[
+            b"if", b"for", b"while", b"try", b"with", b"def", b"class", b"else", b"elif",
+            b"except", b"finally", b"async", b"raise", b"return", b"assert", b"import",
+            b"from", b"pass", b"break", b"continue", b"global", b"nonlocal", b"del",
+            b"yield", b"lambda",
+        ];
+        let rest = &self.src[self.pos..];
+        for kw in KWS {
+            if rest.starts_with(kw) {
+                let after = self.pos + kw.len();
+                let next = self.src.get(after).copied();
+                // keyword boundary: not part of a longer identifier
+                if next.map(|c| c.is_ascii_alphanumeric() || c == b'_').unwrap_or(false) {
+                    continue;
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Skip a compound statement (header line + indented body) or a single line.
+    fn skip_compound_or_line(&mut self) {
+        // Consume until end of logical line (bracket-aware).
+        let _ = self.skip_one_statement();
+        // Skip following indented body lines (Python-style).
+        loop {
+            let saved = self.pos;
+            // Count leading spaces/tabs on the next line.
+            if self.pos >= self.src.len() {
+                break;
+            }
+            if self.peek() == Some(b'\n') {
+                self.pos += 1;
+            }
+            let mut i = self.pos;
+            let mut indent = 0usize;
+            while let Some(&c) = self.src.get(i) {
+                if c == b' ' {
+                    indent += 1;
+                    i += 1;
+                } else if c == b'\t' {
+                    indent += 4;
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            if indent == 0 {
+                self.pos = saved;
+                // re-consume newline we may have stepped past only if body empty
+                break;
+            }
+            // Blank indented line: continue.
+            if self.src.get(i) == Some(&b'\n') {
+                self.pos = i + 1;
+                continue;
+            }
+            self.pos = i;
+            let _ = self.skip_one_statement();
+        }
+    }
+
+    /// Advance past one statement (assignment, expression, etc.) with bracket/string depth.
+    /// Returns false if no progress was made.
+    fn skip_one_statement(&mut self) -> bool {
+        let start = self.pos;
+        if self.pos >= self.src.len() {
+            return false;
+        }
+        let mut depth_paren = 0i32;
+        let mut depth_brack = 0i32;
+        let mut depth_brace = 0i32;
+        let mut in_s = false;
+        let mut in_d = false;
+        let mut escape = false;
+        while self.pos < self.src.len() {
+            let c = self.src[self.pos];
+            if escape {
+                escape = false;
+                self.pos += 1;
+                continue;
+            }
+            if in_s {
+                if c == b'\\' {
+                    escape = true;
+                } else if c == b'\'' {
+                    in_s = false;
+                }
+                self.pos += 1;
+                continue;
+            }
+            if in_d {
+                if c == b'\\' {
+                    escape = true;
+                } else if c == b'"' {
+                    in_d = false;
+                }
+                self.pos += 1;
+                continue;
+            }
+            match c {
+                b'\'' => in_s = true,
+                b'"' => in_d = true,
+                b'(' => depth_paren += 1,
+                b')' => depth_paren = (depth_paren - 1).max(0),
+                b'[' => depth_brack += 1,
+                b']' => depth_brack = (depth_brack - 1).max(0),
+                b'{' => depth_brace += 1,
+                b'}' => depth_brace = (depth_brace - 1).max(0),
+                b'\n' if depth_paren == 0 && depth_brack == 0 && depth_brace == 0 => {
+                    self.pos += 1;
+                    break;
+                }
+                b'#' if depth_paren == 0 && depth_brack == 0 && depth_brace == 0 => {
+                    // rest of line is comment
+                    while self.pos < self.src.len() && self.src[self.pos] != b'\n' {
+                        self.pos += 1;
+                    }
+                    if self.pos < self.src.len() {
+                        self.pos += 1;
+                    }
+                    break;
+                }
+                _ => {}
+            }
+            self.pos += 1;
+        }
+        self.pos > start
     }
 
     fn parse_assignment(&mut self) -> Result<(), String> {
         self.skip_ws();
         let name = self.parse_ident()?;
         self.skip_ws();
-        if self.bump() != Some(b'=') {
+        // Support `=` and `+=` (string append used in real easyconfigs).
+        let aug_add = if self.peek() == Some(b'+') && self.src.get(self.pos + 1) == Some(&b'=') {
+            self.pos += 2;
+            true
+        } else if self.bump() == Some(b'=') {
+            false
+        } else {
             return Err(self.err(format!("expected '=' after identifier '{name}'")));
-        }
+        };
         self.skip_ws();
         let val = self.parse_expr()?;
-        self.env.insert(name, val);
+        if aug_add {
+            match (self.env.get(&name).cloned(), val) {
+                (Some(Value::Str(a)), Value::Str(b)) => {
+                    self.env.insert(name, Value::Str(a + &b));
+                }
+                (_, v) => {
+                    self.env.insert(name, v);
+                }
+            }
+        } else {
+            self.env.insert(name, val);
+        }
         // Optional trailing semicolon (rare); ignore commas at top level.
         self.skip_ws();
         if self.peek() == Some(b';') {
@@ -435,9 +605,6 @@ impl<'a> Parser<'a> {
             "False" => Ok(Value::Bool(false)),
             "None" => Ok(Value::None),
             "SYSTEM" => Ok(system_toolchain_value()),
-            // EasyBuild built-in source filename constants (need name/version already set).
-            "SOURCE_TAR_GZ" | "SOURCELOWER_TAR_GZ" | "SOURCE_TAR_BZ2" | "SOURCELOWER_TAR_BZ2"
-            | "SOURCE_TAR_XZ" | "SOURCELOWER_TAR_XZ" => self.eb_source_constant(&name),
             other => {
                 if let Some(v) = self.env.get(other) {
                     Ok(v.clone())
@@ -446,32 +613,6 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-    }
-
-    fn eb_source_constant(&self, which: &str) -> Result<Value, String> {
-        let pkg = self
-            .env
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| self.err(format!("{which} requires name = ... first")))?;
-        let ver = match self.env.get("version") {
-            Some(Value::Str(s)) => s.clone(),
-            Some(Value::Int(i)) => i.to_string(),
-            _ => return Err(self.err(format!("{which} requires version = ... first"))),
-        };
-        let base = if which.contains("LOWER") {
-            pkg.to_ascii_lowercase()
-        } else {
-            pkg.to_string()
-        };
-        let ext = if which.ends_with("BZ2") {
-            "tar.bz2"
-        } else if which.ends_with("XZ") {
-            "tar.xz"
-        } else {
-            "tar.gz"
-        };
-        Ok(Value::Str(format!("{base}-{ver}.{ext}")))
     }
 
     fn parse_list(&mut self) -> Result<Value, String> {
@@ -657,14 +798,28 @@ fn version_part_templates(version: &str) -> HashMap<String, String> {
 fn build_templates(name: &str, version: &str, versionsuffix: &str, tc: &Toolchain) -> HashMap<String, String> {
     let mut tv = HashMap::new();
     tv.insert("name".into(), name.to_string());
+    let namelower = name.to_ascii_lowercase();
+    tv.insert("namelower".into(), namelower.clone());
     if let Some(ch) = name.chars().next() {
         tv.insert("nameletter".into(), ch.to_string());
+        tv.insert("nameletterlower".into(), ch.to_ascii_lowercase().to_string());
     }
+    // Defaults used by GITHUB_*/BITBUCKET_* constants when not set in the recipe.
+    tv.insert("github_account".into(), namelower.clone());
+    tv.insert("bitbucket_account".into(), namelower);
     tv.insert("version".into(), version.to_string());
     tv.extend(version_part_templates(version));
     tv.insert("versionsuffix".into(), versionsuffix.to_string());
     tv.insert("toolchain_name".into(), tc.name.clone());
     tv.insert("toolchain_version".into(), tc.version.clone());
+    // pyshortver is used in sanity paths; approximate from version major.minor when possible.
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() >= 2 {
+        tv.insert(
+            "pyshortver".into(),
+            format!("{}.{}", parts[0], parts[1]),
+        );
+    }
     tv
 }
 
@@ -942,9 +1097,56 @@ pub fn parse_easyconfig_file(path: &Path) -> Result<Candidate, ParseError> {
     Ok(resolve_easyconfig_file(path)?.to_candidate())
 }
 
+/// One easyconfig path that could not be parsed into a candidate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkippedEasyconfig {
+    pub path: String,
+    pub error: String,
+}
+
+/// Result of walking an easyconfig tree: successes + skipped unparseable files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ParseTreeResult {
+    pub candidates: Vec<Candidate>,
+    pub skipped: Vec<SkippedEasyconfig>,
+}
+
+impl ParseTreeResult {
+    pub fn skip_count(&self) -> usize {
+        self.skipped.len()
+    }
+
+    pub fn parsed_count(&self) -> usize {
+        self.candidates.len()
+    }
+
+    /// Coverage fraction `parsed / (parsed + skipped)`; 1.0 when the tree is empty.
+    pub fn coverage(&self) -> f64 {
+        let p = self.parsed_count();
+        let s = self.skip_count();
+        if p + s == 0 {
+            1.0
+        } else {
+            p as f64 / (p + s) as f64
+        }
+    }
+
+    /// Merge another result (later candidates override on identity; skips append).
+    pub fn merge_with_precedence(mut self, other: ParseTreeResult) -> ParseTreeResult {
+        let layers = vec![self.candidates, other.candidates];
+        self.candidates = merge_candidates_with_precedence(&layers);
+        self.skipped.extend(other.skipped);
+        self
+    }
+}
+
 /// Walk a directory tree for `*.eb` and parse all easyconfigs.
-pub fn parse_easyconfig_tree(root: &Path) -> Result<Vec<Candidate>, ParseError> {
-    let mut out = Vec::new();
+///
+/// Unparseable files are **skipped** (not fatal): they appear in
+/// [`ParseTreeResult::skipped`] so callers can report coverage without
+/// aborting a real multi-thousand-file tree on the first bad recipe.
+pub fn parse_easyconfig_tree(root: &Path) -> Result<ParseTreeResult, ParseError> {
+    let mut out = ParseTreeResult::default();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let rd =
@@ -955,12 +1157,25 @@ pub fn parse_easyconfig_tree(root: &Path) -> Result<Vec<Candidate>, ParseError> 
             if p.is_dir() {
                 stack.push(p);
             } else if p.extension().and_then(|s| s.to_str()) == Some("eb") {
-                out.push(parse_easyconfig_file(&p)?);
+                match parse_easyconfig_file(&p) {
+                    Ok(c) => out.candidates.push(c),
+                    Err(e) => out.skipped.push(SkippedEasyconfig {
+                        path: p.display().to_string(),
+                        error: e.to_string(),
+                    }),
+                }
             }
         }
     }
-    sort_candidates(&mut out);
+    sort_candidates(&mut out.candidates);
+    out.skipped.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(out)
+}
+
+/// Backward-compatible helper: candidates only (skips discarded). Prefer
+/// [`parse_easyconfig_tree`] when skip reporting matters.
+pub fn parse_easyconfig_tree_candidates(root: &Path) -> Result<Vec<Candidate>, ParseError> {
+    Ok(parse_easyconfig_tree(root)?.candidates)
 }
 
 fn candidate_identity_key(c: &Candidate) -> (String, String, String) {
@@ -995,12 +1210,18 @@ pub fn merge_candidates_with_precedence(layers: &[Vec<Candidate>]) -> Vec<Candid
 }
 
 /// Parse multiple easyconfig trees and merge with later-path precedence.
-pub fn parse_easyconfig_trees(roots: &[&Path]) -> Result<Vec<Candidate>, ParseError> {
-    let mut layers = Vec::with_capacity(roots.len());
+/// Skipped paths from every tree are retained.
+pub fn parse_easyconfig_trees(roots: &[&Path]) -> Result<ParseTreeResult, ParseError> {
+    let mut acc = ParseTreeResult::default();
+    let mut layers: Vec<Vec<Candidate>> = Vec::with_capacity(roots.len());
     for root in roots {
-        layers.push(parse_easyconfig_tree(root)?);
+        let r = parse_easyconfig_tree(root)?;
+        layers.push(r.candidates);
+        acc.skipped.extend(r.skipped);
     }
-    Ok(merge_candidates_with_precedence(&layers))
+    acc.candidates = merge_candidates_with_precedence(&layers);
+    acc.skipped.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(acc)
 }
 
 pub fn filter_toolchain(cands: &[Candidate], tc: &Toolchain) -> Vec<Candidate> {
@@ -1175,7 +1396,7 @@ mod tests {
 
     #[test]
     fn parse_tree_finds_both_generations() {
-        let all = parse_easyconfig_tree(&fixture_eb_root()).expect("tree");
+        let all = parse_easyconfig_tree(&fixture_eb_root()).expect("tree").candidates;
         assert!(all.len() >= 8, "got {}", all.len());
         let tc = Toolchain {
             name: "foss".into(),
@@ -1438,7 +1659,7 @@ mod tests {
 
     #[test]
     fn hardcase_tree_parse_uses_shipped_entry_point() {
-        let all = parse_easyconfig_tree(&hardcase_root().join("easyconfigs")).expect("tree");
+        let all = parse_easyconfig_tree(&hardcase_root().join("easyconfigs")).expect("tree").candidates;
         assert_eq!(all.len(), 5, "expected five hardcase easyconfigs");
         assert!(all.iter().any(|c| c.name == "TemplatedApp"));
         assert!(all.iter().any(|c| c.name == "SystemTool"
@@ -1447,14 +1668,21 @@ mod tests {
     }
 
     #[test]
-    fn resolve_str_rejects_unresolved_unknown_name() {
-        let src = "name = 'X'\nversion = '1'\ntoolchain = SYSTEM\ndependencies = [(missing_var, '1')]\n";
+    fn resolve_str_tolerates_unknown_name_in_noncritical_assignment() {
+        // Unmodeled / broken assignments are skipped; required fields still parse.
+        let src = "name = 'X'\nversion = '1'\ntoolchain = SYSTEM\nconfigopts = missing_var + 'x'\ndependencies = []\n";
+        let r = resolve_easyconfig_str(src).expect("tolerant resolve");
+        assert_eq!(r.name, "X");
+        assert_eq!(r.version, "1");
+        assert!(r.dependencies.is_empty());
+    }
+
+    #[test]
+    fn resolve_str_rejects_missing_required_name() {
+        let src = "version = '1'\ntoolchain = SYSTEM\n";
         let err = resolve_easyconfig_str(src).unwrap_err();
         let msg = err.to_string();
-        assert!(
-            msg.contains("unknown name") || msg.contains("missing_var"),
-            "{msg}"
-        );
+        assert!(msg.contains("missing name"), "{msg}");
     }
 
     fn repro_root() -> PathBuf {
@@ -1579,6 +1807,84 @@ mod tests {
                 .version_req,
             "==2.10.12"
         );
+    }
+
+    #[test]
+    fn template_constants_resolve_major_families() {
+        // Seeded TEMPLATE_CONSTANTS must not be unknown-name errors.
+        let src = r#"
+name = 'Foo'
+version = '1.2.3'
+toolchain = {'name': 'foss', 'version': '2024a'}
+sources = [
+    SOURCE_TAR_GZ,
+    SOURCELOWER_TAR_BZ2,
+    GITHUB_SOURCE,
+    GITHUB_LOWER_SOURCE,
+    PYPI_SOURCE,
+    GNU_SOURCE,
+]
+dependencies = []
+"#;
+        let r = resolve_easyconfig_str(src).expect("constants resolve");
+        assert_eq!(r.name, "Foo");
+        assert_eq!(r.version, "1.2.3");
+    }
+
+    #[test]
+    fn parse_tolerates_if_for_and_junk_after_required_fields() {
+        let src = r#"
+name = 'TolerantApp'
+version = '9.9'
+toolchain = {'name': 'foss', 'version': '2025b'}
+if True:
+    configopts = '--bogus'
+for x in [1, 2]:
+    pass
+configopts = unknown_helper() + ' more'
+dependencies = [
+    ('OpenMPI', '5.0.3'),
+]
+builddependencies = [
+    ('CMake', '3.29.3'),
+]
+"#;
+        let r = resolve_easyconfig_str(src).expect("tolerant parse");
+        assert_eq!(r.name, "TolerantApp");
+        assert_eq!(r.version, "9.9");
+        assert_eq!(r.toolchain.label(), "foss-2025b");
+        assert_eq!(r.dependencies.len(), 1);
+        assert_eq!(r.dependencies[0].name, "OpenMPI");
+        assert_eq!(r.dependencies[0].version, "5.0.3");
+        assert_eq!(r.builddependencies[0].name, "CMake");
+    }
+
+    #[test]
+    fn parse_tree_skips_broken_files_and_reports_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(
+            root.join("good.eb"),
+            "name = 'Good'\nversion = '1.0'\ntoolchain = {'name': 'foss', 'version': '2025b'}\ndependencies = []\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("bad.eb"),
+            "this is not a valid easyconfig {{{{\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("also_good.eb"),
+            "name = 'AlsoGood'\nversion = '2.0'\ntoolchain = SYSTEM\ndependencies = []\n",
+        )
+        .unwrap();
+        let tree = parse_easyconfig_tree(root).expect("tree walk");
+        assert_eq!(tree.parsed_count(), 2, "got {:?}", tree.candidates);
+        assert_eq!(tree.skip_count(), 1, "got {:?}", tree.skipped);
+        assert!(tree.skipped[0].path.ends_with("bad.eb"));
+        assert!(tree.candidates.iter().any(|c| c.name == "Good"));
+        assert!(tree.candidates.iter().any(|c| c.name == "AlsoGood"));
+        assert!(tree.coverage() > 0.6 && tree.coverage() < 1.0);
     }
 
     #[test]

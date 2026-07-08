@@ -3,10 +3,10 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use eb_stack::{
-    emit_next_generation_auto_from_path, emit_next_generation_from_path, load_json_file,
+    emit_next_generation_auto_from_path_with_opts, emit_next_generation_from_path, load_json_file,
     lock_to_cyclonedx, parse_easyconfig_tree,
     solve_from_easyconfigs_with_baseline_version_and_extras, solve_to_files_with_extras,
-    EmitParams, SolveExtraOut, StackLock, Toolchain,
+    AutoResolveOpts, EmitParams, SolveExtraOut, StackLock, Toolchain,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -134,6 +134,11 @@ enum Cmd {
         /// (e.g. foss-2024a).
         #[arg(long, value_name = "PATH")]
         hierarchy_fixture: Option<PathBuf>,
+        /// Keep source dependency versions when auto-resolve finds no candidate
+        /// (default: fail with a non-zero exit). Versionsuffix-pinned deps are
+        /// never bumped regardless of this flag.
+        #[arg(long)]
+        keep_old_deps: bool,
         /// Output directory; file is written as the conventional basename
         #[arg(long, conflicts_with = "out")]
         out_dir: Option<PathBuf>,
@@ -227,7 +232,21 @@ fn main() -> Result<()> {
             toolchain_name,
             toolchain_version,
         } => {
-            let mut cands = parse_easyconfig_tree(&easyconfigs).map_err(|e| anyhow::anyhow!(e))?;
+            let tree = parse_easyconfig_tree(&easyconfigs).map_err(|e| anyhow::anyhow!(e))?;
+            if !tree.skipped.is_empty() {
+                eprintln!(
+                    "parse: skipped {} unparseable easyconfig(s) under {}",
+                    tree.skip_count(),
+                    easyconfigs.display()
+                );
+                for s in tree.skipped.iter().take(20) {
+                    eprintln!("  skip {}: {}", s.path, s.error);
+                }
+                if tree.skipped.len() > 20 {
+                    eprintln!("  ... and {} more", tree.skipped.len() - 20);
+                }
+            }
+            let mut cands = tree.candidates;
             if let (Some(n), Some(v)) = (toolchain_name, toolchain_version) {
                 cands.retain(|c| c.toolchain.name == n && c.toolchain.version == v);
             }
@@ -295,6 +314,7 @@ fn main() -> Result<()> {
             deps,
             easyconfigs,
             hierarchy_fixture,
+            keep_old_deps,
             out_dir,
             out,
         } => {
@@ -304,7 +324,7 @@ fn main() -> Result<()> {
             };
             let hand = parse_dep_overrides(&deps)?;
             let result = if let Some(ec_dir) = easyconfigs {
-                emit_next_generation_auto_from_path(
+                emit_next_generation_auto_from_path_with_opts(
                     &source,
                     &toolchain,
                     &ec_dir,
@@ -313,6 +333,9 @@ fn main() -> Result<()> {
                     &hand,
                     version,
                     source_checksum,
+                    &AutoResolveOpts {
+                        keep_old: keep_old_deps,
+                    },
                 )
                 .with_context(|| {
                     format!(
