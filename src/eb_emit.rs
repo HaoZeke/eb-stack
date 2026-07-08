@@ -34,6 +34,11 @@ pub struct EmitParams {
     /// Otherwise the operator already present on the source version (if any) is
     /// preserved and only the version token is replaced.
     pub dep_versions: HashMap<String, String>,
+    /// New sha256 for the source tarball, used only when `version` changes.
+    /// When `None` and the version changes, the source checksum entry's key
+    /// is still renamed to the new versioned tarball name, but the checksum
+    /// value is left stale and a warning is added to [`EmitResult::warnings`].
+    pub source_checksum: Option<String>,
 }
 
 /// Result of a next-generation emit: rewritten text and conventional basename.
@@ -42,6 +47,10 @@ pub struct EmitResult {
     pub text: String,
     /// EasyBuild filename: `{name}-{version}-{toolchain_name}-{toolchain_version}.eb`
     pub filename: String,
+    /// Human-readable warnings about content that was not (or could not be)
+    /// safely rewritten, e.g. a stale source checksum or an unreviewed patch
+    /// set after a version bump. Callers should surface these to the user.
+    pub warnings: Vec<String>,
 }
 
 /// Derive the conventional EasyBuild easyconfig basename.
@@ -55,9 +64,10 @@ pub fn easyconfig_filename(name: &str, version: &str, toolchain: &Toolchain) -> 
 /// Emit next-generation easyconfig text and conventional filename from source text.
 pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitResult, EmitError> {
     let name = assign_string_raw(source, "name").ok_or(EmitError::MissingName)?;
+    let source_version = assign_string_raw(source, "version");
     let app_version = match &params.version {
         Some(v) => v.clone(),
-        None => assign_string_raw(source, "version").ok_or(EmitError::MissingVersion)?,
+        None => source_version.clone().ok_or(EmitError::MissingVersion)?,
     };
 
     // Ensure source has a toolchain assignment we can rewrite.
@@ -67,6 +77,12 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
     }) {
         return Err(EmitError::MissingToolchain);
     }
+
+    // A version bump changes the source tarball name; a toolchain-only bump
+    // (params.version == None, or explicitly set back to the source version)
+    // does not, so checksums/patches stay untouched in that case.
+    let version_changed =
+        params.version.is_some() && source_version.as_deref() != Some(app_version.as_str());
 
     let mut text = source.to_string();
     text = rewrite_toolchain(&text, &params.toolchain)?;
@@ -78,8 +94,38 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
         text = rewrite_dep_list_versions(&text, "builddependencies", &params.dep_versions)?;
     }
 
+    let mut warnings = Vec::new();
+    if version_changed {
+        if let Some(old_v) = source_version.as_deref() {
+            let (new_text, stale) = rewrite_source_checksum(
+                &text,
+                old_v,
+                &app_version,
+                params.source_checksum.as_deref(),
+            )?;
+            text = new_text;
+            if stale {
+                warnings.push(format!(
+                    "source checksum is stale after version bump {old_v} -> {app_version}: \
+                     the tarball key was renamed but the checksum value was left unchanged; \
+                     set --source-checksum <SHA256> or run `eb --inject-checksums` before building"
+                ));
+            }
+        }
+        if list_is_nonempty(&text, "patches") {
+            warnings.push(format!(
+                "patches were not modified for version bump to {app_version}: \
+                 review patch applicability -- a version bump commonly needs a different patch set"
+            ));
+        }
+    }
+
     let filename = easyconfig_filename(&name, &app_version, &params.toolchain);
-    Ok(EmitResult { text, filename })
+    Ok(EmitResult {
+        text,
+        filename,
+        warnings,
+    })
 }
 
 /// Read a source file and emit the next-generation recipe.
@@ -319,17 +365,14 @@ fn apply_version_override(source_field: &str, override_val: &str) -> String {
     }
 }
 
-/// Rewrite version strings inside `key = [ ... ]` for named deps present in `overrides`.
-fn rewrite_dep_list_versions(
-    src: &str,
-    key: &str,
-    overrides: &HashMap<String, String>,
-) -> Result<String, EmitError> {
+/// Locate a top-level `key = [ ... ]` assignment and return the byte offsets
+/// `(list_open_end, list_close_start)`: just after the opening `[` and at the
+/// matching closing `]`. Returns `None` when no such assignment exists.
+fn find_list_span(src: &str, key: &str) -> Result<Option<(usize, usize)>, EmitError> {
     let re_hdr = regex::Regex::new(&format!(r"(?m)^(\s*{}\s*=\s*\[)", regex::escape(key)))
         .map_err(|e| EmitError::Rewrite(e.to_string()))?;
     let Some(m) = re_hdr.find(src) else {
-        // No such list — nothing to rewrite (not an error).
-        return Ok(src.to_string());
+        return Ok(None);
     };
     let list_open_end = m.end(); // index just after '['
     let bytes = src.as_bytes();
@@ -348,17 +391,161 @@ fn rewrite_dep_list_versions(
         i += 1;
     }
     if depth != 0 {
-        return Err(EmitError::Rewrite(format!(
-            "unclosed {key} list"
-        )));
+        return Err(EmitError::Rewrite(format!("unclosed {key} list")));
     }
-    let body = &src[list_open_end..i];
+    Ok(Some((list_open_end, i)))
+}
+
+/// Whether `key = [ ... ]` exists in `src` and has at least one non-whitespace
+/// element (used to decide whether a "review the patch set" warning applies).
+fn list_is_nonempty(src: &str, key: &str) -> bool {
+    matches!(find_list_span(src, key), Ok(Some((s, e))) if !src[s..e].trim().is_empty())
+}
+
+/// Rewrite version strings inside `key = [ ... ]` for named deps present in `overrides`.
+fn rewrite_dep_list_versions(
+    src: &str,
+    key: &str,
+    overrides: &HashMap<String, String>,
+) -> Result<String, EmitError> {
+    let Some((list_open_end, list_close_start)) = find_list_span(src, key)? else {
+        // No such list — nothing to rewrite (not an error).
+        return Ok(src.to_string());
+    };
+    let body = &src[list_open_end..list_close_start];
     let new_body = rewrite_dep_tuples_in_body(body, overrides)?;
     let mut out = String::with_capacity(src.len() + 32);
     out.push_str(&src[..list_open_end]);
     out.push_str(&new_body);
-    out.push_str(&src[i..]);
+    out.push_str(&src[list_close_start..]);
     Ok(out)
+}
+
+/// Rewrite the SOURCE tarball entry (the first element) inside a
+/// `checksums = [ ... ]` list after a version bump. Handles both the dict
+/// form (`{'name-version.tar.bz2': 'sha256'}`) and a bare-string checksum
+/// form. Only the first (source) element is touched; patch checksum entries
+/// that follow are left untouched.
+///
+/// The key (tarball filename), when present, has its first occurrence of
+/// `old_version` replaced with `new_version`. The checksum value is replaced
+/// with `new_checksum` when given; otherwise it is left as-is and the second
+/// return value is `true` (the value is now stale).
+fn rewrite_source_checksum(
+    src: &str,
+    old_version: &str,
+    new_version: &str,
+    new_checksum: Option<&str>,
+) -> Result<(String, bool), EmitError> {
+    let Some((list_open_end, list_close_start)) = find_list_span(src, "checksums")? else {
+        // No checksums list — nothing to rewrite (not an error).
+        return Ok((src.to_string(), false));
+    };
+    let body = &src[list_open_end..list_close_start];
+    let body_bytes = body.as_bytes();
+
+    let mut start = 0usize;
+    while start < body_bytes.len() && (body_bytes[start] as char).is_whitespace() {
+        start += 1;
+    }
+    if start >= body_bytes.len() {
+        // Empty checksums list — nothing to rewrite.
+        return Ok((src.to_string(), false));
+    }
+
+    let elem_end = if body_bytes[start] == b'{' {
+        let mut depth = 1i32;
+        let mut j = start + 1;
+        while j < body_bytes.len() {
+            match body_bytes[j] as char {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        j += 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            j += 1;
+        }
+        j
+    } else if body_bytes[start] == b'\'' || body_bytes[start] == b'"' {
+        let q = body_bytes[start];
+        let mut j = start + 1;
+        while j < body_bytes.len() && body_bytes[j] != q {
+            j += 1;
+        }
+        (j + 1).min(body_bytes.len())
+    } else {
+        return Err(EmitError::Rewrite(
+            "unrecognized source checksum entry form".into(),
+        ));
+    };
+
+    let elem = &body[start..elem_end];
+    let mut stale = false;
+
+    let new_elem = if elem.starts_with('{') {
+        // Dict form: first quoted string is the tarball key, second is the sha.
+        // No backreferences (regex crate): match single- and double-quoted
+        // spans separately, then merge and sort by position.
+        let re_sq =
+            regex::Regex::new(r"'[^']*'").map_err(|e| EmitError::Rewrite(e.to_string()))?;
+        let re_dq =
+            regex::Regex::new(r#""[^"]*""#).map_err(|e| EmitError::Rewrite(e.to_string()))?;
+        let mut matches: Vec<regex::Match> =
+            re_sq.find_iter(elem).chain(re_dq.find_iter(elem)).collect();
+        matches.sort_by_key(|m| m.start());
+        if matches.len() < 2 {
+            return Err(EmitError::Rewrite(
+                "malformed source checksum dict entry".into(),
+            ));
+        }
+        let key_m = matches[0];
+        let val_m = matches[1];
+        let key_quote = elem.as_bytes()[key_m.start()] as char;
+        let key_str = &elem[key_m.start() + 1..key_m.end() - 1];
+        let new_key = if key_str.contains(old_version) {
+            key_str.replacen(old_version, new_version, 1)
+        } else {
+            key_str.to_string()
+        };
+
+        let mut out = String::with_capacity(elem.len() + 16);
+        out.push_str(&elem[..key_m.start()]);
+        out.push(key_quote);
+        out.push_str(&new_key);
+        out.push(key_quote);
+        out.push_str(&elem[key_m.end()..val_m.start()]);
+        if let Some(sha) = new_checksum {
+            let val_quote = elem.as_bytes()[val_m.start()] as char;
+            out.push(val_quote);
+            out.push_str(sha);
+            out.push(val_quote);
+        } else {
+            out.push_str(&elem[val_m.start()..val_m.end()]);
+            stale = true;
+        }
+        out.push_str(&elem[val_m.end()..]);
+        out
+    } else {
+        // Bare-string checksum form: no filename key to rename.
+        if let Some(sha) = new_checksum {
+            let q = elem.chars().next().unwrap();
+            format!("{q}{sha}{q}")
+        } else {
+            stale = true;
+            elem.to_string()
+        }
+    };
+
+    let mut out = String::with_capacity(src.len() + 16);
+    out.push_str(&src[..list_open_end + start]);
+    out.push_str(&new_elem);
+    out.push_str(&src[list_open_end + elem_end..]);
+    Ok((out, stale))
 }
 
 fn rewrite_dep_tuples_in_body(
@@ -443,6 +630,7 @@ builddependencies = [
             toolchain: foss("2025b"),
             version: None,
             dep_versions: HashMap::new(),
+            source_checksum: None,
         };
         let r = emit_next_generation(MINIMAL, &params).expect("emit");
         assert_eq!(r.filename, "GROMACS-2024.1-foss-2025b.eb");
@@ -474,6 +662,7 @@ builddependencies = [
             toolchain: foss("2025b"),
             version: Some("2025.0".into()),
             dep_versions: HashMap::new(),
+            source_checksum: None,
         };
         let r = emit_next_generation(MINIMAL, &params).expect("emit");
         assert_eq!(r.filename, "GROMACS-2025.0-foss-2025b.eb");
@@ -492,6 +681,7 @@ builddependencies = [
             toolchain: foss("2025b"),
             version: Some("2025.0".into()),
             dep_versions: deps,
+            source_checksum: None,
         };
         let r = emit_next_generation(MINIMAL, &params).expect("emit");
         assert_eq!(r.filename, "GROMACS-2025.0-foss-2025b.eb");
@@ -511,6 +701,7 @@ builddependencies = [
             toolchain: foss("2025b"),
             version: None,
             dep_versions: deps,
+            source_checksum: None,
         };
         let r = emit_next_generation(WITH_BUILDDEPS, &params).expect("emit");
         assert_eq!(r.filename, "Demo-1.0-foss-2025b.eb");
@@ -529,6 +720,7 @@ builddependencies = [
             toolchain: foss("2025b"),
             version: None,
             dep_versions: deps,
+            source_checksum: None,
         };
         let r = emit_next_generation(WITH_BUILDDEPS, &params).expect("emit");
         assert!(r.text.contains("('OpenMPI', '==5.0.3')"));
@@ -549,6 +741,7 @@ builddependencies = [
             toolchain: foss("2025b"),
             version: Some("2.0".into()),
             dep_versions: HashMap::new(),
+            source_checksum: None,
         };
         let r = emit_next_generation(src, &params).expect("emit");
         assert_eq!(r.filename, "Pkg-2.0-foss-2025b.eb");
@@ -556,5 +749,90 @@ builddependencies = [
         assert!(r
             .text
             .contains("toolchain = {\"name\": \"foss\", \"version\": \"2025b\"}"));
+    }
+
+    const WITH_CHECKSUMS: &str = "\
+name = 'OpenMPI'
+version = '5.0.3'
+toolchain = {'name': 'NVHPC', 'version': '24.9-CUDA-12.6.0'}
+homepage = 'https://www.open-mpi.org/'
+sources = [SOURCELOWER_TAR_BZ2]
+patches = [
+    'OpenMPI-5.0.3_fix_hle_make_errors.patch',
+]
+checksums = [
+    {'openmpi-5.0.3.tar.bz2': '990582f206b3ab32e938aa31bbf07c639368e4405dca196fabe7f0f76eeda90b'},
+    {'OpenMPI-5.0.3_fix_hle_make_errors.patch': '881c907a9f5901d5d6af41cd33dffdcecba4a67a9e5123e602542aea57a80895'},
+]
+dependencies = [
+    ('hwloc', '2.10.0'),
+]
+";
+
+    fn nvhpc(ver: &str) -> Toolchain {
+        Toolchain {
+            name: "NVHPC".into(),
+            version: ver.into(),
+        }
+    }
+
+    #[test]
+    fn version_bump_with_source_checksum_rewrites_source_entry() {
+        let params = EmitParams {
+            toolchain: nvhpc("25.11-CUDA-12.8.0"),
+            version: Some("5.0.7".into()),
+            dep_versions: HashMap::new(),
+            source_checksum: Some(
+                "119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd".into(),
+            ),
+        };
+        let r = emit_next_generation(WITH_CHECKSUMS, &params).expect("emit");
+        assert_eq!(r.filename, "OpenMPI-5.0.7-NVHPC-25.11-CUDA-12.8.0.eb");
+        // Source tarball key renamed to the new version and checksum replaced.
+        assert!(r.text.contains(
+            "{'openmpi-5.0.7.tar.bz2': '119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd'}"
+        ));
+        // Patch checksum entry left untouched.
+        assert!(r.text.contains(
+            "{'OpenMPI-5.0.3_fix_hle_make_errors.patch': '881c907a9f5901d5d6af41cd33dffdcecba4a67a9e5123e602542aea57a80895'}"
+        ));
+        // No stale-checksum warning since a value was supplied, but the
+        // patch set still needs human review after a version bump.
+        assert_eq!(r.warnings.len(), 1, "warnings: {:?}", r.warnings);
+        assert!(r.warnings[0].contains("patches"), "{:?}", r.warnings);
+    }
+
+    #[test]
+    fn version_bump_without_source_checksum_renames_key_and_warns() {
+        let params = EmitParams {
+            toolchain: nvhpc("25.11-CUDA-12.8.0"),
+            version: Some("5.0.7".into()),
+            dep_versions: HashMap::new(),
+            source_checksum: None,
+        };
+        let r = emit_next_generation(WITH_CHECKSUMS, &params).expect("emit");
+        // Key renamed to the new version, but checksum value stays stale.
+        assert!(r.text.contains(
+            "{'openmpi-5.0.7.tar.bz2': '990582f206b3ab32e938aa31bbf07c639368e4405dca196fabe7f0f76eeda90b'}"
+        ));
+        assert_eq!(r.warnings.len(), 2, "warnings: {:?}", r.warnings);
+        assert!(r.warnings.iter().any(|w| w.contains("checksum")));
+        assert!(r.warnings.iter().any(|w| w.contains("patches")));
+    }
+
+    #[test]
+    fn toolchain_only_bump_leaves_checksums_untouched() {
+        let params = EmitParams {
+            toolchain: nvhpc("25.11-CUDA-12.8.0"),
+            version: None,
+            dep_versions: HashMap::new(),
+            source_checksum: None,
+        };
+        let r = emit_next_generation(WITH_CHECKSUMS, &params).expect("emit");
+        assert!(r.text.contains(
+            "{'openmpi-5.0.3.tar.bz2': '990582f206b3ab32e938aa31bbf07c639368e4405dca196fabe7f0f76eeda90b'}"
+        ));
+        assert!(r.text.contains("'OpenMPI-5.0.3_fix_hle_make_errors.patch',"));
+        assert!(r.warnings.is_empty(), "warnings: {:?}", r.warnings);
     }
 }

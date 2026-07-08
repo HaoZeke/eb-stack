@@ -104,6 +104,13 @@ enum Cmd {
         /// Optional new application version
         #[arg(long)]
         version: Option<String>,
+        /// New sha256 for the source tarball; only meaningful when `--version`
+        /// changes the app version (the tarball name changes with it). When
+        /// omitted on a version bump, the source checksum entry's key is
+        /// still renamed to the new versioned tarball name but the checksum
+        /// value is left stale and a warning is printed.
+        #[arg(long, value_name = "SHA256")]
+        source_checksum: Option<String>,
         /// Dependency version override as `Name=version` (repeatable).
         /// Also applied to `builddependencies`. If `version` includes an
         /// operator (`>=`, `==`, …) it replaces the whole version field;
@@ -252,6 +259,7 @@ fn main() -> Result<()> {
             toolchain_name,
             toolchain_version,
             version,
+            source_checksum,
             deps,
             out_dir,
             out,
@@ -263,9 +271,13 @@ fn main() -> Result<()> {
                 },
                 version,
                 dep_versions: parse_dep_overrides(&deps)?,
+                source_checksum,
             };
             let result = emit_next_generation_from_path(&source, &params)
                 .with_context(|| format!("bump {}", source.display()))?;
+            for w in &result.warnings {
+                eprintln!("WARNING: {w}");
+            }
             let dest = if let Some(path) = out {
                 path
             } else if let Some(dir) = out_dir {

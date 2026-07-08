@@ -28,6 +28,7 @@ fn library_bumps_fixture_gromacs_toolchain_only() {
         toolchain: foss("2025b"),
         version: None,
         dep_versions: HashMap::new(),
+        source_checksum: None,
     };
     let r = emit_next_generation(&source, &params).expect("emit");
     assert_eq!(r.filename, "GROMACS-2024.1-foss-2025b.eb");
@@ -55,6 +56,7 @@ fn library_bumps_version_toolchain_and_deps() {
         toolchain: foss("2025b"),
         version: Some("2025.0".into()),
         dep_versions: deps,
+        source_checksum: None,
     };
     let r = emit_next_generation_from_path(&src_path, &params).expect("emit from path");
     assert_eq!(
