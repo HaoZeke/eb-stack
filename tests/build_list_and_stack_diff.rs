@@ -32,7 +32,7 @@ fn library_solve_writes_build_list_and_stack_diff() {
         &fixture("policy_prefer_newer.json"),
         Some(&fixture("baseline.lock.json")),
         &lock_out,
-        &sbom_out,
+        Some(&sbom_out),
         SolveExtraOut {
             build_list_out: Some(&build_list_out),
             stack_diff_out: Some(&stack_diff_out),
@@ -166,7 +166,46 @@ fn cli_solve_json_writes_both_artifacts() {
 }
 
 #[test]
-fn cli_solve_without_extras_still_writes_lock_and_sbom() {
+fn cli_solve_without_sbom_flag_writes_lock_only() {
+    let bin = env!("CARGO_BIN_EXE_eb-stack");
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let lock_out = tmp.path().join("stack.lock.json");
+    // Intentionally omit --sbom-out: core solve must not default-write an SBOM.
+    let status = Command::new(bin)
+        .current_dir(tmp.path())
+        .args([
+            "solve",
+            "--easyconfigs",
+            fixture("easyconfigs").to_str().unwrap(),
+            "--policy",
+            fixture("policies/prefer_newer.json").to_str().unwrap(),
+            "--baseline-easyconfigs",
+            fixture("easyconfigs").to_str().unwrap(),
+            "--lock-out",
+            lock_out.to_str().unwrap(),
+        ])
+        .status()
+        .expect("spawn");
+    assert!(status.success());
+    assert!(lock_out.is_file());
+    // No default SBOM filename (neither cwd default nor lock-sibling).
+    assert!(
+        !tmp.path().join("stack.cdx.json").exists(),
+        "solve must not write stack.cdx.json without --sbom-out"
+    );
+    assert!(!tmp.path().join("build.list").exists());
+    let names: Vec<_> = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !names.iter().any(|n| n.ends_with(".cdx.json")),
+        "unexpected SBOM files without --sbom-out: {names:?}"
+    );
+}
+
+#[test]
+fn cli_solve_with_sbom_flag_writes_sbom() {
     let bin = env!("CARGO_BIN_EXE_eb-stack");
     let tmp = tempfile::tempdir().expect("tempdir");
     let lock_out = tmp.path().join("stack.lock.json");
@@ -190,6 +229,4 @@ fn cli_solve_without_extras_still_writes_lock_and_sbom() {
     assert!(status.success());
     assert!(lock_out.is_file());
     assert!(sbom_out.is_file());
-    // No default extra artifacts when flags omitted.
-    assert!(!tmp.path().join("build.list").exists());
 }

@@ -104,8 +104,28 @@ pub fn cmp_version(a: &str, b: &str) -> Ordering {
     Ordering::Equal
 }
 
-/// version_req grammar (v1): `==X`, `>=X`, `>X`, `<=X`, `<X`, or bare `X` (exact).
+/// version_req grammar (v1): `==X`, `>=X`, `>X`, `<=X`, `<X`, bare `X` (exact),
+/// or a comma-separated AND of those clauses (e.g. `>=4.1.0,<4.2.0`).
+///
+/// A compound requirement matches only if **every** non-empty clause matches.
 pub fn matches_req(version: &str, req: &str) -> bool {
+    let req = req.trim();
+    if req.is_empty() {
+        return true;
+    }
+    // Compound AND ranges: split on commas, require every clause.
+    if req.contains(',') {
+        return req
+            .split(',')
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .all(|clause| matches_req_single(version, clause));
+    }
+    matches_req_single(version, req)
+}
+
+/// Single clause: one leading operator or bare exact version.
+fn matches_req_single(version: &str, req: &str) -> bool {
     let req = req.trim();
     if req.is_empty() {
         return true;
@@ -152,6 +172,29 @@ mod tests {
         assert!(!matches_req("4.1.5", ">=4.1.6"));
         assert!(matches_req("0.3.24", "==0.3.24"));
         assert!(!matches_req("0.3.27", "==0.3.24"));
+        // bare exact still exact
+        assert!(matches_req("1.2.3", "1.2.3"));
+        assert!(!matches_req("1.2.4", "1.2.3"));
+    }
+
+    #[test]
+    fn compound_and_ranges() {
+        // Classic half-open minor range.
+        let req = ">=4.1.0,<4.2.0";
+        assert!(matches_req("4.1.0", req));
+        assert!(matches_req("4.1.5", req));
+        assert!(matches_req("4.1.99", req));
+        assert!(!matches_req("4.0.9", req), "below lower bound");
+        assert!(!matches_req("4.2.0", req), "at exclusive upper bound");
+        assert!(!matches_req("5.0.0", req), "above upper bound");
+        // Whitespace around commas is fine.
+        assert!(matches_req("4.1.6", ">=4.1.0, <4.2.0"));
+        // Three clauses AND: every clause must hold.
+        assert!(matches_req("2.0", ">=1.0,<=3.0,==2.0"));
+        assert!(!matches_req("2.1", ">=1.0,<=3.0,==2.0"));
+        // Single-op path unchanged when no comma.
+        assert!(matches_req("4.1.6", ">=4.1.6"));
+        assert!(!matches_req("4.1.5", ">=4.1.6"));
     }
 
     #[test]

@@ -191,13 +191,16 @@ fn write_lock_sbom_and_extras(
     baseline: Option<&StackLock>,
     universe: &Universe,
     lock_out: &Path,
-    sbom_out: &Path,
+    sbom_out: Option<&Path>,
     extra: SolveExtraOut<'_>,
 ) -> Result<()> {
     write_json_pretty(lock_out, lock)?;
     let dep_map = dep_map_from_universe(lock, universe);
-    let sbom = lock_to_cyclonedx_with_deps(lock, Some(&dep_map));
-    write_json_pretty(sbom_out, &sbom)?;
+    // SBOM is opt-in: only write when the caller supplies an output path.
+    if let Some(path) = sbom_out {
+        let sbom = lock_to_cyclonedx_with_deps(lock, Some(&dep_map));
+        write_json_pretty(path, &sbom)?;
+    }
 
     if let Some(path) = extra.build_list_out {
         let text = format_build_list(lock, &dep_map);
@@ -215,7 +218,8 @@ fn write_lock_sbom_and_extras(
     Ok(())
 }
 
-/// Parse easyconfigs dir, filter to policy toolchain, solve with resolvo, write lock+SBOM.
+/// Parse easyconfigs dir, filter to policy toolchain, solve with resolvo, write lock
+/// (and optional CycloneDX SBOM when `sbom_out` is `Some`).
 ///
 /// When `baseline_easyconfigs` is set and that tree holds multiple generations of the
 /// policy toolchain family, the baseline generation is chosen by
@@ -226,7 +230,7 @@ pub fn solve_from_easyconfigs(
     policy_path: &Path,
     baseline_easyconfigs: Option<&Path>,
     lock_out: &Path,
-    sbom_out: &Path,
+    sbom_out: Option<&Path>,
 ) -> Result<StackLock> {
     solve_from_easyconfigs_with_baseline_version_and_extras(
         easyconfigs_root,
@@ -246,7 +250,7 @@ pub fn solve_from_easyconfigs_with_baseline_version(
     baseline_easyconfigs: Option<&Path>,
     baseline_toolchain_version: Option<&str>,
     lock_out: &Path,
-    sbom_out: &Path,
+    sbom_out: Option<&Path>,
 ) -> Result<StackLock> {
     solve_from_easyconfigs_with_baseline_version_and_extras(
         easyconfigs_root,
@@ -265,7 +269,7 @@ pub fn solve_from_easyconfigs_with_extras(
     policy_path: &Path,
     baseline_easyconfigs: Option<&Path>,
     lock_out: &Path,
-    sbom_out: &Path,
+    sbom_out: Option<&Path>,
     extra: SolveExtraOut<'_>,
 ) -> Result<StackLock> {
     solve_from_easyconfigs_with_baseline_version_and_extras(
@@ -281,14 +285,14 @@ pub fn solve_from_easyconfigs_with_extras(
 
 /// Full form: explicit baseline toolchain generation selection (see
 /// [`select_baseline_generation`]) plus optional operator artifacts (build list /
-/// stack diff, see [`SolveExtraOut`]).
+/// stack diff, see [`SolveExtraOut`]). SBOM is written only when `sbom_out` is `Some`.
 pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
     easyconfigs_root: &Path,
     policy_path: &Path,
     baseline_easyconfigs: Option<&Path>,
     baseline_toolchain_version: Option<&str>,
     lock_out: &Path,
-    sbom_out: &Path,
+    sbom_out: Option<&Path>,
     extra: SolveExtraOut<'_>,
 ) -> Result<StackLock> {
     let policy: Policy = load_json_file(policy_path)?;
@@ -348,12 +352,13 @@ pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
 }
 
 /// Backward-compatible path: pre-baked universe JSON (still supported for tests).
+/// SBOM is written only when `sbom_out` is `Some`.
 pub fn solve_to_files(
     universe_path: &Path,
     policy_path: &Path,
     baseline_path: Option<&Path>,
     lock_out: &Path,
-    sbom_out: &Path,
+    sbom_out: Option<&Path>,
 ) -> Result<StackLock> {
     solve_to_files_with_extras(
         universe_path,
@@ -366,12 +371,13 @@ pub fn solve_to_files(
 }
 
 /// Like [`solve_to_files`], optionally writing build-list and stack-diff files.
+/// SBOM is written only when `sbom_out` is `Some`.
 pub fn solve_to_files_with_extras(
     universe_path: &Path,
     policy_path: &Path,
     baseline_path: Option<&Path>,
     lock_out: &Path,
-    sbom_out: &Path,
+    sbom_out: Option<&Path>,
     extra: SolveExtraOut<'_>,
 ) -> Result<StackLock> {
     let universe: Universe = load_json_file(universe_path)?;
@@ -478,7 +484,6 @@ mod tests {
         let policy = root.join("policies/prefer_newer.json");
         let tmp = tempfile::tempdir().unwrap();
         let lock_out = tmp.path().join("stack.lock.json");
-        let sbom_out = tmp.path().join("stack.cdx.json");
 
         let lock = solve_from_easyconfigs_with_baseline_version(
             &easyconfigs,
@@ -486,7 +491,7 @@ mod tests {
             Some(&easyconfigs),
             None,
             &lock_out,
-            &sbom_out,
+            None,
         )
         .expect("solve with multi-gen baseline must pick nearest lower (2025a), not 2024b");
 
@@ -533,7 +538,7 @@ mod tests {
             Some(&easyconfigs),
             Some("2024b"),
             &tmp.path().join("lock.json"),
-            &tmp.path().join("sbom.json"),
+            None,
         )
         .expect_err("baseline 2024b has GROMACS 2025.0; require_upgrade should unsat");
         let msg = err.to_string().to_lowercase();
@@ -558,7 +563,7 @@ mod tests {
             Some(&easyconfigs),
             Some("2025a"),
             &tmp.path().join("lock.json"),
-            &tmp.path().join("sbom.json"),
+            None,
         )
         .expect("explicit 2025a baseline");
         assert_eq!(lock.package("GROMACS").unwrap().version, "2025.0");
@@ -576,10 +581,58 @@ mod tests {
             &policy,
             Some(&easyconfigs),
             &tmp.path().join("lock.json"),
-            &tmp.path().join("sbom.json"),
+            None,
         )
         .expect("two-gen tree");
         assert_eq!(lock.package("GROMACS").unwrap().version, "2025.0");
         assert_eq!(lock.package("OpenBLAS").unwrap().version, "0.3.27");
+    }
+
+    /// Core solve path without SBOM flag writes lock only (no default .cdx.json).
+    #[test]
+    fn solve_without_sbom_out_writes_no_sbom_file() {
+        let root = two_gen_root();
+        let easyconfigs = root.join("easyconfigs");
+        let policy = root.join("policies/prefer_newer.json");
+        let tmp = tempfile::tempdir().unwrap();
+        let lock_out = tmp.path().join("stack.lock.json");
+        let _ = solve_from_easyconfigs(
+            &easyconfigs,
+            &policy,
+            Some(&easyconfigs),
+            &lock_out,
+            None,
+        )
+        .expect("solve without SBOM");
+        assert!(lock_out.is_file());
+        // No default SBOM filename under the work dir.
+        let entries: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !entries.iter().any(|n| n.ends_with(".cdx.json") || n.contains("sbom")),
+            "unexpected SBOM artifact when sbom_out is None: {entries:?}"
+        );
+    }
+
+    #[test]
+    fn solve_with_sbom_out_writes_sbom_file() {
+        let root = two_gen_root();
+        let easyconfigs = root.join("easyconfigs");
+        let policy = root.join("policies/prefer_newer.json");
+        let tmp = tempfile::tempdir().unwrap();
+        let lock_out = tmp.path().join("stack.lock.json");
+        let sbom_out = tmp.path().join("stack.cdx.json");
+        let _ = solve_from_easyconfigs(
+            &easyconfigs,
+            &policy,
+            Some(&easyconfigs),
+            &lock_out,
+            Some(&sbom_out),
+        )
+        .expect("solve with SBOM");
+        assert!(lock_out.is_file());
+        assert!(sbom_out.is_file(), "explicit --sbom-out must write the file");
     }
 }

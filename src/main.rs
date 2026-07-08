@@ -24,7 +24,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Cmd {
-    /// Parse a tree of `.eb` files, solve with resolvo, write lock + CycloneDX SBOM.
+    /// Parse a tree of `.eb` files, solve with resolvo, write lock (+ optional SBOM).
     Solve {
         /// Root directory of easyconfigs (walked recursively for `*.eb`)
         #[arg(long)]
@@ -42,8 +42,9 @@ enum Cmd {
         baseline_toolchain_version: Option<String>,
         #[arg(long, default_value = "stack.lock.json")]
         lock_out: PathBuf,
-        #[arg(long, default_value = "stack.cdx.json")]
-        sbom_out: PathBuf,
+        /// Optional planned CycloneDX SBOM path (omit to skip SBOM emission).
+        #[arg(long)]
+        sbom_out: Option<PathBuf>,
         /// Optional plain-text build list: selected easyconfigs in dependency order
         #[arg(long)]
         build_list_out: Option<PathBuf>,
@@ -70,8 +71,9 @@ enum Cmd {
         baseline: Option<PathBuf>,
         #[arg(long, default_value = "stack.lock.json")]
         lock_out: PathBuf,
-        #[arg(long, default_value = "stack.cdx.json")]
-        sbom_out: PathBuf,
+        /// Optional planned CycloneDX SBOM path (omit to skip SBOM emission).
+        #[arg(long)]
+        sbom_out: Option<PathBuf>,
         /// Optional plain-text build list: selected easyconfigs in dependency order
         #[arg(long)]
         build_list_out: Option<PathBuf>,
@@ -79,7 +81,7 @@ enum Cmd {
         #[arg(long)]
         stack_diff_out: Option<PathBuf>,
     },
-    /// Emit CycloneDX from an existing lock.
+    /// Emit CycloneDX from an existing lock (explicit SBOM command; always writes).
     Sbom {
         #[arg(long)]
         lock: PathBuf,
@@ -175,7 +177,7 @@ fn main() -> Result<()> {
                 Some(&baseline),
                 baseline_toolchain_version.as_deref(),
                 &lock_out,
-                &sbom_out,
+                sbom_out.as_deref(),
                 SolveExtraOut {
                     build_list_out: build_list_out.as_deref(),
                     stack_diff_out: stack_diff_out.as_deref(),
@@ -197,7 +199,9 @@ fn main() -> Result<()> {
             for p in &lock.packages {
                 println!("  - {} {} ({})", p.name, p.version, p.easyconfig_path);
             }
-            println!("planned SBOM {}", sbom_out.display());
+            if let Some(p) = &sbom_out {
+                println!("planned SBOM {}", p.display());
+            }
             if let Some(p) = &build_list_out {
                 println!("build list {}", p.display());
             }
@@ -230,7 +234,7 @@ fn main() -> Result<()> {
                 &policy,
                 baseline.as_deref(),
                 &lock_out,
-                &sbom_out,
+                sbom_out.as_deref(),
                 SolveExtraOut {
                     build_list_out: build_list_out.as_deref(),
                     stack_diff_out: stack_diff_out.as_deref(),
@@ -253,7 +257,9 @@ fn main() -> Result<()> {
             for p in &lock.packages {
                 println!("  - {} {} ({})", p.name, p.version, p.easyconfig_path);
             }
-            println!("planned SBOM {}", sbom_out.display());
+            if let Some(p) = &sbom_out {
+                println!("planned SBOM {}", p.display());
+            }
             if let Some(p) = &build_list_out {
                 println!("build list {}", p.display());
             }
