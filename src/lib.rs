@@ -3,6 +3,7 @@
 pub mod domain;
 pub mod eb_emit;
 pub mod eb_parse;
+pub mod report;
 pub mod resolvo_provider;
 pub mod sbom;
 pub mod select;
@@ -16,6 +17,10 @@ pub use eb_emit::{
 pub use eb_parse::{
     filter_toolchain, lock_from_candidates, parse_easyconfig_file, parse_easyconfig_tree,
     validate_lock_deps,
+};
+pub use report::{
+    classify_stack_diff, format_build_list, format_stack_diff_markdown, ordered_build_paths,
+    ordered_packages, PackageChange, PackageChangeKind,
 };
 pub use sbom::{
     build_dep_map_from_universe, dep_map_from_universe, lock_to_cyclonedx,
@@ -158,6 +163,50 @@ pub fn filter_baseline_candidates(
     }
 }
 
+pub fn write_text(path: &Path, text: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, text).with_context(|| format!("write {}", path.display()))?;
+    Ok(())
+}
+
+/// Optional operator artifacts written after a successful solve.
+#[derive(Debug, Clone, Default)]
+pub struct SolveExtraOut<'a> {
+    pub build_list_out: Option<&'a Path>,
+    pub stack_diff_out: Option<&'a Path>,
+}
+
+fn write_lock_sbom_and_extras(
+    lock: &StackLock,
+    baseline: Option<&StackLock>,
+    universe: &Universe,
+    lock_out: &Path,
+    sbom_out: &Path,
+    extra: SolveExtraOut<'_>,
+) -> Result<()> {
+    write_json_pretty(lock_out, lock)?;
+    let dep_map = dep_map_from_universe(lock, universe);
+    let sbom = lock_to_cyclonedx_with_deps(lock, Some(&dep_map));
+    write_json_pretty(sbom_out, &sbom)?;
+
+    if let Some(path) = extra.build_list_out {
+        let text = format_build_list(lock, &dep_map);
+        write_text(path, &text)?;
+    }
+    if let Some(path) = extra.stack_diff_out {
+        let Some(base) = baseline else {
+            bail!(
+                "stack-diff-out requires a baseline lock (pass --baseline / --baseline-easyconfigs)"
+            );
+        };
+        let md = format_stack_diff_markdown(base, lock);
+        write_text(path, &md)?;
+    }
+    Ok(())
+}
+
 /// Parse easyconfigs dir, filter to policy toolchain, solve with resolvo, write lock+SBOM.
 ///
 /// When `baseline_easyconfigs` is set and that tree holds multiple generations of the
@@ -171,13 +220,14 @@ pub fn solve_from_easyconfigs(
     lock_out: &Path,
     sbom_out: &Path,
 ) -> Result<StackLock> {
-    solve_from_easyconfigs_with_baseline_version(
+    solve_from_easyconfigs_with_baseline_version_and_extras(
         easyconfigs_root,
         policy_path,
         baseline_easyconfigs,
         None,
         lock_out,
         sbom_out,
+        SolveExtraOut::default(),
     )
 }
 
@@ -189,6 +239,49 @@ pub fn solve_from_easyconfigs_with_baseline_version(
     baseline_toolchain_version: Option<&str>,
     lock_out: &Path,
     sbom_out: &Path,
+) -> Result<StackLock> {
+    solve_from_easyconfigs_with_baseline_version_and_extras(
+        easyconfigs_root,
+        policy_path,
+        baseline_easyconfigs,
+        baseline_toolchain_version,
+        lock_out,
+        sbom_out,
+        SolveExtraOut::default(),
+    )
+}
+
+/// Like [`solve_from_easyconfigs`], optionally writing build-list and stack-diff files.
+pub fn solve_from_easyconfigs_with_extras(
+    easyconfigs_root: &Path,
+    policy_path: &Path,
+    baseline_easyconfigs: Option<&Path>,
+    lock_out: &Path,
+    sbom_out: &Path,
+    extra: SolveExtraOut<'_>,
+) -> Result<StackLock> {
+    solve_from_easyconfigs_with_baseline_version_and_extras(
+        easyconfigs_root,
+        policy_path,
+        baseline_easyconfigs,
+        None,
+        lock_out,
+        sbom_out,
+        extra,
+    )
+}
+
+/// Full form: explicit baseline toolchain generation selection (see
+/// [`select_baseline_generation`]) plus optional operator artifacts (build list /
+/// stack diff, see [`SolveExtraOut`]).
+pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
+    easyconfigs_root: &Path,
+    policy_path: &Path,
+    baseline_easyconfigs: Option<&Path>,
+    baseline_toolchain_version: Option<&str>,
+    lock_out: &Path,
+    sbom_out: &Path,
+    extra: SolveExtraOut<'_>,
 ) -> Result<StackLock> {
     let policy: Policy = load_json_file(policy_path)?;
     let all = parse_easyconfig_tree(easyconfigs_root).map_err(|e| anyhow::anyhow!(e))?;
@@ -212,11 +305,8 @@ pub fn solve_from_easyconfigs_with_baseline_version(
 
     let baseline = if let Some(base_root) = baseline_easyconfigs {
         let base_all = parse_easyconfig_tree(base_root).map_err(|e| anyhow::anyhow!(e))?;
-        let base_cands = filter_baseline_candidates(
-            &base_all,
-            &policy.toolchain,
-            baseline_toolchain_version,
-        )?;
+        let base_cands =
+            filter_baseline_candidates(&base_all, &policy.toolchain, baseline_toolchain_version)?;
         if base_cands.is_empty() {
             bail!(
                 "no baseline easyconfigs for toolchain family {} after generation filter under {}",
@@ -238,10 +328,14 @@ pub fn solve_from_easyconfigs_with_baseline_version(
 
     let lock = select_stack(&universe, &policy, baseline.as_ref()).map_err(|e| anyhow::anyhow!(e))?;
     validate_lock_deps(&lock, &universe.candidates).map_err(|e| anyhow::anyhow!(e))?;
-    write_json_pretty(lock_out, &lock)?;
-    let dep_map = dep_map_from_universe(&lock, &universe);
-    let sbom = lock_to_cyclonedx_with_deps(&lock, Some(&dep_map));
-    write_json_pretty(sbom_out, &sbom)?;
+    write_lock_sbom_and_extras(
+        &lock,
+        baseline.as_ref(),
+        &universe,
+        lock_out,
+        sbom_out,
+        extra,
+    )?;
     Ok(lock)
 }
 
@@ -253,6 +347,25 @@ pub fn solve_to_files(
     lock_out: &Path,
     sbom_out: &Path,
 ) -> Result<StackLock> {
+    solve_to_files_with_extras(
+        universe_path,
+        policy_path,
+        baseline_path,
+        lock_out,
+        sbom_out,
+        SolveExtraOut::default(),
+    )
+}
+
+/// Like [`solve_to_files`], optionally writing build-list and stack-diff files.
+pub fn solve_to_files_with_extras(
+    universe_path: &Path,
+    policy_path: &Path,
+    baseline_path: Option<&Path>,
+    lock_out: &Path,
+    sbom_out: &Path,
+    extra: SolveExtraOut<'_>,
+) -> Result<StackLock> {
     let universe: Universe = load_json_file(universe_path)?;
     let policy: Policy = load_json_file(policy_path)?;
     let baseline = match baseline_path {
@@ -262,10 +375,14 @@ pub fn solve_to_files(
     let lock =
         select_stack(&universe, &policy, baseline.as_ref()).map_err(|e| anyhow::anyhow!(e))?;
     validate_lock_deps(&lock, &universe.candidates).map_err(|e| anyhow::anyhow!(e))?;
-    write_json_pretty(lock_out, &lock)?;
-    let dep_map = dep_map_from_universe(&lock, &universe);
-    let sbom = lock_to_cyclonedx_with_deps(&lock, Some(&dep_map));
-    write_json_pretty(sbom_out, &sbom)?;
+    write_lock_sbom_and_extras(
+        &lock,
+        baseline.as_ref(),
+        &universe,
+        lock_out,
+        sbom_out,
+        extra,
+    )?;
     Ok(lock)
 }
 
