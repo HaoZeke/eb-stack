@@ -1,0 +1,6 @@
+name = 'OpenMPI'
+version = '4.1.5'
+toolchain = {'name': 'foss', 'version': '2025a'}
+# comment ignored
+dependencies = [
+]

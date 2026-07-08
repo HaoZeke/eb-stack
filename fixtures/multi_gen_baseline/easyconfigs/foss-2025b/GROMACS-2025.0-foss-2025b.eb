@@ -1,0 +1,10 @@
+name = 'GROMACS'
+version = '2025.0'
+toolchain = {'name': 'foss', 'version': '2025b'}
+homepage = 'https://www.gromacs.org'
+description = "GROMACS molecular dynamics (fixture for stack upgrade)."
+dependencies = [
+    ('OpenBLAS', '>=0.3.27'),
+    ('OpenMPI', '>=4.1.6'),
+    ('FFTW', '>=3.3.10'),
+]

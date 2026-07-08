@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use eb_stack::{
     emit_next_generation_from_path, load_json_file, lock_to_cyclonedx, parse_easyconfig_tree,
-    solve_from_easyconfigs, solve_to_files, EmitParams, StackLock, Toolchain,
+    solve_from_easyconfigs_with_baseline_version, solve_to_files, EmitParams, StackLock, Toolchain,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -33,6 +33,11 @@ enum Cmd {
         /// Optional second tree (or same tree) used to build the baseline lock for upgrades
         #[arg(long)]
         baseline_easyconfigs: Option<PathBuf>,
+        /// Baseline toolchain generation (version only, e.g. 2025a) when the baseline
+        /// tree has multiple generations of the policy toolchain family. Default: nearest
+        /// lower generation than the policy target (see version ordering).
+        #[arg(long, value_name = "VERSION")]
+        baseline_toolchain_version: Option<String>,
         #[arg(long, default_value = "stack.lock.json")]
         lock_out: PathBuf,
         #[arg(long, default_value = "stack.cdx.json")]
@@ -124,14 +129,16 @@ fn main() -> Result<()> {
             easyconfigs,
             policy,
             baseline_easyconfigs,
+            baseline_toolchain_version,
             lock_out,
             sbom_out,
         } => {
             let baseline = baseline_easyconfigs.unwrap_or_else(|| easyconfigs.clone());
-            let lock = solve_from_easyconfigs(
+            let lock = solve_from_easyconfigs_with_baseline_version(
                 &easyconfigs,
                 &policy,
                 Some(&baseline),
+                baseline_toolchain_version.as_deref(),
                 &lock_out,
                 &sbom_out,
             )?;
