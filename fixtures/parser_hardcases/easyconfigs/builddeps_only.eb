@@ -1,0 +1,14 @@
+# builddependencies distinct from runtime dependencies.
+easyblock = 'ConfigureMake'
+name = 'BuildDepOnly'
+version = '1.0'
+homepage = 'https://example.invalid/builddep-only'
+description = "Fixture with runtime and build dependencies."
+toolchain = {'name': 'foss', 'version': '2025b'}
+dependencies = [
+    ('OpenBLAS', '>=0.3.23'),
+]
+builddependencies = [
+    ('FFTW', '>=3.3.10'),
+    ('CMake', '3.27.0', '', SYSTEM),
+]

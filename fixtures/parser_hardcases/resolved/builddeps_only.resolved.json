@@ -1,0 +1,36 @@
+{
+  "name": "BuildDepOnly",
+  "version": "1.0",
+  "versionsuffix": null,
+  "toolchain": {
+    "name": "foss",
+    "version": "2025b"
+  },
+  "dependencies": [
+    {
+      "name": "OpenBLAS",
+      "version": ">=0.3.23",
+      "versionsuffix": null,
+      "toolchain": null
+    }
+  ],
+  "builddependencies": [
+    {
+      "name": "FFTW",
+      "version": ">=3.3.10",
+      "versionsuffix": null,
+      "toolchain": null
+    },
+    {
+      "name": "CMake",
+      "version": "3.27.0",
+      "versionsuffix": "",
+      "toolchain": {
+        "name": "system",
+        "version": "system"
+      }
+    }
+  ],
+  "exts_list": [],
+  "source_easyconfig": "builddeps_only.eb"
+}

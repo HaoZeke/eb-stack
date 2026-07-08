@@ -1,0 +1,16 @@
+# Templates in dependency versions and exts_list; standard foss toolchain.
+easyblock = 'ConfigureMake'
+name = 'TemplatedApp'
+version = '3.4.5'
+homepage = 'https://example.invalid/templated-app'
+description = "Fixture for %(version)s / %(version_major_minor)s template resolution."
+toolchain = {'name': 'foss', 'version': '2025b'}
+dependencies = [
+    ('DepExact', '%(version)s'),
+    ('DepMinor', '%(version_major_minor)s'),
+    ('DepMajor', '%(version_major)s.0'),
+]
+exts_list = [
+    ('ext_a', '0.1'),
+    ('ext_b', '%(version_major)s.0'),
+]

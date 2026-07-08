@@ -1,0 +1,20 @@
+{
+  "name": "SystemTool",
+  "version": "1.0",
+  "versionsuffix": null,
+  "toolchain": {
+    "name": "system",
+    "version": "system"
+  },
+  "dependencies": [
+    {
+      "name": "binutils",
+      "version": "2.40",
+      "versionsuffix": null,
+      "toolchain": null
+    }
+  ],
+  "builddependencies": [],
+  "exts_list": [],
+  "source_easyconfig": "system_toolchain.eb"
+}

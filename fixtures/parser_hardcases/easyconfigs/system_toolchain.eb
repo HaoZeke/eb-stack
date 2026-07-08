@@ -1,0 +1,10 @@
+# SYSTEM toolchain constant (resolves to name/version system).
+easyblock = 'ConfigureMake'
+name = 'SystemTool'
+version = '1.0'
+homepage = 'https://example.invalid/system-tool'
+description = "Fixture for toolchain = SYSTEM."
+toolchain = SYSTEM
+dependencies = [
+    ('binutils', '2.40'),
+]

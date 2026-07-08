@@ -1,0 +1,41 @@
+{
+  "name": "TemplatedApp",
+  "version": "3.4.5",
+  "versionsuffix": null,
+  "toolchain": {
+    "name": "foss",
+    "version": "2025b"
+  },
+  "dependencies": [
+    {
+      "name": "DepExact",
+      "version": "3.4.5",
+      "versionsuffix": null,
+      "toolchain": null
+    },
+    {
+      "name": "DepMinor",
+      "version": "3.4",
+      "versionsuffix": null,
+      "toolchain": null
+    },
+    {
+      "name": "DepMajor",
+      "version": "3.0",
+      "versionsuffix": null,
+      "toolchain": null
+    }
+  ],
+  "builddependencies": [],
+  "exts_list": [
+    {
+      "name": "ext_a",
+      "version": "0.1"
+    },
+    {
+      "name": "ext_b",
+      "version": "3.0"
+    }
+  ],
+  "source_easyconfig": "templates_version.eb"
+}

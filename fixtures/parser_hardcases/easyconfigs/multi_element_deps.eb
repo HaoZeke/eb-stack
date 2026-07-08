@@ -1,0 +1,22 @@
+# Multi-element dependency tuples: versionsuffix and/or per-dep toolchain.
+easyblock = 'ConfigureMake'
+name = 'MultiDepApp'
+version = '1.2.3'
+versionsuffix = '-extra'
+homepage = 'https://example.invalid/multi-dep'
+description = "Fixture for 3- and 4-element dependency tuples."
+toolchain = {'name': 'foss', 'version': '2025b'}
+local_depver = '9.9.9'
+dependencies = [
+    ('DepA', '%(version)s'),
+    ('DepB', '%(version_major_minor)s', versionsuffix),
+    ('DepC', local_depver, '', ('gompi', '2025b')),
+    ('DepD', '1.0', '', SYSTEM),
+]
+builddependencies = [
+    ('BuildTool', '1.0', '', SYSTEM),
+]
+exts_list = [
+    ('extpkg', '0.1'),
+    ('extpkg2', '%(version_major)s.0'),
+]

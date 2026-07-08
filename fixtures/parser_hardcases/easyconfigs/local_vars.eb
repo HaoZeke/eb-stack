@@ -1,0 +1,13 @@
+# local_* variables referenced from dependency tuples.
+easyblock = 'ConfigureMake'
+name = 'LocalVarsApp'
+version = '2.0.0'
+homepage = 'https://example.invalid/local-vars'
+description = "Fixture for local_* variable resolution in dependencies."
+toolchain = {'name': 'foss', 'version': '2025b'}
+local_blas_ver = '0.3.27'
+local_mpi_ver = '5.0.3'
+dependencies = [
+    ('OpenBLAS', local_blas_ver),
+    ('OpenMPI', local_mpi_ver),
+]

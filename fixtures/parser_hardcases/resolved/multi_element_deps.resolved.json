@@ -1,0 +1,63 @@
+{
+  "name": "MultiDepApp",
+  "version": "1.2.3",
+  "versionsuffix": "-extra",
+  "toolchain": {
+    "name": "foss",
+    "version": "2025b"
+  },
+  "dependencies": [
+    {
+      "name": "DepA",
+      "version": "1.2.3",
+      "versionsuffix": null,
+      "toolchain": null
+    },
+    {
+      "name": "DepB",
+      "version": "1.2",
+      "versionsuffix": "-extra",
+      "toolchain": null
+    },
+    {
+      "name": "DepC",
+      "version": "9.9.9",
+      "versionsuffix": "",
+      "toolchain": {
+        "name": "gompi",
+        "version": "2025b"
+      }
+    },
+    {
+      "name": "DepD",
+      "version": "1.0",
+      "versionsuffix": "",
+      "toolchain": {
+        "name": "system",
+        "version": "system"
+      }
+    }
+  ],
+  "builddependencies": [
+    {
+      "name": "BuildTool",
+      "version": "1.0",
+      "versionsuffix": "",
+      "toolchain": {
+        "name": "system",
+        "version": "system"
+      }
+    }
+  ],
+  "exts_list": [
+    {
+      "name": "extpkg",
+      "version": "0.1"
+    },
+    {
+      "name": "extpkg2",
+      "version": "1.0"
+    }
+  ],
+  "source_easyconfig": "multi_element_deps.eb"
+}

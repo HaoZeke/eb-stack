@@ -16,7 +16,8 @@ pub use eb_emit::{
 };
 pub use eb_parse::{
     filter_toolchain, lock_from_candidates, parse_easyconfig_file, parse_easyconfig_tree,
-    validate_lock_deps,
+    resolve_easyconfig_file, resolve_easyconfig_str, validate_lock_deps, version_field_to_req,
+    ResolvedDep, ResolvedEasyconfig, ResolvedExt,
 };
 pub use report::{
     classify_stack_diff, format_build_list, format_stack_diff_markdown, ordered_build_paths,

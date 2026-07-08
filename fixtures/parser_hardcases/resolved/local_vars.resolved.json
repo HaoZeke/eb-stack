@@ -1,0 +1,26 @@
+{
+  "name": "LocalVarsApp",
+  "version": "2.0.0",
+  "versionsuffix": null,
+  "toolchain": {
+    "name": "foss",
+    "version": "2025b"
+  },
+  "dependencies": [
+    {
+      "name": "OpenBLAS",
+      "version": "0.3.27",
+      "versionsuffix": null,
+      "toolchain": null
+    },
+    {
+      "name": "OpenMPI",
+      "version": "5.0.3",
+      "versionsuffix": null,
+      "toolchain": null
+    }
+  ],
+  "builddependencies": [],
+  "exts_list": [],
+  "source_easyconfig": "local_vars.eb"
+}

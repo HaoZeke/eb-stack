@@ -40,3 +40,24 @@ The same flags work on `solve-json` (baseline via `--baseline` lock JSON).
 
 `prefer_newer` co-selects GROMACS 2025.0 with OpenBLAS 0.3.27, OpenMPI 5.0.3,
 FFTW 3.3.10. Design notes (if any) live in a separate notes vault, not this repo.
+
+## Easyconfig parsing
+
+`.eb` files are a restricted Python DSL. The crate evaluates that subset (including
+`local_*` names, the `SYSTEM` toolchain constant, multi-element dependency tuples,
+`builddependencies`, and `exts_list`) and resolves EasyBuild-style `%(…)s` templates
+derived from name/version/toolchain. Solver code still consumes `Candidate` /
+`DepReq`; full resolution is available as `ResolvedEasyconfig`.
+
+Hard-case samples and EasyBuild-captured goldens live under
+`fixtures/parser_hardcases/`. Refresh goldens (requires `~/.venvs/easybuild`):
+
+```bash
+source ~/.venvs/easybuild/bin/activate
+python scripts/resolve_easyconfig_eb.py \
+  fixtures/parser_hardcases/easyconfigs/*.eb \
+  -o fixtures/parser_hardcases/resolved/
+```
+
+`cargo test` does not invoke EasyBuild; it asserts the crate parser against the
+checked-in resolved JSON.
