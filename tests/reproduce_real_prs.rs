@@ -232,10 +232,11 @@ fn reproduces_mdtraj_1_10_3_foss_2023b_to_2024a() {
 
 #[test]
 fn reproduces_mdtraj_1_10_3_foss_2023b_to_2024a_auto() {
-    // networkx / PyTables are `# optional` in the source: policy preserves those
-    // source pins (AC: optional not bumped). Maintainer recipe bumps them —
-    // residual is intentional. Hand-map test above still proves full PR when
-    // versions are supplied explicitly.
+    // networkx / PyTables are `# optional` in the source: optional marks a dep
+    // optional to *include*, not frozen, so auto-resolve bumps them to the
+    // generation version like any other dep, matching the maintainer PR
+    // (networkx 3.4.2, PyTables 3.10.2). The `# optional` comment itself is
+    // preserved verbatim; only the version token changes.
     let source = fixture("mdtraj/MDTraj-1.10.3-foss-2023b.eb");
     let empty = HashMap::new();
     let result = emit_next_generation_auto_from_path(
@@ -261,19 +262,19 @@ fn reproduces_mdtraj_1_10_3_foss_2023b_to_2024a_auto() {
             result.text
         );
     }
-    // Optional: keep source versions, do not bump to maintainer 3.4.2 / 3.10.2.
-    assert!(result.text.contains("('networkx', '3.2.1')"));
-    assert!(result.text.contains("('PyTables', '3.9.2')"));
-    assert!(!result.text.contains("('networkx', '3.4.2')"));
-    assert!(!result.text.contains("('PyTables', '3.10.2')"));
+    // Optional deps bump to the generation version, matching the maintainer PR.
     assert!(
-        result
-            .warnings
-            .iter()
-            .any(|w| w.contains("networkx") && w.contains("optional")),
-        "warnings: {:?}",
-        result.warnings
+        result.text.contains("('networkx', '3.4.2'),  # optional"),
+        "networkx must bump to 3.4.2 with comment preserved, got:\n{}",
+        result.text
     );
+    assert!(
+        result.text.contains("('PyTables', '3.10.2'),  # optional"),
+        "PyTables must bump to 3.10.2 with comment preserved, got:\n{}",
+        result.text
+    );
+    assert!(!result.text.contains("('networkx', '3.2.1')"));
+    assert!(!result.text.contains("('PyTables', '3.9.2')"));
 }
 
 /// Fiona-1.10.1: foss/2023b -> foss/2024a.
