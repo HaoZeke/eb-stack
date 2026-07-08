@@ -57,6 +57,12 @@ pub struct RequireUpgrade {
 pub struct Policy {
     pub toolchain: Toolchain,
     pub roots: Vec<String>,
+    /// Declared priority order over application roots for multi-root
+    /// lexicographic newest selection. When omitted or empty, defaults to
+    /// [`Self::roots`] list order. Explicit priority is independent of
+    /// reordering `roots` in the policy JSON.
+    #[serde(default)]
+    pub root_priority: Option<Vec<String>>,
     #[serde(default)]
     pub pins: Vec<Pin>,
     #[serde(default)]
@@ -69,6 +75,26 @@ pub struct Policy {
 
 fn default_objective() -> String {
     "prefer_newer".into()
+}
+
+impl Policy {
+    /// Effective root priority: explicit `root_priority` when non-empty,
+    /// otherwise `roots` order. Any root missing from the priority list is
+    /// appended in `roots` order so every application root is optimized.
+    pub fn effective_root_priority(&self) -> Vec<String> {
+        let mut order: Vec<String> = match &self.root_priority {
+            Some(p) if !p.is_empty() => p.clone(),
+            _ => self.roots.clone(),
+        };
+        // Only roots participate in the objective.
+        order.retain(|r| self.roots.iter().any(|root| root == r));
+        for r in &self.roots {
+            if !order.iter().any(|x| x == r) {
+                order.push(r.clone());
+            }
+        }
+        order
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,6 +1,10 @@
 //! EasyBuild candidate graph as a resolvo DependencyProvider (CDCL SAT).
+//!
+//! Feasibility is decided by resolvo. Multi-root *optimization* (priority-lex
+//! newest jointly consistent stack) lives in [`solve_with_resolvo`], which
+//! constrains and re-solves rather than returning the first SAT assignment.
 
-use crate::domain::{Candidate, Policy, StackLock};
+use crate::domain::{Candidate, Pin, Policy, StackLock};
 use crate::version::{cmp_version, matches_req};
 use resolvo::utils::Pool;
 use resolvo::{
@@ -349,8 +353,8 @@ impl DependencyProvider for EbProvider {
     }
 }
 
-/// Solve using resolvo CDCL SAT.
-pub fn solve_with_resolvo(
+/// One resolvo CDCL SAT solve for the given policy (feasibility only).
+fn solve_feasibility(
     candidates: &[Candidate],
     policy: &Policy,
     baseline: Option<&StackLock>,
@@ -381,4 +385,109 @@ pub fn solve_with_resolvo(
             Err(format!("solver cancelled: {reason:?}"))
         }
     }
+}
+
+/// Candidate versions for a package name under the policy toolchain, newest first.
+/// Order is deterministic (sorted by [`cmp_version`]), independent of HashMap iteration.
+fn versions_newest_first(candidates: &[Candidate], policy: &Policy, name: &str) -> Vec<String> {
+    let mut versions: Vec<String> = candidates
+        .iter()
+        .filter(|c| {
+            c.name == name
+                && c.toolchain.name == policy.toolchain.name
+                && c.toolchain.version == policy.toolchain.version
+                && !policy
+                    .forbid
+                    .iter()
+                    .any(|f| f == &c.easyconfig_path || f == &c.name)
+        })
+        .map(|c| c.version.clone())
+        .collect();
+    versions.sort_by(|a, b| cmp_version(b, a));
+    versions.dedup();
+    // Honour existing policy pins for this package when listing trial versions.
+    if let Some(pin) = policy.pins.iter().find(|p| p.name == name) {
+        versions.retain(|v| matches_req(v, &pin.version_req));
+    }
+    versions
+}
+
+fn policy_with_root_version_pins(policy: &Policy, root_pins: &[(String, String)]) -> Policy {
+    let mut p = policy.clone();
+    for (name, ver) in root_pins {
+        // Replace any existing pin for this root with the exact trial version.
+        p.pins.retain(|pin| pin.name != *name);
+        p.pins.push(Pin {
+            name: name.clone(),
+            version_req: format!("=={ver}"),
+        });
+    }
+    p
+}
+
+/// Solve using resolvo CDCL SAT as the feasibility core, then optimize over
+/// satisfying assignments: lexicographically maximize each application root's
+/// version in declared [`Policy::effective_root_priority`] order.
+///
+/// The outcome depends only on the policy (including priority) and the
+/// candidate set — not on incidental list order of non-priority fields or
+/// HashMap iteration order inside the provider.
+pub fn solve_with_resolvo(
+    candidates: &[Candidate],
+    policy: &Policy,
+    baseline: Option<&StackLock>,
+) -> Result<Vec<Candidate>, String> {
+    let priority = policy.effective_root_priority();
+    if priority.is_empty() {
+        return Err("unsatisfiable stack: policy has no roots".into());
+    }
+
+    // Sequential lex maximization: for each root in priority order, pin the
+    // newest version that remains jointly feasible with already-chosen higher
+    // priority roots (and all other roots still required without a version pin).
+    let mut chosen_root_versions: Vec<(String, String)> = Vec::new();
+
+    for root in &priority {
+        let versions = versions_newest_first(candidates, policy, root);
+        if versions.is_empty() {
+            return Err(format!("no candidates for root package {root}"));
+        }
+
+        let mut found: Option<String> = None;
+        let mut last_err = String::new();
+        for ver in &versions {
+            let mut trial_pins = chosen_root_versions.clone();
+            trial_pins.push((root.clone(), ver.clone()));
+            let trial_policy = policy_with_root_version_pins(policy, &trial_pins);
+            match solve_feasibility(candidates, &trial_policy, baseline) {
+                Ok(_) => {
+                    found = Some(ver.clone());
+                    break;
+                }
+                Err(e) => {
+                    last_err = e;
+                }
+            }
+        }
+
+        match found {
+            Some(ver) => chosen_root_versions.push((root.clone(), ver)),
+            None => {
+                return Err(if last_err.is_empty() {
+                    format!(
+                        "unsatisfiable stack: no jointly feasible version for root {root} \
+                         under priority {:?}",
+                        priority
+                    )
+                } else {
+                    last_err
+                });
+            }
+        }
+    }
+
+    // Final solve with all priority-optimal root versions pinned; co-selected
+    // non-root packages still prefer newer via resolvo's sort_candidates.
+    let final_policy = policy_with_root_version_pins(policy, &chosen_root_versions);
+    solve_feasibility(candidates, &final_policy, baseline)
 }
