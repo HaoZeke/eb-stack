@@ -1,0 +1,129 @@
+#+TITLE: From recipe to installed stack
+#+OPTIONS: toc:t num:nil
+
+This page teaches the whole lifecycle a software stack goes through, and the one
+distinction people trip on most: *resolving* a stack is not the same as
+*building* it. Read this before you trust "eb-stack says the stack is ready."
+
+* The problem eb-stack exists for
+
+A site rebuilds its whole software stack once a year onto a new compiler
+generation - on the order of hundreds of packages, each installed and optimised
+per CPU/GPU architecture. The mechanical part of that work is copying last
+year's recipe for a package, renaming it, and adjusting the toolchain and every
+dependency version to the new generation. Done by hand across the stack this is
+weeks of tedium. eb-stack does the mechanical part; a human (or an agent) does
+the small judgment part; a build pipeline does the installs.
+
+* Vocabulary (the four things)
+
+- *Easyconfig* (a ~.eb~ file): a *recipe*. Text that tells EasyBuild how to build
+  one package - its name, version, sources and their checksums, patches, its
+  ~dependencies~ and ~builddependencies~, the build steps, and the sanity checks
+  that must pass after install. A recipe is a plan, not a build.
+- *Toolchain generation* (for example ~foss-2024a~): a dated set of a compiler
+  plus MPI/BLAS/FFT libraries that a batch of packages is built against. Its
+  *sub-toolchains* form a hierarchy: ~SYSTEM~ then ~GCCcore-13.3.0~ then
+  ~GCC-13.3.0~ then ~gompi-2024a~/~gfbf-2024a~ then ~foss-2024a~. A package's
+  dependencies live at *different levels* of that hierarchy (Python at
+  ~GCCcore~, SciPy-bundle at ~gfbf~, MPI wrappers at ~gompi~), which is why
+  "find the 2024a version of Python" is not a literal string match.
+- *The robot tree*: the directory of all easyconfigs EasyBuild draws from
+  (upstream ~easybuild-easyconfigs~, plus a site overlay of custom recipes).
+- *The build list*: the ordered set of easyconfigs to (re)install this
+  generation, from toolchains up to applications. The pipeline consumes it.
+
+* The two levels of "done"
+
+This is the crux. An easyconfig can be at one of two very different states, and
+eb-stack only takes you to the first.
+
+** Level 1 - the stack RESOLVES (what eb-stack proves)
+
+Resolving means the *dependency graph is complete and self-consistent*: every
+dependency each recipe names exists as another recipe, at a version that belongs
+to the target generation. eb-stack's solver, and ~eb-stack check-recipe~, prove
+this - "0 missing, all deps found." It is the paper check: every reference points
+at something real, at the right generation. It is analogous to confirming a
+Makefile's targets all have rules, *without running make*.
+
+Resolving catches: a missing dependency, a wrong-generation version, an
+inconsistent stack (two packages needing incompatible versions of a shared lib).
+
+** Level 2 - the stack BUILDS (what only EasyBuild proves)
+
+Building means EasyBuild actually *downloads the sources, verifies the checksums,
+applies the patches, runs configure/compile/install, and checks the sanity
+tests pass*. This is the empirical proof that a recipe is *correct*, not merely
+*consistent*. You get it by running ~eb <recipe> --robot~.
+
+Building catches everything resolving cannot: a wrong checksum, a source URL that
+404s, the wrong easyblock (build machinery), a missing build tool, a compile
+error, a failing sanity check.
+
+** Why the gap bites hardest on greenfield recipes
+
+When eb-stack bumps a recipe that *already exists* for a nearby generation, it
+copies a known-good build and changes versions - low risk. When a dependency has
+*no prior recipe to copy from*, the recipe must be authored from scratch
+("greenfield"), and the author has to *guess* the parts a dependency graph cannot
+supply: the source URL and download filename, the sha256 checksum, the easyblock,
+the build options, and the sanity paths. Any of those can be wrong, and only a
+real build reveals it. So a freshly authored stack that *resolves cleanly* is a
+complete set of *plausible hypotheses* - not yet a set of *proven* recipes.
+
+* Who does what
+
+#+begin_src dot :file ../images/lifecycle.svg :exports results
+digraph L {
+    rankdir=LR;
+    node [shape=box, style="filled,rounded", fillcolor="white", fontname="Jost", fontsize=12];
+    edge [fontname="Jost", fontsize=11, color="#004D40"];
+    graph [fontname="Jost"];
+
+    src [label="last generation's\nrecipes + build list"];
+    ebs [label="eb-stack\nbump + solve + check-recipe\n(RESOLVE)", fillcolor="#F1DB4B"];
+    repo [label="easyconfigs fork\nnew recipes, canonical layout\n(PR)", fillcolor="white"];
+    eb [label="EasyBuild\neb --robot\n(BUILD + install)", fillcolor="#FF655D", fontcolor="white"];
+    jenkins [label="pipeline (Jenkins)\ninstall the build list\nper architecture", fillcolor="#004D40", fontcolor="white"];
+
+    src -> ebs -> repo -> eb -> jenkins;
+    eb -> repo [label="fix recipe\non build failure", style=dashed, constraint=false];
+}
+#+end_src
+
+- *eb-stack* reads recipes and the robot tree, decides a consistent selection,
+  and writes recipes/lock/reports back out. It never builds software and never
+  shells out to EasyBuild. Its output is *resolved* recipes.
+- *The easyconfigs fork* is where the generated recipes live and are reviewed as
+  a pull request. Recipes belong here, not inside eb-stack (eb-stack is the
+  generator; its own test fixtures are not the deliverable).
+- *EasyBuild* builds and installs each recipe (~eb --robot~), which is where a
+  greenfield recipe's guesses get tested and fixed.
+- *The pipeline* (Jenkins at many sites) installs the whole build list per
+  architecture from the reviewed recipes.
+
+* The migration lifecycle, end to end
+
+1. *Bump* each recipe onto the new generation with eb-stack (deps auto-resolved
+   from the robot tree). See [[file:../howto/bump-recipe.org][Bump a recipe]].
+2. *Close the graph*: ~check-recipe~ until every dependency and build-dependency
+   resolves for the target generation; author any greenfield companion the stack
+   needs but the robot tree lacks.
+3. *Resolve the stack*: ~solve~ for a jointly consistent selection and emit the
+   build list and a review diff.
+4. *Build*: ~eb --robot~ the closure. Fix each recipe that fails (checksum,
+   easyblock, build step) and re-run. This is the step that promotes the stack
+   from "resolves" to "installs."
+5. *Review + install*: open the recipes as a pull request into the easyconfigs
+   repo; the pipeline installs the reviewed build list per architecture.
+
+* What to remember
+
+- "eb-stack says the closure resolves" means the *plan* is complete and
+  consistent, not that the software *builds*. Never report a resolved stack as
+  installable.
+- The honest boundary is mechanical vs judgment: eb-stack does the mechanical
+  majority correctly and refuses to guess (it fails loudly, never silently
+  wrong); the greenfield recipes and any real build failure are the judgment
+  work a human or agent finishes. See [[file:fidelity.org][Reproduction fidelity and limitations]].

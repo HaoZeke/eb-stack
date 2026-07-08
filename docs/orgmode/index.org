@@ -36,6 +36,7 @@
    :maxdepth: 1
    :caption: Explanation
 
+   explanation/lifecycle
    explanation/architecture
    explanation/optimization-model
    explanation/parser-approach
