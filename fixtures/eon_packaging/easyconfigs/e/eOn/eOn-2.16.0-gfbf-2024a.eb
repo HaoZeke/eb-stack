@@ -26,7 +26,11 @@ sources = ['v%(version)s.tar.gz']
 checksums = ['bdb2edd169fb7162bbddbc2742db3215ccbf58206923782c98e0c549fd0614dd']
 
 builddependencies = [
-    ('Meson', '1.4.0'),
+    # eOn meson.build requires meson_version >= 1.8.0; 2024a tree only has
+    # Meson-1.4.0 on GCCcore-13.3.0 (1.8.2 exists only on 14.3.0+). Explicit
+    # GCCcore pin so robot cannot silently pick Meson-1.8.2-GCCcore-14.3.0.
+    # Companion: Meson-1.8.2-GCCcore-13.3.0.eb (+ binutils workaround patch).
+    ('Meson', '1.8.2', '', ('GCCcore', '13.3.0')),
     ('Ninja', '1.12.1'),
     ('pkgconf', '2.2.0'),
     ('CMake', '3.29.3'),
