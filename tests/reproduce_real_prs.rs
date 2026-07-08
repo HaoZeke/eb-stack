@@ -93,6 +93,7 @@ fn reproduces_gromacs_2024_4_foss_2023b_to_2024a() {
     let params = EmitParams {
         toolchain: foss("2024a"),
         version: None,
+        source_checksum: None,
         dep_versions: deps(&[
             ("CMake", "3.29.3"),
             ("scikit-build-core", "0.11.1"),
@@ -122,6 +123,7 @@ fn reproduces_scafacos_1_0_4_foss_2023b_to_2024a() {
     let params = EmitParams {
         toolchain: foss("2024a"),
         version: None,
+        source_checksum: None,
         dep_versions: deps(&[
             ("Autotools", "20231222"),
             ("pkgconf", "2.2.0"),
@@ -142,6 +144,7 @@ fn reproduces_mdtraj_1_10_3_foss_2023b_to_2024a() {
     let params = EmitParams {
         toolchain: foss("2024a"),
         version: None,
+        source_checksum: None,
         dep_versions: deps(&[
             ("Python", "3.12.3"),
             ("SciPy-bundle", "2024.05"),
@@ -164,6 +167,7 @@ fn reproduces_fiona_1_10_1_foss_2023b_to_2024a() {
     let params = EmitParams {
         toolchain: foss("2024a"),
         version: None,
+        source_checksum: None,
         dep_versions: deps(&[("Python", "3.12.3"), ("GDAL", "3.10.0")]),
     };
     assert_reproduces(&source, &target, &params, &[]);
@@ -179,6 +183,7 @@ fn reproduces_pulp_2_8_0_foss_2023b_to_2024a() {
     let params = EmitParams {
         toolchain: foss("2024a"),
         version: None,
+        source_checksum: None,
         dep_versions: deps(&[("Python", "3.12.3"), ("Cbc", "2.10.12")]),
     };
     assert_reproduces(&source, &target, &params, &[]);
@@ -194,6 +199,7 @@ fn reproduces_numba_0_60_0_foss_2023b_to_2024a() {
     let params = EmitParams {
         toolchain: foss("2024a"),
         version: None,
+        source_checksum: None,
         dep_versions: deps(&[("Python", "3.12.3"), ("SciPy-bundle", "2024.05")]),
     };
     assert_reproduces(&source, &target, &params, &[]);
