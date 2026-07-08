@@ -6,8 +6,8 @@ use eb_stack::{
     check_recipe_deps, emit_next_generation_auto_from_path_with_opts,
     emit_next_generation_from_path, load_json_file, lock_to_cyclonedx, packaging_gate,
     parse_easyconfig_tree, parse_easyconfig_trees, resolve_easyconfig_file,
-    solve_from_easyconfigs_with_baseline_version_and_extras, solve_to_files_with_extras,
-    AutoResolveOpts, EmitParams, SolveExtraOut, StackLock, Toolchain,
+    scaffold_missing_companions, solve_from_easyconfigs_with_baseline_version_and_extras,
+    solve_to_files_with_extras, AutoResolveOpts, EmitParams, SolveExtraOut, StackLock, Toolchain,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -69,6 +69,10 @@ enum Cmd {
     /// Cross-toolchain deps (e.g. `quill` on GCCcore while the recipe is `gfbf`)
     /// are matched by identity, not policy-toolchain filter. Exit 1 if any dep
     /// is missing or packaging gates fail.
+    ///
+    /// With `--scaffold-missing DIR`, write draft companion `.eb` files for every
+    /// missing dep under `DIR` (letter/name/ layout) so the overlay can be filled
+    /// and re-checked — the packaging prep loop for stacks like eOn.
     CheckRecipe {
         /// Recipe `.eb` to validate
         #[arg(long)]
@@ -82,6 +86,9 @@ enum Cmd {
         /// Skip the missing-dep robot check (only packaging metadata gates)
         #[arg(long)]
         metadata_only: bool,
+        /// Write scaffold companion easyconfigs for missing deps into this tree
+        #[arg(long = "scaffold-missing", value_name = "DIR")]
+        scaffold_missing: Option<PathBuf>,
     },
     /// Legacy: solve from pre-baked universe JSON (still tested).
     SolveJson {
@@ -277,6 +284,7 @@ fn main() -> Result<()> {
             easyconfigs,
             require_configopts,
             metadata_only,
+            scaffold_missing,
         } => {
             let resolved =
                 resolve_easyconfig_file(&recipe).map_err(|e| anyhow::anyhow!(e))?;
@@ -300,17 +308,48 @@ fn main() -> Result<()> {
                         eprintln!("packaging-gate: {e}");
                     }
                 }
-                if !check.ok() || gate.is_err() {
+                if !check.ok() {
                     for m in &check.missing {
                         eprintln!(
                             "missing-dep [{}] {} {}: {}",
                             m.role, m.name, m.version, m.reason
                         );
                     }
+                    if let Some(dir) = scaffold_missing.as_ref() {
+                        let written = scaffold_missing_companions(
+                            &check.missing,
+                            dir,
+                            &resolved.toolchain,
+                        )
+                        .map_err(|e| anyhow::anyhow!(e))?;
+                        for s in &written {
+                            if s.skipped_existing {
+                                eprintln!(
+                                    "scaffold-skip: {} (exists)",
+                                    s.path
+                                );
+                            } else {
+                                eprintln!(
+                                    "scaffold-write: {} [{}/{} {}]",
+                                    s.path, s.role, s.name, s.version
+                                );
+                            }
+                        }
+                        eprintln!(
+                            "scaffold: {} companion path(s) under {} — fill sources/checksums then re-run check-recipe",
+                            written.len(),
+                            dir.display()
+                        );
+                    }
                     bail!(
                         "check-recipe failed: {} missing dep(s), packaging_gate={}",
                         check.missing.len(),
                         gate.is_ok()
+                    );
+                }
+                if gate.is_err() {
+                    bail!(
+                        "check-recipe failed: packaging_gate failed (deps complete)"
                     );
                 }
                 eprintln!(
