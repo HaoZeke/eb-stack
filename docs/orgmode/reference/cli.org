@@ -1,0 +1,160 @@
+#+TITLE: CLI Reference
+#+OPTIONS: toc:t num:t
+
+* Top-level usage
+
+#+begin_src text
+eb-stack {solve|parse|solve-json|sbom|bump} [subcommand options]
+#+end_src
+
+Built on [[https://docs.rs/clap][clap]]'s derive API. Every subcommand accepts
+~--help~ for its own usage text; ~eb-stack --version~ prints the crate
+version.
+
+* solve
+
+Parse a tree of ~.eb~ files, solve with resolvo, write a lock and a planned
+CycloneDX SBOM. This is the primary entry point.
+
+#+begin_src text
+eb-stack solve
+  --easyconfigs PATH
+  --policy PATH
+  [--baseline-easyconfigs PATH]
+  [--baseline-toolchain-version VERSION]
+  [--lock-out PATH]              (default: stack.lock.json)
+  [--sbom-out PATH]               (default: stack.cdx.json)
+  [--build-list-out PATH]
+  [--stack-diff-out PATH]
+#+end_src
+
+- ~--easyconfigs~ :: Root directory of easyconfigs, walked recursively for
+  ~*.eb~. Required.
+- ~--policy~ :: Policy JSON path. Required. See the
+  [[file:policy.org][policy schema]].
+- ~--baseline-easyconfigs~ :: Optional second tree (or the same tree) used to
+  build the baseline lock for upgrade comparisons and ~require_upgrade~. When
+  omitted, no baseline is built and ~--stack-diff-out~ is an error.
+- ~--baseline-toolchain-version~ :: When the baseline tree contains
+  *multiple* generations of the policy's toolchain family, this pins which generation is
+  the baseline. Without it, the nearest lower generation than the policy
+  target is chosen automatically (EasyBuild-style version ordering, e.g.
+  target ~2025b~ with ~2024b~ and ~2025a~ present in the tree picks
+  ~2025a~, not ~2024b~).
+- ~--lock-out~ :: Where to write the solved lock. Default ~stack.lock.json~.
+- ~--sbom-out~ :: Where to write the planned CycloneDX SBOM. Default
+  ~stack.cdx.json~.
+- ~--build-list-out~ :: Optional plain-text build list, one selected
+  easyconfig path per line, dependencies before the packages that need them.
+- ~--stack-diff-out~ :: Optional markdown diff of the solved lock against the
+  baseline lock. Requires a baseline (see ~--baseline-easyconfigs~).
+
+* parse
+
+Parse easyconfigs and print JSON candidates. A debug / universe dump: no
+solving happens.
+
+#+begin_src text
+eb-stack parse
+  --easyconfigs PATH
+  [--toolchain-name NAME]
+  [--toolchain-version VERSION]
+#+end_src
+
+- ~--easyconfigs~ :: Root directory, walked recursively. Required.
+- ~--toolchain-name~, ~--toolchain-version~ :: Both together filter the
+  printed candidates to one toolchain generation. Either alone has no
+  filtering effect (both must be present to filter).
+
+Prints the parsed [[https://docs.rs/serde_json][serde_json]]-pretty array of
+candidates to stdout: ~name~, ~version~, ~toolchain~, optional
+~versionsuffix~, ~easyconfig_path~, ~dependencies~, ~builddependencies~.
+
+* solve-json
+
+Legacy entry point: solve from an already-built universe JSON instead of parsing
+~.eb~ files. Still exercised by the test suite; useful for driving the
+solver from hand-written or externally generated candidate data.
+
+#+begin_src text
+eb-stack solve-json
+  --universe PATH
+  --policy PATH
+  [--baseline PATH]
+  [--lock-out PATH]              (default: stack.lock.json)
+  [--sbom-out PATH]               (default: stack.cdx.json)
+  [--build-list-out PATH]
+  [--stack-diff-out PATH]
+#+end_src
+
+- ~--universe~ :: Universe JSON path (the ~parse~ output shape, wrapped with
+  a ~toolchain~ and optional ~generation_label~; see
+  [[file:formats.org][format reference]]). Required.
+- ~--policy~ :: Same policy schema as ~solve~. Required.
+- ~--baseline~ :: Optional baseline *lock* JSON (not an easyconfig tree) used
+  the same way ~--baseline-easyconfigs~ is on ~solve~.
+- Remaining flags are identical to ~solve~.
+
+* sbom
+
+Emit a CycloneDX SBOM from an already-solved lock file, without re-solving.
+
+#+begin_src text
+eb-stack sbom
+  --lock PATH
+  [--out PATH]                    (default: stack.cdx.json)
+#+end_src
+
+- ~--lock~ :: Path to a ~stack.lock.json~. Required.
+- ~--out~ :: Where to write the CycloneDX document. Default
+  ~stack.cdx.json~.
+
+This path uses lock-level co-stack edges (every package depends on every
+other co-selected package) rather than the declared per-package dependency
+edges ~solve~ / ~solve-json~ can attach when they still have the universe in
+hand. See [[file:formats.org][the SBOM format reference]].
+
+* bump
+
+Produce a next-generation easyconfig from an existing recipe. See the
+[[file:../tutorial.org][tutorial]] for a full worked example and
+[[file:../howto/bump-recipe.org][the how-to]] for override syntax.
+
+#+begin_src text
+eb-stack bump
+  --source PATH
+  --toolchain-name NAME
+  --toolchain-version VERSION
+  [--version VERSION]
+  [--dep NAME=VERSION]...
+  [--out-dir PATH]
+  [--out PATH]
+#+end_src
+
+- ~--source~ :: Source ~.eb~ file to rewrite. Required.
+- ~--toolchain-name~, ~--toolchain-version~ :: Target toolchain. Always
+  rewritten. Both required.
+- ~--version~ :: New application version. Omit to keep the source's
+  ~version = '...'~ unchanged (the common case: same release, new
+  toolchain).
+- ~--dep NAME=VERSION~ :: Dependency version override, repeatable. Applies
+  to matching tuples in both ~dependencies~ and ~builddependencies~. See
+  [[file:../howto/bump-recipe.org][operator preservation rules]].
+- ~--out-dir~ :: Output directory (created if missing); file is written
+  under the conventional
+  ~{name}-{version}-{toolchain_name}-{toolchain_version}.eb~ basename.
+  Conflicts with ~--out~.
+- ~--out~ :: Explicit output file path, any name. Conflicts with
+  ~--out-dir~. With neither flag, the file is written to the current
+  directory under the conventional basename.
+
+Every field not named above -- ~easyblock~, ~homepage~, ~description~,
+~toolchainopts~, comments, and any dependency not named in ~--dep~ -- is
+copied through byte-for-byte from the source.
+
+* Exit codes
+
+| Code | Meaning                                                          |
+|------+-------------------------------------------------------------------|
+|    0 | Success                                                          |
+|    1 | Error: parse failure, unsatisfiable policy, missing file, or rewrite failure. The message names real package/version/field data, not internal solver identifiers. |

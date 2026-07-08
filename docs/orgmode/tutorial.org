@@ -1,0 +1,164 @@
+#+TITLE: Tutorial
+#+OPTIONS: toc:nil num:nil
+
+In this tutorial you take a real GROMACS easyconfig built against
+~foss-2023b~ and bump it to the next toolchain generation, ~foss-2024a~,
+picking up newer Python, OpenBLAS, and OpenMPI along the way. Here is the end
+result: a full next-generation easyconfig, produced by one command, with
+every untouched field preserved byte-for-byte from the source.
+
+#+begin_src diff
+-toolchain = {'name': 'foss', 'version': '2023b'}
++toolchain = {'name': 'foss', 'version': '2024a'}
+ dependencies = [
+-    ('Python', '3.11.5'),
++    ('Python', '3.12.3'),
+     ('FFTW', '3.3.10'),
+-    ('OpenBLAS', '0.3.24'),
+-    ('OpenMPI', '4.1.6'),
++    ('OpenBLAS', '0.3.27'),
++    ('OpenMPI', '5.0.3'),
+ ]
+#+end_src
+
+Everything else in the file -- ~easyblock~, ~homepage~, ~description~,
+~toolchainopts~, ~source_urls~, ~sources~, ~builddependencies~,
+~moduleclass~ -- comes out identical to the source.
+
+* Install eb-stack
+
+#+begin_src bash
+git clone https://github.com/HaoZeke/eb-stack.git
+cd eb-stack
+cargo test
+cargo build --release
+# binary: target/release/eb-stack
+#+end_src
+
+The rest of this tutorial calls the binary as ~eb-stack~; put
+~target/release~ on your ~PATH~ or use the full path.
+
+* Write the source easyconfig
+
+Save the following as ~GROMACS-2024.4-foss-2023b.eb~. This is a typical
+EasyBuild recipe: an ~easyblock~, ~name~/~version~, a ~toolchain~ dict, and
+~dependencies~ / ~builddependencies~ lists of ~(Name, version)~ tuples.
+
+#+begin_src python
+easyblock = 'CMakeMake'
+
+name = 'GROMACS'
+version = '2024.4'
+
+homepage = 'https://www.gromacs.org'
+description = """GROMACS is a versatile package to perform molecular dynamics,
+i.e. simulate the Newtonian equations of motion for systems with hundreds to
+millions of particles."""
+
+toolchain = {'name': 'foss', 'version': '2023b'}
+toolchainopts = {'usempi': True}
+
+source_urls = ['https://ftp.gromacs.org/gromacs']
+sources = ['gromacs-%(version)s.tar.gz']
+
+builddependencies = [
+    ('CMake', '3.27.6'),
+]
+
+dependencies = [
+    ('Python', '3.11.5'),
+    ('FFTW', '3.3.10'),
+    ('OpenBLAS', '0.3.24'),
+    ('OpenMPI', '4.1.6'),
+]
+
+moduleclass = 'bio'
+#+end_src
+
+* Bump it to foss-2024a
+
+Rewrite the toolchain to ~foss-2024a~ and pull three dependencies up to the
+versions that generation uses. ~FFTW~ is left alone on purpose: it did not
+change between generations, so it is not passed as a ~--dep~ override.
+
+#+begin_src bash
+eb-stack bump \
+  --source GROMACS-2024.4-foss-2023b.eb \
+  --toolchain-name foss \
+  --toolchain-version 2024a \
+  --dep Python=3.12.3 \
+  --dep OpenBLAS=0.3.27 \
+  --dep OpenMPI=5.0.3 \
+  --out-dir easyconfigs/foss-2024a
+# wrote easyconfigs/foss-2024a/GROMACS-2024.4-foss-2024a.eb (from GROMACS-2024.4-foss-2023b.eb)
+#+end_src
+
+No ~--version~ flag was given, so the application version stays ~2024.4~:
+this is the same release rebuilt against a newer toolchain, which is the
+common case for a toolchain-generation bump.
+
+* Inspect the result
+
+#+begin_src bash
+cat easyconfigs/foss-2024a/GROMACS-2024.4-foss-2024a.eb
+#+end_src
+
+#+begin_src python
+easyblock = 'CMakeMake'
+
+name = 'GROMACS'
+version = '2024.4'
+
+homepage = 'https://www.gromacs.org'
+description = """GROMACS is a versatile package to perform molecular dynamics,
+i.e. simulate the Newtonian equations of motion for systems with hundreds to
+millions of particles."""
+
+toolchain = {'name': 'foss', 'version': '2024a'}
+toolchainopts = {'usempi': True}
+
+source_urls = ['https://ftp.gromacs.org/gromacs']
+sources = ['gromacs-%(version)s.tar.gz']
+
+builddependencies = [
+    ('CMake', '3.27.6'),
+]
+
+dependencies = [
+    ('Python', '3.12.3'),
+    ('FFTW', '3.3.10'),
+    ('OpenBLAS', '0.3.27'),
+    ('OpenMPI', '5.0.3'),
+]
+
+moduleclass = 'bio'
+#+end_src
+
+The output filename, ~GROMACS-2024.4-foss-2024a.eb~, follows EasyBuild's own
+convention: ~{name}-{version}-{toolchain_name}-{toolchain_version}.eb~.
+
+* What changed, and why the rest did not
+
+~eb-stack bump~ does not parse the easyconfig into an AST and regenerate it.
+It finds the ~toolchain = {...}~ dict, the ~version = '...'~ assignment (only
+when ~--version~ is given), and the named tuples inside ~dependencies~ /
+~builddependencies~, and rewrites only those spans of the original text.
+Every other byte -- comments, formatting, ~easyblock~, ~description~,
+~source_urls~, ~moduleclass~, the untouched ~CMake~ build dependency -- is
+copied through unchanged. That is deliberate: a reviewer diffing the
+generated file against the source sees exactly the toolchain-generation
+change, nothing else, which is what a PR reviewer for a software stack bump
+actually wants to see.
+
+~CMake~ in ~builddependencies~ was never mentioned in ~--dep~, so it survives
+untouched too: dependency overrides apply to both ~dependencies~ and
+~builddependencies~, but only to names you name.
+
+* Next steps
+
+- [[file:howto/bump-recipe.org][How to bump a recipe]] -- operator-preserving overrides
+  (~>=~, exact pins), ~--out~ vs ~--out-dir~.
+- [[file:howto/solve-lock.org][How to solve a consistent stack lock]] -- co-select an
+  entire tree of easyconfigs, not just one recipe, with the resolvo SAT
+  solver.
+- [[file:reference/cli.org][CLI reference]] -- every subcommand and flag.

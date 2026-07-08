@@ -1,0 +1,104 @@
+#+TITLE: The optimization model
+#+OPTIONS: toc:t num:nil
+
+~eb-stack~ uses [[https://github.com/mamba-org/resolvo][resolvo]], a CDCL SAT
+solver, as its feasibility core. CDCL SAT answers one question well: *does a
+consistent assignment exist* under the requirements given. It does not, by
+itself, answer *which* consistent assignment is best when more than one
+exists and a policy has more than one root. ~eb-stack~ adds a small
+optimization layer on top of feasibility to answer that second question
+deterministically.
+
+* Why feasibility alone is not enough
+
+resolvo's own candidate ordering
+(~resolvo_provider::EbProvider::sort_candidates~) sorts each *individual*
+package's candidates newest-first, so the solver's internal search leans
+toward newer versions. That is a per-package heuristic for the SAT search,
+not a joint, policy-aware optimum across every root. With a single root, the
+newest jointly-feasible version and the heuristic's pick coincide, because
+there is only one root to satisfy. With two or more roots that share a
+dependency and disagree about its version, "which root's newest version
+wins" is not determined by that heuristic: it can depend on incidental input
+order rather than anything a policy author declared.
+
+* A conflict between two roots
+
+#+begin_src python
+# GROMACS's newest easyconfig
+dependencies = [('OpenMPI', '==4.1.6')]
+
+# LAMMPS's newest easyconfig
+dependencies = [('OpenMPI', '>=5.0.3')]
+#+end_src
+
+Only one ~OpenMPI~ version is co-selected per lock, so ~GROMACS~'s newest
+and ~LAMMPS~'s newest cannot both be selected: whichever root keeps its
+newest version forces the other one down to whatever version of it is
+compatible with the winning ~OpenMPI~. Plain feasibility says "a solution
+exists"; it does not say which root's newest version that solution should
+favor. See [[file:../howto/root-priority.org][the how-to]] for this exact
+fixture solved both ways.
+
+* The priority-lexicographic layer
+
+~solve_with_resolvo~ (in ~resolvo_provider.rs~) resolves the ambiguity with
+sequential lexicographic maximization over
+~Policy::effective_root_priority~: fix the highest-priority root's version
+first, keep it fixed, move to the next root, and so on.
+
+#+begin_src dot :file ../images/optimization-loop.svg :exports results
+digraph G {
+    rankdir=TB;
+    node [shape=box, style=filled, fillcolor="white", fontname="Jost", fontsize=12];
+    edge [fontname="Jost", fontsize=11, color="#004D40"];
+    graph [fontname="Jost"];
+
+    start [label="for each root,\nin priority order", shape=ellipse];
+    nextver [label="take the next-newest\ncandidate version of root"];
+    trial [label="pin root == that version\n(plus every already-fixed\nhigher-priority root)\nsolve_feasibility()", fillcolor="#FF655D", fontcolor="white"];
+    feasible [label="feasible?", shape=diamond, fillcolor="#F1DB4B"];
+    keep [label="fix this version\nfor root"];
+    nextroot [label="advance to\nthe next root", shape=ellipse];
+    fail [label="unsatisfiable stack:\nno version of root works\nwith higher-priority pins", fillcolor="#FF655D", fontcolor="white"];
+
+    start -> nextver;
+    nextver -> trial;
+    trial -> feasible;
+    feasible -> keep [label="yes"];
+    feasible -> nextver [label="no: try the\nnext-oldest version"];
+    keep -> nextroot;
+    nextver -> fail [label="no versions left", style=dashed];
+}
+#+end_src
+
+Each trial re-solves feasibility (a fresh resolvo SAT call) with the
+candidate version pinned as an exact requirement alongside every
+higher-priority root's already-fixed version. The first version that keeps
+the whole trial feasible is kept; the loop never backtracks past a
+higher-priority root once fixed. After every root has a fixed version, one
+final solve with all root pins in place produces the lock -- non-root,
+non-priority packages still prefer newer via resolvo's own
+~sort_candidates~ heuristic, since nothing forces them to a specific
+version.
+
+This priority layer is deliberately *not* a joint, whole-stack optimum: it is a
+lexicographic optimum over the declared priority order. That is a stronger
+guarantee than plain SAT feasibility, and it is enough to make multi-root
+outcomes depend only on the policy (including ~root_priority~) and the
+candidate set -- never on incidental candidate list order or map iteration
+order. It is not a claim that the result maximizes some single scalar
+objective across every co-selected package simultaneously; a true
+multi-objective optimum would need a different (and considerably more
+expensive) formulation on top of the same SAT core.
+
+* What this guarantees in practice
+
+- Single-root policies: priority reduces to one root, so this is "newest
+  feasible version of the root plus newest feasible everything else" --
+  the common case, and the fast path.
+- Multi-root policies with no shared-dependency conflict: every root gets
+  its newest version; the priority order never has to break a tie.
+- Multi-root policies *with* a conflict: the declared ~root_priority~
+  decides, not candidate list order, not ~HashMap~ iteration, not which
+  root happened to be listed first in ~roots~.

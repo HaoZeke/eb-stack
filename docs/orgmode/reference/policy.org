@@ -1,0 +1,94 @@
+#+TITLE: Policy JSON schema
+#+OPTIONS: toc:t num:t
+
+A policy is the input that turns a universe of parsed easyconfig candidates
+into one selection. It is a JSON object matching the ~Policy~ struct in
+~src/domain.rs~.
+
+* Full shape
+
+#+begin_src json
+{
+  "toolchain": {"name": "foss", "version": "2025b"},
+  "roots": ["GROMACS"],
+  "root_priority": ["GROMACS"],
+  "pins": [
+    {"name": "OpenBLAS", "version_req": "==0.3.24"}
+  ],
+  "forbid": ["OpenMPI-4.1.5-foss-2025b.eb"],
+  "objective": "prefer_newer",
+  "require_upgrade": {"name": "GROMACS", "relative_to_baseline": true}
+}
+#+end_src
+
+Only ~toolchain~ and ~roots~ are required; every other field defaults as
+noted below.
+
+* Fields
+
+- ~toolchain~ :: ~{"name": string, "version": string}~. Required. Selects
+  which candidates from the parsed tree participate: only easyconfigs whose
+  own ~toolchain~ matches exactly are eligible.
+- ~roots~ :: Array of package names. Required, non-empty. Every dependency
+  (runtime *and* build-time) a root needs co-selects automatically; the
+  solve fails if any named root has no candidate at all.
+- ~root_priority~ :: Optional array of package names. Declares which root
+  wins the newest-version tie-break when two or more roots share a
+  dependency with conflicting requirements. Defaults to ~roots~ list order
+  when omitted or empty. Any root missing from an explicit
+  ~root_priority~ is appended in ~roots~ order, so every root always
+  participates. Reordering ~roots~ does *not* change the effective priority
+  once ~root_priority~ is set explicitly. See
+  [[file:../howto/root-priority.org][the how-to]] and
+  [[file:../explanation/optimization-model.org][why this exists]].
+- ~pins~ :: Optional array of ~{"name": string, "version_req": string}~.
+  Restricts a package to candidates whose version matches the requirement
+  string (grammar below). A pin on a package with no matching candidate
+  fails the solve at policy-construction time, before any SAT solving
+  happens.
+- ~forbid~ :: Optional array of strings. Each entry matches either a full
+  ~easyconfig_path~ or a bare package ~name~; matching candidates are
+  excluded from the universe entirely before solving.
+- ~objective~ :: Optional string, default ~"prefer_newer"~. The only
+  objective eb-stack 0.2.0 supports: among jointly feasible assignments, prefer the
+  newest version of each root (in priority order), then the newest version
+  of every other co-selected package.
+- ~require_upgrade~ :: Optional ~{"name": string, "relative_to_baseline":
+  bool}~. When ~relative_to_baseline~ is true, the named package's solved
+  version must be strictly newer than its version in the baseline lock (see
+  ~--baseline-easyconfigs~ / ~--baseline~). No baseline, or no baseline entry
+  for that package, fails the solve with an explicit error instead of
+  skipping the requirement without a warning.
+
+* version_req grammar
+
+Used by both ~pins[].version_req~ and parsed easyconfig dependency
+requirements (~==X~, ~>=X~, ~<=X~, ~>X~, ~<X~, or a bare ~X~ for an exact
+match). Version comparison is EasyBuild-shaped, not semver: digit runs
+compare numerically, letter runs compare lexicographically, and a trailing
+letter run with nothing on the other side sorts as a pre-release
+(~2025a < 2025b~, ~1.0rc1 < 1.0~).
+
+* Effective root priority
+
+#+begin_src python
+def effective_root_priority(policy):
+    order = policy.root_priority or policy.roots
+    order = [r for r in order if r in policy.roots]     # only real roots
+    for r in policy.roots:
+        if r not in order:
+            order.append(r)                             # never drop a root
+    return order
+#+end_src
+
+This is a description of ~Policy::effective_root_priority~ in
+~src/domain.rs~, not a separate implementation; it is shown here because the
+outcome of a multi-root solve depends entirely on this order.
+
+* Where policies are consumed
+
+- ~eb-stack solve --policy POLICY.json~
+- ~eb-stack solve-json --policy POLICY.json~
+
+Both subcommands accept the identical schema. See
+[[file:../howto/solve-lock.org][how to solve a consistent stack lock]].

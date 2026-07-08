@@ -1,0 +1,120 @@
+#+TITLE: ~eb-stack~
+#+AUTHOR: [[https://rgoswami.me][Rohit Goswami]]
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil ^:nil
+
+#+begin_export rst
+============
+``eb-stack``
+============
+
+:Author: `Rohit Goswami <https://rgoswami.me>`_
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Getting Started
+
+   tutorial
+
+.. toctree::
+   :maxdepth: 1
+   :caption: How-To Guides
+
+   howto/solve-lock
+   howto/emit-reports
+   howto/bump-recipe
+   howto/root-priority
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Reference
+
+   reference/cli
+   reference/policy
+   reference/formats
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Explanation
+
+   explanation/architecture
+   explanation/optimization-model
+   explanation/parser-approach
+#+end_export
+
+* What it is
+
+  ~eb-stack~ parses a tree of [[https://docs.easybuild.io/][EasyBuild]] easyconfig (~*.eb~) files, co-selects a
+  consistent software stack for one toolchain generation with a CDCL SAT
+  solver ([[https://github.com/mamba-org/resolvo][resolvo]]), and writes the result as a machine-readable lock file plus a
+  planned CycloneDX SBOM. It also rewrites an existing easyconfig into the
+  next toolchain generation (~bump~), and reports the selected build order
+  and a baseline-vs-solved stack diff for pull request review.
+
+* What it is not
+
+  - *Not* an EasyBuild replacement. ~eb-stack~ reads and rewrites easyconfig
+    text; it does not build software and does not implement EasyBuild's
+    build-step framework.
+  - *Not* a general-purpose Python dependency resolver. The domain model is
+    EasyBuild's ~name~ / ~version~ / ~toolchain~ / ~dependencies~ shape only.
+  - *Not* a post-install compliance scanner. The emitted SBOM is a *planned*
+    inventory from the lock, produced before anything is built.
+
+* Install
+
+  Build from source with Cargo (build on a remote builder, not a laptop, per
+  the repository's own convention):
+
+#+begin_src bash
+git clone https://github.com/HaoZeke/eb-stack.git
+cd eb-stack
+cargo test
+cargo build --release
+# binary: target/release/eb-stack
+install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
+#+end_src
+
+  Verify:
+
+#+begin_src bash
+eb-stack --version
+#+end_src
+
+* Documentation map
+
+  - [[file:tutorial.org][Tutorial: bump GROMACS to a new toolchain generation]] -- start here.
+  - How-to guides: [[file:howto/solve-lock.org][solve a stack lock]],
+    [[file:howto/emit-reports.org][emit a build list and stack diff]],
+    [[file:howto/bump-recipe.org][bump a recipe]],
+    [[file:howto/root-priority.org][declare root priority]].
+  - Reference: [[file:reference/cli.org][CLI]], [[file:reference/policy.org][policy JSON schema]],
+    [[file:reference/formats.org][lock / build-list / stack-diff formats]].
+  - Explanation: [[file:explanation/architecture.org][architecture]],
+    [[file:explanation/optimization-model.org][the optimization model]],
+    [[file:explanation/parser-approach.org][the parser approach]].
+
+* Citation
+
+  ~eb-stack~ does not yet have a Zenodo DOI or a JOSS paper. Until then, cite
+  the repository and version directly:
+
+#+begin_src text
+Rohit Goswami, eb-stack (version 0.2.0), https://github.com/HaoZeke/eb-stack
+#+end_src
+
+* License
+
+  MIT, per ~Cargo.toml~. See the ~LICENSE~ terms in the
+  [[https://github.com/HaoZeke/eb-stack][repository]].
+
+* Build these docs
+
+#+begin_src bash
+cd eb-stack
+pixi run -e docs docbld
+# HTML -> docs/build/index.html
+#+end_src
+
+  Org sources live under ~docs/orgmode/~; Emacs ~ox-rst~ publishes to
+  ~docs/source/~; Sphinx + *Shibuya* builds the site (same pattern as
+  ~nimvault~ / ~meetrec~ / ~org2anki~).

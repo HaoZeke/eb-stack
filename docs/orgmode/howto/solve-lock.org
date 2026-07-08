@@ -1,0 +1,116 @@
+#+TITLE: Solve a consistent stack lock
+#+OPTIONS: toc:nil num:nil
+
+Goal: given a tree of easyconfigs for one toolchain generation and a policy,
+produce a ~stack.lock.json~ that names one mutually consistent version of
+every package the policy's roots need.
+
+* Lay out the easyconfig tree
+
+~eb-stack solve~ walks ~--easyconfigs~ recursively for ~*.eb~ files. Group by
+toolchain generation, the way EasyBuild itself does:
+
+#+begin_src text
+easyconfigs/
+  foss-2025a/
+    GROMACS-2024.1-foss-2025a.eb
+    OpenBLAS-0.3.23-foss-2025a.eb
+    OpenMPI-4.1.5-foss-2025a.eb
+    FFTW-3.3.10-foss-2025a.eb
+  foss-2025b/
+    GROMACS-2024.1-foss-2025b.eb
+    GROMACS-2024.4-foss-2025b.eb
+    GROMACS-2025.0-foss-2025b.eb
+    OpenBLAS-0.3.23-foss-2025b.eb
+    OpenBLAS-0.3.24-foss-2025b.eb
+    OpenBLAS-0.3.27-foss-2025b.eb
+    OpenMPI-4.1.5-foss-2025b.eb
+    OpenMPI-4.1.6-foss-2025b.eb
+    OpenMPI-5.0.3-foss-2025b.eb
+    FFTW-3.3.10-foss-2025b.eb
+#+end_src
+
+The solver only looks at candidates whose ~toolchain~ matches the policy's
+~toolchain~; the other generation in the tree becomes the *baseline* for the
+diff (see below).
+
+* Write a policy
+
+#+begin_src json
+{
+  "toolchain": {"name": "foss", "version": "2025b"},
+  "roots": ["GROMACS"],
+  "pins": [],
+  "forbid": [],
+  "objective": "prefer_newer",
+  "require_upgrade": {"name": "GROMACS", "relative_to_baseline": true}
+}
+#+end_src
+
+Save this as ~policies/prefer_newer.json~. ~roots~ names the packages that must end up in the lock; every dependency
+they pull in (including build-only dependencies) co-selects automatically.
+See the [[file:../reference/policy.org][policy schema reference]] for every field.
+
+* Solve
+
+#+begin_src bash
+eb-stack solve \
+  --easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
+  --policy fixtures/gromacs_2025_to_next/policies/prefer_newer.json \
+  --baseline-easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
+  --lock-out stack.lock.json \
+  --sbom-out stack.cdx.json
+# parsed easyconfigs under fixtures/.../easyconfigs -> lock stack.lock.json (4 packages, engine=resolvo_cdcl_sat)
+# GROMACS 2025.0 (toolchain foss-2025b) <- fixtures/.../foss-2025b/GROMACS-2025.0-foss-2025b.eb
+#   - FFTW 3.3.10 (...)
+#   - GROMACS 2025.0 (...)
+#   - OpenBLAS 0.3.27 (...)
+#   - OpenMPI 4.1.6 (...)
+# planned SBOM stack.cdx.json
+#+end_src
+
+~--baseline-easyconfigs~ points at the same tree here because it contains
+both generations; ~eb-stack~ picks the *nearest lower* toolchain generation than
+the policy target as the baseline automatically (override with
+~--baseline-toolchain-version~ when a tree has more than two generations).
+With ~require_upgrade.relative_to_baseline~ set, the solve fails outright if
+no candidate for ~GROMACS~ is newer than whatever the baseline tree has.
+
+* Change the outcome with a pin
+
+Freeze ~OpenBLAS~ to an older release and re-solve; because ~GROMACS
+2025.0~'s easyconfig requires ~OpenBLAS >= 0.3.27~, pinning ~OpenBLAS~ forces
+an older jointly-consistent ~GROMACS~ instead:
+
+#+begin_src json
+{
+  "toolchain": {"name": "foss", "version": "2025b"},
+  "roots": ["GROMACS"],
+  "pins": [{"name": "OpenBLAS", "version_req": "==0.3.24"}],
+  "forbid": [],
+  "objective": "prefer_newer",
+  "require_upgrade": {"name": "GROMACS", "relative_to_baseline": true}
+}
+#+end_src
+
+Save this as ~policies/pin_openblas.json~.
+
+#+begin_src bash
+eb-stack solve \
+  --easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
+  --policy fixtures/gromacs_2025_to_next/policies/pin_openblas.json \
+  --lock-out stack.lock.json \
+  --sbom-out stack.cdx.json
+# GROMACS 2024.4 (toolchain foss-2025b) <- .../GROMACS-2024.4-foss-2025b.eb
+#+end_src
+
+An unsatisfiable policy (a pin no candidate can meet, together with a root
+that needs it) fails with a message naming the real package versions
+involved, not internal solver ranks.
+
+* Next steps
+
+- [[file:emit-reports.org][Emit a build list and stack diff]] alongside the lock.
+- [[file:root-priority.org][Declare root priority]] when more than one root shares a
+  dependency and they disagree on its version.
+- [[file:../reference/formats.org][Lock file format reference]].

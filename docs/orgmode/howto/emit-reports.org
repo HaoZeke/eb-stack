@@ -1,0 +1,88 @@
+#+TITLE: Emit a build list and stack diff
+#+OPTIONS: toc:nil num:nil
+
+Goal: alongside ~stack.lock.json~, get an install-ordered build list for a
+build pipeline and a markdown diff you can paste straight into a pull
+request.
+
+* Add the two flags to solve
+
+Both ~solve~ and ~solve-json~ accept ~--build-list-out~ and
+~--stack-diff-out~. They are independent: pass either, both, or neither.
+
+#+begin_src bash
+eb-stack solve \
+  --easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
+  --policy fixtures/gromacs_2025_to_next/policies/prefer_newer.json \
+  --baseline-easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
+  --lock-out stack.lock.json \
+  --sbom-out stack.cdx.json \
+  --build-list-out build.list \
+  --stack-diff-out stack.diff.md
+#+end_src
+
+~--stack-diff-out~ requires a baseline: pass ~--baseline-easyconfigs~ (or
+~--baseline~ on ~solve-json~) or the solve fails with an explicit error
+instead of skipping the diff without a warning.
+
+* Read the build list
+
+#+begin_src text
+cat build.list
+#+end_src
+
+One easyconfig path per line, dependencies before the packages that need
+them (a topological sort over the co-selected stack, ties broken by package
+name for a deterministic order):
+
+#+begin_src text
+fixtures/.../foss-2025b/OpenBLAS-0.3.27-foss-2025b.eb
+fixtures/.../foss-2025b/OpenMPI-4.1.6-foss-2025b.eb
+fixtures/.../foss-2025b/FFTW-3.3.10-foss-2025b.eb
+fixtures/.../foss-2025b/GROMACS-2025.0-foss-2025b.eb
+#+end_src
+
+Feed this straight into a sequential build pipeline: ~xargs -n1 eb build~,
+a Jenkins matrix step, or a plain shell loop.
+
+* Read the stack diff
+
+Every co-selected package is classified against the baseline lock as
+~unchanged~, ~added~, ~removed~, or ~version-bumped~:
+
+#+begin_src markdown
+# Stack diff
+
+Baseline (`foss-2025a`) -> solved (`foss-2025b`).
+
+## Summary
+
+- **unchanged**: 1
+- **added**: 0
+- **removed**: 0
+- **version-bumped**: 3
+
+## Packages
+
+### FFTW -- unchanged
+
+- Baseline: `3.3.10` -- `.../FFTW-3.3.10-foss-2025a.eb`
+- Solved: `3.3.10` -- `.../FFTW-3.3.10-foss-2025b.eb`
+
+### GROMACS -- version-bumped
+
+- Baseline: `2024.1` -- `.../GROMACS-2024.1-foss-2025a.eb`
+- Solved: `2025.0` -- `.../GROMACS-2025.0-foss-2025b.eb`
+- Change: `2024.1` -> `2025.0`
+#+end_src
+
+Paste the file body directly into a pull request description; every line
+names a real version and a real easyconfig path, not an internal solver
+identifier.
+
+* Next steps
+
+- [[file:../reference/formats.org][Format reference]] for the exact build-list and
+  stack-diff grammar, and the CycloneDX SBOM shape.
+- [[file:solve-lock.org][Solve a consistent stack lock]] if you have not run
+  ~solve~ yet.
