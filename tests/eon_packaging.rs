@@ -124,6 +124,20 @@ fn resolve_eon_full_product_foss_2024a_feedstock_parity() {
         eon_txt.contains("cargo cinstall"),
         "preconfigopts must cargo-c install staged readcon-core"
     );
+    // Feedstock installs into product prefix ($PREFIX / %(installdir)s), not a
+    // disposable builddir side prefix (leaves runtime libs outside the module).
+    assert!(
+        eon_txt.contains("--prefix %(installdir)s"),
+        "cargo cinstall must target %(installdir)s like feedstock $PREFIX"
+    );
+    assert!(
+        !eon_txt.contains("readcon-prefix"),
+        "must not use a builddir-only readcon-prefix"
+    );
+    assert!(
+        eon_txt.contains("libreadcon_core"),
+        "sanity must require packaged libreadcon_core under installdir"
+    );
     assert!(
         !eon_txt.contains("('Rust', '1.83"),
         "must not pin Rust 1.83 (below readcon MSRV)"
