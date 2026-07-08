@@ -6,7 +6,7 @@
 //! versionsuffix / toolchain — matching EasyBuild's `EasyConfigParser` plus the
 //! core template set used for fixture goldens under `fixtures/parser_hardcases/`.
 
-use crate::domain::{Candidate, DepReq, LockPackage, SolverMeta, StackLock, Toolchain};
+use crate::domain::{Candidate, DepReq, ExtEntry, LockPackage, SolverMeta, StackLock, Toolchain};
 use crate::version::matches_req;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -79,6 +79,14 @@ impl ResolvedEasyconfig {
                 .iter()
                 .map(resolved_dep_to_req)
                 .collect(),
+            exts_list: self
+                .exts_list
+                .iter()
+                .map(|e| ExtEntry {
+                    name: e.name.clone(),
+                    version: e.version.clone(),
+                })
+                .collect(),
         }
     }
 }
@@ -87,6 +95,8 @@ fn resolved_dep_to_req(d: &ResolvedDep) -> DepReq {
     DepReq {
         name: d.name.clone(),
         version_req: version_field_to_req(&d.version),
+        versionsuffix: d.versionsuffix.clone(),
+        toolchain: d.toolchain.clone(),
     }
 }
 
@@ -1125,7 +1135,10 @@ mod tests {
             builddependencies: vec![DepReq {
                 name: "Tool".into(),
                 version_req: "==1.0".into(),
+                versionsuffix: None,
+                toolchain: None,
             }],
+            exts_list: vec![],
         };
         let tool = Candidate {
             name: "Tool".into(),
@@ -1135,6 +1148,7 @@ mod tests {
             easyconfig_path: "Tool-1.0.eb".into(),
             dependencies: vec![],
             builddependencies: vec![],
+            exts_list: vec![],
         };
         let lock_ok = lock_from_candidates(&[root.clone(), tool.clone()], None, "test");
         assert!(validate_lock_deps(&lock_ok, &[root.clone(), tool.clone()]).is_ok());
@@ -1204,14 +1218,89 @@ mod tests {
         assert_eq!(c.toolchain.label(), "foss-2025b");
         let a = c.dependencies.iter().find(|d| d.name == "DepA").unwrap();
         assert_eq!(a.version_req, "==1.2.3");
+        assert!(a.versionsuffix.is_none());
+        assert!(a.toolchain.is_none());
         let b = c.dependencies.iter().find(|d| d.name == "DepB").unwrap();
         assert_eq!(b.version_req, "==1.2");
+        assert_eq!(b.versionsuffix.as_deref(), Some("-extra"));
+        assert!(b.toolchain.is_none());
+        let dep_c = c.dependencies.iter().find(|d| d.name == "DepC").unwrap();
+        assert_eq!(dep_c.version_req, "==9.9.9");
+        assert_eq!(
+            dep_c.toolchain.as_ref().map(|t| t.label()),
+            Some("gompi-2025b".into())
+        );
+        let dep_d = c.dependencies.iter().find(|d| d.name == "DepD").unwrap();
+        assert_eq!(
+            dep_d.toolchain.as_ref().map(|t| (t.name.as_str(), t.version.as_str())),
+            Some(("system", "system"))
+        );
         let build = c
             .builddependencies
             .iter()
             .find(|d| d.name == "BuildTool")
             .unwrap();
         assert_eq!(build.version_req, "==1.0");
+        assert_eq!(
+            build.toolchain.as_ref().map(|t| (t.name.as_str(), t.version.as_str())),
+            Some(("system", "system"))
+        );
+        // exts_list threaded onto the solver-facing candidate.
+        assert_eq!(c.exts_list.len(), 2);
+        assert_eq!(c.exts_list[0].name, "extpkg");
+        assert_eq!(c.exts_list[0].version, "0.1");
+        assert_eq!(c.exts_list[1].name, "extpkg2");
+        assert_eq!(c.exts_list[1].version, "1.0");
+    }
+
+    #[test]
+    fn resolved_dep_to_req_threads_versionsuffix_and_toolchain() {
+        // Drive the real conversion path via ResolvedEasyconfig::to_candidate.
+        let resolved = ResolvedEasyconfig {
+            name: "App".into(),
+            version: "1.0".into(),
+            versionsuffix: None,
+            toolchain: Toolchain {
+                name: "foss".into(),
+                version: "2025b".into(),
+            },
+            dependencies: vec![
+                ResolvedDep {
+                    name: "CudaLib".into(),
+                    version: "2.0".into(),
+                    versionsuffix: Some("-CUDA-12.8".into()),
+                    toolchain: None,
+                },
+                ResolvedDep {
+                    name: "SysTool".into(),
+                    version: "1.0".into(),
+                    versionsuffix: None,
+                    toolchain: Some(Toolchain {
+                        name: "system".into(),
+                        version: "system".into(),
+                    }),
+                },
+            ],
+            builddependencies: vec![],
+            exts_list: vec![ResolvedExt {
+                name: "ext".into(),
+                version: "0.1".into(),
+            }],
+            easyconfig_path: "App.eb".into(),
+        };
+        let c = resolved.to_candidate();
+        let cuda = c.dependencies.iter().find(|d| d.name == "CudaLib").unwrap();
+        assert_eq!(cuda.version_req, "==2.0");
+        assert_eq!(cuda.versionsuffix.as_deref(), Some("-CUDA-12.8"));
+        assert!(cuda.toolchain.is_none());
+        let sys = c.dependencies.iter().find(|d| d.name == "SysTool").unwrap();
+        assert_eq!(
+            sys.toolchain.as_ref().map(|t| t.label()),
+            Some("system-system".into())
+        );
+        assert_eq!(c.exts_list.len(), 1);
+        assert_eq!(c.exts_list[0].name, "ext");
+        assert_eq!(c.exts_list[0].version, "0.1");
     }
 
     #[test]

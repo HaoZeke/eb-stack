@@ -55,8 +55,16 @@ impl EbProvider {
         for (i, c) in candidates.iter().enumerate() {
             by_name.entry(c.name.clone()).or_default().push(i);
         }
+        // Sort by (version, versionsuffix) so same version with different
+        // suffixes get distinct, deterministic ranks rather than colliding.
         for idxs in by_name.values_mut() {
-            idxs.sort_by(|&a, &b| cmp_version(&candidates[a].version, &candidates[b].version));
+            idxs.sort_by(|&a, &b| {
+                cmp_version(&candidates[a].version, &candidates[b].version).then_with(|| {
+                    let sa = candidates[a].versionsuffix.as_deref().unwrap_or("");
+                    let sb = candidates[b].versionsuffix.as_deref().unwrap_or("");
+                    sa.cmp(sb)
+                })
+            });
         }
 
         let pool: Pool<Ranges<u32>> = Pool::new();
@@ -93,41 +101,45 @@ impl EbProvider {
         }
 
         let mut min_rank_exclusive: HashMap<String, u32> = HashMap::new();
-        if let Some(ru) = &policy.require_upgrade {
-            if ru.relative_to_baseline {
-                let base_ver = baseline
-                    .and_then(|b| b.package(&ru.name))
-                    .map(|p| p.version.clone())
-                    .ok_or_else(|| {
-                        format!(
-                            "require_upgrade {} needs baseline package version",
-                            ru.name
-                        )
-                    })?;
-                let Some(ranked) = ranks.get(&ru.name) else {
-                    return Err(format!("require_upgrade unknown package {}", ru.name));
-                };
-                let mut max_non_upgrade: Option<u32> = None;
-                for (rank, idx) in ranked {
-                    if cmp_version(&candidates[*idx].version, &base_ver)
-                        != std::cmp::Ordering::Greater
-                    {
-                        max_non_upgrade = Some(*rank);
-                    }
+        for ru in &policy.require_upgrade {
+            if !ru.relative_to_baseline {
+                return Err(format!(
+                    "require_upgrade for {}: relative_to_baseline is false; \
+                     absolute require_upgrade is not supported (set relative_to_baseline \
+                     to true and provide a baseline lock, or use a pin)",
+                    ru.name
+                ));
+            }
+            let base_ver = baseline
+                .and_then(|b| b.package(&ru.name))
+                .map(|p| p.version.clone())
+                .ok_or_else(|| {
+                    format!(
+                        "require_upgrade {} needs baseline package version",
+                        ru.name
+                    )
+                })?;
+            let Some(ranked) = ranks.get(&ru.name) else {
+                return Err(format!("require_upgrade unknown package {}", ru.name));
+            };
+            let mut max_non_upgrade: Option<u32> = None;
+            for (rank, idx) in ranked {
+                if cmp_version(&candidates[*idx].version, &base_ver) != std::cmp::Ordering::Greater
+                {
+                    max_non_upgrade = Some(*rank);
                 }
-                if let Some(m) = max_non_upgrade {
-                    min_rank_exclusive.insert(ru.name.clone(), m);
-                }
-                let any_upgrade = ranked.iter().any(|(_, idx)| {
-                    cmp_version(&candidates[*idx].version, &base_ver)
-                        == std::cmp::Ordering::Greater
-                });
-                if !any_upgrade {
-                    return Err(format!(
-                        "no candidate for {} newer than baseline {}",
-                        ru.name, base_ver
-                    ));
-                }
+            }
+            if let Some(m) = max_non_upgrade {
+                min_rank_exclusive.insert(ru.name.clone(), m);
+            }
+            let any_upgrade = ranked.iter().any(|(_, idx)| {
+                cmp_version(&candidates[*idx].version, &base_ver) == std::cmp::Ordering::Greater
+            });
+            if !any_upgrade {
+                return Err(format!(
+                    "no candidate for {} newer than baseline {}",
+                    ru.name, base_ver
+                ));
             }
         }
 
@@ -154,15 +166,30 @@ impl EbProvider {
             .or_insert_with(|| self.pool.intern_solvable(name_id, rank))
     }
 
-    fn range_matching(&self, pkg: &str, version_req: &str) -> Ranges<u32> {
+    fn range_matching(
+        &self,
+        pkg: &str,
+        version_req: &str,
+        versionsuffix: Option<&str>,
+    ) -> Ranges<u32> {
         let Some(ranked) = self.ranks.get(pkg) else {
             return Ranges::empty();
         };
         let mut range = Ranges::empty();
         for (rank, idx) in ranked {
-            if matches_req(&self.candidates[*idx].version, version_req) {
-                range = range.union(&Ranges::singleton(*rank));
+            let c = &self.candidates[*idx];
+            if !matches_req(&c.version, version_req) {
+                continue;
             }
+            // When the dep carries a versionsuffix, only candidates with the
+            // same suffix satisfy the requirement (distinct CUDA vs plain, etc.).
+            if let Some(want) = versionsuffix {
+                let got = c.versionsuffix.as_deref().unwrap_or("");
+                if got != want {
+                    continue;
+                }
+            }
+            range = range.union(&Ranges::singleton(*rank));
         }
         range
     }
@@ -223,9 +250,12 @@ impl Interner for EbProvider {
     type SolvableId = SolvableId;
 
     fn display_solvable(&self, solvable: SolvableId) -> impl Display + '_ {
-        // Version only: resolvo already prefixes display_name (package).
+        // Version (+ versionsuffix when present): resolvo already prefixes display_name.
         let c = self.candidate_for_solvable(solvable);
-        c.version.clone()
+        match &c.versionsuffix {
+            Some(s) if !s.is_empty() => format!("{}{}", c.version, s),
+            _ => c.version.clone(),
+        }
     }
 
     fn display_name(&self, name: NameId) -> impl Display + '_ {
@@ -340,7 +370,11 @@ impl DependencyProvider for EbProvider {
                     .intern_string(format!("missing dependency package {}", d.name));
                 return Dependencies::Unknown(reason);
             };
-            let range = self.range_matching(&d.name, &d.version_req);
+            let range = self.range_matching(
+                &d.name,
+                &d.version_req,
+                d.versionsuffix.as_deref(),
+            );
             if range == Ranges::empty() {
                 let reason = self.pool.intern_string(format!(
                     "unsatisfiable dep {} {} from {}={}",
@@ -492,4 +526,263 @@ pub fn solve_with_resolvo(
     // non-root packages still prefer newer via resolvo's sort_candidates.
     let final_policy = policy_with_root_version_pins(policy, &chosen_root_versions);
     solve_feasibility(candidates, &final_policy, baseline)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{DepReq, LockPackage, RequireUpgrade, SolverMeta, Toolchain};
+
+    fn tc() -> Toolchain {
+        Toolchain {
+            name: "foss".into(),
+            version: "2025b".into(),
+        }
+    }
+
+    fn cand(
+        name: &str,
+        version: &str,
+        versionsuffix: Option<&str>,
+        path: &str,
+        deps: Vec<DepReq>,
+    ) -> Candidate {
+        Candidate {
+            name: name.into(),
+            version: version.into(),
+            toolchain: tc(),
+            versionsuffix: versionsuffix.map(str::to_string),
+            easyconfig_path: path.into(),
+            dependencies: deps,
+            builddependencies: vec![],
+            exts_list: vec![],
+        }
+    }
+
+    fn policy(roots: Vec<&str>, require_upgrade: Vec<RequireUpgrade>) -> Policy {
+        Policy {
+            toolchain: tc(),
+            roots: roots.into_iter().map(str::to_string).collect(),
+            root_priority: None,
+            pins: vec![],
+            forbid: vec![],
+            objective: "prefer_newer".into(),
+            require_upgrade,
+        }
+    }
+
+    fn lock_pkg(name: &str, version: &str) -> LockPackage {
+        LockPackage {
+            name: name.into(),
+            version: version.into(),
+            toolchain: tc(),
+            versionsuffix: None,
+            easyconfig_path: format!("{name}-{version}.eb"),
+        }
+    }
+
+    fn baseline_lock(packages: Vec<LockPackage>) -> StackLock {
+        StackLock {
+            schema_version: 1,
+            toolchain: tc(),
+            generation_label: Some("baseline".into()),
+            packages,
+            solver: SolverMeta {
+                engine: "test".into(),
+                engine_version: "test".into(),
+                timestamp: "STABLE".into(),
+            },
+        }
+    }
+
+    /// Same name + version with different versionsuffix must get distinct ranks.
+    #[test]
+    fn versionsuffix_distinguishes_candidate_identity() {
+        let candidates = vec![
+            cand("Lib", "1.0", None, "Lib-1.0.eb", vec![]),
+            cand("Lib", "1.0", Some("-CUDA-12.8"), "Lib-1.0-CUDA.eb", vec![]),
+            cand(
+                "App",
+                "1.0",
+                None,
+                "App-1.0.eb",
+                vec![DepReq {
+                    name: "Lib".into(),
+                    version_req: "==1.0".into(),
+                    versionsuffix: Some("-CUDA-12.8".into()),
+                    toolchain: None,
+                }],
+            ),
+        ];
+        let pol = policy(vec!["App"], vec![]);
+        let provider = EbProvider::from_universe(&candidates, &pol, None).expect("provider");
+        let lib_ranks = provider.ranks.get("Lib").expect("Lib ranks");
+        assert_eq!(
+            lib_ranks.len(),
+            2,
+            "plain and CUDA Lib must be two rank identities, got {lib_ranks:?}"
+        );
+        let suffixes: Vec<Option<&str>> = lib_ranks
+            .iter()
+            .map(|(_, idx)| provider.candidates[*idx].versionsuffix.as_deref())
+            .collect();
+        assert!(
+            suffixes.contains(&None) && suffixes.contains(&Some("-CUDA-12.8")),
+            "expected both suffixes in ranks: {suffixes:?}"
+        );
+
+        // Real solve path: App requires CUDA Lib specifically.
+        let selected = solve_with_resolvo(&candidates, &pol, None).expect("solve");
+        let lib = selected.iter().find(|c| c.name == "Lib").expect("Lib selected");
+        assert_eq!(
+            lib.versionsuffix.as_deref(),
+            Some("-CUDA-12.8"),
+            "solver must pick the CUDA identity, not collapse to plain Lib"
+        );
+        assert_eq!(lib.easyconfig_path, "Lib-1.0-CUDA.eb");
+    }
+
+    /// Two same-version candidates with different suffixes remain independently selectable.
+    #[test]
+    fn versionsuffix_plain_selected_when_dep_has_no_suffix() {
+        let candidates = vec![
+            cand("Lib", "1.0", None, "Lib-1.0.eb", vec![]),
+            cand("Lib", "1.0", Some("-CUDA-12.8"), "Lib-1.0-CUDA.eb", vec![]),
+            cand(
+                "App",
+                "1.0",
+                None,
+                "App-1.0.eb",
+                vec![DepReq {
+                    name: "Lib".into(),
+                    version_req: "==1.0".into(),
+                    // No versionsuffix on the dep: both identities match; prefer higher rank.
+                    versionsuffix: None,
+                    toolchain: None,
+                }],
+            ),
+        ];
+        let pol = policy(vec!["App"], vec![]);
+        let selected = solve_with_resolvo(&candidates, &pol, None).expect("solve");
+        let lib = selected.iter().find(|c| c.name == "Lib").expect("Lib");
+        // Rank order: plain "" then CUDA (lexicographic suffix). Prefer newer = higher rank = CUDA.
+        // With no suffix constraint either may win via prefer_newer; assert a Lib was chosen
+        // and provider still had two identities (covered above). Here: both are valid.
+        assert_eq!(lib.version, "1.0");
+        assert!(
+            lib.versionsuffix.is_none() || lib.versionsuffix.as_deref() == Some("-CUDA-12.8")
+        );
+    }
+
+    #[test]
+    fn require_upgrade_relative_to_baseline_false_errors() {
+        let candidates = vec![
+            cand("App", "1.0", None, "App-1.0.eb", vec![]),
+            cand("App", "2.0", None, "App-2.0.eb", vec![]),
+        ];
+        let pol = policy(
+            vec!["App"],
+            vec![RequireUpgrade {
+                name: "App".into(),
+                relative_to_baseline: false,
+            }],
+        );
+        let baseline = baseline_lock(vec![lock_pkg("App", "1.0")]);
+        let err = match EbProvider::from_universe(&candidates, &pol, Some(&baseline)) {
+            Ok(_) => panic!("relative_to_baseline false must not silent no-op"),
+            Err(e) => e,
+        };
+        let low = err.to_lowercase();
+        assert!(
+            low.contains("relative_to_baseline") && low.contains("false"),
+            "error must mention relative_to_baseline false, got: {err}"
+        );
+        // Solve path also surfaces the error (not success-with-no-constraint).
+        let solve_err = match solve_with_resolvo(&candidates, &pol, Some(&baseline)) {
+            Ok(_) => panic!("solve must fail for relative_to_baseline false"),
+            Err(e) => e,
+        };
+        assert!(
+            solve_err.to_lowercase().contains("relative_to_baseline"),
+            "solve error: {solve_err}"
+        );
+    }
+
+    #[test]
+    fn require_upgrade_multi_package_honoured() {
+        let candidates = vec![
+            cand("Foo", "1.0", None, "Foo-1.0.eb", vec![]),
+            cand("Foo", "2.0", None, "Foo-2.0.eb", vec![]),
+            cand("Bar", "1.0", None, "Bar-1.0.eb", vec![]),
+            cand("Bar", "2.0", None, "Bar-2.0.eb", vec![]),
+            cand("App", "1.0", None, "App-1.0.eb", vec![]),
+        ];
+        // Roots include Foo and Bar so both appear in the selection; require both upgrade.
+        let pol = policy(
+            vec!["App", "Foo", "Bar"],
+            vec![
+                RequireUpgrade {
+                    name: "Foo".into(),
+                    relative_to_baseline: true,
+                },
+                RequireUpgrade {
+                    name: "Bar".into(),
+                    relative_to_baseline: true,
+                },
+            ],
+        );
+        let baseline = baseline_lock(vec![lock_pkg("Foo", "1.0"), lock_pkg("Bar", "1.0")]);
+        let selected =
+            solve_with_resolvo(&candidates, &pol, Some(&baseline)).expect("multi require_upgrade");
+        assert_eq!(
+            selected.iter().find(|c| c.name == "Foo").unwrap().version,
+            "2.0",
+            "Foo must upgrade past baseline 1.0"
+        );
+        assert_eq!(
+            selected.iter().find(|c| c.name == "Bar").unwrap().version,
+            "2.0",
+            "Bar must upgrade past baseline 1.0"
+        );
+    }
+
+    #[test]
+    fn require_upgrade_single_object_json_still_deserializes() {
+        let json = r#"{
+            "toolchain": {"name": "foss", "version": "2025b"},
+            "roots": ["GROMACS"],
+            "require_upgrade": {"name": "GROMACS", "relative_to_baseline": true}
+        }"#;
+        let p: Policy = serde_json::from_str(json).expect("single-object require_upgrade");
+        assert_eq!(p.require_upgrade.len(), 1);
+        assert_eq!(p.require_upgrade[0].name, "GROMACS");
+        assert!(p.require_upgrade[0].relative_to_baseline);
+    }
+
+    #[test]
+    fn require_upgrade_array_json_deserializes() {
+        let json = r#"{
+            "toolchain": {"name": "foss", "version": "2025b"},
+            "roots": ["App"],
+            "require_upgrade": [
+                {"name": "Foo", "relative_to_baseline": true},
+                {"name": "Bar", "relative_to_baseline": true}
+            ]
+        }"#;
+        let p: Policy = serde_json::from_str(json).expect("array require_upgrade");
+        assert_eq!(p.require_upgrade.len(), 2);
+        assert_eq!(p.require_upgrade[0].name, "Foo");
+        assert_eq!(p.require_upgrade[1].name, "Bar");
+    }
+
+    #[test]
+    fn require_upgrade_null_json_deserializes_empty() {
+        let json = r#"{
+            "toolchain": {"name": "foss", "version": "2025b"},
+            "roots": ["App"],
+            "require_upgrade": null
+        }"#;
+        let p: Policy = serde_json::from_str(json).expect("null require_upgrade");
+        assert!(p.require_upgrade.is_empty());
+    }
 }

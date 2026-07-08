@@ -201,11 +201,16 @@ mod tests {
             dependencies: vec![DepReq {
                 name: "Lib".into(),
                 version_req: "==1.0".into(),
+                versionsuffix: None,
+                toolchain: None,
             }],
             builddependencies: vec![DepReq {
                 name: "Tool".into(),
                 version_req: "==1.0".into(),
+                versionsuffix: None,
+                toolchain: None,
             }],
+            exts_list: vec![],
         };
         let lib = Candidate {
             name: "Lib".into(),
@@ -215,6 +220,7 @@ mod tests {
             easyconfig_path: "Lib.eb".into(),
             dependencies: vec![],
             builddependencies: vec![],
+            exts_list: vec![],
         };
         let tool = Candidate {
             name: "Tool".into(),
@@ -224,6 +230,7 @@ mod tests {
             easyconfig_path: "Tool.eb".into(),
             dependencies: vec![],
             builddependencies: vec![],
+            exts_list: vec![],
         };
         let universe = Universe {
             toolchain: tc.clone(),
@@ -237,7 +244,7 @@ mod tests {
             pins: vec![],
             forbid: vec![],
             objective: "prefer_newer".into(),
-            require_upgrade: None,
+            require_upgrade: vec![],
         };
         let lock = select_stack(&universe, &policy, None).unwrap();
         let runtime = dep_map_from_universe(&lock, &universe);

@@ -18,6 +18,21 @@ impl Toolchain {
 pub struct DepReq {
     pub name: String,
     pub version_req: String,
+    /// Optional versionsuffix on this dependency (e.g. `-CUDA-%(cudaver)s` after resolve).
+    /// When set, selection treats it as part of the requirement identity.
+    #[serde(default)]
+    pub versionsuffix: Option<String>,
+    /// Per-dependency toolchain override (`None` = inherit the dependent's toolchain).
+    /// Includes EasyBuild `SYSTEM` → `{name: "system", version: "system"}`.
+    #[serde(default)]
+    pub toolchain: Option<Toolchain>,
+}
+
+/// One bundled extension entry from an easyconfig `exts_list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtEntry {
+    pub name: String,
+    pub version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +50,9 @@ pub struct Candidate {
     /// lock/SBOM/serialized outputs can distinguish build vs runtime roles.
     #[serde(default)]
     pub builddependencies: Vec<DepReq>,
+    /// Bundled extensions (`exts_list`) resolved from the easyconfig.
+    #[serde(default)]
+    pub exts_list: Vec<ExtEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +72,9 @@ pub struct Pin {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequireUpgrade {
     pub name: String,
+    /// When true, the selected version of `name` must be strictly newer than
+    /// the baseline lock's version. When false, construction fails with a
+    /// clear error (absolute require_upgrade is not silently ignored).
     #[serde(default)]
     pub relative_to_baseline: bool,
 }
@@ -74,8 +95,29 @@ pub struct Policy {
     pub forbid: Vec<String>,
     #[serde(default = "default_objective")]
     pub objective: String,
-    #[serde(default)]
-    pub require_upgrade: Option<RequireUpgrade>,
+    /// Packages that must be strictly newer than baseline (when
+    /// `relative_to_baseline` is true). Accepts a single object or an array
+    /// in JSON for backward compatibility.
+    #[serde(default, deserialize_with = "deserialize_require_upgrades")]
+    pub require_upgrade: Vec<RequireUpgrade>,
+}
+
+/// Accept `null`, a single `RequireUpgrade` object, or an array of them.
+fn deserialize_require_upgrades<'de, D>(deserializer: D) -> Result<Vec<RequireUpgrade>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Helper {
+        One(RequireUpgrade),
+        Many(Vec<RequireUpgrade>),
+    }
+    Ok(match Option::<Helper>::deserialize(deserializer)? {
+        None => Vec::new(),
+        Some(Helper::One(one)) => vec![one],
+        Some(Helper::Many(many)) => many,
+    })
 }
 
 fn default_objective() -> String {

@@ -176,6 +176,7 @@ mod tests {
             easyconfig_path: "BuildTool-2.0-foss-2025b.eb".into(),
             dependencies: vec![],
             builddependencies: vec![],
+            exts_list: vec![],
         };
         let root = Candidate {
             name: "App".into(),
@@ -187,7 +188,10 @@ mod tests {
             builddependencies: vec![DepReq {
                 name: "BuildTool".into(),
                 version_req: ">=2.0".into(),
+                versionsuffix: None,
+                toolchain: None,
             }],
+            exts_list: vec![],
         };
         let universe = Universe {
             toolchain: tc.clone(),
@@ -201,7 +205,7 @@ mod tests {
             pins: vec![],
             forbid: vec![],
             objective: "prefer_newer".into(),
-            require_upgrade: None,
+            require_upgrade: vec![],
         };
         let lock = select_stack(&universe, &policy, None).expect("solve via builddependencies");
         assert!(
@@ -232,7 +236,10 @@ mod tests {
             builddependencies: vec![DepReq {
                 name: "MissingTool".into(),
                 version_req: "==1.0".into(),
+                versionsuffix: None,
+                toolchain: None,
             }],
+            exts_list: vec![],
         };
         let universe = Universe {
             toolchain: tc.clone(),
@@ -246,7 +253,7 @@ mod tests {
             pins: vec![],
             forbid: vec![],
             objective: "prefer_newer".into(),
-            require_upgrade: None,
+            require_upgrade: vec![],
         };
         let err = select_stack(&universe, &policy, None).unwrap_err();
         let msg = err.to_string();
@@ -289,7 +296,7 @@ mod tests {
             pins: vec![],
             forbid: vec![],
             objective: "prefer_newer".into(),
-            require_upgrade: None,
+            require_upgrade: vec![],
         };
         let lock = select_stack(&universe, &policy, None).expect("BuildDepRoot solve");
         assert!(
