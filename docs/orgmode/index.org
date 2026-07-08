@@ -39,16 +39,20 @@
    explanation/architecture
    explanation/optimization-model
    explanation/parser-approach
+   explanation/fidelity
 #+end_export
 
 * What it is
 
   ~eb-stack~ parses a tree of [[https://docs.easybuild.io/][EasyBuild]] easyconfig (~*.eb~) files, co-selects a
   consistent software stack for one toolchain generation with a CDCL SAT
-  solver ([[https://github.com/mamba-org/resolvo][resolvo]]), and writes the result as a machine-readable lock file plus a
-  planned CycloneDX SBOM. It also rewrites an existing easyconfig into the
-  next toolchain generation (~bump~), and reports the selected build order
-  and a baseline-vs-solved stack diff for pull request review.
+  solver ([[https://github.com/mamba-org/resolvo][resolvo]]), and writes the result as a machine-readable lock file plus an
+  opt-in planned CycloneDX SBOM. It also rewrites an existing easyconfig into
+  the next toolchain generation (~bump~), auto-resolving every dependency and
+  build-dependency version from a directory of easyconfigs (hierarchy-aware
+  across ~GCCcore~/~GCC~/~gfbf~/~gompi~/... sub-toolchains) with no
+  hand-fed ~--dep~ flags required, and reports the selected build order and
+  a baseline-vs-solved stack diff for pull request review.
 
 * What it is not
 
@@ -91,7 +95,8 @@ eb-stack --version
     [[file:reference/formats.org][lock / build-list / stack-diff formats]].
   - Explanation: [[file:explanation/architecture.org][architecture]],
     [[file:explanation/optimization-model.org][the optimization model]],
-    [[file:explanation/parser-approach.org][the parser approach]].
+    [[file:explanation/parser-approach.org][the parser approach]],
+    [[file:explanation/fidelity.org][reproduction fidelity and limitations]].
 
 * Citation
 

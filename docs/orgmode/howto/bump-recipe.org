@@ -3,7 +3,8 @@
 
 Goal: use ~eb-stack bump~ on your own easyconfig, controlling exactly which
 fields change. See the [[file:../tutorial.org][tutorial]] for a full worked
-example; this page is the quick reference for the flags.
+example of the zero-hand-fed flow; this page is the quick reference for
+every flag.
 
 * Minimum invocation
 
@@ -19,6 +20,58 @@ eb-stack bump \
 Writes ~Pkg-1.0-foss-2024b.eb~ to the current directory: application
 ~version~ and every dependency version are left exactly as in the source.
 
+* Auto-resolve dependency versions from a universe
+
+Pass ~--easyconfigs DIR~ and every ~dependencies~ / ~builddependencies~
+version in the source recipe is resolved automatically -- no ~--dep~ flags
+needed at all:
+
+#+begin_src bash
+eb-stack bump \
+  --source Pkg-1.0-foss-2023b.eb \
+  --toolchain-name foss \
+  --toolchain-version 2024a \
+  --easyconfigs /path/to/easyconfigs
+#+end_src
+
+~eb-stack~ parses ~DIR~ (recursively, same as ~solve~), then for each
+dependency name in the source recipe walks the target generation's
+sub-toolchain hierarchy (~GCCcore~, ~GCC~, ~gfbf~, ~gompi~, down to
+~SYSTEM~) and picks a version that:
+
+- exists as a real easyconfig somewhere in that hierarchy for the target
+  generation,
+- is never older than the source recipe's own version for that dependency,
+  and
+- honors a ~versionsuffix~-qualified dependency (e.g. LLVM pinned for
+  ~llvmlite~) by leaving it untouched rather than bumping it to the newest
+  plain candidate.
+
+Hierarchy data for known generations (~foss-2023b~, ~foss-2024a~,
+~foss-2025a~) is built in; pass ~--hierarchy-fixture PATH~ to supply an
+EasyBuild ~get_toolchain_hierarchy~ capture for a generation eb-stack does
+not know about yet.
+
+** Unresolved dependencies fail loudly by default
+
+If any dependency has no candidate in the hierarchy, ~bump~ exits non-zero
+naming the dependency and the target toolchain, and does *not* keep the
+source version without saying so. Pass ~--keep-old-deps~ to opt back into
+"leave the source version and keep going" for whichever dependencies could
+not be resolved (a warning is still printed for each one):
+
+#+begin_src bash
+eb-stack bump \
+  --source Pkg-1.0-foss-2023b.eb \
+  --toolchain-name foss --toolchain-version 2024a \
+  --easyconfigs /path/to/easyconfigs \
+  --keep-old-deps
+#+end_src
+
+A dependency pinned by a non-empty ~versionsuffix~ is never bumped, with or
+without ~--keep-old-deps~ -- that is a build-variant pin, not a plain
+version that happens to be missing.
+
 * Bump the application version too
 
 #+begin_src bash
@@ -33,7 +86,53 @@ Only pass ~--version~ when the application itself has a new release for this
 toolchain generation. Without it, the source's ~version = '...'~ line is
 copied through unchanged (the common case: same release, newer toolchain).
 
-* Override dependency versions
+** Update the source checksum on a version bump
+
+A version bump changes the source tarball's filename, so its
+~checksums~ entry needs a new key *and* a new sha256. Pass
+~--source-checksum SHA256~ to supply both:
+
+#+begin_src bash
+eb-stack bump \
+  --source Pkg-1.0-foss-2024a.eb \
+  --toolchain-name foss --toolchain-version 2024b \
+  --version 1.1 \
+  --source-checksum 3b9c2f...
+#+end_src
+
+Only the *first* (source tarball) entry in ~checksums~ is touched: its
+tarball-name key is renamed from the old version to the new one, and its
+sha256 value is replaced. Any following patch-checksum entries are left
+untouched.
+
+Omit ~--source-checksum~ on a version bump and ~bump~ still renames the
+tarball key to the new version, but leaves the checksum *value* stale and
+prints a warning:
+
+#+begin_src text
+WARNING: source checksum is stale after version bump 1.0 -> 1.1: the
+tarball key was renamed but the checksum value was left unchanged; set
+--source-checksum <SHA256> or run `eb --inject-checksums` before building
+#+end_src
+
+A toolchain-only bump (no ~--version~) never touches ~checksums~ -- the
+source tarball has not changed, so there is nothing to rename or warn about.
+
+** Patches need human review on a version bump
+
+When ~checksums~ or ~patches~ is non-empty and ~--version~ changes the
+application version, ~bump~ also prints:
+
+#+begin_src text
+WARNING: patches were not modified for version bump to 1.1: review patch
+applicability -- a version bump commonly needs a different patch set
+#+end_src
+
+A new application release commonly needs a different patch set than the
+old one; ~eb-stack~ leaves the existing ~patches~ list untouched (it cannot
+know whether an old patch still applies) and flags it for a human to check.
+
+* Override dependency versions by hand
 
 ~--dep NAME=VERSION~ is repeatable and applies to both ~dependencies~ and
 ~builddependencies~ tuples for that name:
@@ -48,7 +147,9 @@ eb-stack bump \
 #+end_src
 
 Any dependency *not* named in a ~--dep~ flag is left untouched, operator and
-all.
+all. When ~--easyconfigs~ is also given, a ~--dep~ override wins over
+whatever auto-resolve would otherwise have picked for that name; every
+other dependency still auto-resolves normally.
 
 * Operator preservation
 
@@ -88,15 +189,21 @@ eb-stack bump --source Pkg-1.0-foss-2024a.eb \
 written to the current directory under the conventional
 ~{name}-{version}-{toolchain_name}-{toolchain_version}.eb~ name.
 
-* What is guaranteed to stay byte-identical
+* What stays exactly as in the source
 
 ~easyblock~, ~homepage~, ~description~, ~toolchainopts~, ~source_urls~,
 ~sources~, ~moduleclass~, comments, blank lines, and every dependency tuple
-you did not name in ~--dep~. ~bump~ rewrites targeted spans of the source
-text; it does not reformat or regenerate anything else. Running the same
-command twice on the same source produces byte-identical output both times.
+that neither ~--dep~ nor auto-resolve (~--easyconfigs~) changed. ~bump~
+rewrites targeted spans of the source text; it does not reformat or
+regenerate anything else. Running the same command twice on the same
+source and the same universe produces the exact same output bytes both
+times.
 
 * Next steps
 
-- [[file:../tutorial.org][Tutorial]] -- a full end-to-end bump with real GROMACS versions.
+- [[file:../tutorial.org][Tutorial]] -- a full zero-hand-fed bump, source
+  recipe to next-generation recipe, with real GROMACS versions.
+- [[file:../explanation/fidelity.org][Reproduction fidelity and limitations]] --
+  how often this reproduces a real maintainer PR exactly, and what kind of
+  residual to expect when it does not.
 - [[file:../reference/cli.org][CLI reference]] -- the complete ~bump~ flag list.

@@ -3,27 +3,35 @@
 
 In this tutorial you take a real GROMACS easyconfig built against
 ~foss-2023b~ and bump it to the next toolchain generation, ~foss-2024a~,
-picking up newer Python, OpenBLAS, and OpenMPI along the way. Here is the end
-result: a full next-generation easyconfig, produced by one command, with
-every untouched field preserved byte-for-byte from the source.
+with *zero hand-fed dependency versions*: every ~dependencies~ and
+~builddependencies~ entry is resolved automatically from a directory of
+easyconfigs, one command, no ~--dep~ flags. Here is the end result:
 
 #+begin_src diff
 -toolchain = {'name': 'foss', 'version': '2023b'}
 +toolchain = {'name': 'foss', 'version': '2024a'}
+ builddependencies = [
+-    ('CMake', '3.27.6'),
+-    ('scikit-build-core', '0.9.3'),
++    ('CMake', '3.29.3'),
++    ('scikit-build-core', '0.11.1'),
+ ]
  dependencies = [
 -    ('Python', '3.11.5'),
+-    ('SciPy-bundle', '2023.11'),
+-    ('networkx', '3.2.1'),
+-    ('mpi4py', '3.1.5'),
 +    ('Python', '3.12.3'),
-     ('FFTW', '3.3.10'),
--    ('OpenBLAS', '0.3.24'),
--    ('OpenMPI', '4.1.6'),
-+    ('OpenBLAS', '0.3.27'),
-+    ('OpenMPI', '5.0.3'),
++    ('SciPy-bundle', '2024.05'),
++    ('networkx', '3.4.2'),
++    ('mpi4py', '4.0.1'),
  ]
 #+end_src
 
 Everything else in the file -- ~easyblock~, ~homepage~, ~description~,
-~toolchainopts~, ~source_urls~, ~sources~, ~builddependencies~,
-~moduleclass~ -- comes out identical to the source.
+~toolchainopts~, ~source_urls~, ~sources~, ~patches~, ~checksums~,
+~configopts~, ~exts_list~, ~moduleclass~ -- comes out identical to the
+source.
 
 * Install eb-stack
 
@@ -35,130 +43,125 @@ cargo build --release
 # binary: target/release/eb-stack
 #+end_src
 
-The rest of this tutorial calls the binary as ~eb-stack~; put
-~target/release~ on your ~PATH~ or use the full path.
+The rest of this tutorial calls the binary as ~eb-stack~ (put
+~target/release~ on your ~PATH~, or use the full path) and runs commands
+from the repository root, since it uses easyconfigs already checked into
+the repo's own test fixtures -- no files to create by hand.
 
-* Write the source easyconfig
+* The source easyconfig
 
-Save the following as ~GROMACS-2024.4-foss-2023b.eb~. This is a typical
-EasyBuild recipe: an ~easyblock~, ~name~/~version~, a ~toolchain~ dict, and
-~dependencies~ / ~builddependencies~ lists of ~(Name, version)~ tuples.
+~tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb~ is a real,
+unmodified maintainer easyconfig -- 90 lines with the usual ~homepage~,
+~description~, ~source_urls~, ~patches~, ~checksums~, and ~exts_list~
+fields. The lines this tutorial cares about are the toolchain and the
+dependency lists:
 
 #+begin_src python
-easyblock = 'CMakeMake'
-
-name = 'GROMACS'
-version = '2024.4'
-
-homepage = 'https://www.gromacs.org'
-description = """GROMACS is a versatile package to perform molecular dynamics,
-i.e. simulate the Newtonian equations of motion for systems with hundreds to
-millions of particles."""
-
 toolchain = {'name': 'foss', 'version': '2023b'}
-toolchainopts = {'usempi': True}
-
-source_urls = ['https://ftp.gromacs.org/gromacs']
-sources = ['gromacs-%(version)s.tar.gz']
+toolchainopts = {'openmp': True, 'usempi': True}
 
 builddependencies = [
     ('CMake', '3.27.6'),
+    ('scikit-build-core', '0.9.3'),
 ]
 
 dependencies = [
     ('Python', '3.11.5'),
-    ('FFTW', '3.3.10'),
-    ('OpenBLAS', '0.3.24'),
-    ('OpenMPI', '4.1.6'),
+    ('SciPy-bundle', '2023.11'),
+    ('networkx', '3.2.1'),
+    ('mpi4py', '3.1.5'),
 ]
-
-moduleclass = 'bio'
 #+end_src
 
-* Bump it to foss-2024a
+* The dependency universe
 
-Rewrite the toolchain to ~foss-2024a~ and pull three dependencies up to the
-versions that generation uses. ~FFTW~ is left alone on purpose: it did not
-change between generations, so it is not passed as a ~--dep~ override.
+~tests/repro_fixtures/universe_foss_2024a/~ holds real ~foss-2024a~-era
+easyconfigs at every sub-toolchain level GROMACS's dependencies actually
+live at: ~Python~ and ~CMake~ on ~GCCcore-13.3.0~, ~SciPy-bundle~ and
+~networkx~ on ~gfbf-2024a~, ~mpi4py~ on ~gompi-2024a~. None of them sit on
+plain ~foss-2024a~ -- that is the point: EasyBuild's composite toolchains
+pull dependencies from several sub-toolchain levels of the *same
+generation*, and ~eb-stack~ has to walk that hierarchy to find them.
+
+* Bump it, zero hand-fed versions
 
 #+begin_src bash
 eb-stack bump \
-  --source GROMACS-2024.4-foss-2023b.eb \
+  --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
   --toolchain-name foss \
   --toolchain-version 2024a \
-  --dep Python=3.12.3 \
-  --dep OpenBLAS=0.3.27 \
-  --dep OpenMPI=5.0.3 \
-  --out-dir easyconfigs/foss-2024a
-# wrote easyconfigs/foss-2024a/GROMACS-2024.4-foss-2024a.eb (from GROMACS-2024.4-foss-2023b.eb)
+  --easyconfigs tests/repro_fixtures/universe_foss_2024a \
+  --out-dir /tmp/gromacs-2024a
+# wrote /tmp/gromacs-2024a/GROMACS-2024.4-foss-2024a.eb (from tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb)
 #+end_src
 
-No ~--version~ flag was given, so the application version stays ~2024.4~:
-this is the same release rebuilt against a newer toolchain, which is the
-common case for a toolchain-generation bump.
+No ~--dep~ flags. ~--easyconfigs~ points at the universe directory above;
+~eb-stack~ parses every easyconfig under it, walks the ~foss-2024a~
+sub-toolchain hierarchy (~GCCcore~, ~GCC~, ~gfbf~, ~gompi~, ... down to
+~SYSTEM~), and for each of ~CMake~, ~scikit-build-core~, ~Python~,
+~SciPy-bundle~, ~networkx~, ~mpi4py~ picks the version that generation
+actually used -- never older than the source's own version. No
+~--version~ flag either, so the application version stays ~2024.4~: the
+same release rebuilt against a newer toolchain, the common case for a
+toolchain-generation bump.
 
 * Inspect the result
 
 #+begin_src bash
-cat easyconfigs/foss-2024a/GROMACS-2024.4-foss-2024a.eb
+diff tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
+     /tmp/gromacs-2024a/GROMACS-2024.4-foss-2024a.eb
 #+end_src
 
-#+begin_src python
-easyblock = 'CMakeMake'
+The diff is exactly the toolchain line and the six dependency versions
+shown at the top of this page. Run the same command twice: both runs
+produce the exact same bytes, because ~bump~ rewrites targeted spans of
+the source text -- it does not reformat or regenerate anything else.
 
-name = 'GROMACS'
-version = '2024.4'
+* What auto-resolve does not do
 
-homepage = 'https://www.gromacs.org'
-description = """GROMACS is a versatile package to perform molecular dynamics,
-i.e. simulate the Newtonian equations of motion for systems with hundreds to
-millions of particles."""
+Compare the emitted file against
+~tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2024a.eb~, the real
+maintainer's ~foss-2024a~ recipe checked into the same fixture directory:
+it also adds a new runtime dependency, ~('pybind11', '2.12.0')~, that does
+not exist anywhere in the ~foss-2023b~ source. ~eb-stack~ correctly leaves
+that line out -- a mechanical version bump cannot invent a dependency the
+source recipe never declared. That one line is the only place the emitted
+file and the real target differ, and the gap is intentional: see
+[[file:explanation/fidelity.org][reproduction fidelity and limitations]]
+for how often auto-resolve reproduces a real maintainer PR exactly, and
+why the residual cases look the way they do.
 
-toolchain = {'name': 'foss', 'version': '2024a'}
-toolchainopts = {'usempi': True}
+* Override one dependency by hand
 
-source_urls = ['https://ftp.gromacs.org/gromacs']
-sources = ['gromacs-%(version)s.tar.gz']
+~--dep NAME=VERSION~ still works alongside ~--easyconfigs~: a hand override
+wins over whatever auto-resolve would have picked for that name, and every
+other dependency still auto-resolves normally.
 
-builddependencies = [
-    ('CMake', '3.27.6'),
-]
-
-dependencies = [
-    ('Python', '3.12.3'),
-    ('FFTW', '3.3.10'),
-    ('OpenBLAS', '0.3.27'),
-    ('OpenMPI', '5.0.3'),
-]
-
-moduleclass = 'bio'
+#+begin_src bash
+eb-stack bump \
+  --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
+  --toolchain-name foss \
+  --toolchain-version 2024a \
+  --easyconfigs tests/repro_fixtures/universe_foss_2024a \
+  --dep scikit-build-core=0.12.0 \
+  --out-dir /tmp/gromacs-2024a-override
+# scikit-build-core is 0.12.0 (the override), everything else auto-resolved as before
 #+end_src
-
-The output filename, ~GROMACS-2024.4-foss-2024a.eb~, follows EasyBuild's own
-convention: ~{name}-{version}-{toolchain_name}-{toolchain_version}.eb~.
-
-* What changed, and why the rest did not
-
-~eb-stack bump~ does not parse the easyconfig into an AST and regenerate it.
-It finds the ~toolchain = {...}~ dict, the ~version = '...'~ assignment (only
-when ~--version~ is given), and the named tuples inside ~dependencies~ /
-~builddependencies~, and rewrites only those spans of the original text.
-Every other byte -- comments, formatting, ~easyblock~, ~description~,
-~source_urls~, ~moduleclass~, the untouched ~CMake~ build dependency -- is
-copied through unchanged. That is deliberate: a reviewer diffing the
-generated file against the source sees exactly the toolchain-generation
-change, nothing else, which is what a PR reviewer for a software stack bump
-actually wants to see.
-
-~CMake~ in ~builddependencies~ was never mentioned in ~--dep~, so it survives
-untouched too: dependency overrides apply to both ~dependencies~ and
-~builddependencies~, but only to names you name.
 
 * Next steps
 
-- [[file:howto/bump-recipe.org][How to bump a recipe]] -- operator-preserving overrides
-  (~>=~, exact pins), ~--out~ vs ~--out-dir~.
+- [[file:howto/bump-recipe.org][How to bump a recipe]] -- every ~bump~ flag:
+  auto-resolve, hand overrides, operator preservation, version bumps with a
+  new source checksum.
 - [[file:howto/solve-lock.org][How to solve a consistent stack lock]] -- co-select an
-  entire tree of easyconfigs, not just one recipe, with the resolvo SAT
-  solver.
+  entire tree of easyconfigs with the resolvo SAT solver, beyond the
+  single-recipe scope of ~bump~.
+- [[file:explanation/fidelity.org][Reproduction fidelity and limitations]] -- how
+  often auto-resolve reproduces a real maintainer toolchain bump exactly,
+  and what it cannot do.
+- [[https://github.com/HaoZeke/eb-stack/blob/main/skills/annual-bump/SKILL.md][The
+  annual-bump skill]] (~skills/annual-bump/SKILL.md~ in the repository) --
+  drives this same ~bump~ / ~solve~ pipeline over a whole set of recipes
+  for an annual toolchain rebuild, naming the narrow residual an operator
+  or agent still has to resolve by hand.
 - [[file:reference/cli.org][CLI reference]] -- every subcommand and flag.

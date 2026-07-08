@@ -120,6 +120,12 @@ different version). Sections are sorted by package name.
 
 * Planned SBOM (~--sbom-out~, CycloneDX)
 
+Opt-in: ~--sbom-out~ has no default filename. Omit it and ~solve~ /
+~solve-json~ write only the lock (and any requested build list / stack
+diff) -- no SBOM file at all. ~eb-stack sbom --lock LOCK~ is the one
+exception with a real default output path (~stack.cdx.json~), since that
+subcommand's entire purpose is emitting an SBOM from an existing lock.
+
 #+begin_src json
 {
   "bomFormat": "CycloneDX",
@@ -163,8 +169,8 @@ different version). Sections are sorted by package name.
 Each component's ~bom-ref~ / ~purl~ is a synthetic ~pkg:generic/~ reference
 (EasyBuild packages have no real PURL type registry entry) embedding name,
 version, and toolchain label. ~eb_stack:lifecycle: pre-install-plan~ marks
-this as a *planned* inventory: the packages named here are the solver's
-selection, not a scan of anything actually built or installed.
+this as a *planned* inventory: the packages it names come from the
+solver's selection, not a scan of anything actually built or installed.
 
 ~dependsOn~ edges differ by how the document was produced:
 

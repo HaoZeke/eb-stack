@@ -14,22 +14,26 @@ version.
 * solve
 
 Parse a tree of ~.eb~ files, solve with resolvo, write a lock and a planned
-CycloneDX SBOM. This is the primary entry point.
+CycloneDX SBOM. This subcommand is the primary entry point.
 
 #+begin_src text
 eb-stack solve
-  --easyconfigs PATH
+  --easyconfigs PATH...
   --policy PATH
   [--baseline-easyconfigs PATH]
   [--baseline-toolchain-version VERSION]
   [--lock-out PATH]              (default: stack.lock.json)
-  [--sbom-out PATH]               (default: stack.cdx.json)
+  [--sbom-out PATH]
   [--build-list-out PATH]
   [--stack-diff-out PATH]
 #+end_src
 
 - ~--easyconfigs~ :: Root directory of easyconfigs, walked recursively for
-  ~*.eb~. Required.
+  ~*.eb~. Required, repeatable: pass it more than once to layer trees, with
+  *later* paths overriding earlier ones for the same
+  name+version+toolchain identity (a site overlay on top of an upstream
+  checkout). See
+  [[file:../howto/solve-lock.org][how to layer a site overlay]].
 - ~--policy~ :: Policy JSON path. Required. See the
   [[file:policy.org][policy schema]].
 - ~--baseline-easyconfigs~ :: Optional second tree (or the same tree) used to
@@ -42,8 +46,9 @@ eb-stack solve
   target ~2025b~ with ~2024b~ and ~2025a~ present in the tree picks
   ~2025a~, not ~2024b~).
 - ~--lock-out~ :: Where to write the solved lock. Default ~stack.lock.json~.
-- ~--sbom-out~ :: Where to write the planned CycloneDX SBOM. Default
-  ~stack.cdx.json~.
+- ~--sbom-out~ :: Where to write the planned CycloneDX SBOM. *Opt-in*: with
+  no ~--sbom-out~, no SBOM file is written at all -- there is no default
+  filename. Pass it explicitly to get an SBOM alongside the lock.
 - ~--build-list-out~ :: Optional plain-text build list, one selected
   easyconfig path per line, dependencies before the packages that need them.
 - ~--stack-diff-out~ :: Optional markdown diff of the solved lock against the
@@ -82,7 +87,7 @@ eb-stack solve-json
   --policy PATH
   [--baseline PATH]
   [--lock-out PATH]              (default: stack.lock.json)
-  [--sbom-out PATH]               (default: stack.cdx.json)
+  [--sbom-out PATH]
   [--build-list-out PATH]
   [--stack-diff-out PATH]
 #+end_src
@@ -93,7 +98,12 @@ eb-stack solve-json
 - ~--policy~ :: Same policy schema as ~solve~. Required.
 - ~--baseline~ :: Optional baseline *lock* JSON (not an easyconfig tree) used
   the same way ~--baseline-easyconfigs~ is on ~solve~.
-- Remaining flags are identical to ~solve~.
+- ~--sbom-out~ :: Same opt-in behavior as ~solve~: omit it and no SBOM file
+  is written.
+- Remaining flags are identical to ~solve~ (except ~--universe~ is a single
+  pre-built JSON file, not a repeatable ~--easyconfigs~ tree -- overlay
+  merging happens before this command runs, when the universe JSON is
+  built).
 
 * sbom
 
@@ -126,7 +136,11 @@ eb-stack bump
   --toolchain-name NAME
   --toolchain-version VERSION
   [--version VERSION]
+  [--source-checksum SHA256]
   [--dep NAME=VERSION]...
+  [--easyconfigs DIR]
+  [--hierarchy-fixture PATH]
+  [--keep-old-deps]
   [--out-dir PATH]
   [--out PATH]
 #+end_src
@@ -137,9 +151,32 @@ eb-stack bump
 - ~--version~ :: New application version. Omit to keep the source's
   ~version = '...'~ unchanged (the common case: same release, new
   toolchain).
+- ~--source-checksum SHA256~ :: New sha256 for the source tarball. Applies
+  together with ~--version~ (the tarball name changes with the version).
+  When the version changes and this is omitted, the source
+  checksum entry's key is still renamed to the new versioned tarball name,
+  but the checksum value is left stale and a warning is printed. See
+  [[file:../howto/bump-recipe.org][updating the source checksum]].
 - ~--dep NAME=VERSION~ :: Dependency version override, repeatable. Applies
   to matching tuples in both ~dependencies~ and ~builddependencies~. See
-  [[file:../howto/bump-recipe.org][operator preservation rules]].
+  [[file:../howto/bump-recipe.org][operator preservation rules]]. When
+  ~--easyconfigs~ is also set, a ~--dep~ override wins over the
+  auto-resolved version for that name.
+- ~--easyconfigs DIR~ :: Directory of easyconfigs (walked recursively, same
+  parser as ~solve~) used to auto-resolve every ~dependencies~ /
+  ~builddependencies~ version for the target toolchain generation,
+  hierarchy-aware (~GCCcore~/~GCC~/~gfbf~/~gompi~/... down to ~SYSTEM~).
+  Omit it to fall back to hand ~--dep~ overrides only (unnamed dependencies
+  keep their source version). See [[file:../tutorial.org][the tutorial]]
+  for the zero-hand-fed flow.
+- ~--hierarchy-fixture PATH~ :: Optional EasyBuild ~get_toolchain_hierarchy~
+  capture (JSON) for a target generation with no built-in hierarchy fixture
+  in eb-stack. Applies only with ~--easyconfigs~.
+- ~--keep-old-deps~ :: When set, a dependency ~--easyconfigs~ cannot resolve
+  keeps its source version (with a warning) instead of failing the bump.
+  Default: unresolved dependencies fail the bump with a non-zero exit
+  naming the dependency and the target toolchain. A ~versionsuffix~-pinned
+  dependency is never bumped regardless of this flag.
 - ~--out-dir~ :: Output directory (created if missing); file is written
   under the conventional
   ~{name}-{version}-{toolchain_name}-{toolchain_version}.eb~ basename.
@@ -149,7 +186,8 @@ eb-stack bump
   directory under the conventional basename.
 
 Every field not named above -- ~easyblock~, ~homepage~, ~description~,
-~toolchainopts~, comments, and any dependency not named in ~--dep~ -- is
+~toolchainopts~, comments, and any dependency neither ~--dep~ nor
+~--easyconfigs~ auto-resolve changed -- is
 copied through byte-for-byte from the source.
 
 * Exit codes
