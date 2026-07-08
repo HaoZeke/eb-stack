@@ -1,0 +1,94 @@
+#+TITLE: Declare root priority for multi-root optimization
+#+OPTIONS: toc:nil num:nil
+
+Goal: when a policy has more than one root and they disagree on a shared
+dependency's version, control which root wins the newest-version tie-break
+instead of leaving it to incidental list order.
+
+* The conflict
+
+Two application roots, one shared dependency, mutually exclusive
+requirements on it:
+
+#+begin_src python
+# GROMACS-2025.0-foss-2025b.eb (newest GROMACS)
+dependencies = [
+    ('OpenMPI', '==4.1.6'),
+]
+
+# LAMMPS-2024.08-foss-2025b.eb (newest LAMMPS)
+dependencies = [
+    ('OpenMPI', '>=5.0.3'),
+]
+#+end_src
+
+Both roots cannot get their newest version at once: only one ~OpenMPI~
+version is co-selected per lock. Feasibility (resolvo's CDCL SAT core) will
+happily return *a* consistent assignment, but which one depends on solver
+internals unless the policy says which root matters more. See
+[[file:../explanation/optimization-model.org][the optimization model]] for why plain SAT
+feasibility is not enough here.
+
+* Without root_priority: list order decides
+
+#+begin_src json
+{
+  "toolchain": {"name": "foss", "version": "2025b"},
+  "roots": ["GROMACS", "LAMMPS"],
+  "pins": [],
+  "forbid": [],
+  "objective": "prefer_newer"
+}
+#+end_src
+
+With no ~root_priority~ field, priority defaults to ~roots~ list order:
+listing ~GROMACS~ first here keeps ~GROMACS 2025.0~ (and ~OpenMPI 4.1.6~),
+yielding ~LAMMPS 2023.08~. Reordering ~roots~ to ~["LAMMPS", "GROMACS"]~
+flips the outcome to ~LAMMPS 2024.08~ / ~GROMACS 2024.4~. That coupling --
+priority tied to incidental list order -- is exactly what ~root_priority~
+lets you avoid.
+
+* With root_priority: explicit and list-order-independent
+
+#+begin_src json
+{
+  "toolchain": {"name": "foss", "version": "2025b"},
+  "roots": ["LAMMPS", "GROMACS"],
+  "root_priority": ["GROMACS", "LAMMPS"],
+  "pins": [],
+  "forbid": [],
+  "objective": "prefer_newer"
+}
+#+end_src
+
+#+begin_src bash
+eb-stack solve \
+  --easyconfigs fixtures/two_root_openmpi_conflict/easyconfigs \
+  --policy fixtures/two_root_openmpi_conflict/policies/priority_gromacs_roots_lammps_first.json \
+  --lock-out stack.lock.json --sbom-out stack.cdx.json
+# GROMACS 2025.0 (kept: prioritized)
+# LAMMPS 2023.08 (yielded: not prioritized)
+# OpenMPI 4.1.6 (forced by GROMACS's exact pin)
+#+end_src
+
+~roots~ still lists ~LAMMPS~ first, but ~root_priority: ["GROMACS",
+"LAMMPS"]~ keeps ~GROMACS~ at its newest version regardless. Swap the
+~roots~ order in the policy file and re-run: the outcome does not change,
+because priority is now declared, not inferred.
+
+* How the priority is applied
+
+For each root in ~root_priority~ order (or ~roots~ order when
+~root_priority~ is omitted), ~eb-stack~ pins that root to the newest version
+that is *still jointly feasible* with every higher-priority root already
+pinned, then moves to the next root. Lower-priority roots yield whatever
+version remains consistent once the higher-priority pins are fixed. A root
+missing from an explicit ~root_priority~ list is appended in ~roots~ order,
+so every root always participates.
+
+* Next steps
+
+- [[file:../reference/policy.org][Policy schema reference]] for the exact
+  ~root_priority~ field semantics.
+- [[file:../explanation/optimization-model.org][Why this needs an optimization layer
+  on top of SAT feasibility]].

@@ -1,0 +1,177 @@
+#+TITLE: Output formats
+#+OPTIONS: toc:t num:t
+
+* Stack lock (~stack.lock.json~)
+
+#+begin_src json
+{
+  "schema_version": 1,
+  "toolchain": {"name": "foss", "version": "2025b"},
+  "generation_label": "foss-2025b",
+  "packages": [
+    {
+      "name": "GROMACS",
+      "version": "2025.0",
+      "toolchain": {"name": "foss", "version": "2025b"},
+      "versionsuffix": null,
+      "easyconfig_path": "foss-2025b/GROMACS-2025.0-foss-2025b.eb"
+    }
+  ],
+  "solver": {
+    "engine": "resolvo_cdcl_sat",
+    "engine_version": "resolvo+eb_stack-0.2.0",
+    "timestamp": "2026-01-01T00:00:00Z"
+  }
+}
+#+end_src
+
+- ~schema_version~ :: ~1~ as of eb-stack 0.2.0.
+- ~toolchain~ :: The policy's target toolchain (not necessarily every
+  package's own toolchain field, though in practice they match).
+- ~generation_label~ :: Optional human label, e.g. ~"foss-2025b"~ when
+  produced from an easyconfig tree, or a caller-supplied string on
+  ~solve-json~. ~None~ from hand-built universes that omit it.
+- ~packages~ :: One entry per co-selected package, sorted by name. Each
+  entry is a ~LockPackage~: ~name~, ~version~, its own ~toolchain~, optional
+  ~versionsuffix~, and the ~easyconfig_path~ it came from.
+- ~solver~ :: ~engine~ is always ~"resolvo_cdcl_sat"~. ~engine_version~
+  embeds the crate version. ~timestamp~ is RFC 3339, UTC, second precision.
+
+* Universe JSON (~solve-json --universe~, ~parse~ output)
+
+#+begin_src json
+{
+  "toolchain": {"name": "foss", "version": "2025b"},
+  "generation_label": "foss-2025b",
+  "candidates": [
+    {
+      "name": "GROMACS",
+      "version": "2025.0",
+      "toolchain": {"name": "foss", "version": "2025b"},
+      "versionsuffix": null,
+      "easyconfig_path": "foss-2025b/GROMACS-2025.0-foss-2025b.eb",
+      "dependencies": [
+        {"name": "OpenMPI", "version_req": ">=4.1.6"}
+      ],
+      "builddependencies": []
+    }
+  ]
+}
+#+end_src
+
+~parse~ prints just the ~candidates~ array (no wrapping ~toolchain~ /
+~generation_label~); wrap it yourself to feed ~solve-json --universe~.
+~dependencies~ and ~builddependencies~ use the same ~DepReq~ shape and the
+same ~version_req~ grammar as policy pins (see
+[[file:policy.org][policy reference]]). Legacy universe JSON without a
+~builddependencies~ key deserializes with it defaulting to empty.
+
+* Build list (~--build-list-out~)
+
+Plain text, one easyconfig path per line, trailing newline, no blank lines:
+
+#+begin_src text
+foss-2025b/OpenBLAS-0.3.27-foss-2025b.eb
+foss-2025b/OpenMPI-4.1.6-foss-2025b.eb
+foss-2025b/FFTW-3.3.10-foss-2025b.eb
+foss-2025b/GROMACS-2025.0-foss-2025b.eb
+#+end_src
+
+Order is a topological sort over the co-selected stack: a dependency's path
+always appears before every co-selected package that needs it (runtime or
+build-time). Ties are broken by package name for a deterministic order
+independent of input list order or ~HashMap~ iteration. An empty lock
+produces an empty file.
+
+* Stack diff (~--stack-diff-out~)
+
+Markdown, meant to be pasted directly into a pull request:
+
+#+begin_src markdown
+# Stack diff
+
+Baseline (`foss-2025a`) -> solved (`foss-2025b`).
+
+## Summary
+
+- **unchanged**: 1
+- **added**: 0
+- **removed**: 0
+- **version-bumped**: 3
+
+## Packages
+
+### FFTW -- unchanged
+
+- Baseline: `3.3.10` -- `foss-2025a/FFTW-3.3.10-foss-2025a.eb`
+- Solved: `3.3.10` -- `foss-2025b/FFTW-3.3.10-foss-2025b.eb`
+
+### GROMACS -- version-bumped
+
+- Baseline: `2024.1` -- `foss-2025a/GROMACS-2024.1-foss-2025a.eb`
+- Solved: `2025.0` -- `foss-2025b/GROMACS-2025.0-foss-2025b.eb`
+- Change: `2024.1` -> `2025.0`
+#+end_src
+
+Every package present in either the baseline or the solved lock is
+classified once: ~unchanged~ (same version both sides), ~added~ (solved
+only), ~removed~ (baseline only), or ~version-bumped~ (present both sides,
+different version). Sections are sorted by package name.
+
+* Planned SBOM (~--sbom-out~, CycloneDX)
+
+#+begin_src json
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-01-01T00:00:00Z",
+    "tools": [{"vendor": "SURF", "name": "eb-stack", "version": "resolvo+eb_stack-0.2.0"}],
+    "component": {
+      "type": "application",
+      "name": "easybuild-stack-foss-2025b",
+      "version": "foss-2025b",
+      "description": "Planned EasyBuild stack inventory from eb-stack lock (pre-install; not a post-build compliance scan)"
+    },
+    "properties": [
+      {"name": "eb_stack:document_kind", "value": "planned-sbom-from-lock"},
+      {"name": "eb_stack:solver_engine", "value": "resolvo_cdcl_sat"},
+      {"name": "eb_stack:toolchain", "value": "foss-2025b"}
+    ]
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "pkg:generic/GROMACS@2025.0?toolchain=foss-2025b",
+      "name": "GROMACS",
+      "version": "2025.0",
+      "purl": "pkg:generic/GROMACS@2025.0?toolchain=foss-2025b",
+      "properties": [
+        {"name": "easybuild:toolchain", "value": "foss-2025b"},
+        {"name": "easybuild:easyconfig_path", "value": "foss-2025b/GROMACS-2025.0-foss-2025b.eb"},
+        {"name": "eb_stack:lifecycle", "value": "pre-install-plan"}
+      ]
+    }
+  ],
+  "dependencies": [
+    {"ref": "pkg:generic/GROMACS@2025.0?toolchain=foss-2025b", "dependsOn": ["pkg:generic/OpenMPI@4.1.6?toolchain=foss-2025b"]}
+  ]
+}
+#+end_src
+
+Each component's ~bom-ref~ / ~purl~ is a synthetic ~pkg:generic/~ reference
+(EasyBuild packages have no real PURL type registry entry) embedding name,
+version, and toolchain label. ~eb_stack:lifecycle: pre-install-plan~ marks
+this as a *planned* inventory: the packages named here are the solver's
+selection, not a scan of anything actually built or installed.
+
+~dependsOn~ edges differ by how the document was produced:
+
+- From ~solve~ / ~solve-json~ (universe still in hand): edges come from each
+  package's *declared* ~dependencies~ (runtime only; build-time deps are
+  tracked separately and intentionally excluded from ~dependsOn~),
+  intersected with what actually co-selected.
+- From ~eb-stack sbom --lock LOCK~ (lock only, no universe): falls back to
+  co-stack edges -- every package ~dependsOn~ every other co-selected
+  package. This is a weaker, purely inventory-level edge set.

@@ -1,0 +1,89 @@
+#+TITLE: The parser approach
+#+OPTIONS: toc:t num:nil
+
+* Easyconfigs are Python, but eb-stack does not run Python
+
+An EasyBuild easyconfig (~*.eb~) is, syntactically, a Python source file.
+EasyBuild's own framework loads it by executing it and reading the resulting
+module namespace. That gives EasyBuild full fidelity -- conditionals,
+computed values, imports, templating via ~%(version)s~-style substitution --
+at the cost of needing a Python interpreter and the EasyBuild framework
+installed, and of executing arbitrary code from every recipe it reads.
+
+~eb_parse~ (~src/eb_parse.rs~) does not evaluate Python. Its own module
+comment says so directly: easyconfigs are treated as *a restricted
+Python-like DSL*, and only the fields ~eb-stack~ actually needs are
+extracted -- ~name~, ~version~, ~versionsuffix~, ~toolchain~,
+~dependencies~, ~builddependencies~.
+
+* What extraction actually does
+
+1. *Strip comments.* A best-effort line scanner drops ~#~ comments outside
+   quoted strings, leaving assignment and literal lines intact.
+2. *Extract single-line string assignments.* ~name = '...'~,
+   ~version = '...'~, ~versionsuffix = '...'~: find the line, confirm it is
+   a quoted string (single or double), take the contents up to the matching
+   quote. No expression evaluation -- ~version = get_version()~ or
+   ~version = VERSION_CONST~ would not be recognized as a version at all.
+3. *Extract the toolchain dict.* Scan from the ~toolchain = {~ line,
+   brace-match to the closing ~}~ (handling nesting), then pull ~name~ and
+   ~version~ string values out of that span with a pair of small regexes
+   (one for single quotes, one for double, since the ~regex~ crate has no
+   backreferences to match "whichever quote character opened this token").
+4. *Extract dependency lists.* Same brace/bracket-matching approach for
+   ~dependencies = [ ... ]~ and ~builddependencies = [ ... ]~: find the
+   list, then regex-match ~('Name', 'version')~ / ~("Name", "version")~
+   tuples inside it (an optional third tuple element, e.g. a version
+   suffix, is tolerated but ignored). A fallback pattern also recognizes the
+   filename form ~'OpenMPI-4.1.6-foss-2025b.eb'~ some easyconfigs use in
+   dependency lists instead of a tuple.
+5. *Map version fields to solver requirements.* A bare version
+   (~'4.1.5'~) becomes an *exact* requirement (~==4.1.5~) -- EasyBuild's own
+   default dependency semantics, co-version pinning unless an explicit
+   operator says otherwise. A version already carrying ~==~, ~>=~, ~<=~,
+   ~>~, ~<~, or ~!=~ is used as-is.
+
+~eb_emit~ (the ~bump~ path, see [[file:../explanation/architecture.org][architecture]])
+uses the same style of targeted text surgery in the other direction:
+locate the ~toolchain~ dict / ~version~ assignment / dependency tuples by
+the same brace-matching approach, and rewrite only those spans, leaving
+every other byte of the source untouched.
+
+* Why targeted extraction instead of the alternatives
+
+Two more general options exist and were deliberately not taken as the
+current implementation:
+
+- *Evaluate the file with a real Python interpreter* (optionally driving
+  EasyBuild's own ~EasyConfig~ class for full parity with what EasyBuild
+  itself would parse). This gives ground-truth fidelity, including
+  computed and templated fields, but pulls in a Python runtime and
+  (for true parity) an EasyBuild install as a dependency of a Rust CLI, and
+  means executing recipe code that ~eb-stack~ did not author.
+- *A full PEG or hand-written grammar* for the easyconfig DSL (the
+  ~pest~/~chumsky~/~nom~/~lalrpop~ family). This stays native and dependency
+  -free like the current approach, but is strictly more implementation
+  effort for a grammar that has to track EasyBuild's own syntax evolution,
+  to extract the same handful of fields the targeted extractor already
+  gets in a few hundred lines.
+
+The targeted extractor is a deliberately narrow middle ground: it reads real
+easyconfig syntax (quoted assignments, dict literals, list-of-tuples) as
+authored, without evaluating it, and it is scoped to exactly the fields the
+solver and the emit path need. It does not (and is not meant to) handle
+easyconfigs whose ~name~, ~version~, ~toolchain~, or dependency versions are
+computed rather than written as literal quoted strings -- those recipes
+would need the full-evaluation path to parse correctly. In the corpus of
+real easyconfigs this project targets, those fields are written as literals
+in the overwhelming majority of cases.
+
+* Version comparison is EasyBuild-shaped, not semver
+
+~src/version.rs~ tokenizes a version string into an ordered run of numeric
+and alphabetic parts and compares position by position: numeric parts
+compare numerically, alphabetic parts compare lexicographically, and a
+trailing alphabetic part with nothing on the other side sorts as a
+pre-release (~2025a < 2025b~, ~1.0rc1 < 1.0~). This matches how EasyBuild
+toolchain generations (~2025a~, ~2025b~) and application pre-releases
+actually sort, which semver's ~MAJOR.MINOR.PATCH~ model does not directly
+express.

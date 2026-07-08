@@ -1,0 +1,102 @@
+#+TITLE: Bump a recipe
+#+OPTIONS: toc:nil num:nil
+
+Goal: use ~eb-stack bump~ on your own easyconfig, controlling exactly which
+fields change. See the [[file:../tutorial.org][tutorial]] for a full worked
+example; this page is the quick reference for the flags.
+
+* Minimum invocation
+
+Only the toolchain is required to change:
+
+#+begin_src bash
+eb-stack bump \
+  --source Pkg-1.0-foss-2024a.eb \
+  --toolchain-name foss \
+  --toolchain-version 2024b
+#+end_src
+
+Writes ~Pkg-1.0-foss-2024b.eb~ to the current directory: application
+~version~ and every dependency version are left exactly as in the source.
+
+* Bump the application version too
+
+#+begin_src bash
+eb-stack bump \
+  --source Pkg-1.0-foss-2024a.eb \
+  --toolchain-name foss \
+  --toolchain-version 2024b \
+  --version 1.1
+#+end_src
+
+Only pass ~--version~ when the application itself has a new release for this
+toolchain generation. Without it, the source's ~version = '...'~ line is
+copied through unchanged (the common case: same release, newer toolchain).
+
+* Override dependency versions
+
+~--dep NAME=VERSION~ is repeatable and applies to both ~dependencies~ and
+~builddependencies~ tuples for that name:
+
+#+begin_src bash
+eb-stack bump \
+  --source Pkg-1.0-foss-2024a.eb \
+  --toolchain-name foss \
+  --toolchain-version 2024b \
+  --dep OpenMPI=5.0.3 \
+  --dep CMake=3.29.0
+#+end_src
+
+Any dependency *not* named in a ~--dep~ flag is left untouched, operator and
+all.
+
+* Operator preservation
+
+If the source has ~('OpenMPI', '>=4.1.5')~ and you pass
+~--dep OpenMPI=4.1.6~, the existing ~>=~ operator is kept:
+~('OpenMPI', '>=4.1.6')~. Give the override its own operator to replace the
+field outright:
+
+#+begin_src bash
+--dep 'OpenMPI=4.1.6'      # bare version: keeps the source's own operator
+--dep 'OpenMPI===4.1.6'    # explicit ==, replaces the field outright
+--dep 'OpenMPI=>=5.0.0'    # explicit >=, replaces the field outright
+#+end_src
+
+~--dep NAME=VERSION~ splits on the *first* ~=~ only, so everything after it
+is the override value: ~OpenMPI===4.1.6~ is name ~OpenMPI~, value
+~==4.1.6~. Recognized override operators: ~==~, ~>=~, ~<=~, ~!=~, ~>~, ~<~.
+A bare version (no leading operator in the override) keeps whatever operator
+the source already had -- ~>=4.1.5~ becomes ~>=4.1.6~, ~==4.1.5~ becomes
+~==4.1.6~, and a plain ~4.1.5~ stays plain.
+
+* Choose where the file lands
+
+#+begin_src bash
+# Conventional filename, written under a directory (created if missing)
+eb-stack bump --source Pkg-1.0-foss-2024a.eb \
+  --toolchain-name foss --toolchain-version 2024b \
+  --out-dir easyconfigs/foss-2024b
+
+# Explicit path, any filename
+eb-stack bump --source Pkg-1.0-foss-2024a.eb \
+  --toolchain-name foss --toolchain-version 2024b \
+  --out /tmp/review/Pkg-next.eb
+#+end_src
+
+~--out~ and ~--out-dir~ are mutually exclusive. With neither, the file is
+written to the current directory under the conventional
+~{name}-{version}-{toolchain_name}-{toolchain_version}.eb~ name.
+
+* What is guaranteed to stay byte-identical
+
+~easyblock~, ~homepage~, ~description~, ~toolchainopts~, ~source_urls~,
+~sources~, ~moduleclass~, comments, blank lines, and every dependency tuple
+you did not name in ~--dep~. ~bump~ rewrites targeted spans of the source
+text; it does not reformat or regenerate anything else. Running the same
+command twice on the same source produces byte-identical output both times.
+
+* Next steps
+
+- [[file:../tutorial.org][Tutorial]] -- a full end-to-end bump with real GROMACS versions.
+- [[file:../reference/cli.org][CLI reference]] -- the complete ~bump~ flag list.

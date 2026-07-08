@@ -1,0 +1,95 @@
+#+TITLE: Architecture
+#+OPTIONS: toc:t num:nil
+
+~eb-stack~ is a pipeline of small, independently testable modules. Nothing
+in the pipeline builds software or shells out to EasyBuild itself: the tool
+reads easyconfig text, decides a consistent selection, and writes text
+(lock, SBOM, reports, or a rewritten easyconfig) back out.
+
+#+begin_src dot :file ../images/pipeline.svg :exports results
+digraph G {
+    rankdir=LR;
+    node [shape=box, style=filled, fillcolor="white", fontname="Jost", fontsize=12];
+    edge [fontname="Jost", fontsize=11, color="#004D40"];
+    graph [fontname="Jost"];
+
+    eb_files [label=".eb files\n(easyconfig tree)"];
+    parser [label="eb_parse\nCandidate extraction"];
+    domain [label="domain\nCandidate / Policy / Universe"];
+    provider [label="resolvo_provider\nEbProvider", fillcolor="#F1DB4B"];
+    solver [label="resolvo::Solver\nCDCL SAT core", fillcolor="#FF655D", fontcolor="white"];
+    select [label="select\npriority-lex optimize"];
+    lock [label="StackLock\nstack.lock.json"];
+    report [label="report\nbuild list, stack diff"];
+    sbom [label="sbom\nCycloneDX"];
+    emit [label="eb_emit\nbump: next-gen .eb"];
+
+    eb_files -> parser -> domain -> provider -> solver;
+    solver -> select [label="feasible\nassignment"];
+    select -> lock;
+    lock -> report;
+    lock -> sbom;
+    eb_files -> emit [style=dashed, label="bump path\n(no solving)"];
+}
+#+end_src
+
+* Modules
+
+- ~eb_parse~ (~src/eb_parse.rs~) :: Reads ~.eb~ files into ~Candidate~
+  structs: ~name~, ~version~, ~toolchain~, ~dependencies~,
+  ~builddependencies~. See [[file:parser-approach.org][the parser approach]]: it
+  extracts these specific fields with regex-based text matching, without
+  evaluating the file as Python.
+- ~domain~ (~src/domain.rs~) :: The shared vocabulary every other module
+  speaks: ~Toolchain~, ~Candidate~, ~DepReq~, ~Universe~, ~Policy~,
+  ~StackLock~, ~LockPackage~. Plain serde structs, no behavior beyond a
+  couple of small helpers (~Policy::effective_root_priority~).
+- ~resolvo_provider~ (~src/resolvo_provider.rs~) :: ~EbProvider~ implements
+  resolvo's ~DependencyProvider~ trait over the candidate set: which
+  versions exist per package name, which versions satisfy a requirement
+  range, and the dependency edges to expose to the SAT core. Also owns
+  ~solve_with_resolvo~, the priority-lexicographic optimization loop layered
+  on top of feasibility. See
+  [[file:optimization-model.org][the optimization model]].
+- ~select~ (~src/select.rs~) :: Thin wrapper that calls
+  ~resolvo_provider::solve_with_resolvo~, turns the result into a
+  ~StackLock~ (sorted, timestamped, tagged with the solver engine string),
+  and validates every declared root is present.
+- ~sbom~ (~src/sbom.rs~) :: ~StackLock~ (plus, when available, the
+  universe's declared dependency edges) to a CycloneDX JSON document. See
+  [[file:../reference/formats.org][the format reference]].
+- ~report~ (~src/report.rs~) :: ~StackLock~ to an install-ordered build list
+  (topological sort) and a baseline-vs-solved markdown stack diff.
+- ~eb_emit~ (~src/eb_emit.rs~) :: The ~bump~ path. Rewrites the ~toolchain~
+  dict, optional ~version~ assignment, and named dependency tuples in an
+  easyconfig's *source text*, byte-preserving everything else. Does not go
+  through ~eb_parse~, ~domain~, or the solver at all: bumping one recipe is
+  a single-file text rewrite that never invokes the solver.
+- ~version~ (~src/version.rs~) :: EasyBuild-shaped version comparison and
+  the ~version_req~ matcher (~==~, ~>=~, ~<=~, ~>~, ~<~, bare-exact) shared
+  by the parser, the provider, and the baseline-generation picker.
+
+* Two entry paths, one codebase
+
+~solve~ / ~solve-json~ / ~parse~ / ~sbom~ all flow through the co-selection
+pipeline above: parse (or load an already-built universe JSON), build a ~Universe~, ask
+~select_stack~ for a consistent ~StackLock~, then derive reports from that
+lock.
+
+~bump~ is deliberately separate. It never builds a ~Universe~ and never
+touches the solver: it reads one file, rewrites specific spans of its text,
+and writes the result. That separation is why ~bump~ has no dependency on a
+policy, a universe, or any other easyconfig in the tree -- it is a
+single-file, offline operation with no solving involved.
+
+* Where the co-selection graph's edges come from
+
+Every ~Candidate~ carries two separate dependency lists: ~dependencies~
+(runtime) and ~builddependencies~ (build-time only, e.g. ~CMake~). Both
+lists become co-selection *requirements* on the SAT core identically
+(~resolvo_provider::get_dependencies~ chains them) -- a package with an edge
+to another only through ~builddependencies~ still forces that other package
+into the lock. The role distinction survives only in the outputs that care
+about it: the SBOM's runtime-vs-build-time ~dependsOn~ maps
+(~dep_map_from_universe~ vs ~build_dep_map_from_universe~ in ~sbom.rs~) keep
+the two separate even though the solver does not.
