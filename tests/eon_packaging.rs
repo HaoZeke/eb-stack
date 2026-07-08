@@ -124,19 +124,31 @@ fn resolve_eon_full_product_foss_2024a_feedstock_parity() {
         eon_txt.contains("cargo cinstall"),
         "preconfigopts must cargo-c install staged readcon-core"
     );
-    // Feedstock installs into product prefix ($PREFIX / %(installdir)s), not a
-    // disposable builddir side prefix (leaves runtime libs outside the module).
+    // EasyBuild lifecycle: make_installdir wipes %(installdir)s after preconfig.
+    // Stage for link in builddir; re-populate product prefix in postinstallcmds.
     assert!(
-        eon_txt.contains("--prefix %(installdir)s"),
-        "cargo cinstall must target %(installdir)s like feedstock $PREFIX"
+        eon_txt.contains("%(builddir)s/readcon-stage"),
+        "preconfig must stage readcon under builddir for meson link"
     );
     assert!(
-        !eon_txt.contains("readcon-prefix"),
-        "must not use a builddir-only readcon-prefix"
+        eon_txt.contains("postinstallcmds"),
+        "must re-stage readcon into installdir after make_installdir wipe"
     );
     assert!(
-        eon_txt.contains("libreadcon_core"),
-        "sanity must require packaged libreadcon_core under installdir"
+        eon_txt.contains("%(installdir)s/lib")
+            && eon_txt.contains("libreadcon_core")
+            && eon_txt.contains("readcon-core.h"),
+        "postinstall/sanity must place libreadcon_core + header under installdir"
+    );
+    // preconfig-only cinstall into installdir is wiped — must not be the sole path
+    let preconfig_block = eon_txt
+        .lines()
+        .filter(|l| l.contains("preconfigopts"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !preconfig_block.contains("--prefix %(installdir)s"),
+        "preconfig must not cargo-c solely into installdir (wiped by make_installdir)"
     );
     assert!(
         !eon_txt.contains("('Rust', '1.83"),

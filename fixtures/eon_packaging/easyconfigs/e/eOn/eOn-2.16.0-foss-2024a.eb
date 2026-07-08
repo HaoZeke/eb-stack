@@ -99,31 +99,40 @@ dependencies = [
     ('metatomic-torch', '0.1.15'),
 ]
 
-# Feedstock-style readcon-core C-API via cargo-c into the *module prefix*
-# (%(installdir)s == conda $PREFIX). A side builddir prefix leaves absolute
-# install names / missing runtime libs outside the product (feedstock build.sh
-# installs into $PREFIX for the same reason). Multi-source stages readcon under
-# subprojects/; after cinstall the tree is removed so meson does not take the
-# subproject path (cbindgen + re-check rustc MSRV). Keep nlohmann_json wrap.
-preconfigopts = 'mkdir -p %(installdir)s && cd %(builddir)s/eOn-%(version)s/subprojects/readcon-core && cargo cinstall --locked --release --prefix %(installdir)s --libdir lib --includedir include --pkgconfigdir lib/pkgconfig && cd %(builddir)s/eOn-%(version)s && rm -f subprojects/xtb.wrap subprojects/vesin.wrap subprojects/rgpot.wrap subprojects/readcon-core.wrap && rm -rf subprojects/readcon-core && '
-preconfigopts += 'export PKG_CONFIG_PATH=%(installdir)s/lib/pkgconfig:$EBROOTXTB/lib/pkgconfig:$EBROOTCAPNPROTO/lib/pkgconfig:$EBROOTQUILL/lib/pkgconfig:$EBROOTMETATENSOR/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH} && '
-preconfigopts += 'export LIBRARY_PATH=%(installdir)s/lib${LIBRARY_PATH:+:$LIBRARY_PATH} && '
-preconfigopts += 'export LD_LIBRARY_PATH=%(installdir)s/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} && '
+# EasyBuild lifecycle (cleanupoldinstall=True):
+#   preconfig → configure/build → make_installdir WIPES %(installdir)s → ninja install
+#   → postinstallcmds → sanity.
+# cargo-c stages into %(builddir)s/readcon-stage for meson link; postinstallcmds
+# re-populate %(installdir)s after the wipe. (conda $PREFIX is one stable prefix;
+# EB installdir is not — preconfig-only cinstall into installdir is wiped.)
+# Multi-source stages readcon under subprojects/; after cinstall remove the
+# source tree so meson uses pkg-config (not subproject/cbindgen path).
+preconfigopts = 'mkdir -p %(builddir)s/readcon-stage && cd %(builddir)s/eOn-%(version)s/subprojects/readcon-core && cargo cinstall --locked --release --prefix %(builddir)s/readcon-stage --libdir lib --includedir include --pkgconfigdir lib/pkgconfig && cd %(builddir)s/eOn-%(version)s && rm -f subprojects/xtb.wrap subprojects/vesin.wrap subprojects/rgpot.wrap subprojects/readcon-core.wrap && rm -rf subprojects/readcon-core && '
+preconfigopts += 'export PKG_CONFIG_PATH=%(builddir)s/readcon-stage/lib/pkgconfig:$EBROOTXTB/lib/pkgconfig:$EBROOTCAPNPROTO/lib/pkgconfig:$EBROOTQUILL/lib/pkgconfig:$EBROOTMETATENSOR/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH} && '
+preconfigopts += 'export LIBRARY_PATH=%(builddir)s/readcon-stage/lib${LIBRARY_PATH:+:$LIBRARY_PATH} && '
+preconfigopts += 'export LD_LIBRARY_PATH=%(builddir)s/readcon-stage/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} && '
 # EasyBuild convert_name: '-' → 'min' → EBROOTMETATENSORMINTORCH / EBROOTMETATOMICMINTORCH.
-preconfigopts += 'export CMAKE_PREFIX_PATH=%(installdir)s:$EBROOTPYTORCH:$EBROOTMETATENSOR:$EBROOTMETATENSORMINTORCH:$EBROOTMETATOMICMINTORCH:$EBROOTXTB:$EBROOTCAPNPROTO:$EBROOTQUILL:$EBROOTEIGEN:$EBROOTHIGHWAY:$EBROOTINIH${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
+preconfigopts += 'export CMAKE_PREFIX_PATH=%(builddir)s/readcon-stage:$EBROOTPYTORCH:$EBROOTMETATENSOR:$EBROOTMETATENSORMINTORCH:$EBROOTMETATOMICMINTORCH:$EBROOTXTB:$EBROOTCAPNPROTO:$EBROOTQUILL:$EBROOTEIGEN:$EBROOTHIGHWAY:$EBROOTINIH${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
 preconfigopts += 'export PYTHONPATH=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH} && '
-# feedstock: force generic libtorch.so for CPU/CUDA runtime switch; keep installdir/lib
-# first so eonclient links the packaged libreadcon_core.
-preconfigopts += 'export LDFLAGS="-L%(installdir)s/lib $LDFLAGS -Wl,--no-as-needed,$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch/lib/libtorch.so -Wl,--as-needed" && '
+# feedstock: force generic libtorch.so; stage path for link only (runtime uses installdir after postinstall).
+preconfigopts += 'export LDFLAGS="-L%(builddir)s/readcon-stage/lib $LDFLAGS -Wl,--no-as-needed,$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch/lib/libtorch.so -Wl,--as-needed" && '
 
 # Scientific surface. torch_path: EB PyTorch lays out libtorch under site-packages/torch.
 # Keep as one plain assignment for packaging tools that only scrape configopts = '...'.
 configopts = "-Dbuildtype=release -Dwith_tests=false -Dwith_fortran=true -Dwith_cuh2=true -Dwith_metatomic=true -Dwith_xtb=true -Dwith_serve=true -Dwith_rgpot=true -Dpip_metatomic=false -Dtorch_path=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch -Dwith_artn=false -Dwith_ira=false -Dwith_parallel_neb=false -Dwith_catlearn=false -Dwith_ase=false -Dwith_ase_orca=false -Dwith_ase_nwchem=false -Dwith_gp_surrogate=false -Dwith_gprd=false -Dwith_vasp=false -Dwith_ams=false -Dwith_mpi=false -Dwith_qsc=false -Dwith_water=false -Dwith_newpot=false -Dnative_arch=false -Dfast_math=false -Duse_mkl=false"
 
+# After make_installdir wipe + ninja install: ship staged readcon into the module.
+postinstallcmds = [
+    'mkdir -p %(installdir)s/lib %(installdir)s/include %(installdir)s/lib/pkgconfig',
+    'cp -a %(builddir)s/readcon-stage/lib/libreadcon_core* %(installdir)s/lib/',
+    'cp -a %(builddir)s/readcon-stage/include/readcon-core.h %(installdir)s/include/',
+    "sed 's|^prefix=.*|prefix=%(installdir)s|' %(builddir)s/readcon-stage/lib/pkgconfig/readcon-core.pc > %(installdir)s/lib/pkgconfig/readcon-core.pc",
+]
+
 sanity_check_paths = {
     'files': [
         'bin/eonclient',
-        # cargo-c into %(installdir)s (product prefix), not a builddir side tree
+        # postinstallcmds re-stage after make_installdir wipe
         'include/readcon-core.h',
         'lib/libreadcon_core.%s' % SHLIB_EXT,
         'lib/python%(pyshortver)s/site-packages/eon/__init__.py',
