@@ -1,4 +1,5 @@
-# TorchScript bindings for metatensor. Needs system PyTorch + metatensor-core.
+# Companion: TorchScript C++ bindings for metatensor (libmetatensor_torch).
+# Co-built against EasyBuild PyTorch on foss-2024a.
 easyblock = 'CMakeMake'
 
 name = 'metatensor-torch'
@@ -6,14 +7,16 @@ version = '0.10.0'
 
 homepage = 'https://docs.metatensor.org/'
 description = """TorchScript C++ bindings for metatensor (libmetatensor_torch).
-Co-built against EasyBuild PyTorch for foss-2024a."""
+Required by metatomic-torch and eOn metatomic potentials."""
 
 toolchain = {'name': 'foss', 'version': '2024a'}
 toolchainopts = {'pic': True, 'openmp': True}
 
 source_urls = ['https://github.com/metatensor/metatensor/archive/refs/tags/']
 sources = ['metatensor-torch-v%(version)s.tar.gz']
-checksums = ['824bc84c217b6994fa4c989d5d1953836bff22d309de8c4b0d022cb760093274']
+checksums = [
+    {'metatensor-torch-v0.10.0.tar.gz': '824bc84c217b6994fa4c989d5d1953836bff22d309de8c4b0d022cb760093274'},
+]
 
 builddependencies = [
     ('CMake', '3.29.3'),
@@ -29,10 +32,9 @@ dependencies = [
 
 start_dir = 'metatensor-torch'
 
-# Point CMake at EB PyTorch + metatensor prefixes.
-preconfigopts = 'export CMAKE_PREFIX_PATH=$EBROOTPYTORCH:$EBROOTMETATENSOR${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
-
-configopts = '-GNinja -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release'
+# Siesta-style $EBROOT* at configure time; EB PyTorch lays out under site-packages/torch.
+preconfigopts = 'export CMAKE_PREFIX_PATH=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch:$EBROOTMETATENSOR${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
+configopts = '-GNinja -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release -DTorch_DIR=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch/share/cmake/Torch '
 
 sanity_check_paths = {
     'files': ['lib/libmetatensor_torch.%s' % SHLIB_EXT],

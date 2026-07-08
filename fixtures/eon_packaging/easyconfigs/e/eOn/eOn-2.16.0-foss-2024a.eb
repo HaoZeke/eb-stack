@@ -1,21 +1,28 @@
 # EasyBuild recipe for eOn 2.16.0 — full default product (conda-forge parity).
-# Style model: GROMACS/LAMMPS (foss toolchain, fat dependency list, Meson/CMake
-# flags encode the scientific surface; CUDA torch is a versionsuffix sibling).
+# Style model: GROMACS / LAMMPS / Siesta (foss, fat deps, multi-source
+# staged subprojects, configopts encode scientific surface). CUDA torch is a
+# versionsuffix sibling when needed (GROMACS -CUDA-… / LAMMPS -kokkos-CUDA-…),
+# not option-off stubs per meson flag.
 #
-# Feature surface matches conda-forge eon-feedstock build.sh:
+# Feature surface matches conda-forge eon-feedstock recipe/build.sh:
 #   -Dwith_metatomic=true -Dwith_xtb=true -Dwith_serve=true -Dwith_rgpot=true
-# plus Fortran pots / CuH2. pip_metatomic=false (system metatomic stack).
+#   -Dpip_metatomic=false  (system metatomic stack from companion modules)
+# plus Fortran pots / CuH2.
+
 easyblock = 'MesonNinja'
 
 name = 'eOn'
 version = '2.16.0'
 
 homepage = 'https://theochemuieon.readthedocs.io/'
-description = """eOn long-timescale atomistic simulation: AKMC, NEB, and
-saddle-point search (min-mode, dimer). This module is the full default product:
-C++/Fortran eonclient with metatomic, xTB, Cap'n Proto serve, and rgpot, plus
-the Python AKMC package (import eon). Matches the conda-forge eon feedstock
-feature surface for HPC module stacks."""
+description = """
+eOn long-timescale atomistic simulation: adaptive kinetic Monte Carlo (AKMC),
+nudged elastic band (NEB), and saddle-point search (min-mode, dimer).
+
+This is the full default product: C++/Fortran eonclient with metatomic, xTB,
+Cap'n Proto serve, and rgpot, plus the Python AKMC package (import eon). Feature
+surface matches the conda-forge eon feedstock for HPC module stacks.
+"""
 
 toolchain = {'name': 'foss', 'version': '2024a'}
 toolchainopts = {'pic': True, 'openmp': True}
@@ -25,30 +32,45 @@ source_urls = [GITHUB_SOURCE]
 sources = [
     {
         'download_filename': 'v%(version)s.tar.gz',
-        'filename': 'eOn-%(version)s.tar.gz',
+        'filename': SOURCE_TAR_GZ,
     },
+    # Stage rgpot into subprojects/ (same as feedstock target_directory).
     {
         'source_urls': ['https://github.com/OmniPotentRPC/rgpot/archive/refs/tags/'],
         'download_filename': 'v2.2.1.tar.gz',
         'filename': 'rgpot-2.2.1.tar.gz',
         'extract_cmd': "mkdir -p %(builddir)s/eOn-%(version)s/subprojects && "
                        "tar -xzf %s -C %(builddir)s/eOn-%(version)s/subprojects && "
+                       "rm -rf %(builddir)s/eOn-%(version)s/subprojects/rgpot && "
                        "mv %(builddir)s/eOn-%(version)s/subprojects/rgpot-* "
                        "%(builddir)s/eOn-%(version)s/subprojects/rgpot",
+    },
+    # Stage readcon-core into subprojects/ (feedstock builds via cargo-c into
+    # prefix; meson subproject builds the same crate with cargo).
+    {
+        'source_urls': ['https://github.com/lode-org/readcon-core/archive/refs/tags/'],
+        'download_filename': 'v0.13.1.tar.gz',
+        'filename': 'readcon-core-0.13.1.tar.gz',
+        'extract_cmd': "mkdir -p %(builddir)s/eOn-%(version)s/subprojects && "
+                       "tar -xzf %s -C %(builddir)s/eOn-%(version)s/subprojects && "
+                       "rm -rf %(builddir)s/eOn-%(version)s/subprojects/readcon-core && "
+                       "mv %(builddir)s/eOn-%(version)s/subprojects/readcon-core-* "
+                       "%(builddir)s/eOn-%(version)s/subprojects/readcon-core",
     },
 ]
 checksums = [
     {'eOn-2.16.0.tar.gz': 'bdb2edd169fb7162bbddbc2742db3215ccbf58206923782c98e0c549fd0614dd'},
     {'rgpot-2.2.1.tar.gz': 'd4687bc719e19174e89288dd16dd45d7a8645d7205c7f8d8fc4d677266055918'},
+    {'readcon-core-0.13.1.tar.gz': 'a261e69b87228dcc8f161eef800590b0395b4c93605b838c6216d40a1780f0bf'},
 ]
 
 builddependencies = [
-    # eOn meson_version >= 1.8.0; companion on GCCcore-13.3.0 (2024a robot only has 1.4.0).
+    # eOn requires meson >= 1.8.0; 2024a robot only has Meson-1.4.0 on GCCcore-13.3.0.
     ('Meson', '1.8.2', '', ('GCCcore', '13.3.0')),
     ('Ninja', '1.12.1'),
     ('pkgconf', '2.2.0'),
     ('CMake', '3.29.3'),
-    # readcon-core wrap (when not using a system module) needs cargo.
+    # readcon-core subproject is a Rust crate (cargo).
     ('Rust', '1.83.0'),
 ]
 
@@ -56,29 +78,36 @@ dependencies = [
     ('Python', '3.12.3'),
     ('SciPy-bundle', '2024.05'),
     ('PyYAML', '6.0.2'),
-    # Client stack (GCCcore generation members of foss-2024a)
-    ('Eigen', '3.4.0', '', ('GCCcore', '13.3.0')),
-    ('Highway', '1.2.0', '', ('GCCcore', '13.3.0')),
-    ('inih', '58', '', ('GCCcore', '13.3.0')),
+    # Client stack (robot resolves GCCcore-13.3.0 under foss-2024a)
+    ('Eigen', '3.4.0'),
+    ('Highway', '1.2.0'),
+    ('inih', '58'),
+    # Companion (not yet upstream): easyconfigs/q/quill/
     ('quill', '11.1.0', '', ('GCCcore', '13.3.0')),
-    # xTB pot (gfbf is in foss hierarchy)
+    # xTB pot — only gfbf-2024a in robot
     ('xtb', '6.7.1', '', ('gfbf', '2024a')),
-    # serve / rgpot Cap'n Proto RPC
-    ('CapnProto', '1.1.0', '', ('GCCcore', '13.3.0')),
-    # metatomic stack (companions under easybuild/easyconfigs/m/)
+    # Cap'n Proto serve / rgpot RPC
+    ('CapnProto', '1.1.0'),
+    # metatomic stack (companions under easyconfigs/m/)
     ('PyTorch', '2.6.0'),
     ('metatensor', '0.1.17', '', ('GCCcore', '13.3.0')),
     ('metatensor-torch', '0.10.0'),
     ('metatomic-torch', '0.1.15'),
 ]
 
-# Feedstock-parity Meson surface (plain string for packaging tools).
-# torch_path left empty → meson probes PyTorch via PYTHONPATH / CMAKE_PREFIX_PATH
-# from the loaded modules (set below in preconfigopts).
-configopts = '-Dbuildtype=release -Dwith_tests=false -Dwith_fortran=true -Dwith_cuh2=true -Dwith_metatomic=true -Dwith_xtb=true -Dwith_serve=true -Dwith_rgpot=true -Dpip_metatomic=false -Dwith_artn=false -Dwith_ira=false -Dwith_parallel_neb=false -Dwith_catlearn=false -Dwith_ase=false -Dwith_ase_orca=false -Dwith_ase_nwchem=false -Dwith_gp_surrogate=false -Dwith_gprd=false -Dwith_vasp=false -Dwith_ams=false -Dwith_mpi=false -Dwith_qsc=false -Dwith_water=false -Dwith_newpot=false -Dnative_arch=false -Dfast_math=false -Duse_mkl=false'
+# Feedstock pattern: drop wraps for deps provided by modules or staged sources
+# so meson does not try wrap-git/network. Keep nlohmann_json wrap (header-only).
+# Siesta-style $EBROOT* expansion at configure time.
+preconfigopts = 'rm -f subprojects/xtb.wrap subprojects/vesin.wrap subprojects/rgpot.wrap subprojects/readcon-core.wrap && '
+preconfigopts += 'export CMAKE_PREFIX_PATH=$EBROOTPYTORCH:$EBROOTMETATENSOR:$EBROOTMETATENSORTORCH:$EBROOTMETATOMICTORCH:$EBROOTXTB:$EBROOTCAPNPROTO:$EBROOTQUILL:$EBROOTEIGEN:$EBROOTHIGHWAY:$EBROOTINIH${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
+preconfigopts += 'export PKG_CONFIG_PATH=$EBROOTXTB/lib/pkgconfig:$EBROOTCAPNPROTO/lib/pkgconfig:$EBROOTQUILL/lib/pkgconfig:$EBROOTMETATENSOR/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH} && '
+preconfigopts += 'export PYTHONPATH=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH} && '
+# feedstock: force generic libtorch.so for CPU/CUDA runtime switch
+preconfigopts += 'export LDFLAGS="$LDFLAGS -Wl,--no-as-needed,$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch/lib/libtorch.so -Wl,--as-needed" && '
 
-# Ensure meson finds torch / metatomic / xtb / capnp from EB modules.
-preconfigopts = 'export CMAKE_PREFIX_PATH=$EBROOTPYTORCH:$EBROOTMETATENSOR:$EBROOTMETATENSORTORCH:$EBROOTMETATOMICTORCH:$EBROOTXTB:$EBROOTCAPNPROTO:$EBROOTQUILL:$EBROOTEIGEN${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && export PKG_CONFIG_PATH=$EBROOTXTB/lib/pkgconfig:$EBROOTCAPNPROTO/lib/pkgconfig:$EBROOTQUILL/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH} && export PYTHONPATH=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH} && '
+# Scientific surface. torch_path: EB PyTorch lays out libtorch under site-packages/torch.
+# Keep as one plain assignment for packaging tools that only scrape configopts = '...'.
+configopts = "-Dbuildtype=release -Dwith_tests=false -Dwith_fortran=true -Dwith_cuh2=true -Dwith_metatomic=true -Dwith_xtb=true -Dwith_serve=true -Dwith_rgpot=true -Dpip_metatomic=false -Dtorch_path=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch -Dwith_artn=false -Dwith_ira=false -Dwith_parallel_neb=false -Dwith_catlearn=false -Dwith_ase=false -Dwith_ase_orca=false -Dwith_ase_nwchem=false -Dwith_gp_surrogate=false -Dwith_gprd=false -Dwith_vasp=false -Dwith_ams=false -Dwith_mpi=false -Dwith_qsc=false -Dwith_water=false -Dwith_newpot=false -Dnative_arch=false -Dfast_math=false -Duse_mkl=false"
 
 sanity_check_paths = {
     'files': [
@@ -95,7 +124,7 @@ sanity_check_commands = [
     "eonclient --help",
     "eonclient --version",
     # FEATURES_STRING is generated before -DWITH_* in client/meson.build, so
-    # --features can lie; check linked engine libs instead (xtb/torch/capnp).
+    # --features can lie; assert linked engine libs (feedstock surface).
     "bash -c \"ldd $(which eonclient) | grep -Ei 'libxtb|metatomic|capnp|torch'\"",
     "python -c \"import eon; print(getattr(eon, '__version__', 'ok'))\"",
 ]

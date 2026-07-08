@@ -46,7 +46,12 @@ fn resolve_eon_full_product_foss_2024a_feedstock_parity() {
     assert_eq!(r.toolchain.version, "2024a");
     assert_eq!(r.easyblock.as_deref(), Some("MesonNinja"));
     assert_eq!(r.moduleclass.as_deref(), Some("chem"));
-    assert!(!r.checksums.is_empty(), "checksum required for packaging");
+    // Multi-source: eOn + rgpot + readcon-core (Siesta/feedstock style)
+    assert!(
+        r.checksums.len() >= 3,
+        "expected >=3 multi-source checksums, got {}",
+        r.checksums.len()
+    );
     let opts = r.configopts.as_deref().unwrap_or("");
     for flag in [
         "-Dwith_metatomic=true",
@@ -55,6 +60,7 @@ fn resolve_eon_full_product_foss_2024a_feedstock_parity() {
         "-Dwith_rgpot=true",
         "-Dwith_fortran=true",
         "-Dpip_metatomic=false",
+        "-Dtorch_path=",
     ] {
         assert!(opts.contains(flag), "configopts missing {flag}: {opts}");
     }

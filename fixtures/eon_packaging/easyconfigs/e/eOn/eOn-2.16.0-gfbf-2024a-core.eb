@@ -1,0 +1,65 @@
+# NOT the primary product. Core-only debug/lite leftover on gfbf-2024a.
+# Submit / module default is eOn-2.16.0-foss-2024a.eb (feedstock-parity full).
+easyblock = 'MesonNinja'
+
+name = 'eOn'
+version = '2.16.0'
+versionsuffix = '-core'
+
+homepage = 'https://theochemuieon.readthedocs.io/'
+description = """eOn core-only client (Fortran/CuH2, no metatomic/xTB/serve/rgpot).
+Not the default product — use eOn-*-foss-2024a.eb for feedstock parity."""
+
+toolchain = {'name': 'gfbf', 'version': '2024a'}
+toolchainopts = {'pic': True, 'openmp': True}
+
+github_account = 'TheochemUI'
+source_urls = [GITHUB_SOURCE]
+sources = [
+    {
+        'download_filename': 'v%(version)s.tar.gz',
+        'filename': SOURCE_TAR_GZ,
+    },
+]
+checksums = [
+    {'eOn-2.16.0.tar.gz': 'bdb2edd169fb7162bbddbc2742db3215ccbf58206923782c98e0c549fd0614dd'},
+]
+
+builddependencies = [
+    ('Meson', '1.8.2', '', ('GCCcore', '13.3.0')),
+    ('Ninja', '1.12.1'),
+    ('pkgconf', '2.2.0'),
+    ('CMake', '3.29.3'),
+    ('Rust', '1.83.0'),
+]
+
+dependencies = [
+    ('Python', '3.12.3'),
+    ('SciPy-bundle', '2024.05'),
+    ('Eigen', '3.4.0'),
+    ('Highway', '1.2.0'),
+    ('inih', '58'),
+    ('quill', '11.1.0', '', ('GCCcore', '13.3.0')),
+]
+
+configopts = "-Dbuildtype=release -Dwith_tests=false -Dwith_fortran=true -Dwith_cuh2=true -Dwith_artn=false -Dwith_ira=false -Dwith_xtb=false -Dwith_metatomic=false -Dwith_parallel_neb=false -Dwith_catlearn=false -Dwith_ase=false -Dwith_ase_orca=false -Dwith_ase_nwchem=false -Dwith_gp_surrogate=false -Dwith_gprd=false -Dwith_vasp=false -Dwith_ams=false -Dwith_mpi=false -Dwith_rgpot=false -Dwith_serve=false -Dwith_qsc=false -Dwith_water=false -Dwith_newpot=false -Dnative_arch=false -Dfast_math=false -Duse_mkl=false -Dpip_metatomic=false"
+
+sanity_check_paths = {
+    'files': [
+        'bin/eonclient',
+        'lib/python%(pyshortver)s/site-packages/eon/__init__.py',
+    ],
+    'dirs': [
+        'bin',
+        'lib/python%(pyshortver)s/site-packages/eon',
+    ],
+}
+
+sanity_check_commands = [
+    "eonclient --help",
+    "python -c \"import eon; print(getattr(eon, '__version__', 'ok'))\"",
+]
+
+moduleclass = 'chem'
+
+modextrapaths = {'PYTHONPATH': 'lib/python%(pyshortver)s/site-packages'}
