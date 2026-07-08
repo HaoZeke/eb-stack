@@ -16,8 +16,19 @@ cargo build --release
   --policy fixtures/gromacs_2025_to_next/policies/prefer_newer.json \
   --baseline-easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
   --lock-out stack.lock.json \
-  --sbom-out stack.cdx.json
+  --sbom-out stack.cdx.json \
+  --build-list-out build.list \
+  --stack-diff-out stack.diff.md
 ```
+
+Optional outputs (omit to keep prior lock+SBOM-only behavior):
+
+- `--build-list-out`: plain-text selected easyconfigs in dependency order (one path
+  per line) for sequential install pipelines.
+- `--stack-diff-out`: markdown package-level diff vs the baseline (unchanged /
+  added / removed / version-bumped with easyconfig paths), pasteable into a PR.
+
+The same flags work on `solve-json` (baseline via `--baseline` lock JSON).
 
 `prefer_newer` co-selects GROMACS 2025.0 with OpenBLAS 0.3.27, OpenMPI 5.0.3,
 FFTW 3.3.10. Design notes (if any) live in a separate notes vault, not this repo.

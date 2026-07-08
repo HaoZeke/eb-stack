@@ -4,7 +4,8 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use eb_stack::{
     emit_next_generation_from_path, load_json_file, lock_to_cyclonedx, parse_easyconfig_tree,
-    solve_from_easyconfigs, solve_to_files, EmitParams, StackLock, Toolchain,
+    solve_from_easyconfigs_with_extras, solve_to_files_with_extras, EmitParams, SolveExtraOut,
+    StackLock, Toolchain,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -37,6 +38,12 @@ enum Cmd {
         lock_out: PathBuf,
         #[arg(long, default_value = "stack.cdx.json")]
         sbom_out: PathBuf,
+        /// Optional plain-text build list: selected easyconfigs in dependency order
+        #[arg(long)]
+        build_list_out: Option<PathBuf>,
+        /// Optional markdown stack diff vs baseline (pasteable into a PR)
+        #[arg(long)]
+        stack_diff_out: Option<PathBuf>,
     },
     /// Parse easyconfigs and print JSON candidates (debug / universe dump).
     Parse {
@@ -59,6 +66,12 @@ enum Cmd {
         lock_out: PathBuf,
         #[arg(long, default_value = "stack.cdx.json")]
         sbom_out: PathBuf,
+        /// Optional plain-text build list: selected easyconfigs in dependency order
+        #[arg(long)]
+        build_list_out: Option<PathBuf>,
+        /// Optional markdown stack diff vs baseline lock (pasteable into a PR)
+        #[arg(long)]
+        stack_diff_out: Option<PathBuf>,
     },
     /// Emit CycloneDX from an existing lock.
     Sbom {
@@ -126,14 +139,20 @@ fn main() -> Result<()> {
             baseline_easyconfigs,
             lock_out,
             sbom_out,
+            build_list_out,
+            stack_diff_out,
         } => {
             let baseline = baseline_easyconfigs.unwrap_or_else(|| easyconfigs.clone());
-            let lock = solve_from_easyconfigs(
+            let lock = solve_from_easyconfigs_with_extras(
                 &easyconfigs,
                 &policy,
                 Some(&baseline),
                 &lock_out,
                 &sbom_out,
+                SolveExtraOut {
+                    build_list_out: build_list_out.as_deref(),
+                    stack_diff_out: stack_diff_out.as_deref(),
+                },
             )?;
             println!(
                 "parsed easyconfigs under {} -> lock {} ({} packages, engine={})",
@@ -152,6 +171,12 @@ fn main() -> Result<()> {
                 println!("  - {} {} ({})", p.name, p.version, p.easyconfig_path);
             }
             println!("planned SBOM {}", sbom_out.display());
+            if let Some(p) = &build_list_out {
+                println!("build list {}", p.display());
+            }
+            if let Some(p) = &stack_diff_out {
+                println!("stack diff {}", p.display());
+            }
         }
         Cmd::Parse {
             easyconfigs,
@@ -170,13 +195,19 @@ fn main() -> Result<()> {
             baseline,
             lock_out,
             sbom_out,
+            build_list_out,
+            stack_diff_out,
         } => {
-            let lock = solve_to_files(
+            let lock = solve_to_files_with_extras(
                 &universe,
                 &policy,
                 baseline.as_deref(),
                 &lock_out,
                 &sbom_out,
+                SolveExtraOut {
+                    build_list_out: build_list_out.as_deref(),
+                    stack_diff_out: stack_diff_out.as_deref(),
+                },
             )?;
             println!(
                 "solve-json universe {} policy {} -> lock {} ({} packages, engine={})",
@@ -196,6 +227,12 @@ fn main() -> Result<()> {
                 println!("  - {} {} ({})", p.name, p.version, p.easyconfig_path);
             }
             println!("planned SBOM {}", sbom_out.display());
+            if let Some(p) = &build_list_out {
+                println!("build list {}", p.display());
+            }
+            if let Some(p) = &stack_diff_out {
+                println!("stack diff {}", p.display());
+            }
         }
         Cmd::Sbom { lock, out } => {
             let lock: StackLock = load_json_file(&lock)?;
