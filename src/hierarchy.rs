@@ -476,7 +476,8 @@ pub struct SourceDepSpec {
     pub versionsuffix: Option<String>,
     /// 4th tuple element is EasyBuild `SYSTEM` (pseudo-external / binary pin).
     pub system_toolchain: bool,
-    /// Trailing comment marks the dep optional (e.g. `# optional`).
+    /// Trailing same-line comment marks an optional extra (e.g. `# optional`).
+    /// Soft-unresolved only — does **not** freeze the pin when candidates exist.
     pub optional: bool,
 }
 
@@ -492,11 +493,13 @@ impl SourceDepSpec {
         }
     }
 
-    /// Whether auto-resolve must leave the source version untouched:
-    /// SYSTEM 4th-tuple, non-empty versionsuffix, or `# optional` comment.
+    /// Whether auto-resolve must leave the source version untouched without
+    /// attempting hierarchy resolve: SYSTEM 4th-tuple or non-empty versionsuffix.
+    ///
+    /// Bare `# optional` is **not** a freeze pin — optional deps still bump when
+    /// hierarchy candidates exist (soft-keep only if unresolved).
     pub fn is_preserve_pin(&self) -> bool {
         self.system_toolchain
-            || self.optional
             || self
                 .versionsuffix
                 .as_deref()
@@ -508,11 +511,13 @@ impl SourceDepSpec {
 ///
 /// - Deps with a **non-empty versionsuffix** are not bumped (caller keeps source).
 /// - Deps with **SYSTEM** 4th-tuple toolchain are not bumped (keep source pin).
-/// - Deps marked **optional** in a trailing comment are not bumped and never
-///   hard-fail (same preserve path as SYSTEM / versionsuffix).
+/// - Deps marked **optional** (`# optional` on that line) still resolve/bump when
+///   hierarchy candidates exist; if none exist they soft-keep the source pin
+///   (no hard ERROR) — optional is not a freeze, only soft-unresolved.
 /// - Resolved versions are never older than the source version.
-/// - Missing candidates yield [`HierarchyError::MissingDep`] unless `keep_old` is true
-///   (then the source version is kept and the name is listed in `kept_old`).
+/// - Missing **non-optional** candidates yield [`HierarchyError::MissingDep`]
+///   unless `keep_old` is true (then the source version is kept and listed in
+///   `kept_old`).
 pub fn resolve_dep_versions_for_specs(
     specs: &[SourceDepSpec],
     cands: &[Candidate],
@@ -540,14 +545,6 @@ pub fn resolve_dep_versions_for_specs(
             ));
             continue;
         }
-        // `# optional` comment: preserve source pin even when hierarchy candidates exist.
-        if spec.optional {
-            kept_old.push(format!(
-                "{} (optional; keeping source {})",
-                spec.name, spec.version
-            ));
-            continue;
-        }
         let opts = ResolveDepOpts {
             floor_version: Some(spec.version.as_str()),
             versionsuffix: None,
@@ -558,14 +555,27 @@ pub fn resolve_dep_versions_for_specs(
                 out.insert(spec.name.clone(), ver);
             }
             None => {
-                if keep_old {
-                    kept_old.push(format!(
-                        "{} (no candidate under {}-{}; keeping source {})",
-                        spec.name,
-                        hierarchy.parent.name,
-                        hierarchy.parent.version,
-                        spec.version
-                    ));
+                // Optional deps soft-keep when unresolved (no hard ERROR).
+                // Non-optional: keep_old or hard fail.
+                if spec.optional || keep_old {
+                    let reason = if spec.optional {
+                        format!(
+                            "{} (optional; no candidate under {}-{}; keeping source {})",
+                            spec.name,
+                            hierarchy.parent.name,
+                            hierarchy.parent.version,
+                            spec.version
+                        )
+                    } else {
+                        format!(
+                            "{} (no candidate under {}-{}; keeping source {})",
+                            spec.name,
+                            hierarchy.parent.name,
+                            hierarchy.parent.version,
+                            spec.version
+                        )
+                    };
+                    kept_old.push(reason);
                 } else {
                     return Err(HierarchyError::MissingDep(
                         spec.name.clone(),
@@ -1070,13 +1080,15 @@ mod tests {
     }
 
     #[test]
-    fn resolve_specs_preserve_system_and_optional_pins() {
+    fn resolve_specs_system_preserve_optional_bumps_when_candidates_exist() {
         let h = known_hierarchy(&foss("2024a")).unwrap();
         let cands = vec![
             cand("Python", "3.12.3", "GCCcore", "13.3.0", None),
-            // In-hierarchy newer ASE — must still NOT bump optional source pin.
+            // In-hierarchy newer ASE — optional must still bump (not freeze).
             cand("ASE", "3.24.0", "foss", "2024a", None),
             cand("USEARCH", "12.0", "GCCcore", "13.3.0", None), // decoy — must not bump SYSTEM pin
+            cand("networkx", "3.4.2", "foss", "2024a", None),
+            cand("PyTables", "3.10.2", "foss", "2024a", None),
         ];
         let specs = vec![
             SourceDepSpec {
@@ -1093,6 +1105,21 @@ mod tests {
                 system_toolchain: false,
                 optional: true,
             },
+            // MDTraj-style optional extras: must bump when candidates exist.
+            SourceDepSpec {
+                name: "networkx".into(),
+                version: "3.2.1".into(),
+                versionsuffix: None,
+                system_toolchain: false,
+                optional: true,
+            },
+            SourceDepSpec {
+                name: "PyTables".into(),
+                version: "3.9.2".into(),
+                versionsuffix: None,
+                system_toolchain: false,
+                optional: true,
+            },
             SourceDepSpec::plain("Python", "3.12.0"),
         ];
         let (map, kept) = resolve_dep_versions_for_specs(&specs, &cands, &h, false).unwrap();
@@ -1100,17 +1127,16 @@ mod tests {
             !map.contains_key("USEARCH"),
             "SYSTEM pin must not be bumped: {map:?}"
         );
-        assert!(
-            !map.contains_key("ASE"),
-            "optional with candidates must keep source pin: {map:?}"
+        assert_eq!(
+            map.get("ASE").map(String::as_str),
+            Some("3.24.0"),
+            "optional ASE with hierarchy candidates must bump: {map:?}"
         );
+        assert_eq!(map.get("networkx").map(String::as_str), Some("3.4.2"));
+        assert_eq!(map.get("PyTables").map(String::as_str), Some("3.10.2"));
         assert_eq!(map.get("Python").map(String::as_str), Some("3.12.3"));
         assert!(kept.iter().any(|k| k.contains("USEARCH") && k.contains("SYSTEM")));
-        assert!(
-            kept.iter().any(|k| k.contains("ASE") && k.contains("optional") && k.contains("3.23.0")),
-            "kept notes: {kept:?}"
-        );
-        assert!(SourceDepSpec {
+        assert!(!SourceDepSpec {
             name: "ASE".into(),
             version: "3.23.0".into(),
             versionsuffix: None,
@@ -1118,10 +1144,18 @@ mod tests {
             optional: true,
         }
         .is_preserve_pin());
+        assert!(SourceDepSpec {
+            name: "USEARCH".into(),
+            version: "11.0".into(),
+            versionsuffix: None,
+            system_toolchain: true,
+            optional: false,
+        }
+        .is_preserve_pin());
         // Missing non-optional still errors.
         let bad = vec![SourceDepSpec::plain("MissingPkg", "1.0")];
         assert!(resolve_dep_versions_for_specs(&bad, &cands, &h, false).is_err());
-        // Missing optional never errors (same preserve path).
+        // Missing optional never hard-fails (soft-keep).
         let opt_missing = vec![SourceDepSpec {
             name: "OptionalGhost".into(),
             version: "0.1".into(),

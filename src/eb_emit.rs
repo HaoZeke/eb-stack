@@ -1349,7 +1349,7 @@ dependencies = [
     }
 
     #[test]
-    fn auto_resolve_preserves_system_and_optional_without_unresolved_error() {
+    fn auto_resolve_preserves_system_optional_soft_keep_or_bump() {
         let src = "\
 name = 'PhyloPhlAn'
 version = '3.1.1'
@@ -1371,7 +1371,7 @@ dependencies = [
             "name = 'Python'\nversion = '3.12.3'\ntoolchain = {'name': 'GCCcore', 'version': '13.3.0'}\ndependencies = []\n",
         )
         .unwrap();
-        // Out-of-generation decoy ASE must not be applied to optional pin.
+        // Out-of-generation decoy ASE must not be selected (hierarchy scoped).
         std::fs::write(
             uni.join("ASE-3.24.0-foss-2025a.eb"),
             "name = 'ASE'\nversion = '3.24.0'\ntoolchain = {'name': 'foss', 'version': '2025a'}\ndependencies = []\n",
@@ -1392,14 +1392,14 @@ dependencies = [
             None,
             None,
         )
-        .expect("SYSTEM + optional must not hard-fail");
+        .expect("SYSTEM + optional unresolved must not hard-fail");
         assert!(r.text.contains("toolchain = {'name': 'foss', 'version': '2024a'}"));
         assert!(r.text.contains("('Python', '3.12.3')"));
-        // SYSTEM + optional preserved even if hierarchy has decoys (ASE-3.24 foss-2025a).
         assert!(r.text.contains("('USEARCH', '11.0.667-i86linux32', '', SYSTEM)"));
+        // No in-hierarchy ASE → optional soft-keeps source 3.23.0.
         assert!(
             r.text.contains("('ASE', '3.23.0')"),
-            "optional ASE must keep source pin, got:\n{}",
+            "optional unresolved ASE must soft-keep source, got:\n{}",
             r.text
         );
         assert!(!r.text.contains("3.24.0"));
@@ -1415,6 +1415,83 @@ dependencies = [
             "warnings: {:?}",
             r.warnings
         );
+
+        // In-hierarchy ASE candidate: optional must bump (not freeze).
+        std::fs::write(
+            uni.join("ASE-3.24.0-foss-2024a.eb"),
+            "name = 'ASE'\nversion = '3.24.0'\ntoolchain = {'name': 'foss', 'version': '2024a'}\ndependencies = []\n",
+        )
+        .unwrap();
+        let r2 = emit_next_generation_auto_from_path(
+            &src_path,
+            &tc,
+            &uni,
+            None,
+            None,
+            &empty,
+            None,
+            None,
+        )
+        .expect("optional with candidates");
+        assert!(
+            r2.text.contains("('ASE', '3.24.0')"),
+            "optional ASE with hierarchy candidates must bump, got:\n{}",
+            r2.text
+        );
+        assert!(!r2.text.contains("('ASE', '3.23.0')"));
+    }
+
+    #[test]
+    fn auto_resolve_optional_mdtraj_style_extras_bump() {
+        // MDTraj-style: networkx/PyTables marked # optional but still generation-bump.
+        let src = "\
+name = 'MDTraj'
+version = '1.10.3'
+toolchain = {'name': 'foss', 'version': '2023b'}
+dependencies = [
+    ('Python', '3.11.5'),
+    ('networkx', '3.2.1'),  # optional
+    ('PyTables', '3.9.2'),  # optional
+]
+";
+        let tmp = tempfile::tempdir().unwrap();
+        let src_path = tmp.path().join("MDTraj.eb");
+        std::fs::write(&src_path, src).unwrap();
+        let uni = tmp.path().join("uni");
+        std::fs::create_dir_all(&uni).unwrap();
+        for (name, ver, tc_n, tc_v) in [
+            ("Python", "3.12.3", "GCCcore", "13.3.0"),
+            ("networkx", "3.4.2", "foss", "2024a"),
+            ("PyTables", "3.10.2", "foss", "2024a"),
+        ] {
+            std::fs::write(
+                uni.join(format!("{name}-{ver}-{tc_n}-{tc_v}.eb")),
+                format!(
+                    "name = '{name}'\nversion = '{ver}'\ntoolchain = {{'name': '{tc_n}', 'version': '{tc_v}'}}\ndependencies = []\n"
+                ),
+            )
+            .unwrap();
+        }
+        let empty = HashMap::new();
+        let tc = Toolchain {
+            name: "foss".into(),
+            version: "2024a".into(),
+        };
+        let r = emit_next_generation_auto_from_path(
+            &src_path,
+            &tc,
+            &uni,
+            None,
+            None,
+            &empty,
+            None,
+            None,
+        )
+        .expect("optional extras must bump");
+        assert!(r.text.contains("('networkx', '3.4.2')"), "got:\n{}", r.text);
+        assert!(r.text.contains("('PyTables', '3.10.2')"), "got:\n{}", r.text);
+        assert!(!r.text.contains("3.2.1"));
+        assert!(!r.text.contains("3.9.2"));
     }
 
     #[test]
