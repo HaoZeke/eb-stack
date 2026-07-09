@@ -111,6 +111,21 @@ pub fn load_hierarchy_fixture(path: &Path) -> Result<ToolchainHierarchy, Hierarc
 
 /// Built-in hierarchy fixtures embedded at compile time (no EasyBuild at test/runtime).
 pub fn known_hierarchy(parent: &Toolchain) -> Option<ToolchainHierarchy> {
+    // Bare compiler-toolchain targets: retargeting a companion recipe down onto
+    // a site's base compiler (e.g. GCCcore-13.3.0). The hierarchy is simply
+    // [SYSTEM, <that GCCcore>], so no hand-fed --hierarchy-fixture is needed.
+    if parent.name == "GCCcore" && !parent.version.is_empty() {
+        return Some(ToolchainHierarchy {
+            parent: parent.clone(),
+            members: vec![
+                Toolchain {
+                    name: "system".into(),
+                    version: String::new(),
+                },
+                parent.clone(),
+            ],
+        });
+    }
     let key = format!("{}-{}", parent.name, parent.version);
     let raw = match key.as_str() {
         "foss-2024a" => Some(include_str!(
@@ -371,7 +386,15 @@ pub fn resolve_dep_version_in_hierarchy_opts(
             continue;
         }
         if let Some(floor) = opts.floor_version {
-            if cmp_version(&c.version, floor) == Ordering::Less {
+            // The floor (source recipe's dep version) guards against accidental
+            // downgrades on a forward generation bump. It must not exclude a
+            // candidate on the target hierarchy's own parent toolchain: that
+            // version is the generation-authoritative pick, not a downgrade,
+            // even when a newer-generation source is retargeted onto an older
+            // generation (e.g. binutils-2.42-GCCcore-13.3.0 resolved from a
+            // GCCcore-15.2.0 source whose binutils floor is 2.45).
+            let is_parent_toolchain = toolchains_match(&hierarchy.parent, &c.toolchain);
+            if !is_parent_toolchain && cmp_version(&c.version, floor) == Ordering::Less {
                 continue;
             }
         }
@@ -783,6 +806,34 @@ mod tests {
         let only_old = vec![cand("Cython", "0.29.37", "GCCcore", "13.3.0", None)];
         assert!(
             resolve_dep_version_in_hierarchy_opts("Cython", &only_old, &h, &opts).is_none()
+        );
+    }
+
+    #[test]
+    fn floor_does_not_exclude_parent_generation_on_backward_retarget() {
+        // Retargeting a GCCcore-15.2.0 companion onto GCCcore-13.3.0: the source
+        // binutils floor (2.45) must not exclude the generation-authoritative
+        // binutils-2.42-GCCcore-13.3.0 (the hierarchy parent), even though a
+        // higher SYSTEM binutils (2.46.1) is present. Without the parent-toolchain
+        // exemption the floor snaps to the SYSTEM 2.46.1 -- the wrong binutils for
+        // a GCCcore-13.3.0 build.
+        let gcccore = Toolchain {
+            name: "GCCcore".into(),
+            version: "13.3.0".into(),
+        };
+        let h = known_hierarchy(&gcccore).expect("built-in GCCcore hierarchy");
+        let cands = vec![
+            cand("binutils", "2.42", "GCCcore", "13.3.0", None),
+            cand("binutils", "2.46.1", "system", "", None),
+        ];
+        let opts = ResolveDepOpts {
+            floor_version: Some("2.45"),
+            versionsuffix: None,
+            use_consensus: false,
+        };
+        assert_eq!(
+            resolve_dep_version_in_hierarchy_opts("binutils", &cands, &h, &opts).as_deref(),
+            Some("2.42"),
         );
     }
 
