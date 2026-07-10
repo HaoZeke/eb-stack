@@ -7,8 +7,8 @@
 use crate::domain::Toolchain;
 use crate::eb_parse::{parse_easyconfig_tree, ParseError};
 use crate::hierarchy::{
-    hierarchy_for, resolve_dep_versions_for_specs, HierarchyError, SourceDepSpec,
-    ToolchainHierarchy,
+    hierarchy_for_with_tree, known_hierarchy, resolve_dep_versions_for_specs, HierarchyError,
+    SourceDepSpec, ToolchainHierarchy,
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -165,8 +165,9 @@ pub struct AutoResolveOpts {
 /// `hand_overrides` win over auto-resolved versions (same keys). Unresolved
 /// dependencies **fail** unless [`AutoResolveOpts::keep_old`] is set.
 ///
-/// When `hierarchy` is `None`, uses [`hierarchy_for`] (built-in fixture or
-/// `hierarchy_fixture` path).
+/// When `hierarchy` is `None`, uses [`hierarchy_for_with_tree`]: the
+/// `hierarchy_fixture` path, else a built-in fixture, else a hierarchy
+/// derived from the easyconfig tree itself.
 pub fn emit_next_generation_auto(
     source: &str,
     target_toolchain: &Toolchain,
@@ -308,17 +309,29 @@ pub fn resolve_dep_versions_for_source_with_opts(
     hierarchy_fixture: Option<&Path>,
     opts: &AutoResolveOpts,
 ) -> Result<(HashMap<String, String>, Vec<String>), EmitError> {
+    let specs = dep_specs_from_source(source)?;
+    let tree = parse_easyconfig_tree(easyconfigs_dir)?;
+    let mut warnings = Vec::new();
     let owned;
     let h = match hierarchy {
         Some(h) => h,
         None => {
-            owned = hierarchy_for(target_toolchain, hierarchy_fixture)?;
+            // Fixture path, else built-in, else derive the generation's
+            // hierarchy from the robot tree itself, so a brand-new generation
+            // (the annual-bump case) needs no shipped fixture.
+            owned =
+                hierarchy_for_with_tree(target_toolchain, hierarchy_fixture, &tree.candidates)?;
+            if hierarchy_fixture.is_none() && known_hierarchy(target_toolchain).is_none() {
+                warnings.push(format!(
+                    "hierarchy: derived from robot tree for {}-{} (members: {})",
+                    target_toolchain.name,
+                    target_toolchain.version,
+                    owned.member_labels().join(" < ")
+                ));
+            }
             &owned
         }
     };
-    let specs = dep_specs_from_source(source)?;
-    let tree = parse_easyconfig_tree(easyconfigs_dir)?;
-    let mut warnings = Vec::new();
     if !tree.skipped.is_empty() {
         warnings.push(format!(
             "parse: skipped {} unparseable easyconfig(s) under {} ({:.1}% coverage of this tree)",

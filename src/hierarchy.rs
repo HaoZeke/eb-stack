@@ -146,6 +146,74 @@ pub fn known_hierarchy(parent: &Toolchain) -> Option<ToolchainHierarchy> {
     })
 }
 
+/// Derive a GCC-family generation hierarchy from the parsed easyconfig universe.
+///
+/// The robot tree itself defines each generation: the `foss-<gen>` (or
+/// `gompi-<gen>` / `gfbf-<gen>`) toolchain-definition easyconfig pins the
+/// generation's `GCC` version, and the intermediate composite definitions
+/// exist as sibling recipes. Deriving from the tree makes any generation
+/// present in the robot tree work with no fixture (the annual-bump case:
+/// a brand-new `foss-2026.1` must not require shipping a new fixture).
+///
+/// Members mirror EasyBuild's `get_toolchain_hierarchy` order for foss-family
+/// generations: `system < GCCcore < GCC < gompi < gfbf < parent`. Intermediate
+/// composites are included only when their definition recipe is in the tree.
+/// GCCcore is assumed version-paired with GCC (true for all modern
+/// generations, 2020a+). Non-GCC-family parents return `None`.
+pub fn derive_hierarchy_from_candidates(
+    parent: &Toolchain,
+    cands: &[Candidate],
+) -> Option<ToolchainHierarchy> {
+    const COMPOSITES: [&str; 3] = ["gompi", "gfbf", "foss"];
+    if !COMPOSITES.contains(&parent.name.as_str()) || parent.version.is_empty() {
+        return None;
+    }
+    // The parent generation's own toolchain-definition recipe.
+    let def = cands
+        .iter()
+        .find(|c| c.name == parent.name && c.version == parent.version)?;
+    let gcc_ver = def
+        .dependencies
+        .iter()
+        .chain(def.builddependencies.iter())
+        .find(|d| d.name == "GCC")
+        .and_then(|d| exact_pin_version(&d.version_req))?
+        .to_string();
+    let mut members = vec![
+        Toolchain {
+            name: "system".into(),
+            version: String::new(),
+        },
+        Toolchain {
+            name: "GCCcore".into(),
+            version: gcc_ver.clone(),
+        },
+        Toolchain {
+            name: "GCC".into(),
+            version: gcc_ver,
+        },
+    ];
+    for comp in COMPOSITES {
+        if comp == parent.name {
+            break; // parent itself is appended last (highest rank)
+        }
+        let defined = cands
+            .iter()
+            .any(|c| c.name == comp && c.version == parent.version);
+        if defined {
+            members.push(Toolchain {
+                name: comp.into(),
+                version: parent.version.clone(),
+            });
+        }
+    }
+    members.push(parent.clone());
+    Some(ToolchainHierarchy {
+        parent: parent.clone(),
+        members,
+    })
+}
+
 /// Resolve hierarchy for `parent`: optional fixture path, else built-in known map.
 pub fn hierarchy_for(
     parent: &Toolchain,
@@ -157,6 +225,25 @@ pub fn hierarchy_for(
     known_hierarchy(parent).ok_or_else(|| {
         HierarchyError::UnknownToolchain(parent.name.clone(), parent.version.clone())
     })
+}
+
+/// Like [`hierarchy_for`], with the parsed easyconfig universe as a final
+/// fallback: fixture path, else built-in, else derived from the tree
+/// ([`derive_hierarchy_from_candidates`]).
+pub fn hierarchy_for_with_tree(
+    parent: &Toolchain,
+    fixture_path: Option<&Path>,
+    cands: &[Candidate],
+) -> Result<ToolchainHierarchy, HierarchyError> {
+    match hierarchy_for(parent, fixture_path) {
+        Ok(h) => Ok(h),
+        Err(HierarchyError::UnknownToolchain(..)) if fixture_path.is_none() => {
+            derive_hierarchy_from_candidates(parent, cands).ok_or_else(|| {
+                HierarchyError::UnknownToolchain(parent.name.clone(), parent.version.clone())
+            })
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Keep candidates whose toolchain is any member of `hierarchy`.
@@ -807,6 +894,58 @@ mod tests {
         assert!(
             resolve_dep_version_in_hierarchy_opts("Cython", &only_old, &h, &opts).is_none()
         );
+    }
+
+    #[test]
+    fn derive_hierarchy_from_tree_for_unknown_generation() {
+        // A generation with no shipped fixture (e.g. a brand-new foss-2026.1)
+        // must derive its hierarchy from the robot tree: the foss definition
+        // pins GCC 15.2.0, and gompi/gfbf definitions exist as recipes.
+        let parent = Toolchain {
+            name: "foss".into(),
+            version: "2026.1".into(),
+        };
+        let mut foss_def = cand("foss", "2026.1", "system", "", None);
+        foss_def.dependencies = vec![dep_pin("GCC", "15.2.0")];
+        let cands = vec![
+            foss_def,
+            cand("gompi", "2026.1", "system", "", None),
+            cand("gfbf", "2026.1", "system", "", None),
+            cand("binutils", "2.42", "GCCcore", "15.2.0", None),
+        ];
+        let h = derive_hierarchy_from_candidates(&parent, &cands).expect("derived");
+        assert_eq!(
+            h.member_labels(),
+            vec![
+                "system",
+                "GCCcore-15.2.0",
+                "GCC-15.2.0",
+                "gompi-2026.1",
+                "gfbf-2026.1",
+                "foss-2026.1",
+            ]
+        );
+        // hierarchy_for_with_tree falls back to derivation for unknown gens...
+        let via_tree = hierarchy_for_with_tree(&parent, None, &cands).expect("with tree");
+        assert_eq!(via_tree, h);
+        // ...but a known generation still uses the shipped fixture.
+        let known = hierarchy_for_with_tree(&foss("2024a"), None, &cands).expect("known");
+        assert_eq!(known, known_hierarchy(&foss("2024a")).unwrap());
+        // Missing composite definitions are simply omitted from members.
+        let mut foss_only = cand("foss", "2026.1", "system", "", None);
+        foss_only.dependencies = vec![dep_pin("GCC", "15.2.0")];
+        let sparse = vec![foss_only];
+        let h2 = derive_hierarchy_from_candidates(&parent, &sparse).expect("derived sparse");
+        assert_eq!(
+            h2.member_labels(),
+            vec!["system", "GCCcore-15.2.0", "GCC-15.2.0", "foss-2026.1"]
+        );
+        // Non-GCC-family parents are not derivable.
+        let intel = Toolchain {
+            name: "intel".into(),
+            version: "2026a".into(),
+        };
+        assert!(derive_hierarchy_from_candidates(&intel, &cands).is_none());
     }
 
     #[test]
