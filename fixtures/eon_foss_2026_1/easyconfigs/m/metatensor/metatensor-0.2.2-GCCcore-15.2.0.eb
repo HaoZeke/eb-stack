@@ -1,0 +1,34 @@
+# metatensor-core C library (CXX release tarball).
+easyblock = 'CMakeMake'
+
+name = 'metatensor'
+version = '0.2.2'
+
+homepage = 'https://docs.metatensor.org/'
+description = """Metatensor core C library: sparse storage for atomistic
+machine learning. Built from the metatensor-core CXX release tarball."""
+
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+toolchainopts = {'pic': True}
+
+source_urls = ['https://github.com/metatensor/metatensor/releases/download/metatensor-core-v%(version)s/']
+sources = ['metatensor-core-cxx-%(version)s.tar.gz']
+checksums = ['a104512516c8761080075e3ba7c023fcc1bb3430df7c67b25bded359a729e2ff']
+
+builddependencies = [
+    ('binutils', '2.45'),
+    ('CMake', '4.2.1'),
+    ('pkgconf', '2.5.1'),
+    ('Rust', '1.94.1'),
+]
+
+preconfigopts = 'unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER; '
+prebuildopts = 'unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER; '
+configopts = '-DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release '
+
+sanity_check_paths = {
+    'files': ['include/metatensor.h', 'lib/libmetatensor.%s' % SHLIB_EXT],
+    'dirs': ['include', 'lib', 'lib/cmake'],
+}
+
+moduleclass = 'lib'

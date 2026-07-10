@@ -192,3 +192,94 @@ mechanical tool can or should invent. Treat it as: it does the mechanical
 majority correctly and never silently wrong, and it hands you a short, named list
 of judgment calls. That is what makes the annual bump tractable for one
 agent-plus-human instead of a person-month of hand edits.
+
+## 9. Reproducing the eOn and QMCPACK PR fixtures
+
+Frozen recipe sets live in-repo. Use them for operator/agent runs so check-recipe
+does not depend on a mutable fork checkout.
+
+### 9.1 Paths
+
+| Package | Fixture | Generation | Role |
+|---------|---------|------------|------|
+| eOn 2.16.0 | `fixtures/eon_packaging/` | foss-2024a | Site / feedstock parity only |
+| eOn 2.16.0 | `fixtures/eon_foss_2026_1/` | **foss-2026.1** | **Landable** upstream PR set |
+| QMCPACK 4.3.0 | `fixtures/qmcpack_foss_2026_1/` | foss-2026.1 | PR #26437 |
+
+Robot universe (dependency versions for non-companion packages):
+
+```
+ROBOT=$HOME/.venvs/easybuild/easybuild/easyconfigs
+# or a clone of easybuild-easyconfigs/easybuild/easyconfigs
+```
+
+### 9.2 eOn foss-2026.1 — check-recipe (landable)
+
+```
+REPO=<path-to-eb-stack>
+DRAFTS=$REPO/fixtures/eon_foss_2026_1/easyconfigs
+ROBOT=$HOME/.venvs/easybuild/easybuild/easyconfigs
+
+eb-stack check-recipe \
+  --recipe $DRAFTS/e/eOn/eOn-2.16.0-foss-2026.1.eb \
+  --easyconfigs "$ROBOT" \
+  --easyconfigs "$DRAFTS" \
+  --require-configopt=-Dwith_metatomic=true \
+  --require-configopt=-Dwith_xtb=true \
+  --require-configopt=-Dwith_serve=true \
+  --require-configopt=-Dwith_rgpot=true
+```
+
+Expect: exit 0, `check-recipe OK`, 0 missing deps. Overlay order: robot first,
+drafts second (companions win).
+
+**Residuals (do not invent):**
+
+- Recipe pins `xtb` to `gfbf-2024a` and `PyTorch` to `foss-2024a` until 2026.1
+  recipes exist upstream.
+- Companion greenfield build/runtime (metatensor stack, quill) if robot still
+  lacks them — sources/checksums already in fixtures; build validation is EB/robot.
+
+### 9.3 eOn foss-2024a — site parity only
+
+```
+DRAFTS=$REPO/fixtures/eon_packaging/easyconfigs
+eb-stack check-recipe \
+  --recipe $DRAFTS/e/eOn/eOn-2.16.0-foss-2024a.eb \
+  --easyconfigs "$ROBOT" \
+  --easyconfigs "$DRAFTS" \
+  --require-configopt=-Dwith_metatomic=true \
+  --require-configopt=-Dwith_xtb=true \
+  --require-configopt=-Dwith_serve=true \
+  --require-configopt=-Dwith_rgpot=true
+```
+
+Do **not** use this tree as the upstream-develop PR target for new software;
+prefer foss-2026.1 (§9.2).
+
+### 9.4 QMCPACK foss-2026.1 — check-recipe
+
+```
+DRAFTS=$REPO/fixtures/qmcpack_foss_2026_1/easyconfigs
+eb-stack check-recipe \
+  --recipe $DRAFTS/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1.eb \
+  --easyconfigs "$ROBOT" \
+  --require-configopt=-DQMC_MPI=ON \
+  --require-configopt=-DQMC_OMP=ON \
+  --require-configopt=-DQMC_MIXED_PRECISION=OFF
+```
+
+No companion overlay required: HDF5/Boost/libxml2/Python come from the robot.
+Expect: exit 0, 0 missing.
+
+**Residuals:** performance ctests need external `QMC_DATA` (recipe excludes them
+via `testopts -E performance`). Full `eb` install/build is outside this skill's
+mechanical bar — use rg.terra / Jenkins when required.
+
+### 9.5 Agent driver (SURF Willma / OMP)
+
+For SURF-only AI work, drive this skill with the SURF model path, not commercial
+frontier models. With OMP: role `eb-stack` → `surf-ai-hub/openai/gpt-oss-120b`.
+Run the exact commands above; do not reimplement EasyBuild semantics in the prompt.
+
+Automated regression: `cargo test --test eon_foss_2026_1 --test qmcpack_foss_2026_1 --test eon_packaging`.
