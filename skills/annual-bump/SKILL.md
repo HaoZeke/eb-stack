@@ -198,47 +198,51 @@ majority correctly and never silently wrong, and it hands you a short, named lis
 of judgment calls. That is what makes the annual bump tractable for one
 agent-plus-human instead of a person-month of hand edits.
 
-## 10. Operational contract (every line below cost a real build cycle once)
+## 10. Operational contract (generic; every rule cost a real build cycle once)
 
-These are not tips; treat them as the execution contract. All were paid for
-during the 2026-07 eOn/QMCPACK/OpenMPI campaigns.
+These are principles, deliberately site-agnostic. Keep the *exact*
+incantations for your machines (init paths, module names, partition sizes,
+known local quirks) in a **site runbook** alongside this skill, and hand an
+agent driver both documents. The rules below hold everywhere.
 
 ### 10.1 The eb runtime contract (per machine, before ANY build)
 
-`eb` needs exactly five things — and "needs EESSI" is never one of them:
+`eb` needs exactly five things — and "needs a prebuilt base stack" is never
+one of them (a base like EESSI only shortens builds when it has your target
+generation):
 
-1. **Python ≥3.9 on PATH** (venv activate, or `uv python install 3.12` +
-   `uv venv` + `uv pip install easybuild` on hosts with ancient system
-   python). Symptom when missing: "No compatible 'python' command".
+1. **A supported Python on PATH** (a venv or a `uv`-provisioned interpreter
+   on hosts with an ancient system python). Symptom when missing:
+   "No compatible 'python' command".
 2. **A modules tool with the `lmod` BINARY on PATH** — the `module` shell
-   function is not enough, and profile.d init scripts silently no-op in
-   non-interactive shells. Source the real init
-   (`/usr/share/lmod/lmod/init/bash`, `/opt/ohpc/admin/lmod/lmod/init/bash`)
-   *before* `set -u`, then prepend `$(dirname $LMOD_CMD)` to PATH; export
+   function is not enough, and profile.d init scripts commonly no-op in
+   non-interactive shells. Source your Lmod install's real `init/bash`
+   *before* `set -u`, prepend `$(dirname $LMOD_CMD)` to PATH, and export
    the login shell's MODULEPATH explicitly in batch scripts (batch shells
-   often get an empty one).
+   often start with an empty one).
 3. **Robot paths** (`--robot`/`EASYBUILD_ROBOT_PATHS`; overlay dir first
    when your drafts must win).
-4. **A starting compiler** — the system gcc suffices for a full bootstrap;
-   OpenHPC-style compute nodes may ship *no* compiler (load `gnu12`-class
-   module) and may lack glibc headers entirely (then SYSTEM-level builds
-   are impossible there: reuse the site toolchain modules instead).
-5. **Clean paths**: set `EASYBUILD_TMPDIR` under scratch so failure logs
-   survive node-local `/tmp`; clear stale `<installpath>/software/.locks/`
-   or pass `--ignore-locks`; on non-deb/rpm hosts pass `--ignore-osdeps`
-   (osdependencies use dpkg/rpm names that can never match).
+4. **A starting compiler** — a host gcc suffices for a full bootstrap; some
+   sites' compute nodes ship no compiler (load the site compiler module)
+   or no libc headers at all (then SYSTEM-level bootstrap is impossible
+   there: build against the site's own toolchain modules instead).
+5. **Clean paths**: set `EASYBUILD_TMPDIR` on shared storage so failure
+   logs survive node-local `/tmp`; clear stale
+   `<installpath>/software/.locks/` or pass `--ignore-locks`; on hosts
+   whose package manager is not deb/rpm pass `--ignore-osdeps`
+   (osdependencies name dpkg/rpm packages that can never match).
 
 Debug order when eb fails before building anything: python → lmod binary →
-MODULEPATH → robot paths → locks → osdeps. Never "needs EESSI".
+MODULEPATH → robot paths → locks → osdeps. Never "needs the base stack".
 
 ### 10.2 Scheduler discipline
 
 Heavy builds go through the batch scheduler, never a login shell and never
-a shared tmux: a Slurm job owns its cgroup (shared-cgroup builds get
-kernel-OOM-killed by *other* processes' memory pressure). Size `--mem` to
-what the node actually has free (`scontrol show node`: RealMemory minus
-AllocMem) and match `EASYBUILD_PARALLEL` to `--cpus-per-task`. Never
-cancel or delay jobs you did not create.
+a shared terminal session: a scheduler job owns its cgroup, while a
+shared-cgroup build gets kernel-OOM-killed by *other* processes' memory
+pressure. Size the memory request to what the node actually has free and
+match `EASYBUILD_PARALLEL` to the allocated cores. Never cancel or delay
+jobs you did not create.
 
 ### 10.3 Recipe correctness rules the tool now enforces
 
@@ -279,8 +283,9 @@ cancel or delay jobs you did not create.
 - New software targets the **current development generation** (what
   upstream `develop` toolchain definitions say), not the generation you
   happen to have prebuilt. Verify with the tree, not memory.
-- PR text can be (re)generated with the SURF-internal model (§11.5) so the
-  AI provenance is attestable as internal.
+- PR text can be (re)generated with a site-internal model (§11.5) given only
+  the recipe + verification facts, so any AI provenance is attestable as
+  internal to your organisation.
 
 ## 11. Reproducing the eOn and QMCPACK PR fixtures
 
