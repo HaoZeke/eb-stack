@@ -129,7 +129,11 @@ buildable; match the maintainer's formatting only if your review requires it.
   fields changed.
 - Sanity-check dependency existence for the target generation:
   `eb-stack check-recipe` resolves one recipe and verifies its deps exist in the
-  robot tree(s).
+  robot tree(s). A missing dep is reported with the generations where the
+  package DOES exist ("available at other generations: ...") — that hint is
+  your work queue, not decoration. The same gate also lint-checks the
+  `checksums` list against EasyBuild's positional convention (sources first,
+  then patches); a "packaging" finding means reorder the list, never bypass.
 
 ## 7. Solve the whole set and emit the build list
 
@@ -160,7 +164,8 @@ For each recipe in the build list:
 4. When the set is bumped, `solve` for joint consistency and emit the build list.
 5. Open the change as a reviewable PR into your easyconfigs repo; a human (and
    your build pipeline) reviews before install. Do not push generated recipes to
-   a build without review.
+   a build without review — and follow the PR discipline in §10.5 to the letter
+   (one PR per recipe set, duplicate check first, PR surface is human-only).
 
 ## 9. Driver
 
@@ -179,7 +184,7 @@ semantics live in the prompt.
 | Version bump | add `--version V --source-checksum SHA` |
 | Overlay universe | pass `--easyconfigs` twice (later wins) |
 | Keep unresolved deps (opt-in) | add `--keep-old-deps` |
-| Check a recipe's deps exist | `eb-stack check-recipe --source X.eb --easyconfigs DIR` |
+| Check a recipe's deps exist | `eb-stack check-recipe --recipe X.eb --easyconfigs DIR` (repeat `--easyconfigs` for overlays; `--require-configopt=FLAG` asserts the config surface) |
 | Solve stack + build list | `eb-stack solve --easyconfigs DIR --policy P.json --lock-out L.json --build-list-out B.txt --stack-diff-out D.md` |
 
 ## Reality check
@@ -193,12 +198,96 @@ majority correctly and never silently wrong, and it hands you a short, named lis
 of judgment calls. That is what makes the annual bump tractable for one
 agent-plus-human instead of a person-month of hand edits.
 
-## 9. Reproducing the eOn and QMCPACK PR fixtures
+## 10. Operational contract (every line below cost a real build cycle once)
+
+These are not tips; treat them as the execution contract. All were paid for
+during the 2026-07 eOn/QMCPACK/OpenMPI campaigns.
+
+### 10.1 The eb runtime contract (per machine, before ANY build)
+
+`eb` needs exactly five things — and "needs EESSI" is never one of them:
+
+1. **Python ≥3.9 on PATH** (venv activate, or `uv python install 3.12` +
+   `uv venv` + `uv pip install easybuild` on hosts with ancient system
+   python). Symptom when missing: "No compatible 'python' command".
+2. **A modules tool with the `lmod` BINARY on PATH** — the `module` shell
+   function is not enough, and profile.d init scripts silently no-op in
+   non-interactive shells. Source the real init
+   (`/usr/share/lmod/lmod/init/bash`, `/opt/ohpc/admin/lmod/lmod/init/bash`)
+   *before* `set -u`, then prepend `$(dirname $LMOD_CMD)` to PATH; export
+   the login shell's MODULEPATH explicitly in batch scripts (batch shells
+   often get an empty one).
+3. **Robot paths** (`--robot`/`EASYBUILD_ROBOT_PATHS`; overlay dir first
+   when your drafts must win).
+4. **A starting compiler** — the system gcc suffices for a full bootstrap;
+   OpenHPC-style compute nodes may ship *no* compiler (load `gnu12`-class
+   module) and may lack glibc headers entirely (then SYSTEM-level builds
+   are impossible there: reuse the site toolchain modules instead).
+5. **Clean paths**: set `EASYBUILD_TMPDIR` under scratch so failure logs
+   survive node-local `/tmp`; clear stale `<installpath>/software/.locks/`
+   or pass `--ignore-locks`; on non-deb/rpm hosts pass `--ignore-osdeps`
+   (osdependencies use dpkg/rpm names that can never match).
+
+Debug order when eb fails before building anything: python → lmod binary →
+MODULEPATH → robot paths → locks → osdeps. Never "needs EESSI".
+
+### 10.2 Scheduler discipline
+
+Heavy builds go through the batch scheduler, never a login shell and never
+a shared tmux: a Slurm job owns its cgroup (shared-cgroup builds get
+kernel-OOM-killed by *other* processes' memory pressure). Size `--mem` to
+what the node actually has free (`scontrol show node`: RealMemory minus
+AllocMem) and match `EASYBUILD_PARALLEL` to `--cpus-per-task`. Never
+cancel or delay jobs you did not create.
+
+### 10.3 Recipe correctness rules the tool now enforces
+
+- **Checksums are positional**: all `sources` entries first, then
+  `patches`, and a multi-arch dict is ONE entry. `check-recipe` fails on a
+  count mismatch and on a patch-keyed checksum in a source slot — do not
+  bypass the finding; reorder the list.
+- **Missing deps come with a hint** ("available at other generations:
+  …"): that list is your work queue — bump from the newest listed
+  generation or author greenfield if the hint says no candidate exists
+  anywhere.
+- Prefer **official release artifacts** over `archive/refs/tags` tarballs:
+  release assets ship stable checksums and any dev-version metadata the
+  build machinery needs; tag archives are re-compressed at GitHub's whim
+  and lack git metadata.
+
+### 10.4 The reporting ladder (three different claims — never conflate)
+
+1. **Resolves** — `check-recipe` exit 0, 0 missing: the *plan* is
+   complete. Say "resolves", never "works".
+2. **Builds** — `eb --robot` green: module file exists. For PR-bound
+   recipes verify on TWO legs when possible: a delta build against a
+   prebuilt stack (fast) and a virgin-robot full build (what upstream CI
+   does).
+3. **Binary-verified** — the module loads and the binary runs
+   (`env -i <bin> --version` proves RPATH completeness) and links the
+   stack's libraries (`ldd`).
+
+### 10.5 PR discipline (hard rules)
+
+- **One PR per recipe set.** Before opening anything, list existing open
+  PRs for the same software (`gh pr list --author … --state open`) — a
+  duplicate PR is a community-facing incident.
+- **The PR surface belongs to the human.** Branch pushes to your own fork
+  are plumbing and always fine; opening/editing/commenting on PRs happens
+  only on an explicit, current instruction — an old authorization does not
+  carry forward.
+- New software targets the **current development generation** (what
+  upstream `develop` toolchain definitions say), not the generation you
+  happen to have prebuilt. Verify with the tree, not memory.
+- PR text can be (re)generated with the SURF-internal model (§11.5) so the
+  AI provenance is attestable as internal.
+
+## 11. Reproducing the eOn and QMCPACK PR fixtures
 
 Frozen recipe sets live in-repo. Use them for operator/agent runs so check-recipe
 does not depend on a mutable fork checkout.
 
-### 9.1 Paths
+### 11.1 Paths
 
 | Package | Fixture | Generation | Role |
 |---------|---------|------------|------|
@@ -213,7 +302,7 @@ ROBOT=$HOME/.venvs/easybuild/easybuild/easyconfigs
 # or a clone of easybuild-easyconfigs/easybuild/easyconfigs
 ```
 
-### 9.2 eOn foss-2026.1 — check-recipe (landable)
+### 11.2 eOn foss-2026.1 — check-recipe (landable)
 
 ```
 REPO=<path-to-eb-stack>
@@ -240,7 +329,7 @@ drafts second (companions win).
 - Companion greenfield build/runtime (metatensor stack, quill) if robot still
   lacks them — sources/checksums already in fixtures; build validation is EB/robot.
 
-### 9.3 eOn foss-2024a — site parity only
+### 11.3 eOn foss-2024a — site parity only
 
 ```
 DRAFTS=$REPO/fixtures/eon_packaging/easyconfigs
@@ -255,9 +344,9 @@ eb-stack check-recipe \
 ```
 
 Do **not** use this tree as the upstream-develop PR target for new software;
-prefer foss-2026.1 (§9.2).
+prefer foss-2026.1 (§11.2).
 
-### 9.4 QMCPACK foss-2026.1 — check-recipe
+### 11.4 QMCPACK foss-2026.1 — check-recipe
 
 ```
 DRAFTS=$REPO/fixtures/qmcpack_foss_2026_1/easyconfigs
@@ -276,7 +365,7 @@ Expect: exit 0, 0 missing.
 via `testopts -E performance`). Full `eb` install/build is outside this skill's
 mechanical bar — use rg.terra / Jenkins when required.
 
-### 9.5 Agent driver (SURF Willma / OMP)
+### 11.5 Agent driver (SURF Willma / OMP)
 
 For SURF-only AI work, drive this skill with the SURF model path, not commercial
 frontier models. With OMP: role `eb-stack` → `surf-ai-hub/openai/gpt-oss-120b`.
