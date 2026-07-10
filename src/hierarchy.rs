@@ -57,8 +57,44 @@ pub enum HierarchyError {
     Parse(String, String),
     #[error("no known hierarchy for toolchain {0}-{1}")]
     UnknownToolchain(String, String),
-    #[error("dependency {0} not found in universe under hierarchy of {1}-{2}")]
-    MissingDep(String, String, String),
+    #[error("dependency {0} not found in universe under hierarchy of {1}-{2}{3}")]
+    MissingDep(String, String, String, String),
+}
+
+/// Short "what DOES exist" suffix for a missing dependency: up to four
+/// name-matching candidates across all generations, so the failure reads as a
+/// work item (bump/author from one of these) instead of a dead end. Returns
+/// an empty-or-parenthesised string safe to append to an error message.
+pub fn nearest_candidates_hint(name: &str, cands: &[Candidate]) -> String {
+    let mut seen: Vec<String> = cands
+        .iter()
+        .filter(|c| c.name == name)
+        .map(|c| {
+            let tc = if is_system_toolchain(&c.toolchain) {
+                "SYSTEM".to_string()
+            } else {
+                c.toolchain.label()
+            };
+            format!(
+                "{}{} @ {}",
+                c.version,
+                c.versionsuffix.clone().unwrap_or_default(),
+                tc
+            )
+        })
+        .collect();
+    seen.sort();
+    seen.dedup();
+    if seen.is_empty() {
+        return " (no candidate with this name at any generation)".to_string();
+    }
+    let extra = seen.len().saturating_sub(4);
+    let head = seen.into_iter().take(4).collect::<Vec<_>>().join(", ");
+    if extra > 0 {
+        format!(" (available at other generations: {head}, +{extra} more)")
+    } else {
+        format!(" (available at other generations: {head})")
+    }
 }
 
 impl ToolchainHierarchy {
@@ -567,10 +603,12 @@ pub fn resolve_dep_versions_in_hierarchy_strict(
                 out.insert(name, ver);
             }
             None => {
+                let hint = nearest_candidates_hint(&name, cands);
                 return Err(HierarchyError::MissingDep(
                     name,
                     hierarchy.parent.name.clone(),
                     hierarchy.parent.version.clone(),
+                    hint,
                 ));
             }
         }
@@ -693,10 +731,12 @@ pub fn resolve_dep_versions_for_specs(
                     };
                     kept_old.push(reason);
                 } else {
+                    let hint = nearest_candidates_hint(&spec.name, cands);
                     return Err(HierarchyError::MissingDep(
                         spec.name.clone(),
                         hierarchy.parent.name.clone(),
                         hierarchy.parent.version.clone(),
+                        hint,
                     ));
                 }
             }
@@ -949,6 +989,21 @@ mod tests {
     }
 
     #[test]
+    fn missing_dep_error_carries_nearest_generation_hint() {
+        // A miss must read as a work item: name the generations that DO have
+        // the package so the operator knows what to bump from.
+        let h = known_hierarchy(&foss("2024a")).unwrap();
+        let cands = vec![cand("xtb", "6.7.1", "gfbf", "2023b", None)];
+        let err =
+            resolve_dep_versions_in_hierarchy_strict(["xtb"], &cands, &h).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("available at other generations") && msg.contains("6.7.1 @ gfbf-2023b"),
+            "got {msg}"
+        );
+    }
+
+    #[test]
     fn floor_does_not_exclude_parent_generation_on_backward_retarget() {
         // Retargeting a GCCcore-15.2.0 companion onto GCCcore-13.3.0: the source
         // binutils floor (2.45) must not exclude the generation-authoritative
@@ -1044,7 +1099,7 @@ mod tests {
         let specs = vec![SourceDepSpec::plain("MissingPkg", "1.0")];
         let err = resolve_dep_versions_for_specs(&specs, &cands, &h, false).unwrap_err();
         assert!(
-            matches!(err, HierarchyError::MissingDep(ref n, _, _) if n == "MissingPkg"),
+            matches!(err, HierarchyError::MissingDep(ref n, _, _, _) if n == "MissingPkg"),
             "{err}"
         );
         let (map, kept) = resolve_dep_versions_for_specs(&specs, &cands, &h, true).unwrap();

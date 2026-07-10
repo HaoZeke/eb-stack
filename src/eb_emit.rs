@@ -28,8 +28,8 @@ pub enum EmitError {
     Hierarchy(#[from] HierarchyError),
     #[error("parse: {0}")]
     Parse(#[from] ParseError),
-    #[error("unresolved dependency {0} under target toolchain {1}-{2}")]
-    UnresolvedDep(String, String, String),
+    #[error("unresolved dependency {0} under target toolchain {1}-{2}{3}")]
+    UnresolvedDep(String, String, String, String),
 }
 
 /// Parameters for producing a next-generation easyconfig.
@@ -343,8 +343,8 @@ pub fn resolve_dep_versions_for_source_with_opts(
     let (map, kept) =
         resolve_dep_versions_for_specs(&specs, &tree.candidates, h, opts.keep_old).map_err(
             |e| match e {
-                HierarchyError::MissingDep(name, tn, tv) => {
-                    EmitError::UnresolvedDep(name, tn, tv)
+                HierarchyError::MissingDep(name, tn, tv, hint) => {
+                    EmitError::UnresolvedDep(name, tn, tv, hint)
                 }
                 other => EmitError::Hierarchy(other),
             },

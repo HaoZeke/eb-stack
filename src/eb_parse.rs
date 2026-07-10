@@ -78,6 +78,17 @@ pub struct ResolvedEasyconfig {
     /// Source checksums list (strings), when present — used for packaging gates.
     #[serde(default)]
     pub checksums: Vec<String>,
+    /// Number of entries in `sources` (0 when the field is absent).
+    #[serde(default)]
+    pub sources_count: usize,
+    /// Patch file names from `patches` (tuple/dict entries reduced to the name).
+    #[serde(default)]
+    pub patch_names: Vec<String>,
+    /// Per-`checksums`-LIST-ENTRY dict keys (empty inner vec for plain-string
+    /// entries). Parallel to the checksums list entries, not the flattened
+    /// values, so a multi-arch dict entry stays one entry.
+    #[serde(default)]
+    pub checksum_entry_keys: Vec<Vec<String>>,
 }
 
 impl ResolvedEasyconfig {
@@ -1092,6 +1103,9 @@ pub fn resolve_easyconfig_str(src: &str) -> Result<ResolvedEasyconfig, ParseErro
     let moduleclass = opt_str_field(&parser.env, "moduleclass", &templates);
     let homepage = opt_str_field(&parser.env, "homepage", &templates);
     let checksums = opt_str_list_field(&parser.env, "checksums", &templates);
+    let sources_count = env_list_len(&parser.env, "sources", &templates);
+    let patch_names = patch_names_field(&parser.env, &templates);
+    let checksum_entry_keys = checksum_entry_keys_field(&parser.env, &templates);
 
     Ok(ResolvedEasyconfig {
         name,
@@ -1107,7 +1121,111 @@ pub fn resolve_easyconfig_str(src: &str) -> Result<ResolvedEasyconfig, ParseErro
         moduleclass,
         homepage,
         checksums,
+        sources_count,
+        patch_names,
+        checksum_entry_keys,
     })
+}
+
+/// Length of a list-valued field after template expansion (0 when absent or
+/// not a list).
+fn env_list_len(
+    env: &HashMap<String, Value>,
+    key: &str,
+    templates: &HashMap<String, String>,
+) -> usize {
+    env.get(key)
+        .map(|v| apply_templates_value(v, templates))
+        .and_then(|v| value_list_as_slice(Some(&v)).ok().map(|l| l.len()))
+        .unwrap_or(0)
+}
+
+/// Patch names from `patches`: plain string, `(name, level)` tuple/list, or a
+/// dict with a `name`/`filename` key. Unrecognised entries are skipped.
+fn patch_names_field(
+    env: &HashMap<String, Value>,
+    templates: &HashMap<String, String>,
+) -> Vec<String> {
+    let Some(v) = env.get("patches") else {
+        return Vec::new();
+    };
+    let v = apply_templates_value(v, templates);
+    let Ok(items) = value_list_as_slice(Some(&v)) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| match item {
+            Value::Str(s) => Some(s.clone()),
+            Value::Tuple(xs) | Value::List(xs) => {
+                xs.first().and_then(|x| x.as_str()).map(str::to_string)
+            }
+            Value::Dict(kvs) => kvs
+                .iter()
+                .find(|(k, _)| k == "name" || k == "filename")
+                .and_then(|(_, val)| val.as_str())
+                .map(str::to_string),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Dict keys per `checksums` list entry (empty vec for plain-string entries).
+fn checksum_entry_keys_field(
+    env: &HashMap<String, Value>,
+    templates: &HashMap<String, String>,
+) -> Vec<Vec<String>> {
+    let Some(v) = env.get("checksums") else {
+        return Vec::new();
+    };
+    let v = apply_templates_value(v, templates);
+    let Ok(items) = value_list_as_slice(Some(&v)) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .map(|item| match item {
+            Value::Dict(kvs) => kvs.iter().map(|(k, _)| k.clone()).collect(),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+/// Structural findings for the `checksums` list (EasyBuild convention:
+/// positional, all `sources` entries first, then `patches`). Catches the
+/// class of failure where a patch checksum is inserted in a source slot,
+/// which otherwise only surfaces as an eb "Missing checksum for X" abort
+/// after a build cycle has already been spent.
+pub fn checksum_structure_findings(recipe: &ResolvedEasyconfig) -> Vec<String> {
+    let mut out = Vec::new();
+    let entries = recipe.checksum_entry_keys.len();
+    if entries == 0 {
+        return out;
+    }
+    let expected = recipe.sources_count + recipe.patch_names.len();
+    if recipe.sources_count > 0 && entries != expected {
+        out.push(format!(
+            "checksums has {entries} entries but sources ({}) + patches ({}) = {expected} \
+             (EasyBuild matches checksums positionally: sources first, then patches)",
+            recipe.sources_count,
+            recipe.patch_names.len(),
+        ));
+    }
+    for (i, keys) in recipe.checksum_entry_keys.iter().enumerate() {
+        if i >= recipe.sources_count {
+            break;
+        }
+        for k in keys {
+            if recipe.patch_names.iter().any(|p| p == k) {
+                out.push(format!(
+                    "checksum entry {i} is keyed by patch '{k}' but sits in a source slot \
+                     (positions 0..{} are sources; move patch checksums after all source entries)",
+                    recipe.sources_count,
+                ));
+            }
+        }
+    }
+    out
 }
 
 fn opt_str_field(
@@ -1332,6 +1450,7 @@ pub fn check_recipe_deps(recipe: &ResolvedEasyconfig, universe: &[Candidate]) ->
                         .unwrap_or_default()
                 ));
             } else {
+                let hint = crate::hierarchy::nearest_candidates_hint(&d.name, universe);
                 missing.push(MissingDep {
                     name: d.name.clone(),
                     version: d.version.clone(),
@@ -1339,7 +1458,7 @@ pub fn check_recipe_deps(recipe: &ResolvedEasyconfig, universe: &[Candidate]) ->
                     toolchain: d.toolchain.clone(),
                     role: role.into(),
                     reason: format!(
-                        "no candidate for {} {}{} in robot universe",
+                        "no candidate for {} {}{} in robot universe{hint}",
                         d.name,
                         d.version,
                         d.toolchain
@@ -1350,6 +1469,18 @@ pub fn check_recipe_deps(recipe: &ResolvedEasyconfig, universe: &[Candidate]) ->
                 });
             }
         }
+    }
+    // Structural checksum findings fail the gate too: a patch checksum in a
+    // source slot only surfaces from eb itself after a wasted build cycle.
+    for finding in checksum_structure_findings(recipe) {
+        missing.push(MissingDep {
+            name: "checksums".into(),
+            version: String::new(),
+            versionsuffix: None,
+            toolchain: None,
+            role: "packaging".into(),
+            reason: finding,
+        });
     }
     RecipeDepCheck {
         recipe: recipe.easyconfig_path.clone(),
@@ -2018,6 +2149,9 @@ mod tests {
             moduleclass: None,
             homepage: None,
             checksums: vec![],
+            sources_count: 0,
+            patch_names: vec![],
+            checksum_entry_keys: vec![],
         };
         let c = resolved.to_candidate();
         let cuda = c.dependencies.iter().find(|d| d.name == "CudaLib").unwrap();
@@ -2264,6 +2398,91 @@ builddependencies = [
         assert!(tree.coverage() > 0.6 && tree.coverage() < 1.0);
     }
 
+    fn checksum_recipe(checksums_block: &str) -> ResolvedEasyconfig {
+        let src = format!(
+            "name = 'App'\nversion = '1.0'\n\
+             toolchain = {{'name': 'foss', 'version': '2026.1'}}\n\
+             sources = ['app-1.0.tar.gz', 'sub-2.0.tar.gz', 'core-3.0.tar.gz']\n\
+             patches = ['App-1.0_fix.patch']\n\
+             checksums = {checksums_block}\n\
+             dependencies = []\n"
+        );
+        resolve_easyconfig_str(&src).expect("parse checksum recipe")
+    }
+
+    #[test]
+    fn checksum_lint_accepts_sources_then_patches_order() {
+        let r = checksum_recipe(
+            "[{'app-1.0.tar.gz': 'aa11'}, {'sub-2.0.tar.gz': 'bb22'},\n \
+             {'core-3.0.tar.gz': 'cc33'}, {'App-1.0_fix.patch': 'dd44'}]",
+        );
+        assert_eq!(r.sources_count, 3);
+        assert_eq!(r.patch_names, vec!["App-1.0_fix.patch"]);
+        assert!(checksum_structure_findings(&r).is_empty());
+    }
+
+    #[test]
+    fn checksum_lint_flags_patch_checksum_in_source_slot() {
+        // The eOn-2026.1 incident: the patch checksum inserted at position 1
+        // (a source slot). Counts match, so only positional key matching
+        // catches it before eb aborts a build with "Missing checksum for X".
+        let r = checksum_recipe(
+            "[{'app-1.0.tar.gz': 'aa11'}, {'App-1.0_fix.patch': 'dd44'},\n \
+             {'sub-2.0.tar.gz': 'bb22'}, {'core-3.0.tar.gz': 'cc33'}]",
+        );
+        let findings = checksum_structure_findings(&r);
+        assert_eq!(findings.len(), 1, "got {findings:?}");
+        assert!(findings[0].contains("source slot"), "got {findings:?}");
+        // and it fails the packaging gate
+        let check = check_recipe_deps(&r, &[]);
+        assert!(!check.ok());
+        assert!(check.missing.iter().any(|m| m.role == "packaging"));
+    }
+
+    #[test]
+    fn checksum_lint_flags_count_mismatch_and_allows_multiarch_dicts() {
+        // 3 sources + 1 patch but only 2 checksum entries -> count finding.
+        let short = checksum_recipe("[{'app-1.0.tar.gz': 'aa11'}, {'App-1.0_fix.patch': 'dd44'}]");
+        assert!(checksum_structure_findings(&short)
+            .iter()
+            .any(|f| f.contains("positionally")));
+        // A multi-key (per-arch) dict is ONE list entry, not two values.
+        let arch = "name = 'Sdk'\nversion = '1.0'\n\
+                    toolchain = SYSTEM\n\
+                    sources = ['sdk_%(arch)s.tar.gz']\n\
+                    checksums = [{'sdk_aarch64.tar.gz': 'aa', 'sdk_x86_64.tar.gz': 'bb'}]\n\
+                    dependencies = []\n";
+        let r = resolve_easyconfig_str(arch).expect("parse arch recipe");
+        assert_eq!(r.sources_count, 1);
+        assert_eq!(r.checksum_entry_keys.len(), 1);
+        assert!(checksum_structure_findings(&r).is_empty());
+    }
+
+    #[test]
+    fn missing_dep_reason_names_nearest_generations() {
+        let recipe = resolve_easyconfig_str(
+            "name = 'App'\nversion = '1.0'\n\
+             toolchain = {'name': 'foss', 'version': '2026.1'}\n\
+             dependencies = [('Foo', '1.0')]\n",
+        )
+        .expect("parse");
+        let other = resolve_easyconfig_str(
+            "name = 'Foo'\nversion = '0.9'\n\
+             toolchain = {'name': 'GCCcore', 'version': '13.3.0'}\n\
+             dependencies = []\n",
+        )
+        .expect("parse")
+        .to_candidate();
+        let check = check_recipe_deps(&recipe, &[other]);
+        assert!(!check.ok());
+        let reason = &check.missing[0].reason;
+        assert!(
+            reason.contains("available at other generations")
+                && reason.contains("0.9 @ GCCcore-13.3.0"),
+            "got {reason}"
+        );
+    }
+
     #[test]
     fn scaffold_missing_companions_writes_parseable_letter_layout() {
         let dir = tempfile::tempdir().unwrap();
@@ -2372,6 +2591,9 @@ builddependencies = [
             moduleclass: None,
             homepage: None,
             checksums: vec![],
+            sources_count: 0,
+            patch_names: vec![],
+            checksum_entry_keys: vec![],
         }
     }
 
