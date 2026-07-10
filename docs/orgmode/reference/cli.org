@@ -170,8 +170,13 @@ eb-stack bump
   keep their source version). See [[file:../tutorial.org][the tutorial]]
   for the zero-hand-fed flow.
 - ~--hierarchy-fixture PATH~ :: Optional EasyBuild ~get_toolchain_hierarchy~
-  capture (JSON) for a target generation with no built-in hierarchy fixture
-  in eb-stack. Applies only with ~--easyconfigs~.
+  capture (JSON) that overrides hierarchy discovery. Rarely needed: with
+  ~--easyconfigs~, GCC-family generations (~foss~/~gompi~/~gfbf~) derive
+  their hierarchy from the tree's own toolchain definitions, bare
+  ~GCCcore-x.y.z~ targets synthesize ~[SYSTEM, GCCcore]~, and
+  ~foss-2023b~/~2024a~/~2025a~ have built-in fixtures. The explicit fixture
+  is the escape hatch for non-GCC toolchains (~intel~, ~nvidia-compilers~).
+  Applies only with ~--easyconfigs~.
 - ~--keep-old-deps~ :: When set, a dependency ~--easyconfigs~ cannot resolve
   keeps its source version (with a warning) instead of failing the bump.
   Default: unresolved dependencies fail the bump with a non-zero exit

@@ -47,10 +47,15 @@ sub-toolchain hierarchy (~GCCcore~, ~GCC~, ~gfbf~, ~gompi~, down to
   ~llvmlite~) by leaving it untouched rather than bumping it to the newest
   plain candidate.
 
-Hierarchy data for known generations (~foss-2023b~, ~foss-2024a~,
-~foss-2025a~) is built in; pass ~--hierarchy-fixture PATH~ to supply an
-EasyBuild ~get_toolchain_hierarchy~ capture for a generation eb-stack does
-not know about yet.
+Hierarchy data needs no configuration for GCC-family generations: eb-stack
+derives it from the robot tree itself (the ~foss-<gen>~ toolchain definition
+pins the generation's GCC version; ~gompi~/~gfbf~ definitions are sibling
+recipes), so a brand-new generation such as ~foss-2026.1~ works the day its
+toolchain definitions land in the tree. Built-in fixtures cover
+~foss-2023b~/~foss-2024a~/~foss-2025a~, a bare ~GCCcore-x.y.z~ target
+synthesizes ~[SYSTEM, GCCcore]~, and ~--hierarchy-fixture PATH~ still
+overrides everything with an explicit EasyBuild ~get_toolchain_hierarchy~
+capture (the escape hatch for non-GCC toolchains like ~intel~/~nvidia~).
 
 ** Unresolved dependencies fail loudly by default
 
