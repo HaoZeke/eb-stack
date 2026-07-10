@@ -186,6 +186,7 @@ semantics live in the prompt.
 | Keep unresolved deps (opt-in) | add `--keep-old-deps` |
 | Check a recipe's deps exist | `eb-stack check-recipe --recipe X.eb --easyconfigs DIR` (repeat `--easyconfigs` for overlays; `--require-configopt=FLAG` asserts the config surface) |
 | Solve stack + build list | `eb-stack solve --easyconfigs DIR --policy P.json --lock-out L.json --build-list-out B.txt --stack-diff-out D.md` |
+| Typed tools for an agent harness | `eb-stack mcp` serves `eb_check_recipe` / `eb_bump` / `eb_solve` over stdio MCP; every check result embeds the section 10.4 ladder and derived next-actions. Register with `claude mcp add eb-stack -- eb-stack mcp` (or the harness equivalent) |
 
 ## Reality check
 

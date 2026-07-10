@@ -17,6 +17,10 @@ names, scheduler sizing); ask for it if you were not given one.
 1. **Run the real CLI** (`eb-stack check-recipe | bump | solve`). Never
    guess dependency versions, checksums, or hierarchy relationships in
    prose — the tool resolves them or tells you exactly what is missing.
+   If your harness speaks MCP, prefer the typed tool surface: `eb-stack
+   mcp` serves `eb_check_recipe` / `eb_bump` / `eb_solve` over stdio,
+   with the reporting ladder and the next actions embedded in every
+   result.
 2. **Tool output is instructions.** A missing-dep hint ("available at
    other generations: ...") is your work queue. A `[packaging]` checksum
    finding means fix the recipe (checksums are positional: all sources
