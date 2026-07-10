@@ -595,7 +595,7 @@ moduleclass = 'tools'
                 "source": recipe.display().to_string(),
                 "toolchain_name": "foss",
                 "toolchain_version": "2027.1",
-                "deps": {"Sub": "2.0"},
+                "deps": {"Sub": "3.0"},
                 "out_dir": out_dir.display().to_string(),
             }),
         );
@@ -609,8 +609,9 @@ moduleclass = 'tools'
             .as_str()
             .unwrap()
             .contains("eb_check_recipe"));
-        // The robot tree has no foss-2027.1 Sub, so the check must fail with
-        // a missing dep — proving the loop (bump -> check) composes.
+        // Deps match cross-toolchain by name+version, so the bump to Sub 3.0
+        // (absent from the robot tree at any generation) must fail the check
+        // — proving the loop (bump -> check) composes.
         let check = tool_payload(&call_tool(
             "eb_check_recipe",
             json!({
@@ -619,6 +620,7 @@ moduleclass = 'tools'
             }),
         ));
         assert_eq!(check["ok"], false);
+        assert_eq!(check["check"]["missing"][0]["name"], "Sub");
     }
 
     #[test]
