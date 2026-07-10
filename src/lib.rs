@@ -5,6 +5,7 @@ pub mod eb_emit;
 pub mod eb_parse;
 pub mod eb_template_constants;
 pub mod hierarchy;
+pub mod mcp;
 pub mod report;
 pub mod resolvo_provider;
 pub mod sbom;

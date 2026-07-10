@@ -173,6 +173,12 @@ enum Cmd {
         #[arg(long, conflicts_with = "out_dir")]
         out: Option<PathBuf>,
     },
+    /// Serve the packaging workflow as MCP tools over stdio (JSON-RPC 2.0).
+    ///
+    /// Exposes `eb_check_recipe`, `eb_bump`, and `eb_solve` to MCP clients
+    /// (claude, codex, omp, grok). Register with e.g.
+    /// `claude mcp add eb-stack -- eb-stack mcp`.
+    Mcp,
 }
 
 fn parse_dep_overrides(deps: &[String]) -> Result<HashMap<String, String>> {
@@ -521,6 +527,12 @@ fn main() -> Result<()> {
             std::fs::write(&dest, &result.text)
                 .with_context(|| format!("write {}", dest.display()))?;
             println!("wrote {} (from {})", dest.display(), source.display());
+        }
+        Cmd::Mcp => {
+            let stdin = std::io::stdin();
+            let stdout = std::io::stdout();
+            eb_stack::mcp::run_server(stdin.lock(), stdout.lock())
+                .context("mcp stdio server")?;
         }
     }
     Ok(())
