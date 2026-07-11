@@ -272,6 +272,42 @@ jobs you did not create.
    (`env -i <bin> --version` proves RPATH completeness) and links the
    stack's libraries (`ldd`).
 
+### 10.6 Drive builds to completion in a loop (do not babysit)
+
+A `eb --robot` build on a bleeding-edge or quirky host fails one dependency
+at a time. Do **not** hand-drive this: run it as an autonomous resume loop
+and stop only for a genuinely novel failure or a gated action. The loop:
+
+1. **Submit / resume** the build (scheduler job, or a scope-contained
+   background session on a host whose scheduler is being purged by another
+   workflow — see the site runbook's containment note).
+2. On failure, read the real error from the per-package eb log (not just
+   the summary line), and **classify it**:
+   - **Host artifact** (the toolchain/glibc/gcc on this host is newer or
+     older than the recipe's world; a bundled autotools/gnulib predates a
+     libc change; a stale env var from the shell/server leaks in; a missing
+     `--accept-eula-for=…`; an env module's `LD_LIBRARY_PATH` shadows a host
+     library). Match it against the site runbook's **incident → rule
+     table**; apply the workaround **host-locally** — an overlay copy of the
+     dependency recipe placed first in the robot path, an env scrub in the
+     build wrapper, a build-env flag — and resume.
+   - **Recipe defect** (a dep the tree genuinely lacks, a wrong version, a
+     checksum in the wrong slot). Fix the recipe, re-run `check-recipe`,
+     resume.
+   - **Unrecognized.** Escalate: report the classified error and stop.
+3. Repeat until the verify step (mpi/compiler/binary `--version`) is green,
+   then report on the ladder (§10.4).
+
+**The one inviolable rule of the loop: never edit a stock recipe to clear a
+*host* error.** The recipes are the deliverable. If the failure is the host
+being weird, the fix is a host-local workaround (overlay/env/flag) that
+leaves the submitted recipe untouched; disclose it as a build-host note. A
+loop that "makes the error go away" by deleting a dep, hardcoding a flag into
+the `.eb`, or loosening a checksum silently corrupts what you ship — that is
+the failure mode the classify-first step exists to prevent. Prefer
+`eb --robot --fetch` on a login node first so compute jobs never hit a mirror
+flake mid-loop.
+
 ### 10.5 PR discipline (hard rules)
 
 - **One PR per recipe set.** Before opening anything, list existing open
