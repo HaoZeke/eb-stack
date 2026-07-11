@@ -202,7 +202,12 @@ pub fn derive_hierarchy_from_candidates(
 ) -> Option<ToolchainHierarchy> {
     const COMPOSITES: [&str; 3] = ["gompi", "gfbf", "foss"];
     if !COMPOSITES.contains(&parent.name.as_str()) || parent.version.is_empty() {
-        return None;
+        // Not a GCC-family composite. A compiler-only toolchain
+        // (intel-compilers, nvidia-compilers, rocm-compilers, ...) still has a
+        // derivable hierarchy: its own defining recipe pins the GCCcore
+        // generation it is built on, so companion recipes on this toolchain
+        // resolve their dependencies at [SYSTEM, GCCcore-<gen>, <toolchain>].
+        return derive_compiler_toolchain_hierarchy(parent, cands);
     }
     // The parent generation's own toolchain-definition recipe.
     let def = cands
@@ -247,6 +252,50 @@ pub fn derive_hierarchy_from_candidates(
     Some(ToolchainHierarchy {
         parent: parent.clone(),
         members,
+    })
+}
+
+/// Derive the hierarchy for a compiler-only toolchain (intel-compilers,
+/// nvidia-compilers, rocm-compilers, ...) from the tree.
+///
+/// These sit directly on a GCCcore generation rather than composing gompi/gfbf.
+/// The toolchain's own defining recipe (`name == parent.name`, `version ==
+/// parent.version`) pins that GCCcore version as a dependency, so a companion
+/// recipe built on the toolchain (e.g. `OpenMPI-<v>-nvidia-compilers-25.11`)
+/// resolves its dependency versions against the GCCcore generation. The
+/// hierarchy is `[SYSTEM, GCCcore-<gen>, <toolchain>]`, mirroring how
+/// [`known_hierarchy`] treats a bare `GCCcore` parent. Returns `None` when the
+/// toolchain has no defining recipe in the tree or that recipe pins no GCCcore.
+fn derive_compiler_toolchain_hierarchy(
+    parent: &Toolchain,
+    cands: &[Candidate],
+) -> Option<ToolchainHierarchy> {
+    if parent.version.is_empty() || is_system_toolchain(parent) {
+        return None;
+    }
+    let def = cands
+        .iter()
+        .find(|c| c.name == parent.name && c.version == parent.version)?;
+    let gcccore_ver = def
+        .dependencies
+        .iter()
+        .chain(def.builddependencies.iter())
+        .find(|d| d.name == "GCCcore")
+        .and_then(|d| exact_pin_version(&d.version_req))?
+        .to_string();
+    Some(ToolchainHierarchy {
+        parent: parent.clone(),
+        members: vec![
+            Toolchain {
+                name: "system".into(),
+                version: String::new(),
+            },
+            Toolchain {
+                name: "GCCcore".into(),
+                version: gcccore_ver,
+            },
+            parent.clone(),
+        ],
     })
 }
 
@@ -980,12 +1029,39 @@ mod tests {
             h2.member_labels(),
             vec!["system", "GCCcore-15.2.0", "GCC-15.2.0", "foss-2026.1"]
         );
-        // Non-GCC-family parents are not derivable.
+        // A compiler-only toolchain with no defining recipe in the tree is not
+        // derivable (nothing pins its GCCcore generation).
         let intel = Toolchain {
             name: "intel".into(),
             version: "2026a".into(),
         };
         assert!(derive_hierarchy_from_candidates(&intel, &cands).is_none());
+    }
+
+    #[test]
+    fn compiler_only_toolchain_hierarchy_derived_from_its_gcccore_dep() {
+        // nvidia-compilers-25.11 sits directly on GCCcore-14.3.0 (declared in
+        // its own recipe). A companion recipe on this toolchain must resolve
+        // dependencies at [SYSTEM, GCCcore-14.3.0, nvidia-compilers-25.11].
+        let mut def = cand("nvidia-compilers", "25.11", "system", "", None);
+        def.dependencies = vec![dep_pin("GCCcore", "14.3.0"), dep_pin("binutils", "2.44")];
+        let parent = Toolchain {
+            name: "nvidia-compilers".into(),
+            version: "25.11".into(),
+        };
+        let h = derive_hierarchy_from_candidates(&parent, &[def.clone()]).expect("derived");
+        assert_eq!(
+            h.member_labels(),
+            vec!["system", "GCCcore-14.3.0", "nvidia-compilers-25.11"]
+        );
+        // A GCCcore-14.3.0 dependency candidate is in-hierarchy; an intel-gen
+        // one on a different GCCcore is not.
+        let ucx_143 = cand("UCX", "1.19.0", "GCCcore", "14.3.0", None);
+        let ucx_133 = cand("UCX", "1.18.0", "GCCcore", "13.3.0", None);
+        assert!(h.contains(&ucx_143.toolchain));
+        assert!(!h.contains(&ucx_133.toolchain));
+        // No defining recipe -> not derivable.
+        assert!(derive_hierarchy_from_candidates(&parent, &[]).is_none());
     }
 
     #[test]

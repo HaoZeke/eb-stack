@@ -607,14 +607,9 @@ fn rewrite_toolchain(src: &str, tc: &Toolchain) -> Result<String, EmitError> {
     }
     let start_line = start_line.ok_or(EmitError::MissingToolchain)?;
 
-    // Rebuild with name/version values substituted inside the dict, preserving
-    // surrounding whitespace and quote characters on each key/value pair.
-    let mut capturing = false;
-    let mut depth = 0i32;
-    let mut span_start = None;
-    let mut span_end = None;
     let bytes = src.as_bytes();
-    // Find byte offset of start of the start_line.
+    // Find byte offset of start of each line (used by both the bare-SYSTEM and
+    // dict-rewrite paths below).
     let mut line_offsets = Vec::with_capacity(lines.len());
     let mut off = 0usize;
     for line in &lines {
@@ -632,6 +627,45 @@ fn rewrite_toolchain(src: &str, tc: &Toolchain) -> Result<String, EmitError> {
             }
         }
     }
+
+    // Handle the bare `toolchain = SYSTEM` form (no dict braces to scan). This
+    // is how SYSTEM-toolchain recipes (e.g. nvidia-compilers, CMake) declare
+    // their toolchain.
+    {
+        let rhs = lines[start_line]
+            .split_once('=')
+            .map(|(_, r)| r)
+            .unwrap_or("")
+            .split('#')
+            .next()
+            .unwrap_or("")
+            .trim();
+        if rhs == "SYSTEM" {
+            // Target is also SYSTEM (a version-only bump): leave it untouched.
+            if tc.name.eq_ignore_ascii_case("system") {
+                return Ok(src.to_string());
+            }
+            // Promote SYSTEM to a real toolchain dict in place, preserving the
+            // rest of the line (indentation, trailing comment).
+            let in_line = lines[start_line]
+                .find("SYSTEM")
+                .expect("rhs == SYSTEM implies the token is present");
+            let abs = line_offsets[start_line] + in_line;
+            let replacement = format!("{{'name': '{}', 'version': '{}'}}", tc.name, tc.version);
+            let mut out = String::with_capacity(src.len() + replacement.len());
+            out.push_str(&src[..abs]);
+            out.push_str(&replacement);
+            out.push_str(&src[abs + "SYSTEM".len()..]);
+            return Ok(out);
+        }
+    }
+
+    // Rebuild with name/version values substituted inside the dict, preserving
+    // surrounding whitespace and quote characters on each key/value pair.
+    let mut capturing = false;
+    let mut depth = 0i32;
+    let mut span_start = None;
+    let mut span_end = None;
 
     let search_from = line_offsets[start_line];
     let mut i = search_from;
@@ -1581,5 +1615,35 @@ dependencies = []
             r.text
         );
         assert!(!r.text.contains("3.31.8"));
+    }
+
+    #[test]
+    fn rewrite_bare_system_toolchain_version_bump_keeps_system() {
+        // nvidia-compilers-style recipe: `toolchain = SYSTEM` (no dict). A
+        // version-only bump (target toolchain still SYSTEM) must leave the line
+        // untouched rather than fail on the missing dict braces.
+        let src = "name = 'nvidia-compilers'\nversion = '25.9'\ntoolchain = SYSTEM\n";
+        let sys = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let out = rewrite_toolchain(src, &sys).expect("bare SYSTEM must not error");
+        assert!(out.contains("toolchain = SYSTEM"), "got:\n{out}");
+    }
+
+    #[test]
+    fn rewrite_bare_system_toolchain_promoted_to_real_toolchain() {
+        // Retargeting a SYSTEM recipe onto a real toolchain promotes the bare
+        // token to a dict in place, preserving a trailing comment.
+        let src = "name = 'App'\nversion = '1.0'\ntoolchain = SYSTEM  # bootstrap\n";
+        let tc = Toolchain {
+            name: "GCCcore".into(),
+            version: "14.3.0".into(),
+        };
+        let out = rewrite_toolchain(src, &tc).expect("promotion must succeed");
+        assert!(
+            out.contains("toolchain = {'name': 'GCCcore', 'version': '14.3.0'}  # bootstrap"),
+            "got:\n{out}"
+        );
     }
 }
