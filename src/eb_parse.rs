@@ -1496,16 +1496,20 @@ pub fn check_recipe_deps(recipe: &ResolvedEasyconfig, universe: &[Candidate]) ->
     }
 }
 
-/// Packaging gate: checksum present, easyblock/moduleclass set, and optional
-/// required configopts substrings (e.g. `-Dwith_tests=false`).
+/// Packaging gate: checksums present, moduleclass set, and optional required
+/// configopts substrings (e.g. `-Dwith_tests=false`).
+///
+/// A missing `easyblock` is **not** an error: EasyBuild derives the easyblock
+/// from the software name when the recipe omits it (`OpenMPI` -> `EB_OpenMPI`,
+/// `GCC` -> `EB_GCC`, ...), which is how the majority of upstream recipes are
+/// written. Only recipes whose name does not map to a software-specific
+/// easyblock need to declare one, and the recipe author — not this gate —
+/// makes that call.
 pub fn packaging_gate(
     recipe: &ResolvedEasyconfig,
     required_configopts: &[&str],
 ) -> Result<(), Vec<String>> {
     let mut errs = Vec::new();
-    if recipe.easyblock.as_deref().unwrap_or("").is_empty() {
-        errs.push("missing easyblock".into());
-    }
     if recipe.moduleclass.as_deref().unwrap_or("").is_empty() {
         errs.push("missing moduleclass".into());
     }
@@ -2598,16 +2602,23 @@ builddependencies = [
     }
 
     #[test]
-    fn packaging_gate_requires_easyblock_moduleclass_checksums() {
+    fn packaging_gate_requires_moduleclass_checksums_not_easyblock() {
         let mut r = blank_recipe();
         let errs = packaging_gate(&r, &[]).unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("easyblock")));
+        // A missing easyblock is name-derived by EasyBuild, never a gate error.
+        assert!(!errs.iter().any(|e| e.contains("easyblock")));
         assert!(errs.iter().any(|e| e.contains("moduleclass")));
         assert!(errs.iter().any(|e| e.contains("checksums")));
 
+        // No explicit easyblock (name-derived) still passes once the genuinely
+        // required fields are present — mirrors OpenMPI / nvidia-compilers.
+        r.moduleclass = Some("mpi".into());
+        r.checksums = vec!["deadbeef".into()];
+        assert!(r.easyblock.is_none());
+        packaging_gate(&r, &[]).unwrap();
+
         r.easyblock = Some("MesonNinja".into());
         r.moduleclass = Some("chem".into());
-        r.checksums = vec!["deadbeef".into()];
         r.configopts = Some("-Dwith_fortran=true -Dwith_tests=false".into());
         packaging_gate(&r, &["-Dwith_fortran=true", "-Dwith_tests=false"]).unwrap();
         let miss = packaging_gate(&r, &["-Dwith_metatomic=true"]).unwrap_err();
