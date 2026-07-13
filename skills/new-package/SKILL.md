@@ -39,8 +39,7 @@ new toolchain” section of the writing-easyconfigs page.
 
 All EasyBuild-facing work for **new packages** runs on **`EasyBuild host`**
 (SSH host alias; SURF workstation), not on the laptop and not on
-`cargo builder` (terra is the generic remote builder for cargo/heavy compile —
-different role).
+the site **cargo builder** (compile-only remote for this repo — different role).
 
 | On site EasyBuild host | Why |
 |--------------|-----|
