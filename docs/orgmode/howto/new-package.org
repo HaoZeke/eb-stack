@@ -110,11 +110,20 @@ Per https://docs.easybuild.io/contributing/ :
 
 * Mechanical first; local-ai agent only for judgment
 
-On ~rg.surf~, run every mechanical step (~eb-stack ingest~,
-~eb --inject-checksums~, ~eb --check-contrib~, ~eb -Dr --robot~) before
-involving a model. Product flags, ambiguous ~moduleclass~, real
-~sanity_check_paths~, and variant policy are *judgment residuals*: a
-**local-ai agent** (OMP or Hermes **on rg.surf**) follows
+On ~rg.surf~, run every mechanical step (~eb-stack ingest~ / MCP ~eb_ingest~,
+~eb --inject-checksums~, ~eb --check-contrib~, ~eb-stack check-recipe~,
+~eb -Dr --robot~) before involving a model.
+
+Ingest always writes ~{stem}.residuals.json~ (or ~--residual-queue PATH~):
+classified residual items + a claim ladder that does **not** claim
+*resolves*/*builds*. Feed that JSON to the residual agent.
+
+~check-recipe~ is hierarchy-aware: unpinned deps must match a generation
+member (older GCCcore alone is not enough for a newer foss recipe).
+
+Product flags, ambiguous ~moduleclass~, real ~sanity_check_paths~, companion
+recipes for robot holes, and variant policy are *judgment residuals*: a
+**local-ai agent** (Hermes preferred, in **herdr** on ~rg.surf~) follows
 ~skills/new-package/SKILL.md~ §7 — do **not** hardcode them into ~eb-stack~.
 
 * Related

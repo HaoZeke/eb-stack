@@ -42,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - README public framing for **0.3.x**: ready vs must-not-claim table;
   three-claim ladder (*resolves* / *builds* / *binary-verified*); ingest
   scaffold ≠ landable PR; human-owned PR surface.
+- Skills + `AGENTS.md` aligned with residual-queue JSON, hierarchy-aware
+  `check-recipe`, MCP `eb_ingest`, and herdr residual agents on `rg.surf`.
 
 ## [0.3.0] - 2026-07-13
 

@@ -29,19 +29,23 @@ installs there unless a site runbook explicitly says so.
    Never guess dependency versions, checksums, or hierarchy relationships in
    prose — the tool resolves them or tells you exactly what is missing.
    If your harness speaks MCP, prefer the typed tool surface: `eb-stack
-   mcp` serves `eb_check_recipe` / `eb_bump` / `eb_solve` over stdio,
-   with the reporting ladder and the next actions embedded in every
-   result. Foreign ingest is CLI (`eb-stack ingest`) today.
+   mcp` serves `eb_check_recipe` / `eb_bump` / `eb_solve` / `eb_ingest`
+   over stdio, with the reporting ladder and next actions embedded in every
+   result. Ingest also writes `{stem}.residuals.json` — that file is the
+   residual work queue (not a closed landable PR).
 2. **Tool output is instructions.** A missing-dep hint ("available at
-   other generations: ...") is your work queue. A `[packaging]` checksum
-   finding means fix the recipe (checksums are positional: all sources
-   first, then patches) — bypassing or deleting a check is never the fix.
+   other generations: ...") and hierarchy-member notes are your work queue.
+   A `[packaging]` checksum finding means fix the recipe (checksums are
+   positional: all sources first, then patches) — bypassing or deleting a
+   check is never the fix.
 3. **Report on the three-claim ladder** (skill section 10.4): *resolves* /
    *builds* / *binary-verified* are different claims; state which rung you
-   actually established and which you did not.
-4. **Builds happen on build machines** through the batch scheduler, in
-   their own cgroup, with `EASYBUILD_TMPDIR` on shared storage. Not on the
-   machine you are typing on, not in a shared terminal session.
+   actually established and which you did not. Ingest alone is never
+   *resolves* or *builds*.
+4. **EasyBuild *builds* on `rg.surf`** (or site scheduler/cgroup when the
+   runbook says so), with `EASYBUILD_TMPDIR` on durable storage. Residual
+   agents run in **herdr** on that host. Not the laptop login session; not
+   `rg.terra` (cargo only for this repo).
 5. **The PR surface belongs to the human.** Branch pushes to a fork you
    were told to use are plumbing; opening, editing, or commenting on PRs
    and issues is not yours. Prepare paste-ready drafts instead. One PR per

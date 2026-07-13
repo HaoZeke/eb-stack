@@ -149,9 +149,12 @@ buildable; match the maintainer's formatting only if your review requires it.
   fields changed.
 - Sanity-check dependency existence for the target generation:
   `eb-stack check-recipe` resolves one recipe and verifies its deps exist in the
-  robot tree(s). A missing dep is reported with the generations where the
-  package DOES exist ("available at other generations: ...") — that hint is
-  your work queue, not decoration. The same gate also lint-checks the
+  robot tree(s). **Unpinned** deps must match a **hierarchy member** of the
+  recipe toolchain (older GCCcore alone does not pass a newer foss recipe);
+  explicit fourth-tuple pins (cross-generation residuals) still match exactly.
+  A missing dep is reported with hierarchy member labels and the generations
+  where the package DOES exist ("available at other generations: ...") — that
+  hint is your work queue, not decoration. The same gate also lint-checks the
   `checksums` list against EasyBuild's positional convention (sources first,
   then patches); a "packaging" finding means reorder the list, never bypass.
 

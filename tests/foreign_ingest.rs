@@ -235,6 +235,22 @@ fn cli_ingest_conda_eon_and_spack_qmcpack() {
     let r = resolve_easyconfig_file(&eon_out).expect("re-parse eon");
     assert_eq!(r.name, "eOn");
     assert_eq!(r.version, "2.16.0");
+    // Residual queue is part of the mechanical contract for residual agents.
+    let eon_rq = tmp.path().join("eon.residuals.json");
+    assert!(
+        eon_rq.is_file(),
+        "expected default residual queue next to scaffold: {}",
+        eon_rq.display()
+    );
+    let rq = std::fs::read_to_string(&eon_rq).expect("read residual queue");
+    assert!(
+        rq.contains("\"items\"") && rq.contains("claim_ladder"),
+        "residual queue shape: {rq}"
+    );
+    assert!(
+        rq.contains("not-established") || rq.contains("eb --robot"),
+        "queue must not claim builds/resolves falsely: {rq}"
+    );
 
     let qmc_out = tmp.path().join("qmc.eb");
     let st = Command::new(bin)
@@ -253,6 +269,36 @@ fn cli_ingest_conda_eon_and_spack_qmcpack() {
     let r = resolve_easyconfig_file(Path::new(&qmc_out)).expect("re-parse qmc");
     assert_eq!(r.name, "QMCPACK");
     assert_eq!(r.version, "4.3.0");
+    assert!(
+        tmp.path().join("qmc.residuals.json").is_file(),
+        "qmc residual queue missing"
+    );
+}
+
+#[test]
+fn cli_ingest_residual_queue_explicit_path() {
+    let bin = env!("CARGO_BIN_EXE_eb-stack");
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let out = tmp.path().join("zlib.eb");
+    let rq = tmp.path().join("custom-queue.json");
+    let st = Command::new(bin)
+        .args([
+            "ingest",
+            "--source",
+            root().join("conda_zlib/meta.yaml").to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--residual-queue",
+            rq.to_str().unwrap(),
+        ])
+        .status()
+        .expect("spawn");
+    assert!(st.success());
+    assert!(out.is_file());
+    assert!(rq.is_file(), "explicit --residual-queue not written");
+    let body = std::fs::read_to_string(&rq).unwrap();
+    assert!(body.contains("\"package\""));
+    assert!(body.contains("zlib") || body.contains("\"items\""));
 }
 
 #[test]

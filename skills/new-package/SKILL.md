@@ -148,7 +148,12 @@ eb-stack ingest \
   --easyconfigs "$ROBOT" \
   --keep-old-deps \
   --out-dir work/easyconfigs
+# Also writes work/easyconfigs/<letter>/<Name>/<Name>-….residuals.json
+# Optional: --residual-queue PATH
 ```
+
+MCP (same semantics): `eb_ingest` via `eb-stack mcp` (`source`, optional
+`easyconfigs[]`, `out` / `out_dir`, `residual_queue`).
 
 What ingest **is allowed** to claim after a successful run:
 
@@ -157,15 +162,19 @@ What ingest **is allowed** to claim after a successful run:
   robot has hierarchy candidates (hierarchy consensus + resolvo joint pins)
 - Static configure flags only when they appear as plain string literals in the
   foreign file
+- A **residual queue JSON** (`{stem}.residuals.json`) with classified items
+  (`dep_version`, `product_config`, `moduleclass`, `sanity`, `checksum`, …)
+  and a claim ladder that marks *resolves*/*builds* as **not** established
 
 What ingest **must not** claim:
 
 - A landable easyconfig (style, `moduleclass`, real checksums, sanity)
 - Correctness of product `configopts` / Spack `when=` / conda selectors
 - That `eb --robot` will succeed
+- That the residual queue is closed (it is the work list for §7)
 
-Treat every `# WARNING:` line as a work-queue item mapped to an EasyBuild
-parameter below.
+Treat every `# WARNING:` line **and** every residual-queue `items[]` entry as a
+work-queue item mapped to an EasyBuild parameter in §4.
 
 ---
 
@@ -228,7 +237,7 @@ Then install (build machine / scheduler — see annual-bump §10):
 eb Name-Ver-foss-YYYY.eb --robot work/easyconfigs:$ROBOT
 ```
 
-### Step E — eb-stack plan check (optional, complements EB)
+### Step E — eb-stack plan check (complements EB)
 
 ```
 eb-stack check-recipe \
@@ -238,7 +247,15 @@ eb-stack check-recipe \
 ```
 
 Use for missing-dep generation hints and checksums **positional** lint.
+Unpinned deps must match a **hierarchy member** of the recipe toolchain
+(e.g. CapnProto on GCCcore-14.x does **not** satisfy foss-2026.1 which needs
+GCCcore-15.2.0). Explicit fourth-tuple pins (cross-gen residuals like
+`xtb`/gfbf-2024a) still match exactly. Missing-dep reasons include hierarchy
+member labels + “available at other generations” hints — that list is the
+companion-author work queue.
+
 This is **not** a substitute for `eb --check-contrib` or a real install.
+MCP: `eb_check_recipe` with the same trees.
 
 ### Step F — Contribute (upstream easyconfigs)
 
@@ -263,16 +280,19 @@ org forbids agents on GitHub PR APIs.
 
 ## 4. Residual map (foreign bootstrap → EasyBuild parameters)
 
-| Symptom from ingest / check | EasyBuild action |
-|-----------------------------|------------------|
-| Zero / missing checksum | `eb --inject-checksums`; fix `sources` to a stable URL first |
+Primary input: **`{stem}.residuals.json`** from ingest (kinds below). Also map
+`# WARNING:` lines and `check-recipe` missing-dep reasons.
+
+| Residual kind / symptom | EasyBuild action |
+|-------------------------|------------------|
+| `checksum` / zero checksum | `eb --inject-checksums`; fix `sources` to a stable URL first |
 | Hardcoded version in `sources` | Use `%(version)s` / `SOURCE_*` templates |
-| `moduleclass = 'lib'` default wrong | Set known class; `eb --show-default-moduleclasses` |
-| Empty / fake `sanity_check_paths` | Real files under install prefix |
-| Residual foreign dep version | Pin from robot / subtoolchain easyconfig for target gen |
-| Missing dep + generation hint | Author or bump that dep easyconfig (recurse) |
-| Product flags missing | From project build docs / sibling EB recipe — not from inventing `-D` |
-| Spack `when=` / conda selectors | Residual; encode variants as separate easyconfigs or toolchainopts |
+| `moduleclass` default `lib` wrong | Set known class; `eb --show-default-moduleclasses` |
+| `sanity` / empty paths | Real files under install prefix |
+| `dep_version` / residual foreign pin | Pin from robot / subtoolchain easyconfig for target gen |
+| check-recipe missing + hierarchy note | Author or bump companion for **this** generation (e.g. CapnProto-GCCcore-15.2.0), put under work overlay first in `--robot` |
+| `product_config` / flags missing | From project build docs / sibling EB recipe — **not** inventing `-D` in `eb-stack` |
+| `variant` / Spack `when=` / selectors | Encode variants as separate easyconfigs or toolchainopts |
 | Multi-source without extract layout | Hand-write `sources` dicts / `extract_cmd` per EB multi-source docs |
 
 ---
@@ -287,34 +307,45 @@ and `fixtures/qmcpack_foss_2026_1` and were hand-finished to EasyBuild rules.
 REPO=<eb-stack-checkout-on-rg.surf>
 ROBOT=$HOME/.venvs/easybuild/easybuild/easyconfigs   # or easybuild-easyconfigs checkout on rg.surf
 
-# Bootstrap from conda-forge eOn
+# Bootstrap from conda-forge eOn (foss-2026.1 landable gen)
 eb-stack ingest \
   --source $REPO/fixtures/foreign_ingest/conda_eon/recipe.yaml \
-  --toolchain-name foss --toolchain-version 2024a \
+  --toolchain-name foss --toolchain-version 2026.1 \
   --easyconfigs "$ROBOT" --keep-old-deps \
   --out-dir /tmp/eb-new/easyconfigs
+# → …/eOn-….eb and …/eOn-….residuals.json
 
 # Bootstrap from Spack QMCPACK
 eb-stack ingest \
   --source $REPO/fixtures/foreign_ingest/spack_qmcpack/package.py \
   --format spack \
-  --toolchain-name foss --toolchain-version 2024a \
+  --toolchain-name foss --toolchain-version 2026.1 \
   --easyconfigs "$ROBOT" --keep-old-deps \
   --out-dir /tmp/eb-new/easyconfigs
+
+# Overlay landable companions when robot holes exist (e.g. CapnProto GCCcore-15.2.0):
+# rsync $REPO/fixtures/eon_foss_2026_1/easyconfigs/ /tmp/eb-new/easyconfigs/
 
 # Then ALWAYS:
 eb --inject-checksums /tmp/eb-new/easyconfigs/*/*/*.eb
 eb --check-contrib /tmp/eb-new/easyconfigs/*/*/*.eb
+eb-stack check-recipe --recipe /tmp/eb-new/easyconfigs/e/eOn/*.eb \
+  --easyconfigs "$ROBOT" --easyconfigs /tmp/eb-new/easyconfigs
 eb -Dr --robot /tmp/eb-new/easyconfigs:$ROBOT /tmp/eb-new/easyconfigs/*/*/*.eb
 ```
 
-Compare bootstrap output to landable fixtures to see residual product surface
-(configopts, extract_cmd, real checksums, toolchainopts).
+Compare bootstrap + residual queue to landable fixtures
+(`fixtures/eon_foss_2026_1`, `fixtures/qmcpack_foss_2026_1`) for product surface
+(configopts, extract_cmd, companions). Fixtures prove **resolve**/packaging_gate,
+not a virgin *builds* install.
 
-Regression for the bootstrap path:
+Regression (code + validation):
 
 ```
+cargo test --locked --lib unpinned_dep_requires_hierarchy
+cargo test --locked --lib residual_queue_classifies
 cargo test --locked --test foreign_ingest
+cargo test --locked --test eon_foss_2026_1 --test qmcpack_foss_2026_1
 ```
 
 ---
@@ -323,12 +354,13 @@ cargo test --locked --test foreign_ingest
 
 | Claim | Who |
 |-------|-----|
-| Foreign identity → parseable draft | `eb-stack ingest` (**mechanical**) |
+| Foreign identity → parseable draft + residual JSON | `eb-stack ingest` / MCP `eb_ingest` (**mechanical**) |
 | Generation-native dep versions when robot has candidates | `eb-stack` hierarchy + resolvo (**mechanical**) |
+| Hierarchy-aware missing deps (no older-GCCcore false pass) | `eb-stack check-recipe` (**mechanical**) |
 | SHA256 for fetched sources | `eb --inject-checksums` (**mechanical**) |
 | Style + checksum presence gate | `eb --check-contrib` (**mechanical**) |
-| Graph dry-run / install | `eb -Dr` / `eb --robot` (**mechanical**) |
-| Product configopts, variant policy, real sanity paths, moduleclass choice, multi-source extract layout, “which sibling to copy” judgment | **local-ai agent** following this skill — **not** hardcoding into `eb-stack` |
+| Graph dry-run / install (*builds*) | `eb -Dr` / `eb --robot` on **rg.surf** (**mechanical**) |
+| Product configopts, variant policy, real sanity paths, moduleclass choice, multi-source extract layout, companion authoring judgment | **local-ai agent** using residual queue — **not** hardcoding into `eb-stack` |
 | Upstream PR merge | Human + EasyBuild maintainers |
 
 Three-claim ladder (site ops): annual-bump §10.4 —
@@ -353,20 +385,24 @@ bakes lies into the tool. Judgment residuals go to a **local-ai agent**
 
 | Kind | Examples | Who |
 |------|----------|-----|
-| **Mechanical** | `eb -S`; `eb-stack ingest --easyconfigs`; hierarchy/resolvo pins; `eb --inject-checksums`; `eb --check-contrib`; `eb-stack check-recipe`; `eb -Dr --robot` | CLI / any driver that only runs commands |
-| **Judgment residual** | Which product features to enable; moduleclass when ambiguous; real `sanity_check_paths` from install intent; multi-source `extract_cmd`; Spack `when=` → EB variant story; whether to copy sibling vs greenfield; PR title wording | **local-ai agent** (this skill §3–§4) |
-| **Forbidden** | Encoding product `-D` sets, fake checksums, or landable style as hardwired ingest defaults | Nobody — not code, not the agent pretending mechanical |
+| **Mechanical** | `eb -S`; `eb-stack ingest` / `eb_ingest` (+ residual JSON); hierarchy/resolvo pins; `eb --inject-checksums`; `eb --check-contrib`; `eb-stack check-recipe` / `eb_check_recipe`; `eb -Dr --robot` | CLI / MCP / any driver that only runs commands |
+| **Judgment residual** | Close residual-queue items: product features; moduleclass; sanity paths; extract_cmd; companion recipes for hierarchy holes; Spack `when=`; sibling vs greenfield; PR title | **local-ai agent** (this skill §3–§4) with residual JSON as input |
+| **Forbidden** | Encoding product `-D` sets, fake checksums, or landable style as hardwired ingest defaults; claiming *builds* without `eb --robot` | Nobody — not code, not the agent pretending mechanical |
 
 ### Mechanical sequence (always do this before calling a local-ai agent)
 
 1. `eb -S Name` — prefer sibling copy when possible.
-2. `eb-stack ingest … --easyconfigs $ROBOT` (or hand draft from sibling).
-3. `eb --inject-checksums` on the draft (after sources URLs are stable).
-4. `eb --check-contrib` — fix only what the gate names that is mechanical
+2. `eb-stack ingest … --easyconfigs $ROBOT` (or MCP `eb_ingest`) — keep the
+   printed **residual-queue** path.
+3. Read residual JSON kinds; fix only **mechanical** items if any (none of the
+   product `-D` set).
+4. `eb --inject-checksums` on the draft (after sources URLs are stable).
+5. `eb --check-contrib` — fix only what the gate names that is mechanical
    (missing SHA256, style reordering if `eb` can do it).
-5. `eb-stack check-recipe` + `eb -Dr --robot …` for the dep graph.
-6. **Stop.** If the recipe is not yet landable, the remaining list is
-   judgment residuals → dispatch local-ai agent with that list + this skill.
+6. `eb-stack check-recipe` (+ draft overlay for companions) + `eb -Dr --robot …`.
+7. **Stop.** Remaining residual-queue + missing-dep hierarchy hints → local-ai
+   agent in **herdr** (§7). After judgment edits, re-run 4–6, then `eb --robot`
+   on **rg.surf** only when claiming *builds*.
 
 ### local-ai agent (Hermes preferred) — **herdr pane on `rg.surf`**
 
@@ -394,21 +430,22 @@ bakes lies into the tool. Judgment residuals go to a **local-ai agent**
   is allowed only if started the same way through **herdr agent start**.
 - **Harness model path:** site Willma role for eb-stack (see annual-bump §11.5).
   Commercial frontier models out of scope for SURF-only work.
-- **Input:** this skill path, software name, foreign path (or “none —
-  search first”), toolchain, `ROBOT` **on rg.surf**, work dir **on rg.surf**,
-  and the **mechanical leftover list**.
+- **Input:** this skill path; software name; foreign path (or “none —
+  search first”); toolchain; `ROBOT` and work dir **on rg.surf**; the
+  **`*.residuals.json` path** from ingest; any `check-recipe` missing-dep JSON.
 - **Prompt shape (minimal):**
   ```
   On rg.surf (herdr pane): follow skills/new-package/SKILL.md for <software>.
   Foreign: <path|none>. Toolchain: foss-<gen>. ROBOT=<path on rg.surf>.
-  Work=<path on rg.surf>. Mechanical steps already done: <…>.
-  Residual judgment only: <bullets>.
-  Use eb / eb-stack on this host; do not invent eb-stack features or
-  hardcode product flags into the tool. Report claim ladder. PR surface
-  human-only unless authorized this turn.
+  Work=<path on rg.surf>. Residual queue JSON: <path to *.residuals.json>.
+  Mechanical steps already done: <ingest, inject-checksums, check-contrib, …>.
+  Residual judgment only: close residual-queue items + check-recipe missing
+  hierarchy companions. Use eb / eb-stack / MCP eb_check_recipe on this host.
+  Do not invent eb-stack features or hardcode product flags into the tool.
+  Report claim ladder. PR surface human-only unless authorized this turn.
   ```
-- **Output:** edited easyconfig(s) + residual log + claim ladder; paste-ready
-  PR title/body if contribution is in scope.
+- **Output:** edited easyconfig(s) + companions under letter layout + residual
+  log + claim ladder; paste-ready PR title/body if contribution is in scope.
 
 ### What success looks like
 
@@ -427,12 +464,15 @@ bakes lies into the tool. Judgment residuals go to a **local-ai agent**
 |------|---------|
 | Search existing EB recipes | `eb -S Name` |
 | Bootstrap from foreign | `eb-stack ingest --source … --easyconfigs ROBOT --out-dir DIR` |
+| Residual work queue | `{stem}.residuals.json` (or `--residual-queue PATH`) |
+| MCP bootstrap | `eb-stack mcp` → `eb_ingest` |
 | Inject SHA256 | `eb --inject-checksums foo.eb` |
 | Contributor gate | `eb --check-contrib foo.eb` |
-| Dry-run graph | `eb foo.eb -Dr --robot DIR:ROBOT` |
-| Install | `eb foo.eb --robot DIR:ROBOT` |
-| Plan check (eb-stack) | `eb-stack check-recipe --recipe foo.eb --easyconfigs ROBOT` |
-| Open easyconfig PR (EB GitHub integration) | `eb --new-pr foo.eb` (see integration-with-github docs) |
+| Plan check (hierarchy-aware) | `eb-stack check-recipe --recipe foo.eb --easyconfigs ROBOT --easyconfigs work` |
+| MCP plan check | `eb_check_recipe` |
+| Dry-run graph | `eb foo.eb -Dr --robot work:ROBOT` |
+| Install (*builds*, **rg.surf**) | `eb foo.eb --robot work:ROBOT` |
+| Open easyconfig PR (EB GitHub integration) | `eb --new-pr foo.eb` (human; see integration-with-github docs) |
 | Review consistency vs develop | `eb --review-pr <PR#>` |
 
 ---
