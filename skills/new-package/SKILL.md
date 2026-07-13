@@ -1,6 +1,6 @@
 ---
 name: eb-stack-new-package
-description: Author a new EasyBuild easyconfig (greenfield) using EasyBuild's own contribution workflow, with eb-stack ingest from conda-forge/Spack as an optional bootstrap. Follows docs.easybuild.io writing-easyconfig-files + contributing (mandatory params, templates, inject-checksums, check-contrib, review-pr, new-pr).
+description: Author a new EasyBuild easyconfig (greenfield) with eb-stack ingest. Default: Hermes/herdr campaign agent on rg.surf full-drives residual judgment through eb --robot *builds*. Mechanical format-style/check-recipe; human owns PR surface.
 ---
 
 # New EasyBuild package (greenfield)
@@ -517,7 +517,8 @@ scopes “no install / recipe gates only.” Default is full-drive.
 | Plan check (hierarchy-aware) | `eb-stack check-recipe --recipe foo.eb --easyconfigs ROBOT --easyconfigs work` |
 | MCP plan check | `eb_check_recipe` |
 | Dry-run graph | `eb foo.eb -Dr --robot work:ROBOT` |
-| Install (*builds*, **rg.surf**) | `eb foo.eb --robot work:ROBOT` |
+| Install (*builds*, **rg.surf**) | `eb foo.eb --robot work:ROBOT` (campaign agent §7) |
+| Full-drive agent (default) | herdr + Hermes with `hermes-full-drive.md` (§7) |
 | Open easyconfig PR (EB GitHub integration) | `eb --new-pr foo.eb` (human; see integration-with-github docs) |
 | Review consistency vs develop | `eb --review-pr <PR#>` |
 
@@ -529,11 +530,13 @@ scopes “no install / recipe gates only.” Default is full-drive.
 |-----------|-------------|
 | New software / first easyconfig | **This skill** + [writing easyconfigs](https://docs.easybuild.io/writing-easyconfig-files/) |
 | Existing `.eb` → new foss generation | `skills/annual-bump` + writing-docs “new toolchain” |
-| Residual judgment after mechanical gates | **local-ai agent** (§7), not hardcoding into `eb-stack` |
+| PR-ready / landable / “do the packages” | **Campaign agent full-drive** (§7) through `eb --robot` |
+| Residual-only (explicit human scope) | Campaign agent residual-only prompt — no *builds* claim |
 | Stack lock / build list | annual-bump `solve` |
 | Contribute to easybuilders/* | [contributing](https://docs.easybuild.io/contributing/) + [GitHub integration](https://docs.easybuild.io/integration-with-github/) |
 
 **Do not invent EasyBuild parameters, style, or contribution requirements.**
 If this skill and docs.easybuild.io disagree, **docs.easybuild.io wins**.
-**Mechanize everything that is a tool step; never hardcode product residuals
-into ingest — dispatch a local-ai agent for judgment only.**
+**Mechanize every tool step (including format-style and `eb --robot`); never
+hardcode product residuals into ingest. The campaign agent owns the loop
+through *builds* unless the human explicitly scoped residual-only.**
