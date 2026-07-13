@@ -26,7 +26,7 @@
          :headline-levels 4)
         ("sphinx-images"
          :base-directory "./orgmode/"
-         :base-extension "svg\\|png\\|jpg"
+         :base-extension "svg\\|png\\|jpg\\|jpeg\\|webp"
          :publishing-directory "./source/"
          :publishing-function org-publish-attachment
          :recursive t)

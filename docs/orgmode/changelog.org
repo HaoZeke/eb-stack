@@ -1,0 +1,22 @@
+#+TITLE: Changelog
+#+OPTIONS: toc:nil num:nil
+
+The full Keep a Changelog history lives in
+[[https://github.com/HaoZeke/eb-stack/blob/main/CHANGELOG.md][CHANGELOG.md]]
+at the repository root. Highlights for the documentation site:
+
+* 0.2.0
+
+- Hierarchy-aware ~bump --easyconfigs~ with loud fail on unresolved deps
+- ~check-recipe~ with nearest-generation missing-dep hints and positional
+  checksum packaging gate
+- ~solve~ lock, optional CycloneDX SBOM, build list, and stack-diff markdown
+- MCP tool surface (~eb-stack mcp~)
+- Annual-bump skill and agent driver contract
+- Frozen eOn and QMCPACK foss-2026.1 packaging fixtures
+- CI gates for known-bump regression and packaging fixtures
+- Operator guide for the annual rebuild loop
+
+* 0.1.0
+
+- Initial parse / resolvo co-select / planned SBOM path and GROMACS fixtures

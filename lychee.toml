@@ -1,0 +1,20 @@
+# Link check for docs HTML and README.
+# Offline-friendly defaults: skip local anchors and private hosts.
+
+max_concurrency = 8
+timeout = 20
+accept = [200, 206, 429]
+
+# docs.rs / crates.io may 404 until published; GitHub rate-limits anonymous.
+exclude = [
+  '^https://crates\\.io/',
+  '^https://docs\\.rs/',
+  '^https://eb-stack\\.rgoswami\\.me/',
+]
+
+exclude_path = [
+  'docs/build/_sources/',
+]
+
+# Local file links from Sphinx are fine.
+include_verbatim = true

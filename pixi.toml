@@ -15,12 +15,16 @@ graphviz = ">=12,<13"
 shibuya = ">=2025.12.13, <2026"
 sphinx = ">=9.0.4, <10"
 sphinx-sitemap = ">=2.9.0, <3"
+sphinx-copybutton = ">=0.5.2, <1"
+sphinx-design = ">=0.6.0, <1"
 
 [feature.docs.tasks]
 mkrst = { cmd = "emacs --batch --load export.el", cwd = "docs" }
 sphinxbld = { cmd = "sphinx-build docs/source/ docs/build", depends-on = ["mkrst"] }
 docbld = { depends-on = ["sphinxbld"] }
 docdel = { cmd = "rm -rf build source/*.rst source/**/*.rst 2>/dev/null; true", cwd = "docs" }
+# Link check after a local docbld (CI installs lychee separately)
+linkcheck = { cmd = "lychee --config lychee.toml --no-progress 'docs/build/**/*.html' README.md" }
 
 [environments]
 docs = { features = ["docs"] }

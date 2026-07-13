@@ -3,11 +3,69 @@
 #+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil ^:nil
 
 #+begin_export rst
+.. raw:: html
+
+   <div class="eb-hero">
+     <div class="eb-hero-brand">
+       <img class="eb-hero-mark" src="_static/mark.svg" width="56" height="56" alt="" />
+       <div>
+         <p class="eb-hero-name">eb-stack</p>
+         <p class="eb-hero-sub">EasyBuild · stack lock · generation bump</p>
+       </div>
+     </div>
+     <p class="eb-hero-tagline">Rewrite an EasyBuild stack onto the next toolchain generation: hierarchy-aware dependency versions, joint co-selection with resolvo, and reviewable lock / build-list / stack-diff artifacts.</p>
+     <div class="eb-hero-pills">
+       <span>bump --easyconfigs</span>
+       <span>check-recipe</span>
+       <span>resolvo SAT</span>
+       <span>planned SBOM</span>
+       <span>annual-bump skill</span>
+     </div>
+     <p class="eb-hero-flow">recipe → bump → check-recipe → solve → human-reviewed PR → eb --robot</p>
+   </div>
+
 ============
 ``eb-stack``
 ============
 
 :Author: `Rohit Goswami <https://rgoswami.me>`_
+
+.. important::
+
+   *New here?* → :doc:`tutorial`
+
+   *Whole annual rebuild?* → :doc:`howto/run-annual-bump`
+
+   *One recipe flags?* → :doc:`howto/bump-recipe`
+
+   *CLI surface?* → :doc:`reference/cli`
+
+.. grid:: 1 1 2 2
+   :gutter: 2
+
+   .. grid-item-card:: Tutorial — zero-hand-fed bump
+      :link: tutorial
+      :link-type: doc
+
+      One Good Tutorial: GROMACS foss-2023b → foss-2024a with no ``--dep`` flags.
+
+   .. grid-item-card:: Annual rebuild (operator)
+      :link: howto/run-annual-bump
+      :link-type: doc
+
+      What the loop closes, residual table, claim ladder, CI-known bumps.
+
+   .. grid-item-card:: Solve a stack lock
+      :link: howto/solve-lock
+      :link-type: doc
+
+      Co-select a generation with resolvo; emit lock and build list.
+
+   .. grid-item-card:: Reproduction fidelity
+      :link: explanation/fidelity
+      :link-type: doc
+
+      Measured rates on real maintainer pairs and residual classes.
 
 .. toctree::
    :maxdepth: 1
@@ -42,6 +100,13 @@
    explanation/optimization-model
    explanation/parser-approach
    explanation/fidelity
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Project
+
+   contributing
+   changelog
 #+end_export
 
 * What it is
@@ -68,13 +133,12 @@
 
 * Install
 
-  Build from source with Cargo (build on a remote builder, not a laptop, per
-  the repository's own convention):
+  Build from source with Cargo:
 
 #+begin_src bash
 git clone https://github.com/HaoZeke/eb-stack.git
 cd eb-stack
-cargo test
+cargo test --locked
 cargo build --release
 # binary: target/release/eb-stack
 install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
@@ -103,11 +167,11 @@ eb-stack --version
     [[file:explanation/parser-approach.org][the parser approach]],
     [[file:explanation/fidelity.org][reproduction fidelity and limitations]],
     [[file:explanation/lifecycle.org][from recipe to installed stack]].
+  - Project: [[file:contributing.org][contributing]], [[file:changelog.org][changelog]].
 
 * Citation
 
-  ~eb-stack~ does not yet have a Zenodo DOI or a JOSS paper. Until then, cite
-  the repository and version directly:
+  Cite the repository and version (or the [[https://github.com/HaoZeke/eb-stack/blob/main/CITATION.cff][CITATION.cff]] metadata):
 
 #+begin_src text
 Rohit Goswami, eb-stack (version 0.2.0), https://github.com/HaoZeke/eb-stack
@@ -115,8 +179,7 @@ Rohit Goswami, eb-stack (version 0.2.0), https://github.com/HaoZeke/eb-stack
 
 * License
 
-  MIT, per ~Cargo.toml~. See the ~LICENSE~ terms in the
-  [[https://github.com/HaoZeke/eb-stack][repository]].
+  MIT. See [[https://github.com/HaoZeke/eb-stack/blob/main/LICENSE][LICENSE]] in the repository.
 
 * Build these docs
 

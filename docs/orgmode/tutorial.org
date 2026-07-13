@@ -5,7 +5,19 @@ In this tutorial you take a real GROMACS easyconfig built against
 ~foss-2023b~ and bump it to the next toolchain generation, ~foss-2024a~,
 with *zero hand-fed dependency versions*: every ~dependencies~ and
 ~builddependencies~ entry is resolved automatically from a directory of
-easyconfigs, one command, no ~--dep~ flags. Here is the end result:
+easyconfigs, one command, no ~--dep~ flags.
+
+#+begin_export rst
+.. figure:: /images/00-hero-annual-bump.jpg
+   :alt: Mascot stamping foss-2024a onto a stack of easyconfig cards; residual sticky note for hand-added deps
+   :align: center
+   :width: 88%
+
+   The mechanical majority of a generation bump is rewriting recipes and
+   dependency versions; a short residual list stays human.
+#+end_export
+
+Here is the end result:
 
 #+begin_src diff
 -toolchain = {'name': 'foss', 'version': '2023b'}

@@ -1,0 +1,46 @@
+#+TITLE: Contributing
+#+OPTIONS: toc:nil num:nil
+
+This page mirrors the repository ~CONTRIBUTING.md~ for the documentation
+site. The source of truth for development gates is the markdown file at the
+repo root; keep them aligned when you change either.
+
+* Development environment
+
+Rust stable builds the library and CLI. Documentation uses
+[[https://pixi.sh][pixi]]:
+
+#+begin_src bash
+cargo test --locked --lib
+cargo test --locked --test reproduce_real_prs --test bump_emit
+pixi run -e docs docbld
+#+end_src
+
+* Code style and gates
+
+- ~cargo fmt --check~
+- ~cargo clippy --all-targets -- -D warnings~ when you touch Rust
+- Tests relevant to your change must pass
+- New public CLI surface needs a flag entry in [[file:reference/cli.org][CLI reference]]
+  and a unit or integration test under ~tests/~
+- Known maintainer-bump regressions in ~tests/reproduce_real_prs.rs~ must
+  stay green (library *and* CLI auto-bump)
+
+* Documentation
+
+Primary docs live in orgmode under ~docs/orgmode/~ (Diataxis). Edit there,
+then ~pixi run -e docs docbld~. Do not hand-edit generated
+~docs/source/**/*.rst~.
+
+* Agent drivers
+
+Follow ~AGENTS.md~ and ~skills/annual-bump/SKILL.md~. The PR surface on
+GitHub remains human-only unless a maintainer says otherwise in the live
+conversation.
+
+* Releasing
+
+1. Move Unreleased notes in ~CHANGELOG.md~ into a versioned section.
+2. Bump ~version~ in ~Cargo.toml~, ~pixi.toml~, ~CITATION.cff~, and
+   ~docs/source/conf.py~ release.
+3. Tag ~vX.Y.Z~ and push the tag.

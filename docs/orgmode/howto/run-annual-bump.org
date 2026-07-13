@@ -10,6 +10,15 @@ driver contract lives in the repository's
 skill]] (~skills/annual-bump/SKILL.md~); both documents describe the same
 loop.
 
+#+begin_export rst
+.. figure:: /images/00-hero-annual-bump.jpg
+   :alt: Mascot stamping foss-2024a onto easyconfig cards with a residual sticky note
+   :align: center
+   :width: 88%
+
+   Stamp the generation, lock what resolves, leave the residual for review.
+#+end_export
+
 * What this closes
 
 An annual (or mid-year) stack rebuild has three separable problems:

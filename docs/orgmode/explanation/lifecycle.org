@@ -35,6 +35,16 @@ the small judgment part; a build pipeline does the installs.
 
 * The two levels of "done"
 
+#+begin_export rst
+.. figure:: /images/01-claim-ladder.png
+   :alt: Three claim rungs — resolves, builds, binary-verified — do not conflate them
+   :align: center
+   :width: 88%
+
+   Three different claims. eb-stack proves the bottom rung; EasyBuild and a
+   running binary prove the rest.
+#+end_export
+
 This is the crux. An easyconfig can be at one of two very different states, and
 eb-stack only takes you to the first.
 
