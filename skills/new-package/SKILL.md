@@ -46,12 +46,14 @@ different role).
 |--------------|-----|
 | `eb`, EasyBuild robot tree, modules | Real SURF EasyBuild environment |
 | `eb-stack` (release binary or build there) | Same machine as `eb` for ingest → check-recipe |
-| **local-ai agent** (OMP / Hermes) | Residual judgment against live `eb` / robot |
+| **local-ai agent** (Hermes preferred; OMP allowed) | Residual judgment against live `eb` / robot |
+| **herdr** pane for residual agents | Always; never ad-hoc `ssh … hermes/omp -p` for residual loops |
 | Drafts / letter-layout work dir | Where `eb --robot` and inject-checksums see files |
 
 ```
 ssh rg.surf
-# then run this skill's commands in a shell on that host
+# mechanical CLI (ingest / inject-checksums / check-contrib) may run in that shell
+# residual judgment agents: always under herdr on this host (see §7)
 ```
 
 If `rg.surf` is unreachable, **stop and report** — do not fall back to
@@ -280,8 +282,9 @@ These **bootstrap** only; landable PRs live under `fixtures/eon_foss_2026_1`
 and `fixtures/qmcpack_foss_2026_1` and were hand-finished to EasyBuild rules.
 
 ```
-REPO=<eb-stack>
-ROBOT=$HOME/.venvs/easybuild/easybuild/easyconfigs   # or easybuild-easyconfigs checkout
+# On rg.surf:
+REPO=<eb-stack-checkout-on-rg.surf>
+ROBOT=$HOME/.venvs/easybuild/easybuild/easyconfigs   # or easybuild-easyconfigs checkout on rg.surf
 
 # Bootstrap from conda-forge eOn
 eb-stack ingest \
@@ -359,21 +362,38 @@ bakes lies into the tool. Judgment residuals go to a **local-ai agent**
 6. **Stop.** If the recipe is not yet landable, the remaining list is
    judgment residuals → dispatch local-ai agent with that list + this skill.
 
-### local-ai agent (OMP / Hermes) — runs on `rg.surf`
+### local-ai agent (Hermes preferred) — **herdr pane on `rg.surf`**
 
 - **Name in prompts:** “local-ai agent” (not product nicknames).
-- **Host:** **`rg.surf` only** (same as §0). Start OMP/Hermes *on that
-  machine* (or with cwd/shell on `rg.surf`), where `eb` and the robot tree
-  live. Do not run the residual loop against a laptop-only PATH.
-- **Harness:** OMP or Hermes; site model path for the `eb-stack` role
-  (see annual-bump §11.5). Commercial frontier models out of scope for
-  SURF-only work.
+- **Host:** **`rg.surf` only** (same as §0). Where `eb` and the robot tree live.
+- **Container (mandatory):** run the residual agent **inside a herdr pane** on
+  that host — same pattern as other SURF agent work (herdr → harness → tools).
+  Do **not** drive residual judgment via bare `ssh rg.surf 'hermes …'` /
+  `omp … -p` outside herdr (no pane status, no `herdr agent read`, easy to
+  leave orphan processes).
+- **How to start (on rg.surf):**
+  ```
+  # ensure server
+  herdr status   # if server not running: herdr server &
+  WORK=$HOME/tmp/eb-repro/work   # or site work dir
+  herdr agent start eb-residual-hermes \
+    --cwd "$WORK" --no-focus -- \
+    hermes chat --cli --yolo --accept-hooks \
+      --provider willma -m openai/gpt-oss-120b \
+      -q "$(cat "$WORK/residuals/hermes-residual-prompt.md")"
+  herdr agent read eb-residual-hermes --source recent --lines 80
+  herdr agent wait eb-residual-hermes --status idle
+  ```
+  Hermes is the default residual harness; OMP (`omp-surf` / `omp-eb-stack`)
+  is allowed only if started the same way through **herdr agent start**.
+- **Harness model path:** site Willma role for eb-stack (see annual-bump §11.5).
+  Commercial frontier models out of scope for SURF-only work.
 - **Input:** this skill path, software name, foreign path (or “none —
   search first”), toolchain, `ROBOT` **on rg.surf**, work dir **on rg.surf**,
   and the **mechanical leftover list**.
 - **Prompt shape (minimal):**
   ```
-  On rg.surf: follow skills/new-package/SKILL.md for <software>.
+  On rg.surf (herdr pane): follow skills/new-package/SKILL.md for <software>.
   Foreign: <path|none>. Toolchain: foss-<gen>. ROBOT=<path on rg.surf>.
   Work=<path on rg.surf>. Mechanical steps already done: <…>.
   Residual judgment only: <bullets>.
