@@ -1,0 +1,26 @@
+name = 'binutils'
+version = '2.45'
+
+homepage = 'https://directory.fsf.org/project/binutils/'
+description = "binutils: GNU binary utilities"
+
+toolchain = SYSTEM
+
+source_urls = [GNU_SOURCE]
+sources = [SOURCE_TAR_GZ]
+checksums = ['8a3eb4b10e7053312790f21ee1a38f7e2bbd6f4096abb590d3429e5119592d96']
+
+builddependencies = [
+    ('flex', '2.6.4'),
+    ('Bison', '3.8.2'),
+    ('zlib', '1.3.1'),
+]
+
+# Arch host GCC 16: gprofng/libcollector fails on _Generic; not needed for EB stack.
+configopts = '--disable-gprofng '
+
+# avoid build failure when makeinfo command is not available
+buildopts = 'MAKEINFO=true'
+installopts = buildopts
+
+moduleclass = 'tools'

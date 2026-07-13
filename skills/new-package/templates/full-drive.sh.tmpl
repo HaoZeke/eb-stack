@@ -72,6 +72,13 @@ RECIPES=(
 @@RECIPES_BASH_ARRAY@@
 )
 
+# Site Arch overlays (binutils --disable-gprofng for host GCC 16, etc.)
+ARCH_OVERLAY="${REPO}/skills/new-package/overlays/arch"
+if [[ "${os_id}" == "arch" && -d "${ARCH_OVERLAY}" ]]; then
+  echo "===== Arch host overlays from ${ARCH_OVERLAY} ====="
+  rsync -a "${ARCH_OVERLAY}/" "${WORK}/easyconfigs/"
+fi
+
 if [[ -n "${OVERLAY_DIR}" && -d "${OVERLAY_DIR}" ]]; then
   echo "===== companion overlay from ${OVERLAY_DIR} ====="
   rsync -a "${OVERLAY_DIR}/" "${WORK}/easyconfigs/"
