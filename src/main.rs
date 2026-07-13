@@ -185,9 +185,10 @@ enum Cmd {
     /// into a parseable EasyBuild scaffold.
     ///
     /// Mechanically derives name/version/sources/deps/configopts from the foreign
-    /// recipe. With `--easyconfigs`, resolves dependency versions against the
-    /// target generation hierarchy (same path as `bump`). Residuals (product
-    /// patches, hand pins) still surface as warnings.
+    /// recipe. With `--easyconfigs`, fills dependency versions via hierarchy
+    /// consensus plus resolvo joint co-select over the robot universe (same
+    /// machinery as `solve`/`bump`). Residuals (product patches, hand pins)
+    /// still surface as warnings.
     Ingest {
         /// Foreign recipe path (`meta.yaml`, `recipe.yaml`, or `package.py`)
         #[arg(long)]

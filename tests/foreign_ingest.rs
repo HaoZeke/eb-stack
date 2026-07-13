@@ -253,10 +253,10 @@ fn ingest_with_robot_resolves_dep_versions_from_hierarchy() {
         &opts,
     )
     .expect("ingest+robot");
-    // Robot has Python-3.12.3 and CMake-3.29.3 for foss-2024a hierarchy.
+    // Robot has Python-3.12.3 and CMake for foss-2024a hierarchy.
     assert!(
-        out.text.contains("('Python', '3.12.3')") || out.warnings.iter().any(|w| w.contains("Python")),
-        "expected robot-resolved Python or resolve note: {}\n{}",
+        out.text.contains("('Python', '3.12.3')"),
+        "expected robot-resolved Python 3.12.3 from universe: {}\n{}",
         out.text,
         out.warnings.join("\n")
     );
@@ -265,9 +265,25 @@ fn ingest_with_robot_resolves_dep_versions_from_hierarchy() {
         "expected robot resolve warnings: {:?}",
         out.warnings
     );
+    // Joint resolvo path must fire when hierarchy candidates exist for deps.
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("resolvo") && w.contains("joint")),
+        "expected resolvo joint co-select warning: {:?}",
+        out.warnings
+    );
     // Spack eon meson_args static -D flags should appear when present
     let r = resolve_easyconfig_str(&out.text).expect("re-parse after robot resolve");
     assert_eq!(r.version, "2.16.0");
+    // Resolved Python version must match a real hierarchy candidate, not a foreign floor.
+    let py = r
+        .dependencies
+        .iter()
+        .chain(r.builddependencies.iter())
+        .find(|d| d.name == "Python")
+        .expect("Python dep present after robot resolve");
+    assert_eq!(py.version, "3.12.3");
 }
 
 #[test]

@@ -24,15 +24,31 @@
 //!
 //! Residuals (EB generation-native dep versions, easyblock/build logic) surface
 //! as warnings — never invented as authoritative.
+//!
+//! # Robot resolve (when `--easyconfigs` is set)
+//!
+//! 1. **Hierarchy consensus** — same generation-native picker as `bump`
+//!    ([`resolve_dep_versions_for_specs`]), so GCCcore-level deps (Python,
+//!    CMake, …) get correct pins even when they are not on the policy
+//!    toolchain label.
+//! 2. **Resolvo joint co-select** — a synthetic root candidate whose
+//!    dependencies are the foreign→EB mapped deps that exist under the
+//!    hierarchy is solved with [`select_stack`] / resolvo CDCL SAT over
+//!    hierarchy-eligible candidates (toolchain labels rewritten to the
+//!    policy toolchain so the provider accepts GCCcore members). Joint
+//!    SAT versions win over hierarchy when both produce a pin; hierarchy
+//!    remains the fallback when resolvo is unsat (missing robot packages).
 
-use crate::domain::{Candidate, Toolchain};
+use crate::domain::{Candidate, DepReq, Policy, Toolchain, Universe};
 use crate::eb_emit::easyconfig_filename;
 use crate::eb_parse::{
     companion_easyconfig_basename, easyconfig_letter_dir, parse_easyconfig_trees,
 };
 use crate::hierarchy::{
-    hierarchy_for_with_tree, resolve_dep_versions_for_specs, SourceDepSpec, ToolchainHierarchy,
+    filter_candidates_in_hierarchy, hierarchy_for_with_tree, resolve_dep_versions_for_specs,
+    SourceDepSpec, ToolchainHierarchy,
 };
+use crate::select::select_stack;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value as YamlValue;
@@ -379,6 +395,10 @@ pub fn ingest_foreign_to_easyconfig_with_opts(
 }
 
 /// Resolve dep/builddep versions in an already-emitted scaffold against robot trees.
+///
+/// Prefer joint **resolvo** selection over hierarchy-eligible candidates when
+/// the SAT solve is feasible; fall back to generation hierarchy consensus
+/// (same path as `bump`) for pins resolvo cannot co-select.
 fn apply_robot_resolution(
     mut result: IngestResult,
     toolchain: &Toolchain,
@@ -444,19 +464,53 @@ fn apply_robot_resolution(
         h.member_labels().join(" < ")
     ));
 
-    let (map, kept) =
+    // Hierarchy consensus first (generation-native floors; GCCcore-aware).
+    let (mut map, kept) =
         resolve_dep_versions_for_specs(&specs, &tree.candidates, &h, opts.keep_old_deps).map_err(
             |e| ForeignError::Parse(format!("robot dep resolve: {e}")),
         )?;
     for k in kept {
         result.warnings.push(format!("robot resolve: {k}"));
     }
+    for (name, ver) in &map {
+        result.warnings.push(format!(
+            "robot resolve: {name} → {ver} (hierarchy consensus)"
+        ));
+    }
+
+    // Joint resolvo over hierarchy-eligible candidates (synthetic root).
+    match resolvo_joint_resolve_deps(
+        &specs,
+        &tree.candidates,
+        &h,
+        toolchain,
+        &result.recipe.name,
+        &result.recipe.version,
+    ) {
+        Ok((resolvo_map, engine_note)) => {
+            result.warnings.push(engine_note);
+            for (name, ver) in resolvo_map {
+                if map.get(&name).map(|v| v != &ver).unwrap_or(true) {
+                    result.warnings.push(format!(
+                        "robot resolve: {name} → {ver} (resolvo joint; overrides hierarchy when differing)"
+                    ));
+                } else {
+                    result.warnings.push(format!(
+                        "robot resolve: {name} → {ver} (resolvo joint agrees)"
+                    ));
+                }
+                map.insert(name, ver);
+            }
+        }
+        Err(why) => {
+            result.warnings.push(format!(
+                "robot resolve: resolvo joint skipped ({why}); using hierarchy consensus only"
+            ));
+        }
+    }
 
     // Rewrite residual version tokens in the emitted text.
     for (name, ver) in &map {
-        result.warnings.push(format!(
-            "robot resolve: {name} → {ver} (generation-native)"
-        ));
         let re = Regex::new(&format!(
             r"(\('{re_name}',\s*')([^']*)(')",
             re_name = regex::escape(name)
@@ -485,6 +539,117 @@ fn apply_robot_resolution(
     }
 
     Ok(result)
+}
+
+/// Build a synthetic root over hierarchy-eligible robot candidates and solve
+/// with resolvo. Returns (name → version) for foreign deps that co-selected.
+///
+/// Hierarchy members (GCCcore, gfbf, …) are rewritten to the policy toolchain
+/// label so [`crate::resolvo_provider::EbProvider`] keeps them — the same
+/// generation membership already enforced by [`filter_candidates_in_hierarchy`].
+fn resolvo_joint_resolve_deps(
+    specs: &[SourceDepSpec],
+    cands: &[Candidate],
+    hierarchy: &ToolchainHierarchy,
+    toolchain: &Toolchain,
+    root_name: &str,
+    root_version: &str,
+) -> Result<(HashMap<String, String>, String), String> {
+    let mut universe_cands = filter_candidates_in_hierarchy(cands, hierarchy);
+    if universe_cands.is_empty() {
+        return Err("no candidates under hierarchy members".into());
+    }
+    for c in &mut universe_cands {
+        c.toolchain = toolchain.clone();
+    }
+
+    let mut dep_reqs: Vec<DepReq> = Vec::new();
+    let mut resolvable: Vec<String> = Vec::new();
+    for s in specs {
+        if !universe_cands.iter().any(|c| c.name == s.name) {
+            continue;
+        }
+        // Floor from foreign residual pin; unconstrained residual → any version.
+        let version_req = if s.version == "0.0.0" || s.version.is_empty() {
+            ">=0".into()
+        } else {
+            format!(">={}", s.version)
+        };
+        // Drop ranks that fail the floor so resolvo never sees ineligible sols.
+        let any_match = universe_cands.iter().any(|c| {
+            c.name == s.name && crate::version::matches_req(&c.version, &version_req)
+        });
+        if !any_match {
+            continue;
+        }
+        dep_reqs.push(DepReq {
+            name: s.name.clone(),
+            version_req,
+            versionsuffix: None,
+            toolchain: None,
+        });
+        resolvable.push(s.name.clone());
+    }
+    if dep_reqs.is_empty() {
+        return Err("no foreign deps have hierarchy candidates matching residual floors".into());
+    }
+
+    // Avoid clashing with a real easyconfig of the same name in the universe.
+    let synthetic = if universe_cands.iter().any(|c| c.name == root_name) {
+        format!("__ingest__{root_name}")
+    } else {
+        root_name.to_string()
+    };
+
+    universe_cands.push(Candidate {
+        name: synthetic.clone(),
+        version: root_version.to_string(),
+        toolchain: toolchain.clone(),
+        versionsuffix: None,
+        easyconfig_path: format!("__ingest__/{synthetic}-{root_version}.eb"),
+        dependencies: dep_reqs,
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+    });
+
+    let universe = Universe {
+        toolchain: toolchain.clone(),
+        generation_label: Some(format!(
+            "ingest-{}-{}",
+            toolchain.name, toolchain.version
+        )),
+        candidates: universe_cands,
+    };
+    let policy = Policy {
+        toolchain: toolchain.clone(),
+        roots: vec![synthetic.clone()],
+        root_priority: None,
+        pins: Vec::new(),
+        forbid: Vec::new(),
+        objective: "prefer_newer".into(),
+        require_upgrade: Vec::new(),
+    };
+
+    let lock = select_stack(&universe, &policy, None).map_err(|e| e.to_string())?;
+    let mut map = HashMap::new();
+    for p in &lock.packages {
+        if p.name == synthetic {
+            continue;
+        }
+        if resolvable.iter().any(|n| n == &p.name) {
+            map.insert(p.name.clone(), p.version.clone());
+        }
+    }
+    if map.is_empty() {
+        return Err("resolvo lock had no co-selected foreign deps".into());
+    }
+    let note = format!(
+        "robot resolve: resolvo joint co-selected {} dep(s) via {} ({})",
+        map.len(),
+        lock.solver.engine,
+        lock.solver.engine_version
+    );
+    Ok((map, note))
 }
 
 fn find_canonical_package_name(name: &str, cands: &[Candidate]) -> Option<String> {
