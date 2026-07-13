@@ -458,7 +458,7 @@ probe uses `rpm`/`dpkg` and never matches Arch names, so it can report
 | Force strict | `EB_IGNORE_OSDEPS=0 bash …/full-drive.sh` |
 | Isolated Debian userspace | Optional image under `skills/new-package/docker/eb-arch-host-fallback/` |
 | Host GCC ≥16 builds binutils gprofng | Overlay `overlays/arch/` binutils `--disable-gprofng` |
-| Kernel 7.x dropped `linux/scc.h` | **Not** fixed by reinstalling `linux-api-headers` (already current). GCCcore overlay: `--disable-libsanitizer` (+ optional `withnvptx = False` for CPU stacks) |
+| Kernel 7.x dropped `linux/scc.h` | **Not** fixed by reinstalling `linux-api-headers` (already current). **Do not** reinstall `linux-api-headers`. Provide stub via `overlays/arch/stubs/include/linux/scc.h` + `CPATH` (full-drive does this on Arch). Optional: GCCcore `--disable-libsanitizer` (EB_GCC may not honor configopts for stage1) |
 
 Campaign agents **must not** thrash `pacman` looking for `libibverbs-dev` or
 claim OS deps are missing without checking `verbs.h`. Do **not** disable

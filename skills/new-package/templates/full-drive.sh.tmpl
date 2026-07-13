@@ -74,6 +74,16 @@ RECIPES=(
 
 # Site Arch overlays (binutils --disable-gprofng for host GCC 16, etc.)
 ARCH_OVERLAY="${REPO}/skills/new-package/overlays/arch"
+# Kernel 7.x linux-api-headers dropped linux/scc.h; GCC 15 libsanitizer still includes it.
+# Reinstalling linux-api-headers does nothing. Provide stub via CPATH (not pacman).
+ARCH_STUB_INC="${ARCH_OVERLAY}/stubs/include"
+if [[ "${os_id}" == "arch" && -d "${ARCH_STUB_INC}" ]]; then
+  export CPATH="${ARCH_STUB_INC}${CPATH:+:$CPATH}"
+  export C_INCLUDE_PATH="${ARCH_STUB_INC}${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
+  export CPLUS_INCLUDE_PATH="${ARCH_STUB_INC}${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
+  echo "===== Arch stubs CPATH=${ARCH_STUB_INC} (linux/scc.h) ====="
+fi
+ARCH_OVERLAY="${REPO}/skills/new-package/overlays/arch"
 if [[ "${os_id}" == "arch" && -d "${ARCH_OVERLAY}" ]]; then
   echo "===== Arch host overlays from ${ARCH_OVERLAY} ====="
   rsync -a "${ARCH_OVERLAY}/" "${WORK}/easyconfigs/"
