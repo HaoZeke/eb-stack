@@ -11,7 +11,7 @@ RUN dnf -y update \
  && dnf -y install \
       gcc gcc-c++ gcc-gfortran make cmake ninja-build \
       python3 python3-pip python3-devel \
-      git curl wget bzip2 tar xz unzip which findutils \
+      git wget ca-certificates bzip2 tar xz unzip which findutils \
       openssl-devel libffi-devel zlib-devel bzip2-devel \
       readline-devel sqlite-devel xz-devel \
       rdma-core-devel libibverbs-devel libnl3-devel \
@@ -19,6 +19,7 @@ RUN dnf -y update \
       perl \
       Lmod \
  && dnf clean all
+# Note: base image ships curl-minimal; do not install conflicting `curl`.
 
 # EasyBuild in a venv (site may bind-mount a newer one)
 RUN python3 -m venv /opt/eb \
