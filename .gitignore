@@ -25,8 +25,8 @@ docs/source/**/*.rst
 docs/source/*.rst
 # Generated graphviz SVGs under orgmode/images (export regenerates them)
 docs/orgmode/images/*.svg
-# Committed raster illustrations are published into docs/source/images/
-# by ox-publish; do not ignore the whole images/ tree.
+# ox-publish copies orgmode/images into docs/source/images/ at build time
+docs/source/images/
 
 # Keep branding and hand-authored static assets
 !docs/source/_static/
