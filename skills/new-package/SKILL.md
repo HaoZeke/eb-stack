@@ -437,6 +437,26 @@ Inside herdr on **EasyBuild host**, for each target recipe (and companions as ne
 5. Print **`DONE_FULL_DRIVE`** when every target has *resolves* and *builds*, else
    **`DONE_PARTIAL`** with exact failures and log paths.
 
+### OS dependencies on Arch (campaign mechanical — not residual judgment)
+
+EasyBuild `osdependencies` lists **Debian/RHEL package names** (e.g.
+`libibverbs-dev`, `rdma-core-devel`). On **Arch Linux** the package is
+`rdma-core` (provides libibverbs + `/usr/include/infiniband/verbs.h`). EB’s
+probe uses `rpm`/`dpkg` and never matches Arch names, so it can report
+“missing” OS deps even when headers and libs are installed.
+
+| Situation | Action |
+|-----------|--------|
+| Arch, `verbs.h` present | Campaign `full-drive.sh` adds `--ignore-osdeps` automatically |
+| Arch, headers missing | `sudo pacman -S --needed rdma-core` then re-run full-drive |
+| Force ignore | `EB_IGNORE_OSDEPS=1 bash …/full-drive.sh` |
+| Force strict | `EB_IGNORE_OSDEPS=0 bash …/full-drive.sh` |
+| Isolated Debian userspace | Optional image under `skills/new-package/docker/eb-arch-host-fallback/` |
+
+Campaign agents **must not** thrash `pacman` looking for `libibverbs-dev` or
+claim OS deps are missing without checking `verbs.h`. Do **not** disable
+sanity checks for this.
+
 ### Render full-drive assets (mechanical; required before herdr)
 
 Do **not** hand-write a per-campaign `full-drive.sh`. **Render** from templates:

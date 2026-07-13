@@ -1,4 +1,4 @@
-On the EasyBuild host (herdr): follow @@SKILL_PATH@@ section 7 full-drive.
+On the site EasyBuild host (herdr): follow @@SKILL_PATH@@ section 7 full-drive.
 You OWN the campaign through REAL installs (*builds*).
 
 Primary mechanical path (already rendered for this campaign):
@@ -9,15 +9,23 @@ That script: optional oracle copies, format-style/check-contrib/check-recipe
 (--recipe), eb -Dr, then eb --robot per recipe with logs under WORK/logs/,
 and writes WORK/residuals/session-log.md.
 
+**Arch Linux OS deps (do not thrash pacman or invent packages):**
+EasyBuild checks Debian/RHEL package *names* (`libibverbs-dev`,
+`rdma-core-devel`). On Arch the package is `rdma-core` (provides libibverbs +
+headers). If `/usr/include/infiniband/verbs.h` exists, the rendered full-drive
+script already passes `--ignore-osdeps`. If headers are missing:
+`sudo pacman -S --needed rdma-core` then re-run the script. Do **not** search
+for `libibverbs-dev` on Arch. Do **not** disable sanity checks.
+
 WORK=@@WORK@@
 REPO=@@REPO@@
 ROBOT=@@ROBOT@@
 Recipes:
 @@RECIPES_BULLETS@@
 
-If a build fails: read the matching robot-*.log, fix recipe/companion with
-justified edits (oracles/docs only — do not invent -D), re-run gates + robot
-for that package, update session-log.md.
+If a build fails for a real compile/link/sanity reason: read robot-*.log, fix
+recipe/companion with justified edits (oracles/docs only — do not invent -D),
+re-run gates + robot for that package, update session-log.md.
 
 Print DONE_FULL_DRIVE or DONE_PARTIAL.
 

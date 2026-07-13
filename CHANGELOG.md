@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `EasyBuild host`) owns residual judgment **and** `eb --robot` *builds* for PR-ready
   campaigns; residual-only only when human scopes it. Stopping after `eb -Dr`
   without install is not done.
+- **Arch OS-dep policy in full-drive**: rendered `full-drive.sh` auto-passes `--ignore-osdeps` when `/usr/include/infiniband/verbs.h` exists (Arch `rdma-core`); teaches campaign agents not to chase Debian package names. Optional Debian Docker fallback under `skills/new-package/docker/eb-arch-host-fallback/`.
 - **`render-full-drive`**: templates
   (`skills/new-package/templates/full-drive.sh.tmpl`,
   `hermes-full-drive.md.tmpl`) + renderer that emits per-campaign

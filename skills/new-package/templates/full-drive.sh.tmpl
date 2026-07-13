@@ -23,6 +23,38 @@ OVERLAY_DIR="@@OVERLAY_DIR@@"
 mkdir -p "${EASYBUILD_SOURCEPATH}" "${EASYBUILD_TMPDIR}" "${EASYBUILD_INSTALLPATH}" \
   "${WORK}/logs" "${WORK}/residuals"
 
+# --- OS dependency policy (teach the campaign, not residual judgment) ---
+# EasyBuild checks Debian/RHEL *package names* (libibverbs-dev, rdma-core-devel).
+# On Arch the package is `rdma-core` (libs + headers); EB never matches those names.
+# Policy: if InfiniBand/verbs headers are on disk, pass --ignore-osdeps for robot.
+# Force with EB_IGNORE_OSDEPS=1; refuse ignore with EB_IGNORE_OSDEPS=0 even on Arch.
+eb_osdep_opts=()
+os_id=""
+if [[ -r /etc/os-release ]]; then
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  os_id="${ID:-}"
+fi
+verbs_h="/usr/include/infiniband/verbs.h"
+if [[ "${EB_IGNORE_OSDEPS:-}" == "1" ]]; then
+  eb_osdep_opts+=(--ignore-osdeps)
+  echo "===== OSDEPS: EB_IGNORE_OSDEPS=1 → --ignore-osdeps ====="
+elif [[ "${EB_IGNORE_OSDEPS:-}" == "0" ]]; then
+  echo "===== OSDEPS: EB_IGNORE_OSDEPS=0 → strict package-name checks ====="
+elif [[ "${os_id}" == "arch" ]]; then
+  if [[ -f "${verbs_h}" ]]; then
+    eb_osdep_opts+=(--ignore-osdeps)
+    echo "===== OSDEPS: Arch + ${verbs_h} present → --ignore-osdeps ====="
+    echo "===== (pacman: rdma-core; EB only knows Debian/RHEL package names) ====="
+  else
+    echo "===== OSDEPS: Arch but ${verbs_h} MISSING — install: sudo pacman -S --needed rdma-core =====" >&2
+    echo "===== refusing to ignore OS deps without headers =====" >&2
+    exit 2
+  fi
+else
+  echo "===== OSDEPS: os_id=${os_id:-unknown} — default EB package-name checks ====="
+fi
+
 # Each entry: RECIPE_PATH|ORACLE_PATH_OR_EMPTY|LOG_STEM
 RECIPES=(
 @@RECIPES_BASH_ARRAY@@
@@ -48,7 +80,8 @@ gate() {
   echo "===== check-recipe ====="
   "${EB}" check-recipe --recipe "$f" --easyconfigs "${ROBOT}" --easyconfigs "${WORK}/easyconfigs"
   echo "===== eb -Dr ====="
-  eb --modules-tool=Lmod -Dr --robot "${WORK}/easyconfigs:${ROBOT}" "$f"
+  # dry-run also evaluates OS deps for some EB versions
+  eb --modules-tool=Lmod "${eb_osdep_opts[@]}" -Dr --robot "${WORK}/easyconfigs:${ROBOT}" "$f"
 }
 
 declare -a STEMS=()
@@ -83,7 +116,7 @@ for i in "${!PATHS[@]}"; do
   log="${WORK}/logs/robot-${stem}.log"
   echo "===== ROBOT ${stem} ====="
   set +e
-  eb --modules-tool=Lmod --robot "${WORK}/easyconfigs:${ROBOT}" "${rpath}" 2>&1 | tee "${log}"
+  eb --modules-tool=Lmod "${eb_osdep_opts[@]}" --robot "${WORK}/easyconfigs:${ROBOT}" "${rpath}" 2>&1 | tee "${log}"
   rc=${PIPESTATUS[0]}
   set -e
   echo "robot_exit_${stem}=${rc}"
@@ -95,6 +128,9 @@ done
 
 {
   echo "# session-log full-drive (rendered)"
+  echo
+  echo "- os_id: ${os_id:-unknown}"
+  echo "- eb_osdep_opts: ${eb_osdep_opts[*]:-(none)}"
   echo
   for i in "${!PATHS[@]}"; do
     rpath="${PATHS[$i]}"
