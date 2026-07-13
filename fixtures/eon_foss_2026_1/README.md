@@ -14,11 +14,12 @@ This tree is the **landable** EasyBuild easyconfigs set for eOn 2.16.0 on
 
 - `e/eOn/eOn-2.16.0-foss-2026.1.eb` — full product (metatomic + xTB + serve + rgpot)
 - `e/eOn/eOn-2.16.0_safemath-eigen5-core-guard.patch`
-- Companions (robot holes on develop): metatensor 0.2.2, metatensor-torch 0.10.0,
+- Companions (robot holes on develop): CapnProto 1.4.0, metatensor 0.2.2, metatensor-torch 0.10.0,
   metatomic-torch 0.1.15, quill 11.1.0 on GCCcore-15.2.0
 
 ## Overlay companions (shipped here so check-recipe closes on stale robots)
 
+- `c/CapnProto/CapnProto-1.4.0-GCCcore-15.2.0.eb` (serve feature; robot hole until develop has 15.2.0)
 - `i/inih/inih-62-GCCcore-15.2.0.eb` (on develop; often missing from older robot clones)
 - `c/cargo-c/cargo-c-0.10.23-GCCcore-15.2.0.eb` (readcon-core needs cargo-c >= 0.10.17)
 - `p/PyTorch/PyTorch-2.9.1-foss-2024a.eb` (cross-gen pin until foss-2026.1 PyTorch exists)
