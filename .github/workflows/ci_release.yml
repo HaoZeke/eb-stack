@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --locked --release --bin eb-stack
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          stage=$(mktemp -d)
+          cp target/release/eb-stack "$stage/"
+          cp README.md LICENSE CHANGELOG.md "$stage/"
+          tar -C "$stage" -czf "eb-stack-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz" .
+          sha256sum "eb-stack-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz" \
+            > "eb-stack-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz.sha256"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body_path: CHANGELOG.md
+          files: |
+            eb-stack-*-x86_64-unknown-linux-gnu.tar.gz
+            eb-stack-*-x86_64-unknown-linux-gnu.tar.gz.sha256
