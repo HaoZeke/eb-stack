@@ -19,6 +19,7 @@ use eb_stack::{
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn fixture(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -363,4 +364,118 @@ fn reproduces_numba_0_60_0_foss_2023b_to_2024a_auto() {
         &universe_foss_2024a(),
         &[],
     );
+}
+
+// ---------------------------------------------------------------------------
+// CLI path: the same known bumps an operator or the annual-bump skill runs
+// via `eb-stack bump --easyconfigs …`. CI must exercise this surface, not
+// only the library API, because flag wiring and exit status are the contract.
+// ---------------------------------------------------------------------------
+
+/// Run `eb-stack bump --easyconfigs` and return the written file contents.
+fn cli_auto_bump(source: &Path, out_name: &str) -> String {
+    let bin = env!("CARGO_BIN_EXE_eb-stack");
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let out = tmp.path().join(out_name);
+    let status = Command::new(bin)
+        .args([
+            "bump",
+            "--source",
+            source.to_str().unwrap(),
+            "--toolchain-name",
+            "foss",
+            "--toolchain-version",
+            "2024a",
+            "--easyconfigs",
+            universe_foss_2024a().to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .status()
+        .expect("spawn eb-stack bump");
+    assert!(
+        status.success(),
+        "eb-stack bump failed for {}: {status}",
+        source.display()
+    );
+    std::fs::read_to_string(&out).expect("read CLI output")
+}
+
+/// CLI auto-bump must match library emit (modulo residual additions).
+fn assert_cli_reproduces(source: &Path, target: &Path, allowed_additions: &[&str], out_name: &str) {
+    let emitted = cli_auto_bump(source, out_name);
+    assert_emitted_matches_target(&emitted, target, allowed_additions, source);
+}
+
+#[test]
+fn cli_reproduces_gromacs_2024_4_foss_2023b_to_2024a() {
+    assert_cli_reproduces(
+        &fixture("gromacs/GROMACS-2024.4-foss-2023b.eb"),
+        &fixture("gromacs/GROMACS-2024.4-foss-2024a.eb"),
+        &["    ('pybind11', '2.12.0'),"],
+        "GROMACS-2024.4-foss-2024a.eb",
+    );
+}
+
+#[test]
+fn cli_reproduces_scafacos_1_0_4_foss_2023b_to_2024a() {
+    assert_cli_reproduces(
+        &fixture("scafacos/ScaFaCoS-1.0.4-foss-2023b.eb"),
+        &fixture("scafacos/ScaFaCoS-1.0.4-foss-2024a.eb"),
+        &[],
+        "ScaFaCoS-1.0.4-foss-2024a.eb",
+    );
+}
+
+#[test]
+fn cli_reproduces_fiona_1_10_1_foss_2023b_to_2024a() {
+    assert_cli_reproduces(
+        &fixture("fiona/Fiona-1.10.1-foss-2023b.eb"),
+        &fixture("fiona/Fiona-1.10.1-foss-2024a.eb"),
+        &[],
+        "Fiona-1.10.1-foss-2024a.eb",
+    );
+}
+
+#[test]
+fn cli_reproduces_pulp_2_8_0_foss_2023b_to_2024a() {
+    assert_cli_reproduces(
+        &fixture("pulp/PuLP-2.8.0-foss-2023b.eb"),
+        &fixture("pulp/PuLP-2.8.0-foss-2024a.eb"),
+        &[],
+        "PuLP-2.8.0-foss-2024a.eb",
+    );
+}
+
+#[test]
+fn cli_reproduces_numba_0_60_0_foss_2023b_to_2024a() {
+    assert_cli_reproduces(
+        &fixture("numba/numba-0.60.0-foss-2023b.eb"),
+        &fixture("numba/numba-0.60.0-foss-2024a.eb"),
+        &[],
+        "numba-0.60.0-foss-2024a.eb",
+    );
+}
+
+#[test]
+fn cli_reproduces_mdtraj_required_pins_and_optional_bumps() {
+    // Same residual contract as the library MDTraj auto test: required deps
+    // bump; `# optional` comment is preserved while the version token moves.
+    let emitted = cli_auto_bump(
+        &fixture("mdtraj/MDTraj-1.10.3-foss-2023b.eb"),
+        "MDTraj-1.10.3-foss-2024a.eb",
+    );
+    assert!(emitted.contains("toolchain = {'name': 'foss', 'version': '2024a'}"));
+    for pin in [
+        "('Python', '3.12.3')",
+        "('SciPy-bundle', '2024.05')",
+        "('zlib', '1.3.1')",
+        "('networkx', '3.4.2'),  # optional",
+        "('PyTables', '3.10.2'),  # optional",
+    ] {
+        assert!(
+            emitted.contains(pin),
+            "CLI MDTraj missing {pin} in:\n{emitted}"
+        );
+    }
 }
