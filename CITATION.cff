@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+title: "eb-stack: EasyBuild stack lock solver and toolchain-generation bump"
+message: "If you use eb-stack, please cite it using the metadata below."
+type: software
+authors:
+  - given-names: Rohit
+    family-names: Goswami
+    email: rgoswami@ieee.org
+    orcid: "https://orcid.org/0000-0002-2393-8056"
+license: MIT
+repository-code: "https://github.com/HaoZeke/eb-stack"
+url: "https://eb-stack.rgoswami.me"
+version: 0.2.0
+date-released: "2026-07-10"
+keywords:
+  - EasyBuild
+  - HPC
+  - package management
+  - toolchain
+  - dependency resolution
+  - resolvo
+abstract: >-
+  eb-stack parses EasyBuild easyconfig files, co-selects a consistent software
+  stack for one toolchain generation with a CDCL SAT solver (resolvo), rewrites
+  recipes onto the next generation with hierarchy-aware dependency resolution,
+  and emits a stack lock, build list, and optional planned CycloneDX SBOM.

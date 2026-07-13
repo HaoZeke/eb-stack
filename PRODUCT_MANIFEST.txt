@@ -1,5 +1,6 @@
 product=eb-stack
-repo=private standalone (not a monorepo member)
+repo=https://github.com/HaoZeke/eb-stack
 package=eb_stack
 binary=eb-stack
 engine=resolvo_cdcl_sat
+docs=https://eb-stack.rgoswami.me
