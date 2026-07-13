@@ -154,8 +154,8 @@ enum Cmd {
         deps: Vec<String>,
         /// Directory of easyconfigs used to auto-resolve dependency and
         /// build-dependency versions for the target toolchain generation
-        /// (hierarchy-aware: GCCcore/GCC/gfbf/gompi/… members count).
-        /// When set, hand `--dep` overrides are optional.
+        /// (hierarchy consensus + resolvo joint co-select; GCCcore/GCC/gfbf/…
+        /// members count). When set, hand `--dep` overrides are optional.
         #[arg(long, value_name = "DIR")]
         easyconfigs: Option<PathBuf>,
         /// Optional hierarchy fixture JSON (EasyBuild `get_toolchain_hierarchy`
@@ -187,8 +187,8 @@ enum Cmd {
     /// Mechanically derives name/version/sources/deps/configopts from the foreign
     /// recipe. With `--easyconfigs`, fills dependency versions via hierarchy
     /// consensus plus resolvo joint co-select over the robot universe (same
-    /// machinery as `solve`/`bump`). Residuals (product patches, hand pins)
-    /// still surface as warnings.
+    /// machinery as `bump --easyconfigs` / `solve`). Residuals (product
+    /// patches, hand pins) still surface as warnings.
     Ingest {
         /// Foreign recipe path (`meta.yaml`, `recipe.yaml`, or `package.py`)
         #[arg(long)]

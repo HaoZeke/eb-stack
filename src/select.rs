@@ -1,7 +1,16 @@
 //! Stack selection via resolvo CDCL SAT (fed by parsed easyconfig candidates).
+//!
+//! Also provides [`resolvo_resolve_dep_versions`]: joint SAT co-select of
+//! dependency pins for a single recipe (used by `bump --easyconfigs` and
+//! foreign ingest), so version bumps are not hierarchy-lookup-only.
 
-use crate::domain::{LockPackage, Policy, SolverMeta, StackLock, Universe};
+use crate::domain::{Candidate, DepReq, LockPackage, Policy, SolverMeta, StackLock, Toolchain, Universe};
+use crate::hierarchy::{
+    filter_candidates_in_hierarchy, is_system_toolchain, SourceDepSpec, ToolchainHierarchy,
+};
 use crate::resolvo_provider::solve_with_resolvo;
+use crate::version::matches_req;
+use std::collections::HashMap;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -59,6 +68,170 @@ pub fn select_stack(
             timestamp: ts,
         },
     })
+}
+
+/// Joint resolvo co-select of dependency versions for one recipe (bump / ingest).
+///
+/// Builds a synthetic root candidate whose dependencies are the foreign or
+/// source-recipe deps that exist under the generation hierarchy, solves with
+/// [`select_stack`], and returns name→version for co-selected deps plus a
+/// human note (engine id). Hierarchy members (GCCcore, gfbf, …) are rewritten
+/// to the policy toolchain label so [`crate::resolvo_provider::EbProvider`]
+/// keeps them — membership is already enforced by
+/// [`filter_candidates_in_hierarchy`].
+///
+/// When `preferred_pins` is set (typically hierarchy consensus), those packages
+/// are **exact pins** in the policy: resolvo joint-checks feasibility under
+/// generation-native versions rather than free prefer_newer overriding
+/// consensus (which would re-select SYSTEM/out-of-generation newest).
+/// Unpinned resolvable specs still free-select under residual floors.
+///
+/// Specs with SYSTEM toolchain or a non-empty versionsuffix are skipped
+/// (frozen pins). Pure SYSTEM install candidates are dropped when a non-SYSTEM
+/// hierarchy candidate for the same name exists.
+pub fn resolvo_resolve_dep_versions(
+    specs: &[SourceDepSpec],
+    cands: &[Candidate],
+    hierarchy: &ToolchainHierarchy,
+    toolchain: &Toolchain,
+    root_name: &str,
+    root_version: &str,
+    preferred_pins: Option<&HashMap<String, String>>,
+) -> Result<(HashMap<String, String>, String), String> {
+    let mut universe_cands = filter_candidates_in_hierarchy(cands, hierarchy);
+    if universe_cands.is_empty() {
+        return Err("no candidates under hierarchy members".into());
+    }
+    // Drop SYSTEM installs when a non-SYSTEM hierarchy member of the same name
+    // exists (mirrors hierarchy::prefer_non_system_candidates).
+    universe_cands = drop_system_when_non_system_exists(universe_cands);
+    for c in &mut universe_cands {
+        c.toolchain = toolchain.clone();
+    }
+
+    let mut dep_reqs: Vec<DepReq> = Vec::new();
+    let mut resolvable: Vec<String> = Vec::new();
+    let mut pins: Vec<crate::domain::Pin> = Vec::new();
+    for s in specs {
+        if s.system_toolchain {
+            continue;
+        }
+        if s.versionsuffix.as_deref().is_some_and(|vs| !vs.is_empty()) {
+            continue;
+        }
+        if !universe_cands.iter().any(|c| c.name == s.name) {
+            continue;
+        }
+
+        let (version_req, pin_exact) =
+            if let Some(pref) = preferred_pins.and_then(|m| m.get(&s.name)) {
+                // Hierarchy consensus: exact pin, joint SAT under that version.
+                let req = format!("=={pref}");
+                (req.clone(), Some(pref.clone()))
+            } else if s.version == "0.0.0" || s.version.is_empty() {
+                (">=0".into(), None)
+            } else {
+                (format!(">={}", s.version), None)
+            };
+
+        let any_match = universe_cands
+            .iter()
+            .any(|c| c.name == s.name && matches_req(&c.version, &version_req));
+        if !any_match {
+            continue;
+        }
+        if let Some(ver) = pin_exact {
+            pins.push(crate::domain::Pin {
+                name: s.name.clone(),
+                version_req: format!("=={ver}"),
+            });
+        }
+        dep_reqs.push(DepReq {
+            name: s.name.clone(),
+            version_req,
+            versionsuffix: None,
+            toolchain: None,
+        });
+        resolvable.push(s.name.clone());
+    }
+    if dep_reqs.is_empty() {
+        return Err("no resolvable deps with hierarchy candidates matching floors".into());
+    }
+
+    let synthetic = if universe_cands.iter().any(|c| c.name == root_name) {
+        format!("__bump__{root_name}")
+    } else {
+        root_name.to_string()
+    };
+
+    universe_cands.push(Candidate {
+        name: synthetic.clone(),
+        version: root_version.to_string(),
+        toolchain: toolchain.clone(),
+        versionsuffix: None,
+        easyconfig_path: format!("__bump__/{synthetic}-{root_version}.eb"),
+        dependencies: dep_reqs,
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+    });
+
+    let universe = Universe {
+        toolchain: toolchain.clone(),
+        generation_label: Some(format!("bump-{}-{}", toolchain.name, toolchain.version)),
+        candidates: universe_cands,
+    };
+    let policy = Policy {
+        toolchain: toolchain.clone(),
+        roots: vec![synthetic.clone()],
+        root_priority: None,
+        pins,
+        forbid: Vec::new(),
+        objective: "prefer_newer".into(),
+        require_upgrade: Vec::new(),
+    };
+
+    let lock = select_stack(&universe, &policy, None).map_err(|e| e.to_string())?;
+    let mut map = HashMap::new();
+    for p in &lock.packages {
+        if p.name == synthetic {
+            continue;
+        }
+        if resolvable.iter().any(|n| n == &p.name) {
+            map.insert(p.name.clone(), p.version.clone());
+        }
+    }
+    if map.is_empty() {
+        return Err("resolvo lock had no co-selected deps".into());
+    }
+    let note = format!(
+        "resolvo joint co-selected {} dep(s) via {} ({})",
+        map.len(),
+        lock.solver.engine,
+        lock.solver.engine_version
+    );
+    Ok((map, note))
+}
+
+/// Prefer non-SYSTEM install candidates when both SYSTEM and non-SYSTEM exist
+/// for the same package name (EasyBuild generation installs over bare SYSTEM).
+fn drop_system_when_non_system_exists(cands: Vec<Candidate>) -> Vec<Candidate> {
+    let mut has_non_sys: HashMap<String, bool> = HashMap::new();
+    for c in &cands {
+        if !is_system_toolchain(&c.toolchain) {
+            has_non_sys.insert(c.name.clone(), true);
+        }
+    }
+    cands
+        .into_iter()
+        .filter(|c| {
+            if is_system_toolchain(&c.toolchain)
+                && has_non_sys.get(&c.name).copied().unwrap_or(false)
+            {
+                return false;
+            }
+            true
+        })
+        .collect()
 }
 
 #[cfg(test)]

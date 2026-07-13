@@ -43,10 +43,10 @@ pub use report::{
     ordered_packages, PackageChange, PackageChangeKind,
 };
 pub use sbom::{
-    build_dep_map_from_universe, dep_map_from_universe, lock_to_cyclonedx,
-    lock_to_cyclonedx_with_deps,
+    build_dep_map_from_universe, dep_map_from_universe, lock_to_bom, lock_to_cyclonedx,
+    lock_to_cyclonedx_with_deps, lock_to_cyclonedx_with_runtime_and_build,
 };
-pub use select::{select_stack, SelectError};
+pub use select::{resolvo_resolve_dep_versions, select_stack, SelectError};
 pub use foreign::{
     detect_foreign_format, emit_easyconfig_from_foreign, ingest_foreign_to_easyconfig,
     ingest_foreign_to_easyconfig_with_opts, parse_foreign_path, parse_foreign_str,
@@ -213,9 +213,14 @@ fn write_lock_sbom_and_extras(
 ) -> Result<()> {
     write_json_pretty(lock_out, lock)?;
     let dep_map = dep_map_from_universe(lock, universe);
+    let build_map = build_dep_map_from_universe(lock, universe);
     // SBOM is opt-in: only write when the caller supplies an output path.
     if let Some(path) = sbom_out {
-        let sbom = lock_to_cyclonedx_with_deps(lock, Some(&dep_map));
+        let sbom = lock_to_cyclonedx_with_runtime_and_build(
+            lock,
+            Some(&dep_map),
+            Some(&build_map),
+        );
         write_json_pretty(path, &sbom)?;
     }
 

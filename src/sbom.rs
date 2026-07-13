@@ -1,8 +1,22 @@
-//! Planned CycloneDX 1.5-ish JSON SBOM from a stack lock (pre-install inventory).
+//! Planned CycloneDX 1.5 SBOM from a stack lock (pre-install inventory).
+//!
+//! Built with the official [`cyclonedx_bom`] crate (same models as
+//! `cargo-cyclonedx` / CycloneDX Rust Cargo). Documents are serialized as
+//! JSON 1.5 with serial numbers, tool metadata, lifecycle phase, and
+//! declared dependency edges — not a post-build compliance scan.
 
 use crate::domain::{StackLock, Universe};
-use serde_json::{json, Value};
+use cyclonedx_bom::models::component::{Classification, Component, Components};
+use cyclonedx_bom::models::dependency::{Dependencies, Dependency};
+use cyclonedx_bom::models::lifecycle::{Lifecycle, Lifecycles, Phase};
+use cyclonedx_bom::models::metadata::Metadata;
+use cyclonedx_bom::models::property::{Properties, Property};
+use cyclonedx_bom::models::tool::{Tool, Tools};
+use cyclonedx_bom::prelude::*;
+use serde_json::Value;
 use std::collections::HashMap;
+use std::convert::TryFrom;
+use std::str::FromStr;
 
 fn bom_ref(name: &str, version: &str, toolchain_label: &str) -> String {
     format!("pkg:generic/{name}@{version}?toolchain={toolchain_label}")
@@ -24,72 +38,144 @@ pub fn lock_to_cyclonedx_with_deps(
     lock: &StackLock,
     selected_dep_map: Option<&HashMap<String, Vec<String>>>,
 ) -> Value {
+    lock_to_cyclonedx_with_runtime_and_build(lock, selected_dep_map, None)
+}
+
+/// Like [`lock_to_cyclonedx_with_deps`], also records build-time edges as a
+/// component property (`eb_stack:buildDependsOn`) while runtime edges fill
+/// the CycloneDX `dependencies` graph.
+pub fn lock_to_cyclonedx_with_runtime_and_build(
+    lock: &StackLock,
+    runtime_dep_map: Option<&HashMap<String, Vec<String>>>,
+    build_dep_map: Option<&HashMap<String, Vec<String>>>,
+) -> Value {
+    let bom = lock_to_bom(lock, runtime_dep_map, build_dep_map);
+    bom_to_json_value(bom)
+}
+
+/// Typed CycloneDX BOM (1.5 models) — preferred when callers want validation.
+pub fn lock_to_bom(
+    lock: &StackLock,
+    runtime_dep_map: Option<&HashMap<String, Vec<String>>>,
+    build_dep_map: Option<&HashMap<String, Vec<String>>>,
+) -> Bom {
     let toolchain_label = lock.toolchain.label();
-    let mut components = Vec::new();
     let mut package_refs: HashMap<String, String> = HashMap::new();
+    let mut components: Vec<Component> = Vec::new();
 
     for p in &lock.packages {
         let r = bom_ref(&p.name, &p.version, &toolchain_label);
         package_refs.insert(p.name.clone(), r.clone());
-        components.push(json!({
-            "type": "library",
-            "bom-ref": r,
-            "name": p.name,
-            "version": p.version,
-            "purl": r,
-            "properties": [
-                { "name": "easybuild:toolchain", "value": toolchain_label },
-                { "name": "easybuild:easyconfig_path", "value": p.easyconfig_path },
-                { "name": "eb_stack:lifecycle", "value": "pre-install-plan" }
-            ]
-        }));
+
+        let mut props = vec![
+            Property::new("easybuild:toolchain", &toolchain_label),
+            Property::new("easybuild:easyconfig_path", &p.easyconfig_path),
+            Property::new("eb_stack:lifecycle", "pre-install-plan"),
+        ];
+        if let Some(vs) = p.versionsuffix.as_deref() {
+            if !vs.is_empty() {
+                props.push(Property::new("easybuild:versionsuffix", vs));
+            }
+        }
+        if let Some(bmap) = build_dep_map {
+            if let Some(bdeps) = bmap.get(&p.name) {
+                if !bdeps.is_empty() {
+                    let joined = bdeps
+                        .iter()
+                        .filter_map(|n| package_refs.get(n).cloned().or_else(|| Some(n.clone())))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    props.push(Property::new("eb_stack:buildDependsOn", &joined));
+                }
+            }
+        }
+
+        let purl_str = r.clone();
+        let mut component = Component::new(
+            Classification::Library,
+            &p.name,
+            &p.version,
+            Some(r),
+        );
+        component.purl = Purl::from_str(&purl_str).ok();
+        component.properties = Some(Properties(props));
+        components.push(component);
     }
 
-    let mut deps = Vec::new();
+    let mut deps: Vec<Dependency> = Vec::new();
     for p in &lock.packages {
         let r = package_refs.get(&p.name).cloned().unwrap();
-        let depends_on: Vec<String> = if let Some(map) = selected_dep_map {
+        let depends_on: Vec<String> = if let Some(map) = runtime_dep_map {
             map.get(&p.name)
                 .into_iter()
                 .flatten()
                 .filter_map(|dep_name| package_refs.get(dep_name).cloned())
                 .collect()
         } else {
-            // No declared map: empty edges (unknown), never all-to-all cycles.
             Vec::new()
         };
-        deps.push(json!({
-            "ref": r,
-            "dependsOn": depends_on
-        }));
+        deps.push(Dependency {
+            dependency_ref: r,
+            dependencies: depends_on,
+        });
     }
 
-    json!({
-        "bomFormat": "CycloneDX",
-        "specVersion": "1.5",
-        "version": 1,
-        "metadata": {
-            "timestamp": lock.solver.timestamp,
-            "tools": [{
-                "vendor": "SURF",
-                "name": "eb-stack",
-                "version": lock.solver.engine_version
-            }],
-            "component": {
-                "type": "application",
-                "name": format!("easybuild-stack-{}", lock.toolchain.label()),
-                "version": lock.generation_label.clone().unwrap_or_else(|| lock.toolchain.label()),
-                "description": "Planned EasyBuild stack inventory from eb-stack lock (pre-install; not a post-build compliance scan)"
-            },
-            "properties": [
-                { "name": "eb_stack:document_kind", "value": "planned-sbom-from-lock" },
-                { "name": "eb_stack:solver_engine", "value": lock.solver.engine },
-                { "name": "eb_stack:toolchain", "value": lock.toolchain.label() }
-            ]
-        },
-        "components": components,
-        "dependencies": deps
-    })
+    let stack_name = format!("easybuild-stack-{}", toolchain_label);
+    let stack_ver = lock
+        .generation_label
+        .clone()
+        .unwrap_or_else(|| toolchain_label.clone());
+    let mut meta_component = Component::new(
+        Classification::Application,
+        &stack_name,
+        &stack_ver,
+        Some(format!("pkg:generic/{stack_name}@{stack_ver}")),
+    );
+    meta_component.description = Some(NormalizedString::new(
+        "Planned EasyBuild stack inventory from eb-stack lock (pre-install; not a post-build compliance scan)",
+    ));
+
+    let mut metadata = Metadata::new().unwrap_or_default();
+    // Prefer lock solver timestamp when parseable as ISO-8601.
+    if let Ok(dt) = DateTime::try_from(lock.solver.timestamp.clone()) {
+        metadata.timestamp = Some(dt);
+    }
+    metadata.tools = Some(Tools::List(vec![Tool::new(
+        "SURF",
+        "eb-stack",
+        &lock.solver.engine_version,
+    )]));
+    metadata.component = Some(meta_component);
+    metadata.properties = Some(Properties(vec![
+        Property::new("eb_stack:document_kind", "planned-sbom-from-lock"),
+        Property::new("eb_stack:solver_engine", &lock.solver.engine),
+        Property::new("eb_stack:toolchain", &toolchain_label),
+    ]));
+    metadata.lifecycles = Some(Lifecycles(vec![Lifecycle::Phase(Phase::PreBuild)]));
+
+    Bom {
+        version: 1,
+        serial_number: Some(UrnUuid::generate()),
+        metadata: Some(metadata),
+        components: Some(Components(components)),
+        services: None,
+        external_references: None,
+        dependencies: Some(Dependencies(deps)),
+        compositions: None,
+        properties: None,
+        vulnerabilities: None,
+        signature: None,
+        annotations: None,
+        formulation: None,
+        spec_version: SpecVersion::V1_5,
+    }
+}
+
+fn bom_to_json_value(bom: Bom) -> Value {
+    let mut buf = Vec::new();
+    bom.output_as_json_v1_5(&mut buf)
+        .expect("cyclonedx-bom JSON 1.5 serialize");
+    serde_json::from_slice(&buf).expect("cyclonedx JSON is valid serde_json::Value")
 }
 
 /// Build dep map name -> **runtime** dependency names from universe candidates
@@ -151,6 +237,18 @@ mod tests {
         serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
     }
 
+    /// cyclonedx-bom skips serializing empty `dependsOn` arrays.
+    fn depends_on_list(dep: &Value) -> Vec<String> {
+        dep.get("dependsOn")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     #[test]
     fn sbom_uses_declared_deps_not_gromacs_only_hardcode() {
         let baseline: StackLock = load_json("baseline.lock.json");
@@ -159,36 +257,55 @@ mod tests {
         let lock = select_stack(&universe, &policy, Some(&baseline)).unwrap();
         let map = dep_map_from_universe(&lock, &universe);
         let sbom = lock_to_cyclonedx_with_deps(&lock, Some(&map));
-        let deps = sbom["dependencies"].as_array().unwrap();
+        assert_eq!(sbom["bomFormat"], "CycloneDX");
+        assert_eq!(sbom["specVersion"], "1.5");
+        assert!(
+            sbom["serialNumber"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("urn:uuid:"),
+            "serialNumber: {:?}",
+            sbom["serialNumber"]
+        );
+        let deps = sbom["dependencies"].as_array().expect("dependencies array");
         // GROMACS declares real co-deps (Python + stack libs), not empty/hardcoded.
         let g_ref = deps
             .iter()
-            .find(|d| d["ref"].as_str().unwrap().contains("GROMACS@"))
-            .unwrap();
-        let g_on = g_ref["dependsOn"].as_array().unwrap();
+            .find(|d| {
+                d.get("ref")
+                    .and_then(|r| r.as_str())
+                    .is_some_and(|s| s.contains("GROMACS"))
+            })
+            .unwrap_or_else(|| panic!("GROMACS dep entry missing in {deps:?}"));
+        let g_on = depends_on_list(g_ref);
         assert!(
-            g_on.iter().any(|x| x.as_str().unwrap().contains("OpenBLAS")),
+            g_on.iter().any(|x| x.contains("OpenBLAS")),
             "GROMACS must list OpenBLAS dep: {g_on:?}"
         );
         assert!(
-            g_on.iter().any(|x| x.as_str().unwrap().contains("Python")),
+            g_on.iter().any(|x| x.contains("Python")),
             "GROMACS must list Python dep: {g_on:?}"
         );
         assert!(g_on.len() >= 3, "GROMACS dependsOn co-deps: {g_on:?}");
         // Leaf FFTW has no runtime deps in the realistic fixture.
         let fftw_ref = deps
             .iter()
-            .find(|d| d["ref"].as_str().unwrap().contains("FFTW@"))
-            .unwrap();
-        let fftw_on = fftw_ref["dependsOn"].as_array().unwrap();
+            .find(|d| {
+                d.get("ref")
+                    .and_then(|r| r.as_str())
+                    .is_some_and(|s| s.contains("FFTW"))
+            })
+            .expect("FFTW dep entry");
+        let fftw_on = depends_on_list(fftw_ref);
         assert!(
             fftw_on.is_empty(),
             "FFTW leaf should have empty dependsOn: {fftw_on:?}"
         );
         // Lock-only path: no all-to-all co-stack edges (empty when map unknown).
+        // cyclonedx-bom omits empty dependsOn (skip_serializing_if empty).
         let co = lock_to_cyclonedx(&lock);
         for d in co["dependencies"].as_array().unwrap() {
-            let on = d["dependsOn"].as_array().unwrap();
+            let on = depends_on_list(d);
             assert!(
                 on.is_empty(),
                 "lock-only SBOM must not invent all-to-all dependsOn: {on:?}"
@@ -198,7 +315,7 @@ mod tests {
         let others = lock.packages.len().saturating_sub(1);
         if others > 0 {
             for d in co["dependencies"].as_array().unwrap() {
-                let on = d["dependsOn"].as_array().unwrap();
+                let on = depends_on_list(d);
                 assert_ne!(
                     on.len(),
                     others,
@@ -206,6 +323,13 @@ mod tests {
                 );
             }
         }
+        // Typed BOM validates under cyclonedx-bom.
+        let bom = lock_to_bom(&lock, Some(&map), None);
+        let vr = bom.validate();
+        assert!(
+            vr.passed(),
+            "cyclonedx-bom Validate failed: {vr:?}"
+        );
     }
 
     #[test]
@@ -219,11 +343,11 @@ mod tests {
         let deps = sbom["dependencies"].as_array().expect("dependencies array");
         assert_eq!(deps.len(), lock.packages.len());
         for d in deps {
-            let on = d["dependsOn"].as_array().expect("dependsOn");
+            let on = depends_on_list(d);
             assert!(
                 on.is_empty(),
-                "without a dep map dependsOn must be empty, got {on:?} for {}",
-                d["ref"]
+                "without a dep map dependsOn must be empty, got {on:?} for {:?}",
+                d.get("ref")
             );
         }
         // Real declared-map path still has non-empty edges for GROMACS.
@@ -234,10 +358,14 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|d| d["ref"].as_str().unwrap().contains("GROMACS@"))
-            .unwrap();
+            .find(|d| {
+                d.get("ref")
+                    .and_then(|r| r.as_str())
+                    .is_some_and(|s| s.contains("GROMACS"))
+            })
+            .expect("GROMACS entry");
         assert!(
-            !g["dependsOn"].as_array().unwrap().is_empty(),
+            !depends_on_list(g).is_empty(),
             "declared map must still emit real edges"
         );
     }
@@ -320,6 +448,29 @@ mod tests {
         let json = serde_json::to_value(app_c).unwrap();
         assert_eq!(json["dependencies"][0]["name"], "Lib");
         assert_eq!(json["builddependencies"][0]["name"], "Tool");
+
+        // Build edges land on property, not runtime dependsOn.
+        let sbom = lock_to_cyclonedx_with_runtime_and_build(
+            &lock,
+            Some(&runtime),
+            Some(&build),
+        );
+        let comps = sbom["components"].as_array().unwrap();
+        let app_c = comps
+            .iter()
+            .find(|c| c["name"].as_str() == Some("App"))
+            .unwrap();
+        let props = app_c["properties"].as_array().unwrap();
+        assert!(
+            props.iter().any(|p| {
+                p["name"].as_str() == Some("eb_stack:buildDependsOn")
+                    && p["value"]
+                        .as_str()
+                        .unwrap_or("")
+                        .contains("Tool")
+            }),
+            "buildDependsOn property missing: {props:?}"
+        );
     }
 
     #[test]

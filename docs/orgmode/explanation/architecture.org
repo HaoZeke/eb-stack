@@ -67,30 +67,26 @@ digraph G {
   ~resolvo_provider::solve_with_resolvo~, turns the result into a
   ~StackLock~ (sorted, timestamped, tagged with the solver engine string),
   and validates every declared root is present.
-- ~sbom~ (~src/sbom.rs~) :: ~StackLock~ (plus, when available, the
-  universe's declared dependency edges) to a CycloneDX JSON document,
-  written only when a caller asks for it (~--sbom-out~ is opt-in, no
-  default filename). See [[file:../reference/formats.org][the format
-  reference]].
+- ~sbom~ (~src/sbom.rs~) :: ~StackLock~ (plus declared runtime/build edges)
+  to a CycloneDX **1.5** JSON document via the official ~cyclonedx-bom~
+  crate (~serialNumber~, tools, pre-build lifecycle, runtime ~dependsOn~,
+  build edges as ~eb_stack:buildDependsOn~ properties). Opt-in via
+  ~--sbom-out~. See [[file:../reference/formats.org][the format reference]].
 - ~report~ (~src/report.rs~) :: ~StackLock~ to an install-ordered build list
   (topological sort) and a baseline-vs-solved markdown stack diff.
 - ~hierarchy~ (~src/hierarchy.rs~) :: Sub-toolchain hierarchy membership and
-  safe dependency-version resolution for ~bump --easyconfigs~: given a
-  target toolchain generation (~foss-2024a~), which sub-toolchain levels
-  (~GCCcore~, ~GCC~, ~gfbf~, ~gompi~, ..., ~SYSTEM~) belong to it, and, for
-  each dependency name, the newest candidate in that hierarchy that is
-  never older than the source recipe's own version and respects a
-  ~versionsuffix~ pin. Ground truth for hierarchy membership is EasyBuild's
-  own ~get_toolchain_hierarchy~, captured as fixtures under
-  ~fixtures/toolchain_hierarchy/~.
+  generation-consensus version floors for ~bump --easyconfigs~ / ingest:
+  which levels (~GCCcore~, ~GCC~, ~gfbf~, ~gompi~, ..., ~SYSTEM~) belong to
+  the target generation, and per-name floors never older than the source
+  pin. Ground truth membership is EasyBuild's ~get_toolchain_hierarchy~,
+  captured under ~fixtures/toolchain_hierarchy/~.
 - ~eb_emit~ (~src/eb_emit.rs~) :: The ~bump~ path. Rewrites the ~toolchain~
   dict, optional ~version~ assignment, named dependency tuples, and (on a
   version bump) the source checksum entry in an easyconfig's *source text*,
-  byte-preserving everything else. When ~--easyconfigs~ is given, it calls
-  ~eb_parse~'s tree walk and ~hierarchy~'s resolver to fill dependency
-  versions before rewriting -- but it still never builds a ~Universe~ or
-  calls the SAT solver: auto-resolve is dependency-version lookup, not
-  co-selection.
+  byte-preserving everything else. With ~--easyconfigs~, auto-resolve is
+  hierarchy consensus **then** ~resolvo_resolve_dep_versions~ (joint SAT
+  over hierarchy-eligible candidates with a synthetic root for this
+  recipe).
 - ~version~ (~src/version.rs~) :: EasyBuild-shaped version comparison and
   the ~version_req~ matcher (~==~, ~>=~, ~<=~, ~>~, ~<~, bare-exact) shared
   by the parser, the provider, the hierarchy resolver, and the
@@ -103,15 +99,16 @@ pipeline above: parse (or load an already-built universe JSON), build a ~Univers
 ~select_stack~ for a consistent ~StackLock~, then derive reports from that
 lock.
 
-~bump~ never touches the solver, with or without ~--easyconfigs~: it reads
-one file, rewrites specific spans of its text, and writes the result. The
-auto-resolve universe (when ~--easyconfigs~ is given) reuses ~eb_parse~'s
-tree walk to build a set of candidates and ~hierarchy~ to pick a version per
-dependency name -- a lookup, not a co-selection -- so ~bump~ still has no
-dependency on a policy or on resolvo. That separation is why bumping one
-recipe never requires every other recipe in the tree to be jointly
-consistent: it is a single-recipe operation, informed by but not
-constrained by the rest of the universe.
+~bump~ always rewrites one recipe's source text (toolchain / version / dep
+pins). With ~--easyconfigs~, auto-resolve is **two stages**: (1) hierarchy
+consensus picks generation-native floors (GCCcore-aware, same as before);
+(2) ~resolvo_resolve_dep_versions~ builds a synthetic root over
+hierarchy-eligible candidates and runs the same resolvo CDCL SAT core as
+~solve~, so co-selected dep pins are jointly feasible. Hand ~--dep~
+overrides still win after both stages. Bumping one recipe still does not
+require every unrelated package in the tree to appear as a ~solve~ root --
+only the recipe's declared deps that exist under the hierarchy enter the
+SAT problem.
 
 * Where the co-selection graph's edges come from
 

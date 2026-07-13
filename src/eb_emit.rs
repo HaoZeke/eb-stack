@@ -3,6 +3,11 @@
 //! Surgical assignment/list rewrites: only `toolchain`, optional application
 //! `version`, and named dependency / build-dependency version fields change.
 //! All other source bytes stay verbatim.
+//!
+//! With `--easyconfigs`, dependency versions are filled by:
+//! 1. generation **hierarchy consensus** (GCCcore-aware floors), then
+//! 2. **resolvo joint co-select** ([`crate::select::resolvo_resolve_dep_versions`])
+//!    so multi-dep pins are SAT-feasible together — not independent lookups.
 
 use crate::domain::Toolchain;
 use crate::eb_parse::{parse_easyconfig_tree, ParseError};
@@ -10,6 +15,7 @@ use crate::hierarchy::{
     hierarchy_for_with_tree, known_hierarchy, resolve_dep_versions_for_specs, HierarchyError,
     SourceDepSpec, ToolchainHierarchy,
 };
+use crate::select::resolvo_resolve_dep_versions;
 use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
@@ -340,7 +346,7 @@ pub fn resolve_dep_versions_for_source_with_opts(
             100.0 * tree.coverage()
         ));
     }
-    let (map, kept) =
+    let (mut map, kept) =
         resolve_dep_versions_for_specs(&specs, &tree.candidates, h, opts.keep_old).map_err(
             |e| match e {
                 HierarchyError::MissingDep(name, tn, tv, hint) => {
@@ -352,6 +358,55 @@ pub fn resolve_dep_versions_for_source_with_opts(
     for note in kept {
         warnings.push(format!("auto-resolve: {note}"));
     }
+    for (name, ver) in &map {
+        warnings.push(format!(
+            "auto-resolve: {name} → {ver} (hierarchy consensus)"
+        ));
+    }
+
+    // Joint resolvo SAT over hierarchy-eligible candidates (synthetic root).
+    let root_name = assign_string_raw(source, "name").unwrap_or_else(|| "root".into());
+    let root_version = assign_string_raw(source, "version").unwrap_or_else(|| "0".into());
+    match resolvo_resolve_dep_versions(
+        &specs,
+        &tree.candidates,
+        h,
+        target_toolchain,
+        &root_name,
+        &root_version,
+        Some(&map), // hierarchy consensus as exact pins; joint SAT under those
+    ) {
+        Ok((resolvo_map, engine_note)) => {
+            warnings.push(format!("auto-resolve: {engine_note}"));
+            for (name, ver) in resolvo_map {
+                match map.get(&name) {
+                    Some(hver) if hver == &ver => {
+                        warnings.push(format!(
+                            "auto-resolve: {name} → {ver} (resolvo joint agrees with hierarchy)"
+                        ));
+                    }
+                    Some(hver) => {
+                        // Pins should prevent this; keep hierarchy (generation-native).
+                        warnings.push(format!(
+                            "auto-resolve: {name} resolvo={ver} hierarchy={hver}; keeping hierarchy"
+                        ));
+                    }
+                    None => {
+                        warnings.push(format!(
+                            "auto-resolve: {name} → {ver} (resolvo joint; hierarchy had no pin)"
+                        ));
+                        map.insert(name, ver);
+                    }
+                }
+            }
+        }
+        Err(why) => {
+            warnings.push(format!(
+                "auto-resolve: resolvo joint skipped ({why}); using hierarchy consensus only"
+            ));
+        }
+    }
+
     Ok((map, warnings))
 }
 
