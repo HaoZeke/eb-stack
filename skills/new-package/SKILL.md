@@ -443,8 +443,9 @@ Inside herdr on **rg.surf**, for each target recipe (and companions as needed):
 ```
 herdr status   # if server not running: herdr server &
 WORK=$HOME/tmp/eb-repro/work   # or site work dir
-# Write $WORK/residuals/hermes-full-drive.md from the prompt template below
-# (or skills/new-package/hermes-full-drive.prompt.md).
+# Write $WORK/residuals/hermes-full-drive.md from hermes-full-drive.prompt.md.
+# Optional mechanical+install helper (eOn+QMCPACK example):
+#   skills/new-package/full-drive-eon-qmcpack.example.sh
 
 herdr agent start eb-full-drive-hermes \
   --cwd "$WORK" --no-focus -- \
