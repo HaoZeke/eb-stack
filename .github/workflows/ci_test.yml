@@ -1,0 +1,123 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: cargo test --lib
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Library unit tests
+        run: cargo test --locked --lib
+
+  known-bumps:
+    name: known-bump regression (reproduce_real_prs + bump_emit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Replay frozen maintainer toolchain bumps
+        run: |
+          set -euo pipefail
+          # Library + CLI emit path: foss-2023b -> foss-2024a pairs under
+          # tests/repro_fixtures/ (GROMACS, ScaFaCoS, MDTraj, Fiona, PuLP, numba)
+          # plus hierarchy auto-resolve cases in bump_emit.
+          cargo test --locked --test reproduce_real_prs --test bump_emit -- --nocapture
+
+  packaging-fixtures:
+    name: packaging fixtures (eOn + QMCPACK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Parse, resolve, packaging_gate on frozen PR recipe sets
+        run: |
+          set -euo pipefail
+          # Robot-overlay checks skip cleanly when no easyconfigs tree is
+          # present; resolve + packaging_gate always run against the fixtures.
+          cargo test --locked \
+            --test eon_foss_2026_1 \
+            --test qmcpack_foss_2026_1 \
+            --test eon_packaging \
+            -- --nocapture
+
+  solve-reports:
+    name: solve + build-list + stack-diff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Co-select and report fixtures
+        run: cargo test --locked --test build_list_and_stack_diff -- --nocapture
+
+  cli-smoke:
+    name: CLI smoke (bump + check-recipe on fixtures)
+    runs-on: ubuntu-latest
+    needs: [unit, known-bumps]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary
+        run: cargo build --locked --release --bin eb-stack
+      - name: Tutorial path (GROMACS zero-hand-fed bump)
+        run: |
+          set -euo pipefail
+          BIN=./target/release/eb-stack
+          OUT=$(mktemp -d)
+          "$BIN" --version
+          "$BIN" bump \
+            --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
+            --toolchain-name foss \
+            --toolchain-version 2024a \
+            --easyconfigs tests/repro_fixtures/universe_foss_2024a \
+            --out-dir "$OUT"
+          test -f "$OUT/GROMACS-2024.4-foss-2024a.eb"
+          grep -q "toolchain = {'name': 'foss', 'version': '2024a'}" \
+            "$OUT/GROMACS-2024.4-foss-2024a.eb"
+          grep -q "('Python', '3.12.3')" "$OUT/GROMACS-2024.4-foss-2024a.eb"
+          grep -q "('mpi4py', '4.0.1')" "$OUT/GROMACS-2024.4-foss-2024a.eb"
+          # Residual: maintainer-added pybind11 is NOT invented.
+          ! grep -q pybind11 "$OUT/GROMACS-2024.4-foss-2024a.eb"
+      - name: check-recipe on QMCPACK fixture (universe = empty drafts)
+        run: |
+          set -euo pipefail
+          BIN=./target/release/eb-stack
+          # Fixture alone lacks HDF5/Boost; expect non-zero (loud incompleteness).
+          if "$BIN" check-recipe \
+            --recipe fixtures/qmcpack_foss_2026_1/easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1.eb \
+            --easyconfigs fixtures/qmcpack_foss_2026_1/easyconfigs; then
+            echo "expected check-recipe to fail without robot deps" >&2
+            exit 1
+          fi
+      - name: check-recipe packaging gate on eOn landable fixture
+        run: |
+          set -euo pipefail
+          BIN=./target/release/eb-stack
+          # Drafts alone leave stack deps missing; exit non-zero is correct.
+          # Still exercises parse + packaging_gate on the landable recipe.
+          "$BIN" check-recipe \
+            --recipe fixtures/eon_foss_2026_1/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb \
+            --easyconfigs fixtures/eon_foss_2026_1/easyconfigs \
+            --require-configopt=-Dwith_metatomic=true \
+            --require-configopt=-Dwith_xtb=true \
+            --require-configopt=-Dwith_serve=true \
+            --require-configopt=-Dwith_rgpot=true \
+            && exit 1 || true
