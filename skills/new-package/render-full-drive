@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-"""Render full-drive.sh + hermes-full-drive.md from skill templates.
-
-Example:
-  skills/new-package/render-full-drive \\
-    --work ~/tmp/eb-campaign --repo ~/Git/.../eb-stack --robot ~/.../easyconfigs \\
-    --recipe work/easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1.eb \\
-    --oracle fixtures/qmcpack_foss_2026_1/easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1.eb \\
-    --stem qmcpack \\
-    --recipe work/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb \\
-    --oracle fixtures/eon_foss_2026_1/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb \\
-    --stem eon \\
-    --overlay fixtures/eon_foss_2026_1/easyconfigs
-
-Then:
-  bash $WORK/residuals/full-drive.sh
-  # or herdr agent with -q "$(cat $WORK/residuals/hermes-full-drive.md)"
-"""
+"""Render full-drive.sh + hermes-full-drive.md from skill templates."""
 from __future__ import annotations
 
 import argparse
@@ -48,23 +32,22 @@ def esc_sq(s: str) -> str:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--work", required=True, type=Path)
     ap.add_argument("--repo", required=True, type=Path)
     ap.add_argument("--robot", required=True, type=Path)
     ap.add_argument("--recipe", action="append", default=[], metavar="PATH")
-    ap.add_argument("--oracle", action="append", default=[], metavar="PATH",
-                    help="Oracle for recipes in order (pad empty if fewer than recipes)")
-    ap.add_argument("--stem", action="append", default=[], metavar="NAME",
-                    help="robot-*.log stem for recipes in order")
-    ap.add_argument("--overlay", type=Path, default=None,
-                    help="Companion easyconfigs tree rsynced into WORK/easyconfigs")
-    ap.add_argument("--eb", type=Path, default=None)
+    ap.add_argument("--oracle", action="append", default=[], metavar="PATH")
+    ap.add_argument("--stem", action="append", default=[], metavar="NAME")
+    ap.add_argument("--overlay", type=Path, default=None)
+    ap.add_argument("--eb-stack", type=Path, default=None, dest="eb_stack",
+                    help="Path to eb-stack binary (default REPO/target/release/eb-stack)")
+    ap.add_argument("--easybuild-eb", type=Path, default=None,
+                    help="Path to EasyBuild eb (default ~/.venvs/easybuild/bin/eb)")
     ap.add_argument("--out-dir", type=Path, default=None)
     ap.add_argument("--sourcepath", type=Path, default=None)
     ap.add_argument("--tmpdir", type=Path, default=None)
     ap.add_argument("--installpath", type=Path, default=None)
-    ap.add_argument("--extra-path", default="")
     ap.add_argument("--skill-path", default="skills/new-package/SKILL.md")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -81,7 +64,10 @@ def main() -> int:
     repo = args.repo.expanduser().resolve()
     robot = args.robot.expanduser().resolve()
     out_dir = (args.out_dir or (work / "residuals")).expanduser().resolve()
-    eb = (args.eb or (repo / "target" / "release" / "eb-stack")).expanduser().resolve()
+    eb_stack = (args.eb_stack or (repo / "target" / "release" / "eb-stack")).expanduser().resolve()
+    easybuild_eb = (
+        args.easybuild_eb or (Path.home() / ".venvs" / "easybuild" / "bin" / "eb")
+    ).expanduser()
     home = Path.home()
     sourcepath = (args.sourcepath or (home / "tmp" / "eb-sources")).expanduser().resolve()
     tmpdir = (args.tmpdir or (home / "tmp" / "eb-tmp")).expanduser().resolve()
@@ -105,14 +91,15 @@ def main() -> int:
             bullets.append(f"- `{r_s}` (stem: `{s}`)")
 
     mapping = {
-        "EXTRA_PATH": args.extra_path or str(eb.parent),
+        "EB_STACK_DIR": str(eb_stack.parent),
         "EASYBUILD_SOURCEPATH": str(sourcepath),
         "EASYBUILD_TMPDIR": str(tmpdir),
         "EASYBUILD_INSTALLPATH": str(installpath),
         "WORK": str(work),
         "REPO": str(repo),
         "ROBOT": str(robot),
-        "EB": str(eb),
+        "EB_STACK": str(eb_stack),
+        "EASYBUILD_EB": str(easybuild_eb),
         "OVERLAY_DIR": overlay,
         "RECIPES_BASH_ARRAY": "\n".join(bash_lines),
         "SKILL_PATH": args.skill_path,
@@ -128,18 +115,17 @@ def main() -> int:
     if args.dry_run:
         print(f"would write {sh_path}")
         print(f"would write {md_path}")
-        print(f"recipes={n}")
         return 0
 
     out_dir.mkdir(parents=True, exist_ok=True)
     sh_path.write_text(sh, encoding="utf-8")
-    mode = sh_path.stat().st_mode
-    sh_path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    sh_path.chmod(sh_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     md_path.write_text(md, encoding="utf-8")
     print(f"wrote {sh_path}")
     print(f"wrote {md_path}")
     print(f"recipes={n}")
-    print(f"next: bash {sh_path}")
+    print(f"easybuild_eb={easybuild_eb}")
+    print(f"eb_stack={eb_stack}")
     return 0
 
 

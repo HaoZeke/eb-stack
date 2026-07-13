@@ -3,7 +3,9 @@
 # Mechanical gates + eb --robot (*builds*) for listed recipes (new-package skill §7).
 set -euo pipefail
 
-export PATH="@@EXTRA_PATH@@:${HOME}/.venvs/easybuild/bin:${HOME}/.local/bin:${PATH}"
+# PATH: EasyBuild's `eb` MUST come before any eb-stack dir that may ship a
+# symlink named `eb` → eb-stack (that collision made --robot hit clap).
+export PATH="${HOME}/.venvs/easybuild/bin:@@EB_STACK_DIR@@:${HOME}/.local/bin:${PATH}"
 export LMOD_CMD="${LMOD_CMD:-${HOME}/.local/lmod/lmod/libexec/lmod}"
 export FPATH="${FPATH:-}"
 # shellcheck disable=SC1090
@@ -17,17 +19,30 @@ export EASYBUILD_INSTALLPATH="@@EASYBUILD_INSTALLPATH@@"
 WORK="@@WORK@@"
 REPO="@@REPO@@"
 ROBOT="@@ROBOT@@"
-EB="@@EB@@"
+# Distinct binaries — never shadow EasyBuild `eb` with eb-stack.
+EB_STACK="@@EB_STACK@@"
+EASYBUILD_EB="@@EASYBUILD_EB@@"
 OVERLAY_DIR="@@OVERLAY_DIR@@"
+
+if [[ ! -x "${EASYBUILD_EB}" ]]; then
+  # fall back to PATH after venv prepend
+  EASYBUILD_EB="$(command -v eb)"
+fi
+if [[ ! -x "${EB_STACK}" ]]; then
+  echo "ERROR: eb-stack binary missing at ${EB_STACK}" >&2
+  exit 127
+fi
+# Guard: `eb` must be EasyBuild, not eb-stack
+eb_help="$("${EASYBUILD_EB}" --help 2>&1 | head -3 || true)"
+if echo "${eb_help}" | grep -q 'eb-stack'; then
+  echo "ERROR: EASYBUILD_EB resolves to eb-stack (${EASYBUILD_EB}); fix PATH/symlink" >&2
+  exit 127
+fi
 
 mkdir -p "${EASYBUILD_SOURCEPATH}" "${EASYBUILD_TMPDIR}" "${EASYBUILD_INSTALLPATH}" \
   "${WORK}/logs" "${WORK}/residuals"
 
-# --- OS dependency policy (teach the campaign, not residual judgment) ---
-# EasyBuild checks Debian/RHEL *package names* (libibverbs-dev, rdma-core-devel).
-# On Arch the package is `rdma-core` (libs + headers); EB never matches those names.
-# Policy: if InfiniBand/verbs headers are on disk, pass --ignore-osdeps for robot.
-# Force with EB_IGNORE_OSDEPS=1; refuse ignore with EB_IGNORE_OSDEPS=0 even on Arch.
+# --- OS dependency policy (Arch vs Debian/RHEL package names) ---
 eb_osdep_opts=()
 os_id=""
 if [[ -r /etc/os-release ]]; then
@@ -45,17 +60,14 @@ elif [[ "${os_id}" == "arch" ]]; then
   if [[ -f "${verbs_h}" ]]; then
     eb_osdep_opts+=(--ignore-osdeps)
     echo "===== OSDEPS: Arch + ${verbs_h} present → --ignore-osdeps ====="
-    echo "===== (pacman: rdma-core; EB only knows Debian/RHEL package names) ====="
   else
     echo "===== OSDEPS: Arch but ${verbs_h} MISSING — install: sudo pacman -S --needed rdma-core =====" >&2
-    echo "===== refusing to ignore OS deps without headers =====" >&2
     exit 2
   fi
 else
   echo "===== OSDEPS: os_id=${os_id:-unknown} — default EB package-name checks ====="
 fi
 
-# Each entry: RECIPE_PATH|ORACLE_PATH_OR_EMPTY|LOG_STEM
 RECIPES=(
 @@RECIPES_BASH_ARRAY@@
 )
@@ -68,20 +80,15 @@ fi
 gate() {
   local f="$1"
   echo "===== format-style $(basename "$f") ====="
-  if [[ -x "${EB}" ]] || command -v "${EB}" >/dev/null 2>&1; then
-    "${EB}" format-style "$f" || true
-    "${EB}" check-style "$f"
-  else
-    echo "WARN: eb-stack binary missing at ${EB}; skip format/check-style" >&2
-  fi
+  "${EB_STACK}" format-style "$f" || true
+  "${EB_STACK}" check-style "$f"
   sed -i 's/[[:space:]]*$//' "$f"
   echo "===== check-contrib ====="
-  eb --modules-tool=Lmod --check-contrib "$f"
+  "${EASYBUILD_EB}" --modules-tool=Lmod --check-contrib "$f"
   echo "===== check-recipe ====="
-  "${EB}" check-recipe --recipe "$f" --easyconfigs "${ROBOT}" --easyconfigs "${WORK}/easyconfigs"
+  "${EB_STACK}" check-recipe --recipe "$f" --easyconfigs "${ROBOT}" --easyconfigs "${WORK}/easyconfigs"
   echo "===== eb -Dr ====="
-  # dry-run also evaluates OS deps for some EB versions
-  eb --modules-tool=Lmod "${eb_osdep_opts[@]}" -Dr --robot "${WORK}/easyconfigs:${ROBOT}" "$f"
+  "${EASYBUILD_EB}" --modules-tool=Lmod "${eb_osdep_opts[@]}" -Dr --robot "${WORK}/easyconfigs:${ROBOT}" "$f"
 }
 
 declare -a STEMS=()
@@ -116,7 +123,7 @@ for i in "${!PATHS[@]}"; do
   log="${WORK}/logs/robot-${stem}.log"
   echo "===== ROBOT ${stem} ====="
   set +e
-  eb --modules-tool=Lmod "${eb_osdep_opts[@]}" --robot "${WORK}/easyconfigs:${ROBOT}" "${rpath}" 2>&1 | tee "${log}"
+  "${EASYBUILD_EB}" --modules-tool=Lmod "${eb_osdep_opts[@]}" --robot "${WORK}/easyconfigs:${ROBOT}" "${rpath}" 2>&1 | tee "${log}"
   rc=${PIPESTATUS[0]}
   set -e
   echo "robot_exit_${stem}=${rc}"
@@ -131,6 +138,8 @@ done
   echo
   echo "- os_id: ${os_id:-unknown}"
   echo "- eb_osdep_opts: ${eb_osdep_opts[*]:-(none)}"
+  echo "- easybuild_eb: ${EASYBUILD_EB}"
+  echo "- eb_stack: ${EB_STACK}"
   echo
   for i in "${!PATHS[@]}"; do
     rpath="${PATHS[$i]}"

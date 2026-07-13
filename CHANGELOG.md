@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **full-drive PATH**: use absolute EasyBuild `eb` vs `eb-stack`; venv bin first so a release-dir `eb`→`eb-stack` symlink cannot steal `--robot`.
+
 - **new-package skill §7 full-drive default**: local-ai agent (Hermes/herdr on
   `EasyBuild host`) owns residual judgment **and** `eb --robot` *builds* for PR-ready
   campaigns; residual-only only when human scopes it. Stopping after `eb -Dr`

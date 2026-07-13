@@ -437,6 +437,14 @@ Inside herdr on **EasyBuild host**, for each target recipe (and companions as ne
 5. Print **`DONE_FULL_DRIVE`** when every target has *resolves* and *builds*, else
    **`DONE_PARTIAL`** with exact failures and log paths.
 
+### PATH: EasyBuild `eb` vs `eb-stack`
+
+Never put a directory that contains a symlink `eb` → `eb-stack` **before**
+EasyBuild’s venv `bin` on `PATH`. That makes `eb --robot` invoke eb-stack’s
+clap CLI and fail with `unexpected argument '--robot'`. The rendered
+full-drive script uses absolute `EASYBUILD_EB` and `EB_STACK` paths and puts
+`~/.venvs/easybuild/bin` first.
+
 ### OS dependencies on Arch (campaign mechanical — not residual judgment)
 
 EasyBuild `osdependencies` lists **Debian/RHEL package names** (e.g.
