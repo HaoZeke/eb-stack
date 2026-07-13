@@ -427,11 +427,14 @@ Expect: exit 0, 0 missing.
 via `testopts -E performance`). Full `eb` install/build is outside this skill's
 mechanical bar — use rg.terra / Jenkins when required.
 
-### 11.5 Agent driver (SURF Willma / OMP)
+### 11.5 Agent driver (local-ai agent via OMP / Hermes)
 
-For SURF-only AI work, drive this skill with the SURF model path, not commercial
-frontier models. With OMP: role `eb-stack` → `surf-ai-hub/openai/gpt-oss-120b`.
-Run the exact commands above; do not reimplement EasyBuild semantics in the prompt.
+For SURF-only AI work, drive this skill with the **local-ai agent** (OMP or
+Hermes), not commercial frontier models. With OMP: role `eb-stack` → site
+model path (configured local stack). Run the exact commands above; do not
+reimplement EasyBuild semantics in the prompt. Prefer mechanical CLI steps;
+use the local-ai agent for residual judgment only (same split as
+`skills/new-package/SKILL.md` §6).
 
 ### 11.6 Automated regression (what CI runs)
 

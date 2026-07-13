@@ -294,77 +294,77 @@ cargo test --locked --test foreign_ingest
 
 | Claim | Who |
 |-------|-----|
-| Foreign identity → parseable draft | `eb-stack ingest` |
-| Generation-native dep versions when robot has candidates | `eb-stack` hierarchy + resolvo |
-| Stable checksums, templates, style, product flags | **Driver agent** running *this skill* + `eb` |
-| Modules exist / install works | **`eb --robot` on a build host** |
-| Upstream-ready | **EasyBuild PR process** (`--new-pr`, test reports, maintainers) |
+| Foreign identity → parseable draft | `eb-stack ingest` (**mechanical**) |
+| Generation-native dep versions when robot has candidates | `eb-stack` hierarchy + resolvo (**mechanical**) |
+| SHA256 for fetched sources | `eb --inject-checksums` (**mechanical**) |
+| Style + checksum presence gate | `eb --check-contrib` (**mechanical**) |
+| Graph dry-run / install | `eb -Dr` / `eb --robot` (**mechanical**) |
+| Product configopts, variant policy, real sanity paths, moduleclass choice, multi-source extract layout, “which sibling to copy” judgment | **local-ai agent** following this skill — **not** hardcoding into `eb-stack` |
+| Upstream PR merge | Human + EasyBuild maintainers |
 
 Three-claim ladder (site ops): annual-bump §10.4 —
 *resolves* (plan) ≠ *builds* (`eb`) ≠ *binary-verified*.
 
 ---
 
-## 6. Closing residuals: Willma (OMP / Hermes) — not more eb-stack code
+## 6. Mechanical first; local-ai agent only for judgment residuals
 
-**Do not patch `eb-stack` to invent product flags, checksums, or landable
-style.** Ingest deliberately leaves residuals. Closing them is **agent work
-against EasyBuild docs and `eb`**, driven by this skill.
+**Maximize mechanical work.** Run every tool step that does not require a
+product/policy decision. **Do not hardcode** product flags, hand pins, or
+site-specific layout into `eb-stack` / ingest to “close” residuals — that
+bakes lies into the tool. Judgment residuals go to a **local-ai agent**
+(OMP or Hermes session with this skill as the runbook).
 
-### Who runs what
+### Split of work
 
-| Layer | Role |
-|-------|------|
-| `eb-stack ingest` / `check-recipe` | Mechanical bootstrap + plan lint |
-| **This skill** | Full runbook (EasyBuild-native finish steps) |
-| **SURF Willma** (`surf-ai-hub/openai/gpt-oss-120b`) via **OMP** or **Hermes** | Execute the residual loop: templates, inject-checksums, moduleclass, sanity, `check-contrib`, `-Dr`/`--robot`, paste-ready PR notes |
-| Human | PR surface, maintainer review, site policy |
+| Kind | Examples | Who |
+|------|----------|-----|
+| **Mechanical** | `eb -S`; `eb-stack ingest --easyconfigs`; hierarchy/resolvo pins; `eb --inject-checksums`; `eb --check-contrib`; `eb-stack check-recipe`; `eb -Dr --robot` | CLI / any driver that only runs commands |
+| **Judgment residual** | Which product features to enable; moduleclass when ambiguous; real `sanity_check_paths` from install intent; multi-source `extract_cmd`; Spack `when=` → EB variant story; whether to copy sibling vs greenfield; PR title wording | **local-ai agent** (this skill §2–§3) |
+| **Forbidden** | Encoding product `-D` sets, fake checksums, or landable style as hardwired ingest defaults | Nobody — not code, not the agent pretending mechanical |
 
-### Driver contract (paste as system / task context)
+### Mechanical sequence (always do this before calling a local-ai agent)
 
-1. Open and follow **`skills/new-package/SKILL.md` end to end** — do not
-   re-summarize EasyBuild into a private procedure.
-2. Prefer **`eb -S` → copy sibling** over foreign invent when a close
-   easyconfig exists.
-3. If bootstrapping: run **`eb-stack ingest`** with robot, then treat every
-   WARNING as a work-queue item in §3.
-4. Finish with **EasyBuild tools only** for landability:
-   `eb --inject-checksums`, `eb --check-contrib`, `eb -Dr --robot …`,
-   optional `eb --new-pr` when authorized.
-5. Report on the **three-claim ladder** (annual-bump §10.4). Never say
-   “works” when only *resolves*.
-6. **Do not** open/edit GitHub PRs unless the human explicitly authorized
-   it in this turn. Prepare paste-ready PR title/body instead.
-7. **Do not** change stock robot recipes to silence host errors (annual-bump
-   §10.6).
+1. `eb -S Name` — prefer sibling copy when possible.
+2. `eb-stack ingest … --easyconfigs $ROBOT` (or hand draft from sibling).
+3. `eb --inject-checksums` on the draft (after sources URLs are stable).
+4. `eb --check-contrib` — fix only what the gate names that is mechanical
+   (missing SHA256, style reordering if `eb` can do it).
+5. `eb-stack check-recipe` + `eb -Dr --robot …` for the dep graph.
+6. **Stop.** If the recipe is not yet landable, the remaining list is
+   judgment residuals → dispatch local-ai agent with that list + this skill.
 
-### OMP (SURF)
+### local-ai agent (OMP / Hermes)
 
-Same path as annual-bump §11.5:
+- **Name in prompts:** “local-ai agent” (not product nicknames).
+- **Harness:** OMP or Hermes; site model path for the `eb-stack` role
+  (see annual-bump §11.5 for the configured model id). Commercial frontier
+  models are out of scope for SURF-only work.
+- **Input:** this skill path, software name, foreign path (or “none —
+  search first”), toolchain, `ROBOT`, work dir, and the **mechanical
+  leftover list** (warnings / check-contrib failures that are not pure
+  command re-runs).
+- **Prompt shape (minimal):**
+  ```
+  Follow skills/new-package/SKILL.md for <software>.
+  Foreign: <path|none>. Toolchain: foss-<gen>. ROBOT=<path>. Work=<path>.
+  Mechanical steps already done: <ingest|inject-checksums|check-contrib|…>.
+  Residual judgment only: <bullets>.
+  Use eb / eb-stack; do not invent eb-stack features or hardcode product
+  flags into the tool. Report claim ladder. PR surface human-only unless
+  authorized this turn.
+  ```
+- **Output:** edited easyconfig(s) + residual log + claim ladder; paste-ready
+  PR title/body if contribution is in scope.
 
-- Role / model: **`eb-stack` → `surf-ai-hub/openai/gpt-oss-120b`** (Willma).
-- Give the agent: path to this skill, foreign recipe path (or “search first”),
-  target toolchain generation, `ROBOT` path, output work dir.
-- Prompt shape (minimal):  
-  `Follow skills/new-package/SKILL.md for <software>. Foreign: <path or none>.
-   Toolchain foss-<gen>. ROBOT=<path>. Work dir=<path>. Close residuals with
-   eb, not by inventing eb-stack features. Stop at paste-ready recipe + claim
-   ladder unless told to open a PR.`
+### What success looks like
 
-### Hermes
-
-- Start a Willma/gpt-oss session with the same skill path and task prompt as
-  above (Hermes role equivalent to OMP `eb-stack` if configured).
-- Point `cwd` at the easyconfigs work tree; keep `eb` and `eb-stack` on PATH.
-- Do not embed EasyBuild parameter encyclopedias in the prompt — the skill
-  and docs.easybuild.io are the encyclopedias.
-
-### What success looks like for the driver
-
-- `eb --check-contrib` clean (or listed, justified residuals only).
-- `eb -Dr --robot` shows a coherent graph with no invented dep versions.
-- Claim ladder stated; build only if site runbook + scheduler allow.
-- Paste-ready PR title matching `{moduleclass}[toolchain] Name version`.
+- Mechanical gates green: inject-checksums done, `check-contrib` clean or
+  only judgment items left and documented.
+- `eb -Dr --robot` coherent; no invented dep versions.
+- Judgment residuals closed by local-ai agent with citations to project
+  docs / sibling easyconfigs, not silent invention.
+- Claim ladder stated.
 
 ---
 
@@ -390,11 +390,11 @@ Same path as annual-bump §11.5:
 |-----------|-------------|
 | New software / first easyconfig | **This skill** + [writing easyconfigs](https://docs.easybuild.io/writing-easyconfig-files/) |
 | Existing `.eb` → new foss generation | `skills/annual-bump` + writing-docs “new toolchain” |
-| Residual finish / landability | **Willma via OMP or Hermes** (§6), not more `eb-stack` code |
+| Residual judgment after mechanical gates | **local-ai agent** (§6), not hardcoding into `eb-stack` |
 | Stack lock / build list | annual-bump `solve` |
 | Contribute to easybuilders/* | [contributing](https://docs.easybuild.io/contributing/) + [GitHub integration](https://docs.easybuild.io/integration-with-github/) |
 
 **Do not invent EasyBuild parameters, style, or contribution requirements.**
 If this skill and docs.easybuild.io disagree, **docs.easybuild.io wins**.
-**Do not “fix” residual product gaps by coding them into ingest** — run Willma
-on this skill.
+**Mechanize everything that is a tool step; never hardcode product residuals
+into ingest — dispatch a local-ai agent for judgment only.**

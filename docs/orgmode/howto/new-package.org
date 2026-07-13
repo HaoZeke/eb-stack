@@ -78,13 +78,13 @@ Per https://docs.easybuild.io/contributing/ :
 - Requirements: style (~--check-contrib~), consistency (~eb --review-pr~),
   test reports, maintainer approval.
 
-* Residuals: Willma, not more eb-stack code
+* Mechanical first; local-ai agent only for judgment
 
-Product flags, real checksums, ~moduleclass~, and sanity paths are closed by an
-agent following ~skills/new-package/SKILL.md~ (SURF Willma via OMP or Hermes),
-using ~eb --inject-checksums~, ~eb --check-contrib~, and ~eb --robot~. Do not
-expect ~eb-stack ingest~ to invent those fields. Skill §6 has the OMP/Hermes
-dispatch prompt.
+Run every mechanical step (~eb-stack ingest~, ~eb --inject-checksums~,
+~eb --check-contrib~, ~eb -Dr --robot~) before involving a model. Product
+flags, ambiguous ~moduleclass~, real ~sanity_check_paths~, and variant
+policy are *judgment residuals*: a **local-ai agent** (OMP or Hermes) follows
+~skills/new-package/SKILL.md~ §6 — do **not** hardcode them into ~eb-stack~.
 
 * Related
 
