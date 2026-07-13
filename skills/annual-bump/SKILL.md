@@ -23,6 +23,10 @@ never declared, source checksums/patches on application version bumps, and the
 PR surface (human-only). Operator-facing guide with the same loop:
 `docs/orgmode/howto/run-annual-bump.org`.
 
+**New software from conda-forge or Spack** is a different skill:
+`skills/new-package/SKILL.md` (`eb-stack ingest`). Use that for greenfield
+recipes; use this skill to retarget *existing* easyconfigs.
+
 ## 0. What you need first
 
 1. **The tool.** Build once: in the eb-stack repo, `cargo build --release`; put

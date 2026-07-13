@@ -36,6 +36,9 @@
 
    *Whole annual rebuild?* → :doc:`howto/run-annual-bump`
 
+   *New package from conda-forge/Spack?* → skill ``skills/new-package/SKILL.md``
+   (CLI ``eb-stack ingest``; see :doc:`reference/cli`)
+
    *One recipe flags?* → :doc:`howto/bump-recipe`
 
    *CLI surface?* → :doc:`reference/cli`
@@ -78,6 +81,7 @@
    :caption: How-To Guides
 
    howto/run-annual-bump
+   howto/new-package
    howto/solve-lock
    howto/emit-reports
    howto/bump-recipe

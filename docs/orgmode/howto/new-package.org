@@ -1,0 +1,58 @@
+#+TITLE: Author a new package from conda-forge or Spack
+#+OPTIONS: toc:nil num:nil
+
+Goal: turn a foreign recipe into a parseable EasyBuild scaffold with generation-native
+dependency pins, then close residuals until ~check-recipe~ *resolves*.
+
+The complete agent runbook is
+[[https://github.com/HaoZeke/eb-stack/blob/main/skills/new-package/SKILL.md][skills/new-package/SKILL.md]].
+This page is the short human how-to.
+
+* Minimum: identity scaffold
+
+#+begin_src bash
+eb-stack ingest \
+  --source path/to/recipe.yaml \   # or meta.yaml / package.py
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  --out Name-Ver-foss-2026.1.eb
+#+end_src
+
+Name, version, sources, dep *names*, and static ~configopts~ (when the foreign
+DSL states them) come from the input. Dep *versions* without a robot tree are
+residual.
+
+* Preferred: robot pins
+
+#+begin_src bash
+ROBOT=$HOME/.venvs/easybuild/easybuild/easyconfigs
+
+eb-stack ingest \
+  --source path/to/package.py --format spack \
+  --toolchain-name foss --toolchain-version 2024a \
+  --easyconfigs "$ROBOT" --keep-old-deps \
+  --out-dir drafts/easyconfigs
+#+end_src
+
+Hierarchy consensus + resolvo joint pins fill generation-native versions for
+deps that exist under the target generation (same machinery as
+~bump --easyconfigs~).
+
+* Verify the plan
+
+#+begin_src bash
+eb-stack check-recipe \
+  --recipe drafts/easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2024a.eb \
+  --easyconfigs "$ROBOT" \
+  --easyconfigs drafts/easyconfigs
+#+end_src
+
+Missing-dep hints ("available at other generations: …") are the work queue.
+Use ~--scaffold-missing DIR~ for companion stubs. Product flags, real
+checksums, and extract layout remain residual judgment — see the skill.
+
+* Related
+
+- [[file:run-annual-bump.org][Annual generation rebuild]] (existing recipes)
+- [[file:../reference/cli.org][CLI reference]] (~ingest~, ~check-recipe~)
+- Frozen foreign fixtures: ~fixtures/foreign_ingest/~

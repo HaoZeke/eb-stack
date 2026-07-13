@@ -5,6 +5,11 @@ The full Keep a Changelog history lives in
 [[https://github.com/HaoZeke/eb-stack/blob/main/CHANGELOG.md][CHANGELOG.md]]
 at the repository root. Highlights for the documentation site:
 
+* Unreleased
+
+- Agent skill ~skills/new-package/SKILL.md~ for greenfield packages from
+  conda-forge / Spack; ~AGENTS.md~ routes annual-bump vs new-package
+
 * 0.3.0
 
 - ~eb-stack ingest~: conda-forge / Spack → EB scaffold; optional ~--easyconfigs~

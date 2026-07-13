@@ -6,21 +6,29 @@ built to make the right thing the easy thing.
 
 ## The procedure
 
-Follow `skills/annual-bump/SKILL.md` end to end. It is a complete runbook:
-the tool does the mechanical majority and fails loudly; you handle only the
-bounded residual cases it names. Your site should pair it with a site
-runbook holding the exact per-machine incantations (init paths, module
-names, scheduler sizing); ask for it if you were not given one.
+Pick the skill that matches the work, then follow it end to end. The tool
+does the mechanical majority and fails loudly; you handle only the bounded
+residual cases it names. Your site should pair these with a site runbook
+(init paths, module names, scheduler sizing); ask for it if you were not
+given one.
+
+| Work | Skill |
+|------|--------|
+| Existing recipes → new toolchain generation (annual rebuild) | `skills/annual-bump/SKILL.md` |
+| **New package** from conda-forge / Spack (greenfield) | `skills/new-package/SKILL.md` |
+
+Build/PR ops, three-claim ladder, and host contracts live in annual-bump §10
+and are shared; new-package points there rather than duplicating them.
 
 ## Non-negotiables
 
-1. **Run the real CLI** (`eb-stack check-recipe | bump | solve`). Never
-   guess dependency versions, checksums, or hierarchy relationships in
+1. **Run the real CLI** (`eb-stack check-recipe | bump | solve | ingest`).
+   Never guess dependency versions, checksums, or hierarchy relationships in
    prose — the tool resolves them or tells you exactly what is missing.
    If your harness speaks MCP, prefer the typed tool surface: `eb-stack
    mcp` serves `eb_check_recipe` / `eb_bump` / `eb_solve` over stdio,
    with the reporting ladder and the next actions embedded in every
-   result.
+   result. Foreign ingest is CLI (`eb-stack ingest`) today.
 2. **Tool output is instructions.** A missing-dep hint ("available at
    other generations: ...") is your work queue. A `[packaging]` checksum
    finding means fix the recipe (checksums are positional: all sources
@@ -41,8 +49,9 @@ names, scheduler sizing); ask for it if you were not given one.
 `cargo test --lib` is the fast suite. CI (`.github/workflows/ci_test.yml`) also
 runs the **known-bump** regression (`--test reproduce_real_prs --test bump_emit`:
 frozen `foss-2023b` → `foss-2024a` maintainer pairs under
-`tests/repro_fixtures/`, library and CLI) and the packaging fixture suites
-(`--test eon_foss_2026_1 --test qmcpack_foss_2026_1 --test eon_packaging`).
-Robot-overlay check-recipe cases skip when no easyconfigs tree is present;
-resolve and packaging_gate always run. Build/test on a build machine when the
-repository owner's rules say the local machine must not compile.
+`tests/repro_fixtures/`, library and CLI), the packaging fixture suites
+(`--test eon_foss_2026_1 --test qmcpack_foss_2026_1 --test eon_packaging`),
+and foreign ingest (`--test foreign_ingest`). Robot-overlay check-recipe cases
+skip when no easyconfigs tree is present; resolve and packaging_gate always
+run. Build/test on a build machine when the repository owner's rules say the
+local machine must not compile.

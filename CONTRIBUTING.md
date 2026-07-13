@@ -52,7 +52,9 @@ Do not hand-edit generated `docs/source/**/*.rst` or `docs/source/crates/`.
 ## Agent drivers
 
 If you are driving packaging work with an agent, follow `AGENTS.md` and
-`skills/annual-bump/SKILL.md`. The PR surface on GitHub remains human-only
+`skills/annual-bump/SKILL.md` (generation rebuild) and
+`skills/new-package/SKILL.md` (conda-forge/Spack → new EB recipe). The PR
+surface on GitHub remains human-only
 unless a maintainer says otherwise in the live conversation.
 
 ## Releasing

@@ -52,17 +52,16 @@ not invent.
 Full walkthrough: [tutorial](https://eb-stack.rgoswami.me/tutorial.html) ·
 source: [`docs/orgmode/tutorial.org`](docs/orgmode/tutorial.org).
 
-## Annual rebuild
+## Operator / agent skills
 
-For a whole generation move — residual decisions, claim ladder, PR discipline:
-
-| Audience | Document |
-|----------|----------|
-| Human operator | [`docs/orgmode/howto/run-annual-bump.org`](docs/orgmode/howto/run-annual-bump.org) |
-| Agent driver | [`skills/annual-bump/SKILL.md`](skills/annual-bump/SKILL.md) |
-| Repo contract | [`AGENTS.md`](AGENTS.md) |
+| Work | Human guide | Agent skill |
+|------|-------------|-------------|
+| Annual generation rebuild | [`docs/orgmode/howto/run-annual-bump.org`](docs/orgmode/howto/run-annual-bump.org) | [`skills/annual-bump/SKILL.md`](skills/annual-bump/SKILL.md) |
+| **New package** (conda-forge / Spack → EB) | CLI: `docs/orgmode/reference/cli.org` (*ingest*) | [`skills/new-package/SKILL.md`](skills/new-package/SKILL.md) |
+| Repo contract | | [`AGENTS.md`](AGENTS.md) |
 
 MCP surface: `eb-stack mcp` (`eb_check_recipe` / `eb_bump` / `eb_solve`).
+Ingest is CLI-only today (`eb-stack ingest`).
 
 ## Solve a multi-package stack
 
