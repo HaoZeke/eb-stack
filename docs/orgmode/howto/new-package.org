@@ -1,58 +1,94 @@
-#+TITLE: Author a new package from conda-forge or Spack
+#+TITLE: Author a new EasyBuild package
 #+OPTIONS: toc:nil num:nil
 
-Goal: turn a foreign recipe into a parseable EasyBuild scaffold with generation-native
-dependency pins, then close residuals until ~check-recipe~ *resolves*.
+Goal: add software that is not yet in (or not yet on this generation of)
+~easybuild-easyconfigs~, following *EasyBuild's own* writing and contribution
+rules. ~eb-stack ingest~ is an optional bootstrap from conda-forge/Spack, not a
+replacement for those rules.
 
-The complete agent runbook is
-[[https://github.com/HaoZeke/eb-stack/blob/main/skills/new-package/SKILL.md][skills/new-package/SKILL.md]].
-This page is the short human how-to.
+* EasyBuild documentation (authoritative)
 
-* Minimum: identity scaffold
+| Topic | URL |
+|-------+-----|
+| Writing easyconfigs | https://docs.easybuild.io/writing-easyconfig-files/ |
+| Templates | https://docs.easybuild.io/version-specific/easyconfig-templates/ |
+| Generic easyblocks | https://docs.easybuild.io/version-specific/generic-easyblocks/ |
+| Contributing + PR requirements | https://docs.easybuild.io/contributing/ |
+| ~eb --new-pr~ / GitHub integration | https://docs.easybuild.io/integration-with-github/ |
+| Typical ~eb -S~ / ~-Dr~ / ~--robot~ workflow | https://docs.easybuild.io/typical-workflow-example/ |
+
+The full agent runbook is [[https://github.com/HaoZeke/eb-stack/blob/main/skills/new-package/SKILL.md][skills/new-package/SKILL.md]].
+
+* Prefer search-and-tweak over inventing
 
 #+begin_src bash
+eb -S SoftwareName
+#+end_src
+
+If a nearby easyconfig exists, copy it and update version/toolchain per the
+"Updating existing easyconfigs for a new toolchain" section of the writing
+docs — that is EasyBuild's preferred path. Use ~eb-stack bump~ for
+generation retargets of existing recipes.
+
+* Optional bootstrap from foreign recipes
+
+#+begin_src bash
+ROBOT=/path/to/easybuild-easyconfigs/easybuild/easyconfigs
+
 eb-stack ingest \
   --source path/to/recipe.yaml \   # or meta.yaml / package.py
   --toolchain-name foss \
-  --toolchain-version 2026.1 \
-  --out Name-Ver-foss-2026.1.eb
-#+end_src
-
-Name, version, sources, dep *names*, and static ~configopts~ (when the foreign
-DSL states them) come from the input. Dep *versions* without a robot tree are
-residual.
-
-* Preferred: robot pins
-
-#+begin_src bash
-ROBOT=$HOME/.venvs/easybuild/easybuild/easyconfigs
-
-eb-stack ingest \
-  --source path/to/package.py --format spack \
-  --toolchain-name foss --toolchain-version 2024a \
-  --easyconfigs "$ROBOT" --keep-old-deps \
-  --out-dir drafts/easyconfigs
-#+end_src
-
-Hierarchy consensus + resolvo joint pins fill generation-native versions for
-deps that exist under the target generation (same machinery as
-~bump --easyconfigs~).
-
-* Verify the plan
-
-#+begin_src bash
-eb-stack check-recipe \
-  --recipe drafts/easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2024a.eb \
+  --toolchain-version 2024a \
   --easyconfigs "$ROBOT" \
-  --easyconfigs drafts/easyconfigs
+  --keep-old-deps \
+  --out-dir work/easyconfigs
 #+end_src
 
-Missing-dep hints ("available at other generations: …") are the work queue.
-Use ~--scaffold-missing DIR~ for companion stubs. Product flags, real
-checksums, and extract layout remain residual judgment — see the skill.
+Expect a *scaffold* with identity fields and (when the robot has candidates)
+generation-native dependency versions. Expect residual warnings for product
+flags, checksums, ~moduleclass~, and sanity paths.
+
+* Finish as a real easyconfig (required)
+
+1. Prefer ~%(version)s~ / ~SOURCE_TAR_GZ~ / ~GITHUB_SOURCE~ templates.
+2. Inject real SHA256 checksums:
+   #+begin_src bash
+   eb --inject-checksums work/easyconfigs/*/*/*.eb
+   #+end_src
+3. Set a *known* ~moduleclass~ (~eb --show-default-moduleclasses~).
+4. Set ~sanity_check_paths~ to real install-relative files (default is only
+   non-empty ~bin~ + ~lib~/~lib64~).
+5. Contributor gate:
+   #+begin_src bash
+   eb --check-contrib work/easyconfigs/*/*/*.eb
+   #+end_src
+6. Dry-run and install with EasyBuild robot resolution:
+   #+begin_src bash
+   eb Name-Ver-foss-YYYY.eb -Dr --robot work/easyconfigs:$ROBOT
+   eb Name-Ver-foss-YYYY.eb --robot work/easyconfigs:$ROBOT
+   #+end_src
+
+* Contribute upstream
+
+Per https://docs.easybuild.io/contributing/ :
+
+- Target the ~develop~ branch of ~easybuild-easyconfigs~.
+- Prefer ~eb --new-pr~ / ~eb --update-pr~.
+- Title pattern: ~{moduleclass}[toolchain] Name version~.
+- Requirements: style (~--check-contrib~), consistency (~eb --review-pr~),
+  test reports, maintainer approval.
+
+* Residuals: Willma, not more eb-stack code
+
+Product flags, real checksums, ~moduleclass~, and sanity paths are closed by an
+agent following ~skills/new-package/SKILL.md~ (SURF Willma via OMP or Hermes),
+using ~eb --inject-checksums~, ~eb --check-contrib~, and ~eb --robot~. Do not
+expect ~eb-stack ingest~ to invent those fields. Skill §6 has the OMP/Hermes
+dispatch prompt.
 
 * Related
 
 - [[file:run-annual-bump.org][Annual generation rebuild]] (existing recipes)
 - [[file:../reference/cli.org][CLI reference]] (~ingest~, ~check-recipe~)
 - Frozen foreign fixtures: ~fixtures/foreign_ingest/~
+- Agent skill: ~skills/new-package/SKILL.md~
