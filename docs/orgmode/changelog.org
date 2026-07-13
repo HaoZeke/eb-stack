@@ -10,7 +10,7 @@ at the repository root. Highlights for the documentation site:
 - Agent skill ~skills/new-package/SKILL.md~ for greenfield packages from
   conda-forge / Spack; ~AGENTS.md~ routes annual-bump vs new-package
 - Howto ~howto/new-package~; CapnProto companion in eOn foss-2026.1 fixture
-- Mechanical-first residual + herdr / ~rg.surf~ host rules in skills;
+- Mechanical-first residual + herdr / ~EasyBuild host~ host rules in skills;
   README ready vs must-not-claim framing for public 0.3.x
 
 * 0.3.0

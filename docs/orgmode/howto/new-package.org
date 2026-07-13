@@ -19,30 +19,30 @@ replacement for those rules.
 
 The full agent runbook is [[https://github.com/HaoZeke/eb-stack/blob/main/skills/new-package/SKILL.md][skills/new-package/SKILL.md]].
 
-* Host: ~rg.surf~ (EasyBuild + residual)
+* Host: ~EasyBuild host~ (EasyBuild + residual)
 
 Run ~eb~, ~eb-stack ingest~, ~eb --robot~ installs (*builds* claim), and any
-**local-ai agent** residual session on **~rg.surf~** (SURF workstation). Do
-not use the laptop as a fake EasyBuild host; do not use ~rg.terra~ for this
+**local-ai agent** residual session on **~EasyBuild host~** (SURF workstation). Do
+not use the laptop as a fake EasyBuild host; do not use ~cargo builder~ for this
 path (terra is the **cargo** builder for the ~eb-stack~ crate only).
 
 Residual agents run **inside a herdr pane** on that host (see skill §7) —
-not ad-hoc ~ssh rg.surf 'hermes …'~ / ~omp -p~.
+not ad-hoc ~ssh <easybuild-host>  # from site runbook 'hermes …'~ / ~omp -p~.
 
 #+begin_src bash
-ssh rg.surf
+ssh <easybuild-host>  # from site runbook
 # residual (example shape — see skills/new-package/SKILL.md §7):
 # herdr agent start eb-residual-hermes --cwd "$WORK" -- …
 #+end_src
 
-If ~rg.surf~ is unreachable, stop and report.
+If ~EasyBuild host~ is unreachable, stop and report.
 
 * Claims: resolves ≠ builds ≠ binary-verified
 
 | Rung | Proved by |
 |------+-----------|
 | *resolves* | ~eb-stack check-recipe~ (deps exist; packaging gate) |
-| *builds* | ~eb --robot~ green; module file exists (**on ~rg.surf~**) |
+| *builds* | ~eb --robot~ green; module file exists (**on ~EasyBuild host~**) |
 | *binary-verified* | module load; binary runs / ~ldd~ / RPATH checks |
 
 ~eb-stack ingest~ only helps the bootstrap toward *resolves*. It does **not**
@@ -110,7 +110,7 @@ Per https://docs.easybuild.io/contributing/ :
 
 * Mechanical first; local-ai agent only for judgment
 
-On ~rg.surf~, run every mechanical step (~eb-stack ingest~ / MCP ~eb_ingest~,
+On ~EasyBuild host~, run every mechanical step (~eb-stack ingest~ / MCP ~eb_ingest~,
 ~eb --inject-checksums~, ~eb --check-contrib~, ~eb-stack check-recipe~,
 ~eb -Dr --robot~) before involving a model.
 
@@ -123,7 +123,7 @@ member (older GCCcore alone is not enough for a newer foss recipe).
 
 Product flags, ambiguous ~moduleclass~, real ~sanity_check_paths~, companion
 recipes for robot holes, and variant policy are *judgment residuals*: a
-**local-ai agent** (Hermes preferred, in **herdr** on ~rg.surf~) follows
+**local-ai agent** (Hermes preferred, in **herdr** on ~EasyBuild host~) follows
 ~skills/new-package/SKILL.md~ §7 — do **not** hardcode them into ~eb-stack~.
 
 * Related

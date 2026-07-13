@@ -89,8 +89,8 @@ source: [`docs/orgmode/tutorial.org`](docs/orgmode/tutorial.org).
 
 MCP surface: `eb-stack mcp` (`eb_check_recipe` / `eb_bump` / `eb_solve`).
 Ingest is CLI-only today (`eb-stack ingest`). Skills assume a real EasyBuild
-host (site: `rg.surf` + herdr for residual agents); cargo builds for *this*
-repo use the site cargo builder (`rg.terra`), not as an EasyBuild substitute.
+host (site: `EasyBuild host` + herdr for residual agents); cargo builds for *this*
+repo use the site cargo builder (`cargo builder`), not as an EasyBuild substitute.
 
 ## Solve a multi-package stack
 

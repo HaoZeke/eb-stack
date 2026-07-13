@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **new-package skill §7 full-drive default**: local-ai agent (Hermes/herdr on
-  `rg.surf`) owns residual judgment **and** `eb --robot` *builds* for PR-ready
+  `EasyBuild host`) owns residual judgment **and** `eb --robot` *builds* for PR-ready
   campaigns; residual-only only when human scopes it. Stopping after `eb -Dr`
   without install is not done.
 - **`render-full-drive`**: templates
@@ -52,14 +52,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   local-ai agent (Hermes preferred, OMP allowed) only for judgment
   residuals — never hardcode product `configopts` into ingest.
 - **Host split** for SURF ops: EasyBuild authoring, residual agents, and
-  `eb --robot` *builds* on **`rg.surf`**; residual agents in a **herdr**
-  pane (not ad-hoc `ssh … hermes/omp -p`). **`rg.terra` is cargo-only**
+  `eb --robot` *builds* on **`EasyBuild host`**; residual agents in a **herdr**
+  pane (not ad-hoc `ssh … hermes/omp -p`). **`cargo builder` is cargo-only**
   for this repo’s Rust compile — not the EasyBuild install host.
 - README public framing for **0.3.x**: ready vs must-not-claim table;
   three-claim ladder (*resolves* / *builds* / *binary-verified*); ingest
   scaffold ≠ landable PR; human-owned PR surface.
 - Skills + `AGENTS.md` aligned with residual-queue JSON, hierarchy-aware
-  `check-recipe`, MCP `eb_ingest`, and herdr residual agents on `rg.surf`.
+  `check-recipe`, MCP `eb_ingest`, and herdr residual agents on `EasyBuild host`.
 
 ## [0.3.0] - 2026-07-13
 

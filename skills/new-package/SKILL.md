@@ -1,6 +1,6 @@
 ---
 name: eb-stack-new-package
-description: Author a new EasyBuild easyconfig (greenfield) with eb-stack ingest. Default: Hermes/herdr campaign agent on rg.surf full-drives residual judgment through eb --robot *builds*. Mechanical format-style/check-recipe; human owns PR surface.
+description: Author a new EasyBuild easyconfig (greenfield) with eb-stack ingest. Default: Hermes/herdr campaign agent on the site EasyBuild host full-drives residual judgment through eb --robot *builds*. Mechanical format-style/check-recipe; human owns PR surface.
 ---
 
 # New EasyBuild package (greenfield)
@@ -35,29 +35,29 @@ new toolchain” section of the writing-easyconfigs page.
 
 ---
 
-## 0. Host: `rg.surf` (mandatory for this skill)
+## 0. Host: site EasyBuild machine (mandatory for this skill)
 
-All EasyBuild-facing work for **new packages** runs on **`rg.surf`**
+All EasyBuild-facing work for **new packages** runs on **`EasyBuild host`**
 (SSH host alias; SURF workstation), not on the laptop and not on
-`rg.terra` (terra is the generic remote builder for cargo/heavy compile —
+`cargo builder` (terra is the generic remote builder for cargo/heavy compile —
 different role).
 
-| On `rg.surf` | Why |
+| On site EasyBuild host | Why |
 |--------------|-----|
 | `eb`, EasyBuild robot tree, modules | Real SURF EasyBuild environment (this host **is** the EB machine) |
 | `eb-stack` (release binary or build there) | Same machine as `eb` for ingest → check-recipe → install |
-| **Install / *builds* claim** | `eb --robot` **here** when EB is set up — not `rg.terra` (terra is cargo for this repo) |
+| **Install / *builds* claim** | `eb --robot` **here** when EB is set up — not the cargo builder |
 | **local-ai agent** (Hermes preferred; OMP allowed) | **Full campaign owner** on this host: residual judgment **and** `eb --robot` *builds* (see §7) |
 | **herdr** pane for the campaign agent | Always; never ad-hoc `ssh … hermes/omp -p` for residual/build loops |
 | Drafts / letter-layout work dir | Where `eb --robot` and inject-checksums see files |
 
 ```
-ssh rg.surf
+ssh <easybuild-host>   # name from private site runbook
 # optional preflight mechanical CLI may run in that shell
 # campaign agent (residual + install): always under herdr on this host (see §7)
 ```
 
-If `rg.surf` is unreachable, **stop and report** — do not fall back to
+If `EasyBuild host` is unreachable, **stop and report** — do not fall back to
 laptop-local `eb` fiction or invent a second EasyBuild install. Site
 runbook may document modules init on that host; load it before `eb`.
 
@@ -304,9 +304,9 @@ These **bootstrap** only; landable PRs live under `fixtures/eon_foss_2026_1`
 and `fixtures/qmcpack_foss_2026_1` and were hand-finished to EasyBuild rules.
 
 ```
-# On rg.surf:
-REPO=<eb-stack-checkout-on-rg.surf>
-ROBOT=$HOME/.venvs/easybuild/easybuild/easyconfigs   # or easybuild-easyconfigs checkout on rg.surf
+# On EasyBuild host:
+REPO=<eb-stack-checkout on EasyBuild host>
+ROBOT=$HOME/.venvs/easybuild/easybuild/easyconfigs   # or easybuild-easyconfigs checkout on EasyBuild host
 
 # Bootstrap from conda-forge eOn (foss-2026.1 landable gen)
 eb-stack ingest \
@@ -341,7 +341,7 @@ eb -Dr --robot /tmp/eb-new/easyconfigs:$ROBOT /tmp/eb-new/easyconfigs/*/*/*.eb
 Compare bootstrap + residual queue to landable fixtures
 (`fixtures/eon_foss_2026_1`, `fixtures/qmcpack_foss_2026_1`) for product surface
 (configopts, extract_cmd, companions). Fixtures prove **resolve**/packaging_gate;
-a *builds* claim still needs `eb --robot` on **rg.surf** (campaign agent §7).
+a *builds* claim still needs `eb --robot` on **EasyBuild host** (campaign agent §7).
 
 
 Regression (code + validation):
@@ -365,19 +365,19 @@ cargo test --locked --test eon_foss_2026_1 --test qmcpack_foss_2026_1
 | SHA256 for fetched sources | `eb --inject-checksums` (**mechanical**) |
 | Style + checksum presence gate | `eb --check-contrib` (**mechanical**) |
 | E501 line length (≤120) lint / wrap | `eb-stack check-style` / `format-style` (**mechanical**) |
-| Graph dry-run | `eb -Dr --robot` on **rg.surf** (**mechanical**; campaign agent re-runs) |
-| Real install (*builds*) | `eb --robot` on **rg.surf** (**mechanical command**, run by the **campaign agent** §7 — not optional if goal is PR-ready / *builds*) |
+| Graph dry-run | `eb -Dr --robot` on **EasyBuild host** (**mechanical**; campaign agent re-runs) |
+| Real install (*builds*) | `eb --robot` on **EasyBuild host** (**mechanical command**, run by the **campaign agent** §7 — not optional if goal is PR-ready / *builds*) |
 | Product configopts, variant policy, real sanity paths, moduleclass choice, multi-source extract layout, companion authoring judgment | **campaign agent** using residual queue — **not** hardcoding into `eb-stack` |
 | Upstream PR merge | Human + EasyBuild maintainers |
 
 Three-claim ladder (site ops): annual-bump §10.4 —
-*resolves* (plan) ≠ *builds* (`eb --robot` on **`rg.surf`**) ≠ *binary-verified*.
+*resolves* (plan) ≠ *builds* (`eb --robot` on **`EasyBuild host`**) ≠ *binary-verified*.
 
 **Default campaign goal when the human asks for PR-ready / landable / “do the
 packages”:** establish *resolves* **and** *builds* for every target recipe.
 Stopping after recipe polish + `eb -Dr` without `eb --robot` is **not done**.
 Use the batch scheduler when the site runbook says so; on a single-user
-rg.surf workstation a direct `eb --robot` session is fine if it owns a cgroup
+site EasyBuild workstation a direct `eb --robot` session is fine if it owns a cgroup
 and `EASYBUILD_TMPDIR` is set.
 
 ---
@@ -385,7 +385,7 @@ and `EASYBUILD_TMPDIR` is set.
 ## 7. Full-drive campaign agent (default)
 
 The **local-ai agent (Hermes preferred)** is the **process owner** of a greenfield
-campaign on **rg.surf**: it runs mechanical CLI steps, closes judgment residuals,
+campaign on **EasyBuild host**: it runs mechanical CLI steps, closes judgment residuals,
 **and** drives `eb --robot` until *builds* is established or a real block is
 documented. It is **not** a “residual-only chat that stops before install.”
 
@@ -419,7 +419,7 @@ as the end of the campaign when *builds* is in scope.
 
 ### Full-drive sequence (campaign agent MUST run)
 
-Inside herdr on **rg.surf**, for each target recipe (and companions as needed):
+Inside herdr on **EasyBuild host**, for each target recipe (and companions as needed):
 
 1. Close residual-queue judgment (oracles / project docs / sibling EB). Prefer
    `cp` from a landable fixture when residual is “match landable fixture.”
@@ -450,7 +450,7 @@ Do **not** hand-write a per-campaign `full-drive.sh`. **Render** from templates:
 | `examples/render-eon-qmcpack.sh` | Example invocation (eOn + QMCPACK fixtures) |
 
 ```
-# On rg.surf (or any host that can write WORK):
+# On the EasyBuild host (or any host that can write WORK):
 REPO=$HOME/Git/Github/Tools/eb-stack
 WORK=$HOME/tmp/eb-campaign
 ROBOT=$HOME/Git/Github/easybuilders/easybuild-easyconfigs/easybuild/easyconfigs
@@ -476,7 +476,7 @@ Repeat `--recipe` / optional `--oracle` / `--stem` for any package set. Oracles 
 copied onto recipe paths before gates (landable fixture match). Without `--oracle`,
 the existing work recipe is gated and built as-is.
 
-### How to start (on rg.surf)
+### How to start (on EasyBuild host)
 
 ```
 herdr status   # if server not running: herdr server &
@@ -524,8 +524,9 @@ prompt is allowed only when the human explicitly scopes “no install.”
 | Plan check (hierarchy-aware) | `eb-stack check-recipe --recipe foo.eb --easyconfigs ROBOT --easyconfigs work` |
 | MCP plan check | `eb_check_recipe` |
 | Dry-run graph | `eb foo.eb -Dr --robot work:ROBOT` |
-| Install (*builds*, **rg.surf**) | `eb foo.eb --robot work:ROBOT` (campaign agent §7) |
-| Full-drive agent (default) | herdr + Hermes with `hermes-full-drive.md` (§7) |
+| Install (*builds*, **EasyBuild host**) | `eb foo.eb --robot work:ROBOT` (campaign agent §7) |
+| Render full-drive script + prompt | `skills/new-package/render-full-drive --work … --recipe …` (§7) |
+| Full-drive agent (default) | herdr + Hermes with **rendered** `hermes-full-drive.md` (§7) |
 | Open easyconfig PR (EB GitHub integration) | `eb --new-pr foo.eb` (human; see integration-with-github docs) |
 | Review consistency vs develop | `eb --review-pr <PR#>` |
 

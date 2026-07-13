@@ -428,18 +428,18 @@ Expect: exit 0, 0 missing.
 
 **Residuals:** performance ctests need external `QMC_DATA` (recipe excludes them
 via `testopts -E performance`). Full `eb` install (`eb --robot`) is the *builds*
-rung (§10.4): run it on **`rg.surf`** (SURF EasyBuild host), not the laptop and
-not `rg.terra` (terra is cargo for this repo). Jenkins/site CI remains optional
+rung (§10.4): run it on the **site EasyBuild host** (SURF EasyBuild host), not the laptop and
+not `cargo builder` (terra is cargo for this repo). Jenkins/site CI remains optional
 when the site runbook says so.
 
-### 11.5 Agent driver (local-ai agent via OMP / Hermes on `rg.surf`)
+### 11.5 Agent driver (local-ai agent via OMP / Hermes on the site EasyBuild host)
 
 For SURF EasyBuild AI work, drive this skill with the **local-ai agent**
-(OMP or Hermes) **on `rg.surf`**, not commercial frontier models and not
+(OMP or Hermes) **on the site EasyBuild host**, not commercial frontier models and not
 the laptop. With OMP: role `eb-stack` → site model path on that host. Run
 `eb` / `eb-stack` there (robot tree + modules). Prefer mechanical CLI
 steps; use the local-ai agent for residual judgment only (same split as
-`skills/new-package/SKILL.md` §7). If `rg.surf` is down, stop and report.
+`skills/new-package/SKILL.md` §7). If the EasyBuild host is down, stop and report.
 
 ### 11.6 Automated regression (what CI runs)
 
