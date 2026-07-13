@@ -1408,7 +1408,33 @@ impl RecipeDepCheck {
 /// optional versionsuffix + optional per-dep toolchain). Cross-toolchain
 /// deps (e.g. eOn/gfbf depending on quill/GCCcore) are first-class here —
 /// unlike [`filter_toolchain`] which keeps only the policy toolchain.
+///
+/// When `dep.toolchain` is **None**, any toolchain with a matching
+/// name/version/suffix is accepted (legacy identity match). Prefer
+/// [`candidate_matches_dep_for_recipe`] so unpinned deps must live in the
+/// recipe generation hierarchy (closer to EasyBuild robot behaviour).
 pub fn candidate_matches_dep(c: &Candidate, dep: &ResolvedDep) -> bool {
+    candidate_matches_dep_core(c, dep, /*require_hierarchy*/ None)
+}
+
+/// Like [`candidate_matches_dep`], but when the dep has **no** explicit
+/// toolchain pin, only candidates whose toolchain is a member of `hierarchy`
+/// count (e.g. CapnProto on GCCcore-14.x does not satisfy foss-2026.1 which
+/// needs GCCcore-15.2.0). Explicit fourth-tuple pins still match exactly,
+/// including cross-generation residuals (`xtb`/gfbf-2024a).
+pub fn candidate_matches_dep_for_recipe(
+    c: &Candidate,
+    dep: &ResolvedDep,
+    hierarchy: &crate::hierarchy::ToolchainHierarchy,
+) -> bool {
+    candidate_matches_dep_core(c, dep, Some(hierarchy))
+}
+
+fn candidate_matches_dep_core(
+    c: &Candidate,
+    dep: &ResolvedDep,
+    hierarchy: Option<&crate::hierarchy::ToolchainHierarchy>,
+) -> bool {
     if c.name != dep.name {
         return false;
     }
@@ -1421,9 +1447,11 @@ pub fn candidate_matches_dep(c: &Candidate, dep: &ResolvedDep) -> bool {
         return false;
     }
     if let Some(tc) = &dep.toolchain {
-        if c.toolchain.name != tc.name || c.toolchain.version != tc.version {
-            return false;
-        }
+        return crate::hierarchy::toolchains_match(&c.toolchain, tc);
+    }
+    // Unpinned: EasyBuild resolves within the parent recipe hierarchy.
+    if let Some(h) = hierarchy {
+        return h.contains(&c.toolchain);
     }
     true
 }
@@ -1431,7 +1459,17 @@ pub fn candidate_matches_dep(c: &Candidate, dep: &ResolvedDep) -> bool {
 /// Check that every runtime/build dep of `recipe` appears as a candidate in
 /// `universe` (any tree layer already merged). Does **not** run the SAT
 /// solver — this is the packaging/robot completeness gate used before `eb`.
+///
+/// Unpinned deps must match a hierarchy member of the recipe toolchain
+/// (derived from the robot universe when possible), so an older-generation
+/// GCCcore candidate does not false-pass a newer foss recipe.
 pub fn check_recipe_deps(recipe: &ResolvedEasyconfig, universe: &[Candidate]) -> RecipeDepCheck {
+    let hierarchy = crate::hierarchy::hierarchy_for_with_tree(
+        &recipe.toolchain,
+        None,
+        universe,
+    )
+    .ok();
     let mut missing = Vec::new();
     let mut found = Vec::new();
     for (role, deps) in [
@@ -1439,18 +1477,40 @@ pub fn check_recipe_deps(recipe: &ResolvedEasyconfig, universe: &[Candidate]) ->
         ("build", recipe.builddependencies.as_slice()),
     ] {
         for d in deps {
-            if universe.iter().any(|c| candidate_matches_dep(c, d)) {
+            let matched = universe.iter().find(|c| {
+                if let Some(ref h) = hierarchy {
+                    candidate_matches_dep_for_recipe(c, d, h)
+                } else {
+                    candidate_matches_dep(c, d)
+                }
+            });
+            if let Some(c) = matched {
                 found.push(format!(
                     "{role}:{}-{}{}",
                     d.name,
                     d.version,
-                    d.toolchain
-                        .as_ref()
-                        .map(|t| format!(" ({})", t.label()))
-                        .unwrap_or_default()
+                    if d.toolchain.is_some() {
+                        d.toolchain
+                            .as_ref()
+                            .map(|t| format!(" ({})", t.label()))
+                            .unwrap_or_default()
+                    } else {
+                        format!(" ({})", c.toolchain.label())
+                    }
                 ));
             } else {
                 let hint = crate::hierarchy::nearest_candidates_hint(&d.name, universe);
+                let hier_note = hierarchy
+                    .as_ref()
+                    .map(|h| {
+                        format!(
+                            " (need hierarchy member of {}-{}: {})",
+                            recipe.toolchain.name,
+                            recipe.toolchain.version,
+                            h.member_labels().join(" < ")
+                        )
+                    })
+                    .unwrap_or_default();
                 missing.push(MissingDep {
                     name: d.name.clone(),
                     version: d.version.clone(),
@@ -1458,7 +1518,7 @@ pub fn check_recipe_deps(recipe: &ResolvedEasyconfig, universe: &[Candidate]) ->
                     toolchain: d.toolchain.clone(),
                     role: role.into(),
                     reason: format!(
-                        "no candidate for {} {}{} in robot universe{hint}",
+                        "no candidate for {} {}{} in robot universe{hier_note}{hint}",
                         d.name,
                         d.version,
                         d.toolchain
@@ -2658,6 +2718,129 @@ builddependencies = [
         };
         assert!(candidate_matches_dep(&ok, &dep));
         assert!(!candidate_matches_dep(&wrong_tc, &dep));
+    }
+
+    #[test]
+    fn unpinned_dep_requires_hierarchy_member_not_older_gcccore() {
+        // CapnProto 1.4.0 only on GCCcore-14.3.0 must NOT satisfy foss-2026.1
+        // (GCCcore-15.2.0 hierarchy). Explicit cross-gen pins still match.
+        let mut r = blank_recipe();
+        r.toolchain = Toolchain {
+            name: "foss".into(),
+            version: "2026.1".into(),
+        };
+        r.dependencies = vec![
+            ResolvedDep {
+                name: "CapnProto".into(),
+                version: "1.4.0".into(),
+                versionsuffix: None,
+                toolchain: None,
+            },
+            ResolvedDep {
+                name: "xtb".into(),
+                version: "6.7.1".into(),
+                versionsuffix: None,
+                toolchain: Some(Toolchain {
+                    name: "gfbf".into(),
+                    version: "2024a".into(),
+                }),
+            },
+        ];
+        let old_capnp = Candidate {
+            name: "CapnProto".into(),
+            version: "1.4.0".into(),
+            toolchain: Toolchain {
+                name: "GCCcore".into(),
+                version: "14.3.0".into(),
+            },
+            versionsuffix: None,
+            easyconfig_path: "CapnProto-1.4.0-GCCcore-14.3.0.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+        };
+        let xtb = Candidate {
+            name: "xtb".into(),
+            version: "6.7.1".into(),
+            toolchain: Toolchain {
+                name: "gfbf".into(),
+                version: "2024a".into(),
+            },
+            versionsuffix: None,
+            easyconfig_path: "xtb.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+        };
+        // Minimal foss-2026.1 tree so hierarchy derives with GCCcore-15.2.0.
+        let mut foss_def = Candidate {
+            name: "foss".into(),
+            version: "2026.1".into(),
+            toolchain: Toolchain {
+                name: "system".into(),
+                version: String::new(),
+            },
+            versionsuffix: None,
+            easyconfig_path: "foss-2026.1.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+        };
+        foss_def.dependencies = vec![
+            crate::DepReq {
+                name: "GCCcore".into(),
+                version_req: "15.2.0".into(),
+                versionsuffix: None,
+                toolchain: None,
+            },
+            crate::DepReq {
+                name: "GCC".into(),
+                version_req: "15.2.0".into(),
+                versionsuffix: None,
+                toolchain: None,
+            },
+            crate::DepReq {
+                name: "gompi".into(),
+                version_req: "2026.1".into(),
+                versionsuffix: None,
+                toolchain: None,
+            },
+            crate::DepReq {
+                name: "gfbf".into(),
+                version_req: "2026.1".into(),
+                versionsuffix: None,
+                toolchain: None,
+            },
+        ];
+        let universe_old = vec![old_capnp.clone(), xtb.clone(), foss_def.clone()];
+        let check_old = check_recipe_deps(&r, &universe_old);
+        assert!(
+            check_old.missing.iter().any(|m| m.name == "CapnProto"),
+            "older GCCcore CapnProto must not satisfy foss-2026.1: {:?}",
+            check_old
+        );
+        assert!(
+            check_old.found.iter().any(|f| f.contains("xtb")),
+            "explicit cross-gen xtb pin must still match: {:?}",
+            check_old.found
+        );
+
+        let new_capnp = Candidate {
+            toolchain: Toolchain {
+                name: "GCCcore".into(),
+                version: "15.2.0".into(),
+            },
+            easyconfig_path: "CapnProto-1.4.0-GCCcore-15.2.0.eb".into(),
+            ..old_capnp
+        };
+        let universe_new = vec![new_capnp, xtb, foss_def];
+        let check_new = check_recipe_deps(&r, &universe_new);
+        assert!(
+            check_new.missing.iter().all(|m| m.name != "CapnProto"),
+            "GCCcore-15.2.0 CapnProto must satisfy: {:?}",
+            check_new
+        );
+        assert!(check_new.found.iter().any(|f| f.contains("CapnProto")));
     }
 
     #[test]

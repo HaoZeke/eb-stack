@@ -18,9 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CapnProto-1.4.0-GCCcore-15.2.0.eb` so robot-style resolve of CapnProto
   matches the PR surface (serve feature) without inventing versions in
   product code.
+- **`ingest --residual-queue`** (default: `{stem}.residuals.json` beside the
+  scaffold): machine-readable residual work queue for agents (dep versions,
+  product_config / moduleclass / sanity / checksum gaps). Claim ladder in
+  the JSON always marks *resolves*/*builds* as not established by ingest.
+- MCP tool **`eb_ingest`**: same path as CLI ingest + residual queue.
 
 ### Changed
 
+- **`check-recipe` hierarchy membership for unpinned deps**: a candidate on
+  an out-of-generation GCCcore (e.g. CapnProto only on 14.3.0) no longer
+  false-passes a newer foss recipe; explicit cross-gen pins still match.
+  Closer to EasyBuild robot behaviour without inventing companion recipes.
+- Ingest WARNING comments wrap to ≤116 columns (mechanical style noise).
 - **Mechanical-first residual policy** in skills: maximize CLI steps
   (`ingest`, inject-checksums, check-contrib, check-recipe, `eb -Dr`);
   local-ai agent (Hermes preferred, OMP allowed) only for judgment

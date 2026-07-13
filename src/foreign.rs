@@ -143,6 +143,131 @@ pub struct IngestResult {
     pub warnings: Vec<String>,
 }
 
+/// One judgment/mechanical residual item for the local-ai agent work queue.
+/// Never encodes product-specific `-D` defaults — only what ingest observed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResidualItem {
+    /// Stable kind for tooling: `dep_version`, `product_config`, `moduleclass`,
+    /// `sanity`, `checksum`, `template`, `warning`, …
+    pub kind: String,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// Machine-readable residual queue written next to an ingested scaffold.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResidualQueue {
+    pub package: String,
+    pub version: String,
+    pub toolchain: Toolchain,
+    pub foreign_format: String,
+    pub claim_ladder: ResidualClaimLadder,
+    pub items: Vec<ResidualItem>,
+}
+
+/// Which rungs this ingest establishes (always resolves=false until check-recipe).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResidualClaimLadder {
+    pub resolves: String,
+    pub builds: String,
+    pub binary_verified: String,
+}
+
+impl ResidualClaimLadder {
+    pub fn ingest_default() -> Self {
+        Self {
+            resolves: "not-established — run eb-stack check-recipe after residual edits"
+                .into(),
+            builds: "not-established — requires green `eb --robot` on an EasyBuild host".into(),
+            binary_verified: "not-established — requires load + binary/RPATH checks".into(),
+        }
+    }
+}
+
+/// Build a residual queue from an ingest result (warnings + structural gaps).
+pub fn residual_queue_from_ingest(result: &IngestResult, toolchain: &Toolchain) -> ResidualQueue {
+    let mut items = Vec::new();
+    for w in &result.warnings {
+        let kind = classify_residual_warning(w);
+        items.push(ResidualItem {
+            kind,
+            summary: w.clone(),
+            detail: None,
+        });
+    }
+    if result.recipe.configopts.as_ref().map(|s| s.is_empty()).unwrap_or(true)
+        && !result.text.contains("configopts =")
+    {
+        items.push(ResidualItem {
+            kind: "product_config".into(),
+            summary: "no product configopts in scaffold — set from project docs / sibling EB, not inventing -D sets in eb-stack".into(),
+            detail: None,
+        });
+    }
+    if result.text.contains("moduleclass = 'lib'") {
+        items.push(ResidualItem {
+            kind: "moduleclass".into(),
+            summary: "default moduleclass 'lib' is usually wrong — set a known class via eb --show-default-moduleclasses".into(),
+            detail: None,
+        });
+    }
+    if result.text.contains("'files': []") {
+        items.push(ResidualItem {
+            kind: "sanity".into(),
+            summary: "empty sanity_check_paths files — set real install-relative binaries".into(),
+            detail: None,
+        });
+    }
+    if result.text.contains("0000000000000000000000000000000000000000000000000000000000000000") {
+        items.push(ResidualItem {
+            kind: "checksum".into(),
+            summary: "placeholder checksum present — run eb --inject-checksums after sources stabilize".into(),
+            detail: None,
+        });
+    }
+    ResidualQueue {
+        package: result.recipe.name.clone(),
+        version: result.recipe.version.clone(),
+        toolchain: toolchain.clone(),
+        foreign_format: result.recipe.format.as_str().to_string(),
+        claim_ladder: ResidualClaimLadder::ingest_default(),
+        items,
+    }
+}
+
+fn classify_residual_warning(w: &str) -> String {
+    let l = w.to_ascii_lowercase();
+    if l.contains("0.0.0") || l.contains("no foreign pin") || l.contains("not eb generation") {
+        "dep_version".into()
+    } else if l.contains("configopts") {
+        "product_config".into()
+    } else if l.contains("checksum") || l.contains("sha256") {
+        "checksum".into()
+    } else if l.contains("jinja") || l.contains("template") {
+        "template".into()
+    } else if l.contains("when=") || l.contains("selector") {
+        "variant".into()
+    } else {
+        "warning".into()
+    }
+}
+
+/// Write residual queue JSON (pretty) to `path`.
+pub fn write_residual_queue(path: &Path, queue: &ResidualQueue) -> Result<(), ForeignError> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| ForeignError::Io(format!("mkdir {}: {e}", parent.display())))?;
+        }
+    }
+    let s = serde_json::to_string_pretty(queue)
+        .map_err(|e| ForeignError::Io(format!("serialize residual queue: {e}")))?;
+    std::fs::write(path, s + "\n")
+        .map_err(|e| ForeignError::Io(format!("write {}: {e}", path.display())))?;
+    Ok(())
+}
+
 /// Detect format from path basename / extension.
 pub fn detect_foreign_format(path: &Path) -> Option<ForeignFormat> {
     let name = path
@@ -305,9 +430,11 @@ pub fn emit_easyconfig_from_foreign(
         toolchain.name, toolchain.version
     );
 
+    // Wrap long WARNING lines so `eb --check-contrib` style (E501 ≤120) is
+    // less likely to fail on mechanical comment noise alone.
     let warn_header: String = warnings
         .iter()
-        .map(|w| format!("# WARNING: {w}"))
+        .flat_map(|w| wrap_eb_comment_line(&format!("WARNING: {w}"), 116))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -1654,6 +1781,21 @@ pub fn write_ingest_result(
     out: Option<&Path>,
     out_dir: Option<&Path>,
 ) -> Result<std::path::PathBuf, ForeignError> {
+    write_ingest_result_with_queue(result, toolchain, out, out_dir, None)
+}
+
+/// Write scaffold and optional residual-queue JSON.
+///
+/// When `residual_queue` is `Some(path)`, writes that path. When `None` but
+/// `out`/`out_dir` wrote an `.eb`, also writes `{stem}.residuals.json` beside it
+/// so residual agents always get a machine-readable work queue.
+pub fn write_ingest_result_with_queue(
+    result: &IngestResult,
+    toolchain: &Toolchain,
+    out: Option<&Path>,
+    out_dir: Option<&Path>,
+    residual_queue: Option<&Path>,
+) -> Result<std::path::PathBuf, ForeignError> {
     let path = if let Some(p) = out {
         p.to_path_buf()
     } else if let Some(dir) = out_dir {
@@ -1677,7 +1819,51 @@ pub fn write_ingest_result(
     }
     std::fs::write(&path, &result.text)
         .map_err(|e| ForeignError::Io(format!("write {}: {e}", path.display())))?;
+
+    let queue = residual_queue_from_ingest(result, toolchain);
+    let queue_path = residual_queue.map(|p| p.to_path_buf()).unwrap_or_else(|| {
+        let mut p = path.clone();
+        let stem = p
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("scaffold");
+        p.set_file_name(format!("{stem}.residuals.json"));
+        p
+    });
+    write_residual_queue(&queue_path, &queue)?;
+
     Ok(path)
+}
+
+/// Wrap a single EB comment body into `# …` lines of at most `width` characters.
+fn wrap_eb_comment_line(body: &str, width: usize) -> Vec<String> {
+    let width = width.max(20);
+    let mut lines = Vec::new();
+    let mut rest = body.trim();
+    while !rest.is_empty() {
+        if rest.len() <= width {
+            lines.push(format!("# {rest}"));
+            break;
+        }
+        let take = rest
+            .char_indices()
+            .take_while(|(i, _)| *i < width)
+            .map(|(i, c)| (i, c))
+            .collect::<Vec<_>>();
+        let split_at = take
+            .iter()
+            .rev()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(i, _)| *i)
+            .unwrap_or_else(|| take.last().map(|(i, _)| *i + 1).unwrap_or(width));
+        let (head, tail) = rest.split_at(split_at);
+        lines.push(format!("# {}", head.trim_end()));
+        rest = tail.trim_start();
+    }
+    if lines.is_empty() {
+        lines.push("#".into());
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -1836,6 +2022,44 @@ about:
         let names: Vec<_> = r.dependencies.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"gmake"), "{names:?}");
         assert!(!names.iter().any(|n| *n == "c"), "language virtual skipped");
+    }
+
+    #[test]
+    fn residual_queue_classifies_dep_and_product_gaps() {
+        let r = parse_conda_forge(CONDA_ZLIB).expect("parse");
+        let tc = Toolchain {
+            name: "foss".into(),
+            version: "2024a".into(),
+        };
+        let out = emit_easyconfig_from_foreign(&r, &tc);
+        let q = residual_queue_from_ingest(&out, &tc);
+        assert_eq!(q.package, "zlib");
+        assert!(
+            q.items.iter().any(|i| i.kind == "moduleclass"),
+            "default lib moduleclass residual: {:?}",
+            q.items
+        );
+        assert!(
+            q.items.iter().any(|i| i.kind == "sanity"),
+            "empty sanity residual: {:?}",
+            q.items
+        );
+        assert!(
+            q.claim_ladder.builds.contains("eb --robot"),
+            "{:?}",
+            q.claim_ladder
+        );
+    }
+
+    #[test]
+    fn wrap_eb_comment_line_respects_width() {
+        let long = "WARNING: ".to_string() + &"x".repeat(200);
+        let lines = wrap_eb_comment_line(&long, 80);
+        assert!(lines.len() > 1, "{lines:?}");
+        for l in &lines {
+            assert!(l.starts_with("# "));
+            assert!(l.len() <= 82, "line too long: {} ({})", l.len(), l);
+        }
     }
 
     #[test]

@@ -11,6 +11,8 @@
 //! - `eb_check_recipe`: robot completeness + packaging gates for one recipe.
 //! - `eb_bump`: retarget a recipe to another toolchain generation.
 //! - `eb_solve`: SAT co-select a stack lock from easyconfig trees + policy.
+//! - `eb_ingest`: conda-forge/Spack → EB scaffold + residual-queue JSON
+//!   (not a landable PR; establishes no claim rungs by itself).
 //!
 //! The protocol subset implemented: `initialize`, `ping`, `tools/list`,
 //! `tools/call`; notifications are consumed without replies. That is the
@@ -181,6 +183,28 @@ fn tool_definitions() -> Value {
                 },
                 "required": ["easyconfigs", "policy"]
             }
+        },
+        {
+            "name": "eb_ingest",
+            "description": "Ingest a foreign conda-forge or Spack recipe into a parseable EasyBuild scaffold. Optional robot trees fill generation-native dep versions (hierarchy + resolvo). Writes the .eb and a residual-queue JSON for judgment work. Does NOT claim a landable PR, builds, or product configopts — residuals stay in the queue.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "Path to meta.yaml / recipe.yaml / package.py"},
+                    "format": {"type": "string", "description": "auto | conda-forge | spack (default auto)"},
+                    "toolchain_name": {"type": "string", "description": "default foss"},
+                    "toolchain_version": {"type": "string", "description": "default 2024a"},
+                    "easyconfigs": {
+                        "type": "array", "items": {"type": "string"},
+                        "description": "Optional robot tree(s) for dep version resolve"
+                    },
+                    "keep_old_deps": {"type": "boolean"},
+                    "out": {"type": "string"},
+                    "out_dir": {"type": "string"},
+                    "residual_queue": {"type": "string", "description": "Optional residual-queue JSON path (default next to .eb)"}
+                },
+                "required": ["source"]
+            }
         }
     ])
 }
@@ -194,6 +218,7 @@ fn handle_tool_call(params: &Value) -> Value {
         "eb_check_recipe" => tool_check_recipe(&args),
         "eb_bump" => tool_bump(&args),
         "eb_solve" => tool_solve(&args),
+        "eb_ingest" => tool_ingest(&args),
         other => Err(format!("unknown tool: {other}")),
     };
     match outcome {
@@ -429,6 +454,83 @@ fn tool_solve(args: &Value) -> Result<Value, String> {
     }))
 }
 
+fn tool_ingest(args: &Value) -> Result<Value, String> {
+    use crate::foreign::{
+        ingest_foreign_to_easyconfig_with_opts, residual_queue_from_ingest,
+        write_ingest_result_with_queue, ForeignFormat, IngestOpts,
+    };
+    let source = req_str(args, "source")?;
+    let fmt = match opt_str(args, "format")
+        .unwrap_or_else(|| "auto".into())
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "auto" => None,
+        "conda" | "conda-forge" | "cf" => Some(ForeignFormat::CondaForge),
+        "spack" => Some(ForeignFormat::Spack),
+        other => {
+            return Err(format!(
+                "unknown format {other:?}; expected auto, conda-forge, or spack"
+            ))
+        }
+    };
+    let toolchain = Toolchain {
+        name: opt_str(args, "toolchain_name").unwrap_or_else(|| "foss".into()),
+        version: opt_str(args, "toolchain_version").unwrap_or_else(|| "2024a".into()),
+    };
+    let opts = IngestOpts {
+        easyconfigs: str_vec(args, "easyconfigs")
+            .into_iter()
+            .map(PathBuf::from)
+            .collect(),
+        keep_old_deps: args
+            .get("keep_old_deps")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        hierarchy_fixture: None,
+    };
+    let result = ingest_foreign_to_easyconfig_with_opts(
+        Path::new(&source),
+        fmt,
+        &toolchain,
+        &opts,
+    )
+    .map_err(|e| format!("ingest {source}: {e}"))?;
+    let residual = opt_str(args, "residual_queue").map(PathBuf::from);
+    let dest = write_ingest_result_with_queue(
+        &result,
+        &toolchain,
+        opt_str(args, "out").as_deref().map(Path::new),
+        opt_str(args, "out_dir").as_deref().map(Path::new),
+        residual.as_deref(),
+    )
+    .map_err(|e| format!("write ingest: {e}"))?;
+    let queue = residual_queue_from_ingest(&result, &toolchain);
+    let mut queue_path = dest.clone();
+    let stem = queue_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("scaffold");
+    queue_path.set_file_name(format!("{stem}.residuals.json"));
+    if let Some(p) = residual {
+        queue_path = p;
+    }
+    Ok(json!({
+        "wrote": dest.display().to_string(),
+        "residual_queue": queue_path.display().to_string(),
+        "filename": result.filename,
+        "warnings": result.warnings,
+        "residual_items": queue.items.len(),
+        "ladder": ladder(false),
+        "next_actions": [
+            "Treat residual_queue JSON as the judgment work list — do not invent product configopts in eb-stack.",
+            "Run eb --inject-checksums and eb --check-contrib on the scaffold.",
+            "Run eb_check_recipe against the robot tree (+ companion overlay) for the resolves rung.",
+            "Claim builds only after green eb --robot on an EasyBuild host."
+        ]
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -526,7 +628,52 @@ moduleclass = 'tools'
             .iter()
             .map(|t| t["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, ["eb_check_recipe", "eb_bump", "eb_solve"]);
+        assert_eq!(
+            names,
+            ["eb_check_recipe", "eb_bump", "eb_solve", "eb_ingest"]
+        );
+    }
+
+    #[test]
+    fn ingest_tool_writes_scaffold_and_residual_queue() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("meta.yaml");
+        std::fs::write(
+            &src,
+            r#"
+package:
+  name: zlib
+  version: 1.3.1
+source:
+  url: https://example.com/zlib-1.3.1.tar.gz
+  sha256: 9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
+requirements:
+  build:
+    - make
+about:
+  home: https://zlib.net/
+  summary: zlib
+"#,
+        )
+        .unwrap();
+        let out = dir.path().join("zlib.eb");
+        let result = call_tool(
+            "eb_ingest",
+            json!({
+                "source": src.display().to_string(),
+                "out": out.display().to_string(),
+                "toolchain_name": "foss",
+                "toolchain_version": "2024a",
+            }),
+        );
+        assert_eq!(result["isError"], false, "{result}");
+        let payload = tool_payload(&result);
+        assert_eq!(payload["ladder"]["resolves"], false);
+        assert!(out.is_file(), "scaffold written");
+        let rq = PathBuf::from(payload["residual_queue"].as_str().unwrap());
+        assert!(rq.is_file(), "residual queue written at {rq:?}");
+        let qtext = std::fs::read_to_string(&rq).unwrap();
+        assert!(qtext.contains("moduleclass") || qtext.contains("sanity") || qtext.contains("items"));
     }
 
     #[test]

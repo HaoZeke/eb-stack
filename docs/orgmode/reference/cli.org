@@ -344,3 +344,8 @@ this tool.
 Without ~--easyconfigs~, dep versions stay residual (foreign floors or
 ~0.0.0~). With it, expect warnings naming ~hierarchy consensus~ and
 ~resolvo joint~. Fixtures: ~fixtures/foreign_ingest/~.
+
+- ~--residual-queue PATH~ :: optional residual work-queue JSON path. Default:
+  write ~{stem}.residuals.json~ next to the scaffold. Items classify dep
+  version / product_config / moduleclass / sanity / checksum residuals for
+  a local-ai agent — not product ~-D~ defaults invented by ~eb-stack~.

@@ -50,9 +50,12 @@ pub use select::{resolvo_resolve_dep_versions, select_stack, SelectError};
 pub use foreign::{
     detect_foreign_format, emit_easyconfig_from_foreign, ingest_foreign_to_easyconfig,
     ingest_foreign_to_easyconfig_with_opts, parse_foreign_path, parse_foreign_str,
-    write_ingest_result, ForeignDep, ForeignError, ForeignFormat, ForeignRecipe, IngestOpts,
-    IngestResult,
+    residual_queue_from_ingest, write_ingest_result, write_ingest_result_with_queue,
+    write_residual_queue, ForeignDep, ForeignError, ForeignFormat, ForeignRecipe, IngestOpts,
+    IngestResult, ResidualClaimLadder, ResidualItem, ResidualQueue,
 };
+pub use eb_parse::candidate_matches_dep_for_recipe;
+pub use hierarchy::hierarchy_for_with_tree;
 
 use anyhow::{bail, Context, Result};
 use std::cmp::Ordering;

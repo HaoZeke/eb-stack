@@ -8,7 +8,8 @@ use eb_stack::{
     lock_to_cyclonedx, packaging_gate, parse_easyconfig_tree, parse_easyconfig_trees,
     resolve_easyconfig_file, scaffold_missing_companions,
     solve_from_easyconfigs_with_baseline_version_and_extras, solve_to_files_with_extras,
-    write_ingest_result, AutoResolveOpts, EmitParams, ForeignFormat, IngestOpts, SolveExtraOut,
+    residual_queue_from_ingest, write_ingest_result_with_queue, AutoResolveOpts, EmitParams,
+    ForeignFormat, IngestOpts, SolveExtraOut,
     StackLock, Toolchain,
 };
 use std::collections::HashMap;
@@ -177,8 +178,8 @@ enum Cmd {
     },
     /// Serve the packaging workflow as MCP tools over stdio (JSON-RPC 2.0).
     ///
-    /// Exposes `eb_check_recipe`, `eb_bump`, and `eb_solve` to MCP clients
-    /// (claude, codex, omp, grok). Register with e.g.
+    /// Exposes `eb_check_recipe`, `eb_bump`, `eb_solve`, and `eb_ingest` to MCP
+    /// clients (claude, codex, omp, grok). Register with e.g.
     /// `claude mcp add eb-stack -- eb-stack mcp`.
     Mcp,
     /// Ingest a foreign recipe (conda-forge meta.yaml / Spack package.py)
@@ -218,6 +219,11 @@ enum Cmd {
         /// Output directory; writes letter/name/conventional basename layout
         #[arg(long, conflicts_with = "out")]
         out_dir: Option<PathBuf>,
+        /// Write residual work-queue JSON (default: next to the `.eb` as
+        /// `{stem}.residuals.json`). Machine-readable for residual agents;
+        /// never invents product configopts.
+        #[arg(long, value_name = "PATH")]
+        residual_queue: Option<PathBuf>,
     },
 }
 
@@ -584,6 +590,7 @@ fn main() -> Result<()> {
             hierarchy_fixture,
             out,
             out_dir,
+            residual_queue,
         } => {
             let fmt = match format.to_ascii_lowercase().as_str() {
                 "auto" => None,
@@ -608,18 +615,34 @@ fn main() -> Result<()> {
             for w in &result.warnings {
                 eprintln!("WARNING: {w}");
             }
-            let dest = write_ingest_result(
+            let dest = write_ingest_result_with_queue(
                 &result,
                 &toolchain,
                 out.as_deref(),
                 out_dir.as_deref(),
+                residual_queue.as_deref(),
             )
             .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let queue_path = residual_queue.clone().unwrap_or_else(|| {
+                let mut p = dest.clone();
+                let stem = p
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("scaffold");
+                p.set_file_name(format!("{stem}.residuals.json"));
+                p
+            });
+            let n_items = residual_queue_from_ingest(&result, &toolchain).items.len();
             println!(
                 "wrote {} (from {} as {})",
                 dest.display(),
                 source.display(),
                 result.recipe.format.as_str()
+            );
+            println!(
+                "residual-queue {} ({} item(s); not a landable PR — finish with eb + judgment)",
+                queue_path.display(),
+                n_items
             );
         }
     }
