@@ -429,7 +429,7 @@ Expect: exit 0, 0 missing.
 **Residuals:** performance ctests need external `QMC_DATA` (recipe excludes them
 via `testopts -E performance`). Full `eb` install (`eb --robot`) is the *builds*
 rung (§10.4): run it on the **site EasyBuild host** (SURF EasyBuild host), not the laptop and
-not `cargo builder` (terra is cargo for this repo). Jenkins/site CI remains optional
+not the site cargo builder. Jenkins/site CI remains optional
 when the site runbook says so.
 
 ### 11.5 Agent driver (local-ai agent via OMP / Hermes on the site EasyBuild host)

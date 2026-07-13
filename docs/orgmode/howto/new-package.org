@@ -24,7 +24,7 @@ The full agent runbook is [[https://github.com/HaoZeke/eb-stack/blob/main/skills
 Run ~eb~, ~eb-stack ingest~, ~eb --robot~ installs (*builds* claim), and any
 **local-ai agent** residual session on **~EasyBuild host~** (SURF workstation). Do
 not use the laptop as a fake EasyBuild host; do not use ~cargo builder~ for this
-path (terra is the **cargo** builder for the ~eb-stack~ crate only).
+path (site cargo builder for the ~eb-stack~ crate only).
 
 Residual agents run **inside a herdr pane** on that host (see skill §7) —
 not ad-hoc ~ssh <easybuild-host>  # from site runbook 'hermes …'~ / ~omp -p~.
