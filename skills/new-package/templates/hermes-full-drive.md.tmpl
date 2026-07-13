@@ -9,13 +9,16 @@ That script: optional oracle copies, format-style/check-contrib/check-recipe
 (--recipe), eb -Dr, then eb --robot per recipe with logs under WORK/logs/,
 and writes WORK/residuals/session-log.md.
 
-**Arch Linux OS deps (do not thrash pacman or invent packages):**
+**Arch Linux host lessons (do not thrash pacman or invent packages):**
 EasyBuild checks Debian/RHEL package *names* (`libibverbs-dev`,
 `rdma-core-devel`). On Arch the package is `rdma-core` (provides libibverbs +
 headers). If `/usr/include/infiniband/verbs.h` exists, the rendered full-drive
 script already passes `--ignore-osdeps`. If headers are missing:
-`sudo pacman -S --needed rdma-core` then re-run the script. Do **not** search
-for `libibverbs-dev` on Arch. Do **not** disable sanity checks.
+`sudo pacman -S --needed rdma-core` then re-run the script. Do **not** search for `libibverbs-dev` on Arch.
+Do **not** reinstall `linux-api-headers` for `linux/scc.h` — kernel 7.x **removed** that UAPI
+header; GCC 15 libsanitizer still includes it. Fix: GCCcore overlay
+`--disable-libsanitizer` under `overlays/arch/` (auto-rsynced on Arch).
+Do **not** disable sanity checks.
 
 WORK=@@WORK@@
 REPO=@@REPO@@
