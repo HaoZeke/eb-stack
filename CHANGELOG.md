@@ -34,9 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **new-package skill §7 full-drive default**: local-ai agent (Hermes/herdr on
   `rg.surf`) owns residual judgment **and** `eb --robot` *builds* for PR-ready
-  campaigns; residual-only only when human scopes it. Prompt template
-  `skills/new-package/hermes-full-drive.prompt.md`. Stopping after `eb -Dr`
+  campaigns; residual-only only when human scopes it. Stopping after `eb -Dr`
   without install is not done.
+- **`render-full-drive`**: templates
+  (`skills/new-package/templates/full-drive.sh.tmpl`,
+  `hermes-full-drive.md.tmpl`) + renderer that emits per-campaign
+  `WORK/residuals/full-drive.sh` and `hermes-full-drive.md` from
+  `--work` / `--robot` / repeated `--recipe` [`--oracle`/`--stem`].
+  Example: `examples/render-eon-qmcpack.sh`.
 - **`check-recipe` hierarchy membership for unpinned deps**: a candidate on
   an out-of-generation GCCcore (e.g. CapnProto only on 14.3.0) no longer
   false-passes a newer foss recipe; explicit cross-gen pins still match.

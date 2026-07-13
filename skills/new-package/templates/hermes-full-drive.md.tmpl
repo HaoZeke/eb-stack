@@ -1,0 +1,26 @@
+On rg.surf (herdr): follow @@SKILL_PATH@@ section 7 full-drive.
+You OWN the campaign through REAL installs (*builds*).
+
+Primary mechanical path (already rendered for this campaign):
+
+  bash @@FULL_DRIVE_SCRIPT@@
+
+That script: optional oracle copies, format-style/check-contrib/check-recipe
+(--recipe), eb -Dr, then eb --robot per recipe with logs under WORK/logs/,
+and writes WORK/residuals/session-log.md.
+
+WORK=@@WORK@@
+REPO=@@REPO@@
+ROBOT=@@ROBOT@@
+Recipes:
+@@RECIPES_BULLETS@@
+
+If a build fails: read the matching robot-*.log, fix recipe/companion with
+justified edits (oracles/docs only — do not invent -D), re-run gates + robot
+for that package, update session-log.md.
+
+Print DONE_FULL_DRIVE or DONE_PARTIAL.
+
+FORBIDDEN: edit REPO/src; open GitHub/GitLab PRs; invent product flags; disable sanity.
+
+Start by running the full-drive script now.

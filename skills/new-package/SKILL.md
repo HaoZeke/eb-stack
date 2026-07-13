@@ -438,14 +438,49 @@ Inside herdr on **rg.surf**, for each target recipe (and companions as needed):
 5. Print **`DONE_FULL_DRIVE`** when every target has *resolves* and *builds*, else
    **`DONE_PARTIAL`** with exact failures and log paths.
 
+### Render full-drive assets (mechanical; required before herdr)
+
+Do **not** hand-write a per-campaign `full-drive.sh`. **Render** from templates:
+
+| Asset | Role |
+|-------|------|
+| `templates/full-drive.sh.tmpl` | Generic gates + `eb --robot` loop |
+| `templates/hermes-full-drive.md.tmpl` | Campaign agent prompt |
+| `render-full-drive` | Fills `@@TOKENS@@`, writes under `WORK/residuals/` |
+| `examples/render-eon-qmcpack.sh` | Example invocation (eOn + QMCPACK fixtures) |
+
+```
+# On rg.surf (or any host that can write WORK):
+REPO=$HOME/Git/Github/Tools/eb-stack
+WORK=$HOME/tmp/eb-campaign
+ROBOT=$HOME/Git/Github/easybuilders/easybuild-easyconfigs/easybuild/easyconfigs
+
+$REPO/skills/new-package/render-full-drive \
+  --work "$WORK" \
+  --repo "$REPO" \
+  --robot "$ROBOT" \
+  --overlay "$REPO/fixtures/eon_foss_2026_1/easyconfigs" \   # optional companions
+  --recipe "$WORK/easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1.eb" \
+  --oracle fixtures/qmcpack_foss_2026_1/easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1.eb \
+  --stem qmcpack \
+  --recipe "$WORK/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb" \
+  --oracle fixtures/eon_foss_2026_1/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb \
+  --stem eon
+
+# writes:
+#   $WORK/residuals/full-drive.sh
+#   $WORK/residuals/hermes-full-drive.md
+```
+
+Repeat `--recipe` / optional `--oracle` / `--stem` for any package set. Oracles are
+copied onto recipe paths before gates (landable fixture match). Without `--oracle`,
+the existing work recipe is gated and built as-is.
+
 ### How to start (on rg.surf)
 
 ```
 herdr status   # if server not running: herdr server &
-WORK=$HOME/tmp/eb-repro/work   # or site work dir
-# Write $WORK/residuals/hermes-full-drive.md from hermes-full-drive.prompt.md.
-# Optional mechanical+install helper (eOn+QMCPACK example):
-#   skills/new-package/full-drive-eon-qmcpack.example.sh
+# render-full-drive first (above), then:
 
 herdr agent start eb-full-drive-hermes \
   --cwd "$WORK" --no-focus -- \
@@ -460,38 +495,9 @@ Hermes is the default harness; OMP only via the same **herdr agent start** path.
 Harness model: site Willma role for eb-stack (annual-bump §11.5). Commercial
 frontier models out of scope for SURF-only work.
 
-### Prompt template (full-drive — default)
-
-Copy and fill paths. Ship as `$WORK/residuals/hermes-full-drive.md`.
-
-```
-On rg.surf (herdr pane): follow skills/new-package/SKILL.md end to end.
-You OWN the full campaign through REAL installs (*builds*). Do not stop at recipe polish.
-
-WORK=<path> REPO=<eb-stack> ROBOT=<easyconfigs tree>
-export PATH=$HOME/.venvs/easybuild/bin:$HOME/.local/bin:$REPO/target/release:$PATH
-export LMOD_CMD=$HOME/.local/lmod/lmod/libexec/lmod
-source $HOME/.local/lmod/lmod/init/bash 2>/dev/null || true
-export EASYBUILD_MODULES_TOOL=Lmod EASYBUILD_SOURCEPATH=… EASYBUILD_TMPDIR=… EASYBUILD_INSTALLPATH=…
-
-Recipes: <list .eb paths>
-Residual queues: <*.residuals.json>
-Oracles (if any): <fixture .eb paths — copy product judgment, do not invent -D>
-Companions: under WORK/easyconfigs as needed.
-
-FORBIDDEN: edit REPO/src; open GitHub/GitLab PRs; invent product flags not in
-oracle/docs; claim builds without eb --robot success.
-
-Sequence: (1) residual/oracle align (2) inject-checksums (3) format-style +
-check-style (4) check-contrib (5) check-recipe (6) eb -Dr (7) eb --robot with
-tee to WORK/logs/robot-*.log for EACH package (8) session-log.md claim ladder
-(9) DONE_FULL_DRIVE or DONE_PARTIAL.
-
-Start now. Run commands; do not only plan.
-```
-
-Optional **residual-only** prompt is allowed only when the human explicitly
-scopes “no install / recipe gates only.” Default is full-drive.
+The rendered Hermes prompt tells the agent to run `bash $WORK/residuals/full-drive.sh`
+first, then only hand-fix on real build failures. Optional **residual-only**
+prompt is allowed only when the human explicitly scopes “no install.”
 
 ### What success looks like
 
