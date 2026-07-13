@@ -424,8 +424,10 @@ No companion overlay required: HDF5/Boost/libxml2/Python come from the robot.
 Expect: exit 0, 0 missing.
 
 **Residuals:** performance ctests need external `QMC_DATA` (recipe excludes them
-via `testopts -E performance`). Full `eb` install/build is outside this skill's
-mechanical bar — use rg.terra / Jenkins when required.
+via `testopts -E performance`). Full `eb` install (`eb --robot`) is the *builds*
+rung (§10.4): run it on **`rg.surf`** (SURF EasyBuild host), not the laptop and
+not `rg.terra` (terra is cargo for this repo). Jenkins/site CI remains optional
+when the site runbook says so.
 
 ### 11.5 Agent driver (local-ai agent via OMP / Hermes on `rg.surf`)
 

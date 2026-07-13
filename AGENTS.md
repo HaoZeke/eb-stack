@@ -18,9 +18,10 @@ given one.
 | **New package** from conda-forge / Spack (greenfield) | `skills/new-package/SKILL.md` | **`rg.surf`** (mandatory; see skill §0) |
 
 Build/PR ops and three-claim ladder live in annual-bump §10. **SURF
-EasyBuild + local-ai agent residual loops run on `rg.surf`**, not the
-laptop and not `rg.terra` (terra remains the remote cargo/builder for
-this repo’s Rust compile when required).
+EasyBuild** (authoring, residual agents in herdr, and `eb --robot` *builds*)
+**runs on `rg.surf`**, not the laptop. **`rg.terra` is only the remote cargo
+builder** for this repo’s Rust compile when required — do not route EasyBuild
+installs there unless a site runbook explicitly says so.
 
 ## Non-negotiables
 

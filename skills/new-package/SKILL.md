@@ -44,8 +44,9 @@ different role).
 
 | On `rg.surf` | Why |
 |--------------|-----|
-| `eb`, EasyBuild robot tree, modules | Real SURF EasyBuild environment |
-| `eb-stack` (release binary or build there) | Same machine as `eb` for ingest → check-recipe |
+| `eb`, EasyBuild robot tree, modules | Real SURF EasyBuild environment (this host **is** the EB machine) |
+| `eb-stack` (release binary or build there) | Same machine as `eb` for ingest → check-recipe → install |
+| **Install / *builds* claim** | `eb --robot` **here** when EB is set up — not `rg.terra` (terra is cargo for this repo) |
 | **local-ai agent** (Hermes preferred; OMP allowed) | Residual judgment against live `eb` / robot |
 | **herdr** pane for residual agents | Always; never ad-hoc `ssh … hermes/omp -p` for residual loops |
 | Drafts / letter-layout work dir | Where `eb --robot` and inject-checksums see files |
@@ -331,7 +332,12 @@ cargo test --locked --test foreign_ingest
 | Upstream PR merge | Human + EasyBuild maintainers |
 
 Three-claim ladder (site ops): annual-bump §10.4 —
-*resolves* (plan) ≠ *builds* (`eb`) ≠ *binary-verified*.
+*resolves* (plan) ≠ *builds* (`eb --robot` on **`rg.surf`**) ≠ *binary-verified*.
+Do not ship a residual session that only edits recipes and stops if the next
+step is install: after residual gates, run `eb -Dr --robot …` then
+`eb --robot …` on **rg.surf** (site EB setup). Use the batch scheduler when the
+site runbook says so; on a single-user rg.surf workstation a direct `eb`
+session is fine if it owns a cgroup and `EASYBUILD_TMPDIR` is set.
 
 ---
 
