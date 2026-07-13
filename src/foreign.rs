@@ -203,6 +203,16 @@ pub fn emit_easyconfig_from_foreign(
         )
     });
 
+    // Prefer EasyBuild-style package name casing when the foreign name is a
+    // known EB title (qmcpack → QMCPACK, eon → eOn); robot may refine later.
+    let pkg_name = canonicalize_eb_package_name(&recipe.name);
+    if pkg_name != recipe.name {
+        warnings.push(format!(
+            "package name casing for EasyBuild: {} → {pkg_name}",
+            recipe.name
+        ));
+    }
+
     let easyblock = guess_easyblock(recipe, &mut warnings);
     let (source_urls_line, sources_line, checksums_line) = source_block(recipe, &mut warnings);
     let configopts_line = match &recipe.configopts {
@@ -233,6 +243,19 @@ pub fn emit_easyconfig_from_foreign(
                 format!(" pin={pin_note}")
             }
         ));
+        if is_toolchain_virtual(&eb_name) {
+            warnings.push(format!(
+                "skip toolchain virtual '{eb_name}' (provided by foss/GCCcore stack; not emitted)"
+            ));
+            continue;
+        }
+        // Conda host packaging noise — not EB modules.
+        if is_conda_python_packaging_noise(&eb_name) {
+            warnings.push(format!(
+                "skip conda packaging dep '{eb_name}' (pip/setuptools/…; not an EB module)"
+            ));
+            continue;
+        }
         if !seen_dep.insert(eb_name.clone()) {
             continue;
         }
@@ -331,7 +354,7 @@ moduleclass = 'lib'
         warn_header = warn_header,
         foreign_deps_header = foreign_deps_header,
         easyblock = easyblock,
-        name = recipe.name,
+        name = pkg_name,
         version = recipe.version,
         homepage = escape_py_single(&homepage),
         summary = escape_py_triple(&summary),
@@ -344,9 +367,11 @@ moduleclass = 'lib'
         deps_block = deps_block,
     );
 
-    let filename = easyconfig_filename(&recipe.name, &recipe.version, toolchain);
+    let filename = easyconfig_filename(&pkg_name, &recipe.version, toolchain);
+    let mut out_recipe = recipe.clone();
+    out_recipe.name = pkg_name;
     IngestResult {
-        recipe: recipe.clone(),
+        recipe: out_recipe,
         filename,
         text,
         warnings,
@@ -729,6 +754,28 @@ fn source_block(recipe: &ForeignRecipe, warnings: &mut Vec<String>) -> (String, 
     )
 }
 
+/// Map foreign package *identity* names toward EasyBuild title casing.
+fn canonicalize_eb_package_name(name: &str) -> String {
+    match name.to_ascii_lowercase().as_str() {
+        "qmcpack" => "QMCPACK".into(),
+        "eon" => "eOn".into(),
+        "gromacs" => "GROMACS".into(),
+        "lammps" => "LAMMPS".into(),
+        "python" => "Python".into(),
+        "cmake" => "CMake".into(),
+        "boost" => "Boost".into(),
+        "hdf5" => "HDF5".into(),
+        other => {
+            // Preserve already-mixed case; otherwise keep foreign spelling.
+            if name.chars().any(|c| c.is_ascii_uppercase()) {
+                name.to_string()
+            } else {
+                other.to_string()
+            }
+        }
+    }
+}
+
 /// Map foreign dependency package names toward EasyBuild-style names.
 fn map_dep_name_to_eb(name: &str) -> String {
     match name.to_ascii_lowercase().as_str() {
@@ -746,6 +793,8 @@ fn map_dep_name_to_eb(name: &str) -> String {
         "capnproto" => "CapnProto".into(),
         "py-pyyaml" | "pyyaml" => "PyYAML".into(),
         "py-numpy" | "numpy" => "numpy".into(),
+        "py-matplotlib" | "matplotlib" => "matplotlib".into(),
+        "libxml2" => "libxml2".into(),
         "libgcc-ng" | "libstdcxx-ng" => name.to_string(), // residual CF runtime
         "libmetatomic-torch" => "metatomic-torch".into(),
         "libmetatensor-torch" => "metatensor-torch".into(),
@@ -754,6 +803,14 @@ fn map_dep_name_to_eb(name: &str) -> String {
         "readcon-core" => "readcon-core".into(),
         other => other.to_string(),
     }
+}
+
+/// Conda host/build packaging deps that are not EasyBuild modules.
+fn is_conda_python_packaging_noise(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "pip" | "setuptools" | "wheel" | "hatchling" | "flit" | "poetry" | "hatch-vcs"
+    )
 }
 
 /// Residual version for emit: exact pin, else open-range floor (`1.8.0:`, `>=1.2`).
@@ -1839,7 +1896,7 @@ class Eon(MesonPackage):
         assert!(out.text.contains("('Meson', '1.8.0')"), "{}", out.text);
         assert!(out.text.contains("('Eigen', '3.4')"), "{}", out.text);
         let resolved = crate::eb_parse::resolve_easyconfig_str(&out.text).unwrap();
-        assert_eq!(resolved.name, "eon");
+        assert_eq!(resolved.name, "eOn");
         assert_eq!(resolved.version, "2.16.0");
     }
 
@@ -1855,7 +1912,7 @@ class Eon(MesonPackage):
             out.text
         );
         let resolved = crate::eb_parse::resolve_easyconfig_str(&out.text).unwrap();
-        assert_eq!(resolved.name, "eon");
+        assert_eq!(resolved.name, "eOn");
         assert!(
             resolved.checksums.len() >= 2,
             "checksums: {}",
@@ -1882,6 +1939,7 @@ class Qmcpack(CMakePackage, CudaPackage):
         );
         assert!(!out.text.contains("${{"), "no jinja");
         let resolved = crate::eb_parse::resolve_easyconfig_str(&out.text).unwrap();
+        assert_eq!(resolved.name, "QMCPACK");
         assert_eq!(resolved.version, "4.3.0");
     }
 

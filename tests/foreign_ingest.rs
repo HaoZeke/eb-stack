@@ -91,7 +91,12 @@ fn conda_eon_rattler_recipe_expands_context_and_multi_source() {
     );
 
     let out = ingest_foreign_to_easyconfig(&path, None, &foss_2026()).expect("ingest eon");
-    assert!(out.text.contains("name = 'eon'"));
+    assert!(
+        out.text.contains("name = 'eOn'") || out.recipe.name == "eOn",
+        "EB-style eOn casing: name={:?} text has eon? {}",
+        out.recipe.name,
+        out.text.contains("name = 'eon'")
+    );
     assert!(out.text.contains("version = '2.16.0'"));
     // Meson in build reqs → MesonNinja easyblock
     assert!(
@@ -100,9 +105,15 @@ fn conda_eon_rattler_recipe_expands_context_and_multi_source() {
         out.text.lines().find(|l| l.contains("easyblock")).unwrap_or("?")
     );
     let r = resolve_easyconfig_str(&out.text).expect("re-parse eon scaffold");
-    assert_eq!(r.name, "eon");
+    assert_eq!(r.name, "eOn");
     assert_eq!(r.version, "2.16.0");
     assert_eq!(r.toolchain.version, "2026.1");
+    // Toolchain virtuals / conda packaging noise must not appear as modules.
+    assert!(
+        !out.text.contains("('pip',") && !out.text.contains("('setuptools',"),
+        "conda packaging noise should not be EB deps: {}",
+        out.text
+    );
 }
 
 #[test]
@@ -153,7 +164,7 @@ fn spack_eon_real_package_py() {
         out.text.lines().find(|l| l.starts_with("easyblock")).unwrap_or("")
     );
     let r = resolve_easyconfig_str(&out.text).unwrap();
-    assert_eq!(r.name, "eon");
+    assert_eq!(r.name, "eOn");
     assert_eq!(r.version, "2.16.0");
 }
 
@@ -188,8 +199,16 @@ fn spack_qmcpack_multi_base_skips_develop() {
     );
     // tag-only version → placeholder checksum warning path still re-parses
     let r = resolve_easyconfig_str(&out.text).unwrap();
-    assert_eq!(r.name, "qmcpack");
+    assert_eq!(r.name, "QMCPACK", "EB-style title casing from Spack Qmcpack");
     assert_eq!(r.version, "4.3.0");
+    // Toolchain virtuals (blas/lapack/mpi) must not be emitted as residual modules.
+    assert!(
+        !out.text.contains("('blas',")
+            && !out.text.contains("('lapack',")
+            && !out.text.contains("('mpi',"),
+        "virtuals must not be EB deps: {}",
+        out.text
+    );
 }
 
 #[test]
@@ -214,7 +233,7 @@ fn cli_ingest_conda_eon_and_spack_qmcpack() {
         .expect("spawn");
     assert!(st.success(), "conda eon ingest failed");
     let r = resolve_easyconfig_file(&eon_out).expect("re-parse eon");
-    assert_eq!(r.name, "eon");
+    assert_eq!(r.name, "eOn");
     assert_eq!(r.version, "2.16.0");
 
     let qmc_out = tmp.path().join("qmc.eb");
@@ -232,7 +251,7 @@ fn cli_ingest_conda_eon_and_spack_qmcpack() {
         .expect("spawn");
     assert!(st.success(), "spack qmcpack ingest failed");
     let r = resolve_easyconfig_file(Path::new(&qmc_out)).expect("re-parse qmc");
-    assert_eq!(r.name, "qmcpack");
+    assert_eq!(r.name, "QMCPACK");
     assert_eq!(r.version, "4.3.0");
 }
 
