@@ -43,7 +43,8 @@ dependencies = [
 ]
 
 # Pin the CPU-real product; defaults match today but must not drift silently.
-configopts = '-DCMAKE_BUILD_TYPE=Release -DQMC_MPI=ON -DQMC_OMP=ON -DQMC_MIXED_PRECISION=OFF -DQMC_COMPLEX=OFF -DBUILD_AFQMC=OFF'
+configopts = '-DCMAKE_BUILD_TYPE=Release -DQMC_MPI=ON -DQMC_OMP=ON -DQMC_MIXED_PRECISION=OFF -DQMC_COMPLEX=OFF '
+configopts += '-DBUILD_AFQMC=OFF'
 
 # CMakeNinja defaults test_cmd to 'ninja', so runtest=True alone only re-invokes
 # ninja (no-op after a successful build). Drive ctest explicitly. Performance

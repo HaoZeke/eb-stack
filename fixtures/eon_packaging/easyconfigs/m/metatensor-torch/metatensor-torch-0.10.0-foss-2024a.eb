@@ -33,8 +33,10 @@ dependencies = [
 start_dir = 'metatensor-torch'
 
 # Siesta-style $EBROOT* at configure time; EB PyTorch lays out under site-packages/torch.
-preconfigopts = 'export CMAKE_PREFIX_PATH=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch:$EBROOTMETATENSOR${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
-configopts = '-GNinja -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release -DTorch_DIR=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch/share/cmake/Torch '
+preconfigopts = 'export CMAKE_PREFIX_PATH=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch:'
+preconfigopts += '$EBROOTMETATENSOR${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
+configopts = '-GNinja -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release '
+configopts += '-DTorch_DIR=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch/share/cmake/Torch '
 
 sanity_check_paths = {
     'files': ['lib/libmetatensor_torch.%s' % SHLIB_EXT],

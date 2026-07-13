@@ -42,7 +42,12 @@ dependencies = [
     ('quill', '11.1.0', '', ('GCCcore', '13.3.0')),
 ]
 
-configopts = "-Dbuildtype=release -Dwith_tests=false -Dwith_fortran=true -Dwith_cuh2=true -Dwith_artn=false -Dwith_ira=false -Dwith_xtb=false -Dwith_metatomic=false -Dwith_parallel_neb=false -Dwith_catlearn=false -Dwith_ase=false -Dwith_ase_orca=false -Dwith_ase_nwchem=false -Dwith_gp_surrogate=false -Dwith_gprd=false -Dwith_vasp=false -Dwith_ams=false -Dwith_mpi=false -Dwith_rgpot=false -Dwith_serve=false -Dwith_qsc=false -Dwith_water=false -Dwith_newpot=false -Dnative_arch=false -Dfast_math=false -Duse_mkl=false -Dpip_metatomic=false"
+configopts = "-Dbuildtype=release -Dwith_tests=false -Dwith_fortran=true -Dwith_cuh2=true -Dwith_artn=false "
+configopts += "-Dwith_ira=false -Dwith_xtb=false -Dwith_metatomic=false -Dwith_parallel_neb=false "
+configopts += "-Dwith_catlearn=false -Dwith_ase=false -Dwith_ase_orca=false -Dwith_ase_nwchem=false "
+configopts += "-Dwith_gp_surrogate=false -Dwith_gprd=false -Dwith_vasp=false -Dwith_ams=false -Dwith_mpi=false "
+configopts += "-Dwith_rgpot=false -Dwith_serve=false -Dwith_qsc=false -Dwith_water=false -Dwith_newpot=false "
+configopts += "-Dnative_arch=false -Dfast_math=false -Duse_mkl=false -Dpip_metatomic=false"
 
 sanity_check_paths = {
     'files': [

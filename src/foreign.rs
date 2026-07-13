@@ -226,6 +226,8 @@ pub fn residual_queue_from_ingest(result: &IngestResult, toolchain: &Toolchain) 
             detail: None,
         });
     }
+    // E501 / long physical lines: mechanical — format-style, not residual judgment.
+    items.extend(crate::eb_style::style_residual_items(&result.text));
     ResidualQueue {
         package: result.recipe.name.clone(),
         version: result.recipe.version.clone(),

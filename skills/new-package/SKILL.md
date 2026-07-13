@@ -292,6 +292,7 @@ Primary input: **`{stem}.residuals.json`** from ingest (kinds below). Also map
 | `dep_version` / residual foreign pin | Pin from robot / subtoolchain easyconfig for target gen |
 | check-recipe missing + hierarchy note | Author or bump companion for **this** generation (e.g. CapnProto-GCCcore-15.2.0), put under work overlay first in `--robot` |
 | `product_config` / flags missing | From project build docs / sibling EB recipe — **not** inventing `-D` in `eb-stack` |
+| `style` / E501 line too long | **`eb-stack format-style`** then `check-style` / `eb --check-contrib` — **not** residual judgment |
 | `variant` / Spack `when=` / selectors | Encode variants as separate easyconfigs or toolchainopts |
 | Multi-source without extract layout | Hand-write `sources` dicts / `extract_cmd` per EB multi-source docs |
 
@@ -359,6 +360,7 @@ cargo test --locked --test eon_foss_2026_1 --test qmcpack_foss_2026_1
 | Hierarchy-aware missing deps (no older-GCCcore false pass) | `eb-stack check-recipe` (**mechanical**) |
 | SHA256 for fetched sources | `eb --inject-checksums` (**mechanical**) |
 | Style + checksum presence gate | `eb --check-contrib` (**mechanical**) |
+| E501 line length (≤120) lint / wrap | `eb-stack check-style` / `format-style` (**mechanical**) |
 | Graph dry-run / install (*builds*) | `eb -Dr` / `eb --robot` on **rg.surf** (**mechanical**) |
 | Product configopts, variant policy, real sanity paths, moduleclass choice, multi-source extract layout, companion authoring judgment | **local-ai agent** using residual queue — **not** hardcoding into `eb-stack` |
 | Upstream PR merge | Human + EasyBuild maintainers |
@@ -385,9 +387,9 @@ bakes lies into the tool. Judgment residuals go to a **local-ai agent**
 
 | Kind | Examples | Who |
 |------|----------|-----|
-| **Mechanical** | `eb -S`; `eb-stack ingest` / `eb_ingest` (+ residual JSON); hierarchy/resolvo pins; `eb --inject-checksums`; `eb --check-contrib`; `eb-stack check-recipe` / `eb_check_recipe`; `eb -Dr --robot` | CLI / MCP / any driver that only runs commands |
+| **Mechanical** | `eb -S`; `eb-stack ingest` / `eb_ingest` (+ residual JSON); hierarchy/resolvo pins; `eb --inject-checksums`; **`eb-stack format-style`** / `check-style` (E501 ≤120); `eb --check-contrib`; `eb-stack check-recipe` / `eb_check_recipe`; `eb -Dr --robot` | CLI / MCP / any driver that only runs commands |
 | **Judgment residual** | Close residual-queue items: product features; moduleclass; sanity paths; extract_cmd; companion recipes for hierarchy holes; Spack `when=`; sibling vs greenfield; PR title | **local-ai agent** (this skill §3–§4) with residual JSON as input |
-| **Forbidden** | Encoding product `-D` sets, fake checksums, or landable style as hardwired ingest defaults; claiming *builds* without `eb --robot` | Nobody — not code, not the agent pretending mechanical |
+| **Forbidden** | Encoding product `-D` sets, fake checksums into ingest; hand-wrapping E501 in a residual agent when `format-style` exists; claiming *builds* without `eb --robot` | Nobody — not code, not the agent pretending mechanical |
 
 ### Mechanical sequence (always do this before calling a local-ai agent)
 
@@ -397,12 +399,15 @@ bakes lies into the tool. Judgment residuals go to a **local-ai agent**
 3. Read residual JSON kinds; fix only **mechanical** items if any (none of the
    product `-D` set).
 4. `eb --inject-checksums` on the draft (after sources URLs are stable).
-5. `eb --check-contrib` — fix only what the gate names that is mechanical
-   (missing SHA256, style reordering if `eb` can do it).
-6. `eb-stack check-recipe` (+ draft overlay for companions) + `eb -Dr --robot …`.
-7. **Stop.** Remaining residual-queue + missing-dep hierarchy hints → local-ai
-   agent in **herdr** (§7). After judgment edits, re-run 4–6, then `eb --robot`
-   on **rg.surf** only when claiming *builds*.
+5. **`eb-stack format-style path/to/Name-Ver-tc.eb`** then
+   **`eb-stack check-style`** — E501 (line longer than 120) is **mechanical**. Do **not**
+   send long `configopts` / `preconfigopts` line-wrapping to a residual agent.
+   Residual-queue items with `kind: "style"` mean run format-style, not judgment.
+6. `eb --check-contrib` — remaining non-E501 style / missing SHA256 only.
+7. `eb-stack check-recipe` (+ draft overlay for companions) + `eb -Dr --robot …`.
+8. **Stop.** Remaining residual-queue (non-`style`) + missing-dep hierarchy
+   hints → local-ai agent in **herdr** (§7). After judgment edits, re-run
+   4–7, then `eb --robot` on **rg.surf** only when claiming *builds*.
 
 ### local-ai agent (Hermes preferred) — **herdr pane on `rg.surf`**
 
@@ -468,6 +473,8 @@ bakes lies into the tool. Judgment residuals go to a **local-ai agent**
 | MCP bootstrap | `eb-stack mcp` → `eb_ingest` |
 | Inject SHA256 | `eb --inject-checksums foo.eb` |
 | Contributor gate | `eb --check-contrib foo.eb` |
+| E501 lint (≤120) | `eb-stack check-style foo.eb` |
+| E501 auto-wrap (mechanical) | `eb-stack format-style foo.eb` |
 | Plan check (hierarchy-aware) | `eb-stack check-recipe --recipe foo.eb --easyconfigs ROBOT --easyconfigs work` |
 | MCP plan check | `eb_check_recipe` |
 | Dry-run graph | `eb foo.eb -Dr --robot work:ROBOT` |

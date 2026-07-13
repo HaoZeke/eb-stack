@@ -90,15 +90,34 @@ dependencies = [
 # Subshell: cargo cinstall must not leave CWD in the source tree for Meson.
 # Prefer builddep Rust on PATH (edition2024). PyTorch paths use python3.12
 # (foss-2024a layout); do not use %(pyshortver)s for EBROOTPYTORCH.
-preconfigopts = 'export PATH=$EBROOTRUST/bin:$PATH && unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER && mkdir -p %(builddir)s/readcon-stage && ( cd %(builddir)s/eOn-%(version)s/subprojects/readcon-core && cargo --version && rustc --version && cargo cinstall --locked --release --prefix %(builddir)s/readcon-stage --libdir lib --includedir include --pkgconfigdir lib/pkgconfig && cd %(builddir)s/eOn-%(version)s && rm -f subprojects/xtb.wrap subprojects/vesin.wrap subprojects/rgpot.wrap subprojects/readcon-core.wrap && rm -rf subprojects/readcon-core ) && '
-preconfigopts += 'export PKG_CONFIG_PATH=%(builddir)s/readcon-stage/lib/pkgconfig:$EBROOTXTB/lib/pkgconfig:$EBROOTCAPNPROTO/lib/pkgconfig:$EBROOTQUILL/lib/pkgconfig:$EBROOTMETATENSOR/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH} && '
+preconfigopts = 'export PATH=$EBROOTRUST/bin:$PATH && '
+preconfigopts += 'unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER && '
+preconfigopts += 'mkdir -p %(builddir)s/readcon-stage && ( cd %(builddir)s/eOn-%(version)s/subprojects/readcon-core && '
+preconfigopts += 'cargo --version && rustc --version && '
+preconfigopts += 'cargo cinstall --locked --release --prefix %(builddir)s/readcon-stage --libdir lib --includedir '
+preconfigopts += 'include --pkgconfigdir lib/pkgconfig && cd %(builddir)s/eOn-%(version)s && '
+preconfigopts += 'rm -f subprojects/xtb.wrap subprojects/vesin.wrap subprojects/rgpot.wrap '
+preconfigopts += 'subprojects/readcon-core.wrap && rm -rf subprojects/readcon-core ) && '
+preconfigopts += 'export PKG_CONFIG_PATH=%(builddir)s/readcon-stage/lib/pkgconfig:$EBROOTXTB/lib/pkgconfig:'
+preconfigopts += '$EBROOTCAPNPROTO/lib/pkgconfig:$EBROOTQUILL/lib/pkgconfig:'
+preconfigopts += '$EBROOTMETATENSOR/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH} && '
 preconfigopts += 'export LIBRARY_PATH=%(builddir)s/readcon-stage/lib${LIBRARY_PATH:+:$LIBRARY_PATH} && '
 preconfigopts += 'export LD_LIBRARY_PATH=%(builddir)s/readcon-stage/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} && '
-preconfigopts += 'export CMAKE_PREFIX_PATH=%(builddir)s/readcon-stage:$EBROOTPYTORCH:$EBROOTMETATENSOR:$EBROOTMETATENSORMINTORCH:$EBROOTMETATOMICMINTORCH:$EBROOTXTB:$EBROOTCAPNPROTO:$EBROOTQUILL:$EBROOTEIGEN:$EBROOTHIGHWAY:$EBROOTINIH${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
+preconfigopts += 'export CMAKE_PREFIX_PATH=%(builddir)s/readcon-stage:$EBROOTPYTORCH:$EBROOTMETATENSOR:'
+preconfigopts += '$EBROOTMETATENSORMINTORCH:$EBROOTMETATOMICMINTORCH:$EBROOTXTB:$EBROOTCAPNPROTO:$EBROOTQUILL:'
+preconfigopts += '$EBROOTEIGEN:$EBROOTHIGHWAY:$EBROOTINIH${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
 preconfigopts += 'export PYTHONPATH=$EBROOTPYTORCH/lib/python3.12/site-packages${PYTHONPATH:+:$PYTHONPATH} && '
-preconfigopts += 'export LDFLAGS="-L%(builddir)s/readcon-stage/lib $LDFLAGS -Wl,--no-as-needed,$EBROOTPYTORCH/lib/python3.12/site-packages/torch/lib/libtorch.so -Wl,--as-needed" && '
+preconfigopts += 'export LDFLAGS="-L%(builddir)s/readcon-stage/lib $LDFLAGS '
+preconfigopts += '-Wl,--no-as-needed,$EBROOTPYTORCH/lib/python3.12/site-packages/torch/lib/libtorch.so '
+preconfigopts += '-Wl,--as-needed" && '
 
-configopts = "-Dbuildtype=release -Dwith_tests=false -Dwith_fortran=true -Dwith_cuh2=true -Dwith_metatomic=true -Dwith_xtb=true -Dwith_serve=true -Dwith_rgpot=true -Dpip_metatomic=false -Dtorch_path=$EBROOTPYTORCH/lib/python3.12/site-packages/torch -Dwith_artn=false -Dwith_ira=false -Dwith_parallel_neb=false -Dwith_catlearn=false -Dwith_ase=false -Dwith_ase_orca=false -Dwith_ase_nwchem=false -Dwith_gp_surrogate=false -Dwith_gprd=false -Dwith_vasp=false -Dwith_ams=false -Dwith_mpi=false -Dwith_qsc=false -Dwith_water=false -Dwith_newpot=false -Dnative_arch=false -Dfast_math=false -Duse_mkl=false"
+configopts = "-Dbuildtype=release -Dwith_tests=false -Dwith_fortran=true -Dwith_cuh2=true -Dwith_metatomic=true "
+configopts += "-Dwith_xtb=true -Dwith_serve=true -Dwith_rgpot=true -Dpip_metatomic=false "
+configopts += "-Dtorch_path=$EBROOTPYTORCH/lib/python3.12/site-packages/torch -Dwith_artn=false -Dwith_ira=false "
+configopts += "-Dwith_parallel_neb=false -Dwith_catlearn=false -Dwith_ase=false -Dwith_ase_orca=false "
+configopts += "-Dwith_ase_nwchem=false -Dwith_gp_surrogate=false -Dwith_gprd=false -Dwith_vasp=false "
+configopts += "-Dwith_ams=false -Dwith_mpi=false -Dwith_qsc=false -Dwith_water=false -Dwith_newpot=false "
+configopts += "-Dnative_arch=false -Dfast_math=false -Duse_mkl=false"
 
 postinstallcmds = [
     'mkdir -p %(installdir)s/lib %(installdir)s/include %(installdir)s/lib/pkgconfig',
@@ -107,7 +126,8 @@ postinstallcmds = [
     # RPATH so rpath-mode sanity checks pass.
     "patchelf --force-rpath --set-rpath '$ORIGIN' %(installdir)s/lib/libreadcon_core.so.0.13.1",
     'cp -a %(builddir)s/readcon-stage/include/readcon-core.h %(installdir)s/include/',
-    "sed 's|^prefix=.*|prefix=%(installdir)s|' %(builddir)s/readcon-stage/lib/pkgconfig/readcon-core.pc > %(installdir)s/lib/pkgconfig/readcon-core.pc",
+    ("sed 's|^prefix=.*|prefix=%(installdir)s|' %(builddir)s/readcon-stage/lib/pkgconfig/readcon-core.pc > "
+     + "%(installdir)s/lib/pkgconfig/readcon-core.pc"),
 ]
 
 sanity_check_paths = {

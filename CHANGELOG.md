@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`eb-stack check-style` / `format-style`**: mechanical pycodestyle E501
+  (max 120 columns) lint and rewrite for easyconfig string assignments
+  (`key = '…'` / `key += "…"` → parenthesized adjacent literals) and `#`
+  comments. Residual queue gains `kind: "style"` items pointing at
+  format-style — line wrapping is **not** residual judgment. Skills and
+  mechanical sequence updated so Hermes/local-ai never hand-split E501.
 - Agent skill for **new packages** from conda-forge / Spack:
   `skills/new-package/SKILL.md` (paired with `skills/annual-bump/` for
   generation rebuilds). `AGENTS.md` routes by work type.

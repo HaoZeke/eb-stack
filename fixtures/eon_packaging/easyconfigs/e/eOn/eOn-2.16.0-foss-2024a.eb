@@ -107,26 +107,44 @@ dependencies = [
 # EB installdir is not — preconfig-only cinstall into installdir is wiped.)
 # Multi-source stages readcon under subprojects/; after cinstall remove the
 # source tree so meson uses pkg-config (not subproject/cbindgen path).
-preconfigopts = 'mkdir -p %(builddir)s/readcon-stage && cd %(builddir)s/eOn-%(version)s/subprojects/readcon-core && cargo cinstall --locked --release --prefix %(builddir)s/readcon-stage --libdir lib --includedir include --pkgconfigdir lib/pkgconfig && cd %(builddir)s/eOn-%(version)s && rm -f subprojects/xtb.wrap subprojects/vesin.wrap subprojects/rgpot.wrap subprojects/readcon-core.wrap && rm -rf subprojects/readcon-core && '
-preconfigopts += 'export PKG_CONFIG_PATH=%(builddir)s/readcon-stage/lib/pkgconfig:$EBROOTXTB/lib/pkgconfig:$EBROOTCAPNPROTO/lib/pkgconfig:$EBROOTQUILL/lib/pkgconfig:$EBROOTMETATENSOR/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH} && '
+preconfigopts = 'mkdir -p %(builddir)s/readcon-stage && cd %(builddir)s/eOn-%(version)s/subprojects/readcon-core && '
+preconfigopts += 'cargo cinstall --locked --release --prefix %(builddir)s/readcon-stage --libdir lib --includedir '
+preconfigopts += 'include --pkgconfigdir lib/pkgconfig && cd %(builddir)s/eOn-%(version)s && '
+preconfigopts += 'rm -f subprojects/xtb.wrap subprojects/vesin.wrap subprojects/rgpot.wrap '
+preconfigopts += 'subprojects/readcon-core.wrap && rm -rf subprojects/readcon-core && '
+preconfigopts += 'export PKG_CONFIG_PATH=%(builddir)s/readcon-stage/lib/pkgconfig:$EBROOTXTB/lib/pkgconfig:'
+preconfigopts += '$EBROOTCAPNPROTO/lib/pkgconfig:$EBROOTQUILL/lib/pkgconfig:'
+preconfigopts += '$EBROOTMETATENSOR/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH} && '
 preconfigopts += 'export LIBRARY_PATH=%(builddir)s/readcon-stage/lib${LIBRARY_PATH:+:$LIBRARY_PATH} && '
 preconfigopts += 'export LD_LIBRARY_PATH=%(builddir)s/readcon-stage/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} && '
 # EasyBuild convert_name: '-' → 'min' → EBROOTMETATENSORMINTORCH / EBROOTMETATOMICMINTORCH.
-preconfigopts += 'export CMAKE_PREFIX_PATH=%(builddir)s/readcon-stage:$EBROOTPYTORCH:$EBROOTMETATENSOR:$EBROOTMETATENSORMINTORCH:$EBROOTMETATOMICMINTORCH:$EBROOTXTB:$EBROOTCAPNPROTO:$EBROOTQUILL:$EBROOTEIGEN:$EBROOTHIGHWAY:$EBROOTINIH${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
-preconfigopts += 'export PYTHONPATH=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH} && '
+preconfigopts += 'export CMAKE_PREFIX_PATH=%(builddir)s/readcon-stage:$EBROOTPYTORCH:$EBROOTMETATENSOR:'
+preconfigopts += '$EBROOTMETATENSORMINTORCH:$EBROOTMETATOMICMINTORCH:$EBROOTXTB:$EBROOTCAPNPROTO:$EBROOTQUILL:'
+preconfigopts += '$EBROOTEIGEN:$EBROOTHIGHWAY:$EBROOTINIH${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
+preconfigopts += 'export PYTHONPATH=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH} '
+preconfigopts += '&& '
 # feedstock: force generic libtorch.so; stage path for link only (runtime uses installdir after postinstall).
-preconfigopts += 'export LDFLAGS="-L%(builddir)s/readcon-stage/lib $LDFLAGS -Wl,--no-as-needed,$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch/lib/libtorch.so -Wl,--as-needed" && '
+preconfigopts += 'export LDFLAGS="-L%(builddir)s/readcon-stage/lib $LDFLAGS '
+preconfigopts += '-Wl,--no-as-needed,$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch/lib/libtorch.so '
+preconfigopts += '-Wl,--as-needed" && '
 
 # Scientific surface. torch_path: EB PyTorch lays out libtorch under site-packages/torch.
 # Keep as one plain assignment for packaging tools that only scrape configopts = '...'.
-configopts = "-Dbuildtype=release -Dwith_tests=false -Dwith_fortran=true -Dwith_cuh2=true -Dwith_metatomic=true -Dwith_xtb=true -Dwith_serve=true -Dwith_rgpot=true -Dpip_metatomic=false -Dtorch_path=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch -Dwith_artn=false -Dwith_ira=false -Dwith_parallel_neb=false -Dwith_catlearn=false -Dwith_ase=false -Dwith_ase_orca=false -Dwith_ase_nwchem=false -Dwith_gp_surrogate=false -Dwith_gprd=false -Dwith_vasp=false -Dwith_ams=false -Dwith_mpi=false -Dwith_qsc=false -Dwith_water=false -Dwith_newpot=false -Dnative_arch=false -Dfast_math=false -Duse_mkl=false"
+configopts = "-Dbuildtype=release -Dwith_tests=false -Dwith_fortran=true -Dwith_cuh2=true -Dwith_metatomic=true "
+configopts += "-Dwith_xtb=true -Dwith_serve=true -Dwith_rgpot=true -Dpip_metatomic=false "
+configopts += "-Dtorch_path=$EBROOTPYTORCH/lib/python%(pyshortver)s/site-packages/torch -Dwith_artn=false "
+configopts += "-Dwith_ira=false -Dwith_parallel_neb=false -Dwith_catlearn=false -Dwith_ase=false "
+configopts += "-Dwith_ase_orca=false -Dwith_ase_nwchem=false -Dwith_gp_surrogate=false -Dwith_gprd=false "
+configopts += "-Dwith_vasp=false -Dwith_ams=false -Dwith_mpi=false -Dwith_qsc=false -Dwith_water=false "
+configopts += "-Dwith_newpot=false -Dnative_arch=false -Dfast_math=false -Duse_mkl=false"
 
 # After make_installdir wipe + ninja install: ship staged readcon into the module.
 postinstallcmds = [
     'mkdir -p %(installdir)s/lib %(installdir)s/include %(installdir)s/lib/pkgconfig',
     'cp -a %(builddir)s/readcon-stage/lib/libreadcon_core* %(installdir)s/lib/',
     'cp -a %(builddir)s/readcon-stage/include/readcon-core.h %(installdir)s/include/',
-    "sed 's|^prefix=.*|prefix=%(installdir)s|' %(builddir)s/readcon-stage/lib/pkgconfig/readcon-core.pc > %(installdir)s/lib/pkgconfig/readcon-core.pc",
+    ("sed 's|^prefix=.*|prefix=%(installdir)s|' %(builddir)s/readcon-stage/lib/pkgconfig/readcon-core.pc > "
+     + "%(installdir)s/lib/pkgconfig/readcon-core.pc"),
 ]
 
 sanity_check_paths = {

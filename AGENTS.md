@@ -25,19 +25,22 @@ installs there unless a site runbook explicitly says so.
 
 ## Non-negotiables
 
-1. **Run the real CLI** (`eb-stack check-recipe | bump | solve | ingest`).
-   Never guess dependency versions, checksums, or hierarchy relationships in
-   prose — the tool resolves them or tells you exactly what is missing.
-   If your harness speaks MCP, prefer the typed tool surface: `eb-stack
-   mcp` serves `eb_check_recipe` / `eb_bump` / `eb_solve` / `eb_ingest`
-   over stdio, with the reporting ladder and next actions embedded in every
-   result. Ingest also writes `{stem}.residuals.json` — that file is the
-   residual work queue (not a closed landable PR).
+1. **Run the real CLI** (`eb-stack check-recipe | bump | solve | ingest |
+   check-style | format-style`). Never guess dependency versions, checksums,
+   or hierarchy relationships in prose — the tool resolves them or tells you
+   exactly what is missing. If your harness speaks MCP, prefer the typed
+   tool surface: `eb-stack mcp` serves `eb_check_recipe` / `eb_bump` /
+   `eb_solve` / `eb_ingest` over stdio, with the reporting ladder and next
+   actions embedded in every result. Ingest also writes
+   `{stem}.residuals.json` — that file is the residual work queue (not a
+   closed landable PR).
 2. **Tool output is instructions.** A missing-dep hint ("available at
    other generations: ...") and hierarchy-member notes are your work queue.
    A `[packaging]` checksum finding means fix the recipe (checksums are
    positional: all sources first, then patches) — bypassing or deleting a
-   check is never the fix.
+   check is never the fix. Residual-queue `kind: "style"` / pycodestyle
+   E501 means run **`eb-stack format-style`** (mechanical); do not spend a
+   residual agent turn hand-wrapping lines.
 3. **Report on the three-claim ladder** (skill section 10.4): *resolves* /
    *builds* / *binary-verified* are different claims; state which rung you
    actually established and which you did not. Ingest alone is never

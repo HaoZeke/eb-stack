@@ -28,7 +28,7 @@ dependency version on the rest.
 | Ready (mechanical packaging) | Must **not** claim |
 |------------------------------|--------------------|
 | `bump` with hierarchy + resolvo pins; loud fail on unresolved deps | Ingest alone is a **landable EasyBuild PR** |
-| `check-recipe`, `solve`, lock, stack-diff, optional CycloneDX SBOM | ***builds*** without a real `eb --robot` install |
+| `check-recipe`, `check-style` / `format-style` (E501), `solve`, lock, stack-diff, optional CycloneDX SBOM | ***builds*** without a real `eb --robot` install |
 | `ingest` scaffolds + residual honesty (warnings, 0.0.0 placeholders) | Product `configopts` invented inside this binary |
 | CI: lib, known-bump fixtures, packaging fixtures, foreign ingest | Residual judgment without an agent + live `eb` / robot tree |
 | Skills + docs for annual bump and greenfield bootstrap | Agents open/edit upstream PRs by default |
@@ -119,7 +119,8 @@ come from the input; pass `--easyconfigs` for generation-native dep versions
 style gates remain residual work for a human or local-ai agent following
 [`skills/new-package/SKILL.md`](skills/new-package/SKILL.md) — never hardcoded
 into this tool. After residual edits: `eb --inject-checksums`,
-`eb --check-contrib`, `eb-stack check-recipe`, then `eb -Dr` / `eb --robot`
+`eb-stack format-style` (E501 ≤120, mechanical), `eb --check-contrib`,
+`eb-stack check-recipe`, then `eb -Dr` / `eb --robot`
 for the *builds* rung.
 
 ```bash

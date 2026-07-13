@@ -4,13 +4,12 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use eb_stack::{
     check_recipe_deps, emit_next_generation_auto_from_path_with_opts,
-    emit_next_generation_from_path, ingest_foreign_to_easyconfig_with_opts, load_json_file,
-    lock_to_cyclonedx, packaging_gate, parse_easyconfig_tree, parse_easyconfig_trees,
-    resolve_easyconfig_file, scaffold_missing_companions,
-    solve_from_easyconfigs_with_baseline_version_and_extras, solve_to_files_with_extras,
-    residual_queue_from_ingest, write_ingest_result_with_queue, AutoResolveOpts, EmitParams,
-    ForeignFormat, IngestOpts, SolveExtraOut,
-    StackLock, Toolchain,
+    emit_next_generation_from_path, format_style_file, ingest_foreign_to_easyconfig_with_opts,
+    lint_style, load_json_file, lock_to_cyclonedx, packaging_gate, parse_easyconfig_tree,
+    parse_easyconfig_trees, residual_queue_from_ingest, resolve_easyconfig_file,
+    scaffold_missing_companions, solve_from_easyconfigs_with_baseline_version_and_extras,
+    solve_to_files_with_extras, write_ingest_result_with_queue, AutoResolveOpts, EmitParams,
+    ForeignFormat, IngestOpts, SolveExtraOut, StackLock, Toolchain,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -224,6 +223,31 @@ enum Cmd {
         /// never invents product configopts.
         #[arg(long, value_name = "PATH")]
         residual_queue: Option<PathBuf>,
+    },
+    /// Lint physical lines for EasyBuild pycodestyle E501 (max 120 columns).
+    ///
+    /// Exit 1 if any line is too long. Prefer `format-style` to fix mechanical
+    /// string-assignment and comment lines before residual judgment.
+    CheckStyle {
+        /// Easyconfig path(s)
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
+    /// Mechanically wrap long lines (E501) in easyconfig string assignments
+    /// and comments so `eb --check-contrib` style can pass without residual agents.
+    ///
+    /// Rewrites `key = '…'` / `key += "…"` into parenthesized adjacent string
+    /// literals and wraps `#` comments. Does **not** invent product flags.
+    FormatStyle {
+        /// Easyconfig path(s) to rewrite in place (or with `--out` for a single file)
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// Write the first path to this file instead of in-place (single path only)
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Report only; do not write
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -644,6 +668,67 @@ fn main() -> Result<()> {
                 queue_path.display(),
                 n_items
             );
+        }
+        Cmd::CheckStyle { paths } => {
+            let mut n_fail = 0usize;
+            for p in &paths {
+                let text = std::fs::read_to_string(p)
+                    .with_context(|| format!("read {}", p.display()))?;
+                let findings = lint_style(&text);
+                if findings.is_empty() {
+                    println!("check-style OK: {}", p.display());
+                } else {
+                    n_fail += findings.len();
+                    for f in &findings {
+                        println!("{}:{}:{}: {} {}", p.display(), f.line, f.column, f.code, f.message);
+                    }
+                    let mech = findings.iter().filter(|f| f.mechanical).count();
+                    eprintln!(
+                        "check-style FAIL: {} ({} finding(s), {} mechanical — run format-style)",
+                        p.display(),
+                        findings.len(),
+                        mech
+                    );
+                }
+            }
+            if n_fail > 0 {
+                bail!("check-style: {n_fail} E501 finding(s)");
+            }
+        }
+        Cmd::FormatStyle {
+            paths,
+            out,
+            dry_run,
+        } => {
+            if out.is_some() && paths.len() != 1 {
+                bail!("--out requires exactly one path");
+            }
+            for p in &paths {
+                let text = std::fs::read_to_string(p)
+                    .with_context(|| format!("read {}", p.display()))?;
+                let before = lint_style(&text).len();
+                if dry_run {
+                    let r = eb_stack::format_style(&text);
+                    println!(
+                        "format-style dry-run {}: would rewrite {} line(s); remaining E501={}",
+                        p.display(),
+                        r.lines_rewritten,
+                        r.remaining.len()
+                    );
+                    continue;
+                }
+                let r = format_style_file(p, out.as_deref())
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                println!(
+                    "format-style {}: rewrote {} line(s); remaining E501={} (was {before})",
+                    out.as_ref().unwrap_or(p).display(),
+                    r.lines_rewritten,
+                    r.remaining.len()
+                );
+                for f in &r.remaining {
+                    eprintln!("  remaining L{}: {}", f.line, f.message);
+                }
+            }
         }
     }
     Ok(())

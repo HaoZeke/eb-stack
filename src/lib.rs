@@ -3,6 +3,7 @@
 pub mod domain;
 pub mod eb_emit;
 pub mod eb_parse;
+pub mod eb_style;
 pub mod eb_template_constants;
 pub mod foreign;
 pub mod hierarchy;
@@ -53,6 +54,10 @@ pub use foreign::{
     residual_queue_from_ingest, write_ingest_result, write_ingest_result_with_queue,
     write_residual_queue, ForeignDep, ForeignError, ForeignFormat, ForeignRecipe, IngestOpts,
     IngestResult, ResidualClaimLadder, ResidualItem, ResidualQueue,
+};
+pub use eb_style::{
+    format_style, format_style_file, lint_style, style_residual_items, FormatStyleResult,
+    StyleError, StyleFinding, EB_MAX_LINE,
 };
 pub use eb_parse::candidate_matches_dep_for_recipe;
 pub use hierarchy::hierarchy_for_with_tree;
