@@ -9,8 +9,19 @@ You are moving a set of EasyBuild easyconfigs from one toolchain generation to t
 next (for example `foss-2023b` -> `foss-2024a`). `eb-stack` rewrites each recipe
 mechanically and resolves every dependency version itself; you drive the loop and
 resolve the handful of cases it cannot decide. Expect it to reproduce a real
-maintainer update mechanically for roughly 60% of packages and to tell you
-exactly what is left on the rest. It never silently emits a wrong version.
+maintainer update mechanically for roughly half to 60% of packages (measured
+on a 34-pair sample) and to tell you exactly what is left on the rest. It never
+silently emits a wrong version.
+
+**What this skill closes:** the mechanical majority of an annual (or mid-year)
+toolchain-generation rebuild — rewrite every recipe onto the new generation,
+auto-resolve every dependency across the sub-toolchain hierarchy, prove each
+recipe *resolves* against the robot tree, and emit a jointly consistent build
+list plus a reviewable stack diff. **What it does not close:** real builds
+(`eb --robot`), binary verification, genuinely new dependencies the old recipe
+never declared, source checksums/patches on application version bumps, and the
+PR surface (human-only). Operator-facing guide with the same loop:
+`docs/orgmode/howto/run-annual-bump.org`.
 
 ## 0. What you need first
 
@@ -413,4 +424,24 @@ For SURF-only AI work, drive this skill with the SURF model path, not commercial
 frontier models. With OMP: role `eb-stack` → `surf-ai-hub/openai/gpt-oss-120b`.
 Run the exact commands above; do not reimplement EasyBuild semantics in the prompt.
 
-Automated regression: `cargo test --test eon_foss_2026_1 --test qmcpack_foss_2026_1 --test eon_packaging`.
+### 11.6 Automated regression (what CI runs)
+
+GitHub Actions (`.github/workflows/ci_test.yml`) gates the known cases on every
+push and pull request. Locally:
+
+```
+# Known maintainer toolchain bumps (library + CLI): foss-2023b -> foss-2024a
+#   GROMACS, ScaFaCoS, MDTraj, Fiona, PuLP, numba under tests/repro_fixtures/
+cargo test --locked --test reproduce_real_prs --test bump_emit
+
+# Landable packaging recipe sets (parse / resolve / packaging_gate)
+cargo test --locked --test eon_foss_2026_1 --test qmcpack_foss_2026_1 --test eon_packaging
+
+# Solve + build-list + stack-diff emission
+cargo test --locked --test build_list_and_stack_diff
+```
+
+Robot-overlay check-recipe cases skip cleanly when no easyconfigs tree is
+present (set `EB_EASYCONFIGS` or install under
+`~/.venvs/easybuild/easybuild/easyconfigs` for full closure). Operator guide:
+`docs/orgmode/howto/run-annual-bump.org`.

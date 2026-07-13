@@ -38,8 +38,11 @@ names, scheduler sizing); ask for it if you were not given one.
 
 ## Tests
 
-`cargo test --lib` is the fast suite; the fixture suites
-(`--test eon_foss_2026_1 --test qmcpack_foss_2026_1 --test eon_packaging`)
-replay the frozen upstream-PR recipe sets against a real robot tree and are
-slow. Build/test on a build machine when the repository owner's rules say
-the local machine must not compile.
+`cargo test --lib` is the fast suite. CI (`.github/workflows/ci_test.yml`) also
+runs the **known-bump** regression (`--test reproduce_real_prs --test bump_emit`:
+frozen `foss-2023b` → `foss-2024a` maintainer pairs under
+`tests/repro_fixtures/`, library and CLI) and the packaging fixture suites
+(`--test eon_foss_2026_1 --test qmcpack_foss_2026_1 --test eon_packaging`).
+Robot-overlay check-recipe cases skip when no easyconfigs tree is present;
+resolve and packaging_gate always run. Build/test on a build machine when the
+repository owner's rules say the local machine must not compile.

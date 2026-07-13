@@ -150,6 +150,9 @@ eb-stack bump \
 
 * Next steps
 
+- [[file:howto/run-annual-bump.org][How to run the annual toolchain-generation
+  bump]] -- whole rebuild loop: what it closes, residual table, claim ladder,
+  and the CI-known bumps.
 - [[file:howto/bump-recipe.org][How to bump a recipe]] -- every ~bump~ flag:
   auto-resolve, hand overrides, operator preservation, version bumps with a
   new source checksum.

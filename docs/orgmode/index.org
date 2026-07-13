@@ -19,6 +19,7 @@
    :maxdepth: 1
    :caption: How-To Guides
 
+   howto/run-annual-bump
    howto/solve-lock
    howto/emit-reports
    howto/bump-recipe
@@ -88,6 +89,9 @@ eb-stack --version
 * Documentation map
 
   - [[file:tutorial.org][Tutorial: bump GROMACS to a new toolchain generation]] -- start here.
+  - [[file:howto/run-annual-bump.org][How to run the annual toolchain-generation bump]] --
+    operator guide for a whole rebuild (what it closes, the residual, the
+    claim ladder, and the CI-known bumps).
   - How-to guides: [[file:howto/solve-lock.org][solve a stack lock]],
     [[file:howto/emit-reports.org][emit a build list and stack diff]],
     [[file:howto/bump-recipe.org][bump a recipe]],
@@ -97,7 +101,8 @@ eb-stack --version
   - Explanation: [[file:explanation/architecture.org][architecture]],
     [[file:explanation/optimization-model.org][the optimization model]],
     [[file:explanation/parser-approach.org][the parser approach]],
-    [[file:explanation/fidelity.org][reproduction fidelity and limitations]].
+    [[file:explanation/fidelity.org][reproduction fidelity and limitations]],
+    [[file:explanation/lifecycle.org][from recipe to installed stack]].
 
 * Citation
 

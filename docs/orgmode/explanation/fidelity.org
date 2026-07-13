@@ -160,6 +160,8 @@ review time for:
 
 * Next steps
 
+- [[file:../howto/run-annual-bump.org][How to run the annual toolchain-generation
+  bump]] -- operator guide: residual table, claim ladder, CI-known bumps.
 - [[file:parser-approach.org][The parser approach]] -- what the restricted
   evaluator does and does not model.
 - [[file:../howto/bump-recipe.org][How to bump a recipe]] -- ~--keep-old-deps~,
