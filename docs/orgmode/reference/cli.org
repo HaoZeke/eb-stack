@@ -4,7 +4,7 @@
 * Top-level usage
 
 #+begin_src text
-eb-stack {solve|parse|check-recipe|solve-json|sbom|bump|mcp} [subcommand options]
+eb-stack {solve|parse|check-recipe|solve-json|sbom|bump|mcp|ingest} [subcommand options]
 #+end_src
 
 Built on [[https://docs.rs/clap][clap]]'s derive API. Every subcommand accepts
@@ -22,6 +22,7 @@ Subcommands at a glance:
 | ~sbom~ | CycloneDX from an existing lock |
 | ~bump~ | Next-generation easyconfig rewrite (hierarchy-aware auto deps) |
 | ~mcp~ | Stdio MCP server (~eb_check_recipe~ / ~eb_bump~ / ~eb_solve~) |
+| ~ingest~ | Foreign conda-forge / Spack recipe → EB scaffold |
 
 * solve
 
@@ -300,3 +301,31 @@ errors, per the MCP tools/call contract. Library entry point:
 |------+-------------------------------------------------------------------|
 |    0 | Success                                                          |
 |    1 | Error: parse failure, unsatisfiable policy, missing dep, packaging gate failure, missing file, or rewrite failure. The message names real package/version/field data, not internal solver identifiers. |
+
+* ingest
+
+Convert a foreign package recipe into a parseable EasyBuild scaffold.
+
+#+begin_src text
+eb-stack ingest
+  --source PATH
+  [--format auto|conda-forge|spack]
+  [--toolchain-name foss]
+  [--toolchain-version 2024a]
+  [--out PATH | --out-dir DIR]
+#+end_src
+
+- ~--source~ :: ~meta.yaml~ / ~recipe.yaml~ (conda-forge) or ~package.py~
+  (Spack). Required.
+- ~--format~ :: ~auto~ (default, from filename), ~conda-forge~, or ~spack~.
+- ~--toolchain-name~ / ~--toolchain-version~ :: scaffold toolchain identity
+  (operator-supplied generation; not invented from the foreign recipe).
+- ~--out~ / ~--out-dir~ :: output path or letter/name layout directory.
+
+The emit path is honest: name, version, source URL/filename, sha256 when
+present, and dependency *names* come from the foreign input. Easyblock,
+build steps, and EB generation-native dependency versions are residual
+(header warnings). Re-parse the result with ~check-recipe~ (robot completeness
+may still fail until companions and pins are filled).
+
+Fixtures: ~fixtures/foreign_ingest/~.

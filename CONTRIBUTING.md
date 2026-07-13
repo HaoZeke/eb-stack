@@ -62,3 +62,30 @@ unless a maintainer says otherwise in the live conversation.
    `docs/source/conf.py` release.
 3. Tag `vX.Y.Z` and push the tag; CI publishes the GitHub Release when the
    release workflow is enabled.
+
+
+## Tag and release
+
+Version source of truth: `version` in root `Cargo.toml` (currently **0.3.0**).
+Keep these in lockstep on every release:
+
+1. `Cargo.toml` / `pixi.toml` `version`
+2. `CITATION.cff` `version` (+ `date-released` when cutting)
+3. `docs/source/conf.py` `release`
+4. `CHANGELOG.md` — move Unreleased notes into `## [X.Y.Z] - YYYY-MM-DD`
+
+Then:
+
+```bash
+git tag -a v0.3.0 -m "eb-stack 0.3.0"
+git push origin v0.3.0
+# GitHub Actions ci_release.yml builds linux x86_64 tarball + checksum
+```
+
+Verify the binary surface:
+
+```bash
+cargo build --release
+./target/release/eb-stack --version
+# → eb-stack 0.3.0
+```

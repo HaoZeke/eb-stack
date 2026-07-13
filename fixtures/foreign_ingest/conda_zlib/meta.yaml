@@ -1,0 +1,27 @@
+# Fixture: classic conda-forge meta.yaml (plain, no Jinja) for eb-stack ingest.
+package:
+  name: zlib
+  version: 1.3.1
+
+source:
+  url: https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+  sha256: 9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
+
+build:
+  number: 0
+
+requirements:
+  build:
+    - make
+  host: []
+  run:
+    - libgcc-ng
+
+about:
+  home: https://zlib.net/
+  license: Zlib
+  summary: zlib compression library
+
+extra:
+  recipe-maintainers:
+    - conda-forge

@@ -4,6 +4,7 @@ pub mod domain;
 pub mod eb_emit;
 pub mod eb_parse;
 pub mod eb_template_constants;
+pub mod foreign;
 pub mod hierarchy;
 pub mod mcp;
 pub mod report;
@@ -46,6 +47,11 @@ pub use sbom::{
     lock_to_cyclonedx_with_deps,
 };
 pub use select::{select_stack, SelectError};
+pub use foreign::{
+    detect_foreign_format, emit_easyconfig_from_foreign, ingest_foreign_to_easyconfig,
+    parse_foreign_path, parse_foreign_str, write_ingest_result, ForeignDep, ForeignError,
+    ForeignFormat, ForeignRecipe, IngestResult,
+};
 
 use anyhow::{bail, Context, Result};
 use std::cmp::Ordering;

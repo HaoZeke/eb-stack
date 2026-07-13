@@ -77,6 +77,31 @@ Optional `--sbom-out` writes a planned CycloneDX inventory. Baseline generation
 selection (nearest lower vs explicit) is documented in the
 [solve howto](docs/orgmode/howto/solve-lock.org).
 
+
+## Ingest foreign recipes (conda-forge / Spack)
+
+Scaffold a parseable EasyBuild `.eb` from a frozen foreign recipe (name,
+version, source identity, dependency **names**; build logic and EB generation
+versions remain residual):
+
+```bash
+./target/release/eb-stack ingest \
+  --source fixtures/foreign_ingest/conda_zlib/meta.yaml \
+  --toolchain-name foss --toolchain-version 2024a \
+  --out /tmp/zlib-from-conda.eb
+
+./target/release/eb-stack ingest \
+  --source fixtures/foreign_ingest/spack_zlib/package.py \
+  --format spack \
+  --out /tmp/zlib-from-spack.eb
+```
+
+## Version
+
+```bash
+eb-stack --version   # crate version (Cargo.toml); tag releases as vX.Y.Z
+```
+
 ## Documentation
 
 | Kind | Where |

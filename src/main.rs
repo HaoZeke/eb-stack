@@ -4,10 +4,12 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use eb_stack::{
     check_recipe_deps, emit_next_generation_auto_from_path_with_opts,
-    emit_next_generation_from_path, load_json_file, lock_to_cyclonedx, packaging_gate,
-    parse_easyconfig_tree, parse_easyconfig_trees, resolve_easyconfig_file,
-    scaffold_missing_companions, solve_from_easyconfigs_with_baseline_version_and_extras,
-    solve_to_files_with_extras, AutoResolveOpts, EmitParams, SolveExtraOut, StackLock, Toolchain,
+    emit_next_generation_from_path, ingest_foreign_to_easyconfig, load_json_file,
+    lock_to_cyclonedx, packaging_gate, parse_easyconfig_tree, parse_easyconfig_trees,
+    resolve_easyconfig_file, scaffold_missing_companions,
+    solve_from_easyconfigs_with_baseline_version_and_extras, solve_to_files_with_extras,
+    write_ingest_result, AutoResolveOpts, EmitParams, ForeignFormat, SolveExtraOut, StackLock,
+    Toolchain,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -179,6 +181,32 @@ enum Cmd {
     /// (claude, codex, omp, grok). Register with e.g.
     /// `claude mcp add eb-stack -- eb-stack mcp`.
     Mcp,
+    /// Ingest a foreign recipe (conda-forge meta.yaml / Spack package.py)
+    /// into a parseable EasyBuild scaffold.
+    ///
+    /// Does not invent EB generation-native dependency versions or build
+    /// logic: residual warnings are printed and embedded in the `.eb` header.
+    /// Format is auto-detected from the filename unless `--format` is set.
+    Ingest {
+        /// Foreign recipe path (`meta.yaml`, `recipe.yaml`, or `package.py`)
+        #[arg(long)]
+        source: PathBuf,
+        /// Foreign format: `conda-forge`, `spack`, or `auto` (default)
+        #[arg(long, default_value = "auto", value_name = "FORMAT")]
+        format: String,
+        /// Target toolchain name for the scaffold (default: foss)
+        #[arg(long, default_value = "foss")]
+        toolchain_name: String,
+        /// Target toolchain version / generation (default: 2024a)
+        #[arg(long, default_value = "2024a")]
+        toolchain_version: String,
+        /// Explicit output `.eb` path
+        #[arg(long, conflicts_with = "out_dir")]
+        out: Option<PathBuf>,
+        /// Output directory; writes letter/name/conventional basename layout
+        #[arg(long, conflicts_with = "out")]
+        out_dir: Option<PathBuf>,
+    },
 }
 
 fn parse_dep_overrides(deps: &[String]) -> Result<HashMap<String, String>> {
@@ -533,6 +561,45 @@ fn main() -> Result<()> {
             let stdout = std::io::stdout();
             eb_stack::mcp::run_server(stdin.lock(), stdout.lock())
                 .context("mcp stdio server")?;
+        }
+        Cmd::Ingest {
+            source,
+            format,
+            toolchain_name,
+            toolchain_version,
+            out,
+            out_dir,
+        } => {
+            let fmt = match format.to_ascii_lowercase().as_str() {
+                "auto" => None,
+                "conda" | "conda-forge" | "cf" => Some(ForeignFormat::CondaForge),
+                "spack" => Some(ForeignFormat::Spack),
+                other => bail!(
+                    "unknown --format {other:?}; expected auto, conda-forge, or spack"
+                ),
+            };
+            let toolchain = Toolchain {
+                name: toolchain_name,
+                version: toolchain_version,
+            };
+            let result = ingest_foreign_to_easyconfig(&source, fmt, &toolchain)
+                .with_context(|| format!("ingest {}", source.display()))?;
+            for w in &result.warnings {
+                eprintln!("WARNING: {w}");
+            }
+            let dest = write_ingest_result(
+                &result,
+                &toolchain,
+                out.as_deref(),
+                out_dir.as_deref(),
+            )
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!(
+                "wrote {} (from {} as {})",
+                dest.display(),
+                source.display(),
+                result.recipe.format.as_str()
+            );
         }
     }
     Ok(())

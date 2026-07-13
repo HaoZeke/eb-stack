@@ -5,6 +5,11 @@ The full Keep a Changelog history lives in
 [[https://github.com/HaoZeke/eb-stack/blob/main/CHANGELOG.md][CHANGELOG.md]]
 at the repository root. Highlights for the documentation site:
 
+* 0.3.0
+
+- ~eb-stack ingest~: conda-forge ~meta.yaml~ / Spack ~package.py~ → EB scaffold
+- Version surfaces aligned at 0.3.0; tag path ~vX.Y.Z~ documented in CONTRIBUTING
+
 * 0.2.0
 
 - Hierarchy-aware ~bump --easyconfigs~ with loud fail on unresolved deps

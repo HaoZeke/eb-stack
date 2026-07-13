@@ -175,7 +175,7 @@ eb-stack --version
   Cite the repository and version (or the [[https://github.com/HaoZeke/eb-stack/blob/main/CITATION.cff][CITATION.cff]] metadata):
 
 #+begin_src text
-Rohit Goswami, eb-stack (version 0.2.0), https://github.com/HaoZeke/eb-stack
+Rohit Goswami, eb-stack (version 0.3.0), https://github.com/HaoZeke/eb-stack
 #+end_src
 
 * License
