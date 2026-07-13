@@ -32,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **new-package skill §7 full-drive default**: local-ai agent (Hermes/herdr on
+  `rg.surf`) owns residual judgment **and** `eb --robot` *builds* for PR-ready
+  campaigns; residual-only only when human scopes it. Prompt template
+  `skills/new-package/hermes-full-drive.prompt.md`. Stopping after `eb -Dr`
+  without install is not done.
 - **`check-recipe` hierarchy membership for unpinned deps**: a candidate on
   an out-of-generation GCCcore (e.g. CapnProto only on 14.3.0) no longer
   false-passes a newer foss recipe; explicit cross-gen pins still match.

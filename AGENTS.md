@@ -6,11 +6,13 @@ built to make the right thing the easy thing.
 
 ## The procedure
 
-Pick the skill that matches the work, then follow it end to end. The tool
-does the mechanical majority and fails loudly; you handle only the bounded
-residual cases it names. Your site should pair these with a site runbook
-(init paths, module names, scheduler sizing); ask for it if you were not
-given one.
+Pick the skill that matches the work, then follow it end to end.
+Mechanical CLI fails loudly; the **campaign agent** (Hermes preferred, herdr
+on **rg.surf**) owns residual judgment **and** `eb --robot` *builds* when the
+goal is PR-ready / landable (new-package skill §7 full-drive). Residual-only
+sessions require an explicit human scope. Your site should pair these with a
+site runbook (init paths, module names, scheduler sizing); ask for it if you
+were not given one.
 
 | Work | Skill | Host |
 |------|--------|------|

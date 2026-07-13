@@ -47,14 +47,14 @@ different role).
 | `eb`, EasyBuild robot tree, modules | Real SURF EasyBuild environment (this host **is** the EB machine) |
 | `eb-stack` (release binary or build there) | Same machine as `eb` for ingest → check-recipe → install |
 | **Install / *builds* claim** | `eb --robot` **here** when EB is set up — not `rg.terra` (terra is cargo for this repo) |
-| **local-ai agent** (Hermes preferred; OMP allowed) | Residual judgment against live `eb` / robot |
-| **herdr** pane for residual agents | Always; never ad-hoc `ssh … hermes/omp -p` for residual loops |
+| **local-ai agent** (Hermes preferred; OMP allowed) | **Full campaign owner** on this host: residual judgment **and** `eb --robot` *builds* (see §7) |
+| **herdr** pane for the campaign agent | Always; never ad-hoc `ssh … hermes/omp -p` for residual/build loops |
 | Drafts / letter-layout work dir | Where `eb --robot` and inject-checksums see files |
 
 ```
 ssh rg.surf
-# mechanical CLI (ingest / inject-checksums / check-contrib) may run in that shell
-# residual judgment agents: always under herdr on this host (see §7)
+# optional preflight mechanical CLI may run in that shell
+# campaign agent (residual + install): always under herdr on this host (see §7)
 ```
 
 If `rg.surf` is unreachable, **stop and report** — do not fall back to
@@ -327,18 +327,22 @@ eb-stack ingest \
 # Overlay landable companions when robot holes exist (e.g. CapnProto GCCcore-15.2.0):
 # rsync $REPO/fixtures/eon_foss_2026_1/easyconfigs/ /tmp/eb-new/easyconfigs/
 
-# Then ALWAYS:
+# Then ALWAYS (mechanical preflight; campaign agent §7 re-runs and continues to install):
 eb --inject-checksums /tmp/eb-new/easyconfigs/*/*/*.eb
+eb-stack format-style /tmp/eb-new/easyconfigs/*/*/*.eb
 eb --check-contrib /tmp/eb-new/easyconfigs/*/*/*.eb
 eb-stack check-recipe --recipe /tmp/eb-new/easyconfigs/e/eOn/*.eb \
   --easyconfigs "$ROBOT" --easyconfigs /tmp/eb-new/easyconfigs
 eb -Dr --robot /tmp/eb-new/easyconfigs:$ROBOT /tmp/eb-new/easyconfigs/*/*/*.eb
+# *builds* (required for DONE_FULL_DRIVE / *builds* claim):
+# eb --robot /tmp/eb-new/easyconfigs:$ROBOT /tmp/eb-new/easyconfigs/*/*/*.eb
 ```
 
 Compare bootstrap + residual queue to landable fixtures
 (`fixtures/eon_foss_2026_1`, `fixtures/qmcpack_foss_2026_1`) for product surface
-(configopts, extract_cmd, companions). Fixtures prove **resolve**/packaging_gate,
-not a virgin *builds* install.
+(configopts, extract_cmd, companions). Fixtures prove **resolve**/packaging_gate;
+a *builds* claim still needs `eb --robot` on **rg.surf** (campaign agent §7).
+
 
 Regression (code + validation):
 
@@ -361,105 +365,140 @@ cargo test --locked --test eon_foss_2026_1 --test qmcpack_foss_2026_1
 | SHA256 for fetched sources | `eb --inject-checksums` (**mechanical**) |
 | Style + checksum presence gate | `eb --check-contrib` (**mechanical**) |
 | E501 line length (≤120) lint / wrap | `eb-stack check-style` / `format-style` (**mechanical**) |
-| Graph dry-run / install (*builds*) | `eb -Dr` / `eb --robot` on **rg.surf** (**mechanical**) |
-| Product configopts, variant policy, real sanity paths, moduleclass choice, multi-source extract layout, companion authoring judgment | **local-ai agent** using residual queue — **not** hardcoding into `eb-stack` |
+| Graph dry-run | `eb -Dr --robot` on **rg.surf** (**mechanical**; campaign agent re-runs) |
+| Real install (*builds*) | `eb --robot` on **rg.surf** (**mechanical command**, run by the **campaign agent** §7 — not optional if goal is PR-ready / *builds*) |
+| Product configopts, variant policy, real sanity paths, moduleclass choice, multi-source extract layout, companion authoring judgment | **campaign agent** using residual queue — **not** hardcoding into `eb-stack` |
 | Upstream PR merge | Human + EasyBuild maintainers |
 
 Three-claim ladder (site ops): annual-bump §10.4 —
 *resolves* (plan) ≠ *builds* (`eb --robot` on **`rg.surf`**) ≠ *binary-verified*.
-Do not ship a residual session that only edits recipes and stops if the next
-step is install: after residual gates, run `eb -Dr --robot …` then
-`eb --robot …` on **rg.surf** (site EB setup). Use the batch scheduler when the
-site runbook says so; on a single-user rg.surf workstation a direct `eb`
-session is fine if it owns a cgroup and `EASYBUILD_TMPDIR` is set.
+
+**Default campaign goal when the human asks for PR-ready / landable / “do the
+packages”:** establish *resolves* **and** *builds* for every target recipe.
+Stopping after recipe polish + `eb -Dr` without `eb --robot` is **not done**.
+Use the batch scheduler when the site runbook says so; on a single-user
+rg.surf workstation a direct `eb --robot` session is fine if it owns a cgroup
+and `EASYBUILD_TMPDIR` is set.
 
 ---
 
-## 7. Mechanical first; local-ai agent only for judgment residuals
+## 7. Full-drive campaign agent (default)
 
-**Maximize mechanical work.** Run every tool step that does not require a
-product/policy decision. **Do not hardcode** product flags, hand pins, or
-site-specific layout into `eb-stack` / ingest to “close” residuals — that
-bakes lies into the tool. Judgment residuals go to a **local-ai agent**
-(OMP or Hermes session with this skill as the runbook).
+The **local-ai agent (Hermes preferred)** is the **process owner** of a greenfield
+campaign on **rg.surf**: it runs mechanical CLI steps, closes judgment residuals,
+**and** drives `eb --robot` until *builds* is established or a real block is
+documented. It is **not** a “residual-only chat that stops before install.”
+
+**Maximize mechanical tools** (do not invent product `-D` into `eb-stack`). Use
+`format-style` for E501; use residual judgment for product/moduleclass/companions.
+**Do not** end the herdr session after check-contrib / check-recipe / `eb -Dr`
+when the goal includes *builds*.
 
 ### Split of work
 
 | Kind | Examples | Who |
 |------|----------|-----|
-| **Mechanical** | `eb -S`; `eb-stack ingest` / `eb_ingest` (+ residual JSON); hierarchy/resolvo pins; `eb --inject-checksums`; **`eb-stack format-style`** / `check-style` (E501 ≤120); `eb --check-contrib`; `eb-stack check-recipe` / `eb_check_recipe`; `eb -Dr --robot` | CLI / MCP / any driver that only runs commands |
-| **Judgment residual** | Close residual-queue items: product features; moduleclass; sanity paths; extract_cmd; companion recipes for hierarchy holes; Spack `when=`; sibling vs greenfield; PR title | **local-ai agent** (this skill §3–§4) with residual JSON as input |
-| **Forbidden** | Encoding product `-D` sets, fake checksums into ingest; hand-wrapping E501 in a residual agent when `format-style` exists; claiming *builds* without `eb --robot` | Nobody — not code, not the agent pretending mechanical |
+| **Mechanical commands** | `eb -S`; `eb-stack ingest` / `eb_ingest`; inject-checksums; **format-style** / check-style; check-contrib; check-recipe; `eb -Dr`; **`eb --robot`** | Run by shell **or** by the campaign agent; same commands either way |
+| **Judgment** | product features; moduleclass; sanity paths; extract_cmd; hierarchy companions; Spack `when=`; sibling vs greenfield | **campaign agent** with residual JSON + oracles/docs |
+| **Forbidden** | Hardcoding product `-D` into ingest; hand-wrapping E501 when format-style exists; claiming *builds* without `eb --robot` success; opening GitHub PRs without human authorization | Nobody |
 
-### Mechanical sequence (always do this before calling a local-ai agent)
+### Preflight (optional outer driver)
+
+An outer driver **may** run steps 1–7 below before starting herdr to save agent
+turns. If skipped, the campaign agent runs them itself. **Never** treat preflight
+as the end of the campaign when *builds* is in scope.
 
 1. `eb -S Name` — prefer sibling copy when possible.
-2. `eb-stack ingest … --easyconfigs $ROBOT` (or MCP `eb_ingest`) — keep the
-   printed **residual-queue** path.
-3. Read residual JSON kinds; fix only **mechanical** items if any (none of the
-   product `-D` set).
-4. `eb --inject-checksums` on the draft (after sources URLs are stable).
-5. **`eb-stack format-style path/to/Name-Ver-tc.eb`** then
-   **`eb-stack check-style`** — E501 (line longer than 120) is **mechanical**. Do **not**
-   send long `configopts` / `preconfigopts` line-wrapping to a residual agent.
-   Residual-queue items with `kind: "style"` mean run format-style, not judgment.
-6. `eb --check-contrib` — remaining non-E501 style / missing SHA256 only.
-7. `eb-stack check-recipe` (+ draft overlay for companions) + `eb -Dr --robot …`.
-8. **Stop.** Remaining residual-queue (non-`style`) + missing-dep hierarchy
-   hints → local-ai agent in **herdr** (§7). After judgment edits, re-run
-   4–7, then `eb --robot` on **rg.surf** only when claiming *builds*.
+2. `eb-stack ingest … --easyconfigs $ROBOT` — keep residual-queue path.
+3. Mechanical residual items only (not product `-D`).
+4. `eb --inject-checksums` after sources are stable.
+5. `eb-stack format-style` then `check-style` (E501 is mechanical).
+6. `eb --check-contrib`.
+7. `eb-stack check-recipe` + `eb -Dr --robot …`.
+8. **Start campaign agent (§7 full-drive)** — judgment + re-gates + **`eb --robot`**.
 
-### local-ai agent (Hermes preferred) — **herdr pane on `rg.surf`**
+### Full-drive sequence (campaign agent MUST run)
 
-- **Name in prompts:** “local-ai agent” (not product nicknames).
-- **Host:** **`rg.surf` only** (same as §0). Where `eb` and the robot tree live.
-- **Container (mandatory):** run the residual agent **inside a herdr pane** on
-  that host — same pattern as other SURF agent work (herdr → harness → tools).
-  Do **not** drive residual judgment via bare `ssh rg.surf 'hermes …'` /
-  `omp … -p` outside herdr (no pane status, no `herdr agent read`, easy to
-  leave orphan processes).
-- **How to start (on rg.surf):**
-  ```
-  # ensure server
-  herdr status   # if server not running: herdr server &
-  WORK=$HOME/tmp/eb-repro/work   # or site work dir
-  herdr agent start eb-residual-hermes \
-    --cwd "$WORK" --no-focus -- \
-    hermes chat --cli --yolo --accept-hooks \
-      --provider willma -m openai/gpt-oss-120b \
-      -q "$(cat "$WORK/residuals/hermes-residual-prompt.md")"
-  herdr agent read eb-residual-hermes --source recent --lines 80
-  herdr agent wait eb-residual-hermes --status idle
-  ```
-  Hermes is the default residual harness; OMP (`omp-surf` / `omp-eb-stack`)
-  is allowed only if started the same way through **herdr agent start**.
-- **Harness model path:** site Willma role for eb-stack (see annual-bump §11.5).
-  Commercial frontier models out of scope for SURF-only work.
-- **Input:** this skill path; software name; foreign path (or “none —
-  search first”); toolchain; `ROBOT` and work dir **on rg.surf**; the
-  **`*.residuals.json` path** from ingest; any `check-recipe` missing-dep JSON.
-- **Prompt shape (minimal):**
-  ```
-  On rg.surf (herdr pane): follow skills/new-package/SKILL.md for <software>.
-  Foreign: <path|none>. Toolchain: foss-<gen>. ROBOT=<path on rg.surf>.
-  Work=<path on rg.surf>. Residual queue JSON: <path to *.residuals.json>.
-  Mechanical steps already done: <ingest, inject-checksums, check-contrib, …>.
-  Residual judgment only: close residual-queue items + check-recipe missing
-  hierarchy companions. Use eb / eb-stack / MCP eb_check_recipe on this host.
-  Do not invent eb-stack features or hardcode product flags into the tool.
-  Report claim ladder. PR surface human-only unless authorized this turn.
-  ```
-- **Output:** edited easyconfig(s) + companions under letter layout + residual
-  log + claim ladder; paste-ready PR title/body if contribution is in scope.
+Inside herdr on **rg.surf**, for each target recipe (and companions as needed):
+
+1. Close residual-queue judgment (oracles / project docs / sibling EB). Prefer
+   `cp` from a landable fixture when residual is “match landable fixture.”
+2. Re-run: inject-checksums (if needed) → **format-style** → check-style →
+   check-contrib → check-recipe → `eb -Dr --robot WORK:ROBOT` until green.
+3. **REAL BUILD (required for *builds*):**
+   ```
+   eb --modules-tool=Lmod --robot "$WORK/easyconfigs:$ROBOT" path/to/Name-Ver-tc.eb \
+     2>&1 | tee "$WORK/logs/robot-<name>.log"
+   ```
+   Prefer smaller packages first when batching. On failure: read the log, fix
+   recipe/companion with justified edits, re-run from step 2 for that package.
+   **Do not** disable sanity checks or invent looser settings.
+4. Write `$WORK/residuals/session-log.md` with the three-claim ladder **per package**:
+   *resolves* / *builds* / *binary-verified* (last only if real binary checks ran).
+5. Print **`DONE_FULL_DRIVE`** when every target has *resolves* and *builds*, else
+   **`DONE_PARTIAL`** with exact failures and log paths.
+
+### How to start (on rg.surf)
+
+```
+herdr status   # if server not running: herdr server &
+WORK=$HOME/tmp/eb-repro/work   # or site work dir
+# Write $WORK/residuals/hermes-full-drive.md from the prompt template below
+# (or skills/new-package/hermes-full-drive.prompt.md).
+
+herdr agent start eb-full-drive-hermes \
+  --cwd "$WORK" --no-focus -- \
+  hermes chat --cli --yolo --accept-hooks \
+    --provider willma -m openai/gpt-oss-120b \
+    -q "$(cat "$WORK/residuals/hermes-full-drive.md")"
+herdr agent read eb-full-drive-hermes --source recent --lines 80
+# Monitor: herdr agent read / wait; outer driver uses monitor tool (no sleep-poll).
+```
+
+Hermes is the default harness; OMP only via the same **herdr agent start** path.
+Harness model: site Willma role for eb-stack (annual-bump §11.5). Commercial
+frontier models out of scope for SURF-only work.
+
+### Prompt template (full-drive — default)
+
+Copy and fill paths. Ship as `$WORK/residuals/hermes-full-drive.md`.
+
+```
+On rg.surf (herdr pane): follow skills/new-package/SKILL.md end to end.
+You OWN the full campaign through REAL installs (*builds*). Do not stop at recipe polish.
+
+WORK=<path> REPO=<eb-stack> ROBOT=<easyconfigs tree>
+export PATH=$HOME/.venvs/easybuild/bin:$HOME/.local/bin:$REPO/target/release:$PATH
+export LMOD_CMD=$HOME/.local/lmod/lmod/libexec/lmod
+source $HOME/.local/lmod/lmod/init/bash 2>/dev/null || true
+export EASYBUILD_MODULES_TOOL=Lmod EASYBUILD_SOURCEPATH=… EASYBUILD_TMPDIR=… EASYBUILD_INSTALLPATH=…
+
+Recipes: <list .eb paths>
+Residual queues: <*.residuals.json>
+Oracles (if any): <fixture .eb paths — copy product judgment, do not invent -D>
+Companions: under WORK/easyconfigs as needed.
+
+FORBIDDEN: edit REPO/src; open GitHub/GitLab PRs; invent product flags not in
+oracle/docs; claim builds without eb --robot success.
+
+Sequence: (1) residual/oracle align (2) inject-checksums (3) format-style +
+check-style (4) check-contrib (5) check-recipe (6) eb -Dr (7) eb --robot with
+tee to WORK/logs/robot-*.log for EACH package (8) session-log.md claim ladder
+(9) DONE_FULL_DRIVE or DONE_PARTIAL.
+
+Start now. Run commands; do not only plan.
+```
+
+Optional **residual-only** prompt is allowed only when the human explicitly
+scopes “no install / recipe gates only.” Default is full-drive.
 
 ### What success looks like
 
-- Mechanical gates green: inject-checksums done, `check-contrib` clean or
-  only judgment items left and documented.
-- `eb -Dr --robot` coherent; no invented dep versions.
-- Judgment residuals closed by local-ai agent with citations to project
-  docs / sibling easyconfigs, not silent invention.
-- Claim ladder stated.
+- Gates green: format-style, check-contrib, check-recipe, `eb -Dr`.
+- **`eb --robot` exit 0** for each target (or documented real failure + log).
+- session-log.md states *resolves* / *builds* / *binary-verified* honestly.
+- `DONE_FULL_DRIVE` or `DONE_PARTIAL` printed.
+- PR surface: paste-ready only unless human authorized remote PR this turn.
 
 ---
 
