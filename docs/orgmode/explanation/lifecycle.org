@@ -115,13 +115,14 @@ digraph L {
 
 * The migration lifecycle, end to end
 
-1. *Bump* each recipe onto the new generation with eb-stack (deps auto-resolved
-   from the robot tree). See [[file:../howto/bump-recipe.org][Bump a recipe]].
+1. *Bump* each recipe onto the new generation with eb-stack (~--easyconfigs~:
+   hierarchy consensus + resolvo joint pins for that recipe's deps). See
+   [[file:../howto/bump-recipe.org][Bump a recipe]].
 2. *Close the graph*: ~check-recipe~ until every dependency and build-dependency
    resolves for the target generation; author any greenfield companion the stack
    needs but the robot tree lacks.
-3. *Resolve the stack*: ~solve~ for a jointly consistent selection and emit the
-   build list and a review diff.
+3. *Resolve the stack*: ~solve~ for a multi-root jointly consistent selection and
+   emit the build list and a review diff (optional CycloneDX 1.5 SBOM).
 4. *Build*: ~eb --robot~ the closure. Fix each recipe that fails (checksum,
    easyblock, build step) and re-run. This is the step that promotes the stack
    from "resolves" to "installs."

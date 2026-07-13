@@ -222,11 +222,13 @@ eb-stack bump
   auto-resolved version for that name.
 - ~--easyconfigs DIR~ :: Directory of easyconfigs (walked recursively, same
   parser as ~solve~) used to auto-resolve every ~dependencies~ /
-  ~builddependencies~ version for the target toolchain generation,
-  hierarchy-aware (~GCCcore~/~GCC~/~gfbf~/~gompi~/... down to ~SYSTEM~).
-  Omit it to fall back to hand ~--dep~ overrides only (unnamed dependencies
-  keep their source version). See [[file:../tutorial.org][the tutorial]]
-  for the zero-hand-fed flow.
+  ~builddependencies~ version for the target toolchain generation.
+  Resolution is hierarchy consensus then resolvo joint SAT (hierarchy
+  pins as exact requirements on a synthetic root; see
+  [[file:../howto/bump-recipe.org][bump how-to]] and
+  [[file:../explanation/architecture.org][architecture]]). Omit to fall back
+  to hand ~--dep~ only. See [[file:../tutorial.org][the tutorial]] for the
+  zero-hand-fed flow.
 - ~--hierarchy-fixture PATH~ :: Optional EasyBuild ~get_toolchain_hierarchy~
   capture (JSON) that overrides hierarchy discovery. Rarely needed: with
   ~--easyconfigs~, GCC-family generations (~foss~/~gompi~/~gfbf~) derive
@@ -323,17 +325,17 @@ eb-stack ingest
 - ~--out~ / ~--out-dir~ :: output path or letter/name layout directory.
 
 The emit path is honest: name, version, source URL/filename, sha256 when
-present, and dependency *names* come from the foreign input. Easyblock,
-build steps, and EB generation-native dependency versions are residual
-(header warnings). Re-parse the result with ~check-recipe~ (robot completeness
-may still fail until companions and pins are filled).
+present, multi-source layout, static ~configopts~ when the foreign DSL
+states them, and dependency *names* come from the foreign input. Product
+flags, patches, and hand-maintainer pins remain residual (header warnings).
 
-- ~--easyconfigs DIR~ :: Robot easyconfig tree(s) for hierarchy-aware dependency
-  version resolve (same mechanical path as ~bump~). Repeatable; later wins.
+- ~--easyconfigs DIR~ :: Robot easyconfig tree(s). Same two-stage resolve as
+  ~bump~ (hierarchy consensus + resolvo joint pins). Repeatable; later wins
+  on identity conflict. Fills generation-native dep versions and preferred
+  package-name casing.
 - ~--keep-old-deps~ :: Keep residual foreign versions when the robot has no candidate.
 - ~--hierarchy-fixture PATH~ :: Optional hierarchy JSON override.
 
-With ~--easyconfigs~, dependency versions and package-name casing are filled
-from the target generation — not left as ~0.0.0~ stubs.
-
-Fixtures: ~fixtures/foreign_ingest/~.
+Without ~--easyconfigs~, dep versions stay residual (foreign floors or
+~0.0.0~). With it, expect warnings naming ~hierarchy consensus~ and
+~resolvo joint~. Fixtures: ~fixtures/foreign_ingest/~.

@@ -168,9 +168,11 @@ eb-stack bump \
 - [[file:howto/bump-recipe.org][How to bump a recipe]] -- every ~bump~ flag:
   auto-resolve, hand overrides, operator preservation, version bumps with a
   new source checksum.
-- [[file:howto/solve-lock.org][How to solve a consistent stack lock]] -- co-select an
-  entire tree of easyconfigs with the resolvo SAT solver, beyond the
-  single-recipe scope of ~bump~.
+- [[file:howto/solve-lock.org][How to solve a consistent stack lock]] -- multi-root
+  stack co-selection with resolvo (policy roots, baseline, build list,
+  stack diff, optional CycloneDX). ~bump --easyconfigs~ already runs
+  resolvo joint pins for one recipe's deps; ~solve~ co-selects a whole
+  generation under a policy.
 - [[file:explanation/fidelity.org][Reproduction fidelity and limitations]] -- how
   often auto-resolve reproduces a real maintainer toolchain bump exactly,
   and what it cannot do.

@@ -21,19 +21,22 @@ digraph G {
     select [label="select\npriority-lex optimize"];
     lock [label="StackLock\nstack.lock.json"];
     report [label="report\nbuild list, stack diff"];
-    sbom [label="sbom\nCycloneDX"];
-    hierarchy [label="hierarchy\nsub-toolchain resolve", fillcolor="#F1DB4B"];
+    sbom [label="sbom\ncyclonedx-bom\n1.5 JSON"];
+    hierarchy [label="hierarchy\nconsensus floors", fillcolor="#F1DB4B"];
     emit [label="eb_emit\nbump: next-gen .eb"];
+    joint [label="resolvo_resolve\n_dep_versions\n(joint SAT pins)", fillcolor="#F1DB4B"];
 
     eb_files -> parser -> domain -> provider -> solver;
     solver -> select [label="feasible\nassignment"];
     select -> lock;
     lock -> report;
     lock -> sbom;
-    eb_files -> emit [style=dashed, label="bump path\n(source: text rewrite,\nno solving)"];
-    eb_files -> parser [style=dashed, label="--easyconfigs\n(auto-resolve universe)"];
+    eb_files -> emit [style=dashed, label="bump: text rewrite"];
+    eb_files -> parser [style=dashed, label="--easyconfigs\nuniverse"];
     parser -> hierarchy [style=dashed];
-    hierarchy -> emit [style=dashed, label="resolved dep\nversions"];
+    hierarchy -> joint [style=dashed, label="generation\npins"];
+    joint -> provider [style=dashed, label="synthetic root\n+ pins"];
+    joint -> emit [style=dashed, label="dep versions"];
 }
 #+end_src
 
@@ -68,7 +71,7 @@ digraph G {
   ~StackLock~ (sorted, timestamped, tagged with the solver engine string),
   and validates every declared root is present.
 - ~sbom~ (~src/sbom.rs~) :: ~StackLock~ (plus declared runtime/build edges)
-  to a CycloneDX **1.5** JSON document via the official ~cyclonedx-bom~
+  to a CycloneDX 1.5 JSON document via the official ~cyclonedx-bom~
   crate (~serialNumber~, tools, pre-build lifecycle, runtime ~dependsOn~,
   build edges as ~eb_stack:buildDependsOn~ properties). Opt-in via
   ~--sbom-out~. See [[file:../reference/formats.org][the format reference]].
@@ -84,7 +87,7 @@ digraph G {
   dict, optional ~version~ assignment, named dependency tuples, and (on a
   version bump) the source checksum entry in an easyconfig's *source text*,
   byte-preserving everything else. With ~--easyconfigs~, auto-resolve is
-  hierarchy consensus **then** ~resolvo_resolve_dep_versions~ (joint SAT
+  hierarchy consensus then ~resolvo_resolve_dep_versions~ (joint SAT
   over hierarchy-eligible candidates with a synthetic root for this
   recipe).
 - ~version~ (~src/version.rs~) :: EasyBuild-shaped version comparison and
@@ -100,7 +103,7 @@ pipeline above: parse (or load an already-built universe JSON), build a ~Univers
 lock.
 
 ~bump~ always rewrites one recipe's source text (toolchain / version / dep
-pins). With ~--easyconfigs~, auto-resolve is **two stages**: (1) hierarchy
+pins). With ~--easyconfigs~, auto-resolve is two stages: (1) hierarchy
 consensus picks generation-native floors (GCCcore-aware, same as before);
 (2) ~resolvo_resolve_dep_versions~ builds a synthetic root over
 hierarchy-eligible candidates and runs the same resolvo CDCL SAT core as

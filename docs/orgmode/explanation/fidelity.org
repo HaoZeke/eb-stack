@@ -5,8 +5,8 @@
 unattended pipeline. This page states how much of a real maintainer bump
 it reproduces, measured against real EasyBuild recipes, and what kind of
 residual to expect when it does not reproduce one exactly. Both numbers
-below move as the parser and the hierarchy resolver improve; this page is
-updated alongside the code that moves them.
+below move as the parser, hierarchy resolver, and resolvo joint path improve;
+this page is updated alongside the code that moves them.
 
 * Parser coverage on a real, unfiltered checkout
 

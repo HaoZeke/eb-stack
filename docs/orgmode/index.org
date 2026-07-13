@@ -114,13 +114,14 @@
 
   ~eb-stack~ parses a tree of [[https://docs.easybuild.io/][EasyBuild]] easyconfig (~*.eb~) files, co-selects a
   consistent software stack for one toolchain generation with a CDCL SAT
-  solver ([[https://github.com/mamba-org/resolvo][resolvo]]), and writes the result as a machine-readable lock file plus an
-  opt-in planned CycloneDX SBOM. It also rewrites an existing easyconfig into
-  the next toolchain generation (~bump~), auto-resolving every dependency and
-  build-dependency version from a directory of easyconfigs (hierarchy-aware
-  across ~GCCcore~/~GCC~/~gfbf~/~gompi~/... sub-toolchains) with no
-  hand-fed ~--dep~ flags required, and reports the selected build order and
-  a baseline-vs-solved stack diff for pull request review.
+  solver ([[https://github.com/mamba-org/resolvo][resolvo]]), and writes a machine-readable lock plus an opt-in planned
+  CycloneDX 1.5 SBOM (via [[https://crates.io/crates/cyclonedx-bom][cyclonedx-bom]]). It rewrites an existing
+  easyconfig into the next generation (~bump~), auto-resolving every
+  dependency and build-dependency version from a robot tree in two stages —
+  hierarchy consensus, then resolvo joint pins — with no hand-fed ~--dep~
+  flags required. It also ingests conda-forge / Spack recipes into EB
+  scaffolds, and reports build order and a baseline-vs-solved stack diff for
+  review.
 
 * What it is not
 

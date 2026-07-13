@@ -13,8 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `eb-stack ingest`: convert conda-forge (`meta.yaml` / `recipe.yaml`) and
   Spack (`package.py`, restricted parse) recipes into parseable EasyBuild
-  scaffolds (name, version, source identity, dependency names; residual
-  warnings for toolchain/build logic and EB generation-native dep versions).
+  scaffolds (name, version, sources, static configopts, dependency names).
+  With `--easyconfigs`, fills generation-native dep versions via hierarchy
+  consensus + resolvo joint pins (same path as `bump`).
 - Frozen fixtures under `fixtures/foreign_ingest/` and integration tests
   (`tests/foreign_ingest.rs`) for library + CLI ingest paths.
 - In-site Rust API docs path (sphinx-rustdocgen) and public packaging hygiene
@@ -22,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `bump --easyconfigs` auto-resolve is **two-stage**: hierarchy consensus
+  floors, then resolvo CDCL SAT with those versions as exact pins (joint
+  feasibility). No longer hierarchy-only independent lookup.
+- Planned SBOM emission uses the official `cyclonedx-bom` crate (CycloneDX
+  1.5 JSON: `serialNumber`, tools, pre-build lifecycle; runtime `dependsOn`;
+  build edges as `eb_stack:buildDependsOn`). Lock-only SBOM no longer invents
+  all-to-all co-stack edges.
 - Project version surfaces (`Cargo.toml`, `pixi.toml`, `CITATION.cff`, docs
   `release`, binary `--version`) aligned at **0.3.0**.
 

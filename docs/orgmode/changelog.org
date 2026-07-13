@@ -7,8 +7,13 @@ at the repository root. Highlights for the documentation site:
 
 * 0.3.0
 
-- ~eb-stack ingest~: conda-forge ~meta.yaml~ / Spack ~package.py~ → EB scaffold
-- Version surfaces aligned at 0.3.0; tag path ~vX.Y.Z~ documented in CONTRIBUTING
+- ~eb-stack ingest~: conda-forge / Spack → EB scaffold; optional ~--easyconfigs~
+  uses hierarchy + resolvo joint pins (same path as ~bump~)
+- ~bump --easyconfigs~: hierarchy consensus then resolvo CDCL joint pins
+  (not hierarchy-only lookup)
+- Planned SBOM via official ~cyclonedx-bom~ (CycloneDX 1.5, ~serialNumber~,
+  pre-build lifecycle, runtime ~dependsOn~, build edges as properties)
+- Version surfaces aligned at 0.3.0
 
 * 0.2.0
 

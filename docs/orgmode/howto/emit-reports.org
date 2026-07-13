@@ -83,6 +83,6 @@ identifier.
 * Next steps
 
 - [[file:../reference/formats.org][Format reference]] for the exact build-list and
-  stack-diff grammar, and the CycloneDX SBOM shape.
+  stack-diff grammar, and the CycloneDX 1.5 SBOM shape (~cyclonedx-bom~).
 - [[file:solve-lock.org][Solve a consistent stack lock]] if you have not run
   ~solve~ yet.

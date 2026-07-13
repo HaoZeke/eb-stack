@@ -19,7 +19,7 @@
   ],
   "solver": {
     "engine": "resolvo_cdcl_sat",
-    "engine_version": "resolvo+eb_stack-0.2.0",
+    "engine_version": "resolvo+eb_stack-0.3.0",
     "timestamp": "2026-01-01T00:00:00Z"
   }
 }
@@ -118,28 +118,32 @@ classified once: ~unchanged~ (same version both sides), ~added~ (solved
 only), ~removed~ (baseline only), or ~version-bumped~ (present both sides,
 different version). Sections are sorted by package name.
 
-* Planned SBOM (~--sbom-out~, CycloneDX)
+* Planned SBOM (~--sbom-out~, CycloneDX 1.5)
+
+Documents are built with the official [[https://crates.io/crates/cyclonedx-bom][cyclonedx-bom]]
+crate (same models as cargo-cyclonedx), serialized as CycloneDX 1.5 JSON.
 
 Opt-in: ~--sbom-out~ has no default filename. Omit it and ~solve~ /
 ~solve-json~ write only the lock (and any requested build list / stack
-diff) -- no SBOM file at all. ~eb-stack sbom --lock LOCK~ is the one
-exception with a real default output path (~stack.cdx.json~), since that
-subcommand's entire purpose is emitting an SBOM from an existing lock.
+diff). ~eb-stack sbom --lock LOCK~ defaults to ~stack.cdx.json~ because that
+subcommand's sole purpose is SBOM emission.
 
 #+begin_src json
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
+  "serialNumber": "urn:uuid:…",
   "version": 1,
   "metadata": {
     "timestamp": "2026-01-01T00:00:00Z",
-    "tools": [{"vendor": "SURF", "name": "eb-stack", "version": "resolvo+eb_stack-0.2.0"}],
+    "tools": [{"vendor": "SURF", "name": "eb-stack", "version": "resolvo+eb_stack-0.3.0"}],
     "component": {
       "type": "application",
       "name": "easybuild-stack-foss-2025b",
       "version": "foss-2025b",
       "description": "Planned EasyBuild stack inventory from eb-stack lock (pre-install; not a post-build compliance scan)"
     },
+    "lifecycles": [{"phase": "pre-build"}],
     "properties": [
       {"name": "eb_stack:document_kind", "value": "planned-sbom-from-lock"},
       {"name": "eb_stack:solver_engine", "value": "resolvo_cdcl_sat"},
@@ -167,17 +171,17 @@ subcommand's entire purpose is emitting an SBOM from an existing lock.
 #+end_src
 
 Each component's ~bom-ref~ / ~purl~ is a synthetic ~pkg:generic/~ reference
-(EasyBuild packages have no real PURL type registry entry) embedding name,
-version, and toolchain label. ~eb_stack:lifecycle: pre-install-plan~ marks
-this as a *planned* inventory: the packages it names come from the
-solver's selection, not a scan of anything actually built or installed.
+(EasyBuild has no dedicated PURL type) embedding name, version, and
+toolchain. Metadata ~lifecycles: pre-build~ and
+~eb_stack:lifecycle: pre-install-plan~ mark a *planned* inventory from the
+solver selection, not a scan of installed software.
 
-~dependsOn~ edges differ by how the document was produced:
+~dependsOn~ edges:
 
-- From ~solve~ / ~solve-json~ (universe still in hand): edges come from each
-  package's *declared* ~dependencies~ (runtime only; build-time deps are
-  tracked separately and intentionally excluded from ~dependsOn~),
-  intersected with what actually co-selected.
-- From ~eb-stack sbom --lock LOCK~ (lock only, no universe): falls back to
-  co-stack edges -- every package ~dependsOn~ every other co-selected
-  package. This is a weaker, purely inventory-level edge set.
+- From ~solve~ / ~solve-json~ (universe in hand): each package's declared
+  *runtime* ~dependencies~, intersected with co-selected lock members.
+  Build-time deps (~builddependencies~) go on the component property
+  ~eb_stack:buildDependsOn~ (comma-separated refs), not the runtime graph.
+- From ~eb-stack sbom --lock LOCK~ (lock only): ~dependsOn~ is empty
+  (unknown edges). The document never invents all-to-all co-stack cycles.
+  Empty ~dependsOn~ arrays may be omitted by cyclonedx-bom serialization.

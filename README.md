@@ -7,9 +7,11 @@
 
 **Rewrite EasyBuild stacks onto the next toolchain generation.**
 
-Parse `*.eb` files, hierarchy-aware `bump` with zero hand-fed dependency
-versions, co-select a consistent stack with **resolvo** (CDCL SAT), and emit a
-lock, build list, optional planned CycloneDX SBOM, and a reviewable stack diff.
+Parse `*.eb` files, `bump` with zero hand-fed dependency versions
+(hierarchy consensus **and** resolvo joint pins), co-select a full stack with
+**resolvo** (CDCL SAT), ingest conda-forge/Spack scaffolds, and emit a lock,
+build list, optional planned CycloneDX 1.5 SBOM (`cyclonedx-bom`), and a
+reviewable stack diff.
 
 [![CI](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_test.yml/badge.svg)](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_test.yml)
 [![Docs](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_docs.yml/badge.svg)](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_docs.yml)
@@ -42,9 +44,10 @@ cargo build --release
   --out-dir /tmp/gromacs-2024a
 ```
 
-Every dependency version comes from the universe; no `--dep` flags. The only
-intentional gap versus the real maintainer `foss-2024a` recipe is a hand-added
-`pybind11` line the tool correctly does not invent.
+Every dependency version comes from the universe (hierarchy + resolvo joint
+pins); no `--dep` flags. The only intentional gap versus the real maintainer
+`foss-2024a` recipe is a hand-added `pybind11` line the tool correctly does
+not invent.
 
 Full walkthrough: [tutorial](https://eb-stack.rgoswami.me/tutorial.html) ·
 source: [`docs/orgmode/tutorial.org`](docs/orgmode/tutorial.org).
@@ -73,16 +76,15 @@ MCP surface: `eb-stack mcp` (`eb_check_recipe` / `eb_bump` / `eb_solve`).
   --stack-diff-out stack.diff.md
 ```
 
-Optional `--sbom-out` writes a planned CycloneDX inventory. Baseline generation
-selection (nearest lower vs explicit) is documented in the
-[solve howto](docs/orgmode/howto/solve-lock.org).
-
+Optional `--sbom-out` writes a planned CycloneDX **1.5** inventory via
+`cyclonedx-bom`. Baseline generation selection (nearest lower vs explicit) is
+documented in the [solve howto](docs/orgmode/howto/solve-lock.org).
 
 ## Ingest foreign recipes (conda-forge / Spack)
 
-Scaffold a parseable EasyBuild `.eb` from a frozen foreign recipe (name,
-version, source identity, dependency **names**; build logic and EB generation
-versions remain residual):
+Scaffold a parseable EasyBuild `.eb` from a foreign recipe. Identity fields
+come from the input; pass `--easyconfigs` for generation-native dep versions
+(hierarchy + resolvo, same as `bump`):
 
 ```bash
 ./target/release/eb-stack ingest \
@@ -91,9 +93,12 @@ versions remain residual):
   --out /tmp/zlib-from-conda.eb
 
 ./target/release/eb-stack ingest \
-  --source fixtures/foreign_ingest/spack_zlib/package.py \
+  --source fixtures/foreign_ingest/spack_eon/package.py \
   --format spack \
-  --out /tmp/zlib-from-spack.eb
+  --toolchain-name foss --toolchain-version 2024a \
+  --easyconfigs fixtures/hierarchy_resolve/easyconfigs \
+  --keep-old-deps \
+  --out /tmp/eon-from-spack.eb
 ```
 
 ## Version

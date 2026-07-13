@@ -129,12 +129,14 @@ toolchain identity. A site recipe for ~GROMACS-2025.0-foss-2025b.eb~ that
 patches in a local build option replaces the upstream recipe of the same
 identity in the solved universe; a site-only package with no upstream
 counterpart is simply added, and it participates in co-selection like any
-other candidate. ~eb-stack bump --easyconfigs~ (the auto-resolve universe,
-see [[file:bump-recipe.org][how to bump a recipe]]) and ~eb-stack parse
---easyconfigs~ each take a single directory, not a repeatable list -- point
-either at a directory that already contains the overlay merged in, or at
-the overlay directory alone if it is self-sufficient for the dependencies
-being resolved.
+other candidate. ~eb-stack bump --easyconfigs~ and ~eb-stack parse
+--easyconfigs~ each take a *single* directory (not a repeatable list) —
+point at a tree that already contains the overlay merged in, or at the
+overlay alone if it is self-sufficient for the deps being resolved.
+(~solve~, ~check-recipe~, and ~ingest~ accept repeatable ~--easyconfigs~
+with later-path precedence.) Bump auto-resolve itself is hierarchy
+consensus plus resolvo joint pins over that one universe; see
+[[file:bump-recipe.org][how to bump a recipe]].
 
 * Next steps
 

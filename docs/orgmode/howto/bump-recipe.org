@@ -34,28 +34,32 @@ eb-stack bump \
   --easyconfigs /path/to/easyconfigs
 #+end_src
 
-~eb-stack~ parses ~DIR~ (recursively, same as ~solve~), then for each
-dependency name in the source recipe walks the target generation's
-sub-toolchain hierarchy (~GCCcore~, ~GCC~, ~gfbf~, ~gompi~, down to
-~SYSTEM~) and picks a version that:
+~eb-stack~ parses ~DIR~ (recursively, same restricted-Python evaluator as
+~solve~), then auto-resolves every ~dependencies~ / ~builddependencies~
+version in two stages (same machinery as ~ingest --easyconfigs~):
 
-- exists as a real easyconfig somewhere in that hierarchy for the target
-  generation,
-- is never older than the source recipe's own version for that dependency,
-  and
-- honors a ~versionsuffix~-qualified dependency (e.g. LLVM pinned for
-  ~llvmlite~) by leaving it untouched rather than bumping it to the newest
-  plain candidate.
+1. *Hierarchy consensus.* Walk the target generation's sub-toolchain
+   hierarchy (~GCCcore~, ~GCC~, ~gfbf~, ~gompi~, down to ~SYSTEM~) and pick a
+   generation-native version that exists as a real easyconfig, is never older
+   than the source pin, and leaves ~versionsuffix~ / ~SYSTEM~-toolchain pins
+   untouched.
+2. *Resolvo joint co-select.* Build a synthetic root for this recipe whose
+   deps are those names, pin the hierarchy versions as exact SAT requirements,
+   and run the same resolvo CDCL core as ~solve~. That proves the pins are
+   jointly feasible; free prefer_newer only fills names hierarchy could not
+   pin. SYSTEM installs are dropped when a non-SYSTEM hierarchy candidate for
+   the same name exists.
 
-Hierarchy data needs no configuration for GCC-family generations: eb-stack
-derives it from the robot tree itself (the ~foss-<gen>~ toolchain definition
-pins the generation's GCC version; ~gompi~/~gfbf~ definitions are sibling
-recipes), so a brand-new generation such as ~foss-2026.1~ works the day its
-toolchain definitions land in the tree. Built-in fixtures cover
-~foss-2023b~/~foss-2024a~/~foss-2025a~, a bare ~GCCcore-x.y.z~ target
-synthesizes ~[SYSTEM, GCCcore]~, and ~--hierarchy-fixture PATH~ still
-overrides everything with an explicit EasyBuild ~get_toolchain_hierarchy~
-capture (the escape hatch for non-GCC toolchains like ~intel~/~nvidia~).
+Warnings on stderr name which stage produced each pin
+(~hierarchy consensus~, ~resolvo joint agrees with hierarchy~, …).
+
+Hierarchy membership needs no configuration for GCC-family generations:
+eb-stack derives it from the robot tree (the ~foss-<gen>~ definition pins the
+generation's GCC; ~gompi~/~gfbf~ are sibling recipes). Built-in fixtures cover
+~foss-2023b~/~foss-2024a~/~foss-2025a~; a bare ~GCCcore-x.y.z~ target
+synthesizes ~[SYSTEM, GCCcore]~; ~--hierarchy-fixture PATH~ overrides with an
+explicit EasyBuild ~get_toolchain_hierarchy~ capture (escape hatch for
+~intel~/~nvidia~).
 
 ** Unresolved dependencies fail loudly by default
 

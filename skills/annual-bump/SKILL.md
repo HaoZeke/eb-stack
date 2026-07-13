@@ -39,10 +39,11 @@ PR surface (human-only). Operator-facing guide with the same loop:
 
 - **Deterministic (the tool does it, and refuses to guess):** rewrite
   `toolchain`; resolve every `dependencies` and `builddependencies` version from
-  the universe across the target generation's sub-toolchain hierarchy
-  (`GCCcore`/`GCC`/`gfbf`/`gompi`/... down to `SYSTEM`) using the generation's
-  consensus version; preserve templates, `local_*`, `SYSTEM`, versionsuffix and
-  pin qualifiers, `exts_list`, and every unchanged line verbatim.
+  the universe in two stages — (1) generation **hierarchy consensus** across
+  `GCCcore`/`GCC`/`gfbf`/`gompi`/.../`SYSTEM`, (2) **resolvo joint SAT** with
+  those versions as exact pins (same CDCL core as `solve`); preserve templates,
+  `local_*`, `SYSTEM`, versionsuffix and pin qualifiers, `exts_list`, and every
+  unchanged line verbatim.
 - **Judgment (yours):** a genuinely new dependency the maintainer adds for the
   new version; the source tarball checksum on a version bump; whether a
   version-bump's patches still apply; a maintainer's one-off decision to freeze
@@ -62,10 +63,13 @@ eb-stack bump \
   --out out/App-<ver>-foss-2024a.eb
 ```
 
-- Dependency versions are resolved automatically from `--easyconfigs`. You do not
-  hand-feed them. To override one, add `--dep Name=version` (repeatable).
-- Multiple universes with precedence (upstream plus a site overlay): pass
-  `--easyconfigs` more than once; a later path wins on conflict.
+- Dependency versions are resolved automatically from `--easyconfigs` (hierarchy
+  consensus + resolvo joint pins). You do not hand-feed them. To override one,
+  add `--dep Name=version` (repeatable; wins after auto-resolve).
+- `bump` takes a **single** `--easyconfigs` directory. For upstream + site
+  overlay, merge into one tree first, or point at a self-sufficient overlay.
+  (`solve` / `check-recipe` / `ingest` accept repeatable `--easyconfigs` with
+  later-path precedence.)
 
 ### Worked example (copy-paste reliable)
 
@@ -122,8 +126,9 @@ buildable; match the maintainer's formatting only if your review requires it.
 
 ## 5. What the tool guarantees (so you can trust the output)
 
-- It resolves the **generation-native** version of each dependency, not the
-  globally newest, and never a version older than the source's.
+- It resolves the **generation-native** version of each dependency (hierarchy
+  consensus, not free global newest), joint-checks those pins with **resolvo**,
+  and never picks a version older than the source floor.
 - It **never silently keeps a stale dependency**: an unresolved dependency is a
   loud warning and a non-zero exit (unless you pass `--keep-old-deps`).
 - It respects **pins**: versionsuffix-qualified and `SYSTEM`-toolchain
@@ -163,8 +168,8 @@ eb-stack solve \
 
 `solve` returns the globally newest jointly-consistent stack under the policy's
 declared `root_priority`; `stack-diff.md` is a reviewable summary against the
-baseline. (CycloneDX SBOM output is opt-in via `--sbom-out`, not part of the core
-loop.)
+baseline. (Planned CycloneDX 1.5 SBOM via `cyclonedx-bom` is opt-in with
+`--sbom-out`, not part of the core loop.)
 
 ## 8. The loop, end to end
 

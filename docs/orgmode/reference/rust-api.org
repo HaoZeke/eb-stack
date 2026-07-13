@@ -27,11 +27,12 @@ The module toctree (crate root and children) is injected below by
 |--------+------|
 | ~domain~ | Core types: toolchain, candidate, lock, policy |
 | ~eb_parse~ | Restricted-Python easyconfig parse, ~check_recipe_deps~, ~packaging_gate~ |
-| ~eb_emit~ | ~emit_next_generation~ / hierarchy-aware auto-resolve bump |
-| ~hierarchy~ | Generation sub-toolchain hierarchy and consensus versions |
-| ~select~ / ~resolvo_provider~ | CDCL SAT co-selection |
+| ~eb_emit~ | ~emit_next_generation~; auto-resolve = hierarchy + resolvo joint pins |
+| ~hierarchy~ | Sub-toolchain membership and generation-consensus floors |
+| ~select~ / ~resolvo_provider~ | CDCL SAT co-selection; ~resolvo_resolve_dep_versions~ for bump/ingest |
 | ~report~ | Build list and stack-diff markdown |
-| ~sbom~ | Planned CycloneDX from a lock |
+| ~sbom~ | Planned CycloneDX 1.5 via ~cyclonedx-bom~ (~lock_to_bom~, …) |
+| ~foreign~ | conda-forge / Spack parse → EB scaffold (+ optional robot resolve) |
 | ~mcp~ | JSON-RPC MCP tool surface (~eb_check_recipe~, ~eb_bump~, ~eb_solve~) |
 | ~version~ | EasyBuild-style version ordering |
 
