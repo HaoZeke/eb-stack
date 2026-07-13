@@ -383,10 +383,7 @@ and `EASYBUILD_TMPDIR` is set.
 
 ## 7. Full-drive campaign agent (default)
 
-The **local-ai agent (Hermes preferred)** is the **process owner** of a greenfield
-campaign on **EasyBuild host**: it runs mechanical CLI steps, closes judgment residuals,
-**and** drives `eb --robot` until *builds* is established or a real block is
-documented. It is **not** a “residual-only chat that stops before install.”
+The **FOSS local-ai agent (Hermes + site Willma)** is the **process owner** of a greenfield campaign on the site EasyBuild host. Outer orchestrators (including commercial models) **only bootstrap** (rsync skill, render-full-drive, start herdr). They do **not** iterate fixes or claim *builds* — the Hermes session owns: run full-drive → read logs → overlay fix → re-run until `DONE_FULL_DRIVE`. It runs mechanical CLI steps, closes judgment residuals, **and** drives `eb --robot` until *builds* is established or a real block is documented. It is **not** a “residual-only chat that stops before install.”
 
 **Maximize mechanical tools** (do not invent product `-D` into `eb-stack`). Use
 `format-style` for E501; use residual judgment for product/moduleclass/companions.
