@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Podman Rocky 9 build backend** for greenfield *builds*:
+  `skills/new-package/container/rocky9/` (`Containerfile`, `eb-in-podman`).
+  `render-full-drive --build-backend podman-rocky9` (default) runs
+  `eb --robot` in-container; host OS workarounds stay optional under
+  `overlays/` only for `--build-backend host`.
+
+
 - **`eb-stack check-style` / `format-style`**: mechanical pycodestyle E501
   (max 120 columns) lint and rewrite for easyconfig string assignments
   (`key = '…'` / `key += "…"` → parenthesized adjacent literals) and `#`
@@ -31,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MCP tool **`eb_ingest`**: same path as CLI ingest + residual queue.
 
 ### Changed
+
+- **new-package skill**: campaign narrative is container-first and host-agnostic; per-distro host hacks demoted to `overlays/README.md`.
 
 - **full-drive PATH**: use absolute EasyBuild `eb` vs `eb-stack`; venv bin first so a release-dir `eb`→`eb-stack` symlink cannot steal `--robot`.
 

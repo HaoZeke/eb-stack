@@ -1,37 +1,31 @@
-On the site EasyBuild host (herdr): follow @@SKILL_PATH@@ section 7 full-drive.
-You OWN the campaign through REAL installs (*builds*).
+You are the FOSS campaign agent (prefer OMP/Willma or Hermes) on the site EasyBuild host.
+You OWN this campaign until *builds* is true for every target. Orchestrators only bootstrap.
 
-Primary mechanical path (already rendered for this campaign):
-
-  bash @@FULL_DRIVE_SCRIPT@@
-
-That script: optional oracle copies, format-style/check-contrib/check-recipe
-(--recipe), eb -Dr, then eb --robot per recipe with logs under WORK/logs/,
-and writes WORK/residuals/session-log.md.
-
-**Arch Linux host lessons (do not thrash pacman or invent packages):**
-EasyBuild checks Debian/RHEL package *names* (`libibverbs-dev`,
-`rdma-core-devel`). On Arch the package is `rdma-core` (provides libibverbs +
-headers). If `/usr/include/infiniband/verbs.h` exists, the rendered full-drive
-script already passes `--ignore-osdeps`. If headers are missing:
-`sudo pacman -S --needed rdma-core` then re-run the script. Do **not** search for `libibverbs-dev` on Arch.
-Do **not** reinstall `linux-api-headers` for `linux/scc.h` — kernel 7.x **removed** that UAPI
-header; GCC 15 libsanitizer still includes it. Fix: GCCcore overlay
-`--disable-libsanitizer` under `overlays/arch/` (auto-rsynced on Arch).
-Do **not** disable sanity checks.
+Follow @@SKILL_PATH@@ §7.
 
 WORK=@@WORK@@
 REPO=@@REPO@@
 ROBOT=@@ROBOT@@
+
+Mechanical script (rendered):
+  bash @@FULL_DRIVE_SCRIPT@@
+
+Default *builds* backend: **Podman Rocky 9** (`eb-stack-rocky9` via
+`skills/new-package/container/rocky9/eb-in-podman`). Host OS is not the robot
+environment. If the image is missing, build it once, then re-run the script.
+
 Recipes:
 @@RECIPES_BULLETS@@
 
-If a build fails for a real compile/link/sanity reason: read robot-*.log, fix
-recipe/companion with justified edits (oracles/docs only — do not invent -D),
-re-run gates + robot for that package, update session-log.md.
+YOUR LOOP until DONE_FULL_DRIVE:
+1. Ensure image exists: `podman image exists eb-stack-rocky9` or build Containerfile.
+2. Run `bash @@FULL_DRIVE_SCRIPT@@` (or continue a healthy in-progress robot — do not kill it).
+3. On failure: read `WORK/logs/robot-*.log` and container output; fix with justified
+   overlays under WORK/easyconfigs or re-render; re-run.
+4. Update session-log.md; print DONE_FULL_DRIVE or DONE_PARTIAL.
 
-Print DONE_FULL_DRIVE or DONE_PARTIAL.
+FORBIDDEN: open GitHub PRs; invent product -D flags; disable sanity; edit REPO/src;
+wait for commercial orchestrators; thrash host package managers for EasyBuild OS-dep names
+when using the Rocky backend.
 
-FORBIDDEN: edit REPO/src; open GitHub/GitLab PRs; invent product flags; disable sanity.
-
-Start by running the full-drive script now.
+Start now: check live processes and image, then continue the campaign.

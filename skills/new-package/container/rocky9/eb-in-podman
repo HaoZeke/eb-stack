@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# Run EasyBuild `eb` inside the Rocky 9 image with campaign mounts.
+set -euo pipefail
+
+IMAGE="${EB_PODMAN_IMAGE:-eb-stack-rocky9}"
+WORK=""
+ROBOT=""
+SOURCES=""
+INSTALL=""
+TMPDIR_EB=""
+BUILD=""
+EXTRA_MOUNTS=()
+
+usage() {
+  cat <<'U'
+Usage: eb-in-podman --work DIR --robot DIR [options] -- [eb args...]
+
+  --work DIR       Campaign work dir (easyconfigs under work/easyconfigs)
+  --robot DIR      Upstream easyconfigs tree (read-only)
+  --sources DIR    EASYBUILD_SOURCEPATH (default: $HOME/tmp/eb-sources)
+  --install DIR    EASYBUILD_INSTALLPATH (default: $HOME/tmp/eb-install)
+  --tmpdir DIR     EASYBUILD_TMPDIR (default: $HOME/tmp/eb-tmp)
+  --build DIR      EASYBUILD_BUILDPATH (default: $HOME/tmp/eb-build)
+  --image NAME     Podman image (default: eb-stack-rocky9)
+  --               Remaining args passed to eb inside the container
+
+Paths under WORK are rewritten: host $WORK/foo -> /work/foo when possible.
+Robot is mounted at /robot.
+U
+  exit 2
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --work) WORK=$(readlink -f "$2"); shift 2 ;;
+    --robot) ROBOT=$(readlink -f "$2"); shift 2 ;;
+    --sources) SOURCES=$(readlink -f "$2"); shift 2 ;;
+    --install) INSTALL=$(readlink -f "$2"); shift 2 ;;
+    --tmpdir) TMPDIR_EB=$(readlink -f "$2"); shift 2 ;;
+    --build) BUILD=$(readlink -f "$2"); shift 2 ;;
+    --image) IMAGE="$2"; shift 2 ;;
+    -h|--help) usage ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+
+[[ -n "$WORK" && -n "$ROBOT" ]] || usage
+SOURCES="${SOURCES:-$HOME/tmp/eb-sources}"
+INSTALL="${INSTALL:-$HOME/tmp/eb-install}"
+TMPDIR_EB="${TMPDIR_EB:-$HOME/tmp/eb-tmp}"
+BUILD="${BUILD:-$HOME/tmp/eb-build}"
+mkdir -p "$SOURCES" "$INSTALL" "$TMPDIR_EB" "$BUILD" "$WORK"
+
+if ! command -v podman >/dev/null 2>&1; then
+  echo "ERROR: podman not found" >&2
+  exit 127
+fi
+if ! podman image exists "$IMAGE" 2>/dev/null; then
+  echo "ERROR: image $IMAGE missing; build with:" >&2
+  echo "  podman build -t $IMAGE -f skills/new-package/container/rocky9/Containerfile skills/new-package/container/rocky9" >&2
+  exit 127
+fi
+
+# Rewrite host WORK-absolute paths in eb args to /work/...
+args=()
+for a in "$@"; do
+  if [[ "$a" == "$WORK"* ]]; then
+    args+=("/work${a#"$WORK"}")
+  elif [[ "$a" == "$ROBOT"* ]]; then
+    args+=("/robot${a#"$ROBOT"}")
+  else
+    # common host path form WORK/easyconfigs:ROBOT
+    a2=${a//$WORK//work}
+    a2=${a2//$ROBOT//robot}
+    args+=("$a2")
+  fi
+done
+
+exec podman run --rm -i \
+  --security-opt label=disable \
+  -v "$WORK:/work:Z" \
+  -v "$ROBOT:/robot:ro,Z" \
+  -v "$SOURCES:/eb/sources:Z" \
+  -v "$INSTALL:/eb/install:Z" \
+  -v "$TMPDIR_EB:/eb/tmp:Z" \
+  -v "$BUILD:/eb/build:Z" \
+  -e EASYBUILD_SOURCEPATH=/eb/sources \
+  -e EASYBUILD_INSTALLPATH=/eb/install \
+  -e EASYBUILD_TMPDIR=/eb/tmp \
+  -e EASYBUILD_BUILDPATH=/eb/build \
+  -e EASYBUILD_MODULES_TOOL=Lmod \
+  -e LMOD_CMD=/usr/share/lmod/lmod/libexec/lmod \
+  -w /work \
+  "$IMAGE" \
+  "${args[@]}"

@@ -40,14 +40,19 @@ def main() -> int:
     ap.add_argument("--oracle", action="append", default=[], metavar="PATH")
     ap.add_argument("--stem", action="append", default=[], metavar="NAME")
     ap.add_argument("--overlay", type=Path, default=None)
-    ap.add_argument("--eb-stack", type=Path, default=None, dest="eb_stack",
-                    help="Path to eb-stack binary (default REPO/target/release/eb-stack)")
-    ap.add_argument("--easybuild-eb", type=Path, default=None,
-                    help="Path to EasyBuild eb (default ~/.venvs/easybuild/bin/eb)")
+    ap.add_argument("--eb-stack", type=Path, default=None, dest="eb_stack")
+    ap.add_argument("--easybuild-eb", type=Path, default=None)
+    ap.add_argument(
+        "--build-backend",
+        choices=("podman-rocky9", "host"),
+        default="podman-rocky9",
+        help="Where eb --robot runs (default: podman-rocky9)",
+    )
     ap.add_argument("--out-dir", type=Path, default=None)
     ap.add_argument("--sourcepath", type=Path, default=None)
     ap.add_argument("--tmpdir", type=Path, default=None)
     ap.add_argument("--installpath", type=Path, default=None)
+    ap.add_argument("--buildpath", type=Path, default=None)
     ap.add_argument("--skill-path", default="skills/new-package/SKILL.md")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -72,6 +77,7 @@ def main() -> int:
     sourcepath = (args.sourcepath or (home / "tmp" / "eb-sources")).expanduser().resolve()
     tmpdir = (args.tmpdir or (home / "tmp" / "eb-tmp")).expanduser().resolve()
     installpath = (args.installpath or (home / "tmp" / "eb-install")).expanduser().resolve()
+    buildpath = (args.buildpath or (home / "tmp" / "eb-build")).expanduser().resolve()
     overlay = str(args.overlay.expanduser().resolve()) if args.overlay else ""
 
     bash_lines = []
@@ -95,12 +101,14 @@ def main() -> int:
         "EASYBUILD_SOURCEPATH": str(sourcepath),
         "EASYBUILD_TMPDIR": str(tmpdir),
         "EASYBUILD_INSTALLPATH": str(installpath),
+        "EASYBUILD_BUILDPATH": str(buildpath),
         "WORK": str(work),
         "REPO": str(repo),
         "ROBOT": str(robot),
         "EB_STACK": str(eb_stack),
         "EASYBUILD_EB": str(easybuild_eb),
         "OVERLAY_DIR": overlay,
+        "BUILD_BACKEND": args.build_backend,
         "RECIPES_BASH_ARRAY": "\n".join(bash_lines),
         "SKILL_PATH": args.skill_path,
         "FULL_DRIVE_SCRIPT": str(out_dir / "full-drive.sh"),
@@ -115,6 +123,7 @@ def main() -> int:
     if args.dry_run:
         print(f"would write {sh_path}")
         print(f"would write {md_path}")
+        print(f"build_backend={args.build_backend}")
         return 0
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -124,8 +133,13 @@ def main() -> int:
     print(f"wrote {sh_path}")
     print(f"wrote {md_path}")
     print(f"recipes={n}")
-    print(f"easybuild_eb={easybuild_eb}")
+    print(f"build_backend={args.build_backend}")
     print(f"eb_stack={eb_stack}")
+    if args.build_backend == "podman-rocky9":
+        print("next: podman build -t eb-stack-rocky9 -f skills/new-package/container/rocky9/Containerfile skills/new-package/container/rocky9")
+        print(f"then: bash {sh_path}")
+    else:
+        print(f"next: bash {sh_path}")
     return 0
 
 

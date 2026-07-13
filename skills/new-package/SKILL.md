@@ -1,6 +1,6 @@
 ---
 name: eb-stack-new-package
-description: Author a new EasyBuild easyconfig (greenfield) with eb-stack ingest. Default: Hermes/herdr campaign agent on the site EasyBuild host full-drives residual judgment through eb --robot *builds*. Mechanical format-style/check-recipe; human owns PR surface.
+description: Author a new EasyBuild easyconfig (greenfield) with eb-stack ingest. Campaign agent full-drives through eb --robot *builds* via Podman Rocky 9 by default. Mechanical format-style/check-recipe on host; human owns PR surface.
 ---
 
 # New EasyBuild package (greenfield)
@@ -35,32 +35,25 @@ new toolchain” section of the writing-easyconfigs page.
 
 ---
 
-## 0. Host: site EasyBuild machine (mandatory for this skill)
+## 0. Hosts and build backend
 
-All EasyBuild-facing work for **new packages** runs on **`EasyBuild host`**
-(SSH host alias; SURF workstation), not on the laptop and not on
-the site **cargo builder** (compile-only remote for this repo — different role).
-
-| On site EasyBuild host | Why |
-|--------------|-----|
-| `eb`, EasyBuild robot tree, modules | Real SURF EasyBuild environment (this host **is** the EB machine) |
-| `eb-stack` (release binary or build there) | Same machine as `eb` for ingest → check-recipe → install |
-| **Install / *builds* claim** | `eb --robot` **here** when EB is set up — not the cargo builder |
-| **local-ai agent** (Hermes preferred; OMP allowed) | **Full campaign owner** on this host: residual judgment **and** `eb --robot` *builds* (see §7) |
-| **herdr** pane for the campaign agent | Always; never ad-hoc `ssh … hermes/omp -p` for residual/build loops |
-| Drafts / letter-layout work dir | Where `eb --robot` and inject-checksums see files |
+| Layer | Where | Role |
+|-------|--------|------|
+| Agent + git + `eb-stack` | Site **EasyBuild host** (hostname in private site runbook) | herdr campaign agent (OMP preferred on SURF, Hermes allowed), render-full-drive, gates |
+| **`eb --robot` *builds*** | **Podman Rocky 9** image `eb-stack-rocky9` | Default install backend — RHEL-family OS deps match EasyBuild expectations |
+| Optional host robot | Same machine, `--build-backend host` | Escape hatch only; optional `overlays/<os-id>/` |
 
 ```
-ssh <easybuild-host>   # name from private site runbook
-# optional preflight mechanical CLI may run in that shell
-# campaign agent (residual + install): always under herdr on this host (see §7)
+ssh <easybuild-host>   # from private site runbook
+# build image once:
+podman build -t eb-stack-rocky9 \
+  -f $REPO/skills/new-package/container/rocky9/Containerfile \
+  $REPO/skills/new-package/container/rocky9
 ```
 
-If `EasyBuild host` is unreachable, **stop and report** — do not fall back to
-laptop-local `eb` fiction or invent a second EasyBuild install. Site
-runbook may document modules init on that host; load it before `eb`.
-
----
+If the EasyBuild host is unreachable, **stop and report**. Do not invent a second
+EasyBuild site on the laptop. Cargo builds for the `eb-stack` crate use the site
+**cargo builder** (separate role).
 
 ## 1. What EasyBuild requires of an easyconfig
 
@@ -340,7 +333,7 @@ eb -Dr --robot /tmp/eb-new/easyconfigs:$ROBOT /tmp/eb-new/easyconfigs/*/*/*.eb
 Compare bootstrap + residual queue to landable fixtures
 (`fixtures/eon_foss_2026_1`, `fixtures/qmcpack_foss_2026_1`) for product surface
 (configopts, extract_cmd, companions). Fixtures prove **resolve**/packaging_gate;
-a *builds* claim still needs `eb --robot` on **EasyBuild host** (campaign agent §7).
+a *builds* claim still needs `eb --robot` (campaign agent §7).
 
 
 Regression (code + validation):
@@ -364,13 +357,13 @@ cargo test --locked --test eon_foss_2026_1 --test qmcpack_foss_2026_1
 | SHA256 for fetched sources | `eb --inject-checksums` (**mechanical**) |
 | Style + checksum presence gate | `eb --check-contrib` (**mechanical**) |
 | E501 line length (≤120) lint / wrap | `eb-stack check-style` / `format-style` (**mechanical**) |
-| Graph dry-run | `eb -Dr --robot` on **EasyBuild host** (**mechanical**; campaign agent re-runs) |
-| Real install (*builds*) | `eb --robot` on **EasyBuild host** (**mechanical command**, run by the **campaign agent** §7 — not optional if goal is PR-ready / *builds*) |
+| Graph dry-run | `eb -Dr --robot` (same backend as *builds*) |
+| Real install (*builds*) | `eb --robot` via **Podman Rocky 9** (default) or host backend; campaign agent §7 |
 | Product configopts, variant policy, real sanity paths, moduleclass choice, multi-source extract layout, companion authoring judgment | **campaign agent** using residual queue — **not** hardcoding into `eb-stack` |
 | Upstream PR merge | Human + EasyBuild maintainers |
 
 Three-claim ladder (site ops): annual-bump §10.4 —
-*resolves* (plan) ≠ *builds* (`eb --robot` on **`EasyBuild host`**) ≠ *binary-verified*.
+*resolves* (plan) ≠ *builds* (`eb --robot` via build backend) ≠ *binary-verified*.
 
 **Default campaign goal when the human asks for PR-ready / landable / “do the
 packages”:** establish *resolves* **and** *builds* for every target recipe.
@@ -383,7 +376,7 @@ and `EASYBUILD_TMPDIR` is set.
 
 ## 7. Full-drive campaign agent (default)
 
-The **FOSS local-ai agent (Hermes + site Willma)** is the **process owner** of a greenfield campaign on the site EasyBuild host. Outer orchestrators (including commercial models) **only bootstrap** (rsync skill, render-full-drive, start herdr). They do **not** iterate fixes or claim *builds* — the Hermes session owns: run full-drive → read logs → overlay fix → re-run until `DONE_FULL_DRIVE`. It runs mechanical CLI steps, closes judgment residuals, **and** drives `eb --robot` until *builds* is established or a real block is documented. It is **not** a “residual-only chat that stops before install.”
+The **FOSS local-ai agent (OMP preferred, Hermes allowed; site Willma)** is the **process owner** of a greenfield campaign on the site EasyBuild host. Outer orchestrators **only bootstrap** (rsync skill, render-full-drive, ensure Podman image, start herdr). The FOSS agent owns: run full-drive → read logs → fix → re-run until `DONE_FULL_DRIVE`. Default robot backend is **Podman Rocky 9**, not the host OS. Not a residual-only chat that stops before install.
 
 **Maximize mechanical tools** (do not invent product `-D` into `eb-stack`). Use
 `format-style` for E501; use residual judgment for product/moduleclass/companions.
@@ -415,7 +408,7 @@ as the end of the campaign when *builds* is in scope.
 
 ### Full-drive sequence (campaign agent MUST run)
 
-Inside herdr on **EasyBuild host**, for each target recipe (and companions as needed):
+Inside herdr, for each target recipe (and companions as needed):
 
 1. Close residual-queue judgment (oracles / project docs / sibling EB). Prefer
    `cp` from a landable fixture when residual is “match landable fixture.”
@@ -436,94 +429,54 @@ Inside herdr on **EasyBuild host**, for each target recipe (and companions as ne
 
 ### PATH: EasyBuild `eb` vs `eb-stack`
 
-Never put a directory that contains a symlink `eb` → `eb-stack` **before**
-EasyBuild’s venv `bin` on `PATH`. That makes `eb --robot` invoke eb-stack’s
-clap CLI and fail with `unexpected argument '--robot'`. The rendered
-full-drive script uses absolute `EASYBUILD_EB` and `EB_STACK` paths and puts
-`~/.venvs/easybuild/bin` first.
-
-### OS dependencies on Arch (campaign mechanical — not residual judgment)
-
-EasyBuild `osdependencies` lists **Debian/RHEL package names** (e.g.
-`libibverbs-dev`, `rdma-core-devel`). On **Arch Linux** the package is
-`rdma-core` (provides libibverbs + `/usr/include/infiniband/verbs.h`). EB’s
-probe uses `rpm`/`dpkg` and never matches Arch names, so it can report
-“missing” OS deps even when headers and libs are installed.
-
-| Situation | Action |
-|-----------|--------|
-| Arch, `verbs.h` present | Campaign `full-drive.sh` adds `--ignore-osdeps` automatically |
-| Arch, headers missing | `sudo pacman -S --needed rdma-core` then re-run full-drive |
-| Force ignore | `EB_IGNORE_OSDEPS=1 bash …/full-drive.sh` |
-| Force strict | `EB_IGNORE_OSDEPS=0 bash …/full-drive.sh` |
-| Isolated Debian userspace | Optional image under `skills/new-package/docker/eb-arch-host-fallback/` |
-| Host GCC ≥16 builds binutils gprofng | Overlay `overlays/arch/` binutils `--disable-gprofng` |
-| Kernel 7.x dropped `linux/scc.h` | **Not** fixed by reinstalling `linux-api-headers` (already current). **Do not** reinstall `linux-api-headers`. Provide stub via `overlays/arch/stubs/include/linux/scc.h` + `CPATH` (full-drive does this on Arch). Optional: GCCcore `--disable-libsanitizer` (EB_GCC may not honor configopts for stage1) |
-
-Campaign agents **must not** thrash `pacman` looking for `libibverbs-dev` or
-claim OS deps are missing without checking `verbs.h`. Do **not** disable
-sanity checks for this.
+Never shadow EasyBuild's `eb` with an `eb-stack` binary/symlink named `eb`.
+The rendered full-drive script uses absolute `EASYBUILD_EB` / `EB_STACK` paths.
 
 ### Render full-drive assets (mechanical; required before herdr)
 
-Do **not** hand-write a per-campaign `full-drive.sh`. **Render** from templates:
-
-| Asset | Role |
-|-------|------|
-| `templates/full-drive.sh.tmpl` | Generic gates + `eb --robot` loop |
-| `templates/hermes-full-drive.md.tmpl` | Campaign agent prompt |
-| `render-full-drive` | Fills `@@TOKENS@@`, writes under `WORK/residuals/` |
-| `examples/render-eon-qmcpack.sh` | Example invocation (eOn + QMCPACK fixtures) |
-
 ```
-# On the EasyBuild host (or any host that can write WORK):
-REPO=$HOME/Git/Github/Tools/eb-stack
+REPO=<eb-stack-checkout>
 WORK=$HOME/tmp/eb-campaign
-ROBOT=$HOME/Git/Github/easybuilders/easybuild-easyconfigs/easybuild/easyconfigs
+ROBOT=<easybuild-easyconfigs .../easyconfigs>
+
+# once per host:
+podman build -t eb-stack-rocky9 \
+  -f $REPO/skills/new-package/container/rocky9/Containerfile \
+  $REPO/skills/new-package/container/rocky9
 
 $REPO/skills/new-package/render-full-drive \
-  --work "$WORK" \
-  --repo "$REPO" \
-  --robot "$ROBOT" \
-  --overlay "$REPO/fixtures/eon_foss_2026_1/easyconfigs" \   # optional companions
-  --recipe "$WORK/easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1.eb" \
-  --oracle fixtures/qmcpack_foss_2026_1/easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1.eb \
-  --stem qmcpack \
-  --recipe "$WORK/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb" \
-  --oracle fixtures/eon_foss_2026_1/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb \
-  --stem eon
+  --work "$WORK" --repo "$REPO" --robot "$ROBOT" \
+  --build-backend podman-rocky9 \
+  --overlay "$REPO/fixtures/.../easyconfigs" \   # optional companions
+  --recipe "$WORK/easyconfigs/.../Name-Ver-tc.eb" \
+  --oracle fixtures/.../Name-Ver-tc.eb \
+  --stem name
 
 # writes:
 #   $WORK/residuals/full-drive.sh
 #   $WORK/residuals/hermes-full-drive.md
 ```
 
-Repeat `--recipe` / optional `--oracle` / `--stem` for any package set. Oracles are
-copied onto recipe paths before gates (landable fixture match). Without `--oracle`,
-the existing work recipe is gated and built as-is.
+| Flag | Meaning |
+|------|---------|
+| `--build-backend podman-rocky9` | **Default.** `eb --robot` in Rocky 9 container |
+| `--build-backend host` | Bare-metal EasyBuild; may need `overlays/<os-id>/` |
 
-### How to start (on EasyBuild host)
+Templates: `templates/full-drive.sh.tmpl`, `templates/hermes-full-drive.md.tmpl`.  
+Example: `examples/render-eon-qmcpack.sh`.
+
+### How to start campaign agent
 
 ```
-herdr status   # if server not running: herdr server &
-# render-full-drive first (above), then:
-
-herdr agent start eb-full-drive-hermes \
+herdr status   # herdr server if needed
+herdr agent start eb-full-drive \
   --cwd "$WORK" --no-focus -- \
-  hermes chat --cli --yolo --accept-hooks \
-    --provider willma -m openai/gpt-oss-120b \
-    -q "$(cat "$WORK/residuals/hermes-full-drive.md")"
-herdr agent read eb-full-drive-hermes --source recent --lines 80
-# Monitor: herdr agent read / wait; outer driver uses monitor tool (no sleep-poll).
+  omp-eb-stack -p "$(cat "$WORK/residuals/hermes-full-drive.md")"
+# or Hermes + Willma with the same prompt file
 ```
 
-Hermes is the default harness; OMP only via the same **herdr agent start** path.
-Harness model: site Willma role for eb-stack (annual-bump §11.5). Commercial
-frontier models out of scope for SURF-only work.
-
-The rendered Hermes prompt tells the agent to run `bash $WORK/residuals/full-drive.sh`
-first, then only hand-fix on real build failures. Optional **residual-only**
-prompt is allowed only when the human explicitly scopes “no install.”
+Prefer the site primary FOSS harness (OMP/Willma on SURF). Campaign agent owns
+iterate-on-log until `DONE_FULL_DRIVE`; orchestrators only bootstrap.
 
 ### What success looks like
 
@@ -552,7 +505,9 @@ prompt is allowed only when the human explicitly scopes “no install.”
 | Dry-run graph | `eb foo.eb -Dr --robot work:ROBOT` |
 | Install (*builds*, **EasyBuild host**) | `eb foo.eb --robot work:ROBOT` (campaign agent §7) |
 | Render full-drive script + prompt | `skills/new-package/render-full-drive --work … --recipe …` (§7) |
-| Full-drive agent (default) | herdr + Hermes with **rendered** `hermes-full-drive.md` (§7) |
+| Full-drive agent (default) | herdr + OMP/Hermes + rendered prompt; robot in Rocky Podman (§7) |
+| Podman image build | `container/rocky9/Containerfile` → `eb-stack-rocky9` |
+| Host-only robot escape hatch | `render-full-drive --build-backend host` + optional `overlays/<os-id>/` |
 | Open easyconfig PR (EB GitHub integration) | `eb --new-pr foo.eb` (human; see integration-with-github docs) |
 | Review consistency vs develop | `eb --review-pr <PR#>` |
 
@@ -564,7 +519,7 @@ prompt is allowed only when the human explicitly scopes “no install.”
 |-----------|-------------|
 | New software / first easyconfig | **This skill** + [writing easyconfigs](https://docs.easybuild.io/writing-easyconfig-files/) |
 | Existing `.eb` → new foss generation | `skills/annual-bump` + writing-docs “new toolchain” |
-| PR-ready / landable / “do the packages” | **Campaign agent full-drive** (§7) through `eb --robot` |
+| PR-ready / landable / “do the packages” | **Campaign agent full-drive** (§7) via Podman Rocky robot |
 | Residual-only (explicit human scope) | Campaign agent residual-only prompt — no *builds* claim |
 | Stack lock / build list | annual-bump `solve` |
 | Contribute to easybuilders/* | [contributing](https://docs.easybuild.io/contributing/) + [GitHub integration](https://docs.easybuild.io/integration-with-github/) |

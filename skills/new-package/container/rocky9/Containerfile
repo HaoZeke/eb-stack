@@ -1,0 +1,39 @@
+# EasyBuild robot backend (RHEL-family). Prefer this for *builds* over host-OS workarounds.
+# Build: podman build -t eb-stack-rocky9 -f skills/new-package/container/rocky9/Containerfile skills/new-package/container/rocky9
+FROM docker.io/rockylinux/rockylinux:9
+
+ENV LANG=C.UTF-8
+RUN dnf -y update \
+ && dnf -y install dnf-plugins-core \
+ && dnf config-manager --set-enabled crb \
+ && dnf -y install epel-release \
+ && dnf -y groupinstall "Development Tools" \
+ && dnf -y install \
+      gcc gcc-c++ gcc-gfortran make cmake ninja-build \
+      python3 python3-pip python3-devel \
+      git curl wget bzip2 tar xz unzip which findutils \
+      openssl-devel libffi-devel zlib-devel bzip2-devel \
+      readline-devel sqlite-devel xz-devel \
+      rdma-core-devel libibverbs-devel libnl3-devel \
+      numactl-devel \
+      perl \
+      Lmod \
+ && dnf clean all
+
+# EasyBuild in a venv (site may bind-mount a newer one)
+RUN python3 -m venv /opt/eb \
+ && /opt/eb/bin/pip install --upgrade pip setuptools wheel \
+ && /opt/eb/bin/pip install easybuild
+
+ENV PATH=/opt/eb/bin:/usr/share/lmod/lmod/libexec:$PATH
+ENV LMOD_CMD=/usr/share/lmod/lmod/libexec/lmod
+ENV EASYBUILD_MODULES_TOOL=Lmod
+# Prefixes overridden at runtime via -e and volume mounts
+ENV EASYBUILD_PREFIX=/eb
+ENV EASYBUILD_SOURCEPATH=/eb/sources
+ENV EASYBUILD_TMPDIR=/eb/tmp
+ENV EASYBUILD_INSTALLPATH=/eb/install
+ENV EASYBUILD_BUILDPATH=/eb/build
+
+WORKDIR /work
+ENTRYPOINT ["/opt/eb/bin/eb"]

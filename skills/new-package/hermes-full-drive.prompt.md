@@ -1,23 +1,15 @@
-# Hermes full-drive prompt
+# Campaign agent prompt
 
-**Do not hand-fill this file for campaigns.** Render instead:
+Render instead of hand-editing:
 
 ```bash
 skills/new-package/render-full-drive \
   --work "$WORK" --repo "$REPO" --robot "$ROBOT" \
-  --recipe path/to/A.eb [--oracle fixtures/.../A.eb] [--stem a] \
-  --recipe path/to/B.eb ...
+  --build-backend podman-rocky9 \
+  --recipe path/A.eb [--oracle …] [--stem a] \
+  --recipe path/B.eb …
 
-# writes:
-#   $WORK/residuals/full-drive.sh
-#   $WORK/residuals/hermes-full-drive.md
+# produces WORK/residuals/{full-drive.sh,hermes-full-drive.md}
 ```
 
-Templates live in `templates/full-drive.sh.tmpl` and
-`templates/hermes-full-drive.md.tmpl`. Example packaging:
-
-```bash
-skills/new-package/examples/render-eon-qmcpack.sh
-```
-
-Then start herdr with `-q "$(cat $WORK/residuals/hermes-full-drive.md)"`.
+Default backend is Rocky 9 Podman for `eb --robot`.

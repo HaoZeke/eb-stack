@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Example: render full-drive for eOn + QMCPACK landable fixtures (not a hard-coded drive body).
+# Example: render full-drive for eOn + QMCPACK (Rocky Podman builds).
 set -euo pipefail
 SKILL="$(cd "$(dirname "$0")/.." && pwd)"
 REPO="${REPO:-$(cd "$SKILL/../.." && pwd)}"
@@ -10,6 +10,7 @@ ROBOT="${ROBOT:-$HOME/Git/Github/easybuilders/easybuild-easyconfigs/easybuild/ea
   --work "$WORK" \
   --repo "$REPO" \
   --robot "$ROBOT" \
+  --build-backend podman-rocky9 \
   --overlay "$REPO/fixtures/eon_foss_2026_1/easyconfigs" \
   --recipe "$WORK/easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1.eb" \
   --oracle "fixtures/qmcpack_foss_2026_1/easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1.eb" \
