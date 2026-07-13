@@ -20,10 +20,11 @@ sphinx-design = ">=0.6.0, <1"
 
 [feature.docs.tasks]
 mkrst = { cmd = "emacs --batch --load export.el", cwd = "docs" }
-sphinxbld = { cmd = "sphinx-build docs/source/ docs/build", depends-on = ["mkrst"] }
+# Rust API: system/cargo-installed sphinx-rustdocgen (avoids conda mold link errors)
+gen-rust-api = { cmd = "bash scripts/gen-rust-api.sh", description = "Generate docs/source/crates/eb_stack via sphinx-rustdocgen" }
+sphinxbld = { cmd = "bash scripts/sphinx-build-docs.sh", depends-on = ["mkrst", "gen-rust-api"] }
 docbld = { depends-on = ["sphinxbld"] }
-docdel = { cmd = "rm -rf build source/*.rst source/**/*.rst 2>/dev/null; true", cwd = "docs" }
-# Link check after a local docbld (CI installs lychee separately)
+docdel = { cmd = "rm -rf build source/*.rst source/**/*.rst source/crates 2>/dev/null; true", cwd = "docs" }
 linkcheck = { cmd = "lychee --config lychee.toml --no-progress 'docs/build/**/*.html' README.md" }
 
 [environments]

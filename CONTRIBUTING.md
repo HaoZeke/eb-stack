@@ -30,14 +30,24 @@ Build heavy work on a remote builder when local compiles thrash the machine.
 ## Documentation
 
 Primary docs live in orgmode under `docs/orgmode/` (Diataxis). Edit there,
-then:
+then build:
 
 ```bash
+# once: system-cargo venv for sphinxcontrib-rust (conda mold cannot link it)
+python3 -m venv .venv-docs
+export RUSTFLAGS='-C linker=cc'
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=cc
+.venv-docs/bin/pip install 'sphinx>=9,<10' shibuya sphinx-sitemap \
+  sphinx-copybutton sphinx-design 'sphinxcontrib-rust>=1,<2' \
+  'sphinx-rustdoc-postprocess>=0.1,<0.2'
+cargo install sphinx-rustdocgen   # or use an existing ~/.cargo/bin copy
+
+export EB_STACK_DOCS_PYTHON=$PWD/.venv-docs/bin/python
 pixi run -e docs docbld
-# HTML → docs/build/index.html
+# HTML → docs/build/index.html (includes crates/eb_stack/* Rust API)
 ```
 
-Do not hand-edit generated `docs/source/**/*.rst`.
+Do not hand-edit generated `docs/source/**/*.rst` or `docs/source/crates/`.
 
 ## Agent drivers
 

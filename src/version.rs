@@ -2,26 +2,19 @@
 //!
 //! This targets EasyBuild-style version strings, not full PEP 440 / semver.
 //! A version decomposes into an ordered run of tokens: maximal digit runs
-//! parse as `Part::Num`, maximal alphabetic runs parse as `Part::Alpha`
-//! (case-folded to lowercase), and any other character (`.`, `-`, `_`, ...)
-//! is a separator that is dropped. `"1.0rc1"` tokenizes to
-//! `[Num(1), Num(0), Alpha("rc"), Num(1)]`; `"2025a"` tokenizes to
-//! `[Num(2025), Alpha("a")]`.
+//! parse as Num, maximal alphabetic runs parse as Alpha (case-folded to
+//! lowercase), and any other character (dot, hyphen, underscore, ...) is a
+//! separator that is dropped. Example: 1.0rc1 tokenizes to Num(1), Num(0),
+//! Alpha(rc), Num(1); 2025a tokenizes to Num(2025), Alpha(a).
 //!
-//! Comparison walks both token sequences position by position:
-//! - two `Num` tokens at the same position compare numerically;
-//! - two `Alpha` tokens at the same position compare lexicographically
-//!   (`"2025a" < "2025b"`, `"1.0alpha" < "1.0beta"`);
-//! - a `Num` token against a missing token on the other side pads the
-//!   missing side with `0`, so `"1.2.3" > "1.2"` and `"1.2.0" == "1.2"`;
-//! - an `Alpha` token against a missing token on the other side marks the
-//!   `Alpha` side as a pre-release suffix (covers `rc`, `alpha`, `beta`,
-//!   and bare trailing letters alike) that always sorts before the side
-//!   that has nothing more, so `"1.0rc1" < "1.0"` and `"1.2.3a" < "1.2.3"`.
-//! - a `Num` token against an `Alpha` token at the same position (mixed
-//!   types with neither side missing) is not expected in EasyBuild
-//!   versions; `Num` sorts before `Alpha` there for a total, deterministic
-//!   order.
+//! Comparison walks both token sequences position by position. Two Num
+//! tokens compare numerically; two Alpha tokens compare lexicographically
+//! (so 2025a is before 2025b). A Num against a missing token pads the
+//! missing side with zero. An Alpha against a missing token is treated as
+//! a pre-release suffix (rc, alpha, beta, or a bare trailing letter) that
+//! sorts before the side with nothing more. Mixed Num versus Alpha at the
+//! same position is rare for EasyBuild; Num sorts before Alpha there for a
+//! total deterministic order.
 
 use std::cmp::Ordering;
 

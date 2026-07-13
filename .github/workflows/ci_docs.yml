@@ -30,8 +30,47 @@ jobs:
           cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
           environments: docs
 
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install sphinx-rustdocgen
+        run: cargo install sphinx-rustdocgen --locked || cargo install sphinx-rustdocgen
+
+      - name: Docs venv with sphinxcontrib-rust
+        run: |
+          set -euo pipefail
+          # System/cargo linker (GitHub runners have no conda mold conflict).
+          python3 -m venv .venv-docs
+          .venv-docs/bin/pip install -U pip
+          .venv-docs/bin/pip install \
+            'sphinx>=9,<10' \
+            'shibuya>=2025.12.13,<2026' \
+            'sphinx-sitemap>=2.9,<3' \
+            'sphinx-copybutton>=0.5.2,<1' \
+            'sphinx-design>=0.6,<1' \
+            'sphinxcontrib-rust>=1,<2' \
+            'sphinx-rustdoc-postprocess>=0.1,<0.2'
+          .venv-docs/bin/python -c 'import sphinxcontrib_rust; print("ok")'
+
       - name: Build documentation
         run: pixi run -e docs docbld
+        env:
+          EB_STACK_DOCS_PYTHON: ${{ github.workspace }}/.venv-docs/bin/python
+
+      - name: Assert CLI docs name check-recipe and mcp
+        run: |
+          set -euo pipefail
+          grep -q check-recipe docs/build/reference/cli.html
+          grep -q 'eb_check_recipe' docs/build/reference/cli.html
+          grep -q 'eb-stack mcp' docs/build/reference/cli.html
+          # In-site Rust API
+          test -f docs/build/reference/rust-api.html
+          test -f docs/build/crates/eb_stack/lib.html
+          grep -q 'emit_next_generation' docs/build/crates/eb_stack/eb_emit.html
+          # light/dark logos present
+          test -f docs/build/_static/logo-light.svg
+          test -f docs/build/_static/logo-dark.svg
+          grep -q logo-light docs/build/index.html || grep -q logo-dark docs/build/index.html || true
 
       - name: Install lychee
         uses: taiki-e/install-action@v2

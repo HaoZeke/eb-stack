@@ -4,12 +4,24 @@
 * Top-level usage
 
 #+begin_src text
-eb-stack {solve|parse|solve-json|sbom|bump} [subcommand options]
+eb-stack {solve|parse|check-recipe|solve-json|sbom|bump|mcp} [subcommand options]
 #+end_src
 
 Built on [[https://docs.rs/clap][clap]]'s derive API. Every subcommand accepts
 ~--help~ for its own usage text; ~eb-stack --version~ prints the crate
 version.
+
+Subcommands at a glance:
+
+| Subcommand | Role |
+|------------|------|
+| ~solve~ | Parse trees, resolvo co-select, lock + optional SBOM / build list / stack diff |
+| ~parse~ | Dump parsed candidates as JSON (no solve) |
+| ~check-recipe~ | One recipe: robot dep completeness + packaging gates (*resolves* rung) |
+| ~solve-json~ | Solve from a pre-built universe JSON |
+| ~sbom~ | CycloneDX from an existing lock |
+| ~bump~ | Next-generation easyconfig rewrite (hierarchy-aware auto deps) |
+| ~mcp~ | Stdio MCP server (~eb_check_recipe~ / ~eb_bump~ / ~eb_solve~) |
 
 * solve
 
@@ -53,6 +65,51 @@ eb-stack solve
   easyconfig path per line, dependencies before the packages that need them.
 - ~--stack-diff-out~ :: Optional markdown diff of the solved lock against the
   baseline lock. Requires a baseline (see ~--baseline-easyconfigs~).
+
+* check-recipe
+
+Packaging check for *one* easyconfig: resolve every runtime and build
+dependency against robot tree(s), and run packaging gates (positional
+checksum lint, required ~configopts~ substrings). This establishes only the
+*resolves* rung of the reporting ladder -- not builds, not binary
+verification. See [[file:../explanation/lifecycle.org][lifecycle]] and
+[[file:../howto/run-annual-bump.org][annual bump]].
+
+Cross-toolchain deps (for example ~quill~ on ~GCCcore~ while the recipe is
+~gfbf~) are matched by identity, not by filtering the universe to the
+recipe's toolchain alone. Exit 1 if any dep is missing or a packaging gate
+fails.
+
+#+begin_src text
+eb-stack check-recipe
+  --recipe PATH
+  --easyconfigs PATH...
+  [--require-configopt SUBSTR]...
+  [--metadata-only]
+  [--scaffold-missing DIR]
+#+end_src
+
+- ~--recipe~ :: Path to the ~.eb~ file to validate. Required.
+- ~--easyconfigs~ :: Robot easyconfig tree(s), walked recursively. Required,
+  *repeatable*: later paths override earlier ones for the same
+  name+version+toolchain identity (draft overlay on upstream). Same
+  precedence rule as ~solve~.
+- ~--require-configopt SUBSTR~ :: Assert that ~configopts~ contains this
+  substring. Repeatable. Used to gate product flags (e.g.
+  ~-Dwith_metatomic=true~, ~-DQMC_MPI=ON~).
+- ~--metadata-only~ :: Skip the missing-dep robot check; only run packaging
+  metadata gates (checksum structure, required configopts, etc.). Useful
+  when the robot tree is absent and you only need the packaging lint.
+- ~--scaffold-missing DIR~ :: Write draft companion ~.eb~ files for every
+  missing dep under ~DIR~ using the EasyBuild letter/name layout
+  (~e/eOn/...~, ~q/quill/...~). The packaging prep loop for stacks that
+  need greenfield companions: scaffold, fill sources/checksums, re-run
+  ~check-recipe~ with the draft tree as a later ~--easyconfigs~ overlay.
+
+Missing-dep output names generations where the package *does* exist
+("available at other generations: ..."); treat that list as the work queue.
+A ~[packaging]~ checksum finding means reorder ~checksums~ (all sources
+first, then patches) -- never bypass the gate.
 
 * parse
 
@@ -195,9 +252,51 @@ Every field not named above -- ~easyblock~, ~homepage~, ~description~,
 ~--easyconfigs~ auto-resolve changed -- is
 copied through byte-for-byte from the source.
 
+* mcp
+
+Serve the packaging workflow as MCP tools over *stdio* (JSON-RPC 2.0). No
+extra flags: the process reads requests from stdin and writes responses to
+stdout until EOF.
+
+#+begin_src text
+eb-stack mcp
+#+end_src
+
+Register with a harness that speaks MCP, for example:
+
+#+begin_src bash
+claude mcp add eb-stack -- eb-stack mcp
+# harness-equivalent: pass `eb-stack mcp` as the stdio server command
+#+end_src
+
+Tools exposed (same semantics as the matching CLI subcommands):
+
+| Tool | CLI analogue | Required arguments |
+|------+--------------|--------------------|
+| ~eb_check_recipe~ | ~check-recipe~ | ~recipe~, ~easyconfigs~ (array) |
+| ~eb_bump~ | ~bump~ | ~source~, ~toolchain_name~, ~toolchain_version~ |
+| ~eb_solve~ | ~solve~ | ~easyconfigs~ (array), ~policy~ |
+
+Optional arguments mirror the CLI:
+
+- ~eb_check_recipe~: ~require_configopts~ (array of strings),
+  ~scaffold_missing~ (directory path). Note: the CLI ~--metadata-only~ flag
+  is not currently mirrored on the MCP tool; use the CLI for metadata-only
+  packaging lint.
+- ~eb_bump~: ~version~, ~source_checksum~, ~deps~ (object name→version),
+  ~easyconfigs~, ~hierarchy_fixture~, ~keep_old_deps~, ~out_dir~, ~out~.
+- ~eb_solve~: ~baseline_easyconfigs~, ~baseline_toolchain_version~,
+  ~lock_out~, ~sbom_out~, ~build_list_out~, ~stack_diff_out~.
+
+Every ~eb_check_recipe~ result embeds the three-claim ladder state and
+derived next-actions (missing-dep work queue, packaging fixes). Tool
+failures are returned as MCP ~isError: true~ content, not as bare JSON-RPC
+errors, per the MCP tools/call contract. Library entry point:
+[[file:rust-api.org][Rust API]] module ~mcp~.
+
 * Exit codes
 
 | Code | Meaning                                                          |
 |------+-------------------------------------------------------------------|
 |    0 | Success                                                          |
-|    1 | Error: parse failure, unsatisfiable policy, missing file, or rewrite failure. The message names real package/version/field data, not internal solver identifiers. |
+|    1 | Error: parse failure, unsatisfiable policy, missing dep, packaging gate failure, missing file, or rewrite failure. The message names real package/version/field data, not internal solver identifiers. |

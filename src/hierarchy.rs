@@ -19,7 +19,7 @@ use thiserror::Error;
 
 /// Minimum share of generation-scoped dependency pins a version must hold to
 /// count as a **clear** consensus (modal). Below this, the signal is treated as
-/// weak and we fall back to newest-among-used (still ≥ floor).
+/// weak and we fall back to newest-among-used (still at least floor).
 ///
 /// Rationale: pure plurality can favor an older back-ported pin that many
 /// packages still list (scikit-build-core 0.10.6) while maintainers of key
@@ -360,24 +360,21 @@ pub struct ResolveDepOpts<'a> {
 
 /// Among hierarchy members for `name`, pick a safe version for the target generation.
 ///
-/// Selection rules (in order):
-/// 1. Candidate must be in `hierarchy` and match `name` (strict name+version
-///    membership — out-of-generation GCCcore/GCC never qualify).
-/// 2. Optional `versionsuffix` must match (empty/`None` matches candidates with no suffix).
-/// 3. Optional `floor_version`: never pick a version **older** than the floor.
-/// 4. Prefer candidates on the hierarchy **parent** toolchain when present,
-///    otherwise the highest (deepest) hierarchy member that has a candidate.
-/// 5. Among the same hierarchy rank (or when `use_consensus` / floor is set):
-///    - **Generation consensus** (when `use_consensus` or a floor is set):
-///      count which version of `name` other recipes in the hierarchy depend on
-///      (runtime + build deps). If a version has a clear majority (≥ 80% of
-///      pins) and is eligible, pick it. Otherwise fall back to the **newest**
-///      eligible version that has at least one generation pin (else newest
-///      eligible). This matches maintainer CMake 3.29.3 (clear majority) and
-///      scikit-build-core 0.11.1 (weak plurality → newest used).
-///    - if no floor and not consensus: pick the **newest** version by [`cmp_version`].
+/// Among hierarchy members for name, pick a safe version for the target
+/// generation.
 ///
-/// Returns `None` when no candidate satisfies the filters.
+/// Selection rules, in order: (1) candidate must be in the hierarchy and match
+/// name (strict name+version membership; out-of-generation GCCcore/GCC never
+/// qualify); (2) optional versionsuffix must match (empty/None matches
+/// candidates with no suffix); (3) optional floor_version never picks a version
+/// older than the floor; (4) prefer candidates on the hierarchy parent
+/// toolchain when present, otherwise the highest hierarchy member that has a
+/// candidate; (5) among the same hierarchy rank (or when use_consensus / floor
+/// is set), use generation consensus when available: if a version has a clear
+/// majority (at least 80 percent of pins) and is eligible, pick it, else the
+/// newest eligible version that has at least one generation pin (else newest
+/// eligible). Without floor and without consensus, pick the newest version by
+/// cmp_version. Returns None when no candidate satisfies the filters.
 pub fn resolve_dep_version_in_hierarchy(
     name: &str,
     cands: &[Candidate],
@@ -482,15 +479,15 @@ pub fn prefer_non_system_candidates<'a>(eligible: &[&'a Candidate]) -> Vec<&'a C
 
 /// Pick a generation-consensus version of `name` among `eligible` install versions.
 ///
-/// - Clear majority (≥ 80% of generation pins of `name` that land in `eligible`):
-///   that modal version.
-/// - Else: **newest** among eligible versions that appear in the pin counts
-///   (weak signal / no unique consensus).
-/// - If no pin counts hit eligible: **newest** eligible (true no-signal fallback).
+/// Clear majority (at least 80 percent of generation pins of name that land in
+/// eligible) yields that modal version. Else pick the newest among eligible
+/// versions that appear in the pin counts (weak signal / no unique consensus).
+/// If no pin counts hit eligible, pick the newest eligible (true no-signal
+/// fallback).
 ///
-/// `eligible` must already be floor/suffix/hierarchy filtered. Empty → `None`.
-/// Callers that hold full [`Candidate`]s should first run
-/// [`prefer_non_system_candidates`] so SYSTEM does not beat GCCcore on version alone.
+/// eligible must already be floor/suffix/hierarchy filtered; empty yields None.
+/// Callers that hold full Candidate values should first run
+/// prefer_non_system_candidates so SYSTEM does not beat GCCcore on version alone.
 pub fn pick_consensus_version(
     counts: &HashMap<String, usize>,
     eligible: &[String],

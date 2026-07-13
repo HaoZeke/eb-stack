@@ -1,0 +1,49 @@
+#+TITLE: Rust API Reference
+#+OPTIONS: toc:2 num:nil
+
+The ~eb_stack~ crate is the library behind the ~eb-stack~ binary. CLI
+subcommands and MCP tools call the same public paths documented here.
+
+The module tree below is *generated from the crate source* (rustdoc comments)
+via ~sphinx-rustdocgen~ and rendered with ~sphinxcontrib_rust~ during
+~pixi run -e docs docbld~. Expand "Crate eb_stack" in the sidebar, or follow
+the injected toctree, for every public item.
+
+#+begin_export rst
+See also:
+
+- CLI flags: :doc:`/reference/cli` (``solve``, ``check-recipe``, ``bump``, ``mcp``, …)
+- Annual rebuild loop: :doc:`/howto/run-annual-bump`
+- Architecture: :doc:`/explanation/architecture`
+- Parser approach: :doc:`/explanation/parser-approach`
+
+The module toctree (crate root and children) is injected below by
+``sphinx-rustdoc-postprocess`` during the docs build.
+#+end_export
+
+* Public modules (map)
+
+| Module | Role |
+|--------+------|
+| ~domain~ | Core types: toolchain, candidate, lock, policy |
+| ~eb_parse~ | Restricted-Python easyconfig parse, ~check_recipe_deps~, ~packaging_gate~ |
+| ~eb_emit~ | ~emit_next_generation~ / hierarchy-aware auto-resolve bump |
+| ~hierarchy~ | Generation sub-toolchain hierarchy and consensus versions |
+| ~select~ / ~resolvo_provider~ | CDCL SAT co-selection |
+| ~report~ | Build list and stack-diff markdown |
+| ~sbom~ | Planned CycloneDX from a lock |
+| ~mcp~ | JSON-RPC MCP tool surface (~eb_check_recipe~, ~eb_bump~, ~eb_solve~) |
+| ~version~ | EasyBuild-style version ordering |
+
+* Rebuild the API pages
+
+#+begin_src bash
+pixi run -e docs gen-rust-api   # docs/source/crates/eb_stack/*.rst
+pixi run -e docs docbld        # Sphinx + postprocess injects toctree
+#+end_src
+
+* Stability
+
+The CLI and MCP tool argument schemas are the supported operator contracts
+through 0.x. Library item paths may move before 1.0; pin the crate version
+when embedding.

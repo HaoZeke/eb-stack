@@ -85,16 +85,15 @@ pub enum BaselineGenError {
     NoLowerGeneration { target: String, found: Vec<String> },
 }
 
-/// Choose the baseline toolchain **version** for a same-family multi-generation tree.
+/// Choose the baseline toolchain version for a same-family multi-generation tree.
 ///
-/// # Rule
-/// 1. If `explicit` is set, that version must appear in `versions` and is used as-is.
-/// 2. Otherwise, select the **nearest lower** generation than `target_version` under
-///    [`cmp_version`] ordering (greatest version strictly less than the target).
+/// If explicit is set, that version must appear in versions and is used as-is.
+/// Otherwise select the nearest lower generation than target_version under
+/// cmp_version ordering (greatest version strictly less than the target).
 ///
-/// This replaces an earlier “first non-target in `BTreeSet` sort order” pick, which is
-/// wrong when more than one non-target generation is present (e.g. `2024b` before `2025a`
-/// when the target is `2025b`).
+/// This replaces an earlier first-non-target in BTreeSet sort order pick, which
+/// is wrong when more than one non-target generation is present (for example
+/// 2024b before 2025a when the target is 2025b).
 pub fn select_baseline_generation(
     versions: impl IntoIterator<Item = impl AsRef<str>>,
     target_version: &str,
