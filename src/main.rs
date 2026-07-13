@@ -4,12 +4,12 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use eb_stack::{
     check_recipe_deps, emit_next_generation_auto_from_path_with_opts,
-    emit_next_generation_from_path, ingest_foreign_to_easyconfig, load_json_file,
+    emit_next_generation_from_path, ingest_foreign_to_easyconfig_with_opts, load_json_file,
     lock_to_cyclonedx, packaging_gate, parse_easyconfig_tree, parse_easyconfig_trees,
     resolve_easyconfig_file, scaffold_missing_companions,
     solve_from_easyconfigs_with_baseline_version_and_extras, solve_to_files_with_extras,
-    write_ingest_result, AutoResolveOpts, EmitParams, ForeignFormat, SolveExtraOut, StackLock,
-    Toolchain,
+    write_ingest_result, AutoResolveOpts, EmitParams, ForeignFormat, IngestOpts, SolveExtraOut,
+    StackLock, Toolchain,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -184,9 +184,10 @@ enum Cmd {
     /// Ingest a foreign recipe (conda-forge meta.yaml / Spack package.py)
     /// into a parseable EasyBuild scaffold.
     ///
-    /// Does not invent EB generation-native dependency versions or build
-    /// logic: residual warnings are printed and embedded in the `.eb` header.
-    /// Format is auto-detected from the filename unless `--format` is set.
+    /// Mechanically derives name/version/sources/deps/configopts from the foreign
+    /// recipe. With `--easyconfigs`, resolves dependency versions against the
+    /// target generation hierarchy (same path as `bump`). Residuals (product
+    /// patches, hand pins) still surface as warnings.
     Ingest {
         /// Foreign recipe path (`meta.yaml`, `recipe.yaml`, or `package.py`)
         #[arg(long)]
@@ -200,6 +201,16 @@ enum Cmd {
         /// Target toolchain version / generation (default: 2024a)
         #[arg(long, default_value = "2024a")]
         toolchain_version: String,
+        /// Robot easyconfig tree(s) for hierarchy-aware dep version resolve.
+        /// Repeatable; later paths win on conflict (site overlay).
+        #[arg(long, value_name = "DIR")]
+        easyconfigs: Vec<PathBuf>,
+        /// Keep residual foreign versions when the robot has no candidate.
+        #[arg(long)]
+        keep_old_deps: bool,
+        /// Optional hierarchy fixture JSON (escape hatch).
+        #[arg(long, value_name = "PATH")]
+        hierarchy_fixture: Option<PathBuf>,
         /// Explicit output `.eb` path
         #[arg(long, conflicts_with = "out_dir")]
         out: Option<PathBuf>,
@@ -567,6 +578,9 @@ fn main() -> Result<()> {
             format,
             toolchain_name,
             toolchain_version,
+            easyconfigs,
+            keep_old_deps,
+            hierarchy_fixture,
             out,
             out_dir,
         } => {
@@ -582,8 +596,14 @@ fn main() -> Result<()> {
                 name: toolchain_name,
                 version: toolchain_version,
             };
-            let result = ingest_foreign_to_easyconfig(&source, fmt, &toolchain)
-                .with_context(|| format!("ingest {}", source.display()))?;
+            let opts = IngestOpts {
+                easyconfigs,
+                keep_old_deps,
+                hierarchy_fixture,
+            };
+            let result =
+                ingest_foreign_to_easyconfig_with_opts(&source, fmt, &toolchain, &opts)
+                    .with_context(|| format!("ingest {}", source.display()))?;
             for w in &result.warnings {
                 eprintln!("WARNING: {w}");
             }

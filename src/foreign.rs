@@ -25,14 +25,19 @@
 //! Residuals (EB generation-native dep versions, easyblock/build logic) surface
 //! as warnings — never invented as authoritative.
 
-use crate::domain::Toolchain;
+use crate::domain::{Candidate, Toolchain};
 use crate::eb_emit::easyconfig_filename;
-use crate::eb_parse::{companion_easyconfig_basename, easyconfig_letter_dir};
+use crate::eb_parse::{
+    companion_easyconfig_basename, easyconfig_letter_dir, parse_easyconfig_trees,
+};
+use crate::hierarchy::{
+    hierarchy_for_with_tree, resolve_dep_versions_for_specs, SourceDepSpec, ToolchainHierarchy,
+};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value as YamlValue;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 /// Origin of a foreign recipe.
@@ -92,8 +97,22 @@ pub struct ForeignRecipe {
     /// Build-system / base-class hints (e.g. Spack `MesonPackage`, `CMakePackage`).
     #[serde(default)]
     pub build_system_hints: Vec<String>,
+    /// Mechanically extracted configure flags (e.g. Spack meson_args / cmake_args literals).
+    #[serde(default)]
+    pub configopts: Option<String>,
     /// Human notes from the parser.
     pub notes: Vec<String>,
+}
+
+/// Options for foreign → EB ingest, including optional robot hierarchy resolve.
+#[derive(Debug, Clone, Default)]
+pub struct IngestOpts {
+    /// Robot easyconfig tree(s); later paths override earlier (site overlay).
+    pub easyconfigs: Vec<PathBuf>,
+    /// Keep foreign residual versions when the robot has no candidate.
+    pub keep_old_deps: bool,
+    /// Optional hierarchy fixture override.
+    pub hierarchy_fixture: Option<PathBuf>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -177,6 +196,15 @@ pub fn emit_easyconfig_from_foreign(
 
     let easyblock = guess_easyblock(recipe, &mut warnings);
     let (source_urls_line, sources_line, checksums_line) = source_block(recipe, &mut warnings);
+    let configopts_line = match &recipe.configopts {
+        Some(c) if !c.is_empty() => {
+            warnings.push(format!(
+                "configopts mechanically extracted from foreign recipe ({c})"
+            ));
+            format!("configopts = '{}'\n", escape_py_single(c))
+        }
+        _ => String::new(),
+    };
 
     let mut dep_comment_lines: Vec<String> = Vec::new();
     let mut builddep_tuples: Vec<String> = Vec::new();
@@ -280,6 +308,7 @@ against a robot tree before production install."""
 {source_urls_line}
 {sources_line}
 {checksums_line}
+{configopts_line}
 {builddeps_block}
 {deps_block}
 sanity_check_paths = {{
@@ -301,6 +330,7 @@ moduleclass = 'lib'
         source_urls_line = source_urls_line,
         sources_line = sources_line,
         checksums_line = checksums_line,
+        configopts_line = configopts_line,
         builddeps_block = builddeps_block,
         deps_block = deps_block,
     );
@@ -314,14 +344,200 @@ moduleclass = 'lib'
     }
 }
 
-/// Parse path, emit scaffold.
+/// Parse path, emit scaffold (no robot resolve).
 pub fn ingest_foreign_to_easyconfig(
     path: &Path,
     format: Option<ForeignFormat>,
     toolchain: &Toolchain,
 ) -> Result<IngestResult, ForeignError> {
-    let recipe = parse_foreign_path(path, format)?;
-    Ok(emit_easyconfig_from_foreign(&recipe, toolchain))
+    ingest_foreign_to_easyconfig_with_opts(path, format, toolchain, &IngestOpts::default())
+}
+
+/// Parse path, emit scaffold, and **mechanically** fill dependency versions
+/// (and preferred package name casing) from robot easyconfig tree(s) when
+/// `opts.easyconfigs` is non-empty — same hierarchy resolve path as `bump`.
+pub fn ingest_foreign_to_easyconfig_with_opts(
+    path: &Path,
+    format: Option<ForeignFormat>,
+    toolchain: &Toolchain,
+    opts: &IngestOpts,
+) -> Result<IngestResult, ForeignError> {
+    let mut recipe = parse_foreign_path(path, format)?;
+    // Spack: pull string-literal -D flags from meson_args / cmake_args bodies.
+    if recipe.format == ForeignFormat::Spack {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            if let Some(flags) = extract_spack_config_flags(&text) {
+                recipe.configopts = Some(flags);
+            }
+        }
+    }
+    let mut result = emit_easyconfig_from_foreign(&recipe, toolchain);
+    if !opts.easyconfigs.is_empty() {
+        result = apply_robot_resolution(result, toolchain, opts)?;
+    }
+    Ok(result)
+}
+
+/// Resolve dep/builddep versions in an already-emitted scaffold against robot trees.
+fn apply_robot_resolution(
+    mut result: IngestResult,
+    toolchain: &Toolchain,
+    opts: &IngestOpts,
+) -> Result<IngestResult, ForeignError> {
+    let roots: Vec<&Path> = opts.easyconfigs.iter().map(|p| p.as_path()).collect();
+    let tree = parse_easyconfig_trees(&roots).map_err(|e| {
+        ForeignError::Parse(format!("robot parse: {e}"))
+    })?;
+    result.warnings.push(format!(
+        "robot resolve: {} candidate(s), {:.1}% parse coverage",
+        tree.candidates.len(),
+        100.0 * tree.coverage()
+    ));
+
+    // Prefer EasyBuild package name casing when the robot already has this software.
+    if let Some(canon) = find_canonical_package_name(&result.recipe.name, &tree.candidates) {
+        if canon != result.recipe.name {
+            result.warnings.push(format!(
+                "package name casing from robot: {} → {}",
+                result.recipe.name, canon
+            ));
+            result.text = result.text.replacen(
+                &format!("name = '{}'", result.recipe.name),
+                &format!("name = '{canon}'"),
+                1,
+            );
+            result.filename = easyconfig_filename(&canon, &result.recipe.version, toolchain);
+            result.recipe.name = canon;
+        }
+    }
+
+    // Build specs from mapped foreign deps (skip toolchain virtuals).
+    let mut specs = Vec::new();
+    for d in &result.recipe.dependencies {
+        let eb_name = map_dep_name_to_eb(&d.name);
+        if is_toolchain_virtual(&eb_name) {
+            result.warnings.push(format!(
+                "robot resolve: skip toolchain virtual '{eb_name}' (provided by foss/GCCcore stack)"
+            ));
+            continue;
+        }
+        let floor = residual_version_token(d.pin.as_deref()).unwrap_or_else(|| "0.0.0".into());
+        specs.push(SourceDepSpec::plain(eb_name, floor));
+    }
+    if specs.is_empty() {
+        result
+            .warnings
+            .push("robot resolve: no non-virtual foreign deps to resolve".into());
+        return Ok(result);
+    }
+
+    let h: ToolchainHierarchy = hierarchy_for_with_tree(
+        toolchain,
+        opts.hierarchy_fixture.as_deref(),
+        &tree.candidates,
+    )
+    .map_err(|e| ForeignError::Parse(format!("hierarchy: {e}")))?;
+    result.warnings.push(format!(
+        "robot resolve: hierarchy {}-{} members: {}",
+        toolchain.name,
+        toolchain.version,
+        h.member_labels().join(" < ")
+    ));
+
+    let (map, kept) =
+        resolve_dep_versions_for_specs(&specs, &tree.candidates, &h, opts.keep_old_deps).map_err(
+            |e| ForeignError::Parse(format!("robot dep resolve: {e}")),
+        )?;
+    for k in kept {
+        result.warnings.push(format!("robot resolve: {k}"));
+    }
+
+    // Rewrite residual version tokens in the emitted text.
+    for (name, ver) in &map {
+        result.warnings.push(format!(
+            "robot resolve: {name} → {ver} (generation-native)"
+        ));
+        let re = Regex::new(&format!(
+            r"(\('{re_name}',\s*')([^']*)(')",
+            re_name = regex::escape(name)
+        ))
+        .map_err(|e| ForeignError::Parse(e.to_string()))?;
+        let ver = ver.clone();
+        result.text = re
+            .replace_all(&result.text, move |caps: &regex::Captures| {
+                format!("{}{}{}", &caps[1], ver, &caps[3])
+            })
+            .to_string();
+    }
+
+    // Strip residual 0.0.0 lines for deps that never resolved (keep comments).
+    let zero_re = Regex::new(r#"(?m)^\s*\('[^']+',\s*'0\.0\.0'\),?\s*(?:#.*)?\n"#)
+        .map_err(|e| ForeignError::Parse(e.to_string()))?;
+    if !opts.keep_old_deps {
+        let stripped = zero_re.replace_all(&result.text, "");
+        if stripped != result.text {
+            result.warnings.push(
+                "robot resolve: dropped residual 0.0.0 dep lines that did not resolve (pass --keep-old-deps to retain)"
+                    .into(),
+            );
+            result.text = stripped.to_string();
+        }
+    }
+
+    Ok(result)
+}
+
+fn find_canonical_package_name(name: &str, cands: &[Candidate]) -> Option<String> {
+    let lower = name.to_ascii_lowercase();
+    // Prefer exact case-insensitive match with most common casing among candidates
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for c in cands {
+        if c.name.to_ascii_lowercase() == lower {
+            *counts.entry(c.name.clone()).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, n)| *n)
+        .map(|(n, _)| n)
+}
+
+fn is_toolchain_virtual(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "blas"
+            | "lapack"
+            | "scalapack"
+            | "mpi"
+            | "fftw"
+            | "fftw-api"
+            | "mkl"
+            | "openblas"
+            | "c"
+            | "cxx"
+            | "fortran"
+            | "libgcc-ng"
+            | "libstdcxx-ng"
+            | "llvm-openmp"
+    )
+}
+
+/// Extract static `-D…` string literals from Spack packages.
+///
+/// Only plain string list items (not f-strings): `"-Dwith_xtb=false"`.
+fn extract_spack_config_flags(text: &str) -> Option<String> {
+    // Line must start with whitespace then a quote (not f") so f-strings are skipped.
+    let lit = Regex::new(r#"(?m)^[ \t]+[\"'](-D[A-Za-z0-9_./+=-]+)[\"']"#).ok()?;
+    let mut flags: Vec<String> = lit
+        .captures_iter(text)
+        .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
+        .collect();
+    if flags.is_empty() {
+        return None;
+    }
+    let mut seen = std::collections::HashSet::new();
+    flags.retain(|f| seen.insert(f.clone()));
+    Some(flags.join(" "))
 }
 
 fn guess_easyblock(recipe: &ForeignRecipe, warnings: &mut Vec<String>) -> String {
@@ -705,6 +921,7 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
         summary,
         dependencies,
         build_system_hints: Vec::new(),
+        configopts: None,
         notes,
     })
 }
@@ -1018,6 +1235,14 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
         build_system_hints = bases;
     }
 
+    let configopts = extract_spack_config_flags(text);
+    if let Some(ref c) = configopts {
+        notes.push(format!(
+            "extracted {} configure flag token(s) from meson_args/cmake_args",
+            c.split_whitespace().count()
+        ));
+    }
+
     Ok(ForeignRecipe {
         format: ForeignFormat::Spack,
         name,
@@ -1030,6 +1255,7 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
         summary,
         dependencies,
         build_system_hints,
+        configopts,
         notes,
     })
 }

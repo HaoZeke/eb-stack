@@ -49,8 +49,9 @@ pub use sbom::{
 pub use select::{select_stack, SelectError};
 pub use foreign::{
     detect_foreign_format, emit_easyconfig_from_foreign, ingest_foreign_to_easyconfig,
-    parse_foreign_path, parse_foreign_str, write_ingest_result, ForeignDep, ForeignError,
-    ForeignFormat, ForeignRecipe, IngestResult,
+    ingest_foreign_to_easyconfig_with_opts, parse_foreign_path, parse_foreign_str,
+    write_ingest_result, ForeignDep, ForeignError, ForeignFormat, ForeignRecipe, IngestOpts,
+    IngestResult,
 };
 
 use anyhow::{bail, Context, Result};

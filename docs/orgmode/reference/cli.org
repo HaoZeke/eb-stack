@@ -328,4 +328,12 @@ build steps, and EB generation-native dependency versions are residual
 (header warnings). Re-parse the result with ~check-recipe~ (robot completeness
 may still fail until companions and pins are filled).
 
+- ~--easyconfigs DIR~ :: Robot easyconfig tree(s) for hierarchy-aware dependency
+  version resolve (same mechanical path as ~bump~). Repeatable; later wins.
+- ~--keep-old-deps~ :: Keep residual foreign versions when the robot has no candidate.
+- ~--hierarchy-fixture PATH~ :: Optional hierarchy JSON override.
+
+With ~--easyconfigs~, dependency versions and package-name casing are filled
+from the target generation — not left as ~0.0.0~ stubs.
+
 Fixtures: ~fixtures/foreign_ingest/~.

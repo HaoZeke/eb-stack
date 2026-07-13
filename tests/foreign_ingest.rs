@@ -235,3 +235,55 @@ fn cli_ingest_conda_eon_and_spack_qmcpack() {
     assert_eq!(r.name, "qmcpack");
     assert_eq!(r.version, "4.3.0");
 }
+
+#[test]
+fn ingest_with_robot_resolves_dep_versions_from_hierarchy() {
+    let path = root().join("spack_eon/package.py");
+    let robot = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/hierarchy_resolve/easyconfigs");
+    let opts = eb_stack::IngestOpts {
+        easyconfigs: vec![robot],
+        keep_old_deps: true,
+        hierarchy_fixture: None,
+    };
+    let out = eb_stack::ingest_foreign_to_easyconfig_with_opts(
+        &path,
+        Some(ForeignFormat::Spack),
+        &foss(),
+        &opts,
+    )
+    .expect("ingest+robot");
+    // Robot has Python-3.12.3 and CMake-3.29.3 for foss-2024a hierarchy.
+    assert!(
+        out.text.contains("('Python', '3.12.3')") || out.warnings.iter().any(|w| w.contains("Python")),
+        "expected robot-resolved Python or resolve note: {}\n{}",
+        out.text,
+        out.warnings.join("\n")
+    );
+    assert!(
+        out.warnings.iter().any(|w| w.contains("robot resolve")),
+        "expected robot resolve warnings: {:?}",
+        out.warnings
+    );
+    // Spack eon meson_args static -D flags should appear when present
+    let r = resolve_easyconfig_str(&out.text).expect("re-parse after robot resolve");
+    assert_eq!(r.version, "2.16.0");
+}
+
+#[test]
+fn spack_eon_extracts_static_meson_configopts() {
+    let path = root().join("spack_eon/package.py");
+    let recipe = parse_foreign_path(&path, None).expect("parse");
+    let opts = recipe.configopts.as_deref().unwrap_or("");
+    // Static -D flags from meson_args (not f-string dynamics)
+    assert!(
+        opts.contains("-Dwith_xtb=false") || opts.contains("-Dwith_metatomic=false"),
+        "expected static meson -D flags, got {opts:?}"
+    );
+    let out = ingest_foreign_to_easyconfig(&path, None, &foss()).expect("emit");
+    assert!(
+        out.text.contains("configopts") && out.text.contains("-Dwith_"),
+        "{}",
+        out.text
+    );
+}
