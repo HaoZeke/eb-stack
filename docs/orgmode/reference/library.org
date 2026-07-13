@@ -1,0 +1,36 @@
+#+TITLE: Library crate (~eb_stack~)
+#+OPTIONS: toc:nil num:nil
+
+The CLI binary ~eb-stack~ is a thin clap front end over the ~eb_stack~
+library. Drivers that embed the crate (or agent MCP tools) call the same
+paths the CLI uses.
+
+* Browse rustdoc
+
+#+begin_src bash
+cargo doc --no-deps --open
+# crate root: target/doc/eb_stack/index.html
+#+end_src
+
+Public modules:
+
+| Module | Role |
+|--------+------|
+| ~eb_parse~ | Restricted-Python easyconfig parse, ~check_recipe_deps~, ~packaging_gate~ |
+| ~eb_emit~ | ~emit_next_generation~ / auto-resolve hierarchy bump |
+| ~hierarchy~ | Generation sub-toolchain hierarchy and consensus versions |
+| ~select~ / ~resolvo_provider~ | CDCL SAT co-selection |
+| ~report~ | Build list and stack-diff markdown |
+| ~sbom~ | Planned CycloneDX from a lock |
+| ~mcp~ | JSON-RPC tool surface for agent harnesses |
+
+* Stability
+
+The CLI flag surface is the supported operator contract. Library APIs may
+change before 1.0; pin the crate version and prefer the binary when you
+only need the workflow.
+
+* Related
+
+- [[file:cli.org][CLI reference]] -- every subcommand and flag
+- [[file:../howto/run-annual-bump.org][Annual bump operator guide]]
