@@ -22,3 +22,9 @@ skills/new-package/container/rocky9/eb-in-podman \
 ```
 
 `render-full-drive --build-backend podman-rocky9` wires this into `full-drive.sh`.
+
+## Capabilities
+
+`eb-in-podman` adds `CAP_NET_RAW` so Perl’s Net-Ping ICMP tests (and similar)
+can open raw ICMP sockets. Without it, rootless Podman fails those tests with
+`icmp socket error - Operation not permitted`.

@@ -79,8 +79,11 @@ done
 
 # Container runs as root by default; EasyBuild refuses root unless allowed.
 # Prefer image isolation over host uid mapping for site campaigns.
+# CAP_NET_RAW: Perl Net-Ping ICMP tests (and similar) need raw ICMP sockets;
+# without it rootless Podman fails with "Operation not permitted" in test_step.
 exec podman run --rm -i \
   --security-opt label=disable \
+  --cap-add=NET_RAW \
   -v "$WORK:/work:Z" \
   -v "$ROBOT:/robot:ro,Z" \
   -v "$SOURCES:/eb/sources:Z" \
