@@ -162,6 +162,8 @@ eb-stack --version
   - [[file:howto/run-annual-bump.org][How to run the annual toolchain-generation bump]] --
     operator guide for a whole rebuild (what it closes, the residual, the
     claim ladder, and the CI-known bumps).
+  - [[file:howto/new-package.org][Author a new package from conda-forge or Spack]] --
+    ~ingest~ + robot pins + ~check-recipe~ (agent skill ~skills/new-package/~).
   - How-to guides: [[file:howto/solve-lock.org][solve a stack lock]],
     [[file:howto/emit-reports.org][emit a build list and stack diff]],
     [[file:howto/bump-recipe.org][bump a recipe]],
