@@ -12,13 +12,15 @@ residual cases it names. Your site should pair these with a site runbook
 (init paths, module names, scheduler sizing); ask for it if you were not
 given one.
 
-| Work | Skill |
-|------|--------|
-| Existing recipes → new toolchain generation (annual rebuild) | `skills/annual-bump/SKILL.md` |
-| **New package** from conda-forge / Spack (greenfield) | `skills/new-package/SKILL.md` |
+| Work | Skill | Host |
+|------|--------|------|
+| Existing recipes → new toolchain generation (annual rebuild) | `skills/annual-bump/SKILL.md` | SURF EasyBuild work: **`rg.surf`** |
+| **New package** from conda-forge / Spack (greenfield) | `skills/new-package/SKILL.md` | **`rg.surf`** (mandatory; see skill §0) |
 
-Build/PR ops, three-claim ladder, and host contracts live in annual-bump §10
-and are shared; new-package points there rather than duplicating them.
+Build/PR ops and three-claim ladder live in annual-bump §10. **SURF
+EasyBuild + local-ai agent residual loops run on `rg.surf`**, not the
+laptop and not `rg.terra` (terra remains the remote cargo/builder for
+this repo’s Rust compile when required).
 
 ## Non-negotiables
 

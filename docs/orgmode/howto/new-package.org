@@ -19,6 +19,18 @@ replacement for those rules.
 
 The full agent runbook is [[https://github.com/HaoZeke/eb-stack/blob/main/skills/new-package/SKILL.md][skills/new-package/SKILL.md]].
 
+* Host: ~rg.surf~
+
+Run ~eb~, ~eb-stack ingest~, and any **local-ai agent** residual session on
+**~rg.surf~** (SURF workstation). Do not use the laptop as a fake EasyBuild
+host; do not use ~rg.terra~ for this path (terra is the cargo builder).
+
+#+begin_src bash
+ssh rg.surf
+#+end_src
+
+If ~rg.surf~ is unreachable, stop and report.
+
 * Prefer search-and-tweak over inventing
 
 #+begin_src bash
@@ -80,11 +92,12 @@ Per https://docs.easybuild.io/contributing/ :
 
 * Mechanical first; local-ai agent only for judgment
 
-Run every mechanical step (~eb-stack ingest~, ~eb --inject-checksums~,
-~eb --check-contrib~, ~eb -Dr --robot~) before involving a model. Product
-flags, ambiguous ~moduleclass~, real ~sanity_check_paths~, and variant
-policy are *judgment residuals*: a **local-ai agent** (OMP or Hermes) follows
-~skills/new-package/SKILL.md~ §6 — do **not** hardcode them into ~eb-stack~.
+On ~rg.surf~, run every mechanical step (~eb-stack ingest~,
+~eb --inject-checksums~, ~eb --check-contrib~, ~eb -Dr --robot~) before
+involving a model. Product flags, ambiguous ~moduleclass~, real
+~sanity_check_paths~, and variant policy are *judgment residuals*: a
+**local-ai agent** (OMP or Hermes **on rg.surf**) follows
+~skills/new-package/SKILL.md~ §7 — do **not** hardcode them into ~eb-stack~.
 
 * Related
 

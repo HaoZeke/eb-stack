@@ -35,7 +35,32 @@ new toolchain” section of the writing-easyconfigs page.
 
 ---
 
-## 0. What EasyBuild requires of an easyconfig
+## 0. Host: `rg.surf` (mandatory for this skill)
+
+All EasyBuild-facing work for **new packages** runs on **`rg.surf`**
+(SSH host alias; SURF workstation), not on the laptop and not on
+`rg.terra` (terra is the generic remote builder for cargo/heavy compile —
+different role).
+
+| On `rg.surf` | Why |
+|--------------|-----|
+| `eb`, EasyBuild robot tree, modules | Real SURF EasyBuild environment |
+| `eb-stack` (release binary or build there) | Same machine as `eb` for ingest → check-recipe |
+| **local-ai agent** (OMP / Hermes) | Residual judgment against live `eb` / robot |
+| Drafts / letter-layout work dir | Where `eb --robot` and inject-checksums see files |
+
+```
+ssh rg.surf
+# then run this skill's commands in a shell on that host
+```
+
+If `rg.surf` is unreachable, **stop and report** — do not fall back to
+laptop-local `eb` fiction or invent a second EasyBuild install. Site
+runbook may document modules init on that host; load it before `eb`.
+
+---
+
+## 1. What EasyBuild requires of an easyconfig
 
 From [Writing easyconfig files](https://docs.easybuild.io/writing-easyconfig-files/):
 
@@ -89,7 +114,7 @@ contribution gates.
 
 ---
 
-## 1. When to use `eb-stack ingest` (optional bootstrap)
+## 2. When to use `eb-stack ingest` (optional bootstrap)
 
 Use ingest when you have a **real** foreign recipe and want a first draft:
 
@@ -141,7 +166,7 @@ parameter below.
 
 ---
 
-## 2. End-to-end workflow (EasyBuild-native)
+## 3. End-to-end workflow (EasyBuild-native)
 
 ### Step A — Search first
 
@@ -233,7 +258,7 @@ org forbids agents on GitHub PR APIs.
 
 ---
 
-## 3. Residual map (foreign bootstrap → EasyBuild parameters)
+## 4. Residual map (foreign bootstrap → EasyBuild parameters)
 
 | Symptom from ingest / check | EasyBuild action |
 |-----------------------------|------------------|
@@ -249,7 +274,7 @@ org forbids agents on GitHub PR APIs.
 
 ---
 
-## 4. Worked fixtures (in-repo foreign inputs only)
+## 5. Worked fixtures (in-repo foreign inputs only)
 
 These **bootstrap** only; landable PRs live under `fixtures/eon_foss_2026_1`
 and `fixtures/qmcpack_foss_2026_1` and were hand-finished to EasyBuild rules.
@@ -290,7 +315,7 @@ cargo test --locked --test foreign_ingest
 
 ---
 
-## 5. Guarantees vs non-guarantees
+## 6. Guarantees vs non-guarantees
 
 | Claim | Who |
 |-------|-----|
@@ -307,7 +332,7 @@ Three-claim ladder (site ops): annual-bump §10.4 —
 
 ---
 
-## 6. Mechanical first; local-ai agent only for judgment residuals
+## 7. Mechanical first; local-ai agent only for judgment residuals
 
 **Maximize mechanical work.** Run every tool step that does not require a
 product/policy decision. **Do not hardcode** product flags, hand pins, or
@@ -320,7 +345,7 @@ bakes lies into the tool. Judgment residuals go to a **local-ai agent**
 | Kind | Examples | Who |
 |------|----------|-----|
 | **Mechanical** | `eb -S`; `eb-stack ingest --easyconfigs`; hierarchy/resolvo pins; `eb --inject-checksums`; `eb --check-contrib`; `eb-stack check-recipe`; `eb -Dr --robot` | CLI / any driver that only runs commands |
-| **Judgment residual** | Which product features to enable; moduleclass when ambiguous; real `sanity_check_paths` from install intent; multi-source `extract_cmd`; Spack `when=` → EB variant story; whether to copy sibling vs greenfield; PR title wording | **local-ai agent** (this skill §2–§3) |
+| **Judgment residual** | Which product features to enable; moduleclass when ambiguous; real `sanity_check_paths` from install intent; multi-source `extract_cmd`; Spack `when=` → EB variant story; whether to copy sibling vs greenfield; PR title wording | **local-ai agent** (this skill §3–§4) |
 | **Forbidden** | Encoding product `-D` sets, fake checksums, or landable style as hardwired ingest defaults | Nobody — not code, not the agent pretending mechanical |
 
 ### Mechanical sequence (always do this before calling a local-ai agent)
@@ -334,25 +359,27 @@ bakes lies into the tool. Judgment residuals go to a **local-ai agent**
 6. **Stop.** If the recipe is not yet landable, the remaining list is
    judgment residuals → dispatch local-ai agent with that list + this skill.
 
-### local-ai agent (OMP / Hermes)
+### local-ai agent (OMP / Hermes) — runs on `rg.surf`
 
 - **Name in prompts:** “local-ai agent” (not product nicknames).
+- **Host:** **`rg.surf` only** (same as §0). Start OMP/Hermes *on that
+  machine* (or with cwd/shell on `rg.surf`), where `eb` and the robot tree
+  live. Do not run the residual loop against a laptop-only PATH.
 - **Harness:** OMP or Hermes; site model path for the `eb-stack` role
-  (see annual-bump §11.5 for the configured model id). Commercial frontier
-  models are out of scope for SURF-only work.
+  (see annual-bump §11.5). Commercial frontier models out of scope for
+  SURF-only work.
 - **Input:** this skill path, software name, foreign path (or “none —
-  search first”), toolchain, `ROBOT`, work dir, and the **mechanical
-  leftover list** (warnings / check-contrib failures that are not pure
-  command re-runs).
+  search first”), toolchain, `ROBOT` **on rg.surf**, work dir **on rg.surf**,
+  and the **mechanical leftover list**.
 - **Prompt shape (minimal):**
   ```
-  Follow skills/new-package/SKILL.md for <software>.
-  Foreign: <path|none>. Toolchain: foss-<gen>. ROBOT=<path>. Work=<path>.
-  Mechanical steps already done: <ingest|inject-checksums|check-contrib|…>.
+  On rg.surf: follow skills/new-package/SKILL.md for <software>.
+  Foreign: <path|none>. Toolchain: foss-<gen>. ROBOT=<path on rg.surf>.
+  Work=<path on rg.surf>. Mechanical steps already done: <…>.
   Residual judgment only: <bullets>.
-  Use eb / eb-stack; do not invent eb-stack features or hardcode product
-  flags into the tool. Report claim ladder. PR surface human-only unless
-  authorized this turn.
+  Use eb / eb-stack on this host; do not invent eb-stack features or
+  hardcode product flags into the tool. Report claim ladder. PR surface
+  human-only unless authorized this turn.
   ```
 - **Output:** edited easyconfig(s) + residual log + claim ladder; paste-ready
   PR title/body if contribution is in scope.
@@ -368,7 +395,7 @@ bakes lies into the tool. Judgment residuals go to a **local-ai agent**
 
 ---
 
-## 7. Quick reference
+## 8. Quick reference
 
 | Task | Command |
 |------|---------|
@@ -384,13 +411,13 @@ bakes lies into the tool. Judgment residuals go to a **local-ai agent**
 
 ---
 
-## 8. Routing
+## 9. Routing
 
 | Situation | Skill / doc |
 |-----------|-------------|
 | New software / first easyconfig | **This skill** + [writing easyconfigs](https://docs.easybuild.io/writing-easyconfig-files/) |
 | Existing `.eb` → new foss generation | `skills/annual-bump` + writing-docs “new toolchain” |
-| Residual judgment after mechanical gates | **local-ai agent** (§6), not hardcoding into `eb-stack` |
+| Residual judgment after mechanical gates | **local-ai agent** (§7), not hardcoding into `eb-stack` |
 | Stack lock / build list | annual-bump `solve` |
 | Contribute to easybuilders/* | [contributing](https://docs.easybuild.io/contributing/) + [GitHub integration](https://docs.easybuild.io/integration-with-github/) |
 

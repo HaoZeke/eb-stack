@@ -427,14 +427,14 @@ Expect: exit 0, 0 missing.
 via `testopts -E performance`). Full `eb` install/build is outside this skill's
 mechanical bar — use rg.terra / Jenkins when required.
 
-### 11.5 Agent driver (local-ai agent via OMP / Hermes)
+### 11.5 Agent driver (local-ai agent via OMP / Hermes on `rg.surf`)
 
-For SURF-only AI work, drive this skill with the **local-ai agent** (OMP or
-Hermes), not commercial frontier models. With OMP: role `eb-stack` → site
-model path (configured local stack). Run the exact commands above; do not
-reimplement EasyBuild semantics in the prompt. Prefer mechanical CLI steps;
-use the local-ai agent for residual judgment only (same split as
-`skills/new-package/SKILL.md` §6).
+For SURF EasyBuild AI work, drive this skill with the **local-ai agent**
+(OMP or Hermes) **on `rg.surf`**, not commercial frontier models and not
+the laptop. With OMP: role `eb-stack` → site model path on that host. Run
+`eb` / `eb-stack` there (robot tree + modules). Prefer mechanical CLI
+steps; use the local-ai agent for residual judgment only (same split as
+`skills/new-package/SKILL.md` §7). If `rg.surf` is down, stop and report.
 
 ### 11.6 Automated regression (what CI runs)
 
