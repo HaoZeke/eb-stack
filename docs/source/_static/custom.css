@@ -1,0 +1,58 @@
+/* eb-stack docs — light hero brand strip */
+.eb-hero {
+  margin: 0 0 1.75rem 0;
+  padding: 1.25rem 1.35rem 1.1rem;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--color-brand) 28%, transparent);
+  background: color-mix(in srgb, var(--color-brand) 8%, var(--color-background-secondary, #f8fafc));
+}
+.eb-hero-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin-bottom: 0.65rem;
+}
+.eb-hero-mark {
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 8%);
+}
+.eb-hero-name {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+.eb-hero-sub {
+  margin: 0.15rem 0 0;
+  font-size: 0.9rem;
+  opacity: 0.78;
+}
+.eb-hero-tagline {
+  margin: 0.35rem 0 0.75rem;
+  font-size: 1.05rem;
+  line-height: 1.45;
+  max-width: 42rem;
+}
+.eb-hero-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 0.55rem;
+}
+.eb-hero-pills span {
+  display: inline-block;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: color-mix(in srgb, var(--color-brand) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-brand) 28%, transparent);
+}
+.eb-hero-flow {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  opacity: 0.85;
+}

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="120" viewBox="0 0 420 120" fill="none" aria-labelledby="eb-stack-logo-title-dark" role="img">
+  <title id="eb-stack-logo-title-dark">eb-stack — EasyBuild stack lock and toolchain bump</title>
+  <desc>Dark-theme logo for eb-stack: three stacked recipe cards with a lock pin, wordmark eb-stack.</desc>
+  <g id="eb-stack-mark" transform="translate(8,14)">
+    <rect x="18" y="8" width="72" height="48" rx="6" fill="#134E4A" stroke="#2DD4BF" stroke-width="2.5"/>
+    <rect x="10" y="22" width="72" height="48" rx="6" fill="#115E59" stroke="#2DD4BF" stroke-width="2.5"/>
+    <rect x="2" y="36" width="72" height="48" rx="6" fill="#0F172A" stroke="#E2E8F0" stroke-width="2.5"/>
+    <rect x="12" y="48" width="40" height="5" rx="1.5" fill="#2DD4BF"/>
+    <rect x="12" y="58" width="52" height="5" rx="1.5" fill="#64748B"/>
+    <rect x="12" y="68" width="34" height="5" rx="1.5" fill="#64748B"/>
+    <circle cx="78" cy="58" r="14" fill="#F97316" stroke="#E2E8F0" stroke-width="2"/>
+    <path d="M78 50 v8 M74 58 h8" stroke="#0F172A" stroke-width="2.5" stroke-linecap="round"/>
+    <rect x="72" y="58" width="12" height="10" rx="2" fill="#0F172A"/>
+  </g>
+  <text x="120" y="78" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="48" font-weight="800" letter-spacing="-1.5" fill="#F8FAFC">eb-stack</text>
+</svg>
