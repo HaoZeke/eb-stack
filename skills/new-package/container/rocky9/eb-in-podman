@@ -77,6 +77,8 @@ for a in "$@"; do
   fi
 done
 
+# Container runs as root by default; EasyBuild refuses root unless allowed.
+# Prefer image isolation over host uid mapping for site campaigns.
 exec podman run --rm -i \
   --security-opt label=disable \
   -v "$WORK:/work:Z" \
@@ -93,4 +95,5 @@ exec podman run --rm -i \
   -e LMOD_CMD=/usr/share/lmod/lmod/libexec/lmod \
   -w /work \
   "$IMAGE" \
+  --allow-use-as-root-and-accept-consequences \
   "${args[@]}"
