@@ -110,16 +110,7 @@ run_eb() {
   fi
 }
 
-# check-contrib needs host or container python EB; use same backend for consistency
-run_eb_check_contrib() {
-  local f="$1"
-  if [[ "${BUILD_BACKEND}" == "podman-rocky9" ]]; then
-    run_eb --check-contrib "$f"
-  else
-    "${EASYBUILD_EB}" --modules-tool=Lmod --check-contrib "$f"
-  fi
-}
-
+# Gates: style/check-contrib/check-recipe on host when possible; robot always via backend.
 gate() {
   local f="$1"
   echo "===== format-style $(basename "$f") ====="
@@ -127,7 +118,11 @@ gate() {
   "${EB_STACK}" check-style "$f"
   sed -i 's/[[:space:]]*$//' "$f"
   echo "===== check-contrib ====="
-  run_eb_check_contrib "$f"
+  if [[ -n "${EASYBUILD_EB}" && -x "${EASYBUILD_EB}" ]]; then
+    "${EASYBUILD_EB}" --modules-tool=Lmod --check-contrib "$f"
+  else
+    run_eb --check-contrib "$f"
+  fi
   echo "===== check-recipe ====="
   "${EB_STACK}" check-recipe --recipe "$f" --easyconfigs "${ROBOT}" --easyconfigs "${WORK}/easyconfigs"
   echo "===== eb -Dr (backend=${BUILD_BACKEND}) ====="

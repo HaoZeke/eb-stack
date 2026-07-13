@@ -24,7 +24,7 @@ RUN dnf -y update \
 # EasyBuild in a venv (site may bind-mount a newer one)
 RUN python3 -m venv /opt/eb \
  && /opt/eb/bin/pip install --upgrade pip setuptools wheel \
- && /opt/eb/bin/pip install easybuild
+ && /opt/eb/bin/pip install easybuild pycodestyle
 
 ENV PATH=/opt/eb/bin:/usr/share/lmod/lmod/libexec:$PATH
 ENV LMOD_CMD=/usr/share/lmod/lmod/libexec/lmod
