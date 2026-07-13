@@ -329,6 +329,11 @@ present, multi-source layout, static ~configopts~ when the foreign DSL
 states them, and dependency *names* come from the foreign input. Product
 flags, patches, and hand-maintainer pins remain residual (header warnings).
 
+**Not a landable PR.** Finish with EasyBuild (~inject-checksums~,
+~check-contrib~, ~eb --robot~) and residual judgment per
+~skills/new-package/SKILL.md~. Do not hardcode product ~configopts~ into
+this tool.
+
 - ~--easyconfigs DIR~ :: Robot easyconfig tree(s). Same two-stage resolve as
   ~bump~ (hierarchy consensus + resolvo joint pins). Repeatable; later wins
   on identity conflict. Fills generation-native dep versions and preferred

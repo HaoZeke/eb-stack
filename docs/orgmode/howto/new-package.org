@@ -19,17 +19,34 @@ replacement for those rules.
 
 The full agent runbook is [[https://github.com/HaoZeke/eb-stack/blob/main/skills/new-package/SKILL.md][skills/new-package/SKILL.md]].
 
-* Host: ~rg.surf~
+* Host: ~rg.surf~ (EasyBuild + residual)
 
-Run ~eb~, ~eb-stack ingest~, and any **local-ai agent** residual session on
-**~rg.surf~** (SURF workstation). Do not use the laptop as a fake EasyBuild
-host; do not use ~rg.terra~ for this path (terra is the cargo builder).
+Run ~eb~, ~eb-stack ingest~, ~eb --robot~ installs (*builds* claim), and any
+**local-ai agent** residual session on **~rg.surf~** (SURF workstation). Do
+not use the laptop as a fake EasyBuild host; do not use ~rg.terra~ for this
+path (terra is the **cargo** builder for the ~eb-stack~ crate only).
+
+Residual agents run **inside a herdr pane** on that host (see skill §7) —
+not ad-hoc ~ssh rg.surf 'hermes …'~ / ~omp -p~.
 
 #+begin_src bash
 ssh rg.surf
+# residual (example shape — see skills/new-package/SKILL.md §7):
+# herdr agent start eb-residual-hermes --cwd "$WORK" -- …
 #+end_src
 
 If ~rg.surf~ is unreachable, stop and report.
+
+* Claims: resolves ≠ builds ≠ binary-verified
+
+| Rung | Proved by |
+|------+-----------|
+| *resolves* | ~eb-stack check-recipe~ (deps exist; packaging gate) |
+| *builds* | ~eb --robot~ green; module file exists (**on ~rg.surf~**) |
+| *binary-verified* | module load; binary runs / ~ldd~ / RPATH checks |
+
+~eb-stack ingest~ only helps the bootstrap toward *resolves*. It does **not**
+auto-author a landable PR end-to-end.
 
 * Prefer search-and-tweak over inventing
 
@@ -58,7 +75,8 @@ eb-stack ingest \
 
 Expect a *scaffold* with identity fields and (when the robot has candidates)
 generation-native dependency versions. Expect residual warnings for product
-flags, checksums, ~moduleclass~, and sanity paths.
+flags, checksums, ~moduleclass~, and sanity paths. **Do not treat the scaffold
+as a landable PR** or as a *builds* claim.
 
 * Finish as a real easyconfig (required)
 

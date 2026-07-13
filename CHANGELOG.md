@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agent skill for **new packages** from conda-forge / Spack:
   `skills/new-package/SKILL.md` (paired with `skills/annual-bump/` for
   generation rebuilds). `AGENTS.md` routes by work type.
+- Operator howto for greenfield packages:
+  `docs/orgmode/howto/new-package.org` (linked from README and the docs map).
+- Landable eOn foss-2026.1 fixture companion
+  `CapnProto-1.4.0-GCCcore-15.2.0.eb` so robot-style resolve of CapnProto
+  matches the PR surface (serve feature) without inventing versions in
+  product code.
+
+### Changed
+
+- **Mechanical-first residual policy** in skills: maximize CLI steps
+  (`ingest`, inject-checksums, check-contrib, check-recipe, `eb -Dr`);
+  local-ai agent (Hermes preferred, OMP allowed) only for judgment
+  residuals — never hardcode product `configopts` into ingest.
+- **Host split** for SURF ops: EasyBuild authoring, residual agents, and
+  `eb --robot` *builds* on **`rg.surf`**; residual agents in a **herdr**
+  pane (not ad-hoc `ssh … hermes/omp -p`). **`rg.terra` is cargo-only**
+  for this repo’s Rust compile — not the EasyBuild install host.
+- README public framing for **0.3.x**: ready vs must-not-claim table;
+  three-claim ladder (*resolves* / *builds* / *binary-verified*); ingest
+  scaffold ≠ landable PR; human-owned PR surface.
 
 ## [0.3.0] - 2026-07-13
 
