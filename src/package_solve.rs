@@ -62,10 +62,11 @@ pub fn solve_package_profile_with_hierarchy(
         let Some(name) = dependency.eb_name.as_ref() else {
             continue;
         };
-        let build_only = dependency
+        let foreign_build_only = dependency
             .roles
             .iter()
             .all(|role| matches!(role, DependencyRole::Build | DependencyRole::Test));
+        let build_only = foreign_build_only && is_easybuild_build_tool(name);
         direct_roles
             .entry(name.clone())
             .and_modify(|existing| *existing &= build_only)
@@ -153,6 +154,31 @@ pub fn solve_package_profile_with_hierarchy(
         exclusions: result.exclusions,
         solver: "resolvo".into(),
     })
+}
+
+fn is_easybuild_build_tool(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "autoconf"
+            | "automake"
+            | "autotools"
+            | "bazel"
+            | "bison"
+            | "cargo-c"
+            | "cmake"
+            | "cython"
+            | "flex"
+            | "gmake"
+            | "make"
+            | "meson"
+            | "ninja"
+            | "patchelf"
+            | "pkg-config"
+            | "pkgconf"
+            | "rust"
+            | "scons"
+            | "swig"
+    )
 }
 
 fn admit_stack_pin_closures(
