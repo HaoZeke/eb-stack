@@ -59,7 +59,10 @@ fn library_solve_writes_build_list_and_stack_diff() {
     for dep in ["OpenBLAS", "OpenMPI", "FFTW"] {
         let d_path = &lock.package(dep).unwrap().easyconfig_path;
         let d_idx = lines.iter().position(|l| *l == d_path).unwrap();
-        assert!(d_idx < g_idx, "{dep} must appear before GROMACS in build list");
+        assert!(
+            d_idx < g_idx,
+            "{dep} must appear before GROMACS in build list"
+        );
     }
 
     let md = std::fs::read_to_string(&stack_diff_out).expect("read stack diff");
@@ -150,8 +153,16 @@ fn cli_solve_json_writes_both_artifacts() {
     for dir in [&run1, &run2] {
         let bl = std::fs::read_to_string(dir.join("build.list")).unwrap();
         let md = std::fs::read_to_string(dir.join("diff.md")).unwrap();
-        assert!(!bl.trim().is_empty(), "empty build list in {}", dir.display());
-        assert!(!md.trim().is_empty(), "empty stack diff in {}", dir.display());
+        assert!(
+            !bl.trim().is_empty(),
+            "empty build list in {}",
+            dir.display()
+        );
+        assert!(
+            !md.trim().is_empty(),
+            "empty stack diff in {}",
+            dir.display()
+        );
         assert!(bl.lines().any(|l| l.contains("GROMACS")), "{bl}");
         assert!(
             md.contains("version-bumped") || md.contains("unchanged"),
@@ -174,6 +185,7 @@ fn cli_solve_without_sbom_flag_writes_lock_only() {
     let status = Command::new(bin)
         .current_dir(tmp.path())
         .args([
+            "stack",
             "solve",
             "--easyconfigs",
             fixture("easyconfigs").to_str().unwrap(),
@@ -212,6 +224,7 @@ fn cli_solve_with_sbom_flag_writes_sbom() {
     let sbom_out = tmp.path().join("stack.cdx.json");
     let status = Command::new(bin)
         .args([
+            "stack",
             "solve",
             "--easyconfigs",
             fixture("easyconfigs").to_str().unwrap(),
@@ -241,6 +254,7 @@ fn cli_solve_baseline_asserts_lock_versions_and_stack_diff() {
     let stack_diff_out = tmp.path().join("stack.diff.md");
     let status = Command::new(bin)
         .args([
+            "stack",
             "solve",
             "--easyconfigs",
             fixture("easyconfigs").to_str().unwrap(),
@@ -272,9 +286,18 @@ fn cli_solve_baseline_asserts_lock_versions_and_stack_diff() {
     assert_eq!(lock.package("Python").unwrap().version, "3.12.3");
 
     let md = std::fs::read_to_string(&stack_diff_out).expect("stack diff");
-    assert!(md.contains("version-bumped") || md.contains("**version-bumped**"), "{md}");
+    assert!(
+        md.contains("version-bumped") || md.contains("**version-bumped**"),
+        "{md}"
+    );
     assert!(md.contains("GROMACS"), "diff must mention GROMACS:\n{md}");
-    assert!(md.contains("2024.1"), "diff must show baseline GROMACS 2024.1:\n{md}");
-    assert!(md.contains("2025.0"), "diff must show selected GROMACS 2025.0:\n{md}");
+    assert!(
+        md.contains("2024.1"),
+        "diff must show baseline GROMACS 2024.1:\n{md}"
+    );
+    assert!(
+        md.contains("2025.0"),
+        "diff must show selected GROMACS 2025.0:\n{md}"
+    );
     assert!(md.contains("OpenBLAS"), "{md}");
 }

@@ -69,14 +69,7 @@ fn assert_reproduces_auto(
 ) {
     let empty = HashMap::new();
     let result = emit_next_generation_auto_from_path(
-        source,
-        toolchain,
-        universe,
-        None,
-        None,
-        &empty,
-        None,
-        None,
+        source, toolchain, universe, None, None, &empty, None, None,
     )
     .unwrap_or_else(|e| {
         panic!(
@@ -147,12 +140,7 @@ fn reproduces_gromacs_2024_4_foss_2023b_to_2024a() {
             ("mpi4py", "4.0.1"),
         ]),
     };
-    assert_reproduces(
-        &source,
-        &target,
-        &params,
-        &["    ('pybind11', '2.12.0'),"],
-    );
+    assert_reproduces(&source, &target, &params, &["    ('pybind11', '2.12.0'),"]);
 }
 
 /// GROMACS-2024.4 auto-resolve: zero hand-fed dependency versions.
@@ -251,7 +239,9 @@ fn reproduces_mdtraj_1_10_3_foss_2023b_to_2024a_auto() {
         None,
     )
     .expect("MDTraj auto emit");
-    assert!(result.text.contains("toolchain = {'name': 'foss', 'version': '2024a'}"));
+    assert!(result
+        .text
+        .contains("toolchain = {'name': 'foss', 'version': '2024a'}"));
     for pin in [
         "('Python', '3.12.3')",
         "('SciPy-bundle', '2024.05')",
@@ -379,6 +369,7 @@ fn cli_auto_bump(source: &Path, out_name: &str) -> String {
     let out = tmp.path().join(out_name);
     let status = Command::new(bin)
         .args([
+            "package",
             "bump",
             "--source",
             source.to_str().unwrap(),

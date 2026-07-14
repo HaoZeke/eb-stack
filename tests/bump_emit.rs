@@ -84,6 +84,7 @@ fn cli_bump_writes_conventional_file() {
 
     let status = Command::new(bin)
         .args([
+            "package",
             "bump",
             "--source",
             src.to_str().unwrap(),
@@ -124,6 +125,7 @@ fn cli_bump_toolchain_only_twice_idempotent_content() {
         let out = tmp.path().join(format!("run{i}.eb"));
         let status = Command::new(bin)
             .args([
+                "package",
                 "bump",
                 "--source",
                 src.to_str().unwrap(),
@@ -157,8 +159,7 @@ fn gromacs_repro_source() -> PathBuf {
 }
 
 fn gromacs_repro_universe() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/repro_fixtures/universe_foss_2024a")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/repro_fixtures/universe_foss_2024a")
 }
 
 /// Library auto-resolve fills dep versions from a multi-subtoolchain universe
@@ -202,6 +203,7 @@ fn cli_bump_auto_resolve_from_easyconfigs() {
 
     let status = Command::new(bin)
         .args([
+            "package",
             "bump",
             "--source",
             src.to_str().unwrap(),
