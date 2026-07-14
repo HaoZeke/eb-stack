@@ -143,6 +143,37 @@ fn locked_stack_pin_makes_incompatible_graph_unsatisfiable() {
 }
 
 #[test]
+fn locked_stack_pin_without_full_identity_constrains_resolvo_candidates() {
+    let mut compatible = candidate("HDF5", "1.14.2", vec![dep("zlib", "==1.3")]);
+    compatible.versionsuffix = Some("-mpi".into());
+    compatible.easyconfig_path = "HDF5-1.14.2-foss-2026.1-mpi.eb".into();
+    let result = solve_with_stack_policy(
+        &[
+            candidate("zlib", "1.2", Vec::new()),
+            candidate("zlib", "1.3", Vec::new()),
+            candidate("HDF5", "1.14.2", vec![dep("zlib", "==1.2")]),
+            compatible,
+            candidate(
+                "App",
+                "1.0",
+                vec![dep("HDF5", "==1.14.2"), dep("zlib", "==1.3")],
+            ),
+        ],
+        &policy(),
+        None,
+        &stack_policy(StackPinMode::Locked),
+    )
+    .expect("locked version requirement must remain a solver constraint");
+    let selected = result
+        .selected
+        .iter()
+        .find(|candidate| candidate.name == "HDF5")
+        .expect("HDF5");
+    assert_eq!(selected.version, "1.14.2");
+    assert_eq!(selected.versionsuffix.as_deref(), Some("-mpi"));
+}
+
+#[test]
 fn exclusions_are_solver_inputs_and_retain_reasons() {
     let mut stack = stack_policy(StackPinMode::Preferred);
     stack.pins.clear();
