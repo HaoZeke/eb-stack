@@ -64,7 +64,9 @@ runs the **known-bump** regression (`--test reproduce_real_prs --test bump_emit`
 frozen `foss-2023b` → `foss-2024a` maintainer pairs under
 `tests/repro_fixtures/`, library and CLI), the packaging fixture suites
 (`--test eon_foss_2026_1 --test qmcpack_foss_2026_1 --test eon_packaging`),
-and foreign ingest (`--test foreign_ingest`). Robot-overlay check-recipe cases
+the goal-scenario acceptance suite (`--test goal_scenario`: conda eOn + Spack
+QMCPACK -> SBOM + manifest + recipe on foss-2026.1), and foreign ingest
+(`--test foreign_ingest`). Robot-overlay check-recipe cases
 skip when no easyconfigs tree is present; resolve and packaging_gate always
 run. Build/test on a build machine when the repository owner's rules say the
 local machine must not compile.
