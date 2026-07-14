@@ -1,13 +1,16 @@
 //! Resolvo-backed lock generation for a materialized package profile.
 
 use crate::domain::{Candidate, DepReq, Policy};
-use crate::hierarchy::{filter_candidates_in_hierarchy, hierarchy_for_with_tree};
+use crate::hierarchy::{
+    filter_candidates_in_hierarchy, hierarchy_for_with_tree, toolchains_match, ToolchainHierarchy,
+};
 use crate::package::{
     materialize_profile, DependencyRole, LockedDependency, PackagePlan, ProfileEnvironment,
     ProfileLock, StackPolicy, PROFILE_LOCK_SCHEMA_VERSION,
 };
 use crate::resolvo_provider::solve_with_stack_policy;
-use std::collections::BTreeMap;
+use crate::version::matches_req;
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::path::Path;
 use thiserror::Error;
 
@@ -82,7 +85,8 @@ pub fn solve_package_profile_with_hierarchy(
 
     let hierarchy = hierarchy_for_with_tree(&plan.build.toolchain, hierarchy_fixture, candidates)
         .map_err(|error| ProfileSolveError::Resolve(error.to_string()))?;
-    let original_candidates = filter_candidates_in_hierarchy(candidates, &hierarchy);
+    let mut original_candidates = filter_candidates_in_hierarchy(candidates, &hierarchy);
+    admit_stack_pin_closures(candidates, &mut original_candidates, stack_policy);
     let mut universe = original_candidates.clone();
     for candidate in &mut universe {
         // Existing robot recipes are independently built artifacts. Their
@@ -149,6 +153,68 @@ pub fn solve_package_profile_with_hierarchy(
         exclusions: result.exclusions,
         solver: "resolvo".into(),
     })
+}
+
+fn admit_stack_pin_closures(
+    candidates: &[Candidate],
+    admitted: &mut Vec<Candidate>,
+    stack_policy: &StackPolicy,
+) {
+    let mut paths = admitted
+        .iter()
+        .map(|candidate| candidate.easyconfig_path.clone())
+        .collect::<HashSet<_>>();
+    let mut queue = VecDeque::new();
+
+    for pin in &stack_policy.pins {
+        for candidate in candidates.iter().filter(|candidate| {
+            candidate.name == pin.name && matches_req(&candidate.version, &pin.version_requirement)
+        }) {
+            if paths.insert(candidate.easyconfig_path.clone()) {
+                admitted.push(candidate.clone());
+                queue.push_back(candidate.clone());
+            }
+        }
+    }
+
+    while let Some(parent) = queue.pop_front() {
+        let parent_hierarchy = hierarchy_for_with_tree(&parent.toolchain, None, candidates).ok();
+        for dependency in &parent.dependencies {
+            for candidate in candidates.iter().filter(|candidate| {
+                dependency_candidate_matches(candidate, dependency, parent_hierarchy.as_ref())
+            }) {
+                if paths.insert(candidate.easyconfig_path.clone()) {
+                    admitted.push(candidate.clone());
+                    queue.push_back(candidate.clone());
+                }
+            }
+        }
+    }
+}
+
+fn dependency_candidate_matches(
+    candidate: &Candidate,
+    dependency: &DepReq,
+    parent_hierarchy: Option<&ToolchainHierarchy>,
+) -> bool {
+    if candidate.name != dependency.name
+        || !matches_req(&candidate.version, &dependency.version_req)
+    {
+        return false;
+    }
+    if dependency
+        .versionsuffix
+        .as_deref()
+        .is_some_and(|suffix| candidate.versionsuffix.as_deref().unwrap_or_default() != suffix)
+    {
+        return false;
+    }
+    if let Some(toolchain) = &dependency.toolchain {
+        return toolchains_match(&candidate.toolchain, toolchain);
+    }
+    parent_hierarchy
+        .map(|hierarchy| hierarchy.contains(&candidate.toolchain))
+        .unwrap_or(true)
 }
 
 fn normalize_requirement(constraint: Option<&str>) -> String {
