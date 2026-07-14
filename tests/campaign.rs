@@ -288,6 +288,51 @@ fn staging_failure_is_persisted_as_a_transport_finding() {
 }
 
 #[test]
+fn executor_spawn_failure_is_persisted_as_a_typed_finding() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipes = bundle.join("easyconfigs/e/eOn");
+    std::fs::create_dir_all(&recipes).expect("recipes");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"eOn","version":"2.16.0"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .expect("lock");
+    std::fs::write(recipes.join("eOn.eb"), "name = 'eOn'\n").expect("recipe");
+    let mut build_target = target("true");
+    build_target.executor = TargetExecutor::Slurm {
+        command: "/definitely/missing/eb-stack-srun".into(),
+        partition: None,
+        account: None,
+        cpus: None,
+        memory: None,
+        time: None,
+        gres: None,
+    };
+    let state_path = temp.path().join("campaign.json");
+
+    let state = run_campaign(&CampaignRequest {
+        bundle,
+        target: build_target,
+        state_path: state_path.clone(),
+    })
+    .expect("spawn failure is campaign evidence");
+    assert_eq!(state.status, CampaignStatus::Failed);
+    assert_eq!(state.findings.len(), 1);
+    assert_eq!(state.findings[0].class, BuildFindingClass::Executor);
+    assert_eq!(state.findings[0].stage, "build");
+    assert_eq!(state.findings[0].exit_code, None);
+    assert!(state.findings[0].evidence.contains("eb-stack-srun"));
+    assert!(state_path.is_file());
+}
+
+#[test]
 fn campaign_runs_profile_verification_and_sets_the_binary_claim() {
     let temp = tempfile::tempdir().expect("tempdir");
     let bundle = temp.path().join("bundle");
