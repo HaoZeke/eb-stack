@@ -77,8 +77,9 @@ pub use package_solve::{
     solve_package_profile, solve_package_profile_with_hierarchy, ProfileSolveError,
 };
 pub use package_workflow::{
-    inspect_new_package, plan_new_package, write_package_bundle, NewPackageRequest, PackageBundle,
-    PackageWorkflowError, WrittenPackageBundle,
+    inspect_new_package, plan_new_package, plan_package_bump, write_package_bundle,
+    BumpPackageRequest, NewPackageRequest, PackageBundle, PackageWorkflowError,
+    WrittenPackageBundle,
 };
 pub use resolvo_provider::solve_with_stack_policy;
 pub use sbom::{

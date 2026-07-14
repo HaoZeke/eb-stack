@@ -1,14 +1,23 @@
 //! Canonical foreign-package planning bundle: manifest, SBOM, locks, recipes.
 
 use crate::domain::Toolchain;
-use crate::eb_parse::{easyconfig_letter_dir, parse_easyconfig_trees};
+use crate::eb_emit::{emit_next_generation_from_path, EmitParams};
+use crate::eb_parse::{
+    easyconfig_letter_dir, parse_easyconfig_trees, resolve_easyconfig_file, ResolvedDep,
+};
 use crate::foreign::{parse_foreign_path, ForeignFormat};
 use crate::manifest::package_plan_from_foreign;
-use crate::package::{package_plan_to_cyclonedx, PackagePlan, ProfileLock, StackPolicy};
+use crate::package::{
+    package_plan_to_cyclonedx, BuildSpec, ConditionExpr, DependencyIntent, DependencyRole,
+    OutputRequest, PackageMetadata, PackageOrigin, PackagePlan, ProductProfile, ProfileLock,
+    Residual, ResidualSeverity, ResidualStage, SourceArtifact, StackPin, StackPinMode, StackPolicy,
+    PACKAGE_SCHEMA_VERSION,
+};
 use crate::package_config::{apply_profile_layers, ProfileConfigLayer};
 use crate::package_emit::{emit_profile_easyconfigs, EmittedEasyconfig};
-use crate::package_solve::solve_package_profile;
+use crate::package_solve::{solve_package_profile, solve_package_profile_with_hierarchy};
 use serde_json::Value;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -19,6 +28,18 @@ pub struct NewPackageRequest {
     pub toolchain: Toolchain,
     pub profile_layers: Vec<ProfileConfigLayer>,
     pub easyconfig_roots: Vec<PathBuf>,
+    pub stack_policy: StackPolicy,
+}
+
+#[derive(Debug, Clone)]
+pub struct BumpPackageRequest {
+    pub source: PathBuf,
+    pub toolchain: Toolchain,
+    pub version: Option<String>,
+    pub source_checksum: Option<String>,
+    pub easyconfig_roots: Vec<PathBuf>,
+    pub hierarchy_fixture: Option<PathBuf>,
+    pub overrides: HashMap<String, String>,
     pub stack_policy: StackPolicy,
 }
 
@@ -98,6 +119,192 @@ pub fn plan_new_package(
     })
 }
 
+pub fn plan_package_bump(
+    request: &BumpPackageRequest,
+) -> Result<PackageBundle, PackageWorkflowError> {
+    if request.easyconfig_roots.is_empty() {
+        return Err(PackageWorkflowError::NoEasyconfigRoots);
+    }
+    let resolved = resolve_easyconfig_file(&request.source)
+        .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+    let mut plan = package_plan_from_easyconfig(
+        &resolved,
+        &request.toolchain,
+        request.version.as_deref(),
+        request.source_checksum.as_deref(),
+    );
+    let roots = request
+        .easyconfig_roots
+        .iter()
+        .map(PathBuf::as_path)
+        .collect::<Vec<_>>();
+    let tree = parse_easyconfig_trees(&roots)
+        .map_err(|error| PackageWorkflowError::Robot(error.to_string()))?;
+    let mut stack_policy = request.stack_policy.clone();
+    for (name, version) in &request.overrides {
+        stack_policy.pins.retain(|pin| pin.name != *name);
+        stack_policy.pins.push(StackPin {
+            name: name.clone(),
+            version_requirement: format!("=={version}"),
+            mode: StackPinMode::Locked,
+            source: Some("package bump override".into()),
+        });
+    }
+    let lock = solve_package_profile_with_hierarchy(
+        &plan,
+        "default",
+        &Default::default(),
+        &tree.candidates,
+        &stack_policy,
+        request.hierarchy_fixture.as_deref(),
+    )
+    .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?;
+    let dependency_versions = lock
+        .dependencies
+        .iter()
+        .map(|dependency| (dependency.name.clone(), dependency.version.clone()))
+        .collect::<HashMap<_, _>>();
+    let result = emit_next_generation_from_path(
+        &request.source,
+        &EmitParams {
+            toolchain: request.toolchain.clone(),
+            version: request.version.clone(),
+            dep_versions: dependency_versions,
+            source_checksum: request.source_checksum.clone(),
+        },
+    )
+    .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+    for (index, warning) in result.warnings.iter().enumerate() {
+        plan.residuals.push(Residual {
+            id: format!("bump-warning:{index}"),
+            stage: ResidualStage::Emit,
+            category: "bump-warning".into(),
+            severity: ResidualSeverity::Judgment,
+            summary: warning.clone(),
+            evidence: None,
+            provenance: None,
+        });
+    }
+    let sbom = package_plan_to_cyclonedx(&plan)
+        .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
+    Ok(PackageBundle {
+        plan,
+        sbom,
+        locks: vec![lock],
+        easyconfigs: vec![EmittedEasyconfig {
+            profile: "default".into(),
+            filename: result.filename,
+            text: result.text,
+        }],
+    })
+}
+
+fn package_plan_from_easyconfig(
+    recipe: &crate::eb_parse::ResolvedEasyconfig,
+    toolchain: &Toolchain,
+    version: Option<&str>,
+    source_checksum: Option<&str>,
+) -> PackagePlan {
+    let version = version.unwrap_or(&recipe.version).to_string();
+    let mut sources = recipe
+        .checksums
+        .iter()
+        .map(|checksum| SourceArtifact {
+            sha256: Some(checksum.clone()),
+            ..SourceArtifact::default()
+        })
+        .collect::<Vec<_>>();
+    if let Some(checksum) = source_checksum {
+        if let Some(source) = sources.first_mut() {
+            source.sha256 = Some(checksum.to_string());
+        } else {
+            sources.push(SourceArtifact {
+                sha256: Some(checksum.to_string()),
+                ..SourceArtifact::default()
+            });
+        }
+    }
+    let mut dependencies = Vec::new();
+    dependencies.extend(
+        recipe
+            .dependencies
+            .iter()
+            .enumerate()
+            .map(|(index, dependency)| {
+                dependency_from_easyconfig(dependency, DependencyRole::Run, index)
+            }),
+    );
+    let runtime_count = dependencies.len();
+    dependencies.extend(
+        recipe
+            .builddependencies
+            .iter()
+            .enumerate()
+            .map(|(index, dependency)| {
+                dependency_from_easyconfig(dependency, DependencyRole::Build, runtime_count + index)
+            }),
+    );
+    let versionsuffix = recipe.versionsuffix.iter().cloned().collect::<Vec<_>>();
+    let profile = ProductProfile {
+        name: "default".into(),
+        default: true,
+        versionsuffix,
+        features: BTreeMap::new(),
+        parameters: BTreeMap::new(),
+        toolchain_options: BTreeMap::new(),
+        config_options: Vec::new(),
+    };
+    PackagePlan {
+        schema_version: PACKAGE_SCHEMA_VERSION,
+        origin: PackageOrigin::EasyBuild,
+        package: PackageMetadata {
+            name: recipe.name.clone(),
+            version,
+            homepage: recipe.homepage.clone(),
+            description: None,
+            license: None,
+        },
+        sources,
+        dependencies,
+        rules: Vec::new(),
+        build: BuildSpec {
+            toolchain: toolchain.clone(),
+            easyblock: recipe.easyblock.clone(),
+            build_systems: Vec::new(),
+            config_options: recipe.configopts.iter().cloned().collect(),
+            moduleclass: recipe.moduleclass.clone(),
+            patches: recipe.patch_names.clone(),
+        },
+        profiles: vec![profile],
+        outputs: vec![OutputRequest {
+            profile: "default".into(),
+            stack: toolchain.label(),
+        }],
+        residuals: Vec::new(),
+    }
+}
+
+fn dependency_from_easyconfig(
+    dependency: &ResolvedDep,
+    role: DependencyRole,
+    index: usize,
+) -> DependencyIntent {
+    let external = dependency
+        .toolchain
+        .as_ref()
+        .is_some_and(|toolchain| toolchain.name.eq_ignore_ascii_case("system"));
+    DependencyIntent {
+        id: format!("easybuild:{index}:{}", dependency.name),
+        name: dependency.name.clone(),
+        eb_name: Some(dependency.name.clone()),
+        constraint: Some(format!(">={}", dependency.version)),
+        roles: vec![role],
+        condition: ConditionExpr::Always,
+        virtual_capability: external.then(|| format!("external:system:{}", dependency.name)),
+        provenance: Vec::new(),
+    }
+}
+
 pub fn write_package_bundle(
     bundle: &PackageBundle,
     output_directory: &Path,
@@ -152,6 +359,8 @@ fn write_json(path: &Path, value: &impl serde::Serialize) -> Result<(), PackageW
 pub enum PackageWorkflowError {
     #[error("foreign package parse: {0}")]
     Foreign(String),
+    #[error("EasyBuild package adapter: {0}")]
+    EasyBuild(String),
     #[error("package profile config: {0}")]
     Config(String),
     #[error("package SBOM: {0}")]
