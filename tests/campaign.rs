@@ -6,6 +6,7 @@ use eb_stack::target::{
     BuildTarget, EasyBuildWorkload, TargetExecutor, TargetRuntime, TargetTransport,
 };
 use std::collections::BTreeMap;
+use std::process::Command;
 
 fn target(command: &str) -> BuildTarget {
     BuildTarget {
@@ -112,4 +113,81 @@ fn campaign_state_persists_claims_attempts_and_resume() {
             .expect("state JSON");
     assert_eq!(persisted["status"], "completed");
     assert_eq!(persisted["claims"]["builds"], true);
+}
+
+#[test]
+fn campaign_cli_runs_a_named_target_and_reports_status() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipes = bundle.join("easyconfigs/e/eOn");
+    std::fs::create_dir_all(&recipes).expect("recipes");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"eOn","version":"2.16.0"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .expect("lock");
+    std::fs::write(
+        recipes.join("eOn-2.16.0-foss-2026.1.eb"),
+        "name = 'eOn'\nversion = '2.16.0'\n",
+    )
+    .expect("recipe");
+    let config = temp.path().join("targets.toml");
+    std::fs::write(
+        &config,
+        r#"
+schema_version = 1
+[[targets]]
+name = "test-builder"
+[targets.transport]
+kind = "local"
+[targets.executor]
+kind = "direct"
+[targets.runtime]
+kind = "host"
+[targets.easybuild]
+command = "true"
+robot_paths = ["/tmp"]
+work_root = "/tmp"
+tmp_root = "/tmp"
+"#,
+    )
+    .expect("config");
+    let state = temp.path().join("campaign.json");
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let run = Command::new(binary)
+        .args([
+            "campaign",
+            "run",
+            "--bundle",
+            bundle.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--target",
+            "test-builder",
+            "--state",
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .expect("campaign run");
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(state.is_file());
+
+    let status = Command::new(binary)
+        .args(["campaign", "status", "--state", state.to_str().unwrap()])
+        .output()
+        .expect("campaign status");
+    assert!(status.status.success());
+    let body: serde_json::Value = serde_json::from_slice(&status.stdout).expect("status JSON");
+    assert_eq!(body["status"], "completed");
+    assert_eq!(body["claims"]["builds"], true);
 }
