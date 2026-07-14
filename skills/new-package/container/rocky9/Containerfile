@@ -37,4 +37,5 @@ ENV EASYBUILD_INSTALLPATH=/eb/install
 ENV EASYBUILD_BUILDPATH=/eb/build
 
 WORKDIR /work
-ENTRYPOINT ["/opt/eb/bin/eb"]
+COPY eb-entrypoint /usr/local/bin/eb-stack-entrypoint
+ENTRYPOINT ["/usr/local/bin/eb-stack-entrypoint"]

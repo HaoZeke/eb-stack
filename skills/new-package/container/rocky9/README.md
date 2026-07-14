@@ -27,8 +27,17 @@ Configure the same image through a target runtime layer:
 [targets.runtime]
 kind = "podman"
 image = "eb-stack-rocky9"
+args = ["--security-opt", "label=disable", "--cap-add=NET_RAW"]
 mounts = ["/shared/work:/work", "/shared/robot:/robot:ro"]
 workdir = "/work"
+```
+
+For rootful container execution, set EasyBuild's explicit acceptance switch in
+the workload environment:
+
+```toml
+[targets.easybuild.environment]
+EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES = "1"
 ```
 
 `eb-stack campaign run` routes EasyBuild builds and profile verification

@@ -76,6 +76,8 @@ pub enum TargetRuntime {
         #[serde(default = "default_podman_command")]
         command: String,
         #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
         mounts: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workdir: Option<String>,
@@ -84,6 +86,8 @@ pub enum TargetRuntime {
         image: String,
         #[serde(default = "default_docker_command")]
         command: String,
+        #[serde(default)]
+        args: Vec<String>,
         #[serde(default)]
         mounts: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -331,6 +335,7 @@ impl BuildTarget {
             TargetRuntime::Podman {
                 image,
                 command: runtime,
+                args,
                 mounts,
                 workdir,
             }
@@ -341,6 +346,7 @@ impl BuildTarget {
                 workdir,
             } => {
                 let mut tokens = vec![runtime.clone(), "run".into(), "--rm".into()];
+                tokens.extend(args.iter().cloned());
                 for mount in mounts {
                     tokens.push("--volume".into());
                     tokens.push(mount.clone());

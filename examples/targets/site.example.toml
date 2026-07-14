@@ -17,5 +17,6 @@ time = "02:00:00"
 [targets.runtime]
 kind = "podman"
 image = "registry.example.org/easybuild:rocky9"
+args = ["--security-opt", "label=disable", "--cap-add=NET_RAW"]
 mounts = ["/shared:/shared"]
 workdir = "/shared/eb-stack/campaigns"

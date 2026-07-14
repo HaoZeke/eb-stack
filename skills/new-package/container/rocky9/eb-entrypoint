@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -eq 0 ]]; then
+  exec eb --help
+fi
+
+case "$1" in
+  env|/usr/bin/env|eb|/opt/eb/bin/eb)
+    exec "$@"
+    ;;
+  *)
+    exec eb "$@"
+    ;;
+esac
