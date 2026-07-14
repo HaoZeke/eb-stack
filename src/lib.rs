@@ -18,6 +18,7 @@ pub mod report;
 pub mod resolvo_provider;
 pub mod sbom;
 pub mod select;
+pub mod target;
 pub mod version;
 
 pub use domain::*;
