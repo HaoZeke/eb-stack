@@ -333,6 +333,41 @@ fn executor_spawn_failure_is_persisted_as_a_typed_finding() {
 }
 
 #[test]
+fn missing_easybuild_program_is_persisted_as_a_runtime_finding() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipes = bundle.join("easyconfigs/e/eOn");
+    std::fs::create_dir_all(&recipes).expect("recipes");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"eOn","version":"2.16.0"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .expect("lock");
+    std::fs::write(recipes.join("eOn.eb"), "name = 'eOn'\n").expect("recipe");
+    let state_path = temp.path().join("campaign.json");
+
+    let state = run_campaign(&CampaignRequest {
+        bundle,
+        target: target("/definitely/missing/eb-stack-easybuild"),
+        state_path: state_path.clone(),
+    })
+    .expect("missing workload command is campaign evidence");
+    assert_eq!(state.status, CampaignStatus::Failed);
+    assert_eq!(state.findings.len(), 1);
+    assert_eq!(state.findings[0].class, BuildFindingClass::Runtime);
+    assert_eq!(state.findings[0].stage, "build");
+    assert_eq!(state.findings[0].exit_code, Some(127));
+    assert!(state.findings[0].evidence.contains("eb-stack-easybuild"));
+    assert!(state_path.is_file());
+}
+
+#[test]
 fn campaign_runs_profile_verification_and_sets_the_binary_claim() {
     let temp = tempfile::tempdir().expect("tempdir");
     let bundle = temp.path().join("bundle");
