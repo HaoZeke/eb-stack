@@ -1,7 +1,7 @@
 //! EasyBuild stack lock: parse `.eb` files, resolvo SAT co-select, planned SBOM.
 
-pub mod domain;
 pub mod campaign;
+pub mod domain;
 pub mod eb_emit;
 pub mod eb_parse;
 pub mod eb_style;
@@ -61,17 +61,7 @@ pub use hierarchy::{
     resolve_dep_versions_in_hierarchy, resolve_dep_versions_in_hierarchy_strict, toolchains_match,
     HierarchyError, ResolveDepOpts, SourceDepSpec, ToolchainHierarchy,
 };
-pub use manifest::{
-    bump_recipe_from_plan, emit_new_recipe_from_plan, package_manifest_from_foreign,
-    package_plan_from_foreign, plan_and_emit, plan_from_foreign, planned_sbom_from_manifest,
-    solve_plan_with_robot, BuildConfig, IntermediatePlan, ManifestDep, ManifestError,
-    ManifestOrigin, ManifestSource, ManifestVariant, PackageManifest, ParserCoverage,
-    SolvedManifest, MANIFEST_SCHEMA_VERSION,
-};
-pub use report::{
-    classify_stack_diff, format_build_list, format_stack_diff_markdown, ordered_build_paths,
-    ordered_packages, PackageChange, PackageChangeKind,
-};
+pub use manifest::package_plan_from_foreign;
 pub use package_emit::{emit_profile_easyconfigs, EmittedEasyconfig, PackageEmitError};
 pub use package_solve::{
     solve_package_profile, solve_package_profile_with_hierarchy, ProfileSolveError,
@@ -80,6 +70,10 @@ pub use package_workflow::{
     inspect_new_package, plan_new_package, plan_package_bump, write_package_bundle,
     BumpPackageRequest, NewPackageRequest, PackageBundle, PackageWorkflowError,
     WrittenPackageBundle,
+};
+pub use report::{
+    classify_stack_diff, format_build_list, format_stack_diff_markdown, ordered_build_paths,
+    ordered_packages, PackageChange, PackageChangeKind,
 };
 pub use resolvo_provider::solve_with_stack_policy;
 pub use sbom::{
