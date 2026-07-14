@@ -96,6 +96,7 @@ pub fn solve_package_profile_with_hierarchy(
         // requirements because those tools are needed to build this output.
         candidate.builddependencies.clear();
     }
+    scope_cross_generation_pin_closures(&mut universe, stack_policy, &hierarchy);
     universe.push(Candidate {
         name: synthetic_name.clone(),
         version: plan.package.version.clone(),
@@ -166,22 +167,10 @@ fn admit_stack_pin_closures(
     let mut queue = VecDeque::new();
 
     for pin in &stack_policy.pins {
-        for candidate in candidates.iter().filter(|candidate| {
-            candidate.name == pin.name
-                && matches_req(&candidate.version, &pin.version_requirement)
-                && pin
-                    .toolchain
-                    .as_ref()
-                    .map(|toolchain| toolchains_match(&candidate.toolchain, toolchain))
-                    .unwrap_or(true)
-                && pin
-                    .versionsuffix
-                    .as_deref()
-                    .map(|versionsuffix| {
-                        candidate.versionsuffix.as_deref().unwrap_or_default() == versionsuffix
-                    })
-                    .unwrap_or(true)
-        }) {
+        for candidate in candidates
+            .iter()
+            .filter(|candidate| stack_pin_candidate_matches(candidate, pin))
+        {
             if paths.insert(candidate.easyconfig_path.clone()) {
                 admitted.push(candidate.clone());
                 queue.push_back(candidate.clone());
@@ -202,6 +191,98 @@ fn admit_stack_pin_closures(
             }
         }
     }
+}
+
+fn scope_cross_generation_pin_closures(
+    universe: &mut Vec<Candidate>,
+    stack_policy: &StackPolicy,
+    target_hierarchy: &ToolchainHierarchy,
+) {
+    let base = universe.clone();
+    let mut scoped_candidates = Vec::new();
+    for (pin_index, pin) in stack_policy.pins.iter().enumerate() {
+        let root_indexes = universe
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| {
+                stack_pin_candidate_matches(candidate, pin)
+                    && !target_hierarchy.contains(&candidate.toolchain)
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        for root_index in root_indexes {
+            let scope = format!("pin{pin_index}");
+            let root = universe[root_index].clone();
+            let mut queue = VecDeque::new();
+            let mut visited = HashSet::new();
+            universe[root_index].dependencies =
+                scoped_dependencies(&root, &base, &scope, &mut queue, &mut visited);
+            while let Some(candidate) = queue.pop_front() {
+                let mut scoped = candidate.clone();
+                scoped.name = scoped_dependency_name(&scope, &candidate.name);
+                scoped.dependencies =
+                    scoped_dependencies(&candidate, &base, &scope, &mut queue, &mut visited);
+                scoped.builddependencies.clear();
+                scoped_candidates.push(scoped);
+            }
+        }
+    }
+    universe.extend(scoped_candidates);
+}
+
+fn scoped_dependencies(
+    parent: &Candidate,
+    candidates: &[Candidate],
+    scope: &str,
+    queue: &mut VecDeque<Candidate>,
+    visited: &mut HashSet<String>,
+) -> Vec<DepReq> {
+    let parent_hierarchy = hierarchy_for_with_tree(&parent.toolchain, None, candidates).ok();
+    parent
+        .dependencies
+        .iter()
+        .map(|dependency| {
+            for candidate in candidates.iter().filter(|candidate| {
+                dependency_candidate_matches(candidate, dependency, parent_hierarchy.as_ref())
+            }) {
+                let identity = format!(
+                    "{}|{}|{}|{}|{}",
+                    candidate.name,
+                    candidate.version,
+                    candidate.toolchain.label(),
+                    candidate.versionsuffix.as_deref().unwrap_or_default(),
+                    candidate.easyconfig_path
+                );
+                if visited.insert(identity) {
+                    queue.push_back(candidate.clone());
+                }
+            }
+            let mut scoped = dependency.clone();
+            scoped.name = scoped_dependency_name(scope, &dependency.name);
+            scoped
+        })
+        .collect()
+}
+
+fn scoped_dependency_name(scope: &str, name: &str) -> String {
+    format!("__stack_context_{scope}__{name}")
+}
+
+fn stack_pin_candidate_matches(candidate: &Candidate, pin: &crate::package::StackPin) -> bool {
+    candidate.name == pin.name
+        && matches_req(&candidate.version, &pin.version_requirement)
+        && pin
+            .toolchain
+            .as_ref()
+            .map(|toolchain| toolchains_match(&candidate.toolchain, toolchain))
+            .unwrap_or(true)
+        && pin
+            .versionsuffix
+            .as_deref()
+            .map(|versionsuffix| {
+                candidate.versionsuffix.as_deref().unwrap_or_default() == versionsuffix
+            })
+            .unwrap_or(true)
 }
 
 fn dependency_candidate_matches(
