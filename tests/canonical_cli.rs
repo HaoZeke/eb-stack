@@ -1,0 +1,118 @@
+use std::process::Command;
+
+#[test]
+fn command_surface_is_namespaced_without_flat_legacy_aliases() {
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let help = Command::new(binary)
+        .arg("--help")
+        .output()
+        .expect("run help");
+    assert!(help.status.success());
+    let stdout = String::from_utf8_lossy(&help.stdout);
+    for namespace in ["package", "recipe", "stack", "target", "campaign", "mcp"] {
+        assert!(stdout.contains(namespace), "missing {namespace}: {stdout}");
+    }
+
+    let legacy = Command::new(binary)
+        .args(["ingest", "--help"])
+        .output()
+        .expect("run legacy command");
+    assert!(
+        !legacy.status.success(),
+        "legacy ingest alias must be removed"
+    );
+}
+
+#[test]
+fn package_plan_cli_writes_the_canonical_bundle() {
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("recipe.yaml");
+    std::fs::write(
+        &source,
+        r#"
+package:
+  name: eon
+  version: 2.16.0
+source:
+  url: https://example.invalid/eon-2.16.0.tar.gz
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+requirements:
+  host:
+    - zlib >=1.2
+"#,
+    )
+    .expect("source");
+    let profiles = temp.path().join("profiles.toml");
+    std::fs::write(
+        &profiles,
+        r#"
+schema_version = 1
+[[profiles]]
+name = "default"
+default = true
+config_options = ["-Dwith_cli=true"]
+"#,
+    )
+    .expect("profiles");
+    let stack = temp.path().join("stack.toml");
+    std::fs::write(
+        &stack,
+        r#"
+schema_version = 1
+name = "site"
+[toolchain]
+name = "foss"
+version = "2026.1"
+[[pins]]
+name = "zlib"
+version_requirement = "==1.2"
+mode = "preferred"
+"#,
+    )
+    .expect("stack");
+    let robot = temp.path().join("robot");
+    std::fs::create_dir(&robot).expect("robot");
+    std::fs::write(
+        robot.join("zlib-1.2-foss-2026.1.eb"),
+        "name = 'zlib'\nversion = '1.2'\ntoolchain = {'name': 'foss', 'version': '2026.1'}\n",
+    )
+    .expect("candidate");
+    let output = temp.path().join("output");
+
+    let result = Command::new(binary)
+        .args([
+            "package",
+            "plan",
+            "--source",
+            source.to_str().unwrap(),
+            "--format",
+            "conda-forge",
+            "--toolchain-name",
+            "foss",
+            "--toolchain-version",
+            "2026.1",
+            "--profile-config",
+            profiles.to_str().unwrap(),
+            "--easyconfigs",
+            robot.to_str().unwrap(),
+            "--stack-policy",
+            stack.to_str().unwrap(),
+            "--out-dir",
+            output.to_str().unwrap(),
+        ])
+        .output()
+        .expect("package plan");
+    assert!(
+        result.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(output.join("package.plan.json").is_file());
+    assert!(output.join("package.sbom.cdx.json").is_file());
+    assert!(output.join("locks/default.lock.json").is_file());
+    assert!(output
+        .join("easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb")
+        .is_file());
+}
