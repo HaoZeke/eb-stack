@@ -1,5 +1,6 @@
 //! Persisted build-evaluation campaigns with typed failure findings.
 
+use crate::package::ProductProfile;
 use crate::target::{BuildTarget, CommandPlan, TargetError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -162,6 +163,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
     state.target = request.target.name.clone();
     state.status = CampaignStatus::Running;
     state.claims.builds = false;
+    state.claims.binary_verified = false;
     state.history.push(CampaignEvent {
         attempt: state.attempts,
         status: CampaignStatus::Running,
@@ -259,14 +261,91 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         });
     }
 
-    state.status = CampaignStatus::Completed;
     state.current_recipe = None;
     state.claims.builds = true;
+    write_state(&request.state_path, &state)?;
+
+    let verification_profiles = verification_profiles(&manifest)?;
+    let verification_count = verification_profiles
+        .iter()
+        .map(|profile| profile.verification_commands.len())
+        .sum::<usize>();
+    for profile in verification_profiles {
+        let module = module_name(&manifest, package, version, &profile)?;
+        for verification in &profile.verification_commands {
+            let program = expand_verification_token(
+                &verification.program,
+                &module,
+                package,
+                version,
+                &profile,
+            );
+            let args = verification
+                .args
+                .iter()
+                .map(|argument| {
+                    expand_verification_token(argument, &module, package, version, &profile)
+                })
+                .collect::<Vec<_>>();
+            let command = request.target.verification_command(&program, &args);
+            let output = command.execute().map_err(CampaignError::Target)?;
+            if !output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+                let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+                let class =
+                    classify_build_failure("verify", &stdout, &stderr, output.status.code());
+                state.findings.push(BuildFinding {
+                    id: format!(
+                        "attempt:{}:finding:{}",
+                        state.attempts,
+                        state.findings.len() + 1
+                    ),
+                    class,
+                    disposition: disposition(class),
+                    stage: "verify".into(),
+                    recipe: format!("profile:{}", profile.name),
+                    target: request.target.name.clone(),
+                    summary: format!(
+                        "binary verification failed for profile {} (exit {:?})",
+                        profile.name,
+                        output.status.code()
+                    ),
+                    evidence: format!("module={module}\n{}", compact_evidence(&stdout, &stderr)),
+                    command,
+                    exit_code: output.status.code(),
+                    attempt: state.attempts,
+                });
+                state.status = CampaignStatus::Failed;
+                state.history.push(CampaignEvent {
+                    attempt: state.attempts,
+                    status: CampaignStatus::Failed,
+                    recipe: Some(format!("profile:{}", profile.name)),
+                    detail: format!("classified binary verification failure as {class:?}"),
+                });
+                write_state(&request.state_path, &state)?;
+                return Ok(state);
+            }
+            state.history.push(CampaignEvent {
+                attempt: state.attempts,
+                status: CampaignStatus::Running,
+                recipe: Some(format!("profile:{}", profile.name)),
+                detail: format!("binary verification succeeded for module {module}"),
+            });
+            write_state(&request.state_path, &state)?;
+        }
+    }
+
+    state.status = CampaignStatus::Completed;
+    state.claims.binary_verified = verification_count > 0;
     state.history.push(CampaignEvent {
         attempt: state.attempts,
         status: CampaignStatus::Completed,
         recipe: None,
-        detail: "all EasyBuild commands succeeded".into(),
+        detail: if verification_count > 0 {
+            "all EasyBuild and binary verification commands succeeded".into()
+        } else {
+            "all EasyBuild commands succeeded; no binary verification commands declared".into()
+        },
     });
     write_state(&request.state_path, &state)?;
     Ok(state)
@@ -320,9 +399,72 @@ pub fn classify_build_failure(
         BuildFindingClass::Timeout
     } else if text.contains("error:") || text.contains("compilation terminated") {
         BuildFindingClass::Compile
+    } else if stage.eq_ignore_ascii_case("verify") {
+        BuildFindingClass::Sanity
     } else {
         BuildFindingClass::Unknown
     }
+}
+
+fn verification_profiles(manifest: &Value) -> Result<Vec<ProductProfile>, CampaignError> {
+    manifest
+        .get("profiles")
+        .and_then(Value::as_array)
+        .map(|profiles| {
+            profiles
+                .iter()
+                .cloned()
+                .map(|profile| {
+                    serde_json::from_value(profile).map_err(|error| {
+                        CampaignError::InvalidBundle(format!("invalid product profile: {error}"))
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_else(|| Ok(Vec::new()))
+}
+
+fn module_name(
+    manifest: &Value,
+    package: &str,
+    version: &str,
+    profile: &ProductProfile,
+) -> Result<String, CampaignError> {
+    let toolchain_name = manifest
+        .pointer("/build/toolchain/name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            CampaignError::InvalidBundle(
+                "manifest with verification commands has no build.toolchain.name".into(),
+            )
+        })?;
+    let toolchain_version = manifest
+        .pointer("/build/toolchain/version")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            CampaignError::InvalidBundle(
+                "manifest with verification commands has no build.toolchain.version".into(),
+            )
+        })?;
+    Ok(format!(
+        "{package}/{version}{}-{toolchain_name}-{toolchain_version}",
+        profile.versionsuffix.join("")
+    ))
+}
+
+fn expand_verification_token(
+    token: &str,
+    module: &str,
+    package: &str,
+    version: &str,
+    profile: &ProductProfile,
+) -> String {
+    token
+        .replace("{module}", module)
+        .replace("{package}", package)
+        .replace("{version}", version)
+        .replace("{profile}", &profile.name)
+        .replace("{versionsuffix}", &profile.versionsuffix.join(""))
 }
 
 fn disposition(class: BuildFindingClass) -> FindingDisposition {

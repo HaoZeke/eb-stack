@@ -44,6 +44,7 @@ fn qmcpack_profiles() -> Vec<ProductProfile> {
                 "-DQMC_COMPLEX=OFF".into(),
                 "-DQMC_MIXED_PRECISION=OFF".into(),
             ],
+            verification_commands: Vec::new(),
         },
         ProductProfile {
             name: "complex".into(),
@@ -64,6 +65,7 @@ fn qmcpack_profiles() -> Vec<ProductProfile> {
                 "-DQMC_COMPLEX=ON".into(),
                 "-DQMC_MIXED_PRECISION=OFF".into(),
             ],
+            verification_commands: Vec::new(),
         },
     ]
 }

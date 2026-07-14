@@ -1,6 +1,6 @@
 //! Layered TOML configuration for public package-profile definitions.
 
-use crate::package::{OutputRequest, PackagePlan, ProductProfile};
+use crate::package::{OutputRequest, PackagePlan, ProductProfile, VerificationCommand};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -34,6 +34,8 @@ pub struct ProfilePatch {
     pub toolchain_options: BTreeMap<String, bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_options: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_commands: Option<Vec<VerificationCommand>>,
 }
 
 impl ProfileConfigLayer {
@@ -97,6 +99,7 @@ pub fn apply_profile_layers(
                     parameters: BTreeMap::new(),
                     toolchain_options: BTreeMap::new(),
                     config_options: Vec::new(),
+                    verification_commands: Vec::new(),
                 },
             };
 
@@ -113,6 +116,9 @@ pub fn apply_profile_layers(
                 .extend(patch.toolchain_options.clone());
             if let Some(config_options) = &patch.config_options {
                 profile.config_options = config_options.clone();
+            }
+            if let Some(verification_commands) = &patch.verification_commands {
+                profile.verification_commands = verification_commands.clone();
             }
 
             match existing_index {

@@ -414,6 +414,14 @@ pub struct BuildSpec {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct VerificationCommand {
+    pub program: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProductProfile {
     pub name: String,
     #[serde(default)]
@@ -428,6 +436,8 @@ pub struct ProductProfile {
     pub toolchain_options: BTreeMap<String, bool>,
     #[serde(default)]
     pub config_options: Vec<String>,
+    #[serde(default)]
+    pub verification_commands: Vec<VerificationCommand>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

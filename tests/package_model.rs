@@ -75,6 +75,7 @@ fn qmcpack_plan() -> PackagePlan {
                 "-DQMC_MIXED_PRECISION=OFF".into(),
                 "-DQMC_COMPLEX=OFF".into(),
             ],
+            verification_commands: Vec::new(),
         }],
         outputs: vec![OutputRequest {
             profile: "default".into(),

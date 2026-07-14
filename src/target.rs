@@ -312,6 +312,19 @@ impl BuildTarget {
         self.route_tokens(self.runtime_tokens(tokens), true)
     }
 
+    pub fn verification_command(&self, program: &str, args: &[String]) -> CommandPlan {
+        let mut tokens = vec!["env".to_string()];
+        tokens.extend(
+            self.easybuild
+                .environment
+                .iter()
+                .map(|(name, value)| format!("{name}={value}")),
+        );
+        tokens.push(program.to_string());
+        tokens.extend(args.iter().cloned());
+        self.route_tokens(self.runtime_tokens(tokens), true)
+    }
+
     fn runtime_tokens(&self, command: Vec<String>) -> Vec<String> {
         match &self.runtime {
             TargetRuntime::Host => command,

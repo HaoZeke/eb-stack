@@ -447,6 +447,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
         parameters,
         toolchain_options: BTreeMap::new(),
         config_options: config_options.clone(),
+        verification_commands: Vec::new(),
     };
 
     let mut residuals = Vec::new();

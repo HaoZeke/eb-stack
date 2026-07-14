@@ -253,6 +253,7 @@ fn package_plan_from_easyconfig(
         parameters: BTreeMap::new(),
         toolchain_options: BTreeMap::new(),
         config_options: Vec::new(),
+        verification_commands: Vec::new(),
     };
     PackagePlan {
         schema_version: PACKAGE_SCHEMA_VERSION,
