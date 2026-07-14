@@ -191,3 +191,42 @@ tmp_root = "/tmp"
     assert_eq!(body["status"], "completed");
     assert_eq!(body["claims"]["builds"], true);
 }
+
+#[test]
+fn staging_failure_is_persisted_as_a_transport_finding() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipes = bundle.join("easyconfigs/e/eOn");
+    std::fs::create_dir_all(&recipes).expect("recipes");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"eOn","version":"2.16.0"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .expect("lock");
+    std::fs::write(recipes.join("eOn.eb"), "name = 'eOn'\n").expect("recipe");
+    let mut target = target("true");
+    target.transport = TargetTransport::Ssh {
+        host: "unused.example.org".into(),
+        port: None,
+        command: "true".into(),
+        sync_command: "false".into(),
+    };
+    let state_path = temp.path().join("campaign.json");
+    let state = run_campaign(&CampaignRequest {
+        bundle,
+        target,
+        state_path: state_path.clone(),
+    })
+    .expect("staging failure state");
+    assert_eq!(state.status, CampaignStatus::Failed);
+    assert_eq!(state.findings.len(), 1);
+    assert_eq!(state.findings[0].class, BuildFindingClass::Transport);
+    assert_eq!(state.findings[0].stage, "stage");
+    assert!(state_path.is_file());
+}
