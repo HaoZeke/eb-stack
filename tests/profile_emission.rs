@@ -1,11 +1,11 @@
 use eb_stack::package::{
-    materialize_profile, LockedDependency, OutputRequest, ProductProfile, ProfileEnvironment,
-    ProfileLock, StackPin, StackPinMode, StackPolicy, PROFILE_LOCK_SCHEMA_VERSION,
-    STACK_POLICY_SCHEMA_VERSION,
+    materialize_profile, ConditionExpr, LockedDependency, OutputRequest, ProductProfile,
+    ProfileEnvironment, ProfileLock, StackPin, StackPinMode, StackPolicy,
+    PROFILE_LOCK_SCHEMA_VERSION, STACK_POLICY_SCHEMA_VERSION,
 };
 use eb_stack::{
     emit_profile_easyconfigs, package_plan_from_foreign, parse_foreign_path,
-    resolve_easyconfig_str, solve_package_profile, Candidate, ForeignFormat, Toolchain,
+    resolve_easyconfig_str, solve_package_profile, Candidate, DepReq, ForeignFormat, Toolchain,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -227,4 +227,90 @@ fn profile_lock_is_created_by_resolvo_with_stack_preferences() {
     assert_eq!(lock.dependencies[0].version, "1.14.2");
     assert!(!lock.dependencies[0].build);
     assert!(!lock.pin_outcomes[0].fallback);
+}
+
+#[test]
+fn profile_solve_scopes_build_dependencies_of_existing_recipes() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.profiles = qmcpack_profiles();
+    let template = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.eb_name.as_deref() == Some("HDF5"))
+        .expect("HDF5 dependency")
+        .clone();
+    plan.dependencies = [("openssl", "OpenSSL", "3"), ("git", "git", "2.45.1")]
+        .into_iter()
+        .map(|(id, name, version)| {
+            let mut dependency = template.clone();
+            dependency.id = id.into();
+            dependency.name = name.into();
+            dependency.eb_name = Some(name.into());
+            dependency.constraint = Some(version.into());
+            dependency.condition = ConditionExpr::Always;
+            dependency
+        })
+        .collect();
+
+    let candidate = |name: &str,
+                     version: &str,
+                     dependencies: Vec<DepReq>,
+                     builddependencies: Vec<DepReq>| Candidate {
+        name: name.into(),
+        version: version.into(),
+        toolchain: toolchain(),
+        versionsuffix: None,
+        easyconfig_path: format!("{name}-{version}-foss-2026.1.eb"),
+        dependencies,
+        builddependencies,
+        exts_list: Vec::new(),
+    };
+    let requirement = |name: &str, version: &str| DepReq {
+        name: name.into(),
+        version_req: format!("=={version}"),
+        versionsuffix: None,
+        toolchain: None,
+    };
+    let candidates = vec![
+        candidate(
+            "OpenSSL",
+            "3",
+            Vec::new(),
+            vec![requirement("Perl", "5.38.0")],
+        ),
+        candidate(
+            "git",
+            "2.45.1",
+            vec![requirement("Perl", "5.38.2")],
+            Vec::new(),
+        ),
+        candidate("Perl", "5.38.0", Vec::new(), Vec::new()),
+        candidate("Perl", "5.38.2", Vec::new(), Vec::new()),
+    ];
+    let stack = StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "test".into(),
+        toolchain: toolchain(),
+        pins: Vec::new(),
+        exclusions: Vec::new(),
+    };
+
+    let lock = solve_package_profile(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &candidates,
+        &stack,
+    )
+    .expect("existing recipe build dependencies have independent build contexts");
+    assert_eq!(lock.dependencies.len(), 2);
+    assert!(lock
+        .dependencies
+        .iter()
+        .any(|dependency| dependency.name == "OpenSSL"));
+    assert!(lock
+        .dependencies
+        .iter()
+        .any(|dependency| dependency.name == "git"));
 }
