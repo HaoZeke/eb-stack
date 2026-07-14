@@ -85,6 +85,12 @@ pub fn solve_package_profile_with_hierarchy(
     let original_candidates = filter_candidates_in_hierarchy(candidates, &hierarchy);
     let mut universe = original_candidates.clone();
     for candidate in &mut universe {
+        // Existing robot recipes are independently built artifacts. Their
+        // build-only tools are not co-loaded into the generated package's
+        // runtime environment and therefore have separate version scopes.
+        // The synthetic profile candidate below retains its direct build
+        // requirements because those tools are needed to build this output.
+        candidate.builddependencies.clear();
         candidate.toolchain = plan.build.toolchain.clone();
     }
     universe.push(Candidate {
