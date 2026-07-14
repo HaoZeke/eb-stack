@@ -116,3 +116,43 @@ mode = "preferred"
         .join("easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb")
         .is_file());
 }
+
+#[test]
+fn package_bump_cli_writes_an_sbom_resolvo_bundle() {
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let source = root.join("tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb");
+    let robot = root.join("tests/repro_fixtures/universe_foss_2024a");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let output = temp.path().join("bundle");
+
+    let result = Command::new(binary)
+        .args([
+            "package",
+            "bump",
+            "--source",
+            source.to_str().unwrap(),
+            "--toolchain-name",
+            "foss",
+            "--toolchain-version",
+            "2024a",
+            "--easyconfigs",
+            robot.to_str().unwrap(),
+            "--out-dir",
+            output.to_str().unwrap(),
+        ])
+        .output()
+        .expect("package bump");
+    assert!(
+        result.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(output.join("package.plan.json").is_file());
+    assert!(output.join("package.sbom.cdx.json").is_file());
+    assert!(output.join("locks/default.lock.json").is_file());
+    assert!(output
+        .join("easyconfigs/g/GROMACS/GROMACS-2024.4-foss-2024a.eb")
+        .is_file());
+}
