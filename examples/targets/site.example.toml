@@ -40,9 +40,16 @@ EASYBUILD_SOURCEPATH = "/shared/easybuild/sources"
 #  - PRTE/OMPI ALLOW_RUN_AS_ROOT... : OpenMPI 5.x sanity runs mpi_test via
 #    mpirun; PRRTE refuses to launch as root without these (the sanity MPI
 #    programs still run and must pass).
+#  - OMPI_MCA_mpi_yield_when_idle / rmaps_base_oversubscribe : multi-rank test
+#    suites (QMCPACK ctest) oversubscribe cores when the box runs a second
+#    build. Without yield-on-idle, OpenMPI ranks busy-wait-spin in collectives
+#    and deadlock (ctest never returns). Yielding lets every rank progress
+#    under oversubscription so tests finish and pass instead of hanging.
 EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES = "1"
 TAR_OPTIONS = "--no-same-owner"
 PRTE_ALLOW_RUN_AS_ROOT = "1"
 PRTE_ALLOW_RUN_AS_ROOT_CONFIRM = "1"
 OMPI_ALLOW_RUN_AS_ROOT = "1"
 OMPI_ALLOW_RUN_AS_ROOT_CONFIRM = "1"
+OMPI_MCA_mpi_yield_when_idle = "1"
+OMPI_MCA_rmaps_base_oversubscribe = "1"

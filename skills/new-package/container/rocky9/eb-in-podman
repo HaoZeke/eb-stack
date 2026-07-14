@@ -81,6 +81,12 @@ done
 # Prefer image isolation over host uid mapping for site campaigns.
 # CAP_NET_RAW: Perl Net-Ping ICMP tests (and similar) need raw ICMP sockets;
 # without it rootless Podman fails with "Operation not permitted" in test_step.
+# OMPI_MCA_mpi_yield_when_idle / rmaps_base_oversubscribe: multi-rank test suites
+# (e.g. QMCPACK ctest) can oversubscribe cores when the box also runs another
+# build. Without yield-when-idle, OpenMPI ranks busy-wait-spin in collectives,
+# starve each other's progress, and deadlock (ctest never returns). Yielding on
+# idle lets every rank make progress under oversubscription so the tests finish
+# and pass instead of hanging; oversubscribe=1 lets prterun place them at all.
 exec podman run --rm -i \
   --security-opt label=disable \
   --cap-add=NET_RAW \
@@ -100,6 +106,8 @@ exec podman run --rm -i \
   -e PRTE_ALLOW_RUN_AS_ROOT_CONFIRM=1 \
   -e OMPI_ALLOW_RUN_AS_ROOT=1 \
   -e OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1 \
+  -e OMPI_MCA_mpi_yield_when_idle=1 \
+  -e OMPI_MCA_rmaps_base_oversubscribe=1 \
   -e LMOD_CMD=/usr/share/lmod/lmod/libexec/lmod \
   -w /work \
   "$IMAGE" \
