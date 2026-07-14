@@ -51,7 +51,13 @@ mode = "preferred"
 source = "EESSI stack"
 ```
 
-`preferred` asks Resolvo to select the pin and records whether it fell back. `locked` makes the pin mandatory. Compatibility metadata is not build evidence: if a preferred or locked selection fails on the build target, Hermes owns the classified repair loop and may change the policy only with evidence.
+Pins may also set `toolchain = { name = "...", version = "..." }` and
+`versionsuffix = "..."` to select an exact EasyBuild artifact. Omitted fields
+remain unconstrained. `preferred` asks Resolvo to select the complete identity
+and records whether it fell back. `locked` makes the pin mandatory.
+Compatibility metadata is not build evidence: if a preferred or locked
+selection fails on the build target, Hermes owns the classified repair loop
+and may change the policy only with evidence.
 
 Use repeatable `--dep NAME=VERSION` only for a package-specific hard override. It is folded into the solve as a locked pin and appears in the lock evidence.
 

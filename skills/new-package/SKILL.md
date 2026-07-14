@@ -78,9 +78,24 @@ name = "HDF5"
 version_requirement = "==2.1.1"
 mode = "preferred"
 source = "site stack"
+
+[[pins]]
+name = "PyTorch"
+version_requirement = "==2.9.1"
+toolchain = { name = "foss", version = "2024a" }
+versionsuffix = ""
+mode = "preferred"
+source = "distribution stack"
 ```
 
-Use `preferred` when Resolvo may fall back to another compatible candidate. Use `locked` when any other version is invalid. A claimed-compatible version that fails to build remains a build finding; Hermes decides whether the recipe, target, or stack policy needs repair.
+Use `toolchain` and `versionsuffix` when a stack requires one exact EasyBuild
+artifact rather than only a package version. Omitting either field leaves that
+part of the identity unconstrained. Use `preferred` when Resolvo may fall back
+to another compatible candidate; the profile lock records the requested and
+selected identity and whether fallback occurred. Use `locked` when any other
+identity is invalid. A claimed-compatible version that fails to build remains
+a build finding; Hermes decides whether the recipe, target, or stack policy
+needs repair.
 
 ## Plan the package
 

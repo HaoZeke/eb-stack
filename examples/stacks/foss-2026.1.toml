@@ -7,3 +7,5 @@ version = "2026.1"
 
 # Add site or distribution constraints as pins. Use mode = "preferred" for a
 # fallback-capable preference and mode = "locked" for a mandatory selection.
+# Optional toolchain and versionsuffix fields constrain one exact EasyBuild
+# artifact; omit them when only the package version matters.

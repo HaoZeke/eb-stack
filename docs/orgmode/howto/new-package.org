@@ -95,12 +95,22 @@ name = "HDF5"
 version_requirement = "==2.1.1"
 mode = "preferred"
 source = "site stack"
+
+[[pins]]
+name = "PyTorch"
+version_requirement = "==2.9.1"
+toolchain = { name = "foss", version = "2024a" }
+versionsuffix = ""
+mode = "preferred"
+source = "distribution stack"
 #+end_src
 
 A preferred pin is favored when jointly feasible. Resolvo may choose another
-compatible candidate and records the fallback. A locked pin cannot fall back.
-Candidate exclusions record known target/build evidence and stay visible in
-the profile lock.
+compatible candidate and records the requested version, toolchain,
+versionsuffix, selected identity, and fallback. A locked pin cannot fall back.
+Omitting ~toolchain~ or ~versionsuffix~ leaves that part of the artifact
+identity unconstrained. Candidate exclusions record known target/build
+evidence and stay visible in the profile lock.
 
 * Plan the complete bundle
 
