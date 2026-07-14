@@ -1,8 +1,8 @@
 use eb_stack::package::{
-    package_plan_to_cyclonedx, BuildSpec, ConditionContext, ConditionExpr,
-    ConditionPredicate, Confidence, DependencyIntent, DependencyRole, OutputRequest,
-    PackageMetadata, PackageOrigin, PackagePlan, ProductProfile, Provenance, Residual,
-    ResidualSeverity, ResidualStage, SourceSpan, PACKAGE_SCHEMA_VERSION,
+    package_plan_to_cyclonedx, BuildSpec, ConditionContext, ConditionExpr, ConditionPredicate,
+    Confidence, DependencyIntent, DependencyRole, OutputRequest, PackageMetadata, PackageOrigin,
+    PackagePlan, ProductProfile, Provenance, Residual, ResidualSeverity, ResidualStage, SourceSpan,
+    PACKAGE_SCHEMA_VERSION,
 };
 use eb_stack::Toolchain;
 use serde_json::Value;
@@ -68,10 +68,7 @@ fn qmcpack_plan() -> PackagePlan {
             default: true,
             versionsuffix: Vec::new(),
             features,
-            toolchain_options: BTreeMap::from([
-                ("usempi".into(), true),
-                ("openmp".into(), true),
-            ]),
+            toolchain_options: BTreeMap::from([("usempi".into(), true), ("openmp".into(), true)]),
             config_options: vec![
                 "-DQMC_MIXED_PRECISION=OFF".into(),
                 "-DQMC_COMPLEX=OFF".into(),
@@ -117,7 +114,9 @@ fn package_plan_rejects_unknown_schema_version() {
     json["schema_version"] = Value::from(99);
     let error = PackagePlan::from_json_str(&json.to_string()).expect_err("unknown schema");
     assert!(
-        error.to_string().contains("unsupported package schema version 99"),
+        error
+            .to_string()
+            .contains("unsupported package schema version 99"),
         "unexpected error: {error}"
     );
 }
@@ -171,6 +170,12 @@ fn canonical_plan_writes_typed_cyclonedx_components() {
         .iter()
         .filter_map(|component| component["name"].as_str())
         .collect();
-    assert!(names.contains(&"QMCPACK"), "root component missing: {names:?}");
-    assert!(names.contains(&"HDF5"), "dependency component missing: {names:?}");
+    assert!(
+        names.contains(&"QMCPACK"),
+        "root component missing: {names:?}"
+    );
+    assert!(
+        names.contains(&"HDF5"),
+        "dependency component missing: {names:?}"
+    );
 }
