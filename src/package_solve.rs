@@ -8,7 +8,7 @@ use crate::package::{
     materialize_profile, DependencyRole, LockedDependency, PackagePlan, ProfileEnvironment,
     ProfileLock, StackPolicy, PROFILE_LOCK_SCHEMA_VERSION,
 };
-use crate::resolvo_provider::solve_with_stack_policy;
+use crate::resolvo_provider::solve_curated_with_stack_policy;
 use crate::version::matches_req;
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::path::Path;
@@ -95,7 +95,6 @@ pub fn solve_package_profile_with_hierarchy(
         // The synthetic profile candidate below retains its direct build
         // requirements because those tools are needed to build this output.
         candidate.builddependencies.clear();
-        candidate.toolchain = plan.build.toolchain.clone();
     }
     universe.push(Candidate {
         name: synthetic_name.clone(),
@@ -117,7 +116,7 @@ pub fn solve_package_profile_with_hierarchy(
         objective: "prefer_newer".into(),
         require_upgrade: Vec::new(),
     };
-    let result = solve_with_stack_policy(&universe, &policy, None, stack_policy)
+    let result = solve_curated_with_stack_policy(&universe, &policy, None, stack_policy)
         .map_err(ProfileSolveError::Resolve)?;
 
     let mut dependencies = Vec::new();

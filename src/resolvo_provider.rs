@@ -57,6 +57,22 @@ impl EbProvider {
         baseline: Option<&StackLock>,
         stack_policy: Option<&StackPolicy>,
     ) -> Result<Self, String> {
+        Self::from_universe_with_stack_policy_scope(
+            candidates_in,
+            policy,
+            baseline,
+            stack_policy,
+            false,
+        )
+    }
+
+    fn from_universe_with_stack_policy_scope(
+        candidates_in: &[Candidate],
+        policy: &Policy,
+        baseline: Option<&StackLock>,
+        stack_policy: Option<&StackPolicy>,
+        curated_toolchains: bool,
+    ) -> Result<Self, String> {
         if let Some(stack) = stack_policy {
             validate_stack_policy(policy, stack)?;
         }
@@ -64,8 +80,9 @@ impl EbProvider {
         let candidates: Vec<Candidate> = candidates_in
             .iter()
             .filter(|c| {
-                c.toolchain.name == policy.toolchain.name
-                    && c.toolchain.version == policy.toolchain.version
+                (curated_toolchains
+                    || c.toolchain.name == policy.toolchain.name
+                        && c.toolchain.version == policy.toolchain.version)
                     && !policy
                         .forbid
                         .iter()
@@ -546,12 +563,14 @@ fn solve_feasibility_with_stack_policy(
     policy: &Policy,
     baseline: Option<&StackLock>,
     stack_policy: &StackPolicy,
+    curated_toolchains: bool,
 ) -> Result<Vec<Candidate>, String> {
-    let provider = EbProvider::from_universe_with_stack_policy(
+    let provider = EbProvider::from_universe_with_stack_policy_scope(
         candidates,
         policy,
         baseline,
         Some(stack_policy),
+        curated_toolchains,
     )?;
     let requirements = provider.root_requirements(&policy.roots);
     if requirements.len() != policy.roots.len() {
@@ -585,8 +604,33 @@ pub fn solve_with_stack_policy(
     baseline: Option<&StackLock>,
     stack_policy: &StackPolicy,
 ) -> Result<StackPolicySolve, String> {
+    solve_with_stack_policy_scope(candidates, policy, baseline, stack_policy, false)
+}
+
+pub(crate) fn solve_curated_with_stack_policy(
+    candidates: &[Candidate],
+    policy: &Policy,
+    baseline: Option<&StackLock>,
+    stack_policy: &StackPolicy,
+) -> Result<StackPolicySolve, String> {
+    solve_with_stack_policy_scope(candidates, policy, baseline, stack_policy, true)
+}
+
+fn solve_with_stack_policy_scope(
+    candidates: &[Candidate],
+    policy: &Policy,
+    baseline: Option<&StackLock>,
+    stack_policy: &StackPolicy,
+    curated_toolchains: bool,
+) -> Result<StackPolicySolve, String> {
     validate_stack_policy(policy, stack_policy)?;
-    let selected = solve_feasibility_with_stack_policy(candidates, policy, baseline, stack_policy)?;
+    let selected = solve_feasibility_with_stack_policy(
+        candidates,
+        policy,
+        baseline,
+        stack_policy,
+        curated_toolchains,
+    )?;
     let pin_outcomes = stack_policy
         .pins
         .iter()
