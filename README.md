@@ -143,6 +143,23 @@ claim) live under `fixtures/eon_foss_2026_1/` and
 `fixtures/qmcpack_foss_2026_1/` (companions such as CapnProto for eOn when
 develop still lacks them).
 
+### Bump / new package == SBOM + resolvo
+
+A bump is the same pipeline as a new package: manifest + planned SBOM +
+resolvo joint co-select, then emit. Three entry points, all resolvo-backed:
+
+| Want | Command |
+|------|---------|
+| New recipe from a foreign source, with manifest + planned SBOM | `plan --source … --manifest-out … --sbom-out … --out-dir …` |
+| Bump an existing `.eb` to the next generation, carrying the SBOM | `plan --source … --bump-from OLD.eb --sbom-out … --out NEW.eb` |
+| Whole-stack lock + generation SBOM | `solve --easyconfigs … --sbom-out …` |
+| Low-level retarget only (no SBOM) | `bump --source … --easyconfigs …` |
+
+`plan`/`solve` derive every dependency version from the universe (hierarchy
+consensus + resolvo pins); `foss-2026.1` and earlier generations are known
+hierarchies, so no `--hierarchy-fixture` is needed against a robot that carries
+the generation's toolchain definition.
+
 ## Version
 
 ```bash
@@ -173,6 +190,7 @@ pixi run -e docs docbld
 | `cargo test --lib` | Unit tests |
 | known-bump regression | Frozen maintainer pairs (GROMACS, ScaFaCoS, MDTraj, Fiona, PuLP, numba) library + CLI |
 | packaging fixtures | eOn 2.16.0 and QMCPACK 4.3.0 landable recipe sets |
+| goal scenario | conda eOn + Spack QMCPACK → SBOM + manifest + recipe (foss-2026.1) |
 | solve / reports | build-list and stack-diff emission |
 | CLI smoke | release `eb-stack bump` on the GROMACS tutorial path |
 | docs | org export + Sphinx build + link check |
@@ -181,6 +199,7 @@ pixi run -e docs docbld
 cargo test --locked --lib
 cargo test --locked --test reproduce_real_prs --test bump_emit
 cargo test --locked --test eon_foss_2026_1 --test qmcpack_foss_2026_1 --test eon_packaging
+cargo test --locked --test goal_scenario
 cargo test --locked --test foreign_ingest
 ```
 
