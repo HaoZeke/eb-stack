@@ -21,7 +21,18 @@ skills/new-package/container/rocky9/eb-in-podman \
   --robot /work/easyconfigs:/robot Name-Ver-tc.eb
 ```
 
-`render-full-drive --build-backend podman-rocky9` wires this into `full-drive.sh`.
+Configure the same image through a target runtime layer:
+
+```toml
+[targets.runtime]
+kind = "podman"
+image = "eb-stack-rocky9"
+mounts = ["/shared/work:/work", "/shared/robot:/robot:ro"]
+workdir = "/work"
+```
+
+`eb-stack campaign run` routes EasyBuild builds and profile verification
+through this runtime.
 
 ## Capabilities
 
