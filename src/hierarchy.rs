@@ -176,6 +176,9 @@ pub fn known_hierarchy(parent: &Toolchain) -> Option<ToolchainHierarchy> {
         "foss-2025b" => Some(include_str!(
             "../fixtures/toolchain_hierarchy/foss-2025b.json"
         )),
+        "foss-2026.1" => Some(include_str!(
+            "../fixtures/toolchain_hierarchy/foss-2026.1.json"
+        )),
         _ => None,
     }?;
     let fix: HierarchyFixture = serde_json::from_str(raw).ok()?;
@@ -832,6 +835,30 @@ mod tests {
     }
 
     #[test]
+    fn known_foss_2026_1_includes_required_levels() {
+        // foss-2026.1 is the landable target generation used across the eOn /
+        // QMCPACK fixtures and skills. It must be a known hierarchy so `plan`
+        // resolves dependency versions without a full easyconfigs robot that
+        // carries the foss-2026.1 toolchain-definition recipe.
+        let h = known_hierarchy(&foss("2026.1")).expect("embedded foss-2026.1");
+        let labels = h.member_labels();
+        for need in [
+            "system",
+            "GCCcore-15.2.0",
+            "GCC-15.2.0",
+            "gfbf-2026.1",
+            "gompi-2026.1",
+            "foss-2026.1",
+        ] {
+            assert!(
+                labels.iter().any(|l| l == need),
+                "missing {need} in {labels:?}"
+            );
+        }
+        assert_eq!(h.parent, foss("2026.1"));
+    }
+
+    #[test]
     fn load_fixture_matches_known() {
         let path = fixture_root().join("fixtures/toolchain_hierarchy/foss-2024a.json");
         let loaded = load_hierarchy_fixture(&path).expect("load");
@@ -987,19 +1014,20 @@ mod tests {
 
     #[test]
     fn derive_hierarchy_from_tree_for_unknown_generation() {
-        // A generation with no shipped fixture (e.g. a brand-new foss-2026.1)
+        // A generation with no shipped fixture (foss-2026.1 graduated to a
+        // known fixture; 2099a stands in for the next brand-new generation)
         // must derive its hierarchy from the robot tree: the foss definition
         // pins GCC 15.2.0, and gompi/gfbf definitions exist as recipes.
         let parent = Toolchain {
             name: "foss".into(),
-            version: "2026.1".into(),
+            version: "2099a".into(),
         };
-        let mut foss_def = cand("foss", "2026.1", "system", "", None);
+        let mut foss_def = cand("foss", "2099a", "system", "", None);
         foss_def.dependencies = vec![dep_pin("GCC", "15.2.0")];
         let cands = vec![
             foss_def,
-            cand("gompi", "2026.1", "system", "", None),
-            cand("gfbf", "2026.1", "system", "", None),
+            cand("gompi", "2099a", "system", "", None),
+            cand("gfbf", "2099a", "system", "", None),
             cand("binutils", "2.42", "GCCcore", "15.2.0", None),
         ];
         let h = derive_hierarchy_from_candidates(&parent, &cands).expect("derived");
@@ -1009,9 +1037,9 @@ mod tests {
                 "system",
                 "GCCcore-15.2.0",
                 "GCC-15.2.0",
-                "gompi-2026.1",
-                "gfbf-2026.1",
-                "foss-2026.1",
+                "gompi-2099a",
+                "gfbf-2099a",
+                "foss-2099a",
             ]
         );
         // hierarchy_for_with_tree falls back to derivation for unknown gens...
@@ -1020,14 +1048,16 @@ mod tests {
         // ...but a known generation still uses the shipped fixture.
         let known = hierarchy_for_with_tree(&foss("2024a"), None, &cands).expect("known");
         assert_eq!(known, known_hierarchy(&foss("2024a")).unwrap());
+        // foss-2026.1 is now a shipped fixture (no tree derivation needed).
+        assert!(known_hierarchy(&foss("2026.1")).is_some());
         // Missing composite definitions are simply omitted from members.
-        let mut foss_only = cand("foss", "2026.1", "system", "", None);
+        let mut foss_only = cand("foss", "2099a", "system", "", None);
         foss_only.dependencies = vec![dep_pin("GCC", "15.2.0")];
         let sparse = vec![foss_only];
         let h2 = derive_hierarchy_from_candidates(&parent, &sparse).expect("derived sparse");
         assert_eq!(
             h2.member_labels(),
-            vec!["system", "GCCcore-15.2.0", "GCC-15.2.0", "foss-2026.1"]
+            vec!["system", "GCCcore-15.2.0", "GCC-15.2.0", "foss-2099a"]
         );
         // A compiler-only toolchain with no defining recipe in the tree is not
         // derivable (nothing pins its GCCcore generation).
