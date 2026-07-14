@@ -1016,12 +1016,11 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
         .ok()
         .map(|r| r.find_iter(text).count())
         .unwrap_or(0);
-    let mut patches = Vec::new();
+    let patches = Vec::new();
     if patch_n > 0 {
         notes.push(format!(
             "{patch_n} patch() directive(s) — recorded as residual patch count"
         ));
-        patches.push(format!("spack:{patch_n}_patch_directives"));
     }
 
     Ok(ForeignRecipe {

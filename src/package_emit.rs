@@ -138,13 +138,13 @@ fn render_easyconfig(plan: &PackagePlan, lock: &ProfileLock, versionsuffix: &str
         .dependencies
         .iter()
         .filter(|dependency| dependency.build)
-        .map(render_dependency)
+        .map(|dependency| render_dependency(dependency, &lock.toolchain))
         .collect::<Vec<_>>();
     let runtime_dependencies = lock
         .dependencies
         .iter()
         .filter(|dependency| !dependency.build)
-        .map(render_dependency)
+        .map(|dependency| render_dependency(dependency, &lock.toolchain))
         .collect::<Vec<_>>();
     let moduleclass = plan.build.moduleclass.as_deref().unwrap_or("lib");
 
@@ -207,7 +207,20 @@ fn render_sources(plan: &PackagePlan) -> (String, String) {
     )
 }
 
-fn render_dependency(dependency: &crate::package::LockedDependency) -> String {
+fn render_dependency(
+    dependency: &crate::package::LockedDependency,
+    package_toolchain: &crate::domain::Toolchain,
+) -> String {
+    if dependency.toolchain != *package_toolchain {
+        return format!(
+            "('{}', '{}', '{}', ('{}', '{}'))",
+            escape_single(&dependency.name),
+            escape_single(&dependency.version),
+            escape_single(dependency.versionsuffix.as_deref().unwrap_or("")),
+            escape_single(&dependency.toolchain.name),
+            escape_single(&dependency.toolchain.version),
+        );
+    }
     match dependency.versionsuffix.as_deref() {
         Some(versionsuffix) if !versionsuffix.is_empty() => format!(
             "('{}', '{}', '{}')",
