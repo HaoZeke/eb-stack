@@ -281,23 +281,28 @@ fn extract_spack_config_flags(text: &str) -> Option<String> {
 }
 
 pub(crate) fn guess_easyblock(recipe: &ForeignRecipe, warnings: &mut Vec<String>) -> String {
-    for h in &recipe.build_system_hints {
-        let hl = h.to_ascii_lowercase();
-        if hl.contains("meson") {
-            warnings.push(format!("build-system hint {h} → easyblock MesonNinja"));
-            return "MesonNinja".into();
-        }
-        if hl.contains("cmake") {
-            warnings.push(format!("build-system hint {h} → easyblock CMakeNinja"));
-            return "CMakeNinja".into();
-        }
-        if hl.contains("python") || hl.contains("pip") {
-            warnings.push(format!("build-system hint {h} → easyblock PythonPackage"));
-            return "PythonPackage".into();
-        }
-        if hl.contains("autotools") || hl.contains("autoreconf") {
-            return "ConfigureMake".into();
-        }
+    let hint = |needles: &[&str]| {
+        recipe.build_system_hints.iter().find(|hint| {
+            let lower = hint.to_ascii_lowercase();
+            needles.iter().any(|needle| lower.contains(needle))
+        })
+    };
+    if let Some(hint) = hint(&["meson"]) {
+        warnings.push(format!("build-system hint {hint} → easyblock MesonNinja"));
+        return "MesonNinja".into();
+    }
+    if let Some(hint) = hint(&["cmake"]) {
+        warnings.push(format!("build-system hint {hint} → easyblock CMakeNinja"));
+        return "CMakeNinja".into();
+    }
+    if let Some(hint) = hint(&["python", "pip"]) {
+        warnings.push(format!(
+            "build-system hint {hint} → easyblock PythonPackage"
+        ));
+        return "PythonPackage".into();
+    }
+    if hint(&["autotools", "autoreconf"]).is_some() {
+        return "ConfigureMake".into();
     }
     // Dep names as weak signal
     let dep_names: Vec<&str> = recipe
