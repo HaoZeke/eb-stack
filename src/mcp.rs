@@ -2,19 +2,16 @@
 
 use crate::campaign::{run_campaign, CampaignRequest, CampaignStatus};
 use crate::domain::Toolchain;
-use crate::eb_emit::{
-    emit_next_generation_auto_from_path_with_opts, emit_next_generation_from_path, AutoResolveOpts,
-    EmitParams,
-};
 use crate::eb_parse::{
     check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,
 };
 use crate::eb_style::{format_style_file, lint_style};
 use crate::foreign::ForeignFormat;
-use crate::package::StackPolicy;
+use crate::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
 use crate::package_config::ProfileConfigLayer;
 use crate::package_workflow::{
-    inspect_new_package, plan_new_package, write_package_bundle, NewPackageRequest, PackageBundle,
+    inspect_new_package, plan_new_package, plan_package_bump, write_package_bundle,
+    BumpPackageRequest, NewPackageRequest, PackageBundle,
 };
 use crate::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use crate::{
@@ -118,12 +115,13 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool(
             "eb_package_bump",
-            "Retarget an existing EasyBuild recipe using hierarchy and Resolvo dependency selection.",
+            "Retarget an EasyBuild recipe and emit its canonical SBOM, Resolvo lock, and recipe bundle.",
             &[
                 ("source", "string"),
                 ("toolchain_name", "string"),
                 ("toolchain_version", "string"),
-                ("out", "string"),
+                ("easyconfigs", "array"),
+                ("out_dir", "string"),
             ],
         ),
         tool(
@@ -265,44 +263,40 @@ fn package_plan(arguments: &Value) -> Result<Value, String> {
 }
 
 fn package_bump(arguments: &Value) -> Result<Value, String> {
-    let source = required_path(arguments, "source")?;
     let target = toolchain(arguments)?;
-    let version = optional_string(arguments, "version");
-    let checksum = optional_string(arguments, "source_checksum");
-    let overrides = string_map(arguments, "dependencies")?;
-    let result = if let Some(easyconfigs) = optional_path(arguments, "easyconfigs") {
-        emit_next_generation_auto_from_path_with_opts(
-            &source,
-            &target,
-            &easyconfigs,
-            None,
-            optional_path(arguments, "hierarchy_fixture").as_deref(),
-            &overrides,
-            version,
-            checksum,
-            &AutoResolveOpts {
-                keep_old: optional_bool(arguments, "keep_old_deps"),
-            },
-        )
-        .map_err(|error| error.to_string())?
+    let stack_policy = if let Some(path) = optional_path(arguments, "stack_policy") {
+        load_stack_policy(&path)?
     } else {
-        emit_next_generation_from_path(
-            &source,
-            &EmitParams {
-                toolchain: target,
-                version,
-                dep_versions: overrides,
-                source_checksum: checksum,
-            },
-        )
-        .map_err(|error| error.to_string())?
+        StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "unconstrained".into(),
+            toolchain: target.clone(),
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        }
     };
-    let output = optional_path(arguments, "out").unwrap_or_else(|| PathBuf::from(&result.filename));
-    if let Some(parent) = output.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    std::fs::write(&output, result.text).map_err(|error| error.to_string())?;
-    Ok(json!({"easyconfig": output, "warnings": result.warnings}))
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source: required_path(arguments, "source")?,
+        toolchain: target,
+        version: optional_string(arguments, "version"),
+        source_checksum: optional_string(arguments, "source_checksum"),
+        easyconfig_roots: path_array(arguments, "easyconfigs")?,
+        hierarchy_fixture: optional_path(arguments, "hierarchy_fixture"),
+        overrides: string_map(arguments, "dependencies")?,
+        stack_policy,
+    })
+    .map_err(|error| error.to_string())?;
+    let written = write_package_bundle(&bundle, &required_path(arguments, "out_dir")?)
+        .map_err(|error| error.to_string())?;
+    Ok(json!({
+        "package": bundle.plan.package.name,
+        "version": bundle.plan.package.version,
+        "manifest": written.manifest,
+        "sbom": written.sbom,
+        "locks": written.locks,
+        "easyconfigs": written.easyconfigs,
+        "claims": {"resolves": true, "builds": false, "binary_verified": false}
+    }))
 }
 
 fn recipe_check(arguments: &Value) -> Result<Value, String> {
@@ -514,13 +508,6 @@ fn string_map(arguments: &Value, name: &str) -> Result<HashMap<String, String>, 
             .collect(),
         Some(_) => Err(format!("argument {name} must be an object")),
     }
-}
-
-fn optional_bool(arguments: &Value, name: &str) -> bool {
-    arguments
-        .get(name)
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
 }
 
 fn tool_success(value: Value) -> Value {

@@ -3,17 +3,16 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use eb_stack::campaign::{run_campaign as execute_campaign, CampaignRequest, CampaignStatus};
-use eb_stack::package::StackPolicy;
+use eb_stack::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
 use eb_stack::package_config::ProfileConfigLayer;
 use eb_stack::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use eb_stack::{
-    check_recipe_deps, emit_next_generation_auto_from_path_with_opts,
-    emit_next_generation_from_path, format_style, format_style_file, inspect_new_package,
-    lint_style, load_json_file, lock_to_cyclonedx, packaging_gate, parse_easyconfig_trees,
-    plan_new_package, resolve_easyconfig_file, scaffold_missing_companions,
+    check_recipe_deps, format_style, format_style_file, inspect_new_package, lint_style,
+    load_json_file, lock_to_cyclonedx, packaging_gate, parse_easyconfig_trees, plan_new_package,
+    plan_package_bump, resolve_easyconfig_file, scaffold_missing_companions,
     solve_from_easyconfigs_with_baseline_version_and_extras, write_json_pretty,
-    write_package_bundle, AutoResolveOpts, EmitParams, ForeignFormat, NewPackageRequest,
-    PackageBundle, SolveExtraOut, StackLock, Toolchain,
+    write_package_bundle, BumpPackageRequest, ForeignFormat, NewPackageRequest, PackageBundle,
+    SolveExtraOut, StackLock, Toolchain,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -110,16 +109,14 @@ struct PackageBumpArgs {
     source_checksum: Option<String>,
     #[arg(long = "dep", value_name = "NAME=VERSION")]
     dependencies: Vec<String>,
-    #[arg(long)]
-    easyconfigs: Option<PathBuf>,
+    #[arg(long, required = true)]
+    easyconfigs: Vec<PathBuf>,
     #[arg(long)]
     hierarchy_fixture: Option<PathBuf>,
     #[arg(long)]
-    keep_old_deps: bool,
-    #[arg(long, conflicts_with = "out")]
-    out_dir: Option<PathBuf>,
-    #[arg(long, conflicts_with = "out_dir")]
-    out: Option<PathBuf>,
+    stack_policy: Option<PathBuf>,
+    #[arg(long)]
+    out_dir: PathBuf,
 }
 
 #[derive(Subcommand, Debug)]
@@ -290,44 +287,29 @@ fn run_package(command: PackageCommand) -> Result<()> {
 
 fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
     let toolchain = toolchain(&args.toolchain_name, &args.toolchain_version);
-    let overrides = parse_dep_overrides(&args.dependencies)?;
-    let result = if let Some(easyconfigs) = args.easyconfigs.as_deref() {
-        emit_next_generation_auto_from_path_with_opts(
-            &args.source,
-            &toolchain,
-            easyconfigs,
-            None,
-            args.hierarchy_fixture.as_deref(),
-            &overrides,
-            args.version.clone(),
-            args.source_checksum.clone(),
-            &AutoResolveOpts {
-                keep_old: args.keep_old_deps,
-            },
-        )?
+    let stack_policy = if let Some(path) = args.stack_policy.as_deref() {
+        load_stack_policy(path)?
     } else {
-        emit_next_generation_from_path(
-            &args.source,
-            &EmitParams {
-                toolchain: toolchain.clone(),
-                version: args.version.clone(),
-                dep_versions: overrides,
-                source_checksum: args.source_checksum.clone(),
-            },
-        )?
+        unconstrained_stack_policy(&toolchain)
     };
-    let destination = output_path(
-        args.out.as_deref(),
-        args.out_dir.as_deref(),
-        &result.filename,
-    );
-    if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent)?;
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source: args.source,
+        toolchain,
+        version: args.version,
+        source_checksum: args.source_checksum,
+        easyconfig_roots: args.easyconfigs,
+        hierarchy_fixture: args.hierarchy_fixture,
+        overrides: parse_dep_overrides(&args.dependencies)?,
+        stack_policy,
+    })?;
+    let written = write_package_bundle(&bundle, &args.out_dir)?;
+    println!("manifest={}", written.manifest.display());
+    println!("sbom={}", written.sbom.display());
+    for path in written.locks {
+        println!("lock={}", path.display());
     }
-    std::fs::write(&destination, result.text)?;
-    println!("easyconfig={}", destination.display());
-    for warning in result.warnings {
-        eprintln!("warning={warning}");
+    for path in written.easyconfigs {
+        println!("easyconfig={}", path.display());
     }
     Ok(())
 }
@@ -561,6 +543,16 @@ fn load_stack_policy(path: &Path) -> Result<StackPolicy> {
     }
 }
 
+fn unconstrained_stack_policy(toolchain: &Toolchain) -> StackPolicy {
+    StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "unconstrained".into(),
+        toolchain: toolchain.clone(),
+        pins: Vec::new(),
+        exclusions: Vec::new(),
+    }
+}
+
 fn load_targets(paths: &[PathBuf]) -> Result<Vec<BuildTarget>> {
     let layers = paths
         .iter()
@@ -591,11 +583,4 @@ fn toolchain(name: &str, version: &str) -> Toolchain {
         name: name.to_string(),
         version: version.to_string(),
     }
-}
-
-fn output_path(explicit: Option<&Path>, directory: Option<&Path>, filename: &str) -> PathBuf {
-    explicit
-        .map(Path::to_path_buf)
-        .or_else(|| directory.map(|directory| directory.join(filename)))
-        .unwrap_or_else(|| PathBuf::from(filename))
 }
