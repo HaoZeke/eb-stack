@@ -1,7 +1,5 @@
-use eb_stack::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
-use eb_stack::{
-    plan_package_bump, resolve_easyconfig_str, BumpPackageRequest, PackageOrigin, Toolchain,
-};
+use eb_stack::package::{PackageOrigin, StackPolicy, STACK_POLICY_SCHEMA_VERSION};
+use eb_stack::{plan_package_bump, resolve_easyconfig_str, BumpPackageRequest, Toolchain};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
