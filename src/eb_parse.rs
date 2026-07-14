@@ -2490,6 +2490,38 @@ builddependencies = [
         );
     }
 
+    #[test]
+    fn merge_candidates_preserves_versionsuffix_variants() {
+        let tc = Toolchain {
+            name: "foss".into(),
+            version: "2024a".into(),
+        };
+        let candidate = |suffix: Option<&str>, path: &str| Candidate {
+            name: "PyTorch".into(),
+            version: "2.9.1".into(),
+            toolchain: tc.clone(),
+            versionsuffix: suffix.map(str::to_string),
+            easyconfig_path: path.into(),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+        };
+        let merged = merge_candidates_with_precedence(&[vec![
+            candidate(None, "PyTorch-2.9.1-foss-2024a.eb"),
+            candidate(
+                Some("-CUDA-12.6.0"),
+                "PyTorch-2.9.1-foss-2024a-CUDA-12.6.0.eb",
+            ),
+        ]]);
+        assert_eq!(merged.len(), 2);
+        assert!(merged
+            .iter()
+            .any(|candidate| candidate.versionsuffix.is_none()));
+        assert!(merged
+            .iter()
+            .any(|candidate| { candidate.versionsuffix.as_deref() == Some("-CUDA-12.6.0") }));
+    }
+
     fn blank_recipe() -> ResolvedEasyconfig {
         ResolvedEasyconfig {
             name: "X".into(),
