@@ -17,6 +17,7 @@ use std::str::FromStr;
 use thiserror::Error;
 
 pub const PACKAGE_SCHEMA_VERSION: u32 = 1;
+pub const PROFILE_LOCK_SCHEMA_VERSION: u32 = 1;
 pub const STACK_POLICY_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,6 +76,62 @@ pub struct StackPolicySolve {
     pub selected: Vec<Candidate>,
     pub pin_outcomes: Vec<StackPinOutcome>,
     pub exclusions: Vec<CandidateExclusion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileEnvironment {
+    #[serde(default)]
+    pub dependency_features: BTreeMap<String, BTreeMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compiler: Option<NamedVersion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub architecture: Option<String>,
+    #[serde(default)]
+    pub variables: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaterializedProfile {
+    pub package: PackageMetadata,
+    pub build: BuildSpec,
+    pub profile: ProductProfile,
+    pub versionsuffix: String,
+    pub dependencies: Vec<DependencyIntent>,
+    pub rules: Vec<PackageRule>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedDependency {
+    pub name: String,
+    pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub versionsuffix: Option<String>,
+    pub toolchain: Toolchain,
+    pub easyconfig_path: String,
+    pub build: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileLock {
+    pub schema_version: u32,
+    pub package: String,
+    pub version: String,
+    pub profile: String,
+    pub toolchain: Toolchain,
+    pub versionsuffix: String,
+    #[serde(default)]
+    pub dependencies: Vec<LockedDependency>,
+    #[serde(default)]
+    pub pin_outcomes: Vec<StackPinOutcome>,
+    #[serde(default)]
+    pub exclusions: Vec<CandidateExclusion>,
+    pub solver: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,7 +252,8 @@ pub enum ConditionExpr {
     Not(Box<ConditionExpr>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct NamedVersion {
     pub name: String,
     pub version: String,
@@ -448,10 +506,60 @@ impl PackagePlan {
     }
 }
 
+pub fn materialize_profile(
+    plan: &PackagePlan,
+    profile_name: &str,
+    environment: &ProfileEnvironment,
+) -> Result<MaterializedProfile, PackageError> {
+    plan.validate_schema()?;
+    let profile = plan
+        .profiles
+        .iter()
+        .find(|profile| profile.name == profile_name)
+        .cloned()
+        .ok_or_else(|| PackageError::ProfileNotFound(profile_name.to_string()))?;
+
+    let mut variables = profile.parameters.clone();
+    variables.extend(environment.variables.clone());
+    let context = ConditionContext {
+        package_version: plan.package.version.clone(),
+        features: profile.features.clone(),
+        dependency_features: environment.dependency_features.clone(),
+        compiler: environment.compiler.clone(),
+        toolchain: Some(plan.build.toolchain.clone()),
+        platform: environment.platform.clone(),
+        architecture: environment.architecture.clone(),
+        variables,
+    };
+    let dependencies = plan
+        .dependencies
+        .iter()
+        .filter(|dependency| dependency.condition.evaluate(&context))
+        .cloned()
+        .collect();
+    let rules = plan
+        .rules
+        .iter()
+        .filter(|rule| rule.condition.evaluate(&context))
+        .cloned()
+        .collect();
+
+    Ok(MaterializedProfile {
+        package: plan.package.clone(),
+        build: plan.build.clone(),
+        versionsuffix: profile.versionsuffix.concat(),
+        profile,
+        dependencies,
+        rules,
+    })
+}
+
 #[derive(Debug, Error)]
 pub enum PackageError {
     #[error("unsupported package schema version {0}")]
     UnsupportedSchema(u32),
+    #[error("package profile {0} does not exist")]
+    ProfileNotFound(String),
     #[error("package JSON: {0}")]
     Json(#[from] serde_json::Error),
     #[error("CycloneDX serialization: {0}")]

@@ -10,6 +10,7 @@ pub mod hierarchy;
 pub mod manifest;
 pub mod mcp;
 pub mod package;
+pub mod package_emit;
 pub mod report;
 pub mod resolvo_provider;
 pub mod sbom;
@@ -66,6 +67,7 @@ pub use report::{
     classify_stack_diff, format_build_list, format_stack_diff_markdown, ordered_build_paths,
     ordered_packages, PackageChange, PackageChangeKind,
 };
+pub use package_emit::{emit_profile_easyconfigs, EmittedEasyconfig, PackageEmitError};
 pub use resolvo_provider::solve_with_stack_policy;
 pub use sbom::{
     build_dep_map_from_universe, dep_map_from_universe, lock_to_bom, lock_to_cyclonedx,
