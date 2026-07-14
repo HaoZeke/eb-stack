@@ -1,6 +1,6 @@
 //! Deterministic EasyBuild recipe-set emission from materialized package profiles.
 
-use crate::eb_parse::companion_easyconfig_basename;
+use crate::eb_parse::easyconfig_basename;
 use crate::package::{materialize_profile, PackagePlan, ProfileEnvironment, ProfileLock};
 use std::collections::BTreeSet;
 use thiserror::Error;
@@ -59,7 +59,7 @@ pub fn emit_profile_easyconfigs(
 
         emitted.push(EmittedEasyconfig {
             profile: output.profile.clone(),
-            filename: companion_easyconfig_basename(
+            filename: easyconfig_basename(
                 &plan.package.name,
                 &plan.package.version,
                 &plan.build.toolchain,

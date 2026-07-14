@@ -25,13 +25,12 @@ pub mod version;
 pub use domain::*;
 pub use eb_parse::candidate_matches_dep_for_recipe;
 pub use eb_parse::{
-    candidate_matches_dep, check_recipe_deps, companion_easyconfig_basename, easyconfig_letter_dir,
+    candidate_matches_dep, check_recipe_deps, easyconfig_basename, easyconfig_letter_dir,
     filter_toolchain, lock_from_candidates, merge_candidates_with_precedence, packaging_gate,
     parse_easyconfig_file, parse_easyconfig_tree, parse_easyconfig_tree_candidates,
-    parse_easyconfig_trees, render_companion_scaffold, resolve_easyconfig_file,
-    resolve_easyconfig_str, scaffold_missing_companions, validate_lock_deps, version_field_to_req,
-    MissingDep, ParseTreeResult, RecipeDepCheck, ResolvedDep, ResolvedEasyconfig, ResolvedExt,
-    ScaffoldedCompanion, SkippedEasyconfig,
+    parse_easyconfig_trees, resolve_easyconfig_file, resolve_easyconfig_str, validate_lock_deps,
+    version_field_to_req, MissingDep, ParseTreeResult, RecipeDepCheck, ResolvedDep,
+    ResolvedEasyconfig, ResolvedExt, SkippedEasyconfig,
 };
 pub use eb_style::{
     format_style, format_style_file, lint_style, FormatStyleResult, StyleError, StyleFinding,

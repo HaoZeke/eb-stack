@@ -6,8 +6,7 @@
 //! plus metatensor / metatomic-torch companions.
 
 use eb_stack::{
-    check_recipe_deps, packaging_gate, parse_easyconfig_trees,
-    resolve_easyconfig_file, scaffold_missing_companions, MissingDep, Toolchain,
+    check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,
 };
 use std::path::PathBuf;
 
@@ -188,46 +187,6 @@ fn eon_and_companions_use_ebroot_min_for_hyphenated_deps() {
     assert!(
         !mta.contains("$EBROOTMETATENSORTORCH"),
         "metatomic-torch must not use wrong EBROOTMETATENSORTORCH"
-    );
-}
-
-#[test]
-fn scaffold_missing_preps_companion_easyconfigs_for_overlay() {
-    // Simulate robot hole: no metatomic-torch → eb-stack writes companion scaffold.
-    let dir = tempfile::tempdir().unwrap();
-    let missing = vec![MissingDep {
-        name: "metatomic-torch".into(),
-        version: "0.1.15".into(),
-        versionsuffix: None,
-        toolchain: Some(Toolchain {
-            name: "foss".into(),
-            version: "2024a".into(),
-        }),
-        role: "runtime".into(),
-        reason: "no candidate".into(),
-    }];
-    let written = scaffold_missing_companions(
-        &missing,
-        dir.path(),
-        &Toolchain {
-            name: "foss".into(),
-            version: "2024a".into(),
-        },
-    )
-    .expect("scaffold");
-    assert_eq!(written.len(), 1);
-    assert!(!written[0].skipped_existing);
-    let r = resolve_easyconfig_file(std::path::Path::new(&written[0].path)).expect("parse");
-    assert_eq!(r.name, "metatomic-torch");
-    // Overlay can now satisfy identity matching.
-    let drafts = root().join("easyconfigs");
-    let recipe = resolve_easyconfig_file(&drafts.join("e/eOn/eOn-2.16.0-foss-2024a.eb")).unwrap();
-    let tree = parse_easyconfig_trees(&[drafts.as_path(), dir.path()]).unwrap();
-    let check = check_recipe_deps(&recipe, &tree.candidates);
-    assert!(
-        check.found.iter().any(|f| f.contains("metatomic-torch")),
-        "scaffold must become a robot candidate: found={:?}",
-        check.found
     );
 }
 

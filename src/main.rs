@@ -12,7 +12,7 @@ use eb_stack::target::{doctor_target, resolve_target_layers, BuildTarget, Target
 use eb_stack::{
     check_recipe_deps, format_style, format_style_file, inspect_new_package, lint_style,
     load_json_file, lock_to_cyclonedx, packaging_gate, parse_easyconfig_trees, plan_new_package,
-    plan_package_bump, resolve_easyconfig_file, scaffold_missing_companions,
+    plan_package_bump, resolve_easyconfig_file,
     solve_from_easyconfigs_with_baseline_version_and_extras, write_json_pretty,
     write_package_bundle, BumpPackageRequest, ForeignFormat, NewPackageRequest, PackageBundle,
     SolveExtraOut, StackLock, Toolchain,
@@ -134,8 +134,6 @@ enum RecipeCommand {
         require_configopts: Vec<String>,
         #[arg(long)]
         metadata_only: bool,
-        #[arg(long)]
-        scaffold_missing: Option<PathBuf>,
     },
     /// Report EasyBuild E501 style findings.
     Lint {
@@ -357,7 +355,6 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             easyconfigs,
             require_configopts,
             metadata_only,
-            scaffold_missing,
         } => {
             let resolved = resolve_easyconfig_file(&recipe).map_err(anyhow::Error::msg)?;
             let required = require_configopts
@@ -376,10 +373,6 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             let tree = parse_easyconfig_trees(&roots).map_err(anyhow::Error::msg)?;
             let check = check_recipe_deps(&resolved, &tree.candidates);
             println!("{}", serde_json::to_string_pretty(&check)?);
-            if let Some(directory) = scaffold_missing.as_deref() {
-                scaffold_missing_companions(&check.missing, directory, &resolved.toolchain)
-                    .map_err(anyhow::Error::msg)?;
-            }
             if let Err(errors) = gate {
                 bail!("packaging gate failed: {}", errors.join("; "));
             }
