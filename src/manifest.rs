@@ -39,7 +39,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
                 id: format!("dep:{index}:{name}", name = dependency.name),
                 name: dependency.name.clone(),
                 eb_name: Some(eb_name.clone()),
-                constraint: dependency.pin.clone(),
+                constraint: canonical_version_constraint(dependency.pin.as_deref()),
                 roles: dependency_roles(&dependency.role),
                 condition: dependency.condition.clone(),
                 virtual_capability: is_foreign_virtual(&dependency.name, &eb_name)
@@ -164,6 +164,16 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             stack: toolchain.label(),
         }],
         residuals,
+    }
+}
+
+fn canonical_version_constraint(pin: Option<&str>) -> Option<String> {
+    let pin = pin.map(str::trim).filter(|pin| !pin.is_empty())?;
+    let version_field = pin.split_whitespace().next().unwrap_or(pin);
+    if version_field.contains('*') && !version_field.chars().any(|value| value.is_ascii_digit()) {
+        None
+    } else {
+        Some(pin.to_string())
     }
 }
 
