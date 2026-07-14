@@ -707,7 +707,7 @@ impl SourceDepSpec {
     }
 }
 
-/// Resolve many [`SourceDepSpec`]s with floor + versionsuffix safety.
+/// Resolve many source dependency specifications with floor and versionsuffix safety.
 ///
 /// - Deps with a **non-empty versionsuffix** are not bumped (caller keeps source).
 /// - Deps with **SYSTEM** 4th-tuple toolchain are not bumped (keep source pin).

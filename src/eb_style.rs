@@ -5,11 +5,10 @@
 //! string assignments so each physical line is ≤120 is mechanical and must not
 //! burn residual-agent turns.
 //!
-//! This module:
-//! - **lints** any physical line longer than [`EB_MAX_LINE`] (E501);
-//! - **formats** long single-quoted / double-quoted *assignments*
-//!   (`key = '…'`, `key += "…"`) into parenthesized adjacent string literals,
-//!   and wraps long `#` comment lines — the same patterns maintainers use by hand.
+//! The linter reports physical lines longer than [`EB_MAX_LINE`] (E501). The
+//! formatter rewrites long single-quoted or double-quoted assignments such as
+//! `key = '…'` and `key += "…"` into parenthesized adjacent string literals. It
+//! also wraps long `#` comment lines using the patterns maintainers use by hand.
 
 use std::fmt;
 use std::path::Path;
