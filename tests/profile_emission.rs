@@ -247,7 +247,12 @@ fn stack_pin_admits_a_cross_generation_runtime_closure() {
     dependency.eb_name = Some("PyTorch".into());
     dependency.constraint = Some("2.9.1".into());
     dependency.condition = ConditionExpr::Always;
-    plan.dependencies = vec![dependency];
+    let mut target_python = dependency.clone();
+    target_python.id = "python".into();
+    target_python.name = "python".into();
+    target_python.eb_name = Some("Python".into());
+    target_python.constraint = Some("3.14.2".into());
+    plan.dependencies = vec![dependency, target_python];
 
     let foss_2024a = Toolchain {
         name: "foss".into(),
@@ -320,11 +325,21 @@ fn stack_pin_admits_a_cross_generation_runtime_closure() {
         &stack,
     )
     .expect("cross-generation stack pin closure");
-    assert_eq!(lock.dependencies.len(), 1);
-    assert_eq!(lock.dependencies[0].name, "PyTorch");
-    assert_eq!(lock.dependencies[0].version, "2.9.1");
-    assert_eq!(lock.dependencies[0].toolchain, foss_2024a);
-    assert!(lock.dependencies[0].versionsuffix.is_none());
+    assert_eq!(lock.dependencies.len(), 2);
+    let pytorch = lock
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "PyTorch")
+        .expect("PyTorch lock");
+    assert_eq!(pytorch.version, "2.9.1");
+    assert_eq!(pytorch.toolchain, foss_2024a);
+    assert!(pytorch.versionsuffix.is_none());
+    let python = lock
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "Python")
+        .expect("target Python lock");
+    assert_eq!(python.version, "3.14.2");
     assert!(!lock.pin_outcomes[0].fallback);
 }
 
