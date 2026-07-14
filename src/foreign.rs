@@ -85,9 +85,22 @@ pub struct ForeignSource {
     pub git: Option<String>,
     pub tag: Option<String>,
     pub commit: Option<String>,
+    /// Conda `target_directory` or Spack resource destination folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_directory: Option<String>,
 }
 
-/// Intermediate fields shared by all foreign formats before EB emit.
+/// Variant / feature flag from Spack `variant()` or residual conda feature.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ForeignVariant {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Intermediate fields shared by all foreign formats before EB emit / plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForeignRecipe {
     pub format: ForeignFormat,
@@ -102,6 +115,11 @@ pub struct ForeignRecipe {
     #[serde(default)]
     pub sources: Vec<ForeignSource>,
     pub summary: Option<String>,
+    /// Longer description when available (conda about.description, Spack docstring).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
     pub dependencies: Vec<ForeignDep>,
     /// Build-system / base-class hints (e.g. Spack `MesonPackage`, `CMakePackage`).
     #[serde(default)]
@@ -109,6 +127,12 @@ pub struct ForeignRecipe {
     /// Mechanically extracted configure flags (e.g. Spack meson_args / cmake_args literals).
     #[serde(default)]
     pub configopts: Option<String>,
+    /// Patch filenames / URLs recorded from foreign recipe (not applied).
+    #[serde(default)]
+    pub patches: Vec<String>,
+    /// Spack variants (and residual conda features when recorded).
+    #[serde(default)]
+    pub variants: Vec<ForeignVariant>,
     /// Human notes from the parser.
     pub notes: Vec<String>,
 }
@@ -737,6 +761,11 @@ fn is_toolchain_virtual(name: &str) -> bool {
 /// Extract static `-D…` string literals from Spack packages.
 ///
 /// Only plain string list items (not f-strings): `"-Dwith_xtb=false"`.
+/// Public wrapper for plan pipeline (Spack meson_args / cmake_args literals).
+pub fn extract_spack_config_flags_pub(text: &str) -> Option<String> {
+    extract_spack_config_flags(text)
+}
+
 fn extract_spack_config_flags(text: &str) -> Option<String> {
     // Line must start with whitespace then a quote (not f") so f-strings are skipped.
     let lit = Regex::new(r#"(?m)^[ \t]+[\"'](-D[A-Za-z0-9_./+=-]+)[\"']"#).ok()?;
@@ -906,6 +935,11 @@ fn canonicalize_eb_package_name(name: &str) -> String {
 }
 
 /// Map foreign dependency package names toward EasyBuild-style names.
+/// Map a foreign dependency name to an EasyBuild-style package name (public for plan IR).
+pub fn map_dep_name_to_eb_pub(name: &str) -> String {
+    map_dep_name_to_eb(name)
+}
+
 fn map_dep_name_to_eb(name: &str) -> String {
     match name.to_ascii_lowercase().as_str() {
         "python" => "Python".into(),
@@ -1122,6 +1156,15 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let summary = about
         .and_then(|a| a.get(YamlValue::from("summary")))
         .and_then(yaml_as_string);
+    let description = about
+        .and_then(|a| a.get(YamlValue::from("description")))
+        .and_then(yaml_as_string);
+    let license = about
+        .and_then(|a| {
+            a.get(YamlValue::from("license"))
+                .or_else(|| a.get(YamlValue::from("license_file")))
+        })
+        .and_then(yaml_as_string);
 
     let mut dependencies = Vec::new();
     if let Some(req) = map
@@ -1152,6 +1195,78 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
         }
     }
 
+    // patches: list of filenames / urls (classic + rattler)
+    let mut patches = Vec::new();
+    if let Some(p) = map.get(YamlValue::from("patches")) {
+        match p {
+            YamlValue::Sequence(seq) => {
+                for item in seq {
+                    if let Some(s) = yaml_as_string(item) {
+                        patches.push(s);
+                    } else if let Some(m) = item.as_mapping() {
+                        if let Some(s) = m
+                            .get(YamlValue::from("path"))
+                            .or_else(|| m.get(YamlValue::from("file")))
+                            .and_then(yaml_as_string)
+                        {
+                            patches.push(s);
+                        }
+                    }
+                }
+            }
+            YamlValue::String(s) => patches.push(s.clone()),
+            _ => {}
+        }
+    }
+    // classic: source.patches nested (after multi-source expand, also scan source list)
+    if patches.is_empty() {
+        if let Some(src) = map.get(YamlValue::from("source")) {
+            if let Some(m) = src.as_mapping() {
+                if let Some(YamlValue::Sequence(seq)) = m.get(YamlValue::from("patches")) {
+                    for item in seq {
+                        if let Some(s) = yaml_as_string(item) {
+                            patches.push(s);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !patches.is_empty() {
+        notes.push(format!("conda: {} patch path(s) recorded", patches.len()));
+    }
+
+    // build.number residual
+    if let Some(b) = map
+        .get(YamlValue::from("build"))
+        .and_then(|v| v.as_mapping())
+    {
+        if b.get(YamlValue::from("number")).is_some() {
+            notes.push("conda: build.number present (not an EB field; residual)".into());
+        }
+        if b.get(YamlValue::from("script")).is_some() {
+            notes.push("conda: build.script present — product build residual".into());
+        }
+    }
+    if map.get(YamlValue::from("test")).is_some() {
+        notes.push("conda: test: section present — residual (not mapped to EB sanity)".into());
+    }
+
+    // Build system hints from build deps
+    let mut build_system_hints = Vec::new();
+    for d in &dependencies {
+        let n = d.name.to_ascii_lowercase();
+        if n == "meson" {
+            build_system_hints.push("Meson".into());
+        }
+        if n == "cmake" {
+            build_system_hints.push("CMake".into());
+        }
+        if n == "ninja" {
+            build_system_hints.push("Ninja".into());
+        }
+    }
+
     let primary = sources.first().cloned().unwrap_or_default();
     Ok(ForeignRecipe {
         format: ForeignFormat::CondaForge,
@@ -1163,9 +1278,13 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
         sha256: primary.sha256.clone(),
         sources,
         summary,
+        description,
+        license,
         dependencies,
-        build_system_hints: Vec::new(),
+        build_system_hints,
         configopts: None,
+        patches,
+        variants: Vec::new(),
         notes,
     })
 }
@@ -1285,9 +1404,16 @@ fn foreign_source_from_yaml_map(v: &YamlValue) -> Option<ForeignSource> {
         .get(YamlValue::from("git_url"))
         .or_else(|| m.get(YamlValue::from("git")))
         .and_then(yaml_as_string);
-    let filename = m.get(YamlValue::from("fn")).and_then(yaml_as_string);
+    let filename = m
+        .get(YamlValue::from("fn"))
+        .or_else(|| m.get(YamlValue::from("file")))
+        .and_then(yaml_as_string);
     let sha256 = m.get(YamlValue::from("sha256")).and_then(yaml_as_string);
     let tag = m.get(YamlValue::from("tag")).and_then(yaml_as_string);
+    let target_directory = m
+        .get(YamlValue::from("target_directory"))
+        .or_else(|| m.get(YamlValue::from("folder")))
+        .and_then(yaml_as_string);
     if url.is_none() && git.is_none() && sha256.is_none() {
         return None;
     }
@@ -1297,7 +1423,11 @@ fn foreign_source_from_yaml_map(v: &YamlValue) -> Option<ForeignSource> {
         sha256,
         git,
         tag,
-        commit: m.get(YamlValue::from("git_rev")).and_then(yaml_as_string),
+        commit: m
+            .get(YamlValue::from("git_rev"))
+            .or_else(|| m.get(YamlValue::from("git_commit")))
+            .and_then(yaml_as_string),
+        target_directory,
     })
 }
 
@@ -1467,12 +1597,41 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
         git: git.clone(),
         tag: preferred.tag.clone(),
         commit: preferred.commit.clone(),
+        target_directory: None,
     }];
     if sources[0].url.is_none() && sources[0].git.is_none() {
         sources[0].git = git.clone();
     }
 
+    // resource(name=..., url=..., destination=..., placement=...)
+    let res_full = Regex::new(
+        r#"(?s)resource\s*\(\s*((?:[^()]|\([^()]*\))*)\)"#,
+    )
+    .ok();
+    if let Some(re) = res_full {
+        for cap in re.captures_iter(text) {
+            let inner = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+            let res_url = Regex::new(r#"url\s*=\s*[\"']([^\"']+)[\"']"#)
+                .ok()
+                .and_then(|r| r.captures(inner))
+                .and_then(|c| c.get(1).map(|m| m.as_str().to_string()));
+            let dest = Regex::new(r#"(?:destination|placement)\s*=\s*[\"']([^\"']+)[\"']"#)
+                .ok()
+                .and_then(|r| r.captures(inner))
+                .and_then(|c| c.get(1).map(|m| m.as_str().to_string()));
+            if let Some(u) = res_url {
+                sources.push(ForeignSource {
+                    url: Some(u),
+                    target_directory: dest,
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
     let summary = spack_docstring(text);
+    let license = spack_license(text);
+    let variants = parse_spack_variants(text, &mut notes);
 
     // Meson/CMake from bases
     if build_system_hints.is_empty() {
@@ -1487,6 +1646,37 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
         ));
     }
 
+    // conflicts / requires / patch as residual coverage notes
+    let conflict_n = Regex::new(r"(?m)^\s*conflicts\s*\(")
+        .ok()
+        .map(|r| r.find_iter(text).count())
+        .unwrap_or(0);
+    if conflict_n > 0 {
+        notes.push(format!(
+            "{conflict_n} conflicts() directive(s) — residual (not encoded as EB constraints)"
+        ));
+    }
+    let requires_n = Regex::new(r"(?m)^\s*requires\s*\(")
+        .ok()
+        .map(|r| r.find_iter(text).count())
+        .unwrap_or(0);
+    if requires_n > 0 {
+        notes.push(format!(
+            "{requires_n} requires() directive(s) — residual (not encoded as EB constraints)"
+        ));
+    }
+    let patch_n = Regex::new(r"(?m)^\s*patch\s*\(")
+        .ok()
+        .map(|r| r.find_iter(text).count())
+        .unwrap_or(0);
+    let mut patches = Vec::new();
+    if patch_n > 0 {
+        notes.push(format!(
+            "{patch_n} patch() directive(s) — recorded as residual patch count"
+        ));
+        patches.push(format!("spack:{patch_n}_patch_directives"));
+    }
+
     Ok(ForeignRecipe {
         format: ForeignFormat::Spack,
         name,
@@ -1496,11 +1686,87 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
         source_filename: None,
         sha256: preferred.sha256.clone(),
         sources,
-        summary,
+        summary: summary.clone(),
+        description: summary,
+        license,
         dependencies,
         build_system_hints,
         configopts,
+        patches,
+        variants,
         notes,
+    })
+}
+
+fn spack_license(text: &str) -> Option<String> {
+    // license("MIT") or license("NCSA", checked_by=...)
+    let re = Regex::new(r#"(?m)^\s*license\s*\(\s*[\"']([^\"']+)[\"']"#).ok()?;
+    re.captures(text)
+        .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
+}
+
+fn parse_spack_variants(text: &str, notes: &mut Vec<String>) -> Vec<ForeignVariant> {
+    let mut out = Vec::new();
+    // variant("name", default=True/False/"...", description="...")
+    let mut i = 0;
+    let b = text.as_bytes();
+    while i < text.len() {
+        if text[i..].starts_with("variant(") || text[i..].starts_with("variant (") {
+            let start = if text[i..].starts_with("variant (") {
+                i + "variant (".len()
+            } else {
+                i + "variant(".len()
+            };
+            let mut depth = 1;
+            let mut j = start;
+            while j < text.len() && depth > 0 {
+                match b[j] as char {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    '"' | '\'' => {
+                        let q = b[j];
+                        j += 1;
+                        while j < text.len() && b[j] != q {
+                            if b[j] == b'\\' {
+                                j += 1;
+                            }
+                            j += 1;
+                        }
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+            let inner = &text[start..j.saturating_sub(1)];
+            if let Some(v) = parse_spack_variant_call(inner) {
+                out.push(v);
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    if !out.is_empty() {
+        notes.push(format!("spack: {} variant() directive(s) extracted", out.len()));
+    }
+    out
+}
+
+fn parse_spack_variant_call(inner: &str) -> Option<ForeignVariant> {
+    let name_re = Regex::new(r#"^\s*[\"']([^\"']+)[\"']"#).ok()?;
+    let name = name_re.captures(inner)?.get(1)?.as_str().to_string();
+    let default = Regex::new(r#"default\s*=\s*([^\s,]+)"#)
+        .ok()
+        .and_then(|r| r.captures(inner))
+        .and_then(|c| c.get(1).map(|m| m.as_str().trim_matches(|c| c == '"' || c == '\'').to_string()));
+    let description = Regex::new(r#"description\s*=\s*[\"']([^\"']*)[\"']"#)
+        .ok()
+        .and_then(|r| r.captures(inner))
+        .and_then(|c| c.get(1).map(|m| m.as_str().to_string()));
+    Some(ForeignVariant {
+        name,
+        default,
+        description,
     })
 }
 

@@ -6,7 +6,7 @@ use eb_stack::{
     check_recipe_deps, emit_next_generation_auto_from_path_with_opts,
     emit_next_generation_from_path, format_style_file, ingest_foreign_to_easyconfig_with_opts,
     lint_style, load_json_file, lock_to_cyclonedx, packaging_gate, parse_easyconfig_tree,
-    parse_easyconfig_trees, residual_queue_from_ingest, resolve_easyconfig_file,
+    parse_easyconfig_trees, plan_and_emit, residual_queue_from_ingest, resolve_easyconfig_file,
     scaffold_missing_companions, solve_from_easyconfigs_with_baseline_version_and_extras,
     solve_to_files_with_extras, write_ingest_result_with_queue, AutoResolveOpts, EmitParams,
     ForeignFormat, IngestOpts, SolveExtraOut, StackLock, Toolchain,
@@ -223,6 +223,50 @@ enum Cmd {
         /// never invents product configopts.
         #[arg(long, value_name = "PATH")]
         residual_queue: Option<PathBuf>,
+    },
+    /// Foreign recipe → intermediate package manifest + planned SBOM + build
+    /// config → optional resolvo joint co-select → mechanical new `.eb` or bump.
+    ///
+    /// This is the structured path: parsers produce a full IR, resolvo consumes
+    /// the robot universe + IR deps, and emit/bump uses the solved pins as the
+    /// manifest. Prefer over ad-hoc ingest when you want the plan JSON artifacts.
+    Plan {
+        /// Foreign recipe path (`meta.yaml`, `recipe.yaml`, or `package.py`)
+        #[arg(long)]
+        source: PathBuf,
+        /// Foreign format: `conda-forge`, `spack`, or `auto` (default)
+        #[arg(long, default_value = "auto", value_name = "FORMAT")]
+        format: String,
+        /// Target toolchain name (default: foss)
+        #[arg(long, default_value = "foss")]
+        toolchain_name: String,
+        /// Target toolchain version / generation (default: 2024a)
+        #[arg(long, default_value = "2024a")]
+        toolchain_version: String,
+        /// Robot easyconfig tree(s) for hierarchy + resolvo solve (repeatable)
+        #[arg(long, value_name = "DIR")]
+        easyconfigs: Vec<PathBuf>,
+        /// Keep residual foreign versions when the robot has no candidate
+        #[arg(long)]
+        keep_old_deps: bool,
+        /// Optional hierarchy fixture JSON
+        #[arg(long, value_name = "PATH")]
+        hierarchy_fixture: Option<PathBuf>,
+        /// Write intermediate plan JSON (package manifest + build config + optional solve)
+        #[arg(long, value_name = "PATH")]
+        manifest_out: Option<PathBuf>,
+        /// Write planned CycloneDX-like SBOM JSON (pre-build lifecycle)
+        #[arg(long, value_name = "PATH")]
+        sbom_out: Option<PathBuf>,
+        /// Explicit output `.eb` path (new recipe)
+        #[arg(long, conflicts_with = "out_dir")]
+        out: Option<PathBuf>,
+        /// Output directory for new recipe (letter/name layout)
+        #[arg(long, conflicts_with = "out")]
+        out_dir: Option<PathBuf>,
+        /// Existing `.eb` to bump from (uses solved dep pins + plan version)
+        #[arg(long, value_name = "PATH")]
+        bump_from: Option<PathBuf>,
     },
     /// Lint physical lines for EasyBuild pycodestyle E501 (max 120 columns).
     ///
@@ -603,6 +647,82 @@ fn main() -> Result<()> {
             let stdout = std::io::stdout();
             eb_stack::mcp::run_server(stdin.lock(), stdout.lock())
                 .context("mcp stdio server")?;
+        }
+        Cmd::Plan {
+            source,
+            format,
+            toolchain_name,
+            toolchain_version,
+            easyconfigs,
+            keep_old_deps,
+            hierarchy_fixture,
+            manifest_out,
+            sbom_out,
+            out,
+            out_dir,
+            bump_from,
+        } => {
+            let fmt = match format.to_ascii_lowercase().as_str() {
+                "auto" => None,
+                "conda" | "conda-forge" | "cf" => Some(ForeignFormat::CondaForge),
+                "spack" => Some(ForeignFormat::Spack),
+                other => bail!(
+                    "unknown --format {other:?}; expected auto, conda-forge, or spack"
+                ),
+            };
+            let toolchain = Toolchain {
+                name: toolchain_name,
+                version: toolchain_version,
+            };
+            let opts = IngestOpts {
+                easyconfigs: easyconfigs.clone(),
+                keep_old_deps,
+                hierarchy_fixture,
+            };
+            let (plan, eb_path) = plan_and_emit(
+                &source,
+                fmt,
+                &toolchain,
+                &opts,
+                manifest_out.as_deref(),
+                sbom_out.as_deref(),
+                out.as_deref(),
+                out_dir.as_deref(),
+                bump_from.as_deref(),
+            )
+            .with_context(|| format!("plan {}", source.display()))?;
+            println!(
+                "plan {}-{} origin={} coverage={:.1}% extracted={} residual={}",
+                plan.package.name,
+                plan.package.version,
+                plan.package.origin.as_str(),
+                100.0 * plan.package.coverage.ratio(),
+                plan.package.coverage.extracted_count(),
+                plan.package.coverage.residual_count(),
+            );
+            if let Some(s) = &plan.solved {
+                println!(
+                    "solved {} dep pin(s); {}",
+                    s.dep_versions.len(),
+                    s.engine_note
+                );
+            } else if !easyconfigs.is_empty() {
+                println!("solve: no pins written (check robot / keep_old_deps)");
+            } else {
+                println!("solve: skipped (pass --easyconfigs for resolvo)");
+            }
+            if let Some(p) = &manifest_out {
+                println!("manifest {}", p.display());
+            }
+            if let Some(p) = &sbom_out {
+                println!("planned SBOM {}", p.display());
+            }
+            if let Some(p) = eb_path {
+                println!("easyconfig {}", p.display());
+            }
+            for n in plan.package.notes.iter().take(12) {
+                println!("note: {n}");
+            }
         }
         Cmd::Ingest {
             source,

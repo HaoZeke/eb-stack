@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Intermediate package plan pipeline** (`src/manifest.rs`, CLI `eb-stack plan`,
+  MCP `eb_plan`): foreign parsers → `PackageManifest` + `BuildConfig` → planned
+  CycloneDX-like SBOM → hierarchy + **resolvo** joint co-select over robot
+  easyconfigs → mechanical **new recipe** or **`--bump-from`** rewrite. Plan
+  JSON records parser coverage (extracted vs residual fields). This is the
+  structured path from conda-forge/Spack into the SAT solver manifest.
+- Foreign parser expansions toward upstream field parity: conda
+  `about.{description,license}`, `patches`, `target_directory` / `folder` on
+  sources, build/test residual notes, build-system hints from deps; Spack
+  `variant()`, `license()`, `resource()` secondary sources, `conflicts` /
+  `requires` / `patch` residual counts.
+
 - **Podman Rocky 9 build backend** for greenfield *builds*:
   `skills/new-package/container/rocky9/` (`Containerfile`, `eb-in-podman`).
   `render-full-drive --build-backend podman-rocky9` (default) runs

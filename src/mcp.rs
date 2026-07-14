@@ -205,6 +205,27 @@ fn tool_definitions() -> Value {
                 },
                 "required": ["source"]
             }
+        },
+        {
+            "name": "eb_plan",
+            "description": "Parse foreign recipe → intermediate package manifest + planned SBOM + build config → optional resolvo joint co-select over robot easyconfigs → mechanical new .eb or bump_from existing. Structured path preferred over bare ingest when plan JSON is needed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string"},
+                    "format": {"type": "string", "description": "auto | conda-forge | spack"},
+                    "toolchain_name": {"type": "string"},
+                    "toolchain_version": {"type": "string"},
+                    "easyconfigs": {"type": "array", "items": {"type": "string"}},
+                    "keep_old_deps": {"type": "boolean"},
+                    "manifest_out": {"type": "string", "description": "Intermediate plan JSON path"},
+                    "sbom_out": {"type": "string", "description": "Planned CycloneDX-like SBOM path"},
+                    "out": {"type": "string"},
+                    "out_dir": {"type": "string"},
+                    "bump_from": {"type": "string", "description": "Existing .eb to bump using solved pins"}
+                },
+                "required": ["source"]
+            }
         }
     ])
 }
@@ -219,6 +240,7 @@ fn handle_tool_call(params: &Value) -> Value {
         "eb_bump" => tool_bump(&args),
         "eb_solve" => tool_solve(&args),
         "eb_ingest" => tool_ingest(&args),
+        "eb_plan" => tool_plan(&args),
         other => Err(format!("unknown tool: {other}")),
     };
     match outcome {
@@ -451,6 +473,72 @@ fn tool_solve(args: &Value) -> Result<Value, String> {
         "sbom_out": sbom_out.map(|p| p.display().to_string()),
         "build_list_out": build_list_out.map(|p| p.display().to_string()),
         "stack_diff_out": stack_diff_out.map(|p| p.display().to_string()),
+    }))
+}
+
+fn tool_plan(args: &Value) -> Result<Value, String> {
+    use crate::foreign::{ForeignFormat, IngestOpts};
+    use crate::manifest::plan_and_emit;
+    let source = req_str(args, "source")?;
+    let fmt = match opt_str(args, "format")
+        .unwrap_or_else(|| "auto".into())
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "auto" => None,
+        "conda" | "conda-forge" | "cf" => Some(ForeignFormat::CondaForge),
+        "spack" => Some(ForeignFormat::Spack),
+        other => {
+            return Err(format!(
+                "unknown format {other:?}; expected auto, conda-forge, or spack"
+            ))
+        }
+    };
+    let toolchain = Toolchain {
+        name: opt_str(args, "toolchain_name").unwrap_or_else(|| "foss".into()),
+        version: opt_str(args, "toolchain_version").unwrap_or_else(|| "2024a".into()),
+    };
+    let opts = IngestOpts {
+        easyconfigs: str_vec(args, "easyconfigs")
+            .into_iter()
+            .map(PathBuf::from)
+            .collect(),
+        keep_old_deps: args
+            .get("keep_old_deps")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        hierarchy_fixture: None,
+    };
+    let (plan, eb_path) = plan_and_emit(
+        Path::new(&source),
+        fmt,
+        &toolchain,
+        &opts,
+        opt_str(args, "manifest_out").as_deref().map(Path::new),
+        opt_str(args, "sbom_out").as_deref().map(Path::new),
+        opt_str(args, "out").as_deref().map(Path::new),
+        opt_str(args, "out_dir").as_deref().map(Path::new),
+        opt_str(args, "bump_from").as_deref().map(Path::new),
+    )
+    .map_err(|e| format!("plan {source}: {e}"))?;
+    Ok(json!({
+        "package": plan.package.name,
+        "version": plan.package.version,
+        "origin": plan.package.origin.as_str(),
+        "coverage_ratio": plan.package.coverage.ratio(),
+        "extracted": plan.package.coverage.extracted_count(),
+        "residual": plan.package.coverage.residual_count(),
+        "solved_pins": plan.solved.as_ref().map(|s| s.dep_versions.len()).unwrap_or(0),
+        "engine_note": plan.solved.as_ref().map(|s| s.engine_note.clone()),
+        "manifest_out": opt_str(args, "manifest_out"),
+        "sbom_out": opt_str(args, "sbom_out"),
+        "easyconfig": eb_path.map(|p| p.display().to_string()),
+        "ladder": ladder(plan.solved.is_some()),
+        "next_actions": [
+            "Inspect intermediate plan JSON (package + build_config + planned SBOM).",
+            "Solved dep pins come from hierarchy + resolvo when --easyconfigs is set.",
+            "Run eb --inject-checksums / check-contrib / check-recipe; claim builds only after eb --robot."
+        ]
     }))
 }
 

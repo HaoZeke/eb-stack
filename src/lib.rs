@@ -7,6 +7,7 @@ pub mod eb_style;
 pub mod eb_template_constants;
 pub mod foreign;
 pub mod hierarchy;
+pub mod manifest;
 pub mod mcp;
 pub mod report;
 pub mod resolvo_provider;
@@ -49,11 +50,18 @@ pub use sbom::{
 };
 pub use select::{resolvo_resolve_dep_versions, select_stack, SelectError};
 pub use foreign::{
-    detect_foreign_format, emit_easyconfig_from_foreign, ingest_foreign_to_easyconfig,
-    ingest_foreign_to_easyconfig_with_opts, parse_foreign_path, parse_foreign_str,
-    residual_queue_from_ingest, write_ingest_result, write_ingest_result_with_queue,
-    write_residual_queue, ForeignDep, ForeignError, ForeignFormat, ForeignRecipe, IngestOpts,
-    IngestResult, ResidualClaimLadder, ResidualItem, ResidualQueue,
+    detect_foreign_format, emit_easyconfig_from_foreign, extract_spack_config_flags_pub,
+    ingest_foreign_to_easyconfig, ingest_foreign_to_easyconfig_with_opts, map_dep_name_to_eb_pub,
+    parse_foreign_path, parse_foreign_str, residual_queue_from_ingest, write_ingest_result,
+    write_ingest_result_with_queue, write_residual_queue, ForeignDep, ForeignError, ForeignFormat,
+    ForeignRecipe, ForeignSource, ForeignVariant, IngestOpts, IngestResult, ResidualClaimLadder,
+    ResidualItem, ResidualQueue,
+};
+pub use manifest::{
+    bump_recipe_from_plan, emit_new_recipe_from_plan, package_manifest_from_foreign,
+    plan_and_emit, plan_from_foreign, planned_sbom_from_manifest, solve_plan_with_robot,
+    BuildConfig, IntermediatePlan, ManifestDep, ManifestError, ManifestOrigin, ManifestSource,
+    ManifestVariant, PackageManifest, ParserCoverage, SolvedManifest, MANIFEST_SCHEMA_VERSION,
 };
 pub use eb_style::{
     format_style, format_style_file, lint_style, style_residual_items, FormatStyleResult,
