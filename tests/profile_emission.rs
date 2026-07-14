@@ -228,9 +228,7 @@ fn emitted_dependencies_preserve_locked_toolchain_and_versionsuffix_identity() {
     assert!(emitted[0]
         .text
         .contains("('PyTorch', '2.9.1', '', ('foss', '2024a'))"));
-    assert!(emitted[0]
-        .text
-        .contains("('PETSc', '3.24.0', '-complex')"));
+    assert!(emitted[0].text.contains("('PETSc', '3.24.0', '-complex')"));
 
     let resolved = resolve_easyconfig_str(&emitted[0].text).expect("parse emitted easyconfig");
     let pytorch = resolved
@@ -285,6 +283,51 @@ fn profile_lock_is_created_by_resolvo_with_stack_preferences() {
     assert_eq!(lock.dependencies[0].version, "1.14.2");
     assert!(!lock.dependencies[0].build);
     assert!(!lock.pin_outcomes[0].fallback);
+}
+
+#[test]
+fn foreign_build_roles_only_create_easybuild_builddependencies_for_tools() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.profiles = qmcpack_profiles();
+    plan.dependencies
+        .retain(|dependency| matches!(dependency.eb_name.as_deref(), Some("Boost" | "CMake")));
+    let candidate = |name: &str, version: &str| Candidate {
+        name: name.into(),
+        version: version.into(),
+        toolchain: toolchain(),
+        versionsuffix: None,
+        easyconfig_path: format!("{name}-{version}-foss-2026.1.eb"),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+    };
+    let stack = StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "test".into(),
+        toolchain: toolchain(),
+        pins: Vec::new(),
+        exclusions: Vec::new(),
+    };
+
+    let lock = solve_package_profile(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &[candidate("Boost", "1.90.0"), candidate("CMake", "4.2.1")],
+        &stack,
+    )
+    .expect("classify foreign dependencies");
+    assert!(lock
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "CMake")
+        .is_some_and(|dependency| dependency.build));
+    assert!(lock
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "Boost")
+        .is_some_and(|dependency| !dependency.build));
 }
 
 #[test]
