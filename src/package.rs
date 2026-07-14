@@ -118,6 +118,11 @@ pub enum ConditionPredicate {
     Architecture {
         name: String,
     },
+    VariableComparison {
+        left: String,
+        operator: String,
+        right: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -146,6 +151,7 @@ pub struct ConditionContext {
     pub toolchain: Option<Toolchain>,
     pub platform: Option<String>,
     pub architecture: Option<String>,
+    pub variables: BTreeMap<String, String>,
 }
 
 impl ConditionExpr {
@@ -184,16 +190,16 @@ impl ConditionPredicate {
             }
             Self::Compiler { name, version } => context.compiler.as_ref().is_some_and(|compiler| {
                 compiler.name.eq_ignore_ascii_case(name)
-                    && version
-                        .as_deref()
-                        .is_none_or(|requirement| matches_req(&compiler.version, requirement))
+                    && version.as_deref().map_or(true, |requirement| {
+                        matches_req(&compiler.version, requirement)
+                    })
             }),
             Self::Toolchain { name, version } => {
                 context.toolchain.as_ref().is_some_and(|toolchain| {
                     toolchain.name.eq_ignore_ascii_case(name)
-                        && version
-                            .as_deref()
-                            .is_none_or(|requirement| matches_req(&toolchain.version, requirement))
+                        && version.as_deref().map_or(true, |requirement| {
+                            matches_req(&toolchain.version, requirement)
+                        })
                 })
             }
             Self::Platform { name } => context
@@ -204,6 +210,21 @@ impl ConditionPredicate {
                 .architecture
                 .as_deref()
                 .is_some_and(|architecture| architecture.eq_ignore_ascii_case(name)),
+            Self::VariableComparison {
+                left,
+                operator,
+                right,
+            } => {
+                let Some(left_value) = context.variables.get(left) else {
+                    return false;
+                };
+                let right_value = context.variables.get(right).unwrap_or(right);
+                match operator.as_str() {
+                    "==" => left_value == right_value,
+                    "!=" => left_value != right_value,
+                    _ => false,
+                }
+            }
         }
     }
 }

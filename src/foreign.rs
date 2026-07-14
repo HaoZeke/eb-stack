@@ -41,6 +41,7 @@ use crate::eb_parse::{
 use crate::hierarchy::{
     hierarchy_for_with_tree, resolve_dep_versions_for_specs, SourceDepSpec, ToolchainHierarchy,
 };
+use crate::package::{ConditionExpr, ConditionPredicate, Confidence, Provenance, SourceSpan};
 use crate::select::resolvo_resolve_dep_versions;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -74,6 +75,14 @@ pub struct ForeignDep {
     pub pin: Option<String>,
     /// Role: `build`, `host`, `run`, or Spack type string when known.
     pub role: String,
+    /// Complete upstream dependency spec before EasyBuild name mapping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_spec: Option<String>,
+    /// Selector / `when=` expression represented structurally.
+    #[serde(default)]
+    pub condition: ConditionExpr,
+    #[serde(default)]
+    pub provenance: Vec<Provenance>,
 }
 
 /// One source artifact (URL/git + optional checksum).
@@ -98,6 +107,30 @@ pub struct ForeignVariant {
     pub default: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default)]
+    pub condition: ConditionExpr,
+    #[serde(default)]
+    pub provenance: Vec<Provenance>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ForeignRuleKind {
+    Conflict,
+    Requirement,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForeignRule {
+    pub kind: ForeignRuleKind,
+    pub spec: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
+    #[serde(default)]
+    pub condition: ConditionExpr,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    pub provenance: Provenance,
 }
 
 /// Intermediate fields shared by all foreign formats before EB emit / plan.
@@ -133,6 +166,9 @@ pub struct ForeignRecipe {
     /// Spack variants (and residual conda features when recorded).
     #[serde(default)]
     pub variants: Vec<ForeignVariant>,
+    /// Spack `conflicts()` and `requires()` directives.
+    #[serde(default)]
+    pub rules: Vec<ForeignRule>,
     /// Human notes from the parser.
     pub notes: Vec<String>,
 }
@@ -201,8 +237,7 @@ pub struct ResidualClaimLadder {
 impl ResidualClaimLadder {
     pub fn ingest_default() -> Self {
         Self {
-            resolves: "not-established — run eb-stack check-recipe after residual edits"
-                .into(),
+            resolves: "not-established — run eb-stack check-recipe after residual edits".into(),
             builds: "not-established — requires green `eb --robot` on an EasyBuild host".into(),
             binary_verified: "not-established — requires load + binary/RPATH checks".into(),
         }
@@ -220,7 +255,12 @@ pub fn residual_queue_from_ingest(result: &IngestResult, toolchain: &Toolchain) 
             detail: None,
         });
     }
-    if result.recipe.configopts.as_ref().map(|s| s.is_empty()).unwrap_or(true)
+    if result
+        .recipe
+        .configopts
+        .as_ref()
+        .map(|s| s.is_empty())
+        .unwrap_or(true)
         && !result.text.contains("configopts =")
     {
         items.push(ResidualItem {
@@ -243,10 +283,15 @@ pub fn residual_queue_from_ingest(result: &IngestResult, toolchain: &Toolchain) 
             detail: None,
         });
     }
-    if result.text.contains("0000000000000000000000000000000000000000000000000000000000000000") {
+    if result
+        .text
+        .contains("0000000000000000000000000000000000000000000000000000000000000000")
+    {
         items.push(ResidualItem {
             kind: "checksum".into(),
-            summary: "placeholder checksum present — run eb --inject-checksums after sources stabilize".into(),
+            summary:
+                "placeholder checksum present — run eb --inject-checksums after sources stabilize"
+                    .into(),
             detail: None,
         });
     }
@@ -328,23 +373,82 @@ pub fn parse_foreign_path(
     let fmt = format
         .or_else(|| detect_foreign_format(path))
         .ok_or_else(|| ForeignError::Unsupported(path.display().to_string()))?;
-    parse_foreign_str(fmt, &text)
+    let mut recipe = parse_foreign_str(fmt, &text)?;
+    set_recipe_source_path(&mut recipe, &path.display().to_string());
+    Ok(recipe)
+}
+
+fn set_recipe_source_path(recipe: &mut ForeignRecipe, path: &str) {
+    for dependency in &mut recipe.dependencies {
+        for provenance in &mut dependency.provenance {
+            provenance.span.path = path.to_string();
+        }
+    }
+    for variant in &mut recipe.variants {
+        for provenance in &mut variant.provenance {
+            provenance.span.path = path.to_string();
+        }
+    }
+    for rule in &mut recipe.rules {
+        rule.provenance.span.path = path.to_string();
+    }
+}
+
+fn source_span(text: &str, start: usize, end: usize) -> SourceSpan {
+    fn line_column(text: &str, offset: usize) -> (u32, u32) {
+        let prefix = &text[..offset.min(text.len())];
+        let line = prefix.bytes().filter(|byte| *byte == b'\n').count() as u32 + 1;
+        let column = prefix
+            .rsplit_once('\n')
+            .map(|(_, tail)| tail.chars().count() as u32 + 1)
+            .unwrap_or_else(|| prefix.chars().count() as u32 + 1);
+        (line, column)
+    }
+
+    let (start_line, start_column) = line_column(text, start);
+    let (end_line, end_column) = line_column(text, end);
+    SourceSpan {
+        path: "<memory>".into(),
+        start_line,
+        start_column,
+        end_line,
+        end_column,
+    }
+}
+
+fn provenance_for_range(
+    text: &str,
+    start: usize,
+    end: usize,
+    extractor: &str,
+    confidence: Confidence,
+) -> Provenance {
+    Provenance {
+        span: source_span(text, start, end),
+        extractor: extractor.into(),
+        original: text[start..end].trim().to_string(),
+        confidence,
+    }
+}
+
+fn provenance_for_text(text: &str, needle: &str, extractor: &str) -> Provenance {
+    let start = text.find(needle).unwrap_or(0);
+    let end = start.saturating_add(needle.len()).min(text.len());
+    provenance_for_range(text, start, end, extractor, Confidence::Derived)
 }
 
 /// Emit a parseable EasyBuild scaffold from intermediate fields.
-pub fn emit_easyconfig_from_foreign(
-    recipe: &ForeignRecipe,
-    toolchain: &Toolchain,
-) -> IngestResult {
+pub fn emit_easyconfig_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) -> IngestResult {
     let mut warnings = recipe.notes.clone();
     warnings.push(format!(
         "ingested from {}; toolchain and full build logic are residual — review before `eb` install",
         recipe.format.as_str()
     ));
 
-    let homepage = recipe.homepage.clone().unwrap_or_else(|| {
-        format!("https://example.invalid/TODO-{}", recipe.name)
-    });
+    let homepage = recipe
+        .homepage
+        .clone()
+        .unwrap_or_else(|| format!("https://example.invalid/TODO-{}", recipe.name));
     let summary = recipe.summary.clone().unwrap_or_else(|| {
         format!(
             "Scaffold from {} for {}-{}",
@@ -440,10 +544,7 @@ pub fn emit_easyconfig_from_foreign(
     let builddeps_block = if builddep_tuples.is_empty() {
         "builddependencies = []\n".to_string()
     } else {
-        format!(
-            "builddependencies = [\n{}\n]\n",
-            builddep_tuples.join("\n")
-        )
+        format!("builddependencies = [\n{}\n]\n", builddep_tuples.join("\n"))
     };
     let deps_block = if dep_tuples.is_empty() {
         "dependencies = []\n".to_string()
@@ -576,9 +677,8 @@ fn apply_robot_resolution(
     opts: &IngestOpts,
 ) -> Result<IngestResult, ForeignError> {
     let roots: Vec<&Path> = opts.easyconfigs.iter().map(|p| p.as_path()).collect();
-    let tree = parse_easyconfig_trees(&roots).map_err(|e| {
-        ForeignError::Parse(format!("robot parse: {e}"))
-    })?;
+    let tree = parse_easyconfig_trees(&roots)
+        .map_err(|e| ForeignError::Parse(format!("robot parse: {e}")))?;
     result.warnings.push(format!(
         "robot resolve: {} candidate(s), {:.1}% parse coverage",
         tree.candidates.len(),
@@ -637,9 +737,8 @@ fn apply_robot_resolution(
 
     // Hierarchy consensus first (generation-native floors; GCCcore-aware).
     let (mut map, kept) =
-        resolve_dep_versions_for_specs(&specs, &tree.candidates, &h, opts.keep_old_deps).map_err(
-            |e| ForeignError::Parse(format!("robot dep resolve: {e}")),
-        )?;
+        resolve_dep_versions_for_specs(&specs, &tree.candidates, &h, opts.keep_old_deps)
+            .map_err(|e| ForeignError::Parse(format!("robot dep resolve: {e}")))?;
     for k in kept {
         result.warnings.push(format!("robot resolve: {k}"));
     }
@@ -732,10 +831,7 @@ fn find_canonical_package_name(name: &str, cands: &[Candidate]) -> Option<String
             *counts.entry(c.name.clone()).or_default() += 1;
         }
     }
-    counts
-        .into_iter()
-        .max_by_key(|(_, n)| *n)
-        .map(|(n, _)| n)
+    counts.into_iter().max_by_key(|(_, n)| *n).map(|(n, _)| n)
 }
 
 fn is_toolchain_virtual(name: &str) -> bool {
@@ -801,8 +897,15 @@ fn guess_easyblock(recipe: &ForeignRecipe, warnings: &mut Vec<String>) -> String
         }
     }
     // Dep names as weak signal
-    let dep_names: Vec<&str> = recipe.dependencies.iter().map(|d| d.name.as_str()).collect();
-    if dep_names.iter().any(|n| *n == "meson" || n.ends_with("-meson")) {
+    let dep_names: Vec<&str> = recipe
+        .dependencies
+        .iter()
+        .map(|d| d.name.as_str())
+        .collect();
+    if dep_names
+        .iter()
+        .any(|n| *n == "meson" || n.ends_with("-meson"))
+    {
         warnings.push("meson in foreign deps → easyblock MesonNinja".into());
         return "MesonNinja".into();
     }
@@ -856,10 +959,7 @@ fn source_block(recipe: &ForeignRecipe, warnings: &mut Vec<String>) -> (String, 
     if usable.len() == 1 {
         let s = usable[0];
         let url = s.url.as_ref().or(s.git.as_ref()).unwrap();
-        let fname = s
-            .filename
-            .clone()
-            .unwrap_or_else(|| filename_from_url(url));
+        let fname = s.filename.clone().unwrap_or_else(|| filename_from_url(url));
         let (base, file) = split_url_base_file(url, &fname);
         let checksums = match &s.sha256 {
             Some(sum) => format!("checksums = ['{sum}']"),
@@ -886,18 +986,12 @@ fn source_block(recipe: &ForeignRecipe, warnings: &mut Vec<String>) -> (String, 
     let mut checksum_entries = Vec::new();
     for s in &usable {
         let url = s.url.as_ref().or(s.git.as_ref()).unwrap();
-        let fname = s
-            .filename
-            .clone()
-            .unwrap_or_else(|| filename_from_url(url));
+        let fname = s.filename.clone().unwrap_or_else(|| filename_from_url(url));
         let (base, file) = split_url_base_file(url, &fname);
         source_entries.push(format!(
             "    {{\n        'source_urls': ['{base}'],\n        'filename': '{file}',\n    }},"
         ));
-        let sum = s
-            .sha256
-            .clone()
-            .unwrap_or_else(|| "0".repeat(64));
+        let sum = s.sha256.clone().unwrap_or_else(|| "0".repeat(64));
         if s.sha256.is_none() {
             warnings.push(format!(
                 "source {file} has no sha256; using zero placeholder"
@@ -1172,10 +1266,18 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
         .and_then(|v| v.as_mapping())
     {
         for (section, role) in [("build", "build"), ("host", "host"), ("run", "run")] {
-            if let Some(list) = req.get(YamlValue::from(section)).and_then(|v| v.as_sequence()) {
+            if let Some(list) = req
+                .get(YamlValue::from(section))
+                .and_then(|v| v.as_sequence())
+            {
                 for item in list {
-                    for raw in flatten_conda_req_item(item) {
-                        if let Some(dep) = parse_conda_dep_line(&raw, role) {
+                    for selected in flatten_conda_req_item(item, &ConditionExpr::Always) {
+                        if let Some(dep) = parse_conda_dep_line(
+                            &selected.raw,
+                            role,
+                            selected.condition,
+                            provenance_for_text(text, &selected.raw, "conda-selector"),
+                        ) {
                             if is_conda_compiler_macro(&dep.name) {
                                 notes.push(format!(
                                     "skipped conda compiler/stdlib macro: {}",
@@ -1183,7 +1285,9 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
                                 ));
                                 continue;
                             }
-                            if dep.name.starts_with("if:") || dep.name == "then" || dep.name == "else"
+                            if dep.name.starts_with("if:")
+                                || dep.name == "then"
+                                || dep.name == "else"
                             {
                                 continue;
                             }
@@ -1285,6 +1389,7 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
         configopts: None,
         patches,
         variants: Vec::new(),
+        rules: Vec::new(),
         notes,
     })
 }
@@ -1309,17 +1414,20 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>) {
     {
         let rest = &text[ctx_start.end()..];
         for line in rest.lines() {
-            if Regex::new(r"^[A-Za-z_]").ok().is_some_and(|r| r.is_match(line))
+            if Regex::new(r"^[A-Za-z_]")
+                .ok()
+                .is_some_and(|r| r.is_match(line))
                 && line.contains(':')
                 && !line.starts_with(' ')
                 && !line.starts_with('\t')
             {
                 break;
             }
-            if let Some(c) =
-                Regex::new(r#"^[ \t]+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*[\"']?([^\"'#\n]+?)[\"']?\s*(?:#.*)?$"#)
-                    .ok()
-                    .and_then(|r| r.captures(line))
+            if let Some(c) = Regex::new(
+                r#"^[ \t]+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*[\"']?([^\"'#\n]+?)[\"']?\s*(?:#.*)?$"#,
+            )
+            .ok()
+            .and_then(|r| r.captures(line))
             {
                 let k = c[1].to_string();
                 let v = c[2].trim().to_string();
@@ -1431,34 +1539,112 @@ fn foreign_source_from_yaml_map(v: &YamlValue) -> Option<ForeignSource> {
     })
 }
 
-/// Flatten a requirements list item into package match strings.
-fn flatten_conda_req_item(item: &YamlValue) -> Vec<String> {
+#[derive(Debug, Clone)]
+struct CondaRequirementItem {
+    raw: String,
+    condition: ConditionExpr,
+}
+
+/// Flatten a requirements list item while preserving selector branches.
+fn flatten_conda_req_item(
+    item: &YamlValue,
+    inherited: &ConditionExpr,
+) -> Vec<CondaRequirementItem> {
     match item {
-        YamlValue::String(s) => vec![s.clone()],
+        YamlValue::String(s) => vec![CondaRequirementItem {
+            raw: s.clone(),
+            condition: inherited.clone(),
+        }],
         YamlValue::Mapping(m) => {
             // Selector form: { if: ..., then: "pkg" | [..], else: ... }
-            let mut out = Vec::new();
-            for key in ["then", "else"] {
-                if let Some(v) = m.get(YamlValue::from(key)) {
-                    out.extend(flatten_conda_req_item(v));
+            if let Some(selector) = m.get(YamlValue::from("if")).and_then(yaml_as_string) {
+                let selector_condition = parse_conda_selector(&selector);
+                let mut out = Vec::new();
+                if let Some(value) = m.get(YamlValue::from("then")) {
+                    let condition = condition_all(inherited.clone(), selector_condition.clone());
+                    out.extend(flatten_conda_req_item(value, &condition));
                 }
+                if let Some(value) = m.get(YamlValue::from("else")) {
+                    let condition = condition_all(
+                        inherited.clone(),
+                        ConditionExpr::Not(Box::new(selector_condition)),
+                    );
+                    out.extend(flatten_conda_req_item(value, &condition));
+                }
+                return out;
             }
-            // bare string values that look like package matches
-            if out.is_empty() {
-                for (k, v) in m {
-                    if let Some(ks) = k.as_str() {
-                        if ks == "if" {
-                            continue;
-                        }
-                    }
-                    out.extend(flatten_conda_req_item(v));
-                }
+
+            let mut out = Vec::new();
+            for value in m.values() {
+                out.extend(flatten_conda_req_item(value, inherited));
             }
             out
         }
-        YamlValue::Sequence(seq) => seq.iter().flat_map(flatten_conda_req_item).collect(),
+        YamlValue::Sequence(seq) => seq
+            .iter()
+            .flat_map(|value| flatten_conda_req_item(value, inherited))
+            .collect(),
         _ => Vec::new(),
     }
+}
+
+fn condition_all(left: ConditionExpr, right: ConditionExpr) -> ConditionExpr {
+    match (left, right) {
+        (ConditionExpr::Always, expression) | (expression, ConditionExpr::Always) => expression,
+        (ConditionExpr::All(mut left), ConditionExpr::All(right)) => {
+            left.extend(right);
+            ConditionExpr::All(left)
+        }
+        (ConditionExpr::All(mut expressions), expression) => {
+            expressions.push(expression);
+            ConditionExpr::All(expressions)
+        }
+        (expression, ConditionExpr::All(mut expressions)) => {
+            expressions.insert(0, expression);
+            ConditionExpr::All(expressions)
+        }
+        (left, right) => ConditionExpr::All(vec![left, right]),
+    }
+}
+
+fn parse_conda_selector(selector: &str) -> ConditionExpr {
+    let selector = selector
+        .trim()
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .trim();
+    if let Some((left, right)) = selector.split_once(" or ") {
+        return ConditionExpr::Any(vec![
+            parse_conda_selector(left),
+            parse_conda_selector(right),
+        ]);
+    }
+    if let Some((left, right)) = selector.split_once(" and ") {
+        return ConditionExpr::All(vec![
+            parse_conda_selector(left),
+            parse_conda_selector(right),
+        ]);
+    }
+    if let Some(rest) = selector.strip_prefix("not ") {
+        return ConditionExpr::Not(Box::new(parse_conda_selector(rest)));
+    }
+    if let Some((left, right)) = selector.split_once(" != ") {
+        return ConditionExpr::Predicate(ConditionPredicate::VariableComparison {
+            left: left.trim().into(),
+            operator: "!=".into(),
+            right: right.trim().into(),
+        });
+    }
+    if let Some((left, right)) = selector.split_once(" == ") {
+        return ConditionExpr::Predicate(ConditionPredicate::VariableComparison {
+            left: left.trim().into(),
+            operator: "==".into(),
+            right: right.trim().into(),
+        });
+    }
+    ConditionExpr::Predicate(ConditionPredicate::Platform {
+        name: selector.into(),
+    })
 }
 
 fn yaml_as_string(v: &YamlValue) -> Option<String> {
@@ -1470,7 +1656,12 @@ fn yaml_as_string(v: &YamlValue) -> Option<String> {
     }
 }
 
-fn parse_conda_dep_line(raw: &str, role: &str) -> Option<ForeignDep> {
+fn parse_conda_dep_line(
+    raw: &str,
+    role: &str,
+    condition: ConditionExpr,
+    provenance: Provenance,
+) -> Option<ForeignDep> {
     let line = raw.trim();
     if line.is_empty() || line.starts_with('#') {
         return None;
@@ -1493,6 +1684,9 @@ fn parse_conda_dep_line(raw: &str, role: &str) -> Option<ForeignDep> {
         name: sanitize_pkg_name(&name),
         pin,
         role: role.into(),
+        original_spec: Some(line.into()),
+        condition,
+        provenance: vec![provenance],
     })
 }
 
@@ -1521,10 +1715,8 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
     notes.push("Spack package.py: restricted static parse (no Python execution)".into());
 
     // class Name(Base) or class Name(Base1, Base2, ...)
-    let class_re = Regex::new(
-        r"(?m)^class\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*:",
-    )
-    .map_err(|e| ForeignError::Parse(e.to_string()))?;
+    let class_re = Regex::new(r"(?m)^class\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*:")
+        .map_err(|e| ForeignError::Parse(e.to_string()))?;
     let class_cap = class_re
         .captures(text)
         .ok_or_else(|| ForeignError::Parse("spack: no class Name(...): found".into()))?;
@@ -1537,10 +1729,7 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
         .collect();
     let name = spack_class_to_pkg_name(class_name);
     let mut build_system_hints = bases.clone();
-    notes.push(format!(
-        "class {class_name} bases: {}",
-        bases.join(", ")
-    ));
+    notes.push(format!("class {class_name} bases: {}", bases.join(", ")));
 
     let homepage = spack_string_attr(text, "homepage");
     let url = spack_string_attr(text, "url");
@@ -1576,10 +1765,7 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let dependencies = parse_spack_depends_on(text, &mut notes);
 
     // resource() urls as extra notes (not primary package source)
-    let res_re = Regex::new(
-        r#"(?m)resource\s*\(\s*[^)]*url\s*=\s*[\"']([^\"']+)[\"']"#,
-    )
-    .ok();
+    let res_re = Regex::new(r#"(?m)resource\s*\(\s*[^)]*url\s*=\s*[\"']([^\"']+)[\"']"#).ok();
     if let Some(re) = res_re {
         let n = re.find_iter(text).count();
         if n > 0 {
@@ -1604,10 +1790,7 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
     }
 
     // resource(name=..., url=..., destination=..., placement=...)
-    let res_full = Regex::new(
-        r#"(?s)resource\s*\(\s*((?:[^()]|\([^()]*\))*)\)"#,
-    )
-    .ok();
+    let res_full = Regex::new(r#"(?s)resource\s*\(\s*((?:[^()]|\([^()]*\))*)\)"#).ok();
     if let Some(re) = res_full {
         for cap in re.captures_iter(text) {
             let inner = cap.get(1).map(|m| m.as_str()).unwrap_or("");
@@ -1632,6 +1815,7 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let summary = spack_docstring(text);
     let license = spack_license(text);
     let variants = parse_spack_variants(text, &mut notes);
+    let rules = parse_spack_rules(text, &mut notes);
 
     // Meson/CMake from bases
     if build_system_hints.is_empty() {
@@ -1646,25 +1830,6 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
         ));
     }
 
-    // conflicts / requires / patch as residual coverage notes
-    let conflict_n = Regex::new(r"(?m)^\s*conflicts\s*\(")
-        .ok()
-        .map(|r| r.find_iter(text).count())
-        .unwrap_or(0);
-    if conflict_n > 0 {
-        notes.push(format!(
-            "{conflict_n} conflicts() directive(s) — residual (not encoded as EB constraints)"
-        ));
-    }
-    let requires_n = Regex::new(r"(?m)^\s*requires\s*\(")
-        .ok()
-        .map(|r| r.find_iter(text).count())
-        .unwrap_or(0);
-    if requires_n > 0 {
-        notes.push(format!(
-            "{requires_n} requires() directive(s) — residual (not encoded as EB constraints)"
-        ));
-    }
     let patch_n = Regex::new(r"(?m)^\s*patch\s*\(")
         .ok()
         .map(|r| r.find_iter(text).count())
@@ -1694,6 +1859,7 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
         configopts,
         patches,
         variants,
+        rules,
         notes,
     })
 }
@@ -1705,60 +1871,135 @@ fn spack_license(text: &str) -> Option<String> {
         .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PythonCallSpan {
+    start: usize,
+    inner_start: usize,
+    end: usize,
+}
+
+fn python_call_spans(text: &str, name: &str) -> Vec<PythonCallSpan> {
+    let pattern = format!(r"(?m)^[ \t]*{}\s*\(", regex::escape(name));
+    let Ok(regex) = Regex::new(&pattern) else {
+        return Vec::new();
+    };
+    regex
+        .find_iter(text)
+        .filter_map(|matched| {
+            let relative_name = matched.as_str().find(name)?;
+            let start = matched.start() + relative_name;
+            let inner_start = matched.end();
+            let end = python_call_end(text, inner_start)?;
+            Some(PythonCallSpan {
+                start,
+                inner_start,
+                end,
+            })
+        })
+        .collect()
+}
+
+fn python_call_end(text: &str, inner_start: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut index = inner_start;
+    let mut depth = 1usize;
+    let mut quote: Option<u8> = None;
+    let mut triple = false;
+
+    while index < bytes.len() {
+        if let Some(delimiter) = quote {
+            if bytes[index] == b'\\' {
+                index = (index + 2).min(bytes.len());
+                continue;
+            }
+            if triple {
+                if index + 2 < bytes.len()
+                    && bytes[index] == delimiter
+                    && bytes[index + 1] == delimiter
+                    && bytes[index + 2] == delimiter
+                {
+                    quote = None;
+                    triple = false;
+                    index += 3;
+                    continue;
+                }
+            } else if bytes[index] == delimiter {
+                quote = None;
+                index += 1;
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+
+        match bytes[index] {
+            b'#' => {
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            }
+            b'\'' | b'"' => {
+                let delimiter = bytes[index];
+                triple = index + 2 < bytes.len()
+                    && bytes[index + 1] == delimiter
+                    && bytes[index + 2] == delimiter;
+                quote = Some(delimiter);
+                index += if triple { 3 } else { 1 };
+            }
+            b'(' => {
+                depth += 1;
+                index += 1;
+            }
+            b')' => {
+                depth -= 1;
+                index += 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => index += 1,
+        }
+    }
+    None
+}
+
 fn parse_spack_variants(text: &str, notes: &mut Vec<String>) -> Vec<ForeignVariant> {
     let mut out = Vec::new();
-    // variant("name", default=True/False/"...", description="...")
-    let mut i = 0;
-    let b = text.as_bytes();
-    while i < text.len() {
-        if text[i..].starts_with("variant(") || text[i..].starts_with("variant (") {
-            let start = if text[i..].starts_with("variant (") {
-                i + "variant (".len()
-            } else {
-                i + "variant(".len()
-            };
-            let mut depth = 1;
-            let mut j = start;
-            while j < text.len() && depth > 0 {
-                match b[j] as char {
-                    '(' => depth += 1,
-                    ')' => depth -= 1,
-                    '"' | '\'' => {
-                        let q = b[j];
-                        j += 1;
-                        while j < text.len() && b[j] != q {
-                            if b[j] == b'\\' {
-                                j += 1;
-                            }
-                            j += 1;
-                        }
-                    }
-                    _ => {}
-                }
-                j += 1;
-            }
-            let inner = &text[start..j.saturating_sub(1)];
-            if let Some(v) = parse_spack_variant_call(inner) {
-                out.push(v);
-            }
-            i = j;
-        } else {
-            i += 1;
+    for call in python_call_spans(text, "variant") {
+        let inner = &text[call.inner_start..call.end.saturating_sub(1)];
+        let provenance = provenance_for_range(
+            text,
+            call.start,
+            call.end,
+            "spack-static",
+            Confidence::Exact,
+        );
+        if let Some(variant) = parse_spack_variant_call(inner, provenance) {
+            out.push(variant);
         }
     }
     if !out.is_empty() {
-        notes.push(format!("spack: {} variant() directive(s) extracted", out.len()));
+        notes.push(format!(
+            "spack: {} variant() directive(s) extracted",
+            out.len()
+        ));
     }
     out
 }
 
-fn parse_spack_variant_call(inner: &str) -> Option<ForeignVariant> {
+fn parse_spack_variant_call(inner: &str, provenance: Provenance) -> Option<ForeignVariant> {
     let name_re = Regex::new(r#"^\s*[\"']([^\"']+)[\"']"#).ok()?;
     let name = name_re.captures(inner)?.get(1)?.as_str().to_string();
     let default = Regex::new(r#"default\s*=\s*([^\s,]+)"#)
         .ok()
         .and_then(|r| r.captures(inner))
-        .and_then(|c| c.get(1).map(|m| m.as_str().trim_matches(|c| c == '"' || c == '\'').to_string()));
+        .and_then(|c| {
+            c.get(1).map(|m| {
+                m.as_str()
+                    .trim_matches(|c| c == '"' || c == '\'')
+                    .to_string()
+            })
+        });
     let description = Regex::new(r#"description\s*=\s*[\"']([^\"']*)[\"']"#)
         .ok()
         .and_then(|r| r.captures(inner))
@@ -1767,6 +2008,76 @@ fn parse_spack_variant_call(inner: &str) -> Option<ForeignVariant> {
         name,
         default,
         description,
+        condition: ConditionExpr::Always,
+        provenance: vec![provenance],
+    })
+}
+
+fn parse_spack_rules(text: &str, notes: &mut Vec<String>) -> Vec<ForeignRule> {
+    let mut rules = Vec::new();
+    for (name, kind) in [
+        ("conflicts", ForeignRuleKind::Conflict),
+        ("requires", ForeignRuleKind::Requirement),
+    ] {
+        for call in python_call_spans(text, name) {
+            let inner = &text[call.inner_start..call.end.saturating_sub(1)];
+            let provenance = provenance_for_range(
+                text,
+                call.start,
+                call.end,
+                "spack-static",
+                Confidence::Exact,
+            );
+            if let Some(rule) = parse_spack_rule_call(inner, kind, provenance) {
+                rules.push(rule);
+            }
+        }
+    }
+    let conflicts = rules
+        .iter()
+        .filter(|rule| rule.kind == ForeignRuleKind::Conflict)
+        .count();
+    let requirements = rules
+        .iter()
+        .filter(|rule| rule.kind == ForeignRuleKind::Requirement)
+        .count();
+    if conflicts > 0 {
+        notes.push(format!(
+            "spack: {conflicts} conflicts() directive(s) preserved"
+        ));
+    }
+    if requirements > 0 {
+        notes.push(format!(
+            "spack: {requirements} requires() directive(s) preserved"
+        ));
+    }
+    rules.sort_by_key(|rule| rule.provenance.span.start_line);
+    rules
+}
+
+fn parse_spack_rule_call(
+    inner: &str,
+    kind: ForeignRuleKind,
+    provenance: Provenance,
+) -> Option<ForeignRule> {
+    let spec = Regex::new(r#"^\s*[\"']([^\"']+)[\"']"#)
+        .ok()?
+        .captures(inner)?
+        .get(1)?
+        .as_str()
+        .to_string();
+    let when = spack_string_kwarg(inner, "when");
+    let condition = when
+        .as_deref()
+        .map(parse_spack_condition)
+        .unwrap_or(ConditionExpr::Always);
+    Some(ForeignRule {
+        kind,
+        spec,
+        when,
+        condition,
+        message: spack_string_kwarg(inner, "msg"),
+        provenance,
     })
 }
 
@@ -1780,48 +2091,11 @@ struct SpackVersion {
 }
 
 fn parse_spack_versions(text: &str) -> Result<Vec<SpackVersion>, ForeignError> {
-    // Match version( ... ) possibly multi-line up to closing paren at depth 0
     let mut out = Vec::new();
-    let mut chars = text.char_indices().peekable();
-    while let Some((i, _)) = chars.peek().copied() {
-        if text[i..].starts_with("version(") || text[i..].starts_with("version (") {
-            let start = if text[i..].starts_with("version (") {
-                i + "version (".len()
-            } else {
-                i + "version(".len()
-            };
-            // find matching close paren
-            let mut depth = 1;
-            let mut j = start;
-            let bytes = text.as_bytes();
-            while j < text.len() && depth > 0 {
-                match bytes[j] as char {
-                    '(' => depth += 1,
-                    ')' => depth -= 1,
-                    '"' | '\'' => {
-                        let q = bytes[j];
-                        j += 1;
-                        while j < text.len() && bytes[j] != q {
-                            if bytes[j] == b'\\' {
-                                j += 1;
-                            }
-                            j += 1;
-                        }
-                    }
-                    _ => {}
-                }
-                j += 1;
-            }
-            let inner = &text[start..j.saturating_sub(1)];
-            if let Some(v) = parse_spack_version_call(inner) {
-                out.push(v);
-            }
-            // advance
-            while chars.peek().map(|(k, _)| *k < j).unwrap_or(false) {
-                chars.next();
-            }
-        } else {
-            chars.next();
+    for call in python_call_spans(text, "version") {
+        let inner = &text[call.inner_start..call.end.saturating_sub(1)];
+        if let Some(version) = parse_spack_version_call(inner) {
+            out.push(version);
         }
     }
     Ok(out)
@@ -1832,10 +2106,7 @@ fn parse_spack_version_call(inner: &str) -> Option<SpackVersion> {
     let ver_re = Regex::new(r#"^\s*[\"']([^\"']+)[\"']"#).ok()?;
     let version = ver_re.captures(inner)?.get(1)?.as_str().to_string();
     let kw = |key: &str| -> Option<String> {
-        let re = Regex::new(&format!(
-            r#"{key}\s*=\s*[\"']([^\"']*)[\"']"#
-        ))
-        .ok()?;
+        let re = Regex::new(&format!(r#"{key}\s*=\s*[\"']([^\"']*)[\"']"#)).ok()?;
         re.captures(inner)
             .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
     };
@@ -1865,65 +2136,27 @@ fn pick_preferred_spack_version(versions: &[SpackVersion]) -> SpackVersion {
 
 fn parse_spack_depends_on(text: &str, notes: &mut Vec<String>) -> Vec<ForeignDep> {
     let mut out = Vec::new();
-    // Scan depends_on( ... ) with paren matching
-    let mut i = 0;
-    let b = text.as_bytes();
-    while i < text.len() {
-        if text[i..].starts_with("depends_on(") || text[i..].starts_with("depends_on (") {
-            let start = if text[i..].starts_with("depends_on (") {
-                i + "depends_on (".len()
-            } else {
-                i + "depends_on(".len()
-            };
-            let mut depth = 1;
-            let mut j = start;
-            while j < text.len() && depth > 0 {
-                match b[j] as char {
-                    '(' => depth += 1,
-                    ')' => depth -= 1,
-                    '"' | '\'' => {
-                        let q = b[j];
-                        j += 1;
-                        while j < text.len() && b[j] != q {
-                            if b[j] == b'\\' {
-                                j += 1;
-                            }
-                            j += 1;
-                        }
-                    }
-                    _ => {}
-                }
-                j += 1;
-            }
-            let inner = &text[start..j.saturating_sub(1)];
-            if let Some(dep) = parse_spack_depends_on_call(inner, notes) {
-                out.push(dep);
-            }
-            i = j;
-        } else {
-            i += 1;
+    for call in python_call_spans(text, "depends_on") {
+        let inner = &text[call.inner_start..call.end.saturating_sub(1)];
+        let provenance = provenance_for_range(
+            text,
+            call.start,
+            call.end,
+            "spack-static",
+            Confidence::Exact,
+        );
+        if let Some(dependency) = parse_spack_depends_on_call(inner, notes, provenance) {
+            out.push(dependency);
         }
     }
-    // Dedupe by name: keep the entry with the richest residual pin (last wins when
-    // Spack lists version-gated depends_on from oldest to newest).
-    let mut by_name: std::collections::HashMap<String, ForeignDep> =
-        std::collections::HashMap::new();
-    for d in out {
-        by_name
-            .entry(d.name.clone())
-            .and_modify(|prev| {
-                // Prefer a pin when the previous had none; otherwise keep the later
-                // (usually tighter / newer when= branch listed later in package.py).
-                if d.pin.is_some() {
-                    *prev = d.clone();
-                }
-            })
-            .or_insert(d);
-    }
-    by_name.into_values().collect()
+    out
 }
 
-fn parse_spack_depends_on_call(inner: &str, notes: &mut Vec<String>) -> Option<ForeignDep> {
+fn parse_spack_depends_on_call(
+    inner: &str,
+    notes: &mut Vec<String>,
+    provenance: Provenance,
+) -> Option<ForeignDep> {
     let spec_re = Regex::new(r#"^\s*[\"']([^\"']+)[\"']"#).ok()?;
     let spec = spec_re.captures(inner)?.get(1)?.as_str();
     let (dep_name, pin) = split_spack_spec(spec);
@@ -1964,18 +2197,125 @@ fn parse_spack_depends_on_call(inner: &str, notes: &mut Vec<String>) -> Option<F
         }
     };
 
-    // when= is residual note only
-    if inner.contains("when=") {
-        notes.push(format!(
-            "depends_on({spec}) has when= clause — dep recorded unconditionally"
-        ));
+    let when = spack_string_kwarg(inner, "when");
+    let condition = when
+        .as_deref()
+        .map(parse_spack_condition)
+        .unwrap_or(ConditionExpr::Always);
+    if let Some(when) = &when {
+        notes.push(format!("depends_on({spec}) condition preserved: {when}"));
     }
 
     Some(ForeignDep {
         name: spack_dep_to_eb_name(&dep_name),
         pin,
         role,
+        original_spec: Some(spec.into()),
+        condition,
+        provenance: vec![provenance],
     })
+}
+
+fn spack_string_kwarg(inner: &str, key: &str) -> Option<String> {
+    let regex = Regex::new(&format!(r#"{key}\s*=\s*[\"']([^\"']*)[\"']"#)).ok()?;
+    regex
+        .captures(inner)
+        .and_then(|capture| capture.get(1).map(|value| value.as_str().to_string()))
+}
+
+fn parse_spack_condition(spec: &str) -> ConditionExpr {
+    let terms = split_spack_condition_terms(spec)
+        .into_iter()
+        .filter_map(parse_spack_condition_term)
+        .collect::<Vec<_>>();
+    match terms.len() {
+        0 => ConditionExpr::Always,
+        1 => terms.into_iter().next().unwrap_or(ConditionExpr::Always),
+        _ => ConditionExpr::All(terms),
+    }
+}
+
+fn split_spack_condition_terms(spec: &str) -> Vec<&str> {
+    let mut terms = Vec::new();
+    let mut start = 0usize;
+    let mut bracket_depth = 0usize;
+    for (index, character) in spec.char_indices() {
+        match character {
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            character if character.is_whitespace() && bracket_depth == 0 => {
+                if start < index {
+                    terms.push(spec[start..index].trim());
+                }
+                start = index + character.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    if start < spec.len() {
+        terms.push(spec[start..].trim());
+    }
+    terms.into_iter().filter(|term| !term.is_empty()).collect()
+}
+
+fn parse_spack_condition_term(term: &str) -> Option<ConditionExpr> {
+    if let Some(feature) = term.strip_prefix('+') {
+        return Some(ConditionExpr::Predicate(ConditionPredicate::Feature {
+            name: feature.into(),
+            enabled: true,
+        }));
+    }
+    if let Some(feature) = term.strip_prefix('~') {
+        return Some(ConditionExpr::Predicate(ConditionPredicate::Feature {
+            name: feature.into(),
+            enabled: false,
+        }));
+    }
+    if let Some(range) = term.strip_prefix('@') {
+        return Some(ConditionExpr::Predicate(
+            ConditionPredicate::PackageVersion {
+                requirement: spack_version_range(range),
+            },
+        ));
+    }
+    if let Some(compiler) = term.strip_prefix('%') {
+        let (name, version) = compiler
+            .split_once('@')
+            .map(|(name, version)| (name, Some(spack_version_range(version))))
+            .unwrap_or((compiler, None));
+        return Some(ConditionExpr::Predicate(ConditionPredicate::Compiler {
+            name: name.into(),
+            version,
+        }));
+    }
+    if let Some(dependency) = term.strip_prefix('^') {
+        let dependency = dependency
+            .trim_start_matches('[')
+            .split([']', '@', '+', '~', '%'])
+            .find(|part| !part.is_empty() && !part.contains('='))
+            .unwrap_or(dependency);
+        return Some(ConditionExpr::Predicate(
+            ConditionPredicate::DependencyFeature {
+                dependency: dependency.into(),
+                name: "selected".into(),
+                enabled: true,
+            },
+        ));
+    }
+    None
+}
+
+fn spack_version_range(range: &str) -> String {
+    if let Some((minimum, maximum)) = range.split_once(':') {
+        match (minimum.trim(), maximum.trim()) {
+            ("", "") => String::new(),
+            ("", maximum) => format!("<={maximum}"),
+            (minimum, "") => format!(">={minimum}"),
+            (minimum, maximum) => format!(">={minimum},<={maximum}"),
+        }
+    } else {
+        format!("=={}", range.trim())
+    }
 }
 
 fn spack_class_to_pkg_name(class_name: &str) -> String {
@@ -2025,17 +2365,13 @@ fn split_spack_spec(spec: &str) -> (String, Option<String>) {
 }
 
 fn spack_string_attr(text: &str, attr: &str) -> Option<String> {
-    let re = Regex::new(&format!(
-        r#"(?m)^\s*{attr}\s*=\s*[\"']([^\"']+)[\"']"#
-    ))
-    .ok()?;
+    let re = Regex::new(&format!(r#"(?m)^\s*{attr}\s*=\s*[\"']([^\"']+)[\"']"#)).ok()?;
     re.captures(text)
         .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
 }
 
 fn spack_docstring(text: &str) -> Option<String> {
-    let re =
-        Regex::new(r#"(?s)class\s+\w+\s*\([^)]*\)\s*:\s*(?:r)?\"\"\"(.+?)\"\"\""#).ok()?;
+    let re = Regex::new(r#"(?s)class\s+\w+\s*\([^)]*\)\s*:\s*(?:r)?\"\"\"(.+?)\"\"\""#).ok()?;
     re.captures(text).and_then(|c| {
         c.get(1)
             .map(|m| m.as_str().split_whitespace().collect::<Vec<_>>().join(" "))
@@ -2091,10 +2427,7 @@ pub fn write_ingest_result_with_queue(
     let queue = residual_queue_from_ingest(result, toolchain);
     let queue_path = residual_queue.map(|p| p.to_path_buf()).unwrap_or_else(|| {
         let mut p = path.clone();
-        let stem = p
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("scaffold");
+        let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("scaffold");
         p.set_file_name(format!("{stem}.residuals.json"));
         p
     });
@@ -2361,8 +2694,8 @@ about:
         assert!(out.text.contains("name = 'zlib'"));
         assert!(out.text.contains("version = '1.3.1'"));
         assert!(out.text.contains("zlib-1.3.1.tar.gz"));
-        let resolved = crate::eb_parse::resolve_easyconfig_str(&out.text)
-            .expect("emitted eb must re-parse");
+        let resolved =
+            crate::eb_parse::resolve_easyconfig_str(&out.text).expect("emitted eb must re-parse");
         assert_eq!(resolved.name, "zlib");
         assert_eq!(resolved.version, "1.3.1");
     }
@@ -2397,7 +2730,11 @@ class Eon(MesonPackage):
         let r = parse_conda_forge(CONDA_RATTLE_EON_MIN).unwrap();
         let out = emit_easyconfig_from_foreign(&r, &foss());
         assert!(out.text.contains("eon-v2.16.0.tar.xz"), "{}", out.text);
-        assert!(out.text.contains("rgpot") || out.text.contains("v2.2.1"), "{}", out.text);
+        assert!(
+            out.text.contains("rgpot") || out.text.contains("v2.2.1"),
+            "{}",
+            out.text
+        );
         assert!(
             out.text.contains("sources = ["),
             "multi-source list: {}",
@@ -2424,8 +2761,7 @@ class Qmcpack(CMakePackage, CudaPackage):
         let r = parse_spack_package(text).unwrap();
         let out = emit_easyconfig_from_foreign(&r, &foss());
         assert!(
-            out.text.contains("archive/refs/tags/v4.3.0.tar.gz")
-                || out.text.contains("qmcpack"),
+            out.text.contains("archive/refs/tags/v4.3.0.tar.gz") || out.text.contains("qmcpack"),
             "{}",
             out.text
         );

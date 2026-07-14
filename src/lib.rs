@@ -24,6 +24,29 @@ pub use eb_emit::{
     resolve_dep_versions_for_source, resolve_dep_versions_for_source_with_opts, AutoResolveOpts,
     EmitError, EmitParams, EmitResult,
 };
+pub use eb_parse::candidate_matches_dep_for_recipe;
+pub use eb_parse::{
+    candidate_matches_dep, check_recipe_deps, companion_easyconfig_basename, easyconfig_letter_dir,
+    filter_toolchain, lock_from_candidates, merge_candidates_with_precedence, packaging_gate,
+    parse_easyconfig_file, parse_easyconfig_tree, parse_easyconfig_tree_candidates,
+    parse_easyconfig_trees, render_companion_scaffold, resolve_easyconfig_file,
+    resolve_easyconfig_str, scaffold_missing_companions, validate_lock_deps, version_field_to_req,
+    MissingDep, ParseTreeResult, RecipeDepCheck, ResolvedDep, ResolvedEasyconfig, ResolvedExt,
+    ScaffoldedCompanion, SkippedEasyconfig,
+};
+pub use eb_style::{
+    format_style, format_style_file, lint_style, style_residual_items, FormatStyleResult,
+    StyleError, StyleFinding, EB_MAX_LINE,
+};
+pub use foreign::{
+    detect_foreign_format, emit_easyconfig_from_foreign, extract_spack_config_flags_pub,
+    ingest_foreign_to_easyconfig, ingest_foreign_to_easyconfig_with_opts, map_dep_name_to_eb_pub,
+    parse_foreign_path, parse_foreign_str, residual_queue_from_ingest, write_ingest_result,
+    write_ingest_result_with_queue, write_residual_queue, ForeignDep, ForeignError, ForeignFormat,
+    ForeignRecipe, ForeignRule, ForeignRuleKind, ForeignSource, ForeignVariant, IngestOpts,
+    IngestResult, ResidualClaimLadder, ResidualItem, ResidualQueue,
+};
+pub use hierarchy::hierarchy_for_with_tree;
 pub use hierarchy::{
     count_generation_dep_versions, filter_candidates_in_hierarchy, hierarchy_for,
     hierarchy_member_rank, is_system_toolchain, known_hierarchy, load_hierarchy_fixture,
@@ -32,14 +55,11 @@ pub use hierarchy::{
     resolve_dep_versions_in_hierarchy, resolve_dep_versions_in_hierarchy_strict, toolchains_match,
     HierarchyError, ResolveDepOpts, SourceDepSpec, ToolchainHierarchy,
 };
-pub use eb_parse::{
-    candidate_matches_dep, check_recipe_deps, companion_easyconfig_basename, easyconfig_letter_dir,
-    filter_toolchain, lock_from_candidates, merge_candidates_with_precedence, packaging_gate,
-    parse_easyconfig_file, parse_easyconfig_tree, parse_easyconfig_tree_candidates,
-    parse_easyconfig_trees, render_companion_scaffold, resolve_easyconfig_file, resolve_easyconfig_str,
-    scaffold_missing_companions, validate_lock_deps, version_field_to_req, MissingDep,
-    ParseTreeResult, RecipeDepCheck, ResolvedDep, ResolvedEasyconfig, ResolvedExt,
-    ScaffoldedCompanion, SkippedEasyconfig,
+pub use manifest::{
+    bump_recipe_from_plan, emit_new_recipe_from_plan, package_manifest_from_foreign, plan_and_emit,
+    plan_from_foreign, planned_sbom_from_manifest, solve_plan_with_robot, BuildConfig,
+    IntermediatePlan, ManifestDep, ManifestError, ManifestOrigin, ManifestSource, ManifestVariant,
+    PackageManifest, ParserCoverage, SolvedManifest, MANIFEST_SCHEMA_VERSION,
 };
 pub use report::{
     classify_stack_diff, format_build_list, format_stack_diff_markdown, ordered_build_paths,
@@ -50,26 +70,6 @@ pub use sbom::{
     lock_to_cyclonedx_with_deps, lock_to_cyclonedx_with_runtime_and_build,
 };
 pub use select::{resolvo_resolve_dep_versions, select_stack, SelectError};
-pub use foreign::{
-    detect_foreign_format, emit_easyconfig_from_foreign, extract_spack_config_flags_pub,
-    ingest_foreign_to_easyconfig, ingest_foreign_to_easyconfig_with_opts, map_dep_name_to_eb_pub,
-    parse_foreign_path, parse_foreign_str, residual_queue_from_ingest, write_ingest_result,
-    write_ingest_result_with_queue, write_residual_queue, ForeignDep, ForeignError, ForeignFormat,
-    ForeignRecipe, ForeignSource, ForeignVariant, IngestOpts, IngestResult, ResidualClaimLadder,
-    ResidualItem, ResidualQueue,
-};
-pub use manifest::{
-    bump_recipe_from_plan, emit_new_recipe_from_plan, package_manifest_from_foreign,
-    plan_and_emit, plan_from_foreign, planned_sbom_from_manifest, solve_plan_with_robot,
-    BuildConfig, IntermediatePlan, ManifestDep, ManifestError, ManifestOrigin, ManifestSource,
-    ManifestVariant, PackageManifest, ParserCoverage, SolvedManifest, MANIFEST_SCHEMA_VERSION,
-};
-pub use eb_style::{
-    format_style, format_style_file, lint_style, style_residual_items, FormatStyleResult,
-    StyleError, StyleFinding, EB_MAX_LINE,
-};
-pub use eb_parse::candidate_matches_dep_for_recipe;
-pub use hierarchy::hierarchy_for_with_tree;
 
 use anyhow::{bail, Context, Result};
 use std::cmp::Ordering;
@@ -169,10 +169,7 @@ pub fn filter_baseline_candidates(
     }
 
     let versions: Vec<String> = {
-        let mut v: Vec<String> = family
-            .iter()
-            .map(|c| c.toolchain.version.clone())
-            .collect();
+        let mut v: Vec<String> = family.iter().map(|c| c.toolchain.version.clone()).collect();
         v.sort_by(|a, b| cmp_version(a, b));
         v.dedup();
         v
@@ -195,9 +192,7 @@ pub fn filter_baseline_candidates(
         )?;
         Ok(base_cands
             .iter()
-            .filter(|c| {
-                c.toolchain.name == policy_toolchain.name && c.toolchain.version == bv
-            })
+            .filter(|c| c.toolchain.name == policy_toolchain.name && c.toolchain.version == bv)
             .cloned()
             .collect())
     } else {
@@ -233,11 +228,7 @@ fn write_lock_sbom_and_extras(
     let build_map = build_dep_map_from_universe(lock, universe);
     // SBOM is opt-in: only write when the caller supplies an output path.
     if let Some(path) = sbom_out {
-        let sbom = lock_to_cyclonedx_with_runtime_and_build(
-            lock,
-            Some(&dep_map),
-            Some(&build_map),
-        );
+        let sbom = lock_to_cyclonedx_with_runtime_and_build(lock, Some(&dep_map), Some(&build_map));
         write_json_pretty(path, &sbom)?;
     }
 
@@ -405,7 +396,8 @@ pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
         None
     };
 
-    let lock = select_stack(&universe, &policy, baseline.as_ref()).map_err(|e| anyhow::anyhow!(e))?;
+    let lock =
+        select_stack(&universe, &policy, baseline.as_ref()).map_err(|e| anyhow::anyhow!(e))?;
     validate_lock_deps(&lock, &universe.candidates).map_err(|e| anyhow::anyhow!(e))?;
     write_lock_sbom_and_extras(
         &lock,
@@ -499,8 +491,8 @@ mod tests {
 
     #[test]
     fn select_baseline_explicit_missing_errors() {
-        let err = select_baseline_generation(["2025a", "2025b"], "2025b", Some("2024b"))
-            .unwrap_err();
+        let err =
+            select_baseline_generation(["2025a", "2025b"], "2025b", Some("2024b")).unwrap_err();
         assert!(matches!(err, BaselineGenError::ExplicitNotFound(_)));
     }
 
@@ -513,7 +505,9 @@ mod tests {
     #[test]
     fn filter_baseline_candidates_picks_nearest_lower_on_multi_gen_tree() {
         let root = multi_gen_root().join("easyconfigs");
-        let all = parse_easyconfig_tree(&root).expect("parse multi-gen").candidates;
+        let all = parse_easyconfig_tree(&root)
+            .expect("parse multi-gen")
+            .candidates;
         let policy_tc = Toolchain {
             name: "foss".into(),
             version: "2025b".into(),
@@ -678,7 +672,9 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert!(
-            !entries.iter().any(|n| n.ends_with(".cdx.json") || n.contains("sbom")),
+            !entries
+                .iter()
+                .any(|n| n.ends_with(".cdx.json") || n.contains("sbom")),
             "unexpected SBOM artifact when sbom_out is None: {entries:?}"
         );
     }
@@ -700,7 +696,10 @@ mod tests {
         )
         .expect("solve with SBOM");
         assert!(lock_out.is_file());
-        assert!(sbom_out.is_file(), "explicit --sbom-out must write the file");
+        assert!(
+            sbom_out.is_file(),
+            "explicit --sbom-out must write the file"
+        );
     }
 
     /// Overlay tree wins on name+version+toolchain; non-overridden upstream remains.
@@ -747,7 +746,9 @@ dependencies = []
             .candidates;
         let g = merged
             .iter()
-            .find(|c| c.name == "GROMACS" && c.version == "2025.0" && c.toolchain.version == "2025b")
+            .find(|c| {
+                c.name == "GROMACS" && c.version == "2025.0" && c.toolchain.version == "2025b"
+            })
             .expect("GROMACS 2025.0 present once");
         assert!(
             g.easyconfig_path.contains("overlay"),

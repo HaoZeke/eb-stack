@@ -30,17 +30,13 @@
 
 use crate::domain::{StackLock, Toolchain};
 use crate::eb_emit::{easyconfig_filename, emit_next_generation_from_path, EmitParams};
-use crate::eb_parse::{
-    easyconfig_letter_dir, parse_easyconfig_trees,
-};
+use crate::eb_parse::{easyconfig_letter_dir, parse_easyconfig_trees};
 use crate::foreign::{
-    emit_easyconfig_from_foreign, map_dep_name_to_eb_pub, residual_queue_from_ingest,
-    ForeignDep, ForeignError, ForeignFormat, ForeignRecipe, ForeignSource, IngestOpts,
-    IngestResult, ResidualClaimLadder,
+    emit_easyconfig_from_foreign, map_dep_name_to_eb_pub, residual_queue_from_ingest, ForeignDep,
+    ForeignError, ForeignFormat, ForeignRecipe, ForeignSource, IngestOpts, IngestResult,
+    ResidualClaimLadder,
 };
-use crate::hierarchy::{
-    hierarchy_for_with_tree, resolve_dep_versions_for_specs, SourceDepSpec,
-};
+use crate::hierarchy::{hierarchy_for_with_tree, resolve_dep_versions_for_specs, SourceDepSpec};
 use crate::select::resolvo_resolve_dep_versions;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -300,7 +296,8 @@ pub fn package_manifest_from_foreign(
     coverage.residual.push("control_flow_selectors".into());
     coverage.residual.push("dynamic_version_compute".into());
 
-    let mut sources: Vec<ManifestSource> = recipe.sources.iter().map(ManifestSource::from).collect();
+    let mut sources: Vec<ManifestSource> =
+        recipe.sources.iter().map(ManifestSource::from).collect();
     if sources.is_empty() {
         sources.push(ManifestSource {
             url: recipe.source_url.clone(),
@@ -625,6 +622,9 @@ fn foreign_recipe_from_plan(plan: &IntermediatePlan) -> ForeignRecipe {
                 name: d.name.clone(),
                 pin: d.solved_version.clone().or_else(|| d.pin.clone()),
                 role: d.role.clone(),
+                original_spec: Some(d.name.clone()),
+                condition: crate::package::ConditionExpr::Always,
+                provenance: Vec::new(),
             })
             .collect(),
         build_system_hints: pkg.build.build_system_hints.clone(),
@@ -638,8 +638,11 @@ fn foreign_recipe_from_plan(plan: &IntermediatePlan) -> ForeignRecipe {
                 name: v.name.clone(),
                 default: v.default.clone(),
                 description: v.description.clone(),
+                condition: crate::package::ConditionExpr::Always,
+                provenance: Vec::new(),
             })
             .collect(),
+        rules: Vec::new(),
         notes: pkg.notes.clone(),
     }
 }
