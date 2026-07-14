@@ -97,8 +97,8 @@ pub fn cmp_version(a: &str, b: &str) -> Ordering {
     Ordering::Equal
 }
 
-/// Version requirement grammar: `==X`, `>=X`, `>X`, `<=X`, `<X`, a bare `X`
-/// exact match, or comma-separated clauses such as `>=4.1.0,<4.2.0`.
+/// Version requirements accept exact equality, ordered comparisons, bare exact
+/// versions, and comma-separated conjunctions of those clauses.
 ///
 /// A compound requirement matches only if **every** non-empty clause matches.
 pub fn matches_req(version: &str, req: &str) -> bool {
