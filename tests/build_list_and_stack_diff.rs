@@ -2,8 +2,8 @@
 
 use eb_stack::{
     classify_stack_diff, dep_map_from_universe, format_build_list, format_stack_diff_markdown,
-    ordered_build_paths, solve_to_files_with_extras, PackageChangeKind, SolveExtraOut, StackLock,
-    Universe,
+    ordered_build_paths, solve_from_easyconfigs_with_baseline_version_and_extras,
+    PackageChangeKind, SolveExtraOut, StackLock, Universe,
 };
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -27,10 +27,12 @@ fn library_solve_writes_build_list_and_stack_diff() {
     let build_list_out = tmp.path().join("build.list");
     let stack_diff_out = tmp.path().join("stack.diff.md");
 
-    let lock = solve_to_files_with_extras(
-        &fixture("universe_next.json"),
+    let easyconfigs = fixture("easyconfigs");
+    let lock = solve_from_easyconfigs_with_baseline_version_and_extras(
+        &[easyconfigs.as_path()],
         &fixture("policy_prefer_newer.json"),
-        Some(&fixture("baseline.lock.json")),
+        Some(&easyconfigs),
+        Some("2025a"),
         &lock_out,
         Some(&sbom_out),
         SolveExtraOut {
