@@ -1,12 +1,14 @@
 //! Resolvo-backed lock generation for a materialized package profile.
 
 use crate::domain::{Candidate, DepReq, Policy};
+use crate::hierarchy::{filter_candidates_in_hierarchy, hierarchy_for_with_tree};
 use crate::package::{
     materialize_profile, DependencyRole, LockedDependency, PackagePlan, ProfileEnvironment,
     ProfileLock, StackPolicy, PROFILE_LOCK_SCHEMA_VERSION,
 };
 use crate::resolvo_provider::solve_with_stack_policy;
 use std::collections::BTreeMap;
+use std::path::Path;
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -25,6 +27,24 @@ pub fn solve_package_profile(
     environment: &ProfileEnvironment,
     candidates: &[Candidate],
     stack_policy: &StackPolicy,
+) -> Result<ProfileLock, ProfileSolveError> {
+    solve_package_profile_with_hierarchy(
+        plan,
+        profile_name,
+        environment,
+        candidates,
+        stack_policy,
+        None,
+    )
+}
+
+pub fn solve_package_profile_with_hierarchy(
+    plan: &PackagePlan,
+    profile_name: &str,
+    environment: &ProfileEnvironment,
+    candidates: &[Candidate],
+    stack_policy: &StackPolicy,
+    hierarchy_fixture: Option<&Path>,
 ) -> Result<ProfileLock, ProfileSolveError> {
     let materialized = materialize_profile(plan, profile_name, environment)
         .map_err(|error| ProfileSolveError::Materialize(error.to_string()))?;
@@ -60,7 +80,13 @@ pub fn solve_package_profile(
         }
     }
 
-    let mut universe = candidates.to_vec();
+    let hierarchy = hierarchy_for_with_tree(&plan.build.toolchain, hierarchy_fixture, candidates)
+        .map_err(|error| ProfileSolveError::Resolve(error.to_string()))?;
+    let original_candidates = filter_candidates_in_hierarchy(candidates, &hierarchy);
+    let mut universe = original_candidates.clone();
+    for candidate in &mut universe {
+        candidate.toolchain = plan.build.toolchain.clone();
+    }
     universe.push(Candidate {
         name: synthetic_name.clone(),
         version: plan.package.version.clone(),
@@ -91,6 +117,10 @@ pub fn solve_package_profile(
             .iter()
             .find(|candidate| candidate.name == name)
             .ok_or_else(|| ProfileSolveError::MissingSelection(name.clone()))?;
+        let selected = original_candidates
+            .iter()
+            .find(|candidate| candidate.easyconfig_path == selected.easyconfig_path)
+            .unwrap_or(selected);
         dependencies.push(LockedDependency {
             name,
             version: selected.version.clone(),

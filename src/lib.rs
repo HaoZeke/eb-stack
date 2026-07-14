@@ -73,7 +73,9 @@ pub use report::{
     ordered_packages, PackageChange, PackageChangeKind,
 };
 pub use package_emit::{emit_profile_easyconfigs, EmittedEasyconfig, PackageEmitError};
-pub use package_solve::{solve_package_profile, ProfileSolveError};
+pub use package_solve::{
+    solve_package_profile, solve_package_profile_with_hierarchy, ProfileSolveError,
+};
 pub use package_workflow::{
     inspect_new_package, plan_new_package, write_package_bundle, NewPackageRequest, PackageBundle,
     PackageWorkflowError, WrittenPackageBundle,
