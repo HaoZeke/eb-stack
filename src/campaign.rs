@@ -4,6 +4,7 @@ use crate::package::ProductProfile;
 use crate::target::{
     BuildTarget, CommandPlan, TargetError, TargetExecutor, TargetRuntime, TargetTransport,
 };
+use crate::{packaging_gate, resolve_easyconfig_file};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs::OpenOptions;
@@ -200,6 +201,60 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         detail: format!("build evaluation on {}", request.target.name),
     });
     write_state(&request.state_path, &state)?;
+
+    for recipe in &recipes {
+        let relative_recipe = recipe
+            .strip_prefix(&request.bundle)
+            .map_err(|_| CampaignError::InvalidBundle("recipe is outside bundle".into()))?;
+        let recipe_text = relative_recipe.display().to_string();
+        let preflight = resolve_easyconfig_file(recipe)
+            .map_err(|error| error.to_string())
+            .and_then(|resolved| {
+                packaging_gate(&resolved, &[])
+                    .map_err(|errors| format!("packaging gate failed: {}", errors.join("; ")))
+            });
+        if let Err(evidence) = preflight {
+            let class = if evidence.contains("checksum") {
+                BuildFindingClass::Checksum
+            } else {
+                BuildFindingClass::Unknown
+            };
+            state.findings.push(BuildFinding {
+                id: format!(
+                    "attempt:{}:finding:{}",
+                    state.attempts,
+                    state.findings.len() + 1
+                ),
+                class,
+                disposition: disposition(class),
+                stage: "preflight".into(),
+                recipe: recipe_text.clone(),
+                target: request.target.name.clone(),
+                summary: "recipe packaging preflight failed".into(),
+                evidence,
+                command: CommandPlan {
+                    program: "recipe-metadata-gate".into(),
+                    args: vec![recipe.display().to_string()],
+                },
+                exit_code: None,
+                attempt: state.attempts,
+                status: FindingStatus::Open,
+                owner: None,
+                resolution: None,
+            });
+            state.status = CampaignStatus::Failed;
+            state.current_recipe = None;
+            state.history.push(CampaignEvent {
+                attempt: state.attempts,
+                status: CampaignStatus::Failed,
+                recipe: Some(recipe_text),
+                detail: format!("classified packaging preflight failure as {class:?}"),
+            });
+            write_state(&request.state_path, &state)?;
+            return Ok(state);
+        }
+    }
+
     let staged_bundle = match request.target.stage_bundle(&request.bundle) {
         Ok(path) => path,
         Err(error) => {
