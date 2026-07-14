@@ -48,6 +48,7 @@ time = "02:00:00"
 [targets.runtime]
 kind = "podman"
 image = "registry.example.org/easybuild:rocky9"
+args = ["--security-opt", "label=disable", "--cap-add=NET_RAW"]
 workdir = "/workspace"
 mounts = ["/work:/workspace"]
 "#,
@@ -80,6 +81,13 @@ mounts = ["/work:/workspace"]
     ] {
         assert!(remote.contains(token), "missing {token}: {remote}");
     }
+    let runtime = remote.find("podman run").expect("runtime command");
+    let capability = remote.find("--cap-add=NET_RAW").expect("runtime args");
+    let image = remote
+        .find("registry.example.org/easybuild:rocky9")
+        .expect("runtime image");
+    let routed = remote.find("env EASYBUILD_TMPDIR").expect("routed command");
+    assert!(runtime < capability && capability < image && image < routed);
 }
 
 #[test]
