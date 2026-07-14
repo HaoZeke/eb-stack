@@ -1,6 +1,9 @@
 //! MCP stdio surface for the version-one package, recipe, stack, target, and campaign workflows.
 
-use crate::campaign::{run_campaign, CampaignRequest, CampaignStatus};
+use crate::campaign::{
+    claim_finding, resolve_finding, run_campaign, CampaignRequest, CampaignStatus,
+    FindingResolution,
+};
 use crate::domain::Toolchain;
 use crate::eb_parse::{
     check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,
@@ -168,6 +171,23 @@ fn tool_catalog() -> Vec<Value> {
             "Read persisted campaign findings and claim ladder.",
             &[("state", "string")],
         ),
+        tool(
+            "eb_campaign_finding_claim",
+            "Claim one open campaign finding for an OMP worker.",
+            &[("state", "string"), ("id", "string"), ("owner", "string")],
+        ),
+        tool(
+            "eb_campaign_finding_resolve",
+            "Resolve an owned campaign finding with durable action and evidence.",
+            &[
+                ("state", "string"),
+                ("id", "string"),
+                ("owner", "string"),
+                ("action", "string"),
+                ("evidence", "string"),
+                ("changes", "array"),
+            ],
+        ),
     ]
 }
 
@@ -207,6 +227,8 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_target_doctor" => target_doctor(arguments),
         "eb_campaign_run" => campaign_run(arguments),
         "eb_campaign_status" => campaign_status(arguments),
+        "eb_campaign_finding_claim" => campaign_finding_claim(arguments),
+        "eb_campaign_finding_resolve" => campaign_finding_resolve(arguments),
         _ => Err(format!("unknown tool: {name}")),
     }
 }
@@ -400,6 +422,31 @@ fn campaign_run(arguments: &Value) -> Result<Value, String> {
 fn campaign_status(arguments: &Value) -> Result<Value, String> {
     let state = required_path(arguments, "state")?;
     load_json_file(&state).map_err(|error| error.to_string())
+}
+
+fn campaign_finding_claim(arguments: &Value) -> Result<Value, String> {
+    let state = claim_finding(
+        &required_path(arguments, "state")?,
+        &required_string(arguments, "id")?,
+        &required_string(arguments, "owner")?,
+    )
+    .map_err(|error| error.to_string())?;
+    serde_json::to_value(state).map_err(|error| error.to_string())
+}
+
+fn campaign_finding_resolve(arguments: &Value) -> Result<Value, String> {
+    let state = resolve_finding(
+        &required_path(arguments, "state")?,
+        &required_string(arguments, "id")?,
+        &required_string(arguments, "owner")?,
+        FindingResolution {
+            action: required_string(arguments, "action")?,
+            evidence: required_string(arguments, "evidence")?,
+            changes: string_array(arguments, "changes")?,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    serde_json::to_value(state).map_err(|error| error.to_string())
 }
 
 fn load_targets(arguments: &Value) -> Result<Vec<BuildTarget>, String> {

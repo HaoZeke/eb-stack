@@ -2,7 +2,10 @@
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use eb_stack::campaign::{run_campaign as execute_campaign, CampaignRequest, CampaignStatus};
+use eb_stack::campaign::{
+    claim_finding, resolve_finding, run_campaign as execute_campaign, CampaignRequest,
+    CampaignStatus, FindingResolution,
+};
 use eb_stack::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
 use eb_stack::package_config::ProfileConfigLayer;
 use eb_stack::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
@@ -213,6 +216,39 @@ enum CampaignCommand {
     Status {
         #[arg(long)]
         state: PathBuf,
+    },
+    /// Coordinate typed finding repair across campaign workers.
+    Finding {
+        #[command(subcommand)]
+        command: CampaignFindingCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum CampaignFindingCommand {
+    /// Claim an open finding for one worker.
+    Claim {
+        #[arg(long)]
+        state: PathBuf,
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        owner: String,
+    },
+    /// Resolve a claimed finding with durable evidence.
+    Resolve {
+        #[arg(long)]
+        state: PathBuf,
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        owner: String,
+        #[arg(long)]
+        action: String,
+        #[arg(long)]
+        evidence: String,
+        #[arg(long = "change")]
+        changes: Vec<String>,
     },
 }
 
@@ -508,6 +544,32 @@ fn run_campaign(command: CampaignCommand) -> Result<()> {
         CampaignCommand::Status { state } => {
             let value: serde_json::Value = load_json_file(&state)?;
             println!("{}", serde_json::to_string_pretty(&value)?);
+            Ok(())
+        }
+        CampaignCommand::Finding { command } => {
+            let state = match command {
+                CampaignFindingCommand::Claim { state, id, owner } => {
+                    claim_finding(&state, &id, &owner)?
+                }
+                CampaignFindingCommand::Resolve {
+                    state,
+                    id,
+                    owner,
+                    action,
+                    evidence,
+                    changes,
+                } => resolve_finding(
+                    &state,
+                    &id,
+                    &owner,
+                    FindingResolution {
+                        action,
+                        evidence,
+                        changes,
+                    },
+                )?,
+            };
+            println!("{}", serde_json::to_string_pretty(&state)?);
             Ok(())
         }
     }
