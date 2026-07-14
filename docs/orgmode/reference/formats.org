@@ -29,15 +29,15 @@
 - ~toolchain~ :: The policy's target toolchain (not necessarily every
   package's own toolchain field, though in practice they match).
 - ~generation_label~ :: Optional human label, e.g. ~"foss-2025b"~ when
-  produced from an easyconfig tree, or a caller-supplied string on
-  ~solve-json~. ~None~ from hand-built universes that omit it.
+  produced from an easyconfig tree. Library callers may omit it for hand-built
+  universes.
 - ~packages~ :: One entry per co-selected package, sorted by name. Each
   entry is a ~LockPackage~: ~name~, ~version~, its own ~toolchain~, optional
   ~versionsuffix~, and the ~easyconfig_path~ it came from.
 - ~solver~ :: ~engine~ is always ~"resolvo_cdcl_sat"~. ~engine_version~
   embeds the crate version. ~timestamp~ is RFC 3339, UTC, second precision.
 
-* Universe JSON (~solve-json --universe~, ~parse~ output)
+* Internal candidate universe
 
 #+begin_src json
 {
@@ -59,12 +59,10 @@
 }
 #+end_src
 
-~parse~ prints just the ~candidates~ array (no wrapping ~toolchain~ /
-~generation_label~); wrap it yourself to feed ~solve-json --universe~.
 ~dependencies~ and ~builddependencies~ use the same ~DepReq~ shape and the
 same ~version_req~ grammar as policy pins (see
-[[file:policy.org][policy reference]]). Legacy universe JSON without a
-~builddependencies~ key deserializes with it defaulting to empty.
+[[file:policy.org][policy reference]]). This structure is a Rust/library input;
+the version-one CLI builds it from repeatable ~--easyconfigs~ paths.
 
 * Build list (~--build-list-out~)
 
@@ -123,10 +121,10 @@ different version). Sections are sorted by package name.
 Documents are built with the official [[https://crates.io/crates/cyclonedx-bom][cyclonedx-bom]]
 crate (same models as cargo-cyclonedx), serialized as CycloneDX 1.5 JSON.
 
-Opt-in: ~--sbom-out~ has no default filename. Omit it and ~solve~ /
-~solve-json~ write only the lock (and any requested build list / stack
-diff). ~eb-stack sbom --lock LOCK~ defaults to ~stack.cdx.json~ because that
-subcommand's sole purpose is SBOM emission.
+Opt-in: ~--sbom-out~ has no default filename. Omit it and ~stack solve~ writes
+only the lock (and any requested build list / stack diff). ~eb-stack stack
+sbom --lock LOCK~ defaults to ~stack.cdx.json~ because that command's sole
+purpose is SBOM emission.
 
 #+begin_src json
 {
@@ -178,10 +176,10 @@ solver selection, not a scan of installed software.
 
 ~dependsOn~ edges:
 
-- From ~solve~ / ~solve-json~ (universe in hand): each package's declared
+- From ~stack solve~ (universe in hand): each package's declared
   *runtime* ~dependencies~, intersected with co-selected lock members.
   Build-time deps (~builddependencies~) go on the component property
   ~eb_stack:buildDependsOn~ (comma-separated refs), not the runtime graph.
-- From ~eb-stack sbom --lock LOCK~ (lock only): ~dependsOn~ is empty
+- From ~eb-stack stack sbom --lock LOCK~ (lock only): ~dependsOn~ is empty
   (unknown edges). The document never invents all-to-all co-stack cycles.
   Empty ~dependsOn~ arrays may be omitted by cyclonedx-bom serialization.

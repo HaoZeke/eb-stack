@@ -7,11 +7,11 @@ request.
 
 * Add the two flags to solve
 
-Both ~solve~ and ~solve-json~ accept ~--build-list-out~ and
-~--stack-diff-out~. They are independent: pass either, both, or neither.
+~stack solve~ accepts ~--build-list-out~ and ~--stack-diff-out~. They are
+independent: pass either, both, or neither.
 
 #+begin_src bash
-eb-stack solve \
+eb-stack stack solve \
   --easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
   --policy fixtures/gromacs_2025_to_next/policies/prefer_newer.json \
   --baseline-easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
@@ -21,9 +21,8 @@ eb-stack solve \
   --stack-diff-out stack.diff.md
 #+end_src
 
-~--stack-diff-out~ requires a baseline: pass ~--baseline-easyconfigs~ (or
-~--baseline~ on ~solve-json~) or the solve fails with an explicit error
-instead of skipping the diff without a warning.
+~--stack-diff-out~ requires ~--baseline-easyconfigs~ or the solve fails with
+an explicit error instead of skipping the diff without a warning.
 
 * Read the build list
 

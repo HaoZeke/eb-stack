@@ -57,16 +57,17 @@ jobs:
         env:
           EB_STACK_DOCS_PYTHON: ${{ github.workspace }}/.venv-docs/bin/python
 
-      - name: Assert CLI docs name check-recipe and mcp
+      - name: Assert version-one CLI and Rust API docs
         run: |
           set -euo pipefail
-          grep -q check-recipe docs/build/reference/cli.html
-          grep -q 'eb_check_recipe' docs/build/reference/cli.html
+          grep -q 'package plan' docs/build/reference/cli.html
+          grep -q 'campaign run' docs/build/reference/cli.html
+          grep -q 'eb_package_plan' docs/build/reference/cli.html
           grep -q 'eb-stack mcp' docs/build/reference/cli.html
           # In-site Rust API
           test -f docs/build/reference/rust-api.html
           test -f docs/build/crates/eb_stack/lib.html
-          grep -q 'emit_next_generation' docs/build/crates/eb_stack/eb_emit.html
+          grep -q 'plan_new_package' docs/build/crates/eb_stack/lib.html
           # light/dark logos present
           test -f docs/build/_static/logo-light.svg
           test -f docs/build/_static/logo-dark.svg

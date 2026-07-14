@@ -10,18 +10,18 @@
        <img class="eb-hero-mark" src="_static/mark.svg" width="56" height="56" alt="" />
        <div>
          <p class="eb-hero-name">eb-stack</p>
-         <p class="eb-hero-sub">EasyBuild · stack lock · generation bump</p>
+         <p class="eb-hero-sub">package plan · Resolvo · EasyBuild campaign</p>
        </div>
      </div>
-     <p class="eb-hero-tagline">Rewrite an EasyBuild stack onto the next toolchain generation: hierarchy-aware dependency versions, joint co-selection with resolvo, and reviewable lock / build-list / stack-diff artifacts.</p>
+     <p class="eb-hero-tagline">Parse conda-forge, Spack, and EasyBuild into one canonical manifest and planned SBOM; solve product profiles with Resolvo; emit conventional recipes; build-evaluate them on a declarative target.</p>
      <div class="eb-hero-pills">
-       <span>bump --easyconfigs</span>
-       <span>check-recipe</span>
+       <span>package plan</span>
+       <span>package bump</span>
        <span>resolvo SAT</span>
        <span>planned SBOM</span>
-       <span>annual-bump skill</span>
+       <span>typed campaigns</span>
      </div>
-     <p class="eb-hero-flow">recipe → bump → check-recipe → solve → human-reviewed PR → eb --robot</p>
+     <p class="eb-hero-flow">recipe → manifest + SBOM → profiles + Resolvo → .eb set → campaign evidence</p>
    </div>
 
 ============
@@ -36,27 +36,26 @@
 
    *Whole annual rebuild?* → :doc:`howto/run-annual-bump`
 
-   *New package from conda-forge/Spack?* → skill ``skills/new-package/SKILL.md``
-   (CLI ``eb-stack ingest``; see :doc:`reference/cli`)
+   *New package from conda-forge/Spack?* → :doc:`howto/new-package`
 
-   *One recipe flags?* → :doc:`howto/bump-recipe`
+   *Existing recipe bump?* → :doc:`howto/bump-recipe`
 
    *CLI surface?* → :doc:`reference/cli`
 
 .. grid:: 1 1 2 2
    :gutter: 2
 
-   .. grid-item-card:: Tutorial — zero-hand-fed bump
+   .. grid-item-card:: Tutorial — package to verified build
       :link: tutorial
       :link-type: doc
 
-      One Good Tutorial: GROMACS foss-2023b → foss-2024a with no ``--dep`` flags.
+      Plan conda-forge eOn, inspect its lock/recipe, and drive a target campaign.
 
    .. grid-item-card:: Annual rebuild (operator)
       :link: howto/run-annual-bump
       :link-type: doc
 
-      What the loop closes, residual table, claim ladder, CI-known bumps.
+      Generate canonical bump bundles, solve the stack, and repair typed findings.
 
    .. grid-item-card:: Solve a stack lock
       :link: howto/solve-lock
@@ -116,26 +115,22 @@
 
 * What it is
 
-  ~eb-stack~ parses a tree of [[https://docs.easybuild.io/][EasyBuild]] easyconfig (~*.eb~) files, co-selects a
-  consistent software stack for one toolchain generation with a CDCL SAT
-  solver ([[https://github.com/mamba-org/resolvo][resolvo]]), and writes a machine-readable lock plus an opt-in planned
-  CycloneDX 1.5 SBOM (via [[https://crates.io/crates/cyclonedx-bom][cyclonedx-bom]]). It rewrites an existing
-  easyconfig into the next generation (~bump~), auto-resolving every
-  dependency and build-dependency version from a robot tree in two stages —
-  hierarchy consensus, then resolvo joint pins — with no hand-fed ~--dep~
-  flags required. It also ingests conda-forge / Spack recipes into EB
-  scaffolds, and reports build order and a baseline-vs-solved stack diff for
-  review.
+  ~eb-stack~ parses conda-forge, Spack, and [[https://docs.easybuild.io/][EasyBuild]] recipes into one
+  canonical package plan. It emits a planned CycloneDX SBOM, materializes
+  independently installable profiles, applies distribution/site preferences
+  inside [[https://github.com/mamba-org/resolvo][Resolvo]], writes one lock and conventional ~.eb~ file per profile,
+  and drives the resulting bundle through a persisted target-routed build
+  campaign. Existing-recipe bumps use the same manifest, SBOM, solver, and
+  campaign artifacts as new packages.
 
 * What it is not
 
-  - *Not* an EasyBuild replacement. ~eb-stack~ reads and rewrites easyconfig
-    text; it does not build software and does not implement EasyBuild's
-    build-step framework.
+  - *Not* an EasyBuild replacement. ~eb-stack~ routes ~eb --robot~ through a
+    configured target; EasyBuild still implements all build and install steps.
   - *Not* a general-purpose Python dependency resolver. The domain model is
     EasyBuild's ~name~ / ~version~ / ~toolchain~ / ~dependencies~ shape only.
   - *Not* a post-install compliance scanner. The emitted SBOM is a *planned*
-    inventory from the lock, produced before anything is built.
+    inventory. Binary verification is a separate campaign claim.
 
 * Install
 
@@ -158,12 +153,12 @@ eb-stack --version
 
 * Documentation map
 
-  - [[file:tutorial.org][Tutorial: bump GROMACS to a new toolchain generation]] -- start here.
+  - [[file:tutorial.org][Tutorial: foreign recipe to verified EasyBuild package]] -- start here.
   - [[file:howto/run-annual-bump.org][How to run the annual toolchain-generation bump]] --
     operator guide for a whole rebuild (what it closes, the residual, the
     claim ladder, and the CI-known bumps).
   - [[file:howto/new-package.org][Author a new package from conda-forge or Spack]] --
-    ~ingest~ + robot pins + ~check-recipe~ (agent skill ~skills/new-package/~).
+    canonical plan + profiles + Resolvo + campaign.
   - How-to guides: [[file:howto/solve-lock.org][solve a stack lock]],
     [[file:howto/emit-reports.org][emit a build list and stack diff]],
     [[file:howto/bump-recipe.org][bump a recipe]],

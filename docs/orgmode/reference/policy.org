@@ -87,8 +87,7 @@ outcome of a multi-root solve depends entirely on this order.
 
 * Where policies are consumed
 
-- ~eb-stack solve --policy POLICY.json~
-- ~eb-stack solve-json --policy POLICY.json~
+- ~eb-stack stack solve --policy POLICY.json~
 
-Both subcommands accept the identical schema. See
+See
 [[file:../howto/solve-lock.org][how to solve a consistent stack lock]].

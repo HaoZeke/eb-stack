@@ -62,7 +62,7 @@ lets you avoid.
 #+end_src
 
 #+begin_src bash
-eb-stack solve \
+eb-stack stack solve \
   --easyconfigs fixtures/two_root_openmpi_conflict/easyconfigs \
   --policy fixtures/two_root_openmpi_conflict/policies/priority_gromacs_roots_lammps_first.json \
   --lock-out stack.lock.json --sbom-out stack.cdx.json
