@@ -30,6 +30,9 @@ config_options = [
   "-DQMC_COMPLEX=OFF",
   "-DQMC_MIXED_PRECISION=OFF",
 ]
+verification_commands = [
+  { program = "bash", args = ["-lc", "module load {module} && qmca --help"] },
+]
 
 [profiles.features]
 mpi = true
@@ -87,6 +90,8 @@ build_type = "Release"
     assert!(default.default);
     assert!(default.versionsuffix.is_empty());
     assert_eq!(default.toolchain_options.get("usempi"), Some(&true));
+    assert_eq!(default.verification_commands.len(), 1);
+    assert_eq!(default.verification_commands[0].program, "bash");
     assert_eq!(
         default.parameters.get("build_type").map(String::as_str),
         Some("Release")
@@ -96,6 +101,7 @@ build_type = "Release"
     assert!(!complex.default);
     assert_eq!(complex.versionsuffix, vec!["-complex"]);
     assert_eq!(complex.features.get("complex"), Some(&true));
+    assert_eq!(complex.verification_commands.len(), 1);
     assert!(complex
         .config_options
         .iter()
