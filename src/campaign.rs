@@ -1,7 +1,9 @@
 //! Persisted build-evaluation campaigns with typed failure findings.
 
 use crate::package::ProductProfile;
-use crate::target::{BuildTarget, CommandPlan, TargetError};
+use crate::target::{
+    BuildTarget, CommandPlan, TargetError, TargetExecutor, TargetRuntime, TargetTransport,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs::OpenOptions;
@@ -249,7 +251,22 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         let command = request
             .target
             .build_command(&staged_recipe.display().to_string());
-        let output = command.execute().map_err(CampaignError::Target)?;
+        let output = match command.execute() {
+            Ok(output) => output,
+            Err(error) => {
+                record_target_command_failure(
+                    &mut state,
+                    &request.target,
+                    "build",
+                    &recipe_text,
+                    command,
+                    &error,
+                );
+                state.current_recipe = None;
+                write_state(&request.state_path, &state)?;
+                return Ok(state);
+            }
+        };
         if !output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
             let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -322,7 +339,21 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 })
                 .collect::<Vec<_>>();
             let command = request.target.verification_command(&program, &args);
-            let output = command.execute().map_err(CampaignError::Target)?;
+            let output = match command.execute() {
+                Ok(output) => output,
+                Err(error) => {
+                    record_target_command_failure(
+                        &mut state,
+                        &request.target,
+                        "verify",
+                        &format!("profile:{}", profile.name),
+                        command,
+                        &error,
+                    );
+                    write_state(&request.state_path, &state)?;
+                    return Ok(state);
+                }
+            };
             if !output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
                 let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -499,6 +530,10 @@ pub fn classify_build_failure(
     } else if text.contains("patch") && (text.contains("failed") || text.contains("reject")) {
         BuildFindingClass::Patch
     } else if text.contains("no such file or directory")
+        && (text.contains("env:") || exit_code == Some(127))
+    {
+        BuildFindingClass::Runtime
+    } else if text.contains("no such file or directory")
         && (text.contains("fatal error") || text.contains("header"))
     {
         BuildFindingClass::DependencyMissing
@@ -527,6 +562,71 @@ pub fn classify_build_failure(
     } else {
         BuildFindingClass::Unknown
     }
+}
+
+fn record_target_command_failure(
+    state: &mut CampaignState,
+    target: &BuildTarget,
+    stage: &str,
+    recipe: &str,
+    command: CommandPlan,
+    error: &TargetError,
+) {
+    let class = classify_target_command_failure(target, error);
+    state.findings.push(BuildFinding {
+        id: format!(
+            "attempt:{}:finding:{}",
+            state.attempts,
+            state.findings.len() + 1
+        ),
+        class,
+        disposition: disposition(class),
+        stage: stage.into(),
+        recipe: recipe.into(),
+        target: target.name.clone(),
+        summary: format!("{class:?} target command could not start"),
+        evidence: error.to_string(),
+        command,
+        exit_code: None,
+        attempt: state.attempts,
+        status: FindingStatus::Open,
+        owner: None,
+        resolution: None,
+    });
+    state.status = CampaignStatus::Failed;
+    state.history.push(CampaignEvent {
+        attempt: state.attempts,
+        status: CampaignStatus::Failed,
+        recipe: Some(recipe.into()),
+        detail: format!("classified target command failure as {class:?}"),
+    });
+}
+
+fn classify_target_command_failure(target: &BuildTarget, error: &TargetError) -> BuildFindingClass {
+    let program = match error {
+        TargetError::Spawn(program, _) | TargetError::CommandFailed { program, .. } => program,
+        _ => return BuildFindingClass::Unknown,
+    };
+    if matches!(
+        &target.transport,
+        TargetTransport::Ssh { command, .. } if command == program
+    ) {
+        return BuildFindingClass::Transport;
+    }
+    if matches!(
+        &target.executor,
+        TargetExecutor::Slurm { command, .. } if command == program
+    ) {
+        return BuildFindingClass::Executor;
+    }
+    if matches!(
+        &target.runtime,
+        TargetRuntime::Podman { command, .. } | TargetRuntime::Docker { command, .. }
+            if command == program
+    ) {
+        return BuildFindingClass::Runtime;
+    }
+    BuildFindingClass::Runtime
 }
 
 fn verification_profiles(manifest: &Value) -> Result<Vec<ProductProfile>, CampaignError> {
