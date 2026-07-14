@@ -1,10 +1,11 @@
 use eb_stack::package::{
     materialize_profile, LockedDependency, OutputRequest, ProductProfile, ProfileEnvironment,
-    ProfileLock, PROFILE_LOCK_SCHEMA_VERSION,
+    ProfileLock, StackPin, StackPinMode, StackPolicy, PROFILE_LOCK_SCHEMA_VERSION,
+    STACK_POLICY_SCHEMA_VERSION,
 };
 use eb_stack::{
     emit_profile_easyconfigs, package_plan_from_foreign, parse_foreign_path,
-    resolve_easyconfig_str, ForeignFormat, Toolchain,
+    resolve_easyconfig_str, solve_package_profile, Candidate, ForeignFormat, Toolchain,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -99,6 +100,19 @@ fn profile_lock(profile: &str, versionsuffix: &str) -> ProfileLock {
     }
 }
 
+fn hdf5_candidate(version: &str) -> Candidate {
+    Candidate {
+        name: "HDF5".into(),
+        version: version.into(),
+        toolchain: toolchain(),
+        versionsuffix: None,
+        easyconfig_path: format!("HDF5-{version}-foss-2026.1.eb"),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+    }
+}
+
 #[test]
 fn materialization_filters_conditional_dependencies_per_profile() {
     let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
@@ -173,4 +187,42 @@ fn each_product_profile_emits_a_conventional_easyconfig() {
         .configopts
         .as_deref()
         .is_some_and(|options| options.contains("-DQMC_COMPLEX=ON")));
+}
+
+#[test]
+fn profile_lock_is_created_by_resolvo_with_stack_preferences() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.profiles = qmcpack_profiles();
+    plan.dependencies
+        .retain(|dependency| dependency.name == "hdf5");
+    let stack = StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "eessi".into(),
+        toolchain: toolchain(),
+        pins: vec![StackPin {
+            name: "HDF5".into(),
+            version_requirement: "==1.14.2".into(),
+            mode: StackPinMode::Preferred,
+            source: Some("eessi.cdx.json".into()),
+        }],
+        exclusions: Vec::new(),
+    };
+
+    let lock = solve_package_profile(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &[hdf5_candidate("1.14.2"), hdf5_candidate("1.14.3")],
+        &stack,
+    )
+    .expect("profile solve");
+    assert_eq!(lock.solver, "resolvo");
+    assert_eq!(lock.package, "QMCPACK");
+    assert_eq!(lock.profile, "default");
+    assert_eq!(lock.dependencies.len(), 1);
+    assert_eq!(lock.dependencies[0].name, "HDF5");
+    assert_eq!(lock.dependencies[0].version, "1.14.2");
+    assert!(!lock.dependencies[0].build);
+    assert!(!lock.pin_outcomes[0].fallback);
 }
