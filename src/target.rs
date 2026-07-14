@@ -342,6 +342,7 @@ impl BuildTarget {
             | TargetRuntime::Docker {
                 image,
                 command: runtime,
+                args,
                 mounts,
                 workdir,
             } => {
