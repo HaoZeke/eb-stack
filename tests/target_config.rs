@@ -58,8 +58,12 @@ mounts = ["/work:/workspace"]
     let target = &targets[0];
     assert_eq!(target.name, "site-builder");
     assert!(matches!(target.runtime, TargetRuntime::Podman { .. }));
+    assert_eq!(
+        target.staged_bundle_path(std::path::Path::new("/control/eon-bundle")),
+        "/work/campaign/bundles/eon-bundle"
+    );
 
-    let command = target.build_command("/work/campaign/QMCPACK.eb");
+    let command = target.build_command("/work/campaign/bundles/eon-bundle/QMCPACK.eb");
     assert_eq!(command.program, "ssh");
     assert_eq!(command.args[0], "builder.example.org");
     let remote = command.args.last().expect("remote command");
@@ -72,7 +76,7 @@ mounts = ["/work:/workspace"]
         "EASYBUILD_TMPDIR=/work/easybuild-tmp",
         "eb",
         "--robot=/opt/easybuild/easyconfigs:/work/overlay",
-        "/work/campaign/QMCPACK.eb",
+        "/work/campaign/bundles/eon-bundle/QMCPACK.eb",
     ] {
         assert!(remote.contains(token), "missing {token}: {remote}");
     }
