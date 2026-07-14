@@ -62,6 +62,7 @@ fn conda_eon_expands_context_multi_source_and_selectors() {
     let plan = package_plan_from_foreign(&recipe, &toolchain("2026.1"));
     assert_eq!(plan.package.name, "eOn");
     assert_eq!(plan.origin, eb_stack::package::PackageOrigin::CondaForge);
+    assert_eq!(plan.build.easyblock.as_deref(), Some("MesonNinja"));
     assert_eq!(plan.sources.len(), recipe.sources.len());
     assert!(plan
         .dependencies
