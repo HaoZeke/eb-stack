@@ -66,6 +66,7 @@ pub use report::{
     classify_stack_diff, format_build_list, format_stack_diff_markdown, ordered_build_paths,
     ordered_packages, PackageChange, PackageChangeKind,
 };
+pub use resolvo_provider::solve_with_stack_policy;
 pub use sbom::{
     build_dep_map_from_universe, dep_map_from_universe, lock_to_bom, lock_to_cyclonedx,
     lock_to_cyclonedx_with_deps, lock_to_cyclonedx_with_runtime_and_build,

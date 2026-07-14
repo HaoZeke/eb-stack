@@ -5,6 +5,10 @@
 //! constrains and re-solves rather than returning the first SAT assignment.
 
 use crate::domain::{Candidate, Pin, Policy, StackLock};
+use crate::package::{
+    CandidateExclusion, StackPinMode, StackPinOutcome, StackPolicy, StackPolicySolve,
+    STACK_POLICY_SCHEMA_VERSION,
+};
 use crate::version::{cmp_version, matches_req};
 use resolvo::utils::Pool;
 use resolvo::{
@@ -29,6 +33,12 @@ pub struct EbProvider {
     pin_ranks: HashMap<String, Vec<u32>>,
     /// require_upgrade: name -> rank must be > this
     min_rank_exclusive: HashMap<String, u32>,
+    /// Stack policy preferred candidate for each package.
+    favored_ranks: HashMap<String, u32>,
+    /// Stack policy candidate that is the only selectable version.
+    locked_ranks: HashMap<String, u32>,
+    /// Candidates rejected by target or build evidence, with the retained reason.
+    excluded_ranks: HashMap<String, HashMap<u32, String>>,
     interned: Mutex<HashMap<(NameId, u32), SolvableId>>,
 }
 
@@ -38,6 +48,19 @@ impl EbProvider {
         policy: &Policy,
         baseline: Option<&StackLock>,
     ) -> Result<Self, String> {
+        Self::from_universe_with_stack_policy(candidates_in, policy, baseline, None)
+    }
+
+    pub fn from_universe_with_stack_policy(
+        candidates_in: &[Candidate],
+        policy: &Policy,
+        baseline: Option<&StackLock>,
+        stack_policy: Option<&StackPolicy>,
+    ) -> Result<Self, String> {
+        if let Some(stack) = stack_policy {
+            validate_stack_policy(policy, stack)?;
+        }
+
         let candidates: Vec<Candidate> = candidates_in
             .iter()
             .filter(|c| {
@@ -146,6 +169,58 @@ impl EbProvider {
             }
         }
 
+        let mut favored_ranks = HashMap::new();
+        let mut locked_ranks = HashMap::new();
+        let mut excluded_ranks: HashMap<String, HashMap<u32, String>> = HashMap::new();
+        if let Some(stack) = stack_policy {
+            for pin in &stack.pins {
+                let matching =
+                    matching_ranks(&candidates, &ranks, &pin.name, &pin.version_requirement)?;
+                let selected_rank = matching.last().copied().ok_or_else(|| {
+                    format!(
+                        "stack pin {} {} matches no candidates",
+                        pin.name, pin.version_requirement
+                    )
+                })?;
+                match pin.mode {
+                    StackPinMode::Preferred => {
+                        favored_ranks.insert(pin.name.clone(), selected_rank);
+                    }
+                    StackPinMode::Locked => {
+                        if matching.len() != 1 {
+                            return Err(format!(
+                                "locked stack pin {} {} matches {} candidates; use an exact version",
+                                pin.name,
+                                pin.version_requirement,
+                                matching.len()
+                            ));
+                        }
+                        locked_ranks.insert(pin.name.clone(), selected_rank);
+                    }
+                }
+            }
+
+            for exclusion in &stack.exclusions {
+                let matching = matching_ranks(
+                    &candidates,
+                    &ranks,
+                    &exclusion.name,
+                    &exclusion.version_requirement,
+                )?;
+                if matching.is_empty() {
+                    return Err(format!(
+                        "candidate exclusion {} {} matches no candidates",
+                        exclusion.name, exclusion.version_requirement
+                    ));
+                }
+                let reason = exclusion_reason(exclusion);
+                let package_exclusions = excluded_ranks.entry(exclusion.name.clone()).or_default();
+                for rank in matching {
+                    package_exclusions.insert(rank, reason.clone());
+                }
+            }
+        }
+
         Ok(Self {
             pool,
             candidates,
@@ -153,6 +228,9 @@ impl EbProvider {
             ranks,
             pin_ranks,
             min_rank_exclusive,
+            favored_ranks,
+            locked_ranks,
+            excluded_ranks,
             interned: Mutex::new(HashMap::new()),
         })
     }
@@ -203,6 +281,13 @@ impl EbProvider {
             }
         }
         true
+    }
+
+    fn exclusion_reason(&self, name: &str, rank: u32) -> Option<&str> {
+        self.excluded_ranks
+            .get(name)
+            .and_then(|ranks| ranks.get(&rank))
+            .map(String::as_str)
     }
 
     pub fn root_requirements(&self, roots: &[String]) -> Vec<resolvo::ConditionalRequirement> {
@@ -345,11 +430,22 @@ impl DependencyProvider for EbProvider {
             if !self.allowed_rank(&package_name, *rank) {
                 continue;
             }
-            candidates
-                .candidates
-                .push(self.intern_solvable(name, *rank));
+            let solvable = self.intern_solvable(name, *rank);
+            if let Some(reason) = self.exclusion_reason(&package_name, *rank) {
+                candidates
+                    .excluded
+                    .push((solvable, self.pool.intern_string(reason.to_string())));
+                continue;
+            }
+            candidates.candidates.push(solvable);
+            if self.favored_ranks.get(&package_name) == Some(rank) {
+                candidates.favored = Some(solvable);
+            }
+            if self.locked_ranks.get(&package_name) == Some(rank) {
+                candidates.locked = Some(solvable);
+            }
         }
-        if candidates.candidates.is_empty() {
+        if candidates.candidates.is_empty() && candidates.excluded.is_empty() {
             return None;
         }
         Some(candidates)
@@ -380,6 +476,123 @@ impl DependencyProvider for EbProvider {
         }
         Dependencies::Known(known)
     }
+}
+
+fn validate_stack_policy(policy: &Policy, stack: &StackPolicy) -> Result<(), String> {
+    if stack.schema_version != STACK_POLICY_SCHEMA_VERSION {
+        return Err(format!(
+            "unsupported stack policy schema version {}",
+            stack.schema_version
+        ));
+    }
+    if stack.toolchain != policy.toolchain {
+        return Err(format!(
+            "stack policy toolchain {} does not match solve toolchain {}",
+            stack.toolchain.label(),
+            policy.toolchain.label()
+        ));
+    }
+    Ok(())
+}
+
+fn matching_ranks(
+    candidates: &[Candidate],
+    ranks: &HashMap<String, Vec<(u32, usize)>>,
+    name: &str,
+    version_requirement: &str,
+) -> Result<Vec<u32>, String> {
+    let ranked = ranks
+        .get(name)
+        .ok_or_else(|| format!("stack policy references unknown package {name}"))?;
+    Ok(ranked
+        .iter()
+        .filter(|(_, index)| matches_req(&candidates[*index].version, version_requirement))
+        .map(|(rank, _)| *rank)
+        .collect())
+}
+
+fn exclusion_reason(exclusion: &CandidateExclusion) -> String {
+    match &exclusion.scope {
+        Some(scope) => format!("{} (scope: {scope})", exclusion.reason),
+        None => exclusion.reason.clone(),
+    }
+}
+
+fn solve_feasibility_with_stack_policy(
+    candidates: &[Candidate],
+    policy: &Policy,
+    baseline: Option<&StackLock>,
+    stack_policy: &StackPolicy,
+) -> Result<Vec<Candidate>, String> {
+    let provider = EbProvider::from_universe_with_stack_policy(
+        candidates,
+        policy,
+        baseline,
+        Some(stack_policy),
+    )?;
+    let requirements = provider.root_requirements(&policy.roots);
+    if requirements.len() != policy.roots.len() {
+        return Err("unsatisfiable stack: no valid root version sets (pins/upgrade)".into());
+    }
+    let mut solver = resolvo::Solver::new(provider);
+    let problem = resolvo::Problem::new().requirements(requirements);
+    match solver.solve(problem) {
+        Ok(solvables) => {
+            let provider = solver.provider();
+            let mut selected: Vec<Candidate> = solvables
+                .iter()
+                .map(|solvable| provider.candidate_for_solvable(*solvable).clone())
+                .collect();
+            selected.sort_by(|left, right| left.name.cmp(&right.name));
+            Ok(selected)
+        }
+        Err(resolvo::UnsolvableOrCancelled::Unsolvable(conflict)) => {
+            let message = conflict.display_user_friendly(&solver).to_string();
+            Err(format!("unsatisfiable stack (Resolvo SAT): {message}"))
+        }
+        Err(resolvo::UnsolvableOrCancelled::Cancelled(reason)) => {
+            Err(format!("solver cancelled: {reason:?}"))
+        }
+    }
+}
+
+pub fn solve_with_stack_policy(
+    candidates: &[Candidate],
+    policy: &Policy,
+    baseline: Option<&StackLock>,
+    stack_policy: &StackPolicy,
+) -> Result<StackPolicySolve, String> {
+    validate_stack_policy(policy, stack_policy)?;
+    let selected = solve_feasibility_with_stack_policy(candidates, policy, baseline, stack_policy)?;
+    let pin_outcomes = stack_policy
+        .pins
+        .iter()
+        .map(|pin| {
+            let selected_version = selected
+                .iter()
+                .find(|candidate| candidate.name == pin.name)
+                .map(|candidate| candidate.version.clone());
+            let fallback = pin.mode == StackPinMode::Preferred
+                && selected_version
+                    .as_deref()
+                    .is_some_and(|version| !matches_req(version, &pin.version_requirement));
+            StackPinOutcome {
+                name: pin.name.clone(),
+                requested: pin.version_requirement.clone(),
+                selected_version,
+                fallback,
+                fallback_reason: fallback.then(|| {
+                    "favored candidate did not participate in the complete Resolvo solution"
+                        .to_string()
+                }),
+            }
+        })
+        .collect();
+    Ok(StackPolicySolve {
+        selected,
+        pin_outcomes,
+        exclusions: stack_policy.exclusions.clone(),
+    })
 }
 
 /// One resolvo CDCL SAT solve for the given policy (feasibility only).

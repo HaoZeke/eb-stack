@@ -1,7 +1,7 @@
 //! Canonical package artifacts shared by foreign imports, bumps, solving, and
 //! EasyBuild emission.
 
-use crate::domain::Toolchain;
+use crate::domain::{Candidate, Toolchain};
 use crate::version::matches_req;
 use cyclonedx_bom::models::component::{Classification, Component, Components};
 use cyclonedx_bom::models::dependency::{Dependencies, Dependency};
@@ -17,6 +17,65 @@ use std::str::FromStr;
 use thiserror::Error;
 
 pub const PACKAGE_SCHEMA_VERSION: u32 = 1;
+pub const STACK_POLICY_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StackPinMode {
+    Preferred,
+    Locked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackPin {
+    pub name: String,
+    pub version_requirement: String,
+    pub mode: StackPinMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateExclusion {
+    pub name: String,
+    pub version_requirement: String,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackPolicy {
+    pub schema_version: u32,
+    pub name: String,
+    pub toolchain: Toolchain,
+    #[serde(default)]
+    pub pins: Vec<StackPin>,
+    #[serde(default)]
+    pub exclusions: Vec<CandidateExclusion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackPinOutcome {
+    pub name: String,
+    pub requested: String,
+    pub selected_version: Option<String>,
+    pub fallback: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackPolicySolve {
+    pub selected: Vec<Candidate>,
+    pub pin_outcomes: Vec<StackPinOutcome>,
+    pub exclusions: Vec<CandidateExclusion>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
