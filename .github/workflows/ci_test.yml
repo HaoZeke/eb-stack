@@ -68,8 +68,30 @@ jobs:
       - name: Co-select and report fixtures
         run: cargo test --locked --test build_list_and_stack_diff -- --nocapture
 
+  canonical-workflows:
+    name: canonical package + campaign workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Parse, materialize, solve, route, and coordinate campaigns
+        run: |
+          cargo test --locked \
+            --test foreign_conditions \
+            --test foreign_package_plan \
+            --test package_model \
+            --test package_config \
+            --test profile_emission \
+            --test package_workflow \
+            --test bump_workflow \
+            --test canonical_cli \
+            --test target_config \
+            --test campaign \
+            --test mcp_v1
+
   cli-smoke:
-    name: CLI smoke (bump + check-recipe on fixtures)
+    name: CLI smoke (package bundle + recipe checks)
     runs-on: ubuntu-latest
     needs: [unit, known-bumps]
     steps:
@@ -84,37 +106,41 @@ jobs:
           BIN=./target/release/eb-stack
           OUT=$(mktemp -d)
           "$BIN" --version
-          "$BIN" bump \
+          "$BIN" package bump \
             --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
             --toolchain-name foss \
             --toolchain-version 2024a \
             --easyconfigs tests/repro_fixtures/universe_foss_2024a \
             --out-dir "$OUT"
-          test -f "$OUT/GROMACS-2024.4-foss-2024a.eb"
+          RECIPE="$OUT/easyconfigs/g/GROMACS/GROMACS-2024.4-foss-2024a.eb"
+          test -f "$OUT/package.plan.json"
+          test -f "$OUT/package.sbom.cdx.json"
+          test -f "$OUT/locks/default.lock.json"
+          test -f "$RECIPE"
           grep -q "toolchain = {'name': 'foss', 'version': '2024a'}" \
-            "$OUT/GROMACS-2024.4-foss-2024a.eb"
-          grep -q "('Python', '3.12.3')" "$OUT/GROMACS-2024.4-foss-2024a.eb"
-          grep -q "('mpi4py', '4.0.1')" "$OUT/GROMACS-2024.4-foss-2024a.eb"
+            "$RECIPE"
+          grep -q "('Python', '3.12.3')" "$RECIPE"
+          grep -q "('mpi4py', '4.0.1')" "$RECIPE"
           # Residual: maintainer-added pybind11 is NOT invented.
-          ! grep -q pybind11 "$OUT/GROMACS-2024.4-foss-2024a.eb"
-      - name: check-recipe on QMCPACK fixture (universe = empty drafts)
+          ! grep -q pybind11 "$RECIPE"
+      - name: recipe check on QMCPACK fixture (universe = empty drafts)
         run: |
           set -euo pipefail
           BIN=./target/release/eb-stack
           # Fixture alone lacks HDF5/Boost; expect non-zero (loud incompleteness).
-          if "$BIN" check-recipe \
+          if "$BIN" recipe check \
             --recipe fixtures/qmcpack_foss_2026_1/easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1.eb \
             --easyconfigs fixtures/qmcpack_foss_2026_1/easyconfigs; then
             echo "expected check-recipe to fail without robot deps" >&2
             exit 1
           fi
-      - name: check-recipe packaging gate on eOn landable fixture
+      - name: recipe packaging gate on eOn landable fixture
         run: |
           set -euo pipefail
           BIN=./target/release/eb-stack
           # Drafts alone leave stack deps missing; exit non-zero is correct.
           # Still exercises parse + packaging_gate on the landable recipe.
-          "$BIN" check-recipe \
+          "$BIN" recipe check \
             --recipe fixtures/eon_foss_2026_1/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb \
             --easyconfigs fixtures/eon_foss_2026_1/easyconfigs \
             --require-configopt=-Dwith_metatomic=true \
