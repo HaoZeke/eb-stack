@@ -73,10 +73,12 @@ fn library_solve_writes_build_list_and_stack_diff() {
         assert!(md.contains(label), "stack diff missing {label:?}:\n{md}");
     }
     // Paths from both sides of the GROMACS bump.
-    let baseline: StackLock = load_json("baseline.lock.json");
-    let base_g = baseline.package("GROMACS").unwrap();
+    let baseline_g = easyconfigs
+        .join("foss-2025a/GROMACS-2024.1-foss-2025a.eb")
+        .display()
+        .to_string();
     let sol_g = lock.package("GROMACS").unwrap();
-    assert!(md.contains(&base_g.easyconfig_path), "{md}");
+    assert!(md.contains(&baseline_g), "{md}");
     assert!(md.contains(&sol_g.easyconfig_path), "{md}");
 }
 
