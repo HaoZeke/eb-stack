@@ -723,12 +723,7 @@ pub fn solve_plan_with_robot(
         &plan.package.version,
         Some(&hierarchy_pins),
     )
-    .unwrap_or_else(|e| {
-        (
-            hierarchy_pins.clone(),
-            format!("resolvo failed ({e}); hierarchy consensus only"),
-        )
-    });
+    .map_err(|e| ManifestError::Msg(format!("resolvo solve: {e}")))?;
 
     for d in &mut plan.package.dependencies {
         if let Some(v) = dep_versions.get(&d.eb_name) {
