@@ -358,15 +358,32 @@ fn reproduces_numba_0_60_0_foss_2023b_to_2024a_auto() {
 
 // ---------------------------------------------------------------------------
 // CLI path: the same known bumps an operator or the annual-bump skill runs
-// via `eb-stack bump --easyconfigs …`. CI must exercise this surface, not
+// via `eb-stack package bump --easyconfigs …`. CI must exercise this surface, not
 // only the library API, because flag wiring and exit status are the contract.
 // ---------------------------------------------------------------------------
 
-/// Run `eb-stack bump --easyconfigs` and return the written file contents.
+fn find_named(directory: &Path, name: &str) -> PathBuf {
+    for entry in std::fs::read_dir(directory).expect("read bundle directory") {
+        let path = entry.expect("bundle entry").path();
+        if path.is_dir() {
+            let found = find_named(&path, name);
+            if found.as_os_str().is_empty() {
+                continue;
+            }
+            return found;
+        }
+        if path.file_name().and_then(|value| value.to_str()) == Some(name) {
+            return path;
+        }
+    }
+    PathBuf::new()
+}
+
+/// Run `eb-stack package bump --easyconfigs` and return the bundled recipe.
 fn cli_auto_bump(source: &Path, out_name: &str) -> String {
     let bin = env!("CARGO_BIN_EXE_eb-stack");
     let tmp = tempfile::tempdir().expect("tempdir");
-    let out = tmp.path().join(out_name);
+    let out = tmp.path().join("bundle");
     let status = Command::new(bin)
         .args([
             "package",
@@ -379,7 +396,7 @@ fn cli_auto_bump(source: &Path, out_name: &str) -> String {
             "2024a",
             "--easyconfigs",
             universe_foss_2024a().to_str().unwrap(),
-            "--out",
+            "--out-dir",
             out.to_str().unwrap(),
         ])
         .status()
@@ -389,7 +406,12 @@ fn cli_auto_bump(source: &Path, out_name: &str) -> String {
         "eb-stack bump failed for {}: {status}",
         source.display()
     );
-    std::fs::read_to_string(&out).expect("read CLI output")
+    assert!(out.join("package.plan.json").is_file());
+    assert!(out.join("package.sbom.cdx.json").is_file());
+    assert!(out.join("locks/default.lock.json").is_file());
+    let recipe = find_named(&out.join("easyconfigs"), out_name);
+    assert!(!recipe.as_os_str().is_empty(), "missing {out_name}");
+    std::fs::read_to_string(recipe).expect("read CLI output")
 }
 
 /// CLI auto-bump must match library emit (modulo residual additions).

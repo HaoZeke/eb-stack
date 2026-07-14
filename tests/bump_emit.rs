@@ -21,6 +21,13 @@ fn foss(ver: &str) -> Toolchain {
     }
 }
 
+fn bundle_recipe(out: &std::path::Path, package: &str, filename: &str) -> PathBuf {
+    out.join("easyconfigs")
+        .join(package[..1].to_ascii_lowercase())
+        .join(package)
+        .join(filename)
+}
+
 #[test]
 fn library_bumps_fixture_gromacs_toolchain_only() {
     let src_path = fixture("foss-2025a/GROMACS-2024.1-foss-2025a.eb");
@@ -98,6 +105,8 @@ fn cli_bump_writes_conventional_file() {
             "OpenBLAS=0.3.27",
             "--dep",
             "OpenMPI=5.0.3",
+            "--easyconfigs",
+            fixture("").to_str().unwrap(),
             "--out-dir",
             out_dir.to_str().unwrap(),
         ])
@@ -105,8 +114,11 @@ fn cli_bump_writes_conventional_file() {
         .expect("spawn eb-stack bump");
     assert!(status.success(), "eb-stack bump failed: {status}");
 
-    let written = out_dir.join("GROMACS-2025.0-foss-2025b.eb");
+    let written = bundle_recipe(out_dir, "GROMACS", "GROMACS-2025.0-foss-2025b.eb");
     assert!(written.is_file(), "missing {}", written.display());
+    assert!(out_dir.join("package.plan.json").is_file());
+    assert!(out_dir.join("package.sbom.cdx.json").is_file());
+    assert!(out_dir.join("locks/default.lock.json").is_file());
     let text = std::fs::read_to_string(&written).expect("read written");
     assert!(text.contains("version = '2025.0'"));
     assert!(text.contains("toolchain = {'name': 'foss', 'version': '2025b'}"));
@@ -116,13 +128,13 @@ fn cli_bump_writes_conventional_file() {
 }
 
 #[test]
-fn cli_bump_toolchain_only_twice_idempotent_content() {
+fn cli_bump_resolvo_bundle_is_deterministic() {
     let bin = env!("CARGO_BIN_EXE_eb-stack");
     let src = fixture("foss-2025a/GROMACS-2024.1-foss-2025a.eb");
     let tmp = tempfile::tempdir().expect("tempdir");
 
     for i in 0..2 {
-        let out = tmp.path().join(format!("run{i}.eb"));
+        let out = tmp.path().join(format!("run{i}"));
         let status = Command::new(bin)
             .args([
                 "package",
@@ -133,17 +145,27 @@ fn cli_bump_toolchain_only_twice_idempotent_content() {
                 "foss",
                 "--toolchain-version",
                 "2025b",
-                "--out",
+                "--easyconfigs",
+                fixture("").to_str().unwrap(),
+                "--out-dir",
                 out.to_str().unwrap(),
             ])
             .status()
             .expect("spawn");
         assert!(status.success(), "run {i} failed");
-        let text = std::fs::read_to_string(&out).unwrap();
+        let recipe = bundle_recipe(&out, "GROMACS", "GROMACS-2024.1-foss-2025b.eb");
+        let text = std::fs::read_to_string(&recipe).unwrap();
         assert!(text.contains("toolchain = {'name': 'foss', 'version': '2025b'}"));
         assert!(text.contains("version = '2024.1'"));
+        assert!(out.join("package.sbom.cdx.json").is_file());
+        assert!(out.join("locks/default.lock.json").is_file());
         if i == 1 {
-            let first = std::fs::read_to_string(tmp.path().join("run0.eb")).unwrap();
+            let first = std::fs::read_to_string(bundle_recipe(
+                &tmp.path().join("run0"),
+                "GROMACS",
+                "GROMACS-2024.1-foss-2025b.eb",
+            ))
+            .unwrap();
             assert_eq!(first, text, "two CLI runs must produce identical content");
         }
     }
@@ -199,7 +221,7 @@ fn cli_bump_auto_resolve_from_easyconfigs() {
     let src = gromacs_repro_source();
     let universe = gromacs_repro_universe();
     let tmp = tempfile::tempdir().expect("tempdir");
-    let out = tmp.path().join("out.eb");
+    let out = tmp.path().join("bundle");
 
     let status = Command::new(bin)
         .args([
@@ -213,13 +235,16 @@ fn cli_bump_auto_resolve_from_easyconfigs() {
             "2024a",
             "--easyconfigs",
             universe.to_str().unwrap(),
-            "--out",
+            "--out-dir",
             out.to_str().unwrap(),
         ])
         .status()
         .expect("spawn eb-stack bump --easyconfigs");
     assert!(status.success(), "auto bump failed: {status}");
-    let text = std::fs::read_to_string(&out).expect("read");
+    let recipe = bundle_recipe(&out, "GROMACS", "GROMACS-2024.4-foss-2024a.eb");
+    let text = std::fs::read_to_string(recipe).expect("read");
+    assert!(out.join("package.sbom.cdx.json").is_file());
+    assert!(out.join("locks/default.lock.json").is_file());
     assert!(text.contains("toolchain = {'name': 'foss', 'version': '2024a'}"));
     assert!(text.contains("('Python', '3.12.3')"));
     assert!(text.contains("('mpi4py', '4.0.1')"));
