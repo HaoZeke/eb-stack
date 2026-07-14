@@ -270,8 +270,8 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         if !output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
             let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-            let class = classify_build_failure("build", &stdout, &stderr, output.status.code());
-            let evidence = compact_evidence(&stdout, &stderr);
+            let evidence = build_failure_evidence(&stdout, &stderr);
+            let class = classify_build_failure("build", &evidence, "", output.status.code());
             state.findings.push(BuildFinding {
                 id: format!(
                     "attempt:{}:finding:{}",
@@ -525,6 +525,8 @@ pub fn classify_build_failure(
         }
     } else if text.contains("oom-kill") || text.contains("out of memory") {
         BuildFindingClass::Resource
+    } else if text.contains("glibc_") && text.contains("not found") {
+        BuildFindingClass::Runtime
     } else if text.contains("checksum") && (text.contains("failed") || text.contains("mismatch")) {
         BuildFindingClass::Checksum
     } else if text.contains("patch") && (text.contains("failed") || text.contains("reject")) {
@@ -721,6 +723,45 @@ fn compact_evidence(stdout: &str, stderr: &str) -> String {
             .collect();
     }
     compact
+}
+
+fn build_failure_evidence(stdout: &str, stderr: &str) -> String {
+    let mut evidence = compact_evidence(stdout, stderr);
+    let combined = format!("{stdout}\n{stderr}");
+    for path in easybuild_output_paths(&combined).into_iter().take(4) {
+        let Ok(nested) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        evidence.push_str(&format!(
+            "\nEasyBuild command output {}:\n{}",
+            path.display(),
+            compact_evidence(&nested, "")
+        ));
+    }
+    evidence
+}
+
+fn easybuild_output_paths(output: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for line in output.lines() {
+        if !line.contains("output (stdout + stderr)") {
+            continue;
+        }
+        let Some((_, raw_path)) = line.rsplit_once("->") else {
+            continue;
+        };
+        let raw_path = raw_path
+            .split_once('\u{1b}')
+            .map(|(path, _)| path)
+            .unwrap_or(raw_path)
+            .trim();
+        if !raw_path.is_empty() {
+            paths.push(PathBuf::from(raw_path));
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 fn discover_files(root: &Path, extension: &str) -> Result<Vec<PathBuf>, CampaignError> {
