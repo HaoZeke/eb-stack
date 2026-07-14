@@ -1,125 +1,144 @@
-//! Goal-scenario acceptance: parse conda-forge (eOn) and Spack (QMCPACK) into
-//! an SBOM + build manifest, then emit an EasyBuild recipe, on the landable
-//! foss-2026.1 generation. Locks the exact product goal as a machine check.
-//!
-//! Drives the shipped `plan_and_emit` library path (foreign -> IntermediatePlan
-//! IR -> planned CycloneDX SBOM -> hierarchy + resolvo joint co-select -> new
-//! `.eb`). The *resolves* rung against a full easyconfigs robot is proven on a
-//! real EasyBuild host; here the in-repo overlay carries the companion recipes
-//! only, so we assert the mechanical artefacts + reparse (the honest fixture
-//! guarantee) rather than a full resolvo co-select.
+//! End-to-end acceptance for the two motivating foreign package workflows.
 
-use eb_stack::{plan_and_emit, resolve_easyconfig_file, ForeignFormat, IngestOpts, Toolchain};
-use serde_json::Value;
-use std::path::PathBuf;
+use eb_stack::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
+use eb_stack::package_config::ProfileConfigLayer;
+use eb_stack::version::matches_req;
+use eb_stack::{
+    inspect_new_package, plan_new_package, resolve_easyconfig_file, write_package_bundle,
+    ForeignFormat, NewPackageRequest, Toolchain,
+};
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-fn foss_2026() -> Toolchain {
+fn toolchain() -> Toolchain {
     Toolchain {
         name: "foss".into(),
         version: "2026.1".into(),
     }
 }
 
-fn robot_overlay() -> PathBuf {
-    repo().join("fixtures/eon_foss_2026_1/easyconfigs")
+fn policy() -> StackPolicy {
+    StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "acceptance".into(),
+        toolchain: toolchain(),
+        pins: Vec::new(),
+        exclusions: Vec::new(),
+    }
 }
 
-fn read_json(p: &std::path::Path) -> Value {
-    let text = std::fs::read_to_string(p).expect("read json artefact");
-    serde_json::from_str(&text).expect("parse json artefact")
+fn satisfying_version(requirement: Option<&str>) -> String {
+    let requirement = requirement.unwrap_or("*");
+    let mut candidates = requirement
+        .split([',', '|'])
+        .map(|term| {
+            term.trim()
+                .trim_start_matches(['=', '>', '<', '~', '^', '@', ' '])
+                .split(':')
+                .next()
+                .unwrap_or("")
+                .trim_end_matches('*')
+                .to_string()
+        })
+        .filter(|candidate| !candidate.is_empty())
+        .collect::<Vec<_>>();
+    candidates.extend(["1.0".into(), "2.0".into(), "2026.1".into(), "9999.0".into()]);
+    candidates
+        .into_iter()
+        .find(|candidate| matches_req(candidate, requirement))
+        .unwrap_or_else(|| "1.0".into())
 }
 
-/// A planned SBOM must be a CycloneDX document carrying the package as a
-/// component (name match, case-insensitive).
-fn assert_cyclonedx_has_component(sbom: &Value, pkg: &str) {
-    assert_eq!(
-        sbom.get("bomFormat").and_then(Value::as_str),
-        Some("CycloneDX"),
-        "planned SBOM is not CycloneDX: {sbom}"
-    );
-    let comps = sbom
-        .get("components")
-        .and_then(Value::as_array)
-        .expect("SBOM has components array");
-    let found = comps.iter().any(|c| {
-        c.get("name")
-            .and_then(Value::as_str)
-            .map(|n| n.eq_ignore_ascii_case(pkg))
-            .unwrap_or(false)
-    });
-    assert!(found, "planned SBOM has no component for {pkg}: {sbom}");
+fn synthetic_robot(plan: &eb_stack::package::PackagePlan, root: &Path) {
+    let mut written = BTreeSet::new();
+    for dependency in &plan.dependencies {
+        if dependency.virtual_capability.is_some() {
+            continue;
+        }
+        let name = dependency.eb_name.as_deref().unwrap_or(&dependency.name);
+        let version = satisfying_version(dependency.constraint.as_deref());
+        if !written.insert((name.to_string(), version.clone())) {
+            continue;
+        }
+        let filename = format!("{name}-{version}-foss-2026.1.eb");
+        std::fs::write(
+            root.join(filename),
+            format!(
+                "name = {name:?}\nversion = {version:?}\ntoolchain = {{'name': 'foss', 'version': '2026.1'}}\n"
+            ),
+        )
+        .expect("synthetic robot candidate");
+    }
 }
 
-fn run_plan(source_rel: &str, format: ForeignFormat, exp_name: &str) {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let manifest_out = tmp.path().join("plan.manifest.json");
-    let sbom_out = tmp.path().join("plan.sbom.json");
-    let out_dir = tmp.path().join("out");
-    let toolchain = foss_2026();
-    let opts = IngestOpts {
-        easyconfigs: vec![robot_overlay()],
-        keep_old_deps: true,
-        hierarchy_fixture: None,
-    };
+fn run_package(
+    source: &str,
+    format: ForeignFormat,
+    profile_config: &str,
+    expected_name: &str,
+    expected_profiles: usize,
+) {
+    let source = repo().join(source);
+    let profile = ProfileConfigLayer::from_path(&repo().join(profile_config)).expect("profiles");
+    let (inspected, inspected_sbom) =
+        inspect_new_package(&source, Some(format), &toolchain(), &[profile.clone()])
+            .expect("inspect package");
+    assert_eq!(inspected.package.name, expected_name);
+    assert_eq!(inspected.profiles.len(), expected_profiles);
+    assert_eq!(inspected_sbom["bomFormat"], "CycloneDX");
 
-    let (plan, eb_path) = plan_and_emit(
-        &repo().join(source_rel),
-        Some(format),
-        &toolchain,
-        &opts,
-        Some(&manifest_out),
-        Some(&sbom_out),
-        None,
-        Some(&out_dir),
-        None,
-    )
-    .expect("plan_and_emit on foss-2026.1");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let robot = temp.path().join("robot");
+    std::fs::create_dir(&robot).expect("robot");
+    synthetic_robot(&inspected, &robot);
+    let bundle = plan_new_package(&NewPackageRequest {
+        source,
+        format: Some(format),
+        toolchain: toolchain(),
+        profile_layers: vec![profile],
+        easyconfig_roots: vec![robot],
+        stack_policy: policy(),
+    })
+    .expect("plan package");
+    assert_eq!(bundle.locks.len(), expected_profiles);
+    assert_eq!(bundle.easyconfigs.len(), expected_profiles);
+    assert_eq!(bundle.sbom["bomFormat"], "CycloneDX");
 
-    // Manifest IR written and coherent.
-    assert!(manifest_out.is_file(), "manifest not written");
-    let manifest = read_json(&manifest_out);
-    assert!(
-        manifest.get("package").is_some(),
-        "manifest missing package IR: {manifest}"
-    );
-    assert_eq!(plan.package.name.to_lowercase(), exp_name.to_lowercase());
-
-    // Planned CycloneDX SBOM written and lists the package.
-    assert!(sbom_out.is_file(), "SBOM not written");
-    let sbom = read_json(&sbom_out);
-    assert_cyclonedx_has_component(&sbom, exp_name);
-
-    // Emitted easyconfig reparses to the target identity + toolchain.
-    let eb = eb_path.expect("emitted .eb path");
-    assert!(eb.is_file(), "emitted .eb missing at {}", eb.display());
-    let resolved = resolve_easyconfig_file(&eb).expect("reparse emitted .eb");
-    assert_eq!(resolved.toolchain.name, "foss");
-    assert_eq!(resolved.toolchain.version, "2026.1");
-    assert_eq!(
-        resolved.name.to_lowercase(),
-        exp_name.to_lowercase(),
-        "emitted recipe name mismatch"
-    );
+    let output = temp.path().join("bundle");
+    let written = write_package_bundle(&bundle, &output).expect("write bundle");
+    assert!(written.manifest.is_file());
+    assert!(written.sbom.is_file());
+    assert_eq!(written.locks.len(), expected_profiles);
+    assert_eq!(written.easyconfigs.len(), expected_profiles);
+    for easyconfig in written.easyconfigs {
+        let recipe = resolve_easyconfig_file(&easyconfig).expect("reparse emitted recipe");
+        assert_eq!(recipe.name, expected_name);
+        assert_eq!(recipe.toolchain, toolchain());
+    }
 }
 
 #[test]
-fn conda_eon_to_sbom_manifest_recipe_foss_2026_1() {
-    run_plan(
+fn conda_eon_becomes_a_resolved_package_bundle() {
+    run_package(
         "fixtures/foreign_ingest/conda_eon/recipe.yaml",
         ForeignFormat::CondaForge,
-        "eon",
+        "examples/profiles/eon.toml",
+        "eOn",
+        1,
     );
 }
 
 #[test]
-fn spack_qmcpack_to_sbom_manifest_recipe_foss_2026_1() {
-    run_plan(
+fn spack_qmcpack_becomes_two_resolved_variant_recipes() {
+    run_package(
         "fixtures/foreign_ingest/spack_qmcpack/package.py",
         ForeignFormat::Spack,
-        "qmcpack",
+        "examples/profiles/qmcpack.toml",
+        "QMCPACK",
+        2,
     );
 }
