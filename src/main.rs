@@ -224,7 +224,12 @@ fn main() -> Result<()> {
         Command::Stack { command } => run_stack(command),
         Command::Target { command } => run_target(command),
         Command::Campaign { command } => run_campaign(command),
-        Command::Mcp => eb_stack::mcp::serve_stdio().map_err(anyhow::Error::msg),
+        Command::Mcp => {
+            let stdin = std::io::stdin();
+            let stdout = std::io::stdout();
+            eb_stack::mcp::run_server(stdin.lock(), stdout.lock()).context("MCP stdio server")?;
+            Ok(())
+        }
     }
 }
 
@@ -288,14 +293,14 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
         emit_next_generation_auto_from_path_with_opts(
             &args.source,
             &toolchain,
-            args.version.clone(),
-            args.source_checksum.clone(),
             easyconfigs,
+            None,
             args.hierarchy_fixture.as_deref(),
             &overrides,
+            args.version.clone(),
+            args.source_checksum.clone(),
             &AutoResolveOpts {
                 keep_old: args.keep_old_deps,
-                use_consensus: true,
             },
         )?
     } else {
@@ -394,7 +399,22 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
                 } else {
                     format_style_file(path, destination)?
                 };
-                println!("{}", serde_json::to_string_pretty(&result)?);
+                println!(
+                    "{}: rewritten={} remaining={}",
+                    path.display(),
+                    result.lines_rewritten,
+                    result.remaining.len()
+                );
+                for finding in result.remaining {
+                    println!(
+                        "{}:{}:{}: {} {}",
+                        path.display(),
+                        finding.line,
+                        finding.column,
+                        finding.code,
+                        finding.message
+                    );
+                }
             }
             Ok(())
         }
