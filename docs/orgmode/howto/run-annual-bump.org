@@ -1,268 +1,127 @@
-#+TITLE: Run the annual toolchain-generation bump
+#+TITLE: Run an annual toolchain-generation bump
 #+OPTIONS: toc:t num:nil
 
-Goal: move a set of EasyBuild easyconfigs from one toolchain generation to the
-next (for example ~foss-2023b~ -> ~foss-2024a~, or onto the current development
-generation) using ~eb-stack~ for every mechanical step and a short, named list
-of human decisions for the rest. This page is the operator guide. The agent
-driver contract lives in the repository's
-[[https://github.com/HaoZeke/eb-stack/blob/main/skills/annual-bump/SKILL.md][annual-bump
-skill]] (~skills/annual-bump/SKILL.md~); both documents describe the same
-loop.
+The annual workflow applies the canonical bump bundle to each maintained
+recipe, then drives every bundle through the same target-routed build campaign.
+Dependency version selection is mechanical; build failures remain typed repair
+work.
 
-#+begin_export rst
-.. figure:: /images/00-hero-annual-bump.jpg
-   :alt: Mascot stamping foss-2024a onto easyconfig cards with a residual sticky note
-   :align: center
-   :width: 88%
+* Prepare the generation inputs
 
-   Stamp the generation, lock what resolves, leave the residual for review.
-#+end_export
+Record:
 
-* What this closes
+- the source and target toolchain generations;
+- upstream EasyBuild robot roots and site overlays;
+- the stack-policy TOML for site/distribution preferences;
+- the public target base plus the site target layer;
+- the maintained recipe list and destination easyconfigs repository.
 
-An annual (or mid-year) stack rebuild has three separable problems:
+The site layer owns hostnames, scheduler sizing, module setup, durable build
+paths, container images, and environment. Do not put those values in the
+public skill.
 
-1. *Rewrite every recipe* onto the new generation: change ~toolchain~, and
-   replace every ~dependencies~ / ~builddependencies~ version with the version
-   that generation actually ships at the right sub-toolchain tier
-   (~GCCcore~ / ~GCC~ / ~gfbf~ / ~gompi~ / ...).
-2. *Prove the set is jointly consistent* before anyone spends a build cycle:
-   every dependency each recipe names exists at a generation-native version.
-3. *Ship a reviewable change*: a build list in dependency order and a
-   package-level stack diff pasteable into a PR.
-
-~eb-stack~ closes (1) and (2) mechanically and hands you the artifacts for
-(3). On a measured sample of 34 real ~foss-2023b~ -> ~foss-2024a~ maintainer
-pairs it reproduces the next-generation recipe exactly, or exactly modulo a
-hand-added dependency, for about half the packages, and *never* silently
-emits a wrong dependency version for the rest -- see
-[[file:../explanation/fidelity.org][reproduction fidelity]]. The residual is
-a short, named list of judgment calls (section *What you still decide*), not
-a person-month of hand edits.
-
-* What this does not close
-
-- *Builds.* Resolving a stack is not building it. ~eb-stack check-recipe~
-  exit 0 means the plan is complete; only ~eb --robot~ proves the install.
-  See [[file:../explanation/lifecycle.org][the lifecycle]] for the
-  resolve / build / binary-verified ladder.
-- *Genuinely new dependencies* the new application version needs that the
-  old recipe never declared (for example GROMACS 2024.4 on ~foss-2024a~
-  adds ~pybind11~; the tool correctly does not invent that line).
-- *Source checksums and patch sets on an application version bump.* The
-  tool renames the tarball key and warns; you supply ~--source-checksum~
-  and review patches.
-- *One-off pins* a maintainer deliberately freezes below the generation
-  consensus. Override with ~--dep Name=version~ when you know the reason.
-- *Opening PRs.* Branch pushes to a fork you own are fine; the PR surface
-  belongs to a human.
-
-* Prerequisites
-
-1. *The binary.* From the ~eb-stack~ repository root:
+* Generate one canonical bundle per recipe
 
 #+begin_src bash
-cargo build --release
-export PATH="$PWD/target/release:$PATH"
-eb-stack --version
-#+end_src
-
-2. *A robot tree.* A directory of ~.eb~ files that supplies dependency
-   versions for the *target* generation -- an EasyBuild install's
-   ~easyconfigs/~ tree, or a clone of
-   [[https://github.com/easybuilders/easybuild-easyconfigs][easybuild-easyconfigs]].
-   Site overlays pass as a second ~--easyconfigs~ (later path wins on
-   conflict).
-
-3. *The recipes to move.* The previous generation's build list, retargeted
-   (toolchains first, then libraries, then applications).
-
-4. *(Optional) A site runbook.* Host-specific init paths, module names, and
-   scheduler sizing live next to the skill, not inside it. Ask for one if
-   you build on shared HPC.
-
-* Bump one recipe (copy-paste)
-
-#+begin_src bash
-eb-stack bump \
-  --source path/to/App-<ver>-foss-2023b.eb \
+eb-stack package bump \
+  --source easyconfigs/g/GROMACS/GROMACS-2024.4-foss-2023b.eb \
   --toolchain-name foss \
   --toolchain-version 2024a \
-  --easyconfigs /path/to/easyconfigs \
-  --out path/to/App-<ver>-foss-2024a.eb
+  --easyconfigs vendor/easybuild-easyconfigs/easybuild/easyconfigs \
+  --easyconfigs site/easyconfigs \
+  --stack-policy stacks/foss-2024a.toml \
+  --out-dir work/GROMACS-2024.4-foss-2024a
 #+end_src
 
-No ~--dep~ flags. Every dependency and build-dependency version is resolved
-from ~--easyconfigs~ across the target generation's sub-toolchain hierarchy.
-Run the same command twice: both writes are byte-identical.
+Repeat mechanically for the maintained set. Each successful bundle contains a
+manifest, planned SBOM, default profile lock, and recipe. The lock records stack
+pin fallbacks and exclusions, making generation policy reviewable.
 
-** Worked in-repo example (no external robot required)
+* Validate generated recipes
 
 #+begin_src bash
-eb-stack bump \
-  --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
-  --toolchain-name foss \
-  --toolchain-version 2024a \
-  --easyconfigs tests/repro_fixtures/universe_foss_2024a \
-  --out-dir /tmp/gromacs-2024a
-diff tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
-     /tmp/gromacs-2024a/GROMACS-2024.4-foss-2024a.eb
+eb-stack recipe format work/*/easyconfigs/*/*/*.eb
+eb-stack recipe lint work/*/easyconfigs/*/*/*.eb
+
+eb-stack recipe check \
+  --recipe work/GROMACS-2024.4-foss-2024a/easyconfigs/g/GROMACS/GROMACS-2024.4-foss-2024a.eb \
+  --easyconfigs vendor/easybuild-easyconfigs/easybuild/easyconfigs \
+  --easyconfigs site/easyconfigs \
+  --easyconfigs work/GROMACS-2024.4-foss-2024a/easyconfigs
 #+end_src
 
-The diff is the toolchain line and six dependency versions. Compare the
-emitted file to
-~tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2024a.eb~: the only
-intentional gap is ~('pybind11', '2.12.0')~, which the maintainer added by
-hand and the tool correctly does not invent. Full walkthrough:
-[[file:../tutorial.org][the tutorial]].
+Resolve missing dependencies by adding a real package bundle or authored recipe.
+Checksums are positional: all sources first, then patches. Fix recipe content;
+never bypass the packaging gate.
 
-** Version bump (application release + generation)
+* Solve the multi-root stack
+
+Use ~stack solve~ when the campaign also needs a generation-wide lock, build
+list, or baseline diff:
 
 #+begin_src bash
-eb-stack bump \
-  --source path/to/App-1.0-foss-2023b.eb \
-  --toolchain-name foss --toolchain-version 2024a \
-  --version 1.1 \
-  --source-checksum <sha256> \
-  --easyconfigs /path/to/easyconfigs \
-  --out path/to/App-1.1-foss-2024a.eb
+eb-stack stack solve \
+  --easyconfigs vendor/easybuild-easyconfigs/easybuild/easyconfigs \
+  --easyconfigs site/easyconfigs \
+  --policy policies/annual-foss-2024a.json \
+  --baseline-easyconfigs vendor/easybuild-easyconfigs/easybuild/easyconfigs \
+  --lock-out work/stack.lock.json \
+  --sbom-out work/stack.cdx.json \
+  --build-list-out work/build.list \
+  --stack-diff-out work/stack.diff.md
 #+end_src
 
-Without ~--source-checksum~ the tool renames the tarball key and *warns*
-that the checksum value is stale. Review ~patches~ yourself -- a new
-application release commonly needs a different patch set.
+The whole-stack policy and package stack-policy solve related but distinct
+problems: JSON chooses a multi-root stack; TOML controls preferred/locked pins
+and exclusions for one generated product profile.
 
-* Verify each emitted recipe
+* Validate target routing
 
 #+begin_src bash
-eb-stack check-recipe \
-  --recipe path/to/App-<ver>-foss-2024a.eb \
-  --easyconfigs /path/to/easyconfigs
-# Overlay order when you also have draft companions:
-#   --easyconfigs "$ROBOT" --easyconfigs "$DRAFTS"
+eb-stack target doctor \
+  --config examples/targets/base.toml \
+  --config ~/.config/eb-stack/site.toml \
+  --target site-builder
 #+end_src
 
-Exit 0 with zero missing deps means the recipe *resolves*. A missing dep
-prints the generations where that package *does* exist ("available at other
-generations: ...") -- that list is the work queue. The same command also
-lint-checks ~checksums~ position (all sources first, then patches); a
-~[packaging]~ finding means reorder the list, never bypass the gate.
+The doctor must show healthy transport, executor, runtime, and EasyBuild
+workload checks before a campaign claim is trusted.
 
-* Solve the whole set
-
-Once every recipe in the build list has been bumped and check-recipe is
-green on each:
+* Drive every build campaign
 
 #+begin_src bash
-eb-stack solve \
-  --easyconfigs /path/to/easyconfigs \
-  --policy policy.json \
-  --baseline-easyconfigs /path/to/previous-generation \
-  --lock-out stack.lock.json \
-  --build-list-out build-list.txt \
-  --stack-diff-out stack-diff.md
+eb-stack campaign run \
+  --bundle work/GROMACS-2024.4-foss-2024a \
+  --config examples/targets/base.toml \
+  --config ~/.config/eb-stack/site.toml \
+  --target site-builder \
+  --state work/GROMACS-2024.4-foss-2024a.campaign.json
 #+end_src
 
-~stack-diff.md~ is the reviewable package-level summary (unchanged / added
-/ removed / version-bumped). Policy shape and root priority:
-[[file:root-priority.org][declare root priority]],
-[[file:solve-lock.org][solve a stack lock]].
+Hermes owns the retry loop. OMP workers claim findings and repair according to
+class:
 
-* The end-to-end loop
+| Class | Repair surface |
+|-
+| transport / executor / runtime | target or site configuration |
+| checksum | source digest and positional checksum list |
+| patch | patch source or applicability |
+| dependency-missing | manifest, profile, stack policy, or real dependency recipe |
+| configure / compile / link | product configuration, toolchain, patch, or dependency selection |
+| test / install / sanity | recipe build logic and verification |
+| resource / timeout | scheduler sizing or retry policy |
 
-For each recipe in the build list:
+Each resolution records action, evidence, and changed paths. Rerun the same
+campaign state; successful stages supersede stale open findings.
 
-1. ~bump~ it onto the new generation (~--easyconfigs~ auto-resolves deps).
-2. On non-zero exit or a warning, resolve the residual (next section) and
-   re-run.
-3. ~check-recipe~ against the robot (and any companion overlay). Keep the
-   diff for review.
-4. When the set is complete, ~solve~ for joint consistency and emit the
-   build list + stack diff.
-5. Open *one* PR per recipe set after checking for an existing open PR for
-   the same software. A human reviews before any install.
+* Report claims accurately
 
-* What you still decide (the residual)
+- *resolves* means every requested profile has a lock and recipe.
+- *builds* means every emitted recipe succeeds through EasyBuild on the target.
+- *binary-verified* means every declared verification command succeeds.
 
-| Signal from the tool | Your action |
-|----------------------+-------------|
-| Diff shows a dep the maintainer added that the source never had | Add it from upstream requirements; re-resolve its version |
-| "checksum is stale" warning on a version bump | Supply ~--source-checksum <sha256>~ (or ~eb --inject-checksums~) |
-| "patches were not modified" on a version bump | Review whether each patch still applies; swap the set if needed |
-| One dep differs from generation consensus and you know why | ~--dep Name=version~ to pin; otherwise accept the tool's version |
-| Missing dep with "available at other generations: ..." | Bump or author that companion from the newest listed generation |
-| ~[packaging]~ checksum finding | Reorder ~checksums~: sources first, then patches |
+An annual bump is not complete while an affected campaign remains failed or a
+required verification command is absent. The human operator owns branch/PR
+publication; the campaign supplies the recipe set and evidence.
 
-Everything else in a diff -- reordered blocks, quote style, description
-rewrapping, a Qt5 -> Qt6 swap -- is maintainer cosmetic or structural
-change, not a version error. The tool's recipe is the correct mechanical
-baseline; match formatting only if review requires it.
-
-* Report claims carefully (three rungs)
-
-Never conflate these:
-
-1. *Resolves* -- ~check-recipe~ exit 0, zero missing. Say "resolves", not
-   "works".
-2. *Builds* -- ~eb --robot~ green; module file exists. Prefer two legs when
-   the recipe is PR-bound: a delta build against a prebuilt stack, and a
-   virgin-robot full build.
-3. *Binary-verified* -- module loads; ~env -i <bin> --version~ and ~ldd~
-   show the stack's libraries.
-
-* Known bumps CI already guards
-
-The repository freezes real maintainer ~(source, target)~ pairs under
-~tests/repro_fixtures/~ and landable packaging sets under ~fixtures/~.
-GitHub Actions (~.github/workflows/ci_test.yml~) runs them on every push and
-pull request:
-
-| Suite | Command | What it proves |
-|-------+---------+----------------|
-| Known toolchain bumps | ~cargo test --test reproduce_real_prs --test bump_emit~ | GROMACS, ScaFaCoS, MDTraj, Fiona, PuLP, numba: ~foss-2023b~ -> ~foss-2024a~ library *and* CLI auto-bump match the real targets (modulo documented hand-added deps) |
-| Packaging fixtures | ~cargo test --test eon_foss_2026_1 --test qmcpack_foss_2026_1 --test eon_packaging~ | eOn 2.16.0 and QMCPACK 4.3.0 landable recipe sets parse, resolve, and pass ~packaging_gate~ (robot-overlay checks skip cleanly without a full easyconfigs tree) |
-| Solve / reports | ~cargo test --test build_list_and_stack_diff~ | Lock, build list, and stack-diff emission on the GROMACS multi-generation fixture |
-| CLI smoke | release ~eb-stack bump~ on the GROMACS tutorial path | The binary surface the skill documents, end to end |
-
-Replay the known-bump gate locally:
-
-#+begin_src bash
-cargo test --locked --test reproduce_real_prs --test bump_emit
-cargo test --locked --test eon_foss_2026_1 --test qmcpack_foss_2026_1 --test eon_packaging
-#+end_src
-
-Robot-dependent overlay checks also accept ~EB_EASYCONFIGS=/path/to/easyconfigs~
-(or the default ~$HOME/.venvs/easybuild/easybuild/easyconfigs~) when you want
-full check-recipe closure against a real tree; without it those cases skip
-rather than fail.
-
-* Driving with an agent
-
-Any capable agent (or a human) can execute
-~skills/annual-bump/SKILL.md~ end to end. The skill names no model: the
-tool owns EasyBuild semantics, the driver only handles the residual table
-above. If the harness speaks MCP:
-
-#+begin_src bash
-# Register once (Claude Code example; other harnesses have an equivalent)
-claude mcp add eb-stack -- eb-stack mcp
-#+end_src
-
-~eb-stack mcp~ serves ~eb_check_recipe~ / ~eb_bump~ / ~eb_solve~ over stdio;
-every check result embeds the three-claim ladder and derived next actions.
-Pair the skill with your site runbook for scheduler and host init. Hard
-rules: run the real CLI (never guess versions in prose), report which rung
-of the ladder you established, and leave the PR surface to a human.
-
-* Next steps
-
-- [[file:../tutorial.org][Tutorial]] -- one GROMACS recipe, zero hand-fed
-  versions, the residual ~pybind11~ line included.
-- [[file:bump-recipe.org][How to bump a recipe]] -- every ~bump~ flag.
-- [[file:../explanation/fidelity.org][Reproduction fidelity]] -- measured
-  rates and residual classes.
-- [[file:../explanation/lifecycle.org][From recipe to installed stack]] --
-  resolve vs build vs binary-verified.
-- [[https://github.com/HaoZeke/eb-stack/blob/main/skills/annual-bump/SKILL.md][annual-bump
-  skill]] -- full operational runbook for agent or human drivers.
+The executable procedure is ~skills/annual-bump/SKILL.md~.

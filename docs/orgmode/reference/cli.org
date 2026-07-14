@@ -1,351 +1,204 @@
-#+TITLE: CLI Reference
-#+OPTIONS: toc:t num:t
+#+TITLE: Command-line reference
+#+OPTIONS: toc:t num:nil
 
-* Top-level usage
+~eb-stack~ has five namespaced command groups plus an MCP server. All paths
+written by package commands are deterministic bundle artifacts.
 
-#+begin_src text
-eb-stack {solve|parse|check-recipe|solve-json|sbom|bump|mcp|ingest} [subcommand options]
+* Command map
+
+| Command | Purpose |
+|-
+| ~package inspect~ | Parse conda-forge or Spack into a manifest and planned SBOM |
+| ~package plan~ | Materialize profiles, solve with Resolvo, and emit recipes |
+| ~package bump~ | Retarget an EasyBuild recipe and write the same canonical bundle |
+| ~recipe check~ | Validate metadata and robot dependency availability |
+| ~recipe lint~ / ~recipe format~ | Report or mechanically repair EasyBuild E501 findings |
+| ~stack solve~ / ~stack sbom~ | Solve a multi-root stack or emit SBOM from a lock |
+| ~target list~ / ~target doctor~ | Resolve layered target configuration and probe it |
+| ~campaign run~ / ~campaign status~ | Execute or inspect a persisted build campaign |
+| ~campaign finding ...~ | Claim and resolve typed build findings |
+| ~mcp~ | Serve the same workflows over stdio |
+
+* Package commands
+
+** ~package inspect~
+
+#+begin_src bash
+eb-stack package inspect \
+  --source PATH \
+  --format auto|conda-forge|spack \
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  [--profile-config PROFILE.toml]... \
+  --out-dir BUNDLE
 #+end_src
 
-Built on [[https://docs.rs/clap][clap]]'s derive API. Every subcommand accepts
-~--help~ for its own usage text; ~eb-stack --version~ prints the crate
-version.
+This writes ~package.plan.json~ and ~package.sbom.cdx.json~. It does not solve
+profiles or emit recipes, so it establishes no claim-ladder rung.
 
-Subcommands at a glance:
+** ~package plan~
 
-| Subcommand | Role |
-|------------|------|
-| ~solve~ | Parse trees, resolvo co-select, lock + optional SBOM / build list / stack diff |
-| ~parse~ | Dump parsed candidates as JSON (no solve) |
-| ~check-recipe~ | One recipe: robot dep completeness + packaging gates (*resolves* rung) |
-| ~solve-json~ | Solve from a pre-built universe JSON |
-| ~sbom~ | CycloneDX from an existing lock |
-| ~bump~ | Next-generation easyconfig rewrite (hierarchy-aware auto deps) |
-| ~mcp~ | Stdio MCP server (~eb_check_recipe~ / ~eb_bump~ / ~eb_solve~) |
-| ~ingest~ | Foreign conda-forge / Spack recipe → EB scaffold |
-
-* solve
-
-Parse a tree of ~.eb~ files, solve with resolvo, write a lock and a planned
-CycloneDX SBOM. This subcommand is the primary entry point.
-
-#+begin_src text
-eb-stack solve
-  --easyconfigs PATH...
-  --policy PATH
-  [--baseline-easyconfigs PATH]
-  [--baseline-toolchain-version VERSION]
-  [--lock-out PATH]              (default: stack.lock.json)
-  [--sbom-out PATH]
-  [--build-list-out PATH]
-  [--stack-diff-out PATH]
+#+begin_src bash
+eb-stack package plan \
+  --source PATH \
+  --format conda-forge|spack \
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  [--profile-config PROFILE.toml]... \
+  --easyconfigs UPSTREAM \
+  [--easyconfigs OVERLAY]... \
+  --stack-policy STACK.toml \
+  --out-dir BUNDLE
 #+end_src
 
-- ~--easyconfigs~ :: Root directory of easyconfigs, walked recursively for
-  ~*.eb~. Required, repeatable: pass it more than once to layer trees, with
-  *later* paths overriding earlier ones for the same
-  name+version+toolchain identity (a site overlay on top of an upstream
-  checkout). See
-  [[file:../howto/solve-lock.org][how to layer a site overlay]].
-- ~--policy~ :: Policy JSON path. Required. See the
-  [[file:policy.org][policy schema]].
-- ~--baseline-easyconfigs~ :: Optional second tree (or the same tree) used to
-  build the baseline lock for upgrade comparisons and ~require_upgrade~. When
-  omitted, no baseline is built and ~--stack-diff-out~ is an error.
-- ~--baseline-toolchain-version~ :: When the baseline tree contains
-  *multiple* generations of the policy's toolchain family, this pins which generation is
-  the baseline. Without it, the nearest lower generation than the policy
-  target is chosen automatically (EasyBuild-style version ordering, e.g.
-  target ~2025b~ with ~2024b~ and ~2025a~ present in the tree picks
-  ~2025a~, not ~2024b~).
-- ~--lock-out~ :: Where to write the solved lock. Default ~stack.lock.json~.
-- ~--sbom-out~ :: Where to write the planned CycloneDX SBOM. *Opt-in*: with
-  no ~--sbom-out~, no SBOM file is written at all -- there is no default
-  filename. Pass it explicitly to get an SBOM alongside the lock.
-- ~--build-list-out~ :: Optional plain-text build list, one selected
-  easyconfig path per line, dependencies before the packages that need them.
-- ~--stack-diff-out~ :: Optional markdown diff of the solved lock against the
-  baseline lock. Requires a baseline (see ~--baseline-easyconfigs~).
+Later robot paths override earlier paths for the same EasyBuild identity.
+Each requested product profile is solved independently and emits one lock plus
+one conventional ~.eb~ file. The default profile has no suffix; non-default
+profiles use their declared ~versionsuffix~.
 
-* check-recipe
+** ~package bump~
 
-Packaging check for *one* easyconfig: resolve every runtime and build
-dependency against robot tree(s), and run packaging gates (positional
-checksum lint, required ~configopts~ substrings). This establishes only the
-*resolves* rung of the reporting ladder -- not builds, not binary
-verification. See [[file:../explanation/lifecycle.org][lifecycle]] and
-[[file:../howto/run-annual-bump.org][annual bump]].
+#+begin_src bash
+eb-stack package bump \
+  --source RECIPE.eb \
+  --toolchain-name foss \
+  --toolchain-version 2024a \
+  [--version VERSION] \
+  [--source-checksum SHA256] \
+  [--dep NAME=VERSION]... \
+  --easyconfigs UPSTREAM \
+  [--easyconfigs OVERLAY]... \
+  [--hierarchy-fixture HIERARCHY.json] \
+  [--stack-policy STACK.toml] \
+  --out-dir BUNDLE
+#+end_src
 
-Cross-toolchain deps (for example ~quill~ on ~GCCcore~ while the recipe is
-~gfbf~) are matched by identity, not by filtering the universe to the
-recipe's toolchain alone. Exit 1 if any dep is missing or a packaging gate
-fails.
+A bump writes the same manifest, planned SBOM, profile lock, and recipe layout
+as a new package. ~--dep~ becomes a locked Resolvo override. Without
+~--stack-policy~, the solver uses an unconstrained policy for the requested
+toolchain. A changed package version without ~--source-checksum~ produces a
+visible residual because source bytes cannot be inferred safely.
+
+* Bundle layout
 
 #+begin_src text
-eb-stack check-recipe
-  --recipe PATH
-  --easyconfigs PATH...
-  [--require-configopt SUBSTR]...
+BUNDLE/
+  package.plan.json
+  package.sbom.cdx.json
+  locks/<profile>.lock.json
+  easyconfigs/<letter>/<name>/<recipe>.eb
+#+end_src
+
+~package plan~ and ~package bump~ establish the *resolves* claim only when all
+requested locks and recipes are written successfully.
+
+* Recipe commands
+
+#+begin_src bash
+eb-stack recipe check \
+  --recipe RECIPE.eb \
+  --easyconfigs UPSTREAM \
+  [--easyconfigs OVERLAY]... \
+  [--require-configopt FLAG]... \
   [--metadata-only]
-  [--scaffold-missing DIR]
+
+eb-stack recipe lint RECIPE.eb [RECIPE.eb ...]
+eb-stack recipe format RECIPE.eb [RECIPE.eb ...] [--dry-run]
+eb-stack recipe format RECIPE.eb --out FORMATTED.eb
 #+end_src
 
-- ~--recipe~ :: Path to the ~.eb~ file to validate. Required.
-- ~--easyconfigs~ :: Robot easyconfig tree(s), walked recursively. Required,
-  *repeatable*: later paths override earlier ones for the same
-  name+version+toolchain identity (draft overlay on upstream). Same
-  precedence rule as ~solve~.
-- ~--require-configopt SUBSTR~ :: Assert that ~configopts~ contains this
-  substring. Repeatable. Used to gate product flags (e.g.
-  ~-Dwith_metatomic=true~, ~-DQMC_MPI=ON~).
-- ~--metadata-only~ :: Skip the missing-dep robot check; only run packaging
-  metadata gates (checksum structure, required configopts, etc.). Useful
-  when the robot tree is absent and you only need the packaging lint.
-- ~--scaffold-missing DIR~ :: Write draft companion ~.eb~ files for every
-  missing dep under ~DIR~ using the EasyBuild letter/name layout
-  (~e/eOn/...~, ~q/quill/...~). The packaging prep loop for stacks that
-  need greenfield companions: scaffold, fill sources/checksums, re-run
-  ~check-recipe~ with the draft tree as a later ~--easyconfigs~ overlay.
+~recipe check~ prints the structured dependency result. It fails when package
+metadata, checksum structure, required configuration flags, or robot
+dependencies are invalid. Missing dependencies remain explicit work; the
+command does not create placeholder recipes.
 
-Missing-dep output names generations where the package *does* exist
-("available at other generations: ..."); treat that list as the work queue.
-A ~[packaging]~ checksum finding means reorder ~checksums~ (all sources
-first, then patches) -- never bypass the gate.
+~recipe format~ only performs deterministic physical-line wrapping. Product
+configuration, source selection, checksums, patches, and sanity paths remain
+authored content.
 
-* parse
+* Stack commands
 
-Parse easyconfigs and print JSON candidates. A debug / universe dump: no
-solving happens.
+#+begin_src bash
+eb-stack stack solve \
+  --easyconfigs TREE [--easyconfigs OVERLAY]... \
+  --policy POLICY.json \
+  [--baseline-easyconfigs TREE] \
+  [--baseline-toolchain-version VERSION] \
+  [--lock-out stack.lock.json] \
+  [--sbom-out stack.cdx.json] \
+  [--build-list-out build.list] \
+  [--stack-diff-out stack.diff.md]
 
-#+begin_src text
-eb-stack parse
-  --easyconfigs PATH
-  [--toolchain-name NAME]
-  [--toolchain-version VERSION]
+eb-stack stack sbom --lock stack.lock.json [--out stack.cdx.json]
 #+end_src
 
-- ~--easyconfigs~ :: Root directory, walked recursively. Required.
-- ~--toolchain-name~, ~--toolchain-version~ :: Both together filter the
-  printed candidates to one toolchain generation. Either alone has no
-  filtering effect (both must be present to filter).
+~stack solve~ is the multi-root EasyBuild stack solver. Package-profile stack
+preferences use the TOML schema documented with the package workflow; whole
+stack solving uses the JSON ~Policy~ schema.
 
-Prints the parsed [[https://docs.rs/serde_json][serde_json]]-pretty array of
-candidates to stdout: ~name~, ~version~, ~toolchain~, optional
-~versionsuffix~, ~easyconfig_path~, ~dependencies~, ~builddependencies~.
+* Target commands
 
-* solve-json
-
-Legacy entry point: solve from an already-built universe JSON instead of parsing
-~.eb~ files. Still exercised by the test suite; useful for driving the
-solver from hand-written or externally generated candidate data.
-
-#+begin_src text
-eb-stack solve-json
-  --universe PATH
-  --policy PATH
-  [--baseline PATH]
-  [--lock-out PATH]              (default: stack.lock.json)
-  [--sbom-out PATH]
-  [--build-list-out PATH]
-  [--stack-diff-out PATH]
+#+begin_src bash
+eb-stack target list --config BASE.toml [--config SITE.toml]...
+eb-stack target doctor \
+  --config BASE.toml [--config SITE.toml]... \
+  --target NAME
 #+end_src
 
-- ~--universe~ :: Universe JSON path (the ~parse~ output shape, wrapped with
-  a ~toolchain~ and optional ~generation_label~; see
-  [[file:formats.org][format reference]]). Required.
-- ~--policy~ :: Same policy schema as ~solve~. Required.
-- ~--baseline~ :: Optional baseline *lock* JSON (not an easyconfig tree) used
-  the same way ~--baseline-easyconfigs~ is on ~solve~.
-- ~--sbom-out~ :: Same opt-in behavior as ~solve~: omit it and no SBOM file
-  is written.
-- Remaining flags are identical to ~solve~ (except ~--universe~ is a single
-  pre-built JSON file, not a repeatable ~--easyconfigs~ tree -- overlay
-  merging happens before this command runs, when the universe JSON is
-  built).
+Target layers are applied in argument order. A complete target contains:
 
-* sbom
+- transport: local or SSH;
+- executor: direct or Slurm;
+- runtime: host, Podman, or Docker;
+- EasyBuild workload: command, robot paths, work root, temporary root, and
+  environment.
 
-Emit a CycloneDX SBOM from an already-solved lock file, without re-solving.
+~target doctor~ probes each layer separately and reports the exact routed
+command, exit code, stdout, and stderr.
 
-#+begin_src text
-eb-stack sbom
-  --lock PATH
-  [--out PATH]                    (default: stack.cdx.json)
+* Campaign commands
+
+#+begin_src bash
+eb-stack campaign run \
+  --bundle BUNDLE \
+  --config BASE.toml [--config SITE.toml]... \
+  --target NAME \
+  --state CAMPAIGN.json
+
+eb-stack campaign status --state CAMPAIGN.json
+
+eb-stack campaign finding claim \
+  --state CAMPAIGN.json --id FINDING --owner WORKER
+
+eb-stack campaign finding resolve \
+  --state CAMPAIGN.json --id FINDING --owner WORKER \
+  --action TEXT --evidence TEXT [--change PATH]...
 #+end_src
 
-- ~--lock~ :: Path to a ~stack.lock.json~. Required.
-- ~--out~ :: Where to write the CycloneDX document. Default
-  ~stack.cdx.json~.
+~campaign run~ resumes state with matching package identity, increments the
+attempt, stages the bundle, runs every emitted recipe, and executes each
+profile's verification commands. Transport, executor, runtime, checksum,
+patch, dependency, configure, compile, link, test, install, sanity, resource,
+timeout, and unknown failures are persisted as typed findings.
 
-This path uses lock-level co-stack edges (every package depends on every
-other co-selected package) rather than the declared per-package dependency
-edges ~solve~ / ~solve-json~ can attach when they still have the universe in
-hand. See [[file:formats.org][the SBOM format reference]].
+Finding claims are exclusive. A resolution records an action, evidence, and
+changed paths. A successful retry supersedes matching open or in-progress
+findings. Campaign state reports ~resolves~, ~builds~, and ~binary_verified~
+independently.
 
-* bump
+* MCP
 
-Produce a next-generation easyconfig from an existing recipe. See the
-[[file:../tutorial.org][tutorial]] for a full worked example and
-[[file:../howto/bump-recipe.org][the how-to]] for override syntax.
-
-#+begin_src text
-eb-stack bump
-  --source PATH
-  --toolchain-name NAME
-  --toolchain-version VERSION
-  [--version VERSION]
-  [--source-checksum SHA256]
-  [--dep NAME=VERSION]...
-  [--easyconfigs DIR]
-  [--hierarchy-fixture PATH]
-  [--keep-old-deps]
-  [--out-dir PATH]
-  [--out PATH]
-#+end_src
-
-- ~--source~ :: Source ~.eb~ file to rewrite. Required.
-- ~--toolchain-name~, ~--toolchain-version~ :: Target toolchain. Always
-  rewritten. Both required.
-- ~--version~ :: New application version. Omit to keep the source's
-  ~version = '...'~ unchanged (the common case: same release, new
-  toolchain).
-- ~--source-checksum SHA256~ :: New sha256 for the source tarball. Applies
-  together with ~--version~ (the tarball name changes with the version).
-  When the version changes and this is omitted, the source
-  checksum entry's key is still renamed to the new versioned tarball name,
-  but the checksum value is left stale and a warning is printed. See
-  [[file:../howto/bump-recipe.org][updating the source checksum]].
-- ~--dep NAME=VERSION~ :: Dependency version override, repeatable. Applies
-  to matching tuples in both ~dependencies~ and ~builddependencies~. See
-  [[file:../howto/bump-recipe.org][operator preservation rules]]. When
-  ~--easyconfigs~ is also set, a ~--dep~ override wins over the
-  auto-resolved version for that name.
-- ~--easyconfigs DIR~ :: Directory of easyconfigs (walked recursively, same
-  parser as ~solve~) used to auto-resolve every ~dependencies~ /
-  ~builddependencies~ version for the target toolchain generation.
-  Resolution is hierarchy consensus then resolvo joint SAT (hierarchy
-  pins as exact requirements on a synthetic root; see
-  [[file:../howto/bump-recipe.org][bump how-to]] and
-  [[file:../explanation/architecture.org][architecture]]). Omit to fall back
-  to hand ~--dep~ only. See [[file:../tutorial.org][the tutorial]] for the
-  zero-hand-fed flow.
-- ~--hierarchy-fixture PATH~ :: Optional EasyBuild ~get_toolchain_hierarchy~
-  capture (JSON) that overrides hierarchy discovery. Rarely needed: with
-  ~--easyconfigs~, GCC-family generations (~foss~/~gompi~/~gfbf~) derive
-  their hierarchy from the tree's own toolchain definitions, bare
-  ~GCCcore-x.y.z~ targets synthesize ~[SYSTEM, GCCcore]~, and
-  ~foss-2023b~/~2024a~/~2025a~ have built-in fixtures. The explicit fixture
-  is the escape hatch for non-GCC toolchains (~intel~, ~nvidia-compilers~).
-  Applies only with ~--easyconfigs~.
-- ~--keep-old-deps~ :: When set, a dependency ~--easyconfigs~ cannot resolve
-  keeps its source version (with a warning) instead of failing the bump.
-  Default: unresolved dependencies fail the bump with a non-zero exit
-  naming the dependency and the target toolchain. A ~versionsuffix~-pinned
-  dependency is never bumped regardless of this flag.
-- ~--out-dir~ :: Output directory (created if missing); file is written
-  under the conventional
-  ~{name}-{version}-{toolchain_name}-{toolchain_version}.eb~ basename.
-  Conflicts with ~--out~.
-- ~--out~ :: Explicit output file path, any name. Conflicts with
-  ~--out-dir~. With neither flag, the file is written to the current
-  directory under the conventional basename.
-
-Every field not named above -- ~easyblock~, ~homepage~, ~description~,
-~toolchainopts~, comments, and any dependency neither ~--dep~ nor
-~--easyconfigs~ auto-resolve changed -- is
-copied through byte-for-byte from the source.
-
-* mcp
-
-Serve the packaging workflow as MCP tools over *stdio* (JSON-RPC 2.0). No
-extra flags: the process reads requests from stdin and writes responses to
-stdout until EOF.
-
-#+begin_src text
+#+begin_src bash
 eb-stack mcp
 #+end_src
 
-Register with a harness that speaks MCP, for example:
+The stdio server exposes:
 
-#+begin_src bash
-claude mcp add eb-stack -- eb-stack mcp
-# harness-equivalent: pass `eb-stack mcp` as the stdio server command
-#+end_src
+- ~eb_package_inspect~, ~eb_package_plan~, ~eb_package_bump~;
+- ~eb_recipe_check~, ~eb_recipe_format~, ~eb_stack_solve~;
+- ~eb_target_list~, ~eb_target_doctor~;
+- ~eb_campaign_run~, ~eb_campaign_status~;
+- ~eb_campaign_finding_claim~, ~eb_campaign_finding_resolve~.
 
-Tools exposed (same semantics as the matching CLI subcommands):
-
-| Tool | CLI analogue | Required arguments |
-|------+--------------|--------------------|
-| ~eb_check_recipe~ | ~check-recipe~ | ~recipe~, ~easyconfigs~ (array) |
-| ~eb_bump~ | ~bump~ | ~source~, ~toolchain_name~, ~toolchain_version~ |
-| ~eb_solve~ | ~solve~ | ~easyconfigs~ (array), ~policy~ |
-
-Optional arguments mirror the CLI:
-
-- ~eb_check_recipe~: ~require_configopts~ (array of strings),
-  ~scaffold_missing~ (directory path). Note: the CLI ~--metadata-only~ flag
-  is not currently mirrored on the MCP tool; use the CLI for metadata-only
-  packaging lint.
-- ~eb_bump~: ~version~, ~source_checksum~, ~deps~ (object name→version),
-  ~easyconfigs~, ~hierarchy_fixture~, ~keep_old_deps~, ~out_dir~, ~out~.
-- ~eb_solve~: ~baseline_easyconfigs~, ~baseline_toolchain_version~,
-  ~lock_out~, ~sbom_out~, ~build_list_out~, ~stack_diff_out~.
-
-Every ~eb_check_recipe~ result embeds the three-claim ladder state and
-derived next-actions (missing-dep work queue, packaging fixes). Tool
-failures are returned as MCP ~isError: true~ content, not as bare JSON-RPC
-errors, per the MCP tools/call contract. Library entry point:
-[[file:rust-api.org][Rust API]] module ~mcp~.
-
-* Exit codes
-
-| Code | Meaning                                                          |
-|------+-------------------------------------------------------------------|
-|    0 | Success                                                          |
-|    1 | Error: parse failure, unsatisfiable policy, missing dep, packaging gate failure, missing file, or rewrite failure. The message names real package/version/field data, not internal solver identifiers. |
-
-* ingest
-
-Convert a foreign package recipe into a parseable EasyBuild scaffold.
-
-#+begin_src text
-eb-stack ingest
-  --source PATH
-  [--format auto|conda-forge|spack]
-  [--toolchain-name foss]
-  [--toolchain-version 2024a]
-  [--out PATH | --out-dir DIR]
-#+end_src
-
-- ~--source~ :: ~meta.yaml~ / ~recipe.yaml~ (conda-forge) or ~package.py~
-  (Spack). Required.
-- ~--format~ :: ~auto~ (default, from filename), ~conda-forge~, or ~spack~.
-- ~--toolchain-name~ / ~--toolchain-version~ :: scaffold toolchain identity
-  (operator-supplied generation; not invented from the foreign recipe).
-- ~--out~ / ~--out-dir~ :: output path or letter/name layout directory.
-
-The emit path is honest: name, version, source URL/filename, sha256 when
-present, multi-source layout, static ~configopts~ when the foreign DSL
-states them, and dependency *names* come from the foreign input. Product
-flags, patches, and hand-maintainer pins remain residual (header warnings).
-
-**Not a landable PR.** Finish with EasyBuild (~inject-checksums~,
-~check-contrib~, ~eb --robot~) and residual judgment per
-~skills/new-package/SKILL.md~. Do not hardcode product ~configopts~ into
-this tool.
-
-- ~--easyconfigs DIR~ :: Robot easyconfig tree(s). Same two-stage resolve as
-  ~bump~ (hierarchy consensus + resolvo joint pins). Repeatable; later wins
-  on identity conflict. Fills generation-native dep versions and preferred
-  package-name casing.
-- ~--keep-old-deps~ :: Keep residual foreign versions when the robot has no candidate.
-- ~--hierarchy-fixture PATH~ :: Optional hierarchy JSON override.
-
-Without ~--easyconfigs~, dep versions stay residual (foreign floors or
-~0.0.0~). With it, expect warnings naming ~hierarchy consensus~ and
-~resolvo joint~. Fixtures: ~fixtures/foreign_ingest/~.
-
-- ~--residual-queue PATH~ :: optional residual work-queue JSON path. Default:
-  write ~{stem}.residuals.json~ next to the scaffold. Items classify dep
-  version / product_config / moduleclass / sanity / checksum residuals for
-  a local-ai agent — not product ~-D~ defaults invented by ~eb-stack~.
+MCP results include the same artifacts, claims, findings, and next actions as
+the CLI. There is no separate compatibility command surface.
