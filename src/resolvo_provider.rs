@@ -35,7 +35,7 @@ pub struct EbProvider {
     min_rank_exclusive: HashMap<String, u32>,
     /// Stack policy preferred candidate for each package.
     favored_ranks: HashMap<String, u32>,
-    /// Stack policy candidate that is the only selectable version.
+    /// Fully identified stack policy candidate selected directly by Resolvo.
     locked_ranks: HashMap<String, u32>,
     /// Candidates rejected by target or build evidence, with the retained reason.
     excluded_ranks: HashMap<String, HashMap<u32, String>>,
@@ -210,15 +210,24 @@ impl EbProvider {
                         favored_ranks.insert(pin.name.clone(), selected_rank);
                     }
                     StackPinMode::Locked => {
-                        if matching.len() != 1 {
+                        let allowed = if let Some(existing) = pin_ranks.get(&pin.name) {
+                            matching
+                                .into_iter()
+                                .filter(|rank| existing.contains(rank))
+                                .collect::<Vec<_>>()
+                        } else {
+                            matching
+                        };
+                        if allowed.is_empty() {
                             return Err(format!(
-                                "locked stack pin {} {} matches {} candidates; use an exact version",
-                                pin.name,
-                                pin.version_requirement,
-                                matching.len()
+                                "locked stack pin {} {} conflicts with package policy pins",
+                                pin.name, pin.version_requirement
                             ));
                         }
-                        locked_ranks.insert(pin.name.clone(), selected_rank);
+                        pin_ranks.insert(pin.name.clone(), allowed.clone());
+                        if allowed.len() == 1 {
+                            locked_ranks.insert(pin.name.clone(), allowed[0]);
+                        }
                     }
                 }
             }
