@@ -205,6 +205,8 @@ fn profile_lock_is_created_by_resolvo_with_stack_preferences() {
         pins: vec![StackPin {
             name: "HDF5".into(),
             version_requirement: "==1.14.2".into(),
+            toolchain: None,
+            versionsuffix: None,
             mode: StackPinMode::Preferred,
             source: Some("eessi.cdx.json".into()),
         }],
@@ -277,9 +279,12 @@ fn stack_pin_admits_a_cross_generation_runtime_closure() {
         versionsuffix: None,
         toolchain: None,
     };
+    let mut pytorch_cuda = candidate("PyTorch", "2.9.1", foss_2024a.clone(), Vec::new());
+    pytorch_cuda.versionsuffix = Some("-CUDA-12.6.0".into());
     let candidates = vec![
         candidate("PyTorch", "2.8.0", toolchain(), Vec::new()),
         candidate("PyTorch", "2.9.1", foss_2024a.clone(), vec![python_312]),
+        pytorch_cuda,
         candidate(
             "PyTorch",
             "2.9.1",
@@ -300,6 +305,7 @@ fn stack_pin_admits_a_cross_generation_runtime_closure() {
             name: "PyTorch".into(),
             version_requirement: "==2.9.1".into(),
             toolchain: Some(foss_2024a.clone()),
+            versionsuffix: Some(String::new()),
             mode: StackPinMode::Preferred,
             source: Some("site stack".into()),
         }],
@@ -318,6 +324,7 @@ fn stack_pin_admits_a_cross_generation_runtime_closure() {
     assert_eq!(lock.dependencies[0].name, "PyTorch");
     assert_eq!(lock.dependencies[0].version, "2.9.1");
     assert_eq!(lock.dependencies[0].toolchain, foss_2024a);
+    assert!(lock.dependencies[0].versionsuffix.is_none());
     assert!(!lock.pin_outcomes[0].fallback);
 }
 

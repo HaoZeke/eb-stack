@@ -62,6 +62,8 @@ fn stack_policy(mode: StackPinMode) -> StackPolicy {
         pins: vec![StackPin {
             name: "HDF5".into(),
             version_requirement: "==1.14.2".into(),
+            toolchain: None,
+            versionsuffix: None,
             mode,
             source: Some("eessi-test.cdx.json".into()),
         }],

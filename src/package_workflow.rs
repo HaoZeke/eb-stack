@@ -146,6 +146,8 @@ pub fn plan_package_bump(
         stack_policy.pins.push(StackPin {
             name: name.clone(),
             version_requirement: format!("=={version}"),
+            toolchain: None,
+            versionsuffix: None,
             mode: StackPinMode::Locked,
             source: Some("package bump override".into()),
         });

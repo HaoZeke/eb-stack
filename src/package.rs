@@ -32,6 +32,10 @@ pub enum StackPinMode {
 pub struct StackPin {
     pub name: String,
     pub version_requirement: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toolchain: Option<Toolchain>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub versionsuffix: Option<String>,
     pub mode: StackPinMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
@@ -64,7 +68,15 @@ pub struct StackPolicy {
 pub struct StackPinOutcome {
     pub name: String,
     pub requested: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_toolchain: Option<Toolchain>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_versionsuffix: Option<String>,
     pub selected_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_toolchain: Option<Toolchain>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_versionsuffix: Option<String>,
     pub fallback: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback_reason: Option<String>,

@@ -168,7 +168,20 @@ fn admit_stack_pin_closures(
 
     for pin in &stack_policy.pins {
         for candidate in candidates.iter().filter(|candidate| {
-            candidate.name == pin.name && matches_req(&candidate.version, &pin.version_requirement)
+            candidate.name == pin.name
+                && matches_req(&candidate.version, &pin.version_requirement)
+                && pin
+                    .toolchain
+                    .as_ref()
+                    .map(|toolchain| toolchains_match(&candidate.toolchain, toolchain))
+                    .unwrap_or(true)
+                && pin
+                    .versionsuffix
+                    .as_deref()
+                    .map(|versionsuffix| {
+                        candidate.versionsuffix.as_deref().unwrap_or_default() == versionsuffix
+                    })
+                    .unwrap_or(true)
         }) {
             if paths.insert(candidate.easyconfig_path.clone()) {
                 admitted.push(candidate.clone());

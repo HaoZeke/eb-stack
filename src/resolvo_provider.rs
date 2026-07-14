@@ -174,8 +174,14 @@ impl EbProvider {
         let mut excluded_ranks: HashMap<String, HashMap<u32, String>> = HashMap::new();
         if let Some(stack) = stack_policy {
             for pin in &stack.pins {
-                let matching =
-                    matching_ranks(&candidates, &ranks, &pin.name, &pin.version_requirement)?;
+                let matching = matching_ranks(
+                    &candidates,
+                    &ranks,
+                    &pin.name,
+                    &pin.version_requirement,
+                    pin.toolchain.as_ref(),
+                    pin.versionsuffix.as_deref(),
+                )?;
                 let selected_rank = matching.last().copied().ok_or_else(|| {
                     format!(
                         "stack pin {} {} matches no candidates",
@@ -206,6 +212,8 @@ impl EbProvider {
                     &ranks,
                     &exclusion.name,
                     &exclusion.version_requirement,
+                    None,
+                    None,
                 )?;
                 if matching.is_empty() {
                     return Err(format!(
@@ -500,13 +508,28 @@ fn matching_ranks(
     ranks: &HashMap<String, Vec<(u32, usize)>>,
     name: &str,
     version_requirement: &str,
+    toolchain: Option<&crate::domain::Toolchain>,
+    versionsuffix: Option<&str>,
 ) -> Result<Vec<u32>, String> {
     let ranked = ranks
         .get(name)
         .ok_or_else(|| format!("stack policy references unknown package {name}"))?;
     Ok(ranked
         .iter()
-        .filter(|(_, index)| matches_req(&candidates[*index].version, version_requirement))
+        .filter(|(_, index)| {
+            let candidate = &candidates[*index];
+            matches_req(&candidate.version, version_requirement)
+                && toolchain
+                    .map(|toolchain| {
+                        crate::hierarchy::toolchains_match(&candidate.toolchain, toolchain)
+                    })
+                    .unwrap_or(true)
+                && versionsuffix
+                    .map(|versionsuffix| {
+                        candidate.versionsuffix.as_deref().unwrap_or_default() == versionsuffix
+                    })
+                    .unwrap_or(true)
+        })
         .map(|(rank, _)| *rank)
         .collect())
 }
@@ -568,18 +591,30 @@ pub fn solve_with_stack_policy(
         .pins
         .iter()
         .map(|pin| {
-            let selected_version = selected
-                .iter()
-                .find(|candidate| candidate.name == pin.name)
-                .map(|candidate| candidate.version.clone());
+            let selected_candidate = selected.iter().find(|candidate| candidate.name == pin.name);
+            let selected_version = selected_candidate.map(|candidate| candidate.version.clone());
+            let selected_toolchain =
+                selected_candidate.map(|candidate| candidate.toolchain.clone());
+            let selected_versionsuffix =
+                selected_candidate.and_then(|candidate| candidate.versionsuffix.clone());
             let fallback = pin.mode == StackPinMode::Preferred
-                && selected_version
-                    .as_deref()
-                    .is_some_and(|version| !matches_req(version, &pin.version_requirement));
+                && selected_candidate.is_some_and(|candidate| {
+                    !matches_req(&candidate.version, &pin.version_requirement)
+                        || pin.toolchain.as_ref().is_some_and(|toolchain| {
+                            !crate::hierarchy::toolchains_match(&candidate.toolchain, toolchain)
+                        })
+                        || pin.versionsuffix.as_deref().is_some_and(|versionsuffix| {
+                            candidate.versionsuffix.as_deref().unwrap_or_default() != versionsuffix
+                        })
+                });
             StackPinOutcome {
                 name: pin.name.clone(),
                 requested: pin.version_requirement.clone(),
+                requested_toolchain: pin.toolchain.clone(),
+                requested_versionsuffix: pin.versionsuffix.clone(),
                 selected_version,
+                selected_toolchain,
+                selected_versionsuffix,
                 fallback,
                 fallback_reason: fallback.then(|| {
                     "favored candidate did not participate in the complete Resolvo solution"

@@ -61,6 +61,8 @@ config_options = ["-Dwith_cli=true"]
         pins: vec![StackPin {
             name: "zlib".into(),
             version_requirement: "==1.2".into(),
+            toolchain: None,
+            versionsuffix: None,
             mode: StackPinMode::Preferred,
             source: Some("site-stack.toml".into()),
         }],
