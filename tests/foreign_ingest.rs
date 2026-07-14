@@ -115,6 +115,14 @@ fn spack_qmcpack_preserves_variants_rules_and_conditions() {
         .dependencies
         .iter()
         .any(|dependency| dependency.name == "python"));
+    assert!(
+        recipe.patches.is_empty(),
+        "unresolved Spack patch directives are residuals, not EasyBuild patch filenames"
+    );
+    assert!(recipe
+        .notes
+        .iter()
+        .any(|note| note.contains("3 patch() directive")));
     let plan = package_plan_from_foreign(&recipe, &toolchain("2026.1"));
     assert_eq!(plan.package.name, "QMCPACK");
     assert_eq!(plan.rules.len(), recipe.rules.len());

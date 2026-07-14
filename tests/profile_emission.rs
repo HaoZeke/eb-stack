@@ -192,6 +192,62 @@ fn each_product_profile_emits_a_conventional_easyconfig() {
 }
 
 #[test]
+fn emitted_dependencies_preserve_locked_toolchain_and_versionsuffix_identity() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.profiles = qmcpack_profiles();
+    plan.outputs = vec![OutputRequest {
+        profile: "default".into(),
+        stack: "foss-2026.1".into(),
+    }];
+
+    let mut lock = profile_lock("default", "");
+    lock.dependencies = vec![
+        LockedDependency {
+            name: "PyTorch".into(),
+            version: "2.9.1".into(),
+            versionsuffix: None,
+            toolchain: Toolchain {
+                name: "foss".into(),
+                version: "2024a".into(),
+            },
+            easyconfig_path: "PyTorch-2.9.1-foss-2024a.eb".into(),
+            build: false,
+        },
+        LockedDependency {
+            name: "PETSc".into(),
+            version: "3.24.0".into(),
+            versionsuffix: Some("-complex".into()),
+            toolchain: toolchain(),
+            easyconfig_path: "PETSc-3.24.0-foss-2026.1-complex.eb".into(),
+            build: false,
+        },
+    ];
+
+    let emitted = emit_profile_easyconfigs(&plan, &[lock]).expect("emit locked identities");
+    assert!(emitted[0]
+        .text
+        .contains("('PyTorch', '2.9.1', '', ('foss', '2024a'))"));
+    assert!(emitted[0]
+        .text
+        .contains("('PETSc', '3.24.0', '-complex')"));
+
+    let resolved = resolve_easyconfig_str(&emitted[0].text).expect("parse emitted easyconfig");
+    let pytorch = resolved
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "PyTorch")
+        .expect("PyTorch dependency");
+    assert_eq!(
+        pytorch.toolchain,
+        Some(Toolchain {
+            name: "foss".into(),
+            version: "2024a".into(),
+        })
+    );
+}
+
+#[test]
 fn profile_lock_is_created_by_resolvo_with_stack_preferences() {
     let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
     let mut plan = package_plan_from_foreign(&recipe, &toolchain());
