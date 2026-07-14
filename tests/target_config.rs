@@ -2,6 +2,7 @@ use eb_stack::target::{
     doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer, TargetRuntime,
     TARGET_CONFIG_SCHEMA_VERSION,
 };
+use std::process::Command;
 
 #[test]
 fn layered_target_config_composes_ssh_slurm_container_and_easybuild() {
@@ -109,4 +110,61 @@ tmp_root = "/tmp"
     assert!(report.ok());
     assert_eq!(report.target, "local-doctor");
     assert!(report.checks.iter().all(|check| check.success));
+}
+
+#[test]
+fn target_cli_lists_and_doctors_named_target() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config = temp.path().join("targets.toml");
+    std::fs::write(
+        &config,
+        r#"
+schema_version = 1
+[[targets]]
+name = "local-doctor"
+[targets.transport]
+kind = "local"
+[targets.executor]
+kind = "direct"
+[targets.runtime]
+kind = "host"
+[targets.easybuild]
+command = "true"
+robot_paths = ["/tmp"]
+work_root = "/tmp"
+tmp_root = "/tmp"
+"#,
+    )
+    .expect("config");
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let list = Command::new(binary)
+        .args(["target", "list", "--config", config.to_str().unwrap()])
+        .output()
+        .expect("target list");
+    assert!(
+        list.status.success(),
+        "{}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    assert!(String::from_utf8_lossy(&list.stdout).contains("local-doctor"));
+
+    let doctor = Command::new(binary)
+        .args([
+            "target",
+            "doctor",
+            "--config",
+            config.to_str().unwrap(),
+            "--target",
+            "local-doctor",
+        ])
+        .output()
+        .expect("target doctor");
+    assert!(
+        doctor.status.success(),
+        "{}",
+        String::from_utf8_lossy(&doctor.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&doctor.stdout).expect("doctor JSON");
+    assert_eq!(report["target"], "local-doctor");
+    assert_eq!(report["ok"], true);
 }
