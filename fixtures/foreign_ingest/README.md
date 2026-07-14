@@ -1,6 +1,7 @@
-# Foreign recipe ingest fixtures
+# Foreign recipe fixtures
 
-Inputs for `eb-stack ingest` (conda-forge + Spack → EasyBuild scaffold).
+Inputs for `eb-stack package inspect` and `eb-stack package plan`
+(conda-forge + Spack → manifest, SBOM, Resolvo locks, and EasyBuild recipes).
 
 | Path | Format | Notes |
 |------|--------|--------|
