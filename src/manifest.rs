@@ -2,7 +2,7 @@
 
 use crate::domain::Toolchain;
 use crate::foreign::{
-    canonicalize_eb_package_name, guess_easyblock, map_dep_name_to_eb_pub, ForeignFormat,
+    canonicalize_eb_package_name, guess_easyblock, map_dep_name_to_eb, ForeignFormat,
     ForeignRecipe, ForeignRuleKind,
 };
 use crate::package::{
@@ -34,7 +34,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
         .iter()
         .enumerate()
         .map(|(index, dependency)| {
-            let eb_name = map_dep_name_to_eb_pub(&dependency.name);
+            let eb_name = map_dep_name_to_eb(&dependency.name);
             DependencyIntent {
                 id: format!("dep:{index}:{name}", name = dependency.name),
                 name: dependency.name.clone(),
