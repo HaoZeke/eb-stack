@@ -1,6 +1,7 @@
 //! EasyBuild stack lock: parse `.eb` files, resolvo SAT co-select, planned SBOM.
 
 pub mod domain;
+pub mod campaign;
 pub mod eb_emit;
 pub mod eb_parse;
 pub mod eb_style;
