@@ -96,6 +96,10 @@ exec podman run --rm -i \
   -e EASYBUILD_BUILDPATH=/eb/build \
   -e EASYBUILD_MODULES_TOOL=Lmod \
   -e TAR_OPTIONS=--no-same-owner \
+  -e PRTE_ALLOW_RUN_AS_ROOT=1 \
+  -e PRTE_ALLOW_RUN_AS_ROOT_CONFIRM=1 \
+  -e OMPI_ALLOW_RUN_AS_ROOT=1 \
+  -e OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1 \
   -e LMOD_CMD=/usr/share/lmod/lmod/libexec/lmod \
   -w /work \
   "$IMAGE" \
