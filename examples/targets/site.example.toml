@@ -30,3 +30,17 @@ tmp_root = "/shared/eb-stack/targets/rocky9/tmp"
 [targets.easybuild.environment]
 EASYBUILD_INSTALLPATH = "/shared/eb-stack/targets/rocky9/easybuild"
 EASYBUILD_SOURCEPATH = "/shared/easybuild/sources"
+# Rootless-Podman container builds run eb as container-root. These let real
+# builds succeed inside the isolated container without disabling any check:
+#  - EASYBUILD_ALLOW_USE_AS_ROOT... : eb itself refuses root without it.
+#  - TAR_OPTIONS=--no-same-owner    : tar as root aborts on archives whose
+#    packaged uid is outside the userns map (e.g. libfabric).
+#  - PRTE/OMPI ALLOW_RUN_AS_ROOT... : OpenMPI 5.x sanity runs mpi_test via
+#    mpirun; PRRTE refuses to launch as root without these (the sanity MPI
+#    programs still run and must pass).
+EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES = "1"
+TAR_OPTIONS = "--no-same-owner"
+PRTE_ALLOW_RUN_AS_ROOT = "1"
+PRTE_ALLOW_RUN_AS_ROOT_CONFIRM = "1"
+OMPI_ALLOW_RUN_AS_ROOT = "1"
+OMPI_ALLOW_RUN_AS_ROOT_CONFIRM = "1"
