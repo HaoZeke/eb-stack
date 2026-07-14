@@ -4,6 +4,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use eb_stack::package::StackPolicy;
 use eb_stack::package_config::ProfileConfigLayer;
+use eb_stack::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use eb_stack::{
     check_recipe_deps, emit_next_generation_auto_from_path_with_opts,
     emit_next_generation_from_path, format_style, format_style_file, inspect_new_package,
@@ -469,16 +470,30 @@ fn run_stack(command: StackCommand) -> Result<()> {
 fn run_target(command: TargetCommand) -> Result<()> {
     match command {
         TargetCommand::List { configs } => {
-            bail!(
-                "target configuration is not loaded by this build: {}",
-                display_paths(&configs)
-            )
+            let targets = load_targets(&configs)?;
+            println!("{}", serde_json::to_string_pretty(&targets)?);
+            Ok(())
         }
         TargetCommand::Doctor { configs, target } => {
-            bail!(
-                "target {target} cannot be checked before loading: {}",
-                display_paths(&configs)
-            )
+            let targets = load_targets(&configs)?;
+            let target_config = targets
+                .iter()
+                .find(|candidate| candidate.name == target)
+                .with_context(|| format!("target {target} is not configured"))?;
+            let report = doctor_target(target_config)?;
+            let ok = report.ok();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "target": report.target,
+                    "ok": ok,
+                    "checks": report.checks,
+                }))?
+            );
+            if !ok {
+                bail!("target {target} doctor failed");
+            }
+            Ok(())
         }
     }
 }
@@ -532,6 +547,17 @@ fn load_stack_policy(path: &Path) -> Result<StackPolicy> {
     } else {
         toml::from_str(&text).with_context(|| format!("parse stack policy TOML {}", path.display()))
     }
+}
+
+fn load_targets(paths: &[PathBuf]) -> Result<Vec<BuildTarget>> {
+    let layers = paths
+        .iter()
+        .map(|path| {
+            TargetConfigLayer::from_path(path)
+                .with_context(|| format!("load target config {}", path.display()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    resolve_target_layers(&layers).map_err(anyhow::Error::msg)
 }
 
 fn parse_dep_overrides(values: &[String]) -> Result<HashMap<String, String>> {
