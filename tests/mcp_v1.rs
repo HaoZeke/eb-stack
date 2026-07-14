@@ -27,6 +27,8 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_target_doctor",
         "eb_campaign_run",
         "eb_campaign_status",
+        "eb_campaign_finding_claim",
+        "eb_campaign_finding_resolve",
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }

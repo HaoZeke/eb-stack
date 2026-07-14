@@ -374,3 +374,83 @@ fn failed_profile_verification_preserves_the_build_claim_and_finding() {
         .evidence
         .contains("module=QMCPACK/4.3.0-complex-foss-2026.1"));
 }
+
+#[test]
+fn campaign_cli_claims_and_resolves_findings_for_omp_workers() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipes = bundle.join("easyconfigs/e/eOn");
+    std::fs::create_dir_all(&recipes).expect("recipes");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"eOn","version":"2.16.0"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .expect("lock");
+    std::fs::write(recipes.join("eOn.eb"), "name = 'eOn'\n").expect("recipe");
+    let state_path = temp.path().join("campaign.json");
+    let failed = run_campaign(&CampaignRequest {
+        bundle,
+        target: target("false"),
+        state_path: state_path.clone(),
+    })
+    .expect("failed campaign");
+    let finding = &failed.findings[0].id;
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+
+    let claim = Command::new(binary)
+        .args([
+            "campaign",
+            "finding",
+            "claim",
+            "--state",
+            state_path.to_str().unwrap(),
+            "--id",
+            finding,
+            "--owner",
+            "omp-worker-1",
+        ])
+        .output()
+        .expect("claim command");
+    assert!(
+        claim.status.success(),
+        "{}",
+        String::from_utf8_lossy(&claim.stderr)
+    );
+
+    let resolve = Command::new(binary)
+        .args([
+            "campaign",
+            "finding",
+            "resolve",
+            "--state",
+            state_path.to_str().unwrap(),
+            "--id",
+            finding,
+            "--owner",
+            "omp-worker-1",
+            "--action",
+            "corrected profile config",
+            "--evidence",
+            "recipe check exits successfully",
+            "--change",
+            "profiles/eon.toml",
+        ])
+        .output()
+        .expect("resolve command");
+    assert!(
+        resolve.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+    let state: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(state_path).expect("state"))
+            .expect("state JSON");
+    assert_eq!(state["findings"][0]["status"], "resolved");
+    assert_eq!(state["findings"][0]["owner"], "omp-worker-1");
+}
