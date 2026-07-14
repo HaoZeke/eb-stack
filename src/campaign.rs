@@ -4,6 +4,7 @@ use crate::package::ProductProfile;
 use crate::target::{BuildTarget, CommandPlan, TargetError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -54,6 +55,25 @@ pub enum FindingDisposition {
     TargetRepair,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum FindingStatus {
+    #[default]
+    Open,
+    InProgress,
+    Resolved,
+    Superseded,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FindingResolution {
+    pub action: String,
+    pub evidence: String,
+    #[serde(default)]
+    pub changes: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BuildFinding {
@@ -68,6 +88,12 @@ pub struct BuildFinding {
     pub command: CommandPlan,
     pub exit_code: Option<i32>,
     pub attempt: u32,
+    #[serde(default)]
+    pub status: FindingStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<FindingResolution>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -107,6 +133,7 @@ pub struct CampaignState {
 }
 
 pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, CampaignError> {
+    let _lock = CampaignLock::acquire(&request.state_path)?;
     let manifest_path = request.bundle.join("package.plan.json");
     let manifest: Value = read_json(&manifest_path)?;
     let package = manifest
@@ -194,6 +221,9 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 },
                 exit_code: None,
                 attempt: state.attempts,
+                status: FindingStatus::Open,
+                owner: None,
+                resolution: None,
             });
             state.status = CampaignStatus::Failed;
             state.current_recipe = None;
@@ -241,6 +271,9 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 command,
                 exit_code: output.status.code(),
                 attempt: state.attempts,
+                status: FindingStatus::Open,
+                owner: None,
+                resolution: None,
             });
             state.status = CampaignStatus::Failed;
             state.current_recipe = None;
@@ -259,6 +292,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
             recipe: Some(recipe_text),
             detail: "EasyBuild command succeeded".into(),
         });
+        supersede_findings(&mut state, "build", &recipe_text);
     }
 
     state.current_recipe = None;
@@ -314,6 +348,9 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                     command,
                     exit_code: output.status.code(),
                     attempt: state.attempts,
+                    status: FindingStatus::Open,
+                    owner: None,
+                    resolution: None,
                 });
                 state.status = CampaignStatus::Failed;
                 state.history.push(CampaignEvent {
@@ -331,6 +368,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 recipe: Some(format!("profile:{}", profile.name)),
                 detail: format!("binary verification succeeded for module {module}"),
             });
+            supersede_findings(&mut state, "verify", &format!("profile:{}", profile.name));
             write_state(&request.state_path, &state)?;
         }
     }
@@ -349,6 +387,91 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
     });
     write_state(&request.state_path, &state)?;
     Ok(state)
+}
+
+pub fn claim_finding(
+    state_path: &Path,
+    finding_id: &str,
+    owner: &str,
+) -> Result<CampaignState, CampaignError> {
+    let _lock = CampaignLock::acquire(state_path)?;
+    let mut state: CampaignState = read_json(state_path)?;
+    let finding = state
+        .findings
+        .iter_mut()
+        .find(|finding| finding.id == finding_id)
+        .ok_or_else(|| CampaignError::FindingNotFound(finding_id.into()))?;
+    match finding.status {
+        FindingStatus::Open => {
+            finding.status = FindingStatus::InProgress;
+            finding.owner = Some(owner.into());
+        }
+        FindingStatus::InProgress if finding.owner.as_deref() == Some(owner) => {}
+        FindingStatus::InProgress => {
+            return Err(CampaignError::FindingOwned {
+                id: finding_id.into(),
+                owner: finding.owner.clone().unwrap_or_else(|| "unknown".into()),
+            });
+        }
+        status => {
+            return Err(CampaignError::FindingState {
+                id: finding_id.into(),
+                status,
+            });
+        }
+    }
+    write_state(state_path, &state)?;
+    Ok(state)
+}
+
+pub fn resolve_finding(
+    state_path: &Path,
+    finding_id: &str,
+    owner: &str,
+    resolution: FindingResolution,
+) -> Result<CampaignState, CampaignError> {
+    let _lock = CampaignLock::acquire(state_path)?;
+    let mut state: CampaignState = read_json(state_path)?;
+    let finding = state
+        .findings
+        .iter_mut()
+        .find(|finding| finding.id == finding_id)
+        .ok_or_else(|| CampaignError::FindingNotFound(finding_id.into()))?;
+    if finding.status != FindingStatus::InProgress {
+        return Err(CampaignError::FindingState {
+            id: finding_id.into(),
+            status: finding.status,
+        });
+    }
+    if finding.owner.as_deref() != Some(owner) {
+        return Err(CampaignError::FindingOwned {
+            id: finding_id.into(),
+            owner: finding.owner.clone().unwrap_or_else(|| "unknown".into()),
+        });
+    }
+    finding.status = FindingStatus::Resolved;
+    finding.resolution = Some(resolution);
+    write_state(state_path, &state)?;
+    Ok(state)
+}
+
+fn supersede_findings(state: &mut CampaignState, stage: &str, recipe: &str) {
+    for finding in &mut state.findings {
+        if finding.stage == stage
+            && finding.recipe == recipe
+            && matches!(
+                finding.status,
+                FindingStatus::Open | FindingStatus::InProgress
+            )
+        {
+            finding.status = FindingStatus::Superseded;
+            finding.resolution.get_or_insert_with(|| FindingResolution {
+                action: "successful campaign retry superseded this finding".into(),
+                evidence: format!("attempt {} succeeded at stage {stage}", state.attempts),
+                changes: Vec::new(),
+            });
+        }
+    }
 }
 
 pub fn classify_build_failure(
@@ -545,6 +668,39 @@ fn write_state(path: &Path, state: &CampaignState) -> Result<(), CampaignError> 
     Ok(())
 }
 
+struct CampaignLock {
+    path: PathBuf,
+    _file: std::fs::File,
+}
+
+impl CampaignLock {
+    fn acquire(state_path: &Path) -> Result<Self, CampaignError> {
+        if let Some(parent) = state_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| CampaignError::Io(parent.to_path_buf(), error))?;
+        }
+        let path = PathBuf::from(format!("{}.lock", state_path.display()));
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    CampaignError::Busy(path.clone())
+                } else {
+                    CampaignError::Io(path.clone(), error)
+                }
+            })?;
+        Ok(Self { path, _file: file })
+    }
+}
+
+impl Drop for CampaignLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum CampaignError {
     #[error("invalid package bundle: {0}")]
@@ -553,6 +709,14 @@ pub enum CampaignError {
     UnsupportedSchema(u32),
     #[error("campaign state package identity does not match the bundle")]
     StateIdentity,
+    #[error("campaign state is busy: {0}")]
+    Busy(PathBuf),
+    #[error("campaign finding {0} does not exist")]
+    FindingNotFound(String),
+    #[error("campaign finding {id} is owned by {owner}")]
+    FindingOwned { id: String, owner: String },
+    #[error("campaign finding {id} cannot be changed from status {status:?}")]
+    FindingState { id: String, status: FindingStatus },
     #[error("target command: {0}")]
     Target(#[from] TargetError),
     #[error("read or write {0}: {1}")]
