@@ -110,70 +110,17 @@ fn pure_formatters_match_shipped_solve_outputs() {
 }
 
 #[test]
-fn cli_solve_json_writes_both_artifacts() {
-    let bin = env!("CARGO_BIN_EXE_eb-stack");
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let lock_out = tmp.path().join("lock.json");
-    let sbom_out = tmp.path().join("sbom.json");
-    let build_list_out = tmp.path().join("build.list");
-    let stack_diff_out = tmp.path().join("diff.md");
-
-    let run = |dest: &Path| {
-        let status = Command::new(bin)
-            .args([
-                "solve-json",
-                "--universe",
-                fixture("universe_next.json").to_str().unwrap(),
-                "--policy",
-                fixture("policy_prefer_newer.json").to_str().unwrap(),
-                "--baseline",
-                fixture("baseline.lock.json").to_str().unwrap(),
-                "--lock-out",
-                lock_out.to_str().unwrap(),
-                "--sbom-out",
-                sbom_out.to_str().unwrap(),
-                "--build-list-out",
-                dest.join("build.list").to_str().unwrap(),
-                "--stack-diff-out",
-                dest.join("diff.md").to_str().unwrap(),
-            ])
-            .status()
-            .expect("spawn eb-stack");
-        assert!(status.success(), "eb-stack solve-json failed: {status}");
-    };
-
-    // Double launch: both runs must produce non-empty artifacts (no flaky empty outputs).
-    let run1 = tmp.path().join("run1");
-    let run2 = tmp.path().join("run2");
-    std::fs::create_dir_all(&run1).unwrap();
-    std::fs::create_dir_all(&run2).unwrap();
-    run(&run1);
-    run(&run2);
-
-    for dir in [&run1, &run2] {
-        let bl = std::fs::read_to_string(dir.join("build.list")).unwrap();
-        let md = std::fs::read_to_string(dir.join("diff.md")).unwrap();
-        assert!(
-            !bl.trim().is_empty(),
-            "empty build list in {}",
-            dir.display()
-        );
-        assert!(
-            !md.trim().is_empty(),
-            "empty stack diff in {}",
-            dir.display()
-        );
-        assert!(bl.lines().any(|l| l.contains("GROMACS")), "{bl}");
-        assert!(
-            md.contains("version-bumped") || md.contains("unchanged"),
-            "{md}"
-        );
-    }
-
-    // Same ordered paths on both runs.
-    let a = std::fs::read_to_string(run1.join("build.list")).unwrap();
-    let b = std::fs::read_to_string(run2.join("build.list")).unwrap();
-    assert_eq!(a, b);
+fn cli_solve_json_legacy_surface_is_removed() {
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .args(["solve-json", "--help"])
+        .output()
+        .expect("spawn eb-stack");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
