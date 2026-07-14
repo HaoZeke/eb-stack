@@ -11,6 +11,7 @@ pub mod manifest;
 pub mod mcp;
 pub mod package;
 pub mod package_emit;
+pub mod package_solve;
 pub mod report;
 pub mod resolvo_provider;
 pub mod sbom;
@@ -68,6 +69,7 @@ pub use report::{
     ordered_packages, PackageChange, PackageChangeKind,
 };
 pub use package_emit::{emit_profile_easyconfigs, EmittedEasyconfig, PackageEmitError};
+pub use package_solve::{solve_package_profile, ProfileSolveError};
 pub use resolvo_provider::solve_with_stack_policy;
 pub use sbom::{
     build_dep_map_from_universe, dep_map_from_universe, lock_to_bom, lock_to_cyclonedx,
