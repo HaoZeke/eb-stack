@@ -127,10 +127,7 @@ pub fn format_style(text: &str) -> FormatStyleResult {
 }
 
 /// Format a file in place (or write to `out` if set). Returns the format result.
-pub fn format_style_file(
-    path: &Path,
-    out: Option<&Path>,
-) -> Result<FormatStyleResult, StyleError> {
+pub fn format_style_file(path: &Path, out: Option<&Path>) -> Result<FormatStyleResult, StyleError> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| StyleError::Io(format!("read {}: {e}", path.display())))?;
     let result = format_style(&text);
@@ -493,9 +490,11 @@ fn preferred_split(s: &str, budget: usize) -> Option<usize> {
         return Some(pos.0 + pos.1.len_utf8());
     }
     // last non-alnum (avoid mid-identifier hard cuts when possible)
-    if let Some((i, _)) = window.char_indices().rev().find(|(_, c)| {
-        !c.is_ascii_alphanumeric() && *c != '_'
-    }) {
+    if let Some((i, _)) = window
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !c.is_ascii_alphanumeric() && *c != '_')
+    {
         if i > 8 {
             return Some(i + 1);
         }
@@ -540,8 +539,15 @@ impl fmt::Display for StyleFinding {
         write!(
             f,
             "{}:{}:{}: {} {}",
-            self.line, self.column, self.code, self.message,
-            if self.mechanical { "(mechanical)" } else { "(manual break)" }
+            self.line,
+            self.column,
+            self.code,
+            self.message,
+            if self.mechanical {
+                "(mechanical)"
+            } else {
+                "(manual break)"
+            }
         )
     }
 }
@@ -575,11 +581,7 @@ mod tests {
         assert!(lint_style(&src).len() >= 1);
         let r = format_style(&src);
         assert!(r.lines_rewritten >= 1);
-        assert!(
-            r.remaining.is_empty(),
-            "remaining: {:?}",
-            r.remaining
-        );
+        assert!(r.remaining.is_empty(), "remaining: {:?}", r.remaining);
         assert!(r.text.contains("configopts = "));
         assert!(r.text.contains("configopts += ") || r.lines_rewritten == 1);
         assert!(r.text.contains("-Dflag_0=ON"));
@@ -672,7 +674,10 @@ mod tests {
     #[test]
     fn qmcpack_configopts_fixture_shape() {
         let line = "configopts = '-DCMAKE_BUILD_TYPE=Release -DQMC_MPI=ON -DQMC_OMP=ON -DQMC_MIXED_PRECISION=OFF -DQMC_COMPLEX=OFF -DBUILD_AFQMC=OFF'\n";
-        assert!(line.chars().count() > EB_MAX_LINE || line.lines().next().unwrap().chars().count() > EB_MAX_LINE);
+        assert!(
+            line.chars().count() > EB_MAX_LINE
+                || line.lines().next().unwrap().chars().count() > EB_MAX_LINE
+        );
         let r = format_style(line);
         assert!(r.remaining.is_empty(), "{:?}", r.remaining);
         for l in r.text.lines() {

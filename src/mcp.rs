@@ -20,16 +20,14 @@
 //! complete surface a tools-only stdio server needs.
 
 use crate::eb_emit::{
-    emit_next_generation_auto_from_path_with_opts, emit_next_generation_from_path,
-    AutoResolveOpts, EmitParams,
+    emit_next_generation_auto_from_path_with_opts, emit_next_generation_from_path, AutoResolveOpts,
+    EmitParams,
 };
 use crate::eb_parse::{
     check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,
     RecipeDepCheck,
 };
-use crate::{
-    solve_from_easyconfigs_with_baseline_version_and_extras, SolveExtraOut, Toolchain,
-};
+use crate::{solve_from_easyconfigs_with_baseline_version_and_extras, SolveExtraOut, Toolchain};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -315,8 +313,8 @@ fn tool_check_recipe(args: &Value) -> Result<Value, String> {
         return Err("missing required argument: easyconfigs (non-empty array)".into());
     }
     let reqs = str_vec(args, "require_configopts");
-    let resolved =
-        resolve_easyconfig_file(Path::new(&recipe)).map_err(|e| format!("resolve {recipe}: {e}"))?;
+    let resolved = resolve_easyconfig_file(Path::new(&recipe))
+        .map_err(|e| format!("resolve {recipe}: {e}"))?;
     let req_refs: Vec<&str> = reqs.iter().map(String::as_str).collect();
     let gate = packaging_gate(&resolved, &req_refs);
     let roots: Vec<&Path> = trees.iter().map(|s| Path::new(s.as_str())).collect();
@@ -417,8 +415,7 @@ fn tool_bump(args: &Value) -> Result<Value, String> {
                 .map_err(|e| format!("create parent {}: {e}", parent.display()))?;
         }
     }
-    std::fs::write(&dest, &result.text)
-        .map_err(|e| format!("write {}: {e}", dest.display()))?;
+    std::fs::write(&dest, &result.text).map_err(|e| format!("write {}: {e}", dest.display()))?;
     Ok(json!({
         "wrote": dest.display().to_string(),
         "filename": result.filename,
@@ -578,13 +575,8 @@ fn tool_ingest(args: &Value) -> Result<Value, String> {
             .unwrap_or(false),
         hierarchy_fixture: None,
     };
-    let result = ingest_foreign_to_easyconfig_with_opts(
-        Path::new(&source),
-        fmt,
-        &toolchain,
-        &opts,
-    )
-    .map_err(|e| format!("ingest {source}: {e}"))?;
+    let result = ingest_foreign_to_easyconfig_with_opts(Path::new(&source), fmt, &toolchain, &opts)
+        .map_err(|e| format!("ingest {source}: {e}"))?;
     let residual = opt_str(args, "residual_queue").map(PathBuf::from);
     let dest = write_ingest_result_with_queue(
         &result,
@@ -768,7 +760,9 @@ about:
         let rq = PathBuf::from(payload["residual_queue"].as_str().unwrap());
         assert!(rq.is_file(), "residual queue written at {rq:?}");
         let qtext = std::fs::read_to_string(&rq).unwrap();
-        assert!(qtext.contains("moduleclass") || qtext.contains("sanity") || qtext.contains("items"));
+        assert!(
+            qtext.contains("moduleclass") || qtext.contains("sanity") || qtext.contains("items")
+        );
     }
 
     #[test]

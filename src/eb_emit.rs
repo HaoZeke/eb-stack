@@ -151,9 +151,8 @@ pub fn emit_next_generation_from_path(
     path: &std::path::Path,
     params: &EmitParams,
 ) -> Result<EmitResult, EmitError> {
-    let source = std::fs::read_to_string(path).map_err(|e| {
-        EmitError::Rewrite(format!("read {}: {}", path.display(), e))
-    })?;
+    let source = std::fs::read_to_string(path)
+        .map_err(|e| EmitError::Rewrite(format!("read {}: {}", path.display(), e)))?;
     emit_next_generation(&source, params)
 }
 
@@ -269,9 +268,8 @@ pub fn emit_next_generation_auto_from_path_with_opts(
     source_checksum: Option<String>,
     opts: &AutoResolveOpts,
 ) -> Result<EmitResult, EmitError> {
-    let source = std::fs::read_to_string(source_path).map_err(|e| {
-        EmitError::Rewrite(format!("read {}: {}", source_path.display(), e))
-    })?;
+    let source = std::fs::read_to_string(source_path)
+        .map_err(|e| EmitError::Rewrite(format!("read {}: {}", source_path.display(), e)))?;
     emit_next_generation_auto_with_opts(
         &source,
         target_toolchain,
@@ -319,9 +317,10 @@ pub fn resolve_dep_versions_for_source_with_opts(
     // No deps/builddeps to resolve: skip hierarchy + resolvo entirely (e.g. leaf
     // OpenMPI-style recipes that only need a toolchain rewrite).
     if specs.is_empty() {
-        return Ok((HashMap::new(), vec![
-            "auto-resolve: no dependencies/builddependencies to resolve".into(),
-        ]));
+        return Ok((
+            HashMap::new(),
+            vec!["auto-resolve: no dependencies/builddependencies to resolve".into()],
+        ));
     }
     let tree = parse_easyconfig_tree(easyconfigs_dir)?;
     let mut warnings = Vec::new();
@@ -332,8 +331,7 @@ pub fn resolve_dep_versions_for_source_with_opts(
             // Fixture path, else built-in, else derive the generation's
             // hierarchy from the robot tree itself, so a brand-new generation
             // (the annual-bump case) needs no shipped fixture.
-            owned =
-                hierarchy_for_with_tree(target_toolchain, hierarchy_fixture, &tree.candidates)?;
+            owned = hierarchy_for_with_tree(target_toolchain, hierarchy_fixture, &tree.candidates)?;
             if hierarchy_fixture.is_none() && known_hierarchy(target_toolchain).is_none() {
                 warnings.push(format!(
                     "hierarchy: derived from robot tree for {}-{} (members: {})",
@@ -564,8 +562,7 @@ fn tuple_rest_is_system(rest: &str) -> bool {
                 let before_ok = i == 0
                     || rest.as_bytes()[i - 1].is_ascii_whitespace()
                     || rest.as_bytes()[i - 1] == b',';
-                let after_ok = end >= rest.len()
-                    || !rest.as_bytes()[end].is_ascii_alphanumeric();
+                let after_ok = end >= rest.len() || !rest.as_bytes()[end].is_ascii_alphanumeric();
                 if before_ok && after_ok {
                     // Avoid matching versionsuffix strings that already closed.
                     return true;
@@ -985,8 +982,7 @@ fn rewrite_source_checksum(
         // Dict form: first quoted string is the tarball key, second is the sha.
         // No backreferences (regex crate): match single- and double-quoted
         // spans separately, then merge and sort by position.
-        let re_sq =
-            regex::Regex::new(r"'[^']*'").map_err(|e| EmitError::Rewrite(e.to_string()))?;
+        let re_sq = regex::Regex::new(r"'[^']*'").map_err(|e| EmitError::Rewrite(e.to_string()))?;
         let re_dq =
             regex::Regex::new(r#""[^"]*""#).map_err(|e| EmitError::Rewrite(e.to_string()))?;
         let mut matches: Vec<regex::Match> =
@@ -1128,9 +1124,13 @@ builddependencies = [
         };
         let r = emit_next_generation(MINIMAL, &params).expect("emit");
         assert_eq!(r.filename, "GROMACS-2024.1-foss-2025b.eb");
-        assert!(r.text.contains("toolchain = {'name': 'foss', 'version': '2025b'}"));
+        assert!(r
+            .text
+            .contains("toolchain = {'name': 'foss', 'version': '2025b'}"));
         assert!(r.text.contains("version = '2024.1'"));
-        assert!(r.text.contains("toolchainopts = {'openmp': True, 'usempi': True}"));
+        assert!(r
+            .text
+            .contains("toolchainopts = {'openmp': True, 'usempi': True}"));
         assert!(r.text.contains("homepage = 'https://www.gromacs.org'"));
         assert!(r
             .text
@@ -1161,7 +1161,9 @@ builddependencies = [
         let r = emit_next_generation(MINIMAL, &params).expect("emit");
         assert_eq!(r.filename, "GROMACS-2025.0-foss-2025b.eb");
         assert!(r.text.contains("version = '2025.0'"));
-        assert!(r.text.contains("toolchain = {'name': 'foss', 'version': '2025b'}"));
+        assert!(r
+            .text
+            .contains("toolchain = {'name': 'foss', 'version': '2025b'}"));
         assert!(r.text.contains("name = 'GROMACS'"));
         assert!(r.text.contains("homepage = 'https://www.gromacs.org'"));
     }
@@ -1326,7 +1328,9 @@ dependencies = [
         assert!(r.text.contains(
             "{'openmpi-5.0.3.tar.bz2': '990582f206b3ab32e938aa31bbf07c639368e4405dca196fabe7f0f76eeda90b'}"
         ));
-        assert!(r.text.contains("'OpenMPI-5.0.3_fix_hle_make_errors.patch',"));
+        assert!(r
+            .text
+            .contains("'OpenMPI-5.0.3_fix_hle_make_errors.patch',"));
         assert!(r.warnings.is_empty(), "warnings: {:?}", r.warnings);
     }
 
@@ -1364,14 +1368,7 @@ dependencies = [
             version: "2024a".into(),
         };
         let err = emit_next_generation_auto_from_path(
-            &src_path,
-            &tc,
-            &uni,
-            None,
-            None,
-            &empty,
-            None,
-            None,
+            &src_path, &tc, &uni, None, None, &empty, None, None,
         )
         .expect_err("must fail without keep_old");
         let msg = err.to_string();
@@ -1499,20 +1496,17 @@ dependencies = [
             version: "2024a".into(),
         };
         let r = emit_next_generation_auto_from_path(
-            &src_path,
-            &tc,
-            &uni,
-            None,
-            None,
-            &empty,
-            None,
-            None,
+            &src_path, &tc, &uni, None, None, &empty, None, None,
         )
         .expect("SYSTEM freeze + optional bump must not hard-fail");
-        assert!(r.text.contains("toolchain = {'name': 'foss', 'version': '2024a'}"));
+        assert!(r
+            .text
+            .contains("toolchain = {'name': 'foss', 'version': '2024a'}"));
         assert!(r.text.contains("('Python', '3.12.3')"));
         // SYSTEM pin still frozen at the source version.
-        assert!(r.text.contains("('USEARCH', '11.0.667-i86linux32', '', SYSTEM)"));
+        assert!(r
+            .text
+            .contains("('USEARCH', '11.0.667-i86linux32', '', SYSTEM)"));
         // Optional ASE bumps to the in-generation candidate; the `# optional`
         // comment is preserved verbatim, only the version token changes.
         assert!(
@@ -1526,7 +1520,9 @@ dependencies = [
             r.text
         );
         assert!(
-            r.warnings.iter().any(|w| w.contains("USEARCH") && w.contains("SYSTEM")),
+            r.warnings
+                .iter()
+                .any(|w| w.contains("USEARCH") && w.contains("SYSTEM")),
             "warnings: {:?}",
             r.warnings
         );
@@ -1546,14 +1542,7 @@ dependencies = [
         )
         .unwrap();
         let r_soft = emit_next_generation_auto_from_path(
-            &src_path,
-            &tc,
-            &uni2,
-            None,
-            None,
-            &empty,
-            None,
-            None,
+            &src_path, &tc, &uni2, None, None, &empty, None, None,
         )
         .expect("optional unresolved must soft-keep, not hard-fail");
         assert!(
@@ -1562,10 +1551,9 @@ dependencies = [
             r_soft.text
         );
         assert!(
-            r_soft
-                .warnings
-                .iter()
-                .any(|w| w.contains("ASE") && w.contains("optional") && w.contains("keeping source")),
+            r_soft.warnings.iter().any(|w| w.contains("ASE")
+                && w.contains("optional")
+                && w.contains("keeping source")),
             "warnings: {:?}",
             r_soft.warnings
         );
@@ -1608,18 +1596,15 @@ dependencies = [
             version: "2024a".into(),
         };
         let r = emit_next_generation_auto_from_path(
-            &src_path,
-            &tc,
-            &uni,
-            None,
-            None,
-            &empty,
-            None,
-            None,
+            &src_path, &tc, &uni, None, None, &empty, None, None,
         )
         .expect("optional extras must bump");
         assert!(r.text.contains("('networkx', '3.4.2')"), "got:\n{}", r.text);
-        assert!(r.text.contains("('PyTables', '3.10.2')"), "got:\n{}", r.text);
+        assert!(
+            r.text.contains("('PyTables', '3.10.2')"),
+            "got:\n{}",
+            r.text
+        );
         assert!(!r.text.contains("3.2.1"));
         assert!(!r.text.contains("3.9.2"));
     }
@@ -1661,14 +1646,7 @@ dependencies = []
             version: "2024a".into(),
         };
         let r = emit_next_generation_auto_from_path(
-            &src_path,
-            &tc,
-            &uni,
-            None,
-            None,
-            &empty,
-            None,
-            None,
+            &src_path, &tc, &uni, None, None, &empty, None, None,
         )
         .expect("FLANN bump");
         assert!(

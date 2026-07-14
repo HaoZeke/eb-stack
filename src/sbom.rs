@@ -91,12 +91,7 @@ pub fn lock_to_bom(
         }
 
         let purl_str = r.clone();
-        let mut component = Component::new(
-            Classification::Library,
-            &p.name,
-            &p.version,
-            Some(r),
-        );
+        let mut component = Component::new(Classification::Library, &p.name, &p.version, Some(r));
         component.purl = Purl::from_str(&purl_str).ok();
         component.properties = Some(Properties(props));
         components.push(component);
@@ -182,7 +177,10 @@ fn bom_to_json_value(bom: Bom) -> Value {
 /// matching the lock. Build-time deps are intentionally omitted here so SBOM
 /// `dependsOn` edges stay role-specific; use [`build_dep_map_from_universe`] for
 /// the build-time list (same shape, separate map).
-pub fn dep_map_from_universe(lock: &StackLock, universe: &Universe) -> HashMap<String, Vec<String>> {
+pub fn dep_map_from_universe(
+    lock: &StackLock,
+    universe: &Universe,
+) -> HashMap<String, Vec<String>> {
     dep_names_map_from_universe(lock, universe, false)
 }
 
@@ -316,20 +314,13 @@ mod tests {
         if others > 0 {
             for d in co["dependencies"].as_array().unwrap() {
                 let on = depends_on_list(d);
-                assert_ne!(
-                    on.len(),
-                    others,
-                    "dependsOn must not be all other packages"
-                );
+                assert_ne!(on.len(), others, "dependsOn must not be all other packages");
             }
         }
         // Typed BOM validates under cyclonedx-bom.
         let bom = lock_to_bom(&lock, Some(&map), None);
         let vr = bom.validate();
-        assert!(
-            vr.passed(),
-            "cyclonedx-bom Validate failed: {vr:?}"
-        );
+        assert!(vr.passed(), "cyclonedx-bom Validate failed: {vr:?}");
     }
 
     #[test]
@@ -444,17 +435,17 @@ mod tests {
             "build map must not include runtime-only deps"
         );
         // Serialized candidate still carries both roles separately.
-        let app_c = universe.candidates.iter().find(|c| c.name == "App").unwrap();
+        let app_c = universe
+            .candidates
+            .iter()
+            .find(|c| c.name == "App")
+            .unwrap();
         let json = serde_json::to_value(app_c).unwrap();
         assert_eq!(json["dependencies"][0]["name"], "Lib");
         assert_eq!(json["builddependencies"][0]["name"], "Tool");
 
         // Build edges land on property, not runtime dependsOn.
-        let sbom = lock_to_cyclonedx_with_runtime_and_build(
-            &lock,
-            Some(&runtime),
-            Some(&build),
-        );
+        let sbom = lock_to_cyclonedx_with_runtime_and_build(&lock, Some(&runtime), Some(&build));
         let comps = sbom["components"].as_array().unwrap();
         let app_c = comps
             .iter()
@@ -464,10 +455,7 @@ mod tests {
         assert!(
             props.iter().any(|p| {
                 p["name"].as_str() == Some("eb_stack:buildDependsOn")
-                    && p["value"]
-                        .as_str()
-                        .unwrap_or("")
-                        .contains("Tool")
+                    && p["value"].as_str().unwrap_or("").contains("Tool")
             }),
             "buildDependsOn property missing: {props:?}"
         );

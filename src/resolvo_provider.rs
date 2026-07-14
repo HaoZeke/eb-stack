@@ -8,9 +8,9 @@ use crate::domain::{Candidate, Pin, Policy, StackLock};
 use crate::version::{cmp_version, matches_req};
 use resolvo::utils::Pool;
 use resolvo::{
-    Candidates, Condition, ConditionId, Dependencies, DependencyProvider, HintDependenciesAvailable,
-    Interner, KnownDependencies, NameId, SolvableId, SolverCache, StringId, VersionSetId,
-    VersionSetUnionId,
+    Candidates, Condition, ConditionId, Dependencies, DependencyProvider,
+    HintDependenciesAvailable, Interner, KnownDependencies, NameId, SolvableId, SolverCache,
+    StringId, VersionSetId, VersionSetUnionId,
 };
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -114,10 +114,7 @@ impl EbProvider {
                 .and_then(|b| b.package(&ru.name))
                 .map(|p| p.version.clone())
                 .ok_or_else(|| {
-                    format!(
-                        "require_upgrade {} needs baseline package version",
-                        ru.name
-                    )
+                    format!("require_upgrade {} needs baseline package version", ru.name)
                 })?;
             let Some(ranked) = ranks.get(&ru.name) else {
                 return Err(format!("require_upgrade unknown package {}", ru.name));
@@ -370,11 +367,7 @@ impl DependencyProvider for EbProvider {
                     .intern_string(format!("missing dependency package {}", d.name));
                 return Dependencies::Unknown(reason);
             };
-            let range = self.range_matching(
-                &d.name,
-                &d.version_req,
-                d.versionsuffix.as_deref(),
-            );
+            let range = self.range_matching(&d.name, &d.version_req, d.versionsuffix.as_deref());
             if range == Ranges::empty() {
                 let reason = self.pool.intern_string(format!(
                     "unsatisfiable dep {} {} from {}={}",
@@ -633,7 +626,10 @@ mod tests {
 
         // Real solve path: App requires CUDA Lib specifically.
         let selected = solve_with_resolvo(&candidates, &pol, None).expect("solve");
-        let lib = selected.iter().find(|c| c.name == "Lib").expect("Lib selected");
+        let lib = selected
+            .iter()
+            .find(|c| c.name == "Lib")
+            .expect("Lib selected");
         assert_eq!(
             lib.versionsuffix.as_deref(),
             Some("-CUDA-12.8"),
@@ -669,9 +665,7 @@ mod tests {
         // With no suffix constraint either may win via prefer_newer; assert a Lib was chosen
         // and provider still had two identities (covered above). Here: both are valid.
         assert_eq!(lib.version, "1.0");
-        assert!(
-            lib.versionsuffix.is_none() || lib.versionsuffix.as_deref() == Some("-CUDA-12.8")
-        );
+        assert!(lib.versionsuffix.is_none() || lib.versionsuffix.as_deref() == Some("-CUDA-12.8"));
     }
 
     #[test]

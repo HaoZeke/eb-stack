@@ -449,7 +449,11 @@ pub fn count_generation_dep_versions(
         if hierarchy_member_rank(hierarchy, &consumer.toolchain).is_none() {
             continue;
         }
-        for dep in consumer.dependencies.iter().chain(consumer.builddependencies.iter()) {
+        for dep in consumer
+            .dependencies
+            .iter()
+            .chain(consumer.builddependencies.iter())
+        {
             if dep.name != name {
                 continue;
             }
@@ -509,16 +513,11 @@ pub fn pick_consensus_version(
         .collect();
     if filtered.is_empty() {
         // No consensus signal at all → newest eligible.
-        return eligible
-            .iter()
-            .max_by(|a, b| cmp_version(a, b))
-            .cloned();
+        return eligible.iter().max_by(|a, b| cmp_version(a, b)).cloned();
     }
     let total: usize = filtered.iter().map(|(_, c)| c).sum();
     // Modal: highest count; ties broken by newer version.
-    filtered.sort_by(|(va, ca), (vb, cb)| {
-        cb.cmp(ca).then_with(|| cmp_version(va, vb))
-    });
+    filtered.sort_by(|(va, ca), (vb, cb)| cb.cmp(ca).then_with(|| cmp_version(va, vb)));
     let (modal_ver, modal_count) = filtered[0];
     let clear = modal_count.saturating_mul(CONSENSUS_CLEAR_MAJORITY_DEN)
         >= total.saturating_mul(CONSENSUS_CLEAR_MAJORITY_NUM);
@@ -886,7 +885,9 @@ mod tests {
     #[test]
     fn resolve_multi_subtoolchain_universe_picks_generation_versions() {
         let root = fixture_root().join("fixtures/hierarchy_resolve/easyconfigs");
-        let cands = parse_easyconfig_tree(&root).expect("parse universe").candidates;
+        let cands = parse_easyconfig_tree(&root)
+            .expect("parse universe")
+            .candidates;
         let h = known_hierarchy(&foss("2024a")).unwrap();
 
         // Exact-toolchain filter would find zero of these under foss-2024a alone.
@@ -1007,9 +1008,7 @@ mod tests {
         );
         // Floor at 3.0.10 with only older available → None.
         let only_old = vec![cand("Cython", "0.29.37", "GCCcore", "13.3.0", None)];
-        assert!(
-            resolve_dep_version_in_hierarchy_opts("Cython", &only_old, &h, &opts).is_none()
-        );
+        assert!(resolve_dep_version_in_hierarchy_opts("Cython", &only_old, &h, &opts).is_none());
     }
 
     #[test]
@@ -1100,8 +1099,7 @@ mod tests {
         // the package so the operator knows what to bump from.
         let h = known_hierarchy(&foss("2024a")).unwrap();
         let cands = vec![cand("xtb", "6.7.1", "gfbf", "2023b", None)];
-        let err =
-            resolve_dep_versions_in_hierarchy_strict(["xtb"], &cands, &h).unwrap_err();
+        let err = resolve_dep_versions_in_hierarchy_strict(["xtb"], &cands, &h).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("available at other generations") && msg.contains("6.7.1 @ gfbf-2023b"),
@@ -1191,7 +1189,10 @@ mod tests {
             v
         };
         let (map, kept) = resolve_dep_versions_for_specs(&specs, &cands2, &h, false).unwrap();
-        assert!(!map.contains_key("LLVM"), "suffix-pinned LLVM must not bump");
+        assert!(
+            !map.contains_key("LLVM"),
+            "suffix-pinned LLVM must not bump"
+        );
         assert!(!map.contains_key("ASE"), "suffix-pinned ASE must not bump");
         assert_eq!(map.get("Python").map(String::as_str), Some("3.12.3"));
         assert!(kept.iter().any(|k| k.contains("LLVM")));
@@ -1210,7 +1211,9 @@ mod tests {
         );
         let (map, kept) = resolve_dep_versions_for_specs(&specs, &cands, &h, true).unwrap();
         assert!(map.is_empty());
-        assert!(kept.iter().any(|k| k.contains("MissingPkg") && k.contains("keeping")));
+        assert!(kept
+            .iter()
+            .any(|k| k.contains("MissingPkg") && k.contains("keeping")));
     }
 
     #[test]
@@ -1277,7 +1280,9 @@ mod tests {
                 "3.29.3",
             ));
         }
-        cands.push(consumer_pinning("NewApp", "1.0", "foss", "2024a", "CMake", "3.31.8"));
+        cands.push(consumer_pinning(
+            "NewApp", "1.0", "foss", "2024a", "CMake", "3.31.8",
+        ));
         let opts = ResolveDepOpts {
             floor_version: Some("3.27.6"),
             versionsuffix: None,
@@ -1303,7 +1308,14 @@ mod tests {
                 "1.5.2",
             ));
         }
-        sk.push(consumer_pinning("SciNew", "1.0", "gfbf", "2024a", "scikit-learn", "1.6.1"));
+        sk.push(consumer_pinning(
+            "SciNew",
+            "1.0",
+            "gfbf",
+            "2024a",
+            "scikit-learn",
+            "1.6.1",
+        ));
         let opts_sk = ResolveDepOpts {
             floor_version: Some("1.4.0"),
             versionsuffix: None,
@@ -1433,7 +1445,10 @@ mod tests {
         ];
         let counts = count_generation_dep_versions("CMake", &cands, &h);
         assert_eq!(counts.get("3.29.3").copied(), Some(2));
-        assert!(!counts.contains_key("3.31.8"), "out-of-gen pins must not count: {counts:?}");
+        assert!(
+            !counts.contains_key("3.31.8"),
+            "out-of-gen pins must not count: {counts:?}"
+        );
     }
 
     #[test]
@@ -1442,7 +1457,6 @@ mod tests {
         let cands = vec![
             cand("Python", "3.12.3", "GCCcore", "13.3.0", None),
             // In-hierarchy newer ASE — optional bumps like a normal dep.
-
             cand("ASE", "3.24.0", "foss", "2024a", None),
             cand("USEARCH", "12.0", "GCCcore", "13.3.0", None), // decoy — must not bump SYSTEM pin
             cand("networkx", "3.4.2", "foss", "2024a", None),
@@ -1493,7 +1507,9 @@ mod tests {
         assert_eq!(map.get("networkx").map(String::as_str), Some("3.4.2"));
         assert_eq!(map.get("PyTables").map(String::as_str), Some("3.10.2"));
         assert_eq!(map.get("Python").map(String::as_str), Some("3.12.3"));
-        assert!(kept.iter().any(|k| k.contains("USEARCH") && k.contains("SYSTEM")));
+        assert!(kept
+            .iter()
+            .any(|k| k.contains("USEARCH") && k.contains("SYSTEM")));
         assert!(
             !kept.iter().any(|k| k.contains("ASE")),
             "optional dep with a candidate must not be listed as kept-old: {kept:?}"
@@ -1556,8 +1572,13 @@ mod tests {
             name: "GCCcore".into(),
             version: "14.3.0".into(),
         };
-        assert_eq!(hierarchy_member_rank(&h, &sys_empty), hierarchy_member_rank(&h, &sys_sys));
-        assert!(hierarchy_member_rank(&h, &gcc).unwrap() > hierarchy_member_rank(&h, &sys_sys).unwrap());
+        assert_eq!(
+            hierarchy_member_rank(&h, &sys_empty),
+            hierarchy_member_rank(&h, &sys_sys)
+        );
+        assert!(
+            hierarchy_member_rank(&h, &gcc).unwrap() > hierarchy_member_rank(&h, &sys_sys).unwrap()
+        );
         assert!(hierarchy_member_rank(&h, &gcc14).is_none());
     }
 }

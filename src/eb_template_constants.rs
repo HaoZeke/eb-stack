@@ -1,28 +1,79 @@
 /// EasyBuild TEMPLATE_CONSTANTS (mirrors easybuild.framework.easyconfig.templates).
 /// Values keep %(…)s placeholders; applied when name/version are known.
 pub const EB_TEMPLATE_CONSTANTS: &[(&str, &str)] = &[
-    ("APACHE_SOURCE", "https://archive.apache.org/dist/%(namelower)s"),
-    ("BITBUCKET_DOWNLOADS", "https://bitbucket.org/%(bitbucket_account)s/%(namelower)s/downloads"),
-    ("BITBUCKET_SOURCE", "https://bitbucket.org/%(bitbucket_account)s/%(namelower)s/get"),
+    (
+        "APACHE_SOURCE",
+        "https://archive.apache.org/dist/%(namelower)s",
+    ),
+    (
+        "BITBUCKET_DOWNLOADS",
+        "https://bitbucket.org/%(bitbucket_account)s/%(namelower)s/downloads",
+    ),
+    (
+        "BITBUCKET_SOURCE",
+        "https://bitbucket.org/%(bitbucket_account)s/%(namelower)s/get",
+    ),
     ("CRAN_SOURCE", "https://cran.r-project.org/src/contrib"),
-    ("FTPGNOME_SOURCE", "https://ftp.gnome.org/pub/GNOME/sources/%(namelower)s/%(version_major_minor)s"),
-    ("GITHUB_LOWER_RELEASE", "https://github.com/%(github_account)s/%(namelower)s/releases/download/v%(version)s"),
-    ("GITHUB_LOWER_SOURCE", "https://github.com/%(github_account)s/%(namelower)s/archive"),
-    ("GITHUB_RELEASE", "https://github.com/%(github_account)s/%(name)s/releases/download/v%(version)s"),
-    ("GITHUB_SOURCE", "https://github.com/%(github_account)s/%(name)s/archive"),
+    (
+        "FTPGNOME_SOURCE",
+        "https://ftp.gnome.org/pub/GNOME/sources/%(namelower)s/%(version_major_minor)s",
+    ),
+    (
+        "GITHUB_LOWER_RELEASE",
+        "https://github.com/%(github_account)s/%(namelower)s/releases/download/v%(version)s",
+    ),
+    (
+        "GITHUB_LOWER_SOURCE",
+        "https://github.com/%(github_account)s/%(namelower)s/archive",
+    ),
+    (
+        "GITHUB_RELEASE",
+        "https://github.com/%(github_account)s/%(name)s/releases/download/v%(version)s",
+    ),
+    (
+        "GITHUB_SOURCE",
+        "https://github.com/%(github_account)s/%(name)s/archive",
+    ),
     ("GNU_FTP_SOURCE", "https://ftp.gnu.org/gnu/%(namelower)s"),
-    ("GNU_SAVANNAH_SOURCE", "https://download-mirror.savannah.gnu.org/releases/%(namelower)s"),
+    (
+        "GNU_SAVANNAH_SOURCE",
+        "https://download-mirror.savannah.gnu.org/releases/%(namelower)s",
+    ),
     ("GNU_SOURCE", "https://ftpmirror.gnu.org/gnu/%(namelower)s"),
-    ("GOOGLECODE_SOURCE", "http://%(namelower)s.googlecode.com/files"),
-    ("LAUNCHPAD_SOURCE", "https://launchpad.net/%(namelower)s/%(version_major_minor)s.x/%(version)s/+download/"),
-    ("PYPI_LOWER_SOURCE", "https://pypi.python.org/packages/source/%(nameletterlower)s/%(namelower)s"),
-    ("PYPI_SOURCE", "https://pypi.python.org/packages/source/%(nameletter)s/%(name)s"),
-    ("R_SOURCE", "https://cran.r-project.org/src/base/R-%(version_major)s"),
+    (
+        "GOOGLECODE_SOURCE",
+        "http://%(namelower)s.googlecode.com/files",
+    ),
+    (
+        "LAUNCHPAD_SOURCE",
+        "https://launchpad.net/%(namelower)s/%(version_major_minor)s.x/%(version)s/+download/",
+    ),
+    (
+        "PYPI_LOWER_SOURCE",
+        "https://pypi.python.org/packages/source/%(nameletterlower)s/%(namelower)s",
+    ),
+    (
+        "PYPI_SOURCE",
+        "https://pypi.python.org/packages/source/%(nameletter)s/%(name)s",
+    ),
+    (
+        "R_SOURCE",
+        "https://cran.r-project.org/src/base/R-%(version_major)s",
+    ),
     ("SHLIB_EXT", "so"),
-    ("SOURCEFORGE_SOURCE", "https://download.sourceforge.net/%(namelower)s"),
+    (
+        "SOURCEFORGE_SOURCE",
+        "https://download.sourceforge.net/%(namelower)s",
+    ),
     ("SOURCELOWER_GTGZ", "%(namelower)s-%(version)s.gtgz"),
-    ("SOURCELOWER_PY2_WHL", "%(namelower)s-%(version)s-py2-none-any.whl"),
-    ("SOURCELOWER_PY3_WHL", "%(namelower)s-%(version)s-py3-none-any.whl"),
+    (
+        "SOURCELOWER_PY2_WHL",
+        "%(namelower)s-%(version)s-py2-none-any.whl",
+    ),
+    (
+        "SOURCELOWER_PY3_WHL",
+        "%(namelower)s-%(version)s-py3-none-any.whl",
+    ),
     ("SOURCELOWER_TAR", "%(namelower)s-%(version)s.tar"),
     ("SOURCELOWER_TAR_BZ2", "%(namelower)s-%(version)s.tar.bz2"),
     ("SOURCELOWER_TAR_GZ", "%(namelower)s-%(version)s.tar.gz"),
@@ -32,7 +83,10 @@ pub const EB_TEMPLATE_CONSTANTS: &[(&str, &str)] = &[
     ("SOURCELOWER_TBZ2", "%(namelower)s-%(version)s.tbz2"),
     ("SOURCELOWER_TGZ", "%(namelower)s-%(version)s.tgz"),
     ("SOURCELOWER_TXZ", "%(namelower)s-%(version)s.txz"),
-    ("SOURCELOWER_WHL", "%(namelower)s-%(version)s-py2.py3-none-any.whl"),
+    (
+        "SOURCELOWER_WHL",
+        "%(namelower)s-%(version)s-py2.py3-none-any.whl",
+    ),
     ("SOURCELOWER_XZ", "%(namelower)s-%(version)s.xz"),
     ("SOURCELOWER_ZIP", "%(namelower)s-%(version)s.zip"),
     ("SOURCE_GTGZ", "%(name)s-%(version)s.gtgz"),
@@ -74,10 +128,25 @@ pub const EB_TEMPLATE_CONSTANTS: &[(&str, &str)] = &[
     ("V_VERSION_TXZ", "v%(version)s.txz"),
     ("V_VERSION_XZ", "v%(version)s.xz"),
     ("V_VERSION_ZIP", "v%(version)s.zip"),
-    ("XORG_DATA_SOURCE", "https://xorg.freedesktop.org/archive/individual/data/"),
-    ("XORG_LIB_SOURCE", "https://xorg.freedesktop.org/archive/individual/lib/"),
-    ("XORG_PROTO_SOURCE", "https://xorg.freedesktop.org/archive/individual/proto/"),
-    ("XORG_UTIL_SOURCE", "https://xorg.freedesktop.org/archive/individual/util/"),
-    ("XORG_XCB_SOURCE", "https://xorg.freedesktop.org/archive/individual/xcb/"),
+    (
+        "XORG_DATA_SOURCE",
+        "https://xorg.freedesktop.org/archive/individual/data/",
+    ),
+    (
+        "XORG_LIB_SOURCE",
+        "https://xorg.freedesktop.org/archive/individual/lib/",
+    ),
+    (
+        "XORG_PROTO_SOURCE",
+        "https://xorg.freedesktop.org/archive/individual/proto/",
+    ),
+    (
+        "XORG_UTIL_SOURCE",
+        "https://xorg.freedesktop.org/archive/individual/util/",
+    ),
+    (
+        "XORG_XCB_SOURCE",
+        "https://xorg.freedesktop.org/archive/individual/xcb/",
+    ),
 ];
 pub const EB_TEMPLATE_CONSTANTS_COUNT: usize = 78;

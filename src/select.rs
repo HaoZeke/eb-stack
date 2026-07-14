@@ -4,7 +4,9 @@
 //! dependency pins for a single recipe (used by `bump --easyconfigs` and
 //! foreign ingest), so version bumps are not hierarchy-lookup-only.
 
-use crate::domain::{Candidate, DepReq, LockPackage, Policy, SolverMeta, StackLock, Toolchain, Universe};
+use crate::domain::{
+    Candidate, DepReq, LockPackage, Policy, SolverMeta, StackLock, Toolchain, Universe,
+};
 use crate::hierarchy::{
     filter_candidates_in_hierarchy, is_system_toolchain, SourceDepSpec, ToolchainHierarchy,
 };
@@ -315,7 +317,10 @@ mod tests {
         let err = select_stack(&universe, &policy, None).unwrap_err();
         let msg = err.to_string();
         let low = msg.to_lowercase();
-        assert!(low.contains("unsatisfiable") || low.contains("unsat"), "{msg}");
+        assert!(
+            low.contains("unsatisfiable") || low.contains("unsat"),
+            "{msg}"
+        );
         // Human-readable versions, not raw resolvo ranks ("GROMACS 2", "OpenMPI 1 | 2").
         assert!(
             msg.contains("2025.0") && (msg.contains("4.1.5") || msg.contains("5.0.3")),
@@ -430,9 +435,7 @@ mod tests {
         let msg = err.to_string();
         let low = msg.to_lowercase();
         assert!(
-            low.contains("unsatisfiable")
-                || low.contains("unsat")
-                || low.contains("missing"),
+            low.contains("unsatisfiable") || low.contains("unsat") || low.contains("missing"),
             "builddep miss should fail like runtime dep miss: {msg}"
         );
     }
@@ -441,10 +444,7 @@ mod tests {
     fn fixture_builddep_root_co_selects_fftw() {
         let (universe, _) = universe_next_from_eb();
         assert!(
-            universe
-                .candidates
-                .iter()
-                .any(|c| c.name == "BuildDepRoot"),
+            universe.candidates.iter().any(|c| c.name == "BuildDepRoot"),
             "BuildDepRoot fixture must be in parsed universe"
         );
         let root = universe
@@ -473,10 +473,7 @@ mod tests {
         assert!(
             lock.package("FFTW").is_some(),
             "FFTW co-selected via builddependencies; packages={:?}",
-            lock.packages
-                .iter()
-                .map(|p| &p.name)
-                .collect::<Vec<_>>()
+            lock.packages.iter().map(|p| &p.name).collect::<Vec<_>>()
         );
         assert!(lock.package("OpenBLAS").is_some());
     }
@@ -494,7 +491,9 @@ mod tests {
 
     fn two_root_universe() -> Universe {
         let root = two_root_fixture_root().join("easyconfigs");
-        let all = parse_easyconfig_tree(&root).expect("parse two-root tree").candidates;
+        let all = parse_easyconfig_tree(&root)
+            .expect("parse two-root tree")
+            .candidates;
         let policy_tc = Toolchain {
             name: "foss".into(),
             version: "2025b".into(),
@@ -617,7 +616,9 @@ mod tests {
         assert_eq!(lock.package("OpenMPI").unwrap().version, "4.1.6");
 
         // Also reverse again after partial sort by path to vary HashMap insert order.
-        universe.candidates.sort_by(|a, b| b.easyconfig_path.cmp(&a.easyconfig_path));
+        universe
+            .candidates
+            .sort_by(|a, b| b.easyconfig_path.cmp(&a.easyconfig_path));
         let lock2 = select_stack(&universe, &policy, None).expect("resorted candidates");
         assert_eq!(lock2.package("GROMACS").unwrap().version, "2025.0");
         assert_eq!(lock2.package("LAMMPS").unwrap().version, "2023.08");

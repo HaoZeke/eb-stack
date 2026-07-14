@@ -35,11 +35,8 @@ pub fn ordered_packages<'a>(
     lock: &'a StackLock,
     dep_map: &HashMap<String, Vec<String>>,
 ) -> Vec<&'a LockPackage> {
-    let by_name: BTreeMap<&str, &LockPackage> = lock
-        .packages
-        .iter()
-        .map(|p| (p.name.as_str(), p))
-        .collect();
+    let by_name: BTreeMap<&str, &LockPackage> =
+        lock.packages.iter().map(|p| (p.name.as_str(), p)).collect();
     let selected: BTreeSet<&str> = by_name.keys().copied().collect();
 
     // Kahn: edge dep -> pkg means dep must be installed before pkg.

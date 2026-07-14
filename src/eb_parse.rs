@@ -100,11 +100,7 @@ impl ResolvedEasyconfig {
             toolchain: self.toolchain.clone(),
             versionsuffix: self.versionsuffix.clone(),
             easyconfig_path: self.easyconfig_path.clone(),
-            dependencies: self
-                .dependencies
-                .iter()
-                .map(resolved_dep_to_req)
-                .collect(),
+            dependencies: self.dependencies.iter().map(resolved_dep_to_req).collect(),
             builddependencies: self
                 .builddependencies
                 .iter()
@@ -297,10 +293,31 @@ impl<'a> Parser<'a> {
 
     fn at_control_keyword(&self) -> bool {
         const KWS: &[&[u8]] = &[
-            b"if", b"for", b"while", b"try", b"with", b"def", b"class", b"else", b"elif",
-            b"except", b"finally", b"async", b"raise", b"return", b"assert", b"import",
-            b"from", b"pass", b"break", b"continue", b"global", b"nonlocal", b"del",
-            b"yield", b"lambda",
+            b"if",
+            b"for",
+            b"while",
+            b"try",
+            b"with",
+            b"def",
+            b"class",
+            b"else",
+            b"elif",
+            b"except",
+            b"finally",
+            b"async",
+            b"raise",
+            b"return",
+            b"assert",
+            b"import",
+            b"from",
+            b"pass",
+            b"break",
+            b"continue",
+            b"global",
+            b"nonlocal",
+            b"del",
+            b"yield",
+            b"lambda",
         ];
         let rest = &self.src[self.pos..];
         for kw in KWS {
@@ -308,7 +325,10 @@ impl<'a> Parser<'a> {
                 let after = self.pos + kw.len();
                 let next = self.src.get(after).copied();
                 // keyword boundary: not part of a longer identifier
-                if next.map(|c| c.is_ascii_alphanumeric() || c == b'_').unwrap_or(false) {
+                if next
+                    .map(|c| c.is_ascii_alphanumeric() || c == b'_')
+                    .unwrap_or(false)
+                {
                     continue;
                 }
                 return true;
@@ -469,10 +489,7 @@ impl<'a> Parser<'a> {
             return Err(self.err("expected identifier, got EOF"));
         };
         if !(c0.is_ascii_alphabetic() || c0 == b'_') {
-            return Err(self.err(format!(
-                "expected identifier, got {:?}",
-                c0 as char
-            )));
+            return Err(self.err(format!("expected identifier, got {:?}", c0 as char)));
         }
         self.pos += 1;
         while let Some(c) = self.peek() {
@@ -501,9 +518,7 @@ impl<'a> Parser<'a> {
                         (Value::Str(a), Value::Int(b)) => Value::Str(format!("{a}{b}")),
                         (Value::Int(a), Value::Str(b)) => Value::Str(format!("{a}{b}")),
                         (a, b) => {
-                            return Err(self.err(format!(
-                                "unsupported + operands: {a:?} + {b:?}"
-                            )));
+                            return Err(self.err(format!("unsupported + operands: {a:?} + {b:?}")));
                         }
                     };
                 }
@@ -518,9 +533,7 @@ impl<'a> Parser<'a> {
                             Value::Str(python_percent_format_one(&fmt, &arg.to_string()))
                         }
                         (a, b) => {
-                            return Err(self.err(format!(
-                                "unsupported % operands: {a:?} % {b:?}"
-                            )));
+                            return Err(self.err(format!("unsupported % operands: {a:?} % {b:?}")));
                         }
                     };
                 }
@@ -741,9 +754,7 @@ impl<'a> Parser<'a> {
                 break;
             }
             let key_val = self.parse_expr()?;
-            let key = key_val
-                .expect_str("dict key")
-                .map_err(|e| self.err(e))?;
+            let key = key_val.expect_str("dict key").map_err(|e| self.err(e))?;
             self.skip_ws();
             if self.bump() != Some(b':') {
                 return Err(self.err("expected ':' in dict"));
@@ -825,14 +836,22 @@ fn version_part_templates(version: &str) -> HashMap<String, String> {
     out
 }
 
-fn build_templates(name: &str, version: &str, versionsuffix: &str, tc: &Toolchain) -> HashMap<String, String> {
+fn build_templates(
+    name: &str,
+    version: &str,
+    versionsuffix: &str,
+    tc: &Toolchain,
+) -> HashMap<String, String> {
     let mut tv = HashMap::new();
     tv.insert("name".into(), name.to_string());
     let namelower = name.to_ascii_lowercase();
     tv.insert("namelower".into(), namelower.clone());
     if let Some(ch) = name.chars().next() {
         tv.insert("nameletter".into(), ch.to_string());
-        tv.insert("nameletterlower".into(), ch.to_ascii_lowercase().to_string());
+        tv.insert(
+            "nameletterlower".into(),
+            ch.to_ascii_lowercase().to_string(),
+        );
     }
     // Defaults used by GITHUB_*/BITBUCKET_* constants when not set in the recipe.
     tv.insert("github_account".into(), namelower.clone());
@@ -845,10 +864,7 @@ fn build_templates(name: &str, version: &str, versionsuffix: &str, tc: &Toolchai
     // pyshortver is used in sanity paths; approximate from version major.minor when possible.
     let parts: Vec<&str> = version.split('.').collect();
     if parts.len() >= 2 {
-        tv.insert(
-            "pyshortver".into(),
-            format!("{}.{}", parts[0], parts[1]),
-        );
+        tv.insert("pyshortver".into(), format!("{}.{}", parts[0], parts[1]));
     }
     tv
 }
@@ -1275,8 +1291,8 @@ fn checksum_strings_from_value(v: &Value) -> Vec<String> {
 
 /// Resolve one `.eb` file to fully expanded fields.
 pub fn resolve_easyconfig_file(path: &Path) -> Result<ResolvedEasyconfig, ParseError> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| ParseError::Io(path.display().to_string(), e))?;
+    let raw =
+        std::fs::read_to_string(path).map_err(|e| ParseError::Io(path.display().to_string(), e))?;
     let mut resolved = resolve_easyconfig_str(&raw).map_err(|e| match e {
         ParseError::Parse(_, msg) => ParseError::Parse(path.display().to_string(), msg),
         other => other,
@@ -1464,12 +1480,8 @@ fn candidate_matches_dep_core(
 /// (derived from the robot universe when possible), so an older-generation
 /// GCCcore candidate does not false-pass a newer foss recipe.
 pub fn check_recipe_deps(recipe: &ResolvedEasyconfig, universe: &[Candidate]) -> RecipeDepCheck {
-    let hierarchy = crate::hierarchy::hierarchy_for_with_tree(
-        &recipe.toolchain,
-        None,
-        universe,
-    )
-    .ok();
+    let hierarchy =
+        crate::hierarchy::hierarchy_for_with_tree(&recipe.toolchain, None, universe).ok();
     let mut missing = Vec::new();
     let mut found = Vec::new();
     for (role, deps) in [
@@ -1709,12 +1721,8 @@ pub fn scaffold_missing_companions(
         let letter = easyconfig_letter_dir(&m.name);
         let dir = out_root.join(&letter).join(&m.name);
         fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
-        let base = companion_easyconfig_basename(
-            &m.name,
-            &m.version,
-            &tc,
-            m.versionsuffix.as_deref(),
-        );
+        let base =
+            companion_easyconfig_basename(&m.name, &m.version, &tc, m.versionsuffix.as_deref());
         let path = dir.join(&base);
         let skipped = path.is_file();
         if !skipped {
@@ -1875,8 +1883,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn fixture_eb_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/gromacs_2025_to_next/easyconfigs")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/gromacs_2025_to_next/easyconfigs")
     }
 
     fn hardcase_root() -> PathBuf {
@@ -1963,7 +1970,9 @@ mod tests {
 
     #[test]
     fn parse_tree_finds_both_generations() {
-        let all = parse_easyconfig_tree(&fixture_eb_root()).expect("tree").candidates;
+        let all = parse_easyconfig_tree(&fixture_eb_root())
+            .expect("tree")
+            .candidates;
         assert!(all.len() >= 8, "got {}", all.len());
         let tc = Toolchain {
             name: "foss".into(),
@@ -2117,7 +2126,10 @@ mod tests {
         );
         let dep_d = r.dependencies.iter().find(|d| d.name == "DepD").unwrap();
         assert_eq!(
-            dep_d.toolchain.as_ref().map(|t| (t.name.as_str(), t.version.as_str())),
+            dep_d
+                .toolchain
+                .as_ref()
+                .map(|t| (t.name.as_str(), t.version.as_str())),
             Some(("system", "system"))
         );
         assert_eq!(r.exts_list.len(), 2);
@@ -2153,7 +2165,10 @@ mod tests {
         );
         let dep_d = c.dependencies.iter().find(|d| d.name == "DepD").unwrap();
         assert_eq!(
-            dep_d.toolchain.as_ref().map(|t| (t.name.as_str(), t.version.as_str())),
+            dep_d
+                .toolchain
+                .as_ref()
+                .map(|t| (t.name.as_str(), t.version.as_str())),
             Some(("system", "system"))
         );
         let build = c
@@ -2163,7 +2178,10 @@ mod tests {
             .unwrap();
         assert_eq!(build.version_req, "==1.0");
         assert_eq!(
-            build.toolchain.as_ref().map(|t| (t.name.as_str(), t.version.as_str())),
+            build
+                .toolchain
+                .as_ref()
+                .map(|t| (t.name.as_str(), t.version.as_str())),
             Some(("system", "system"))
         );
         // exts_list threaded onto the solver-facing candidate.
@@ -2234,7 +2252,9 @@ mod tests {
 
     #[test]
     fn hardcase_tree_parse_uses_shipped_entry_point() {
-        let all = parse_easyconfig_tree(&hardcase_root().join("easyconfigs")).expect("tree").candidates;
+        let all = parse_easyconfig_tree(&hardcase_root().join("easyconfigs"))
+            .expect("tree")
+            .candidates;
         assert_eq!(all.len(), 5, "expected five hardcase easyconfigs");
         assert!(all.iter().any(|c| c.name == "TemplatedApp"));
         assert!(all.iter().any(|c| c.name == "SystemTool"
@@ -2282,11 +2302,7 @@ mod tests {
         assert_eq!(py.version, "3.12.3");
         // Exact co-pins (no operator in source → solver sees ==).
         let c = r.to_candidate();
-        let py_req = c
-            .dependencies
-            .iter()
-            .find(|d| d.name == "Python")
-            .unwrap();
+        let py_req = c.dependencies.iter().find(|d| d.name == "Python").unwrap();
         assert_eq!(py_req.version_req, "==3.12.3");
         let scipy = c
             .dependencies
@@ -2443,11 +2459,7 @@ builddependencies = [
             "name = 'Good'\nversion = '1.0'\ntoolchain = {'name': 'foss', 'version': '2025b'}\ndependencies = []\n",
         )
         .unwrap();
-        std::fs::write(
-            root.join("bad.eb"),
-            "this is not a valid easyconfig {{{{\n",
-        )
-        .unwrap();
+        std::fs::write(root.join("bad.eb"), "this is not a valid easyconfig {{{{\n").unwrap();
         std::fs::write(
             root.join("also_good.eb"),
             "name = 'AlsoGood'\nversion = '2.0'\ntoolchain = SYSTEM\ndependencies = []\n",
@@ -2874,6 +2886,9 @@ builddependencies = [
         let check = check_recipe_deps(&r, &universe);
         assert!(!check.ok());
         assert!(check.found.iter().any(|f| f.contains("Python")));
-        assert!(check.missing.iter().any(|m| m.name == "Meson" && m.role == "build"));
+        assert!(check
+            .missing
+            .iter()
+            .any(|m| m.name == "Meson" && m.role == "build"));
     }
 }
