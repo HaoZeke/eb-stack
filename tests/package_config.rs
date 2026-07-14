@@ -114,3 +114,27 @@ fn profile_config_rejects_unknown_schema() {
         ProfileConfigLayer::from_toml_str("schema_version = 99").expect_err("unsupported schema");
     assert!(error.to_string().contains("schema version 99"), "{error}");
 }
+
+#[test]
+fn public_eon_and_qmcpack_profile_examples_parse() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let eon = ProfileConfigLayer::from_path(&root.join("examples/profiles/eon.toml"))
+        .expect("eOn profiles");
+    let qmcpack = ProfileConfigLayer::from_path(&root.join("examples/profiles/qmcpack.toml"))
+        .expect("QMCPACK profiles");
+    assert_eq!(eon.profiles.len(), 1);
+    assert_eq!(
+        eon.profiles[0]
+            .verification_commands
+            .as_ref()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(qmcpack.profiles.len(), 2);
+    assert_eq!(qmcpack.profiles[0].name, "default");
+    assert_eq!(
+        qmcpack.profiles[1].versionsuffix.as_deref(),
+        Some(&["-complex".to_string()][..])
+    );
+}

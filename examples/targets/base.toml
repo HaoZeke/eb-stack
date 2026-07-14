@@ -1,0 +1,20 @@
+schema_version = 1
+
+# A site layer supplies transport and may replace any layer below.
+[[targets]]
+name = "site-builder"
+
+[targets.executor]
+kind = "direct"
+
+[targets.runtime]
+kind = "host"
+
+[targets.easybuild]
+command = "eb"
+robot_paths = ["/shared/easybuild/easyconfigs", "/shared/eb-stack/overlay"]
+work_root = "/shared/eb-stack/campaigns"
+tmp_root = "/shared/eb-stack/tmp"
+
+[targets.easybuild.environment]
+EASYBUILD_PARALLEL = "8"

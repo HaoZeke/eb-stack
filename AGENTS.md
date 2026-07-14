@@ -1,72 +1,50 @@
 # Agent driver contract for eb-stack
 
-Any agent working in this repository follows these rules. They are the
-distilled, machine-checked form of real campaign incidents; the tool is
-built to make the right thing the easy thing.
+Use the matching public skill and execute it through the requested claim rung:
 
-## The procedure
+| Work | Skill |
+|---|---|
+| conda-forge or Spack → new EasyBuild package | `skills/new-package/SKILL.md` |
+| existing `.eb` → new toolchain/application version | `skills/annual-bump/SKILL.md` |
 
-Pick the skill that matches the work, then follow it end to end.
-Mechanical CLI fails loudly; the **campaign agent** (local-ai in herdr on the
-**EasyBuild host**) owns residual judgment **and** `eb --robot` *builds* when
-the goal is PR-ready / landable (new-package skill §7 full-drive). Residual-only
-sessions require an explicit human scope. Your site should pair these with a
-site runbook (init paths, module names, scheduler sizing); ask for it if you
-were not given one.
+## Canonical procedure
 
-| Work | Skill | Host |
-|------|--------|------|
-| Existing recipes → new toolchain generation (annual rebuild) | `skills/annual-bump/SKILL.md` | **`EasyBuild host`** |
-| **New package** from conda-forge / Spack (greenfield) | `skills/new-package/SKILL.md` | **`EasyBuild host`** (mandatory; see skill §0) |
-
-Build/PR ops and three-claim ladder live in annual-bump §10. EasyBuild
-authoring, residual agents in herdr, and `eb --robot` *builds* run on
-**`EasyBuild host`**, not the laptop. **`cargo builder` is only the remote cargo
-builder** for this repo’s Rust compile when required — do not route EasyBuild
-installs there unless a site runbook explicitly says so.
+1. Run `eb-stack package inspect|plan|bump`; do not use removed flat commands.
+2. Treat `package.plan.json` as the canonical build manifest, `package.sbom.cdx.json` as the planned SBOM, and `locks/*.lock.json` as Resolvo evidence.
+3. Emit one `.eb` file per product profile. Keep the default profile unsuffixed and follow neighboring GROMACS/LAMMPS conventions.
+4. Run `eb-stack recipe format|lint|check` on emitted recipes.
+5. Run `eb-stack target doctor` before a build campaign.
+6. Run or resume `eb-stack campaign run` on the configured EasyBuild target until the requested claim rung is established.
+7. Use `campaign finding claim|resolve` for OMP coordination. Never edit campaign JSON directly or steal an owned finding.
 
 ## Non-negotiables
 
-1. **Run the real CLI** (`eb-stack check-recipe | bump | solve | ingest | plan |
-   check-style | format-style`). Never guess dependency versions, checksums,
-   or hierarchy relationships in prose — the tool resolves them or tells you
-   exactly what is missing. If your harness speaks MCP, prefer the typed
-   tool surface: `eb-stack mcp` serves `eb_check_recipe` / `eb_bump` /
-   `eb_solve` / `eb_ingest` / `eb_plan` over stdio, with the reporting ladder
-   and next actions embedded in every result. Prefer **`plan`** for
-   foreign→manifest→resolvo→new/bump; **`ingest`** remains the short scaffold
-   path. Both write residual queues (`{stem}.residuals.json`) — not a closed
-   landable PR.
-2. **Tool output is instructions.** A missing-dep hint ("available at
-   other generations: ...") and hierarchy-member notes are your work queue.
-   A `[packaging]` checksum finding means fix the recipe (checksums are
-   positional: all sources first, then patches) — bypassing or deleting a
-   check is never the fix. Residual-queue `kind: "style"` / pycodestyle
-   E501 means run **`eb-stack format-style`** (mechanical); do not spend a
-   residual agent turn hand-wrapping lines.
-3. **Report on the three-claim ladder** (skill section 10.4): *resolves* /
-   *builds* / *binary-verified* are different claims; state which rung you
-   actually established and which you did not. Ingest alone is never
-   *resolves* or *builds*.
-4. **EasyBuild *builds* on `EasyBuild host`** (or site scheduler/cgroup when the
-   runbook says so), with `EASYBUILD_TMPDIR` on durable storage. Residual
-   agents run in **herdr** on that host. Not the laptop login session; not
-   `cargo builder` (cargo only for this repo).
-5. **The PR surface belongs to the human.** Branch pushes to a fork you
-   were told to use are plumbing; opening, editing, or commenting on PRs
-   and issues is not yours. Prepare paste-ready drafts instead. One PR per
-   recipe set — check for an existing open PR before drafting another.
+- Dependency versions, hierarchy choices, site pins, and fallbacks belong inside Resolvo. A package-specific `--dep` override becomes a locked solver pin.
+- SAT compatibility is not build evidence. Hermes owns classified target/recipe/policy repair and repeats the campaign through verification.
+- Fix code and recipes under test. Never remove assertions, dependencies, checksums, sanity checks, or tests to clear a failure.
+- Run EasyBuild installs on the configured target, scheduler, and runtime. Keep `EASYBUILD_TMPDIR` on durable storage.
+- Report `resolves`, `builds`, and `binary-verified` separately. A plan establishes only `resolves`; a build without declared verification does not establish `binary-verified`.
+- The public issue and PR surface belongs to the human operator. Prepare paste-ready material and evidence without opening or mutating remote issues or PRs.
+
+## Version-one CLI
+
+```text
+package  inspect | plan | bump
+recipe   check | lint | format
+stack    solve | sbom
+target   list | doctor
+campaign run | status | finding claim | finding resolve
+mcp
+```
+
+The MCP catalog mirrors these workflows with `eb_`-prefixed typed tools.
 
 ## Tests
 
-`cargo test --lib` is the fast suite. CI (`.github/workflows/ci_test.yml`) also
-runs the **known-bump** regression (`--test reproduce_real_prs --test bump_emit`:
-frozen `foss-2023b` → `foss-2024a` maintainer pairs under
-`tests/repro_fixtures/`, library and CLI), the packaging fixture suites
-(`--test eon_foss_2026_1 --test qmcpack_foss_2026_1 --test eon_packaging`),
-the goal-scenario acceptance suite (`--test goal_scenario`: conda eOn + Spack
-QMCPACK -> SBOM + manifest + recipe on foss-2026.1), and foreign ingest
-(`--test foreign_ingest`). Robot-overlay check-recipe cases
-skip when no easyconfigs tree is present; resolve and packaging_gate always
-run. Build/test on a build machine when the repository owner's rules say the
-local machine must not compile.
+Run Rust builds and tests on the repository’s configured build machine when local compilation is prohibited. The complete gate is:
+
+```sh
+cargo test --locked --all-targets
+```
+
+Focused suites cover known bump reproduction, foreign adapters, package bundles, profile emission, target routing, campaign state, CLI, and MCP. No affected suite may remain red in a completion claim.

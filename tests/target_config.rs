@@ -172,3 +172,17 @@ tmp_root = "/tmp"
     assert_eq!(report["target"], "local-doctor");
     assert_eq!(report["ok"], true);
 }
+
+#[test]
+fn public_target_examples_form_a_complete_layered_target() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let base = TargetConfigLayer::from_path(&root.join("examples/targets/base.toml"))
+        .expect("base target");
+    let site = TargetConfigLayer::from_path(&root.join("examples/targets/site.example.toml"))
+        .expect("site target");
+    let targets = resolve_target_layers(&[base, site]).expect("layer examples");
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].name, "site-builder");
+    assert!(matches!(targets[0].runtime, TargetRuntime::Podman { .. }));
+    assert_eq!(targets[0].easybuild.command, "eb");
+}

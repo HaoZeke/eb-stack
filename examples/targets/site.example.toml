@@ -1,0 +1,21 @@
+schema_version = 1
+
+[[targets]]
+name = "site-builder"
+
+[targets.transport]
+kind = "ssh"
+host = "builder.example.org"
+
+[targets.executor]
+kind = "slurm"
+partition = "build"
+cpus = 8
+memory = "32G"
+time = "02:00:00"
+
+[targets.runtime]
+kind = "podman"
+image = "registry.example.org/easybuild:rocky9"
+mounts = ["/shared:/shared"]
+workdir = "/shared/eb-stack/campaigns"

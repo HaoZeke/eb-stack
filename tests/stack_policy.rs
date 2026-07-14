@@ -168,3 +168,14 @@ fn exclusions_are_solver_inputs_and_retain_reasons() {
     );
     assert_eq!(result.exclusions, stack.exclusions);
 }
+
+#[test]
+fn public_stack_policy_example_parses() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/stacks/foss-2026.1.toml");
+    let text = std::fs::read_to_string(path).expect("stack policy example");
+    let policy: StackPolicy = toml::from_str(&text).expect("stack policy TOML");
+    assert_eq!(policy.schema_version, STACK_POLICY_SCHEMA_VERSION);
+    assert_eq!(policy.toolchain, toolchain());
+    assert!(policy.pins.is_empty());
+}

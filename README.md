@@ -5,65 +5,60 @@
   </picture>
 </p>
 
-**Rewrite EasyBuild stacks onto the next toolchain generation.**
+**Turn foreign and EasyBuild recipes into resolved, build-evaluated package bundles.**
 
-Parse `*.eb` files, `bump` with zero hand-fed dependency versions
-(hierarchy consensus **and** resolvo joint pins), co-select a full stack with
-**resolvo** (CDCL SAT), ingest conda-forge/Spack scaffolds, and emit a lock,
-build list, optional planned CycloneDX 1.5 SBOM (`cyclonedx-bom`), and a
-reviewable stack diff.
+`eb-stack` parses conda-forge, Spack, and EasyBuild recipes into one canonical package plan. It emits a planned CycloneDX SBOM, solves each product profile with Resolvo, writes one conventional `.eb` file per installable variant, and drives the recipes through a persisted remote build campaign.
 
 [![CI](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_test.yml/badge.svg)](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_test.yml)
 [![Docs](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_docs.yml/badge.svg)](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_docs.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Docs site](https://img.shields.io/badge/docs-eb--stack.rgoswami.me-teal)](https://eb-stack.rgoswami.me)
 
-On a measured sample of real maintainer `foss-2023b` → `foss-2024a` pairs it
-reproduces the next-generation recipe exactly (or exactly modulo a hand-added
-dependency) for about half the packages, and never silently emits a wrong
-dependency version on the rest.
+## Pipeline
 
-### What this is / is not (public 0.3.x)
+```text
+conda-forge / Spack / EasyBuild
+              │
+              ▼
+ canonical package.plan.json ─── package.sbom.cdx.json
+              │
+              ▼
+ profile materialization + stack policy + Resolvo
+              │
+              ├── locks/<profile>.lock.json
+              └── easyconfigs/<letter>/<name>/<variant>.eb
+                              │
+                              ▼
+             target-routed campaign + typed findings
+```
 
-| Ready (mechanical packaging) | Must **not** claim |
-|------------------------------|--------------------|
-| `bump` with hierarchy + resolvo pins; loud fail on unresolved deps | Ingest alone is a **landable EasyBuild PR** |
-| `check-recipe`, `check-style` / `format-style` (E501), `solve`, lock, stack-diff, optional CycloneDX SBOM | ***builds*** without a real `eb --robot` install |
-| `ingest` scaffolds + residual honesty (warnings, 0.0.0 placeholders) | Product `configopts` invented inside this binary |
-| CI: lib, known-bump fixtures, packaging fixtures, foreign ingest | Residual judgment without an agent + live `eb` / robot tree |
-| Skills + docs for annual bump and greenfield bootstrap | Agents open/edit upstream PRs by default |
+New packages and bumps use the same artifacts. A bump is an EasyBuild-origin plan plus SBOM and Resolvo lock, not a standalone text rewrite.
 
-**Does:** mechanical majority of annual toolchain bumps, greenfield **bootstrap**
-from conda-forge/Spack, and resolve/packaging gates against a robot tree.
+## Claim ladder
 
-**Does not:** replace EasyBuild style or contribution gates, a virgin stack
-install, or maintainer judgment (product flags, companions when the robot has
-holes, PR text). Upstream PR surface is **human-owned**.
+Report these claims independently:
 
-Three claims (never conflate):
+1. **resolves** — every requested profile has a Resolvo lock and emitted recipe;
+2. **builds** — every emitted recipe completes through EasyBuild on the configured target;
+3. **binary-verified** — every declared profile verification command succeeds.
 
-1. ***resolves*** — `eb-stack check-recipe` / plan complete  
-2. ***builds*** — `eb --robot` green (module exists)  
-3. ***binary-verified*** — module loads; binary runs / links correctly  
-
-`eb-stack` proves the first rung. EasyBuild and site ops own the rest.
-Operator skills: [`skills/annual-bump/`](skills/annual-bump/SKILL.md),
-[`skills/new-package/`](skills/new-package/SKILL.md).
+`package inspect` establishes none of them. `package plan` and `package bump` can establish only `resolves`. `campaign run` owns the other two.
 
 ## Install
 
-```bash
+```sh
 git clone https://github.com/HaoZeke/eb-stack.git
 cd eb-stack
 cargo test --locked
-cargo build --release
-# binary: target/release/eb-stack
+cargo build --locked --release
+install -m755 target/release/eb-stack ~/.local/bin/eb-stack
 ```
 
-## 30-second quickstart
+Build the Rust binary on a suitable build host. EasyBuild installs belong on the target selected by the public target configuration, not necessarily on the machine running the CLI.
 
-```bash
-./target/release/eb-stack bump \
+## Bump an existing recipe
+
+```sh
+eb-stack package bump \
   --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
   --toolchain-name foss \
   --toolchain-version 2024a \
@@ -71,148 +66,127 @@ cargo build --release
   --out-dir /tmp/gromacs-2024a
 ```
 
-Every dependency version comes from the universe (hierarchy + resolvo joint
-pins); no `--dep` flags. The only intentional gap versus the real maintainer
-`foss-2024a` recipe is a hand-added `pybind11` line the tool correctly does
-not invent.
+The output recipe is `/tmp/gromacs-2024a/easyconfigs/g/GROMACS/GROMACS-2024.4-foss-2024a.eb`; the same directory contains its manifest, SBOM, and `default` profile lock. Repeat `--easyconfigs` for overlays and use `--stack-policy` for EESSI or site preferences. `preferred` pins may fall back inside Resolvo; `locked` pins may not.
 
-Full walkthrough: [tutorial](https://eb-stack.rgoswami.me/tutorial.html) ·
-source: [`docs/orgmode/tutorial.org`](docs/orgmode/tutorial.org).
+Known maintainer fixtures cover GROMACS, ScaFaCoS, MDTraj, Fiona, PuLP, and numba across `foss-2023b` → `foss-2024a`.
 
-## Operator / agent skills
+## Plan a new package
 
-| Work | Human guide | Agent skill |
-|------|-------------|-------------|
-| Annual generation rebuild | [`docs/orgmode/howto/run-annual-bump.org`](docs/orgmode/howto/run-annual-bump.org) | [`skills/annual-bump/SKILL.md`](skills/annual-bump/SKILL.md) |
-| **New package** (conda-forge / Spack → EB) | [`docs/orgmode/howto/new-package.org`](docs/orgmode/howto/new-package.org) · CLI *ingest* | [`skills/new-package/SKILL.md`](skills/new-package/SKILL.md) |
-| Repo contract | | [`AGENTS.md`](AGENTS.md) |
+Product profiles are public TOML. Each profile is one independently installable EasyBuild variant; MPI/OpenMP toolchain options alone do not require a suffix.
 
-MCP surface: `eb-stack mcp` (`eb_check_recipe` / `eb_bump` / `eb_solve`).
-Ingest is CLI-only today (`eb-stack ingest`). Skills assume a real EasyBuild
-host (site: `EasyBuild host` + herdr for residual agents); cargo builds for *this*
-repo use the site cargo builder (`cargo builder`), not as an EasyBuild substitute.
+```sh
+eb-stack package plan \
+  --source fixtures/foreign_ingest/conda_eon/recipe.yaml \
+  --format conda-forge \
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  --profile-config examples/profiles/eon.toml \
+  --easyconfigs /path/to/easybuild-easyconfigs/easybuild/easyconfigs \
+  --easyconfigs fixtures/eon_foss_2026_1/easyconfigs \
+  --stack-policy examples/stacks/foss-2026.1.toml \
+  --out-dir /tmp/eon
+```
 
-## Solve a multi-package stack
+Use `--format spack` and `examples/profiles/qmcpack.toml` for QMCPACK’s `package.py`. Parser output retains source spans, conda selectors, Spack conditions/conflicts, dependency roles, and residual dynamic logic.
 
-```bash
-./target/release/eb-stack solve \
+Inspect without solving or emitting recipes:
+
+```sh
+eb-stack package inspect \
+  --source fixtures/foreign_ingest/spack_qmcpack/package.py \
+  --format spack \
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  --profile-config examples/profiles/qmcpack.toml \
+  --out-dir /tmp/qmcpack-inspect
+```
+
+## Check recipes
+
+```sh
+eb-stack recipe format /tmp/eon/easyconfigs/e/eOn/*.eb
+eb-stack recipe lint /tmp/eon/easyconfigs/e/eOn/*.eb
+eb-stack recipe check \
+  --recipe /tmp/eon/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb \
+  --easyconfigs /path/to/robot \
+  --easyconfigs /tmp/eon/easyconfigs
+```
+
+Checksums are positional: sources first, then patches. Missing dependency output includes compatible hierarchy members and candidates found in other generations. Fix the recipe or companion; do not bypass the check.
+
+## Configure and run builds
+
+Targets are layered as transport → executor → runtime → EasyBuild workload:
+
+```sh
+eb-stack target list --config examples/targets/base.toml --config ~/.config/eb-stack/site.toml
+eb-stack target doctor \
+  --config examples/targets/base.toml \
+  --config ~/.config/eb-stack/site.toml \
+  --target site-builder
+
+eb-stack campaign run \
+  --bundle /tmp/eon \
+  --config examples/targets/base.toml \
+  --config ~/.config/eb-stack/site.toml \
+  --target site-builder \
+  --state /tmp/eon.campaign.json
+```
+
+Transport may be local or SSH; execution may be direct or Slurm; runtime may be host, Podman, or Docker. Site hostnames, paths, modules, and scheduler sizing belong in the site layer.
+
+Campaign failures persist as typed findings. OMP workers coordinate repairs through owned queue operations:
+
+```sh
+eb-stack campaign finding claim --state /tmp/eon.campaign.json \
+  --id attempt:1:finding:1 --owner omp-worker-1
+
+eb-stack campaign finding resolve --state /tmp/eon.campaign.json \
+  --id attempt:1:finding:1 --owner omp-worker-1 \
+  --action "corrected profile configuration" \
+  --evidence "recipe check exits successfully" \
+  --change examples/profiles/eon.toml
+```
+
+The state file retains attempts, commands, compact logs, ownership, repair evidence, and the claim ladder. A successful retry supersedes the matching open finding.
+
+## Solve a whole stack
+
+```sh
+eb-stack stack solve \
   --easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
   --policy fixtures/gromacs_2025_to_next/policies/prefer_newer.json \
   --baseline-easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
   --lock-out stack.lock.json \
+  --sbom-out stack.cdx.json \
   --build-list-out build.list \
   --stack-diff-out stack.diff.md
 ```
 
-Optional `--sbom-out` writes a planned CycloneDX **1.5** inventory via
-`cyclonedx-bom`. Baseline generation selection (nearest lower vs explicit) is
-documented in the [solve howto](docs/orgmode/howto/solve-lock.org).
+## MCP
 
-## Ingest foreign recipes (conda-forge / Spack)
+`eb-stack mcp` exposes the same version-one workflows over stdio:
 
-Scaffold a parseable EasyBuild `.eb` from a foreign recipe. Identity fields
-come from the input; pass `--easyconfigs` for generation-native dep versions
-(hierarchy + resolvo, same as `bump`).
+- `eb_package_inspect`, `eb_package_plan`, `eb_package_bump`;
+- `eb_recipe_check`, `eb_recipe_format`, `eb_stack_solve`;
+- `eb_target_list`, `eb_target_doctor`;
+- `eb_campaign_run`, `eb_campaign_status`;
+- `eb_campaign_finding_claim`, `eb_campaign_finding_resolve`.
 
-**Ingest is not a landable PR.** Product `configopts`, multi-source
-`extract_cmd`, real sanity paths, companion easyconfigs (robot holes), and
-style gates remain residual work for a human or local-ai agent following
-[`skills/new-package/SKILL.md`](skills/new-package/SKILL.md) — never hardcoded
-into this tool. After residual edits: `eb --inject-checksums`,
-`eb-stack format-style` (E501 ≤120, mechanical), `eb --check-contrib`,
-`eb-stack check-recipe`, then `eb -Dr` / `eb --robot`
-for the *builds* rung.
+## Skills
 
-```bash
-./target/release/eb-stack ingest \
-  --source fixtures/foreign_ingest/conda_zlib/meta.yaml \
-  --toolchain-name foss --toolchain-version 2024a \
-  --out /tmp/zlib-from-conda.eb
+- [New package](skills/new-package/SKILL.md): conda-forge/Spack → profiles → bundle → Hermes/OMP campaign.
+- [Annual bump](skills/annual-bump/SKILL.md): EasyBuild recipe → SBOM + Resolvo bump bundle → campaign.
 
-./target/release/eb-stack ingest \
-  --source fixtures/foreign_ingest/spack_eon/package.py \
-  --format spack \
-  --toolchain-name foss --toolchain-version 2024a \
-  --easyconfigs fixtures/hierarchy_resolve/easyconfigs \
-  --keep-old-deps \
-  --out /tmp/eon-from-spack.eb
+The public issue and PR surface belongs to the human operator. The skills produce recipe sets and evidence; they do not open or mutate upstream issues or PRs.
+
+## Tests
+
+```sh
+cargo test --locked --all-targets
 ```
 
-Landable packaging **oracles** (resolve/`check-recipe` only — not a *builds*
-claim) live under `fixtures/eon_foss_2026_1/` and
-`fixtures/qmcpack_foss_2026_1/` (companions such as CapnProto for eOn when
-develop still lacks them).
-
-### Bump / new package == SBOM + resolvo
-
-A bump is the same pipeline as a new package: manifest + planned SBOM +
-resolvo joint co-select, then emit. Three entry points, all resolvo-backed:
-
-| Want | Command |
-|------|---------|
-| New recipe from a foreign source, with manifest + planned SBOM | `plan --source … --manifest-out … --sbom-out … --out-dir …` |
-| Bump an existing `.eb` to the next generation, carrying the SBOM | `plan --source … --bump-from OLD.eb --sbom-out … --out NEW.eb` |
-| Whole-stack lock + generation SBOM | `solve --easyconfigs … --sbom-out …` |
-| Low-level retarget only (no SBOM) | `bump --source … --easyconfigs …` |
-
-`plan`/`solve` derive every dependency version from the universe (hierarchy
-consensus + resolvo pins); `foss-2026.1` and earlier generations are known
-hierarchies, so no `--hierarchy-fixture` is needed against a robot that carries
-the generation's toolchain definition.
-
-## Version
-
-```bash
-eb-stack --version   # crate version (Cargo.toml); tag releases as vX.Y.Z
-```
-
-## Documentation
-
-| Kind | Where |
-|------|--------|
-| Site | https://eb-stack.rgoswami.me (orgmode → Sphinx + Shibuya) |
-| Tutorial | one zero-hand-fed GROMACS bump |
-| How-tos | annual bump, solve, emit reports, recipe flags, root priority |
-| Reference | CLI, policy JSON, lock / build-list / stack-diff formats |
-| Explanation | lifecycle, architecture, fidelity, parser approach |
-
-Build locally:
-
-```bash
-pixi run -e docs docbld
-# HTML → docs/build/index.html
-```
-
-## Tests and CI
-
-| Job | Coverage |
-|-----|----------|
-| `cargo test --lib` | Unit tests |
-| known-bump regression | Frozen maintainer pairs (GROMACS, ScaFaCoS, MDTraj, Fiona, PuLP, numba) library + CLI |
-| packaging fixtures | eOn 2.16.0 and QMCPACK 4.3.0 landable recipe sets |
-| goal scenario | conda eOn + Spack QMCPACK → SBOM + manifest + recipe (foss-2026.1) |
-| solve / reports | build-list and stack-diff emission |
-| CLI smoke | release `eb-stack bump` on the GROMACS tutorial path |
-| docs | org export + Sphinx build + link check |
-
-```bash
-cargo test --locked --lib
-cargo test --locked --test reproduce_real_prs --test bump_emit
-cargo test --locked --test eon_foss_2026_1 --test qmcpack_foss_2026_1 --test eon_packaging
-cargo test --locked --test goal_scenario
-cargo test --locked --test foreign_ingest
-```
-
-Packaging fixture tests prove **parse / resolve / packaging_gate** against
-frozen recipes — not a virgin `eb --robot` install.
-
-## Citation
-
-```text
-Rohit Goswami, eb-stack (version 0.3.0), https://github.com/HaoZeke/eb-stack
-```
-
-See also [`CITATION.cff`](CITATION.cff).
+The suite covers foreign syntax adapters, conditions, CycloneDX generation, profile materialization, stack-policy fallback, hierarchy-aware Resolvo locks, variant emission, known bump reproduction, target routing, persisted campaigns, binary verification, finding ownership, CLI, and MCP.
 
 ## License
 
