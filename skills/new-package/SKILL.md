@@ -1,534 +1,211 @@
 ---
 name: eb-stack-new-package
-description: Author a new EasyBuild easyconfig (greenfield) with eb-stack ingest. Campaign agent full-drives through eb --robot *builds* via Podman Rocky 9 by default. Mechanical format-style/check-recipe on host; human owns PR surface.
+description: Convert a conda-forge or Spack recipe into a canonical package manifest, CycloneDX SBOM, Resolvo profile locks, separate EasyBuild easyconfigs for product variants, and a remotely built and verified campaign. Use for new EasyBuild packages, foreign recipe imports, eOn or QMCPACK packaging, and Hermes/OMP build-repair loops.
 ---
 
-# New EasyBuild package (greenfield)
+# Build a new EasyBuild package
 
-You are adding **software that is not yet in** (or not yet on this
-generation of) [easybuild-easyconfigs](https://github.com/easybuilders/easybuild-easyconfigs)
-`develop`. The ground truth is **EasyBuild documentation and `eb` itself**,
-not this tool's inventiveness.
+Run the entire workflow from the canonical package plan. Do not hand-select dependency versions or treat a generated recipe as built.
 
-**Authoritative EasyBuild docs (read these; do not improvise around them):**
+## Inputs
 
-| Topic | URL |
-|-------|-----|
-| Writing easyconfigs (mandatory params, sources, deps, sanity, easyblock, moduleclass) | https://docs.easybuild.io/writing-easyconfig-files/ |
-| Updating for a new toolchain (hierarchy, dep versions, inject-checksums) | same page, “Updating existing easyconfigs for a new toolchain” |
-| Templates (`%(version)s`, `SOURCE_TAR_GZ`, `GITHUB_SOURCE`, …) | https://docs.easybuild.io/version-specific/easyconfig-templates/ |
-| Generic easyblocks (`ConfigureMake`, `CMakeMake`, `CMakeNinja`, `MesonNinja`, …) | https://docs.easybuild.io/version-specific/generic-easyblocks/ |
-| Contributing easyconfigs + PR requirements | https://docs.easybuild.io/contributing/ |
-| `eb --new-pr` / `--update-pr` / GitHub integration | https://docs.easybuild.io/integration-with-github/ |
-| Code / easyconfig style | https://docs.easybuild.io/code-style/ |
-| Common toolchains (`foss`, hierarchy diagram) | https://docs.easybuild.io/common-toolchains/ |
-| Typical install workflow (`-S`, `-Dr`, `--robot`) | https://docs.easybuild.io/typical-workflow-example/ |
+Collect these paths before planning:
 
-**What `eb-stack` is for in this skill:** a *bootstrap* when you have a foreign
-recipe (conda-forge / Spack). It is **not** a replacement for EasyBuild's
-easyconfig model, style, or contribution gates. Landable recipes must satisfy
-`eb --check-contrib` and (for upstream PRs) EasyBuild's review process.
+- the conda-forge `recipe.yaml`/`meta.yaml` or Spack `package.py`;
+- one or more EasyBuild robot trees for the target generation;
+- a package profile TOML defining product variants and verification commands;
+- a stack policy TOML defining site preferences, locks, and exclusions;
+- layered target TOML naming the remote EasyBuild host and execution backend.
 
-**Sister skill:** retargeting *existing* easyconfigs to a new generation is
-`skills/annual-bump/SKILL.md` (`eb-stack bump`), which mirrors the “update for
-new toolchain” section of the writing-easyconfigs page.
+Use conda-forge for eOn and Spack for QMCPACK. Parsing is syntax-aware and preserves selectors, Spack `when=` expressions, source provenance, dependency roles, and unresolved dynamic logic in the manifest.
 
----
+## Product profiles and EasyBuild variants
 
-## 0. Hosts and build backend
+Create one product profile per independently installable variant. Each profile emits one `.eb` file.
 
-| Layer | Where | Role |
-|-------|--------|------|
-| Agent + git + `eb-stack` | Site **EasyBuild host** (hostname in private site runbook) | herdr campaign agent, render-full-drive, gates |
-| **`eb --robot` *builds*** | **Podman Rocky 9** image `eb-stack-rocky9` | Default install backend — RHEL-family OS deps match EasyBuild expectations |
-| Optional host robot | Same machine, `--build-backend host` | Escape hatch only; optional `overlays/<os-id>/` |
+- Keep the default CPU or standard MPI/OpenMP profile unsuffixed.
+- Add a semantic `versionsuffix` only when users need both variants installed, such as `-complex`, `-cuda`, or `-mixed`.
+- Do not create suffixes merely because `usempi` or `openmp` is enabled.
+- Follow neighboring GROMACS and LAMMPS easyconfigs for naming, option placement, dependencies, sanity checks, and module class.
 
+Example profile layer:
+
+```toml
+schema_version = 1
+
+[[profiles]]
+name = "default"
+default = true
+config_options = ["-DQMC_MPI=ON", "-DQMC_OMP=ON", "-DQMC_COMPLEX=OFF"]
+verification_commands = [
+  { program = "bash", args = ["-lc", "module load {module} && qmca --help"] },
+]
+
+[profiles.features]
+mpi = true
+complex = false
+
+[profiles.toolchain_options]
+usempi = true
+openmp = true
+
+[[profiles]]
+name = "complex"
+inherits = "default"
+versionsuffix = ["-complex"]
+config_options = ["-DQMC_MPI=ON", "-DQMC_OMP=ON", "-DQMC_COMPLEX=ON"]
+
+[profiles.features]
+complex = true
 ```
-ssh <easybuild-host>   # from private site runbook
-# build image once:
-podman build -t eb-stack-rocky9 \
-  -f $REPO/skills/new-package/container/rocky9/Containerfile \
-  $REPO/skills/new-package/container/rocky9
+
+Verification arguments may use `{module}`, `{package}`, `{version}`, `{profile}`, and `{versionsuffix}`. A campaign can claim `binary-verified` only when at least one declared command succeeds for every declared command set.
+
+## Stack policy
+
+Keep site stack preferences inside Resolvo:
+
+```toml
+schema_version = 1
+name = "site-stack"
+
+[toolchain]
+name = "foss"
+version = "2026.1"
+
+[[pins]]
+name = "HDF5"
+version_requirement = "==2.1.1"
+mode = "preferred"
+source = "site stack"
 ```
 
-If the EasyBuild host is unreachable, **stop and report**. Do not invent a second
-EasyBuild site on the laptop. Cargo builds for the `eb-stack` crate use the site
-**cargo builder** (separate role).
+Use `preferred` when Resolvo may fall back to another compatible candidate. Use `locked` when any other version is invalid. A claimed-compatible version that fails to build remains a build finding; Hermes decides whether the recipe, target, or stack policy needs repair.
 
-## 1. What EasyBuild requires of an easyconfig
+## Plan the package
 
-From [Writing easyconfig files](https://docs.easybuild.io/writing-easyconfig-files/):
+Inspect first when evaluating parser output:
 
-### Mandatory parameters
-
-- `name`, `version`
-- `homepage`, `description` (module help metadata)
-- `toolchain` as `{'name': '…', 'version': '…'}` (or `SYSTEM`)
-
-### Filename scheme (robot resolution)
-
-`<name>-<version>[-<toolchain>][<versionsuffix>].eb`  
-Toolchain label omitted for system toolchain; empty versionsuffix omitted.
-Filename matters for `--robot` dependency resolution.
-
-### Common parameters you must get right
-
-| Parameter | EasyBuild rule (summary) |
-|-----------|--------------------------|
-| `easyblock` | Explicit generic easyblock (`ConfigureMake`, `CMakeMake`, `CMakeNinja`, `MesonNinja`, …) or omit to use software-specific `EB_*` if it exists. Prefer a **generic** easyblock when the build is Autotools/CMake/Meson/copy. List with `eb --list-easyblocks`. |
-| `source_urls` / `sources` | Filenames in `sources`; URLs in `source_urls`. Prefer **templates** (`%(version)s`, `SOURCE_TAR_GZ`, `GITHUB_SOURCE`) over hardcoded names. Prefer **downloadable release tarballs** over `git_config` clones (checksums must be stable). |
-| `checksums` | Highly recommended for **all** sources and patches. SHA256 (64-char) preferred. Order: consume sources first, then patches. Use **`eb --inject-checksums`** rather than hand-typing. Multi-source often uses dict form. |
-| `patches` | Unified diffs (`diff -ruN`), paths relative to unpacked sources. |
-| `dependencies` / `builddependencies` | Tuples `(name, version[, versionsuffix[, toolchain]])`. Modules must exist (or be installable via `--robot`). Default resolve uses same toolchain, then **compatible subtoolchain** (EB ≥ 3.0). Use `SYSTEM` as 4th element for system-toolchain deps. |
-| `configopts` / `buildopts` / … | Easyblock-specific; consult `eb -a -e <EasyBlock>`. |
-| `sanity_check_paths` | Dict with `files` / `dirs` only (relative to install prefix). Default if omitted: non-empty `bin` and `lib`/`lib64`. Prefer explicit binaries. |
-| `moduleclass` | **Required to be a known class** (not free text). Default `base` is wrong for real software — replace. List defaults: `eb --show-default-moduleclasses`. |
-
-Parameter order / grouping in the file is part of EasyBuild **style** (see
-contributing + code-style docs). `eb --inject-checksums` reorders
-`source_urls` → `sources` → `patches` → `checksums` for you.
-
-### Official “new software / new toolchain” procedure (EasyBuild)
-
-From the writing-easyconfigs page (updating for a new toolchain — same
-discipline for greenfield deps):
-
-1. Start from a closely related easyconfig if one exists (`eb -S Name`).
-2. Set `version` / `toolchain`; remove stale checksums, then
-   `eb --inject-checksums`.
-3. For each dependency, find an easyconfig for the **target toolchain or a
-   subtoolchain** (foss → gompi/gfbf/GCC/GCCcore). Read the toolchain
-   easyconfig (e.g. `foss-2023b.eb`) for member versions.
-4. Recurse for missing deps into a working folder; install with
-   `eb --robot <that-folder> …`.
-5. Build, test, then contribute.
-
-`eb-stack ingest` only automates *parts of steps 1–3* when a foreign recipe
-exists. You still own inject-checksums, style, sanity, moduleclass, and
-contribution gates.
-
----
-
-## 2. When to use `eb-stack ingest` (optional bootstrap)
-
-Use ingest when you have a **real** foreign recipe and want a first draft:
-
-| Source | Path | Notes |
-|--------|------|--------|
-| conda-forge classic | `meta.yaml` | Jinja `{% set %}` / limited expand |
-| rattler / v1 | `recipe.yaml` | `context:` + multi-source |
-| Spack | `package.py` | Static parse only — no Python exec, `when=` recorded as residual |
-
-Do **not** use ingest as the final authoring path when:
-
-- An easyconfig already exists in easybuild-easyconfigs for a nearby version —
-  **copy and tweak** that (EasyBuild's preferred approach) with `eb -S` and
-  optional `eb-stack bump`.
-- You need a software-specific easyblock (`EB_Name`) — implement or use the
-  existing one per EasyBuild docs.
-
-### Bootstrap command
-
-```
-ROBOT=/path/to/easybuild-easyconfigs/easybuild/easyconfigs
-
-eb-stack ingest \
-  --source path/to/recipe.yaml \    # or meta.yaml / package.py
-  --format auto \                   # or conda-forge | spack
+```sh
+eb-stack package inspect \
+  --source path/to/recipe.yaml \
+  --format conda-forge \
   --toolchain-name foss \
-  --toolchain-version 2024a \       # must match a real toolchain in ROBOT / develop
-  --easyconfigs "$ROBOT" \
-  --keep-old-deps \
-  --out-dir work/easyconfigs
-# Also writes work/easyconfigs/<letter>/<Name>/<Name>-….residuals.json
-# Optional: --residual-queue PATH
+  --toolchain-version 2026.1 \
+  --profile-config profiles/qmcpack.toml \
+  --out-dir work/qmcpack-inspect
 ```
 
-MCP (same semantics): `eb_ingest` / **`eb_plan`** via `eb-stack mcp`. Prefer
-`eb_plan` when you want intermediate plan JSON + planned SBOM + resolvo pins
-before emit (`manifest_out`, `sbom_out`, optional `bump_from`).
+Produce the buildable bundle:
 
-What ingest **is allowed** to claim after a successful run:
-
-- Parseable `.eb` with mandatory-ish fields filled from foreign identity
-- Dependency *names* mapped toward EB; generation-native *versions* when the
-  robot has hierarchy candidates (hierarchy consensus + resolvo joint pins)
-- Static configure flags only when they appear as plain string literals in the
-  foreign file
-- A **residual queue JSON** (`{stem}.residuals.json`) with classified items
-  (`dep_version`, `product_config`, `moduleclass`, `sanity`, `checksum`, …)
-  and a claim ladder that marks *resolves*/*builds* as **not** established
-
-What ingest **must not** claim:
-
-- A landable easyconfig (style, `moduleclass`, real checksums, sanity)
-- Correctness of product `configopts` / Spack `when=` / conda selectors
-- That `eb --robot` will succeed
-- That the residual queue is closed (it is the work list for §7)
-
-Treat every `# WARNING:` line **and** every residual-queue `items[]` entry as a
-work-queue item mapped to an EasyBuild parameter in §4.
-
----
-
-## 3. End-to-end workflow (EasyBuild-native)
-
-### Step A — Search first
-
-```
-eb -S SoftwareName
-```
-
-If a close easyconfig exists, **copy it** and update version/toolchain (writing
-docs “update for new toolchain”). Prefer that over foreign ingest.
-
-### Step B — Bootstrap or hand-draft
-
-- **Foreign available:** `eb-stack ingest … --easyconfigs $ROBOT`
-- **Else:** draft by hand from a sibling easyconfig or a generic-easyblock
-  template. Use `eb -a -e CMakeNinja` (etc.) for parameters.
-
-Place drafts under a letter layout directory EasyBuild expects, e.g.
-`work/easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2024a.eb`.
-
-### Step C — Align to EasyBuild easyconfig rules (mandatory cleanup)
-
-Do these **before** calling the recipe “done”:
-
-1. **Templates:** rewrite hardcoded tarball names to `%(version)s` /
-   `SOURCE_TAR_GZ` / `GITHUB_SOURCE` where applicable
-   ([templates](https://docs.easybuild.io/version-specific/easyconfig-templates/)).
-2. **Checksums:** delete placeholders; run
-   ```
-   eb --inject-checksums path/to/Name-Ver-tc.eb
-   ```
-   Prefer release assets over git-archive URLs (EB docs: git-created tarballs
-   are not checksum-stable across hosts).
-3. **Dependencies:** only packages that exist as easyconfigs/modules; use
-   subtoolchain versions from `foss-*.eb` / hierarchy. Drop fake conda
-   packages (`pip`, `setuptools` as modules) and language virtuals.
-4. **`moduleclass`:** set a **known** class (`tools`, `chem`, `lib`, `math`,
-   `devel`, …) via `eb --show-default-moduleclasses`. Never leave wrong
-   defaults that mis-classify.
-5. **`sanity_check_paths`:** real install relative paths (binaries), not empty
-   placeholder dirs that always “pass”.
-6. **Style / order:** run EasyBuild's contributor check:
-   ```
-   eb --check-contrib path/to/Name-Ver-tc.eb
-   ```
-   This checks style + SHA256 presence (required for easyconfig PRs).
-
-### Step D — Resolve graph and dry-run install plan
-
-```
-eb Name-Ver-foss-YYYY.eb -Dr --robot work/easyconfigs:$ROBOT
-```
-
-Then install (build machine / scheduler — see annual-bump §10):
-
-```
-eb Name-Ver-foss-YYYY.eb --robot work/easyconfigs:$ROBOT
-```
-
-### Step E — eb-stack plan check (complements EB)
-
-```
-eb-stack check-recipe \
-  --recipe work/easyconfigs/.../Name-Ver-tc.eb \
-  --easyconfigs "$ROBOT" \
-  --easyconfigs work/easyconfigs
-```
-
-Use for missing-dep generation hints and checksums **positional** lint.
-Unpinned deps must match a **hierarchy member** of the recipe toolchain
-(e.g. CapnProto on GCCcore-14.x does **not** satisfy foss-2026.1 which needs
-GCCcore-15.2.0). Explicit fourth-tuple pins (cross-gen residuals like
-`xtb`/gfbf-2024a) still match exactly. Missing-dep reasons include hierarchy
-member labels + “available at other generations” hints — that list is the
-companion-author work queue.
-
-This is **not** a substitute for `eb --check-contrib` or a real install.
-MCP: `eb_check_recipe` with the same trees.
-
-### Step F — Contribute (upstream easyconfigs)
-
-Per [Contributing](https://docs.easybuild.io/contributing/):
-
-- Target **`develop`** of easybuild-easyconfigs.
-- Prefer **`eb --new-pr`** / **`eb --update-pr`** for opening/updating PRs.
-- PR title pattern for new easyconfigs:
-  `{<moduleclass>}[<toolchain>] <software name> <software version> <extra>`
-  e.g. `{chem}[foss/2024a] QMCPACK 4.3.0`
-- PR requirements (do not skip):
-  - green CI on the easyconfigs repo
-  - style consistency (`--check-contrib`)
-  - consistency vs related easyconfigs: `eb --review-pr <PR#>`
-  - **successful test reports** for the easyconfig PR
-  - maintainer approval; author does not merge own PR
-
-Site/fork PRs: still human-owned surface; prepare paste-ready text if your
-org forbids agents on GitHub PR APIs.
-
----
-
-## 4. Residual map (foreign bootstrap → EasyBuild parameters)
-
-Primary input: **`{stem}.residuals.json`** from ingest (kinds below). Also map
-`# WARNING:` lines and `check-recipe` missing-dep reasons.
-
-| Residual kind / symptom | EasyBuild action |
-|-------------------------|------------------|
-| `checksum` / zero checksum | `eb --inject-checksums`; fix `sources` to a stable URL first |
-| Hardcoded version in `sources` | Use `%(version)s` / `SOURCE_*` templates |
-| `moduleclass` default `lib` wrong | Set known class; `eb --show-default-moduleclasses` |
-| `sanity` / empty paths | Real files under install prefix |
-| `dep_version` / residual foreign pin | Pin from robot / subtoolchain easyconfig for target gen |
-| check-recipe missing + hierarchy note | Author or bump companion for **this** generation (e.g. CapnProto-GCCcore-15.2.0), put under work overlay first in `--robot` |
-| `product_config` / flags missing | From project build docs / sibling EB recipe — **not** inventing `-D` in `eb-stack` |
-| `style` / E501 line too long | **`eb-stack format-style`** then `check-style` / `eb --check-contrib` — **not** residual judgment |
-| `variant` / Spack `when=` / selectors | Encode variants as separate easyconfigs or toolchainopts |
-| Multi-source without extract layout | Hand-write `sources` dicts / `extract_cmd` per EB multi-source docs |
-
----
-
-## 5. Worked fixtures (in-repo foreign inputs only)
-
-These **bootstrap** only; landable PRs live under `fixtures/eon_foss_2026_1`
-and `fixtures/qmcpack_foss_2026_1` and were hand-finished to EasyBuild rules.
-
-```
-# On EasyBuild host:
-REPO=<eb-stack-checkout on EasyBuild host>
-ROBOT=$HOME/.venvs/easybuild/easybuild/easyconfigs   # or easybuild-easyconfigs checkout on EasyBuild host
-
-# Bootstrap from conda-forge eOn (foss-2026.1 landable gen)
-eb-stack ingest \
-  --source $REPO/fixtures/foreign_ingest/conda_eon/recipe.yaml \
-  --toolchain-name foss --toolchain-version 2026.1 \
-  --easyconfigs "$ROBOT" --keep-old-deps \
-  --out-dir /tmp/eb-new/easyconfigs
-# → …/eOn-….eb and …/eOn-….residuals.json
-
-# Bootstrap from Spack QMCPACK
-eb-stack ingest \
-  --source $REPO/fixtures/foreign_ingest/spack_qmcpack/package.py \
+```sh
+eb-stack package plan \
+  --source path/to/package.py \
   --format spack \
-  --toolchain-name foss --toolchain-version 2026.1 \
-  --easyconfigs "$ROBOT" --keep-old-deps \
-  --out-dir /tmp/eb-new/easyconfigs
-
-# Overlay landable companions when robot holes exist (e.g. CapnProto GCCcore-15.2.0):
-# rsync $REPO/fixtures/eon_foss_2026_1/easyconfigs/ /tmp/eb-new/easyconfigs/
-
-# Then ALWAYS (mechanical preflight; campaign agent §7 re-runs and continues to install):
-eb --inject-checksums /tmp/eb-new/easyconfigs/*/*/*.eb
-eb-stack format-style /tmp/eb-new/easyconfigs/*/*/*.eb
-eb --check-contrib /tmp/eb-new/easyconfigs/*/*/*.eb
-eb-stack check-recipe --recipe /tmp/eb-new/easyconfigs/e/eOn/*.eb \
-  --easyconfigs "$ROBOT" --easyconfigs /tmp/eb-new/easyconfigs
-eb -Dr --robot /tmp/eb-new/easyconfigs:$ROBOT /tmp/eb-new/easyconfigs/*/*/*.eb
-# *builds* (required for DONE_FULL_DRIVE / *builds* claim):
-# eb --robot /tmp/eb-new/easyconfigs:$ROBOT /tmp/eb-new/easyconfigs/*/*/*.eb
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  --profile-config profiles/qmcpack.toml \
+  --easyconfigs /path/to/easybuild-easyconfigs/easybuild/easyconfigs \
+  --easyconfigs /path/to/site-overlay \
+  --stack-policy stacks/site.toml \
+  --out-dir work/qmcpack
 ```
 
-Compare bootstrap + residual queue to landable fixtures
-(`fixtures/eon_foss_2026_1`, `fixtures/qmcpack_foss_2026_1`) for product surface
-(configopts, extract_cmd, companions). Fixtures prove **resolve**/packaging_gate;
-a *builds* claim still needs `eb --robot` (campaign agent §7).
+The bundle must contain:
 
+- `package.plan.json`: canonical build manifest and residuals;
+- `package.sbom.cdx.json`: planned CycloneDX SBOM;
+- `locks/<profile>.lock.json`: one Resolvo result per profile;
+- `easyconfigs/<letter>/<name>/*.eb`: one deterministic recipe per profile.
 
-Regression (code + validation):
+Treat a planning error as unresolved input. Do not copy a foreign pin into an `.eb` file to bypass Resolvo.
 
-```
-cargo test --locked --lib unpinned_dep_requires_hierarchy
-cargo test --locked --lib residual_queue_classifies
-cargo test --locked --test foreign_ingest
-cargo test --locked --test eon_foss_2026_1 --test qmcpack_foss_2026_1
-```
+## Check emitted recipes
 
----
+Run mechanical checks for every emitted recipe:
 
-## 6. Guarantees vs non-guarantees
-
-| Claim | Who |
-|-------|-----|
-| Foreign identity → parseable draft + residual JSON | `eb-stack ingest` / MCP `eb_ingest` (**mechanical**) |
-| Foreign → intermediate manifest + planned SBOM + resolvo → new/bump | `eb-stack plan` / MCP `eb_plan` (**mechanical**) |
-| Generation-native dep versions when robot has candidates | `eb-stack` hierarchy + resolvo (**mechanical**) |
-| Hierarchy-aware missing deps (no older-GCCcore false pass) | `eb-stack check-recipe` (**mechanical**) |
-| SHA256 for fetched sources | `eb --inject-checksums` (**mechanical**) |
-| Style + checksum presence gate | `eb --check-contrib` (**mechanical**) |
-| E501 line length (≤120) lint / wrap | `eb-stack check-style` / `format-style` (**mechanical**) |
-| Graph dry-run | `eb -Dr --robot` (same backend as *builds*) |
-| Real install (*builds*) | `eb --robot` via **Podman Rocky 9** (default) or host backend; campaign agent §7 |
-| Product configopts, variant policy, real sanity paths, moduleclass choice, multi-source extract layout, companion authoring judgment | **campaign agent** using residual queue — **not** hardcoding into `eb-stack` |
-| Upstream PR merge | Human + EasyBuild maintainers |
-
-Three-claim ladder (site ops): annual-bump §10.4 —
-*resolves* (plan) ≠ *builds* (`eb --robot` via build backend) ≠ *binary-verified*.
-
-**Default campaign goal when the human asks for PR-ready / landable / “do the
-packages”:** establish *resolves* **and** *builds* for every target recipe.
-Stopping after recipe polish + `eb -Dr` without `eb --robot` is **not done**.
-Use the batch scheduler when the site runbook says so; on a single-user
-site EasyBuild workstation a direct `eb --robot` session is fine if it owns a cgroup
-and `EASYBUILD_TMPDIR` is set.
-
----
-
-## 7. Full-drive campaign agent (default)
-
-The **campaign agent** (local-ai in herdr on the EasyBuild host) is the **process owner** of a greenfield campaign. Outer orchestrators **only bootstrap** (rsync skill, render-full-drive, ensure Podman image, start herdr). The campaign agent owns: run full-drive → read logs → fix → re-run until `DONE_FULL_DRIVE`. Default robot backend is **Podman Rocky 9**, not the host OS. Not a residual-only chat that stops before install.
-
-**Maximize mechanical tools** (do not invent product `-D` into `eb-stack`). Use
-`format-style` for E501; use residual judgment for product/moduleclass/companions.
-**Do not** end the herdr session after check-contrib / check-recipe / `eb -Dr`
-when the goal includes *builds*.
-
-### Split of work
-
-| Kind | Examples | Who |
-|------|----------|-----|
-| **Mechanical commands** | `eb -S`; `eb-stack ingest` / `plan` / MCP `eb_ingest`/`eb_plan`; inject-checksums; **format-style** / check-style; check-contrib; check-recipe; `eb -Dr`; **`eb --robot`** | Run by shell **or** by the campaign agent; same commands either way |
-| **Judgment** | product features; moduleclass; sanity paths; extract_cmd; hierarchy companions; Spack `when=`; sibling vs greenfield | **campaign agent** with residual JSON + oracles/docs |
-| **Forbidden** | Hardcoding product `-D` into ingest; hand-wrapping E501 when format-style exists; claiming *builds* without `eb --robot` success; opening GitHub PRs without human authorization | Nobody |
-
-### Preflight (optional outer driver)
-
-An outer driver **may** run steps 1–7 below before starting herdr to save agent
-turns. If skipped, the campaign agent runs them itself. **Never** treat preflight
-as the end of the campaign when *builds* is in scope.
-
-1. `eb -S Name` — prefer sibling copy when possible.
-2. `eb-stack ingest … --easyconfigs $ROBOT` — keep residual-queue path.
-3. Mechanical residual items only (not product `-D`).
-4. `eb --inject-checksums` after sources are stable.
-5. `eb-stack format-style` then `check-style` (E501 is mechanical).
-6. `eb --check-contrib`.
-7. `eb-stack check-recipe` + `eb -Dr --robot …`.
-8. **Start campaign agent (§7 full-drive)** — judgment + re-gates + **`eb --robot`**.
-
-### Full-drive sequence (campaign agent MUST run)
-
-Inside herdr, for each target recipe (and companions as needed):
-
-1. Close residual-queue judgment (oracles / project docs / sibling EB). Prefer
-   `cp` from a landable fixture when residual is “match landable fixture.”
-2. Re-run: inject-checksums (if needed) → **format-style** → check-style →
-   check-contrib → check-recipe → `eb -Dr --robot WORK:ROBOT` until green.
-3. **REAL BUILD (required for *builds*):**
-   ```
-   eb --modules-tool=Lmod --robot "$WORK/easyconfigs:$ROBOT" path/to/Name-Ver-tc.eb \
-     2>&1 | tee "$WORK/logs/robot-<name>.log"
-   ```
-   Prefer smaller packages first when batching. On failure: read the log, fix
-   recipe/companion with justified edits, re-run from step 2 for that package.
-   **Do not** disable sanity checks or invent looser settings.
-4. Write `$WORK/residuals/session-log.md` with the three-claim ladder **per package**:
-   *resolves* / *builds* / *binary-verified* (last only if real binary checks ran).
-5. Print **`DONE_FULL_DRIVE`** when every target has *resolves* and *builds*, else
-   **`DONE_PARTIAL`** with exact failures and log paths.
-
-### PATH: EasyBuild `eb` vs `eb-stack`
-
-Never shadow EasyBuild's `eb` with an `eb-stack` binary/symlink named `eb`.
-The rendered full-drive script uses absolute `EASYBUILD_EB` / `EB_STACK` paths.
-
-### Render full-drive assets (mechanical; required before herdr)
-
-```
-REPO=<eb-stack-checkout>
-WORK=$HOME/tmp/eb-campaign
-ROBOT=<easybuild-easyconfigs .../easyconfigs>
-
-# once per host:
-podman build -t eb-stack-rocky9 \
-  -f $REPO/skills/new-package/container/rocky9/Containerfile \
-  $REPO/skills/new-package/container/rocky9
-
-$REPO/skills/new-package/render-full-drive \
-  --work "$WORK" --repo "$REPO" --robot "$ROBOT" \
-  --build-backend podman-rocky9 \
-  --overlay "$REPO/fixtures/.../easyconfigs" \   # optional companions
-  --recipe "$WORK/easyconfigs/.../Name-Ver-tc.eb" \
-  --oracle fixtures/.../Name-Ver-tc.eb \
-  --stem name
-
-# writes:
-#   $WORK/residuals/full-drive.sh
-#   $WORK/residuals/campaign-full-drive.md
+```sh
+eb-stack recipe format work/qmcpack/easyconfigs/q/QMCPACK/*.eb
+eb-stack recipe lint work/qmcpack/easyconfigs/q/QMCPACK/*.eb
+eb-stack recipe check \
+  --recipe work/qmcpack/easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1.eb \
+  --easyconfigs /path/to/robot \
+  --easyconfigs work/qmcpack/easyconfigs
 ```
 
-| Flag | Meaning |
-|------|---------|
-| `--build-backend podman-rocky9` | **Default.** `eb --robot` in Rocky 9 container |
-| `--build-backend host` | Bare-metal EasyBuild; may need `overlays/<os-id>/` |
+Fix the code under test when a check fails. Do not drop checksums, weaken sanity paths, remove dependencies, or skip tests to clear a finding. Use EasyBuild’s `--check-contrib` and `--inject-checksums` on the EasyBuild host when packaging metadata needs them.
 
-Templates: `templates/full-drive.sh.tmpl`, `templates/campaign-full-drive.md.tmpl`.  
-Example: `examples/render-eon-qmcpack.sh`.
+## Route the build
 
-### How to start campaign agent
+Target configuration is layered as transport → executor → runtime → EasyBuild workload. Keep site hostnames and paths in site-local TOML, not in the public skill.
 
-```
-herdr status   # herdr server if needed
-herdr agent start eb-full-drive \
-  --cwd "$WORK" --no-focus -- \
-  <site-agent> -p "$(cat "$WORK/residuals/campaign-full-drive.md")"
-# site-agent: whatever local-ai CLI the site runbook names
+```sh
+eb-stack target list --config targets/base.toml --config targets/site.toml
+eb-stack target doctor \
+  --config targets/base.toml \
+  --config targets/site.toml \
+  --target site-builder
 ```
 
-Campaign agent owns iterate-on-log until `DONE_FULL_DRIVE`; orchestrators only bootstrap.
+Use SSH for remote transport, Slurm for isolated jobs when available, and `host`, `podman`, or `docker` for runtime. `target doctor` must pass before a campaign. Never run EasyBuild installs on the control laptop.
 
-### What success looks like
+## Hermes build-evaluation loop
 
-- Gates green: format-style, check-contrib, check-recipe, `eb -Dr`.
-- **`eb --robot` exit 0** for each target (or documented real failure + log).
-- session-log.md states *resolves* / *builds* / *binary-verified* honestly.
-- `DONE_FULL_DRIVE` or `DONE_PARTIAL` printed.
-- PR surface: paste-ready only unless human authorized remote PR this turn.
+Use one durable state path for the package:
 
----
+```sh
+eb-stack campaign run \
+  --bundle work/qmcpack \
+  --config targets/base.toml \
+  --config targets/site.toml \
+  --target site-builder \
+  --state work/qmcpack.campaign.json
+```
 
-## 8. Quick reference
+Hermes owns this loop until the requested claim is established:
 
-| Task | Command |
-|------|---------|
-| Search existing EB recipes | `eb -S Name` |
-| Bootstrap from foreign | `eb-stack ingest --source … --easyconfigs ROBOT --out-dir DIR` |
-| Foreign → IR + planned SBOM + resolvo → new/bump | `eb-stack plan --source … --manifest-out … --sbom-out … [--easyconfigs …] [--bump-from …]` |
-| Residual work queue | `{stem}.residuals.json` (or `--residual-queue PATH`) |
-| MCP bootstrap | `eb-stack mcp` → `eb_ingest` / `eb_plan` |
-| Inject SHA256 | `eb --inject-checksums foo.eb` |
-| Contributor gate | `eb --check-contrib foo.eb` |
-| E501 lint (≤120) | `eb-stack check-style foo.eb` |
-| E501 auto-wrap (mechanical) | `eb-stack format-style foo.eb` |
-| Plan check (hierarchy-aware) | `eb-stack check-recipe --recipe foo.eb --easyconfigs ROBOT --easyconfigs work` |
-| MCP plan check | `eb_check_recipe` |
-| MCP foreign plan | `eb_plan` |
-| Dry-run graph | `eb foo.eb -Dr --robot work:ROBOT` |
-| Install (*builds*, **EasyBuild host**) | `eb foo.eb --robot work:ROBOT` (campaign agent §7) |
-| Render full-drive script + prompt | `skills/new-package/render-full-drive --work … --recipe …` (§7) |
-| Full-drive agent (default) | herdr + campaign agent + rendered prompt; robot in Rocky Podman (§7) |
-| Podman image build | `container/rocky9/Containerfile` → `eb-stack-rocky9` |
-| Host-only robot escape hatch | `render-full-drive --build-backend host` + optional `overlays/<os-id>/` |
-| Open easyconfig PR (EB GitHub integration) | `eb --new-pr foo.eb` (human; see integration-with-github docs) |
-| Review consistency vs develop | `eb --review-pr <PR#>` |
+1. Read `campaign status`; inspect the newest open finding and its full command evidence.
+2. Classify before editing: `transport`, `executor`, `runtime`, `checksum`, `patch`, `dependency-missing`, `configure`, `compile`, `link`, `test`, `install`, `sanity`, `resource`, `timeout`, or `unknown`.
+3. Apply target repair for transport/executor/runtime findings; retry resource/timeout findings with corrected allocation; apply deterministic checksum repair mechanically; use package judgment for the remaining recipe failures.
+4. Re-run recipe checks after recipe or profile changes.
+5. Re-run the same campaign command. Successful retries supersede matching open findings while retaining their evidence history.
+6. Continue through post-build verification. Do not stop at a successful compile when verification commands are declared.
 
----
+Never edit a stock recipe to hide a target defect. Never weaken a test or sanity check. Record changed files and concrete verification output in the finding resolution.
 
-## 9. Routing
+## OMP finding coordination
 
-| Situation | Skill / doc |
-|-----------|-------------|
-| New software / first easyconfig | **This skill** + [writing easyconfigs](https://docs.easybuild.io/writing-easyconfig-files/) |
-| Existing `.eb` → new foss generation | `skills/annual-bump` + writing-docs “new toolchain” |
-| PR-ready / landable / “do the packages” | **Campaign agent full-drive** (§7) via Podman Rocky robot |
-| Residual-only (explicit human scope) | Campaign agent residual-only prompt — no *builds* claim |
-| Stack lock / build list | annual-bump `solve` |
-| Contribute to easybuilders/* | [contributing](https://docs.easybuild.io/contributing/) + [GitHub integration](https://docs.easybuild.io/integration-with-github/) |
+Campaign state is the sole shared work queue. One worker must claim a finding before changing its inputs:
 
-**Do not invent EasyBuild parameters, style, or contribution requirements.**
-If this skill and docs.easybuild.io disagree, **docs.easybuild.io wins**.
-**Mechanize every tool step (including format-style and `eb --robot`); never
-hardcode product residuals into ingest. The campaign agent owns the loop
-through *builds* unless the human explicitly scoped residual-only.**
+```sh
+eb-stack campaign finding claim \
+  --state work/qmcpack.campaign.json \
+  --id attempt:1:finding:1 \
+  --owner omp-worker-1
+```
+
+Resolve only after the repair is checked:
+
+```sh
+eb-stack campaign finding resolve \
+  --state work/qmcpack.campaign.json \
+  --id attempt:1:finding:1 \
+  --owner omp-worker-1 \
+  --action "corrected the complex profile configuration" \
+  --evidence "recipe check exits successfully" \
+  --change profiles/qmcpack.toml
+```
+
+The state lock prevents concurrent writers. Workers must not steal an `in-progress` finding or edit the campaign JSON directly. Hermes resumes the campaign after owned repairs are resolved.
+
+## Claims
+
+Report each rung independently:
+
+1. `resolves`: every profile has a Resolvo lock and emitted recipe.
+2. `builds`: every emitted recipe completes through EasyBuild on the configured target.
+3. `binary-verified`: all declared post-build commands execute successfully through the same target routing.
+
+An inspect bundle establishes none of these. A planned bundle establishes only `resolves`. A campaign with no verification commands may establish `builds` but not `binary-verified`.
+
+Do not open, edit, or merge a public issue or PR. Prepare the recipe set, evidence, and paste-ready text for the human-owned contribution surface.
