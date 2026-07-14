@@ -2,7 +2,7 @@
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use eb_stack::campaign::{run_campaign, CampaignRequest, CampaignStatus};
+use eb_stack::campaign::{run_campaign as execute_campaign, CampaignRequest, CampaignStatus};
 use eb_stack::package::StackPolicy;
 use eb_stack::package_config::ProfileConfigLayer;
 use eb_stack::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
@@ -512,7 +512,7 @@ fn run_campaign(command: CampaignCommand) -> Result<()> {
                 .into_iter()
                 .find(|candidate| candidate.name == target)
                 .with_context(|| format!("target {target} is not configured"))?;
-            let campaign = run_campaign(&CampaignRequest {
+            let campaign = execute_campaign(&CampaignRequest {
                 bundle,
                 target: target_config,
                 state_path: state,
