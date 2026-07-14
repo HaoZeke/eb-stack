@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render full-drive.sh + hermes-full-drive.md from skill templates."""
+"""Render full-drive.sh + campaign-full-drive.md from skill templates."""
 from __future__ import annotations
 
 import argparse
@@ -116,9 +116,9 @@ def main() -> int:
     }
 
     sh = render(load_tmpl("full-drive.sh.tmpl"), mapping)
-    md = render(load_tmpl("hermes-full-drive.md.tmpl"), mapping)
+    md = render(load_tmpl("campaign-full-drive.md.tmpl"), mapping)
     sh_path = out_dir / "full-drive.sh"
-    md_path = out_dir / "hermes-full-drive.md"
+    md_path = out_dir / "campaign-full-drive.md"
 
     if args.dry_run:
         print(f"would write {sh_path}")

@@ -36,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`key = '…'` / `key += "…"` → parenthesized adjacent literals) and `#`
   comments. Residual queue gains `kind: "style"` items pointing at
   format-style — line wrapping is **not** residual judgment. Skills and
-  mechanical sequence updated so Hermes/local-ai never hand-split E501.
+  mechanical sequence updated so campaign agents never hand-split E501.
 - Agent skill for **new packages** from conda-forge / Spack:
   `skills/new-package/SKILL.md` (paired with `skills/annual-bump/` for
   generation rebuilds). `AGENTS.md` routes by work type.
@@ -58,15 +58,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **full-drive PATH**: use absolute EasyBuild `eb` vs `eb-stack`; venv bin first so a release-dir `eb`→`eb-stack` symlink cannot steal `--robot`.
 
-- **new-package skill §7 full-drive default**: local-ai agent (Hermes/herdr on
+- **new-package skill §7 full-drive default**: campaign agent (herdr on
   `EasyBuild host`) owns residual judgment **and** `eb --robot` *builds* for PR-ready
   campaigns; residual-only only when human scopes it. Stopping after `eb -Dr`
   without install is not done.
 - **Arch OS-dep policy in full-drive**: rendered `full-drive.sh` auto-passes `--ignore-osdeps` when `/usr/include/infiniband/verbs.h` exists (Arch `rdma-core`); teaches campaign agents not to chase Debian package names. Optional Debian Docker fallback under `skills/new-package/docker/eb-arch-host-fallback/`.
 - **`render-full-drive`**: templates
   (`skills/new-package/templates/full-drive.sh.tmpl`,
-  `hermes-full-drive.md.tmpl`) + renderer that emits per-campaign
-  `WORK/residuals/full-drive.sh` and `hermes-full-drive.md` from
+  `campaign-full-drive.md.tmpl`) + renderer that emits per-campaign
+  `WORK/residuals/full-drive.sh` and `campaign-full-drive.md` from
   `--work` / `--robot` / repeated `--recipe` [`--oracle`/`--stem`].
   Example: `examples/render-eon-qmcpack.sh`.
 - **`check-recipe` hierarchy membership for unpinned deps**: a candidate on
@@ -76,11 +76,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ingest WARNING comments wrap to ≤116 columns (mechanical style noise).
 - **Mechanical-first residual policy** in skills: maximize CLI steps
   (`ingest`, inject-checksums, check-contrib, check-recipe, `eb -Dr`);
-  local-ai agent (Hermes preferred, OMP allowed) only for judgment
-  residuals — never hardcode product `configopts` into ingest.
-- **Host split** for SURF ops: EasyBuild authoring, residual agents, and
+  campaign agent only for judgment residuals — never hardcode product
+  `configopts` into ingest.
+- **Host split** for site ops: EasyBuild authoring, residual agents, and
   `eb --robot` *builds* on **`EasyBuild host`**; residual agents in a **herdr**
-  pane (not ad-hoc `ssh … hermes/omp -p`). **`cargo builder` is cargo-only**
+  pane (not ad-hoc SSH one-liners). **`cargo builder` is cargo-only**
   for this repo’s Rust compile — not the EasyBuild install host.
 - README public framing for **0.3.x**: ready vs must-not-claim table;
   three-claim ladder (*resolves* / *builds* / *binary-verified*); ingest

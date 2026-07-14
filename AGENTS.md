@@ -7,21 +7,21 @@ built to make the right thing the easy thing.
 ## The procedure
 
 Pick the skill that matches the work, then follow it end to end.
-Mechanical CLI fails loudly; the **campaign agent** (FOSS local-ai: **OMP or
-Hermes**, interchangeable; herdr on **EasyBuild host**) owns residual judgment
-**and** `eb --robot` *builds* when the goal is PR-ready / landable (new-package
-skill §7 full-drive). Residual-only sessions require an explicit human scope.
-Your site should pair these with a site runbook (init paths, module names,
-scheduler sizing); ask for it if you were not given one.
+Mechanical CLI fails loudly; the **campaign agent** (local-ai in herdr on the
+**EasyBuild host**) owns residual judgment **and** `eb --robot` *builds* when
+the goal is PR-ready / landable (new-package skill §7 full-drive). Residual-only
+sessions require an explicit human scope. Your site should pair these with a
+site runbook (init paths, module names, scheduler sizing); ask for it if you
+were not given one.
 
 | Work | Skill | Host |
 |------|--------|------|
-| Existing recipes → new toolchain generation (annual rebuild) | `skills/annual-bump/SKILL.md` | SURF EasyBuild work: **`EasyBuild host`** |
+| Existing recipes → new toolchain generation (annual rebuild) | `skills/annual-bump/SKILL.md` | **`EasyBuild host`** |
 | **New package** from conda-forge / Spack (greenfield) | `skills/new-package/SKILL.md` | **`EasyBuild host`** (mandatory; see skill §0) |
 
-Build/PR ops and three-claim ladder live in annual-bump §10. **SURF
-EasyBuild** (authoring, residual agents in herdr, and `eb --robot` *builds*)
-**runs on `EasyBuild host`**, not the laptop. **`cargo builder` is only the remote cargo
+Build/PR ops and three-claim ladder live in annual-bump §10. EasyBuild
+authoring, residual agents in herdr, and `eb --robot` *builds* run on
+**`EasyBuild host`**, not the laptop. **`cargo builder` is only the remote cargo
 builder** for this repo’s Rust compile when required — do not route EasyBuild
 installs there unless a site runbook explicitly says so.
 

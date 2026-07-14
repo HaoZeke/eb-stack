@@ -22,17 +22,17 @@ The full agent runbook is [[https://github.com/HaoZeke/eb-stack/blob/main/skills
 * Host: ~EasyBuild host~ (EasyBuild + residual)
 
 Run ~eb~, ~eb-stack ingest~, ~eb --robot~ installs (*builds* claim), and any
-**local-ai agent** residual session on **~EasyBuild host~** (SURF workstation). Do
-not use the laptop as a fake EasyBuild host; do not use ~cargo builder~ for this
-path (site cargo builder for the ~eb-stack~ crate only).
+**campaign agent** residual session on **~EasyBuild host~**. Do not use the
+laptop as a fake EasyBuild host; do not use ~cargo builder~ for this path (site
+cargo builder for the ~eb-stack~ crate only).
 
 Residual agents run **inside a herdr pane** on that host (see skill §7) —
-not ad-hoc ~ssh <easybuild-host>  # from site runbook 'hermes …'~ / ~omp -p~.
+not ad-hoc SSH one-liners that bypass herdr.
 
 #+begin_src bash
 ssh <easybuild-host>  # from site runbook
 # residual (example shape — see skills/new-package/SKILL.md §7):
-# herdr agent start eb-residual-hermes --cwd "$WORK" -- …
+# herdr agent start eb-full-drive --cwd "$WORK" -- …
 #+end_src
 
 If ~EasyBuild host~ is unreachable, stop and report.
@@ -123,7 +123,7 @@ member (older GCCcore alone is not enough for a newer foss recipe).
 
 Product flags, ambiguous ~moduleclass~, real ~sanity_check_paths~, companion
 recipes for robot holes, and variant policy are *judgment residuals*: a
-**local-ai agent** (Hermes preferred, in **herdr** on ~EasyBuild host~) follows
+**campaign agent** (local-ai in **herdr** on ~EasyBuild host~) follows
 ~skills/new-package/SKILL.md~ §7 — do **not** hardcode them into ~eb-stack~.
 
 * Related

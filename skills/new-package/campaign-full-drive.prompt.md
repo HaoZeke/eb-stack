@@ -9,7 +9,7 @@ skills/new-package/render-full-drive \
   --recipe path/A.eb [--oracle …] [--stem a] \
   --recipe path/B.eb …
 
-# produces WORK/residuals/{full-drive.sh,hermes-full-drive.md}
+# produces WORK/residuals/{full-drive.sh,campaign-full-drive.md}
 ```
 
 Default backend is Rocky 9 Podman for `eb --robot`.

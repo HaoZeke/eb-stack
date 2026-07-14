@@ -39,7 +39,7 @@ new toolchain” section of the writing-easyconfigs page.
 
 | Layer | Where | Role |
 |-------|--------|------|
-| Agent + git + `eb-stack` | Site **EasyBuild host** (hostname in private site runbook) | herdr campaign agent (**OMP or Hermes**, interchangeable), render-full-drive, gates |
+| Agent + git + `eb-stack` | Site **EasyBuild host** (hostname in private site runbook) | herdr campaign agent, render-full-drive, gates |
 | **`eb --robot` *builds*** | **Podman Rocky 9** image `eb-stack-rocky9` | Default install backend — RHEL-family OS deps match EasyBuild expectations |
 | Optional host robot | Same machine, `--build-backend host` | Escape hatch only; optional `overlays/<os-id>/` |
 
@@ -378,7 +378,7 @@ and `EASYBUILD_TMPDIR` is set.
 
 ## 7. Full-drive campaign agent (default)
 
-The **FOSS local-ai agent (OMP or Hermes, interchangeable; site Willma)** is the **process owner** of a greenfield campaign on the site EasyBuild host. Outer orchestrators **only bootstrap** (rsync skill, render-full-drive, ensure Podman image, start herdr). The FOSS agent owns: run full-drive → read logs → fix → re-run until `DONE_FULL_DRIVE`. Default robot backend is **Podman Rocky 9**, not the host OS. Not a residual-only chat that stops before install. Harness prompts must not hard-require a single agent binary.
+The **campaign agent** (local-ai in herdr on the EasyBuild host) is the **process owner** of a greenfield campaign. Outer orchestrators **only bootstrap** (rsync skill, render-full-drive, ensure Podman image, start herdr). The campaign agent owns: run full-drive → read logs → fix → re-run until `DONE_FULL_DRIVE`. Default robot backend is **Podman Rocky 9**, not the host OS. Not a residual-only chat that stops before install.
 
 **Maximize mechanical tools** (do not invent product `-D` into `eb-stack`). Use
 `format-style` for E501; use residual judgment for product/moduleclass/companions.
@@ -456,7 +456,7 @@ $REPO/skills/new-package/render-full-drive \
 
 # writes:
 #   $WORK/residuals/full-drive.sh
-#   $WORK/residuals/hermes-full-drive.md
+#   $WORK/residuals/campaign-full-drive.md
 ```
 
 | Flag | Meaning |
@@ -464,7 +464,7 @@ $REPO/skills/new-package/render-full-drive \
 | `--build-backend podman-rocky9` | **Default.** `eb --robot` in Rocky 9 container |
 | `--build-backend host` | Bare-metal EasyBuild; may need `overlays/<os-id>/` |
 
-Templates: `templates/full-drive.sh.tmpl`, `templates/hermes-full-drive.md.tmpl`.  
+Templates: `templates/full-drive.sh.tmpl`, `templates/campaign-full-drive.md.tmpl`.  
 Example: `examples/render-eon-qmcpack.sh`.
 
 ### How to start campaign agent
@@ -473,12 +473,11 @@ Example: `examples/render-eon-qmcpack.sh`.
 herdr status   # herdr server if needed
 herdr agent start eb-full-drive \
   --cwd "$WORK" --no-focus -- \
-  omp-eb-stack -p "$(cat "$WORK/residuals/hermes-full-drive.md")"
-# or Hermes + Willma with the same prompt file
+  <site-agent> -p "$(cat "$WORK/residuals/campaign-full-drive.md")"
+# site-agent: whatever local-ai CLI the site runbook names
 ```
 
-Either OMP or Hermes (site Willma) is a valid process owner. Campaign agent owns
-iterate-on-log until `DONE_FULL_DRIVE`; orchestrators only bootstrap.
+Campaign agent owns iterate-on-log until `DONE_FULL_DRIVE`; orchestrators only bootstrap.
 
 ### What success looks like
 
@@ -509,7 +508,7 @@ iterate-on-log until `DONE_FULL_DRIVE`; orchestrators only bootstrap.
 | Dry-run graph | `eb foo.eb -Dr --robot work:ROBOT` |
 | Install (*builds*, **EasyBuild host**) | `eb foo.eb --robot work:ROBOT` (campaign agent §7) |
 | Render full-drive script + prompt | `skills/new-package/render-full-drive --work … --recipe …` (§7) |
-| Full-drive agent (default) | herdr + OMP/Hermes + rendered prompt; robot in Rocky Podman (§7) |
+| Full-drive agent (default) | herdr + campaign agent + rendered prompt; robot in Rocky Podman (§7) |
 | Podman image build | `container/rocky9/Containerfile` → `eb-stack-rocky9` |
 | Host-only robot escape hatch | `render-full-drive --build-backend host` + optional `overlays/<os-id>/` |
 | Open easyconfig PR (EB GitHub integration) | `eb --new-pr foo.eb` (human; see integration-with-github docs) |
