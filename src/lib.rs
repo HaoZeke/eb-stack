@@ -27,10 +27,9 @@ pub use eb_parse::candidate_matches_dep_for_recipe;
 pub use eb_parse::{
     candidate_matches_dep, check_recipe_deps, easyconfig_basename, easyconfig_letter_dir,
     filter_toolchain, lock_from_candidates, merge_candidates_with_precedence, packaging_gate,
-    parse_easyconfig_file, parse_easyconfig_tree, parse_easyconfig_tree_candidates,
-    parse_easyconfig_trees, resolve_easyconfig_file, resolve_easyconfig_str, validate_lock_deps,
-    version_field_to_req, MissingDep, ParseTreeResult, RecipeDepCheck, ResolvedDep,
-    ResolvedEasyconfig, ResolvedExt, SkippedEasyconfig,
+    parse_easyconfig_file, parse_easyconfig_tree, parse_easyconfig_trees, resolve_easyconfig_file,
+    resolve_easyconfig_str, validate_lock_deps, version_field_to_req, MissingDep, ParseTreeResult,
+    RecipeDepCheck, ResolvedDep, ResolvedEasyconfig, ResolvedExt, SkippedEasyconfig,
 };
 pub use eb_style::{
     format_style, format_style_file, lint_style, FormatStyleResult, StyleError, StyleFinding,
@@ -395,55 +394,6 @@ pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
         None
     };
 
-    let lock =
-        select_stack(&universe, &policy, baseline.as_ref()).map_err(|e| anyhow::anyhow!(e))?;
-    validate_lock_deps(&lock, &universe.candidates).map_err(|e| anyhow::anyhow!(e))?;
-    write_lock_sbom_and_extras(
-        &lock,
-        baseline.as_ref(),
-        &universe,
-        lock_out,
-        sbom_out,
-        extra,
-    )?;
-    Ok(lock)
-}
-
-/// Backward-compatible path: pre-baked universe JSON (still supported for tests).
-/// SBOM is written only when `sbom_out` is `Some`.
-pub fn solve_to_files(
-    universe_path: &Path,
-    policy_path: &Path,
-    baseline_path: Option<&Path>,
-    lock_out: &Path,
-    sbom_out: Option<&Path>,
-) -> Result<StackLock> {
-    solve_to_files_with_extras(
-        universe_path,
-        policy_path,
-        baseline_path,
-        lock_out,
-        sbom_out,
-        SolveExtraOut::default(),
-    )
-}
-
-/// Like [`solve_to_files`], optionally writing build-list and stack-diff files.
-/// SBOM is written only when `sbom_out` is `Some`.
-pub fn solve_to_files_with_extras(
-    universe_path: &Path,
-    policy_path: &Path,
-    baseline_path: Option<&Path>,
-    lock_out: &Path,
-    sbom_out: Option<&Path>,
-    extra: SolveExtraOut<'_>,
-) -> Result<StackLock> {
-    let universe: Universe = load_json_file(universe_path)?;
-    let policy: Policy = load_json_file(policy_path)?;
-    let baseline = match baseline_path {
-        Some(p) => Some(load_json_file::<StackLock>(p)?),
-        None => None,
-    };
     let lock =
         select_stack(&universe, &policy, baseline.as_ref()).map_err(|e| anyhow::anyhow!(e))?;
     validate_lock_deps(&lock, &universe.candidates).map_err(|e| anyhow::anyhow!(e))?;

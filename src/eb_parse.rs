@@ -1381,12 +1381,6 @@ pub fn parse_easyconfig_tree(root: &Path) -> Result<ParseTreeResult, ParseError>
     Ok(out)
 }
 
-/// Backward-compatible helper: candidates only (skips discarded). Prefer
-/// [`parse_easyconfig_tree`] when skip reporting matters.
-pub fn parse_easyconfig_tree_candidates(root: &Path) -> Result<Vec<Candidate>, ParseError> {
-    Ok(parse_easyconfig_tree(root)?.candidates)
-}
-
 /// One missing (or unmatched) dependency from a packaging/robot check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MissingDep {
