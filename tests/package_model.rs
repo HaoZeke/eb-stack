@@ -69,6 +69,7 @@ fn qmcpack_plan() -> PackagePlan {
             default: true,
             versionsuffix: Vec::new(),
             features,
+            parameters: BTreeMap::new(),
             toolchain_options: BTreeMap::from([("usempi".into(), true), ("openmp".into(), true)]),
             config_options: vec![
                 "-DQMC_MIXED_PRECISION=OFF".into(),
