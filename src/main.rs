@@ -2,6 +2,7 @@
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use eb_stack::campaign::{run_campaign, CampaignRequest, CampaignStatus};
 use eb_stack::package::StackPolicy;
 use eb_stack::package_config::ProfileConfigLayer;
 use eb_stack::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
@@ -505,12 +506,23 @@ fn run_campaign(command: CampaignCommand) -> Result<()> {
             configs,
             target,
             state,
-        } => bail!(
-            "campaign target {target} is not loaded from {} (bundle={}, state={})",
-            display_paths(&configs),
-            bundle.display(),
-            state.display()
-        ),
+        } => {
+            let targets = load_targets(&configs)?;
+            let target_config = targets
+                .into_iter()
+                .find(|candidate| candidate.name == target)
+                .with_context(|| format!("target {target} is not configured"))?;
+            let campaign = run_campaign(&CampaignRequest {
+                bundle,
+                target: target_config,
+                state_path: state,
+            })?;
+            println!("{}", serde_json::to_string_pretty(&campaign)?);
+            if campaign.status == CampaignStatus::Failed {
+                bail!("campaign build failed with typed findings in its state file");
+            }
+            Ok(())
+        }
         CampaignCommand::Status { state } => {
             let value: serde_json::Value = load_json_file(&state)?;
             println!("{}", serde_json::to_string_pretty(&value)?);
@@ -586,12 +598,4 @@ fn output_path(explicit: Option<&Path>, directory: Option<&Path>, filename: &str
         .map(Path::to_path_buf)
         .or_else(|| directory.map(|directory| directory.join(filename)))
         .unwrap_or_else(|| PathBuf::from(filename))
-}
-
-fn display_paths(paths: &[PathBuf]) -> String {
-    paths
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>()
-        .join(",")
 }
