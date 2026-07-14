@@ -129,6 +129,19 @@ fn conda_packaging_and_virtual_libraries_map_to_easybuild_conventions() {
         .expect("numpy");
     assert_eq!(numpy.eb_name.as_deref(), Some("SciPy-bundle"));
 
+    let libtorch = plan
+        .dependencies
+        .iter()
+        .filter(|dependency| dependency.name == "libtorch")
+        .collect::<Vec<_>>();
+    assert!(!libtorch.is_empty());
+    assert!(
+        libtorch
+            .iter()
+            .all(|dependency| dependency.constraint.is_none()),
+        "conda build strings are not package versions: {libtorch:?}"
+    );
+
     for (name, capability) in [
         ("libblas", "blas"),
         ("libcblas", "blas"),
