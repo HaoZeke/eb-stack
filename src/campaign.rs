@@ -289,7 +289,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         state.history.push(CampaignEvent {
             attempt: state.attempts,
             status: CampaignStatus::Running,
-            recipe: Some(recipe_text),
+            recipe: Some(recipe_text.clone()),
             detail: "EasyBuild command succeeded".into(),
         });
         supersede_findings(&mut state, "build", &recipe_text);
