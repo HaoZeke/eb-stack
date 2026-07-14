@@ -1,45 +1,16 @@
 #+TITLE: Solve a consistent stack lock
-#+OPTIONS: toc:nil num:nil
+#+OPTIONS: toc:t num:nil
 
-Goal: given a tree of easyconfigs for one toolchain generation and a policy,
-produce a ~stack.lock.json~ that names one mutually consistent version of
-every package the policy's roots need.
+Use ~stack solve~ for a multi-root EasyBuild generation lock. This is separate
+from per-profile stack-policy TOML used by ~package plan~ and ~package bump~.
 
-* Lay out the easyconfig tree
-
-~eb-stack solve~ walks ~--easyconfigs~ recursively for ~*.eb~ files. Group by
-toolchain generation, the way EasyBuild itself does:
-
-#+begin_src text
-easyconfigs/
-  foss-2025a/
-    GROMACS-2024.1-foss-2025a.eb
-    OpenBLAS-0.3.23-foss-2025a.eb
-    OpenMPI-4.1.5-foss-2025a.eb
-    FFTW-3.3.10-foss-2025a.eb
-  foss-2025b/
-    GROMACS-2024.1-foss-2025b.eb
-    GROMACS-2024.4-foss-2025b.eb
-    GROMACS-2025.0-foss-2025b.eb
-    OpenBLAS-0.3.23-foss-2025b.eb
-    OpenBLAS-0.3.24-foss-2025b.eb
-    OpenBLAS-0.3.27-foss-2025b.eb
-    OpenMPI-4.1.5-foss-2025b.eb
-    OpenMPI-4.1.6-foss-2025b.eb
-    OpenMPI-5.0.3-foss-2025b.eb
-    FFTW-3.3.10-foss-2025b.eb
-#+end_src
-
-The solver only looks at candidates whose ~toolchain~ matches the policy's
-~toolchain~; the other generation in the tree becomes the *baseline* for the
-diff (see below).
-
-* Write a policy
+* Write a whole-stack policy
 
 #+begin_src json
 {
   "toolchain": {"name": "foss", "version": "2025b"},
   "roots": ["GROMACS"],
+  "root_priority": ["GROMACS"],
   "pins": [],
   "forbid": [],
   "objective": "prefer_newer",
@@ -47,100 +18,46 @@ diff (see below).
 }
 #+end_src
 
-Save this as ~policies/prefer_newer.json~. ~roots~ names the packages that must end up in the lock; every dependency
-they pull in (including build-only dependencies) co-selects automatically.
-See the [[file:../reference/policy.org][policy schema reference]] for every field.
+Roots and all declared runtime/build requirements are co-selected. Explicit
+~root_priority~ makes multi-root optimization stable under root-list order.
 
-* Solve
+* Solve with overlays and reports
 
 #+begin_src bash
-eb-stack solve \
+eb-stack stack solve \
   --easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
   --policy fixtures/gromacs_2025_to_next/policies/prefer_newer.json \
   --baseline-easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
   --lock-out stack.lock.json \
-  --sbom-out stack.cdx.json
-# parsed easyconfigs under fixtures/.../easyconfigs -> lock stack.lock.json (4 packages, engine=resolvo_cdcl_sat)
-# GROMACS 2025.0 (toolchain foss-2025b) <- fixtures/.../foss-2025b/GROMACS-2025.0-foss-2025b.eb
-#   - FFTW 3.3.10 (...)
-#   - GROMACS 2025.0 (...)
-#   - OpenBLAS 0.3.27 (...)
-#   - OpenMPI 4.1.6 (...)
-# planned SBOM stack.cdx.json
+  --sbom-out stack.cdx.json \
+  --build-list-out build.list \
+  --stack-diff-out stack.diff.md
 #+end_src
 
-~--baseline-easyconfigs~ points at the same tree here because it contains
-both generations; ~eb-stack~ picks the *nearest lower* toolchain generation than
-the policy target as the baseline automatically (override with
-~--baseline-toolchain-version~ when a tree has more than two generations).
-With ~require_upgrade.relative_to_baseline~ set, the solve fails outright if
-no candidate for ~GROMACS~ is newer than whatever the baseline tree has.
+~--easyconfigs~ is repeatable. Later paths override earlier paths for the same
+name, version, toolchain, and versionsuffix identity. A site-only package is
+added to the universe normally.
 
-* Change the outcome with a pin
+When the baseline tree includes several generations, use
+~--baseline-toolchain-version~ to select one explicitly. A relative
+~require_upgrade~ fails if the baseline package is absent or no newer candidate
+is jointly feasible.
 
-Freeze ~OpenBLAS~ to an older release and re-solve; because ~GROMACS
-2025.0~'s easyconfig requires ~OpenBLAS >= 0.3.27~, pinning ~OpenBLAS~ forces
-an older jointly-consistent ~GROMACS~ instead:
+* Pin or forbid candidates
 
-#+begin_src json
-{
-  "toolchain": {"name": "foss", "version": "2025b"},
-  "roots": ["GROMACS"],
-  "pins": [{"name": "OpenBLAS", "version_req": "==0.3.24"}],
-  "forbid": [],
-  "objective": "prefer_newer",
-  "require_upgrade": {"name": "GROMACS", "relative_to_baseline": true}
-}
-#+end_src
+Policy pins use EasyBuild-shaped requirements such as ~==0.3.24~, ~>=1.14~,
+or a compound range. ~forbid~ accepts a package name or full easyconfig path.
+An unsatisfiable solve reports package names and versions from the actual
+candidate graph.
 
-Save this as ~policies/pin_openblas.json~.
+* Emit an SBOM from an existing lock
 
 #+begin_src bash
-eb-stack solve \
-  --easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
-  --policy fixtures/gromacs_2025_to_next/policies/pin_openblas.json \
-  --lock-out stack.lock.json \
-  --sbom-out stack.cdx.json
-# GROMACS 2024.4 (toolchain foss-2025b) <- .../GROMACS-2024.4-foss-2025b.eb
+eb-stack stack sbom --lock stack.lock.json --out stack.cdx.json
 #+end_src
 
-An unsatisfiable policy (a pin no candidate can meet, together with a root
-that needs it) fails with a message naming the real package versions
-involved, not internal solver ranks.
+A lock-only SBOM cannot reconstruct dependency edges and does not invent them.
+Use ~--sbom-out~ during ~stack solve~ when the full candidate graph is available.
 
-* Layer a site overlay on top of upstream
-
-~--easyconfigs~ is repeatable. Pass the upstream tree first and a site
-overlay second, and the overlay wins wherever it declares the same
-package identity (name + version + toolchain); everything the overlay
-does not touch still comes from upstream:
-
-#+begin_src bash
-eb-stack solve \
-  --easyconfigs vendor/easybuild-easyconfigs/easybuild/easyconfigs \
-  --easyconfigs site/easyconfigs \
-  --policy policies/prefer_newer.json \
-  --lock-out stack.lock.json
-#+end_src
-
-Precedence is by *path order*, not alphabetical or mtime: later
-~--easyconfigs~ paths override earlier ones for the same name+version+
-toolchain identity. A site recipe for ~GROMACS-2025.0-foss-2025b.eb~ that
-patches in a local build option replaces the upstream recipe of the same
-identity in the solved universe; a site-only package with no upstream
-counterpart is simply added, and it participates in co-selection like any
-other candidate. ~eb-stack bump --easyconfigs~ and ~eb-stack parse
---easyconfigs~ each take a *single* directory (not a repeatable list) —
-point at a tree that already contains the overlay merged in, or at the
-overlay alone if it is self-sufficient for the deps being resolved.
-(~solve~, ~check-recipe~, and ~ingest~ accept repeatable ~--easyconfigs~
-with later-path precedence.) Bump auto-resolve itself is hierarchy
-consensus plus resolvo joint pins over that one universe; see
-[[file:bump-recipe.org][how to bump a recipe]].
-
-* Next steps
-
-- [[file:emit-reports.org][Emit a build list and stack diff]] alongside the lock.
-- [[file:root-priority.org][Declare root priority]] when more than one root shares a
-  dependency and they disagree on its version.
-- [[file:../reference/formats.org][Lock file format reference]].
+See [[file:../reference/policy.org][the policy reference]] and
+[[file:../reference/formats.org][the format reference]].

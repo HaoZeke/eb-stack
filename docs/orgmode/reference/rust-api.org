@@ -1,50 +1,56 @@
-#+TITLE: Rust API Reference
-#+OPTIONS: toc:2 num:nil
+#+TITLE: Rust API
+#+OPTIONS: toc:nil num:nil
 
-The ~eb_stack~ crate is the library behind the ~eb-stack~ binary. CLI
-subcommands and MCP tools call the same public paths documented here.
+The public Rust API follows the version-one workflow rather than the retired
+scaffold/auto-emitter surface.
 
-The module tree below is *generated from the crate source* (rustdoc comments)
-via ~sphinx-rustdocgen~ and rendered with ~sphinxcontrib_rust~ during
-~pixi run -e docs docbld~. Expand "Crate eb_stack" in the sidebar, or follow
-the injected toctree, for every public item.
+* Canonical package modules
 
-#+begin_export rst
-See also:
+| Module | Responsibility |
+|-
+| ~package~ | schema-versioned plan, profiles, locks, stack policy, CycloneDX conversion |
+| ~package_config~ | layered public profile TOML |
+| ~package_solve~ | profile materialization and Resolvo lock generation |
+| ~package_emit~ | one deterministic EasyBuild recipe per profile lock |
+| ~package_workflow~ | inspect, new-package plan, bump plan, and bundle writer |
 
-- CLI flags: :doc:`/reference/cli` (``solve``, ``check-recipe``, ``bump``, ``mcp``, …)
-- Annual rebuild loop: :doc:`/howto/run-annual-bump`
-- Architecture: :doc:`/explanation/architecture`
-- Parser approach: :doc:`/explanation/parser-approach`
+Primary entry points:
 
-The module toctree (crate root and children) is injected below by
-``sphinx-rustdoc-postprocess`` during the docs build.
-#+end_export
+- ~inspect_new_package~;
+- ~plan_new_package~;
+- ~plan_package_bump~;
+- ~write_package_bundle~;
+- ~solve_package_profile~ / ~solve_package_profile_with_hierarchy~;
+- ~emit_profile_easyconfigs~.
 
-* Public modules (map)
+* Parsing and stack solving
 
-| Module | Role |
-|--------+------|
-| ~domain~ | Core types: toolchain, candidate, lock, policy |
-| ~eb_parse~ | Restricted-Python easyconfig parse, ~check_recipe_deps~, ~packaging_gate~ |
-| ~eb_emit~ | ~emit_next_generation~; auto-resolve = hierarchy + resolvo joint pins |
-| ~hierarchy~ | Sub-toolchain membership and generation-consensus floors |
-| ~select~ / ~resolvo_provider~ | CDCL SAT co-selection; ~resolvo_resolve_dep_versions~ for bump/ingest |
-| ~report~ | Build list and stack-diff markdown |
-| ~sbom~ | Planned CycloneDX 1.5 via ~cyclonedx-bom~ (~lock_to_bom~, …) |
-| ~foreign~ | conda-forge / Spack parse → EB scaffold (+ optional robot resolve) |
-| ~mcp~ | JSON-RPC MCP tool surface (~eb_check_recipe~, ~eb_bump~, ~eb_solve~) |
-| ~version~ | EasyBuild-style version ordering |
+~parse_foreign_path~ and ~parse_foreign_str~ return the syntax-normalized
+foreign model. ~package_plan_from_foreign~ is the canonical adapter.
 
-* Rebuild the API pages
+~eb_parse~ exposes EasyBuild parsing, robot tree merging, package gates, and
+dependency checks. ~resolvo_provider~ implements candidate selection, policy
+pins, stack preferences, locked pins, and exclusions. ~select~ provides the
+whole-stack optimization path.
+
+* Targets and campaigns
+
+~target~ exposes layered TOML types, target resolution, command plans, staging,
+and target doctor reports. ~campaign~ exposes campaign state, typed findings,
+claim/resolve operations, failure classification, and ~run_campaign~.
+
+* Generated API pages
+
+The crate pages are generated from Rust source:
 
 #+begin_src bash
-pixi run -e docs gen-rust-api   # docs/source/crates/eb_stack/*.rst
-pixi run -e docs docbld        # Sphinx + postprocess injects toctree
+pixi run -e docs gen-rust-api
 #+end_src
 
-* Stability
+#+begin_export rst
+.. toctree::
+   :maxdepth: 2
 
-The CLI and MCP tool argument schemas are the supported operator contracts
-through 0.x. Library item paths may move before 1.0; pin the crate version
-when embedding.
+   ../crates/eb_stack/lib
+   ../crates/eb_stack/main
+#+end_export

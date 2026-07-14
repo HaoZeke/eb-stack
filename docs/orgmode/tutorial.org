@@ -1,184 +1,177 @@
-#+TITLE: Tutorial
-#+OPTIONS: toc:nil num:nil
+#+TITLE: Tutorial: foreign recipe to verified EasyBuild package
+#+OPTIONS: toc:t num:nil
 
-In this tutorial you take a real GROMACS easyconfig built against
-~foss-2023b~ and bump it to the next toolchain generation, ~foss-2024a~,
-with *zero hand-fed dependency versions*: every ~dependencies~ and
-~builddependencies~ entry is resolved automatically from a directory of
-easyconfigs, one command, no ~--dep~ flags.
+This tutorial plans conda-forge eOn, explains the artifacts, and routes the
+result into a build campaign. The QMCPACK path differs only in parser and
+profile selection.
 
-#+begin_export rst
-.. figure:: /images/00-hero-annual-bump.jpg
-   :alt: Mascot stamping foss-2024a onto a stack of easyconfig cards; residual sticky note for hand-added deps
-   :align: center
-   :width: 88%
+* Prepare a robot tree and target layer
 
-   The mechanical majority of a generation bump is rewriting recipes and
-   dependency versions; a short residual list stays human.
-#+end_export
-
-Here is the end result:
-
-#+begin_src diff
--toolchain = {'name': 'foss', 'version': '2023b'}
-+toolchain = {'name': 'foss', 'version': '2024a'}
- builddependencies = [
--    ('CMake', '3.27.6'),
--    ('scikit-build-core', '0.9.3'),
-+    ('CMake', '3.29.3'),
-+    ('scikit-build-core', '0.11.1'),
- ]
- dependencies = [
--    ('Python', '3.11.5'),
--    ('SciPy-bundle', '2023.11'),
--    ('networkx', '3.2.1'),
--    ('mpi4py', '3.1.5'),
-+    ('Python', '3.12.3'),
-+    ('SciPy-bundle', '2024.05'),
-+    ('networkx', '3.4.2'),
-+    ('mpi4py', '4.0.1'),
- ]
-#+end_src
-
-Everything else in the file -- ~easyblock~, ~homepage~, ~description~,
-~toolchainopts~, ~source_urls~, ~sources~, ~patches~, ~checksums~,
-~configopts~, ~exts_list~, ~moduleclass~ -- comes out identical to the
-source.
-
-* Install eb-stack
+Use an installed ~easybuild-easyconfigs~ tree plus the repository fixture:
 
 #+begin_src bash
-git clone https://github.com/HaoZeke/eb-stack.git
-cd eb-stack
-cargo test
-cargo build --release
-# binary: target/release/eb-stack
+export ROBOT=/path/to/easybuild-easyconfigs/easybuild/easyconfigs
+export BUNDLE=/tmp/eon-tutorial
+export STATE=/tmp/eon-tutorial.campaign.json
 #+end_src
 
-The rest of this tutorial calls the binary as ~eb-stack~ (put
-~target/release~ on your ~PATH~, or use the full path) and runs commands
-from the repository root, since it uses easyconfigs already checked into
-the repo's own test fixtures -- no files to create by hand.
+Copy ~examples/targets/site.example.toml~ to a private site file and fill in
+the EasyBuild host, durable roots, runtime, and scheduler settings. The public
+base describes the shape; the site layer describes the deployment.
 
-* The source easyconfig
-
-~tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb~ is a real,
-unmodified maintainer easyconfig -- 90 lines with the usual ~homepage~,
-~description~, ~source_urls~, ~patches~, ~checksums~, and ~exts_list~
-fields. The lines this tutorial cares about are the toolchain and the
-dependency lists:
-
-#+begin_src python
-toolchain = {'name': 'foss', 'version': '2023b'}
-toolchainopts = {'openmp': True, 'usempi': True}
-
-builddependencies = [
-    ('CMake', '3.27.6'),
-    ('scikit-build-core', '0.9.3'),
-]
-
-dependencies = [
-    ('Python', '3.11.5'),
-    ('SciPy-bundle', '2023.11'),
-    ('networkx', '3.2.1'),
-    ('mpi4py', '3.1.5'),
-]
-#+end_src
-
-* The dependency universe
-
-~tests/repro_fixtures/universe_foss_2024a/~ holds real ~foss-2024a~-era
-easyconfigs at every sub-toolchain level GROMACS's dependencies actually
-live at: ~Python~ and ~CMake~ on ~GCCcore-13.3.0~, ~SciPy-bundle~ and
-~networkx~ on ~gfbf-2024a~, ~mpi4py~ on ~gompi-2024a~. None of them sit on
-plain ~foss-2024a~ -- that is the point: EasyBuild's composite toolchains
-pull dependencies from several sub-toolchain levels of the *same
-generation*, and ~eb-stack~ has to walk that hierarchy to find them.
-
-* Bump it, zero hand-fed versions
+* Inspect the conda-forge recipe
 
 #+begin_src bash
-eb-stack bump \
-  --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
+eb-stack package inspect \
+  --source fixtures/foreign_ingest/conda_eon/recipe.yaml \
+  --format conda-forge \
   --toolchain-name foss \
-  --toolchain-version 2024a \
-  --easyconfigs tests/repro_fixtures/universe_foss_2024a \
-  --out-dir /tmp/gromacs-2024a
-# wrote /tmp/gromacs-2024a/GROMACS-2024.4-foss-2024a.eb (from tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb)
+  --toolchain-version 2026.1 \
+  --profile-config examples/profiles/eon.toml \
+  --out-dir /tmp/eon-inspect
 #+end_src
 
-No ~--dep~ flags. ~--easyconfigs~ points at the universe directory above;
-~eb-stack~ parses every easyconfig under it, walks the ~foss-2024a~
-sub-toolchain hierarchy (~GCCcore~, ~GCC~, ~gfbf~, ~gompi~, ... down to
-~SYSTEM~), and for each of ~CMake~, ~scikit-build-core~, ~Python~,
-~SciPy-bundle~, ~networkx~, ~mpi4py~ picks the version that generation
-actually used -- never older than the source's own version. No
-~--version~ flag either, so the application version stays ~2024.4~: the
-same release rebuilt against a newer toolchain, the common case for a
-toolchain-generation bump.
+Open ~/tmp/eon-inspect/package.plan.json~. Important sections are:
 
-* Inspect the result
+- ~origin~ and ~package~: normalized identity;
+- ~sources~: every source artifact and checksum;
+- ~dependencies~: roles, constraints, conditions, and provenance;
+- ~build~: EasyBuild easyblock, toolchain, and configuration;
+- ~profiles~: independently installable products;
+- ~outputs~: requested profile/stack pairs;
+- ~residuals~: dynamic or ambiguous input that needs judgment.
 
-#+begin_src bash
-diff tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
-     /tmp/gromacs-2024a/GROMACS-2024.4-foss-2024a.eb
-#+end_src
+The planned CycloneDX document is emitted at the same boundary. It describes
+the requested pre-build inventory and never claims installed evidence.
 
-The diff is exactly the toolchain line and the six dependency versions
-shown at the top of this page. Run the same command twice: both runs
-produce the exact same bytes, because ~bump~ rewrites targeted spans of
-the source text -- it does not reformat or regenerate anything else.
-
-* What auto-resolve does not do
-
-Compare the emitted file against
-~tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2024a.eb~, the real
-maintainer's ~foss-2024a~ recipe checked into the same fixture directory:
-it also adds a new runtime dependency, ~('pybind11', '2.12.0')~, that does
-not exist anywhere in the ~foss-2023b~ source. ~eb-stack~ correctly leaves
-that line out -- a mechanical version bump cannot invent a dependency the
-source recipe never declared. That one line is the only place the emitted
-file and the real target differ, and the gap is intentional: see
-[[file:explanation/fidelity.org][reproduction fidelity and limitations]]
-for how often auto-resolve reproduces a real maintainer PR exactly, and
-why the residual cases look the way they do.
-
-* Override one dependency by hand
-
-~--dep NAME=VERSION~ still works alongside ~--easyconfigs~: a hand override
-wins over whatever auto-resolve would have picked for that name, and every
-other dependency still auto-resolves normally.
+* Resolve and emit
 
 #+begin_src bash
-eb-stack bump \
-  --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
+eb-stack package plan \
+  --source fixtures/foreign_ingest/conda_eon/recipe.yaml \
+  --format conda-forge \
   --toolchain-name foss \
-  --toolchain-version 2024a \
-  --easyconfigs tests/repro_fixtures/universe_foss_2024a \
-  --dep scikit-build-core=0.12.0 \
-  --out-dir /tmp/gromacs-2024a-override
-# scikit-build-core is 0.12.0 (the override), everything else auto-resolved as before
+  --toolchain-version 2026.1 \
+  --profile-config examples/profiles/eon.toml \
+  --easyconfigs "$ROBOT" \
+  --easyconfigs fixtures/eon_foss_2026_1/easyconfigs \
+  --stack-policy examples/stacks/foss-2026.1.toml \
+  --out-dir "$BUNDLE"
 #+end_src
 
-* Next steps
+The generated tree contains:
 
-- [[file:howto/run-annual-bump.org][How to run the annual toolchain-generation
-  bump]] -- whole rebuild loop: what it closes, residual table, claim ladder,
-  and the CI-known bumps.
-- [[file:howto/bump-recipe.org][How to bump a recipe]] -- every ~bump~ flag:
-  auto-resolve, hand overrides, operator preservation, version bumps with a
-  new source checksum.
-- [[file:howto/solve-lock.org][How to solve a consistent stack lock]] -- multi-root
-  stack co-selection with resolvo (policy roots, baseline, build list,
-  stack diff, optional CycloneDX). ~bump --easyconfigs~ already runs
-  resolvo joint pins for one recipe's deps; ~solve~ co-selects a whole
-  generation under a policy.
-- [[file:explanation/fidelity.org][Reproduction fidelity and limitations]] -- how
-  often auto-resolve reproduces a real maintainer toolchain bump exactly,
-  and what it cannot do.
-- [[https://github.com/HaoZeke/eb-stack/blob/main/skills/annual-bump/SKILL.md][The
-  annual-bump skill]] (~skills/annual-bump/SKILL.md~ in the repository) --
-  drives this same ~bump~ / ~solve~ pipeline over a whole set of recipes
-  for an annual toolchain rebuild, naming the narrow residual an operator
-  or agent still has to resolve by hand.
-- [[file:reference/cli.org][CLI reference]] -- every subcommand and flag.
+#+begin_src text
+package.plan.json
+package.sbom.cdx.json
+locks/default.lock.json
+easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb
+#+end_src
+
+The lock is the actual Resolvo result. Its direct dependencies name selected
+versions, toolchains, versionsuffixes, source easyconfig paths, build/runtime
+roles, pin outcomes, and candidate exclusions.
+
+* Understand stack pin fallback
+
+~examples/stacks/foss-2026.1.toml~ may prefer a distribution version. Resolvo
+first tries that favored candidate. If another declared requirement or known
+exclusion makes it infeasible, the solver selects a compatible alternative and
+sets ~fallback = true~ with a reason in the lock. Change the mode to ~locked~
+only when the stack requires that exact candidate and must fail otherwise.
+
+This matters because a version range is not build evidence. A candidate can be
+SAT-compatible and still fail configure, compile, link, tests, install, or
+sanity. Those outcomes belong to the campaign finding model.
+
+* Check the emitted recipe
+
+#+begin_src bash
+RECIPE="$BUNDLE/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb"
+
+eb-stack recipe format "$RECIPE"
+eb-stack recipe lint "$RECIPE"
+eb-stack recipe check \
+  --recipe "$RECIPE" \
+  --easyconfigs "$ROBOT" \
+  --easyconfigs fixtures/eon_foss_2026_1/easyconfigs \
+  --easyconfigs "$BUNDLE/easyconfigs"
+#+end_src
+
+At this point the bundle may claim *resolves*. No build has occurred.
+
+* Probe the target
+
+#+begin_src bash
+eb-stack target list \
+  --config examples/targets/base.toml \
+  --config ~/.config/eb-stack/site.toml
+
+eb-stack target doctor \
+  --config examples/targets/base.toml \
+  --config ~/.config/eb-stack/site.toml \
+  --target site-builder
+#+end_src
+
+Read all four checks. A healthy transport does not imply a healthy executor,
+runtime, or EasyBuild command.
+
+* Run and repair the campaign
+
+#+begin_src bash
+eb-stack campaign run \
+  --bundle "$BUNDLE" \
+  --config examples/targets/base.toml \
+  --config ~/.config/eb-stack/site.toml \
+  --target site-builder \
+  --state "$STATE"
+
+eb-stack campaign status --state "$STATE"
+#+end_src
+
+If the campaign fails, claim its finding before editing:
+
+#+begin_src bash
+eb-stack campaign finding claim \
+  --state "$STATE" \
+  --id attempt:1:finding:1 \
+  --owner omp-worker-1
+#+end_src
+
+Repair the layer named by the class, then record evidence:
+
+#+begin_src bash
+eb-stack campaign finding resolve \
+  --state "$STATE" \
+  --id attempt:1:finding:1 \
+  --owner omp-worker-1 \
+  --action "corrected package configuration" \
+  --evidence "recipe check and target command reproduce successfully" \
+  --change examples/profiles/eon.toml
+#+end_src
+
+Run the campaign again with the same state. Successful stages supersede stale
+open findings. ~builds~ becomes true only after all emitted recipes succeed.
+~binary_verified~ becomes true only when at least one declared verification
+command exists and all such commands succeed.
+
+* Try QMCPACK variants
+
+Replace the source and profile arguments:
+
+#+begin_src bash
+eb-stack package plan \
+  --source fixtures/foreign_ingest/spack_qmcpack/package.py \
+  --format spack \
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  --profile-config examples/profiles/qmcpack.toml \
+  --easyconfigs "$ROBOT" \
+  --easyconfigs fixtures/qmcpack_foss_2026_1/easyconfigs \
+  --stack-policy examples/stacks/foss-2026.1.toml \
+  --out-dir /tmp/qmcpack-tutorial
+#+end_src
+
+QMCPACK emits one unsuffixed default recipe and one ~-complex~ recipe because
+the latter is an independently loadable product variant. Both profiles get
+their own lock and must build in the campaign.

@@ -1,126 +1,118 @@
 #+TITLE: Architecture
 #+OPTIONS: toc:t num:nil
 
-~eb-stack~ is a pipeline of small, independently testable modules. Nothing
-in the pipeline builds software or shells out to EasyBuild itself: the tool
-reads easyconfig text, decides a consistent selection, and writes text
-(lock, SBOM, reports, or a rewritten easyconfig) back out.
+~eb-stack~ separates package intent, dependency selection, recipe emission,
+and empirical build evidence. Every user-facing workflow passes through the
+same canonical package model.
+
+* Data flow
 
 #+begin_src dot :file ../images/pipeline.svg :exports results
-digraph G {
-    rankdir=LR;
-    node [shape=box, style=filled, fillcolor="white", fontname="Jost", fontsize=12];
-    edge [fontname="Jost", fontsize=11, color="#004D40"];
-    graph [fontname="Jost"];
-
-    eb_files [label=".eb files\n(easyconfig tree,\none or more roots)"];
-    parser [label="eb_parse\nrestricted-Python eval\n(skips unparseable files)"];
-    domain [label="domain\nCandidate / Policy / Universe"];
-    provider [label="resolvo_provider\nEbProvider", fillcolor="#F1DB4B"];
-    solver [label="resolvo::Solver\nCDCL SAT core", fillcolor="#FF655D", fontcolor="white"];
-    select [label="select\npriority-lex optimize"];
-    lock [label="StackLock\nstack.lock.json"];
-    report [label="report\nbuild list, stack diff"];
-    sbom [label="sbom\ncyclonedx-bom\n1.5 JSON"];
-    hierarchy [label="hierarchy\nconsensus floors", fillcolor="#F1DB4B"];
-    emit [label="eb_emit\nbump: next-gen .eb"];
-    joint [label="resolvo_resolve\n_dep_versions\n(joint SAT pins)", fillcolor="#F1DB4B"];
-
-    eb_files -> parser -> domain -> provider -> solver;
-    solver -> select [label="feasible\nassignment"];
-    select -> lock;
-    lock -> report;
-    lock -> sbom;
-    eb_files -> emit [style=dashed, label="bump: text rewrite"];
-    eb_files -> parser [style=dashed, label="--easyconfigs\nuniverse"];
-    parser -> hierarchy [style=dashed];
-    hierarchy -> joint [style=dashed, label="generation\npins"];
-    joint -> provider [style=dashed, label="synthetic root\n+ pins"];
-    joint -> emit [style=dashed, label="dep versions"];
+digraph P {
+  rankdir=LR;
+  node [shape=box, style="rounded,filled", fillcolor="white"];
+  foreign [label="conda-forge / Spack\nsyntax adapters"];
+  easybuild [label="EasyBuild recipe\nadapter"];
+  plan [label="PackagePlan\npackage.plan.json", fillcolor="#F1DB4B"];
+  sbom [label="planned CycloneDX"];
+  profile [label="profile materialization"];
+  resolvo [label="stack policy + Resolvo", fillcolor="#004D40", fontcolor="white"];
+  lock [label="profile lock"];
+  emit [label="one .eb per profile"];
+  target [label="transport + executor\n+ runtime + workload"];
+  campaign [label="campaign state\n+ typed findings", fillcolor="#FF655D", fontcolor="white"];
+  foreign -> plan;
+  easybuild -> plan;
+  plan -> sbom;
+  plan -> profile -> resolvo -> lock -> emit -> target -> campaign;
 }
 #+end_src
 
-* Modules
+* Syntax adapters
 
-- ~eb_parse~ (~src/eb_parse.rs~) :: Evaluates ~.eb~ files as a restricted
-  Python-like DSL into ~ResolvedEasyconfig~ (~name~, ~version~,
-  ~versionsuffix~, ~toolchain~, ~dependencies~, ~builddependencies~,
-  ~exts_list~, templates expanded), then maps that to the solver-facing
-  ~Candidate~ / ~DepReq~ shapes. Tree walks (~parse_easyconfig_tree~,
-  ~parse_easyconfig_trees~) skip unparseable files individually instead of
-  aborting, and merge multiple roots with later-path overlay precedence
-  (~merge_candidates_with_precedence~). See
-  [[file:parser-approach.org][the parser approach]].
-- ~eb_template_constants~ (~src/eb_template_constants.rs~) :: The EasyBuild
-  ~TEMPLATE_CONSTANTS~ table (~SOURCE_TAR_GZ~, ~GITHUB_SOURCE~,
-  ~PYPI_SOURCE~, and around fifty others) that ~eb_parse~ seeds into every
-  recipe's evaluation environment before resolving ~%(...)s~ templates.
-- ~domain~ (~src/domain.rs~) :: The shared vocabulary every other module
-  speaks: ~Toolchain~, ~Candidate~, ~DepReq~, ~Universe~, ~Policy~,
-  ~StackLock~, ~LockPackage~. Plain serde structs, no behavior beyond a
-  couple of small helpers (~Policy::effective_root_priority~).
-- ~resolvo_provider~ (~src/resolvo_provider.rs~) :: ~EbProvider~ implements
-  resolvo's ~DependencyProvider~ trait over the candidate set: which
-  versions exist per package name, which versions satisfy a requirement
-  range, and the dependency edges to expose to the SAT core. Also owns
-  ~solve_with_resolvo~, the priority-lexicographic optimization loop layered
-  on top of feasibility. See
-  [[file:optimization-model.org][the optimization model]].
-- ~select~ (~src/select.rs~) :: Thin wrapper that calls
-  ~resolvo_provider::solve_with_resolvo~, turns the result into a
-  ~StackLock~ (sorted, timestamped, tagged with the solver engine string),
-  and validates every declared root is present.
-- ~sbom~ (~src/sbom.rs~) :: ~StackLock~ (plus declared runtime/build edges)
-  to a CycloneDX 1.5 JSON document via the official ~cyclonedx-bom~
-  crate (~serialNumber~, tools, pre-build lifecycle, runtime ~dependsOn~,
-  build edges as ~eb_stack:buildDependsOn~ properties). Opt-in via
-  ~--sbom-out~. See [[file:../reference/formats.org][the format reference]].
-- ~report~ (~src/report.rs~) :: ~StackLock~ to an install-ordered build list
-  (topological sort) and a baseline-vs-solved markdown stack diff.
-- ~hierarchy~ (~src/hierarchy.rs~) :: Sub-toolchain hierarchy membership and
-  generation-consensus version floors for ~bump --easyconfigs~ / ingest:
-  which levels (~GCCcore~, ~GCC~, ~gfbf~, ~gompi~, ..., ~SYSTEM~) belong to
-  the target generation, and per-name floors never older than the source
-  pin. Ground truth membership is EasyBuild's ~get_toolchain_hierarchy~,
-  captured under ~fixtures/toolchain_hierarchy/~.
-- ~eb_emit~ (~src/eb_emit.rs~) :: The ~bump~ path. Rewrites the ~toolchain~
-  dict, optional ~version~ assignment, named dependency tuples, and (on a
-  version bump) the source checksum entry in an easyconfig's *source text*,
-  byte-preserving everything else. With ~--easyconfigs~, auto-resolve is
-  hierarchy consensus then ~resolvo_resolve_dep_versions~ (joint SAT
-  over hierarchy-eligible candidates with a synthetic root for this
-  recipe).
-- ~version~ (~src/version.rs~) :: EasyBuild-shaped version comparison and
-  the ~version_req~ matcher (~==~, ~>=~, ~<=~, ~>~, ~<~, bare-exact) shared
-  by the parser, the provider, the hierarchy resolver, and the
-  baseline-generation picker.
+The conda adapter expands a restricted template subset, parses classic and v1
+recipe shapes, preserves multi-source entries, and represents selectors as
+structured conditions. The Spack adapter statically reads package DSL calls;
+it does not execute Python. It preserves versions, dependencies and roles,
+variants, conflicts, requirements, source metadata, and source spans.
 
-* Two entry paths, one codebase
+Adapters do not choose EasyBuild dependency versions or emit placeholder
+recipes. Their output is package intent plus explicit residuals.
 
-~solve~ / ~solve-json~ / ~parse~ / ~sbom~ all flow through the co-selection
-pipeline above: parse (or load an already-built universe JSON), build a ~Universe~, ask
-~select_stack~ for a consistent ~StackLock~, then derive reports from that
-lock.
+* Canonical package model
 
-~bump~ always rewrites one recipe's source text (toolchain / version / dep
-pins). With ~--easyconfigs~, auto-resolve is two stages: (1) hierarchy
-consensus picks generation-native floors (GCCcore-aware, same as before);
-(2) ~resolvo_resolve_dep_versions~ builds a synthetic root over
-hierarchy-eligible candidates and runs the same resolvo CDCL SAT core as
-~solve~, so co-selected dep pins are jointly feasible. Hand ~--dep~
-overrides still win after both stages. Bumping one recipe still does not
-require every unrelated package in the tree to appear as a ~solve~ root --
-only the recipe's declared deps that exist under the hierarchy enter the
-SAT problem.
+~PackagePlan~ is schema-versioned and shared by foreign imports and bumps. It
+contains package metadata, provenance-bearing sources and dependencies,
+structured conditions/rules, EasyBuild build intent, product profiles, output
+requests, and residuals.
 
-* Where the co-selection graph's edges come from
+The planned SBOM is derived from this model. It is marked pre-build and remains
+separate from installed/binary evidence.
 
-Every ~Candidate~ carries two separate dependency lists: ~dependencies~
-(runtime) and ~builddependencies~ (build-time only, e.g. ~CMake~). Both
-lists become co-selection *requirements* on the SAT core identically
-(~resolvo_provider::get_dependencies~ chains them) -- a package with an edge
-to another only through ~builddependencies~ still forces that other package
-into the lock. The role distinction survives only in the outputs that care
-about it: the SBOM's runtime-vs-build-time ~dependsOn~ maps
-(~dep_map_from_universe~ vs ~build_dep_map_from_universe~ in ~sbom.rs~) keep
-the two separate even though the solver does not.
+* Product profiles
+
+Profiles represent independently installable products. Materialization applies
+feature flags, dependency-feature values, compiler/toolchain/platform context,
+variables, versionsuffix components, toolchain options, configuration options,
+and verification commands.
+
+The emission invariant is one profile lock and one conventional ~.eb~ file per
+requested profile. The default CPU/MPI/OpenMP product is unsuffixed unless the
+site explicitly defines a distinct loadable variant.
+
+* Resolvo boundary
+
+The solver receives:
+
+- the materialized direct dependency requirements;
+- candidates filtered through the EasyBuild toolchain hierarchy;
+- preferred or locked stack pins;
+- candidate exclusions backed by target/build evidence.
+
+Preferred pins use Resolvo's favored candidate and retain an in-solver
+fallback. Locked pins constrain selection to one candidate. Pin outcomes and
+exclusions are serialized in the profile lock.
+
+Existing robot recipes are already-built artifacts. Their build-only tools
+have independent build contexts and are not forced into the generated
+package's co-loaded runtime closure. Direct build requirements of the generated
+profile remain solver requirements and are emitted as build dependencies.
+
+* Deterministic EasyBuild emission
+
+New-package emission renders package metadata, all sources and checksums,
+EasyBuild build settings, locked dependency tuples, profile toolchain options,
+configuration, sanity paths, and module class. Bumps preserve the source
+recipe's syntax and unrelated bytes while applying the canonical lock to the
+toolchain, package version, dependency versions, and source checksum entry.
+
+* Layered targets
+
+A target is four orthogonal layers:
+
+1. transport: local or SSH;
+2. executor: direct or Slurm;
+3. runtime: host, Podman, or Docker;
+4. EasyBuild workload: command, robot paths, durable roots, and environment.
+
+TOML layers merge by target name in argument order. This keeps the public
+repository and skills portable while a private site layer supplies hostnames,
+paths, modules, scheduler sizing, and container images.
+
+* Persisted campaigns
+
+A campaign stages one bundle, builds every emitted recipe, and runs profile
+verification commands. Its state stores attempts, exact routed commands,
+compact evidence, typed findings, ownership, resolutions, and the three claims.
+
+Spawn and exit failures are data, not lost control flow. They are classified
+as transport, executor, runtime, checksum, patch, dependency, configure,
+compile, link, test, install, sanity, resource, timeout, or unknown findings.
+Hermes drives retries; OMP workers coordinate through claim/resolve operations.
+
+* API surface
+
+The CLI and MCP server expose the same version-one workflows. Internal parser
+and syntax-preserving emit modules are not compatibility APIs. There is one
+canonical route for new packages and one for bumps, both ending in the same
+bundle and campaign model.
