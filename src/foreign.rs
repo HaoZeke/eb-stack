@@ -877,7 +877,7 @@ fn extract_spack_config_flags(text: &str) -> Option<String> {
     Some(flags.join(" "))
 }
 
-fn guess_easyblock(recipe: &ForeignRecipe, warnings: &mut Vec<String>) -> String {
+pub(crate) fn guess_easyblock(recipe: &ForeignRecipe, warnings: &mut Vec<String>) -> String {
     for h in &recipe.build_system_hints {
         let hl = h.to_ascii_lowercase();
         if hl.contains("meson") {
@@ -1007,7 +1007,7 @@ fn source_block(recipe: &ForeignRecipe, warnings: &mut Vec<String>) -> (String, 
 }
 
 /// Map foreign package *identity* names toward EasyBuild title casing.
-fn canonicalize_eb_package_name(name: &str) -> String {
+pub(crate) fn canonicalize_eb_package_name(name: &str) -> String {
     match name.to_ascii_lowercase().as_str() {
         "qmcpack" => "QMCPACK".into(),
         "eon" => "eOn".into(),

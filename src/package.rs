@@ -12,7 +12,7 @@ use cyclonedx_bom::models::tool::{Tool, Tools};
 use cyclonedx_bom::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -257,6 +257,28 @@ pub struct DependencyIntent {
     pub provenance: Vec<Provenance>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PackageRuleKind {
+    Conflict,
+    Requirement,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageRule {
+    pub id: String,
+    pub kind: PackageRuleKind,
+    pub spec: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
+    #[serde(default)]
+    pub condition: ConditionExpr,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    pub provenance: Provenance,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BuildSpec {
@@ -283,6 +305,8 @@ pub struct ProductProfile {
     pub versionsuffix: Vec<String>,
     #[serde(default)]
     pub features: BTreeMap<String, bool>,
+    #[serde(default)]
+    pub parameters: BTreeMap<String, String>,
     #[serde(default)]
     pub toolchain_options: BTreeMap<String, bool>,
     #[serde(default)]
@@ -339,6 +363,8 @@ pub struct PackagePlan {
     pub sources: Vec<SourceArtifact>,
     #[serde(default)]
     pub dependencies: Vec<DependencyIntent>,
+    #[serde(default)]
+    pub rules: Vec<PackageRule>,
     pub build: BuildSpec,
     #[serde(default)]
     pub profiles: Vec<ProductProfile>,
@@ -399,12 +425,20 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
     ]));
 
     let mut components = vec![root];
+    let mut seen_component_refs = BTreeSet::new();
+    seen_component_refs.insert(root_ref.clone());
     let mut dependency_refs = Vec::new();
     for dependency in &plan.dependencies {
         let name = dependency.eb_name.as_deref().unwrap_or(&dependency.name);
         let version = dependency.constraint.as_deref().unwrap_or("unresolved");
         let reference = component_ref(name, version);
-        dependency_refs.push(reference.clone());
+        if !dependency_refs.contains(&reference) {
+            dependency_refs.push(reference.clone());
+        }
+
+        if !seen_component_refs.insert(reference.clone()) {
+            continue;
+        }
 
         let mut component = Component::new(Classification::Library, name, version, Some(reference));
         let roles = dependency
@@ -424,16 +458,17 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
 
     let mut dependencies = vec![Dependency {
         dependency_ref: root_ref,
-        dependencies: dependency_refs,
+        dependencies: dependency_refs.clone(),
     }];
-    dependencies.extend(plan.dependencies.iter().map(|dependency| {
-        let name = dependency.eb_name.as_deref().unwrap_or(&dependency.name);
-        let version = dependency.constraint.as_deref().unwrap_or("unresolved");
-        Dependency {
-            dependency_ref: component_ref(name, version),
-            dependencies: Vec::new(),
-        }
-    }));
+    dependencies.extend(
+        dependency_refs
+            .iter()
+            .cloned()
+            .map(|dependency_ref| Dependency {
+                dependency_ref,
+                dependencies: Vec::new(),
+            }),
+    );
 
     let mut metadata = Metadata::new().unwrap_or_default();
     metadata.tools = Some(Tools::List(vec![Tool::new(

@@ -56,10 +56,11 @@ pub use hierarchy::{
     HierarchyError, ResolveDepOpts, SourceDepSpec, ToolchainHierarchy,
 };
 pub use manifest::{
-    bump_recipe_from_plan, emit_new_recipe_from_plan, package_manifest_from_foreign, plan_and_emit,
-    plan_from_foreign, planned_sbom_from_manifest, solve_plan_with_robot, BuildConfig,
-    IntermediatePlan, ManifestDep, ManifestError, ManifestOrigin, ManifestSource, ManifestVariant,
-    PackageManifest, ParserCoverage, SolvedManifest, MANIFEST_SCHEMA_VERSION,
+    bump_recipe_from_plan, emit_new_recipe_from_plan, package_manifest_from_foreign,
+    package_plan_from_foreign, plan_and_emit, plan_from_foreign, planned_sbom_from_manifest,
+    solve_plan_with_robot, BuildConfig, IntermediatePlan, ManifestDep, ManifestError,
+    ManifestOrigin, ManifestSource, ManifestVariant, PackageManifest, ParserCoverage,
+    SolvedManifest, MANIFEST_SCHEMA_VERSION,
 };
 pub use report::{
     classify_stack_diff, format_build_list, format_stack_diff_markdown, ordered_build_paths,
