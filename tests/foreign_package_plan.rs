@@ -102,3 +102,46 @@ fn eon_canonical_sbom_has_unique_component_references() {
         "CycloneDX bom-ref values must be unique: {references:?}"
     );
 }
+
+#[test]
+fn conda_packaging_and_virtual_libraries_map_to_easybuild_conventions() {
+    let recipe = parse_foreign_path(
+        &fixture("fixtures/foreign_ingest/conda_eon/recipe.yaml"),
+        Some(ForeignFormat::CondaForge),
+    )
+    .expect("parse eOn");
+    let plan = package_plan_from_foreign(&recipe, &toolchain());
+
+    for name in ["pip", "setuptools"] {
+        let dependency = plan
+            .dependencies
+            .iter()
+            .find(|dependency| dependency.name == name)
+            .unwrap_or_else(|| panic!("missing {name}"));
+        assert_eq!(dependency.eb_name.as_deref(), Some("Python"));
+        assert!(dependency.virtual_capability.is_none());
+    }
+
+    let numpy = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "numpy")
+        .expect("numpy");
+    assert_eq!(numpy.eb_name.as_deref(), Some("SciPy-bundle"));
+
+    for (name, capability) in [
+        ("libblas", "blas"),
+        ("libcblas", "blas"),
+        ("liblapack", "lapack"),
+        ("liblapacke", "lapack"),
+        ("cargo-bundle-licenses", "cargo-bundle-licenses"),
+        ("sccache", "sccache"),
+    ] {
+        let dependency = plan
+            .dependencies
+            .iter()
+            .find(|dependency| dependency.name == name)
+            .unwrap_or_else(|| panic!("missing {name}"));
+        assert_eq!(dependency.virtual_capability.as_deref(), Some(capability));
+    }
+}
