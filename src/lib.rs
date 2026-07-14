@@ -10,6 +10,7 @@ pub mod hierarchy;
 pub mod manifest;
 pub mod mcp;
 pub mod package;
+pub mod package_config;
 pub mod package_emit;
 pub mod package_solve;
 pub mod report;
