@@ -14,9 +14,8 @@
 //!    resolved by accepting recipes whose toolchain is any member of the
 //!    target generation's sub-toolchain hierarchy.
 
-use eb_stack::{
-    emit_next_generation_auto_from_path, emit_next_generation_from_path, EmitParams, Toolchain,
-};
+use eb_stack::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
+use eb_stack::{plan_package_bump, BumpPackageRequest, Toolchain};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -45,19 +44,44 @@ fn deps(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         .collect()
 }
 
-/// Assert that bumping `source` with `params` reproduces `target` exactly,
+fn canonical_bump(
+    source: &Path,
+    toolchain: &Toolchain,
+    universe: &Path,
+    overrides: HashMap<String, String>,
+) -> String {
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source: source.to_path_buf(),
+        toolchain: toolchain.clone(),
+        version: None,
+        source_checksum: None,
+        easyconfig_roots: vec![universe.to_path_buf()],
+        hierarchy_fixture: None,
+        overrides,
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "reproduction".into(),
+            toolchain: toolchain.clone(),
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+    })
+    .unwrap_or_else(|error| panic!("canonical bump failed for {}: {error}", source.display()));
+    bundle.easyconfigs[0].text.clone()
+}
+
+/// Assert that bumping `source` with locked overrides reproduces `target` exactly,
 /// except that `target` may contain each line in `allowed_additions` once,
 /// in the position the maintainer inserted it. Removing those lines from
 /// `target` (in order) must leave text identical to the emitted bump.
 fn assert_reproduces(
     source: &Path,
     target: &Path,
-    params: &EmitParams,
+    overrides: HashMap<String, String>,
     allowed_additions: &[&str],
 ) {
-    let result = emit_next_generation_from_path(source, params)
-        .unwrap_or_else(|e| panic!("emit failed for {}: {e}", source.display()));
-    assert_emitted_matches_target(&result.text, target, allowed_additions, source);
+    let text = canonical_bump(source, &foss("2024a"), &universe_foss_2024a(), overrides);
+    assert_emitted_matches_target(&text, target, allowed_additions, source);
 }
 
 fn assert_reproduces_auto(
@@ -67,18 +91,8 @@ fn assert_reproduces_auto(
     universe: &Path,
     allowed_additions: &[&str],
 ) {
-    let empty = HashMap::new();
-    let result = emit_next_generation_auto_from_path(
-        source, toolchain, universe, None, None, &empty, None, None,
-    )
-    .unwrap_or_else(|e| {
-        panic!(
-            "auto emit failed for {} with universe {}: {e}",
-            source.display(),
-            universe.display()
-        )
-    });
-    assert_emitted_matches_target(&result.text, target, allowed_additions, source);
+    let text = canonical_bump(source, toolchain, universe, HashMap::new());
+    assert_emitted_matches_target(&text, target, allowed_additions, source);
 }
 
 fn assert_emitted_matches_target(
@@ -127,20 +141,20 @@ fn assert_emitted_matches_target(
 fn reproduces_gromacs_2024_4_foss_2023b_to_2024a() {
     let source = fixture("gromacs/GROMACS-2024.4-foss-2023b.eb");
     let target = fixture("gromacs/GROMACS-2024.4-foss-2024a.eb");
-    let params = EmitParams {
-        toolchain: foss("2024a"),
-        version: None,
-        source_checksum: None,
-        dep_versions: deps(&[
-            ("CMake", "3.29.3"),
-            ("scikit-build-core", "0.11.1"),
-            ("Python", "3.12.3"),
-            ("SciPy-bundle", "2024.05"),
-            ("networkx", "3.4.2"),
-            ("mpi4py", "4.0.1"),
-        ]),
-    };
-    assert_reproduces(&source, &target, &params, &["    ('pybind11', '2.12.0'),"]);
+    let overrides = deps(&[
+        ("CMake", "3.29.3"),
+        ("scikit-build-core", "0.11.1"),
+        ("Python", "3.12.3"),
+        ("SciPy-bundle", "2024.05"),
+        ("networkx", "3.4.2"),
+        ("mpi4py", "4.0.1"),
+    ]);
+    assert_reproduces(
+        &source,
+        &target,
+        overrides,
+        &["    ('pybind11', '2.12.0'),"],
+    );
 }
 
 /// GROMACS-2024.4 auto-resolve: zero hand-fed dependency versions.
@@ -170,17 +184,12 @@ fn reproduces_gromacs_2024_4_foss_2023b_to_2024a_auto() {
 fn reproduces_scafacos_1_0_4_foss_2023b_to_2024a() {
     let source = fixture("scafacos/ScaFaCoS-1.0.4-foss-2023b.eb");
     let target = fixture("scafacos/ScaFaCoS-1.0.4-foss-2024a.eb");
-    let params = EmitParams {
-        toolchain: foss("2024a"),
-        version: None,
-        source_checksum: None,
-        dep_versions: deps(&[
-            ("Autotools", "20231222"),
-            ("pkgconf", "2.2.0"),
-            ("GSL", "2.8"),
-        ]),
-    };
-    assert_reproduces(&source, &target, &params, &[]);
+    let overrides = deps(&[
+        ("Autotools", "20231222"),
+        ("pkgconf", "2.2.0"),
+        ("GSL", "2.8"),
+    ]);
+    assert_reproduces(&source, &target, overrides, &[]);
 }
 
 #[test]
@@ -204,19 +213,14 @@ fn reproduces_scafacos_1_0_4_foss_2023b_to_2024a_auto() {
 fn reproduces_mdtraj_1_10_3_foss_2023b_to_2024a() {
     let source = fixture("mdtraj/MDTraj-1.10.3-foss-2023b.eb");
     let target = fixture("mdtraj/MDTraj-1.10.3-foss-2024a.eb");
-    let params = EmitParams {
-        toolchain: foss("2024a"),
-        version: None,
-        source_checksum: None,
-        dep_versions: deps(&[
-            ("Python", "3.12.3"),
-            ("SciPy-bundle", "2024.05"),
-            ("zlib", "1.3.1"),
-            ("networkx", "3.4.2"),
-            ("PyTables", "3.10.2"),
-        ]),
-    };
-    assert_reproduces(&source, &target, &params, &[]);
+    let overrides = deps(&[
+        ("Python", "3.12.3"),
+        ("SciPy-bundle", "2024.05"),
+        ("zlib", "1.3.1"),
+        ("networkx", "3.4.2"),
+        ("PyTables", "3.10.2"),
+    ]);
+    assert_reproduces(&source, &target, overrides, &[]);
 }
 
 #[test]
@@ -227,45 +231,37 @@ fn reproduces_mdtraj_1_10_3_foss_2023b_to_2024a_auto() {
     // (networkx 3.4.2, PyTables 3.10.2). The `# optional` comment itself is
     // preserved verbatim; only the version token changes.
     let source = fixture("mdtraj/MDTraj-1.10.3-foss-2023b.eb");
-    let empty = HashMap::new();
-    let result = emit_next_generation_auto_from_path(
+    let text = canonical_bump(
         &source,
         &foss("2024a"),
         &universe_foss_2024a(),
-        None,
-        None,
-        &empty,
-        None,
-        None,
-    )
-    .expect("MDTraj auto emit");
-    assert!(result
-        .text
-        .contains("toolchain = {'name': 'foss', 'version': '2024a'}"));
+        HashMap::new(),
+    );
+    assert!(text.contains("toolchain = {'name': 'foss', 'version': '2024a'}"));
     for pin in [
         "('Python', '3.12.3')",
         "('SciPy-bundle', '2024.05')",
         "('zlib', '1.3.1')",
     ] {
         assert!(
-            result.text.contains(pin),
+            text.contains(pin),
             "missing required pin {pin} in:\n{}",
-            result.text
+            text
         );
     }
     // Optional deps bump to the generation version, matching the maintainer PR.
     assert!(
-        result.text.contains("('networkx', '3.4.2'),  # optional"),
+        text.contains("('networkx', '3.4.2'),  # optional"),
         "networkx must bump to 3.4.2 with comment preserved, got:\n{}",
-        result.text
+        text
     );
     assert!(
-        result.text.contains("('PyTables', '3.10.2'),  # optional"),
+        text.contains("('PyTables', '3.10.2'),  # optional"),
         "PyTables must bump to 3.10.2 with comment preserved, got:\n{}",
-        result.text
+        text
     );
-    assert!(!result.text.contains("('networkx', '3.2.1')"));
-    assert!(!result.text.contains("('PyTables', '3.9.2')"));
+    assert!(!text.contains("('networkx', '3.2.1')"));
+    assert!(!text.contains("('PyTables', '3.9.2')"));
 }
 
 /// Fiona-1.10.1: foss/2023b -> foss/2024a.
@@ -276,13 +272,12 @@ fn reproduces_mdtraj_1_10_3_foss_2023b_to_2024a_auto() {
 fn reproduces_fiona_1_10_1_foss_2023b_to_2024a() {
     let source = fixture("fiona/Fiona-1.10.1-foss-2023b.eb");
     let target = fixture("fiona/Fiona-1.10.1-foss-2024a.eb");
-    let params = EmitParams {
-        toolchain: foss("2024a"),
-        version: None,
-        source_checksum: None,
-        dep_versions: deps(&[("Python", "3.12.3"), ("GDAL", "3.10.0")]),
-    };
-    assert_reproduces(&source, &target, &params, &[]);
+    assert_reproduces(
+        &source,
+        &target,
+        deps(&[("Python", "3.12.3"), ("GDAL", "3.10.0")]),
+        &[],
+    );
 }
 
 #[test]
@@ -305,13 +300,12 @@ fn reproduces_fiona_1_10_1_foss_2023b_to_2024a_auto() {
 fn reproduces_pulp_2_8_0_foss_2023b_to_2024a() {
     let source = fixture("pulp/PuLP-2.8.0-foss-2023b.eb");
     let target = fixture("pulp/PuLP-2.8.0-foss-2024a.eb");
-    let params = EmitParams {
-        toolchain: foss("2024a"),
-        version: None,
-        source_checksum: None,
-        dep_versions: deps(&[("Python", "3.12.3"), ("Cbc", "2.10.12")]),
-    };
-    assert_reproduces(&source, &target, &params, &[]);
+    assert_reproduces(
+        &source,
+        &target,
+        deps(&[("Python", "3.12.3"), ("Cbc", "2.10.12")]),
+        &[],
+    );
 }
 
 #[test]
@@ -334,13 +328,12 @@ fn reproduces_pulp_2_8_0_foss_2023b_to_2024a_auto() {
 fn reproduces_numba_0_60_0_foss_2023b_to_2024a() {
     let source = fixture("numba/numba-0.60.0-foss-2023b.eb");
     let target = fixture("numba/numba-0.60.0-foss-2024a.eb");
-    let params = EmitParams {
-        toolchain: foss("2024a"),
-        version: None,
-        source_checksum: None,
-        dep_versions: deps(&[("Python", "3.12.3"), ("SciPy-bundle", "2024.05")]),
-    };
-    assert_reproduces(&source, &target, &params, &[]);
+    assert_reproduces(
+        &source,
+        &target,
+        deps(&[("Python", "3.12.3"), ("SciPy-bundle", "2024.05")]),
+        &[],
+    );
 }
 
 #[test]
