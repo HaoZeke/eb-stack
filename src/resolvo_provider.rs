@@ -466,7 +466,7 @@ impl DependencyProvider for EbProvider {
             let range = self.range_matching(&d.name, &d.version_req, d.versionsuffix.as_deref());
             if range == Ranges::empty() {
                 let reason = self.pool.intern_string(format!(
-                    "unsatisfiable dep {} {} from {}={}",
+                    "unresolved dependency {} {} from {}={}",
                     d.name, d.version_req, c.name, c.version
                 ));
                 return Dependencies::Unknown(reason);
