@@ -1,320 +1,409 @@
-//! eb-stack: parse EasyBuild easyconfigs, resolvo SAT co-select, planned CycloneDX SBOM.
+//! Version-one command surface for canonical package planning and build campaigns.
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use eb_stack::package::StackPolicy;
+use eb_stack::package_config::ProfileConfigLayer;
 use eb_stack::{
     check_recipe_deps, emit_next_generation_auto_from_path_with_opts,
-    emit_next_generation_from_path, format_style_file, ingest_foreign_to_easyconfig_with_opts,
-    lint_style, load_json_file, lock_to_cyclonedx, packaging_gate, parse_easyconfig_tree,
-    parse_easyconfig_trees, plan_and_emit, residual_queue_from_ingest, resolve_easyconfig_file,
-    scaffold_missing_companions, solve_from_easyconfigs_with_baseline_version_and_extras,
-    solve_to_files_with_extras, write_ingest_result_with_queue, AutoResolveOpts, EmitParams,
-    ForeignFormat, IngestOpts, SolveExtraOut, StackLock, Toolchain,
+    emit_next_generation_from_path, format_style, format_style_file, inspect_new_package,
+    lint_style, load_json_file, lock_to_cyclonedx, packaging_gate, parse_easyconfig_trees,
+    plan_new_package, resolve_easyconfig_file, scaffold_missing_companions,
+    solve_from_easyconfigs_with_baseline_version_and_extras, write_json_pretty,
+    write_package_bundle, AutoResolveOpts, EmitParams, ForeignFormat, NewPackageRequest,
+    PackageBundle, SolveExtraOut, StackLock, Toolchain,
 };
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
 #[command(
     name = "eb-stack",
     version,
-    about = "Parse EasyBuild .eb files, SAT-solve a co-constrained stack lock, emit planned SBOM"
+    about = "Canonical SBOM, build-manifest, Resolvo, EasyBuild, and campaign workflows"
 )]
 struct Cli {
     #[command(subcommand)]
-    cmd: Cmd,
+    command: Command,
 }
 
 #[derive(Subcommand, Debug)]
-enum Cmd {
-    /// Parse a tree of `.eb` files, solve with resolvo, write lock (+ optional SBOM).
-    Solve {
-        /// Easyconfig tree(s) (walked recursively for `*.eb`). Repeatable: later
-        /// paths override earlier ones for the same name+version+toolchain
-        /// (site overlay on upstream).
+enum Command {
+    /// Parse, solve, and emit package artifacts.
+    Package {
+        #[command(subcommand)]
+        command: PackageCommand,
+    },
+    /// Check and format EasyBuild recipes.
+    Recipe {
+        #[command(subcommand)]
+        command: RecipeCommand,
+    },
+    /// Solve EasyBuild stack locks and SBOMs.
+    Stack {
+        #[command(subcommand)]
+        command: StackCommand,
+    },
+    /// Inspect declarative build targets.
+    Target {
+        #[command(subcommand)]
+        command: TargetCommand,
+    },
+    /// Run and inspect persisted build campaigns.
+    Campaign {
+        #[command(subcommand)]
+        command: CampaignCommand,
+    },
+    /// Serve the same workflows over MCP stdio.
+    Mcp,
+}
+
+#[derive(Subcommand, Debug)]
+enum PackageCommand {
+    /// Parse a foreign recipe into a canonical build manifest and planned SBOM.
+    Inspect(PackageInspectArgs),
+    /// Resolve every declared profile and emit a canonical artifact bundle.
+    Plan(PackagePlanArgs),
+    /// Retarget an existing EasyBuild recipe using hierarchy + Resolvo selection.
+    Bump(PackageBumpArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct PackageInspectArgs {
+    #[arg(long)]
+    source: PathBuf,
+    #[arg(long, default_value = "auto")]
+    format: String,
+    #[arg(long, default_value = "foss")]
+    toolchain_name: String,
+    #[arg(long)]
+    toolchain_version: String,
+    #[arg(long = "profile-config")]
+    profile_configs: Vec<PathBuf>,
+    #[arg(long)]
+    out_dir: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+struct PackagePlanArgs {
+    #[command(flatten)]
+    inspect: PackageInspectArgs,
+    #[arg(long, required = true)]
+    easyconfigs: Vec<PathBuf>,
+    #[arg(long)]
+    stack_policy: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+struct PackageBumpArgs {
+    #[arg(long)]
+    source: PathBuf,
+    #[arg(long)]
+    toolchain_name: String,
+    #[arg(long)]
+    toolchain_version: String,
+    #[arg(long)]
+    version: Option<String>,
+    #[arg(long)]
+    source_checksum: Option<String>,
+    #[arg(long = "dep", value_name = "NAME=VERSION")]
+    dependencies: Vec<String>,
+    #[arg(long)]
+    easyconfigs: Option<PathBuf>,
+    #[arg(long)]
+    hierarchy_fixture: Option<PathBuf>,
+    #[arg(long)]
+    keep_old_deps: bool,
+    #[arg(long, conflicts_with = "out")]
+    out_dir: Option<PathBuf>,
+    #[arg(long, conflicts_with = "out_dir")]
+    out: Option<PathBuf>,
+}
+
+#[derive(Subcommand, Debug)]
+enum RecipeCommand {
+    /// Resolve a recipe and verify package metadata plus robot dependencies.
+    Check {
+        #[arg(long)]
+        recipe: PathBuf,
         #[arg(long, required = true)]
         easyconfigs: Vec<PathBuf>,
-        /// Policy JSON (toolchain, roots, pins, require_upgrade)
+        #[arg(long = "require-configopt")]
+        require_configopts: Vec<String>,
+        #[arg(long)]
+        metadata_only: bool,
+        #[arg(long)]
+        scaffold_missing: Option<PathBuf>,
+    },
+    /// Report EasyBuild E501 style findings.
+    Lint {
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
+    /// Mechanically format EasyBuild E501 findings.
+    Format {
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        #[arg(long)]
+        out: Option<PathBuf>,
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum StackCommand {
+    /// Parse EasyBuild trees and solve a jointly consistent stack.
+    Solve {
+        #[arg(long, required = true)]
+        easyconfigs: Vec<PathBuf>,
         #[arg(long)]
         policy: PathBuf,
-        /// Optional second tree (or same tree) used to build the baseline lock for upgrades
         #[arg(long)]
         baseline_easyconfigs: Option<PathBuf>,
-        /// Baseline toolchain generation (version only, e.g. 2025a) when the baseline
-        /// tree has multiple generations of the policy toolchain family. Default: nearest
-        /// lower generation than the policy target (see version ordering).
-        #[arg(long, value_name = "VERSION")]
+        #[arg(long)]
         baseline_toolchain_version: Option<String>,
         #[arg(long, default_value = "stack.lock.json")]
         lock_out: PathBuf,
-        /// Optional planned CycloneDX SBOM path (omit to skip SBOM emission).
         #[arg(long)]
         sbom_out: Option<PathBuf>,
-        /// Optional plain-text build list: selected easyconfigs in dependency order
         #[arg(long)]
         build_list_out: Option<PathBuf>,
-        /// Optional markdown stack diff vs baseline (pasteable into a PR)
         #[arg(long)]
         stack_diff_out: Option<PathBuf>,
     },
-    /// Parse easyconfigs and print JSON candidates (debug / universe dump).
-    Parse {
-        #[arg(long)]
-        easyconfigs: PathBuf,
-        #[arg(long)]
-        toolchain_name: Option<String>,
-        #[arg(long)]
-        toolchain_version: Option<String>,
-    },
-    /// Packaging check: resolve one recipe and verify deps exist in robot tree(s).
-    ///
-    /// Cross-toolchain deps (e.g. `quill` on GCCcore while the recipe is `gfbf`)
-    /// are matched by identity, not policy-toolchain filter. Exit 1 if any dep
-    /// is missing or packaging gates fail.
-    ///
-    /// With `--scaffold-missing DIR`, write draft companion `.eb` files for every
-    /// missing dep under `DIR` (letter/name/ layout) so the overlay can be filled
-    /// and re-checked — the packaging prep loop for stacks like eOn.
-    CheckRecipe {
-        /// Recipe `.eb` to validate
-        #[arg(long)]
-        recipe: PathBuf,
-        /// Robot easyconfig tree(s); later paths override earlier (draft overlay).
-        #[arg(long, required = true)]
-        easyconfigs: Vec<PathBuf>,
-        /// Require these substrings in configopts (repeatable)
-        #[arg(long = "require-configopt")]
-        require_configopts: Vec<String>,
-        /// Skip the missing-dep robot check (only packaging metadata gates)
-        #[arg(long)]
-        metadata_only: bool,
-        /// Write scaffold companion easyconfigs for missing deps into this tree
-        #[arg(long = "scaffold-missing", value_name = "DIR")]
-        scaffold_missing: Option<PathBuf>,
-    },
-    /// Legacy: solve from pre-baked universe JSON (still tested).
-    SolveJson {
-        #[arg(long)]
-        universe: PathBuf,
-        #[arg(long)]
-        policy: PathBuf,
-        #[arg(long)]
-        baseline: Option<PathBuf>,
-        #[arg(long, default_value = "stack.lock.json")]
-        lock_out: PathBuf,
-        /// Optional planned CycloneDX SBOM path (omit to skip SBOM emission).
-        #[arg(long)]
-        sbom_out: Option<PathBuf>,
-        /// Optional plain-text build list: selected easyconfigs in dependency order
-        #[arg(long)]
-        build_list_out: Option<PathBuf>,
-        /// Optional markdown stack diff vs baseline lock (pasteable into a PR)
-        #[arg(long)]
-        stack_diff_out: Option<PathBuf>,
-    },
-    /// Emit CycloneDX from an existing lock (explicit SBOM command; always writes).
+    /// Emit CycloneDX from an existing stack lock.
     Sbom {
         #[arg(long)]
         lock: PathBuf,
         #[arg(long, default_value = "stack.cdx.json")]
         out: PathBuf,
     },
-    /// Produce a next-generation easyconfig from an existing recipe.
-    ///
-    /// Rewrites `toolchain`, optional application `version`, and named
-    /// dependency / build-dependency versions; preserves all other source
-    /// content. Writes `{name}-{version}-{tcname}-{tcver}.eb` under `--out-dir`
-    /// (or to an explicit `--out` file path).
-    Bump {
-        /// Source easyconfig (`.eb`) to rewrite
-        #[arg(long)]
-        source: PathBuf,
-        /// Target toolchain name (e.g. foss)
-        #[arg(long)]
-        toolchain_name: String,
-        /// Target toolchain version / generation (e.g. 2025b)
-        #[arg(long)]
-        toolchain_version: String,
-        /// Optional new application version
-        #[arg(long)]
-        version: Option<String>,
-        /// New sha256 for the source tarball; only meaningful when `--version`
-        /// changes the app version (the tarball name changes with it). When
-        /// omitted on a version bump, the source checksum entry's key is
-        /// still renamed to the new versioned tarball name but the checksum
-        /// value is left stale and a warning is printed.
-        #[arg(long, value_name = "SHA256")]
-        source_checksum: Option<String>,
-        /// Dependency version override as `Name=version` (repeatable).
-        /// Also applied to `builddependencies`. If `version` includes an
-        /// operator (`>=`, `==`, …) it replaces the whole version field;
-        /// otherwise any operator on the source entry is preserved.
-        /// When `--easyconfigs` is set, these override auto-resolved versions.
-        #[arg(long = "dep", value_name = "NAME=VERSION")]
-        deps: Vec<String>,
-        /// Directory of easyconfigs used to auto-resolve dependency and
-        /// build-dependency versions for the target toolchain generation
-        /// (hierarchy consensus + resolvo joint co-select; GCCcore/GCC/gfbf/…
-        /// members count). When set, hand `--dep` overrides are optional.
-        #[arg(long, value_name = "DIR")]
-        easyconfigs: Option<PathBuf>,
-        /// Optional hierarchy fixture JSON (EasyBuild `get_toolchain_hierarchy`
-        /// capture). Default: built-in fixture for known generations
-        /// (e.g. foss-2024a).
-        #[arg(long, value_name = "PATH")]
-        hierarchy_fixture: Option<PathBuf>,
-        /// Keep source dependency versions when auto-resolve finds no candidate
-        /// (default: fail with a non-zero exit). Versionsuffix-pinned deps are
-        /// never bumped regardless of this flag.
-        #[arg(long)]
-        keep_old_deps: bool,
-        /// Output directory; file is written as the conventional basename
-        #[arg(long, conflicts_with = "out")]
-        out_dir: Option<PathBuf>,
-        /// Explicit output file path (overrides conventional directory write)
-        #[arg(long, conflicts_with = "out_dir")]
-        out: Option<PathBuf>,
+}
+
+#[derive(Subcommand, Debug)]
+enum TargetCommand {
+    /// List targets from layered public TOML configuration.
+    List {
+        #[arg(long = "config", required = true)]
+        configs: Vec<PathBuf>,
     },
-    /// Serve the packaging workflow as MCP tools over stdio (JSON-RPC 2.0).
-    ///
-    /// Exposes `eb_check_recipe`, `eb_bump`, `eb_solve`, and `eb_ingest` to MCP
-    /// clients (claude, codex, omp, grok). Register with e.g.
-    /// `claude mcp add eb-stack -- eb-stack mcp`.
-    Mcp,
-    /// Ingest a foreign recipe (conda-forge meta.yaml / Spack package.py)
-    /// into a parseable EasyBuild scaffold.
-    ///
-    /// Mechanically derives name/version/sources/deps/configopts from the foreign
-    /// recipe. With `--easyconfigs`, fills dependency versions via hierarchy
-    /// consensus plus resolvo joint co-select over the robot universe (same
-    /// machinery as `bump --easyconfigs` / `solve`). Residuals (product
-    /// patches, hand pins) still surface as warnings.
-    Ingest {
-        /// Foreign recipe path (`meta.yaml`, `recipe.yaml`, or `package.py`)
+    /// Validate transport, executor, runtime, and EasyBuild workload routing.
+    Doctor {
+        #[arg(long = "config", required = true)]
+        configs: Vec<PathBuf>,
         #[arg(long)]
-        source: PathBuf,
-        /// Foreign format: `conda-forge`, `spack`, or `auto` (default)
-        #[arg(long, default_value = "auto", value_name = "FORMAT")]
-        format: String,
-        /// Target toolchain name for the scaffold (default: foss)
-        #[arg(long, default_value = "foss")]
-        toolchain_name: String,
-        /// Target toolchain version / generation (default: 2024a)
-        #[arg(long, default_value = "2024a")]
-        toolchain_version: String,
-        /// Robot easyconfig tree(s) for hierarchy-aware dep version resolve.
-        /// Repeatable; later paths win on conflict (site overlay).
-        #[arg(long, value_name = "DIR")]
-        easyconfigs: Vec<PathBuf>,
-        /// Keep residual foreign versions when the robot has no candidate.
-        #[arg(long)]
-        keep_old_deps: bool,
-        /// Optional hierarchy fixture JSON (escape hatch).
-        #[arg(long, value_name = "PATH")]
-        hierarchy_fixture: Option<PathBuf>,
-        /// Explicit output `.eb` path
-        #[arg(long, conflicts_with = "out_dir")]
-        out: Option<PathBuf>,
-        /// Output directory; writes letter/name/conventional basename layout
-        #[arg(long, conflicts_with = "out")]
-        out_dir: Option<PathBuf>,
-        /// Write residual work-queue JSON (default: next to the `.eb` as
-        /// `{stem}.residuals.json`). Machine-readable for residual agents;
-        /// never invents product configopts.
-        #[arg(long, value_name = "PATH")]
-        residual_queue: Option<PathBuf>,
-    },
-    /// Foreign recipe → intermediate package manifest + planned SBOM + build
-    /// config → optional resolvo joint co-select → mechanical new `.eb` or bump.
-    ///
-    /// This is the structured path: parsers produce a full IR, resolvo consumes
-    /// the robot universe + IR deps, and emit/bump uses the solved pins as the
-    /// manifest. Prefer over ad-hoc ingest when you want the plan JSON artifacts.
-    Plan {
-        /// Foreign recipe path (`meta.yaml`, `recipe.yaml`, or `package.py`)
-        #[arg(long)]
-        source: PathBuf,
-        /// Foreign format: `conda-forge`, `spack`, or `auto` (default)
-        #[arg(long, default_value = "auto", value_name = "FORMAT")]
-        format: String,
-        /// Target toolchain name (default: foss)
-        #[arg(long, default_value = "foss")]
-        toolchain_name: String,
-        /// Target toolchain version / generation (default: 2024a)
-        #[arg(long, default_value = "2024a")]
-        toolchain_version: String,
-        /// Robot easyconfig tree(s) for hierarchy + resolvo solve (repeatable)
-        #[arg(long, value_name = "DIR")]
-        easyconfigs: Vec<PathBuf>,
-        /// Keep residual foreign versions when the robot has no candidate
-        #[arg(long)]
-        keep_old_deps: bool,
-        /// Optional hierarchy fixture JSON
-        #[arg(long, value_name = "PATH")]
-        hierarchy_fixture: Option<PathBuf>,
-        /// Write intermediate plan JSON (package manifest + build config + optional solve)
-        #[arg(long, value_name = "PATH")]
-        manifest_out: Option<PathBuf>,
-        /// Write planned CycloneDX-like SBOM JSON (pre-build lifecycle)
-        #[arg(long, value_name = "PATH")]
-        sbom_out: Option<PathBuf>,
-        /// Explicit output `.eb` path (new recipe)
-        #[arg(long, conflicts_with = "out_dir")]
-        out: Option<PathBuf>,
-        /// Output directory for new recipe (letter/name layout)
-        #[arg(long, conflicts_with = "out")]
-        out_dir: Option<PathBuf>,
-        /// Existing `.eb` to bump from (uses solved dep pins + plan version)
-        #[arg(long, value_name = "PATH")]
-        bump_from: Option<PathBuf>,
-    },
-    /// Lint physical lines for EasyBuild pycodestyle E501 (max 120 columns).
-    ///
-    /// Exit 1 if any line is too long. Prefer `format-style` to fix mechanical
-    /// string-assignment and comment lines before residual judgment.
-    CheckStyle {
-        /// Easyconfig path(s)
-        #[arg(required = true)]
-        paths: Vec<PathBuf>,
-    },
-    /// Mechanically wrap long lines (E501) in easyconfig string assignments
-    /// and comments so `eb --check-contrib` style can pass without residual agents.
-    ///
-    /// Rewrites `key = '…'` / `key += "…"` into parenthesized adjacent string
-    /// literals and wraps `#` comments. Does **not** invent product flags.
-    FormatStyle {
-        /// Easyconfig path(s) to rewrite in place (or with `--out` for a single file)
-        #[arg(required = true)]
-        paths: Vec<PathBuf>,
-        /// Write the first path to this file instead of in-place (single path only)
-        #[arg(long)]
-        out: Option<PathBuf>,
-        /// Report only; do not write
-        #[arg(long)]
-        dry_run: bool,
+        target: String,
     },
 }
 
-fn parse_dep_overrides(deps: &[String]) -> Result<HashMap<String, String>> {
-    let mut map = HashMap::new();
-    for d in deps {
-        let Some((name, ver)) = d.split_once('=') else {
-            bail!("--dep expects NAME=VERSION, got {d:?}");
-        };
-        let name = name.trim();
-        let ver = ver.trim();
-        if name.is_empty() || ver.is_empty() {
-            bail!("--dep expects non-empty NAME=VERSION, got {d:?}");
-        }
-        map.insert(name.to_string(), ver.to_string());
-    }
-    Ok(map)
+#[derive(Subcommand, Debug)]
+enum CampaignCommand {
+    /// Start or resume a persisted package build campaign.
+    Run {
+        #[arg(long)]
+        bundle: PathBuf,
+        #[arg(long = "config", required = true)]
+        configs: Vec<PathBuf>,
+        #[arg(long)]
+        target: String,
+        #[arg(long)]
+        state: PathBuf,
+    },
+    /// Print persisted campaign state and claim ladder.
+    Status {
+        #[arg(long)]
+        state: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
-    match cli.cmd {
-        Cmd::Solve {
+    match Cli::parse().command {
+        Command::Package { command } => run_package(command),
+        Command::Recipe { command } => run_recipe(command),
+        Command::Stack { command } => run_stack(command),
+        Command::Target { command } => run_target(command),
+        Command::Campaign { command } => run_campaign(command),
+        Command::Mcp => eb_stack::mcp::serve_stdio().map_err(anyhow::Error::msg),
+    }
+}
+
+fn run_package(command: PackageCommand) -> Result<()> {
+    match command {
+        PackageCommand::Inspect(args) => {
+            let toolchain = toolchain(&args.toolchain_name, &args.toolchain_version);
+            let layers = load_profile_layers(&args.profile_configs)?;
+            let (plan, sbom) = inspect_new_package(
+                &args.source,
+                parse_format(&args.format)?,
+                &toolchain,
+                &layers,
+            )?;
+            let written = write_package_bundle(
+                &PackageBundle {
+                    plan,
+                    sbom,
+                    locks: Vec::new(),
+                    easyconfigs: Vec::new(),
+                },
+                &args.out_dir,
+            )?;
+            println!("manifest={}", written.manifest.display());
+            println!("sbom={}", written.sbom.display());
+            Ok(())
+        }
+        PackageCommand::Plan(args) => {
+            let toolchain = toolchain(
+                &args.inspect.toolchain_name,
+                &args.inspect.toolchain_version,
+            );
+            let stack_policy = load_stack_policy(&args.stack_policy)?;
+            let bundle = plan_new_package(&NewPackageRequest {
+                source: args.inspect.source,
+                format: parse_format(&args.inspect.format)?,
+                toolchain,
+                profile_layers: load_profile_layers(&args.inspect.profile_configs)?,
+                easyconfig_roots: args.easyconfigs,
+                stack_policy,
+            })?;
+            let written = write_package_bundle(&bundle, &args.inspect.out_dir)?;
+            println!("manifest={}", written.manifest.display());
+            println!("sbom={}", written.sbom.display());
+            for path in written.locks {
+                println!("lock={}", path.display());
+            }
+            for path in written.easyconfigs {
+                println!("easyconfig={}", path.display());
+            }
+            Ok(())
+        }
+        PackageCommand::Bump(args) => run_package_bump(args),
+    }
+}
+
+fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
+    let toolchain = toolchain(&args.toolchain_name, &args.toolchain_version);
+    let overrides = parse_dep_overrides(&args.dependencies)?;
+    let result = if let Some(easyconfigs) = args.easyconfigs.as_deref() {
+        emit_next_generation_auto_from_path_with_opts(
+            &args.source,
+            &toolchain,
+            args.version.clone(),
+            args.source_checksum.clone(),
+            easyconfigs,
+            args.hierarchy_fixture.as_deref(),
+            &overrides,
+            &AutoResolveOpts {
+                keep_old: args.keep_old_deps,
+                use_consensus: true,
+            },
+        )?
+    } else {
+        emit_next_generation_from_path(
+            &args.source,
+            &EmitParams {
+                toolchain: toolchain.clone(),
+                version: args.version.clone(),
+                dep_versions: overrides,
+                source_checksum: args.source_checksum.clone(),
+            },
+        )?
+    };
+    let destination = output_path(
+        args.out.as_deref(),
+        args.out_dir.as_deref(),
+        &result.filename,
+    );
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&destination, result.text)?;
+    println!("easyconfig={}", destination.display());
+    for warning in result.warnings {
+        eprintln!("warning={warning}");
+    }
+    Ok(())
+}
+
+fn run_recipe(command: RecipeCommand) -> Result<()> {
+    match command {
+        RecipeCommand::Check {
+            recipe,
+            easyconfigs,
+            require_configopts,
+            metadata_only,
+            scaffold_missing,
+        } => {
+            let resolved = resolve_easyconfig_file(&recipe).map_err(anyhow::Error::msg)?;
+            let required = require_configopts
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            let gate = packaging_gate(&resolved, &required);
+            if metadata_only {
+                if let Err(errors) = gate {
+                    bail!("packaging gate failed: {}", errors.join("; "));
+                }
+                println!("recipe metadata resolves");
+                return Ok(());
+            }
+            let roots = easyconfigs.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+            let tree = parse_easyconfig_trees(&roots).map_err(anyhow::Error::msg)?;
+            let check = check_recipe_deps(&resolved, &tree.candidates);
+            println!("{}", serde_json::to_string_pretty(&check)?);
+            if let Some(directory) = scaffold_missing.as_deref() {
+                scaffold_missing_companions(&check.missing, directory, &resolved.toolchain)
+                    .map_err(anyhow::Error::msg)?;
+            }
+            if let Err(errors) = gate {
+                bail!("packaging gate failed: {}", errors.join("; "));
+            }
+            if !check.ok() {
+                bail!("recipe has {} unresolved dependencies", check.missing.len());
+            }
+            println!("recipe resolves");
+            Ok(())
+        }
+        RecipeCommand::Lint { paths } => {
+            let mut findings = Vec::new();
+            for path in paths {
+                let text = std::fs::read_to_string(&path)
+                    .with_context(|| format!("read {}", path.display()))?;
+                findings.extend(lint_style(&text));
+            }
+            println!("{}", serde_json::to_string_pretty(&findings)?);
+            if !findings.is_empty() {
+                bail!("{} style findings", findings.len());
+            }
+            Ok(())
+        }
+        RecipeCommand::Format {
+            paths,
+            out,
+            dry_run,
+        } => {
+            if out.is_some() && paths.len() != 1 {
+                bail!("--out requires exactly one recipe path");
+            }
+            for (index, path) in paths.iter().enumerate() {
+                let destination = out.as_deref().filter(|_| index == 0);
+                let result = if dry_run {
+                    let text = std::fs::read_to_string(path)
+                        .with_context(|| format!("read {}", path.display()))?;
+                    format_style(&text)
+                } else {
+                    format_style_file(path, destination)?
+                };
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok(())
+        }
+    }
+}
+
+fn run_stack(command: StackCommand) -> Result<()> {
+    match command {
+        StackCommand::Solve {
             easyconfigs,
             policy,
             baseline_easyconfigs,
@@ -324,17 +413,14 @@ fn main() -> Result<()> {
             build_list_out,
             stack_diff_out,
         } => {
-            if easyconfigs.is_empty() {
-                bail!("at least one --easyconfigs path is required");
-            }
             let baseline = baseline_easyconfigs
-                .unwrap_or_else(|| easyconfigs[0].clone());
-            let roots: Vec<&std::path::Path> =
-                easyconfigs.iter().map(|p| p.as_path()).collect();
+                .as_deref()
+                .or_else(|| easyconfigs.first().map(PathBuf::as_path));
+            let roots = easyconfigs.iter().map(PathBuf::as_path).collect::<Vec<_>>();
             let lock = solve_from_easyconfigs_with_baseline_version_and_extras(
                 &roots,
                 &policy,
-                Some(&baseline),
+                baseline,
                 baseline_toolchain_version.as_deref(),
                 &lock_out,
                 sbom_out.as_deref(),
@@ -343,513 +429,123 @@ fn main() -> Result<()> {
                     stack_diff_out: stack_diff_out.as_deref(),
                 },
             )?;
-            let roots_disp = easyconfigs
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
             println!(
-                "parsed easyconfigs under [{}] -> lock {} ({} packages, engine={})",
-                roots_disp,
+                "lock={} packages={}",
                 lock_out.display(),
-                lock.packages.len(),
-                lock.solver.engine
+                lock.packages.len()
             );
-            if let Some(g) = lock.package("GROMACS") {
-                println!(
-                    "GROMACS {} (toolchain {}-{}) <- {}",
-                    g.version, g.toolchain.name, g.toolchain.version, g.easyconfig_path
-                );
-            }
-            for p in &lock.packages {
-                println!("  - {} {} ({})", p.name, p.version, p.easyconfig_path);
-            }
-            if let Some(p) = &sbom_out {
-                println!("planned SBOM {}", p.display());
-            }
-            if let Some(p) = &build_list_out {
-                println!("build list {}", p.display());
-            }
-            if let Some(p) = &stack_diff_out {
-                println!("stack diff {}", p.display());
-            }
+            Ok(())
         }
-        Cmd::Parse {
-            easyconfigs,
-            toolchain_name,
-            toolchain_version,
-        } => {
-            let tree = parse_easyconfig_tree(&easyconfigs).map_err(|e| anyhow::anyhow!(e))?;
-            if !tree.skipped.is_empty() {
-                eprintln!(
-                    "parse: skipped {} unparseable easyconfig(s) under {}",
-                    tree.skip_count(),
-                    easyconfigs.display()
-                );
-                for s in tree.skipped.iter().take(20) {
-                    eprintln!("  skip {}: {}", s.path, s.error);
-                }
-                if tree.skipped.len() > 20 {
-                    eprintln!("  ... and {} more", tree.skipped.len() - 20);
-                }
-            }
-            let mut cands = tree.candidates;
-            if let (Some(n), Some(v)) = (toolchain_name, toolchain_version) {
-                cands.retain(|c| c.toolchain.name == n && c.toolchain.version == v);
-            }
-            println!("{}", serde_json::to_string_pretty(&cands)?);
-        }
-        Cmd::CheckRecipe {
-            recipe,
-            easyconfigs,
-            require_configopts,
-            metadata_only,
-            scaffold_missing,
-        } => {
-            let resolved =
-                resolve_easyconfig_file(&recipe).map_err(|e| anyhow::anyhow!(e))?;
-            let reqs: Vec<&str> = require_configopts.iter().map(String::as_str).collect();
-            let gate = packaging_gate(&resolved, &reqs);
-            if !metadata_only {
-                let roots: Vec<&std::path::Path> =
-                    easyconfigs.iter().map(|p| p.as_path()).collect();
-                let tree = parse_easyconfig_trees(&roots).map_err(|e| anyhow::anyhow!(e))?;
-                if !tree.skipped.is_empty() {
-                    eprintln!(
-                        "robot parse: skipped {} ({:.1}% coverage)",
-                        tree.skip_count(),
-                        100.0 * tree.coverage()
-                    );
-                }
-                let check = check_recipe_deps(&resolved, &tree.candidates);
-                println!("{}", serde_json::to_string_pretty(&check)?);
-                if let Err(errs) = &gate {
-                    for e in errs {
-                        eprintln!("packaging-gate: {e}");
-                    }
-                }
-                if !check.ok() {
-                    for m in &check.missing {
-                        eprintln!(
-                            "missing-dep [{}] {} {}: {}",
-                            m.role, m.name, m.version, m.reason
-                        );
-                    }
-                    if let Some(dir) = scaffold_missing.as_ref() {
-                        let written = scaffold_missing_companions(
-                            &check.missing,
-                            dir,
-                            &resolved.toolchain,
-                        )
-                        .map_err(|e| anyhow::anyhow!(e))?;
-                        for s in &written {
-                            if s.skipped_existing {
-                                eprintln!(
-                                    "scaffold-skip: {} (exists)",
-                                    s.path
-                                );
-                            } else {
-                                eprintln!(
-                                    "scaffold-write: {} [{}/{} {}]",
-                                    s.path, s.role, s.name, s.version
-                                );
-                            }
-                        }
-                        eprintln!(
-                            "scaffold: {} companion path(s) under {} — fill sources/checksums then re-run check-recipe",
-                            written.len(),
-                            dir.display()
-                        );
-                    }
-                    bail!(
-                        "check-recipe failed: {} missing dep(s), packaging_gate={}",
-                        check.missing.len(),
-                        gate.is_ok()
-                    );
-                }
-                if gate.is_err() {
-                    bail!(
-                        "check-recipe failed: packaging_gate failed (deps complete)"
-                    );
-                }
-                eprintln!(
-                    "check-recipe OK: {} {} ({}) easyblock={:?} moduleclass={:?} checksums={} found={}",
-                    check.name,
-                    check.version,
-                    check.toolchain.label(),
-                    check.easyblock,
-                    check.moduleclass,
-                    check.checksum_count,
-                    check.found.len()
-                );
-            } else if let Err(errs) = gate {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "name": resolved.name,
-                        "version": resolved.version,
-                        "toolchain": resolved.toolchain,
-                        "easyblock": resolved.easyblock,
-                        "configopts": resolved.configopts,
-                        "moduleclass": resolved.moduleclass,
-                        "checksums": resolved.checksums,
-                        "homepage": resolved.homepage,
-                    }))?
-                );
-                for e in &errs {
-                    eprintln!("packaging-gate: {e}");
-                }
-                bail!("check-recipe metadata-only failed: {} issue(s)", errs.len());
-            } else {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "name": resolved.name,
-                        "version": resolved.version,
-                        "toolchain": resolved.toolchain,
-                        "easyblock": resolved.easyblock,
-                        "configopts": resolved.configopts,
-                        "moduleclass": resolved.moduleclass,
-                        "checksums": resolved.checksums,
-                        "homepage": resolved.homepage,
-                    }))?
-                );
-                eprintln!("check-recipe metadata OK");
-            }
-        }
-        Cmd::SolveJson {
-            universe,
-            policy,
-            baseline,
-            lock_out,
-            sbom_out,
-            build_list_out,
-            stack_diff_out,
-        } => {
-            let lock = solve_to_files_with_extras(
-                &universe,
-                &policy,
-                baseline.as_deref(),
-                &lock_out,
-                sbom_out.as_deref(),
-                SolveExtraOut {
-                    build_list_out: build_list_out.as_deref(),
-                    stack_diff_out: stack_diff_out.as_deref(),
-                },
-            )?;
-            println!(
-                "solve-json universe {} policy {} -> lock {} ({} packages, engine={})",
-                universe.display(),
-                policy.display(),
-                lock_out.display(),
-                lock.packages.len(),
-                lock.solver.engine
-            );
-            if let Some(g) = lock.package("GROMACS") {
-                println!(
-                    "GROMACS {} (toolchain {}-{}) <- {}",
-                    g.version, g.toolchain.name, g.toolchain.version, g.easyconfig_path
-                );
-            }
-            for p in &lock.packages {
-                println!("  - {} {} ({})", p.name, p.version, p.easyconfig_path);
-            }
-            if let Some(p) = &sbom_out {
-                println!("planned SBOM {}", p.display());
-            }
-            if let Some(p) = &build_list_out {
-                println!("build list {}", p.display());
-            }
-            if let Some(p) = &stack_diff_out {
-                println!("stack diff {}", p.display());
-            }
-        }
-        Cmd::Sbom { lock, out } => {
+        StackCommand::Sbom { lock, out } => {
             let lock: StackLock = load_json_file(&lock)?;
             let sbom = lock_to_cyclonedx(&lock);
-            eb_stack::write_json_pretty(&out, &sbom)?;
-            println!("wrote {}", out.display());
-        }
-        Cmd::Bump {
-            source,
-            toolchain_name,
-            toolchain_version,
-            version,
-            source_checksum,
-            deps,
-            easyconfigs,
-            hierarchy_fixture,
-            keep_old_deps,
-            out_dir,
-            out,
-        } => {
-            let toolchain = Toolchain {
-                name: toolchain_name,
-                version: toolchain_version,
-            };
-            let hand = parse_dep_overrides(&deps)?;
-            let result = if let Some(ec_dir) = easyconfigs {
-                emit_next_generation_auto_from_path_with_opts(
-                    &source,
-                    &toolchain,
-                    &ec_dir,
-                    None,
-                    hierarchy_fixture.as_deref(),
-                    &hand,
-                    version,
-                    source_checksum,
-                    &AutoResolveOpts {
-                        keep_old: keep_old_deps,
-                    },
-                )
-                .with_context(|| {
-                    format!(
-                        "bump {} with auto-resolve from {}",
-                        source.display(),
-                        ec_dir.display()
-                    )
-                })?
-            } else {
-                let params = EmitParams {
-                    toolchain,
-                    version,
-                    dep_versions: hand,
-                    source_checksum,
-                };
-                emit_next_generation_from_path(&source, &params)
-                    .with_context(|| format!("bump {}", source.display()))?
-            };
-            for w in &result.warnings {
-                eprintln!("WARNING: {w}");
-            }
-            let dest = if let Some(path) = out {
-                path
-            } else if let Some(dir) = out_dir {
-                std::fs::create_dir_all(&dir)
-                    .with_context(|| format!("create out-dir {}", dir.display()))?;
-                dir.join(&result.filename)
-            } else {
-                // Default: write beside CWD using conventional name.
-                PathBuf::from(&result.filename)
-            };
-            if let Some(parent) = dest.parent() {
-                if !parent.as_os_str().is_empty() {
-                    std::fs::create_dir_all(parent)
-                        .with_context(|| format!("create parent {}", parent.display()))?;
-                }
-            }
-            std::fs::write(&dest, &result.text)
-                .with_context(|| format!("write {}", dest.display()))?;
-            println!("wrote {} (from {})", dest.display(), source.display());
-        }
-        Cmd::Mcp => {
-            let stdin = std::io::stdin();
-            let stdout = std::io::stdout();
-            eb_stack::mcp::run_server(stdin.lock(), stdout.lock())
-                .context("mcp stdio server")?;
-        }
-        Cmd::Plan {
-            source,
-            format,
-            toolchain_name,
-            toolchain_version,
-            easyconfigs,
-            keep_old_deps,
-            hierarchy_fixture,
-            manifest_out,
-            sbom_out,
-            out,
-            out_dir,
-            bump_from,
-        } => {
-            let fmt = match format.to_ascii_lowercase().as_str() {
-                "auto" => None,
-                "conda" | "conda-forge" | "cf" => Some(ForeignFormat::CondaForge),
-                "spack" => Some(ForeignFormat::Spack),
-                other => bail!(
-                    "unknown --format {other:?}; expected auto, conda-forge, or spack"
-                ),
-            };
-            let toolchain = Toolchain {
-                name: toolchain_name,
-                version: toolchain_version,
-            };
-            let opts = IngestOpts {
-                easyconfigs: easyconfigs.clone(),
-                keep_old_deps,
-                hierarchy_fixture,
-            };
-            let (plan, eb_path) = plan_and_emit(
-                &source,
-                fmt,
-                &toolchain,
-                &opts,
-                manifest_out.as_deref(),
-                sbom_out.as_deref(),
-                out.as_deref(),
-                out_dir.as_deref(),
-                bump_from.as_deref(),
-            )
-            .with_context(|| format!("plan {}", source.display()))?;
-            println!(
-                "plan {}-{} origin={} coverage={:.1}% extracted={} residual={}",
-                plan.package.name,
-                plan.package.version,
-                plan.package.origin.as_str(),
-                100.0 * plan.package.coverage.ratio(),
-                plan.package.coverage.extracted_count(),
-                plan.package.coverage.residual_count(),
-            );
-            if let Some(s) = &plan.solved {
-                println!(
-                    "solved {} dep pin(s); {}",
-                    s.dep_versions.len(),
-                    s.engine_note
-                );
-            } else if !easyconfigs.is_empty() {
-                println!("solve: no pins written (check robot / keep_old_deps)");
-            } else {
-                println!("solve: skipped (pass --easyconfigs for resolvo)");
-            }
-            if let Some(p) = &manifest_out {
-                println!("manifest {}", p.display());
-            }
-            if let Some(p) = &sbom_out {
-                println!("planned SBOM {}", p.display());
-            }
-            if let Some(p) = eb_path {
-                println!("easyconfig {}", p.display());
-            }
-            for n in plan.package.notes.iter().take(12) {
-                println!("note: {n}");
-            }
-        }
-        Cmd::Ingest {
-            source,
-            format,
-            toolchain_name,
-            toolchain_version,
-            easyconfigs,
-            keep_old_deps,
-            hierarchy_fixture,
-            out,
-            out_dir,
-            residual_queue,
-        } => {
-            let fmt = match format.to_ascii_lowercase().as_str() {
-                "auto" => None,
-                "conda" | "conda-forge" | "cf" => Some(ForeignFormat::CondaForge),
-                "spack" => Some(ForeignFormat::Spack),
-                other => bail!(
-                    "unknown --format {other:?}; expected auto, conda-forge, or spack"
-                ),
-            };
-            let toolchain = Toolchain {
-                name: toolchain_name,
-                version: toolchain_version,
-            };
-            let opts = IngestOpts {
-                easyconfigs,
-                keep_old_deps,
-                hierarchy_fixture,
-            };
-            let result =
-                ingest_foreign_to_easyconfig_with_opts(&source, fmt, &toolchain, &opts)
-                    .with_context(|| format!("ingest {}", source.display()))?;
-            for w in &result.warnings {
-                eprintln!("WARNING: {w}");
-            }
-            let dest = write_ingest_result_with_queue(
-                &result,
-                &toolchain,
-                out.as_deref(),
-                out_dir.as_deref(),
-                residual_queue.as_deref(),
-            )
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-            let queue_path = residual_queue.clone().unwrap_or_else(|| {
-                let mut p = dest.clone();
-                let stem = p
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("scaffold");
-                p.set_file_name(format!("{stem}.residuals.json"));
-                p
-            });
-            let n_items = residual_queue_from_ingest(&result, &toolchain).items.len();
-            println!(
-                "wrote {} (from {} as {})",
-                dest.display(),
-                source.display(),
-                result.recipe.format.as_str()
-            );
-            println!(
-                "residual-queue {} ({} item(s); not a landable PR — finish with eb + judgment)",
-                queue_path.display(),
-                n_items
-            );
-        }
-        Cmd::CheckStyle { paths } => {
-            let mut n_fail = 0usize;
-            for p in &paths {
-                let text = std::fs::read_to_string(p)
-                    .with_context(|| format!("read {}", p.display()))?;
-                let findings = lint_style(&text);
-                if findings.is_empty() {
-                    println!("check-style OK: {}", p.display());
-                } else {
-                    n_fail += findings.len();
-                    for f in &findings {
-                        println!("{}:{}:{}: {} {}", p.display(), f.line, f.column, f.code, f.message);
-                    }
-                    let mech = findings.iter().filter(|f| f.mechanical).count();
-                    eprintln!(
-                        "check-style FAIL: {} ({} finding(s), {} mechanical — run format-style)",
-                        p.display(),
-                        findings.len(),
-                        mech
-                    );
-                }
-            }
-            if n_fail > 0 {
-                bail!("check-style: {n_fail} E501 finding(s)");
-            }
-        }
-        Cmd::FormatStyle {
-            paths,
-            out,
-            dry_run,
-        } => {
-            if out.is_some() && paths.len() != 1 {
-                bail!("--out requires exactly one path");
-            }
-            for p in &paths {
-                let text = std::fs::read_to_string(p)
-                    .with_context(|| format!("read {}", p.display()))?;
-                let before = lint_style(&text).len();
-                if dry_run {
-                    let r = eb_stack::format_style(&text);
-                    println!(
-                        "format-style dry-run {}: would rewrite {} line(s); remaining E501={}",
-                        p.display(),
-                        r.lines_rewritten,
-                        r.remaining.len()
-                    );
-                    continue;
-                }
-                let r = format_style_file(p, out.as_deref())
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
-                println!(
-                    "format-style {}: rewrote {} line(s); remaining E501={} (was {before})",
-                    out.as_ref().unwrap_or(p).display(),
-                    r.lines_rewritten,
-                    r.remaining.len()
-                );
-                for f in &r.remaining {
-                    eprintln!("  remaining L{}: {}", f.line, f.message);
-                }
-            }
+            write_json_pretty(&out, &sbom)?;
+            println!("sbom={}", out.display());
+            Ok(())
         }
     }
-    Ok(())
+}
+
+fn run_target(command: TargetCommand) -> Result<()> {
+    match command {
+        TargetCommand::List { configs } => {
+            bail!(
+                "target configuration is not loaded by this build: {}",
+                display_paths(&configs)
+            )
+        }
+        TargetCommand::Doctor { configs, target } => {
+            bail!(
+                "target {target} cannot be checked before loading: {}",
+                display_paths(&configs)
+            )
+        }
+    }
+}
+
+fn run_campaign(command: CampaignCommand) -> Result<()> {
+    match command {
+        CampaignCommand::Run {
+            bundle,
+            configs,
+            target,
+            state,
+        } => bail!(
+            "campaign target {target} is not loaded from {} (bundle={}, state={})",
+            display_paths(&configs),
+            bundle.display(),
+            state.display()
+        ),
+        CampaignCommand::Status { state } => {
+            let value: serde_json::Value = load_json_file(&state)?;
+            println!("{}", serde_json::to_string_pretty(&value)?);
+            Ok(())
+        }
+    }
+}
+
+fn parse_format(value: &str) -> Result<Option<ForeignFormat>> {
+    match value {
+        "auto" => Ok(None),
+        "conda-forge" | "conda" => Ok(Some(ForeignFormat::CondaForge)),
+        "spack" => Ok(Some(ForeignFormat::Spack)),
+        _ => bail!("--format must be auto, conda-forge, or spack"),
+    }
+}
+
+fn load_profile_layers(paths: &[PathBuf]) -> Result<Vec<ProfileConfigLayer>> {
+    paths
+        .iter()
+        .map(|path| {
+            ProfileConfigLayer::from_path(path)
+                .with_context(|| format!("load profile config {}", path.display()))
+        })
+        .collect()
+}
+
+fn load_stack_policy(path: &Path) -> Result<StackPolicy> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("read stack policy {}", path.display()))?;
+    if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
+        serde_json::from_str(&text)
+            .with_context(|| format!("parse stack policy JSON {}", path.display()))
+    } else {
+        toml::from_str(&text).with_context(|| format!("parse stack policy TOML {}", path.display()))
+    }
+}
+
+fn parse_dep_overrides(values: &[String]) -> Result<HashMap<String, String>> {
+    let mut dependencies = HashMap::new();
+    for value in values {
+        let Some((name, version)) = value.split_once('=') else {
+            bail!("--dep expects NAME=VERSION, got {value:?}");
+        };
+        if name.trim().is_empty() || version.trim().is_empty() {
+            bail!("--dep expects non-empty NAME=VERSION, got {value:?}");
+        }
+        dependencies.insert(name.trim().to_string(), version.trim().to_string());
+    }
+    Ok(dependencies)
+}
+
+fn toolchain(name: &str, version: &str) -> Toolchain {
+    Toolchain {
+        name: name.to_string(),
+        version: version.to_string(),
+    }
+}
+
+fn output_path(explicit: Option<&Path>, directory: Option<&Path>, filename: &str) -> PathBuf {
+    explicit
+        .map(Path::to_path_buf)
+        .or_else(|| directory.map(|directory| directory.join(filename)))
+        .unwrap_or_else(|| PathBuf::from(filename))
+}
+
+fn display_paths(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(",")
 }
