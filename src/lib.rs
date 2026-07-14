@@ -9,6 +9,7 @@ pub mod foreign;
 pub mod hierarchy;
 pub mod manifest;
 pub mod mcp;
+pub mod package;
 pub mod report;
 pub mod resolvo_provider;
 pub mod sbom;
