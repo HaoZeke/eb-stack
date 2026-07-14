@@ -326,7 +326,7 @@ pub(crate) fn canonicalize_eb_package_name(name: &str) -> String {
         "eon" => "eOn".into(),
         "gromacs" => "GROMACS".into(),
         "lammps" => "LAMMPS".into(),
-        "python" | "pip" | "setuptools" => "Python".into(),
+        "python" => "Python".into(),
         "cmake" => "CMake".into(),
         "boost" => "Boost".into(),
         "hdf5" => "HDF5".into(),
@@ -344,7 +344,7 @@ pub(crate) fn canonicalize_eb_package_name(name: &str) -> String {
 /// Map a foreign dependency name to an EasyBuild-style package name.
 pub(crate) fn map_dep_name_to_eb(name: &str) -> String {
     match name.to_ascii_lowercase().as_str() {
-        "python" => "Python".into(),
+        "python" | "pip" | "setuptools" => "Python".into(),
         "cmake" => "CMake".into(),
         "ninja" => "Ninja".into(),
         "meson" => "Meson".into(),
