@@ -52,6 +52,7 @@ fn qmcpack_plan() -> PackagePlan {
             virtual_capability: None,
             provenance: vec![provenance(181, "depends_on(\"hdf5+mpi\", when=\"+phdf5\")")],
         }],
+        rules: Vec::new(),
         build: BuildSpec {
             toolchain: Toolchain {
                 name: "foss".into(),
