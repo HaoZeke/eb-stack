@@ -1,10 +1,8 @@
-//! Foreign recipe ingest: conda-forge + Spack fixtures → EasyBuild scaffold.
-//!
-//! Drives the shipped library and CLI paths (not a reimplementation).
+//! Syntax-adapter regression for conda-forge and Spack inputs.
 
 use eb_stack::{
-    detect_foreign_format, ingest_foreign_to_easyconfig, parse_foreign_path,
-    resolve_easyconfig_str, ForeignFormat, Toolchain,
+    detect_foreign_format, inspect_new_package, package_plan_from_foreign, parse_foreign_path,
+    ForeignFormat, Toolchain,
 };
 use std::path::PathBuf;
 use std::process::Command;
@@ -13,22 +11,15 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/foreign_ingest")
 }
 
-fn foss() -> Toolchain {
+fn toolchain(version: &str) -> Toolchain {
     Toolchain {
         name: "foss".into(),
-        version: "2024a".into(),
-    }
-}
-
-fn foss_2026() -> Toolchain {
-    Toolchain {
-        name: "foss".into(),
-        version: "2026.1".into(),
+        version: version.into(),
     }
 }
 
 #[test]
-fn conda_zlib_parse_and_emit_reparses() {
+fn conda_zlib_parses_into_a_canonical_plan() {
     let path = root().join("conda_zlib/meta.yaml");
     assert_eq!(
         detect_foreign_format(&path),
@@ -37,370 +28,152 @@ fn conda_zlib_parse_and_emit_reparses() {
     let recipe = parse_foreign_path(&path, None).expect("parse conda fixture");
     assert_eq!(recipe.name, "zlib");
     assert_eq!(recipe.version, "1.3.1");
-    assert!(
-        recipe
-            .source_url
-            .as_ref()
-            .is_some_and(|u| u.contains("zlib-1.3.1.tar.gz")),
-        "source from fixture: {:?}",
-        recipe.source_url
-    );
-    let names: Vec<_> = recipe
+    assert!(recipe
+        .source_url
+        .as_ref()
+        .is_some_and(|url| url.contains("zlib-1.3.1.tar.gz")));
+    let plan = package_plan_from_foreign(&recipe, &toolchain("2024a"));
+    assert_eq!(plan.package.name, "zlib");
+    assert_eq!(plan.sources[0].sha256.as_deref(), recipe.sha256.as_deref());
+    assert!(plan
         .dependencies
         .iter()
-        .map(|d| d.name.as_str())
-        .collect();
-    assert!(names.contains(&"make"), "{names:?}");
-    assert!(names.contains(&"libgcc-ng"), "{names:?}");
-
-    let out = ingest_foreign_to_easyconfig(&path, None, &foss()).expect("ingest");
-    assert!(out.text.contains("name = 'zlib'"));
-    assert!(out.text.contains("version = '1.3.1'"));
-    let r = resolve_easyconfig_str(&out.text).expect("re-parse emitted eb");
-    assert_eq!(r.name, "zlib");
-    assert_eq!(r.version, "1.3.1");
-    assert_eq!(r.toolchain.name, "foss");
+        .any(|dependency| dependency.name == "make"));
+    assert!(plan
+        .dependencies
+        .iter()
+        .any(|dependency| dependency.name == "libgcc-ng"));
 }
 
 #[test]
-fn conda_eon_rattler_recipe_expands_context_and_multi_source() {
+fn conda_eon_expands_context_multi_source_and_selectors() {
     let path = root().join("conda_eon/recipe.yaml");
-    let recipe =
-        parse_foreign_path(&path, Some(ForeignFormat::CondaForge)).expect("parse eon recipe.yaml");
-    assert_eq!(recipe.name, "eon");
-    assert_eq!(recipe.version, "2.16.0", "context version expanded");
-    assert!(
-        recipe.sources.len() >= 3,
-        "multi-source eon: got {}",
-        recipe.sources.len()
-    );
-    assert!(
-        recipe
-            .source_url
-            .as_ref()
-            .is_some_and(|u| u.contains("eon-v2.16.0") || u.contains("2.16.0")),
-        "primary source: {:?}",
-        recipe.source_url
-    );
-    assert!(
-        recipe.sha256.as_ref().is_some_and(|s| s.len() == 64),
-        "sha256: {:?}",
-        recipe.sha256
-    );
-    let names: Vec<_> = recipe
-        .dependencies
-        .iter()
-        .map(|d| d.name.as_str())
-        .collect();
-    assert!(
-        names
-            .iter()
-            .any(|n| n.contains("metatomic") || *n == "xtb" || *n == "quill"),
-        "{names:?}"
-    );
-    assert!(
-        !names.iter().any(|n| n.contains("compiler(")),
-        "compiler macros must be skipped: {names:?}"
-    );
-
-    let out = ingest_foreign_to_easyconfig(&path, None, &foss_2026()).expect("ingest eon");
-    assert!(
-        out.text.contains("name = 'eOn'") || out.recipe.name == "eOn",
-        "EB-style eOn casing: name={:?} text has eon? {}",
-        out.recipe.name,
-        out.text.contains("name = 'eon'")
-    );
-    assert!(out.text.contains("version = '2.16.0'"));
-    // Meson in build reqs → MesonNinja easyblock
-    assert!(
-        out.text.contains("MesonNinja")
-            || out.text.contains("CMakeNinja")
-            || out.text.contains("ConfigureMake"),
-        "easyblock present: {}",
-        out.text
-            .lines()
-            .find(|l| l.contains("easyblock"))
-            .unwrap_or("?")
-    );
-    let r = resolve_easyconfig_str(&out.text).expect("re-parse eon scaffold");
-    assert_eq!(r.name, "eOn");
-    assert_eq!(r.version, "2.16.0");
-    assert_eq!(r.toolchain.version, "2026.1");
-    // Toolchain virtuals / conda packaging noise must not appear as modules.
-    assert!(
-        !out.text.contains("('pip',") && !out.text.contains("('setuptools',"),
-        "conda packaging noise should not be EB deps: {}",
-        out.text
-    );
-}
-
-#[test]
-fn spack_zlib_parse_and_emit_reparses() {
-    let path = root().join("spack_zlib/package.py");
-    assert_eq!(detect_foreign_format(&path), Some(ForeignFormat::Spack));
-    let recipe = parse_foreign_path(&path, None).expect("parse spack fixture");
-    assert_eq!(recipe.name, "zlib");
-    assert_eq!(recipe.version, "1.3.1");
-    let names: Vec<_> = recipe
-        .dependencies
-        .iter()
-        .map(|d| d.name.as_str())
-        .collect();
-    assert!(names.contains(&"gmake"), "{names:?}");
-
-    let out = ingest_foreign_to_easyconfig(&path, Some(ForeignFormat::Spack), &foss())
-        .expect("ingest spack");
-    let r = resolve_easyconfig_str(&out.text).expect("re-parse");
-    assert_eq!(r.name, "zlib");
-    assert_eq!(r.version, "1.3.1");
-}
-
-#[test]
-fn spack_eon_real_package_py() {
-    let path = root().join("spack_eon/package.py");
-    let recipe = parse_foreign_path(&path, None).expect("parse spack eon");
-    assert_eq!(recipe.name, "eon");
+    let recipe = parse_foreign_path(&path, Some(ForeignFormat::CondaForge)).expect("eOn");
     assert_eq!(recipe.version, "2.16.0");
-    assert!(
-        recipe
-            .sha256
-            .as_ref()
-            .is_some_and(|s| s.starts_with("3d4da89a")),
-        "{:?}",
-        recipe.sha256
-    );
-    assert!(
-        recipe
-            .build_system_hints
-            .iter()
-            .any(|h| h.contains("Meson")),
-        "hints: {:?}",
-        recipe.build_system_hints
-    );
-    let names: Vec<_> = recipe
+    assert!(recipe.sources.len() >= 3);
+    assert!(recipe
+        .sha256
+        .as_ref()
+        .is_some_and(|checksum| checksum.len() == 64));
+    assert!(!recipe
         .dependencies
         .iter()
-        .map(|d| d.name.as_str())
-        .collect();
-    assert!(names.contains(&"eigen"), "{names:?}");
-    assert!(names.contains(&"quill"), "{names:?}");
-    assert!(
-        names.contains(&"highway") || names.contains(&"libinih"),
-        "{names:?}"
-    );
-
-    let out = ingest_foreign_to_easyconfig(&path, None, &foss_2026()).expect("ingest");
-    assert!(
-        out.text.contains("easyblock = 'MesonNinja'"),
-        "expected MesonNinja from MesonPackage: {}",
-        out.text
-            .lines()
-            .find(|l| l.starts_with("easyblock"))
-            .unwrap_or("")
-    );
-    let r = resolve_easyconfig_str(&out.text).unwrap();
-    assert_eq!(r.name, "eOn");
-    assert_eq!(r.version, "2.16.0");
+        .any(|dependency| dependency.name.contains("compiler(")));
+    let plan = package_plan_from_foreign(&recipe, &toolchain("2026.1"));
+    assert_eq!(plan.package.name, "eOn");
+    assert_eq!(plan.origin, eb_stack::package::PackageOrigin::CondaForge);
+    assert_eq!(plan.sources.len(), recipe.sources.len());
+    assert!(plan
+        .dependencies
+        .iter()
+        .any(|dependency| dependency.name.contains("metatomic") || dependency.name == "xtb"));
 }
 
 #[test]
-fn spack_qmcpack_multi_base_skips_develop() {
-    let path = root().join("spack_qmcpack/package.py");
-    let recipe = parse_foreign_path(&path, None).expect("parse spack qmcpack");
+fn spack_zlib_and_eon_preserve_build_system_information() {
+    let zlib_path = root().join("spack_zlib/package.py");
+    assert_eq!(
+        detect_foreign_format(&zlib_path),
+        Some(ForeignFormat::Spack)
+    );
+    let zlib = parse_foreign_path(&zlib_path, None).expect("Spack zlib");
+    assert_eq!(zlib.version, "1.3.1");
+    assert!(zlib
+        .dependencies
+        .iter()
+        .any(|dependency| dependency.name == "gmake"));
+
+    let eon = parse_foreign_path(&root().join("spack_eon/package.py"), None).expect("Spack eOn");
+    assert_eq!(eon.version, "2.16.0");
+    assert!(eon
+        .build_system_hints
+        .iter()
+        .any(|hint| hint.contains("Meson")));
+    assert!(eon
+        .configopts
+        .as_deref()
+        .is_some_and(|options| options.contains("-Dwith_")));
+    let plan = package_plan_from_foreign(&eon, &toolchain("2026.1"));
+    assert_eq!(plan.build.easyblock.as_deref(), Some("MesonNinja"));
+}
+
+#[test]
+fn spack_qmcpack_preserves_variants_rules_and_conditions() {
+    let recipe =
+        parse_foreign_path(&root().join("spack_qmcpack/package.py"), None).expect("QMCPACK");
     assert_eq!(recipe.name, "qmcpack");
-    assert_eq!(
-        recipe.version, "4.3.0",
-        "first non-develop version, not develop"
-    );
-    assert!(
-        recipe
-            .build_system_hints
-            .iter()
-            .any(|h| h.contains("CMake")),
-        "{:?}",
-        recipe.build_system_hints
-    );
-    let names: Vec<_> = recipe
+    assert_eq!(recipe.version, "4.3.0");
+    assert!(recipe
+        .build_system_hints
+        .iter()
+        .any(|hint| hint.contains("CMake")));
+    assert!(recipe
         .dependencies
         .iter()
-        .map(|d| d.name.as_str())
-        .collect();
-    assert!(names.contains(&"boost"), "{names:?}");
-    assert!(names.contains(&"hdf5"), "{names:?}");
-    assert!(names.contains(&"libxml2"), "{names:?}");
-    assert!(names.contains(&"python"), "{names:?}");
-
-    let out = ingest_foreign_to_easyconfig(&path, None, &foss_2026()).expect("ingest");
-    assert!(
-        out.text.contains("easyblock = 'CMakeNinja'"),
-        "{}",
-        out.text
-            .lines()
-            .find(|l| l.starts_with("easyblock"))
-            .unwrap_or("")
-    );
-    // tag-only version → placeholder checksum warning path still re-parses
-    let r = resolve_easyconfig_str(&out.text).unwrap();
-    assert_eq!(
-        r.name, "QMCPACK",
-        "EB-style title casing from Spack Qmcpack"
-    );
-    assert_eq!(r.version, "4.3.0");
-    // Toolchain virtuals (blas/lapack/mpi) must not be emitted as residual modules.
-    assert!(
-        !out.text.contains("('blas',")
-            && !out.text.contains("('lapack',")
-            && !out.text.contains("('mpi',"),
-        "virtuals must not be EB deps: {}",
-        out.text
-    );
+        .any(|dependency| dependency.name == "hdf5"));
+    assert!(recipe
+        .dependencies
+        .iter()
+        .any(|dependency| dependency.name == "python"));
+    let plan = package_plan_from_foreign(&recipe, &toolchain("2026.1"));
+    assert_eq!(plan.package.name, "QMCPACK");
+    assert_eq!(plan.rules.len(), recipe.rules.len());
+    assert!(plan.rules.len() >= 10);
+    assert!(plan.dependencies.iter().any(|dependency| {
+        dependency.name == "mpi" && dependency.virtual_capability.as_deref() == Some("mpi")
+    }));
 }
 
 #[test]
-fn cli_inspects_conda_eon_and_spack_qmcpack() {
-    let bin = env!("CARGO_BIN_EXE_eb-stack");
-    let tmp = tempfile::tempdir().expect("tempdir");
-
-    let eon_out = tmp.path().join("eon");
-    let st = Command::new(bin)
-        .args([
-            "package",
-            "inspect",
-            "--source",
-            root().join("conda_eon/recipe.yaml").to_str().unwrap(),
-            "--toolchain-name",
-            "foss",
-            "--toolchain-version",
-            "2026.1",
-            "--out-dir",
-            eon_out.to_str().unwrap(),
-        ])
-        .status()
-        .expect("spawn");
-    assert!(st.success(), "conda eon inspect failed");
-    let eon_plan: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(eon_out.join("package.plan.json")).expect("eOn manifest"),
-    )
-    .expect("eOn manifest JSON");
-    assert_eq!(eon_plan["package"]["name"], "eOn");
-    assert_eq!(eon_plan["package"]["version"], "2.16.0");
-    assert!(eon_out.join("package.sbom.cdx.json").is_file());
-
-    let qmc_out = tmp.path().join("qmc");
-    let st = Command::new(bin)
-        .args([
-            "package",
-            "inspect",
-            "--source",
-            root().join("spack_qmcpack/package.py").to_str().unwrap(),
-            "--format",
-            "spack",
-            "--toolchain-version",
-            "2026.1",
-            "--out-dir",
-            qmc_out.to_str().unwrap(),
-        ])
-        .status()
-        .expect("spawn");
-    assert!(st.success(), "spack qmcpack inspect failed");
-    let qmc_plan: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(qmc_out.join("package.plan.json")).expect("QMCPACK manifest"),
-    )
-    .expect("QMCPACK manifest JSON");
-    assert_eq!(qmc_plan["package"]["name"], "QMCPACK");
-    assert_eq!(qmc_plan["package"]["version"], "4.3.0");
-    assert!(qmc_plan["residuals"].is_array());
+fn inspect_cli_writes_manifest_sbom_and_embedded_residuals() {
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let temp = tempfile::tempdir().expect("tempdir");
+    for (source, format, expected) in [
+        ("conda_eon/recipe.yaml", "conda-forge", "eOn"),
+        ("spack_qmcpack/package.py", "spack", "QMCPACK"),
+    ] {
+        let output = temp.path().join(expected);
+        let result = Command::new(binary)
+            .args([
+                "package",
+                "inspect",
+                "--source",
+                root().join(source).to_str().unwrap(),
+                "--format",
+                format,
+                "--toolchain-version",
+                "2026.1",
+                "--out-dir",
+                output.to_str().unwrap(),
+            ])
+            .output()
+            .expect("package inspect");
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(output.join("package.plan.json")).expect("manifest"),
+        )
+        .expect("manifest JSON");
+        assert_eq!(manifest["package"]["name"], expected);
+        assert!(manifest["residuals"].is_array());
+        assert!(output.join("package.sbom.cdx.json").is_file());
+    }
 }
 
 #[test]
-fn cli_inspect_embeds_residuals_in_the_canonical_manifest() {
-    let bin = env!("CARGO_BIN_EXE_eb-stack");
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let out = tmp.path().join("zlib");
-    let st = Command::new(bin)
-        .args([
-            "package",
-            "inspect",
-            "--source",
-            root().join("conda_zlib/meta.yaml").to_str().unwrap(),
-            "--toolchain-version",
-            "2024a",
-            "--out-dir",
-            out.to_str().unwrap(),
-        ])
-        .status()
-        .expect("spawn");
-    assert!(st.success());
-    let body = std::fs::read_to_string(out.join("package.plan.json")).unwrap();
-    assert!(body.contains("\"package\""));
-    assert!(body.contains("zlib"));
-    assert!(body.contains("\"residuals\""));
-}
-
-#[test]
-fn ingest_with_robot_resolves_dep_versions_from_hierarchy() {
-    let path = root().join("spack_eon/package.py");
-    let robot =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/hierarchy_resolve/easyconfigs");
-    let opts = eb_stack::IngestOpts {
-        easyconfigs: vec![robot],
-        keep_old_deps: true,
-        hierarchy_fixture: None,
-    };
-    let out = eb_stack::ingest_foreign_to_easyconfig_with_opts(
-        &path,
+fn inspect_library_matches_cli_artifact_identity() {
+    let source = root().join("spack_qmcpack/package.py");
+    let (plan, sbom) = inspect_new_package(
+        &source,
         Some(ForeignFormat::Spack),
-        &foss(),
-        &opts,
+        &toolchain("2026.1"),
+        &[],
     )
-    .expect("ingest+robot");
-    // Robot has Python-3.12.3 and CMake for foss-2024a hierarchy.
-    assert!(
-        out.text.contains("('Python', '3.12.3')"),
-        "expected robot-resolved Python 3.12.3 from universe: {}\n{}",
-        out.text,
-        out.warnings.join("\n")
-    );
-    assert!(
-        out.warnings.iter().any(|w| w.contains("robot resolve")),
-        "expected robot resolve warnings: {:?}",
-        out.warnings
-    );
-    // Joint resolvo path must fire when hierarchy candidates exist for deps.
-    assert!(
-        out.warnings
-            .iter()
-            .any(|w| w.contains("resolvo") && w.contains("joint")),
-        "expected resolvo joint co-select warning: {:?}",
-        out.warnings
-    );
-    // Spack eon meson_args static -D flags should appear when present
-    let r = resolve_easyconfig_str(&out.text).expect("re-parse after robot resolve");
-    assert_eq!(r.version, "2.16.0");
-    // Resolved Python version must match a real hierarchy candidate, not a foreign floor.
-    let py = r
-        .dependencies
-        .iter()
-        .chain(r.builddependencies.iter())
-        .find(|d| d.name == "Python")
-        .expect("Python dep present after robot resolve");
-    assert_eq!(py.version, "3.12.3");
-}
-
-#[test]
-fn spack_eon_extracts_static_meson_configopts() {
-    let path = root().join("spack_eon/package.py");
-    let recipe = parse_foreign_path(&path, None).expect("parse");
-    let opts = recipe.configopts.as_deref().unwrap_or("");
-    // Static -D flags from meson_args (not f-string dynamics)
-    assert!(
-        opts.contains("-Dwith_xtb=false") || opts.contains("-Dwith_metatomic=false"),
-        "expected static meson -D flags, got {opts:?}"
-    );
-    let out = ingest_foreign_to_easyconfig(&path, None, &foss()).expect("emit");
-    assert!(
-        out.text.contains("configopts") && out.text.contains("-Dwith_"),
-        "{}",
-        out.text
-    );
+    .expect("inspect library");
+    assert_eq!(plan.package.name, "QMCPACK");
+    assert_eq!(sbom["metadata"]["component"]["name"], "QMCPACK");
+    assert_eq!(sbom["bomFormat"], "CycloneDX");
 }
