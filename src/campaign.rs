@@ -169,7 +169,42 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         detail: format!("build evaluation on {}", request.target.name),
     });
     write_state(&request.state_path, &state)?;
-    let staged_bundle = request.target.stage_bundle(&request.bundle)?;
+    let staged_bundle = match request.target.stage_bundle(&request.bundle) {
+        Ok(path) => path,
+        Err(error) => {
+            let evidence = error.to_string();
+            state.findings.push(BuildFinding {
+                id: format!(
+                    "attempt:{}:finding:{}",
+                    state.attempts,
+                    state.findings.len() + 1
+                ),
+                class: BuildFindingClass::Transport,
+                disposition: FindingDisposition::TargetRepair,
+                stage: "stage".into(),
+                recipe: String::new(),
+                target: request.target.name.clone(),
+                summary: "package bundle staging failed".into(),
+                evidence,
+                command: CommandPlan {
+                    program: "stage-bundle".into(),
+                    args: vec![request.bundle.display().to_string()],
+                },
+                exit_code: None,
+                attempt: state.attempts,
+            });
+            state.status = CampaignStatus::Failed;
+            state.current_recipe = None;
+            state.history.push(CampaignEvent {
+                attempt: state.attempts,
+                status: CampaignStatus::Failed,
+                recipe: None,
+                detail: "classified bundle staging failure as Transport".into(),
+            });
+            write_state(&request.state_path, &state)?;
+            return Ok(state);
+        }
+    };
 
     for recipe in recipes {
         let relative_recipe = recipe
