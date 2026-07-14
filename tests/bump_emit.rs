@@ -1,9 +1,7 @@
 //! Integration tests for next-generation easyconfig emit (library + CLI).
 
-use eb_stack::{
-    easyconfig_filename, emit_next_generation, emit_next_generation_auto_from_path,
-    emit_next_generation_from_path, EmitParams, Toolchain,
-};
+use eb_stack::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
+use eb_stack::{plan_package_bump, BumpPackageRequest, PackageBundle, Toolchain};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
@@ -21,6 +19,32 @@ fn foss(ver: &str) -> Toolchain {
     }
 }
 
+fn bump(
+    source: PathBuf,
+    target: Toolchain,
+    easyconfigs: PathBuf,
+    version: Option<&str>,
+    overrides: HashMap<String, String>,
+) -> PackageBundle {
+    plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: target.clone(),
+        version: version.map(str::to_string),
+        source_checksum: None,
+        easyconfig_roots: vec![easyconfigs],
+        hierarchy_fixture: None,
+        overrides,
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "test".into(),
+            toolchain: target,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+    })
+    .expect("canonical bump")
+}
+
 fn bundle_recipe(out: &std::path::Path, package: &str, filename: &str) -> PathBuf {
     out.join("easyconfigs")
         .join(package[..1].to_ascii_lowercase())
@@ -31,27 +55,26 @@ fn bundle_recipe(out: &std::path::Path, package: &str, filename: &str) -> PathBu
 #[test]
 fn library_bumps_fixture_gromacs_toolchain_only() {
     let src_path = fixture("foss-2025a/GROMACS-2024.1-foss-2025a.eb");
-    let source = std::fs::read_to_string(&src_path).expect("read fixture");
-    let params = EmitParams {
-        toolchain: foss("2025b"),
-        version: None,
-        dep_versions: HashMap::new(),
-        source_checksum: None,
-    };
-    let r = emit_next_generation(&source, &params).expect("emit");
-    assert_eq!(r.filename, "GROMACS-2024.1-foss-2025b.eb");
-    assert!(r
+    let overrides = HashMap::from([
+        ("OpenBLAS".into(), "0.3.23".into()),
+        ("OpenMPI".into(), "4.1.5".into()),
+        ("FFTW".into(), "3.3.10".into()),
+    ]);
+    let bundle = bump(src_path, foss("2025b"), fixture(""), None, overrides);
+    let recipe = &bundle.easyconfigs[0];
+    assert_eq!(recipe.filename, "GROMACS-2024.1-foss-2025b.eb");
+    assert!(recipe
         .text
         .contains("toolchain = {'name': 'foss', 'version': '2025b'}"));
-    // Application version unchanged.
-    assert!(r.text.contains("version = '2024.1'"));
-    // Non-target fields preserved from fixture.
-    assert!(r
+    assert!(recipe.text.contains("version = '2024.1'"));
+    assert!(recipe
         .text
         .contains("toolchainopts = {'openmp': True, 'usempi': True}"));
-    assert!(r.text.contains("('OpenBLAS', '0.3.23')"));
-    assert!(r.text.contains("('OpenMPI', '4.1.5')"));
-    assert!(r.text.contains("('FFTW', '3.3.10')"));
+    assert!(recipe.text.contains("('OpenBLAS', '0.3.23')"));
+    assert!(recipe.text.contains("('OpenMPI', '4.1.5')"));
+    assert!(recipe.text.contains("('FFTW', '3.3.10')"));
+    assert_eq!(bundle.sbom["bomFormat"], "CycloneDX");
+    assert_eq!(bundle.locks.len(), 1);
 }
 
 #[test]
@@ -60,26 +83,17 @@ fn library_bumps_version_toolchain_and_deps() {
     let mut deps = HashMap::new();
     deps.insert("OpenBLAS".into(), "0.3.27".into());
     deps.insert("OpenMPI".into(), "5.0.3".into());
-    let params = EmitParams {
-        toolchain: foss("2025b"),
-        version: Some("2025.0".into()),
-        dep_versions: deps,
-        source_checksum: None,
-    };
-    let r = emit_next_generation_from_path(&src_path, &params).expect("emit from path");
-    assert_eq!(
-        r.filename,
-        easyconfig_filename("GROMACS", "2025.0", &foss("2025b"))
-    );
-    assert_eq!(r.filename, "GROMACS-2025.0-foss-2025b.eb");
-    assert!(r.text.contains("version = '2025.0'"));
-    assert!(r
+    let bundle = bump(src_path, foss("2025b"), fixture(""), Some("2025.0"), deps);
+    let recipe = &bundle.easyconfigs[0];
+    assert_eq!(recipe.filename, "GROMACS-2025.0-foss-2025b.eb");
+    assert!(recipe.text.contains("version = '2025.0'"));
+    assert!(recipe
         .text
         .contains("toolchain = {'name': 'foss', 'version': '2025b'}"));
-    assert!(r.text.contains("('OpenBLAS', '0.3.27')"));
-    assert!(r.text.contains("('OpenMPI', '5.0.3')"));
-    assert!(r.text.contains("('FFTW', '3.3.10')"));
-    assert!(r.text.contains("name = 'GROMACS'"));
+    assert!(recipe.text.contains("('OpenBLAS', '0.3.27')"));
+    assert!(recipe.text.contains("('OpenMPI', '5.0.3')"));
+    assert!(recipe.text.contains("('FFTW', '3.3.10')"));
+    assert!(recipe.text.contains("name = 'GROMACS'"));
 }
 
 #[test]
@@ -188,30 +202,25 @@ fn gromacs_repro_universe() -> PathBuf {
 /// with an empty hand override map.
 #[test]
 fn library_auto_resolve_gromacs_deps_from_universe() {
-    let empty = HashMap::new();
-    let r = emit_next_generation_auto_from_path(
-        &gromacs_repro_source(),
-        &foss("2024a"),
-        &gromacs_repro_universe(),
+    let bundle = bump(
+        gromacs_repro_source(),
+        foss("2024a"),
+        gromacs_repro_universe(),
         None,
-        None,
-        &empty,
-        None,
-        None,
-    )
-    .expect("auto emit");
-    assert_eq!(r.filename, "GROMACS-2024.4-foss-2024a.eb");
-    assert!(r
+        HashMap::new(),
+    );
+    let recipe = &bundle.easyconfigs[0];
+    assert_eq!(recipe.filename, "GROMACS-2024.4-foss-2024a.eb");
+    assert!(recipe
         .text
         .contains("toolchain = {'name': 'foss', 'version': '2024a'}"));
-    assert!(r.text.contains("('CMake', '3.29.3')"));
-    assert!(r.text.contains("('scikit-build-core', '0.11.1')"));
-    assert!(r.text.contains("('Python', '3.12.3')"));
-    assert!(r.text.contains("('SciPy-bundle', '2024.05')"));
-    assert!(r.text.contains("('networkx', '3.4.2')"));
-    assert!(r.text.contains("('mpi4py', '4.0.1')"));
-    // pybind11 is maintainer-added; source does not list it.
-    assert!(!r.text.contains("pybind11"));
+    assert!(recipe.text.contains("('CMake', '3.29.3')"));
+    assert!(recipe.text.contains("('scikit-build-core', '0.11.1')"));
+    assert!(recipe.text.contains("('Python', '3.12.3')"));
+    assert!(recipe.text.contains("('SciPy-bundle', '2024.05')"));
+    assert!(recipe.text.contains("('networkx', '3.4.2')"));
+    assert!(recipe.text.contains("('mpi4py', '4.0.1')"));
+    assert!(!recipe.text.contains("pybind11"));
 }
 
 /// CLI `bump --easyconfigs` with no `--dep` resolves versions from the universe.
@@ -269,21 +278,16 @@ dependencies = [
     let tmp = tempfile::tempdir().unwrap();
     let src_path = tmp.path().join("Demo-1.0-foss-2023b.eb");
     std::fs::write(&src_path, src).unwrap();
-    let empty = HashMap::new();
-    let r = emit_next_generation_auto_from_path(
-        &src_path,
-        &foss("2024a"),
-        &hierarchy_universe(),
+    let bundle = bump(
+        src_path,
+        foss("2024a"),
+        hierarchy_universe(),
         None,
-        None,
-        &empty,
-        None,
-        None,
-    )
-    .expect("auto");
-    assert!(r.text.contains("('Python', '3.12.3')"));
-    assert!(r.text.contains("('SciPy-bundle', '2024.05')"));
-    // Decoys at GCCcore-14.2.0 / gfbf-2025a must not win.
-    assert!(!r.text.contains("3.13.1"));
-    assert!(!r.text.contains("2025.06"));
+        HashMap::new(),
+    );
+    let recipe = &bundle.easyconfigs[0].text;
+    assert!(recipe.contains("('Python', '3.12.3')"));
+    assert!(recipe.contains("('SciPy-bundle', '2024.05')"));
+    assert!(!recipe.contains("3.13.1"));
+    assert!(!recipe.contains("2025.06"));
 }
