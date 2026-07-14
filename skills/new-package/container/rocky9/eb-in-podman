@@ -95,6 +95,7 @@ exec podman run --rm -i \
   -e EASYBUILD_TMPDIR=/eb/tmp \
   -e EASYBUILD_BUILDPATH=/eb/build \
   -e EASYBUILD_MODULES_TOOL=Lmod \
+  -e TAR_OPTIONS=--no-same-owner \
   -e LMOD_CMD=/usr/share/lmod/lmod/libexec/lmod \
   -w /work \
   "$IMAGE" \
