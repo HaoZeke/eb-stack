@@ -230,6 +230,88 @@ fn profile_lock_is_created_by_resolvo_with_stack_preferences() {
 }
 
 #[test]
+fn stack_pin_admits_a_cross_generation_runtime_closure() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.profiles = qmcpack_profiles();
+    let mut dependency = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.eb_name.as_deref() == Some("HDF5"))
+        .expect("dependency template")
+        .clone();
+    dependency.id = "pytorch".into();
+    dependency.name = "pytorch".into();
+    dependency.eb_name = Some("PyTorch".into());
+    dependency.constraint = Some("2.9.1".into());
+    dependency.condition = ConditionExpr::Always;
+    plan.dependencies = vec![dependency];
+
+    let foss_2024a = Toolchain {
+        name: "foss".into(),
+        version: "2024a".into(),
+    };
+    let gcccore_2024a = Toolchain {
+        name: "GCCcore".into(),
+        version: "13.3.0".into(),
+    };
+    let candidate = |name: &str,
+                     version: &str,
+                     candidate_toolchain: Toolchain,
+                     dependencies: Vec<DepReq>| Candidate {
+        name: name.into(),
+        version: version.into(),
+        toolchain: candidate_toolchain.clone(),
+        versionsuffix: None,
+        easyconfig_path: format!(
+            "{name}-{version}-{}-{}.eb",
+            candidate_toolchain.name, candidate_toolchain.version
+        ),
+        dependencies,
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+    };
+    let python_312 = DepReq {
+        name: "Python".into(),
+        version_req: "==3.12.3".into(),
+        versionsuffix: None,
+        toolchain: None,
+    };
+    let candidates = vec![
+        candidate("PyTorch", "2.8.0", toolchain(), Vec::new()),
+        candidate("PyTorch", "2.9.1", foss_2024a.clone(), vec![python_312]),
+        candidate("Python", "3.12.3", gcccore_2024a, Vec::new()),
+        candidate("Python", "3.14.2", toolchain(), Vec::new()),
+    ];
+    let stack = StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "site".into(),
+        toolchain: toolchain(),
+        pins: vec![StackPin {
+            name: "PyTorch".into(),
+            version_requirement: "==2.9.1".into(),
+            mode: StackPinMode::Preferred,
+            source: Some("site stack".into()),
+        }],
+        exclusions: Vec::new(),
+    };
+
+    let lock = solve_package_profile(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &candidates,
+        &stack,
+    )
+    .expect("cross-generation stack pin closure");
+    assert_eq!(lock.dependencies.len(), 1);
+    assert_eq!(lock.dependencies[0].name, "PyTorch");
+    assert_eq!(lock.dependencies[0].version, "2.9.1");
+    assert_eq!(lock.dependencies[0].toolchain, foss_2024a);
+    assert!(!lock.pin_outcomes[0].fallback);
+}
+
+#[test]
 fn profile_solve_scopes_build_dependencies_of_existing_recipes() {
     let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
     let mut plan = package_plan_from_foreign(&recipe, &toolchain());
