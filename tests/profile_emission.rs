@@ -280,6 +280,15 @@ fn stack_pin_admits_a_cross_generation_runtime_closure() {
     let candidates = vec![
         candidate("PyTorch", "2.8.0", toolchain(), Vec::new()),
         candidate("PyTorch", "2.9.1", foss_2024a.clone(), vec![python_312]),
+        candidate(
+            "PyTorch",
+            "2.9.1",
+            Toolchain {
+                name: "foss".into(),
+                version: "2025b".into(),
+            },
+            Vec::new(),
+        ),
         candidate("Python", "3.12.3", gcccore_2024a, Vec::new()),
         candidate("Python", "3.14.2", toolchain(), Vec::new()),
     ];
@@ -290,6 +299,7 @@ fn stack_pin_admits_a_cross_generation_runtime_closure() {
         pins: vec![StackPin {
             name: "PyTorch".into(),
             version_requirement: "==2.9.1".into(),
+            toolchain: Some(foss_2024a.clone()),
             mode: StackPinMode::Preferred,
             source: Some("site stack".into()),
         }],
