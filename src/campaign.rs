@@ -169,12 +169,19 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         detail: format!("build evaluation on {}", request.target.name),
     });
     write_state(&request.state_path, &state)?;
+    let staged_bundle = request.target.stage_bundle(&request.bundle)?;
 
     for recipe in recipes {
-        let recipe_text = recipe.display().to_string();
+        let relative_recipe = recipe
+            .strip_prefix(&request.bundle)
+            .map_err(|_| CampaignError::InvalidBundle("recipe is outside bundle".into()))?;
+        let recipe_text = relative_recipe.display().to_string();
+        let staged_recipe = Path::new(&staged_bundle).join(relative_recipe);
         state.current_recipe = Some(recipe_text.clone());
         write_state(&request.state_path, &state)?;
-        let command = request.target.build_command(&recipe_text);
+        let command = request
+            .target
+            .build_command(&staged_recipe.display().to_string());
         let output = command.execute().map_err(CampaignError::Target)?;
         if !output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -304,7 +311,14 @@ fn compact_evidence(stdout: &str, stderr: &str) -> String {
     let start = lines.len().saturating_sub(200);
     let mut compact = lines[start..].join("\n");
     if compact.len() > 64 * 1024 {
-        compact = compact[compact.len() - 64 * 1024..].to_string();
+        compact = compact
+            .chars()
+            .rev()
+            .take(64 * 1024)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
     }
     compact
 }

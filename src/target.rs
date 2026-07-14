@@ -40,6 +40,8 @@ pub enum TargetTransport {
         port: Option<u16>,
         #[serde(default = "default_ssh_command")]
         command: String,
+        #[serde(default = "default_rsync_command")]
+        sync_command: String,
     },
 }
 
@@ -231,6 +233,67 @@ pub fn resolve_target_layers(
 }
 
 impl BuildTarget {
+    pub fn staged_bundle_path(&self, local_bundle: &Path) -> String {
+        match &self.transport {
+            TargetTransport::Local => local_bundle.display().to_string(),
+            TargetTransport::Ssh { .. } => {
+                let name = local_bundle
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("bundle");
+                format!("{}/bundles/{name}", self.easybuild.work_root)
+            }
+        }
+    }
+
+    pub fn stage_bundle(&self, local_bundle: &Path) -> Result<String, TargetError> {
+        let destination = self.staged_bundle_path(local_bundle);
+        let TargetTransport::Ssh {
+            host,
+            port,
+            command,
+            sync_command,
+        } = &self.transport
+        else {
+            return Ok(destination);
+        };
+
+        let mkdir = self.route_tokens(
+            vec!["mkdir".into(), "-p".into(), destination.clone()],
+            false,
+        );
+        let mkdir_output = mkdir.execute()?;
+        if !mkdir_output.status.success() {
+            return Err(TargetError::CommandFailed {
+                program: mkdir.program,
+                exit_code: mkdir_output.status.code(),
+                stderr: String::from_utf8_lossy(&mkdir_output.stderr).into_owned(),
+            });
+        }
+
+        let mut sync = Command::new(sync_command);
+        sync.arg("-az");
+        let remote_shell = match port {
+            Some(port) => format!("{command} -p {port}"),
+            None => command.clone(),
+        };
+        sync.arg("--rsh").arg(remote_shell);
+        sync.arg(format!("{}/", local_bundle.display()));
+        sync.arg(format!("{host}:{destination}/"));
+        let output = sync
+            .output()
+            .map_err(|error| TargetError::Spawn(sync_command.clone(), error))?;
+        if !output.status.success() {
+            return Err(TargetError::CommandFailed {
+                program: sync_command.clone(),
+                exit_code: output.status.code(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+        Ok(destination)
+    }
+
     pub fn build_command(&self, recipe: &str) -> CommandPlan {
         let mut tokens = vec!["env".to_string()];
         tokens.push(format!("EASYBUILD_TMPDIR={}", self.easybuild.tmp_root));
@@ -321,6 +384,7 @@ impl BuildTarget {
                 host,
                 port,
                 command,
+                ..
             } => {
                 let mut args = Vec::new();
                 if let Some(port) = port {
@@ -436,6 +500,10 @@ fn default_srun_command() -> String {
     "srun".into()
 }
 
+fn default_rsync_command() -> String {
+    "rsync".into()
+}
+
 fn default_podman_command() -> String {
     "podman".into()
 }
@@ -458,4 +526,10 @@ pub enum TargetError {
     MissingLayer(String, &'static str),
     #[error("spawn target command {0}: {1}")]
     Spawn(String, std::io::Error),
+    #[error("target command {program} failed with exit {exit_code:?}: {stderr}")]
+    CommandFailed {
+        program: String,
+        exit_code: Option<i32>,
+        stderr: String,
+    },
 }
