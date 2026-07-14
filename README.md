@@ -133,7 +133,7 @@ eb-stack campaign run \
   --state /tmp/eon.campaign.json
 ```
 
-Transport may be local or SSH; execution may be direct or Slurm; runtime may be host, Podman, or Docker. Site hostnames, paths, modules, and scheduler sizing belong in the site layer.
+Transport may be local or SSH; execution may be direct or Slurm; runtime may be host, Podman, or Docker. Site hostnames, paths, modules, and scheduler sizing belong in the site layer. Container targets must use ABI-specific install, work, and temporary roots; only source archives should be shared across runtimes.
 
 Campaign failures persist as typed findings. OMP workers coordinate repairs through owned queue operations:
 

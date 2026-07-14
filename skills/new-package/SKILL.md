@@ -149,6 +149,11 @@ eb-stack target doctor \
 
 Use SSH for remote transport, Slurm for isolated jobs when available, and `host`, `podman`, or `docker` for runtime. `target doctor` must pass before a campaign. Never run EasyBuild installs on the control laptop.
 
+Scope `EASYBUILD_INSTALLPATH`, `work_root`, and `tmp_root` to the runtime ABI.
+Do not reuse host-built modules inside a container or share compiled modules
+between different images. `EASYBUILD_SOURCEPATH` may remain a shared archive
+cache.
+
 ## Hermes build-evaluation loop
 
 Use one durable state path for the package:

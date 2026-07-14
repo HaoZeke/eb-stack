@@ -152,6 +152,9 @@ eb-stack target doctor \
 The selected target decides transport, executor, runtime, and EasyBuild
 workload. A control host can therefore stage over SSH, submit through Slurm,
 run on the host or in Podman/Docker, and invoke the site's EasyBuild command.
+Use a runtime-specific ~EASYBUILD_INSTALLPATH~, ~work_root~, and ~tmp_root~ so
+host-linked modules cannot leak into a container build. A shared
+~EASYBUILD_SOURCEPATH~ is safe for source archives.
 
 * Run the Hermes/OMP repair loop
 

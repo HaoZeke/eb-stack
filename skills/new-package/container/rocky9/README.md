@@ -30,7 +30,20 @@ image = "eb-stack-rocky9"
 args = ["--security-opt", "label=disable", "--cap-add=NET_RAW"]
 mounts = ["/shared/work:/work", "/shared/robot:/robot:ro"]
 workdir = "/work"
+
+[targets.easybuild]
+work_root = "/shared/eb-stack/targets/rocky9/campaigns"
+tmp_root = "/shared/eb-stack/targets/rocky9/tmp"
+
+[targets.easybuild.environment]
+EASYBUILD_INSTALLPATH = "/shared/eb-stack/targets/rocky9/easybuild"
+EASYBUILD_SOURCEPATH = "/shared/easybuild/sources"
 ```
+
+Keep the install, build, and temporary roots specific to the container ABI.
+Reusing modules compiled on the host or in another image can load binaries
+that require an unavailable glibc or system library. Source archives are
+architecture-neutral and may use a shared cache.
 
 For rootful container execution, set EasyBuild's explicit acceptance switch in
 the workload environment:

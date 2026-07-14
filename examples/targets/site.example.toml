@@ -20,3 +20,13 @@ image = "registry.example.org/easybuild:rocky9"
 args = ["--security-opt", "label=disable", "--cap-add=NET_RAW"]
 mounts = ["/shared:/shared"]
 workdir = "/shared/eb-stack/campaigns"
+
+# Compiled modules, build trees, and temporary files are scoped to the runtime
+# ABI. Source archives may be shared across targets.
+[targets.easybuild]
+work_root = "/shared/eb-stack/targets/rocky9/campaigns"
+tmp_root = "/shared/eb-stack/targets/rocky9/tmp"
+
+[targets.easybuild.environment]
+EASYBUILD_INSTALLPATH = "/shared/eb-stack/targets/rocky9/easybuild"
+EASYBUILD_SOURCEPATH = "/shared/easybuild/sources"

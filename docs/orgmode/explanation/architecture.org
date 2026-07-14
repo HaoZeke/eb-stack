@@ -99,6 +99,11 @@ TOML layers merge by target name in argument order. This keeps the public
 repository and skills portable while a private site layer supplies hostnames,
 paths, modules, scheduler sizing, and container images.
 
+Compiled EasyBuild modules, work trees, and temporary roots belong to one
+runtime ABI. A container target therefore uses its own ~EASYBUILD_INSTALLPATH~,
+~work_root~, and ~tmp_root~. Source archives may use a shared cache because they
+do not contain host-linked executables.
+
 * Persisted campaigns
 
 A campaign stages one bundle, builds every emitted recipe, and runs profile
