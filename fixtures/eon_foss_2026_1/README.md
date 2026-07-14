@@ -17,7 +17,7 @@ This tree is the **landable** EasyBuild easyconfigs set for eOn 2.16.0 on
 - Companions (robot holes on develop): CapnProto 1.4.0, metatensor 0.2.2, metatensor-torch 0.10.0,
   metatomic-torch 0.1.15, quill 11.1.0 on GCCcore-15.2.0
 
-## Overlay companions (shipped here so check-recipe closes on stale robots)
+## Overlay companions for `eb-stack recipe check`
 
 - `c/CapnProto/CapnProto-1.4.0-GCCcore-15.2.0.eb` (serve feature; robot hole until develop has 15.2.0)
 - `i/inih/inih-62-GCCcore-15.2.0.eb` (on develop; often missing from older robot clones)
