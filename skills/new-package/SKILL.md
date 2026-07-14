@@ -39,7 +39,7 @@ new toolchain” section of the writing-easyconfigs page.
 
 | Layer | Where | Role |
 |-------|--------|------|
-| Agent + git + `eb-stack` | Site **EasyBuild host** (hostname in private site runbook) | herdr campaign agent (OMP preferred on SURF, Hermes allowed), render-full-drive, gates |
+| Agent + git + `eb-stack` | Site **EasyBuild host** (hostname in private site runbook) | herdr campaign agent (**OMP or Hermes**, interchangeable), render-full-drive, gates |
 | **`eb --robot` *builds*** | **Podman Rocky 9** image `eb-stack-rocky9` | Default install backend — RHEL-family OS deps match EasyBuild expectations |
 | Optional host robot | Same machine, `--build-backend host` | Escape hatch only; optional `overlays/<os-id>/` |
 
@@ -144,8 +144,9 @@ eb-stack ingest \
 # Optional: --residual-queue PATH
 ```
 
-MCP (same semantics): `eb_ingest` via `eb-stack mcp` (`source`, optional
-`easyconfigs[]`, `out` / `out_dir`, `residual_queue`).
+MCP (same semantics): `eb_ingest` / **`eb_plan`** via `eb-stack mcp`. Prefer
+`eb_plan` when you want intermediate plan JSON + planned SBOM + resolvo pins
+before emit (`manifest_out`, `sbom_out`, optional `bump_from`).
 
 What ingest **is allowed** to claim after a successful run:
 
@@ -352,6 +353,7 @@ cargo test --locked --test eon_foss_2026_1 --test qmcpack_foss_2026_1
 | Claim | Who |
 |-------|-----|
 | Foreign identity → parseable draft + residual JSON | `eb-stack ingest` / MCP `eb_ingest` (**mechanical**) |
+| Foreign → intermediate manifest + planned SBOM + resolvo → new/bump | `eb-stack plan` / MCP `eb_plan` (**mechanical**) |
 | Generation-native dep versions when robot has candidates | `eb-stack` hierarchy + resolvo (**mechanical**) |
 | Hierarchy-aware missing deps (no older-GCCcore false pass) | `eb-stack check-recipe` (**mechanical**) |
 | SHA256 for fetched sources | `eb --inject-checksums` (**mechanical**) |
@@ -376,7 +378,7 @@ and `EASYBUILD_TMPDIR` is set.
 
 ## 7. Full-drive campaign agent (default)
 
-The **FOSS local-ai agent (OMP preferred, Hermes allowed; site Willma)** is the **process owner** of a greenfield campaign on the site EasyBuild host. Outer orchestrators **only bootstrap** (rsync skill, render-full-drive, ensure Podman image, start herdr). The FOSS agent owns: run full-drive → read logs → fix → re-run until `DONE_FULL_DRIVE`. Default robot backend is **Podman Rocky 9**, not the host OS. Not a residual-only chat that stops before install.
+The **FOSS local-ai agent (OMP or Hermes, interchangeable; site Willma)** is the **process owner** of a greenfield campaign on the site EasyBuild host. Outer orchestrators **only bootstrap** (rsync skill, render-full-drive, ensure Podman image, start herdr). The FOSS agent owns: run full-drive → read logs → fix → re-run until `DONE_FULL_DRIVE`. Default robot backend is **Podman Rocky 9**, not the host OS. Not a residual-only chat that stops before install. Harness prompts must not hard-require a single agent binary.
 
 **Maximize mechanical tools** (do not invent product `-D` into `eb-stack`). Use
 `format-style` for E501; use residual judgment for product/moduleclass/companions.
@@ -387,7 +389,7 @@ when the goal includes *builds*.
 
 | Kind | Examples | Who |
 |------|----------|-----|
-| **Mechanical commands** | `eb -S`; `eb-stack ingest` / `eb_ingest`; inject-checksums; **format-style** / check-style; check-contrib; check-recipe; `eb -Dr`; **`eb --robot`** | Run by shell **or** by the campaign agent; same commands either way |
+| **Mechanical commands** | `eb -S`; `eb-stack ingest` / `plan` / MCP `eb_ingest`/`eb_plan`; inject-checksums; **format-style** / check-style; check-contrib; check-recipe; `eb -Dr`; **`eb --robot`** | Run by shell **or** by the campaign agent; same commands either way |
 | **Judgment** | product features; moduleclass; sanity paths; extract_cmd; hierarchy companions; Spack `when=`; sibling vs greenfield | **campaign agent** with residual JSON + oracles/docs |
 | **Forbidden** | Hardcoding product `-D` into ingest; hand-wrapping E501 when format-style exists; claiming *builds* without `eb --robot` success; opening GitHub PRs without human authorization | Nobody |
 
@@ -475,7 +477,7 @@ herdr agent start eb-full-drive \
 # or Hermes + Willma with the same prompt file
 ```
 
-Prefer the site primary FOSS harness (OMP/Willma on SURF). Campaign agent owns
+Either OMP or Hermes (site Willma) is a valid process owner. Campaign agent owns
 iterate-on-log until `DONE_FULL_DRIVE`; orchestrators only bootstrap.
 
 ### What success looks like
@@ -494,14 +496,16 @@ iterate-on-log until `DONE_FULL_DRIVE`; orchestrators only bootstrap.
 |------|---------|
 | Search existing EB recipes | `eb -S Name` |
 | Bootstrap from foreign | `eb-stack ingest --source … --easyconfigs ROBOT --out-dir DIR` |
+| Foreign → IR + planned SBOM + resolvo → new/bump | `eb-stack plan --source … --manifest-out … --sbom-out … [--easyconfigs …] [--bump-from …]` |
 | Residual work queue | `{stem}.residuals.json` (or `--residual-queue PATH`) |
-| MCP bootstrap | `eb-stack mcp` → `eb_ingest` |
+| MCP bootstrap | `eb-stack mcp` → `eb_ingest` / `eb_plan` |
 | Inject SHA256 | `eb --inject-checksums foo.eb` |
 | Contributor gate | `eb --check-contrib foo.eb` |
 | E501 lint (≤120) | `eb-stack check-style foo.eb` |
 | E501 auto-wrap (mechanical) | `eb-stack format-style foo.eb` |
 | Plan check (hierarchy-aware) | `eb-stack check-recipe --recipe foo.eb --easyconfigs ROBOT --easyconfigs work` |
 | MCP plan check | `eb_check_recipe` |
+| MCP foreign plan | `eb_plan` |
 | Dry-run graph | `eb foo.eb -Dr --robot work:ROBOT` |
 | Install (*builds*, **EasyBuild host**) | `eb foo.eb --robot work:ROBOT` (campaign agent §7) |
 | Render full-drive script + prompt | `skills/new-package/render-full-drive --work … --recipe …` (§7) |

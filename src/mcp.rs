@@ -12,6 +12,7 @@
 //! - `eb_bump`: retarget a recipe to another toolchain generation.
 //! - `eb_solve`: SAT co-select a stack lock from easyconfig trees + policy.
 //! - `eb_ingest`: conda-forge/Spack → EB scaffold + residual-queue JSON
+//! - `eb_plan`: foreign → intermediate manifest + planned SBOM → resolvo → new/bump
 //!   (not a landable PR; establishes no claim rungs by itself).
 //!
 //! The protocol subset implemented: `initialize`, `ping`, `tools/list`,
@@ -718,7 +719,13 @@ moduleclass = 'tools'
             .collect();
         assert_eq!(
             names,
-            ["eb_check_recipe", "eb_bump", "eb_solve", "eb_ingest"]
+            [
+                "eb_check_recipe",
+                "eb_bump",
+                "eb_solve",
+                "eb_ingest",
+                "eb_plan",
+            ]
         );
     }
 

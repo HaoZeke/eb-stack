@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sources, build/test residual notes, build-system hints from deps; Spack
   `variant()`, `license()`, `resource()` secondary sources, `conflicts` /
   `requires` / `patch` residual counts.
+- Embedded **foss-2025b** toolchain hierarchy; `bump --easyconfigs` on leaf
+  recipes with empty dep lists skips hierarchy/resolvo (toolchain-only rewrite)
+  so OpenMPI-style generation bumps work without a full robot graph.
 
 - **Podman Rocky 9 build backend** for greenfield *builds*:
   `skills/new-package/container/rocky9/` (`Containerfile`, `eb-in-podman`).

@@ -173,6 +173,9 @@ pub fn known_hierarchy(parent: &Toolchain) -> Option<ToolchainHierarchy> {
         "foss-2025a" => Some(include_str!(
             "../fixtures/toolchain_hierarchy/foss-2025a.json"
         )),
+        "foss-2025b" => Some(include_str!(
+            "../fixtures/toolchain_hierarchy/foss-2025b.json"
+        )),
         _ => None,
     }?;
     let fix: HierarchyFixture = serde_json::from_str(raw).ok()?;

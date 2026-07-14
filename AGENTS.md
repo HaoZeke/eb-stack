@@ -7,12 +7,12 @@ built to make the right thing the easy thing.
 ## The procedure
 
 Pick the skill that matches the work, then follow it end to end.
-Mechanical CLI fails loudly; the **campaign agent** (Hermes preferred, herdr
-on **EasyBuild host**) owns residual judgment **and** `eb --robot` *builds* when the
-goal is PR-ready / landable (new-package skill §7 full-drive). Residual-only
-sessions require an explicit human scope. Your site should pair these with a
-site runbook (init paths, module names, scheduler sizing); ask for it if you
-were not given one.
+Mechanical CLI fails loudly; the **campaign agent** (FOSS local-ai: **OMP or
+Hermes**, interchangeable; herdr on **EasyBuild host**) owns residual judgment
+**and** `eb --robot` *builds* when the goal is PR-ready / landable (new-package
+skill §7 full-drive). Residual-only sessions require an explicit human scope.
+Your site should pair these with a site runbook (init paths, module names,
+scheduler sizing); ask for it if you were not given one.
 
 | Work | Skill | Host |
 |------|--------|------|
@@ -27,15 +27,16 @@ installs there unless a site runbook explicitly says so.
 
 ## Non-negotiables
 
-1. **Run the real CLI** (`eb-stack check-recipe | bump | solve | ingest |
+1. **Run the real CLI** (`eb-stack check-recipe | bump | solve | ingest | plan |
    check-style | format-style`). Never guess dependency versions, checksums,
    or hierarchy relationships in prose — the tool resolves them or tells you
    exactly what is missing. If your harness speaks MCP, prefer the typed
    tool surface: `eb-stack mcp` serves `eb_check_recipe` / `eb_bump` /
-   `eb_solve` / `eb_ingest` over stdio, with the reporting ladder and next
-   actions embedded in every result. Ingest also writes
-   `{stem}.residuals.json` — that file is the residual work queue (not a
-   closed landable PR).
+   `eb_solve` / `eb_ingest` / `eb_plan` over stdio, with the reporting ladder
+   and next actions embedded in every result. Prefer **`plan`** for
+   foreign→manifest→resolvo→new/bump; **`ingest`** remains the short scaffold
+   path. Both write residual queues (`{stem}.residuals.json`) — not a closed
+   landable PR.
 2. **Tool output is instructions.** A missing-dep hint ("available at
    other generations: ...") and hierarchy-member notes are your work queue.
    A `[packaging]` checksum finding means fix the recipe (checksums are

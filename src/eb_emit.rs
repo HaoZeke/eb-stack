@@ -316,6 +316,13 @@ pub fn resolve_dep_versions_for_source_with_opts(
     opts: &AutoResolveOpts,
 ) -> Result<(HashMap<String, String>, Vec<String>), EmitError> {
     let specs = dep_specs_from_source(source)?;
+    // No deps/builddeps to resolve: skip hierarchy + resolvo entirely (e.g. leaf
+    // OpenMPI-style recipes that only need a toolchain rewrite).
+    if specs.is_empty() {
+        return Ok((HashMap::new(), vec![
+            "auto-resolve: no dependencies/builddependencies to resolve".into(),
+        ]));
+    }
     let tree = parse_easyconfig_tree(easyconfigs_dir)?;
     let mut warnings = Vec::new();
     let owned;
