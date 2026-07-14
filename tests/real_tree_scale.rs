@@ -3,11 +3,10 @@
 //! Set EB_EASYCONFIGS to override the default
 //! `~/.venvs/easybuild/easybuild/easyconfigs`.
 
+use eb_stack::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
 use eb_stack::{
-    emit_next_generation_auto_from_path_with_opts, parse_easyconfig_tree, AutoResolveOpts,
-    Toolchain,
+    parse_easyconfig_tree, plan_package_bump, BumpPackageRequest, PackageBundle, Toolchain,
 };
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 fn easyconfigs_root() -> Option<PathBuf> {
@@ -36,7 +35,11 @@ fn find_eb(root: &Path, name: &str) -> PathBuf {
     }
     // Fall back to walk (slow but rare).
     for ent in walkdir(root) {
-        if ent.file_name().map(|n| n.to_string_lossy() == name).unwrap_or(false) {
+        if ent
+            .file_name()
+            .map(|n| n.to_string_lossy() == name)
+            .unwrap_or(false)
+        {
             return ent;
         }
     }
@@ -60,6 +63,29 @@ fn walkdir(root: &Path) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+fn canonical_bump(
+    source: &Path,
+    target: Toolchain,
+    robot: &Path,
+) -> Result<PackageBundle, eb_stack::PackageWorkflowError> {
+    plan_package_bump(&BumpPackageRequest {
+        source: source.to_path_buf(),
+        toolchain: target.clone(),
+        version: None,
+        source_checksum: None,
+        easyconfig_roots: vec![robot.to_path_buf()],
+        hierarchy_fixture: None,
+        overrides: Default::default(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "real-tree".into(),
+            toolchain: target,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+    })
 }
 
 #[test]
@@ -118,39 +144,35 @@ fn real_tree_auto_bump_gromacs_and_two_hard_pairs() {
         name: "foss".into(),
         version: v.into(),
     };
-    let empty = HashMap::new();
-
     // 1) GROMACS-2024.4-foss-2023b -> foss-2024a
     let g_src = find_eb(&root, "GROMACS-2024.4-foss-2023b.eb");
-    let g = emit_next_generation_auto_from_path_with_opts(
-        &g_src,
-        &foss("2024a"),
-        &root,
-        None,
-        None,
-        &empty,
-        None,
-        None,
-        &AutoResolveOpts { keep_old: false },
-    )
-    .expect("GROMACS auto-bump must succeed without keep-old");
-    assert!(g.text.contains("toolchain = {'name': 'foss', 'version': '2024a'}"));
+    let g = canonical_bump(&g_src, foss("2024a"), &root).expect("GROMACS canonical bump");
+    let g_recipe = &g.easyconfigs[0];
+    assert!(g_recipe
+        .text
+        .contains("toolchain = {'name': 'foss', 'version': '2024a'}"));
     // No silent downgrade of Python/SciPy.
     assert!(
-        g.text.contains("('Python', '3.12.3')") || g.text.contains("('Python', \"3.12.3\")"),
+        g_recipe.text.contains("('Python', '3.12.3')")
+            || g_recipe.text.contains("('Python', \"3.12.3\")"),
         "Python should resolve to 2024a generation: {}",
-        g.text.lines().find(|l| l.contains("Python")).unwrap_or("")
+        g_recipe
+            .text
+            .lines()
+            .find(|line| line.contains("Python"))
+            .unwrap_or("")
     );
     let g_path = out_dir.join("GROMACS-bump.eb");
-    std::fs::write(&g_path, &g.text).unwrap();
+    std::fs::write(&g_path, &g_recipe.text).unwrap();
     std::fs::write(
         out_dir.join("real-bump-gromacs.log"),
         format!(
             "source={}\nfilename={}\nwarnings={:?}\nsnippet:\n{}\n",
             g_src.display(),
-            g.filename,
-            g.warnings,
-            g.text
+            g_recipe.filename,
+            g.plan.residuals,
+            g_recipe
+                .text
                 .lines()
                 .filter(|l| l.contains("dependencies")
                     || l.contains("Python")
@@ -166,54 +188,47 @@ fn real_tree_auto_bump_gromacs_and_two_hard_pairs() {
 
     // 2) numba with versionsuffix-pinned LLVM must not bump LLVM suffix pin wrongly.
     let n_src = find_eb(&root, "numba-0.60.0-foss-2023b.eb");
-    let n = emit_next_generation_auto_from_path_with_opts(
-        &n_src,
-        &foss("2024a"),
-        &root,
-        None,
-        None,
-        &empty,
-        None,
-        None,
-        &AutoResolveOpts { keep_old: false },
-    )
-    .expect("numba auto-bump");
+    let n = canonical_bump(&n_src, foss("2024a"), &root).expect("numba canonical bump");
+    let n_recipe = &n.easyconfigs[0];
     // LLVM keeps -llvmlite versionsuffix pin (not rewritten to a plain LLVM).
     assert!(
-        n.text.contains("-llvmlite") || n.warnings.iter().any(|w| w.contains("LLVM")),
+        n_recipe.text.contains("-llvmlite")
+            || n.plan
+                .residuals
+                .iter()
+                .any(|residual| residual.summary.contains("LLVM")),
         "LLVM versionsuffix pin must be respected: warnings={:?}",
-        n.warnings
+        n.plan.residuals
     );
-    std::fs::write(out_dir.join("numba-bump.eb"), &n.text).unwrap();
+    std::fs::write(out_dir.join("numba-bump.eb"), &n_recipe.text).unwrap();
     std::fs::write(
         out_dir.join("real-bump-numba.log"),
-        format!("source={}\nwarnings={:?}\n", n_src.display(), n.warnings),
+        format!(
+            "source={}\nresiduals={:?}\n",
+            n_src.display(),
+            n.plan.residuals
+        ),
     )
     .unwrap();
 
     // 3) nglview: ASE may be versionsuffix-pinned in some gens; ensure no silent stale.
     let v_src = find_eb(&root, "nglview-3.1.4-foss-2023b.eb");
-    let v = emit_next_generation_auto_from_path_with_opts(
-        &v_src,
-        &foss("2024a"),
-        &root,
-        None,
-        None,
-        &empty,
-        None,
-        None,
-        &AutoResolveOpts { keep_old: false },
-    );
+    let v = canonical_bump(&v_src, foss("2024a"), &root);
     match v {
-        Ok(r) => {
-            std::fs::write(out_dir.join("nglview-bump.eb"), &r.text).unwrap();
+        Ok(bundle) => {
+            let recipe = &bundle.easyconfigs[0];
+            std::fs::write(out_dir.join("nglview-bump.eb"), &recipe.text).unwrap();
             std::fs::write(
                 out_dir.join("real-bump-nglview.log"),
-                format!("ok source={}\nwarnings={:?}\n", v_src.display(), r.warnings),
+                format!(
+                    "ok source={}\nresiduals={:?}\n",
+                    v_src.display(),
+                    bundle.plan.residuals
+                ),
             )
             .unwrap();
             // If ASE had a versionsuffix in source, it must not be blindly newest-bumped.
-            if r.text.contains("ASE") && r.text.contains("versionsuffix") {
+            if recipe.text.contains("ASE") && recipe.text.contains("versionsuffix") {
                 // soft check only
             }
         }
