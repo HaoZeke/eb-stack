@@ -7,6 +7,7 @@ use eb_stack::target::{
 };
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::process::Command;
 
 fn target(command: &str) -> BuildTarget {
@@ -23,6 +24,16 @@ fn target(command: &str) -> BuildTarget {
             environment: BTreeMap::new(),
         },
     }
+}
+
+fn write_valid_recipe(path: &Path, name: &str, version: &str) {
+    std::fs::write(
+        path,
+        format!(
+            "name = '{name}'\nversion = '{version}'\ntoolchain = SYSTEM\nsources = ['source.tar.gz']\nchecksums = ['deadbeef']\nmoduleclass = 'tools'\n"
+        ),
+    )
+    .expect("recipe");
 }
 
 #[test]
@@ -78,7 +89,7 @@ fn campaign_interns_easybuild_command_output_before_classifying() {
         r#"{"profile":"default","solver":"resolvo"}"#,
     )
     .expect("lock");
-    std::fs::write(recipes.join("eOn.eb"), "name = 'eOn'\n").expect("recipe");
+    write_valid_recipe(&recipes.join("eOn.eb"), "eOn", "2.16.0");
 
     let nested_log = temp.path().join("easybuild-command.out");
     std::fs::write(
@@ -166,11 +177,7 @@ fn campaign_state_persists_claims_attempts_and_resume() {
         r#"{"profile":"default","solver":"resolvo"}"#,
     )
     .expect("lock");
-    std::fs::write(
-        recipes.join("eOn-2.16.0-foss-2026.1.eb"),
-        "name = 'eOn'\nversion = '2.16.0'\n",
-    )
-    .expect("recipe");
+    write_valid_recipe(&recipes.join("eOn-2.16.0-foss-2026.1.eb"), "eOn", "2.16.0");
     let state_path = temp.path().join("campaign.json");
 
     let failed = run_campaign(&CampaignRequest {
@@ -225,7 +232,7 @@ fn finding_queue_enforces_ownership_and_records_resolution() {
         r#"{"profile":"default","solver":"resolvo"}"#,
     )
     .expect("lock");
-    std::fs::write(recipes.join("eOn.eb"), "name = 'eOn'\n").expect("recipe");
+    write_valid_recipe(&recipes.join("eOn.eb"), "eOn", "2.16.0");
     let state_path = temp.path().join("campaign.json");
     let failed = run_campaign(&CampaignRequest {
         bundle,
@@ -280,11 +287,7 @@ fn campaign_cli_runs_a_named_target_and_reports_status() {
         r#"{"profile":"default","solver":"resolvo"}"#,
     )
     .expect("lock");
-    std::fs::write(
-        recipes.join("eOn-2.16.0-foss-2026.1.eb"),
-        "name = 'eOn'\nversion = '2.16.0'\n",
-    )
-    .expect("recipe");
+    write_valid_recipe(&recipes.join("eOn-2.16.0-foss-2026.1.eb"), "eOn", "2.16.0");
     let config = temp.path().join("targets.toml");
     std::fs::write(
         &config,
@@ -357,7 +360,7 @@ fn staging_failure_is_persisted_as_a_transport_finding() {
         r#"{"profile":"default","solver":"resolvo"}"#,
     )
     .expect("lock");
-    std::fs::write(recipes.join("eOn.eb"), "name = 'eOn'\n").expect("recipe");
+    write_valid_recipe(&recipes.join("eOn.eb"), "eOn", "2.16.0");
     let mut target = target("true");
     target.transport = TargetTransport::Ssh {
         host: "unused.example.org".into(),
@@ -396,7 +399,7 @@ fn executor_spawn_failure_is_persisted_as_a_typed_finding() {
         r#"{"profile":"default","solver":"resolvo"}"#,
     )
     .expect("lock");
-    std::fs::write(recipes.join("eOn.eb"), "name = 'eOn'\n").expect("recipe");
+    write_valid_recipe(&recipes.join("eOn.eb"), "eOn", "2.16.0");
     let mut build_target = target("true");
     build_target.executor = TargetExecutor::Slurm {
         command: "/definitely/missing/eb-stack-srun".into(),
@@ -441,7 +444,7 @@ fn missing_easybuild_program_is_persisted_as_a_runtime_finding() {
         r#"{"profile":"default","solver":"resolvo"}"#,
     )
     .expect("lock");
-    std::fs::write(recipes.join("eOn.eb"), "name = 'eOn'\n").expect("recipe");
+    write_valid_recipe(&recipes.join("eOn.eb"), "eOn", "2.16.0");
     let state_path = temp.path().join("campaign.json");
 
     let state = run_campaign(&CampaignRequest {
@@ -485,7 +488,7 @@ fn campaign_runs_profile_verification_and_sets_the_binary_claim() {
         r#"{"profile":"default","solver":"resolvo"}"#,
     )
     .expect("lock");
-    std::fs::write(recipes.join("eOn.eb"), "name = 'eOn'\n").expect("recipe");
+    write_valid_recipe(&recipes.join("eOn.eb"), "eOn", "2.16.0");
 
     let state = run_campaign(&CampaignRequest {
         bundle,
@@ -528,7 +531,7 @@ fn failed_profile_verification_preserves_the_build_claim_and_finding() {
         r#"{"profile":"complex","solver":"resolvo"}"#,
     )
     .expect("lock");
-    std::fs::write(recipes.join("QMCPACK.eb"), "name = 'QMCPACK'\n").expect("recipe");
+    write_valid_recipe(&recipes.join("QMCPACK.eb"), "QMCPACK", "4.3.0");
 
     let state = run_campaign(&CampaignRequest {
         bundle,
@@ -564,7 +567,7 @@ fn campaign_cli_claims_and_resolves_findings_for_omp_workers() {
         r#"{"profile":"default","solver":"resolvo"}"#,
     )
     .expect("lock");
-    std::fs::write(recipes.join("eOn.eb"), "name = 'eOn'\n").expect("recipe");
+    write_valid_recipe(&recipes.join("eOn.eb"), "eOn", "2.16.0");
     let state_path = temp.path().join("campaign.json");
     let failed = run_campaign(&CampaignRequest {
         bundle,
