@@ -2,13 +2,13 @@
 
 pub mod campaign;
 pub mod domain;
-pub mod eb_emit;
+mod eb_emit;
 pub mod eb_parse;
 pub mod eb_style;
 pub mod eb_template_constants;
-pub mod foreign;
+mod foreign;
 pub mod hierarchy;
-pub mod manifest;
+mod manifest;
 pub mod mcp;
 pub mod package;
 pub mod package_config;
@@ -23,13 +23,6 @@ pub mod target;
 pub mod version;
 
 pub use domain::*;
-pub use eb_emit::{
-    dep_specs_from_source, easyconfig_filename, emit_next_generation, emit_next_generation_auto,
-    emit_next_generation_auto_from_path, emit_next_generation_auto_from_path_with_opts,
-    emit_next_generation_auto_with_opts, emit_next_generation_from_path,
-    resolve_dep_versions_for_source, resolve_dep_versions_for_source_with_opts, AutoResolveOpts,
-    EmitError, EmitParams, EmitResult,
-};
 pub use eb_parse::candidate_matches_dep_for_recipe;
 pub use eb_parse::{
     candidate_matches_dep, check_recipe_deps, companion_easyconfig_basename, easyconfig_letter_dir,
@@ -45,12 +38,8 @@ pub use eb_style::{
     StyleError, StyleFinding, EB_MAX_LINE,
 };
 pub use foreign::{
-    detect_foreign_format, emit_easyconfig_from_foreign, extract_spack_config_flags_pub,
-    ingest_foreign_to_easyconfig, ingest_foreign_to_easyconfig_with_opts, map_dep_name_to_eb_pub,
-    parse_foreign_path, parse_foreign_str, residual_queue_from_ingest, write_ingest_result,
-    write_ingest_result_with_queue, write_residual_queue, ForeignDep, ForeignError, ForeignFormat,
-    ForeignRecipe, ForeignRule, ForeignRuleKind, ForeignSource, ForeignVariant, IngestOpts,
-    IngestResult, ResidualClaimLadder, ResidualItem, ResidualQueue,
+    detect_foreign_format, parse_foreign_path, parse_foreign_str, ForeignDep, ForeignError,
+    ForeignFormat, ForeignRecipe, ForeignRule, ForeignRuleKind, ForeignSource, ForeignVariant,
 };
 pub use hierarchy::hierarchy_for_with_tree;
 pub use hierarchy::{
