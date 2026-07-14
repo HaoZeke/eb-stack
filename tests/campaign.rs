@@ -113,6 +113,42 @@ fn campaign_interns_easybuild_command_output_before_classifying() {
 }
 
 #[test]
+fn campaign_rejects_missing_checksums_before_easybuild() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipes = bundle.join("easyconfigs/q/QMCPACK");
+    std::fs::create_dir_all(&recipes).expect("recipes");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"QMCPACK","version":"4.3.0"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .expect("lock");
+    std::fs::write(
+        recipes.join("QMCPACK.eb"),
+        "name = 'QMCPACK'\nversion = '4.3.0'\ntoolchain = SYSTEM\nchecksums = []\nmoduleclass = 'chem'\n",
+    )
+    .expect("recipe");
+
+    let state = run_campaign(&CampaignRequest {
+        bundle,
+        target: target("true"),
+        state_path: temp.path().join("campaign.json"),
+    })
+    .expect("campaign finding");
+    assert_eq!(state.status, CampaignStatus::Failed);
+    assert!(!state.claims.builds);
+    assert_eq!(state.findings[0].class, BuildFindingClass::Checksum);
+    assert_eq!(state.findings[0].stage, "preflight");
+    assert!(state.findings[0].evidence.contains("missing checksums"));
+}
+
+#[test]
 fn campaign_state_persists_claims_attempts_and_resume() {
     let temp = tempfile::tempdir().expect("tempdir");
     let bundle = temp.path().join("bundle");
