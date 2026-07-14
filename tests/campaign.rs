@@ -6,6 +6,7 @@ use eb_stack::target::{
     BuildTarget, EasyBuildWorkload, TargetExecutor, TargetRuntime, TargetTransport,
 };
 use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 fn target(command: &str) -> BuildTarget {
@@ -46,6 +47,10 @@ fn failure_classifier_preserves_the_build_error_domain() {
             BuildFindingClass::Resource,
         ),
         ("ssh: connect to host failed", BuildFindingClass::Transport),
+        (
+            "flex: /lib64/libc.so.6: version `GLIBC_2.38' not found",
+            BuildFindingClass::Runtime,
+        ),
     ];
     for (log, expected) in cases {
         assert_eq!(
@@ -54,6 +59,57 @@ fn failure_classifier_preserves_the_build_error_domain() {
             "{log}"
         );
     }
+}
+
+#[test]
+fn campaign_interns_easybuild_command_output_before_classifying() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipes = bundle.join("easyconfigs/e/eOn");
+    std::fs::create_dir_all(&recipes).expect("recipes");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"eOn","version":"2.16.0"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .expect("lock");
+    std::fs::write(recipes.join("eOn.eb"), "name = 'eOn'\n").expect("recipe");
+
+    let nested_log = temp.path().join("easybuild-command.out");
+    std::fs::write(
+        &nested_log,
+        "flex: /lib64/libc.so.6: version `GLIBC_2.38' not found\n",
+    )
+    .expect("nested log");
+    let command = temp.path().join("fake-eb");
+    std::fs::write(
+        &command,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' 'output (stdout + stderr)  ->  {}'\nprintf '%s\\n' 'ERROR: installation failed'\nexit 1\n",
+            nested_log.display()
+        ),
+    )
+    .expect("command");
+    let mut permissions = std::fs::metadata(&command).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&command, permissions).expect("permissions");
+
+    let state = run_campaign(&CampaignRequest {
+        bundle,
+        target: target(command.to_str().expect("command path")),
+        state_path: temp.path().join("campaign.json"),
+    })
+    .expect("campaign finding");
+    assert_eq!(state.findings[0].class, BuildFindingClass::Runtime);
+    assert!(state.findings[0].evidence.contains("GLIBC_2.38"));
+    assert!(state.findings[0]
+        .evidence
+        .contains(&nested_log.display().to_string()));
 }
 
 #[test]
