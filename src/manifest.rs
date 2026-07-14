@@ -42,7 +42,8 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
                 constraint: dependency.pin.clone(),
                 roles: dependency_roles(&dependency.role),
                 condition: dependency.condition.clone(),
-                virtual_capability: is_canonical_virtual(&eb_name).then_some(eb_name),
+                virtual_capability: is_foreign_virtual(&dependency.name, &eb_name)
+                    .then_some(eb_name),
                 provenance: dependency.provenance.clone(),
             }
         })
@@ -193,4 +194,12 @@ fn is_canonical_virtual(name: &str) -> bool {
         name.to_ascii_lowercase().as_str(),
         "mpi" | "blas" | "lapack" | "fftw" | "fftw-api" | "c" | "cxx" | "fortran"
     )
+}
+
+fn is_foreign_virtual(name: &str, eb_name: &str) -> bool {
+    is_canonical_virtual(eb_name)
+        || matches!(
+            name.to_ascii_lowercase().as_str(),
+            "cargo-bundle-licenses" | "sccache"
+        )
 }
