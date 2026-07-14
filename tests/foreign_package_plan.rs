@@ -135,7 +135,6 @@ fn conda_packaging_and_virtual_libraries_map_to_easybuild_conventions() {
         ("liblapack", "lapack"),
         ("liblapacke", "lapack"),
         ("cargo-bundle-licenses", "cargo-bundle-licenses"),
-        ("sccache", "sccache"),
     ] {
         let dependency = plan
             .dependencies
@@ -144,4 +143,11 @@ fn conda_packaging_and_virtual_libraries_map_to_easybuild_conventions() {
             .unwrap_or_else(|| panic!("missing {name}"));
         assert_eq!(dependency.virtual_capability.as_deref(), Some(capability));
     }
+    assert!(
+        !plan
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.name == "sccache"),
+        "compiler wrappers and build accelerators are not package edges"
+    );
 }
