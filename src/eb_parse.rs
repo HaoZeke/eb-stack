@@ -1628,8 +1628,13 @@ fn is_system_toolchain(tc: &Toolchain) -> bool {
     tc.name.eq_ignore_ascii_case("system")
 }
 
-fn candidate_identity_key(c: &Candidate) -> (String, String, String) {
-    (c.name.clone(), c.version.clone(), c.toolchain.label())
+fn candidate_identity_key(c: &Candidate) -> (String, String, String, String) {
+    (
+        c.name.clone(),
+        c.version.clone(),
+        c.toolchain.label(),
+        c.versionsuffix.clone().unwrap_or_default(),
+    )
 }
 
 fn sort_candidates(cands: &mut [Candidate]) {
@@ -1643,12 +1648,13 @@ fn sort_candidates(cands: &mut [Candidate]) {
 }
 
 /// Merge candidate layers with **later-layer precedence**: when two candidates
-/// share the same name + version + toolchain, the later layer wins (overlay).
+/// share the same name + version + toolchain + versionsuffix, the later layer
+/// wins (overlay). Distinct installable variants remain separate candidates.
 ///
 /// Used for site overlays on top of an upstream easyconfigs tree.
 pub fn merge_candidates_with_precedence(layers: &[Vec<Candidate>]) -> Vec<Candidate> {
     use std::collections::BTreeMap;
-    let mut map: BTreeMap<(String, String, String), Candidate> = BTreeMap::new();
+    let mut map: BTreeMap<(String, String, String, String), Candidate> = BTreeMap::new();
     for layer in layers {
         for c in layer {
             map.insert(candidate_identity_key(c), c.clone());
