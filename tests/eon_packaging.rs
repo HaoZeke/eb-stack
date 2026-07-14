@@ -24,7 +24,11 @@ fn parse_semver_triple(v: &str) -> Option<(u64, u64, u64)> {
     let minor = parts.next().unwrap_or("0").parse().ok()?;
     let patch = parts
         .next()
-        .map(|p| p.chars().take_while(|c| c.is_ascii_digit()).collect::<String>())
+        .map(|p| {
+            p.chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+        })
         .filter(|s| !s.is_empty())
         .map(|s| s.parse().ok())
         .unwrap_or(Some(0))?;
@@ -224,18 +228,26 @@ fn resolve_meson_companion_meets_eon_floor() {
 #[test]
 fn eon_full_recipe_deps_found_in_drafts_plus_real_robot() {
     let drafts = root().join("easyconfigs");
-    let recipe =
-        resolve_easyconfig_file(&drafts.join("e/eOn/eOn-2.16.0-foss-2024a.eb")).unwrap();
+    let recipe = resolve_easyconfig_file(&drafts.join("e/eOn/eOn-2.16.0-foss-2024a.eb")).unwrap();
     // Drafts alone: companions present; Python/PyTorch/xtb still missing.
     let draft_only = parse_easyconfig_trees(&[&drafts]).unwrap();
     let incomplete = check_recipe_deps(&recipe, &draft_only.candidates);
-    assert!(!incomplete.ok(), "drafts alone cannot supply Python/PyTorch/…");
+    assert!(
+        !incomplete.ok(),
+        "drafts alone cannot supply Python/PyTorch/…"
+    );
     assert!(
         incomplete.missing.iter().any(|m| m.name == "Python"),
         "expected Python missing: {:?}",
         incomplete.missing
     );
-    for companion in ["quill", "metatensor", "metatensor-torch", "metatomic-torch", "Meson"] {
+    for companion in [
+        "quill",
+        "metatensor",
+        "metatensor-torch",
+        "metatomic-torch",
+        "Meson",
+    ] {
         assert!(
             incomplete.found.iter().any(|f| f.contains(companion)),
             "drafts must supply {companion}: {:?}",
@@ -253,7 +265,10 @@ fn eon_full_recipe_deps_found_in_drafts_plus_real_robot() {
     let without_drafts = check_recipe_deps(&recipe, &real_only.candidates);
     // Upstream robot lacks companions (quill, metatomic stack, Meson 1.8.2).
     assert!(
-        without_drafts.missing.iter().any(|m| m.name == "quill" || m.name == "metatomic-torch"),
+        without_drafts
+            .missing
+            .iter()
+            .any(|m| m.name == "quill" || m.name == "metatomic-torch"),
         "upstream robot must lack companions: missing={:?}",
         without_drafts.missing
     );
@@ -272,6 +287,12 @@ fn eon_full_recipe_deps_found_in_drafts_plus_real_robot() {
         check.missing
     );
     assert!(check.found.iter().any(|f| f.contains("metatomic-torch")));
-    assert!(check.found.iter().any(|f| f.contains("xtb") || f.contains("XTB") || f.contains("xtb")));
-    assert!(check.found.iter().any(|f| f.contains("PyTorch") || f.contains("pytorch") || f.contains("PyTorch")));
+    assert!(check
+        .found
+        .iter()
+        .any(|f| f.contains("xtb") || f.contains("XTB") || f.contains("xtb")));
+    assert!(check
+        .found
+        .iter()
+        .any(|f| f.contains("PyTorch") || f.contains("pytorch") || f.contains("PyTorch")));
 }

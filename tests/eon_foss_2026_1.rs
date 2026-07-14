@@ -195,7 +195,8 @@ fn eon_2026_1_check_recipe_drafts_plus_robot() {
         return;
     }
     let drafts_root2 = drafts();
-    let merged = parse_easyconfig_trees(&[real.as_path(), drafts_root2.as_path()]).expect("overlay");
+    let merged =
+        parse_easyconfig_trees(&[real.as_path(), drafts_root2.as_path()]).expect("overlay");
     let check = check_recipe_deps(&recipe, &merged.candidates);
     eprintln!(
         "eOn foss-2026.1 robot check: found={} missing={:?} coverage={:.2}%",

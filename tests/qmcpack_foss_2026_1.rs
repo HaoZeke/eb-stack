@@ -37,11 +37,7 @@ fn resolve_qmcpack_foss_2026_1() {
     }
     packaging_gate(
         &r,
-        &[
-            "-DQMC_MPI=ON",
-            "-DQMC_OMP=ON",
-            "-DQMC_MIXED_PRECISION=OFF",
-        ],
+        &["-DQMC_MPI=ON", "-DQMC_OMP=ON", "-DQMC_MIXED_PRECISION=OFF"],
     )
     .expect("packaging_gate");
 
