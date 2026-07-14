@@ -34,8 +34,8 @@ pub use eb_parse::{
     ScaffoldedCompanion, SkippedEasyconfig,
 };
 pub use eb_style::{
-    format_style, format_style_file, lint_style, style_residual_items, FormatStyleResult,
-    StyleError, StyleFinding, EB_MAX_LINE,
+    format_style, format_style_file, lint_style, FormatStyleResult, StyleError, StyleFinding,
+    EB_MAX_LINE,
 };
 pub use foreign::{
     detect_foreign_format, parse_foreign_path, parse_foreign_str, ForeignDep, ForeignError,

@@ -141,25 +141,6 @@ pub fn format_style_file(path: &Path, out: Option<&Path>) -> Result<FormatStyleR
     Ok(result)
 }
 
-/// Residual-queue style items from a scaffold text (kind `style`, mechanical).
-pub fn style_residual_items(text: &str) -> Vec<crate::foreign::ResidualItem> {
-    lint_style(text)
-        .into_iter()
-        .map(|f| crate::foreign::ResidualItem {
-            kind: "style".into(),
-            summary: format!(
-                "{} L{}: {} — run `eb-stack format-style` (mechanical; not residual judgment)",
-                f.code, f.line, f.message
-            ),
-            detail: Some(if f.mechanical {
-                "mechanical: format-style can rewrite this line".into()
-            } else {
-                "not auto-fixed: break manually or shorten (URL/template); still not product judgment".into()
-            }),
-        })
-        .collect()
-}
-
 fn try_format_line(line: &str) -> Option<Vec<String>> {
     let trimmed_start = line.trim_start();
     if trimmed_start.starts_with('#') {
