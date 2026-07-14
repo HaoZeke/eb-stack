@@ -10,6 +10,7 @@ fn write_easyconfig(root: &std::path::Path, filename: &str, text: &str) {
 #[test]
 fn hierarchy_consensus_cannot_replace_an_unsatisfiable_resolvo_solve() {
     let recipe = parse_foreign_str(
+        ForeignFormat::CondaForge,
         r#"
 package:
   name: app
@@ -19,7 +20,6 @@ requirements:
     - hdf5 >=1.14
     - zlib >=1.2
 "#,
-        ForeignFormat::CondaForge,
     )
     .expect("parse foreign recipe");
     let toolchain = Toolchain {
