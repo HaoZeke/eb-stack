@@ -1,6 +1,6 @@
 use eb_stack::campaign::{
-    classify_build_failure, run_campaign, BuildFindingClass, CampaignRequest, CampaignStatus,
-    CAMPAIGN_SCHEMA_VERSION,
+    claim_finding, classify_build_failure, resolve_finding, run_campaign, BuildFindingClass,
+    CampaignRequest, CampaignStatus, FindingResolution, FindingStatus, CAMPAIGN_SCHEMA_VERSION,
 };
 use eb_stack::target::{
     BuildTarget, EasyBuildWorkload, TargetExecutor, TargetRuntime, TargetTransport,
@@ -107,12 +107,68 @@ fn campaign_state_persists_claims_attempts_and_resume() {
     assert!(!completed.claims.binary_verified);
     assert_eq!(completed.attempts, 2);
     assert_eq!(completed.findings.len(), 1, "failure history is retained");
+    assert_eq!(completed.findings[0].status, FindingStatus::Superseded);
 
     let persisted: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(state_path).expect("read state"))
             .expect("state JSON");
     assert_eq!(persisted["status"], "completed");
     assert_eq!(persisted["claims"]["builds"], true);
+}
+
+#[test]
+fn finding_queue_enforces_ownership_and_records_resolution() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipes = bundle.join("easyconfigs/e/eOn");
+    std::fs::create_dir_all(&recipes).expect("recipes");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"eOn","version":"2.16.0"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .expect("lock");
+    std::fs::write(recipes.join("eOn.eb"), "name = 'eOn'\n").expect("recipe");
+    let state_path = temp.path().join("campaign.json");
+    let failed = run_campaign(&CampaignRequest {
+        bundle,
+        target: target("false"),
+        state_path: state_path.clone(),
+    })
+    .expect("failed campaign");
+    let finding = failed.findings[0].id.clone();
+
+    let claimed = claim_finding(&state_path, &finding, "omp-worker-1").expect("claim finding");
+    assert_eq!(claimed.findings[0].status, FindingStatus::InProgress);
+    assert_eq!(claimed.findings[0].owner.as_deref(), Some("omp-worker-1"));
+    let conflict = claim_finding(&state_path, &finding, "omp-worker-2")
+        .expect_err("second worker cannot steal finding");
+    assert!(conflict.to_string().contains("omp-worker-1"), "{conflict}");
+
+    let resolved = resolve_finding(
+        &state_path,
+        &finding,
+        "omp-worker-1",
+        FindingResolution {
+            action: "corrected the profile config".into(),
+            evidence: "recipe check exits successfully".into(),
+            changes: vec!["profiles/eon.toml".into()],
+        },
+    )
+    .expect("resolve finding");
+    assert_eq!(resolved.findings[0].status, FindingStatus::Resolved);
+    assert_eq!(
+        resolved.findings[0]
+            .resolution
+            .as_ref()
+            .map(|resolution| resolution.action.as_str()),
+        Some("corrected the profile config")
+    );
 }
 
 #[test]
