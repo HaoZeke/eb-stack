@@ -1,5 +1,5 @@
 //! QMCPACK 4.3.0 on foss-2026.1 (PR #26437): fixtures/qmcpack_foss_2026_1.
-//! Real parse/resolve/check-recipe path.
+//! Real parse, resolve, and recipe-check path.
 
 use eb_stack::{
     check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,

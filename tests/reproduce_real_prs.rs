@@ -9,7 +9,7 @@
 //!
 //! Two drive modes:
 //! 1. **Hand map** (historical): explicit per-dependency version map.
-//! 2. **Auto-resolve** (hierarchy-aware): only source, target generation, and
+//! 2. **Resolvo planning** (hierarchy-aware): only source, target generation, and
 //!    a bundled easyconfig universe — no hand-fed dep versions. Versions are
 //!    resolved by accepting recipes whose toolchain is any member of the
 //!    target generation's sub-toolchain hierarchy.
@@ -393,10 +393,10 @@ fn cli_auto_bump(source: &Path, out_name: &str) -> String {
             out.to_str().unwrap(),
         ])
         .status()
-        .expect("spawn eb-stack bump");
+        .expect("spawn eb-stack package bump");
     assert!(
         status.success(),
-        "eb-stack bump failed for {}: {status}",
+        "eb-stack package bump failed for {}: {status}",
         source.display()
     );
     assert!(out.join("package.plan.json").is_file());
@@ -407,7 +407,7 @@ fn cli_auto_bump(source: &Path, out_name: &str) -> String {
     std::fs::read_to_string(recipe).expect("read CLI output")
 }
 
-/// CLI auto-bump must match library emit (modulo residual additions).
+/// CLI package bump must match library emit (modulo residual additions).
 fn assert_cli_reproduces(source: &Path, target: &Path, allowed_additions: &[&str], out_name: &str) {
     let emitted = cli_auto_bump(source, out_name);
     assert_emitted_matches_target(&emitted, target, allowed_additions, source);

@@ -1,7 +1,7 @@
 //! eOn 2.16.0 on foss-2026.1: landable PR recipe set under fixtures/eon_foss_2026_1.
 //!
 //! Distinct from fixtures/eon_packaging (foss-2024a site/feedstock parity).
-//! Drive the real shipped parse/resolve/check-recipe path — not a reimplementation.
+//! Drive the real shipped parse, resolve, and recipe-check path.
 
 use eb_stack::{
     check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,

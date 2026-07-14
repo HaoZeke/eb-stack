@@ -36,7 +36,7 @@ jobs:
           set -euo pipefail
           # Library + CLI emit path: foss-2023b -> foss-2024a pairs under
           # tests/repro_fixtures/ (GROMACS, ScaFaCoS, MDTraj, Fiona, PuLP, numba)
-          # plus hierarchy auto-resolve cases in bump_emit.
+          # plus hierarchy-aware Resolvo cases in bump_emit.
           cargo test --locked --test reproduce_real_prs --test bump_emit -- --nocapture
 
   packaging-fixtures:
@@ -131,7 +131,7 @@ jobs:
           if "$BIN" recipe check \
             --recipe fixtures/qmcpack_foss_2026_1/easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1.eb \
             --easyconfigs fixtures/qmcpack_foss_2026_1/easyconfigs; then
-            echo "expected check-recipe to fail without robot deps" >&2
+            echo "expected recipe check to fail without robot deps" >&2
             exit 1
           fi
       - name: recipe packaging gate on eOn landable fixture

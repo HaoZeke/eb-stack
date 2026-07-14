@@ -1,8 +1,8 @@
 //! Stack selection via resolvo CDCL SAT (fed by parsed easyconfig candidates).
 //!
 //! Also provides [`resolvo_resolve_dep_versions`]: joint SAT co-select of
-//! dependency pins for a single recipe (used by `bump --easyconfigs` and
-//! foreign ingest), so version bumps are not hierarchy-lookup-only.
+//! dependency pins for a single recipe (used by canonical package planning
+//! and bumps), so version selection is not hierarchy-lookup-only.
 
 use crate::domain::{
     Candidate, DepReq, LockPackage, Policy, SolverMeta, StackLock, Toolchain, Universe,
@@ -72,7 +72,7 @@ pub fn select_stack(
     })
 }
 
-/// Joint resolvo co-select of dependency versions for one recipe (bump / ingest).
+/// Joint resolvo co-select of dependency versions for one recipe.
 ///
 /// Builds a synthetic root candidate whose dependencies are the foreign or
 /// source-recipe deps that exist under the generation hierarchy, solves with

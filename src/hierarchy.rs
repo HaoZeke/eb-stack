@@ -692,7 +692,7 @@ impl SourceDepSpec {
         }
     }
 
-    /// Whether auto-resolve must leave the source version untouched:
+    /// Whether package bump planning must leave the source version untouched:
     /// SYSTEM 4th-tuple or non-empty versionsuffix.
     ///
     /// A `# optional` comment marks the dependency optional **to include**,

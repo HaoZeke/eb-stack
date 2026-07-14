@@ -125,8 +125,8 @@ fn cli_bump_writes_conventional_file() {
             out_dir.to_str().unwrap(),
         ])
         .status()
-        .expect("spawn eb-stack bump");
-    assert!(status.success(), "eb-stack bump failed: {status}");
+        .expect("spawn eb-stack package bump");
+    assert!(status.success(), "eb-stack package bump failed: {status}");
 
     let written = bundle_recipe(out_dir, "GROMACS", "GROMACS-2025.0-foss-2025b.eb");
     assert!(written.is_file(), "missing {}", written.display());
@@ -198,7 +198,7 @@ fn gromacs_repro_universe() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/repro_fixtures/universe_foss_2024a")
 }
 
-/// Library auto-resolve fills dep versions from a multi-subtoolchain universe
+/// Library Resolvo planning fills dep versions from a multi-subtoolchain universe
 /// with an empty hand override map.
 #[test]
 fn library_auto_resolve_gromacs_deps_from_universe() {
@@ -223,7 +223,7 @@ fn library_auto_resolve_gromacs_deps_from_universe() {
     assert!(!recipe.text.contains("pybind11"));
 }
 
-/// CLI `bump --easyconfigs` with no `--dep` resolves versions from the universe.
+/// CLI `package bump --easyconfigs` with no `--dep` resolves versions from the universe.
 #[test]
 fn cli_bump_auto_resolve_from_easyconfigs() {
     let bin = env!("CARGO_BIN_EXE_eb-stack");
@@ -248,7 +248,7 @@ fn cli_bump_auto_resolve_from_easyconfigs() {
             out.to_str().unwrap(),
         ])
         .status()
-        .expect("spawn eb-stack bump --easyconfigs");
+        .expect("spawn eb-stack package bump --easyconfigs");
     assert!(status.success(), "auto bump failed: {status}");
     let recipe = bundle_recipe(&out, "GROMACS", "GROMACS-2024.4-foss-2024a.eb");
     let text = std::fs::read_to_string(recipe).expect("read");

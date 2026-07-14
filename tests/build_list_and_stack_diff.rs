@@ -191,7 +191,7 @@ fn cli_solve_with_sbom_flag_writes_sbom() {
     assert!(sbom_out.is_file());
 }
 
-/// End-to-end CLI: `solve --baseline-easyconfigs` asserts lock *content* and
+/// End-to-end CLI: `stack solve --baseline-easyconfigs` asserts lock *content* and
 /// stack-diff text for the known prefer_newer upgrade outcome (not mere file existence).
 #[test]
 fn cli_solve_baseline_asserts_lock_versions_and_stack_diff() {
@@ -215,8 +215,8 @@ fn cli_solve_baseline_asserts_lock_versions_and_stack_diff() {
             stack_diff_out.to_str().unwrap(),
         ])
         .status()
-        .expect("spawn eb-stack solve");
-    assert!(status.success(), "eb-stack solve failed: {status}");
+        .expect("spawn eb-stack stack solve");
+    assert!(status.success(), "eb-stack stack solve failed: {status}");
     assert!(lock_out.is_file());
     assert!(stack_diff_out.is_file());
 
