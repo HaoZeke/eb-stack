@@ -5,9 +5,11 @@ use crate::target::{
     BuildTarget, CommandPlan, TargetError, TargetExecutor, TargetRuntime, TargetTransport,
 };
 use crate::{packaging_gate, resolve_easyconfig_file};
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -885,8 +887,8 @@ fn write_state(path: &Path, state: &CampaignState) -> Result<(), CampaignError> 
 }
 
 struct CampaignLock {
-    path: PathBuf,
-    _file: std::fs::File,
+    metadata_path: PathBuf,
+    _guard: std::fs::File,
 }
 
 impl CampaignLock {
@@ -895,26 +897,87 @@ impl CampaignLock {
             std::fs::create_dir_all(parent)
                 .map_err(|error| CampaignError::Io(parent.to_path_buf(), error))?;
         }
-        let path = PathBuf::from(format!("{}.lock", state_path.display()));
-        let file = OpenOptions::new()
+        let metadata_path = PathBuf::from(format!("{}.lock", state_path.display()));
+        let guard_path = PathBuf::from(format!("{}.lock.guard", state_path.display()));
+        let guard = OpenOptions::new()
+            .read(true)
             .write(true)
-            .create_new(true)
-            .open(&path)
+            .create(true)
+            .open(&guard_path)
+            .map_err(|error| CampaignError::Io(guard_path.clone(), error))?;
+        FileExt::try_lock_exclusive(&guard)
             .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::AlreadyExists {
-                    CampaignError::Busy(path.clone())
+                if error.kind() == fs2::lock_contended_error().kind() {
+                    CampaignError::Busy(metadata_path.clone())
                 } else {
-                    CampaignError::Io(path.clone(), error)
+                    CampaignError::Io(guard_path.clone(), error)
                 }
             })?;
-        Ok(Self { path, _file: file })
+
+        let record = CampaignLockRecord {
+            schema_version: 1,
+            host: campaign_lock_host(),
+            pid: std::process::id(),
+            process_start_ticks: process_start_ticks(std::process::id()),
+        };
+        let mut metadata = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&metadata_path)
+            .map_err(|error| CampaignError::Io(metadata_path.clone(), error))?;
+        serde_json::to_writer_pretty(&mut metadata, &record)
+            .map_err(|error| CampaignError::Json(metadata_path.clone(), error))?;
+        metadata
+            .write_all(b"\n")
+            .and_then(|()| metadata.sync_all())
+            .map_err(|error| CampaignError::Io(metadata_path.clone(), error))?;
+
+        Ok(Self {
+            metadata_path,
+            _guard: guard,
+        })
     }
 }
 
 impl Drop for CampaignLock {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_file(&self.metadata_path);
     }
+}
+
+#[derive(Debug, Serialize)]
+struct CampaignLockRecord {
+    schema_version: u32,
+    host: String,
+    pid: u32,
+    process_start_ticks: Option<u64>,
+}
+
+fn campaign_lock_host() -> String {
+    std::env::var("HOSTNAME")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| value.trim().to_string())
+        .or_else(|| {
+            std::fs::read_to_string("/etc/hostname")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or_else(|| "unknown".into())
+}
+
+#[cfg(target_os = "linux")]
+fn process_start_ticks(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let fields = stat.get(stat.rfind(") ")? + 2..)?;
+    fields.split_whitespace().nth(19)?.parse().ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn process_start_ticks(_pid: u32) -> Option<u64> {
+    None
 }
 
 #[derive(Debug, Error)]

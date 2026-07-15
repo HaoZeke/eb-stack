@@ -37,6 +37,7 @@ version-ranges = "0.1"
 serde_yaml = "0.9"
 toml = "0.9"
 cyclonedx-bom = "0.8"
+fs2 = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
