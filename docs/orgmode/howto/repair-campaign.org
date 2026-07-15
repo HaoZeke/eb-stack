@@ -146,4 +146,3 @@ If the controller exits, its advisory state guard releases automatically.
 Confirm that its container, scheduler job, or remote command is absent before
 retrying because a routed workload can outlive the controller. Reuse the state
 file so attempt history and evidence remain one coherent record.
-
