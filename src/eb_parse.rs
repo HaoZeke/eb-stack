@@ -1251,7 +1251,7 @@ fn opt_str_field(
 ) -> Option<String> {
     env.get(key).and_then(|v| {
         let v = apply_templates_value(v, templates);
-        v.expect_str(key).ok().map(|s| s)
+        v.expect_str(key).ok()
     })
 }
 
@@ -1265,10 +1265,7 @@ fn opt_str_list_field(
     };
     let v = apply_templates_value(v, templates);
     match value_list_as_slice(Some(&v)) {
-        Ok(items) => items
-            .iter()
-            .flat_map(|i| checksum_strings_from_value(i))
-            .collect(),
+        Ok(items) => items.iter().flat_map(checksum_strings_from_value).collect(),
         Err(_) => match v.expect_str(key) {
             Ok(s) => vec![s],
             Err(_) => Vec::new(),
@@ -1964,7 +1961,7 @@ mod tests {
         let lock_ok = lock_from_candidates(&[root.clone(), tool.clone()], None, "test");
         assert!(validate_lock_deps(&lock_ok, &[root.clone(), tool.clone()]).is_ok());
 
-        let lock_missing = lock_from_candidates(&[root.clone()], None, "test");
+        let lock_missing = lock_from_candidates(std::slice::from_ref(&root), None, "test");
         let err = validate_lock_deps(&lock_missing, &[root, tool]).unwrap_err();
         assert!(
             err.contains("builddep") && err.contains("Tool"),

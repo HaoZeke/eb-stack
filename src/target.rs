@@ -230,7 +230,7 @@ pub fn resolve_target_layers(
                     .ok_or_else(|| TargetError::MissingLayer(name.clone(), "runtime"))?,
                 easybuild: target
                     .easybuild
-                    .ok_or_else(|| TargetError::MissingLayer(name, "easybuild"))?,
+                    .ok_or(TargetError::MissingLayer(name, "easybuild"))?,
             })
         })
         .collect()

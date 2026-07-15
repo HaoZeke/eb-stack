@@ -387,7 +387,7 @@ fn stack_solve(arguments: &Value) -> Result<Value, String> {
 }
 
 fn target_list(arguments: &Value) -> Result<Value, String> {
-    Ok(serde_json::to_value(load_targets(arguments)?).map_err(|error| error.to_string())?)
+    serde_json::to_value(load_targets(arguments)?).map_err(|error| error.to_string())
 }
 
 fn target_doctor(arguments: &Value) -> Result<Value, String> {

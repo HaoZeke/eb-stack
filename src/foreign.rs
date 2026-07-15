@@ -595,27 +595,23 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>) {
     }
 
     // rattler context: block — simple scalar keys only
-    if let Some(ctx_start) = Regex::new(r"(?m)^context\s*:\s*$")
-        .ok()
-        .and_then(|r| r.find(text))
-    {
+    let context_re = Regex::new(r"(?m)^context\s*:\s*$").expect("context re");
+    let context_end_re = Regex::new(r"^[A-Za-z_]").expect("context end re");
+    let context_scalar_re = Regex::new(
+        r#"^[ \t]+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*[\"']?([^\"'#\n]+?)[\"']?\s*(?:#.*)?$"#,
+    )
+    .expect("context scalar re");
+    if let Some(ctx_start) = context_re.find(text) {
         let rest = &text[ctx_start.end()..];
         for line in rest.lines() {
-            if Regex::new(r"^[A-Za-z_]")
-                .ok()
-                .is_some_and(|r| r.is_match(line))
+            if context_end_re.is_match(line)
                 && line.contains(':')
                 && !line.starts_with(' ')
                 && !line.starts_with('\t')
             {
                 break;
             }
-            if let Some(c) = Regex::new(
-                r#"^[ \t]+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*[\"']?([^\"'#\n]+?)[\"']?\s*(?:#.*)?$"#,
-            )
-            .ok()
-            .and_then(|r| r.captures(line))
-            {
+            if let Some(c) = context_scalar_re.captures(line) {
                 let k = c[1].to_string();
                 let v = c[2].trim().to_string();
                 // skip nested structures
@@ -978,16 +974,17 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
 
     // resource(name=..., url=..., destination=..., placement=...)
     let res_full = Regex::new(r#"(?s)resource\s*\(\s*((?:[^()]|\([^()]*\))*)\)"#).ok();
+    let res_url_re = Regex::new(r#"url\s*=\s*[\"']([^\"']+)[\"']"#).expect("resource URL re");
+    let res_dest_re = Regex::new(r#"(?:destination|placement)\s*=\s*[\"']([^\"']+)[\"']"#)
+        .expect("resource destination re");
     if let Some(re) = res_full {
         for cap in re.captures_iter(text) {
             let inner = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-            let res_url = Regex::new(r#"url\s*=\s*[\"']([^\"']+)[\"']"#)
-                .ok()
-                .and_then(|r| r.captures(inner))
+            let res_url = res_url_re
+                .captures(inner)
                 .and_then(|c| c.get(1).map(|m| m.as_str().to_string()));
-            let dest = Regex::new(r#"(?:destination|placement)\s*=\s*[\"']([^\"']+)[\"']"#)
-                .ok()
-                .and_then(|r| r.captures(inner))
+            let dest = res_dest_re
+                .captures(inner)
                 .and_then(|c| c.get(1).map(|m| m.as_str().to_string()));
             if let Some(u) = res_url {
                 sources.push(ForeignSource {
@@ -1712,7 +1709,7 @@ about:
         assert!(r.sha256.is_some());
         let names: Vec<_> = r.dependencies.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"gmake"), "{names:?}");
-        assert!(!names.iter().any(|n| *n == "c"), "language virtual skipped");
+        assert!(!names.contains(&"c"), "language virtual skipped");
     }
 
     #[test]

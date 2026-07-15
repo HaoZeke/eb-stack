@@ -107,10 +107,8 @@ pub fn format_style(text: &str) -> FormatStyleResult {
     }
 
     let mut text_out = out_lines.join("\n");
-    if ends_with_nl || text.is_empty() {
-        if !text_out.ends_with('\n') {
-            text_out.push('\n');
-        }
+    if (ends_with_nl || text.is_empty()) && !text_out.ends_with('\n') {
+        text_out.push('\n');
     }
     // Empty input stays empty without forced newline unless original had content.
     if text.is_empty() {
@@ -558,7 +556,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         let src = format!("configopts = '{long_flags}'\n");
-        assert!(lint_style(&src).len() >= 1);
+        assert!(!lint_style(&src).is_empty());
         let r = format_style(&src);
         assert!(r.lines_rewritten >= 1);
         assert!(r.remaining.is_empty(), "remaining: {:?}", r.remaining);
@@ -623,9 +621,7 @@ mod tests {
 
     #[test]
     fn format_list_item_long_string() {
-        let long = format!(
-            "    \"sed 's|^prefix=.*|prefix=%(installdir)s|' %(builddir)s/readcon-stage/lib/pkgconfig/readcon-core.pc > %(installdir)s/lib/pkgconfig/readcon-core.pc\",\n"
-        );
+        let long = "    \"sed 's|^prefix=.*|prefix=%(installdir)s|' %(builddir)s/readcon-stage/lib/pkgconfig/readcon-core.pc > %(installdir)s/lib/pkgconfig/readcon-core.pc\",\n".to_string();
         assert!(long.lines().next().unwrap().chars().count() > EB_MAX_LINE);
         let r = format_style(&long);
         assert!(r.remaining.is_empty(), "{:?}", r.remaining);

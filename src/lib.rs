@@ -79,7 +79,7 @@ use crate::version::cmp_version;
 
 pub fn load_json_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let s = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    Ok(serde_json::from_str(&s).with_context(|| format!("parse {}", path.display()))?)
+    serde_json::from_str(&s).with_context(|| format!("parse {}", path.display()))
 }
 
 pub fn write_json_pretty(path: &Path, value: &impl serde::Serialize) -> Result<()> {
