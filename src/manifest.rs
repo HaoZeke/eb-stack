@@ -1,10 +1,7 @@
 //! Canonical adapter from syntax-aware foreign recipes to package plans.
 
 use crate::domain::Toolchain;
-use crate::foreign::{
-    canonicalize_eb_package_name, guess_easyblock, map_dep_name_to_eb, ForeignFormat,
-    ForeignRecipe, ForeignRuleKind,
-};
+use crate::foreign::{guess_easyblock, ForeignFormat, ForeignRecipe, ForeignRuleKind};
 use crate::package::{
     BuildSpec, DependencyIntent, DependencyRole, OutputRequest, PackageMetadata, PackageOrigin,
     PackagePlan, PackageRule, PackageRuleKind, ProductProfile, Residual, ResidualSeverity,
@@ -13,7 +10,6 @@ use crate::package::{
 use std::collections::BTreeMap;
 
 pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) -> PackagePlan {
-    let package_name = canonicalize_eb_package_name(&recipe.name);
     let sources = recipe
         .sources
         .iter()
@@ -34,16 +30,14 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
         .iter()
         .enumerate()
         .map(|(index, dependency)| {
-            let eb_name = map_dep_name_to_eb(&dependency.name);
             DependencyIntent {
                 id: format!("dep:{index}:{name}", name = dependency.name),
                 name: dependency.name.clone(),
-                eb_name: Some(eb_name.clone()),
+                eb_name: None,
                 constraint: canonical_version_constraint(dependency.pin.as_deref()),
                 roles: dependency_roles(&dependency.role),
                 condition: dependency.condition.clone(),
-                virtual_capability: is_foreign_virtual(&dependency.name, &eb_name)
-                    .then_some(eb_name),
+                virtual_capability: foreign_virtual_capability(&dependency.name),
                 provenance: dependency.provenance.clone(),
             }
         })
@@ -138,7 +132,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             ForeignFormat::Spack => PackageOrigin::Spack,
         },
         package: PackageMetadata {
-            name: package_name,
+            name: recipe.name.clone(),
             version: recipe.version.clone(),
             homepage: recipe.homepage.clone(),
             description: recipe
@@ -206,10 +200,17 @@ fn is_canonical_virtual(name: &str) -> bool {
     )
 }
 
-fn is_foreign_virtual(name: &str, eb_name: &str) -> bool {
-    is_canonical_virtual(eb_name)
+fn foreign_virtual_capability(name: &str) -> Option<String> {
+    let normalized = name.to_ascii_lowercase();
+    if is_canonical_virtual(&normalized)
         || matches!(
-            name.to_ascii_lowercase().as_str(),
-            "cargo-bundle-licenses" | "sccache"
+            normalized.as_str(),
+            "libblas" | "libcblas" | "liblapack" | "liblapacke"
         )
+        || normalized.starts_with("__")
+    {
+        Some(name.to_string())
+    } else {
+        None
+    }
 }

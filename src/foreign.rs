@@ -325,59 +325,6 @@ pub(crate) fn guess_easyblock(recipe: &ForeignRecipe, warnings: &mut Vec<String>
     "ConfigureMake".into()
 }
 
-/// Map foreign package *identity* names toward EasyBuild title casing.
-pub(crate) fn canonicalize_eb_package_name(name: &str) -> String {
-    match name.to_ascii_lowercase().as_str() {
-        "qmcpack" => "QMCPACK".into(),
-        "eon" => "eOn".into(),
-        "gromacs" => "GROMACS".into(),
-        "lammps" => "LAMMPS".into(),
-        "python" => "Python".into(),
-        "cmake" => "CMake".into(),
-        "boost" => "Boost".into(),
-        "hdf5" => "HDF5".into(),
-        other => {
-            // Preserve already-mixed case; otherwise keep foreign spelling.
-            if name.chars().any(|c| c.is_ascii_uppercase()) {
-                name.to_string()
-            } else {
-                other.to_string()
-            }
-        }
-    }
-}
-
-/// Map a foreign dependency name to an EasyBuild-style package name.
-pub(crate) fn map_dep_name_to_eb(name: &str) -> String {
-    match name.to_ascii_lowercase().as_str() {
-        "python" | "pip" | "setuptools" => "Python".into(),
-        "cmake" => "CMake".into(),
-        "ninja" => "Ninja".into(),
-        "meson" => "Meson".into(),
-        "pkg-config" | "pkgconf" => "pkgconf".into(),
-        "boost" => "Boost".into(),
-        "hdf5" => "HDF5".into(),
-        "eigen" => "Eigen".into(),
-        "highway" => "Highway".into(),
-        "libinih" | "inih" => "inih".into(),
-        "gmake" | "make" => "make".into(),
-        "capnproto" => "CapnProto".into(),
-        "py-pyyaml" | "pyyaml" => "PyYAML".into(),
-        "py-numpy" | "numpy" => "SciPy-bundle".into(),
-        "py-matplotlib" | "matplotlib" => "matplotlib".into(),
-        "libxml2" => "libxml2".into(),
-        "libblas" | "libcblas" => "blas".into(),
-        "liblapack" | "liblapacke" => "lapack".into(),
-        "libgcc-ng" | "libstdcxx-ng" => name.to_string(), // residual CF runtime
-        "libmetatomic-torch" => "metatomic-torch".into(),
-        "libmetatensor-torch" => "metatensor-torch".into(),
-        "libmetatensor" => "metatensor".into(),
-        "libtorch" | "pytorch" => "PyTorch".into(),
-        "readcon-core" => "readcon-core".into(),
-        other => other.to_string(),
-    }
-}
-
 // ===========================================================================
 // Conda-forge / rattler-build
 // ===========================================================================
