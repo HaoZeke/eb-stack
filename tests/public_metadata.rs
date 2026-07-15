@@ -5,6 +5,28 @@ fn repo() -> PathBuf {
 }
 
 #[test]
+fn production_rust_has_no_package_identity_branches() {
+    for entry in std::fs::read_dir(repo().join("src")).expect("read source directory") {
+        let path = entry.expect("source entry").path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("read Rust source");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source.as_str(), |(production, _)| production);
+        let production = production.to_ascii_lowercase();
+        for package in ["eon", "qmcpack", "lammps", "gromacs"] {
+            assert!(
+                !production.contains(package),
+                "{} contains package-specific production text for {package}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
 fn public_policies_describe_the_executable_campaign_surface() {
     let code_of_conduct =
         std::fs::read_to_string(repo().join("CODE_OF_CONDUCT.md")).expect("read code of conduct");
