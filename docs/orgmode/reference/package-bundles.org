@@ -54,10 +54,11 @@ pre-build inventory of requested components and dependency intent. It is not a
 scan of installed files and does not establish the ~builds~ or
 ~binary-verified~ claim.
 
-The root component carries the primary source SHA-256. Its external references
-retain VCS tag/commit identity and one distribution URL plus SHA-256 per source
-artifact, including derived GitHub tag archives. These values come from the
-canonical plan after any explicit positional checksum overrides.
+The root component carries the primary source SHA-256 when available. Its
+external references retain VCS tag/commit identity and one distribution URL
+plus SHA-256 per source artifact, including derived GitHub tag archives. These
+values come from the canonical plan after any explicit positional checksum
+overrides.
 
 Consumers should preserve the lifecycle and ~eb_stack:*~ properties when
 copying the document into a wider stack report. Build evidence belongs in the
