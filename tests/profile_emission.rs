@@ -280,9 +280,8 @@ fn conda_target_directories_emit_rattler_compatible_source_staging() {
 
     let emitted = emit_profile_easyconfigs(&plan, &[lock]).expect("emit");
     let text = &emitted[0].text;
-    assert!(text.contains(
-        "'source_urls': ['https://github.com/OmniPotentRPC/rgpot/archive/refs/tags/']"
-    ));
+    assert!(text
+        .contains("'source_urls': ['https://github.com/OmniPotentRPC/rgpot/archive/refs/tags/']"));
     assert!(text.contains("'filename': 'v2.2.1.tar.gz'"));
     assert!(text.contains(
         "'extract_cmd': 'mkdir -p %(builddir)s/subprojects/rgpot && tar -xf %s -C \
