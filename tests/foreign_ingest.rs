@@ -87,6 +87,15 @@ fn conda_lammps_expands_deterministic_date_templates() {
         .url
         .as_deref()
         .is_some_and(|url| url.ends_with("stable_22Jul2025_update4.tar.gz")));
+    assert_eq!(
+        recipe.patches,
+        [
+            "macos_install.patch",
+            "vcsgc_mtp_n2p2.patch",
+            "fix-cython.patch",
+            "matgl.patch",
+        ]
+    );
     for dependency in ["cmake", "fftw", "hdf5", "kim-api", "plumed"] {
         assert!(
             recipe
@@ -101,6 +110,41 @@ fn conda_lammps_expands_deterministic_date_templates() {
         .pin
         .as_deref()
         .is_none_or(|pin| !pin.contains("{{"))));
+}
+
+#[test]
+fn spack_lammps_honors_preference_and_materializes_sources() {
+    let path = root().join("spack_lammps/package.py");
+    let recipe =
+        parse_foreign_path(&path, Some(ForeignFormat::Spack)).expect("parse Spack LAMMPS");
+
+    assert_eq!(recipe.name, "lammps");
+    assert_eq!(recipe.version, "20250722.4");
+    assert_eq!(
+        recipe.sources[0].sha256.as_deref(),
+        Some("411088d9c03339e025f6a975e0a5741bb9e3f351cc39eda220ab22ac318fe2fb")
+    );
+    assert_eq!(
+        recipe.sources[0].url.as_deref(),
+        Some("https://github.com/lammps/lammps/archive/stable_22Jul2025_update4.tar.gz")
+    );
+
+    let potential = recipe
+        .sources
+        .iter()
+        .find(|source| {
+            source.url.as_deref()
+                == Some("https://download.lammps.org/potentials/C_10_10.mesocnt")
+        })
+        .expect("MESONT potential resource");
+    assert_eq!(
+        potential.sha256.as_deref(),
+        Some("923f600a081d948eb8b4510f84aa96167b5a6c3e1aba16845d2364ae137dc346")
+    );
+    assert_eq!(
+        potential.target_directory.as_deref(),
+        Some("potentials/C_10_10.mesocnt")
+    );
 }
 
 #[test]
