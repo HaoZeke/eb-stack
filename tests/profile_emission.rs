@@ -144,6 +144,7 @@ fn materialization_filters_conditional_dependencies_per_profile() {
 fn each_product_profile_emits_a_conventional_easyconfig() {
     let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
     let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.package.name = "QMCPACK".into();
     plan.build.config_options = vec!["-DCMAKE_BUILD_TYPE=Release".into()];
     plan.build.moduleclass = Some("chem".into());
     plan.profiles = qmcpack_profiles();
@@ -209,6 +210,7 @@ fn automatic_easyblock_is_omitted_from_the_easyconfig() {
 fn emitted_dependencies_preserve_locked_toolchain_and_versionsuffix_identity() {
     let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
     let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.package.name = "QMCPACK".into();
     plan.profiles = qmcpack_profiles();
     plan.outputs = vec![OutputRequest {
         profile: "default".into(),
@@ -265,6 +267,7 @@ fn conda_target_directories_emit_rattler_compatible_source_staging() {
         .join("fixtures/foreign_ingest/conda_eon/recipe.yaml");
     let recipe = parse_foreign_path(&source, Some(ForeignFormat::CondaForge)).expect("parse");
     let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.package.name = "eOn".into();
     plan.build.config_options = vec![
         "-Dbuildtype=release".into(),
         "-Dwith_tests=false".into(),
@@ -348,7 +351,7 @@ fn profile_lock_is_created_by_resolvo_with_stack_preferences() {
     )
     .expect("profile solve");
     assert_eq!(lock.solver, "resolvo");
-    assert_eq!(lock.package, "QMCPACK");
+    assert_eq!(lock.package, "qmcpack");
     assert_eq!(lock.profile, "default");
     assert_eq!(lock.dependencies.len(), 1);
     assert_eq!(lock.dependencies[0].name, "HDF5");
@@ -457,7 +460,7 @@ fn stack_pin_admits_a_cross_generation_runtime_closure() {
     let mut dependency = plan
         .dependencies
         .iter()
-        .find(|dependency| dependency.eb_name.as_deref() == Some("HDF5"))
+        .find(|dependency| dependency.name == "hdf5")
         .expect("dependency template")
         .clone();
     dependency.id = "pytorch".into();
@@ -569,7 +572,7 @@ fn profile_solve_scopes_build_dependencies_of_existing_recipes() {
     let template = plan
         .dependencies
         .iter()
-        .find(|dependency| dependency.eb_name.as_deref() == Some("HDF5"))
+        .find(|dependency| dependency.name == "hdf5")
         .expect("HDF5 dependency")
         .clone();
     plan.dependencies = [("openssl", "OpenSSL", "3"), ("git", "git", "2.45.1")]
