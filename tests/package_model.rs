@@ -1,8 +1,8 @@
 use eb_stack::package::{
     package_plan_to_cyclonedx, BuildSpec, ConditionContext, ConditionExpr, ConditionPredicate,
     Confidence, DependencyIntent, DependencyRole, OutputRequest, PackageMetadata, PackageOrigin,
-    PackagePlan, ProductProfile, Provenance, Residual, ResidualSeverity, ResidualStage, SourceSpan,
-    PACKAGE_SCHEMA_VERSION,
+    PackagePlan, ProductProfile, Provenance, Residual, ResidualSeverity, ResidualStage,
+    SourceArtifact, SourceSpan, PACKAGE_SCHEMA_VERSION,
 };
 use eb_stack::Toolchain;
 use serde_json::Value;
@@ -38,7 +38,18 @@ fn qmcpack_plan() -> PackagePlan {
             description: Some("Quantum Monte Carlo application".into()),
             license: Some("BSD-3-Clause".into()),
         },
-        sources: Vec::new(),
+        sources: vec![SourceArtifact {
+            url: None,
+            filename: None,
+            sha256: Some(
+                "511d5f368db002f2f77504619e1ada8d4a3034200d25feef6773d12a6ed6d18e".into(),
+            ),
+            git: Some("https://github.com/QMCPACK/qmcpack.git".into()),
+            tag: Some("v4.3.0".into()),
+            commit: Some("bb7eede051f98ec03296664b304982e655f960c4".into()),
+            target_directory: None,
+            provenance: Vec::new(),
+        }],
         dependencies: vec![DependencyIntent {
             id: "dep:hdf5".into(),
             name: "hdf5".into(),
@@ -181,4 +192,26 @@ fn canonical_plan_writes_typed_cyclonedx_components() {
         names.contains(&"HDF5"),
         "dependency component missing: {names:?}"
     );
+    let root = &sbom["metadata"]["component"];
+    assert_eq!(root["hashes"][0]["alg"], "SHA-256");
+    assert_eq!(
+        root["hashes"][0]["content"],
+        "511d5f368db002f2f77504619e1ada8d4a3034200d25feef6773d12a6ed6d18e"
+    );
+    let references = root["externalReferences"]
+        .as_array()
+        .expect("source references");
+    assert!(references.iter().any(|reference| {
+        reference["type"] == "vcs"
+            && reference["url"] == "https://github.com/QMCPACK/qmcpack.git"
+    }));
+    let distribution = references
+        .iter()
+        .find(|reference| reference["type"] == "distribution")
+        .expect("distribution reference");
+    assert_eq!(
+        distribution["url"],
+        "https://github.com/QMCPACK/qmcpack/archive/refs/tags/v4.3.0.tar.gz"
+    );
+    assert_eq!(distribution["hashes"][0], root["hashes"][0]);
 }
