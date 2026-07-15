@@ -29,6 +29,8 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Public metadata contract
         run: cargo test --locked --test public_metadata
+      - name: Cargo source package
+        run: cargo package --locked
 
   msrv:
     name: Rust 1.88 minimum
