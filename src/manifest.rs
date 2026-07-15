@@ -21,6 +21,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             tag: source.tag.clone(),
             commit: source.commit.clone(),
             target_directory: source.target_directory.clone(),
+            condition: source.condition.clone(),
             provenance: Vec::new(),
         })
         .collect();

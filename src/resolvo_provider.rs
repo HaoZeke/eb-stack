@@ -382,7 +382,7 @@ impl Interner for EbProvider {
         // Map internal rank ranges back to EasyBuild package versions so unsat
         // messages show "{4.1.6|5.0.3}", not raw ranks like "1 | 2".
         // Package name is printed separately by resolvo (display_name); do not
-        // prefix it here or messages become "GROMACS GROMACS@{...}".
+        // prefix it here or messages repeat the package name before the version set.
         let name_id = self.pool.resolve_version_set_package_name(version_set);
         let name = self.pool.resolve_package_name(name_id).to_string();
         let range = self.pool.resolve_version_set(version_set);

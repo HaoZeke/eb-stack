@@ -82,6 +82,9 @@ pub struct ForeignSource {
     /// Conda `target_directory` or Spack resource destination folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_directory: Option<String>,
+    /// Selector / `when=` expression controlling profile inclusion.
+    #[serde(default)]
+    pub condition: ConditionExpr,
 }
 
 /// Variant / feature flag from Spack `variant()` or residual conda feature.
@@ -865,6 +868,7 @@ fn foreign_source_from_yaml_map(v: &YamlValue) -> Option<ForeignSource> {
             .or_else(|| m.get(YamlValue::from("git_commit")))
             .and_then(yaml_as_string),
         target_directory,
+        condition: ConditionExpr::Always,
     })
 }
 
@@ -1190,6 +1194,7 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
         tag: preferred.tag.clone(),
         commit: preferred.commit.clone(),
         target_directory: None,
+        condition: ConditionExpr::Always,
     }];
     if sources[0].url.is_none() && sources[0].git.is_none() {
         sources[0].git = git.clone();
@@ -1201,6 +1206,11 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
     for call in resource_calls {
         let inner = &text[call.inner_start..call.end.saturating_sub(1)];
         if let Some(url) = spack_string_kwarg(inner, "url") {
+            let inherited_condition = spack_scoped_when_condition(text, call.start, &mut notes);
+            let direct_condition = spack_string_kwarg(inner, "when")
+                .as_deref()
+                .map(parse_spack_condition)
+                .unwrap_or(ConditionExpr::Always);
             let target_directory = spack_string_kwarg(inner, "destination").or_else(|| {
                 placement_re
                     .captures(inner)
@@ -1211,6 +1221,7 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
                 filename: spack_string_kwarg(inner, "name"),
                 sha256: spack_string_kwarg(inner, "sha256"),
                 target_directory,
+                condition: condition_all(inherited_condition, direct_condition),
                 ..Default::default()
             });
         }
@@ -1753,7 +1764,7 @@ fn materialize_spack_scoped_when(
     match values.len() {
         0 => {
             notes.push(format!(
-                "dynamic scoped when({expression}) could not be materialized; nested dependency is inactive"
+                "dynamic scoped when({expression}) could not be materialized; nested directive is inactive"
             ));
             ConditionExpr::Never
         }

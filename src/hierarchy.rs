@@ -22,8 +22,8 @@ use thiserror::Error;
 /// weak and we fall back to newest-among-used (still at least floor).
 ///
 /// Rationale: pure plurality can favor an older back-ported pin that many
-/// packages still list (scikit-build-core 0.10.6) while maintainers of key
-/// apps (GROMACS) already moved to 0.11.1. Clear majority (CMake 3.29.3 at
+/// packages still list an older release while maintainers of key applications
+/// already moved to a newer one. A clear majority at
 /// ~97%) still wins; weak plurality falls through to newest-in-generation.
 const CONSENSUS_CLEAR_MAJORITY_NUM: usize = 4;
 const CONSENSUS_CLEAR_MAJORITY_DEN: usize = 5; // 4/5 = 80%

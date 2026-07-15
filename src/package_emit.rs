@@ -66,13 +66,17 @@ pub fn emit_profile_easyconfigs(
                 (!materialized.versionsuffix.is_empty())
                     .then_some(materialized.versionsuffix.as_str()),
             ),
-            text: render_easyconfig(plan, lock, &materialized.versionsuffix),
+            text: render_easyconfig(plan, lock, &materialized),
         });
     }
     Ok(emitted)
 }
 
-fn render_easyconfig(plan: &PackagePlan, lock: &ProfileLock, versionsuffix: &str) -> String {
+fn render_easyconfig(
+    plan: &PackagePlan,
+    lock: &ProfileLock,
+    materialized: &crate::package::MaterializedProfile,
+) -> String {
     let profile = plan
         .profiles
         .iter()
@@ -94,6 +98,7 @@ fn render_easyconfig(plan: &PackagePlan, lock: &ProfileLock, versionsuffix: &str
         .description
         .as_deref()
         .unwrap_or("Package imported from an upstream recipe.");
+    let versionsuffix = materialized.versionsuffix.as_str();
     let versionsuffix_line = if versionsuffix.is_empty() {
         String::new()
     } else {
@@ -110,7 +115,7 @@ fn render_easyconfig(plan: &PackagePlan, lock: &ProfileLock, versionsuffix: &str
     } else {
         format!("toolchainopts = {{{toolchain_options}}}\n")
     };
-    let (source_lines, checksum_lines) = render_sources(plan);
+    let (source_lines, checksum_lines) = render_sources(&materialized.sources);
     let patch_line = if plan.build.patches.is_empty() {
         String::new()
     } else {
@@ -167,7 +172,6 @@ toolchain = {{'name': '{toolchain_name}', 'version': '{toolchain_version}'}}\n\
 {config_line}\
 builddependencies = {build_dependencies}\n\n\
 dependencies = {runtime_dependencies}\n\n\
-sanity_check_paths = {{'files': [], 'dirs': []}}\n\n\
 moduleclass = '{moduleclass}'\n",
         name = escape_single(&plan.package.name),
         version = escape_single(&plan.package.version),
@@ -181,9 +185,8 @@ moduleclass = '{moduleclass}'\n",
     crate::eb_style::format_style(&rendered).text
 }
 
-fn render_sources(plan: &PackagePlan) -> (String, String) {
-    let sources = plan
-        .sources
+fn render_sources(source_artifacts: &[crate::package::SourceArtifact]) -> (String, String) {
+    let sources = source_artifacts
         .iter()
         .filter_map(|source| {
             let url = source
@@ -200,8 +203,7 @@ fn render_sources(plan: &PackagePlan) -> (String, String) {
             Some(render_source(source, &url))
         })
         .collect::<Vec<_>>();
-    let checksums = plan
-        .sources
+    let checksums = source_artifacts
         .iter()
         .filter_map(|source| source.sha256.as_ref())
         .map(|checksum| format!("'{}'", escape_single(checksum)))

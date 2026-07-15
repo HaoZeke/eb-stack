@@ -1413,7 +1413,7 @@ impl RecipeDepCheck {
 
 /// Whether a universe candidate satisfies a resolved dep (name + version +
 /// optional versionsuffix + optional per-dep toolchain). Cross-toolchain
-/// deps (e.g. eOn/gfbf depending on quill/GCCcore) are first-class here —
+/// dependencies crossing from a parent toolchain to a core toolchain are first-class here —
 /// unlike [`filter_toolchain`] which keeps only the policy toolchain.
 ///
 /// When `dep.toolchain` is **None**, any toolchain with a matching
@@ -1592,7 +1592,7 @@ pub fn packaging_gate(
     }
 }
 
-/// EasyBuild-style letter directory for `name` (`GROMACS` → `g`, `xtb` → `x`).
+/// EasyBuild-style letter directory for `name` (`ExamplePkg` → `e`).
 pub fn easyconfig_letter_dir(name: &str) -> String {
     name.chars()
         .next()

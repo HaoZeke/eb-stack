@@ -46,6 +46,7 @@ fn qmcpack_plan() -> PackagePlan {
             tag: Some("v4.3.0".into()),
             commit: Some("bb7eede051f98ec03296664b304982e655f960c4".into()),
             target_directory: None,
+            condition: ConditionExpr::Always,
             provenance: Vec::new(),
         }],
         dependencies: vec![DependencyIntent {

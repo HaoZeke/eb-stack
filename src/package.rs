@@ -114,6 +114,7 @@ pub struct ProfileEnvironment {
 pub struct MaterializedProfile {
     pub package: PackageMetadata,
     pub build: BuildSpec,
+    pub sources: Vec<SourceArtifact>,
     pub profile: ProductProfile,
     pub versionsuffix: String,
     pub dependencies: Vec<DependencyIntent>,
@@ -215,6 +216,8 @@ pub struct SourceArtifact {
     pub commit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_directory: Option<String>,
+    #[serde(default)]
+    pub condition: ConditionExpr,
     #[serde(default)]
     pub provenance: Vec<Provenance>,
 }
@@ -615,6 +618,12 @@ pub fn materialize_profile(
         .filter(|dependency| dependency.condition.evaluate(&context))
         .cloned()
         .collect();
+    let sources = plan
+        .sources
+        .iter()
+        .filter(|source| source.condition.evaluate(&context))
+        .cloned()
+        .collect();
     let rules = plan
         .rules
         .iter()
@@ -625,6 +634,7 @@ pub fn materialize_profile(
     Ok(MaterializedProfile {
         package: plan.package.clone(),
         build: plan.build.clone(),
+        sources,
         versionsuffix: profile.versionsuffix.concat(),
         profile,
         dependencies,
