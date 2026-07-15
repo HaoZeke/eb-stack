@@ -5,19 +5,45 @@ This tutorial plans conda-forge eOn, explains the artifacts, and routes the
 result into a build campaign. The QMCPACK path differs only in parser and
 profile selection.
 
-* Prepare a robot tree and target layer
+* Prepare the runnable local target
 
-Use an installed ~easybuild-easyconfigs~ tree plus the repository fixture:
+The public tutorial target runs EasyBuild inside the repository's Rocky Linux
+Podman image. Build the image and copy the upstream robot plus the eOn fixture
+overlay into the path namespace mounted by the target:
 
 #+begin_src bash
-export ROBOT=/path/to/easybuild-easyconfigs/easybuild/easyconfigs
-export BUNDLE=/tmp/eon-tutorial
-export STATE=/tmp/eon-tutorial.campaign.json
+podman build -t eb-stack-rocky9 \
+  -f skills/new-package/container/rocky9/Containerfile \
+  skills/new-package/container/rocky9
+
+mkdir -p \
+  /tmp/eb-stack/robot \
+  /tmp/eb-stack/overlay \
+  /tmp/eb-stack/sources \
+  /tmp/eb-stack/bundles
+
+rsync -a /path/to/easybuild-easyconfigs/easybuild/easyconfigs/ \
+  /tmp/eb-stack/robot/
+rsync -a fixtures/eon_foss_2026_1/easyconfigs/ \
+  /tmp/eb-stack/overlay/
 #+end_src
 
-Copy ~examples/targets/site.example.toml~ to a private site file and fill in
-the EasyBuild host, durable roots, runtime, and scheduler settings. The public
-base describes the shape; the site layer describes the deployment.
+Set the paths used throughout the tutorial:
+
+#+begin_src bash
+export ROBOT=/tmp/eb-stack/robot
+export BUNDLE=/tmp/eb-stack/bundles/eon-tutorial
+export STATE=/tmp/eb-stack/bundles/eon-tutorial.campaign.json
+#+end_src
+
+The bundle path is identical on the host and in the container. Probe every
+target layer before planning a long build:
+
+#+begin_src bash
+eb-stack target doctor \
+  --config examples/targets/local-podman.toml \
+  --target local-rocky9
+#+end_src
 
 * Inspect the conda-forge recipe
 
@@ -54,7 +80,7 @@ eb-stack package plan \
   --toolchain-version 2026.1 \
   --profile-config examples/profiles/eon.toml \
   --easyconfigs "$ROBOT" \
-  --easyconfigs fixtures/eon_foss_2026_1/easyconfigs \
+  --easyconfigs /tmp/eb-stack/overlay \
   --stack-policy examples/stacks/foss-2026.1.toml \
   --out-dir "$BUNDLE"
 #+end_src
@@ -94,7 +120,7 @@ eb-stack recipe lint "$RECIPE"
 eb-stack recipe check \
   --recipe "$RECIPE" \
   --easyconfigs "$ROBOT" \
-  --easyconfigs fixtures/eon_foss_2026_1/easyconfigs \
+  --easyconfigs /tmp/eb-stack/overlay \
   --easyconfigs "$BUNDLE/easyconfigs"
 #+end_src
 
@@ -104,13 +130,11 @@ At this point the bundle may claim *resolves*. No build has occurred.
 
 #+begin_src bash
 eb-stack target list \
-  --config examples/targets/base.toml \
-  --config ~/.config/eb-stack/site.toml
+  --config examples/targets/local-podman.toml
 
 eb-stack target doctor \
-  --config examples/targets/base.toml \
-  --config ~/.config/eb-stack/site.toml \
-  --target site-builder
+  --config examples/targets/local-podman.toml \
+  --target local-rocky9
 #+end_src
 
 Read all four checks. A healthy transport does not imply a healthy executor,
@@ -121,9 +145,8 @@ runtime, or EasyBuild command.
 #+begin_src bash
 eb-stack campaign run \
   --bundle "$BUNDLE" \
-  --config examples/targets/base.toml \
-  --config ~/.config/eb-stack/site.toml \
-  --target site-builder \
+  --config examples/targets/local-podman.toml \
+  --target local-rocky9 \
   --state "$STATE"
 
 eb-stack campaign status --state "$STATE"
@@ -154,6 +177,31 @@ Run the campaign again with the same state. Successful stages supersede stale
 open findings. ~builds~ becomes true only after all emitted recipes succeed.
 ~binary_verified~ becomes true only when at least one declared verification
 command exists and all such commands succeed.
+
+* Route the same bundle to a deployed site
+
+The local target is a complete public example, not a required deployment
+shape. For SSH, Slurm, or a site-owned container, copy
+~examples/targets/site.example.toml~ to a private file and fill in its host,
+durable roots, image, modules, and scheduler settings. Layer it after the
+public topology:
+
+#+begin_src bash
+eb-stack target doctor \
+  --config examples/targets/base.toml \
+  --config ~/.config/eb-stack/site.toml \
+  --target site-builder
+
+eb-stack campaign run \
+  --bundle /shared/eb-stack/bundles/eon-tutorial \
+  --config examples/targets/base.toml \
+  --config ~/.config/eb-stack/site.toml \
+  --target site-builder \
+  --state /shared/eb-stack/bundles/eon-tutorial.campaign.json
+#+end_src
+
+The bundle must be visible at the same absolute path used by the selected
+runtime. Site credentials remain outside the public TOML.
 
 * Try QMCPACK variants
 
