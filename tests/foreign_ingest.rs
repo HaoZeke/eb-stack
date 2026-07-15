@@ -167,9 +167,12 @@ fn spack_lammps_splits_dependency_specs_from_variant_constraints() {
     let scafacos = recipe
         .dependencies
         .iter()
-        .find(|dependency| dependency.original_spec.as_deref().is_some_and(|spec| {
-            spec.starts_with("scafacos cflags=-fPIC")
-        }))
+        .find(|dependency| {
+            dependency
+                .original_spec
+                .as_deref()
+                .is_some_and(|spec| spec.starts_with("scafacos cflags=-fPIC"))
+        })
         .expect("ScaFaCoS dependency");
     assert_eq!(scafacos.name, "scafacos");
 }

@@ -1788,8 +1788,7 @@ fn split_spack_spec(spec: &str) -> (String, Option<String>) {
         let end = version
             .char_indices()
             .find_map(|(index, character)| {
-                (character.is_whitespace() || matches!(character, '+' | '~' | '%'))
-                    .then_some(index)
+                (character.is_whitespace() || matches!(character, '+' | '~' | '%')).then_some(index)
             })
             .unwrap_or(version.len());
         (end > 0).then(|| version[..end].to_string())
