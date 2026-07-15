@@ -57,6 +57,10 @@ fn failure_classifier_preserves_the_build_error_domain() {
             "slurmstepd: error: Detected 1 oom-kill",
             BuildFindingClass::Resource,
         ),
+        (
+            "g++: fatal error: Killed signal terminated program cc1plus\ncompilation terminated.",
+            BuildFindingClass::Resource,
+        ),
         ("ssh: connect to host failed", BuildFindingClass::Transport),
         (
             "flex: /lib64/libc.so.6: version `GLIBC_2.38' not found",
