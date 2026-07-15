@@ -405,7 +405,7 @@ fn profile_solver_matches_unmapped_foreign_names_to_robot_candidates() {
 }
 
 #[test]
-fn foreign_build_roles_only_create_easybuild_builddependencies_for_tools() {
+fn foreign_build_roles_create_easybuild_builddependencies() {
     let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
     let mut plan = package_plan_from_foreign(&recipe, &toolchain());
     plan.profiles = qmcpack_profiles();
@@ -446,7 +446,7 @@ fn foreign_build_roles_only_create_easybuild_builddependencies_for_tools() {
         .dependencies
         .iter()
         .find(|dependency| dependency.name == "Boost")
-        .is_some_and(|dependency| !dependency.build));
+        .is_some_and(|dependency| dependency.build));
 }
 
 #[test]
