@@ -31,6 +31,14 @@ use `[dependencies.virtuals]` for capabilities and
 `dependencies.exclude_from_solve` for foreign runtime metadata that remains
 visible in the manifest/SBOM but is not an EasyBuild dependency.
 
+Use `foreign = "EasyBuild"` only when the foreign component and EasyBuild
+provider share a version domain. When an EasyBuild package contains a foreign
+component, use
+`foreign = { provider = "EasyBuild", constraint = "drop" }`. This keeps a
+component release from becoming a false provider constraint while provenance
+retains the original foreign requirement. Do not repair this mismatch with a
+package-name parser branch.
+
 The `[package]` and `[build]` tables own EasyBuild spelling, release spelling,
 easyblock policy, module class, build options, and patches. `easyblock =
 "auto"` omits the parameter so EasyBuild can select a software-specific

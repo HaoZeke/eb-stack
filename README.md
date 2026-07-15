@@ -118,6 +118,12 @@ build policy, and independently installable profiles live in package config.
 Each profile emits one `.eb` file; MPI/OpenMP toolchain options alone do not
 require a suffix.
 
+Aliases use `foreign = "EasyBuild"` when both names share a version domain.
+Component-to-provider mappings use
+`foreign = { provider = "EasyBuild", constraint = "drop" }`, so a component
+release such as a Python package version is never imposed on its containing
+EasyBuild provider.
+
 ```sh
 eb-stack package plan \
   --source fixtures/foreign_ingest/conda_eon/recipe.yaml \

@@ -39,6 +39,15 @@ variants, conflicts, requirements, source metadata, and source spans.
 Adapters do not choose EasyBuild dependency versions or emit placeholder
 recipes. Their output is package intent plus explicit residuals.
 
+* Provider mapping
+
+Layered package policy maps foreign dependency identities to EasyBuild
+providers after syntax parsing. Direct aliases preserve constraints when the
+two ecosystems use the same version domain. Component-to-provider aliases can
+drop a component constraint that has no meaning for the containing provider.
+The mapping is data, not parser control flow, and dependency provenance keeps
+the foreign evidence available for review.
+
 * Canonical package model
 
 ~PackagePlan~ is schema-versioned and shared by foreign imports and bumps. It

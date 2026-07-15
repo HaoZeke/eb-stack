@@ -65,8 +65,31 @@ eb-stack package inspect \
 A package layer can replace or extend parser-derived metadata without changing
 the parser. ~examples/packages/common.toml~ provides cross-ecosystem aliases;
 later layers may replace package metadata, build policy, aliases, virtuals,
-solver exclusions, and profiles. A QMCPACK profile set commonly contains a
-default MPI+OpenMP build and a separate ~-complex~ recipe:
+solver exclusions, and profiles.
+
+An alias maps a foreign dependency identity to an EasyBuild provider. Use the
+short string form when both names use the same version domain:
+
+#+begin_src toml
+[dependencies.aliases]
+libcurl = "cURL"
+#+end_src
+
+Use the structured form when the foreign dependency is a component supplied by
+a larger EasyBuild package. ~constraint = "drop"~ prevents the component's
+version from being interpreted as the provider's version:
+
+#+begin_src toml
+[dependencies.aliases]
+"py-setuptools" = { provider = "Python", constraint = "drop" }
+#+end_src
+
+The original foreign spelling and constraint remain in dependency provenance.
+Aliases only control robot matching and solving; they do not teach the parser
+about a package.
+
+A QMCPACK profile set commonly contains a default MPI+OpenMP build and a
+separate ~-complex~ recipe:
 
 #+begin_src toml
 schema_version = 1
