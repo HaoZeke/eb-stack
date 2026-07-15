@@ -535,9 +535,9 @@ fn structure_conda_requirement_selectors(text: &str) -> String {
             output.push(line.to_string());
             continue;
         }
-        if requirements_indent.is_some_and(|base| {
-            !trimmed.is_empty() && !trimmed.starts_with('#') && indent <= base
-        }) {
+        if requirements_indent
+            .is_some_and(|base| !trimmed.is_empty() && !trimmed.starts_with('#') && indent <= base)
+        {
             requirements_indent = None;
         }
         if requirements_indent.is_some() {
@@ -545,8 +545,8 @@ fn structure_conda_requirement_selectors(text: &str) -> String {
                 let indentation = captures.get(1).map_or("", |value| value.as_str());
                 let value = captures.get(2).map_or("", |value| value.as_str());
                 let condition = captures.get(3).map_or("", |value| value.as_str());
-                let quoted = serde_json::to_string(condition)
-                    .unwrap_or_else(|_| format!("\"{condition}\""));
+                let quoted =
+                    serde_json::to_string(condition).unwrap_or_else(|_| format!("\"{condition}\""));
                 output.push(format!("{indentation}- if: {quoted}"));
                 output.push(format!("{indentation}  then: {value}"));
                 continue;
