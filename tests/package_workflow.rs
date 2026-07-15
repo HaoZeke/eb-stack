@@ -46,6 +46,8 @@ requirements:
     let profile = PackageConfigLayer::from_toml_str(
         r#"
 schema_version = 1
+[package]
+name = "eOn"
 [[profiles]]
 name = "default"
 default = true
