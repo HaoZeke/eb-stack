@@ -127,3 +127,26 @@ fn documentation_ci_is_warning_strict_and_checks_rendered_links() {
     assert!(ci.contains("scripts/check-doc-links.sh docs/build"));
     assert!(ci.contains("lychee --config lychee.toml"));
 }
+
+#[test]
+fn unpublished_endpoints_are_excluded_from_external_link_checks() {
+    let input = std::fs::read_to_string(repo().join("lychee.toml")).expect("read lychee config");
+    let config: toml::Value = toml::from_str(&input).expect("parse lychee config");
+    let patterns = config["exclude"]
+        .as_array()
+        .expect("exclude array")
+        .iter()
+        .map(|value| value.as_str().expect("exclude regex"))
+        .map(|pattern| regex::Regex::new(pattern).expect("valid exclude regex"))
+        .collect::<Vec<_>>();
+    for url in [
+        "https://crates.io/crates/eb_stack",
+        "https://docs.rs/eb_stack",
+        "https://eb-stack.rgoswami.me/tutorial.html",
+    ] {
+        assert!(
+            patterns.iter().any(|pattern| pattern.is_match(url)),
+            "Lychee must exclude unpublished endpoint {url}"
+        );
+    }
+}
