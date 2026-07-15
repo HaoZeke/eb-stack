@@ -23,6 +23,7 @@ This tree is the **landable** EasyBuild easyconfigs set for eOn 2.16.0 on
 - `i/inih/inih-62-GCCcore-15.2.0.eb` (on develop; often missing from older robot clones)
 - `c/cargo-c/cargo-c-0.10.23-GCCcore-15.2.0.eb` (readcon-core needs cargo-c >= 0.10.17)
 - `p/PyTorch/PyTorch-2.9.1-foss-2024a.eb` (cross-gen pin until foss-2026.1 PyTorch exists)
+- `m/Meson/Meson-1.8.2-GCCcore-13.3.0.eb` (cross-gen pin satisfying eOn's Meson >= 1.8 floor)
 
 ## Residuals (skill / human judgment — not invented by eb-stack)
 
@@ -31,7 +32,8 @@ This tree is the **landable** EasyBuild easyconfigs set for eOn 2.16.0 on
   a full robot still supplies xtb and the rest of foss-2024a/2026.1.
 - Companion greenfield build/runtime for metatensor stack / quill if CI has not
   built them yet.
-- Meson/Rust versions come from the robot hierarchy when present.
+- Rust comes from the robot hierarchy. Meson 1.8.2 is frozen in the overlay
+  because its complete cross-generation identity is a preferred stack pin.
 
 Provenance: HaoZeke/easybuild-easyconfigs `feat/eon-2.16.0-foss-2026.1` /
 `~/Git/tmp/eb-easyconfigs-push` freeze.
