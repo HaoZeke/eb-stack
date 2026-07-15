@@ -410,7 +410,7 @@ fn foreign_build_roles_create_easybuild_builddependencies() {
     let mut plan = package_plan_from_foreign(&recipe, &toolchain());
     plan.profiles = qmcpack_profiles();
     plan.dependencies
-        .retain(|dependency| matches!(dependency.eb_name.as_deref(), Some("Boost" | "CMake")));
+        .retain(|dependency| matches!(dependency.name.as_str(), "boost" | "cmake"));
     let candidate = |name: &str, version: &str| Candidate {
         name: name.into(),
         version: version.into(),
