@@ -2,9 +2,8 @@
 
 eb-stack turns conda-forge, Spack, and EasyBuild inputs into manifests, planned
 CycloneDX SBOMs, Resolvo locks, and EasyBuild recipes. Planning commands parse
-local input and write local artifacts. Campaign commands execute EasyBuild
-recipes on a configured local or SSH target, optionally through Slurm, Podman,
-or Docker.
+local input and write local artifacts. Campaign commands execute EasyBuild recipes
+on a configured local or SSH target, optionally through Slurm, Podman, or Docker.
 
 ## Supported versions
 
