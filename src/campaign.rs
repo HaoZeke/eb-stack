@@ -597,9 +597,7 @@ pub fn classify_build_failure(
         }
     } else if text.contains("oom-kill") || text.contains("out of memory") {
         BuildFindingClass::Resource
-    } else if text.contains("glibc_") && text.contains("not found") {
-        BuildFindingClass::Runtime
-    } else if missing_executable {
+    } else if (text.contains("glibc_") && text.contains("not found")) || missing_executable {
         BuildFindingClass::Runtime
     } else if checksum_failure {
         BuildFindingClass::Checksum
