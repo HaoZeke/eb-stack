@@ -101,6 +101,12 @@ eb-stack package plan \
   --out-dir /tmp/eon
 ```
 
+The shipped stack policy carries eOn's reviewed cross-generation PyTorch,
+xtb, Eigen, and Meson identities as `preferred` pins. Resolvo admits those
+artifact closures and records either the selected identity or a compatible
+fallback; the same policy does not force those packages into an unrelated
+profile.
+
 Use `--format spack` and `examples/profiles/qmcpack.toml` for QMCPACK’s `package.py`. Parser output retains source spans, conda selectors, Spack conditions/conflicts, dependency roles, and residual dynamic logic.
 
 Inspect without solving or emitting recipes:
