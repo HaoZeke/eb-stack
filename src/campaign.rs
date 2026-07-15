@@ -943,6 +943,7 @@ impl CampaignLock {
 impl Drop for CampaignLock {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.metadata_path);
+        let _ = FileExt::unlock(&self._guard);
     }
 }
 
