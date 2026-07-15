@@ -1,8 +1,9 @@
 //! Syntax-adapter regression for conda-forge and Spack inputs.
 
+use eb_stack::package::{materialize_profile, ProfileEnvironment};
 use eb_stack::{
-    detect_foreign_format, inspect_new_package, materialize_profile, package_plan_from_foreign,
-    parse_foreign_path, ForeignFormat, ProfileEnvironment, Toolchain,
+    detect_foreign_format, inspect_new_package, package_plan_from_foreign, parse_foreign_path,
+    ForeignFormat, Toolchain,
 };
 use std::path::PathBuf;
 use std::process::Command;
