@@ -253,7 +253,7 @@ class Orbit(CMakePackage):
         variant(
             feature,
             default=options.get("default", False),
-            description="Enable {}".format(feature),
+            description="Enable {}".format(feature.replace("-feature", "")),
             when=options.get("when", None),
         )
 "#;
@@ -272,6 +272,7 @@ class Orbit(CMakePackage):
 
     assert_eq!(alpha.default.as_deref(), Some("true"));
     assert_eq!(beta.default.as_deref(), Some("false"));
+    assert_eq!(alpha.description.as_deref(), Some("Enable alpha"));
     assert!(serde_json::to_string(&alpha.condition)
         .expect("condition JSON")
         .contains("package-version"));
