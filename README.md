@@ -118,6 +118,11 @@ build policy, and independently installable profiles live in package config.
 Each profile emits one `.eb` file; MPI/OpenMP toolchain options alone do not
 require a suffix.
 
+The Spack adapter parses Python into an AST without importing the recipe. It
+statically evaluates literal data, bounded loops, formatting, and `when`
+scopes; unsupported runtime expressions become source-located residuals rather
+than guessed dependencies.
+
 Aliases use `foreign = "EasyBuild"` when both names share a version domain.
 Component-to-provider mappings use
 `foreign = { provider = "EasyBuild", constraint = "drop" }`, so a component

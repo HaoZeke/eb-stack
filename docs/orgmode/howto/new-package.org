@@ -41,6 +41,12 @@ source spans, dependency roles, conda selectors, Spack ~when=~ conditions,
 variants, conflicts, requirements, and static build flags. Dynamic foreign
 logic becomes a residual rather than an invented fact.
 
+Spack input is parsed as Python syntax but never imported or executed. Literal
+collections and bounded loops are evaluated statically, so data-driven
+~variant()~ and ~depends_on()~ declarations behave like direct calls. A call
+with a runtime value is omitted from solver input and reported with its source
+location.
+
 Inspection may report ~source:missing-sha256~ for a commit-pinned Spack
 release. A VCS commit does not determine the byte hash of the generated source
 archive. Pass the reviewed archive hash to ~package plan~ with one

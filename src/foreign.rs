@@ -12,10 +12,12 @@
 //!
 //! # Spack
 //!
-//! Restricted static parse of `package.py` (no Python exec), following Spack's
-//! package DSL as written in real packages:
+//! Static Python-AST evaluation of `package.py` (no Python exec), following
+//! Spack's package DSL as written in real packages:
 //! - `class Name(Base)` and multi-base `class Name(Base1, Base2)`;
 //! - `homepage` / `url` / `git` string attributes;
+//! - literal assignments, collections, bounded loops, static conditionals,
+//!   formatting, and `with when(...)` scopes;
 //! - `version("X", sha256=..., tag=..., commit=..., url=...)` kwargs;
 //! - preferred version = explicit `preferred=True`, then the first
 //!   non-`develop`/`main`/`master`/`head` entry;
@@ -1101,12 +1103,12 @@ fn sanitize_pkg_name(name: &str) -> String {
 }
 
 // ===========================================================================
-// Spack package.py (restricted static parse)
+// Spack package.py (static Python syntax model)
 // ===========================================================================
 
 fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let mut notes = Vec::new();
-    notes.push("Spack package.py: restricted static parse (no Python execution)".into());
+    notes.push("Spack package.py: static Python AST evaluation (no execution)".into());
     let syntax = parse_spack_syntax(text).map_err(ForeignError::Parse)?;
     notes.extend(syntax.residuals.iter().cloned());
     let class_name = syntax.class_name.as_str();

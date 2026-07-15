@@ -33,8 +33,14 @@ digraph P {
 The conda adapter expands a restricted template subset, parses classic and v1
 recipe shapes, preserves multi-source entries, and represents selectors as
 structured conditions. The Spack adapter statically reads package DSL calls;
-it does not execute Python. It preserves versions, dependencies and roles,
+it does not execute Python. A Python AST evaluator handles literal assignments,
+collections, bounded loops, static conditionals, formatting, and nested
+~with when(...)~ scopes. It preserves versions, dependencies and roles,
 variants, conflicts, requirements, source metadata, and source spans.
+
+A directive enters the canonical model only when its arguments evaluate to
+static values. Unsupported expressions become source-located residuals instead
+of partial strings or guessed facts.
 
 Adapters do not choose EasyBuild dependency versions or emit placeholder
 recipes. Their output is package intent plus explicit residuals.
