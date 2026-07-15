@@ -1656,6 +1656,18 @@ fn split_spack_condition_terms(spec: &str) -> Vec<&str> {
                 }
                 start = index + character.len_utf8();
             }
+            character if bracket_depth == 0 && start < index => {
+                let first = spec[start..].chars().next();
+                let starts_version = first == Some('@');
+                let starts_feature = matches!(first, Some('+') | Some('~'));
+                let starts_new_term = (starts_version
+                    && matches!(character, '+' | '~' | '%' | '^'))
+                    || (starts_feature && matches!(character, '+' | '~'));
+                if starts_new_term {
+                    terms.push(spec[start..index].trim());
+                    start = index;
+                }
+            }
             _ => {}
         }
     }
@@ -1761,14 +1773,28 @@ fn spack_dep_to_eb_name(name: &str) -> String {
 }
 
 fn split_spack_spec(spec: &str) -> (String, Option<String>) {
-    // foo@1.2.3, foo@1.2: +bar, foo+bar
-    if let Some((n, rest)) = spec.split_once('@') {
-        let ver = rest.split(['+', '~', '%']).next().unwrap_or(rest);
-        (n.to_string(), Some(ver.to_string()))
-    } else {
-        let n = spec.split(['+', '~', '%']).next().unwrap_or(spec);
-        (n.to_string(), None)
-    }
+    // Package identity stops before versions, variants, compilers, and
+    // assignment tokens. The complete spec remains in `original_spec`.
+    let name_end = spec
+        .char_indices()
+        .find_map(|(index, character)| {
+            (character.is_whitespace() || matches!(character, '@' | '+' | '~' | '%'))
+                .then_some(index)
+        })
+        .unwrap_or(spec.len());
+    let name = spec[..name_end].to_string();
+    let pin = spec.find('@').and_then(|at| {
+        let version = &spec[at + 1..];
+        let end = version
+            .char_indices()
+            .find_map(|(index, character)| {
+                (character.is_whitespace() || matches!(character, '+' | '~' | '%'))
+                    .then_some(index)
+            })
+            .unwrap_or(version.len());
+        (end > 0).then(|| version[..end].to_string())
+    });
+    (name, pin)
 }
 
 fn spack_string_attr(text: &str, attr: &str) -> Option<String> {
