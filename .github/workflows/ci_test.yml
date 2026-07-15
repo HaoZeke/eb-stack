@@ -172,11 +172,13 @@ jobs:
           BIN=./target/release/eb-stack
           # Drafts alone leave stack deps missing; exit non-zero is correct.
           # Still exercises parse + packaging_gate on the landable recipe.
-          "$BIN" recipe check \
+          if "$BIN" recipe check \
             --recipe fixtures/eon_foss_2026_1/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb \
             --easyconfigs fixtures/eon_foss_2026_1/easyconfigs \
             --require-configopt=-Dwith_metatomic=true \
             --require-configopt=-Dwith_xtb=true \
             --require-configopt=-Dwith_serve=true \
-            --require-configopt=-Dwith_rgpot=true \
-            && exit 1 || true
+            --require-configopt=-Dwith_rgpot=true; then
+            echo "expected recipe check to fail without robot deps" >&2
+            exit 1
+          fi
