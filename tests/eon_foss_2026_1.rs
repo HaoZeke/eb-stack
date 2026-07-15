@@ -158,6 +158,13 @@ fn resolve_eon_2026_1_companions() {
             "foss",
             "2024a",
         ),
+        (
+            "m/Meson/Meson-1.8.2-GCCcore-13.3.0.eb",
+            "Meson",
+            "1.8.2",
+            "GCCcore",
+            "13.3.0",
+        ),
     ];
     for (rel, name, ver, tc_name, tc_ver) in cases {
         let r = resolve_easyconfig_file(&drafts().join(rel))
