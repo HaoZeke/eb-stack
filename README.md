@@ -59,7 +59,7 @@ Build the Rust binary on a suitable build host. EasyBuild installs belong on the
 
 ## Inspect from a fresh clone
 
-The repository includes foreign-recipe and profile fixtures, so the parsing
+The repository includes foreign-recipe and package-config fixtures, so the parsing
 boundary can be exercised without an EasyBuild installation or external robot
 tree:
 
@@ -69,7 +69,8 @@ eb-stack package inspect \
   --format conda-forge \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  --profile-config examples/profiles/eon.toml \
+  --package-config examples/packages/common.toml \
+  --package-config examples/packages/eon.toml \
   --out-dir /tmp/eon-inspect
 
 python3 -m json.tool /tmp/eon-inspect/package.plan.json >/dev/null
@@ -110,7 +111,12 @@ Known maintainer fixtures cover GROMACS, ScaFaCoS, MDTraj, Fiona, PuLP, and numb
 
 ## Plan a new package
 
-Product profiles are public TOML. Each profile is one independently installable EasyBuild variant; MPI/OpenMP toolchain options alone do not require a suffix.
+Package policy is public, layered TOML. Parsers preserve foreign names and
+syntax without package-name branches; Resolvo matches case/punctuation-equivalent
+robot names mechanically. Explicit ecosystem aliases, EasyBuild metadata,
+build policy, and independently installable profiles live in package config.
+Each profile emits one `.eb` file; MPI/OpenMP toolchain options alone do not
+require a suffix.
 
 ```sh
 eb-stack package plan \
@@ -118,7 +124,8 @@ eb-stack package plan \
   --format conda-forge \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  --profile-config examples/profiles/eon.toml \
+  --package-config examples/packages/common.toml \
+  --package-config examples/packages/eon.toml \
   --easyconfigs /path/to/easybuild-easyconfigs/easybuild/easyconfigs \
   --easyconfigs fixtures/eon_foss_2026_1/easyconfigs \
   --stack-policy examples/stacks/eon-foss-2026.1.toml \
@@ -131,7 +138,8 @@ artifact closures and records either the selected identity or a compatible
 fallback. The generic `foss-2026.1.toml` template remains unpinned for other
 packages.
 
-Use `--format spack` and `examples/profiles/qmcpack.toml` for QMCPACK’s
+Use `--format spack`, `examples/packages/common.toml`, and
+`examples/packages/qmcpack.toml` for QMCPACK’s
 `package.py`. Its Spack version is pinned by commit rather than archive hash,
 so planning also needs
 `--source-checksum 511d5f368db002f2f77504619e1ada8d4a3034200d25feef6773d12a6ed6d18e`.
@@ -146,7 +154,8 @@ eb-stack package inspect \
   --format spack \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  --profile-config examples/profiles/qmcpack.toml \
+  --package-config examples/packages/common.toml \
+  --package-config examples/packages/qmcpack.toml \
   --out-dir /tmp/qmcpack-inspect
 ```
 
@@ -210,9 +219,9 @@ eb-stack campaign finding claim --state /tmp/eon.campaign.json \
 
 eb-stack campaign finding resolve --state /tmp/eon.campaign.json \
   --id attempt:1:finding:1 --owner omp-worker-1 \
-  --action "corrected profile configuration" \
+  --action "corrected package configuration" \
   --evidence "recipe check exits successfully" \
-  --change examples/profiles/eon.toml
+  --change examples/packages/eon.toml
 ```
 
 The state file retains attempts, the active recipe, typed failure commands and
