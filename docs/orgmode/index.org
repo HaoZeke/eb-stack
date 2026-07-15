@@ -42,6 +42,12 @@
 
    *CLI surface?* → :doc:`reference/cli`
 
+   *Bundle schemas?* → :doc:`reference/package-bundles`
+
+   *Build targets?* → :doc:`reference/targets`
+
+   *Campaign findings?* → :doc:`reference/campaigns`
+
 .. grid:: 1 1 2 2
    :gutter: 2
 
@@ -69,6 +75,18 @@
 
       Measured rates on real maintainer pairs and residual classes.
 
+   .. grid-item-card:: Package bundle contract
+      :link: reference/package-bundles
+      :link-type: doc
+
+      Manifest, planned SBOM, profile locks, residuals, and variant recipes.
+
+   .. grid-item-card:: Targets and campaigns
+      :link: reference/targets
+      :link-type: doc
+
+      Layered routing, container isolation, persisted findings, and repairs.
+
 .. toctree::
    :maxdepth: 1
    :caption: Getting Started
@@ -91,6 +109,9 @@
    :caption: Reference
 
    reference/cli
+   reference/package-bundles
+   reference/targets
+   reference/campaigns
    reference/rust-api
    reference/policy
    reference/formats
@@ -163,8 +184,12 @@ eb-stack --version
     [[file:howto/emit-reports.org][emit a build list and stack diff]],
     [[file:howto/bump-recipe.org][bump a recipe]],
     [[file:howto/root-priority.org][declare root priority]].
-  - Reference: [[file:reference/cli.org][CLI]], [[file:reference/policy.org][policy JSON schema]],
-    [[file:reference/formats.org][lock / build-list / stack-diff formats]].
+  - Reference: [[file:reference/cli.org][CLI]],
+    [[file:reference/package-bundles.org][package bundles]],
+    [[file:reference/targets.org][build targets]],
+    [[file:reference/campaigns.org][campaign state and findings]],
+    [[file:reference/policy.org][policy JSON schema]], and
+    [[file:reference/formats.org][whole-stack output formats]].
   - Explanation: [[file:explanation/architecture.org][architecture]],
     [[file:explanation/optimization-model.org][the optimization model]],
     [[file:explanation/parser-approach.org][the parser approach]],
@@ -193,5 +218,4 @@ pixi run -e docs docbld
 #+end_src
 
   Org sources live under ~docs/orgmode/~; Emacs ~ox-rst~ publishes to
-  ~docs/source/~; Sphinx + *Shibuya* builds the site (same pattern as
-  ~nimvault~ / ~meetrec~ / ~org2anki~).
+  ~docs/source/~; Sphinx + *Shibuya* builds the site.

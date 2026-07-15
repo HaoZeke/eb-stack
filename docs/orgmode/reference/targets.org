@@ -1,0 +1,148 @@
+#+TITLE: Build target configuration
+#+OPTIONS: toc:t num:nil
+
+A target routes one EasyBuild workload through four independent layers:
+transport, executor, runtime, and EasyBuild settings. Target configuration is
+public TOML; site hostnames, paths, credentials, scheduler sizing, and private
+images belong in a later site file.
+
+* Layering model
+
+Every file has ~schema_version = 1~ and one or more ~[[targets]]~ entries.
+Files are applied in command-line order and entries merge by target name.
+
+A later file replaces a complete named layer. It does not merge individual
+fields inside that layer. If a site file supplies ~[targets.runtime]~, that
+block must contain the complete runtime configuration.
+
+After layering, every target must have all four layers. Unknown fields and
+unsupported schema versions fail loudly.
+
+#+begin_src bash
+eb-stack target list \
+  --config examples/targets/base.toml \
+  --config ~/.config/eb-stack/site.toml
+
+eb-stack target doctor \
+  --config examples/targets/base.toml \
+  --config ~/.config/eb-stack/site.toml \
+  --target site-builder
+#+end_src
+
+~target doctor~ independently executes transport, executor, runtime, and
+EasyBuild probes. A reachable SSH host is not enough; all four checks must
+succeed.
+
+* Transport
+
+| Kind | Required fields | Optional fields |
+|-
+| ~local~ | none | none |
+| ~ssh~ | ~host~ | ~port~, ~command~ (default ~ssh~), ~sync_command~ (default ~rsync~) |
+
+SSH transport stages a bundle at
+~<work_root>/bundles/<local-bundle-name>~. Commands are shell-quoted before
+being passed to the remote host.
+
+* Executor
+
+| Kind | Required fields | Optional fields |
+|-
+| ~direct~ | none | none |
+| ~slurm~ | none | ~command~, ~partition~, ~account~, ~cpus~, ~memory~, ~time~, ~gres~ |
+
+The Slurm executor uses ~srun~ by default and routes both builds and binary
+verification through the declared allocation. Bundle staging tests transport
+without allocating a job.
+
+* Runtime
+
+| Kind | Required fields | Optional fields |
+|-
+| ~host~ | none | none |
+| ~podman~ | ~image~ | ~command~, ~args~, ~mounts~, ~workdir~ |
+| ~docker~ | ~image~ | ~command~, ~args~, ~mounts~, ~workdir~ |
+
+Container commands use ~run --rm~, then runtime arguments, volume mounts, the
+working directory, image, and routed workload. Every bundle, robot tree, work
+root, temporary root, install prefix, and source cache referenced by the
+workload must be visible inside the container.
+
+Compiled modules, build trees, and temporary files belong to one runtime ABI.
+Do not reuse a host or different-image install prefix inside a container.
+Source archives may share a cache because they contain no linked build output.
+
+* EasyBuild workload
+
+| Field | Meaning |
+|-
+| ~command~ | EasyBuild executable, usually ~eb~ |
+| ~robot_paths~ | Ordered upstream and overlay easyconfig roots |
+| ~work_root~ | Durable campaign and build root |
+| ~tmp_root~ | ~EASYBUILD_TMPDIR~ for this target |
+| ~environment~ | Environment passed to EasyBuild and verification commands |
+
+The routed build command adds ~--robot=<colon-separated paths>~ and
+~--buildpath=<work_root>/build~. Later robot roots override earlier recipes
+with the same EasyBuild identity.
+
+Do not place credentials in a public target file. Use an SSH agent, scheduler
+credential mechanism, container registry login, or private site layer. Target
+doctor and campaign state retain routed commands and compact output as evidence.
+
+* Runnable local Rocky Linux target
+
+The repository includes a complete local Podman target at
+~examples/targets/local-podman.toml~. It uses one portable path namespace under
+~/tmp/eb-stack~.
+
+Build the image and prepare the mounted roots:
+
+#+begin_src bash
+podman build -t eb-stack-rocky9 \
+  -f skills/new-package/container/rocky9/Containerfile \
+  skills/new-package/container/rocky9
+
+mkdir -p \
+  /tmp/eb-stack/robot \
+  /tmp/eb-stack/overlay \
+  /tmp/eb-stack/sources \
+  /tmp/eb-stack/bundles
+
+rsync -a /path/to/easybuild-easyconfigs/easybuild/easyconfigs/ \
+  /tmp/eb-stack/robot/
+#+end_src
+
+Probe the target:
+
+#+begin_src bash
+eb-stack target doctor \
+  --config examples/targets/local-podman.toml \
+  --target local-rocky9
+#+end_src
+
+Write package bundles below ~/tmp/eb-stack/bundles~ so their absolute paths are
+identical inside and outside the container. Then run a campaign:
+
+#+begin_src bash
+eb-stack campaign run \
+  --bundle /tmp/eb-stack/bundles/eon \
+  --config examples/targets/local-podman.toml \
+  --target local-rocky9 \
+  --state /tmp/eb-stack/bundles/eon.campaign.json
+#+end_src
+
+The example enables the explicit EasyBuild and MPI root-container guards,
+~TAR_OPTIONS=--no-same-owner~, and MPI yield-on-idle settings needed when test
+suites oversubscribe the available cores. These settings keep the real build
+and tests enabled; they do not bypass checks.
+
+* Layered SSH, Slurm, and container target
+
+Use ~examples/targets/base.toml~ as reusable topology and copy
+~examples/targets/site.example.toml~ to a private site file. The site layer can
+replace transport with SSH, executor with Slurm, runtime with Podman or Docker,
+and the complete EasyBuild workload with site-specific roots.
+
+Validate the merged target with ~target list~ before doctoring it. This catches
+misspelled target names and missing layers without starting a build.

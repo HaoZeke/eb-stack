@@ -1,0 +1,142 @@
+#+TITLE: Package bundle reference
+#+OPTIONS: toc:t num:nil
+
+~package inspect~, ~package plan~, and ~package bump~ write a version-one
+package bundle. The bundle is the hand-off between parsing, Resolvo, EasyBuild
+authoring, and empirical build evaluation.
+
+* Bundle layout
+
+#+begin_src text
+BUNDLE/
+  package.plan.json
+  package.sbom.cdx.json
+  locks/<profile>.lock.json
+  easyconfigs/<letter>/<name>/<recipe>.eb
+#+end_src
+
+~package inspect~ writes only the plan and planned SBOM. ~package plan~ and
+~package bump~ also write one lock and one EasyBuild recipe for every requested
+profile. A campaign requires at least one lock and recipe.
+
+* Canonical package plan
+
+~package.plan.json~ is the build manifest. Its ~schema_version~ is ~1~ and
+unknown fields are rejected by the Rust model.
+
+| Field | Meaning |
+|-
+| ~origin~ | ~conda-forge~, ~spack~, or ~easy-build~ |
+| ~package~ | Normalized name, version, homepage, description, and license |
+| ~sources~ | URLs, filenames, SHA-256 values, VCS identities, staging directories, and provenance |
+| ~dependencies~ | Names, constraints, roles, structured conditions, virtual capabilities, and provenance |
+| ~rules~ | Preserved conflicts and requirements |
+| ~build~ | Toolchain, easyblock, build systems, configuration options, patches, and module class |
+| ~profiles~ | Independently installable product configurations |
+| ~outputs~ | Requested profile and stack-policy pairs |
+| ~residuals~ | Explicit parser, normalization, resolution, emission, build, or verification work |
+
+Source and dependency provenance records the input span, extractor, original
+text, and one of ~exact~, ~derived~, or ~ambiguous~. The static foreign
+adapters preserve facts they can prove and put dynamic or ambiguous logic in
+~residuals~ instead of inventing EasyBuild metadata.
+
+Residual severity has three values:
+
+- ~mechanical~: deterministic formatting or metadata work;
+- ~judgment~: package-authoring or target evidence is required;
+- ~blocking~: the next pipeline stage cannot make a valid claim.
+
+* Planned CycloneDX SBOM
+
+~package.sbom.cdx.json~ is CycloneDX 1.5 derived from the package plan. It is a
+pre-build inventory of requested components and dependency intent. It is not a
+scan of installed files and does not establish the ~builds~ or
+~binary-verified~ claim.
+
+Consumers should preserve the lifecycle and ~eb_stack:*~ properties when
+copying the document into a wider stack report. Build evidence belongs in the
+campaign state, not in the planned SBOM.
+
+* Product profiles and recipe names
+
+A profile represents one loadable product. Each requested profile is solved
+and emitted independently:
+
+- the default profile has an empty versionsuffix and an unsuffixed recipe;
+- a non-default profile declares its complete versionsuffix, such as
+  ~-complex~;
+- MPI and OpenMP toolchain options alone do not create a separate recipe name;
+- a feature or ABI variant that users load independently gets its own profile,
+  lock, and ~.eb~ file.
+
+For example, the QMCPACK profile set emits:
+
+#+begin_src text
+locks/default.lock.json
+locks/complex.lock.json
+easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1.eb
+easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1-complex.eb
+#+end_src
+
+* Resolvo profile lock
+
+~locks/<profile>.lock.json~ records the actual SAT selection used to render
+that recipe:
+
+#+begin_src json
+{
+  "schema_version": 1,
+  "package": "QMCPACK",
+  "version": "4.3.0",
+  "profile": "complex",
+  "toolchain": {"name": "foss", "version": "2026.1"},
+  "versionsuffix": "-complex",
+  "dependencies": [
+    {
+      "name": "HDF5",
+      "version": "2.1.1",
+      "toolchain": {"name": "foss", "version": "2026.1"},
+      "easyconfig_path": "h/HDF5/HDF5-2.1.1-foss-2026.1.eb",
+      "build": false
+    }
+  ],
+  "pin_outcomes": [],
+  "exclusions": [],
+  "solver": "resolvo"
+}
+#+end_src
+
+Every locked dependency carries its selected EasyBuild identity and source
+recipe path. ~build~ distinguishes direct build dependencies from runtime or
+host dependencies.
+
+~pin_outcomes~ keeps stack preferences reviewable. A ~preferred~ pin may record
+~fallback: true~ when Resolvo selects another jointly compatible candidate. A
+~locked~ pin cannot fall back. ~exclusions~ records candidates removed from
+consideration with the evidence-backed reason and optional scope.
+
+SAT compatibility is not build evidence. A selected candidate may still fail
+configure, compile, link, tests, install, or sanity; the campaign records that
+outcome as a typed finding.
+
+* EasyBuild recipe set
+
+Generated recipes follow the conventional EasyBuild hierarchy and syntax.
+Sources and checksums remain positional: all source checksums precede patch
+checksums. Robot overlays are searched in command-line order, with later paths
+overriding earlier identities.
+
+Run the three recipe gates before a campaign:
+
+#+begin_src bash
+eb-stack recipe format BUNDLE/easyconfigs/*/*/*.eb
+eb-stack recipe lint BUNDLE/easyconfigs/*/*/*.eb
+eb-stack recipe check \
+  --recipe BUNDLE/easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1.eb \
+  --easyconfigs /path/to/upstream/easyconfigs \
+  --easyconfigs BUNDLE/easyconfigs
+#+end_src
+
+The bundle establishes ~resolves~ only when every requested profile has a lock
+and recipe. See [[file:campaigns.org][campaign state and findings]] for the build and binary claims.

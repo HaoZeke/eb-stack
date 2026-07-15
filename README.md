@@ -55,6 +55,18 @@ install -m755 target/release/eb-stack ~/.local/bin/eb-stack
 
 Build the Rust binary on a suitable build host. EasyBuild installs belong on the target selected by the public target configuration, not necessarily on the machine running the CLI.
 
+## Documentation
+
+The manual is organized around operator tasks:
+
+- [foreign recipe to verified package](docs/source/tutorial.rst);
+- [package bundle schemas](docs/source/reference/package-bundles.rst);
+- [layered build targets](docs/source/reference/targets.rst);
+- [campaign state and typed findings](docs/source/reference/campaigns.rst);
+- [command-line reference](docs/source/reference/cli.rst).
+
+The source manual lives in `docs/orgmode/`; generated RST is checked into `docs/source/` and validated by the documentation workflow.
+
 ## Bump an existing recipe
 
 ```sh
@@ -134,6 +146,8 @@ eb-stack campaign run \
 ```
 
 Transport may be local or SSH; execution may be direct or Slurm; runtime may be host, Podman, or Docker. Site hostnames, paths, modules, and scheduler sizing belong in the site layer. Container targets must use ABI-specific install, work, and temporary roots; only source archives should be shared across runtimes.
+
+For a local public example, build `skills/new-package/container/rocky9/Containerfile`, populate `/tmp/eb-stack/robot`, and use `examples/targets/local-podman.toml`. Keep bundles below `/tmp/eb-stack/bundles` so host and container paths match.
 
 Campaign failures persist as typed findings. OMP workers coordinate repairs through owned queue operations:
 

@@ -92,6 +92,9 @@ BUNDLE/
 ~package plan~ and ~package bump~ establish the *resolves* claim only when all
 requested locks and recipes are written successfully.
 
+See [[file:package-bundles.org][package bundle reference]] for the complete
+manifest, planned SBOM, profile-lock, residual, and recipe contract.
+
 * Recipe commands
 
 #+begin_src bash
@@ -156,6 +159,9 @@ Target layers are applied in argument order. A complete target contains:
 ~target doctor~ probes each layer separately and reports the exact routed
 command, exit code, stdout, and stderr.
 
+See [[file:targets.org][build target configuration]] for complete layer schemas,
+replacement semantics, ABI isolation, and the runnable local Podman target.
+
 * Campaign commands
 
 #+begin_src bash
@@ -185,6 +191,9 @@ Finding claims are exclusive. A resolution records an action, evidence, and
 changed paths. A successful retry supersedes matching open or in-progress
 findings. Campaign state reports ~resolves~, ~builds~, and ~binary_verified~
 independently.
+
+See [[file:campaigns.org][campaign state and typed findings]] for the serialized
+state, claim ladder, class/disposition table, and repair protocol.
 
 * MCP
 

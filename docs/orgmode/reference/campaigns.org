@@ -1,0 +1,158 @@
+#+TITLE: Campaign state and typed findings
+#+OPTIONS: toc:t num:nil
+
+A campaign turns a resolved package bundle into empirical build and binary
+evidence on one named target. The JSON state is durable, resumable, and the
+coordination surface for Hermes and OMP workers.
+
+* Run and inspect
+
+#+begin_src bash
+eb-stack campaign run \
+  --bundle BUNDLE \
+  --config BASE.toml \
+  --config SITE.toml \
+  --target NAME \
+  --state CAMPAIGN.json
+
+eb-stack campaign status --state CAMPAIGN.json
+#+end_src
+
+The state file is locked while a run, claim, or resolution mutates it. Reusing
+the path resumes only when package name and version match. Each run increments
+~attempts~, retains history and findings, and resets build and binary claims
+until the current attempt proves them.
+
+* State schema
+
+~CAMPAIGN.json~ has ~schema_version = 1~:
+
+#+begin_src json
+{
+  "schema_version": 1,
+  "package": "QMCPACK",
+  "version": "4.3.0",
+  "bundle": "/work/qmcpack",
+  "target": "site-builder",
+  "status": "failed",
+  "attempts": 2,
+  "claims": {
+    "resolves": true,
+    "builds": false,
+    "binary_verified": false
+  },
+  "current_recipe": null,
+  "findings": [],
+  "history": []
+}
+#+end_src
+
+Status is ~planned~, ~running~, ~failed~, or ~completed~. ~current_recipe~ is
+present while an EasyBuild recipe is active. History entries record attempt,
+status, optional recipe/profile, and a compact detail string.
+
+* Claim ladder
+
+The three booleans are independent claims:
+
+1. ~resolves~: every requested profile has a Resolvo lock and emitted recipe;
+2. ~builds~: every emitted recipe succeeds through EasyBuild on this target;
+3. ~binary_verified~: at least one verification command is declared and every
+   declared command succeeds.
+
+A completed campaign with no verification commands has ~builds: true~ and
+~binary_verified: false~. A planned SBOM never implies either build claim.
+
+* Finding schema
+
+A terminal failure appends a finding containing:
+
+| Field | Meaning |
+|-
+| ~id~ | Stable ~attempt:N:finding:M~ identity |
+| ~class~ | Error-domain classification |
+| ~disposition~ | Mechanical, retryable, judgment, or target repair |
+| ~stage~ | ~preflight~, ~stage~, ~build~, or ~verify~ |
+| ~recipe~ | Relative recipe path or verification profile |
+| ~target~ | Routed target name |
+| ~summary~ / ~evidence~ | Compact diagnosis and terminal evidence |
+| ~command~ / ~exit_code~ | Exact routed program, arguments, and exit status |
+| ~attempt~ | Attempt that observed the failure |
+| ~status~ / ~owner~ | Queue state and exclusive worker owner |
+| ~resolution~ | Action, evidence, and changed paths |
+
+Evidence contains the tail of routed stdout/stderr. When EasyBuild reports a
+separate combined-output path, the campaign interns the nested log before
+classification so the finding reflects the actual compiler or runtime error.
+
+* Classes, dispositions, and repair surfaces
+
+| Class | Default disposition | Start at |
+|-
+| ~transport~ | target-repair | SSH, rsync, host reachability, or staging path |
+| ~executor~ | target-repair | Slurm command, partition, account, or allocation syntax |
+| ~runtime~ | target-repair | Host/container executable, image, mounts, ABI, or environment |
+| ~checksum~ | mechanical | Source digest and positional source/patch checksum list |
+| ~patch~ | requires-judgment | Patch source, order, and applicability |
+| ~dependency-missing~ | requires-judgment | Manifest, profile, stack policy, or real dependency recipe |
+| ~configure~ | requires-judgment | Product options, detected dependency, toolchain, or patch |
+| ~compile~ | requires-judgment | Source compatibility, compiler, flags, dependency, or patch |
+| ~link~ | requires-judgment | Link interface, library order, ABI, or dependency selection |
+| ~test~ | requires-judgment | Product behavior, test environment, or test-specific dependency |
+| ~install~ | requires-judgment | EasyBuild install logic, paths, or permissions |
+| ~sanity~ | requires-judgment | Sanity paths or profile verification command |
+| ~resource~ | retryable | CPU, memory, GPU, filesystem, or scheduler sizing |
+| ~timeout~ | retryable | Routed timeout or scheduler wall time |
+| ~unknown~ | requires-judgment | Unclassified evidence; inspect the exact command and nested log |
+
+The class narrows the first repair surface; it does not replace diagnosis.
+For example, a SAT-compatible dependency that fails to compile remains a
+~compile~ finding until evidence supports a stack exclusion or package patch.
+
+* Ownership protocol
+
+Claim an open finding before changing state shared with another worker:
+
+#+begin_src bash
+eb-stack campaign finding claim \
+  --state CAMPAIGN.json \
+  --id attempt:2:finding:1 \
+  --owner omp-worker-1
+#+end_src
+
+Claims are exclusive. Reclaiming with the same owner is idempotent; a different
+owner receives an ownership error.
+
+Record the repair and its evidence:
+
+#+begin_src bash
+eb-stack campaign finding resolve \
+  --state CAMPAIGN.json \
+  --id attempt:2:finding:1 \
+  --owner omp-worker-1 \
+  --action "corrected the container runtime environment" \
+  --evidence "target doctor and the isolated command exit successfully" \
+  --change ~/.config/eb-stack/site.toml
+#+end_src
+
+Run the campaign again with the same state. A successful retry marks matching
+open or in-progress findings as ~superseded~ while retaining their evidence.
+Resolved findings remain part of the audit trail.
+
+* Repair loop
+
+1. Run ~target doctor~ and the campaign.
+2. Read the finding's stage, class, exact command, evidence, and nested log.
+3. Reproduce the smallest failing command on the same target/runtime.
+4. Claim the finding.
+5. Change the layer supported by the evidence.
+6. Run the nearest mechanical check: recipe lint/check, target doctor, or the
+   isolated build command.
+7. Resolve the finding with concrete evidence and changed paths.
+8. Rerun the full campaign state until every requested recipe and verification
+   command succeeds.
+
+Hermes owns this end-to-end loop. OMP workers use finding ownership to divide
+residual diagnosis without racing on the state file. The executable procedures
+are [[file:../../../skills/new-package/SKILL.md][new package]] and
+[[file:../../../skills/annual-bump/SKILL.md][annual bump]].
