@@ -22,6 +22,7 @@ patches = []
 name = "default"
 default = true
 versionsuffix = ["-kokkos"]
+config_options = []
 verification_commands = [
   { program = "bash", args = ["-lc", "module load {module} && lmp -help >/dev/null"] },
 ]
