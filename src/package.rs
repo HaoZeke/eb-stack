@@ -262,6 +262,7 @@ pub enum ConditionPredicate {
 pub enum ConditionExpr {
     #[default]
     Always,
+    Never,
     Predicate(ConditionPredicate),
     All(Vec<ConditionExpr>),
     Any(Vec<ConditionExpr>),
@@ -291,6 +292,7 @@ impl ConditionExpr {
     pub fn evaluate(&self, context: &ConditionContext) -> bool {
         match self {
             Self::Always => true,
+            Self::Never => false,
             Self::Predicate(predicate) => predicate.evaluate(context),
             Self::All(expressions) => expressions.iter().all(|expr| expr.evaluate(context)),
             Self::Any(expressions) => expressions.iter().any(|expr| expr.evaluate(context)),

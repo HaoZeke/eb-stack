@@ -877,6 +877,7 @@ fn flatten_conda_req_item(
 
 fn condition_all(left: ConditionExpr, right: ConditionExpr) -> ConditionExpr {
     match (left, right) {
+        (ConditionExpr::Never, _) | (_, ConditionExpr::Never) => ConditionExpr::Never,
         (ConditionExpr::Always, expression) | (expression, ConditionExpr::Always) => expression,
         (ConditionExpr::All(mut left), ConditionExpr::All(right)) => {
             left.extend(right);
@@ -1499,7 +1500,10 @@ fn parse_spack_depends_on(text: &str, notes: &mut Vec<String>) -> Vec<ForeignDep
             "spack-static",
             Confidence::Exact,
         );
-        if let Some(dependency) = parse_spack_depends_on_call(inner, notes, provenance) {
+        let inherited_condition = spack_scoped_when_condition(text, call.start, notes);
+        if let Some(dependency) =
+            parse_spack_depends_on_call(inner, notes, provenance, inherited_condition)
+        {
             out.push(dependency);
         }
     }
@@ -1510,6 +1514,7 @@ fn parse_spack_depends_on_call(
     inner: &str,
     notes: &mut Vec<String>,
     provenance: Provenance,
+    inherited_condition: ConditionExpr,
 ) -> Option<ForeignDep> {
     let spec_re = Regex::new(r#"^\s*[\"']([^\"']+)[\"']"#).ok()?;
     let spec = spec_re.captures(inner)?.get(1)?.as_str();
@@ -1552,10 +1557,11 @@ fn parse_spack_depends_on_call(
     };
 
     let when = spack_string_kwarg(inner, "when");
-    let condition = when
+    let direct_condition = when
         .as_deref()
         .map(parse_spack_condition)
         .unwrap_or(ConditionExpr::Always);
+    let condition = condition_all(inherited_condition, direct_condition);
     if let Some(when) = &when {
         notes.push(format!("depends_on({spec}) condition preserved: {when}"));
     }
@@ -1568,6 +1574,91 @@ fn parse_spack_depends_on_call(
         condition,
         provenance: vec![provenance],
     })
+}
+
+fn spack_scoped_when_condition(
+    text: &str,
+    call_start: usize,
+    notes: &mut Vec<String>,
+) -> ConditionExpr {
+    let prefix = &text[..call_start];
+    let call_indent = prefix
+        .rsplit('\n')
+        .next()
+        .map(|line| line.chars().take_while(|character| character.is_whitespace()).count())
+        .unwrap_or(0);
+    let mut scope_indent = call_indent;
+
+    for line in prefix.lines().rev().skip(1) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line
+            .chars()
+            .take_while(|character| character.is_whitespace())
+            .count();
+        if indent >= scope_indent {
+            continue;
+        }
+        scope_indent = indent;
+        let Some(expression) = trimmed
+            .strip_prefix("with when(")
+            .and_then(|value| value.strip_suffix("):"))
+        else {
+            continue;
+        };
+        return materialize_spack_scoped_when(expression.trim(), prefix, notes);
+    }
+
+    ConditionExpr::Always
+}
+
+fn materialize_spack_scoped_when(
+    expression: &str,
+    prefix: &str,
+    notes: &mut Vec<String>,
+) -> ConditionExpr {
+    if expression.len() >= 2 {
+        let first = expression.as_bytes()[0];
+        let last = expression.as_bytes()[expression.len() - 1];
+        if matches!(first, b'\'' | b'"') && first == last {
+            return parse_spack_condition(&expression[1..expression.len() - 1]);
+        }
+    }
+
+    let binding_pattern = format!(
+        r#"(?m)^[ \t]*for\s+{}\s+in\s*\(([^)]*)\)\s*:\s*$"#,
+        regex::escape(expression)
+    );
+    let values = Regex::new(&binding_pattern)
+        .ok()
+        .and_then(|regex| regex.captures_iter(prefix).last())
+        .and_then(|capture| capture.get(1).map(|values| values.as_str().to_string()))
+        .map(|values| {
+            Regex::new(r#"[\"']([^\"']+)[\"']"#)
+                .ok()
+                .map(|regex| {
+                    regex
+                        .captures_iter(&values)
+                        .filter_map(|capture| capture.get(1))
+                        .map(|value| parse_spack_condition(value.as_str()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+
+    match values.len() {
+        0 => {
+            notes.push(format!(
+                "dynamic scoped when({expression}) could not be materialized; nested dependency is inactive"
+            ));
+            ConditionExpr::Never
+        }
+        1 => values.into_iter().next().unwrap_or(ConditionExpr::Never),
+        _ => ConditionExpr::Any(values),
+    }
 }
 
 fn spack_string_kwarg(inner: &str, key: &str) -> Option<String> {
