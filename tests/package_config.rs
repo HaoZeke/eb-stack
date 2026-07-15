@@ -238,6 +238,32 @@ easyblock = "auto"
 }
 
 #[test]
+fn provider_alias_can_drop_a_component_version_constraint() {
+    let config = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[dependencies.aliases]
+py-setuptools = { provider = "Python", constraint = "drop" }
+"#,
+    )
+    .expect("structured provider alias");
+    let mut plan = qmcpack_plan();
+    {
+        let dependency = plan.dependencies.first_mut().expect("fixture dependency");
+        dependency.name = "py-setuptools".into();
+        dependency.eb_name = None;
+        dependency.constraint = Some("42:".into());
+    }
+
+    apply_package_layers(&mut plan, &[config]).expect("apply provider alias");
+
+    let dependency = &plan.dependencies[0];
+    assert_eq!(dependency.eb_name.as_deref(), Some("Python"));
+    assert!(dependency.constraint.is_none());
+}
+
+#[test]
 fn public_package_config_examples_parse() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let common = PackageConfigLayer::from_path(&root.join("examples/packages/common.toml"))
