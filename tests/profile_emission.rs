@@ -344,6 +344,53 @@ fn profile_lock_is_created_by_resolvo_with_stack_preferences() {
 }
 
 #[test]
+fn profile_solver_matches_unmapped_foreign_names_to_robot_candidates() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.profiles = qmcpack_profiles();
+    let mut dependency = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "hdf5")
+        .expect("dependency template")
+        .clone();
+    dependency.id = "some-lib".into();
+    dependency.name = "some-lib".into();
+    dependency.eb_name = None;
+    dependency.constraint = Some(">=2.0".into());
+    dependency.condition = ConditionExpr::Always;
+    plan.dependencies = vec![dependency];
+    let candidate = Candidate {
+        name: "SomeLib".into(),
+        version: "2.1".into(),
+        toolchain: toolchain(),
+        versionsuffix: None,
+        easyconfig_path: "SomeLib-2.1-foss-2026.1.eb".into(),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+    };
+    let stack = StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "test".into(),
+        toolchain: toolchain(),
+        pins: Vec::new(),
+        exclusions: Vec::new(),
+    };
+
+    let lock = solve_package_profile(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &[candidate],
+        &stack,
+    )
+    .expect("match normalized foreign identity");
+    assert_eq!(lock.dependencies.len(), 1);
+    assert_eq!(lock.dependencies[0].name, "SomeLib");
+}
+
+#[test]
 fn foreign_build_roles_only_create_easybuild_builddependencies_for_tools() {
     let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
     let mut plan = package_plan_from_foreign(&recipe, &toolchain());

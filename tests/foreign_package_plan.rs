@@ -23,7 +23,7 @@ fn qmcpack_foreign_recipe_becomes_canonical_package_plan() {
     .expect("parse QMCPACK");
     let plan = package_plan_from_foreign(&recipe, &toolchain());
 
-    assert_eq!(plan.package.name, "QMCPACK");
+    assert_eq!(plan.package.name, "qmcpack");
     assert_eq!(plan.build.easyblock.as_deref(), Some("CMakeNinja"));
     assert_eq!(plan.outputs.len(), 1);
     assert_eq!(plan.outputs[0].profile, "default");
@@ -77,7 +77,7 @@ fn eon_canonical_sbom_has_unique_component_references() {
     let plan = package_plan_from_foreign(&recipe, &toolchain());
     let sbom = package_plan_to_cyclonedx(&plan).expect("canonical SBOM");
 
-    assert_eq!(plan.package.name, "eOn");
+    assert_eq!(plan.package.name, "eon");
     assert_eq!(plan.profiles.len(), 1);
     assert!(plan.profiles[0].default);
     assert!(plan.profiles[0].versionsuffix.is_empty());
@@ -104,7 +104,7 @@ fn eon_canonical_sbom_has_unique_component_references() {
 }
 
 #[test]
-fn conda_packaging_and_virtual_libraries_map_to_easybuild_conventions() {
+fn foreign_dependency_names_are_preserved_until_resolution_policy() {
     let recipe = parse_foreign_path(
         &fixture("fixtures/foreign_ingest/conda_eon/recipe.yaml"),
         Some(ForeignFormat::CondaForge),
@@ -112,22 +112,15 @@ fn conda_packaging_and_virtual_libraries_map_to_easybuild_conventions() {
     .expect("parse eOn");
     let plan = package_plan_from_foreign(&recipe, &toolchain());
 
-    for name in ["pip", "setuptools"] {
+    for name in ["pip", "setuptools", "numpy", "libtorch"] {
         let dependency = plan
             .dependencies
             .iter()
             .find(|dependency| dependency.name == name)
             .unwrap_or_else(|| panic!("missing {name}"));
-        assert_eq!(dependency.eb_name.as_deref(), Some("Python"));
+        assert!(dependency.eb_name.is_none());
         assert!(dependency.virtual_capability.is_none());
     }
-
-    let numpy = plan
-        .dependencies
-        .iter()
-        .find(|dependency| dependency.name == "numpy")
-        .expect("numpy");
-    assert_eq!(numpy.eb_name.as_deref(), Some("SciPy-bundle"));
 
     let libtorch = plan
         .dependencies
@@ -142,19 +135,13 @@ fn conda_packaging_and_virtual_libraries_map_to_easybuild_conventions() {
         "conda build strings are not package versions: {libtorch:?}"
     );
 
-    for (name, capability) in [
-        ("libblas", "blas"),
-        ("libcblas", "blas"),
-        ("liblapack", "lapack"),
-        ("liblapacke", "lapack"),
-        ("cargo-bundle-licenses", "cargo-bundle-licenses"),
-    ] {
+    for name in ["libblas", "libcblas", "liblapack", "liblapacke"] {
         let dependency = plan
             .dependencies
             .iter()
             .find(|dependency| dependency.name == name)
             .unwrap_or_else(|| panic!("missing {name}"));
-        assert_eq!(dependency.virtual_capability.as_deref(), Some(capability));
+        assert_eq!(dependency.virtual_capability.as_deref(), Some(name));
     }
     assert!(
         !plan
