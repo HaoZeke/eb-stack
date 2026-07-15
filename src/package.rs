@@ -699,7 +699,7 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
             Property::new("eb-stack:condition", &condition),
             Property::new(
                 "eb-stack:solver-excluded",
-                dependency.solver_excluded.to_string(),
+                &dependency.solver_excluded.to_string(),
             ),
         ]));
         components.push(component);
