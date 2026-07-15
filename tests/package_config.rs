@@ -510,4 +510,28 @@ fn public_package_config_examples_parse() {
         .dependencies
         .as_ref()
         .is_some_and(|dependencies| dependencies.exclude_from_solve == ["kokkos"]));
+    assert_eq!(
+        lammps
+            .build
+            .as_ref()
+            .and_then(|build| build.patches.as_ref())
+            .map(Vec::len),
+        Some(3)
+    );
+    assert!(matches!(
+        lammps
+            .build
+            .as_ref()
+            .and_then(|build| build.easyconfig_parameters.get("general_packages")),
+        Some(EasyconfigValue::List(packages)) if packages.len() > 80
+    ));
+    assert!(lammps.dependencies.as_ref().is_some_and(|dependencies| {
+        dependencies
+            .requirements
+            .iter()
+            .any(|requirement| requirement.name == "VTK")
+            && dependencies.requirements.iter().any(|requirement| {
+                requirement.name == "CMake" && requirement.roles == [DependencyRole::Build]
+            })
+    }));
 }

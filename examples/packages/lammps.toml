@@ -16,12 +16,198 @@ config_options = [
   "-DCMAKE_CXX_STANDARD_REQUIRED=on",
 ]
 moduleclass = "chem"
-patches = []
+
+[[build.patches]]
+filename = "LAMMPS-22Jul2025_install_lammps_python_package_in_eb_software_module.patch"
+sha256 = "0cab0fa4dc8b2c68b45cd9df4398b9c2c37d69dcd1dc054aacb44f78698a2c84"
+
+[[build.patches]]
+filename = "LAMMPS-2Aug2023_python_venv.patch"
+sha256 = "87fd13b0c66f0886877885412ff13dfd092782e2237ba1fae157f803437828d6"
+
+[[build.patches]]
+filename = "LAMMPS-22Jul2025_update4_DihedralStyle.patch"
+sha256 = "c265db38195f8830a36d5cde409d2ded1f8e9c47275eb29f0458e113d66f90f7"
+
+# Inputs implemented by the selected EasyBuild easyblock are typed data, not
+# Python snippets. Profile layers can override individual parameters.
+[build.easyconfig_parameters]
+general_packages = [
+  "AMOEBA",
+  "APIP",
+  "ASPHERE",
+  "ATC",
+  "AWPMD",
+  "BOCS",
+  "BODY",
+  "BPM",
+  "BROWNIAN",
+  "CG-DNA",
+  "CG-SPICA",
+  "CLASS2",
+  "COLLOID",
+  "COLVARS",
+  "COMPRESS",
+  "CORESHELL",
+  "DIELECTRIC",
+  "DIFFRACTION",
+  "DIPOLE",
+  "DPD-BASIC",
+  "DPD-MESO",
+  "DPD-REACT",
+  "DPD-SMOOTH",
+  "DRUDE",
+  "EFF",
+  "ELECTRODE",
+  "EXTRA-COMPUTE",
+  "EXTRA-DUMP",
+  "EXTRA-FIX",
+  "EXTRA-MOLECULE",
+  "EXTRA-PAIR",
+  "FEP",
+  "GRANULAR",
+  "H5MD",
+  "INTERLAYER",
+  "KIM",
+  "KSPACE",
+  "LATBOLTZ",
+  "LEPTON",
+  "MACHDYN",
+  "MANIFOLD",
+  "MANYBODY",
+  "MC",
+  "MDI",
+  "MEAM",
+  "MGPT",
+  "MISC",
+  "ML-IAP",
+  "ML-PACE",
+  "ML-POD",
+  "ML-RANN",
+  "ML-SNAP",
+  "ML-UEF3",
+  "MOFFF",
+  "MOLECULE",
+  "MOLFILE",
+  "MPIIO",
+  "NETCDF",
+  "OPT",
+  "ORIENT",
+  "PERI",
+  "PHONON",
+  "PLUGIN",
+  "PLUMED",
+  "POEMS",
+  "PTM",
+  "PYTHON",
+  "QEQ",
+  "QTB",
+  "REACTION",
+  "REAXFF",
+  "REPLICA",
+  "RHEO",
+  "RIGID",
+  "SCAFACOS",
+  "SHOCK",
+  "SMTBQ",
+  "SPH",
+  "SPIN",
+  "SRD",
+  "TALLY",
+  "UEF",
+  "VORONOI",
+  "VTK",
+  "YAFF",
+]
 
 # The EasyBuild LAMMPS easyblock builds the bundled Kokkos source selected by
 # the profile; a standalone Kokkos module is not a direct recipe dependency.
 [dependencies]
 exclude_from_solve = ["kokkos"]
+
+# These are requirements of the EasyBuild product policy. Existing foreign
+# edges merge with them; absent edges enter the manifest, SBOM, and Resolvo.
+[[dependencies.requirements]]
+name = "CMake"
+roles = ["build"]
+
+[[dependencies.requirements]]
+name = "pkgconf"
+roles = ["build"]
+
+[[dependencies.requirements]]
+name = "archspec"
+roles = ["build"]
+
+[[dependencies.requirements]]
+name = "PyYAML"
+roles = ["build"]
+
+[[dependencies.requirements]]
+name = "Python"
+
+[[dependencies.requirements]]
+name = "libpng"
+
+[[dependencies.requirements]]
+name = "libjpeg-turbo"
+
+[[dependencies.requirements]]
+name = "netCDF"
+
+[[dependencies.requirements]]
+name = "GSL"
+
+[[dependencies.requirements]]
+name = "zlib"
+
+[[dependencies.requirements]]
+name = "gzip"
+
+[[dependencies.requirements]]
+name = "cURL"
+
+[[dependencies.requirements]]
+name = "HDF5"
+
+[[dependencies.requirements]]
+name = "PCRE"
+
+[[dependencies.requirements]]
+name = "libxml2"
+
+[[dependencies.requirements]]
+name = "FFmpeg"
+
+[[dependencies.requirements]]
+name = "Voro++"
+
+[[dependencies.requirements]]
+name = "kim-api"
+
+[[dependencies.requirements]]
+name = "Eigen"
+
+[[dependencies.requirements]]
+name = "PLUMED"
+
+[[dependencies.requirements]]
+name = "SciPy-bundle"
+
+[[dependencies.requirements]]
+name = "VTK"
+
+[[dependencies.requirements]]
+name = "MDI"
+
+[[dependencies.requirements]]
+name = "mpi4py"
+
+[[dependencies.requirements]]
+name = "tbb"
+
+[[dependencies.requirements]]
+name = "ScaFaCoS"
 
 [[profiles]]
 name = "default"
