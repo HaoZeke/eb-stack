@@ -202,8 +202,8 @@ fn render_sources(plan: &PackagePlan) -> (String, String) {
         .map(|checksum| format!("'{}'", escape_single(checksum)))
         .collect::<Vec<_>>();
     (
-        format!("sources = [{}]", sources.join(", ")),
-        format!("checksums = [{}]", checksums.join(", ")),
+        format!("sources = {}", render_multiline_list(&sources)),
+        format!("checksums = {}", render_multiline_list(&checksums)),
     )
 }
 
@@ -219,19 +219,24 @@ fn render_source(source: &crate::package::SourceArtifact, url: &str) -> String {
     }
 
     let filename = source.filename.as_deref().unwrap_or(download_filename);
-    let mut fields = vec![format!("'source_urls': ['{}']", escape_single(source_url))];
+    let mut fields = vec!["{".to_string()];
+    fields.push(format!(
+        "    'source_urls': ['{}'],",
+        escape_single(source_url)
+    ));
     if source.filename.is_some() {
         fields.push(format!(
-            "'download_filename': '{}'",
+            "    'download_filename': '{}',",
             escape_single(download_filename)
         ));
     }
-    fields.push(format!("'filename': '{}'", escape_single(filename)));
+    fields.push(format!("    'filename': '{}',", escape_single(filename)));
     fields.push(format!(
-        "'extract_cmd': 'mkdir -p %(builddir)s/{target} && tar -xf %s -C \
-         %(builddir)s/{target} --strip-components=1'"
+        "    'extract_cmd': 'mkdir -p %(builddir)s/{target} && ' +\n        \
+                 'tar -xf %s -C %(builddir)s/{target} --strip-components=1',"
     ));
-    format!("{{{}}}", fields.join(", "))
+    fields.push("}".to_string());
+    fields.join("\n")
 }
 
 fn split_source_url(url: &str) -> Option<(&str, &str)> {
@@ -293,6 +298,25 @@ fn render_list(values: &[String]) -> String {
         return "[]".into();
     }
     format!("[\n    {},\n]", values.join(",\n    "))
+}
+
+fn render_multiline_list(values: &[String]) -> String {
+    if values.is_empty() {
+        return "[]".into();
+    }
+    let entries = values
+        .iter()
+        .map(|value| {
+            let value = value
+                .lines()
+                .map(|line| format!("    {line}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("{value},")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("[\n{entries}\n]")
 }
 
 fn escape_single(value: &str) -> String {
