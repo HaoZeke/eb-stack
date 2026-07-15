@@ -252,4 +252,11 @@ fn public_package_config_examples_parse() {
             .and_then(|profile| profile.versionsuffix.as_deref()),
         Some(&["-kokkos".to_string()][..])
     );
+    assert_eq!(
+        lammps
+            .profiles
+            .first()
+            .and_then(|profile| profile.config_options.as_deref()),
+        Some(&[][..])
+    );
 }
