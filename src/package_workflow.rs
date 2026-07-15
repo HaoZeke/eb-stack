@@ -360,6 +360,7 @@ fn dependency_from_easyconfig(
         roles: vec![role],
         condition: ConditionExpr::Always,
         virtual_capability: external.then(|| format!("external:system:{}", dependency.name)),
+        solver_excluded: false,
         provenance: Vec::new(),
     }
 }

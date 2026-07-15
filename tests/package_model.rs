@@ -59,6 +59,7 @@ fn qmcpack_plan() -> PackagePlan {
                 enabled: true,
             }),
             virtual_capability: None,
+            solver_excluded: false,
             provenance: vec![provenance(181, "depends_on(\"hdf5+mpi\", when=\"+phdf5\")")],
         }],
         rules: Vec::new(),

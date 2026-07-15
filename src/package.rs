@@ -387,6 +387,8 @@ pub struct DependencyIntent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub virtual_capability: Option<String>,
     #[serde(default)]
+    pub solver_excluded: bool,
+    #[serde(default)]
     pub provenance: Vec<Provenance>,
 }
 
@@ -695,6 +697,10 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
             Property::new("eb-stack:upstream-name", &dependency.name),
             Property::new("eb-stack:roles", &roles),
             Property::new("eb-stack:condition", &condition),
+            Property::new(
+                "eb-stack:solver-excluded",
+                dependency.solver_excluded.to_string(),
+            ),
         ]));
         components.push(component);
     }

@@ -16,6 +16,8 @@ pub struct PackageConfigLayer {
     pub package: Option<PackagePatch>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<BuildPatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependencies: Option<DependencyPatch>,
     #[serde(default)]
     pub profiles: Vec<ProfilePatch>,
 }
@@ -48,6 +50,17 @@ pub struct BuildPatch {
     pub moduleclass: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub patches: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct DependencyPatch {
+    #[serde(default)]
+    pub aliases: BTreeMap<String, String>,
+    #[serde(default)]
+    pub virtuals: BTreeMap<String, String>,
+    #[serde(default)]
+    pub exclude_from_solve: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -170,6 +183,23 @@ pub fn apply_package_layers(
                 plan.build.patches = patches.clone();
             }
         }
+        if let Some(dependencies) = &layer.dependencies {
+            for dependency in &mut plan.dependencies {
+                if let Some(alias) = policy_value(&dependencies.aliases, &dependency.name) {
+                    dependency.eb_name = Some(alias.clone());
+                }
+                if let Some(capability) = policy_value(&dependencies.virtuals, &dependency.name) {
+                    dependency.virtual_capability = Some(capability.clone());
+                }
+                if dependencies
+                    .exclude_from_solve
+                    .iter()
+                    .any(|name| package_identity(name) == package_identity(&dependency.name))
+                {
+                    dependency.solver_excluded = true;
+                }
+            }
+        }
         for patch in &layer.profiles {
             let existing_index = plan
                 .profiles
@@ -246,6 +276,23 @@ pub fn apply_package_layers(
         })
         .collect();
     Ok(())
+}
+
+fn policy_value<'a>(policy: &'a BTreeMap<String, String>, name: &str) -> Option<&'a String> {
+    policy.get(name).or_else(|| {
+        let identity = package_identity(name);
+        policy
+            .iter()
+            .find(|(key, _)| package_identity(key) == identity)
+            .map(|(_, value)| value)
+    })
+}
+
+fn package_identity(name: &str) -> String {
+    name.chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 #[derive(Debug, Error)]

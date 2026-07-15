@@ -56,7 +56,7 @@ pub fn solve_package_profile_with_hierarchy(
     let mut runtime_dependencies = Vec::new();
     let mut build_dependencies = Vec::new();
     for dependency in &materialized.dependencies {
-        if dependency.virtual_capability.is_some() {
+        if dependency.solver_excluded || dependency.virtual_capability.is_some() {
             continue;
         }
         let name = dependency
