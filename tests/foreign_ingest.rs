@@ -258,7 +258,7 @@ class Orbit(CMakePackage):
         )
 "#;
 
-    let recipe = parse_foreign_str(source, ForeignFormat::Spack).expect("parse static loop");
+    let recipe = parse_foreign_str(ForeignFormat::Spack, source).expect("parse static loop");
     let alpha = recipe
         .variants
         .iter()
@@ -291,7 +291,7 @@ class Orbit(CMakePackage):
     depends_on("backend@%s" % revision)
 "#;
 
-    let recipe = parse_foreign_str(source, ForeignFormat::Spack).expect("parse dynamic call");
+    let recipe = parse_foreign_str(ForeignFormat::Spack, source).expect("parse dynamic call");
 
     assert!(
         recipe.dependencies.iter().all(|dependency| {
