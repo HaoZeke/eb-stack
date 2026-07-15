@@ -81,7 +81,7 @@ eb-stack package plan \
   --profile-config examples/profiles/eon.toml \
   --easyconfigs "$ROBOT" \
   --easyconfigs /tmp/eb-stack/overlay \
-  --stack-policy examples/stacks/foss-2026.1.toml \
+  --stack-policy examples/stacks/eon-foss-2026.1.toml \
   --out-dir "$BUNDLE"
 #+end_src
 
@@ -100,15 +100,15 @@ roles, pin outcomes, and candidate exclusions.
 
 * Understand stack pin fallback
 
-~examples/stacks/foss-2026.1.toml~ records the reviewed cross-generation
-PyTorch, xtb, Eigen, and Meson identities needed by the complete eOn product.
-Each is a ~preferred~ pin with the complete EasyBuild toolchain and
-versionsuffix identity. Resolvo admits the pinned artifact's dependency
-closure, then first tries that favored candidate. If another declared
-requirement or known exclusion makes it infeasible, the solver selects a
-compatible alternative and sets ~fallback = true~ with a reason in the lock.
-Change the mode to ~locked~ only when the stack requires that exact candidate
-and must fail otherwise.
+~examples/stacks/eon-foss-2026.1.toml~ records the reviewed cross-generation
+PyTorch, xtb, Eigen, and Meson identities needed by the complete eOn product
+without imposing them on unrelated package plans. Each is a ~preferred~ pin
+with the complete EasyBuild toolchain and versionsuffix identity. Resolvo
+admits the pinned artifact's dependency closure, then first tries that favored
+candidate. If another declared requirement or known exclusion makes it
+infeasible, the solver selects a compatible alternative and sets ~fallback =
+true~ with a reason in the lock. Change the mode to ~locked~ only when the
+stack requires that exact candidate and must fail otherwise.
 
 This matters because a version range is not build evidence. A candidate can be
 SAT-compatible and still fail configure, compile, link, tests, install, or

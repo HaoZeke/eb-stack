@@ -97,15 +97,15 @@ eb-stack package plan \
   --profile-config examples/profiles/eon.toml \
   --easyconfigs /path/to/easybuild-easyconfigs/easybuild/easyconfigs \
   --easyconfigs fixtures/eon_foss_2026_1/easyconfigs \
-  --stack-policy examples/stacks/foss-2026.1.toml \
+  --stack-policy examples/stacks/eon-foss-2026.1.toml \
   --out-dir /tmp/eon
 ```
 
-The shipped stack policy carries eOn's reviewed cross-generation PyTorch,
+The shipped eOn stack policy carries its reviewed cross-generation PyTorch,
 xtb, Eigen, and Meson identities as `preferred` pins. Resolvo admits those
 artifact closures and records either the selected identity or a compatible
-fallback; the same policy does not force those packages into an unrelated
-profile.
+fallback. The generic `foss-2026.1.toml` template remains unpinned for other
+packages.
 
 Use `--format spack` and `examples/profiles/qmcpack.toml` for QMCPACK’s `package.py`. Parser output retains source spans, conda selectors, Spack conditions/conflicts, dependency roles, and residual dynamic logic.
 
