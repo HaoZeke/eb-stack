@@ -146,6 +146,55 @@ fn spack_lammps_honors_preference_and_materializes_sources() {
 }
 
 #[test]
+fn spack_lammps_splits_dependency_specs_from_variant_constraints() {
+    let recipe = parse_foreign_path(
+        &root().join("spack_lammps/package.py"),
+        Some(ForeignFormat::Spack),
+    )
+    .expect("parse Spack LAMMPS");
+
+    assert!(recipe.dependencies.iter().all(|dependency| {
+        !dependency.name.contains(char::is_whitespace) && !dependency.name.contains('+')
+    }));
+    let kokkos = recipe
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.original_spec.as_deref() == Some("kokkos+shared@3.1:"))
+        .expect("Kokkos shared dependency");
+    assert_eq!(kokkos.name, "kokkos");
+    assert_eq!(kokkos.pin.as_deref(), Some("3.1:"));
+
+    let scafacos = recipe
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.original_spec.as_deref().is_some_and(|spec| {
+            spec.starts_with("scafacos cflags=-fPIC")
+        }))
+        .expect("ScaFaCoS dependency");
+    assert_eq!(scafacos.name, "scafacos");
+}
+
+#[test]
+fn spack_lammps_splits_compound_when_predicates() {
+    let recipe = parse_foreign_path(
+        &root().join("spack_lammps/package.py"),
+        Some(ForeignFormat::Spack),
+    )
+    .expect("parse Spack LAMMPS");
+    let dependency = recipe
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.original_spec.as_deref() == Some("kokkos@4.6.02:"))
+        .expect("versioned Kokkos dependency");
+    let condition = serde_json::to_string(&dependency.condition).expect("condition JSON");
+
+    assert!(condition.contains("package-version"), "{condition}");
+    assert!(condition.contains("\"name\":\"kokkos\""), "{condition}");
+    assert!(condition.contains("\"name\":\"kspace\""), "{condition}");
+    assert!(!condition.contains("kokkos+kspace"), "{condition}");
+}
+
+#[test]
 fn spack_zlib_and_eon_preserve_build_system_information() {
     let zlib_path = root().join("spack_zlib/package.py");
     assert_eq!(

@@ -51,6 +51,12 @@ class Lammps(CMakePackage, CudaPackage, ROCmPackage, PythonExtension):
     depends_on("cxx", type="build")
     depends_on("cmake@3.16:", type="build")
     depends_on("mpi", when="+mpi")
+    depends_on("kokkos+shared@3.1:", when="@20200505:+kokkos")
+    depends_on("kokkos@4.6.02:", when="@20250722:+kokkos+kspace")
+    depends_on(
+        "scafacos cflags=-fPIC cxxflags=-fPIC fflags=-fPIC",
+        when="+scafacos+lib",
+    )
 
     resource(
         name="C_10_10.mesocnt",
