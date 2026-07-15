@@ -3,7 +3,7 @@
 use eb_stack::package::{materialize_profile, ProfileEnvironment};
 use eb_stack::{
     detect_foreign_format, inspect_new_package, package_plan_from_foreign, parse_foreign_path,
-    ForeignFormat, Toolchain,
+    parse_foreign_str, ForeignFormat, Toolchain,
 };
 use std::path::PathBuf;
 use std::process::Command;
@@ -232,6 +232,85 @@ fn spack_valued_variant_conditions_filter_dependencies() {
         .dependencies
         .iter()
         .any(|dependency| dependency.name == "fftw-api"));
+}
+
+#[test]
+fn spack_literal_dictionary_loops_materialize_variants() {
+    let source = r#"
+from spack.package import *
+
+class Orbit(CMakePackage):
+    homepage = "https://example.invalid/orbit"
+    url = "https://example.invalid/orbit-1.0.tar.gz"
+    version("1.0", sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+    capabilities = {
+        "alpha": {"default": True, "when": "@1:"},
+        "beta": {},
+    }
+
+    for feature, options in capabilities.items():
+        variant(
+            feature,
+            default=options.get("default", False),
+            description="Enable {}".format(feature),
+            when=options.get("when", None),
+        )
+"#;
+
+    let recipe = parse_foreign_str(source, ForeignFormat::Spack).expect("parse static loop");
+    let alpha = recipe
+        .variants
+        .iter()
+        .find(|variant| variant.name == "alpha")
+        .expect("alpha variant");
+    let beta = recipe
+        .variants
+        .iter()
+        .find(|variant| variant.name == "beta")
+        .expect("beta variant");
+
+    assert_eq!(alpha.default.as_deref(), Some("true"));
+    assert_eq!(beta.default.as_deref(), Some("false"));
+    assert!(serde_json::to_string(&alpha.condition)
+        .expect("condition JSON")
+        .contains("package-version"));
+}
+
+#[test]
+fn spack_nonliteral_directives_become_residuals_not_fake_facts() {
+    let source = r#"
+from spack.package import *
+
+class Orbit(CMakePackage):
+    homepage = "https://example.invalid/orbit"
+    url = "https://example.invalid/orbit-1.0.tar.gz"
+    version("1.0", sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+    revision = discover_revision()
+    depends_on("backend@%s" % revision)
+"#;
+
+    let recipe = parse_foreign_str(source, ForeignFormat::Spack).expect("parse dynamic call");
+
+    assert!(
+        recipe.dependencies.iter().all(|dependency| {
+            dependency.name != "backend"
+                && !dependency
+                    .original_spec
+                    .as_deref()
+                    .is_some_and(|spec| spec.contains("%s"))
+        }),
+        "nonliteral expressions must not become exact dependency facts"
+    );
+    assert!(
+        recipe
+            .notes
+            .iter()
+            .any(|note| note.contains("residual") && note.contains("depends_on")),
+        "unsupported directive must be visible to the repair loop: {:?}",
+        recipe.notes
+    );
 }
 
 #[test]
