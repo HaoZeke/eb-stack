@@ -57,6 +57,29 @@ install -m755 target/release/eb-stack ~/.local/bin/eb-stack
 
 Build the Rust binary on a suitable build host. EasyBuild installs belong on the target selected by the public target configuration, not necessarily on the machine running the CLI.
 
+## Inspect from a fresh clone
+
+The repository includes foreign-recipe and profile fixtures, so the parsing
+boundary can be exercised without an EasyBuild installation or external robot
+tree:
+
+```sh
+eb-stack package inspect \
+  --source fixtures/foreign_ingest/conda_eon/recipe.yaml \
+  --format conda-forge \
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  --profile-config examples/profiles/eon.toml \
+  --out-dir /tmp/eon-inspect
+
+python3 -m json.tool /tmp/eon-inspect/package.plan.json >/dev/null
+python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
+```
+
+This writes the canonical build manifest and planned CycloneDX SBOM. It does
+not solve dependencies, emit recipes, or make a build claim; those stages need
+an EasyBuild robot tree and a configured build target.
+
 ## Documentation
 
 The manual is organized around operator tasks:

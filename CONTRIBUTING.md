@@ -34,7 +34,7 @@ Primary docs live in orgmode under `docs/orgmode/` (Diataxis). Edit there,
 then build:
 
 ```bash
-# once: system-cargo venv for sphinxcontrib-rust (conda mold cannot link it)
+# once: isolated system-Python environment for the native Rust extension
 python3 -m venv .venv-docs
 export RUSTFLAGS='-C linker=cc'
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=cc
@@ -53,6 +53,10 @@ pixi run -e docs linkcheck
 The Sphinx task treats warnings as errors. The rendered-link check rejects
 links to generated RST and incorrect source-edit targets; the Lychee task
 checks the rendered site and README links.
+
+`sphinxcontrib-rust` contains a native Rust extension. The explicit linker
+environment keeps that extension on the host Rust/C linker rather than a
+linker injected by the documentation package environment.
 
 Do not hand-edit generated `docs/source/**/*.rst` or `docs/source/crates/`.
 

@@ -175,6 +175,28 @@ install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
 eb-stack --version
 #+end_src
 
+* Inspect from a fresh clone
+
+  The bundled conda-forge eOn recipe and public profile make the parser and
+  artifact boundary runnable without EasyBuild or an external robot tree:
+
+#+begin_src bash
+eb-stack package inspect \
+  --source fixtures/foreign_ingest/conda_eon/recipe.yaml \
+  --format conda-forge \
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  --profile-config examples/profiles/eon.toml \
+  --out-dir /tmp/eon-inspect
+
+python3 -m json.tool /tmp/eon-inspect/package.plan.json >/dev/null
+python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
+#+end_src
+
+  The two files are the canonical build manifest and planned CycloneDX SBOM.
+  Inspection does not solve dependencies, emit recipes, or establish a build
+  claim; those stages need an EasyBuild robot tree and configured target.
+
 * Documentation map
 
   - [[file:tutorial.org][Tutorial: foreign recipe to verified EasyBuild package]] -- start here.
