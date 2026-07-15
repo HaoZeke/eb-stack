@@ -31,7 +31,7 @@ use chrono::NaiveDate;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value as YamlValue;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use thiserror::Error;
 
@@ -680,6 +680,7 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>) {
             "skipped {macro_requirement_count} pure template requirement(s)"
         ));
     }
+    out = remove_duplicate_selector_keys(&out, &mut notes);
 
     // Replace longer keys first
     let mut keys: Vec<_> = vars.keys().cloned().collect();
@@ -763,6 +764,46 @@ fn eval_conda_set_expression(
     }
 
     None
+}
+
+fn remove_duplicate_selector_keys(text: &str, notes: &mut Vec<String>) -> String {
+    let top_level_key =
+        Regex::new(r"^([A-Za-z_][A-Za-z0-9_.-]*):").expect("top-level YAML key re");
+    let selector_key = Regex::new(
+        r"^([ \t]+)([A-Za-z_][A-Za-z0-9_.-]*):[^#]*#\s*\[[^]]+\]\s*$",
+    )
+    .expect("selector-gated YAML key re");
+    let mut section = String::new();
+    let mut seen = HashSet::new();
+    let mut duplicate_count = 0usize;
+    let mut out = String::with_capacity(text.len());
+
+    for line in text.lines() {
+        if let Some(capture) = top_level_key.captures(line) {
+            section = capture[1].to_string();
+        }
+        let duplicate = selector_key.captures(line).is_some_and(|capture| {
+            let identity = (
+                section.clone(),
+                capture[1].len(),
+                capture[2].to_string(),
+            );
+            !seen.insert(identity)
+        });
+        if duplicate {
+            duplicate_count += 1;
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+
+    if duplicate_count > 0 {
+        notes.push(format!(
+            "collapsed {duplicate_count} duplicate selector-gated mapping key(s)"
+        ));
+    }
+    out
 }
 
 fn parse_conda_sources(source_val: Option<&YamlValue>) -> Vec<ForeignSource> {
