@@ -195,6 +195,7 @@ fn each_product_profile_emits_a_conventional_easyconfig() {
 fn automatic_easyblock_is_omitted_from_the_easyconfig() {
     let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
     let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.package.name = "QMCPACK".into();
     plan.build.easyblock = None;
     plan.profiles = qmcpack_profiles();
     plan.outputs.truncate(1);
