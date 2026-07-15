@@ -61,7 +61,7 @@ fn conda_eon_expands_context_multi_source_and_selectors() {
         .iter()
         .any(|dependency| dependency.name.contains("compiler(")));
     let plan = package_plan_from_foreign(&recipe, &toolchain("2026.1"));
-    assert_eq!(plan.package.name, "eOn");
+    assert_eq!(plan.package.name, "eon");
     assert_eq!(plan.origin, eb_stack::package::PackageOrigin::CondaForge);
     assert_eq!(plan.build.easyblock.as_deref(), Some("MesonNinja"));
     assert_eq!(plan.sources.len(), recipe.sources.len());
@@ -286,7 +286,7 @@ fn spack_qmcpack_preserves_variants_rules_and_conditions() {
         .iter()
         .any(|note| note.contains("3 patch() directive")));
     let plan = package_plan_from_foreign(&recipe, &toolchain("2026.1"));
-    assert_eq!(plan.package.name, "QMCPACK");
+    assert_eq!(plan.package.name, "qmcpack");
     assert_eq!(plan.rules.len(), recipe.rules.len());
     assert!(plan.rules.len() >= 10);
     assert!(plan.dependencies.iter().any(|dependency| {
@@ -299,8 +299,8 @@ fn inspect_cli_writes_manifest_sbom_and_embedded_residuals() {
     let binary = env!("CARGO_BIN_EXE_eb-stack");
     let temp = tempfile::tempdir().expect("tempdir");
     for (source, format, expected) in [
-        ("conda_eon/recipe.yaml", "conda-forge", "eOn"),
-        ("spack_qmcpack/package.py", "spack", "QMCPACK"),
+        ("conda_eon/recipe.yaml", "conda-forge", "eon"),
+        ("spack_qmcpack/package.py", "spack", "qmcpack"),
     ] {
         let output = temp.path().join(expected);
         let result = Command::new(binary)
@@ -343,7 +343,7 @@ fn inspect_library_matches_cli_artifact_identity() {
         &[],
     )
     .expect("inspect library");
-    assert_eq!(plan.package.name, "QMCPACK");
-    assert_eq!(sbom["metadata"]["component"]["name"], "QMCPACK");
+    assert_eq!(plan.package.name, "qmcpack");
+    assert_eq!(sbom["metadata"]["component"]["name"], "qmcpack");
     assert_eq!(sbom["bomFormat"], "CycloneDX");
 }
