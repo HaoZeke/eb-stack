@@ -595,7 +595,11 @@ pub fn classify_build_failure(
         } else {
             BuildFindingClass::Executor
         }
-    } else if text.contains("oom-kill") || text.contains("out of memory") {
+    } else if text.contains("oom-kill")
+        || text.contains("out of memory")
+        || text.contains("virtual memory exhausted")
+        || text.contains("killed signal terminated program")
+    {
         BuildFindingClass::Resource
     } else if (text.contains("glibc_") && text.contains("not found")) || missing_executable {
         BuildFindingClass::Runtime
