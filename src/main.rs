@@ -7,7 +7,7 @@ use eb_stack::campaign::{
     CampaignStatus, FindingResolution,
 };
 use eb_stack::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
-use eb_stack::package_config::ProfileConfigLayer;
+use eb_stack::package_config::PackageConfigLayer;
 use eb_stack::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use eb_stack::{
     check_recipe_deps, format_style, format_style_file, inspect_new_package, lint_style,
@@ -82,8 +82,8 @@ struct PackageInspectArgs {
     toolchain_name: String,
     #[arg(long)]
     toolchain_version: String,
-    #[arg(long = "profile-config")]
-    profile_configs: Vec<PathBuf>,
+    #[arg(long = "package-config")]
+    package_configs: Vec<PathBuf>,
     #[arg(long)]
     out_dir: PathBuf,
 }
@@ -273,7 +273,7 @@ fn run_package(command: PackageCommand) -> Result<()> {
     match command {
         PackageCommand::Inspect(args) => {
             let toolchain = toolchain(&args.toolchain_name, &args.toolchain_version);
-            let layers = load_profile_layers(&args.profile_configs)?;
+            let layers = load_package_layers(&args.package_configs)?;
             let (plan, sbom) = inspect_new_package(
                 &args.source,
                 parse_format(&args.format)?,
@@ -304,7 +304,7 @@ fn run_package(command: PackageCommand) -> Result<()> {
                 format: parse_format(&args.inspect.format)?,
                 toolchain,
                 source_checksums: args.source_checksums,
-                profile_layers: load_profile_layers(&args.inspect.profile_configs)?,
+                package_layers: load_package_layers(&args.inspect.package_configs)?,
                 easyconfig_roots: args.easyconfigs,
                 stack_policy,
             })?;
@@ -581,11 +581,11 @@ fn parse_format(value: &str) -> Result<Option<ForeignFormat>> {
     }
 }
 
-fn load_profile_layers(paths: &[PathBuf]) -> Result<Vec<ProfileConfigLayer>> {
+fn load_package_layers(paths: &[PathBuf]) -> Result<Vec<PackageConfigLayer>> {
     paths
         .iter()
         .map(|path| {
-            ProfileConfigLayer::from_path(path)
+            PackageConfigLayer::from_path(path)
                 .with_context(|| format!("load profile config {}", path.display()))
         })
         .collect()

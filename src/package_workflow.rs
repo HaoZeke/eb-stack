@@ -13,7 +13,7 @@ use crate::package::{
     Residual, ResidualSeverity, ResidualStage, SourceArtifact, StackPin, StackPinMode, StackPolicy,
     PACKAGE_SCHEMA_VERSION,
 };
-use crate::package_config::{apply_profile_layers, ProfileConfigLayer};
+use crate::package_config::{apply_package_layers, PackageConfigLayer};
 use crate::package_emit::{emit_profile_easyconfigs, EmittedEasyconfig};
 use crate::package_solve::{solve_package_profile, solve_package_profile_with_hierarchy};
 use serde_json::Value;
@@ -28,7 +28,7 @@ pub struct NewPackageRequest {
     pub toolchain: Toolchain,
     /// Positional SHA-256 overrides, one for every canonical source artifact.
     pub source_checksums: Vec<String>,
-    pub profile_layers: Vec<ProfileConfigLayer>,
+    pub package_layers: Vec<PackageConfigLayer>,
     pub easyconfig_roots: Vec<PathBuf>,
     pub stack_policy: StackPolicy,
 }
@@ -65,13 +65,13 @@ pub fn inspect_new_package(
     source: &Path,
     format: Option<ForeignFormat>,
     toolchain: &Toolchain,
-    profile_layers: &[ProfileConfigLayer],
+    package_layers: &[PackageConfigLayer],
 ) -> Result<(PackagePlan, Value), PackageWorkflowError> {
     let recipe = parse_foreign_path(source, format)
         .map_err(|error| PackageWorkflowError::Foreign(error.to_string()))?;
     let mut plan = package_plan_from_foreign(&recipe, toolchain);
-    if !profile_layers.is_empty() {
-        apply_profile_layers(&mut plan, profile_layers)
+    if !package_layers.is_empty() {
+        apply_package_layers(&mut plan, package_layers)
             .map_err(|error| PackageWorkflowError::Config(error.to_string()))?;
     }
     let sbom = package_plan_to_cyclonedx(&plan)
@@ -89,7 +89,7 @@ pub fn plan_new_package(
         &request.source,
         request.format,
         &request.toolchain,
-        &request.profile_layers,
+        &request.package_layers,
     )?;
     if !request.source_checksums.is_empty() {
         apply_source_checksums(&mut plan, &request.source_checksums)?;

@@ -54,7 +54,7 @@ dependencies = [('zlib', '1.2')]
         format: Some(ForeignFormat::CondaForge),
         toolchain: toolchain.clone(),
         source_checksums: Vec::new(),
-        profile_layers: Vec::new(),
+        package_layers: Vec::new(),
         easyconfig_roots: vec![robot],
         stack_policy: StackPolicy {
             schema_version: STACK_POLICY_SCHEMA_VERSION,

@@ -11,7 +11,7 @@ use crate::eb_parse::{
 use crate::eb_style::{format_style_file, lint_style};
 use crate::foreign::ForeignFormat;
 use crate::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
-use crate::package_config::ProfileConfigLayer;
+use crate::package_config::PackageConfigLayer;
 use crate::package_workflow::{
     inspect_new_package, plan_new_package, plan_package_bump, write_package_bundle,
     BumpPackageRequest, NewPackageRequest, PackageBundle,
@@ -96,13 +96,18 @@ pub fn handle_message(message: &Value) -> Option<Value> {
 
 fn tool_catalog() -> Vec<Value> {
     vec![
-        tool(
+        tool_with_optional(
             "eb_package_inspect",
             "Parse a conda-forge or Spack recipe into a canonical build manifest and planned CycloneDX SBOM.",
             &[
                 ("source", "string"),
                 ("toolchain_version", "string"),
                 ("out_dir", "string"),
+            ],
+            &[
+                ("format", "string"),
+                ("toolchain_name", "string"),
+                ("package_configs", "array"),
             ],
         ),
         tool_with_optional(
@@ -118,7 +123,7 @@ fn tool_catalog() -> Vec<Value> {
             &[
                 ("format", "string"),
                 ("toolchain_name", "string"),
-                ("profile_configs", "array"),
+                ("package_configs", "array"),
                 ("source_checksums", "array"),
             ],
         ),
@@ -252,9 +257,9 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
 fn package_inspect(arguments: &Value) -> Result<Value, String> {
     let source = required_path(arguments, "source")?;
     let toolchain = toolchain(arguments)?;
-    let profiles = profile_layers(arguments)?;
+    let configs = package_layers(arguments)?;
     let (plan, sbom) =
-        inspect_new_package(&source, foreign_format(arguments)?, &toolchain, &profiles)
+        inspect_new_package(&source, foreign_format(arguments)?, &toolchain, &configs)
             .map_err(|error| error.to_string())?;
     let output = required_path(arguments, "out_dir")?;
     let written = write_package_bundle(
@@ -283,7 +288,7 @@ fn package_plan(arguments: &Value) -> Result<Value, String> {
         format: foreign_format(arguments)?,
         toolchain: toolchain(arguments)?,
         source_checksums: string_array(arguments, "source_checksums")?,
-        profile_layers: profile_layers(arguments)?,
+        package_layers: package_layers(arguments)?,
         easyconfig_roots: path_array(arguments, "easyconfigs")?,
         stack_policy,
     };
@@ -474,11 +479,11 @@ fn load_targets(arguments: &Value) -> Result<Vec<BuildTarget>, String> {
     resolve_target_layers(&layers).map_err(|error| error.to_string())
 }
 
-fn profile_layers(arguments: &Value) -> Result<Vec<ProfileConfigLayer>, String> {
-    string_array(arguments, "profile_configs")?
+fn package_layers(arguments: &Value) -> Result<Vec<PackageConfigLayer>, String> {
+    string_array(arguments, "package_configs")?
         .iter()
         .map(|path| {
-            ProfileConfigLayer::from_path(Path::new(path)).map_err(|error| error.to_string())
+            PackageConfigLayer::from_path(Path::new(path)).map_err(|error| error.to_string())
         })
         .collect()
 }

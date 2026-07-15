@@ -1,5 +1,5 @@
 use eb_stack::package::{StackPin, StackPinMode, StackPolicy, STACK_POLICY_SCHEMA_VERSION};
-use eb_stack::package_config::ProfileConfigLayer;
+use eb_stack::package_config::PackageConfigLayer;
 use eb_stack::{
     plan_new_package, resolve_easyconfig_file, write_package_bundle, ForeignFormat,
     NewPackageRequest, Toolchain,
@@ -43,7 +43,7 @@ requirements:
         )
         .expect("write candidate");
     }
-    let profile = ProfileConfigLayer::from_toml_str(
+    let profile = PackageConfigLayer::from_toml_str(
         r#"
 schema_version = 1
 [[profiles]]
@@ -73,7 +73,7 @@ config_options = ["-Dwith_cli=true"]
         format: Some(ForeignFormat::CondaForge),
         toolchain: toolchain(),
         source_checksums: Vec::new(),
-        profile_layers: vec![profile.clone()],
+        package_layers: vec![profile.clone()],
         easyconfig_roots: vec![robot.clone()],
         stack_policy: stack_policy.clone(),
     })
@@ -89,7 +89,7 @@ config_options = ["-Dwith_cli=true"]
         format: Some(ForeignFormat::CondaForge),
         toolchain: toolchain(),
         source_checksums: vec![checksum.into()],
-        profile_layers: vec![profile],
+        package_layers: vec![profile],
         easyconfig_roots: vec![robot],
         stack_policy,
     })

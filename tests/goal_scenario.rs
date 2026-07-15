@@ -1,7 +1,7 @@
 //! End-to-end acceptance for the two motivating foreign package workflows.
 
 use eb_stack::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
-use eb_stack::package_config::ProfileConfigLayer;
+use eb_stack::package_config::PackageConfigLayer;
 use eb_stack::version::matches_req;
 use eb_stack::{
     inspect_new_package, plan_new_package, resolve_easyconfig_file, write_package_bundle,
@@ -84,7 +84,7 @@ fn run_package(
     source_checksums: Vec<String>,
 ) {
     let source = repo().join(source);
-    let profile = ProfileConfigLayer::from_path(&repo().join(profile_config)).expect("profiles");
+    let profile = PackageConfigLayer::from_path(&repo().join(profile_config)).expect("profiles");
     let (inspected, inspected_sbom) = inspect_new_package(
         &source,
         Some(format),
@@ -105,7 +105,7 @@ fn run_package(
         format: Some(format),
         toolchain: toolchain(),
         source_checksums,
-        profile_layers: vec![profile],
+        package_layers: vec![profile],
         easyconfig_roots: vec![robot],
         stack_policy: policy(),
     })

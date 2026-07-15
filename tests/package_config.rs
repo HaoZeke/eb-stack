@@ -1,4 +1,4 @@
-use eb_stack::package_config::{apply_profile_layers, ProfileConfigLayer};
+use eb_stack::package_config::{apply_package_layers, PackageConfigLayer};
 use eb_stack::{package_plan_from_foreign, parse_foreign_path, ForeignFormat, Toolchain};
 use std::path::PathBuf;
 
@@ -17,7 +17,7 @@ fn qmcpack_plan() -> eb_stack::package::PackagePlan {
 
 #[test]
 fn layered_toml_profiles_materialize_easybuild_variants() {
-    let base = ProfileConfigLayer::from_toml_str(
+    let base = PackageConfigLayer::from_toml_str(
         r#"
 schema_version = 1
 
@@ -60,7 +60,7 @@ complex = true
 "#,
     )
     .expect("base profile config");
-    let site = ProfileConfigLayer::from_toml_str(
+    let site = PackageConfigLayer::from_toml_str(
         r#"
 schema_version = 1
 
@@ -80,7 +80,7 @@ build_type = "Release"
     .expect("site profile config");
 
     let mut plan = qmcpack_plan();
-    apply_profile_layers(&mut plan, &[base, site]).expect("apply profile layers");
+    apply_package_layers(&mut plan, &[base, site]).expect("apply package layers");
     assert_eq!(plan.profiles.len(), 2);
     assert_eq!(plan.outputs.len(), 2);
     assert_eq!(plan.outputs[0].profile, "default");
@@ -110,7 +110,7 @@ build_type = "Release"
 
 #[test]
 fn package_config_overrides_foreign_metadata_and_build_policy() {
-    let config = ProfileConfigLayer::from_toml_str(
+    let config = PackageConfigLayer::from_toml_str(
         r#"
 schema_version = 1
 
@@ -138,7 +138,7 @@ versionsuffix = ["-kokkos"]
 
     let mut plan = qmcpack_plan();
     plan.build.patches = vec!["foreign-feedstock.patch".into()];
-    apply_profile_layers(&mut plan, &[config]).expect("apply package config");
+    apply_package_layers(&mut plan, &[config]).expect("apply package config");
 
     assert_eq!(plan.package.name, "LAMMPS");
     assert_eq!(plan.package.version, "22Jul2025_update4");
@@ -159,16 +159,16 @@ versionsuffix = ["-kokkos"]
 #[test]
 fn profile_config_rejects_unknown_schema() {
     let error =
-        ProfileConfigLayer::from_toml_str("schema_version = 99").expect_err("unsupported schema");
+        PackageConfigLayer::from_toml_str("schema_version = 99").expect_err("unsupported schema");
     assert!(error.to_string().contains("schema version 99"), "{error}");
 }
 
 #[test]
 fn public_eon_and_qmcpack_profile_examples_parse() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let eon = ProfileConfigLayer::from_path(&root.join("examples/profiles/eon.toml"))
+    let eon = PackageConfigLayer::from_path(&root.join("examples/profiles/eon.toml"))
         .expect("eOn profiles");
-    let qmcpack = ProfileConfigLayer::from_path(&root.join("examples/profiles/qmcpack.toml"))
+    let qmcpack = PackageConfigLayer::from_path(&root.join("examples/profiles/qmcpack.toml"))
         .expect("QMCPACK profiles");
     assert_eq!(eon.profiles.len(), 1);
     assert_eq!(

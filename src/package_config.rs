@@ -6,11 +6,11 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use thiserror::Error;
 
-pub const PROFILE_CONFIG_SCHEMA_VERSION: u32 = 1;
+pub const PACKAGE_CONFIG_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProfileConfigLayer {
+pub struct PackageConfigLayer {
     pub schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<PackagePatch>,
@@ -72,26 +72,26 @@ pub struct ProfilePatch {
     pub verification_commands: Option<Vec<VerificationCommand>>,
 }
 
-impl ProfileConfigLayer {
-    pub fn from_toml_str(input: &str) -> Result<Self, ProfileConfigError> {
+impl PackageConfigLayer {
+    pub fn from_toml_str(input: &str) -> Result<Self, PackageConfigError> {
         let layer: Self = toml::from_str(input)?;
         layer.validate()?;
         Ok(layer)
     }
 
-    pub fn from_path(path: &Path) -> Result<Self, ProfileConfigError> {
+    pub fn from_path(path: &Path) -> Result<Self, PackageConfigError> {
         let input = std::fs::read_to_string(path)
-            .map_err(|error| ProfileConfigError::Io(path.display().to_string(), error))?;
+            .map_err(|error| PackageConfigError::Io(path.display().to_string(), error))?;
         Self::from_toml_str(&input)
     }
 
-    fn validate(&self) -> Result<(), ProfileConfigError> {
-        if self.schema_version != PROFILE_CONFIG_SCHEMA_VERSION {
-            return Err(ProfileConfigError::UnsupportedSchema(self.schema_version));
+    fn validate(&self) -> Result<(), PackageConfigError> {
+        if self.schema_version != PACKAGE_CONFIG_SCHEMA_VERSION {
+            return Err(PackageConfigError::UnsupportedSchema(self.schema_version));
         }
         for profile in &self.profiles {
             if profile.name.trim().is_empty() {
-                return Err(ProfileConfigError::EmptyProfileName);
+                return Err(PackageConfigError::EmptyProfileName);
             }
         }
         if self
@@ -100,7 +100,7 @@ impl ProfileConfigLayer {
             .and_then(|package| package.name.as_deref())
             .is_some_and(|name| name.trim().is_empty())
         {
-            return Err(ProfileConfigError::EmptyPackageName);
+            return Err(PackageConfigError::EmptyPackageName);
         }
         if self
             .package
@@ -108,7 +108,7 @@ impl ProfileConfigLayer {
             .and_then(|package| package.version.as_deref())
             .is_some_and(|version| version.trim().is_empty())
         {
-            return Err(ProfileConfigError::EmptyPackageVersion);
+            return Err(PackageConfigError::EmptyPackageVersion);
         }
         if self
             .build
@@ -116,7 +116,7 @@ impl ProfileConfigLayer {
             .and_then(|build| build.easyblock.as_deref())
             .is_some_and(|easyblock| easyblock.trim().is_empty())
         {
-            return Err(ProfileConfigError::EmptyEasyblock);
+            return Err(PackageConfigError::EmptyEasyblock);
         }
         if self
             .build
@@ -124,16 +124,16 @@ impl ProfileConfigLayer {
             .and_then(|build| build.moduleclass.as_deref())
             .is_some_and(|moduleclass| moduleclass.trim().is_empty())
         {
-            return Err(ProfileConfigError::EmptyModuleclass);
+            return Err(PackageConfigError::EmptyModuleclass);
         }
         Ok(())
     }
 }
 
-pub fn apply_profile_layers(
+pub fn apply_package_layers(
     plan: &mut PackagePlan,
-    layers: &[ProfileConfigLayer],
-) -> Result<(), ProfileConfigError> {
+    layers: &[PackageConfigLayer],
+) -> Result<(), PackageConfigError> {
     for layer in layers {
         layer.validate()?;
         if let Some(package) = &layer.package {
@@ -183,7 +183,7 @@ pub fn apply_profile_layers(
                         .iter()
                         .find(|profile| profile.name == parent)
                         .cloned()
-                        .ok_or_else(|| ProfileConfigError::MissingParent {
+                        .ok_or_else(|| PackageConfigError::MissingParent {
                             profile: patch.name.clone(),
                             parent: parent.to_string(),
                         })?;
@@ -234,7 +234,7 @@ pub fn apply_profile_layers(
         .filter(|profile| profile.default)
         .count();
     if default_count != 1 {
-        return Err(ProfileConfigError::DefaultProfileCount(default_count));
+        return Err(PackageConfigError::DefaultProfileCount(default_count));
     }
     let stack = plan.build.toolchain.label();
     plan.outputs = plan
@@ -249,12 +249,12 @@ pub fn apply_profile_layers(
 }
 
 #[derive(Debug, Error)]
-pub enum ProfileConfigError {
-    #[error("unsupported profile config schema version {0}")]
+pub enum PackageConfigError {
+    #[error("unsupported package config schema version {0}")]
     UnsupportedSchema(u32),
-    #[error("profile config TOML: {0}")]
+    #[error("package config TOML: {0}")]
     Toml(#[from] toml::de::Error),
-    #[error("read profile config {0}: {1}")]
+    #[error("read package config {0}: {1}")]
     Io(String, std::io::Error),
     #[error("profile name cannot be empty")]
     EmptyProfileName,
