@@ -137,12 +137,7 @@ fn apply_source_checksums(
             actual: checksums.len(),
         });
     }
-    for (index, (source, checksum)) in plan
-        .sources
-        .iter_mut()
-        .zip(checksums.iter())
-        .enumerate()
-    {
+    for (index, (source, checksum)) in plan.sources.iter_mut().zip(checksums.iter()).enumerate() {
         validate_source_checksum(index, checksum)?;
         source.sha256 = Some(checksum.clone());
     }

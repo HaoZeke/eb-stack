@@ -117,13 +117,10 @@ mode = "preferred"
     assert!(output
         .join("easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb")
         .is_file());
-    let recipe = std::fs::read_to_string(
-        output.join("easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb"),
-    )
-    .expect("emitted recipe");
-    assert!(recipe.contains(
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    ));
+    let recipe =
+        std::fs::read_to_string(output.join("easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb"))
+            .expect("emitted recipe");
+    assert!(recipe.contains("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
 }
 
 #[test]
