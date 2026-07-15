@@ -45,11 +45,11 @@ if [[ "$PY" == "pixi" ]]; then
     echo "  # with: export RUSTFLAGS='-C linker=cc' CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=cc" >&2
     exit 1
   }
-  pixi run -e docs -- sphinx-build docs/source/ docs/build
+  pixi run -e docs -- sphinx-build -W --keep-going docs/source/ docs/build
 else
   "$PY" -c 'import sphinxcontrib_rust' || {
     echo "ERROR: $PY cannot import sphinxcontrib_rust" >&2
     exit 1
   }
-  "$PY" -m sphinx -b html docs/source/ docs/build
+  "$PY" -m sphinx -W --keep-going -b html docs/source/ docs/build
 fi

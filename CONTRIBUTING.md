@@ -44,8 +44,14 @@ cargo install sphinx-rustdocgen   # or use an existing ~/.cargo/bin copy
 
 export EB_STACK_DOCS_PYTHON=$PWD/.venv-docs/bin/python
 pixi run -e docs docbld
+scripts/check-doc-links.sh docs/build
+pixi run -e docs linkcheck
 # HTML → docs/build/index.html (includes crates/eb_stack/* Rust API)
 ```
+
+The Sphinx task treats warnings as errors. The rendered-link check rejects
+links to generated RST and incorrect source-edit targets; the Lychee task
+checks the rendered site and README links.
 
 Do not hand-edit generated `docs/source/**/*.rst` or `docs/source/crates/`.
 
