@@ -177,6 +177,25 @@ fn resolve_eon_2026_1_companions() {
 }
 
 #[test]
+fn rust_wrappers_are_reset_without_revealing_host_config() {
+    for rel in [
+        "e/eOn/eOn-2.16.0-foss-2026.1.eb",
+        "m/metatensor/metatensor-0.2.2-GCCcore-15.2.0.eb",
+    ] {
+        let text = std::fs::read_to_string(drafts().join(rel)).unwrap();
+        assert!(
+            text.contains("RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER="),
+            "{rel} must reset Cargo wrappers to empty values"
+        );
+        assert!(
+            !text.contains("unset RUSTC_WRAPPER")
+                && !text.contains("unset CARGO_BUILD_RUSTC_WRAPPER"),
+            "{rel} must not reveal wrappers from an ancestor Cargo config"
+        );
+    }
+}
+
+#[test]
 fn eon_2026_1_check_recipe_drafts_plus_robot() {
     let recipe =
         resolve_easyconfig_file(&drafts().join("e/eOn/eOn-2.16.0-foss-2026.1.eb")).unwrap();
