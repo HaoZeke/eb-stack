@@ -89,6 +89,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
         parameters,
         toolchain_options: BTreeMap::new(),
         config_options: config_options.clone(),
+        easyconfig_parameters: BTreeMap::new(),
         verification_commands: Vec::new(),
     };
 
@@ -152,6 +153,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             config_options,
             moduleclass: None,
             patches: recipe.patches.clone(),
+            easyconfig_parameters: BTreeMap::new(),
         },
         profiles: vec![profile],
         outputs: vec![OutputRequest {

@@ -471,6 +471,47 @@ pub struct PackageRule {
     pub provenance: Provenance,
 }
 
+/// Python data values accepted by public EasyBuild package policy.
+///
+/// Expressions are deliberately absent: package configuration describes
+/// easyblock inputs without becoming an arbitrary Python execution surface.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum EasyconfigValue {
+    Bool(bool),
+    Integer(i64),
+    String(String),
+    List(Vec<EasyconfigValue>),
+    Table(BTreeMap<String, EasyconfigValue>),
+}
+
+pub(crate) fn is_easyconfig_parameter_name(name: &str) -> bool {
+    let mut characters = name.chars();
+    let identifier = characters
+        .next()
+        .is_some_and(|character| character.is_ascii_alphabetic() || character == '_')
+        && characters.all(|character| character.is_ascii_alphanumeric() || character == '_');
+    identifier
+        && !matches!(
+            name,
+            "easyblock"
+                | "name"
+                | "version"
+                | "versionsuffix"
+                | "homepage"
+                | "description"
+                | "toolchain"
+                | "toolchainopts"
+                | "sources"
+                | "checksums"
+                | "patches"
+                | "configopts"
+                | "builddependencies"
+                | "dependencies"
+                | "moduleclass"
+        )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BuildSpec {
@@ -485,6 +526,8 @@ pub struct BuildSpec {
     pub moduleclass: Option<String>,
     #[serde(default)]
     pub patches: Vec<String>,
+    #[serde(default)]
+    pub easyconfig_parameters: BTreeMap<String, EasyconfigValue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -511,6 +554,8 @@ pub struct ProductProfile {
     pub toolchain_options: BTreeMap<String, bool>,
     #[serde(default)]
     pub config_options: Vec<String>,
+    #[serde(default)]
+    pub easyconfig_parameters: BTreeMap<String, EasyconfigValue>,
     #[serde(default)]
     pub verification_commands: Vec<VerificationCommand>,
 }

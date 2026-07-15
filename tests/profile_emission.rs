@@ -44,6 +44,7 @@ fn qmcpack_profiles() -> Vec<ProductProfile> {
                 "-DQMC_COMPLEX=OFF".into(),
                 "-DQMC_MIXED_PRECISION=OFF".into(),
             ],
+            easyconfig_parameters: BTreeMap::new(),
             verification_commands: Vec::new(),
         },
         ProductProfile {
@@ -65,6 +66,7 @@ fn qmcpack_profiles() -> Vec<ProductProfile> {
                 "-DQMC_COMPLEX=ON".into(),
                 "-DQMC_MIXED_PRECISION=OFF".into(),
             ],
+            easyconfig_parameters: BTreeMap::new(),
             verification_commands: Vec::new(),
         },
     ]
@@ -253,7 +255,6 @@ fn conditional_spack_resources_follow_the_selected_profile() {
 fn typed_easyconfig_parameters_render_as_conventional_python_data() {
     let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
     let mut plan = package_plan_from_foreign(&recipe, &toolchain());
-    plan.package.name = "Orbit".into();
     plan.build.easyconfig_parameters = BTreeMap::from([
         (
             "general_packages".into(),
@@ -275,8 +276,10 @@ fn typed_easyconfig_parameters_render_as_conventional_python_data() {
     );
     plan.outputs.truncate(1);
 
-    let emitted = emit_profile_easyconfigs(&plan, &[profile_lock("default", "")])
-        .expect("emit typed EasyBuild parameters");
+    let mut lock = profile_lock("default", "");
+    lock.package.clone_from(&plan.package.name);
+    let emitted =
+        emit_profile_easyconfigs(&plan, &[lock]).expect("emit typed EasyBuild parameters");
     let text = &emitted[0].text;
 
     assert!(text.contains("build_shared_libs = True"));
@@ -370,6 +373,7 @@ fn conda_target_directories_emit_rattler_compatible_source_staging() {
         parameters: BTreeMap::new(),
         toolchain_options: BTreeMap::new(),
         config_options: Vec::new(),
+        easyconfig_parameters: BTreeMap::new(),
         verification_commands: Vec::new(),
     }];
     plan.outputs = vec![OutputRequest {

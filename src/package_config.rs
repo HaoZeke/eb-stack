@@ -1,6 +1,10 @@
 //! Layered TOML configuration for public package-profile definitions.
 
-use crate::package::{OutputRequest, PackagePlan, ProductProfile, VerificationCommand};
+use crate::package::{
+    is_easyconfig_parameter_name, ConditionExpr, ConditionPredicate, DependencyIntent,
+    DependencyRole, EasyconfigValue, OutputRequest, PackagePlan, ProductProfile,
+    VerificationCommand,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -50,6 +54,8 @@ pub struct BuildPatch {
     pub moduleclass: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub patches: Option<Vec<String>>,
+    #[serde(default)]
+    pub easyconfig_parameters: BTreeMap<String, EasyconfigValue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -61,6 +67,25 @@ pub struct DependencyPatch {
     pub virtuals: BTreeMap<String, String>,
     #[serde(default)]
     pub exclude_from_solve: Vec<String>,
+    #[serde(default)]
+    pub requirements: Vec<DependencyRequirement>,
+}
+
+/// An EasyBuild-side requirement that foreign metadata may not declare.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DependencyRequirement {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraint: Option<String>,
+    #[serde(default = "default_requirement_roles")]
+    pub roles: Vec<DependencyRole>,
+    #[serde(default)]
+    pub features: BTreeMap<String, bool>,
+}
+
+fn default_requirement_roles() -> Vec<DependencyRole> {
+    vec![DependencyRole::Run]
 }
 
 /// Foreign dependency identity mapped to an EasyBuild provider.
@@ -122,6 +147,8 @@ pub struct ProfilePatch {
     pub toolchain_options: BTreeMap<String, bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_options: Option<Vec<String>>,
+    #[serde(default)]
+    pub easyconfig_parameters: BTreeMap<String, EasyconfigValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification_commands: Option<Vec<VerificationCommand>>,
 }
@@ -180,6 +207,24 @@ impl PackageConfigLayer {
         {
             return Err(PackageConfigError::EmptyModuleclass);
         }
+        if let Some(build) = &self.build {
+            validate_easyconfig_parameter_names(&build.easyconfig_parameters)?;
+        }
+        for profile in &self.profiles {
+            validate_easyconfig_parameter_names(&profile.easyconfig_parameters)?;
+        }
+        if let Some(dependencies) = &self.dependencies {
+            for requirement in &dependencies.requirements {
+                if requirement.name.trim().is_empty() {
+                    return Err(PackageConfigError::EmptyDependencyRequirement);
+                }
+                if requirement.roles.is_empty() {
+                    return Err(PackageConfigError::EmptyDependencyRoles(
+                        requirement.name.clone(),
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -188,7 +233,7 @@ pub fn apply_package_layers(
     plan: &mut PackagePlan,
     layers: &[PackageConfigLayer],
 ) -> Result<(), PackageConfigError> {
-    for layer in layers {
+    for (layer_index, layer) in layers.iter().enumerate() {
         layer.validate()?;
         if let Some(package) = &layer.package {
             if let Some(name) = &package.name {
@@ -230,6 +275,9 @@ pub fn apply_package_layers(
             if let Some(patches) = &build.patches {
                 plan.build.patches = patches.clone();
             }
+            plan.build
+                .easyconfig_parameters
+                .extend(build.easyconfig_parameters.clone());
         }
         if let Some(dependencies) = &layer.dependencies {
             for dependency in &mut plan.dependencies {
@@ -249,6 +297,9 @@ pub fn apply_package_layers(
                 {
                     dependency.solver_excluded = true;
                 }
+            }
+            for (requirement_index, requirement) in dependencies.requirements.iter().enumerate() {
+                ensure_dependency_requirement(plan, requirement, layer_index, requirement_index);
             }
         }
         for patch in &layer.profiles {
@@ -280,6 +331,7 @@ pub fn apply_package_layers(
                     parameters: BTreeMap::new(),
                     toolchain_options: BTreeMap::new(),
                     config_options: Vec::new(),
+                    easyconfig_parameters: BTreeMap::new(),
                     verification_commands: Vec::new(),
                 },
             };
@@ -298,6 +350,9 @@ pub fn apply_package_layers(
             if let Some(config_options) = &patch.config_options {
                 profile.config_options = config_options.clone();
             }
+            profile
+                .easyconfig_parameters
+                .extend(patch.easyconfig_parameters.clone());
             if let Some(verification_commands) = &patch.verification_commands {
                 profile.verification_commands = verification_commands.clone();
             }
@@ -327,6 +382,79 @@ pub fn apply_package_layers(
         })
         .collect();
     Ok(())
+}
+
+fn validate_easyconfig_parameter_names(
+    parameters: &BTreeMap<String, EasyconfigValue>,
+) -> Result<(), PackageConfigError> {
+    for name in parameters.keys() {
+        if !is_easyconfig_parameter_name(name) {
+            return Err(PackageConfigError::InvalidEasyconfigParameter(name.clone()));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_dependency_requirement(
+    plan: &mut PackagePlan,
+    requirement: &DependencyRequirement,
+    layer_index: usize,
+    requirement_index: usize,
+) {
+    let condition = requirement_condition(&requirement.features);
+    let identity = package_identity(&requirement.name);
+    let existing = plan.dependencies.iter_mut().find(|dependency| {
+        let effective_name = dependency.eb_name.as_deref().unwrap_or(&dependency.name);
+        package_identity(effective_name) == identity
+            && (condition == ConditionExpr::Always || dependency.condition == condition)
+    });
+    if let Some(dependency) = existing {
+        dependency.eb_name = Some(requirement.name.clone());
+        if let Some(constraint) = &requirement.constraint {
+            dependency.constraint = Some(constraint.clone());
+        }
+        for role in &requirement.roles {
+            if !dependency.roles.contains(role) {
+                dependency.roles.push(*role);
+            }
+        }
+        dependency.condition = condition;
+        dependency.solver_excluded = false;
+        return;
+    }
+
+    plan.dependencies.push(DependencyIntent {
+        id: format!(
+            "package-policy:{layer_index}:{requirement_index}:{}",
+            package_identity(&requirement.name)
+        ),
+        name: requirement.name.clone(),
+        eb_name: Some(requirement.name.clone()),
+        constraint: requirement.constraint.clone(),
+        roles: requirement.roles.clone(),
+        condition,
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: Vec::new(),
+    });
+}
+
+fn requirement_condition(features: &BTreeMap<String, bool>) -> ConditionExpr {
+    if features.is_empty() {
+        ConditionExpr::Always
+    } else {
+        ConditionExpr::All(
+            features
+                .iter()
+                .map(|(name, enabled)| {
+                    ConditionExpr::Predicate(ConditionPredicate::Feature {
+                        name: name.clone(),
+                        enabled: *enabled,
+                    })
+                })
+                .collect(),
+        )
+    }
 }
 
 fn policy_value<'a>(policy: &'a BTreeMap<String, String>, name: &str) -> Option<&'a String> {
@@ -377,6 +505,12 @@ pub enum PackageConfigError {
     EmptyEasyblock,
     #[error("EasyBuild moduleclass cannot be empty")]
     EmptyModuleclass,
+    #[error("invalid EasyBuild parameter name {0:?}")]
+    InvalidEasyconfigParameter(String),
+    #[error("dependency requirement name cannot be empty")]
+    EmptyDependencyRequirement,
+    #[error("dependency requirement {0} must have at least one role")]
+    EmptyDependencyRoles(String),
     #[error("profile {profile} inherits missing profile {parent}")]
     MissingParent { profile: String, parent: String },
     #[error("package plan must contain exactly one default profile, found {0}")]

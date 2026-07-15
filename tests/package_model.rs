@@ -75,6 +75,7 @@ fn qmcpack_plan() -> PackagePlan {
             config_options: vec!["-DQMC_MPI=ON".into(), "-DQMC_OMP=ON".into()],
             moduleclass: Some("chem".into()),
             patches: Vec::new(),
+            easyconfig_parameters: BTreeMap::new(),
         },
         profiles: vec![ProductProfile {
             name: "default".into(),
@@ -87,6 +88,7 @@ fn qmcpack_plan() -> PackagePlan {
                 "-DQMC_MIXED_PRECISION=OFF".into(),
                 "-DQMC_COMPLEX=OFF".into(),
             ],
+            easyconfig_parameters: BTreeMap::new(),
             verification_commands: Vec::new(),
         }],
         outputs: vec![OutputRequest {

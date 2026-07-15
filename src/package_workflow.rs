@@ -311,6 +311,7 @@ fn package_plan_from_easyconfig(
         parameters: BTreeMap::new(),
         toolchain_options: BTreeMap::new(),
         config_options: Vec::new(),
+        easyconfig_parameters: BTreeMap::new(),
         verification_commands: Vec::new(),
     };
     PackagePlan {
@@ -334,6 +335,7 @@ fn package_plan_from_easyconfig(
             config_options: recipe.configopts.iter().cloned().collect(),
             moduleclass: recipe.moduleclass.clone(),
             patches: recipe.patch_names.clone(),
+            easyconfig_parameters: BTreeMap::new(),
         },
         profiles: vec![profile],
         outputs: vec![OutputRequest {

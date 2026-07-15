@@ -1,8 +1,11 @@
 //! Deterministic EasyBuild recipe-set emission from materialized package profiles.
 
 use crate::eb_parse::easyconfig_basename;
-use crate::package::{materialize_profile, PackagePlan, ProfileEnvironment, ProfileLock};
-use std::collections::BTreeSet;
+use crate::package::{
+    is_easyconfig_parameter_name, materialize_profile, EasyconfigValue, PackagePlan,
+    ProfileEnvironment, ProfileLock,
+};
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +29,8 @@ pub enum PackageEmitError {
     },
     #[error("profile lock for {0} has a mismatched toolchain or versionsuffix")]
     LockConfiguration(String),
+    #[error("invalid EasyBuild parameter name {0:?}")]
+    InvalidEasyconfigParameter(String),
 }
 
 pub fn emit_profile_easyconfigs(
@@ -55,6 +60,16 @@ pub fn emit_profile_easyconfigs(
             || lock.versionsuffix != materialized.versionsuffix
         {
             return Err(PackageEmitError::LockConfiguration(output.profile.clone()));
+        }
+        for name in plan
+            .build
+            .easyconfig_parameters
+            .keys()
+            .chain(materialized.profile.easyconfig_parameters.keys())
+        {
+            if !is_easyconfig_parameter_name(name) {
+                return Err(PackageEmitError::InvalidEasyconfigParameter(name.clone()));
+            }
         }
 
         emitted.push(EmittedEasyconfig {
@@ -144,6 +159,9 @@ fn render_easyconfig(
     } else {
         format!("configopts = '{}'\n", escape_single(&config_options))
     };
+    let mut easyconfig_parameters = plan.build.easyconfig_parameters.clone();
+    easyconfig_parameters.extend(profile.easyconfig_parameters.clone());
+    let easyconfig_parameter_lines = render_easyconfig_parameters(&easyconfig_parameters);
     let build_dependencies = lock
         .dependencies
         .iter()
@@ -170,6 +188,7 @@ toolchain = {{'name': '{toolchain_name}', 'version': '{toolchain_version}'}}\n\
 {checksum_lines}\n\
 {patch_line}\
 {config_line}\
+{easyconfig_parameter_lines}\
 builddependencies = {build_dependencies}\n\n\
 dependencies = {runtime_dependencies}\n\n\
 moduleclass = '{moduleclass}'\n",
@@ -183,6 +202,73 @@ moduleclass = '{moduleclass}'\n",
         runtime_dependencies = render_list(&runtime_dependencies),
     );
     crate::eb_style::format_style(&rendered).text
+}
+
+fn render_easyconfig_parameters(parameters: &BTreeMap<String, EasyconfigValue>) -> String {
+    if parameters.is_empty() {
+        return String::new();
+    }
+    let mut rendered = parameters
+        .iter()
+        .map(|(name, value)| format!("{name} = {}", render_easyconfig_value(value, 0)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    rendered.push_str("\n\n");
+    rendered
+}
+
+fn render_easyconfig_value(value: &EasyconfigValue, indentation: usize) -> String {
+    match value {
+        EasyconfigValue::Bool(value) => python_bool(*value).into(),
+        EasyconfigValue::Integer(value) => value.to_string(),
+        EasyconfigValue::String(value) => format!("'{}'", escape_single(value)),
+        EasyconfigValue::List(values) => render_easyconfig_sequence(values, indentation),
+        EasyconfigValue::Table(values) => render_easyconfig_table(values, indentation),
+    }
+}
+
+fn render_easyconfig_sequence(values: &[EasyconfigValue], indentation: usize) -> String {
+    if values.is_empty() {
+        return "[]".into();
+    }
+    let item_indentation = indentation + 4;
+    let prefix = " ".repeat(item_indentation);
+    let suffix = " ".repeat(indentation);
+    let items = values
+        .iter()
+        .map(|value| {
+            format!(
+                "{prefix}{},",
+                render_easyconfig_value(value, item_indentation)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("[\n{items}\n{suffix}]")
+}
+
+fn render_easyconfig_table(
+    values: &BTreeMap<String, EasyconfigValue>,
+    indentation: usize,
+) -> String {
+    if values.is_empty() {
+        return "{}".into();
+    }
+    let item_indentation = indentation + 4;
+    let prefix = " ".repeat(item_indentation);
+    let suffix = " ".repeat(indentation);
+    let items = values
+        .iter()
+        .map(|(key, value)| {
+            format!(
+                "{prefix}'{}': {},",
+                escape_single(key),
+                render_easyconfig_value(value, item_indentation)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{{\n{items}\n{suffix}}}")
 }
 
 fn render_sources(source_artifacts: &[crate::package::SourceArtifact]) -> (String, String) {
