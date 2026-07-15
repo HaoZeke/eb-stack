@@ -903,6 +903,7 @@ impl CampaignLock {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&guard_path)
             .map_err(|error| CampaignError::Io(guard_path.clone(), error))?;
         FileExt::try_lock_exclusive(&guard).map_err(|error| {
