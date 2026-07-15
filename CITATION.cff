@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-title: "eb-stack: EasyBuild stack lock solver and toolchain-generation bump"
+title: "eb-stack: foreign recipes to resolved, build-evaluated EasyBuild bundles"
 message: "If you use eb-stack, please cite it using the metadata below."
 type: software
 authors:
@@ -11,7 +11,6 @@ license: MIT
 repository-code: "https://github.com/HaoZeke/eb-stack"
 url: "https://eb-stack.rgoswami.me"
 version: 0.3.0
-date-released: "2026-07-13"
 keywords:
   - EasyBuild
   - HPC
@@ -20,7 +19,8 @@ keywords:
   - dependency resolution
   - resolvo
 abstract: >-
-  eb-stack parses EasyBuild easyconfig files, co-selects a consistent software
-  stack for one toolchain generation with a CDCL SAT solver (resolvo), rewrites
-  recipes onto the next generation with hierarchy-aware dependency resolution,
-  and emits a stack lock, build list, and optional planned CycloneDX SBOM.
+  eb-stack parses conda-forge, Spack, and EasyBuild recipes into a canonical
+  package plan, emits a planned CycloneDX SBOM, and uses Resolvo to select a
+  hierarchy-consistent EasyBuild dependency closure for each installable
+  variant. Persisted build campaigns route the generated recipes to configured
+  targets, classify failures, record repairs, and verify declared binaries.

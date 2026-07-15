@@ -49,32 +49,24 @@ pixi run -e docs docbld
 
 Do not hand-edit generated `docs/source/**/*.rst` or `docs/source/crates/`.
 
-## Agent drivers
+## Packaging campaigns
 
-If you are driving packaging work with an agent, follow `AGENTS.md` and
-`skills/annual-bump/SKILL.md` (generation rebuild) and
-`skills/new-package/SKILL.md` (conda-forge/Spack → new EB recipe). The PR
-surface on GitHub remains human-only
-unless a maintainer says otherwise in the live conversation.
+Follow `AGENTS.md`, `skills/annual-bump/SKILL.md` (generation rebuild), and
+`skills/new-package/SKILL.md` (conda-forge/Spack → new EasyBuild recipe). Keep
+site hostnames, paths, credentials, scheduler sizing, and private module names
+in the site target layer. The public files contain reusable package intent and
+target topology.
 
 ## Releasing
-
-1. Move Unreleased notes in `CHANGELOG.md` into a versioned section.
-2. Bump `version` in `Cargo.toml`, `pixi.toml`, `CITATION.cff`, and
-   `docs/source/conf.py` release.
-3. Tag `vX.Y.Z` and push the tag; CI publishes the GitHub Release when the
-   release workflow is enabled.
-
-
-## Tag and release
 
 Version source of truth: `version` in root `Cargo.toml` (currently **0.3.0**).
 Keep these in lockstep on every release:
 
 1. `Cargo.toml` / `pixi.toml` `version`
-2. `CITATION.cff` `version` (+ `date-released` when cutting)
+2. `CITATION.cff` `version`
 3. `docs/source/conf.py` `release`
 4. `CHANGELOG.md` — move Unreleased notes into `## [X.Y.Z] - YYYY-MM-DD`
+5. `CITATION.cff` — add `date-released` when the version is published
 
 Then:
 

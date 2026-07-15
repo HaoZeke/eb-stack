@@ -49,16 +49,22 @@ pixi run -e docs docbld
 
 Do not hand-edit generated ~docs/source/**/*.rst~ or ~docs/source/crates/~.
 
-* Agent drivers
+* Packaging campaigns
 
 Follow ~AGENTS.md~, ~skills/annual-bump/SKILL.md~ (generation rebuild), and
-~skills/new-package/SKILL.md~ (conda-forge/Spack → new recipe). The PR surface on
-GitHub remains human-only unless a maintainer says otherwise in the live
-conversation.
+~skills/new-package/SKILL.md~ (conda-forge/Spack → new recipe). Keep site
+hostnames, paths, credentials, scheduler sizing, and private module names in
+the site target layer. Public files contain reusable package intent and target
+topology.
 
 * Releasing
 
-1. Move Unreleased notes in ~CHANGELOG.md~ into a versioned section.
-2. Bump ~version~ in ~Cargo.toml~, ~pixi.toml~, ~CITATION.cff~, and
-   ~docs/source/conf.py~ release.
-3. Tag ~vX.Y.Z~ and push the tag.
+Version source of truth is ~version~ in root ~Cargo.toml~. Keep these aligned:
+
+1. ~Cargo.toml~ / ~pixi.toml~ ~version~
+2. ~CITATION.cff~ ~version~ and ~date-released~ for a published version
+3. ~docs/source/conf.py~ ~release~
+4. ~CHANGELOG.md~ version heading and release date
+
+Tag ~vX.Y.Z~ and push the tag. The release workflow builds the Linux archive
+and checksum and publishes the GitHub Release.

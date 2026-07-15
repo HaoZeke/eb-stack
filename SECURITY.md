@@ -1,22 +1,45 @@
 # Security Policy
 
-eb-stack is a command-line tool for EasyBuild stack planning. It reads local
-easyconfig trees and writes lock files, recipes, and reports. It does not
-execute builds and does not contact remote package registries by default.
+eb-stack turns conda-forge, Spack, and EasyBuild inputs into manifests, planned
+CycloneDX SBOMs, Resolvo locks, and EasyBuild recipes. Planning commands parse
+local input and write local artifacts. Campaign commands execute EasyBuild
+recipes on a configured local or SSH target, optionally through Slurm, Podman,
+or Docker.
 
 ## Supported versions
 
-Only the latest release on the `main` branch is supported.
+The project has no public release. Security fixes apply to the current `main`
+branch until versioned releases are published.
+
+## Trust boundaries
+
+- Treat every foreign recipe, easyconfig, patch, and source archive as
+  untrusted recipe input. EasyBuild recipes are executable Python and package
+  builds run upstream build scripts.
+- Review a generated bundle before running a campaign. Use a dedicated build
+  account or scheduler allocation, least-privilege SSH credentials, durable
+  temporary storage, and a target without unrelated secrets.
+- A container limits ABI contamination but is not automatically a security
+  boundary. Avoid privileged containers and mount only the source, robot,
+  bundle, build, install, and temporary roots required by the target.
+- Keep credentials out of target TOML. Use the SSH agent, host configuration,
+  scheduler credentials, or runtime credential facilities supplied by the
+  deployment site.
+- A planned SBOM records the selected package intent. It does not prove that a
+  build is safe or that the installed filesystem contains only those
+  components; use the campaign claim ladder and site provenance controls.
 
 ## Reporting a vulnerability
 
-Email the maintainer (rgoswami@ieee.org) with details. Do not open a public
-issue for security matters.
+Email the maintainer at [rgoswami@ieee.org](mailto:rgoswami@ieee.org) with a
+description, reproducer, affected command, and expected impact. Do not open a
+public issue for security matters or include credentials and private target
+configuration in a report.
 
-We acknowledge within 72 hours and aim for a fix plus coordinated disclosure
-for issues that could lead to arbitrary code execution when processing
-untrusted easyconfig input, path traversal when writing outputs, or
-supply-chain problems in release artifacts.
+Relevant reports include unintended command execution during parsing, path
+traversal when writing bundles or campaign state, target-routing escapes,
+credential disclosure, unsafe container mounts, and supply-chain problems in
+release artifacts.
 
 Treat `Cargo.lock` and the release binary provenance as part of the security
 surface.
