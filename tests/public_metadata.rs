@@ -6,8 +6,8 @@ fn repo() -> PathBuf {
 
 #[test]
 fn public_policies_describe_the_executable_campaign_surface() {
-    let code_of_conduct = std::fs::read_to_string(repo().join("CODE_OF_CONDUCT.md"))
-        .expect("read code of conduct");
+    let code_of_conduct =
+        std::fs::read_to_string(repo().join("CODE_OF_CONDUCT.md")).expect("read code of conduct");
     assert!(!code_of_conduct.contains("INSERT CONTACT METHOD"));
     assert!(code_of_conduct.contains("rgoswami@ieee.org"));
 
@@ -26,8 +26,7 @@ fn package_and_citation_metadata_cover_the_public_workflow() {
         assert!(cargo.contains(term), "Cargo metadata must mention {term}");
     }
 
-    let citation =
-        std::fs::read_to_string(repo().join("CITATION.cff")).expect("read CITATION.cff");
+    let citation = std::fs::read_to_string(repo().join("CITATION.cff")).expect("read CITATION.cff");
     for term in [
         "conda-forge",
         "Spack",
