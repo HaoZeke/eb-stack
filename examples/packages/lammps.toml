@@ -18,6 +18,11 @@ config_options = [
 moduleclass = "chem"
 patches = []
 
+# The EasyBuild LAMMPS easyblock builds the bundled Kokkos source selected by
+# the profile; a standalone Kokkos module is not a direct recipe dependency.
+[dependencies]
+exclude_from_solve = ["kokkos"]
+
 [[profiles]]
 name = "default"
 default = true
@@ -33,6 +38,11 @@ openmp = true
 kokkos = true
 kspace = true
 python = true
+
+# Conda build-string selectors use a valued MPI provider rather than a boolean
+# feature. This value activates their MPI dependency branches.
+[profiles.parameters]
+mpi = "openmpi"
 
 [profiles.toolchain_options]
 usempi = true
