@@ -210,5 +210,24 @@ fn public_stack_policy_example_parses() {
     let policy: StackPolicy = toml::from_str(&text).expect("stack policy TOML");
     assert_eq!(policy.schema_version, STACK_POLICY_SCHEMA_VERSION);
     assert_eq!(policy.toolchain, toolchain());
-    assert!(policy.pins.is_empty());
+    let expected = [
+        ("PyTorch", "==2.9.1", "foss", "2024a"),
+        ("xtb", "==6.7.1", "gfbf", "2024a"),
+        ("Eigen", "==3.4.0", "GCCcore", "14.3.0"),
+        ("Meson", "==1.8.2", "GCCcore", "13.3.0"),
+    ];
+    assert_eq!(policy.pins.len(), expected.len());
+    for (name, requirement, toolchain_name, toolchain_version) in expected {
+        let pin = policy
+            .pins
+            .iter()
+            .find(|pin| pin.name == name)
+            .unwrap_or_else(|| panic!("missing public stack pin {name}"));
+        assert_eq!(pin.version_requirement, requirement);
+        assert_eq!(pin.mode, StackPinMode::Preferred);
+        assert_eq!(pin.versionsuffix.as_deref(), Some(""));
+        let pin_toolchain = pin.toolchain.as_ref().expect("pin toolchain");
+        assert_eq!(pin_toolchain.name, toolchain_name);
+        assert_eq!(pin_toolchain.version, toolchain_version);
+    }
 }
