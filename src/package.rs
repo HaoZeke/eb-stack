@@ -5,6 +5,10 @@ use crate::domain::{Candidate, Toolchain};
 use crate::version::matches_req;
 use cyclonedx_bom::models::component::{Classification, Component, Components};
 use cyclonedx_bom::models::dependency::{Dependencies, Dependency};
+use cyclonedx_bom::models::external_reference::{
+    ExternalReference, ExternalReferenceType, ExternalReferences,
+};
+use cyclonedx_bom::models::hash::{Hash, HashAlgorithm, HashValue, Hashes};
 use cyclonedx_bom::models::lifecycle::{Lifecycle, Lifecycles, Phase};
 use cyclonedx_bom::models::metadata::Metadata;
 use cyclonedx_bom::models::property::{Properties, Property};
@@ -608,6 +612,57 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
         .description
         .as_deref()
         .map(NormalizedString::new);
+    root.hashes = plan
+        .sources
+        .first()
+        .and_then(|source| source.sha256.as_deref())
+        .map(|checksum| Hashes(vec![sha256_hash(checksum)]));
+    let mut source_references = Vec::new();
+    let mut seen_references = BTreeSet::new();
+    for source in &plan.sources {
+        if let Some(git) = source.git.as_deref() {
+            let key = (ExternalReferenceType::Vcs.to_string(), git.to_string());
+            if seen_references.insert(key) {
+                let mut reference =
+                    ExternalReference::new(ExternalReferenceType::Vcs, Uri::new(git));
+                let identity = [
+                    source.tag.as_deref().map(|tag| format!("tag={tag}")),
+                    source
+                        .commit
+                        .as_deref()
+                        .map(|commit| format!("commit={commit}")),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" ");
+                if !identity.is_empty() {
+                    reference.comment = Some(identity);
+                }
+                source_references.push(reference);
+            }
+        }
+        if let Some(url) = source_archive_url(source) {
+            let key = (ExternalReferenceType::Distribution.to_string(), url.clone());
+            if seen_references.insert(key) {
+                let mut reference = ExternalReference::new(
+                    ExternalReferenceType::Distribution,
+                    Uri::new(&url),
+                );
+                reference.hashes = source
+                    .sha256
+                    .as_deref()
+                    .map(|checksum| Hashes(vec![sha256_hash(checksum)]));
+                reference.comment = source.target_directory.as_deref().map(|directory| {
+                    format!("staged in package source directory {directory}")
+                });
+                source_references.push(reference);
+            }
+        }
+    }
+    if !source_references.is_empty() {
+        root.external_references = Some(ExternalReferences(source_references));
+    }
     root.properties = Some(Properties(vec![
         Property::new("eb-stack:origin", origin_name(&plan.origin)),
         Property::new("eb-stack:lifecycle", "pre-build-plan"),
@@ -687,6 +742,27 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
         annotations: None,
         formulation: None,
         spec_version: SpecVersion::V1_5,
+    })
+}
+
+fn sha256_hash(checksum: &str) -> Hash {
+    Hash {
+        alg: HashAlgorithm::SHA_256,
+        content: HashValue(checksum.to_string()),
+    }
+}
+
+fn source_archive_url(source: &SourceArtifact) -> Option<String> {
+    source.url.clone().or_else(|| {
+        let git = source.git.as_deref()?;
+        let base = git.trim_end_matches(".git");
+        if let Some(tag) = source.tag.as_deref() {
+            Some(format!("{base}/archive/refs/tags/{tag}.tar.gz"))
+        } else if let Some(commit) = source.commit.as_deref() {
+            Some(format!("{base}/archive/{commit}.tar.gz"))
+        } else {
+            None
+        }
     })
 }
 
