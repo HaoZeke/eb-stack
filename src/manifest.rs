@@ -134,6 +134,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
         package: PackageMetadata {
             name: recipe.name.clone(),
             version: recipe.version.clone(),
+            upstream_version: None,
             homepage: recipe.homepage.clone(),
             description: recipe
                 .description

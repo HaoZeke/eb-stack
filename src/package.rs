@@ -191,6 +191,10 @@ pub enum PackageOrigin {
 pub struct PackageMetadata {
     pub name: String,
     pub version: String,
+    /// Version identity used by the foreign recipe when it differs from the
+    /// emitted EasyBuild version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -603,7 +607,11 @@ pub fn materialize_profile(
     let mut variables = profile.parameters.clone();
     variables.extend(environment.variables.clone());
     let context = ConditionContext {
-        package_version: plan.package.version.clone(),
+        package_version: plan
+            .package
+            .upstream_version
+            .clone()
+            .unwrap_or_else(|| plan.package.version.clone()),
         features: profile.features.clone(),
         dependency_features: environment.dependency_features.clone(),
         compiler: environment.compiler.clone(),
@@ -724,10 +732,14 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
     if !source_references.is_empty() {
         root.external_references = Some(ExternalReferences(source_references));
     }
-    root.properties = Some(Properties(vec![
+    let mut root_properties = vec![
         Property::new("eb-stack:origin", origin_name(&plan.origin)),
         Property::new("eb-stack:lifecycle", "pre-build-plan"),
-    ]));
+    ];
+    if let Some(upstream_version) = plan.package.upstream_version.as_deref() {
+        root_properties.push(Property::new("eb-stack:upstream-version", upstream_version));
+    }
+    root.properties = Some(Properties(root_properties));
 
     let mut components = vec![root];
     let mut seen_component_refs = BTreeSet::new();

@@ -319,6 +319,7 @@ fn package_plan_from_easyconfig(
         package: PackageMetadata {
             name: recipe.name.clone(),
             version,
+            upstream_version: None,
             homepage: recipe.homepage.clone(),
             description: None,
             license: None,

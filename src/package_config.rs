@@ -154,6 +154,9 @@ pub fn apply_package_layers(
                 plan.package.name = name.clone();
             }
             if let Some(version) = &package.version {
+                if version != &plan.package.version && plan.package.upstream_version.is_none() {
+                    plan.package.upstream_version = Some(plan.package.version.clone());
+                }
                 plan.package.version = version.clone();
             }
             if let Some(homepage) = &package.homepage {

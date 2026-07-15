@@ -34,6 +34,7 @@ fn qmcpack_plan() -> PackagePlan {
         package: PackageMetadata {
             name: "QMCPACK".into(),
             version: "4.3.0".into(),
+            upstream_version: None,
             homepage: Some("https://qmcpack.org".into()),
             description: Some("Quantum Monte Carlo application".into()),
             license: Some("BSD-3-Clause".into()),
