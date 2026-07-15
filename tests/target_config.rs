@@ -194,3 +194,40 @@ fn public_target_examples_form_a_complete_layered_target() {
     assert!(matches!(targets[0].runtime, TargetRuntime::Podman { .. }));
     assert_eq!(targets[0].easybuild.command, "eb");
 }
+
+#[test]
+fn public_local_podman_target_is_complete_and_abi_isolated() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let layer = TargetConfigLayer::from_path(&root.join("examples/targets/local-podman.toml"))
+        .expect("local Podman target");
+    let targets = resolve_target_layers(&[layer]).expect("resolve local Podman target");
+    assert_eq!(targets.len(), 1);
+    let target = &targets[0];
+    assert_eq!(target.name, "local-rocky9");
+    assert!(matches!(target.runtime, TargetRuntime::Podman { .. }));
+    assert_eq!(target.easybuild.command, "eb");
+    assert_eq!(
+        target.easybuild.work_root,
+        "/tmp/eb-stack/targets/rocky9/campaigns"
+    );
+    assert_eq!(
+        target.easybuild.tmp_root,
+        "/tmp/eb-stack/targets/rocky9/tmp"
+    );
+    assert_eq!(
+        target
+            .easybuild
+            .environment
+            .get("EASYBUILD_INSTALLPATH")
+            .map(String::as_str),
+        Some("/tmp/eb-stack/targets/rocky9/easybuild")
+    );
+    assert_eq!(
+        target
+            .easybuild
+            .environment
+            .get("EASYBUILD_SOURCEPATH")
+            .map(String::as_str),
+        Some("/tmp/eb-stack/sources")
+    );
+}
