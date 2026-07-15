@@ -657,10 +657,9 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>) {
     // Assignment and control statements are not YAML. Deterministic values
     // are substituted below; unresolved statements remain represented in notes.
     out = set_re.replace_all(&out, "").to_string();
-    let control_re = Regex::new(
-        r#"(?m)^[ \t]*\{%\s*(?:if|elif|else|endif)\b[^\r\n]*%\}[ \t]*(?:\r?\n|$)"#,
-    )
-    .expect("control statement re");
+    let control_re =
+        Regex::new(r#"(?m)^[ \t]*\{%\s*(?:if|elif|else|endif)\b[^\r\n]*%\}[ \t]*(?:\r?\n|$)"#)
+            .expect("control statement re");
     let control_count = control_re.find_iter(&out).count();
     out = control_re.replace_all(&out, "").to_string();
     if control_count > 0 {
@@ -669,10 +668,9 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>) {
         ));
     }
 
-    let pure_macro_requirement_re = Regex::new(
-        r#"(?m)^[ \t]*-[ \t]*(?:\$\{\{|\{\{)[^\r\n]*\}\}[ \t]*(?:#.*)?(?:\r?\n|$)"#,
-    )
-    .expect("pure macro requirement re");
+    let pure_macro_requirement_re =
+        Regex::new(r#"(?m)^[ \t]*-[ \t]*(?:\$\{\{|\{\{)[^\r\n]*\}\}[ \t]*(?:#.*)?(?:\r?\n|$)"#)
+            .expect("pure macro requirement re");
     let macro_requirement_count = pure_macro_requirement_re.find_iter(&out).count();
     out = pure_macro_requirement_re.replace_all(&out, "").to_string();
     if macro_requirement_count > 0 {
@@ -752,10 +750,9 @@ fn eval_conda_set_expression(
         return Some(CondaTemplateValue::Date(date));
     }
 
-    let date_format = Regex::new(
-        r#"^[\"']\{:(%[^\"']+)\}[\"']\.format\(([A-Za-z_][A-Za-z0-9_]*)\)$"#,
-    )
-    .expect("date format expression re");
+    let date_format =
+        Regex::new(r#"^[\"']\{:(%[^\"']+)\}[\"']\.format\(([A-Za-z_][A-Za-z0-9_]*)\)$"#)
+            .expect("date format expression re");
     if let Some(capture) = date_format.captures(expression) {
         let date = dates.get(&capture[2])?;
         return Some(CondaTemplateValue::String(
@@ -767,12 +764,9 @@ fn eval_conda_set_expression(
 }
 
 fn remove_duplicate_selector_keys(text: &str, notes: &mut Vec<String>) -> String {
-    let top_level_key =
-        Regex::new(r"^([A-Za-z_][A-Za-z0-9_.-]*):").expect("top-level YAML key re");
-    let selector_key = Regex::new(
-        r"^([ \t]+)([A-Za-z_][A-Za-z0-9_.-]*):[^#]*#\s*\[[^]]+\]\s*$",
-    )
-    .expect("selector-gated YAML key re");
+    let top_level_key = Regex::new(r"^([A-Za-z_][A-Za-z0-9_.-]*):").expect("top-level YAML key re");
+    let selector_key = Regex::new(r"^([ \t]+)([A-Za-z_][A-Za-z0-9_.-]*):[^#]*#\s*\[[^]]+\]\s*$")
+        .expect("selector-gated YAML key re");
     let mut section = String::new();
     let mut seen = HashSet::new();
     let mut duplicate_count = 0usize;
@@ -783,11 +777,7 @@ fn remove_duplicate_selector_keys(text: &str, notes: &mut Vec<String>) -> String
             section = capture[1].to_string();
         }
         let duplicate = selector_key.captures(line).is_some_and(|capture| {
-            let identity = (
-                section.clone(),
-                capture[1].len(),
-                capture[2].to_string(),
-            );
+            let identity = (section.clone(), capture[1].len(), capture[2].to_string());
             !seen.insert(identity)
         });
         if duplicate {
