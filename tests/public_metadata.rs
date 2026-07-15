@@ -67,3 +67,40 @@ fn ci_enforces_the_declared_msrv_and_quality_gates() {
         assert!(ci.contains(command), "test workflow must run {command}");
     }
 }
+
+#[test]
+fn public_manual_uses_only_the_version_one_cli() {
+    let manual_paths = [
+        "docs/orgmode/explanation/parser-approach.org",
+        "docs/orgmode/explanation/fidelity.org",
+        "docs/orgmode/howto/emit-reports.org",
+    ];
+    let manual = manual_paths
+        .iter()
+        .map(|path| std::fs::read_to_string(repo().join(path)).expect("read manual source"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    for obsolete in [
+        "eb-stack parse",
+        "~bump --easyconfigs",
+        "~parse~ / ~solve~",
+        "--keep-old-deps",
+        "~solve~ yet",
+    ] {
+        assert!(
+            !manual.contains(obsolete),
+            "public manual still names removed CLI surface {obsolete}"
+        );
+    }
+    for canonical in [
+        "eb-stack package plan",
+        "eb-stack package bump",
+        "eb-stack stack solve",
+    ] {
+        assert!(
+            manual.contains(canonical),
+            "public manual must name canonical command {canonical}"
+        );
+    }
+}
