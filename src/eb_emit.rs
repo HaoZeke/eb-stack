@@ -32,8 +32,8 @@ pub struct EmitParams {
     pub version: Option<String>,
     /// Per-dependency (and build-dependency) version overrides keyed by package name.
     ///
-    /// If the override string starts with a comparison operator (`==`, `>=`, `<=`,
-    /// `>`, `<`, `!`), it replaces the entire version field of matching tuples.
+    /// If the override string starts with a supported comparison operator, it
+    /// replaces the entire version field of matching tuples.
     /// Otherwise the operator already present on the source version (if any) is
     /// preserved and only the version token is replaced.
     pub dep_versions: HashMap<String, String>,
