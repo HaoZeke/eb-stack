@@ -41,6 +41,25 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     ] {
         assert!(!names.contains(&removed), "legacy tool remains: {names:?}");
     }
+
+    let package_plan = response["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "eb_package_plan")
+        .expect("package plan schema");
+    assert_eq!(
+        package_plan["inputSchema"]["properties"]["source_checksums"]["type"],
+        "array"
+    );
+    assert!(
+        !package_plan["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|name| name == "source_checksums"),
+        "source checksums are optional when the foreign recipe supplies them"
+    );
 }
 
 #[test]
