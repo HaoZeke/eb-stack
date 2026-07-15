@@ -74,6 +74,7 @@ fn ci_enforces_the_declared_msrv_and_quality_gates() {
         "cargo check --locked --all-targets",
         "cargo fmt --all --check",
         "cargo clippy --locked --all-targets -- -D warnings",
+        "cargo package --locked",
     ] {
         assert!(ci.contains(command), "test workflow must run {command}");
     }
