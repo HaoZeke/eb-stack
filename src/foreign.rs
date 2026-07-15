@@ -333,6 +333,7 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let mut notes = Vec::new();
     let (expanded, ctx_notes) = expand_conda_templates(text);
     notes.extend(ctx_notes);
+    let expanded = structure_conda_requirement_selectors(&expanded);
 
     let yaml: YamlValue = serde_yaml::from_str(&expanded).map_err(|e| {
         ForeignError::Parse(format!(
@@ -518,6 +519,47 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
         rules: Vec::new(),
         notes,
     })
+}
+
+fn structure_conda_requirement_selectors(text: &str) -> String {
+    let selector = Regex::new(r#"^(\s*)-\s+(.+?)\s+#\s*\[([^]]+)\]\s*$"#)
+        .expect("static conda selector regex");
+    let mut output = Vec::new();
+    let mut requirements_indent = None;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let indent = line.len().saturating_sub(line.trim_start().len());
+        if trimmed == "requirements:" {
+            requirements_indent = Some(indent);
+            output.push(line.to_string());
+            continue;
+        }
+        if requirements_indent.is_some_and(|base| {
+            !trimmed.is_empty() && !trimmed.starts_with('#') && indent <= base
+        }) {
+            requirements_indent = None;
+        }
+        if requirements_indent.is_some() {
+            if let Some(captures) = selector.captures(line) {
+                let indentation = captures.get(1).map_or("", |value| value.as_str());
+                let value = captures.get(2).map_or("", |value| value.as_str());
+                let condition = captures.get(3).map_or("", |value| value.as_str());
+                let quoted = serde_json::to_string(condition)
+                    .unwrap_or_else(|_| format!("\"{condition}\""));
+                output.push(format!("{indentation}- if: {quoted}"));
+                output.push(format!("{indentation}  then: {value}"));
+                continue;
+            }
+        }
+        output.push(line.to_string());
+    }
+
+    let mut structured = output.join("\n");
+    if text.ends_with('\n') {
+        structured.push('\n');
+    }
+    structured
 }
 
 fn collect_conda_source_patches(source: &YamlValue, patches: &mut Vec<String>) {
@@ -896,18 +938,14 @@ fn condition_all(left: ConditionExpr, right: ConditionExpr) -> ConditionExpr {
 }
 
 fn parse_conda_selector(selector: &str) -> ConditionExpr {
-    let selector = selector
-        .trim()
-        .trim_start_matches('(')
-        .trim_end_matches(')')
-        .trim();
-    if let Some((left, right)) = selector.split_once(" or ") {
+    let selector = strip_selector_outer_parentheses(selector.trim());
+    if let Some((left, right)) = split_selector_top_level(selector, " or ") {
         return ConditionExpr::Any(vec![
             parse_conda_selector(left),
             parse_conda_selector(right),
         ]);
     }
-    if let Some((left, right)) = selector.split_once(" and ") {
+    if let Some((left, right)) = split_selector_top_level(selector, " and ") {
         return ConditionExpr::All(vec![
             parse_conda_selector(left),
             parse_conda_selector(right),
@@ -916,14 +954,14 @@ fn parse_conda_selector(selector: &str) -> ConditionExpr {
     if let Some(rest) = selector.strip_prefix("not ") {
         return ConditionExpr::Not(Box::new(parse_conda_selector(rest)));
     }
-    if let Some((left, right)) = selector.split_once(" != ") {
+    if let Some((left, right)) = split_selector_top_level(selector, " != ") {
         return ConditionExpr::Predicate(ConditionPredicate::VariableComparison {
             left: left.trim().into(),
             operator: "!=".into(),
             right: right.trim().into(),
         });
     }
-    if let Some((left, right)) = selector.split_once(" == ") {
+    if let Some((left, right)) = split_selector_top_level(selector, " == ") {
         return ConditionExpr::Predicate(ConditionPredicate::VariableComparison {
             left: left.trim().into(),
             operator: "==".into(),
@@ -933,6 +971,65 @@ fn parse_conda_selector(selector: &str) -> ConditionExpr {
     ConditionExpr::Predicate(ConditionPredicate::Platform {
         name: selector.into(),
     })
+}
+
+fn strip_selector_outer_parentheses(mut selector: &str) -> &str {
+    loop {
+        let Some(inner) = selector.strip_prefix('(') else {
+            return selector.trim();
+        };
+        let mut depth = 1usize;
+        let mut closing = None;
+        let mut quote = None;
+        for (index, character) in inner.char_indices() {
+            if let Some(active) = quote {
+                if character == active {
+                    quote = None;
+                }
+                continue;
+            }
+            match character {
+                '\'' | '"' => quote = Some(character),
+                '(' => depth += 1,
+                ')' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        closing = Some(index);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if closing == Some(inner.len().saturating_sub(1)) {
+            selector = inner[..inner.len().saturating_sub(1)].trim();
+        } else {
+            return selector.trim();
+        }
+    }
+}
+
+fn split_selector_top_level<'a>(selector: &'a str, separator: &str) -> Option<(&'a str, &'a str)> {
+    let mut depth = 0usize;
+    let mut quote = None;
+    for (index, character) in selector.char_indices() {
+        if let Some(active) = quote {
+            if character == active {
+                quote = None;
+            }
+            continue;
+        }
+        match character {
+            '\'' | '"' => quote = Some(character),
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ if depth == 0 && selector[index..].starts_with(separator) => {
+                return Some((&selector[..index], &selector[index + separator.len()..]));
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn yaml_as_string(v: &YamlValue) -> Option<String> {

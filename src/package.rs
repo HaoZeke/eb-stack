@@ -350,10 +350,10 @@ impl ConditionPredicate {
                 operator,
                 right,
             } => {
-                let Some(left_value) = context.variables.get(left) else {
+                let Some(left_value) = condition_left_value(context, left) else {
                     return false;
                 };
-                let right_value = context.variables.get(right).unwrap_or(right);
+                let right_value = condition_right_value(context, right);
                 match operator.as_str() {
                     "==" => left_value == right_value,
                     "!=" => left_value != right_value,
@@ -361,6 +361,54 @@ impl ConditionPredicate {
                 }
             }
         }
+    }
+}
+
+fn condition_left_value(context: &ConditionContext, operand: &str) -> Option<String> {
+    let operand = operand.trim();
+    if let Some(inner) = operand
+        .strip_prefix('(')
+        .and_then(|value| value.strip_suffix(')'))
+    {
+        if let Some((variable, fallback)) = inner.split_once(" or ") {
+            let variable = variable.trim();
+            let fallback = unquote_condition_literal(fallback.trim());
+            return Some(
+                context
+                    .variables
+                    .get(variable)
+                    .filter(|value| !value.is_empty())
+                    .cloned()
+                    .unwrap_or(fallback),
+            );
+        }
+    }
+    context.variables.get(operand).cloned()
+}
+
+fn condition_right_value(context: &ConditionContext, operand: &str) -> String {
+    let operand = operand.trim();
+    if is_quoted_condition_literal(operand) {
+        return unquote_condition_literal(operand);
+    }
+    context
+        .variables
+        .get(operand)
+        .cloned()
+        .unwrap_or_else(|| operand.to_string())
+}
+
+fn is_quoted_condition_literal(value: &str) -> bool {
+    value.len() >= 2
+        && matches!(value.as_bytes()[0], b'\'' | b'"')
+        && value.as_bytes()[0] == value.as_bytes()[value.len() - 1]
+}
+
+fn unquote_condition_literal(value: &str) -> String {
+    if is_quoted_condition_literal(value) {
+        value[1..value.len() - 1].to_string()
+    } else {
+        value.to_string()
     }
 }
 
