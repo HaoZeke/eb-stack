@@ -14,11 +14,11 @@ exclude_from_solve = [
 
 [dependencies.aliases]
 python = "Python"
-pip = "Python"
-setuptools = "Python"
-"py-pip" = "Python"
-"py-wheel" = "Python"
-"py-setuptools" = "Python"
+pip = { provider = "Python", constraint = "drop" }
+setuptools = { provider = "Python", constraint = "drop" }
+"py-pip" = { provider = "Python", constraint = "drop" }
+"py-wheel" = { provider = "Python", constraint = "drop" }
+"py-setuptools" = { provider = "Python", constraint = "drop" }
 "py-build" = "build"
 cmake = "CMake"
 ninja = "Ninja"
@@ -33,9 +33,9 @@ gmake = "make"
 capnproto = "CapnProto"
 "py-pyyaml" = "PyYAML"
 pyyaml = "PyYAML"
-"py-numpy" = "SciPy-bundle"
-numpy = "SciPy-bundle"
-"py-scipy" = "SciPy-bundle"
+"py-numpy" = { provider = "SciPy-bundle", constraint = "drop" }
+numpy = { provider = "SciPy-bundle", constraint = "drop" }
+"py-scipy" = { provider = "SciPy-bundle", constraint = "drop" }
 "py-matplotlib" = "matplotlib"
 libtorch = "PyTorch"
 pytorch = "PyTorch"

@@ -56,11 +56,52 @@ pub struct BuildPatch {
 #[serde(deny_unknown_fields)]
 pub struct DependencyPatch {
     #[serde(default)]
-    pub aliases: BTreeMap<String, String>,
+    pub aliases: BTreeMap<String, DependencyAlias>,
     #[serde(default)]
     pub virtuals: BTreeMap<String, String>,
     #[serde(default)]
     pub exclude_from_solve: Vec<String>,
+}
+
+/// Foreign dependency identity mapped to an EasyBuild provider.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum DependencyAlias {
+    /// Preserve the foreign version constraint when provider versions have the
+    /// same meaning.
+    Direct(String),
+    /// Control how a component constraint applies to a containing provider.
+    Provider {
+        provider: String,
+        #[serde(default)]
+        constraint: AliasConstraint,
+    },
+}
+
+impl DependencyAlias {
+    pub fn provider(&self) -> &str {
+        match self {
+            Self::Direct(provider) | Self::Provider { provider, .. } => provider,
+        }
+    }
+
+    fn drops_constraint(&self) -> bool {
+        matches!(
+            self,
+            Self::Provider {
+                constraint: AliasConstraint::Drop,
+                ..
+            }
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum AliasConstraint {
+    #[default]
+    Preserve,
+    Drop,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -192,8 +233,11 @@ pub fn apply_package_layers(
         }
         if let Some(dependencies) = &layer.dependencies {
             for dependency in &mut plan.dependencies {
-                if let Some(alias) = policy_value(&dependencies.aliases, &dependency.name) {
-                    dependency.eb_name = Some(alias.clone());
+                if let Some(alias) = alias_policy_value(&dependencies.aliases, &dependency.name) {
+                    dependency.eb_name = Some(alias.provider().to_string());
+                    if alias.drops_constraint() {
+                        dependency.constraint = None;
+                    }
                 }
                 if let Some(capability) = policy_value(&dependencies.virtuals, &dependency.name) {
                     dependency.virtual_capability = Some(capability.clone());
@@ -286,6 +330,19 @@ pub fn apply_package_layers(
 }
 
 fn policy_value<'a>(policy: &'a BTreeMap<String, String>, name: &str) -> Option<&'a String> {
+    policy.get(name).or_else(|| {
+        let identity = package_identity(name);
+        policy
+            .iter()
+            .find(|(key, _)| package_identity(key) == identity)
+            .map(|(_, value)| value)
+    })
+}
+
+fn alias_policy_value<'a>(
+    policy: &'a BTreeMap<String, DependencyAlias>,
+    name: &str,
+) -> Option<&'a DependencyAlias> {
     policy.get(name).or_else(|| {
         let identity = package_identity(name);
         policy

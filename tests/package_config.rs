@@ -1,5 +1,5 @@
 use eb_stack::package::{materialize_profile, ProfileEnvironment};
-use eb_stack::package_config::{apply_package_layers, PackageConfigLayer};
+use eb_stack::package_config::{apply_package_layers, DependencyAlias, PackageConfigLayer};
 use eb_stack::{package_plan_from_foreign, parse_foreign_path, ForeignFormat, Toolchain};
 use std::path::PathBuf;
 
@@ -279,7 +279,7 @@ fn public_package_config_examples_parse() {
             .dependencies
             .as_ref()
             .and_then(|dependencies| dependencies.aliases.get("py-numpy"))
-            .map(String::as_str),
+            .map(DependencyAlias::provider),
         Some("SciPy-bundle")
     );
     for (foreign, provider) in [
@@ -297,7 +297,7 @@ fn public_package_config_examples_parse() {
                 .dependencies
                 .as_ref()
                 .and_then(|dependencies| dependencies.aliases.get(foreign))
-                .map(String::as_str),
+                .map(DependencyAlias::provider),
             Some(provider),
             "missing shared foreign-package alias for {foreign}"
         );
