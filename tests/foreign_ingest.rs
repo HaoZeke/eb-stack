@@ -1,8 +1,8 @@
 //! Syntax-adapter regression for conda-forge and Spack inputs.
 
 use eb_stack::{
-    detect_foreign_format, inspect_new_package, package_plan_from_foreign, parse_foreign_path,
-    ForeignFormat, Toolchain,
+    detect_foreign_format, inspect_new_package, materialize_profile, package_plan_from_foreign,
+    parse_foreign_path, ForeignFormat, ProfileEnvironment, Toolchain,
 };
 use std::path::PathBuf;
 use std::process::Command;
@@ -195,6 +195,39 @@ fn spack_lammps_splits_compound_when_predicates() {
     assert!(condition.contains("\"name\":\"kokkos\""), "{condition}");
     assert!(condition.contains("\"name\":\"kspace\""), "{condition}");
     assert!(!condition.contains("kokkos+kspace"), "{condition}");
+}
+
+#[test]
+fn spack_valued_variant_conditions_filter_dependencies() {
+    let recipe = parse_foreign_path(
+        &root().join("spack_lammps/package.py"),
+        Some(ForeignFormat::Spack),
+    )
+    .expect("parse Spack LAMMPS");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain("2025b"));
+    let profile = plan.profiles.first_mut().expect("default profile");
+    profile.features.insert("kokkos".into(), true);
+    profile.features.insert("kspace".into(), true);
+    assert_eq!(profile.parameters.get("fft").map(String::as_str), Some("fftw3"));
+    assert_eq!(
+        profile.parameters.get("fft_kokkos").map(String::as_str),
+        Some("fftw3")
+    );
+
+    let materialized = materialize_profile(&plan, "default", &ProfileEnvironment::default())
+        .expect("materialize default profile");
+
+    assert!(
+        materialized
+            .dependencies
+            .iter()
+            .all(|dependency| dependency.name != "mkl"),
+        "FFTW-valued variants must not activate MKL dependencies"
+    );
+    assert!(materialized
+        .dependencies
+        .iter()
+        .any(|dependency| dependency.name == "fftw-api"));
 }
 
 #[test]
