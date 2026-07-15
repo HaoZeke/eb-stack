@@ -1,0 +1,39 @@
+schema_version = 1
+
+# Build the image with the Containerfile under skills/new-package/container/rocky9.
+# Keep bundles and robot overlays below /tmp/eb-stack so every path passed to
+# EasyBuild is visible at the same absolute path inside the container.
+[[targets]]
+name = "local-rocky9"
+
+[targets.transport]
+kind = "local"
+
+[targets.executor]
+kind = "direct"
+
+[targets.runtime]
+kind = "podman"
+image = "localhost/eb-stack-rocky9:latest"
+args = ["--security-opt", "label=disable", "--cap-add=NET_RAW"]
+mounts = ["/tmp/eb-stack:/tmp/eb-stack"]
+workdir = "/tmp/eb-stack"
+
+[targets.easybuild]
+command = "eb"
+robot_paths = ["/tmp/eb-stack/robot", "/tmp/eb-stack/overlay"]
+work_root = "/tmp/eb-stack/targets/rocky9/campaigns"
+tmp_root = "/tmp/eb-stack/targets/rocky9/tmp"
+
+[targets.easybuild.environment]
+EASYBUILD_INSTALLPATH = "/tmp/eb-stack/targets/rocky9/easybuild"
+EASYBUILD_SOURCEPATH = "/tmp/eb-stack/sources"
+EASYBUILD_PARALLEL = "8"
+EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES = "1"
+TAR_OPTIONS = "--no-same-owner"
+PRTE_ALLOW_RUN_AS_ROOT = "1"
+PRTE_ALLOW_RUN_AS_ROOT_CONFIRM = "1"
+OMPI_ALLOW_RUN_AS_ROOT = "1"
+OMPI_ALLOW_RUN_AS_ROOT_CONFIRM = "1"
+OMPI_MCA_mpi_yield_when_idle = "1"
+OMPI_MCA_rmaps_base_oversubscribe = "1"
