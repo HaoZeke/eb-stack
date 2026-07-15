@@ -243,7 +243,7 @@ fn public_package_config_examples_parse() {
                 .and_then(|dependencies| dependencies.aliases.get(foreign))
                 .map(String::as_str),
             Some(provider),
-            "missing shared Spack Python alias for {foreign}"
+            "missing shared foreign-package alias for {foreign}"
         );
     }
     assert_eq!(eon.profiles.len(), 1);

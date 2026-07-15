@@ -41,6 +41,10 @@ libtorch = "PyTorch"
 pytorch = "PyTorch"
 "py-mpi4py" = "mpi4py"
 "voro-plus-plus" = "Voro++"
+voro = "Voro++"
+libnetcdf = "netCDF"
+libpnetcdf = "PnetCDF"
+libcurl = "cURL"
 
 [dependencies.virtuals]
 mpi = "mpi"
