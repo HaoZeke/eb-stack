@@ -104,3 +104,15 @@ fn public_manual_uses_only_the_version_one_cli() {
         );
     }
 }
+
+#[test]
+fn documentation_ci_is_warning_strict_and_checks_rendered_links() {
+    let sphinx = std::fs::read_to_string(repo().join("scripts/sphinx-build-docs.sh"))
+        .expect("read Sphinx build script");
+    assert!(sphinx.contains("-W --keep-going"));
+
+    let ci = std::fs::read_to_string(repo().join(".github/workflows/ci_docs.yml"))
+        .expect("read docs workflow");
+    assert!(ci.contains("scripts/check-doc-links.sh docs/build"));
+    assert!(ci.contains("lychee --config lychee.toml"));
+}
