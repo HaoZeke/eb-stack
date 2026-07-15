@@ -27,6 +27,7 @@
 //! in their dedicated stages.
 
 use crate::package::{ConditionExpr, ConditionPredicate, Confidence, Provenance, SourceSpan};
+use chrono::NaiveDate;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value as YamlValue;
@@ -581,17 +582,33 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
     })
 }
 
-/// Expand `{% set %}`, `context:` scalars, and simple `${{ x }}` / `{{ x }}` / `|lower`.
+/// Expand deterministic `{% set %}` expressions, `context:` scalars, and
+/// simple `${{ x }}` / `{{ x }}` / `|lower` substitutions.
 fn expand_conda_templates(text: &str) -> (String, Vec<String>) {
     let mut notes = Vec::new();
     let mut vars: HashMap<String, String> = HashMap::new();
+    let mut dates: HashMap<String, NaiveDate> = HashMap::new();
 
-    // Classic: {% set name = "zlib" %}  or {% set version = '1.2' %}
-    let set_re =
-        Regex::new(r#"\{%\s*set\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*[\"']([^\"']*)[\"']\s*%\}"#)
-            .expect("set re");
+    let set_re = Regex::new(
+        r#"(?m)^[ \t]*\{%\s*set\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^\r\n]*?)\s*%\}[ \t]*(?:\r?\n|$)"#,
+    )
+    .expect("set re");
+    let mut unresolved_sets = Vec::new();
     for c in set_re.captures_iter(text) {
-        vars.insert(c[1].to_string(), c[2].to_string());
+        let name = c[1].to_string();
+        let expression = c[2].trim();
+        if let Some(value) = eval_conda_set_expression(expression, &vars, &dates) {
+            match value {
+                CondaTemplateValue::String(value) => {
+                    vars.insert(name, value);
+                }
+                CondaTemplateValue::Date(value) => {
+                    dates.insert(name, value);
+                }
+            }
+        } else {
+            unresolved_sets.push(name);
+        }
     }
 
     // rattler context: block — simple scalar keys only
@@ -629,10 +646,40 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>) {
             vars.keys().cloned().collect::<Vec<_>>().join(", ")
         ));
     }
+    if !unresolved_sets.is_empty() {
+        notes.push(format!(
+            "unevaluated template assignment(s) retained as residuals: {}",
+            unresolved_sets.join(", ")
+        ));
+    }
 
     let mut out = text.to_string();
-    // Remove {% set ... %} lines after capture
+    // Assignment and control statements are not YAML. Deterministic values
+    // are substituted below; unresolved statements remain represented in notes.
     out = set_re.replace_all(&out, "").to_string();
+    let control_re = Regex::new(
+        r#"(?m)^[ \t]*\{%\s*(?:if|elif|else|endif)\b[^\r\n]*%\}[ \t]*(?:\r?\n|$)"#,
+    )
+    .expect("control statement re");
+    let control_count = control_re.find_iter(&out).count();
+    out = control_re.replace_all(&out, "").to_string();
+    if control_count > 0 {
+        notes.push(format!(
+            "removed {control_count} unevaluated Jinja control statement(s); branch contents preserved"
+        ));
+    }
+
+    let pure_macro_requirement_re = Regex::new(
+        r#"(?m)^[ \t]*-[ \t]*(?:\$\{\{|\{\{)[^\r\n]*\}\}[ \t]*(?:#.*)?(?:\r?\n|$)"#,
+    )
+    .expect("pure macro requirement re");
+    let macro_requirement_count = pure_macro_requirement_re.find_iter(&out).count();
+    out = pure_macro_requirement_re.replace_all(&out, "").to_string();
+    if macro_requirement_count > 0 {
+        notes.push(format!(
+            "skipped {macro_requirement_count} pure template requirement(s)"
+        ));
+    }
 
     // Replace longer keys first
     let mut keys: Vec<_> = vars.keys().cloned().collect();
@@ -663,6 +710,59 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>) {
     }
 
     (out, notes)
+}
+
+enum CondaTemplateValue {
+    String(String),
+    Date(NaiveDate),
+}
+
+fn eval_conda_set_expression(
+    expression: &str,
+    vars: &HashMap<String, String>,
+    dates: &HashMap<String, NaiveDate>,
+) -> Option<CondaTemplateValue> {
+    let quoted = Regex::new(r#"^[\"']([^\"']*)[\"']$"#).expect("quoted expression re");
+    if let Some(value) = quoted
+        .captures(expression)
+        .and_then(|capture| capture.get(1))
+    {
+        return Some(CondaTemplateValue::String(value.as_str().to_string()));
+    }
+
+    let scalar = Regex::new(r"^[A-Za-z0-9_.+-]+$").expect("scalar expression re");
+    if scalar.is_match(expression) {
+        return Some(CondaTemplateValue::String(
+            vars.get(expression)
+                .cloned()
+                .unwrap_or_else(|| expression.to_string()),
+        ));
+    }
+
+    let strptime = Regex::new(
+        r#"^datetime\.datetime\.strptime\(([A-Za-z_][A-Za-z0-9_]*)\.split\([\"']([^\"']*)[\"']\)\[([0-9]+)\],\s*[\"']([^\"']+)[\"']\)$"#,
+    )
+    .expect("strptime expression re");
+    if let Some(capture) = strptime.captures(expression) {
+        let value = vars.get(&capture[1])?;
+        let index = capture[3].parse::<usize>().ok()?;
+        let part = value.split(&capture[2]).nth(index)?;
+        let date = NaiveDate::parse_from_str(part, &capture[4]).ok()?;
+        return Some(CondaTemplateValue::Date(date));
+    }
+
+    let date_format = Regex::new(
+        r#"^[\"']\{:(%[^\"']+)\}[\"']\.format\(([A-Za-z_][A-Za-z0-9_]*)\)$"#,
+    )
+    .expect("date format expression re");
+    if let Some(capture) = date_format.captures(expression) {
+        let date = dates.get(&capture[2])?;
+        return Some(CondaTemplateValue::String(
+            date.format(&capture[1]).to_string(),
+        ));
+    }
+
+    None
 }
 
 fn parse_conda_sources(source_val: Option<&YamlValue>) -> Vec<ForeignSource> {
@@ -857,7 +957,11 @@ fn parse_conda_dep_line(
     }
     let pin = {
         let rest: Vec<&str> = parts.collect();
-        if rest.is_empty() {
+        if rest.is_empty()
+            || rest
+                .iter()
+                .any(|fragment| fragment.contains("{{") || fragment.contains("${{"))
+        {
             None
         } else {
             Some(rest.join(" "))
