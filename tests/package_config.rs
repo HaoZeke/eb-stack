@@ -1,8 +1,12 @@
 use eb_stack::package::{
-    materialize_profile, ConditionExpr, DependencyRole, EasyconfigValue, ProfileEnvironment,
+    materialize_profile, package_plan_to_cyclonedx, ConditionExpr, DependencyRole, EasyconfigValue,
+    ProfileEnvironment, StackPolicy, STACK_POLICY_SCHEMA_VERSION,
 };
 use eb_stack::package_config::{apply_package_layers, DependencyAlias, PackageConfigLayer};
-use eb_stack::{package_plan_from_foreign, parse_foreign_path, ForeignFormat, Toolchain};
+use eb_stack::{
+    package_plan_from_foreign, parse_foreign_path, solve_package_profile, Candidate, ForeignFormat,
+    Toolchain,
+};
 use std::path::PathBuf;
 
 fn qmcpack_plan() -> eb_stack::package::PackagePlan {
@@ -349,6 +353,62 @@ schema_version = 1
     .expect_err("parameter keys are EasyBuild identifiers, not Python");
 
     assert!(error.to_string().contains("general_packages; import os"));
+}
+
+#[test]
+fn package_policy_requirement_reaches_the_sbom_and_resolvo_lock() {
+    let config = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[dependencies.requirements]]
+name = "NumericsRuntime"
+constraint = ">=2"
+roles = ["run"]
+"#,
+    )
+    .expect("policy requirement");
+    let mut plan = qmcpack_plan();
+    plan.dependencies.clear();
+    apply_package_layers(&mut plan, &[config]).expect("apply policy requirement");
+
+    let sbom = package_plan_to_cyclonedx(&plan).expect("canonical SBOM");
+    assert!(sbom["components"]
+        .as_array()
+        .expect("CycloneDX components")
+        .iter()
+        .any(|component| component["name"] == "NumericsRuntime"));
+
+    let candidate = Candidate {
+        name: "NumericsRuntime".into(),
+        version: "2.4.0".into(),
+        toolchain: plan.build.toolchain.clone(),
+        versionsuffix: None,
+        easyconfig_path: "NumericsRuntime-2.4.0-foss-2026.1.eb".into(),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+    };
+    let stack_policy = StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "site-stack".into(),
+        toolchain: plan.build.toolchain.clone(),
+        pins: Vec::new(),
+        exclusions: Vec::new(),
+    };
+    let lock = solve_package_profile(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &[candidate],
+        &stack_policy,
+    )
+    .expect("Resolvo lock");
+
+    assert_eq!(lock.solver, "resolvo");
+    assert_eq!(lock.dependencies.len(), 1);
+    assert_eq!(lock.dependencies[0].name, "NumericsRuntime");
+    assert_eq!(lock.dependencies[0].version, "2.4.0");
 }
 
 #[test]
