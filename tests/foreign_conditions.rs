@@ -1,5 +1,5 @@
 use eb_stack::package::{ConditionContext, ConditionExpr};
-use eb_stack::{parse_foreign_path, ForeignFormat, ForeignRuleKind};
+use eb_stack::{parse_foreign_path, parse_foreign_str, ForeignFormat, ForeignRuleKind};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -181,4 +181,50 @@ fn unconditional_dependencies_use_always_condition() {
         .find(|dependency| dependency.name == "libxml2")
         .expect("libxml2 dependency");
     assert_eq!(libxml2.condition, ConditionExpr::Always);
+}
+
+#[test]
+fn spack_inherits_scoped_when_conditions() {
+    let recipe = parse_foreign_str(
+        ForeignFormat::Spack,
+        r#"
+class Scoped(Package):
+    homepage = "https://example.invalid/scoped"
+    url = "https://example.invalid/scoped-1.0.tar.gz"
+
+    version("1.0", sha256="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+    for dep_condition in ("+foo", "+bar"):
+        with when(dep_condition):
+            depends_on("resolved")
+
+    with when(runtime_condition):
+        depends_on("opaque")
+"#,
+    )
+    .expect("parse scoped Spack conditions");
+
+    let resolved = recipe
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "resolved")
+        .expect("resolved scoped dependency");
+    assert!(!resolved.condition.evaluate(&feature_context(&[])));
+    assert!(resolved
+        .condition
+        .evaluate(&feature_context(&[("foo", true)])));
+    assert!(resolved
+        .condition
+        .evaluate(&feature_context(&[("bar", true)])));
+
+    let opaque = recipe
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "opaque")
+        .expect("opaque scoped dependency");
+    assert!(!opaque.condition.evaluate(&feature_context(&[])));
+    assert!(recipe
+        .notes
+        .iter()
+        .any(|note| note.contains("dynamic scoped when(runtime_condition)")));
 }
