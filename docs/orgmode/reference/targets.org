@@ -80,6 +80,28 @@ Rust-backed recipes that intentionally disable wrappers must export
 ~RUSTC_WRAPPER=~ and ~CARGO_BUILD_RUSTC_WRAPPER=~ as empty values; unsetting
 them exposes any inherited Cargo configuration.
 
+When site storage exists below a user's home directory, bind the target-owned
+campaign directory into a neutral container path and use that path for both
+~workdir~ and ~work_root~. The original home mount may remain available for
+bundles and robot trees:
+
+#+begin_src toml
+[targets.runtime]
+mounts = [
+  "/home/operator:/home/operator",
+  "/home/operator/.local/share/eb-stack/targets/rocky9/campaigns:/eb-stack-campaigns",
+]
+workdir = "/eb-stack-campaigns"
+
+[targets.easybuild]
+work_root = "/eb-stack-campaigns"
+#+end_src
+
+Cargo invoked below ~/eb-stack-campaigns/build~ can discover only the target's
+own closer configuration and cannot merge ~/home/operator/.cargo/config.toml~.
+This mount alias preserves the host storage location without leaking personal
+linker flags into EasyBuild recipes.
+
 * EasyBuild workload
 
 | Field | Meaning |

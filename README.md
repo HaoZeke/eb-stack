@@ -167,6 +167,8 @@ container, scheduler job, or host command is no longer active.
 
 Transport may be local or SSH; execution may be direct or Slurm; runtime may be host, Podman, or Docker. Site hostnames, paths, modules, and scheduler sizing belong in the site layer. Container targets must use ABI-specific install, work, and temporary roots; only source archives should be shared across runtimes.
 
+Cargo searches ancestor directories for `.cargo/config.toml`. If target storage lives below a bind-mounted home directory, mount the campaign subtree again at a neutral container path such as `/eb-stack-campaigns`, then use that path for runtime `workdir` and EasyBuild `work_root`. The [target reference](docs/orgmode/reference/targets.org) includes the complete TOML pattern.
+
 The runnable local target defaults to two parallel EasyBuild jobs so memory-heavy C++ compilations remain usable on common workstations. Treat `EASYBUILD_PARALLEL`, scheduler CPUs, and scheduler memory as one allocation: raise parallelism only when the target has measured headroom. A compiler process killed by the kernel or exhausted virtual memory is a retryable `resource` finding, not evidence that the selected dependency is incompatible.
 
 For a local public example, build `skills/new-package/container/rocky9/Containerfile`, populate `/tmp/eb-stack/robot`, and use `examples/targets/local-podman.toml`. Keep bundles below `/tmp/eb-stack/bundles` so host and container paths match.

@@ -58,6 +58,25 @@ disable wrappers must keep `RUSTC_WRAPPER=` and
 `CARGO_BUILD_RUSTC_WRAPPER=` exported as empty values; unsetting them exposes
 the inherited Cargo configuration.
 
+Sites that store target state below a user's home directory can expose the
+same host campaign directory at a neutral container path:
+
+```toml
+[targets.runtime]
+mounts = [
+  "/home/operator:/home/operator",
+  "/home/operator/.local/share/eb-stack/targets/rocky9/campaigns:/eb-stack-campaigns",
+]
+workdir = "/eb-stack-campaigns"
+
+[targets.easybuild]
+work_root = "/eb-stack-campaigns"
+```
+
+Builds then run below `/eb-stack-campaigns/build`, so Cargo cannot merge a
+personal `/home/operator/.cargo/config.toml` into a Rust-backed EasyBuild
+recipe.
+
 For rootful container execution, set EasyBuild's explicit acceptance switch in
 the workload environment:
 
