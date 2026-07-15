@@ -251,6 +251,17 @@ fn conda_target_directories_emit_rattler_compatible_source_staging() {
         .join("fixtures/foreign_ingest/conda_eon/recipe.yaml");
     let recipe = parse_foreign_path(&source, Some(ForeignFormat::CondaForge)).expect("parse");
     let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.build.config_options = vec![
+        "-Dbuildtype=release".into(),
+        "-Dwith_tests=false".into(),
+        "-Dwith_fortran=true".into(),
+        "-Dwith_metatomic=true".into(),
+        "-Dwith_xtb=true".into(),
+        "-Dwith_serve=true".into(),
+        "-Dwith_rgpot=true".into(),
+        "-Dwith_mpi=false".into(),
+        "-Dnative_arch=false".into(),
+    ];
     plan.profiles = vec![ProductProfile {
         name: "default".into(),
         default: true,
