@@ -48,6 +48,8 @@ requirements:
         &package_config,
         r#"
 schema_version = 1
+[package]
+name = "eOn"
 [[profiles]]
 name = "default"
 default = true
