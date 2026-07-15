@@ -160,6 +160,8 @@ eb-stack campaign run \
 
 Transport may be local or SSH; execution may be direct or Slurm; runtime may be host, Podman, or Docker. Site hostnames, paths, modules, and scheduler sizing belong in the site layer. Container targets must use ABI-specific install, work, and temporary roots; only source archives should be shared across runtimes.
 
+The runnable local target defaults to two parallel EasyBuild jobs so memory-heavy C++ compilations remain usable on common workstations. Treat `EASYBUILD_PARALLEL`, scheduler CPUs, and scheduler memory as one allocation: raise parallelism only when the target has measured headroom. A compiler process killed by the kernel or exhausted virtual memory is a retryable `resource` finding, not evidence that the selected dependency is incompatible.
+
 For a local public example, build `skills/new-package/container/rocky9/Containerfile`, populate `/tmp/eb-stack/robot`, and use `examples/targets/local-podman.toml`. Keep bundles below `/tmp/eb-stack/bundles` so host and container paths match.
 
 Campaign failures persist as typed findings. OMP workers coordinate repairs through owned queue operations:

@@ -28,7 +28,10 @@ tmp_root = "/tmp/eb-stack/targets/rocky9/tmp"
 [targets.easybuild.environment]
 EASYBUILD_INSTALLPATH = "/tmp/eb-stack/targets/rocky9/easybuild"
 EASYBUILD_SOURCEPATH = "/tmp/eb-stack/sources"
-EASYBUILD_PARALLEL = "8"
+# Keep the runnable example safe on common 16 GiB workstations. Sites with a
+# scheduler or measured per-job memory headroom can raise this in a later
+# target layer.
+EASYBUILD_PARALLEL = "2"
 EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES = "1"
 TAR_OPTIONS = "--no-same-owner"
 PRTE_ALLOW_RUN_AS_ROOT = "1"

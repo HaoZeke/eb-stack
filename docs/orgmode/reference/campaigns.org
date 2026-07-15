@@ -108,6 +108,10 @@ classification so the finding reflects the actual compiler or runtime error.
 The class narrows the first repair surface; it does not replace diagnosis.
 For example, a SAT-compatible dependency that fails to compile remains a
 ~compile~ finding until evidence supports a stack exclusion or package patch.
+A compiler killed by the kernel, ~virtual memory exhausted~, or equivalent
+allocation evidence is instead a ~resource~ finding. Preserve the selected
+dependency and recipe while correcting ~EASYBUILD_PARALLEL~ or the scheduler
+allocation; only source-level compiler diagnostics justify a compile repair.
 
 * Ownership protocol
 

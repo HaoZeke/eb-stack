@@ -94,6 +94,16 @@ The routed build command adds ~--robot=<colon-separated paths>~ and
 ~--buildpath=<work_root>/build~. Later robot roots override earlier recipes
 with the same EasyBuild identity.
 
+Treat ~EASYBUILD_PARALLEL~ and the executor allocation as one resource
+contract. Parallel C++ compiler processes can each consume more than a
+gigabyte, so CPU count alone is not a safe job count. The runnable local target
+uses two parallel jobs for broad workstation compatibility; a site layer may
+raise that value when its scheduler memory request or measured host headroom
+supports it. If the kernel kills a compiler or the compiler reports exhausted
+virtual memory, the campaign records a retryable ~resource~ finding. Lower the
+parallelism or increase the executor allocation, then rerun the same campaign
+state.
+
 Do not place credentials in a public target file. Use an SSH agent, scheduler
 credential mechanism, container registry login, or private site layer. Target
 doctor and campaign state retain routed commands and compact output as evidence.
@@ -143,7 +153,9 @@ eb-stack campaign run \
 The example enables the explicit EasyBuild and MPI root-container guards,
 ~TAR_OPTIONS=--no-same-owner~, and MPI yield-on-idle settings needed when test
 suites oversubscribe the available cores. These settings keep the real build
-and tests enabled; they do not bypass checks.
+and tests enabled; they do not bypass checks. Its conservative
+~EASYBUILD_PARALLEL=2~ default can be replaced in a private site layer after
+the target's memory headroom is measured.
 
 * Layered SSH, Slurm, and container target
 

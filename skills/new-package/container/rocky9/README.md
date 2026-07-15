@@ -45,6 +45,12 @@ Reusing modules compiled on the host or in another image can load binaries
 that require an unavailable glibc or system library. Source archives are
 architecture-neutral and may use a shared cache.
 
+Size `EASYBUILD_PARALLEL` against memory as well as CPU count. Several C++
+compiler processes can each consume more than a gigabyte; the runnable local
+target therefore starts at two jobs. A kernel-killed compiler or exhausted
+virtual memory is a resource-allocation failure. Lower parallelism or increase
+the scheduler memory request before changing the recipe or dependency choice.
+
 Cargo searches parent directories for `.cargo/config.toml`. Place `work_root`
 in a target-owned namespace rather than below a bind-mounted home directory
 with personal compiler-wrapper or linker settings. Rust-backed recipes that
