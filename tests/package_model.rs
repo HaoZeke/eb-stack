@@ -41,9 +41,7 @@ fn qmcpack_plan() -> PackagePlan {
         sources: vec![SourceArtifact {
             url: None,
             filename: None,
-            sha256: Some(
-                "511d5f368db002f2f77504619e1ada8d4a3034200d25feef6773d12a6ed6d18e".into(),
-            ),
+            sha256: Some("511d5f368db002f2f77504619e1ada8d4a3034200d25feef6773d12a6ed6d18e".into()),
             git: Some("https://github.com/QMCPACK/qmcpack.git".into()),
             tag: Some("v4.3.0".into()),
             commit: Some("bb7eede051f98ec03296664b304982e655f960c4".into()),
@@ -202,8 +200,7 @@ fn canonical_plan_writes_typed_cyclonedx_components() {
         .as_array()
         .expect("source references");
     assert!(references.iter().any(|reference| {
-        reference["type"] == "vcs"
-            && reference["url"] == "https://github.com/QMCPACK/qmcpack.git"
+        reference["type"] == "vcs" && reference["url"] == "https://github.com/QMCPACK/qmcpack.git"
     }));
     let distribution = references
         .iter()

@@ -645,17 +645,16 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
         if let Some(url) = source_archive_url(source) {
             let key = (ExternalReferenceType::Distribution.to_string(), url.clone());
             if seen_references.insert(key) {
-                let mut reference = ExternalReference::new(
-                    ExternalReferenceType::Distribution,
-                    Uri::new(&url),
-                );
+                let mut reference =
+                    ExternalReference::new(ExternalReferenceType::Distribution, Uri::new(&url));
                 reference.hashes = source
                     .sha256
                     .as_deref()
                     .map(|checksum| Hashes(vec![sha256_hash(checksum)]));
-                reference.comment = source.target_directory.as_deref().map(|directory| {
-                    format!("staged in package source directory {directory}")
-                });
+                reference.comment = source
+                    .target_directory
+                    .as_deref()
+                    .map(|directory| format!("staged in package source directory {directory}"));
                 source_references.push(reference);
             }
         }
