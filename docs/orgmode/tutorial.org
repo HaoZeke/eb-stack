@@ -218,6 +218,7 @@ eb-stack package plan \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
   --profile-config examples/profiles/qmcpack.toml \
+  --source-checksum 511d5f368db002f2f77504619e1ada8d4a3034200d25feef6773d12a6ed6d18e \
   --easyconfigs "$ROBOT" \
   --easyconfigs fixtures/qmcpack_foss_2026_1/easyconfigs \
   --stack-policy examples/stacks/foss-2026.1.toml \
@@ -226,4 +227,6 @@ eb-stack package plan \
 
 QMCPACK emits one unsuffixed default recipe and one ~-complex~ recipe because
 the latter is an independently loadable product variant. Both profiles get
-their own lock and must build in the campaign.
+their own lock and must build in the campaign. The source checksum is explicit
+because this Spack package pins the release by Git commit rather than by the
+SHA-256 of its GitHub archive.

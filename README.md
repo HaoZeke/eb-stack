@@ -107,7 +107,12 @@ artifact closures and records either the selected identity or a compatible
 fallback. The generic `foss-2026.1.toml` template remains unpinned for other
 packages.
 
-Use `--format spack` and `examples/profiles/qmcpack.toml` for QMCPACK’s `package.py`. Parser output retains source spans, conda selectors, Spack conditions/conflicts, dependency roles, and residual dynamic logic.
+Use `--format spack` and `examples/profiles/qmcpack.toml` for QMCPACK’s
+`package.py`. Its Spack version is pinned by commit rather than archive hash,
+so planning also needs
+`--source-checksum 511d5f368db002f2f77504619e1ada8d4a3034200d25feef6773d12a6ed6d18e`.
+Parser output retains source spans, conda selectors, Spack
+conditions/conflicts, dependency roles, and residual dynamic logic.
 
 Inspect without solving or emitting recipes:
 

@@ -8,12 +8,14 @@ eOn and Spack QMCPACK fixtures.
 
 * Inputs
 
-Collect four inputs:
+Collect these inputs:
 
 1. a conda-forge ~meta.yaml~/~recipe.yaml~ or Spack ~package.py~;
 2. one or more public product-profile TOML files;
 3. an EasyBuild robot tree, with site overlays passed after upstream;
 4. a stack-policy TOML file for preferred pins, locked pins, and exclusions.
+5. positional SHA-256 values for source artifacts whose foreign metadata has
+   only a VCS commit or tag.
 
 Profile TOML is where installable product choices belong. Each profile emits a
 separate ~.eb~ file. MPI/OpenMP toolchain options alone do not create a suffix;
@@ -35,6 +37,12 @@ Inspect ~package.plan.json~ and ~package.sbom.cdx.json~. The parser preserves
 source spans, dependency roles, conda selectors, Spack ~when=~ conditions,
 variants, conflicts, requirements, and static build flags. Dynamic foreign
 logic becomes a residual rather than an invented fact.
+
+Inspection may report ~source:missing-sha256~ for a commit-pinned Spack
+release. A VCS commit does not determine the byte hash of the generated source
+archive. Pass the reviewed archive hash to ~package plan~ with one
+~--source-checksum~ per source artifact; the planner does not invent or omit
+packaging checksums.
 
 For QMCPACK:
 

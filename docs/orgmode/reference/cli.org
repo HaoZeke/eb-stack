@@ -45,6 +45,7 @@ eb-stack package plan \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
   [--profile-config PROFILE.toml]... \
+  [--source-checksum SHA256]... \
   --easyconfigs UPSTREAM \
   [--easyconfigs OVERLAY]... \
   --stack-policy STACK.toml \
@@ -55,6 +56,12 @@ Later robot paths override earlier paths for the same EasyBuild identity.
 Each requested product profile is solved independently and emits one lock plus
 one conventional ~.eb~ file. The default profile has no suffix; non-default
 profiles use their declared ~versionsuffix~.
+
+Every emitted source needs a SHA-256 checksum. When a foreign recipe provides
+only a VCS commit, repeat ~--source-checksum~ once for every source artifact in
+manifest order. The values replace the positional source checksums in both the
+manifest/SBOM and every emitted recipe. Planning fails before emission when
+the count, shape, or completeness is invalid.
 
 ** ~package bump~
 
@@ -211,3 +218,6 @@ The stdio server exposes:
 
 MCP results include the same artifacts, claims, findings, and next actions as
 the CLI. There is no separate compatibility command surface.
+
+~eb_package_plan~ accepts the CLI's repeated source-checksum input as a
+~source_checksums~ string array.

@@ -127,6 +127,12 @@ Sources and checksums remain positional: all source checksums precede patch
 checksums. Robot overlays are searched in command-line order, with later paths
 overriding earlier identities.
 
+A foreign VCS commit is immutable source identity but is not the SHA-256 of
+the downloaded archive. Supply one ~--source-checksum~ per source artifact when
+the foreign recipe lacks archive hashes. ~package inspect~ keeps the missing
+checksum as a blocking residual; ~package plan~ refuses to emit recipes until
+all source checksums are complete and valid.
+
 Run the three recipe gates before a campaign:
 
 #+begin_src bash

@@ -15,6 +15,8 @@ Collect these paths before planning:
 - one or more EasyBuild robot trees for the target generation;
 - a package profile TOML defining product variants and verification commands;
 - a stack policy TOML defining site preferences, locks, and exclusions;
+- positional SHA-256 values when the foreign recipe identifies sources only
+  by VCS tag or commit;
 - layered target TOML naming the remote EasyBuild host and execution backend.
 
 Use conda-forge for eOn and Spack for QMCPACK. Parsing is syntax-aware and preserves selectors, Spack `when=` expressions, source provenance, dependency roles, and unresolved dynamic logic in the manifest.
@@ -120,6 +122,7 @@ eb-stack package plan \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
   --profile-config profiles/qmcpack.toml \
+  --source-checksum SHA256 \
   --easyconfigs /path/to/easybuild-easyconfigs/easybuild/easyconfigs \
   --easyconfigs /path/to/site-overlay \
   --stack-policy stacks/site.toml \
@@ -134,6 +137,9 @@ The bundle must contain:
 - `easyconfigs/<letter>/<name>/*.eb`: one deterministic recipe per profile.
 
 Treat a planning error as unresolved input. Do not copy a foreign pin into an `.eb` file to bypass Resolvo.
+Repeat `--source-checksum` in manifest source order when the foreign recipe
+lacks archive hashes. A VCS commit is not an archive SHA-256; never omit the
+checksum or invent one from the commit.
 
 ## Check emitted recipes
 
