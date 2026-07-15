@@ -47,11 +47,17 @@ configopts = '-DCMAKE_BUILD_TYPE=Release -DQMC_MPI=ON -DQMC_OMP=ON -DQMC_MIXED_P
 configopts += '-DBUILD_AFQMC=OFF'
 
 # CMakeNinja defaults test_cmd to 'ninja', so runtest=True alone only re-invokes
-# ninja (no-op after a successful build). Drive ctest explicitly. Performance
-# suites need external QMC_DATA and are excluded; they skip cleanly without it
-# but still cost configure-time registration noise.
+# ninja (no-op after a successful build). Drive ctest explicitly.
+#
+# ctest label taxonomy (QMCPACK): unit / deterministic / short / long /
+# performance. Build-verification = unit + deterministic + short (exact-value
+# checks, seconds each). The `long` label is multi-hour statistical validation
+# (VMC/DMC energies within Monte Carlo error bars, 15-40 min per test) meant for
+# a dedicated validation farm, not a package build_step; on a shared/CI host it
+# starves or ctest-times-out under contention. `performance` needs external
+# QMC_DATA. Both are excluded so test_step is a bounded build-verification.
 test_cmd = 'ctest'
-testopts = '-j %(parallel)s --output-on-failure -E performance'
+testopts = "-j %(parallel)s --output-on-failure -E 'performance|long'"
 
 sanity_check_paths = {
     'files': [
