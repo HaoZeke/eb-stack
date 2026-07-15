@@ -78,7 +78,12 @@ fn render_easyconfig(plan: &PackagePlan, lock: &ProfileLock, versionsuffix: &str
         .iter()
         .find(|profile| profile.name == lock.profile)
         .expect("profile validated during materialization");
-    let easyblock = plan.build.easyblock.as_deref().unwrap_or("ConfigureMake");
+    let easyblock_line = plan
+        .build
+        .easyblock
+        .as_deref()
+        .map(|easyblock| format!("easyblock = '{}'\n\n", escape_single(easyblock)))
+        .unwrap_or_default();
     let homepage = plan
         .package
         .homepage
@@ -149,8 +154,7 @@ fn render_easyconfig(plan: &PackagePlan, lock: &ProfileLock, versionsuffix: &str
     let moduleclass = plan.build.moduleclass.as_deref().unwrap_or("lib");
 
     let rendered = format!(
-        "easyblock = '{easyblock}'\n\n\
-name = '{name}'\n\
+        "{easyblock_line}name = '{name}'\n\
 version = '{version}'\n\
 {versionsuffix_line}\n\
 homepage = '{homepage}'\n\

@@ -168,7 +168,11 @@ pub fn apply_package_layers(
         }
         if let Some(build) = &layer.build {
             if let Some(easyblock) = &build.easyblock {
-                plan.build.easyblock = Some(easyblock.clone());
+                plan.build.easyblock = if easyblock.eq_ignore_ascii_case("auto") {
+                    None
+                } else {
+                    Some(easyblock.clone())
+                };
             }
             if let Some(build_systems) = &build.build_systems {
                 plan.build.build_systems = build_systems.clone();
