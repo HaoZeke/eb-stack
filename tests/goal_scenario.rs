@@ -113,6 +113,15 @@ fn run_package(
     assert_eq!(bundle.locks.len(), expected_profiles);
     assert_eq!(bundle.easyconfigs.len(), expected_profiles);
     assert_eq!(bundle.sbom["bomFormat"], "CycloneDX");
+    let rendered_sbom = bundle.sbom.to_string();
+    for source in &bundle.plan.sources {
+        if let Some(checksum) = source.sha256.as_deref() {
+            assert!(
+                rendered_sbom.contains(checksum),
+                "source checksum missing from planned SBOM: {checksum}"
+            );
+        }
+    }
 
     let output = temp.path().join("bundle");
     let written = write_package_bundle(&bundle, &output).expect("write bundle");
