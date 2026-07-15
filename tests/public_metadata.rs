@@ -41,3 +41,12 @@ fn package_and_citation_metadata_cover_the_public_workflow() {
     }
     assert!(!citation.contains("date-released:"));
 }
+
+#[test]
+fn generated_documentation_builds_stay_out_of_source_packages() {
+    let gitignore = std::fs::read_to_string(repo().join(".gitignore")).expect("read .gitignore");
+    assert!(gitignore.lines().any(|line| line == "docs/build*/"));
+
+    let cargo = std::fs::read_to_string(repo().join("Cargo.toml")).expect("read Cargo.toml");
+    assert!(cargo.contains("\"docs/build*/\""));
+}
