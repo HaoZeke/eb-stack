@@ -1,4 +1,6 @@
-use eb_stack::package::{materialize_profile, ProfileEnvironment};
+use eb_stack::package::{
+    materialize_profile, ConditionExpr, DependencyRole, EasyconfigValue, ProfileEnvironment,
+};
 use eb_stack::package_config::{apply_package_layers, DependencyAlias, PackageConfigLayer};
 use eb_stack::{package_plan_from_foreign, parse_foreign_path, ForeignFormat, Toolchain};
 use std::path::PathBuf;
@@ -261,6 +263,92 @@ py-setuptools = { provider = "Python", constraint = "drop" }
     let dependency = &plan.dependencies[0];
     assert_eq!(dependency.eb_name.as_deref(), Some("Python"));
     assert!(dependency.constraint.is_none());
+}
+
+#[test]
+fn package_policy_models_typed_easyconfig_parameters_and_requirements() {
+    let config = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[build.easyconfig_parameters]
+general_packages = ["ASPHERE", "KSPACE", "MOLECULE"]
+build_shared_libs = true
+max_nbins = 16
+
+[[dependencies.requirements]]
+name = "HDF5"
+roles = ["run"]
+
+[[dependencies.requirements]]
+name = "CMake"
+constraint = ">=3.30"
+roles = ["build"]
+
+[[profiles]]
+name = "default"
+
+[profiles.easyconfig_parameters]
+with_tests = false
+"#,
+    )
+    .expect("typed package policy");
+    let mut plan = qmcpack_plan();
+
+    apply_package_layers(&mut plan, &[config]).expect("apply typed package policy");
+
+    assert_eq!(
+        plan.build.easyconfig_parameters.get("general_packages"),
+        Some(&EasyconfigValue::List(vec![
+            EasyconfigValue::String("ASPHERE".into()),
+            EasyconfigValue::String("KSPACE".into()),
+            EasyconfigValue::String("MOLECULE".into()),
+        ]))
+    );
+    assert_eq!(
+        plan.build.easyconfig_parameters.get("build_shared_libs"),
+        Some(&EasyconfigValue::Bool(true))
+    );
+    assert_eq!(
+        plan.build.easyconfig_parameters.get("max_nbins"),
+        Some(&EasyconfigValue::Integer(16))
+    );
+    assert_eq!(
+        plan.profiles[0].easyconfig_parameters.get("with_tests"),
+        Some(&EasyconfigValue::Bool(false))
+    );
+
+    let hdf5 = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.eb_name.as_deref() == Some("HDF5"))
+        .expect("existing HDF5 intent is ensured");
+    assert_eq!(hdf5.condition, ConditionExpr::Always);
+    assert!(hdf5.roles.contains(&DependencyRole::Run));
+
+    let cmake = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.eb_name.as_deref() == Some("CMake"))
+        .expect("EasyBuild-only requirement enters the canonical plan");
+    assert_eq!(cmake.constraint.as_deref(), Some(">=3.30"));
+    assert_eq!(cmake.roles, [DependencyRole::Build]);
+    assert_eq!(cmake.condition, ConditionExpr::Always);
+}
+
+#[test]
+fn package_policy_rejects_python_fragments_as_easyconfig_parameter_names() {
+    let error = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[build.easyconfig_parameters]
+"general_packages; import os" = ["MOLECULE"]
+"#,
+    )
+    .expect_err("parameter keys are EasyBuild identifiers, not Python");
+
+    assert!(error.to_string().contains("general_packages; import os"));
 }
 
 #[test]

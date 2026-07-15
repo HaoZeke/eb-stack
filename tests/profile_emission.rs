@@ -1,6 +1,6 @@
 use eb_stack::package::{
-    materialize_profile, ConditionExpr, LockedDependency, OutputRequest, ProductProfile,
-    ProfileEnvironment, ProfileLock, StackPin, StackPinMode, StackPolicy,
+    materialize_profile, ConditionExpr, EasyconfigValue, LockedDependency, OutputRequest,
+    ProductProfile, ProfileEnvironment, ProfileLock, StackPin, StackPinMode, StackPolicy,
     PROFILE_LOCK_SCHEMA_VERSION, STACK_POLICY_SCHEMA_VERSION,
 };
 use eb_stack::{
@@ -247,6 +247,46 @@ fn conditional_spack_resources_follow_the_selected_profile() {
     plan.profiles[0].features.insert("mesont".into(), true);
     let with_mesont = emit_profile_easyconfigs(&plan, &[lock]).expect("emit profile with MESONT");
     assert!(with_mesont[0].text.contains("C_10_10.mesocnt"));
+}
+
+#[test]
+fn typed_easyconfig_parameters_render_as_conventional_python_data() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.package.name = "Orbit".into();
+    plan.build.easyconfig_parameters = BTreeMap::from([
+        (
+            "general_packages".into(),
+            EasyconfigValue::List(vec![
+                EasyconfigValue::String("ASPHERE".into()),
+                EasyconfigValue::String("KSPACE".into()),
+                EasyconfigValue::String("MOLECULE".into()),
+            ]),
+        ),
+        ("build_shared_libs".into(), EasyconfigValue::Bool(true)),
+    ]);
+    plan.profiles = qmcpack_profiles();
+    plan.profiles[0].easyconfig_parameters.insert(
+        "package_extra_cmake_args".into(),
+        EasyconfigValue::Table(BTreeMap::from([(
+            "KSPACE".into(),
+            EasyconfigValue::String("-DFFT=FFTW3".into()),
+        )])),
+    );
+    plan.outputs.truncate(1);
+
+    let emitted = emit_profile_easyconfigs(&plan, &[profile_lock("default", "")])
+        .expect("emit typed EasyBuild parameters");
+    let text = &emitted[0].text;
+
+    assert!(text.contains("build_shared_libs = True"));
+    assert!(text.contains("general_packages = ["));
+    for package in ["ASPHERE", "KSPACE", "MOLECULE"] {
+        assert!(text.contains(&format!("    '{package}',")));
+    }
+    assert!(text.contains("package_extra_cmake_args = {"));
+    assert!(text.contains("'KSPACE': '-DFFT=FFTW3'"));
+    assert!(lint_style(text).is_empty(), "{:?}", lint_style(text));
 }
 
 #[test]
