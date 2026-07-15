@@ -209,7 +209,10 @@ fn spack_valued_variant_conditions_filter_dependencies() {
     let profile = plan.profiles.first_mut().expect("default profile");
     profile.features.insert("kokkos".into(), true);
     profile.features.insert("kspace".into(), true);
-    assert_eq!(profile.parameters.get("fft").map(String::as_str), Some("fftw3"));
+    assert_eq!(
+        profile.parameters.get("fft").map(String::as_str),
+        Some("fftw3")
+    );
     assert_eq!(
         profile.parameters.get("fft_kokkos").map(String::as_str),
         Some("fftw3")

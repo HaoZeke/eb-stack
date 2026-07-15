@@ -29,18 +29,16 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
         .dependencies
         .iter()
         .enumerate()
-        .map(|(index, dependency)| {
-            DependencyIntent {
-                id: format!("dep:{index}:{name}", name = dependency.name),
-                name: dependency.name.clone(),
-                eb_name: None,
-                constraint: canonical_version_constraint(dependency.pin.as_deref()),
-                roles: dependency_roles(&dependency.role),
-                condition: dependency.condition.clone(),
-                virtual_capability: foreign_virtual_capability(&dependency.name),
-                solver_excluded: false,
-                provenance: dependency.provenance.clone(),
-            }
+        .map(|(index, dependency)| DependencyIntent {
+            id: format!("dep:{index}:{name}", name = dependency.name),
+            name: dependency.name.clone(),
+            eb_name: None,
+            constraint: canonical_version_constraint(dependency.pin.as_deref()),
+            roles: dependency_roles(&dependency.role),
+            condition: dependency.condition.clone(),
+            virtual_capability: foreign_virtual_capability(&dependency.name),
+            solver_excluded: false,
+            provenance: dependency.provenance.clone(),
         })
         .collect();
 

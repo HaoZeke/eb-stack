@@ -151,7 +151,10 @@ versionsuffix = ["-kokkos"]
 
     assert_eq!(plan.package.name, "LAMMPS");
     assert_eq!(plan.package.version, "22Jul2025_update4");
-    assert_eq!(plan.package.homepage.as_deref(), Some("https://www.lammps.org/"));
+    assert_eq!(
+        plan.package.homepage.as_deref(),
+        Some("https://www.lammps.org/")
+    );
     assert_eq!(
         plan.package.description.as_deref(),
         Some("LAMMPS molecular dynamics simulator")
