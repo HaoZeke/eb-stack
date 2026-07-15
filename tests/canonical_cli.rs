@@ -43,9 +43,9 @@ requirements:
 "#,
     )
     .expect("source");
-    let profiles = temp.path().join("profiles.toml");
+    let package_config = temp.path().join("package.toml");
     std::fs::write(
-        &profiles,
+        &package_config,
         r#"
 schema_version = 1
 [[profiles]]
@@ -54,7 +54,7 @@ default = true
 config_options = ["-Dwith_cli=true"]
 "#,
     )
-    .expect("profiles");
+    .expect("package config");
     let stack = temp.path().join("stack.toml");
     std::fs::write(
         &stack,
@@ -92,8 +92,8 @@ mode = "preferred"
             "foss",
             "--toolchain-version",
             "2026.1",
-            "--profile-config",
-            profiles.to_str().unwrap(),
+            "--package-config",
+            package_config.to_str().unwrap(),
             "--source-checksum",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "--easyconfigs",
