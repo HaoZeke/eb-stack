@@ -109,6 +109,54 @@ build_type = "Release"
 }
 
 #[test]
+fn package_config_overrides_foreign_metadata_and_build_policy() {
+    let config = ProfileConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[package]
+name = "LAMMPS"
+version = "22Jul2025_update4"
+homepage = "https://www.lammps.org/"
+description = "LAMMPS molecular dynamics simulator"
+license = "GPL-2.0-or-later"
+
+[build]
+easyblock = "LAMMPS"
+build_systems = ["CMake"]
+config_options = ["-DCMAKE_CXX_STANDARD=17"]
+moduleclass = "chem"
+patches = []
+
+[[profiles]]
+name = "default"
+default = true
+versionsuffix = ["-kokkos"]
+"#,
+    )
+    .expect("package config");
+
+    let mut plan = qmcpack_plan();
+    plan.build.patches = vec!["foreign-feedstock.patch".into()];
+    apply_profile_layers(&mut plan, &[config]).expect("apply package config");
+
+    assert_eq!(plan.package.name, "LAMMPS");
+    assert_eq!(plan.package.version, "22Jul2025_update4");
+    assert_eq!(plan.package.homepage.as_deref(), Some("https://www.lammps.org/"));
+    assert_eq!(
+        plan.package.description.as_deref(),
+        Some("LAMMPS molecular dynamics simulator")
+    );
+    assert_eq!(plan.package.license.as_deref(), Some("GPL-2.0-or-later"));
+    assert_eq!(plan.build.easyblock.as_deref(), Some("LAMMPS"));
+    assert_eq!(plan.build.build_systems, ["CMake"]);
+    assert_eq!(plan.build.config_options, ["-DCMAKE_CXX_STANDARD=17"]);
+    assert_eq!(plan.build.moduleclass.as_deref(), Some("chem"));
+    assert!(plan.build.patches.is_empty());
+    assert_eq!(plan.profiles[0].versionsuffix, ["-kokkos"]);
+}
+
+#[test]
 fn profile_config_rejects_unknown_schema() {
     let error =
         ProfileConfigLayer::from_toml_str("schema_version = 99").expect_err("unsupported schema");
