@@ -50,3 +50,20 @@ fn generated_documentation_builds_stay_out_of_source_packages() {
     let cargo = std::fs::read_to_string(repo().join("Cargo.toml")).expect("read Cargo.toml");
     assert!(cargo.contains("\"docs/build*/\""));
 }
+
+#[test]
+fn ci_enforces_the_declared_msrv_and_quality_gates() {
+    let cargo = std::fs::read_to_string(repo().join("Cargo.toml")).expect("read Cargo.toml");
+    assert!(cargo.contains("rust-version = \"1.88\""));
+
+    let ci = std::fs::read_to_string(repo().join(".github/workflows/ci_test.yml"))
+        .expect("read test workflow");
+    for command in [
+        "toolchain: 1.88.0",
+        "cargo check --locked --all-targets",
+        "cargo fmt --all --check",
+        "cargo clippy --locked --all-targets -- -D warnings",
+    ] {
+        assert!(ci.contains(command), "test workflow must run {command}");
+    }
+}
