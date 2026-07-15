@@ -45,6 +45,13 @@ Reusing modules compiled on the host or in another image can load binaries
 that require an unavailable glibc or system library. Source archives are
 architecture-neutral and may use a shared cache.
 
+Cargo searches parent directories for `.cargo/config.toml`. Place `work_root`
+in a target-owned namespace rather than below a bind-mounted home directory
+with personal compiler-wrapper or linker settings. Rust-backed recipes that
+disable wrappers must keep `RUSTC_WRAPPER=` and
+`CARGO_BUILD_RUSTC_WRAPPER=` exported as empty values; unsetting them exposes
+the inherited Cargo configuration.
+
 For rootful container execution, set EasyBuild's explicit acceptance switch in
 the workload environment:
 

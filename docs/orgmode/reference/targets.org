@@ -72,6 +72,14 @@ Compiled modules, build trees, and temporary files belong to one runtime ABI.
 Do not reuse a host or different-image install prefix inside a container.
 Source archives may share a cache because they contain no linked build output.
 
+Cargo searches for ~.cargo/config.toml~ from its working directory through
+parent directories. A container that bind-mounts a home directory can
+therefore inherit host-only compiler wrappers or linkers. Put ~work_root~ in a
+target-owned namespace that does not contain personal tool configuration.
+Rust-backed recipes that intentionally disable wrappers must export
+~RUSTC_WRAPPER=~ and ~CARGO_BUILD_RUSTC_WRAPPER=~ as empty values; unsetting
+them exposes any inherited Cargo configuration.
+
 * EasyBuild workload
 
 | Field | Meaning |

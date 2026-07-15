@@ -175,6 +175,12 @@ Do not reuse host-built modules inside a container or share compiled modules
 between different images. `EASYBUILD_SOURCEPATH` may remain a shared archive
 cache.
 
+Cargo reads `.cargo/config.toml` files above its build directory. Keep a
+container target's `work_root` outside personal tool-configuration trees. A
+recipe that disables compiler wrappers must set `RUSTC_WRAPPER=` and
+`CARGO_BUILD_RUSTC_WRAPPER=` to empty values; `unset` reveals an inherited
+Cargo wrapper.
+
 ## Hermes build-evaluation loop
 
 Use one durable state path for the package:
