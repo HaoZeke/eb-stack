@@ -1,0 +1,38 @@
+schema_version = 1
+
+[package]
+name = "LAMMPS"
+version = "22Jul2025_update4"
+homepage = "https://www.lammps.org/"
+license = "GPL-2.0-only"
+description = """LAMMPS is a classical molecular dynamics simulator for
+atomic, mesoscopic, and continuum systems."""
+
+[build]
+easyblock = "auto"
+build_systems = ["CMake"]
+config_options = [
+  "-DCMAKE_CXX_STANDARD=17",
+  "-DCMAKE_CXX_STANDARD_REQUIRED=on",
+]
+moduleclass = "chem"
+patches = []
+
+[[profiles]]
+name = "default"
+default = true
+versionsuffix = ["-kokkos"]
+verification_commands = [
+  { program = "bash", args = ["-lc", "module load {module} && lmp -help >/dev/null"] },
+]
+
+[profiles.features]
+mpi = true
+openmp = true
+kokkos = true
+kspace = true
+python = true
+
+[profiles.toolchain_options]
+usempi = true
+openmp = true

@@ -1,0 +1,44 @@
+schema_version = 1
+
+[package]
+name = "QMCPACK"
+
+[[profiles]]
+name = "default"
+default = true
+config_options = [
+  "-DCMAKE_BUILD_TYPE=Release",
+  "-DQMC_MPI=ON",
+  "-DQMC_OMP=ON",
+  "-DQMC_MIXED_PRECISION=OFF",
+  "-DQMC_COMPLEX=OFF",
+  "-DBUILD_AFQMC=OFF",
+]
+verification_commands = [
+  { program = "bash", args = ["-lc", "module load {module} && qmcpack --version 2>&1 | grep -q 'QMCPACK version'"] },
+]
+
+[profiles.features]
+mpi = true
+complex = false
+mixed = false
+
+[profiles.toolchain_options]
+usempi = true
+openmp = true
+
+[[profiles]]
+name = "complex"
+inherits = "default"
+versionsuffix = ["-complex"]
+config_options = [
+  "-DCMAKE_BUILD_TYPE=Release",
+  "-DQMC_MPI=ON",
+  "-DQMC_OMP=ON",
+  "-DQMC_MIXED_PRECISION=OFF",
+  "-DQMC_COMPLEX=ON",
+  "-DBUILD_AFQMC=OFF",
+]
+
+[profiles.features]
+complex = true

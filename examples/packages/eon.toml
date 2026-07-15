@@ -1,0 +1,34 @@
+schema_version = 1
+
+[package]
+name = "eOn"
+
+[[profiles]]
+name = "default"
+default = true
+config_options = [
+  "-Dbuildtype=release",
+  "-Dwith_tests=false",
+  "-Dwith_fortran=true",
+  "-Dwith_metatomic=true",
+  "-Dwith_xtb=true",
+  "-Dwith_serve=true",
+  "-Dwith_rgpot=true",
+  "-Dwith_mpi=false",
+  "-Dnative_arch=false",
+]
+verification_commands = [
+  { program = "bash", args = ["-lc", "module load {module} && eonclient --help && eonclient --version"] },
+  { program = "bash", args = ["-lc", "module load {module} && python -c 'import eon'"] },
+]
+
+[profiles.features]
+metatomic = true
+xtb = true
+serve = true
+rgpot = true
+mpi = false
+
+[profiles.toolchain_options]
+openmp = true
+pic = true

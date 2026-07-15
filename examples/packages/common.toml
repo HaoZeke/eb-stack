@@ -1,0 +1,46 @@
+schema_version = 1
+
+# Cross-ecosystem names that cannot be derived by case and punctuation
+# normalization. Sites can layer another package config after this file.
+[dependencies]
+exclude_from_solve = [
+  "_openmp_mutex",
+  "cargo-bundle-licenses",
+  "libgcc-ng",
+  "libstdcxx-ng",
+  "sccache",
+  "sysroot_linux-64",
+]
+
+[dependencies.aliases]
+python = "Python"
+pip = "Python"
+setuptools = "Python"
+cmake = "CMake"
+ninja = "Ninja"
+meson = "Meson"
+"pkg-config" = "pkgconf"
+boost = "Boost"
+hdf5 = "HDF5"
+eigen = "Eigen"
+highway = "Highway"
+libinih = "inih"
+gmake = "make"
+capnproto = "CapnProto"
+"py-pyyaml" = "PyYAML"
+pyyaml = "PyYAML"
+"py-numpy" = "SciPy-bundle"
+numpy = "SciPy-bundle"
+"py-scipy" = "SciPy-bundle"
+"py-matplotlib" = "matplotlib"
+libtorch = "PyTorch"
+pytorch = "PyTorch"
+"py-mpi4py" = "mpi4py"
+"voro-plus-plus" = "Voro++"
+
+[dependencies.virtuals]
+mpi = "mpi"
+libblas = "blas"
+libcblas = "blas"
+liblapack = "lapack"
+liblapacke = "lapack"
