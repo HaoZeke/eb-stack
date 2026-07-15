@@ -12,8 +12,42 @@ pub const PROFILE_CONFIG_SCHEMA_VERSION: u32 = 1;
 #[serde(deny_unknown_fields)]
 pub struct ProfileConfigLayer {
     pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<PackagePatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<BuildPatch>,
     #[serde(default)]
     pub profiles: Vec<ProfilePatch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct PackagePatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct BuildPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub easyblock: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_systems: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_options: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moduleclass: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patches: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +94,38 @@ impl ProfileConfigLayer {
                 return Err(ProfileConfigError::EmptyProfileName);
             }
         }
+        if self
+            .package
+            .as_ref()
+            .and_then(|package| package.name.as_deref())
+            .is_some_and(|name| name.trim().is_empty())
+        {
+            return Err(ProfileConfigError::EmptyPackageName);
+        }
+        if self
+            .package
+            .as_ref()
+            .and_then(|package| package.version.as_deref())
+            .is_some_and(|version| version.trim().is_empty())
+        {
+            return Err(ProfileConfigError::EmptyPackageVersion);
+        }
+        if self
+            .build
+            .as_ref()
+            .and_then(|build| build.easyblock.as_deref())
+            .is_some_and(|easyblock| easyblock.trim().is_empty())
+        {
+            return Err(ProfileConfigError::EmptyEasyblock);
+        }
+        if self
+            .build
+            .as_ref()
+            .and_then(|build| build.moduleclass.as_deref())
+            .is_some_and(|moduleclass| moduleclass.trim().is_empty())
+        {
+            return Err(ProfileConfigError::EmptyModuleclass);
+        }
         Ok(())
     }
 }
@@ -70,6 +136,40 @@ pub fn apply_profile_layers(
 ) -> Result<(), ProfileConfigError> {
     for layer in layers {
         layer.validate()?;
+        if let Some(package) = &layer.package {
+            if let Some(name) = &package.name {
+                plan.package.name = name.clone();
+            }
+            if let Some(version) = &package.version {
+                plan.package.version = version.clone();
+            }
+            if let Some(homepage) = &package.homepage {
+                plan.package.homepage = Some(homepage.clone());
+            }
+            if let Some(description) = &package.description {
+                plan.package.description = Some(description.clone());
+            }
+            if let Some(license) = &package.license {
+                plan.package.license = Some(license.clone());
+            }
+        }
+        if let Some(build) = &layer.build {
+            if let Some(easyblock) = &build.easyblock {
+                plan.build.easyblock = Some(easyblock.clone());
+            }
+            if let Some(build_systems) = &build.build_systems {
+                plan.build.build_systems = build_systems.clone();
+            }
+            if let Some(config_options) = &build.config_options {
+                plan.build.config_options = config_options.clone();
+            }
+            if let Some(moduleclass) = &build.moduleclass {
+                plan.build.moduleclass = Some(moduleclass.clone());
+            }
+            if let Some(patches) = &build.patches {
+                plan.build.patches = patches.clone();
+            }
+        }
         for patch in &layer.profiles {
             let existing_index = plan
                 .profiles
@@ -158,6 +258,14 @@ pub enum ProfileConfigError {
     Io(String, std::io::Error),
     #[error("profile name cannot be empty")]
     EmptyProfileName,
+    #[error("package name cannot be empty")]
+    EmptyPackageName,
+    #[error("package version cannot be empty")]
+    EmptyPackageVersion,
+    #[error("EasyBuild easyblock cannot be empty")]
+    EmptyEasyblock,
+    #[error("EasyBuild moduleclass cannot be empty")]
+    EmptyModuleclass,
     #[error("profile {profile} inherits missing profile {parent}")]
     MissingParent { profile: String, parent: String },
     #[error("package plan must contain exactly one default profile, found {0}")]
