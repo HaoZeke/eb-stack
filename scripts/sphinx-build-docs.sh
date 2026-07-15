@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sphinx build with optional system venv that has sphinxcontrib-rust.
+# Sphinx build with an optional system venv that has sphinxcontrib-rust.
 # Falls back to pixi env if the extension is already importable there.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,7 +10,7 @@ pick_python() {
     echo "$EB_STACK_DOCS_PYTHON"
     return
   fi
-  # Prefer a venv that already has sphinxcontrib_rust (system-cargo install).
+  # Prefer a venv whose native extension uses the host Rust/C toolchain.
   for cand in \
     "$ROOT/.venv-docs/bin/python" \
     "$HOME/.local/share/eb-stack-docs-venv/bin/python"; do
@@ -37,7 +37,7 @@ echo "sphinx-build via: $PY"
 if [[ "$PY" == "pixi" ]]; then
   pixi run -e docs -- python -c 'import sphinxcontrib_rust' 2>/dev/null || {
     echo "ERROR: sphinxcontrib_rust not importable." >&2
-    echo "Create a docs venv (system cargo, no conda mold):" >&2
+    echo "Create a docs venv using the host Rust/C linker:" >&2
     echo "  python3 -m venv .venv-docs" >&2
     echo "  .venv-docs/bin/pip install 'sphinx>=9,<10' shibuya sphinx-sitemap \\" >&2
     echo "    sphinx-copybutton sphinx-design 'sphinxcontrib-rust>=1,<2' \\" >&2

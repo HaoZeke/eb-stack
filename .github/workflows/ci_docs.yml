@@ -39,7 +39,7 @@ jobs:
       - name: Docs venv with sphinxcontrib-rust
         run: |
           set -euo pipefail
-          # System/cargo linker (GitHub runners have no conda mold conflict).
+          # Keep the native Sphinx extension on the runner's Rust/C linker.
           python3 -m venv .venv-docs
           .venv-docs/bin/pip install -U pip
           .venv-docs/bin/pip install \
