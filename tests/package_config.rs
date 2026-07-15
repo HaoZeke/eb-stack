@@ -128,6 +128,15 @@ config_options = ["-DCMAKE_CXX_STANDARD=17"]
 moduleclass = "chem"
 patches = []
 
+[dependencies]
+exclude_from_solve = ["cmake"]
+
+[dependencies.aliases]
+hdf5 = "HDF5"
+
+[dependencies.virtuals]
+mpi = "MPI"
+
 [[profiles]]
 name = "default"
 default = true
@@ -154,6 +163,21 @@ versionsuffix = ["-kokkos"]
     assert_eq!(plan.build.moduleclass.as_deref(), Some("chem"));
     assert!(plan.build.patches.is_empty());
     assert_eq!(plan.profiles[0].versionsuffix, ["-kokkos"]);
+    assert!(plan
+        .dependencies
+        .iter()
+        .filter(|dependency| dependency.name == "hdf5")
+        .all(|dependency| dependency.eb_name.as_deref() == Some("HDF5")));
+    assert!(plan
+        .dependencies
+        .iter()
+        .filter(|dependency| dependency.name == "cmake")
+        .all(|dependency| dependency.solver_excluded));
+    assert!(plan
+        .dependencies
+        .iter()
+        .filter(|dependency| dependency.name == "mpi")
+        .all(|dependency| dependency.virtual_capability.as_deref() == Some("MPI")));
 }
 
 #[test]
