@@ -83,13 +83,12 @@ config_options = ["-Dwith_cli=true"]
         "{missing_checksum}"
     );
 
+    let checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let bundle = plan_new_package(&NewPackageRequest {
         source: source.clone(),
         format: Some(ForeignFormat::CondaForge),
         toolchain: toolchain(),
-        source_checksums: vec![
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
-        ],
+        source_checksums: vec![checksum.into()],
         profile_layers: vec![profile],
         easyconfig_roots: vec![robot],
         stack_policy,
@@ -101,6 +100,16 @@ config_options = ["-Dwith_cli=true"]
     assert_eq!(bundle.locks[0].dependencies[0].name, "zlib");
     assert_eq!(bundle.locks[0].dependencies[0].version, "1.2");
     assert_eq!(bundle.easyconfigs.len(), 1);
+    assert_eq!(bundle.plan.sources[0].sha256.as_deref(), Some(checksum));
+    assert!(!bundle
+        .plan
+        .residuals
+        .iter()
+        .any(|residual| residual.id == "source:missing-sha256"));
+    assert_eq!(
+        bundle.sbom["metadata"]["component"]["hashes"][0]["content"],
+        checksum
+    );
 
     let out = temp.path().join("bundle");
     let written = write_package_bundle(&bundle, &out).expect("write bundle");
@@ -114,7 +123,7 @@ config_options = ["-Dwith_cli=true"]
     assert_eq!(parsed.dependencies[0].version, "1.2");
     assert_eq!(
         parsed.checksums,
-        vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+        vec![checksum]
     );
     assert!(parsed
         .configopts
