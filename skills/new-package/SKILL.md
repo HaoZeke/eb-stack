@@ -190,6 +190,11 @@ Cargo wrapper.
 
 ## Hermes build-evaluation loop
 
+Hermes is the single campaign-owner role, not a required orchestration
+product. It owns classification, repair decisions, retries, and the final
+claim ladder. OMP workers are optional concurrent participants that use only
+the campaign finding queue for shared coordination.
+
 Use one durable state path for the package:
 
 ```sh

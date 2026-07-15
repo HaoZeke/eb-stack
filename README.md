@@ -197,6 +197,11 @@ The runnable local target defaults to two parallel EasyBuild jobs so memory-heav
 
 For a local public example, build `skills/new-package/container/rocky9/Containerfile`, populate `/tmp/eb-stack/robot`, and use `examples/targets/local-podman.toml`. Keep bundles below `/tmp/eb-stack/bundles` so host and container paths match.
 
+Hermes and OMP name campaign roles, not required orchestration software.
+Hermes is the single owner that reads typed findings, applies repairs, and
+retries through the requested claim rung. OMP workers are optional concurrent
+participants that coordinate exclusively through finding ownership.
+
 Campaign failures persist as typed findings. OMP workers coordinate repairs through owned queue operations:
 
 ```sh

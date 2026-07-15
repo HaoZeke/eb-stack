@@ -5,6 +5,12 @@ A campaign turns a resolved package bundle into empirical build and binary
 evidence on one named target. The JSON state is durable, resumable, and the
 coordination surface for Hermes and OMP workers.
 
+Hermes and OMP are role names rather than required orchestration software.
+Hermes is the single campaign owner that classifies findings, applies or
+coordinates repairs, and retries through the requested claim rung. OMP workers
+are optional concurrent participants; their only shared coordination surface
+is finding ownership in the campaign state.
+
 * Run and inspect
 
 #+begin_src bash
