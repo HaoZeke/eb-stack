@@ -63,11 +63,11 @@ pub fn solve_package_profile_with_hierarchy(
             .eb_name
             .clone()
             .unwrap_or_else(|| match_robot_name(&dependency.name, candidates));
-        let foreign_build_only = dependency
-            .roles
-            .iter()
-            .all(|role| matches!(role, DependencyRole::Build | DependencyRole::Test));
-        let build_only = foreign_build_only && is_easybuild_build_tool(&name);
+        let build_only = !dependency.roles.is_empty()
+            && dependency
+                .roles
+                .iter()
+                .all(|role| matches!(role, DependencyRole::Build | DependencyRole::Test));
         direct_roles
             .entry(name.clone())
             .and_modify(|existing| *existing &= build_only)
@@ -178,31 +178,6 @@ fn normalize_package_identity(name: &str) -> String {
         .filter(|character| character.is_ascii_alphanumeric())
         .flat_map(char::to_lowercase)
         .collect()
-}
-
-fn is_easybuild_build_tool(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "autoconf"
-            | "automake"
-            | "autotools"
-            | "bazel"
-            | "bison"
-            | "cargo-c"
-            | "cmake"
-            | "cython"
-            | "flex"
-            | "gmake"
-            | "make"
-            | "meson"
-            | "ninja"
-            | "patchelf"
-            | "pkg-config"
-            | "pkgconf"
-            | "rust"
-            | "scons"
-            | "swig"
-    )
 }
 
 fn admit_stack_pin_closures(
