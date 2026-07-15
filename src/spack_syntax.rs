@@ -201,18 +201,24 @@ impl<'a> StaticEvaluator<'a> {
                 .any(|body| self.statement_mentions_directive(body))
             {
                 self.residual(
-                    &statement.iter,
+                    statement.iter.as_ref(),
                     "dynamic for-loop contains package directives",
                 );
             }
             return;
         };
         let Some(values) = iteration_values(iterable) else {
-            self.residual(&statement.iter, "non-iterable static for-loop value");
+            self.residual(
+                statement.iter.as_ref(),
+                "non-iterable static for-loop value",
+            );
             return;
         };
         if values.len() > 1024 {
-            self.residual(&statement.iter, "static for-loop exceeds 1024 values");
+            self.residual(
+                statement.iter.as_ref(),
+                "static for-loop exceeds 1024 values",
+            );
             return;
         }
         if values.is_empty() {
@@ -224,7 +230,7 @@ impl<'a> StaticEvaluator<'a> {
                 self.walk_statements(&statement.body);
             } else {
                 self.residual(
-                    &statement.target,
+                    statement.target.as_ref(),
                     "for-loop target cannot bind static value",
                 );
                 return;
@@ -275,7 +281,7 @@ impl<'a> StaticEvaluator<'a> {
                 .any(|body| self.statement_mentions_directive(body)) =>
             {
                 self.residual(
-                    &statement.test,
+                    statement.test.as_ref(),
                     "dynamic if-statement contains package directives",
                 );
             }
