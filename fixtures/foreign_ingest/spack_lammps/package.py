@@ -46,6 +46,24 @@ class Lammps(CMakePackage, CudaPackage, ROCmPackage, PythonExtension):
 
     variant("mpi", default=True, description="Build with MPI")
     variant("openmp", default=True, description="Build with OpenMP")
+    variant("kokkos", default=False, description="Build with Kokkos")
+    variant("kspace", default=True, description="Build the KSPACE package")
+    variant(
+        "fft",
+        default="fftw3",
+        when="+kspace",
+        description="FFT library for KSPACE package",
+        values=("kiss", "fftw3", "mkl", "nvpl"),
+        multi=False,
+    )
+    variant(
+        "fft_kokkos",
+        default="fftw3",
+        when="@20240417: +kspace+kokkos",
+        description="FFT library for Kokkos-enabled KSPACE package",
+        values=("kiss", "fftw3", "mkl", "mkl_gpu", "nvpl", "hipfft", "cufft"),
+        multi=False,
+    )
 
     depends_on("c", type="build")
     depends_on("cxx", type="build")
@@ -53,6 +71,10 @@ class Lammps(CMakePackage, CudaPackage, ROCmPackage, PythonExtension):
     depends_on("mpi", when="+mpi")
     depends_on("kokkos+shared@3.1:", when="@20200505:+kokkos")
     depends_on("kokkos@4.6.02:", when="@20250722:+kokkos+kspace")
+    depends_on("fftw-api@3", when="+kspace fft=fftw3")
+    depends_on("mkl", when="+kspace fft=mkl")
+    depends_on("fftw-api@3", when="+kokkos+kspace fft_kokkos=fftw3")
+    depends_on("mkl", when="+kokkos+kspace fft_kokkos=mkl")
     depends_on(
         "scafacos cflags=-fPIC cxxflags=-fPIC fflags=-fPIC",
         when="+scafacos+lib",
