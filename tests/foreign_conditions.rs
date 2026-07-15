@@ -169,6 +169,32 @@ fn conda_keeps_mutually_exclusive_platform_selectors() {
 }
 
 #[test]
+fn conda_classic_selectors_control_cuda_dependencies() {
+    let recipe = parse_foreign_path(
+        &fixture("fixtures/foreign_ingest/conda_lammps/meta.yaml"),
+        Some(ForeignFormat::CondaForge),
+    )
+    .expect("parse conda-forge LAMMPS recipe");
+    let cuda_versions = recipe
+        .dependencies
+        .iter()
+        .filter(|dependency| dependency.name == "cuda-version")
+        .collect::<Vec<_>>();
+    assert_eq!(cuda_versions.len(), 2, "build and host CUDA markers");
+    assert!(cuda_versions
+        .iter()
+        .all(|dependency| !dependency.condition.evaluate(&ConditionContext::default())));
+
+    let enabled = ConditionContext {
+        variables: BTreeMap::from([("cuda_compiler_version".into(), "12.8".into())]),
+        ..ConditionContext::default()
+    };
+    assert!(cuda_versions
+        .iter()
+        .all(|dependency| dependency.condition.evaluate(&enabled)));
+}
+
+#[test]
 fn unconditional_dependencies_use_always_condition() {
     let recipe = parse_foreign_path(
         &fixture("fixtures/foreign_ingest/spack_qmcpack/package.py"),
