@@ -181,7 +181,7 @@ fn render_sources(plan: &PackagePlan) -> (String, String) {
         .sources
         .iter()
         .filter_map(|source| {
-            source
+            let url = source
                 .url
                 .clone()
                 .or_else(|| match (&source.git, &source.tag) {
@@ -191,9 +191,9 @@ fn render_sources(plan: &PackagePlan) -> (String, String) {
                     )),
                     (Some(git), _) => Some(git.clone()),
                     _ => None,
-                })
+                })?;
+            Some(render_source(source, &url))
         })
-        .map(|source| format!("'{}'", escape_single(&source)))
         .collect::<Vec<_>>();
     let checksums = plan
         .sources
@@ -205,6 +205,58 @@ fn render_sources(plan: &PackagePlan) -> (String, String) {
         format!("sources = [{}]", sources.join(", ")),
         format!("checksums = [{}]", checksums.join(", ")),
     )
+}
+
+fn render_source(source: &crate::package::SourceArtifact, url: &str) -> String {
+    let Some(target) = source.target_directory.as_deref() else {
+        return format!("'{}'", escape_single(url));
+    };
+    let Some((source_url, download_filename)) = split_source_url(url) else {
+        return format!("'{}'", escape_single(url));
+    };
+    if !safe_relative_target(target) || !is_tar_archive(download_filename) {
+        return format!("'{}'", escape_single(url));
+    }
+
+    let filename = source.filename.as_deref().unwrap_or(download_filename);
+    let mut fields = vec![format!("'source_urls': ['{}']", escape_single(source_url))];
+    if source.filename.is_some() {
+        fields.push(format!(
+            "'download_filename': '{}'",
+            escape_single(download_filename)
+        ));
+    }
+    fields.push(format!("'filename': '{}'", escape_single(filename)));
+    fields.push(format!(
+        "'extract_cmd': 'mkdir -p %(builddir)s/{target} && tar -xf %s -C \
+         %(builddir)s/{target} --strip-components=1'"
+    ));
+    format!("{{{}}}", fields.join(", "))
+}
+
+fn split_source_url(url: &str) -> Option<(&str, &str)> {
+    let (directory, filename) = url.rsplit_once('/')?;
+    (!filename.is_empty()).then_some((&url[..directory.len() + 1], filename))
+}
+
+fn safe_relative_target(target: &str) -> bool {
+    !target.is_empty()
+        && !target.starts_with('/')
+        && target.split('/').all(|component| {
+            !matches!(component, "" | "." | "..")
+                && component
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '+'))
+        })
+}
+
+fn is_tar_archive(filename: &str) -> bool {
+    let filename = filename.to_ascii_lowercase();
+    [
+        ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".tar.zst", ".tzst",
+    ]
+    .iter()
+    .any(|suffix| filename.ends_with(suffix))
 }
 
 fn render_dependency(
