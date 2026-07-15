@@ -148,7 +148,7 @@ fn render_easyconfig(plan: &PackagePlan, lock: &ProfileLock, versionsuffix: &str
         .collect::<Vec<_>>();
     let moduleclass = plan.build.moduleclass.as_deref().unwrap_or("lib");
 
-    format!(
+    let rendered = format!(
         "easyblock = '{easyblock}'\n\n\
 name = '{name}'\n\
 version = '{version}'\n\
@@ -173,7 +173,8 @@ moduleclass = '{moduleclass}'\n",
         toolchain_version = escape_single(&plan.build.toolchain.version),
         build_dependencies = render_list(&build_dependencies),
         runtime_dependencies = render_list(&runtime_dependencies),
-    )
+    );
+    crate::eb_style::format_style(&rendered).text
 }
 
 fn render_sources(plan: &PackagePlan) -> (String, String) {
