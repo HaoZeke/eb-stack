@@ -246,6 +246,52 @@ fn emitted_dependencies_preserve_locked_toolchain_and_versionsuffix_identity() {
 }
 
 #[test]
+fn conda_target_directories_emit_rattler_compatible_source_staging() {
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/foreign_ingest/conda_eon/recipe.yaml");
+    let recipe = parse_foreign_path(&source, Some(ForeignFormat::CondaForge)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.profiles = vec![ProductProfile {
+        name: "default".into(),
+        default: true,
+        versionsuffix: Vec::new(),
+        features: BTreeMap::new(),
+        parameters: BTreeMap::new(),
+        toolchain_options: BTreeMap::new(),
+        config_options: Vec::new(),
+        verification_commands: Vec::new(),
+    }];
+    plan.outputs = vec![OutputRequest {
+        profile: "default".into(),
+        stack: "foss-2026.1".into(),
+    }];
+    let lock = ProfileLock {
+        schema_version: PROFILE_LOCK_SCHEMA_VERSION,
+        package: "eOn".into(),
+        version: "2.16.0".into(),
+        profile: "default".into(),
+        toolchain: toolchain(),
+        versionsuffix: String::new(),
+        dependencies: Vec::new(),
+        pin_outcomes: Vec::new(),
+        exclusions: Vec::new(),
+        solver: "resolvo".into(),
+    };
+
+    let emitted = emit_profile_easyconfigs(&plan, &[lock]).expect("emit");
+    let text = &emitted[0].text;
+    assert!(text.contains(
+        "'source_urls': ['https://github.com/OmniPotentRPC/rgpot/archive/refs/tags/']"
+    ));
+    assert!(text.contains("'filename': 'v2.2.1.tar.gz'"));
+    assert!(text.contains(
+        "'extract_cmd': 'mkdir -p %(builddir)s/subprojects/rgpot && tar -xf %s -C \
+         %(builddir)s/subprojects/rgpot --strip-components=1'"
+    ));
+    assert!(text.contains("%(builddir)s/readcon-core-src --strip-components=1"));
+}
+
+#[test]
 fn profile_lock_is_created_by_resolvo_with_stack_preferences() {
     let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
     let mut plan = package_plan_from_foreign(&recipe, &toolchain());
