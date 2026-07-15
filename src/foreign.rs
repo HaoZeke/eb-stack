@@ -27,6 +27,7 @@
 //! in their dedicated stages.
 
 use crate::package::{ConditionExpr, ConditionPredicate, Confidence, Provenance, SourceSpan};
+use crate::spack_syntax::{parse_spack_syntax, StaticCall, StaticValue};
 use chrono::NaiveDate;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -1106,30 +1107,20 @@ fn sanitize_pkg_name(name: &str) -> String {
 fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let mut notes = Vec::new();
     notes.push("Spack package.py: restricted static parse (no Python execution)".into());
-
-    // class Name(Base) or class Name(Base1, Base2, ...)
-    let class_re = Regex::new(r"(?m)^class\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*:")
-        .map_err(|e| ForeignError::Parse(e.to_string()))?;
-    let class_cap = class_re
-        .captures(text)
-        .ok_or_else(|| ForeignError::Parse("spack: no class Name(...): found".into()))?;
-    let class_name = class_cap.get(1).unwrap().as_str();
-    let bases_raw = class_cap.get(2).unwrap().as_str();
-    let bases: Vec<String> = bases_raw
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
+    let syntax = parse_spack_syntax(text).map_err(ForeignError::Parse)?;
+    notes.extend(syntax.residuals.iter().cloned());
+    let class_name = syntax.class_name.as_str();
+    let bases = syntax.bases.clone();
     let name = spack_class_to_pkg_name(class_name);
     let mut build_system_hints = bases.clone();
     notes.push(format!("class {class_name} bases: {}", bases.join(", ")));
 
-    let homepage = spack_string_attr(text, "homepage");
-    let url = spack_string_attr(text, "url");
-    let git = spack_string_attr(text, "git");
+    let homepage = static_attribute_string(&syntax.attributes, "homepage");
+    let url = static_attribute_string(&syntax.attributes, "url");
+    let git = static_attribute_string(&syntax.attributes, "git");
 
     // version("X", sha256="...", tag="...", commit="...", url="...")
-    let versions = parse_spack_versions(text)?;
+    let versions = parse_spack_versions(&syntax.calls)?;
     if versions.is_empty() {
         return Err(ForeignError::Parse(
             "spack: no version(\"...\") directives found".into(),
@@ -1155,9 +1146,13 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
         ));
     }
 
-    let dependencies = parse_spack_depends_on(text, &mut notes);
+    let dependencies = parse_spack_depends_on(text, &syntax.calls, &mut notes);
 
-    let resource_calls = python_call_spans(text, "resource");
+    let resource_calls = syntax
+        .calls
+        .iter()
+        .filter(|call| call.name == "resource")
+        .collect::<Vec<_>>();
     if !resource_calls.is_empty() {
         notes.push(format!(
             "{} conditional resource() fetch(es) included in planned sources",
@@ -1204,22 +1199,26 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let placement_re = Regex::new(r#"placement\s*=\s*\{[^:}]+:\s*[\"']([^\"']+)[\"']\s*\}"#)
         .expect("resource placement re");
     for call in resource_calls {
-        let inner = &text[call.inner_start..call.end.saturating_sub(1)];
-        if let Some(url) = spack_string_kwarg(inner, "url") {
-            let inherited_condition = spack_scoped_when_condition(text, call.start, &mut notes);
-            let direct_condition = spack_string_kwarg(inner, "when")
+        if let Some(url) = call.kw_string("url") {
+            let inherited_condition = static_scoped_condition(call);
+            let direct_condition = call
+                .kw_string("when")
                 .as_deref()
                 .map(parse_spack_condition)
                 .unwrap_or(ConditionExpr::Always);
-            let target_directory = spack_string_kwarg(inner, "destination").or_else(|| {
-                placement_re
-                    .captures(inner)
-                    .and_then(|capture| capture.get(1).map(|value| value.as_str().to_string()))
-            });
+            let target_directory = call
+                .kw_string("destination")
+                .or_else(|| static_placement_target(call.kw_value("placement")))
+                .or_else(|| {
+                    let original = &text[call.start..call.end];
+                    placement_re
+                        .captures(original)
+                        .and_then(|capture| capture.get(1).map(|value| value.as_str().to_string()))
+                });
             sources.push(ForeignSource {
                 url: Some(url),
-                filename: spack_string_kwarg(inner, "name"),
-                sha256: spack_string_kwarg(inner, "sha256"),
+                filename: call.kw_string("name"),
+                sha256: call.kw_string("sha256"),
                 target_directory,
                 condition: condition_all(inherited_condition, direct_condition),
                 ..Default::default()
@@ -1228,9 +1227,9 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
     }
 
     let summary = spack_docstring(text);
-    let license = spack_license(text);
-    let variants = parse_spack_variants(text, &mut notes);
-    let rules = parse_spack_rules(text, &mut notes);
+    let license = spack_license(&syntax.calls);
+    let variants = parse_spack_variants(text, &syntax.calls, &mut notes);
+    let rules = parse_spack_rules(text, &syntax.calls, &mut notes);
 
     // Meson/CMake from bases
     if build_system_hints.is_empty() {
@@ -1245,10 +1244,11 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
         ));
     }
 
-    let patch_n = Regex::new(r"(?m)^\s*patch\s*\(")
-        .ok()
-        .map(|r| r.find_iter(text).count())
-        .unwrap_or(0);
+    let patch_n = syntax
+        .calls
+        .iter()
+        .filter(|call| call.name == "patch")
+        .count();
     let patches = Vec::new();
     if patch_n > 0 {
         notes.push(format!(
@@ -1278,109 +1278,41 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
     })
 }
 
-fn spack_license(text: &str) -> Option<String> {
-    // license("MIT") or license("NCSA", checked_by=...)
-    let re = Regex::new(r#"(?m)^\s*license\s*\(\s*[\"']([^\"']+)[\"']"#).ok()?;
-    re.captures(text)
-        .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
+fn static_attribute_string(
+    attributes: &std::collections::BTreeMap<String, StaticValue>,
+    name: &str,
+) -> Option<String> {
+    attributes.get(name)?.as_string()
 }
 
-#[derive(Debug, Clone, Copy)]
-struct PythonCallSpan {
-    start: usize,
-    inner_start: usize,
-    end: usize,
-}
-
-fn python_call_spans(text: &str, name: &str) -> Vec<PythonCallSpan> {
-    let pattern = format!(r"(?m)^[ \t]*{}\s*\(", regex::escape(name));
-    let Ok(regex) = Regex::new(&pattern) else {
-        return Vec::new();
+fn static_placement_target(value: Option<&StaticValue>) -> Option<String> {
+    let StaticValue::Mapping(entries) = value? else {
+        return None;
     };
-    regex
-        .find_iter(text)
-        .filter_map(|matched| {
-            let relative_name = matched.as_str().find(name)?;
-            let start = matched.start() + relative_name;
-            let inner_start = matched.end();
-            let end = python_call_end(text, inner_start)?;
-            Some(PythonCallSpan {
-                start,
-                inner_start,
-                end,
-            })
-        })
-        .collect()
+    entries.first()?.1.as_string()
 }
 
-fn python_call_end(text: &str, inner_start: usize) -> Option<usize> {
-    let bytes = text.as_bytes();
-    let mut index = inner_start;
-    let mut depth = 1usize;
-    let mut quote: Option<u8> = None;
-    let mut triple = false;
-
-    while index < bytes.len() {
-        if let Some(delimiter) = quote {
-            if bytes[index] == b'\\' {
-                index = (index + 2).min(bytes.len());
-                continue;
-            }
-            if triple {
-                if index + 2 < bytes.len()
-                    && bytes[index] == delimiter
-                    && bytes[index + 1] == delimiter
-                    && bytes[index + 2] == delimiter
-                {
-                    quote = None;
-                    triple = false;
-                    index += 3;
-                    continue;
-                }
-            } else if bytes[index] == delimiter {
-                quote = None;
-                index += 1;
-                continue;
-            }
-            index += 1;
-            continue;
-        }
-
-        match bytes[index] {
-            b'#' => {
-                while index < bytes.len() && bytes[index] != b'\n' {
-                    index += 1;
-                }
-            }
-            b'\'' | b'"' => {
-                let delimiter = bytes[index];
-                triple = index + 2 < bytes.len()
-                    && bytes[index + 1] == delimiter
-                    && bytes[index + 2] == delimiter;
-                quote = Some(delimiter);
-                index += if triple { 3 } else { 1 };
-            }
-            b'(' => {
-                depth += 1;
-                index += 1;
-            }
-            b')' => {
-                depth -= 1;
-                index += 1;
-                if depth == 0 {
-                    return Some(index);
-                }
-            }
-            _ => index += 1,
-        }
-    }
-    None
+fn static_scoped_condition(call: &StaticCall) -> ConditionExpr {
+    call.scoped_when
+        .iter()
+        .map(|condition| parse_spack_condition(condition))
+        .fold(ConditionExpr::Always, condition_all)
 }
 
-fn parse_spack_variants(text: &str, notes: &mut Vec<String>) -> Vec<ForeignVariant> {
+fn spack_license(calls: &[StaticCall]) -> Option<String> {
+    calls
+        .iter()
+        .find(|call| call.name == "license")?
+        .arg_string(0)
+}
+
+fn parse_spack_variants(
+    text: &str,
+    calls: &[StaticCall],
+    notes: &mut Vec<String>,
+) -> Vec<ForeignVariant> {
     let mut out = Vec::new();
-    for call in python_call_spans(text, "variant") {
-        let inner = &text[call.inner_start..call.end.saturating_sub(1)];
+    for call in calls.iter().filter(|call| call.name == "variant") {
         let provenance = provenance_for_range(
             text,
             call.start,
@@ -1388,7 +1320,7 @@ fn parse_spack_variants(text: &str, notes: &mut Vec<String>) -> Vec<ForeignVaria
             "spack-static",
             Confidence::Exact,
         );
-        if let Some(variant) = parse_spack_variant_call(inner, provenance) {
+        if let Some(variant) = parse_spack_variant_call(call, provenance) {
             out.push(variant);
         }
     }
@@ -1401,40 +1333,32 @@ fn parse_spack_variants(text: &str, notes: &mut Vec<String>) -> Vec<ForeignVaria
     out
 }
 
-fn parse_spack_variant_call(inner: &str, provenance: Provenance) -> Option<ForeignVariant> {
-    let name_re = Regex::new(r#"^\s*[\"']([^\"']+)[\"']"#).ok()?;
-    let name = name_re.captures(inner)?.get(1)?.as_str().to_string();
-    let default = Regex::new(r#"default\s*=\s*([^\s,]+)"#)
-        .ok()
-        .and_then(|r| r.captures(inner))
-        .and_then(|c| {
-            c.get(1).map(|m| {
-                m.as_str()
-                    .trim_matches(|c| c == '"' || c == '\'')
-                    .to_string()
-            })
-        });
-    let description = Regex::new(r#"description\s*=\s*[\"']([^\"']*)[\"']"#)
-        .ok()
-        .and_then(|r| r.captures(inner))
-        .and_then(|c| c.get(1).map(|m| m.as_str().to_string()));
+fn parse_spack_variant_call(call: &StaticCall, provenance: Provenance) -> Option<ForeignVariant> {
+    let when = call.kw_string("when");
+    let direct = when
+        .as_deref()
+        .map(parse_spack_condition)
+        .unwrap_or(ConditionExpr::Always);
     Some(ForeignVariant {
-        name,
-        default,
-        description,
-        condition: ConditionExpr::Always,
+        name: call.arg_string(0)?,
+        default: call.kw_string("default"),
+        description: call.kw_string("description"),
+        condition: condition_all(static_scoped_condition(call), direct),
         provenance: vec![provenance],
     })
 }
 
-fn parse_spack_rules(text: &str, notes: &mut Vec<String>) -> Vec<ForeignRule> {
+fn parse_spack_rules(
+    text: &str,
+    calls: &[StaticCall],
+    notes: &mut Vec<String>,
+) -> Vec<ForeignRule> {
     let mut rules = Vec::new();
     for (name, kind) in [
         ("conflicts", ForeignRuleKind::Conflict),
         ("requires", ForeignRuleKind::Requirement),
     ] {
-        for call in python_call_spans(text, name) {
-            let inner = &text[call.inner_start..call.end.saturating_sub(1)];
+        for call in calls.iter().filter(|call| call.name == name) {
             let provenance = provenance_for_range(
                 text,
                 call.start,
@@ -1442,7 +1366,7 @@ fn parse_spack_rules(text: &str, notes: &mut Vec<String>) -> Vec<ForeignRule> {
                 "spack-static",
                 Confidence::Exact,
             );
-            if let Some(rule) = parse_spack_rule_call(inner, kind, provenance) {
+            if let Some(rule) = parse_spack_rule_call(call, kind, provenance) {
                 rules.push(rule);
             }
         }
@@ -1470,27 +1394,21 @@ fn parse_spack_rules(text: &str, notes: &mut Vec<String>) -> Vec<ForeignRule> {
 }
 
 fn parse_spack_rule_call(
-    inner: &str,
+    call: &StaticCall,
     kind: ForeignRuleKind,
     provenance: Provenance,
 ) -> Option<ForeignRule> {
-    let spec = Regex::new(r#"^\s*[\"']([^\"']+)[\"']"#)
-        .ok()?
-        .captures(inner)?
-        .get(1)?
-        .as_str()
-        .to_string();
-    let when = spack_string_kwarg(inner, "when");
-    let condition = when
+    let when = call.kw_string("when");
+    let direct = when
         .as_deref()
         .map(parse_spack_condition)
         .unwrap_or(ConditionExpr::Always);
     Some(ForeignRule {
         kind,
-        spec,
+        spec: call.arg_string(0)?,
         when,
-        condition,
-        message: spack_string_kwarg(inner, "msg"),
+        condition: condition_all(static_scoped_condition(call), direct),
+        message: call.kw_string("msg"),
         provenance,
     })
 }
@@ -1505,35 +1423,22 @@ struct SpackVersion {
     url: Option<String>,
 }
 
-fn parse_spack_versions(text: &str) -> Result<Vec<SpackVersion>, ForeignError> {
-    let mut out = Vec::new();
-    for call in python_call_spans(text, "version") {
-        let inner = &text[call.inner_start..call.end.saturating_sub(1)];
-        if let Some(version) = parse_spack_version_call(inner) {
-            out.push(version);
-        }
-    }
-    Ok(out)
+fn parse_spack_versions(calls: &[StaticCall]) -> Result<Vec<SpackVersion>, ForeignError> {
+    Ok(calls
+        .iter()
+        .filter(|call| call.name == "version")
+        .filter_map(parse_spack_version_call)
+        .collect())
 }
 
-fn parse_spack_version_call(inner: &str) -> Option<SpackVersion> {
-    // First positional string is the version id
-    let ver_re = Regex::new(r#"^\s*[\"']([^\"']+)[\"']"#).ok()?;
-    let version = ver_re.captures(inner)?.get(1)?.as_str().to_string();
-    let kw = |key: &str| -> Option<String> {
-        let re = Regex::new(&format!(r#"{key}\s*=\s*[\"']([^\"']*)[\"']"#)).ok()?;
-        re.captures(inner)
-            .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
-    };
+fn parse_spack_version_call(call: &StaticCall) -> Option<SpackVersion> {
     Some(SpackVersion {
-        version,
-        preferred: Regex::new(r"\bpreferred\s*=\s*True\b")
-            .ok()
-            .is_some_and(|regex| regex.is_match(inner)),
-        sha256: kw("sha256"),
-        tag: kw("tag"),
-        commit: kw("commit"),
-        url: kw("url"),
+        version: call.arg_string(0)?,
+        preferred: call.kw_bool("preferred").unwrap_or(false),
+        sha256: call.kw_string("sha256"),
+        tag: call.kw_string("tag"),
+        commit: call.kw_string("commit"),
+        url: call.kw_string("url"),
     })
 }
 
@@ -1597,10 +1502,13 @@ fn materialize_spack_url_for_version(
     ))
 }
 
-fn parse_spack_depends_on(text: &str, notes: &mut Vec<String>) -> Vec<ForeignDep> {
+fn parse_spack_depends_on(
+    text: &str,
+    calls: &[StaticCall],
+    notes: &mut Vec<String>,
+) -> Vec<ForeignDep> {
     let mut out = Vec::new();
-    for call in python_call_spans(text, "depends_on") {
-        let inner = &text[call.inner_start..call.end.saturating_sub(1)];
+    for call in calls.iter().filter(|call| call.name == "depends_on") {
         let provenance = provenance_for_range(
             text,
             call.start,
@@ -1608,10 +1516,7 @@ fn parse_spack_depends_on(text: &str, notes: &mut Vec<String>) -> Vec<ForeignDep
             "spack-static",
             Confidence::Exact,
         );
-        let inherited_condition = spack_scoped_when_condition(text, call.start, notes);
-        if let Some(dependency) =
-            parse_spack_depends_on_call(inner, notes, provenance, inherited_condition)
-        {
+        if let Some(dependency) = parse_spack_depends_on_call(call, notes, provenance) {
             out.push(dependency);
         }
     }
@@ -1619,57 +1524,26 @@ fn parse_spack_depends_on(text: &str, notes: &mut Vec<String>) -> Vec<ForeignDep
 }
 
 fn parse_spack_depends_on_call(
-    inner: &str,
+    call: &StaticCall,
     notes: &mut Vec<String>,
     provenance: Provenance,
-    inherited_condition: ConditionExpr,
 ) -> Option<ForeignDep> {
-    let spec_re = Regex::new(r#"^\s*[\"']([^\"']+)[\"']"#).ok()?;
-    let spec = spec_re.captures(inner)?.get(1)?.as_str();
-    let (dep_name, pin) = split_spack_spec(spec);
+    let spec = call.arg_string(0)?;
+    let (dep_name, pin) = split_spack_spec(&spec);
 
     if matches!(dep_name.as_str(), "c" | "cxx" | "fortran") {
         notes.push(format!("skipped language virtual depends_on({spec})"));
         return None;
     }
 
-    // type="build" or type=("build", "run") or type=["build","run"]
-    let role = {
-        if let Some(c) = Regex::new(r#"type\s*=\s*[\"']([^\"']+)[\"']"#)
-            .ok()
-            .and_then(|r| r.captures(inner))
-        {
-            c.get(1).unwrap().as_str().to_string()
-        } else if let Some(c) = Regex::new(r#"type\s*=\s*[\(\[]([^\)\]]+)[\)\]]"#)
-            .ok()
-            .and_then(|r| r.captures(inner))
-        {
-            // join multiple types
-            let inner_types = c.get(1).unwrap().as_str();
-            let types: Vec<String> = Regex::new(r#"[\"']([^\"']+)[\"']"#)
-                .ok()
-                .map(|r| {
-                    r.captures_iter(inner_types)
-                        .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
-                        .collect()
-                })
-                .unwrap_or_default();
-            if types.is_empty() {
-                "run".into()
-            } else {
-                types.join("+")
-            }
-        } else {
-            "run".into()
-        }
-    };
+    let role = static_dependency_role(call.kw_value("type"));
 
-    let when = spack_string_kwarg(inner, "when");
+    let when = call.kw_string("when");
     let direct_condition = when
         .as_deref()
         .map(parse_spack_condition)
         .unwrap_or(ConditionExpr::Always);
-    let condition = condition_all(inherited_condition, direct_condition);
+    let condition = condition_all(static_scoped_condition(call), direct_condition);
     if let Some(when) = &when {
         notes.push(format!("depends_on({spec}) condition preserved: {when}"));
     }
@@ -1678,106 +1552,28 @@ fn parse_spack_depends_on_call(
         name: spack_dep_to_eb_name(&dep_name),
         pin,
         role,
-        original_spec: Some(spec.into()),
+        original_spec: Some(spec),
         condition,
         provenance: vec![provenance],
     })
 }
 
-fn spack_scoped_when_condition(
-    text: &str,
-    call_start: usize,
-    notes: &mut Vec<String>,
-) -> ConditionExpr {
-    let prefix = &text[..call_start];
-    let call_indent = prefix
-        .rsplit('\n')
-        .next()
-        .map(|line| {
-            line.chars()
-                .take_while(|character| character.is_whitespace())
-                .count()
-        })
-        .unwrap_or(0);
-    let mut scope_indent = call_indent;
-
-    for line in prefix.lines().rev().skip(1) {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
+fn static_dependency_role(value: Option<&StaticValue>) -> String {
+    match value {
+        Some(StaticValue::String(role)) => role.clone(),
+        Some(StaticValue::Sequence(roles)) => {
+            let roles = roles
+                .iter()
+                .filter_map(StaticValue::as_string)
+                .collect::<Vec<_>>();
+            if roles.is_empty() {
+                "run".into()
+            } else {
+                roles.join("+")
+            }
         }
-        let indent = line
-            .chars()
-            .take_while(|character| character.is_whitespace())
-            .count();
-        if indent >= scope_indent {
-            continue;
-        }
-        scope_indent = indent;
-        let Some(expression) = trimmed
-            .strip_prefix("with when(")
-            .and_then(|value| value.strip_suffix("):"))
-        else {
-            continue;
-        };
-        return materialize_spack_scoped_when(expression.trim(), prefix, notes);
+        _ => "run".into(),
     }
-
-    ConditionExpr::Always
-}
-
-fn materialize_spack_scoped_when(
-    expression: &str,
-    prefix: &str,
-    notes: &mut Vec<String>,
-) -> ConditionExpr {
-    if expression.len() >= 2 {
-        let first = expression.as_bytes()[0];
-        let last = expression.as_bytes()[expression.len() - 1];
-        if matches!(first, b'\'' | b'"') && first == last {
-            return parse_spack_condition(&expression[1..expression.len() - 1]);
-        }
-    }
-
-    let binding_pattern = format!(
-        r#"(?m)^[ \t]*for\s+{}\s+in\s*\(([^)]*)\)\s*:\s*$"#,
-        regex::escape(expression)
-    );
-    let values = Regex::new(&binding_pattern)
-        .ok()
-        .and_then(|regex| regex.captures_iter(prefix).last())
-        .and_then(|capture| capture.get(1).map(|values| values.as_str().to_string()))
-        .map(|values| {
-            Regex::new(r#"[\"']([^\"']+)[\"']"#)
-                .ok()
-                .map(|regex| {
-                    regex
-                        .captures_iter(&values)
-                        .filter_map(|capture| capture.get(1))
-                        .map(|value| parse_spack_condition(value.as_str()))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-        })
-        .unwrap_or_default();
-
-    match values.len() {
-        0 => {
-            notes.push(format!(
-                "dynamic scoped when({expression}) could not be materialized; nested directive is inactive"
-            ));
-            ConditionExpr::Never
-        }
-        1 => values.into_iter().next().unwrap_or(ConditionExpr::Never),
-        _ => ConditionExpr::Any(values),
-    }
-}
-
-fn spack_string_kwarg(inner: &str, key: &str) -> Option<String> {
-    let regex = Regex::new(&format!(r#"{key}\s*=\s*[\"']([^\"']*)[\"']"#)).ok()?;
-    regex
-        .captures(inner)
-        .and_then(|capture| capture.get(1).map(|value| value.as_str().to_string()))
 }
 
 fn parse_spack_condition(spec: &str) -> ConditionExpr {
@@ -1957,12 +1753,6 @@ fn split_spack_spec(spec: &str) -> (String, Option<String>) {
         (end > 0).then(|| version[..end].to_string())
     });
     (name, pin)
-}
-
-fn spack_string_attr(text: &str, attr: &str) -> Option<String> {
-    let re = Regex::new(&format!(r#"(?m)^\s*{attr}\s*=\s*[\"']([^\"']+)[\"']"#)).ok()?;
-    re.captures(text)
-        .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
 }
 
 fn spack_docstring(text: &str) -> Option<String> {
