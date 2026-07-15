@@ -323,16 +323,16 @@ impl ConditionPredicate {
             }
             Self::Compiler { name, version } => context.compiler.as_ref().is_some_and(|compiler| {
                 compiler.name.eq_ignore_ascii_case(name)
-                    && version.as_deref().is_none_or(|requirement| {
-                        matches_req(&compiler.version, requirement)
-                    })
+                    && version
+                        .as_deref()
+                        .is_none_or(|requirement| matches_req(&compiler.version, requirement))
             }),
             Self::Toolchain { name, version } => {
                 context.toolchain.as_ref().is_some_and(|toolchain| {
                     toolchain.name.eq_ignore_ascii_case(name)
-                        && version.as_deref().is_none_or(|requirement| {
-                            matches_req(&toolchain.version, requirement)
-                        })
+                        && version
+                            .as_deref()
+                            .is_none_or(|requirement| matches_req(&toolchain.version, requirement))
                 })
             }
             Self::Platform { name } => context
