@@ -181,7 +181,7 @@ versionsuffix = ["-kokkos"]
 }
 
 #[test]
-fn profile_config_rejects_unknown_schema() {
+fn package_config_rejects_unknown_schema() {
     let error =
         PackageConfigLayer::from_toml_str("schema_version = 99").expect_err("unsupported schema");
     assert!(error.to_string().contains("schema version 99"), "{error}");
@@ -205,12 +205,24 @@ easyblock = "auto"
 }
 
 #[test]
-fn public_eon_and_qmcpack_profile_examples_parse() {
+fn public_package_config_examples_parse() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let eon = PackageConfigLayer::from_path(&root.join("examples/profiles/eon.toml"))
-        .expect("eOn profiles");
-    let qmcpack = PackageConfigLayer::from_path(&root.join("examples/profiles/qmcpack.toml"))
-        .expect("QMCPACK profiles");
+    let common = PackageConfigLayer::from_path(&root.join("examples/packages/common.toml"))
+        .expect("common foreign aliases");
+    let eon = PackageConfigLayer::from_path(&root.join("examples/packages/eon.toml"))
+        .expect("eOn package config");
+    let qmcpack = PackageConfigLayer::from_path(&root.join("examples/packages/qmcpack.toml"))
+        .expect("QMCPACK package config");
+    let lammps = PackageConfigLayer::from_path(&root.join("examples/packages/lammps.toml"))
+        .expect("LAMMPS package config");
+    assert_eq!(
+        common
+            .dependencies
+            .as_ref()
+            .and_then(|dependencies| dependencies.aliases.get("py-numpy"))
+            .map(String::as_str),
+        Some("SciPy-bundle")
+    );
     assert_eq!(eon.profiles.len(), 1);
     assert_eq!(
         eon.profiles[0]
@@ -225,5 +237,19 @@ fn public_eon_and_qmcpack_profile_examples_parse() {
     assert_eq!(
         qmcpack.profiles[1].versionsuffix.as_deref(),
         Some(&["-complex".to_string()][..])
+    );
+    assert_eq!(
+        lammps
+            .package
+            .as_ref()
+            .and_then(|package| package.version.as_deref()),
+        Some("22Jul2025_update4")
+    );
+    assert_eq!(
+        lammps
+            .profiles
+            .first()
+            .and_then(|profile| profile.versionsuffix.as_deref()),
+        Some(&["-kokkos".to_string()][..])
     );
 }
