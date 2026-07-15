@@ -74,6 +74,7 @@ pub fn inspect_new_package(
         apply_package_layers(&mut plan, package_layers)
             .map_err(|error| PackageWorkflowError::Config(error.to_string()))?;
     }
+    refresh_checksum_residuals(&mut plan);
     let sbom = package_plan_to_cyclonedx(&plan)
         .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
     Ok((plan, sbom))
@@ -141,8 +142,7 @@ fn apply_source_checksums(
         validate_source_checksum(index, checksum)?;
         source.sha256 = Some(checksum.clone());
     }
-    plan.residuals
-        .retain(|residual| residual.id != "source:missing-sha256");
+    refresh_checksum_residuals(plan);
     Ok(())
 }
 
@@ -162,13 +162,75 @@ fn require_source_checksums(plan: &PackagePlan) -> Result<(), PackageWorkflowErr
     for (index, source) in plan.sources.iter().enumerate() {
         validate_source_checksum(index, source.sha256.as_deref().unwrap_or_default())?;
     }
+    let missing_patches = plan
+        .build
+        .patches
+        .iter()
+        .filter(|patch| patch.sha256.is_none())
+        .map(|patch| patch.filename.clone())
+        .collect::<Vec<_>>();
+    if !missing_patches.is_empty() {
+        return Err(PackageWorkflowError::MissingPatchChecksums(missing_patches));
+    }
+    for patch in &plan.build.patches {
+        validate_patch_checksum(patch)?;
+    }
     Ok(())
+}
+
+fn refresh_checksum_residuals(plan: &mut PackagePlan) {
+    plan.residuals.retain(|residual| {
+        !matches!(
+            residual.id.as_str(),
+            "source:missing-sha256" | "patch:missing-sha256"
+        )
+    });
+    if plan.sources.iter().any(|source| source.sha256.is_none()) {
+        plan.residuals.push(Residual {
+            id: "source:missing-sha256".into(),
+            stage: ResidualStage::Normalize,
+            category: "checksum".into(),
+            severity: ResidualSeverity::Blocking,
+            summary: "one or more source artifacts have no sha256".into(),
+            evidence: None,
+            provenance: None,
+        });
+    }
+    let missing_patches = plan
+        .build
+        .patches
+        .iter()
+        .filter(|patch| patch.sha256.is_none())
+        .map(|patch| patch.filename.as_str())
+        .collect::<Vec<_>>();
+    if !missing_patches.is_empty() {
+        plan.residuals.push(Residual {
+            id: "patch:missing-sha256".into(),
+            stage: ResidualStage::Normalize,
+            category: "checksum".into(),
+            severity: ResidualSeverity::Blocking,
+            summary: "one or more patch artifacts have no sha256".into(),
+            evidence: Some(missing_patches.join(", ")),
+            provenance: None,
+        });
+    }
 }
 
 fn validate_source_checksum(index: usize, checksum: &str) -> Result<(), PackageWorkflowError> {
     if checksum.len() != 64 || !checksum.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(PackageWorkflowError::InvalidSourceChecksum {
             index,
+            checksum: checksum.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_patch_checksum(patch: &PatchArtifact) -> Result<(), PackageWorkflowError> {
+    let checksum = patch.sha256.as_deref().unwrap_or_default();
+    if checksum.len() != 64 || !checksum.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(PackageWorkflowError::InvalidPatchChecksum {
+            filename: patch.filename.clone(),
             checksum: checksum.to_string(),
         });
     }
@@ -460,6 +522,12 @@ pub enum PackageWorkflowError {
         "source checksum required for artifact positions {0:?}; repeat --source-checksum once per source artifact"
     )]
     MissingSourceChecksums(Vec<usize>),
+    #[error("patch checksum required for artifacts {0:?}")]
+    MissingPatchChecksums(Vec<String>),
+    #[error(
+        "patch checksum for {filename} must be exactly 64 hexadecimal characters, got {checksum:?}"
+    )]
+    InvalidPatchChecksum { filename: String, checksum: String },
     #[error("EasyBuild robot parse: {0}")]
     Robot(String),
     #[error("package profile solve: {0}")]
