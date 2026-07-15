@@ -154,5 +154,5 @@ Resolved findings remain part of the audit trail.
 
 Hermes owns this end-to-end loop. OMP workers use finding ownership to divide
 residual diagnosis without racing on the state file. The executable procedures
-are [[file:../../../skills/new-package/SKILL.md][new package]] and
-[[file:../../../skills/annual-bump/SKILL.md][annual bump]].
+are [[https://github.com/HaoZeke/eb-stack/blob/main/skills/new-package/SKILL.md][new package]]
+and [[https://github.com/HaoZeke/eb-stack/blob/main/skills/annual-bump/SKILL.md][annual bump]].

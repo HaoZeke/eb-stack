@@ -68,6 +68,10 @@ jobs:
           test -f docs/build/reference/rust-api.html
           test -f docs/build/crates/eb_stack/lib.html
           grep -q 'plan_new_package' docs/build/crates/eb_stack/lib.html
+          test -f docs/build/reference/package-bundles.html
+          test -f docs/build/reference/targets.html
+          test -f docs/build/reference/campaigns.html
+          scripts/check-doc-links.sh docs/build
           # light/dark logos present
           test -f docs/build/_static/logo-light.svg
           test -f docs/build/_static/logo-dark.svg

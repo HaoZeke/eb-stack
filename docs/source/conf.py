@@ -99,5 +99,17 @@ html_sidebars = {
     ],
 }
 
+
+def _tracked_source_context(app, pagename, templatename, context, doctree):
+    """Route edit links to tracked Org sources, not generated RST."""
+    if pagename.startswith("crates/"):
+        context["page_source_suffix"] = None
+    else:
+        context["page_source_suffix"] = ".org"
+
+
+def setup(app):
+    app.connect("html-page-context", _tracked_source_context)
+
 # sphinx-sitemap
 sitemap_url_scheme = "{link}"

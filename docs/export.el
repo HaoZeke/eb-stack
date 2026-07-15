@@ -15,6 +15,19 @@
 (require 'ob-dot)
 (setq org-confirm-babel-evaluate nil)
 
+;; Sphinx resolves :doc: roles to rendered pages.  ox-rst otherwise exports
+;; file links between Org sources as literal links to generated .rst files.
+(defun eb-stack-rst-doc-link-filter (text backend _info)
+  (if (org-export-derived-backend-p backend 'rst)
+      (replace-regexp-in-string
+       "`\\([^`]+\\) <\\([^>]+\\)\\.rst>`_"
+       ":doc:`\\1 <\\2>`"
+       text)
+    text))
+
+(add-to-list 'org-export-filter-link-functions
+             #'eb-stack-rst-doc-link-filter)
+
 ;; Define the Publishing Project
 (setq org-publish-project-alist
       '(("sphinx-rst"
