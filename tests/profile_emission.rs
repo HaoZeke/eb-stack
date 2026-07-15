@@ -245,8 +245,7 @@ fn conditional_spack_resources_follow_the_selected_profile() {
     assert!(!without_mesont[0].text.contains("C_10_10.mesocnt"));
 
     plan.profiles[0].features.insert("mesont".into(), true);
-    let with_mesont =
-        emit_profile_easyconfigs(&plan, &[lock]).expect("emit profile with MESONT");
+    let with_mesont = emit_profile_easyconfigs(&plan, &[lock]).expect("emit profile with MESONT");
     assert!(with_mesont[0].text.contains("C_10_10.mesocnt"));
 }
 
