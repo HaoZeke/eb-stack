@@ -231,6 +231,10 @@ fn public_package_config_examples_parse() {
         ("py-wheel", "Python"),
         ("py-setuptools", "Python"),
         ("py-build", "build"),
+        ("libnetcdf", "netCDF"),
+        ("libpnetcdf", "PnetCDF"),
+        ("libcurl", "cURL"),
+        ("voro", "Voro++"),
     ] {
         assert_eq!(
             common
