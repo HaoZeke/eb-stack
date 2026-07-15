@@ -106,13 +106,17 @@ jobs:
       - name: Parse, materialize, solve, route, and coordinate campaigns
         run: |
           cargo test --locked \
+            --test container_contract \
             --test foreign_conditions \
+            --test foreign_ingest \
             --test foreign_package_plan \
+            --test manifest_requires_resolvo \
             --test package_model \
             --test package_config \
             --test profile_emission \
             --test package_workflow \
             --test bump_workflow \
+            --test stack_policy \
             --test canonical_cli \
             --test target_config \
             --test campaign \
