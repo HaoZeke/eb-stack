@@ -201,6 +201,12 @@ eb-stack campaign run \
   --state work/qmcpack.campaign.json
 ```
 
+`campaign run` is a foreground process. Keep it under the site's normal
+terminal or service supervisor and inspect `campaign status` from another
+shell. If its controller exits, verify that the routed container, scheduler
+job, or host command is absent before rerunning the same state. The state lock
+releases automatically, but a remote workload can survive its controller.
+
 Hermes owns this loop until the requested claim is established:
 
 1. Read `campaign status`; inspect the newest open finding and its full command evidence.

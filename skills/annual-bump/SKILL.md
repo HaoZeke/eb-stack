@@ -119,6 +119,12 @@ eb-stack campaign run \
   --state work/gromacs-2024a.campaign.json
 ```
 
+Keep the foreground campaign under the site's normal terminal or service
+supervisor. Inspect it from another shell. If the controller exits, confirm
+that its routed workload is absent before rerunning the same state; the
+OS-backed state guard releases automatically, while a remote workload can
+survive its controller.
+
 Hermes classifies each failure and drives recipe, policy, or target repair. OMP workers coordinate through `campaign finding claim` and `campaign finding resolve`; they never edit campaign JSON or work the same finding concurrently. Re-run the campaign until the requested claim rung is green.
 
 Build failure classes are evidence, not solver contradictions. A SAT-compatible dependency set can still fail to configure, compile, link, test, install, or pass sanity checks on a concrete target.

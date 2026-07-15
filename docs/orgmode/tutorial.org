@@ -156,6 +156,13 @@ eb-stack campaign run \
 eb-stack campaign status --state "$STATE"
 #+end_src
 
+~campaign run~ stays in the foreground. Keep that shell under the process
+supervisor used by the target site and use another shell for ~campaign status~.
+If the controlling process is interrupted, first confirm that the routed
+container, scheduler job, or host command has stopped, then rerun with the same
+state path. The state remains the audit record; do not start a duplicate state
+for the same bundle.
+
 If the campaign fails, claim its finding before editing:
 
 #+begin_src bash

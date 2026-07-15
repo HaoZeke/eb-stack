@@ -158,6 +158,13 @@ eb-stack campaign run \
   --state /tmp/eon.campaign.json
 ```
 
+`campaign run` is a foreground command. Keep it under the site's normal
+terminal or service supervisor and inspect the state from another shell with
+`campaign status`. Only one run, claim, or resolution can write a state file at
+a time. The process lock releases automatically if the controlling process
+exits; before rerunning an interrupted state, confirm that its routed
+container, scheduler job, or host command is no longer active.
+
 Transport may be local or SSH; execution may be direct or Slurm; runtime may be host, Podman, or Docker. Site hostnames, paths, modules, and scheduler sizing belong in the site layer. Container targets must use ABI-specific install, work, and temporary roots; only source archives should be shared across runtimes.
 
 The runnable local target defaults to two parallel EasyBuild jobs so memory-heavy C++ compilations remain usable on common workstations. Treat `EASYBUILD_PARALLEL`, scheduler CPUs, and scheduler memory as one allocation: raise parallelism only when the target has measured headroom. A compiler process killed by the kernel or exhausted virtual memory is a retryable `resource` finding, not evidence that the selected dependency is incompatible.
@@ -177,7 +184,9 @@ eb-stack campaign finding resolve --state /tmp/eon.campaign.json \
   --change examples/profiles/eon.toml
 ```
 
-The state file retains attempts, commands, compact logs, ownership, repair evidence, and the claim ladder. A successful retry supersedes the matching open finding.
+The state file retains attempts, the active recipe, typed failure commands and
+compact logs, ownership, repair evidence, and the claim ladder. A successful
+retry supersedes the matching open finding.
 
 ## Solve a whole stack
 

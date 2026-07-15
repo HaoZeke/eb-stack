@@ -18,13 +18,26 @@ eb-stack campaign run \
 eb-stack campaign status --state CAMPAIGN.json
 #+end_src
 
-The state file is locked while a run, claim, or resolution mutates it. Reusing
-the path resumes only when package name and version match. Each run increments
-~attempts~, retains history and findings, and resets build and binary claims
-until the current attempt proves them.
+~campaign run~ is synchronous and stays in the foreground until every recipe
+and verification command finishes or a typed failure is recorded. Run it under
+the target site's terminal or service supervisor; ~campaign status~ remains
+available from another process.
 
-~campaign status~ prints the complete audit record, including command evidence
-from resolved attempts. For a compact operator view during a long build:
+The state file has one writer while a run, claim, or resolution mutates it. An
+OS-backed advisory guard enforces exclusivity, and the visible ~.lock~ file
+records host, PID, and Linux process-start identity for diagnosis. The guard is
+released by the operating system if the controlling process exits, so stale
+metadata cannot permanently block a retry. Before retrying an interrupted run,
+confirm that the routed container, scheduler job, or host command is no longer
+active; a remote workload can outlive its controller. Reuse the same state
+path. Package name and version must match, each run increments ~attempts~,
+history and findings remain available, and build/binary claims reset until the
+current attempt proves them.
+
+~campaign status~ prints the complete audit record. Typed failures retain their
+exact routed command, exit status, and compact evidence, including after their
+findings are resolved or superseded. For a compact operator view during a long
+build:
 
 #+begin_src bash
 eb-stack campaign status --state CAMPAIGN.json |

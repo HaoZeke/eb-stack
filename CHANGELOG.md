@@ -47,6 +47,8 @@ All notable changes to this unreleased project are documented here.
   and public metadata contracts.
 - Rust-backed fixture recipes reset Cargo compiler wrappers without exposing
   host configuration inherited through mounted build paths.
+- Campaign state uses an OS-backed exclusive guard with process-identity
+  metadata, so interrupted controllers do not leave permanent stale locks.
 
 ### Removed
 
