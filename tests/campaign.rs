@@ -62,6 +62,22 @@ fn failure_classifier_preserves_the_build_error_domain() {
             "flex: /lib64/libc.so.6: version `GLIBC_2.38' not found",
             BuildFindingClass::Runtime,
         ),
+        (
+            "CMake Error: could not extract libs\nerror: could not execute process `sccache rustc -vV` (never executed)\nCaused by: No such file or directory",
+            BuildFindingClass::Runtime,
+        ),
+        (
+            "checksums = ['abc']\nmake[2]: *** [Makefile:42: all] Error 2\nInstallation failed",
+            BuildFindingClass::Compile,
+        ),
+        (
+            "patch dependency is installed\nCMake Error at CMakeLists.txt:42\nInstallation failed",
+            BuildFindingClass::Configure,
+        ),
+        (
+            "patching file src/lib.rs\nHunk #1 FAILED at 42",
+            BuildFindingClass::Patch,
+        ),
     ];
     for (log, expected) in cases {
         assert_eq!(
