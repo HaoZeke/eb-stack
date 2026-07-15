@@ -105,7 +105,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("out_dir", "string"),
             ],
         ),
-        tool(
+        tool_with_optional(
             "eb_package_plan",
             "Resolve package profiles with Resolvo and emit manifest, SBOM, profile locks, and EasyBuild recipes.",
             &[
@@ -114,6 +114,12 @@ fn tool_catalog() -> Vec<Value> {
                 ("easyconfigs", "array"),
                 ("stack_policy", "string"),
                 ("out_dir", "string"),
+            ],
+            &[
+                ("format", "string"),
+                ("toolchain_name", "string"),
+                ("profile_configs", "array"),
+                ("source_checksums", "array"),
             ],
         ),
         tool(
@@ -192,8 +198,18 @@ fn tool_catalog() -> Vec<Value> {
 }
 
 fn tool(name: &str, description: &str, required: &[(&str, &str)]) -> Value {
+    tool_with_optional(name, description, required, &[])
+}
+
+fn tool_with_optional(
+    name: &str,
+    description: &str,
+    required: &[(&str, &str)],
+    optional: &[(&str, &str)],
+) -> Value {
     let properties = required
         .iter()
+        .chain(optional.iter())
         .map(|(name, kind)| {
             let schema = if *kind == "array" {
                 json!({"type": "array", "items": {"type": "string"}})
