@@ -11,15 +11,17 @@ eOn and Spack QMCPACK fixtures.
 Collect these inputs:
 
 1. a conda-forge ~meta.yaml~/~recipe.yaml~ or Spack ~package.py~;
-2. one or more public product-profile TOML files;
+2. one or more public package-config TOML files;
 3. an EasyBuild robot tree, with site overlays passed after upstream;
 4. a stack-policy TOML file for preferred pins, locked pins, and exclusions.
 5. positional SHA-256 values for source artifacts whose foreign metadata has
    only a VCS commit or tag.
 
-Profile TOML is where installable product choices belong. Each profile emits a
-separate ~.eb~ file. MPI/OpenMP toolchain options alone do not create a suffix;
-an independently loadable ABI or feature variant does.
+Package TOML carries explicit foreign-to-EasyBuild aliases, package/build
+policy, and installable product choices. Each profile emits a separate ~.eb~
+file. MPI/OpenMP toolchain options alone do not create a suffix; an
+independently loadable ABI or feature variant does. Parser code handles foreign
+syntax, never package names.
 
 * Inspect the foreign recipe
 
@@ -29,7 +31,8 @@ eb-stack package inspect \
   --format conda-forge \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  --profile-config examples/profiles/eon.toml \
+  --package-config examples/packages/common.toml \
+  --package-config examples/packages/eon.toml \
   --out-dir /tmp/eon-inspect
 #+end_src
 
@@ -52,18 +55,24 @@ eb-stack package inspect \
   --format spack \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  --profile-config examples/profiles/qmcpack.toml \
+  --package-config examples/packages/common.toml \
+  --package-config examples/packages/qmcpack.toml \
   --out-dir /tmp/qmcpack-inspect
 #+end_src
 
-* Define product profiles
+* Define package policy and product profiles
 
-A profile layer can replace or extend the parser-derived defaults. The public
-examples show the complete schema. A QMCPACK profile set commonly contains a
+A package layer can replace or extend parser-derived metadata without changing
+the parser. ~examples/packages/common.toml~ provides cross-ecosystem aliases;
+later layers may replace package metadata, build policy, aliases, virtuals,
+solver exclusions, and profiles. A QMCPACK profile set commonly contains a
 default MPI+OpenMP build and a separate ~-complex~ recipe:
 
 #+begin_src toml
 schema_version = 1
+
+[package]
+name = "QMCPACK"
 
 [[profiles]]
 name = "default"
@@ -128,7 +137,8 @@ eb-stack package plan \
   --format conda-forge \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  --profile-config examples/profiles/eon.toml \
+  --package-config examples/packages/common.toml \
+  --package-config examples/packages/eon.toml \
   --easyconfigs /path/to/easybuild-easyconfigs/easybuild/easyconfigs \
   --easyconfigs fixtures/eon_foss_2026_1/easyconfigs \
   --stack-policy examples/stacks/eon-foss-2026.1.toml \

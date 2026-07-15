@@ -9,7 +9,7 @@ scaffold/auto-emitter surface.
 | Module | Responsibility |
 |-
 | ~package~ | schema-versioned plan, profiles, locks, stack policy, CycloneDX conversion |
-| ~package_config~ | layered public profile TOML |
+| ~package_config~ | layered aliases, EasyBuild policy, and product profiles |
 | ~package_solve~ | profile materialization and Resolvo lock generation |
 | ~package_emit~ | one deterministic EasyBuild recipe per profile lock |
 | ~package_workflow~ | inspect, new-package plan, bump plan, and bundle writer |

@@ -29,7 +29,7 @@ eb-stack package inspect \
   --format auto|conda-forge|spack \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  [--profile-config PROFILE.toml]... \
+  [--package-config PACKAGE.toml]... \
   --out-dir BUNDLE
 #+end_src
 
@@ -44,7 +44,7 @@ eb-stack package plan \
   --format conda-forge|spack \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  [--profile-config PROFILE.toml]... \
+  [--package-config PACKAGE.toml]... \
   [--source-checksum SHA256]... \
   --easyconfigs UPSTREAM \
   [--easyconfigs OVERLAY]... \
@@ -52,7 +52,8 @@ eb-stack package plan \
   --out-dir BUNDLE
 #+end_src
 
-Later robot paths override earlier paths for the same EasyBuild identity.
+Package configs apply in argument order; later metadata, build policy, aliases,
+and profile values override earlier layers. Later robot paths override earlier paths for the same EasyBuild identity.
 Each requested product profile is solved independently and emits one lock plus
 one conventional ~.eb~ file. The default profile has no suffix; non-default
 profiles use their declared ~versionsuffix~.

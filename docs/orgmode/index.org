@@ -186,7 +186,8 @@ eb-stack package inspect \
   --format conda-forge \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  --profile-config examples/profiles/eon.toml \
+  --package-config examples/packages/common.toml \
+  --package-config examples/packages/eon.toml \
   --out-dir /tmp/eon-inspect
 
 python3 -m json.tool /tmp/eon-inspect/package.plan.json >/dev/null

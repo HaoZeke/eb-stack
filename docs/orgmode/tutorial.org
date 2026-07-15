@@ -3,7 +3,7 @@
 
 This tutorial plans conda-forge eOn, explains the artifacts, and routes the
 result into a build campaign. The QMCPACK path differs only in parser and
-profile selection.
+package configuration.
 
 * Prepare the runnable local target
 
@@ -53,13 +53,14 @@ eb-stack package inspect \
   --format conda-forge \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  --profile-config examples/profiles/eon.toml \
+  --package-config examples/packages/common.toml \
+  --package-config examples/packages/eon.toml \
   --out-dir /tmp/eon-inspect
 #+end_src
 
 Open ~/tmp/eon-inspect/package.plan.json~. Important sections are:
 
-- ~origin~ and ~package~: normalized identity;
+- ~origin~ and ~package~: foreign identity with configured EasyBuild policy;
 - ~sources~: every source artifact and checksum;
 - ~dependencies~: roles, constraints, conditions, and provenance;
 - ~build~: EasyBuild easyblock, toolchain, and configuration;
@@ -78,7 +79,8 @@ eb-stack package plan \
   --format conda-forge \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  --profile-config examples/profiles/eon.toml \
+  --package-config examples/packages/common.toml \
+  --package-config examples/packages/eon.toml \
   --easyconfigs "$ROBOT" \
   --easyconfigs /tmp/eb-stack/overlay \
   --stack-policy examples/stacks/eon-foss-2026.1.toml \
@@ -181,7 +183,7 @@ eb-stack campaign finding resolve \
   --owner omp-worker-1 \
   --action "corrected package configuration" \
   --evidence "recipe check and target command reproduce successfully" \
-  --change examples/profiles/eon.toml
+  --change examples/packages/eon.toml
 #+end_src
 
 Run the campaign again with the same state. Successful stages supersede stale
@@ -216,7 +218,7 @@ runtime. Site credentials remain outside the public TOML.
 
 * Try QMCPACK variants
 
-Replace the source and profile arguments:
+Replace the source and package-config arguments:
 
 #+begin_src bash
 eb-stack package plan \
@@ -224,7 +226,8 @@ eb-stack package plan \
   --format spack \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  --profile-config examples/profiles/qmcpack.toml \
+  --package-config examples/packages/common.toml \
+  --package-config examples/packages/qmcpack.toml \
   --source-checksum 511d5f368db002f2f77504619e1ada8d4a3034200d25feef6773d12a6ed6d18e \
   --easyconfigs "$ROBOT" \
   --easyconfigs fixtures/qmcpack_foss_2026_1/easyconfigs \

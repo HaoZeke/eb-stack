@@ -55,8 +55,9 @@ A campaign with no verification commands may establish *builds* but leaves
 
 * Repair ownership
 
-- Parser/provenance defects belong in syntax adapters.
-- Product choices belong in profile TOML.
+- Parser/provenance defects belong in package-agnostic syntax adapters.
+- Foreign-to-EasyBuild aliases, package/build policy, and product choices belong
+  in package TOML.
 - Distribution/site versions and known bad candidates belong in stack policy.
 - Mechanical version selection belongs in Resolvo.
 - Recipe syntax, checksums, patches, build logic, and sanity paths belong in the
