@@ -210,6 +210,11 @@ Hermes owns this loop until the requested claim is established:
 5. Re-run the same campaign command. Successful retries supersede matching open findings while retaining their evidence history.
 6. Continue through post-build verification. Do not stop at a successful compile when verification commands are declared.
 
+`campaign status` emits the complete historical JSON. During a long build,
+filter it to `status`, `attempts`, `claims`, `current_recipe`, and findings
+whose status is `open` or `in-progress`; retain the full state as the evidence
+record.
+
 Never edit a stock recipe to hide a target defect. Never weaken a test or sanity check. Record changed files and concrete verification output in the finding resolution.
 
 ## OMP finding coordination

@@ -23,6 +23,21 @@ the path resumes only when package name and version match. Each run increments
 ~attempts~, retains history and findings, and resets build and binary claims
 until the current attempt proves them.
 
+~campaign status~ prints the complete audit record, including command evidence
+from resolved attempts. For a compact operator view during a long build:
+
+#+begin_src bash
+eb-stack campaign status --state CAMPAIGN.json |
+  jq '{status, attempts, claims, current_recipe,
+       active_findings: [.findings[] |
+         select(.status == "open" or .status == "in-progress") |
+         {id, class, stage, recipe, summary, owner}]}'
+#+end_src
+
+The campaign writes ~status: running~ and ~current_recipe~ before launching
+EasyBuild, so another shell can observe those fields while the build command
+is active. Keep the unfiltered state for diagnosis and handoff evidence.
+
 * State schema
 
 ~CAMPAIGN.json~ has ~schema_version = 1~:
