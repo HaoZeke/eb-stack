@@ -1,0 +1,149 @@
+#+TITLE: Repair a failed campaign
+#+OPTIONS: toc:t num:nil
+
+Use this procedure when ~eb-stack campaign run~ records a failed attempt. The
+campaign state already contains the routed command, compact nested log, error
+class, repair disposition, and ownership queue. Keep that evidence attached to
+the same state file through every retry.
+
+* Inspect the active finding
+
+Start with a compact view, then read the complete finding before changing a
+recipe or target:
+
+#+begin_src bash
+eb-stack campaign status --state CAMPAIGN.json |
+  jq '{status, attempts, claims, current_recipe,
+       active_findings: [.findings[] |
+         select(.status == "open" or .status == "in-progress") |
+         {id, class, disposition, stage, recipe, summary, owner,
+          command, exit_code, evidence}]}'
+#+end_src
+
+The three claims are independent. A failed build can retain ~resolves: true~
+while ~builds~ and ~binary_verified~ remain false. Resolving a finding records
+a repair decision; only a successful campaign retry establishes a build claim.
+
+* Check the routing layers
+
+Run the target doctor for ~transport~, ~executor~, or ~runtime~ findings, and
+before diagnosing a product failure on a target whose configuration changed:
+
+#+begin_src bash
+eb-stack target doctor \
+  --config BASE.toml \
+  --config SITE.toml \
+  --target NAME
+#+end_src
+
+The doctor verifies each configured routing layer and EasyBuild availability.
+It does not build the recipe. Compare its routed runtime command with the
+failed finding, including image, mounts, working directory, environment, robot
+roots, durable build path, and temporary path.
+
+Container build and install roots belong to one runtime ABI. Keep Cargo and
+other package-manager build directories outside bind-mounted personal
+configuration ancestry. The [[file:../reference/targets.org][target reference]] includes a complete neutral
+mount-alias pattern for sites whose durable storage lives below a home
+directory.
+
+* Claim the finding
+
+Use a stable worker name. Claims prevent Hermes and OMP workers from applying
+different repairs to the same evidence:
+
+#+begin_src bash
+eb-stack campaign finding claim \
+  --state CAMPAIGN.json \
+  --id attempt:2:finding:1 \
+  --owner hermes
+#+end_src
+
+The same owner may claim again safely. Another owner receives an ownership
+error and must select a different open finding.
+
+* Choose the repair surface
+
+Treat the class as the first place to inspect, not as a substitute for the
+compiler, linker, test, or runtime evidence.
+
+| Finding class | First check | Typical changed artifact |
+|-
+| ~transport~ | Host reachability and staged paths | Private site target layer |
+| ~executor~ | Scheduler command and allocation | Private site target layer |
+| ~runtime~ | Runtime executable, image, mounts, ABI, environment | Target TOML or container definition |
+| ~checksum~ | Source/patch order and upstream digest | Easyconfig checksum list |
+| ~patch~ | Patch source, order, and applicability | Patch plus Easyconfig |
+| ~dependency-missing~ | Manifest/profile requirement and robot candidates | Profile, stack policy, or dependency recipe |
+| ~configure~ | Product options and detected dependencies | Easyconfig, profile, or patch |
+| ~compile~ | First source-level diagnostic and effective flags | Easyconfig, patch, dependency, or target environment |
+| ~link~ | ABI, selected libraries, and link interface | Easyconfig, patch, dependency, or target environment |
+| ~test~ | Failing product assertion and runtime environment | Product repair or target environment |
+| ~install~ | Install paths, permissions, and EasyBlock behavior | Easyconfig or target filesystem |
+| ~sanity~ | Declared files, commands, and loaded module | Easyconfig or profile verification command |
+| ~resource~ | Kernel/scheduler evidence and parallelism | Executor allocation or ~EASYBUILD_PARALLEL~ |
+| ~timeout~ | Routed timeout and scheduler wall time | Executor or target policy |
+| ~unknown~ | Exact command and nested log | Evidence-dependent |
+
+A solver-compatible selection is not a promise that source code compiles. A
+real compiler incompatibility remains a ~compile~ repair owned by the campaign
+loop. Add a stack exclusion or change a pin only when the evidence identifies
+the selected dependency identity as the cause.
+
+For recipe changes, run the nearest mechanical checks before the campaign:
+
+#+begin_src bash
+eb-stack recipe format BUNDLE/easyconfigs/l/Leaf/Leaf-1.2.3-foss-2026.1.eb
+eb-stack recipe lint BUNDLE/easyconfigs/l/Leaf/Leaf-1.2.3-foss-2026.1.eb
+eb-stack recipe check \
+  --recipe BUNDLE/easyconfigs/l/Leaf/Leaf-1.2.3-foss-2026.1.eb \
+  --easyconfigs /path/to/upstream/easyconfigs \
+  --easyconfigs BUNDLE/easyconfigs
+#+end_src
+
+Checksum lists are positional: every source first, then every patch. A missing
+dependency hint is a repair queue, including candidates at other generations;
+it is not permission to bypass recipe validation.
+
+* Record the repair
+
+Resolve the owned finding with an action, evidence from the nearest check, and
+every changed artifact:
+
+#+begin_src bash
+eb-stack campaign finding resolve \
+  --state CAMPAIGN.json \
+  --id attempt:2:finding:1 \
+  --owner hermes \
+  --action "isolated the target build root from host tool configuration" \
+  --evidence "target doctor passes with the neutral container work path" \
+  --change ~/.config/eb-stack/site.toml
+#+end_src
+
+The resolution is an audit record. Keep precise target paths in private state
+or a private site layer; public examples should use portable placeholder paths
+and contain no credentials.
+
+* Retry the same state
+
+Run the original bundle and target with the same state path:
+
+#+begin_src bash
+eb-stack campaign run \
+  --bundle BUNDLE \
+  --config BASE.toml \
+  --config SITE.toml \
+  --target NAME \
+  --state CAMPAIGN.json
+#+end_src
+
+The command stays in the foreground. Run it under the site's terminal or
+service supervisor and inspect status from another shell. A successful attempt
+retains resolved findings and supersedes matching open findings, then advances
+~builds~ and ~binary_verified~ only when their commands succeed.
+
+If the controller exits, its advisory state guard releases automatically.
+Confirm that its container, scheduler job, or remote command is absent before
+retrying because a routed workload can outlive the controller. Reuse the state
+file so attempt history and evidence remain one coherent record.
+

@@ -48,6 +48,8 @@
 
    *Campaign findings?* → :doc:`reference/campaigns`
 
+   *Repair a failed campaign?* → :doc:`howto/repair-campaign`
+
 .. grid:: 1 1 2 2
    :gutter: 2
 
@@ -99,6 +101,7 @@
 
    howto/run-annual-bump
    howto/new-package
+   howto/repair-campaign
    howto/solve-lock
    howto/emit-reports
    howto/bump-recipe
@@ -181,6 +184,7 @@ eb-stack --version
   - [[file:howto/new-package.org][Author a new package from conda-forge or Spack]] --
     canonical plan + profiles + Resolvo + campaign.
   - How-to guides: [[file:howto/solve-lock.org][solve a stack lock]],
+    [[file:howto/repair-campaign.org][repair a failed campaign]],
     [[file:howto/emit-reports.org][emit a build list and stack diff]],
     [[file:howto/bump-recipe.org][bump a recipe]],
     [[file:howto/root-priority.org][declare root priority]].

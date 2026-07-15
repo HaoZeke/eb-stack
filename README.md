@@ -65,6 +65,7 @@ The manual is organized around operator tasks:
 - [package bundle schemas](docs/orgmode/reference/package-bundles.org);
 - [layered build targets](docs/orgmode/reference/targets.org);
 - [campaign state and typed findings](docs/orgmode/reference/campaigns.org);
+- [repair a failed campaign](docs/orgmode/howto/repair-campaign.org);
 - [command-line reference](docs/orgmode/reference/cli.org).
 
 The source manual lives in `docs/orgmode/`; the documentation workflow exports RST into `docs/source/` and validates the Sphinx site.

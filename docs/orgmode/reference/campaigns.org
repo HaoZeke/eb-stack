@@ -173,6 +173,9 @@ Resolved findings remain part of the audit trail.
 
 * Repair loop
 
+The task-oriented [[file:../howto/repair-campaign.org][campaign repair guide]] provides copyable commands and a
+class-to-artifact troubleshooting table. The protocol is:
+
 1. Run ~target doctor~ and the campaign.
 2. Read the finding's stage, class, exact command, evidence, and nested log.
 3. Reproduce the smallest failing command on the same target/runtime.
