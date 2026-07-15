@@ -4,7 +4,7 @@ use eb_stack::package::{
     PROFILE_LOCK_SCHEMA_VERSION, STACK_POLICY_SCHEMA_VERSION,
 };
 use eb_stack::{
-    emit_profile_easyconfigs, package_plan_from_foreign, parse_foreign_path,
+    emit_profile_easyconfigs, lint_style, package_plan_from_foreign, parse_foreign_path,
     resolve_easyconfig_str, solve_package_profile, Candidate, DepReq, ForeignFormat, Toolchain,
 };
 use std::collections::BTreeMap;
@@ -283,11 +283,13 @@ fn conda_target_directories_emit_rattler_compatible_source_staging() {
     assert!(text
         .contains("'source_urls': ['https://github.com/OmniPotentRPC/rgpot/archive/refs/tags/']"));
     assert!(text.contains("'filename': 'v2.2.1.tar.gz'"));
-    assert!(text.contains(
+    let normalized = text.replace("' +\n            '", "");
+    assert!(normalized.contains(
         "'extract_cmd': 'mkdir -p %(builddir)s/subprojects/rgpot && tar -xf %s -C \
          %(builddir)s/subprojects/rgpot --strip-components=1'"
     ));
-    assert!(text.contains("%(builddir)s/readcon-core-src --strip-components=1"));
+    assert!(normalized.contains("%(builddir)s/readcon-core-src --strip-components=1"));
+    assert!(lint_style(text).is_empty(), "{:?}", lint_style(text));
 }
 
 #[test]
