@@ -13,15 +13,28 @@ Collect these paths before planning:
 
 - the conda-forge `recipe.yaml`/`meta.yaml` or Spack `package.py`;
 - one or more EasyBuild robot trees for the target generation;
-- a package profile TOML defining product variants and verification commands;
+- layered package TOML defining ecosystem aliases, EasyBuild policy, product
+  variants, and verification commands;
 - a stack policy TOML defining site preferences, locks, and exclusions;
 - positional SHA-256 values when the foreign recipe identifies sources only
   by VCS tag or commit;
 - layered target TOML naming the remote EasyBuild host and execution backend.
 
-Use conda-forge for eOn and Spack for QMCPACK. Parsing is syntax-aware and preserves selectors, Spack `when=` expressions, source provenance, dependency roles, and unresolved dynamic logic in the manifest.
+Use conda-forge for eOn and Spack for QMCPACK. Parsing is syntax-aware and preserves selectors, Spack `when=` expressions, source provenance, dependency roles, and unresolved dynamic logic in the manifest. Never add a package-name branch to a parser. Add parser code only for foreign syntax that applies to every recipe using that syntax.
 
-## Product profiles and EasyBuild variants
+## Package policy and EasyBuild variants
+
+Layer `examples/packages/common.toml` before the package file. Case and
+punctuation-equivalent foreign names match the robot tree mechanically. Put
+names that genuinely differ across ecosystems in `[dependencies.aliases]`;
+use `[dependencies.virtuals]` for capabilities and
+`dependencies.exclude_from_solve` for foreign runtime metadata that remains
+visible in the manifest/SBOM but is not an EasyBuild dependency.
+
+The `[package]` and `[build]` tables own EasyBuild spelling, release spelling,
+easyblock policy, module class, build options, and patches. `easyblock =
+"auto"` omits the parameter so EasyBuild can select a software-specific
+easyblock. These are packaging decisions, not parser rules.
 
 Create one product profile per independently installable variant. Each profile emits one `.eb` file.
 
@@ -30,10 +43,13 @@ Create one product profile per independently installable variant. Each profile e
 - Do not create suffixes merely because `usempi` or `openmp` is enabled.
 - Follow neighboring GROMACS and LAMMPS easyconfigs for naming, option placement, dependencies, sanity checks, and module class.
 
-Example profile layer:
+Example package layer:
 
 ```toml
 schema_version = 1
+
+[package]
+name = "QMCPACK"
 
 [[profiles]]
 name = "default"
@@ -109,7 +125,8 @@ eb-stack package inspect \
   --format conda-forge \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  --profile-config profiles/qmcpack.toml \
+  --package-config examples/packages/common.toml \
+  --package-config examples/packages/qmcpack.toml \
   --out-dir work/qmcpack-inspect
 ```
 
@@ -121,7 +138,8 @@ eb-stack package plan \
   --format spack \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  --profile-config profiles/qmcpack.toml \
+  --package-config examples/packages/common.toml \
+  --package-config examples/packages/qmcpack.toml \
   --source-checksum SHA256 \
   --easyconfigs /path/to/easybuild-easyconfigs/easybuild/easyconfigs \
   --easyconfigs /path/to/site-overlay \
@@ -246,9 +264,9 @@ eb-stack campaign finding resolve \
   --state work/qmcpack.campaign.json \
   --id attempt:1:finding:1 \
   --owner omp-worker-1 \
-  --action "corrected the complex profile configuration" \
+  --action "corrected the complex package configuration" \
   --evidence "recipe check exits successfully" \
-  --change profiles/qmcpack.toml
+  --change examples/packages/qmcpack.toml
 ```
 
 The state lock prevents concurrent writers. Workers must not steal an `in-progress` finding or edit the campaign JSON directly. Hermes resumes the campaign after owned repairs are resolved.
