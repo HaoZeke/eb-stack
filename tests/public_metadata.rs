@@ -77,6 +77,10 @@ fn ci_enforces_the_declared_msrv_and_quality_gates() {
     ] {
         assert!(ci.contains(command), "test workflow must run {command}");
     }
+    assert!(
+        !ci.contains("&& exit 1 || true"),
+        "expected-failure smoke checks must reject unexpected success"
+    );
 }
 
 #[test]
