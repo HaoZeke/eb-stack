@@ -52,6 +52,17 @@ fn generated_documentation_builds_stay_out_of_source_packages() {
 }
 
 #[test]
+fn local_agent_state_stays_out_of_public_commits() {
+    let gitignore = std::fs::read_to_string(repo().join(".gitignore")).expect("read .gitignore");
+    for path in [".claude/", ".codex/"] {
+        assert!(
+            gitignore.lines().any(|line| line == path),
+            ".gitignore must exclude {path}"
+        );
+    }
+}
+
+#[test]
 fn ci_enforces_the_declared_msrv_and_quality_gates() {
     let cargo = std::fs::read_to_string(repo().join("Cargo.toml")).expect("read Cargo.toml");
     assert!(cargo.contains("rust-version = \"1.88\""));
