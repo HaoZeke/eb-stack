@@ -84,9 +84,13 @@ fn run_package(
 ) {
     let source = repo().join(source);
     let profile = ProfileConfigLayer::from_path(&repo().join(profile_config)).expect("profiles");
-    let (inspected, inspected_sbom) =
-        inspect_new_package(&source, Some(format), &toolchain(), &[profile.clone()])
-            .expect("inspect package");
+    let (inspected, inspected_sbom) = inspect_new_package(
+        &source,
+        Some(format),
+        &toolchain(),
+        std::slice::from_ref(&profile),
+    )
+    .expect("inspect package");
     assert_eq!(inspected.package.name, expected_name);
     assert_eq!(inspected.profiles.len(), expected_profiles);
     assert_eq!(inspected_sbom["bomFormat"], "CycloneDX");
