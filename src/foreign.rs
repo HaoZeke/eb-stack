@@ -1585,7 +1585,11 @@ fn spack_scoped_when_condition(
     let call_indent = prefix
         .rsplit('\n')
         .next()
-        .map(|line| line.chars().take_while(|character| character.is_whitespace()).count())
+        .map(|line| {
+            line.chars()
+                .take_while(|character| character.is_whitespace())
+                .count()
+        })
         .unwrap_or(0);
     let mut scope_indent = call_indent;
 
