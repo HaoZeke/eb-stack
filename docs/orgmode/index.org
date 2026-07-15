@@ -155,13 +155,13 @@
 
 * Install
 
-  Build from source with Cargo:
+  No public release is published. Build from source with Rust 1.88 or newer:
 
 #+begin_src bash
 git clone https://github.com/HaoZeke/eb-stack.git
 cd eb-stack
 cargo test --locked
-cargo build --release
+cargo build --locked --release
 # binary: target/release/eb-stack
 install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
 #+end_src
@@ -199,10 +199,11 @@ eb-stack --version
 
 * Citation
 
-  Cite the repository and version (or the [[https://github.com/HaoZeke/eb-stack/blob/main/CITATION.cff][CITATION.cff]] metadata):
+  For unreleased source, cite the repository revision you used. The
+  [[https://github.com/HaoZeke/eb-stack/blob/main/CITATION.cff][CITATION.cff]] file provides structured author and project metadata.
 
 #+begin_src text
-Rohit Goswami, eb-stack (version 0.3.0), https://github.com/HaoZeke/eb-stack
+Rohit Goswami, eb-stack (source revision <commit>), https://github.com/HaoZeke/eb-stack
 #+end_src
 
 * License
