@@ -188,6 +188,23 @@ fn profile_config_rejects_unknown_schema() {
 }
 
 #[test]
+fn auto_easyblock_defers_to_easybuild_software_selection() {
+    let config = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+[build]
+easyblock = "auto"
+"#,
+    )
+    .expect("automatic easyblock config");
+    let mut plan = qmcpack_plan();
+    assert!(plan.build.easyblock.is_some());
+
+    apply_package_layers(&mut plan, &[config]).expect("apply automatic easyblock");
+    assert!(plan.build.easyblock.is_none());
+}
+
+#[test]
 fn public_eon_and_qmcpack_profile_examples_parse() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let eon = PackageConfigLayer::from_path(&root.join("examples/profiles/eon.toml"))

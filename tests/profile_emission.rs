@@ -192,6 +192,19 @@ fn each_product_profile_emits_a_conventional_easyconfig() {
 }
 
 #[test]
+fn automatic_easyblock_is_omitted_from_the_easyconfig() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.build.easyblock = None;
+    plan.profiles = qmcpack_profiles();
+    plan.outputs.truncate(1);
+
+    let emitted = emit_profile_easyconfigs(&plan, &[profile_lock("default", "")])
+        .expect("emit automatic easyblock recipe");
+    assert!(!emitted[0].text.contains("easyblock ="));
+}
+
+#[test]
 fn emitted_dependencies_preserve_locked_toolchain_and_versionsuffix_identity() {
     let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
     let mut plan = package_plan_from_foreign(&recipe, &toolchain());
