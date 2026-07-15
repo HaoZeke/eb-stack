@@ -59,13 +59,13 @@ Build the Rust binary on a suitable build host. EasyBuild installs belong on the
 
 The manual is organized around operator tasks:
 
-- [foreign recipe to verified package](docs/source/tutorial.rst);
-- [package bundle schemas](docs/source/reference/package-bundles.rst);
-- [layered build targets](docs/source/reference/targets.rst);
-- [campaign state and typed findings](docs/source/reference/campaigns.rst);
-- [command-line reference](docs/source/reference/cli.rst).
+- [foreign recipe to verified package](docs/orgmode/tutorial.org);
+- [package bundle schemas](docs/orgmode/reference/package-bundles.org);
+- [layered build targets](docs/orgmode/reference/targets.org);
+- [campaign state and typed findings](docs/orgmode/reference/campaigns.org);
+- [command-line reference](docs/orgmode/reference/cli.org).
 
-The source manual lives in `docs/orgmode/`; generated RST is checked into `docs/source/` and validated by the documentation workflow.
+The source manual lives in `docs/orgmode/`; the documentation workflow exports RST into `docs/source/` and validates the Sphinx site.
 
 ## Bump an existing recipe
 
