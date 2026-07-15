@@ -86,12 +86,59 @@ config_options = ["-Dwith_cli=true"]
     );
 
     let checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let patch_without_checksum = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+[package]
+name = "eOn"
+[[build.patches]]
+filename = "eOn-2.16.0-portability.patch"
+[[profiles]]
+name = "default"
+default = true
+config_options = ["-Dwith_cli=true"]
+"#,
+    )
+    .expect("unchecked patch config");
+    let missing_patch_checksum = plan_new_package(&NewPackageRequest {
+        source: source.clone(),
+        format: Some(ForeignFormat::CondaForge),
+        toolchain: toolchain(),
+        source_checksums: vec![checksum.into()],
+        package_layers: vec![patch_without_checksum],
+        easyconfig_roots: vec![robot.clone()],
+        stack_policy: stack_policy.clone(),
+    })
+    .expect_err("planning must reject a patch without a packaging checksum");
+    assert!(
+        missing_patch_checksum
+            .to_string()
+            .contains("patch checksum"),
+        "{missing_patch_checksum}"
+    );
+
+    let patch_checksum = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let profile_with_patch = PackageConfigLayer::from_toml_str(&format!(
+        r#"
+schema_version = 1
+[package]
+name = "eOn"
+[[build.patches]]
+filename = "eOn-2.16.0-portability.patch"
+sha256 = "{patch_checksum}"
+[[profiles]]
+name = "default"
+default = true
+config_options = ["-Dwith_cli=true"]
+"#
+    ))
+    .expect("checksummed patch config");
     let bundle = plan_new_package(&NewPackageRequest {
         source: source.clone(),
         format: Some(ForeignFormat::CondaForge),
         toolchain: toolchain(),
         source_checksums: vec![checksum.into()],
-        package_layers: vec![profile],
+        package_layers: vec![profile_with_patch],
         easyconfig_roots: vec![robot],
         stack_policy,
     })
@@ -123,7 +170,11 @@ config_options = ["-Dwith_cli=true"]
     assert_eq!(parsed.name, "eOn");
     assert_eq!(parsed.dependencies[0].name, "zlib");
     assert_eq!(parsed.dependencies[0].version, "1.2");
-    assert_eq!(parsed.checksums, vec![checksum]);
+    assert_eq!(
+        parsed.checksums,
+        vec![checksum.to_string(), patch_checksum.to_string()]
+    );
+    assert_eq!(parsed.patch_names, ["eOn-2.16.0-portability.patch"]);
     assert!(parsed
         .configopts
         .as_deref()
