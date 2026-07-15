@@ -115,8 +115,7 @@ fn conda_lammps_expands_deterministic_date_templates() {
 #[test]
 fn spack_lammps_honors_preference_and_materializes_sources() {
     let path = root().join("spack_lammps/package.py");
-    let recipe =
-        parse_foreign_path(&path, Some(ForeignFormat::Spack)).expect("parse Spack LAMMPS");
+    let recipe = parse_foreign_path(&path, Some(ForeignFormat::Spack)).expect("parse Spack LAMMPS");
 
     assert_eq!(recipe.name, "lammps");
     assert_eq!(recipe.version, "20250722.4");
@@ -133,8 +132,7 @@ fn spack_lammps_honors_preference_and_materializes_sources() {
         .sources
         .iter()
         .find(|source| {
-            source.url.as_deref()
-                == Some("https://download.lammps.org/potentials/C_10_10.mesocnt")
+            source.url.as_deref() == Some("https://download.lammps.org/potentials/C_10_10.mesocnt")
         })
         .expect("MESONT potential resource");
     assert_eq!(

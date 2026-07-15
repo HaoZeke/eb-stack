@@ -1119,7 +1119,8 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let primary_url = if preferred.url.is_some() {
         preferred.url.clone()
     } else if text.contains("def url_for_version") {
-        let materialized = materialize_spack_url_for_version(text, &preferred.version, url.as_deref());
+        let materialized =
+            materialize_spack_url_for_version(text, &preferred.version, url.as_deref());
         if materialized.is_some() {
             notes.push(format!(
                 "materialized dynamic url_for_version for {}",
@@ -1127,8 +1128,7 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
             ));
         } else {
             notes.push(
-                "dynamic url_for_version could not be materialized; stale class URL ignored"
-                    .into(),
+                "dynamic url_for_version could not be materialized; stale class URL ignored".into(),
             );
         }
         materialized
@@ -1151,10 +1151,8 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
     }
 
     // resource(name=..., url=..., sha256=..., destination=..., placement=...)
-    let placement_re = Regex::new(
-        r#"placement\s*=\s*\{[^:}]+:\s*[\"']([^\"']+)[\"']\s*\}"#,
-    )
-    .expect("resource placement re");
+    let placement_re = Regex::new(r#"placement\s*=\s*\{[^:}]+:\s*[\"']([^\"']+)[\"']\s*\}"#)
+        .expect("resource placement re");
     for call in resource_calls {
         let inner = &text[call.inner_start..call.end.saturating_sub(1)];
         if let Some(url) = spack_string_kwarg(inner, "url") {
@@ -1493,7 +1491,11 @@ fn pick_preferred_spack_version(versions: &[SpackVersion]) -> SpackVersion {
     versions
         .iter()
         .find(|version| version.preferred && !is_floating(&version.version))
-        .or_else(|| versions.iter().find(|version| !is_floating(&version.version)))
+        .or_else(|| {
+            versions
+                .iter()
+                .find(|version| !is_floating(&version.version))
+        })
         .or_else(|| versions.first())
         .cloned()
         .expect("versions non-empty")
