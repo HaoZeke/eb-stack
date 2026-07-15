@@ -207,6 +207,50 @@ fn automatic_easyblock_is_omitted_from_the_easyconfig() {
 }
 
 #[test]
+fn empty_sanity_paths_are_omitted_from_the_easyconfig() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.package.name = "QMCPACK".into();
+    plan.profiles = qmcpack_profiles();
+    plan.outputs.truncate(1);
+
+    let emitted = emit_profile_easyconfigs(&plan, &[profile_lock("default", "")])
+        .expect("emit conventional recipe");
+
+    assert!(!emitted[0].text.contains("sanity_check_paths"));
+}
+
+#[test]
+fn conditional_spack_resources_follow_the_selected_profile() {
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/foreign_ingest/spack_lammps/package.py");
+    let recipe = parse_foreign_path(&source, Some(ForeignFormat::Spack)).expect("parse LAMMPS");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.outputs.truncate(1);
+    let lock = ProfileLock {
+        schema_version: PROFILE_LOCK_SCHEMA_VERSION,
+        package: plan.package.name.clone(),
+        version: plan.package.version.clone(),
+        profile: "default".into(),
+        toolchain: toolchain(),
+        versionsuffix: String::new(),
+        dependencies: Vec::new(),
+        pin_outcomes: Vec::new(),
+        exclusions: Vec::new(),
+        solver: "resolvo".into(),
+    };
+
+    let without_mesont = emit_profile_easyconfigs(&plan, std::slice::from_ref(&lock))
+        .expect("emit profile without MESONT");
+    assert!(!without_mesont[0].text.contains("C_10_10.mesocnt"));
+
+    plan.profiles[0].features.insert("mesont".into(), true);
+    let with_mesont =
+        emit_profile_easyconfigs(&plan, &[lock]).expect("emit profile with MESONT");
+    assert!(with_mesont[0].text.contains("C_10_10.mesocnt"));
+}
+
+#[test]
 fn emitted_dependencies_preserve_locked_toolchain_and_versionsuffix_identity() {
     let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
     let mut plan = package_plan_from_foreign(&recipe, &toolchain());
