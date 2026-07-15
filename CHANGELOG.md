@@ -10,11 +10,14 @@ All notable changes to this unreleased project are documented here.
   EasyBuild inputs, with source provenance, structured conditions, variants,
   rules, build intent, product profiles, output requests, and residuals.
 - Planned CycloneDX SBOM generation from canonical package intent and solved
-  EasyBuild stack locks.
+  EasyBuild stack locks, including primary source hashes, VCS identities, and
+  hashed distribution references.
 - Per-profile materialization and Resolvo selection with preferred pins,
   locked pins, candidate exclusions, and recorded fallback outcomes.
 - One conventional EasyBuild recipe and profile lock per installable product
   profile; default profiles remain unsuffixed.
+- Positional source-checksum overrides at the CLI and MCP emission boundary,
+  with complete source coverage required before a recipe is emitted.
 - Canonical new-package and bump bundles containing `package.plan.json`,
   `package.sbom.cdx.json`, profile locks, and EasyBuild recipes.
 - Layered public TOML build targets covering local/SSH transport,
@@ -42,6 +45,8 @@ All notable changes to this unreleased project are documented here.
   version-one command and MCP names.
 - CI enforces the Rust 1.88 minimum, formatting, clippy with warnings denied,
   and public metadata contracts.
+- Rust-backed fixture recipes reset Cargo compiler wrappers without exposing
+  host configuration inherited through mounted build paths.
 
 ### Removed
 

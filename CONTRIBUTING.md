@@ -1,8 +1,9 @@
 # Contributing to eb-stack
 
-Thank you for your interest. eb-stack is assistive tooling for EasyBuild
-toolchain-generation rebuilds: parsers, hierarchy-aware bump, resolvo
-co-selection, and reviewable reports. Clear, tested, reproducible changes win.
+Thank you for your interest. eb-stack turns conda-forge, Spack, and EasyBuild
+inputs into source-evidenced SBOMs, Resolvo locks, conventional EasyBuild
+variants, and persisted build campaigns. Clear, tested, reproducible changes
+win.
 
 ## Development environment
 
