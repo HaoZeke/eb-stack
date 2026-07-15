@@ -1,0 +1,132 @@
+# Snapshot of conda-forge/lammps-feedstock recipe/meta.yaml at
+# 823c7a80a741ba23da14130546aff4d8060e1eb8.
+{% set build = 2 %}
+{% set name = "lammps" %}
+{% set version = "stable_22Jul2025_update4" %}
+{% set version_plugins = "patch_17Apr2024" %}
+{% set sha256 = "411088d9c03339e025f6a975e0a5741bb9e3f351cc39eda220ab22ac318fe2fb" %}
+{% set date = datetime.datetime.strptime(version.split('_')[1], "%d%b%Y") %}
+{% set conda_version = "{:%Y.%m.%d}".format(date) %}
+{% set cuda_major = environ.get("cuda_compiler_version", "0.0").split(".")[0]|int %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ conda_version }}
+
+source:
+  - fn: {{ name }}-{{ conda_version }}.tar.gz
+    url: https://github.com/lammps/lammps/archive/{{ version }}.tar.gz
+    sha256: {{ sha256 }}
+    patches:
+      - macos_install.patch
+      - vcsgc_mtp_n2p2.patch
+      - fix-cython.patch
+      - matgl.patch
+  - fn: lammps-plugins.tar.gz
+    url: https://github.com/lammps/lammps-plugins/archive/{{ version_plugins }}.tar.gz
+    sha256: 173837c8362f9dfa773b0e1bf35d8f5cd1bd41b32dd02e8443c337852a87973e
+    folder: lammps-plugins
+  - fn: mlip.tar.gz
+    url: https://gitlab.com/ivannovikov/interface-lammps-mlip-3/-/archive/68f02dd9ee57279e58f5d0c6fd800fda9e0e8132/interface-lammps-mlip-3-68f02dd9ee57279e58f5d0c6fd800fda9e0e8132.tar.gz
+    sha256: 7b2666234bd2a3c7908ab067cd4579c279bcf9dea894bd80bca88abfa99af33b
+    folder: mlip
+
+build:
+  number: {{ build }}
+  {% if mpi != 'nompi' %}
+  {% set mpi_prefix = "mpi_" + mpi %}
+  {% else %}
+  {% set mpi_prefix = "nompi" %}
+  {% endif %}
+  string: cuda{{ cuda_compiler_version | replace('.', '') }}_py{{ CONDA_PY }}_h{{ PKG_HASH }}_{{ mpi_prefix }}_{{ PKG_BUILDNUM }}  # [cuda_compiler_version != "None"]
+  string: cpu_py{{ CONDA_PY }}_h{{ PKG_HASH }}_{{ mpi_prefix }}_{{ PKG_BUILDNUM }}  # [cuda_compiler_version == "None"]
+  skip: True  # [win]
+  skip: True  # [cuda_compiler_version == "10.2"]
+  skip: True  # [cuda_compiler_version == "11.2"]
+  track_features:
+    - cudatoolkit  # [cuda_compiler_version != "None"]
+  script_env:
+{% if cuda_major == 13 %}
+    - Kokkos_OPT_ARGS=-DKokkos_ARCH_AMPERE80=ON
+{% endif %}
+{% if cuda_major == 12 %}
+    - Kokkos_OPT_ARGS=-DKokkos_ARCH_MAXWELL50=ON
+{% endif %}
+
+requirements:
+  build:
+    - {{ compiler('c') }}
+    - {{ stdlib("c") }}
+    - {{ compiler('cxx') }}
+    - {{ compiler('fortran') }}
+    - {{ compiler('cuda') }}  # [cuda_compiler_version != "None"]
+    - cuda-version {{ cuda_compiler_version }}  # [(cuda_compiler_version or "None") != "None"]
+    - cmake
+    - make
+    - pkg-config
+    - python  # [build_platform != target_platform]
+    - cython  # [build_platform != target_platform]
+    - cross-python_{{ target_platform }}  # [build_platform != target_platform]
+    - numpy  # [build_platform != target_platform]
+  host:
+    - python
+    - cython
+    - numpy
+    - setuptools
+    - pip
+    - {{ mpi }}  # [mpi != 'nompi']
+    - zlib
+    - fftw
+    - fftw * {{ mpi_prefix }}_*
+    - hdf5
+    - hdf5 * {{ mpi_prefix }}_*
+    - libpng
+    - libjpeg-turbo
+    - libcblas  # [linux]
+    - libblas  # [linux]
+    - liblapack  # [linux]
+    - libnetcdf
+    - libnetcdf * {{ mpi_prefix }}_*
+    - libpnetcdf  # [mpi != 'nompi']
+    - libpnetcdf * {{ mpi_prefix }}_*  # [mpi != 'nompi']
+    - kim-api
+    - libcurl
+    - mpi4py  # [mpi != 'nompi']
+    - mlip =3.0  # [linux]
+    - mlip * {{ mpi_prefix }}_*  # [linux]
+    - n2p2 =2.3.0  # [linux]
+    - n2p2 * {{ mpi_prefix }}_*  # [linux]
+    - voro
+    - plumed >=2.4,<2.10
+    - plumed * {{ mpi_prefix }}_*  # [mpi != 'nompi' and build_platform == target_platform]
+    - cuda-version {{ cuda_compiler_version }}  # [(cuda_compiler_version or "None") != "None"]
+    - yaml-cpp
+  run:
+    - python
+    - setuptools
+    - {{ mpi }}  # [mpi != 'nompi']
+    - {{ pin_compatible("numpy") }}
+    - {{ pin_compatible("plumed", max_pin="x.x") }}
+    - kim-api
+    - mlip =3.0  # [linux]
+    - mlip * {{ mpi_prefix }}_*  # [linux]
+    - n2p2 =2.3.0  # [linux]
+    - n2p2 * {{ mpi_prefix }}_*  # [linux]
+
+test:
+  imports:
+    - lammps
+  commands:
+    - lmp_serial -help > help_serial.txt  # [mpi == 'nompi' and cuda_compiler_version == "None"]
+    - mpiexec -n 1 lmp_mpi -help > help_mpi.txt  # [mpi == 'mpich' and cuda_compiler_version == "None"]
+
+about:
+  home: http://lammps.sandia.gov
+  license: GPL-2.0-only
+  license_family: GPL
+  license_file: '{{ environ["RECIPE_DIR"] }}/LICENSE'
+  summary: 'LAMMPS stands for Large-scale Atomic/Molecular Massively Parallel Simulator.'
+  description: |
+    LAMMPS is a classical molecular dynamics simulation code designed to run
+    efficiently on parallel computers.
+

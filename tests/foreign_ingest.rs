@@ -71,6 +71,39 @@ fn conda_eon_expands_context_multi_source_and_selectors() {
 }
 
 #[test]
+fn conda_lammps_expands_deterministic_date_templates() {
+    let path = root().join("conda_lammps/meta.yaml");
+    let recipe = parse_foreign_path(&path, Some(ForeignFormat::CondaForge))
+        .expect("parse conda-forge LAMMPS recipe");
+
+    assert_eq!(recipe.name, "lammps");
+    assert_eq!(recipe.version, "2025.07.22");
+    assert_eq!(recipe.sources.len(), 3);
+    assert_eq!(
+        recipe.sources[0].sha256.as_deref(),
+        Some("411088d9c03339e025f6a975e0a5741bb9e3f351cc39eda220ab22ac318fe2fb")
+    );
+    assert!(recipe.sources[0]
+        .url
+        .as_deref()
+        .is_some_and(|url| url.ends_with("stable_22Jul2025_update4.tar.gz")));
+    for dependency in ["cmake", "fftw", "hdf5", "kim-api", "plumed"] {
+        assert!(
+            recipe
+                .dependencies
+                .iter()
+                .any(|candidate| candidate.name == dependency),
+            "missing {dependency}: {:?}",
+            recipe.dependencies
+        );
+    }
+    assert!(recipe.dependencies.iter().all(|dependency| dependency
+        .pin
+        .as_deref()
+        .is_none_or(|pin| !pin.contains("{{"))));
+}
+
+#[test]
 fn spack_zlib_and_eon_preserve_build_system_information() {
     let zlib_path = root().join("spack_zlib/package.py");
     assert_eq!(
