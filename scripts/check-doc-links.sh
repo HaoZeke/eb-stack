@@ -18,3 +18,8 @@ if rg -n 'github\.com/HaoZeke/eb-stack/blob/[^"]+/docs/orgmode/[^"]+\.rst' \
   echo "rendered documentation edit links target generated RST instead of org sources" >&2
   exit 1
 fi
+
+if rg -n '(chatgpt\.com|claude\.ai|perplexity\.ai)' "$build_dir" -g '*.html'; then
+  echo "rendered documentation contains AI-service links" >&2
+  exit 1
+fi
