@@ -1,3 +1,4 @@
+use eb_stack::package::{materialize_profile, ProfileEnvironment};
 use eb_stack::package_config::{apply_package_layers, PackageConfigLayer};
 use eb_stack::{package_plan_from_foreign, parse_foreign_path, ForeignFormat, Toolchain};
 use std::path::PathBuf;
@@ -13,6 +14,35 @@ fn qmcpack_plan() -> eb_stack::package::PackagePlan {
             version: "2026.1".into(),
         },
     )
+}
+
+#[test]
+fn package_version_override_preserves_foreign_condition_identity() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let recipe = parse_foreign_path(
+        &root.join("fixtures/foreign_ingest/spack_lammps/package.py"),
+        Some(ForeignFormat::Spack),
+    )
+    .expect("parse Spack fixture");
+    let mut plan = package_plan_from_foreign(
+        &recipe,
+        &Toolchain {
+            name: "foss".into(),
+            version: "2025b".into(),
+        },
+    );
+    let config = PackageConfigLayer::from_path(&root.join("examples/packages/lammps.toml"))
+        .expect("package config");
+
+    apply_package_layers(&mut plan, &[config]).expect("apply package identity");
+    let materialized = materialize_profile(&plan, "default", &ProfileEnvironment::default())
+        .expect("materialize configured profile");
+
+    assert_eq!(plan.package.version, "22Jul2025_update4");
+    assert!(materialized
+        .dependencies
+        .iter()
+        .any(|dependency| dependency.name == "kokkos"));
 }
 
 #[test]
