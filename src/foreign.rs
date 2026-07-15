@@ -17,8 +17,8 @@
 //! - `class Name(Base)` and multi-base `class Name(Base1, Base2)`;
 //! - `homepage` / `url` / `git` string attributes;
 //! - `version("X", sha256=..., tag=..., commit=..., url=...)` kwargs;
-//! - preferred version = first non-`develop`/`main`/`master`/`head` entry
-//!   (Spack lists preferred versions first);
+//! - preferred version = explicit `preferred=True`, then the first
+//!   non-`develop`/`main`/`master`/`head` entry;
 //! - `depends_on("spec", type=..., when=...)` including `type=("build", "run")`
 //!   tuples and multi-type lists; language virtuals `c`/`cxx`/`fortran` skipped.
 //!
@@ -510,20 +510,11 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
             _ => {}
         }
     }
-    // classic: source.patches nested (after multi-source expand, also scan source list)
-    if patches.is_empty() {
-        if let Some(src) = map.get(YamlValue::from("source")) {
-            if let Some(m) = src.as_mapping() {
-                if let Some(YamlValue::Sequence(seq)) = m.get(YamlValue::from("patches")) {
-                    for item in seq {
-                        if let Some(s) = yaml_as_string(item) {
-                            patches.push(s);
-                        }
-                    }
-                }
-            }
-        }
+    if let Some(source) = map.get(YamlValue::from("source")) {
+        collect_conda_source_patches(source, &mut patches);
     }
+    let mut seen_patches = HashSet::new();
+    patches.retain(|patch| seen_patches.insert(patch.clone()));
     if !patches.is_empty() {
         notes.push(format!("conda: {} patch path(s) recorded", patches.len()));
     }
@@ -580,6 +571,41 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
         rules: Vec::new(),
         notes,
     })
+}
+
+fn collect_conda_source_patches(source: &YamlValue, patches: &mut Vec<String>) {
+    match source {
+        YamlValue::Sequence(sources) => {
+            for source in sources {
+                collect_conda_source_patches(source, patches);
+            }
+        }
+        YamlValue::Mapping(source) => {
+            let Some(value) = source.get(YamlValue::from("patches")) else {
+                return;
+            };
+            match value {
+                YamlValue::Sequence(items) => {
+                    for item in items {
+                        if let Some(patch) = yaml_as_string(item) {
+                            patches.push(patch);
+                        } else if let Some(mapping) = item.as_mapping() {
+                            if let Some(patch) = mapping
+                                .get(YamlValue::from("path"))
+                                .or_else(|| mapping.get(YamlValue::from("file")))
+                                .and_then(yaml_as_string)
+                            {
+                                patches.push(patch);
+                            }
+                        }
+                    }
+                }
+                YamlValue::String(patch) => patches.push(patch.clone()),
+                _ => {}
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Expand deterministic `{% set %}` expressions, `context:` scalars, and
@@ -1082,20 +1108,37 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
 
     let dependencies = parse_spack_depends_on(text, &mut notes);
 
-    // resource() urls as extra notes (not primary package source)
-    let res_re = Regex::new(r#"(?m)resource\s*\(\s*[^)]*url\s*=\s*[\"']([^\"']+)[\"']"#).ok();
-    if let Some(re) = res_re {
-        let n = re.find_iter(text).count();
-        if n > 0 {
-            notes.push(format!(
-                "{n} resource() fetch(es) present — not folded into primary sources"
-            ));
-        }
+    let resource_calls = python_call_spans(text, "resource");
+    if !resource_calls.is_empty() {
+        notes.push(format!(
+            "{} conditional resource() fetch(es) included in planned sources",
+            resource_calls.len()
+        ));
     }
+
+    let primary_url = if preferred.url.is_some() {
+        preferred.url.clone()
+    } else if text.contains("def url_for_version") {
+        let materialized = materialize_spack_url_for_version(text, &preferred.version, url.as_deref());
+        if materialized.is_some() {
+            notes.push(format!(
+                "materialized dynamic url_for_version for {}",
+                preferred.version
+            ));
+        } else {
+            notes.push(
+                "dynamic url_for_version could not be materialized; stale class URL ignored"
+                    .into(),
+            );
+        }
+        materialized
+    } else {
+        url.clone()
+    };
 
     // Keep http(s) `url` separate from `git` so tag→archive materialization can run.
     let mut sources = vec![ForeignSource {
-        url: preferred.url.clone().or_else(|| url.clone()),
+        url: primary_url,
         filename: None,
         sha256: preferred.sha256.clone(),
         git: git.clone(),
@@ -1107,27 +1150,26 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
         sources[0].git = git.clone();
     }
 
-    // resource(name=..., url=..., destination=..., placement=...)
-    let res_full = Regex::new(r#"(?s)resource\s*\(\s*((?:[^()]|\([^()]*\))*)\)"#).ok();
-    let res_url_re = Regex::new(r#"url\s*=\s*[\"']([^\"']+)[\"']"#).expect("resource URL re");
-    let res_dest_re = Regex::new(r#"(?:destination|placement)\s*=\s*[\"']([^\"']+)[\"']"#)
-        .expect("resource destination re");
-    if let Some(re) = res_full {
-        for cap in re.captures_iter(text) {
-            let inner = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-            let res_url = res_url_re
-                .captures(inner)
-                .and_then(|c| c.get(1).map(|m| m.as_str().to_string()));
-            let dest = res_dest_re
-                .captures(inner)
-                .and_then(|c| c.get(1).map(|m| m.as_str().to_string()));
-            if let Some(u) = res_url {
-                sources.push(ForeignSource {
-                    url: Some(u),
-                    target_directory: dest,
-                    ..Default::default()
-                });
-            }
+    // resource(name=..., url=..., sha256=..., destination=..., placement=...)
+    let placement_re = Regex::new(
+        r#"placement\s*=\s*\{[^:}]+:\s*[\"']([^\"']+)[\"']\s*\}"#,
+    )
+    .expect("resource placement re");
+    for call in resource_calls {
+        let inner = &text[call.inner_start..call.end.saturating_sub(1)];
+        if let Some(url) = spack_string_kwarg(inner, "url") {
+            let target_directory = spack_string_kwarg(inner, "destination").or_else(|| {
+                placement_re
+                    .captures(inner)
+                    .and_then(|capture| capture.get(1).map(|value| value.as_str().to_string()))
+            });
+            sources.push(ForeignSource {
+                url: Some(url),
+                filename: spack_string_kwarg(inner, "name"),
+                sha256: spack_string_kwarg(inner, "sha256"),
+                target_directory,
+                ..Default::default()
+            });
         }
     }
 
@@ -1402,6 +1444,7 @@ fn parse_spack_rule_call(
 #[derive(Debug, Clone)]
 struct SpackVersion {
     version: String,
+    preferred: bool,
     sha256: Option<String>,
     tag: Option<String>,
     commit: Option<String>,
@@ -1430,6 +1473,9 @@ fn parse_spack_version_call(inner: &str) -> Option<SpackVersion> {
     };
     Some(SpackVersion {
         version,
+        preferred: Regex::new(r"\bpreferred\s*=\s*True\b")
+            .ok()
+            .is_some_and(|regex| regex.is_match(inner)),
         sha256: kw("sha256"),
         tag: kw("tag"),
         commit: kw("commit"),
@@ -1446,10 +1492,51 @@ fn pick_preferred_spack_version(versions: &[SpackVersion]) -> SpackVersion {
     };
     versions
         .iter()
-        .find(|v| !is_floating(&v.version))
+        .find(|version| version.preferred && !is_floating(&version.version))
+        .or_else(|| versions.iter().find(|version| !is_floating(&version.version)))
         .or_else(|| versions.first())
         .cloned()
         .expect("versions non-empty")
+}
+
+fn materialize_spack_url_for_version(
+    text: &str,
+    version: &str,
+    class_url: Option<&str>,
+) -> Option<String> {
+    if !text.contains("datetime.strptime")
+        || !text.contains("stable_versions")
+        || !text.contains("_update")
+    {
+        return None;
+    }
+
+    let (date, update) = version
+        .split_once('.')
+        .map(|(date, update)| (date, format!("_update{update}")))
+        .unwrap_or((version, String::new()));
+    let date = NaiveDate::parse_from_str(date, "%Y%m%d").ok()?;
+    let stable_block = Regex::new(r"(?s)stable_versions\s*=\s*\{(.*?)\}")
+        .ok()?
+        .captures(text)?
+        .get(1)?
+        .as_str()
+        .to_string();
+    let quoted_version = format!("\"{version}\"");
+    let single_quoted_version = format!("'{version}'");
+    let release_kind = if stable_block.contains(&quoted_version)
+        || stable_block.contains(&single_quoted_version)
+    {
+        "stable"
+    } else {
+        "patch"
+    };
+    let date = date.format("%d%b%Y").to_string();
+    let date = date.trim_start_matches('0');
+    let prefix = class_url?.split_once("/archive/")?.0;
+    Some(format!(
+        "{prefix}/archive/{release_kind}_{date}{update}.tar.gz"
+    ))
 }
 
 fn parse_spack_depends_on(text: &str, notes: &mut Vec<String>) -> Vec<ForeignDep> {
