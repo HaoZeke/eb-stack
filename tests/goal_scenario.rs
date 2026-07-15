@@ -81,6 +81,7 @@ fn run_package(
     profile_config: &str,
     expected_name: &str,
     expected_profiles: usize,
+    source_checksums: Vec<String>,
 ) {
     let source = repo().join(source);
     let profile = ProfileConfigLayer::from_path(&repo().join(profile_config)).expect("profiles");
@@ -103,6 +104,7 @@ fn run_package(
         source,
         format: Some(format),
         toolchain: toolchain(),
+        source_checksums,
         profile_layers: vec![profile],
         easyconfig_roots: vec![robot],
         stack_policy: policy(),
@@ -122,6 +124,7 @@ fn run_package(
         let recipe = resolve_easyconfig_file(&easyconfig).expect("reparse emitted recipe");
         assert_eq!(recipe.name, expected_name);
         assert_eq!(recipe.toolchain, toolchain());
+        assert!(!recipe.checksums.is_empty(), "packaging checksum required");
     }
 }
 
@@ -133,6 +136,7 @@ fn conda_eon_becomes_a_resolved_package_bundle() {
         "examples/profiles/eon.toml",
         "eOn",
         1,
+        Vec::new(),
     );
 }
 
@@ -144,5 +148,6 @@ fn spack_qmcpack_becomes_two_resolved_variant_recipes() {
         "examples/profiles/qmcpack.toml",
         "QMCPACK",
         2,
+        vec!["511d5f368db002f2f77504619e1ada8d4a3034200d25feef6773d12a6ed6d18e".into()],
     );
 }

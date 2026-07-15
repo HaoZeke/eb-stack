@@ -24,7 +24,6 @@ package:
   version: 2.16.0
 source:
   url: https://example.invalid/eon-2.16.0.tar.gz
-  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 build:
   script: meson setup build
 requirements:
@@ -69,10 +68,28 @@ config_options = ["-Dwith_cli=true"]
         exclusions: Vec::new(),
     };
 
+    let missing_checksum = plan_new_package(&NewPackageRequest {
+        source: source.clone(),
+        format: Some(ForeignFormat::CondaForge),
+        toolchain: toolchain(),
+        source_checksums: Vec::new(),
+        profile_layers: vec![profile.clone()],
+        easyconfig_roots: vec![robot.clone()],
+        stack_policy: stack_policy.clone(),
+    })
+    .expect_err("planning must reject a source without a packaging checksum");
+    assert!(
+        missing_checksum.to_string().contains("source checksum"),
+        "{missing_checksum}"
+    );
+
     let bundle = plan_new_package(&NewPackageRequest {
         source: source.clone(),
         format: Some(ForeignFormat::CondaForge),
         toolchain: toolchain(),
+        source_checksums: vec![
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+        ],
         profile_layers: vec![profile],
         easyconfig_roots: vec![robot],
         stack_policy,
@@ -95,6 +112,10 @@ config_options = ["-Dwith_cli=true"]
     assert_eq!(parsed.name, "eOn");
     assert_eq!(parsed.dependencies[0].name, "zlib");
     assert_eq!(parsed.dependencies[0].version, "1.2");
+    assert_eq!(
+        parsed.checksums,
+        vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+    );
     assert!(parsed
         .configopts
         .as_deref()
