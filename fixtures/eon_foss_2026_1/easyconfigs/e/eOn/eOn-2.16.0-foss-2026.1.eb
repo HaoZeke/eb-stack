@@ -91,7 +91,8 @@ dependencies = [
 # Prefer builddep Rust on PATH (edition2024). PyTorch paths use python3.12
 # (foss-2024a layout); do not use %(pyshortver)s for EBROOTPYTORCH.
 preconfigopts = 'export PATH=$EBROOTRUST/bin:$PATH && '
-preconfigopts += 'unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER && '
+preconfigopts += 'unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS && '
+preconfigopts += 'export RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER= && '
 preconfigopts += 'mkdir -p %(builddir)s/readcon-stage && ( cd %(builddir)s/eOn-%(version)s/subprojects/readcon-core && '
 preconfigopts += 'cargo --version && rustc --version && '
 preconfigopts += 'cargo cinstall --locked --release --prefix %(builddir)s/readcon-stage --libdir lib --includedir '
