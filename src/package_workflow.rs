@@ -26,6 +26,8 @@ pub struct NewPackageRequest {
     pub source: PathBuf,
     pub format: Option<ForeignFormat>,
     pub toolchain: Toolchain,
+    /// Positional SHA-256 overrides, one for every canonical source artifact.
+    pub source_checksums: Vec<String>,
     pub profile_layers: Vec<ProfileConfigLayer>,
     pub easyconfig_roots: Vec<PathBuf>,
     pub stack_policy: StackPolicy,
@@ -83,12 +85,18 @@ pub fn plan_new_package(
     if request.easyconfig_roots.is_empty() {
         return Err(PackageWorkflowError::NoEasyconfigRoots);
     }
-    let (plan, sbom) = inspect_new_package(
+    let (mut plan, mut sbom) = inspect_new_package(
         &request.source,
         request.format,
         &request.toolchain,
         &request.profile_layers,
     )?;
+    if !request.source_checksums.is_empty() {
+        apply_source_checksums(&mut plan, &request.source_checksums)?;
+        sbom = package_plan_to_cyclonedx(&plan)
+            .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
+    }
+    require_source_checksums(&plan)?;
     let roots = request
         .easyconfig_roots
         .iter()
@@ -117,6 +125,59 @@ pub fn plan_new_package(
         locks,
         easyconfigs,
     })
+}
+
+fn apply_source_checksums(
+    plan: &mut PackagePlan,
+    checksums: &[String],
+) -> Result<(), PackageWorkflowError> {
+    if checksums.len() != plan.sources.len() {
+        return Err(PackageWorkflowError::SourceChecksumCount {
+            expected: plan.sources.len(),
+            actual: checksums.len(),
+        });
+    }
+    for (index, (source, checksum)) in plan
+        .sources
+        .iter_mut()
+        .zip(checksums.iter())
+        .enumerate()
+    {
+        validate_source_checksum(index, checksum)?;
+        source.sha256 = Some(checksum.clone());
+    }
+    plan.residuals
+        .retain(|residual| residual.id != "source:missing-sha256");
+    Ok(())
+}
+
+fn require_source_checksums(plan: &PackagePlan) -> Result<(), PackageWorkflowError> {
+    if plan.sources.is_empty() {
+        return Err(PackageWorkflowError::NoSourceArtifacts);
+    }
+    let missing = plan
+        .sources
+        .iter()
+        .enumerate()
+        .filter_map(|(index, source)| source.sha256.is_none().then_some(index))
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(PackageWorkflowError::MissingSourceChecksums(missing));
+    }
+    for (index, source) in plan.sources.iter().enumerate() {
+        validate_source_checksum(index, source.sha256.as_deref().unwrap_or_default())?;
+    }
+    Ok(())
+}
+
+fn validate_source_checksum(index: usize, checksum: &str) -> Result<(), PackageWorkflowError> {
+    if checksum.len() != 64 || !checksum.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(PackageWorkflowError::InvalidSourceChecksum {
+            index,
+            checksum: checksum.to_string(),
+        });
+    }
+    Ok(())
 }
 
 pub fn plan_package_bump(
@@ -370,6 +431,18 @@ pub enum PackageWorkflowError {
     Sbom(String),
     #[error("at least one EasyBuild robot root is required")]
     NoEasyconfigRoots,
+    #[error("foreign package plan has no source artifacts")]
+    NoSourceArtifacts,
+    #[error(
+        "source checksum override count mismatch: expected {expected} positional SHA-256 values, got {actual}"
+    )]
+    SourceChecksumCount { expected: usize, actual: usize },
+    #[error("source checksum {index} must be exactly 64 hexadecimal characters, got {checksum:?}")]
+    InvalidSourceChecksum { index: usize, checksum: String },
+    #[error(
+        "source checksum required for artifact positions {0:?}; repeat --source-checksum once per source artifact"
+    )]
+    MissingSourceChecksums(Vec<usize>),
     #[error("EasyBuild robot parse: {0}")]
     Robot(String),
     #[error("package profile solve: {0}")]

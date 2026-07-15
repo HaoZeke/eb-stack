@@ -266,6 +266,7 @@ fn package_plan(arguments: &Value) -> Result<Value, String> {
         source: required_path(arguments, "source")?,
         format: foreign_format(arguments)?,
         toolchain: toolchain(arguments)?,
+        source_checksums: string_array(arguments, "source_checksums")?,
         profile_layers: profile_layers(arguments)?,
         easyconfig_roots: path_array(arguments, "easyconfigs")?,
         stack_policy,

@@ -96,6 +96,9 @@ struct PackagePlanArgs {
     easyconfigs: Vec<PathBuf>,
     #[arg(long)]
     stack_policy: PathBuf,
+    /// Positional SHA-256 override; repeat once for every source artifact.
+    #[arg(long = "source-checksum", value_name = "SHA256")]
+    source_checksums: Vec<String>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -300,6 +303,7 @@ fn run_package(command: PackageCommand) -> Result<()> {
                 source: args.inspect.source,
                 format: parse_format(&args.inspect.format)?,
                 toolchain,
+                source_checksums: args.source_checksums,
                 profile_layers: load_profile_layers(&args.inspect.profile_configs)?,
                 easyconfig_roots: args.easyconfigs,
                 stack_policy,
