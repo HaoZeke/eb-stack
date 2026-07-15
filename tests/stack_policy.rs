@@ -202,12 +202,25 @@ fn exclusions_are_solver_inputs_and_retain_reasons() {
     assert_eq!(result.exclusions, stack.exclusions);
 }
 
+fn parse_public_stack_policy(name: &str) -> StackPolicy {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/stacks")
+        .join(name);
+    let text = std::fs::read_to_string(path).expect("stack policy example");
+    toml::from_str(&text).expect("stack policy TOML")
+}
+
 #[test]
 fn public_stack_policy_example_parses() {
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("examples/stacks/foss-2026.1.toml");
-    let text = std::fs::read_to_string(path).expect("stack policy example");
-    let policy: StackPolicy = toml::from_str(&text).expect("stack policy TOML");
+    let policy = parse_public_stack_policy("foss-2026.1.toml");
+    assert_eq!(policy.schema_version, STACK_POLICY_SCHEMA_VERSION);
+    assert_eq!(policy.toolchain, toolchain());
+    assert!(policy.pins.is_empty());
+}
+
+#[test]
+fn public_eon_stack_policy_records_cross_generation_fallbacks() {
+    let policy = parse_public_stack_policy("eon-foss-2026.1.toml");
     assert_eq!(policy.schema_version, STACK_POLICY_SCHEMA_VERSION);
     assert_eq!(policy.toolchain, toolchain());
     let expected = [
