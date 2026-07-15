@@ -905,14 +905,13 @@ impl CampaignLock {
             .create(true)
             .open(&guard_path)
             .map_err(|error| CampaignError::Io(guard_path.clone(), error))?;
-        FileExt::try_lock_exclusive(&guard)
-            .map_err(|error| {
-                if error.kind() == fs2::lock_contended_error().kind() {
-                    CampaignError::Busy(metadata_path.clone())
-                } else {
-                    CampaignError::Io(guard_path.clone(), error)
-                }
-            })?;
+        FileExt::try_lock_exclusive(&guard).map_err(|error| {
+            if error.kind() == fs2::lock_contended_error().kind() {
+                CampaignError::Busy(metadata_path.clone())
+            } else {
+                CampaignError::Io(guard_path.clone(), error)
+            }
+        })?;
 
         let record = CampaignLockRecord {
             schema_version: 1,
@@ -1027,10 +1026,9 @@ mod campaign_lock_tests {
         let lock_path = temp.path().join("campaign.json.lock");
 
         let lock = CampaignLock::acquire(&state).expect("campaign lock");
-        let record: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&lock_path).expect("read campaign lock"),
-        )
-        .expect("lock metadata JSON");
+        let record: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&lock_path).expect("read campaign lock"))
+                .expect("lock metadata JSON");
 
         assert_eq!(record["schema_version"], 1);
         assert_eq!(record["host"], local_host());
