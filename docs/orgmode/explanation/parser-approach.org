@@ -46,14 +46,15 @@ like ~namelower~, ~version_major_minor~, ~github_account~) plus the static
 ~TEMPLATE_CONSTANTS~ table, applied recursively (bounded) so a constant that
 itself expands to another template still resolves.
 
-This resolved shape is what ~parse~ and ~solve~ consume, via
-~ResolvedEasyconfig::to_candidate()~ mapping into the solver-facing
-~Candidate~ / ~DepReq~ shapes. ~eb_emit~ (the ~bump~ path, see
-[[file:architecture.org][architecture]]) is separate: it locates the
-~toolchain~ dict / ~version~ assignment / dependency tuples in the *source
-text* with the same brace-matching span logic and rewrites only those
-spans, leaving every other byte untouched -- bump does not build a
-~ResolvedEasyconfig~ or go through the solver at all.
+This resolved shape feeds ~recipe check~, ~stack solve~, and the candidate
+universe for ~package bump~ through
+~ResolvedEasyconfig::to_candidate()~. A bump also resolves its source recipe,
+materializes an EasyBuild-origin package plan, and asks Resolvo for the target
+dependency selection. The targeted emitter then locates the ~toolchain~ dict,
+~version~ assignment, checksum entry, and dependency tuples in the original
+source text and rewrites only those spans. Unselected content stays intact,
+while the selected versions come from the profile lock rather than a separate
+text-rewrite decision path. See [[file:architecture.org][architecture]].
 
 * Correctness is checked against EasyBuild's own parser
 
@@ -76,10 +77,10 @@ constructs outside the restricted DSL (inline ~if~/~for~, multi-statement
 computed values). ~parse_easyconfig_tree~ walks the whole directory and
 records each unparseable file in ~ParseTreeResult::skipped~ with its error;
 it does not abort the walk on the first bad file. ~ParseTreeResult::coverage()~
-reports the parsed fraction, and every caller that walks a tree (~parse~,
-~solve~, ~bump --easyconfigs~) prints a coverage line and a sample of the
-skips, so "not in the universe" and "does not exist" stay distinguishable
-to the operator reading the output.
+reports the parsed fraction. Tree-consuming commands such as ~recipe check~,
+~stack solve~, and ~package bump --easyconfigs~ surface coverage and sample
+skips, so "not in the candidate universe" and "does not exist" stay
+distinguishable to the operator reading the output.
 
 Coverage against a real, unfiltered ~easybuilders/easybuild-easyconfigs~
 checkout (tens of thousands of files, every toolchain generation from

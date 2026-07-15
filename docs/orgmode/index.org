@@ -73,7 +73,7 @@
       :link: explanation/fidelity
       :link-type: doc
 
-      Measured rates on real maintainer pairs and residual classes.
+      Frozen real-recipe regressions, empirical claims, and limitations.
 
    .. grid-item-card:: Package bundle contract
       :link: reference/package-bundles

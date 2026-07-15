@@ -1,170 +1,133 @@
 #+TITLE: Reproduction fidelity and limitations
 #+OPTIONS: toc:t num:nil
 
-~eb-stack~ is assistive tooling for a toolchain-generation rebuild, not an
-unattended pipeline. This page states how much of a real maintainer bump
-it reproduces, measured against real EasyBuild recipes, and what kind of
-residual to expect when it does not reproduce one exactly. Both numbers
-below move as the parser, hierarchy resolver, and resolvo joint path improve;
-this page is updated alongside the code that moves them.
+~eb-stack~ separates deterministic package planning from empirical build
+evidence. This page states what the checked-in regression suites prove and
+where an operator must rely on residuals or a target campaign instead of a
+compatibility assumption.
 
-* Parser coverage on a real, unfiltered checkout
+* Evidence boundaries
 
-~eb-stack parse~ / ~solve~ / ~bump --easyconfigs~ all walk a directory tree
-and evaluate every ~.eb~ file with the restricted-Python evaluator
-described in [[file:parser-approach.org][the parser approach]]. Measured
-against a real, unfiltered local checkout of
-~easybuilders/easybuild-easyconfigs~ (spanning toolchain generations from
-roughly ~2021a~ to ~2025b~, just under eleven thousand ~.eb~ files, no
-pre-filtering or hand-curation): *99.55%* of files parse (10,942 of
-10,992). The remaining 0.45% use constructs outside the restricted DSL --
-multi-statement ~configopts~/~buildopts~ built from ~+=~ lines with
-embedded ~if~/~for~, plus a small set of edge-case string literal forms --
-and are skipped individually, not fatal to the walk (see
-[[file:parser-approach.org][the parser approach]] for how the tree walk
-recovers from a single bad file instead of aborting).
-~tests/real_tree_scale.rs~ exercises this same measurement whenever a real
-checkout is available locally (set ~EB_EASYCONFIGS~) and asserts coverage
-stays above 90%.
+| Evidence | What it proves | What it does not prove |
+|-
+| Parser and package fixtures | Input facts survive normalization into the package plan and planned SBOM | The selected package compiles |
+| Resolvo profile lock | One dependency selection satisfies the declared constraints, pins, exclusions, and EasyBuild hierarchy | The selected versions are ABI-compatible in a real build |
+| Emitted-recipe regression | The rendered ~.eb~ text and bundle layout match a frozen expected result | Upstream source bytes, patches, compilers, tests, or sanity succeed |
+| Campaign state | EasyBuild and declared verification commands ran on one named target | The same recipe builds on a different target or runtime ABI |
 
-Coverage matters beyond the parse step itself: every dependency name
-~bump --easyconfigs~ cannot find a hierarchy-compatible candidate for is
-either a loud failure (default) or a version left unchanged with a printed
-warning (~--keep-old-deps~) -- see the next section. A large gap in parser
-coverage does not show up as a crash; it shows up as dependencies missing
-from the universe with no error naming which ones. Closing the coverage
-gap from a much lower
-starting point (below a third of this same checkout, before the
-restricted evaluator replaced an earlier regex-only extractor) is the main
-reason the reproduction rate in the next section moved from single digits
-into the fifties.
+The claim ladder follows these boundaries: planning may establish *resolves*;
+only a target campaign may establish *builds* and *binary-verified*.
+New packages enter this boundary through ~eb-stack package plan~; existing
+recipes use ~eb-stack package bump~; whole-stack selection uses
+~eb-stack stack solve~.
 
-* Mechanical reproduction of real maintainer toolchain bumps
+* Frozen maintainer-bump matrix
 
-Measured on a sample of 34 real ~foss-2023b~ -> ~foss-2024a~ toolchain-bump
-pairs: applications present under both generations in the same real
-checkout, same application version on both sides, excluding CUDA/PLUMED
-build-variant suffixes. For each pair, ~bump --easyconfigs~ ran against the
-full raw checkout (no pre-sanitizing, no hand-fed ~--dep~ overrides,
-default loud-fail-on-unresolved), and the emitted file was diffed against
-the real target file the maintainer committed.
+~tests/reproduce_real_prs.rs~ contains 18 library and CLI regressions over six
+real ~foss-2023b~ to ~foss-2024a~ recipe pairs:
 
-| Class         | Count | Share |
-|---------------+-------+-------|
-| EXACT         |    15 |   44% |
-| ADDITIVE-ONLY |     3 |    9% |
-| RESIDUAL      |    15 |   44% |
-| ERROR (loud)  |     1 |    3% |
-|---------------+-------+-------|
-| Total         |    34 |  100% |
+- GROMACS 2024.4;
+- ScaFaCoS 1.0.4;
+- MDTraj 1.10.3;
+- Fiona 1.10.1;
+- PuLP 2.8.0;
+- numba 0.60.0.
 
-*Reproduction rate (EXACT + ADDITIVE-ONLY) / N = 53%* (18 of 34).
-"ADDITIVE-ONLY" means the real target equals the emitted file plus lines
-the maintainer inserted -- e.g. an attribution comment, or a
-~builddependencies~ entry unknowable from the source recipe -- with nothing
-removed and nothing else changed: the tool did not reproduce the whole
-diff, but it did not get anything *wrong* either.
+The zero-hand-fed cases give ~package bump~ only the source recipe, target
+toolchain generation, and frozen EasyBuild universe. Resolvo selects the
+hierarchy-compatible dependency identities. ScaFaCoS, MDTraj, Fiona, PuLP,
+and numba reproduce the frozen target content. GROMACS matches after removing
+the one ~pybind11~ dependency added by the maintainer; the regression also
+asserts that ~eb-stack~ does not invent that source-absent dependency.
 
-** What the 15 RESIDUAL pairs look like
+~tests/bump_emit.rs~ separately checks canonical bundle paths, deterministic
+repeat runs, explicit version/checksum inputs, hierarchy-aware selection, and
+parity between the library and ~eb-stack package bump~ CLI paths.
 
-A pair can land in more than one category; the largest by pair count is
-listed first.
+Run the public regression:
 
-1. *"Newest that exists today" is not "newest that existed when the target
-   generation released"* (9 of 15 pairs, the largest remaining gap). The
-   hierarchy resolver picks the newest hierarchy-compatible candidate in
-   whatever universe it is pointed at. When that universe has since
-   accumulated a newer easyconfig than existed at the time the target
-   generation was actually released -- a later ~CMake~ or ~scikit-learn~
-   build added to the same checkout well after ~foss-2024a~'s own release -- the
-   resolver correctly finds it and correctly prefers it, but that is not
-   what the maintainer's PR used. This gap sits entirely in
-   generation-native version selection; parser coverage and hierarchy
-   membership are both already correct here. It is the area receiving
-   active work: a time-boundary-aware candidate filter, or at minimum a
-   per-dependency warning distinguishing "resolved cleanly, one candidate"
-   from "resolved to the newest of several, verify against upstream."
-2. *Pin recognition is not yet complete.* A dependency pinned by a literal
-   ~versionsuffix~ (e.g. ~('LLVM', '14.0.6', '-llvmlite')~) is correctly
-   left untouched. A pin expressed only as a trailing comment
-   (~('ASE', '3.23.0'),  # optional~) or as a ~SYSTEM~-toolchain
-   pseudo-version dependency (a platform-qualified build tag rather than a
-   real version, which by construction has no hierarchy-compatible
-   candidate) is not yet recognized as a pin, so the resolver either bumps
-   it when it should not, or fails loudly when the correct behavior would
-   have been to leave it alone. The loud ERROR in the table above is
-   exactly this case: a ~SYSTEM~-toolchain dependency the resolver could
-   not place in any hierarchy tier, correctly reported as a failure rather
-   than emitted with a wrong version and no indication anything went
-   wrong -- but a false negative, in
-   the sense that a smarter default (treat ~SYSTEM~-toolchain and
-   comment-annotated deps as implicitly pinned, the same as a
-   ~versionsuffix~ pin) would have produced the exact right answer with no
-   manual intervention. ~--keep-old-deps~ is today's one-flag workaround
-   for this specific shape.
-3. *Inherent maintainer judgment.* The remaining residual content is
-   cosmetic or structural work no mechanical version-bump tool can or
-   should invent: quote-style changes, description reformatting,
-   dependency-list restructuring the maintainer did by hand, and new
-   dependencies or patches added specifically for the new version
-   (unknowable from a source recipe that predates them), plus outright
-   structural swaps such
-   as a build moving from Qt5 to Qt6 with a different ~easyblock~
-   entirely. These account for most of the line-level diff in the residual
-   pairs and are explicitly out of scope for a targeted rewrite tool by
-   design -- see
-   [[file:parser-approach.org][the parser approach]] for why ~bump~
-   rewrites targeted spans rather than re-serializing the file.
+#+begin_src bash
+cargo test --locked +  --test reproduce_real_prs +  --test bump_emit +  -- --nocapture
+#+end_src
 
-** Unresolved dependencies fail loudly, with no quiet fallback
+This is a fixed regression matrix, not a success-rate estimate for arbitrary
+EasyBuild recipes.
 
-Earlier revisions of the hierarchy resolver left an unresolved dependency
-at its source version with no warning, which is worse than either
-succeeding or failing cleanly: a diff review sees a stack that looks fully
-bumped, but is not, with nothing in the output saying so. The current
-default inverts that: ~bump~ aborts with a named, non-zero-exit error the
-moment any dependency (other than a recognized pin) has no
-hierarchy-compatible candidate, and ~--keep-old-deps~ is required to opt
-back into "leave the source version and keep going," with a warning
-printed for every dependency that path takes. Across the 34-pair sample,
-zero of the RESIDUAL pairs show a stale dependency version with no warning
-attached; the corresponding cases now surface as either the ERROR row
-above or a correctly-resolved version.
+* Foreign-package and profile evidence
 
-* What this means for using eb-stack on a real rebuild
+The conda-forge eOn and Spack QMCPACK fixtures exercise a different boundary:
 
-Read this as: *~eb-stack~ turns most of a toolchain-generation bump into a
-mechanical, reviewable diff, and names the exact reason when it could
-not.* It
-is not a substitute for reviewing that diff. The
-[[https://github.com/HaoZeke/eb-stack/blob/main/skills/annual-bump/SKILL.md][annual-bump
-skill]] (~skills/annual-bump/SKILL.md~ in the repository) encodes this
-split directly: the deterministic steps (~bump~, ~solve~) run
-unattended and exit non-zero or warn exactly when a residual decision is
-needed, and its own bulletproofing contract says a generated recipe never
-goes to a build pipeline without a human reviewing the diff. Budget human
-review time for:
+- static recipe ingestion with source spans and provenance;
+- conda selectors and Spack conditions, variants, conflicts, and requirements;
+- canonical package plans and CycloneDX 1.5 planned SBOMs;
+- per-profile Resolvo locks;
+- one conventional recipe per independently loadable variant;
+- stack-pin fallback and candidate exclusions;
+- packaging gates against frozen overlays and, when configured, a real robot.
 
-- Any warning ~bump~ prints (stale checksum, patches needing review, a
-  dependency kept at its old version).
-- A version-bumped dependency where more than one candidate existed in the
-  universe at that hierarchy tier -- verify it against the versions that
-  actually existed when the target generation released, since the
-  resolver only sees what is in today's local checkout.
-- New dependencies or patches the target application version needs that
-  the source recipe never declared -- these cannot be mechanically
-  inferred from the old recipe at all.
-- Structural swaps (a different ~easyblock~, a dependency family change) --
-  these are maintainer judgment calls a version-bump tool is not designed
-  to make.
+Run those deterministic suites:
+
+#+begin_src bash
+cargo test --locked +  --test foreign_ingest +  --test foreign_conditions +  --test profile_emission +  --test eon_foss_2026_1 +  --test qmcpack_foss_2026_1 +  --test eon_packaging +  -- --nocapture
+#+end_src
+
+These tests establish parser, solver, and emitter behavior. They do not replace
+~campaign run~ on the selected EasyBuild target.
+
+* Real-tree parser scale
+
+~tests/real_tree_scale.rs~ walks an unfiltered EasyBuild checkout when
+~EB_EASYCONFIGS~ points at one. It requires more than 1,000 recipes, asserts at
+least 90% restricted-DSL coverage, and exercises canonical GROMACS, numba, and
+nglview bumps against that live candidate universe:
+
+#+begin_src bash
+EB_EASYCONFIGS=/path/to/easybuild-easyconfigs/easybuild/easyconfigs +  cargo test --locked --test real_tree_scale -- --nocapture
+#+end_src
+
+Files outside the restricted EasyBuild DSL are reported as skipped paths with
+parse errors; one file does not abort the tree walk. See
+[[file:parser-approach.org][the parser approach]] for the supported expression
+model.
+
+* Limits that remain explicit
+
+- *Static foreign parsing:* dynamic Python, Jinja, helper calls, or imported
+  logic that cannot be proven from source becomes a residual. The parser does
+  not execute conda-forge or Spack recipe code.
+- *Candidate-universe scope:* Resolvo can select only identities present in
+  the supplied robot trees. Pass upstream first and overlays afterward so the
+  reviewed site identity wins.
+- *Stack policy:* a ~preferred~ pin may fall back to another jointly feasible
+  candidate and records that outcome. A ~locked~ pin makes incompatibility
+  unsatisfiable. Neither mode claims that the candidate builds.
+- *Application-version changes:* source URLs and checksums cannot be inferred
+  safely. Supply ~--source-checksum~; patches and source-layout changes remain
+  visible residual work.
+- *Maintainer additions:* a source recipe cannot reveal a dependency, patch,
+  easyblock change, or configuration rule introduced only in the target
+  recipe. Add that authored package knowledge, re-plan, and retain it in the
+  bundle.
+- *Planned SBOM scope:* the CycloneDX document describes requested components
+  and selections. It is not an installed-files inventory or binary provenance
+  attestation.
+- *Target specificity:* a build on one host/container/toolchain ABI does not
+  generalize to another. Keep the target name and routed command in campaign
+  evidence.
+
+Unresolved dependencies and unsatisfiable locked pins fail the planning
+command. Build-compatible claims that fail configure, compile, link, test,
+install, or sanity become typed campaign findings. Hermes owns the full repair
+loop; OMP workers claim findings, repair the evidence-supported layer, record
+the resolution, and rerun the campaign.
 
 * Next steps
 
-- [[file:../howto/run-annual-bump.org][How to run the annual toolchain-generation
-  bump]] -- operator guide: residual table, claim ladder, CI-known bumps.
-- [[file:parser-approach.org][The parser approach]] -- what the restricted
-  evaluator does and does not model.
-- [[file:../howto/bump-recipe.org][How to bump a recipe]] -- ~--keep-old-deps~,
-  ~--source-checksum~, and every other ~bump~ flag.
-- [[file:../tutorial.org][Tutorial]] -- a worked zero-hand-fed bump, including
-  the one line it correctly does not invent.
+- [[file:../howto/run-annual-bump.org][Run the annual toolchain-generation bump]]
+  for the batch workflow and claim ladder.
+- [[file:../howto/bump-recipe.org][Bump one recipe]] for the canonical
+  ~package bump~ inputs and bundle.
+- [[file:../reference/campaigns.org][Campaign state and typed findings]] for
+  empirical build classification and ownership.
+- [[file:../tutorial.org][Tutorial]] for conda-forge eOn plus the QMCPACK
+  profile variant.
