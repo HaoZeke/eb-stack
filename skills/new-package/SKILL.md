@@ -175,6 +175,13 @@ Do not reuse host-built modules inside a container or share compiled modules
 between different images. `EASYBUILD_SOURCEPATH` may remain a shared archive
 cache.
 
+Size `EASYBUILD_PARALLEL` against the executor's memory allocation, not only
+its CPU count. Memory-heavy C++ translation units can consume more than a
+gigabyte per compiler process. Start a workstation target at two jobs and
+raise it only with measured headroom; a kernel-killed compiler or exhausted
+virtual memory is a `resource` finding, not a reason to change the selected
+dependency or weaken the recipe.
+
 Cargo reads `.cargo/config.toml` files above its build directory. Keep a
 container target's `work_root` outside personal tool-configuration trees. A
 recipe that disables compiler wrappers must set `RUSTC_WRAPPER=` and
