@@ -312,4 +312,12 @@ fn public_package_config_examples_parse() {
             .and_then(|profile| profile.config_options.as_deref()),
         Some(&[][..])
     );
+    assert_eq!(
+        lammps.profiles[0].parameters.get("mpi").map(String::as_str),
+        Some("openmpi")
+    );
+    assert!(lammps
+        .dependencies
+        .as_ref()
+        .is_some_and(|dependencies| dependencies.exclude_from_solve == ["kokkos"]));
 }
