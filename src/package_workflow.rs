@@ -9,9 +9,9 @@ use crate::foreign::{parse_foreign_path, ForeignFormat};
 use crate::manifest::package_plan_from_foreign;
 use crate::package::{
     package_plan_to_cyclonedx, BuildSpec, ConditionExpr, DependencyIntent, DependencyRole,
-    OutputRequest, PackageMetadata, PackageOrigin, PackagePlan, ProductProfile, ProfileLock,
-    Residual, ResidualSeverity, ResidualStage, SourceArtifact, StackPin, StackPinMode, StackPolicy,
-    PACKAGE_SCHEMA_VERSION,
+    OutputRequest, PackageMetadata, PackageOrigin, PackagePlan, PatchArtifact, ProductProfile,
+    ProfileLock, Residual, ResidualSeverity, ResidualStage, SourceArtifact, StackPin, StackPinMode,
+    StackPolicy, PACKAGE_SCHEMA_VERSION,
 };
 use crate::package_config::{apply_package_layers, PackageConfigLayer};
 use crate::package_emit::{emit_profile_easyconfigs, EmittedEasyconfig};
@@ -264,9 +264,18 @@ fn package_plan_from_easyconfig(
     source_checksum: Option<&str>,
 ) -> PackagePlan {
     let version = version.unwrap_or(&recipe.version).to_string();
+    let source_count = if recipe.sources_count > 0 {
+        recipe.sources_count
+    } else {
+        recipe
+            .checksums
+            .len()
+            .saturating_sub(recipe.patch_names.len())
+    };
     let mut sources = recipe
         .checksums
         .iter()
+        .take(source_count)
         .map(|checksum| SourceArtifact {
             sha256: Some(checksum.clone()),
             ..SourceArtifact::default()
@@ -303,6 +312,15 @@ fn package_plan_from_easyconfig(
             }),
     );
     let versionsuffix = recipe.versionsuffix.iter().cloned().collect::<Vec<_>>();
+    let patches = recipe
+        .patch_names
+        .iter()
+        .enumerate()
+        .map(|(index, filename)| PatchArtifact {
+            filename: filename.clone(),
+            sha256: recipe.checksums.get(source_count + index).cloned(),
+        })
+        .collect();
     let profile = ProductProfile {
         name: "default".into(),
         default: true,
@@ -334,7 +352,7 @@ fn package_plan_from_easyconfig(
             build_systems: Vec::new(),
             config_options: recipe.configopts.iter().cloned().collect(),
             moduleclass: recipe.moduleclass.clone(),
-            patches: recipe.patch_names.clone(),
+            patches,
             easyconfig_parameters: BTreeMap::new(),
         },
         profiles: vec![profile],

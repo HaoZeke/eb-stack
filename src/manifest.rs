@@ -4,8 +4,8 @@ use crate::domain::Toolchain;
 use crate::foreign::{guess_easyblock, ForeignFormat, ForeignRecipe, ForeignRuleKind};
 use crate::package::{
     BuildSpec, DependencyIntent, DependencyRole, OutputRequest, PackageMetadata, PackageOrigin,
-    PackagePlan, PackageRule, PackageRuleKind, ProductProfile, Residual, ResidualSeverity,
-    ResidualStage, SourceArtifact, PACKAGE_SCHEMA_VERSION,
+    PackagePlan, PackageRule, PackageRuleKind, PatchArtifact, ProductProfile, Residual,
+    ResidualSeverity, ResidualStage, SourceArtifact, PACKAGE_SCHEMA_VERSION,
 };
 use std::collections::BTreeMap;
 
@@ -152,7 +152,14 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             build_systems: recipe.build_system_hints.clone(),
             config_options,
             moduleclass: None,
-            patches: recipe.patches.clone(),
+            patches: recipe
+                .patches
+                .iter()
+                .map(|filename| PatchArtifact {
+                    filename: filename.clone(),
+                    sha256: None,
+                })
+                .collect(),
             easyconfig_parameters: BTreeMap::new(),
         },
         profiles: vec![profile],

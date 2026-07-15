@@ -1,6 +1,6 @@
 use eb_stack::package::{
     materialize_profile, package_plan_to_cyclonedx, ConditionExpr, DependencyRole, EasyconfigValue,
-    ProfileEnvironment, StackPolicy, STACK_POLICY_SCHEMA_VERSION,
+    PatchArtifact, ProfileEnvironment, StackPolicy, STACK_POLICY_SCHEMA_VERSION,
 };
 use eb_stack::package_config::{apply_package_layers, DependencyAlias, PackageConfigLayer};
 use eb_stack::{
@@ -182,7 +182,10 @@ versionsuffix = ["-kokkos"]
     .expect("package config");
 
     let mut plan = qmcpack_plan();
-    plan.build.patches = vec!["foreign-feedstock.patch".into()];
+    plan.build.patches = vec![PatchArtifact {
+        filename: "foreign-feedstock.patch".into(),
+        sha256: None,
+    }];
     apply_package_layers(&mut plan, &[config]).expect("apply package config");
 
     assert_eq!(plan.package.name, "LAMMPS");

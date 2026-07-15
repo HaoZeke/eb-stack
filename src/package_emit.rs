@@ -130,19 +130,17 @@ fn render_easyconfig(
     } else {
         format!("toolchainopts = {{{toolchain_options}}}\n")
     };
-    let (source_lines, checksum_lines) = render_sources(&materialized.sources);
+    let (source_lines, checksum_lines) = render_sources(&materialized.sources, &plan.build.patches);
     let patch_line = if plan.build.patches.is_empty() {
         String::new()
     } else {
-        format!(
-            "patches = [{}]\n",
-            plan.build
-                .patches
-                .iter()
-                .map(|patch| format!("'{}'", escape_single(patch)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
+        let patches = plan
+            .build
+            .patches
+            .iter()
+            .map(|patch| format!("'{}'", escape_single(&patch.filename)))
+            .collect::<Vec<_>>();
+        format!("patches = {}\n", render_multiline_list(&patches))
     };
     let mut seen_options = BTreeSet::new();
     let config_options = plan
@@ -271,7 +269,10 @@ fn render_easyconfig_table(
     format!("{{\n{items}\n{suffix}}}")
 }
 
-fn render_sources(source_artifacts: &[crate::package::SourceArtifact]) -> (String, String) {
+fn render_sources(
+    source_artifacts: &[crate::package::SourceArtifact],
+    patches: &[crate::package::PatchArtifact],
+) -> (String, String) {
     let sources = source_artifacts
         .iter()
         .filter_map(|source| {
@@ -292,6 +293,7 @@ fn render_sources(source_artifacts: &[crate::package::SourceArtifact]) -> (Strin
     let checksums = source_artifacts
         .iter()
         .filter_map(|source| source.sha256.as_ref())
+        .chain(patches.iter().filter_map(|patch| patch.sha256.as_ref()))
         .map(|checksum| format!("'{}'", escape_single(checksum)))
         .collect::<Vec<_>>();
     (

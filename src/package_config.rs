@@ -2,7 +2,7 @@
 
 use crate::package::{
     is_easyconfig_parameter_name, ConditionExpr, ConditionPredicate, DependencyIntent,
-    DependencyRole, EasyconfigValue, OutputRequest, PackagePlan, ProductProfile,
+    DependencyRole, EasyconfigValue, OutputRequest, PackagePlan, PatchArtifact, ProductProfile,
     VerificationCommand,
 };
 use serde::{Deserialize, Serialize};
@@ -53,7 +53,7 @@ pub struct BuildPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moduleclass: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub patches: Option<Vec<String>>,
+    pub patches: Option<Vec<PatchArtifact>>,
     #[serde(default)]
     pub easyconfig_parameters: BTreeMap<String, EasyconfigValue>,
 }

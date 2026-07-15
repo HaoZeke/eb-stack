@@ -485,6 +485,14 @@ pub enum EasyconfigValue {
     Table(BTreeMap<String, EasyconfigValue>),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PatchArtifact {
+    pub filename: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+}
+
 pub(crate) fn is_easyconfig_parameter_name(name: &str) -> bool {
     let mut characters = name.chars();
     let identifier = characters
@@ -525,7 +533,7 @@ pub struct BuildSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moduleclass: Option<String>,
     #[serde(default)]
-    pub patches: Vec<String>,
+    pub patches: Vec<PatchArtifact>,
     #[serde(default)]
     pub easyconfig_parameters: BTreeMap<String, EasyconfigValue>,
 }
@@ -783,6 +791,14 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
     ];
     if let Some(upstream_version) = plan.package.upstream_version.as_deref() {
         root_properties.push(Property::new("eb-stack:upstream-version", upstream_version));
+    }
+    for patch in &plan.build.patches {
+        let value = patch
+            .sha256
+            .as_deref()
+            .map(|sha256| format!("{} sha256:{sha256}", patch.filename))
+            .unwrap_or_else(|| patch.filename.clone());
+        root_properties.push(Property::new("eb-stack:patch", &value));
     }
     root.properties = Some(Properties(root_properties));
 
