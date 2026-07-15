@@ -16,7 +16,7 @@ exclude = [
     ".claude/",
     ".codex/",
     ".pixi/",
-    "docs/build/",
+    "docs/build*/",
     "target/",
 ]
 
