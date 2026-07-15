@@ -567,6 +567,23 @@ pub fn classify_build_failure(
     exit_code: Option<i32>,
 ) -> BuildFindingClass {
     let text = format!("{stage}\n{stdout}\n{stderr}").to_ascii_lowercase();
+    let missing_executable = text.contains("no such file or directory")
+        && (text.contains("could not execute process")
+            || text.contains("never executed")
+            || text.contains("command not found")
+            || text.contains("executable file not found")
+            || text.contains("env:")
+            || exit_code == Some(127));
+    let checksum_failure = text.contains("checksum verification")
+        || text.contains("checksum mismatch")
+        || text.contains("checksums do not match")
+        || text.contains("checksum failed");
+    let patch_failure = text.contains("failed to apply patch")
+        || text.contains("could not apply patch")
+        || text.contains("couldn't apply patch")
+        || text.contains("can't find file to patch")
+        || text.contains("patch failed")
+        || text.contains("hunk #") && text.contains("failed");
     if text.contains("ssh:")
         || text.contains("connection refused")
         || text.contains("connection timed out")
@@ -582,14 +599,12 @@ pub fn classify_build_failure(
         BuildFindingClass::Resource
     } else if text.contains("glibc_") && text.contains("not found") {
         BuildFindingClass::Runtime
-    } else if text.contains("checksum") && (text.contains("failed") || text.contains("mismatch")) {
-        BuildFindingClass::Checksum
-    } else if text.contains("patch") && (text.contains("failed") || text.contains("reject")) {
-        BuildFindingClass::Patch
-    } else if text.contains("no such file or directory")
-        && (text.contains("env:") || exit_code == Some(127))
-    {
+    } else if missing_executable {
         BuildFindingClass::Runtime
+    } else if checksum_failure {
+        BuildFindingClass::Checksum
+    } else if patch_failure {
+        BuildFindingClass::Patch
     } else if text.contains("no such file or directory")
         && (text.contains("fatal error") || text.contains("header"))
     {
@@ -612,7 +627,10 @@ pub fn classify_build_failure(
         BuildFindingClass::Install
     } else if text.contains("timed out") || exit_code == Some(124) {
         BuildFindingClass::Timeout
-    } else if text.contains("error:") || text.contains("compilation terminated") {
+    } else if text.contains("error:")
+        || text.contains("compilation terminated")
+        || text.contains("make") && text.contains("***")
+    {
         BuildFindingClass::Compile
     } else if stage.eq_ignore_ascii_case("verify") {
         BuildFindingClass::Sanity
