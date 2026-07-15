@@ -54,7 +54,7 @@ default = true
 config_options = ["-Dwith_cli=true"]
 "#,
     )
-    .expect("profile config");
+    .expect("package config");
     let stack_policy = StackPolicy {
         schema_version: STACK_POLICY_SCHEMA_VERSION,
         name: "site".into(),

@@ -586,7 +586,7 @@ fn load_package_layers(paths: &[PathBuf]) -> Result<Vec<PackageConfigLayer>> {
         .iter()
         .map(|path| {
             PackageConfigLayer::from_path(path)
-                .with_context(|| format!("load profile config {}", path.display()))
+                .with_context(|| format!("load package config {}", path.display()))
         })
         .collect()
 }

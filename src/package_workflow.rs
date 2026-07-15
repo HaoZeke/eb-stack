@@ -421,7 +421,7 @@ pub enum PackageWorkflowError {
     Foreign(String),
     #[error("EasyBuild package adapter: {0}")]
     EasyBuild(String),
-    #[error("package profile config: {0}")]
+    #[error("package config: {0}")]
     Config(String),
     #[error("package SBOM: {0}")]
     Sbom(String),

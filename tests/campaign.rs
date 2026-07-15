@@ -274,9 +274,9 @@ fn finding_queue_enforces_ownership_and_records_resolution() {
         &finding,
         "omp-worker-1",
         FindingResolution {
-            action: "corrected the profile config".into(),
+            action: "corrected the package config".into(),
             evidence: "recipe check exits successfully".into(),
-            changes: vec!["profiles/eon.toml".into()],
+            changes: vec!["packages/eon.toml".into()],
         },
     )
     .expect("resolve finding");
@@ -286,7 +286,7 @@ fn finding_queue_enforces_ownership_and_records_resolution() {
             .resolution
             .as_ref()
             .map(|resolution| resolution.action.as_str()),
-        Some("corrected the profile config")
+        Some("corrected the package config")
     );
 }
 
@@ -630,11 +630,11 @@ fn campaign_cli_claims_and_resolves_findings_for_omp_workers() {
             "--owner",
             "omp-worker-1",
             "--action",
-            "corrected profile config",
+            "corrected package config",
             "--evidence",
             "recipe check exits successfully",
             "--change",
-            "profiles/eon.toml",
+            "packages/eon.toml",
         ])
         .output()
         .expect("resolve command");

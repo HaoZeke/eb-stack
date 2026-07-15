@@ -78,18 +78,19 @@ fn synthetic_robot(plan: &eb_stack::package::PackagePlan, root: &Path) {
 fn run_package(
     source: &str,
     format: ForeignFormat,
-    profile_config: &str,
+    package_config: &str,
     expected_name: &str,
     expected_profiles: usize,
     source_checksums: Vec<String>,
 ) {
     let source = repo().join(source);
-    let profile = PackageConfigLayer::from_path(&repo().join(profile_config)).expect("profiles");
+    let package =
+        PackageConfigLayer::from_path(&repo().join(package_config)).expect("package config");
     let (inspected, inspected_sbom) = inspect_new_package(
         &source,
         Some(format),
         &toolchain(),
-        std::slice::from_ref(&profile),
+        std::slice::from_ref(&package),
     )
     .expect("inspect package");
     assert_eq!(inspected.package.name, expected_name);
@@ -105,7 +106,7 @@ fn run_package(
         format: Some(format),
         toolchain: toolchain(),
         source_checksums,
-        package_layers: vec![profile],
+        package_layers: vec![package],
         easyconfig_roots: vec![robot],
         stack_policy: policy(),
     })
@@ -142,7 +143,7 @@ fn conda_eon_becomes_a_resolved_package_bundle() {
     run_package(
         "fixtures/foreign_ingest/conda_eon/recipe.yaml",
         ForeignFormat::CondaForge,
-        "examples/profiles/eon.toml",
+        "examples/packages/eon.toml",
         "eOn",
         1,
         Vec::new(),
@@ -154,7 +155,7 @@ fn spack_qmcpack_becomes_two_resolved_variant_recipes() {
     run_package(
         "fixtures/foreign_ingest/spack_qmcpack/package.py",
         ForeignFormat::Spack,
-        "examples/profiles/qmcpack.toml",
+        "examples/packages/qmcpack.toml",
         "QMCPACK",
         2,
         vec!["511d5f368db002f2f77504619e1ada8d4a3034200d25feef6773d12a6ed6d18e".into()],
