@@ -1,7 +1,7 @@
 use eb_stack::package::{
     materialize_profile, ConditionExpr, EasyconfigValue, LockedDependency, OutputRequest,
-    ProductProfile, ProfileEnvironment, ProfileLock, StackPin, StackPinMode, StackPolicy,
-    PROFILE_LOCK_SCHEMA_VERSION, STACK_POLICY_SCHEMA_VERSION,
+    PatchArtifact, ProductProfile, ProfileEnvironment, ProfileLock, StackPin, StackPinMode,
+    StackPolicy, PROFILE_LOCK_SCHEMA_VERSION, STACK_POLICY_SCHEMA_VERSION,
 };
 use eb_stack::{
     emit_profile_easyconfigs, lint_style, package_plan_from_foreign, parse_foreign_path,
@@ -289,6 +289,36 @@ fn typed_easyconfig_parameters_render_as_conventional_python_data() {
     }
     assert!(text.contains("package_extra_cmake_args = {"));
     assert!(text.contains("'KSPACE': '-DFFT=FFTW3'"));
+    assert!(lint_style(text).is_empty(), "{:?}", lint_style(text));
+}
+
+#[test]
+fn patch_artifacts_emit_names_and_positional_checksums_after_sources() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.profiles = qmcpack_profiles();
+    plan.outputs.truncate(1);
+    plan.sources.truncate(1);
+    plan.sources[0].sha256 =
+        Some("1e67f91eaa9c6325746438164e1ea371ffb7a662e6acb0a15faae90e0867f4fa".into());
+    plan.build.patches = vec![PatchArtifact {
+        filename: "Orbit-2.0-portability.patch".into(),
+        sha256: Some("4f43b42fdcf84d0cf634d993dd944f252c8243dc612a919fe2825d56f937c8eb".into()),
+    }];
+    let mut lock = profile_lock("default", "");
+    lock.package.clone_from(&plan.package.name);
+
+    let emitted = emit_profile_easyconfigs(&plan, &[lock]).expect("emit patch artifact");
+    let text = &emitted[0].text;
+
+    assert!(text.contains("patches = [\n    'Orbit-2.0-portability.patch',\n]"));
+    let source_checksum = text
+        .find("1e67f91eaa9c6325746438164e1ea371ffb7a662e6acb0a15faae90e0867f4fa")
+        .expect("source checksum");
+    let patch_checksum = text
+        .find("4f43b42fdcf84d0cf634d993dd944f252c8243dc612a919fe2825d56f937c8eb")
+        .expect("patch checksum");
+    assert!(source_checksum < patch_checksum);
     assert!(lint_style(text).is_empty(), "{:?}", lint_style(text));
 }
 

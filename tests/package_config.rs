@@ -280,6 +280,10 @@ general_packages = ["ASPHERE", "KSPACE", "MOLECULE"]
 build_shared_libs = true
 max_nbins = 16
 
+[[build.patches]]
+filename = "Orbit-2.0-portability.patch"
+sha256 = "4f43b42fdcf84d0cf634d993dd944f252c8243dc612a919fe2825d56f937c8eb"
+
 [[dependencies.requirements]]
 name = "HDF5"
 roles = ["run"]
@@ -316,6 +320,15 @@ with_tests = false
     assert_eq!(
         plan.build.easyconfig_parameters.get("max_nbins"),
         Some(&EasyconfigValue::Integer(16))
+    );
+    assert_eq!(plan.build.patches.len(), 1);
+    assert_eq!(
+        plan.build.patches[0].filename,
+        "Orbit-2.0-portability.patch"
+    );
+    assert_eq!(
+        plan.build.patches[0].sha256.as_deref(),
+        Some("4f43b42fdcf84d0cf634d993dd944f252c8243dc612a919fe2825d56f937c8eb")
     );
     assert_eq!(
         plan.profiles[0].easyconfig_parameters.get("with_tests"),
