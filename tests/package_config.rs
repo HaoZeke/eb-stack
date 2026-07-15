@@ -223,6 +223,22 @@ fn public_package_config_examples_parse() {
             .map(String::as_str),
         Some("SciPy-bundle")
     );
+    for (foreign, provider) in [
+        ("py-pip", "Python"),
+        ("py-wheel", "Python"),
+        ("py-setuptools", "Python"),
+        ("py-build", "build"),
+    ] {
+        assert_eq!(
+            common
+                .dependencies
+                .as_ref()
+                .and_then(|dependencies| dependencies.aliases.get(foreign))
+                .map(String::as_str),
+            Some(provider),
+            "missing shared Spack Python alias for {foreign}"
+        );
+    }
     assert_eq!(eon.profiles.len(), 1);
     assert_eq!(
         eon.profiles[0]
