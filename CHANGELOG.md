@@ -40,6 +40,8 @@ All notable changes to this unreleased project are documented here.
   mechanical.
 - Documentation, examples, CI, and acceptance fixtures use only the
   version-one command and MCP names.
+- CI enforces the Rust 1.88 minimum, formatting, clippy with warnings denied,
+  and public metadata contracts.
 
 ### Removed
 

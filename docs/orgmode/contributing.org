@@ -7,8 +7,8 @@ repo root; keep them aligned when you change either.
 
 * Development environment
 
-Rust stable builds the library and CLI. Documentation uses
-[[https://pixi.sh][pixi]]:
+Rust 1.88 is the minimum supported toolchain; current stable runs the main test
+and lint gates. Documentation uses [[https://pixi.sh][pixi]]:
 
 #+begin_src bash
 cargo test --locked --lib

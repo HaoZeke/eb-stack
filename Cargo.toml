@@ -2,7 +2,7 @@
 name = "eb_stack"
 version = "0.3.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.88"
 description = "Turn conda-forge, Spack, and EasyBuild recipes into Resolvo-solved variants, CycloneDX SBOMs, and build-evaluated package bundles"
 license = "MIT"
 authors = ["Rohit Goswami <rgoswami@ieee.org>"]

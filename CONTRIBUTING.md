@@ -6,8 +6,8 @@ co-selection, and reviewable reports. Clear, tested, reproducible changes win.
 
 ## Development environment
 
-Rust stable is enough for the library and CLI. Documentation uses
-[pixi](https://pixi.sh):
+Rust 1.88 is the minimum supported toolchain; current stable is used for the
+main test and lint gates. Documentation uses [pixi](https://pixi.sh):
 
 ```bash
 cargo test --locked --lib

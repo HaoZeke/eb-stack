@@ -45,6 +45,8 @@ Report these claims independently:
 
 ## Install
 
+Rust 1.88 or newer is required for the locked dependency graph.
+
 ```sh
 git clone https://github.com/HaoZeke/eb-stack.git
 cd eb-stack
