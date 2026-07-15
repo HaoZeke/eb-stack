@@ -1668,6 +1668,19 @@ fn parse_spack_condition_term(term: &str) -> Option<ConditionExpr> {
             },
         ));
     }
+    if let Some((name, value)) = term.split_once('=') {
+        let name = name.trim();
+        let value = value.trim();
+        if !name.is_empty() && !value.is_empty() {
+            return Some(ConditionExpr::Predicate(
+                ConditionPredicate::VariableComparison {
+                    left: name.into(),
+                    operator: "==".into(),
+                    right: value.into(),
+                },
+            ));
+        }
+    }
     None
 }
 
