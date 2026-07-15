@@ -104,6 +104,10 @@ pub(crate) fn parse_spack_syntax(source: &str) -> Result<SpackSyntax, String> {
         .collect::<Vec<_>>();
     let mut evaluator = StaticEvaluator::new(source);
     evaluator.walk_statements(&class.body);
+    let mut seen_residuals = std::collections::BTreeSet::new();
+    evaluator
+        .residuals
+        .retain(|residual| seen_residuals.insert(residual.clone()));
     Ok(SpackSyntax {
         class_name: class.name.to_string(),
         bases,
@@ -427,6 +431,12 @@ impl<'a> StaticEvaluator<'a> {
                         template = replace_first(&template, "{}", &value)?;
                     }
                     Some(StaticValue::String(template))
+                }
+                "replace" if call.args.len() == 2 => {
+                    let input = receiver.as_string()?;
+                    let from = self.evaluate(&call.args[0])?.as_string()?;
+                    let to = self.evaluate(&call.args[1])?.as_string()?;
+                    Some(StaticValue::String(input.replace(&from, &to)))
                 }
                 _ => None,
             };
