@@ -623,15 +623,15 @@ pub fn classify_build_failure(
         BuildFindingClass::Test
     } else if text.contains("sanity check failed") {
         BuildFindingClass::Sanity
+    } else if text.contains("error:")
+        || text.contains("compilation terminated")
+        || stage.eq_ignore_ascii_case("build") && text.contains("make") && text.contains("***")
+    {
+        BuildFindingClass::Compile
     } else if text.contains("install") && text.contains("failed") {
         BuildFindingClass::Install
     } else if text.contains("timed out") || exit_code == Some(124) {
         BuildFindingClass::Timeout
-    } else if text.contains("error:")
-        || text.contains("compilation terminated")
-        || text.contains("make") && text.contains("***")
-    {
-        BuildFindingClass::Compile
     } else if stage.eq_ignore_ascii_case("verify") {
         BuildFindingClass::Sanity
     } else {
