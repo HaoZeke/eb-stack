@@ -121,10 +121,7 @@ config_options = ["-Dwith_cli=true"]
     assert_eq!(parsed.name, "eOn");
     assert_eq!(parsed.dependencies[0].name, "zlib");
     assert_eq!(parsed.dependencies[0].version, "1.2");
-    assert_eq!(
-        parsed.checksums,
-        vec![checksum]
-    );
+    assert_eq!(parsed.checksums, vec![checksum]);
     assert!(parsed
         .configopts
         .as_deref()
