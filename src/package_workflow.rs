@@ -96,7 +96,6 @@ pub fn plan_new_package(
         sbom = package_plan_to_cyclonedx(&plan)
             .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
     }
-    require_source_checksums(&plan)?;
     let roots = request
         .easyconfig_roots
         .iter()
@@ -117,6 +116,7 @@ pub fn plan_new_package(
             .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?,
         );
     }
+    require_source_checksums(&plan)?;
     let easyconfigs = emit_profile_easyconfigs(&plan, &locks)
         .map_err(|error| PackageWorkflowError::Emit(error.to_string()))?;
     Ok(PackageBundle {
