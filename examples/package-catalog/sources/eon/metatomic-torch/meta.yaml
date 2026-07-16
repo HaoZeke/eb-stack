@@ -1,0 +1,44 @@
+{% set version = "0.1.15" %}
+
+package:
+  name: libmetatomic-torch
+  version: {{ version | replace('-', '') }}
+
+source:
+  url: https://github.com/metatensor/metatomic/releases/download/metatomic-torch-v{{ version }}/metatomic-torch-cxx-{{ version }}.tar.gz
+  sha256: 2fa4c94144164168834a90ff195ed7d788959c9d9ffd3ea4a85e2f470925c708
+
+build:
+  number: 0
+  run_exports:
+    - {{ pin_subpackage('libmetatomic-torch', max_pin='x.x') }}
+
+requirements:
+  build:
+    - {{ compiler('cxx') }}
+    - {{ stdlib("c") }}
+    - cmake
+    - ninja
+  host:
+    - libmetatensor >=0.2.2,<0.3
+    - libmetatensor-torch >=0.10.0,<0.11
+    - libtorch * cpu*
+    - libtorch
+
+test:
+  requires:
+    - cmake
+    - ninja
+    - {{ compiler('cxx') }}
+    - libtorch * cpu*
+  commands:
+    - test -f $PREFIX/lib/libmetatomic_torch$SHLIB_EXT
+
+about:
+  home: https://github.com/metatensor/metatomic
+  summary: Portable interfaces for atomistic machine-learning models
+  license: BSD-3-Clause
+  license_file:
+    - LICENSE
+    - _deps/nlohmann_json-src/LICENSE.MIT
+  doc_url: https://docs.metatensor.org/metatomic/

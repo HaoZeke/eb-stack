@@ -1,0 +1,42 @@
+{% set version = "0.2.2" %}
+{% set url_base = "https://github.com/lab-cosmo/metatensor/releases/download" %}
+
+package:
+  name: libmetatensor
+  version: {{ version }}
+
+source:
+  url: {{ url_base }}/metatensor-core-v{{ version }}/metatensor-core-cxx-{{ version }}.tar.gz
+  sha256: a104512516c8761080075e3ba7c023fcc1bb3430df7c67b25bded359a729e2ff
+
+build:
+  number: 0
+  run_exports:
+    - {{ pin_subpackage('libmetatensor', max_pin='x.x') }}
+
+requirements:
+  build:
+    - {{ compiler('c') }}
+    - {{ compiler('cxx') }}
+    - {{ compiler('rust') }}
+    - {{ stdlib("c") }}
+    - cmake
+    - ninja
+    - cargo-bundle-licenses
+
+test:
+  requires:
+    - cmake
+    - ninja
+    - {{ compiler('cxx') }}
+  commands:
+    - test -f $PREFIX/lib/libmetatensor$SHLIB_EXT
+
+about:
+  home: https://github.com/metatensor/metatensor
+  summary: Self-describing sparse tensor data format for atomistic machine learning
+  license: BSD-3-Clause
+  license_file:
+    - LICENSE
+    - THIRDPARTY_LICENSES.yaml
+  doc_url: https://docs.metatensor.org

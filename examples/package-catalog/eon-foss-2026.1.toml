@@ -1,0 +1,56 @@
+schema_version = 1
+
+[[packages]]
+name = "quill"
+version = "11.1.0"
+source = "sources/eon/quill/meta.yaml"
+format = "conda-forge"
+package_config = [
+  "../packages/common.toml",
+  "../packages/quill.toml",
+]
+profile = "default"
+toolchain = { name = "GCCcore", version = "15.2.0" }
+
+[[packages]]
+name = "CapnProto"
+provider = "easybuild-bump"
+version = "1.4.0"
+source = "sources/eon/CapnProto-1.4.0-GCCcore-14.3.0.eb"
+toolchain = { name = "GCCcore", version = "15.2.0" }
+
+[[packages]]
+name = "metatensor"
+version = "0.2.2"
+source = "sources/eon/metatensor/meta.yaml"
+format = "conda-forge"
+package_config = [
+  "../packages/common.toml",
+  "../packages/metatensor.toml",
+]
+profile = "default"
+toolchain = { name = "GCCcore", version = "15.2.0" }
+
+[[packages]]
+name = "metatensor-torch"
+version = "0.10.0"
+source = "sources/eon/metatensor-torch/meta.yaml"
+format = "conda-forge"
+package_config = [
+  "../packages/common.toml",
+  "../packages/metatensor-torch.toml",
+]
+profile = "default"
+toolchain = { name = "foss", version = "2026.1" }
+
+[[packages]]
+name = "metatomic-torch"
+version = "0.1.15"
+source = "sources/eon/metatomic-torch/meta.yaml"
+format = "conda-forge"
+package_config = [
+  "../packages/common.toml",
+  "../packages/metatomic-torch.toml",
+]
+profile = "default"
+toolchain = { name = "foss", version = "2026.1" }

@@ -1,0 +1,52 @@
+schema_version = 1
+
+[package]
+name = "metatensor"
+homepage = "https://docs.metatensor.org/"
+description = "Metatensor stores and manipulates sparse data for atomistic machine learning."
+license = "BSD-3-Clause"
+
+[build]
+easyblock = "CMakeMake"
+build_systems = ["CMake"]
+moduleclass = "lib"
+
+[build.easyconfig_parameters]
+preconfigopts = "unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS; export RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER=; "
+prebuildopts = "unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS; export RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER=; "
+
+[build.easyconfig_parameters.sanity_check_paths]
+files = [
+  "include/metatensor.h",
+  "lib/libmetatensor.so",
+]
+dirs = ["include", "lib", "lib/cmake"]
+
+[dependencies]
+exclude_from_solve = ["ninja"]
+
+[[dependencies.requirements]]
+name = "binutils"
+constraint = "==2.45"
+roles = ["build"]
+
+[[dependencies.requirements]]
+name = "pkgconf"
+constraint = "==2.5.1"
+roles = ["build"]
+
+[[dependencies.requirements]]
+name = "Rust"
+constraint = "==1.94.1"
+roles = ["build"]
+
+[[profiles]]
+name = "default"
+default = true
+config_options = [
+  "-DBUILD_SHARED_LIBS=ON",
+  "-DCMAKE_BUILD_TYPE=Release",
+]
+
+[profiles.toolchain_options]
+pic = true
