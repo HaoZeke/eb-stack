@@ -69,6 +69,34 @@ source:
 }
 
 #[test]
+fn conda_template_assignments_accept_trailing_selector_comments() {
+    let source = r#"
+{% set name = "selector-assignment" %}
+{% set version = "1.0" %}
+package:
+  name: {{ name }}
+  version: {{ version }}
+source:
+  url: https://example.invalid/{{ name }}-{{ version }}.tar.gz
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+build:
+  {% set build = 4 %}
+  {% set build = build + 100 %}  # [mpi != 'nompi']
+  number: {{ build }}
+requirements:
+  build:
+    - make
+"#;
+
+    let recipe = parse_foreign_str(ForeignFormat::CondaForge, source)
+        .expect("parse assignment with a trailing selector comment");
+
+    assert_eq!(recipe.name, "selector-assignment");
+    assert_eq!(recipe.version, "1.0");
+    assert!(recipe.dependencies.iter().any(|dependency| dependency.name == "make"));
+}
+
+#[test]
 fn conda_eon_expands_context_multi_source_and_selectors() {
     let path = root().join("conda_eon/recipe.yaml");
     let recipe = parse_foreign_path(&path, Some(ForeignFormat::CondaForge)).expect("eOn");
