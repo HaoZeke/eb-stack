@@ -29,7 +29,7 @@
 //! in their dedicated stages.
 
 use crate::package::{ConditionExpr, ConditionPredicate, Confidence, Provenance, SourceSpan};
-use crate::spack_syntax::{parse_spack_syntax, StaticCall, StaticValue};
+use crate::spack_syntax::{parse_spack_syntax, StaticCall, StaticScopedCondition, StaticValue};
 use chrono::NaiveDate;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -1321,7 +1321,12 @@ fn static_placement_target(value: Option<&StaticValue>) -> Option<String> {
 fn static_scoped_condition(call: &StaticCall) -> ConditionExpr {
     call.scoped_when
         .iter()
-        .map(|condition| parse_spack_condition(condition))
+        .map(|condition| match condition {
+            StaticScopedCondition::Spec(spec) => parse_spack_condition(spec),
+            StaticScopedCondition::Opaque(source) => ConditionExpr::Opaque {
+                source: source.clone(),
+            },
+        })
         .fold(ConditionExpr::Always, condition_all)
 }
 
@@ -1620,10 +1625,17 @@ fn static_dependency_role(value: Option<&StaticValue>) -> String {
 fn parse_spack_condition(spec: &str) -> ConditionExpr {
     let terms = split_spack_condition_terms(spec)
         .into_iter()
-        .filter_map(parse_spack_condition_term)
+        .map(|term| {
+            parse_spack_condition_term(term).unwrap_or_else(|| ConditionExpr::Opaque {
+                source: term.to_string(),
+            })
+        })
         .collect::<Vec<_>>();
     match terms.len() {
-        0 => ConditionExpr::Always,
+        0 if spec.trim().is_empty() => ConditionExpr::Always,
+        0 => ConditionExpr::Opaque {
+            source: spec.trim().to_string(),
+        },
         1 => terms.into_iter().next().unwrap_or(ConditionExpr::Always),
         _ => ConditionExpr::All(terms),
     }

@@ -275,6 +275,9 @@ pub enum ConditionExpr {
     All(Vec<ConditionExpr>),
     Any(Vec<ConditionExpr>),
     Not(Box<ConditionExpr>),
+    Opaque {
+        source: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -305,6 +308,7 @@ impl ConditionExpr {
             Self::All(expressions) => expressions.iter().all(|expr| expr.evaluate(context)),
             Self::Any(expressions) => expressions.iter().any(|expr| expr.evaluate(context)),
             Self::Not(expression) => !expression.evaluate(context),
+            Self::Opaque { .. } => false,
         }
     }
 }

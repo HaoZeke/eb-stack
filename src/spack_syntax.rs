@@ -56,9 +56,15 @@ pub(crate) struct StaticCall {
     pub(crate) name: String,
     pub(crate) args: Vec<StaticValue>,
     pub(crate) kwargs: BTreeMap<String, StaticValue>,
-    pub(crate) scoped_when: Vec<String>,
+    pub(crate) scoped_when: Vec<StaticScopedCondition>,
     pub(crate) start: usize,
     pub(crate) end: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum StaticScopedCondition {
+    Spec(String),
+    Opaque(String),
 }
 
 impl StaticCall {
@@ -123,7 +129,7 @@ struct StaticEvaluator<'a> {
     attributes: BTreeMap<String, StaticValue>,
     calls: Vec<StaticCall>,
     residuals: Vec<String>,
-    scoped_when: Vec<String>,
+    scoped_when: Vec<StaticScopedCondition>,
 }
 
 impl<'a> StaticEvaluator<'a> {
@@ -245,23 +251,36 @@ impl<'a> StaticEvaluator<'a> {
     fn walk_with(&mut self, statement: &ast::StmtWith) {
         let mut conditions = Vec::new();
         for item in &statement.items {
-            let ast::Expr::Call(call) = &item.context_expr else {
-                self.residual(&item.context_expr, "unsupported package directive context");
-                return;
-            };
-            if expression_name(&call.func).as_deref() != Some("when") || call.args.len() != 1 {
-                self.residual(&item.context_expr, "unsupported package directive context");
-                return;
-            }
-            let Some(condition) = self
-                .evaluate(&call.args[0])
-                .and_then(|value| value.as_string())
-            else {
-                self.residual(
-                    &item.context_expr,
-                    "dynamic when() context contains directives",
-                );
-                return;
+            let condition = match &item.context_expr {
+                ast::Expr::Call(call)
+                    if expression_name(&call.func).as_deref() == Some("when")
+                        && call.args.len() == 1 =>
+                {
+                    match self
+                        .evaluate(&call.args[0])
+                        .and_then(|value| value.as_string())
+                    {
+                        Some(condition) => StaticScopedCondition::Spec(condition),
+                        None => {
+                            let source = self.source_fragment(&call.args[0]);
+                            self.residual(
+                                &item.context_expr,
+                                &format!(
+                                    "dynamic scoped when({source}) contains package directives"
+                                ),
+                            );
+                            StaticScopedCondition::Opaque(source)
+                        }
+                    }
+                }
+                _ => {
+                    let source = self.source_fragment(&item.context_expr);
+                    self.residual(
+                        &item.context_expr,
+                        "unsupported context contains package directives",
+                    );
+                    StaticScopedCondition::Opaque(source)
+                }
             };
             conditions.push(condition);
         }
@@ -571,6 +590,15 @@ impl<'a> StaticEvaluator<'a> {
             + 1;
         self.residuals
             .push(format!("residual: {summary} at package.py:{line}"));
+    }
+
+    fn source_fragment(&self, node: &impl Ranged) -> String {
+        let range = node.range();
+        self.source
+            .get(text_offset(range.start())..text_offset(range.end()))
+            .unwrap_or("<unknown>")
+            .trim()
+            .to_string()
     }
 }
 
