@@ -192,7 +192,11 @@ pub fn plan_package_closure_with_sources(
     let tree = crate::eb_parse::parse_easyconfig_trees(&roots)
         .map_err(|error| PackageWorkflowError::Robot(error.to_string()))?;
 
-    let source_index = PackageSourceIndex::build(source_roots)?;
+    let source_index = PackageSourceIndex::build_with_easybuild_candidates(
+        source_roots,
+        &tree.candidates,
+        &request.easyconfig_roots,
+    )?;
     let target_hierarchy = hierarchy_for_with_tree(&request.toolchain, None, &tree.candidates).ok();
 
     let (plan, sbom) = prepare_new_package_plan(request)?;

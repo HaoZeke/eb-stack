@@ -223,9 +223,32 @@ impl PackageSourceRoots {
 impl PackageSourceIndex {
     /// Walk every configured root and index parseable package identities.
     pub fn build(roots: &PackageSourceRoots) -> Result<Self, PackageSourceError> {
+        Self::build_with_easybuild_candidates(roots, &[], &[])
+    }
+
+    /// Build a closure index while reusing the robot parser's EasyBuild candidates.
+    ///
+    /// `covered_easybuild_roots` identifies source roots represented by
+    /// `easybuild_candidates`. Other EasyBuild-only source roots are parsed,
+    /// while foreign roots always retain their syntax-aware discovery path.
+    pub(crate) fn build_with_easybuild_candidates(
+        roots: &PackageSourceRoots,
+        easybuild_candidates: &[Candidate],
+        covered_easybuild_roots: &[PathBuf],
+    ) -> Result<Self, PackageSourceError> {
         let mut index = Self::default();
+        index.easybuild.extend(
+            easybuild_candidates
+                .iter()
+                .cloned()
+                .map(discovered_from_eb_candidate),
+        );
         for root in &roots.source_roots {
             match root.kind {
+                SourceRootKind::EasyBuild
+                    if covered_easybuild_roots
+                        .iter()
+                        .any(|covered| covered == &root.path) => {}
                 SourceRootKind::EasyBuild => index.index_easybuild(&root.path)?,
                 SourceRootKind::CondaForge => index.index_conda(root)?,
                 SourceRootKind::Spack => index.index_spack(root)?,
