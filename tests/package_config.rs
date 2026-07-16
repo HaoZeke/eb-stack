@@ -430,6 +430,72 @@ roles = ["run"]
 }
 
 #[test]
+fn public_qmcpack_policy_encodes_build_and_verification_contract() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let config = PackageConfigLayer::from_path(&root.join("examples/packages/qmcpack.toml"))
+        .expect("QMCPACK package config");
+    let package = config.package.as_ref().expect("package metadata");
+    let build = config.build.as_ref().expect("build policy");
+
+    assert_eq!(package.homepage.as_deref(), Some("https://qmcpack.org"));
+    assert_eq!(package.license.as_deref(), Some("NCSA"));
+    assert_eq!(build.easyblock.as_deref(), Some("CMakeNinja"));
+    assert_eq!(
+        build.build_systems.as_deref(),
+        Some(&["CMake".into(), "Ninja".into()][..])
+    );
+    assert_eq!(build.moduleclass.as_deref(), Some("chem"));
+    assert_eq!(
+        build.easyconfig_parameters.get("start_dir"),
+        Some(&EasyconfigValue::String("%(namelower)s-%(version)s".into()))
+    );
+    assert_eq!(
+        build.easyconfig_parameters.get("test_cmd"),
+        Some(&EasyconfigValue::String("ctest".into()))
+    );
+    assert_eq!(
+        build.easyconfig_parameters.get("testopts"),
+        Some(&EasyconfigValue::String(
+            "-j %(parallel)s --output-on-failure -E 'performance|long'".into()
+        ))
+    );
+
+    let Some(EasyconfigValue::Table(paths)) = build.easyconfig_parameters.get("sanity_check_paths")
+    else {
+        panic!("sanity_check_paths must be typed data");
+    };
+    assert_eq!(
+        paths.get("files"),
+        Some(&EasyconfigValue::List(vec![
+            EasyconfigValue::String("bin/qmcpack".into()),
+            EasyconfigValue::String("bin/convert4qmc".into()),
+            EasyconfigValue::String("bin/ppconvert".into()),
+            EasyconfigValue::String("bin/qmcpack.settings".into()),
+        ]))
+    );
+    assert_eq!(
+        paths.get("dirs"),
+        Some(&EasyconfigValue::List(vec![EasyconfigValue::String(
+            "lib/nexus".into()
+        )]))
+    );
+    assert_eq!(
+        build.easyconfig_parameters.get("sanity_check_commands"),
+        Some(&EasyconfigValue::List(vec![EasyconfigValue::String(
+            "qmcpack --version 2>&1 | grep -q 'QMCPACK version'".into()
+        )]))
+    );
+    let Some(EasyconfigValue::Table(paths)) = build.easyconfig_parameters.get("modextrapaths")
+    else {
+        panic!("modextrapaths must be typed data");
+    };
+    assert_eq!(
+        paths.get("PYTHONPATH"),
+        Some(&EasyconfigValue::String("lib".into()))
+    );
+}
+
+#[test]
 fn public_package_config_examples_parse() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let common = PackageConfigLayer::from_path(&root.join("examples/packages/common.toml"))
