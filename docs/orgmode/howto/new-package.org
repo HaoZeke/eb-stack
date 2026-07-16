@@ -242,14 +242,48 @@ eb-stack recipe check \
   --easyconfigs /tmp/eon/easyconfigs
 #+end_src
 
-Missing robot dependencies are real package work. Close them with a layered
-package-source catalog rather than inventing placeholders or dummy checksums.
+Missing robot dependencies are real package work. Close them with ordered
+source roots and optional catalog overrides rather than inventing placeholders
+or dummy checksums.
+
+* Source-root discovery (package-neutral)
+
+Configure local indexes so a package closure can resolve robot holes without a
+committed per-package catalog entry:
+
+#+begin_src bash
+eb-stack package plan \
+  --source path/to/root-recipe.yaml \
+  --format conda-forge \
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  --source-checksum SHA256 \
+  --easyconfigs /path/to/robot \
+  --stack-policy stacks/site.toml \
+  --package-sources examples/package-sources/local-roots.toml \
+  --out-dir work/closed-root
+#+end_src
+
+Or pass roots directly with ~--easybuild-source~, ~--conda-source~, and
+~--spack-source~ (repeatable; order is discovery order).
+
+Resolution for each hole is robot-first, then:
+
+1. optional catalog override for that identity;
+2. EasyBuild recipes under easybuild source roots (annual-bump pipeline; source
+   toolchain family is preserved — a ~GCCcore~ recipe retargets to the
+   ~GCCcore~ member of the target hierarchy, not the composite parent);
+3. exactly one compatible conda-forge or Spack recipe under foreign roots.
+
+Ambiguous or incompatible providers fail with typed errors and candidate
+evidence. Catalog entries remain optional ordered overrides.
 
 * Catalog-backed robot holes
 
 Pass one or more ~--package-catalog~ layers when ~package plan~ must recursively
-close robot holes. Compatible robot candidates still win; the catalog is only
-consulted for unsatisfied direct dependencies.
+close robot holes with explicit authoring inputs. Compatible robot candidates
+still win; the catalog is only consulted for unsatisfied direct dependencies
+before source-root discovery.
 
 #+begin_src bash
 eb-stack package plan \

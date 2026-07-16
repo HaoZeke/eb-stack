@@ -6,6 +6,13 @@ All notable changes to this unreleased project are documented here.
 
 ### Added
 
+- Package-neutral source-root discovery for package closure: ordered local
+  EasyBuild, conda-forge, and Spack indexes close robot holes without a
+  committed per-package catalog entry. Explicit catalogs remain optional
+  overrides. EasyBuild bumps preserve toolchain family (for example GCCcore
+  maps to the GCCcore member of the target hierarchy).
+- Public example `examples/package-sources/local-roots.toml` and CLI/MCP flags
+  `--package-sources`, `--easybuild-source`, `--conda-source`, `--spack-source`.
 - Catalog provider kinds `foreign` (default) and `easybuild-bump` for
   package-source catalog entries, so recursive package closure can retarget an
   existing EasyBuild recipe through the annual-bump pipeline instead of

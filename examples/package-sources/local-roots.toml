@@ -1,0 +1,29 @@
+# Package-neutral local source-root configuration.
+#
+# Layer with:
+#   eb-stack package plan ... --package-sources examples/package-sources/local-roots.toml
+#
+# Or pass roots directly:
+#   --easybuild-source DIR --conda-source DIR --spack-source DIR
+#
+# Resolution order for a robot hole (after optional --package-catalog overrides):
+#   1. EasyBuild recipes under easybuild roots (cross-generation annual-bump)
+#   2. Exactly one compatible conda-forge or Spack recipe under foreign roots
+#
+# Paths may be absolute or relative to this file. Order within each kind is
+# discovery order; later roots do not override earlier identical identities for
+# ambiguity — uniqueness is required across the whole index.
+
+schema_version = 1
+
+[[source_roots]]
+kind = "easybuild"
+path = "easyconfigs"
+
+[[source_roots]]
+kind = "conda-forge"
+path = "conda-recipes"
+
+[[source_roots]]
+kind = "spack"
+path = "spack-packages"

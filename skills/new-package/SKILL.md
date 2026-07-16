@@ -192,10 +192,30 @@ Repeat `--source-checksum` in manifest source order when the foreign recipe
 lacks archive hashes. A VCS commit is not an archive SHA-256; never omit the
 checksum or invent one from the commit.
 
-## Catalog-backed robot holes
+## Source-root discovery and catalog overrides
 
 When the target robot has no compatible candidate for a direct dependency,
-layer a package-source catalog with repeatable `--package-catalog`:
+configure ordered local source roots (no per-package catalog required):
+
+```sh
+eb-stack package plan \
+  --source path/to/recipe.yaml \
+  --format conda-forge \
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  --source-checksum SHA256 \
+  --easyconfigs /path/to/robot \
+  --stack-policy stacks/site.toml \
+  --package-sources examples/package-sources/local-roots.toml \
+  --out-dir work/closed
+```
+
+Resolution is robot-first, then catalog override (if any), then EasyBuild
+cross-generation bump from easybuild source roots (toolchain family preserved),
+then exactly one conda-forge or Spack recipe. Ambiguous providers fail with
+typed candidate evidence.
+
+Optional catalog layers remain ordered overrides with repeatable `--package-catalog`:
 
 ```sh
 eb-stack package plan \
