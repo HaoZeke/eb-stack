@@ -1,6 +1,7 @@
 use eb_stack::campaign::{
     claim_finding, classify_build_failure, resolve_finding, run_campaign, BuildFindingClass,
-    CampaignRequest, CampaignStatus, FindingResolution, FindingStatus, CAMPAIGN_SCHEMA_VERSION,
+    CampaignRequest, CampaignState, CampaignStatus, ClaimLadder, FindingDisposition,
+    FindingResolution, FindingStatus, CAMPAIGN_SCHEMA_VERSION,
 };
 use eb_stack::target::{
     BuildTarget, EasyBuildWorkload, TargetExecutor, TargetRuntime, TargetTransport,
@@ -241,6 +242,71 @@ fn campaign_state_persists_claims_attempts_and_resume() {
             .expect("state JSON");
     assert_eq!(persisted["status"], "completed");
     assert_eq!(persisted["claims"]["builds"], true);
+}
+
+#[test]
+fn campaign_resume_records_an_abandoned_running_attempt() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipe = bundle.join("easyconfigs/a/Alpha/Alpha.eb");
+    std::fs::create_dir_all(recipe.parent().unwrap()).expect("recipe directory");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"Alpha","version":"1.0"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .expect("lock");
+    write_valid_recipe(&recipe, "Alpha", "1.0");
+
+    let state_path = temp.path().join("campaign.json");
+    let interrupted_recipe = "easyconfigs/a/Alpha/Alpha.eb";
+    let interrupted = CampaignState {
+        schema_version: CAMPAIGN_SCHEMA_VERSION,
+        package: "Alpha".into(),
+        version: "1.0".into(),
+        bundle: bundle.display().to_string(),
+        target: "test-builder".into(),
+        status: CampaignStatus::Running,
+        attempts: 3,
+        claims: ClaimLadder {
+            resolves: true,
+            builds: false,
+            binary_verified: false,
+        },
+        current_recipe: Some(interrupted_recipe.into()),
+        findings: Vec::new(),
+        history: Vec::new(),
+    };
+    std::fs::write(
+        &state_path,
+        serde_json::to_string_pretty(&interrupted).expect("state JSON"),
+    )
+    .expect("interrupted state");
+
+    let resumed = run_campaign(&CampaignRequest {
+        bundle,
+        target: target("true"),
+        state_path,
+    })
+    .expect("resumed campaign");
+
+    assert_eq!(resumed.status, CampaignStatus::Completed);
+    assert_eq!(resumed.attempts, 4);
+    assert_eq!(resumed.findings.len(), 1);
+    let finding = &resumed.findings[0];
+    assert_eq!(finding.attempt, 3);
+    assert_eq!(finding.class, BuildFindingClass::Interrupted);
+    assert_eq!(finding.disposition, FindingDisposition::Retryable);
+    assert_eq!(finding.status, FindingStatus::Superseded);
+    assert_eq!(finding.recipe, interrupted_recipe);
+    assert!(finding.resolution.as_ref().is_some_and(|resolution| {
+        resolution.action == "resumed campaign after controller interruption"
+    }));
 }
 
 #[test]
