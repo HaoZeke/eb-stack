@@ -549,6 +549,9 @@ pub fn discover_provider_candidates_for_hole(
         .iter()
         .filter(|candidate| package_identity(&candidate.name) == identity)
         .filter(|candidate| matches_req(&candidate.version, &hole.version_req))
+        .filter(|candidate| {
+            source_toolchain_family_is_admitted(candidate, target_parent, hierarchy)
+        })
         .cloned()
         .collect::<Vec<_>>();
 
@@ -565,6 +568,28 @@ pub fn discover_provider_candidates_for_hole(
         .collect::<Vec<_>>();
 
     select_foreign_provider(&foreign_matches, hole, target_parent).map(|provider| vec![provider])
+}
+
+fn source_toolchain_family_is_admitted(
+    candidate: &DiscoveredCandidate,
+    target_parent: &Toolchain,
+    hierarchy: Option<&ToolchainHierarchy>,
+) -> bool {
+    let mapped =
+        map_source_toolchain_to_target(candidate.toolchain.as_ref(), target_parent, hierarchy);
+    if is_system_toolchain(&mapped) || mapped == *target_parent {
+        return true;
+    }
+    if let Some(hierarchy) = hierarchy {
+        return hierarchy.members.iter().any(|member| member == &mapped);
+    }
+    if let Ok(built_in) = hierarchy_for(target_parent, None) {
+        if built_in.members.iter().any(|member| member == &mapped) {
+            return true;
+        }
+    }
+    known_hierarchy(target_parent)
+        .is_some_and(|known| known.members.iter().any(|member| member == &mapped))
 }
 
 fn select_easybuild_providers(
