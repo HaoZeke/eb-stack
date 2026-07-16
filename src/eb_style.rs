@@ -632,6 +632,27 @@ mod tests {
     }
 
     #[test]
+    fn format_dictionary_single_string_list() {
+        let url = format!(
+            "https://example.invalid/releases/{}/",
+            "0123456789abcdef".repeat(7)
+        );
+        let source = format!("        'source_urls': ['{url}'],\n");
+        assert!(source.lines().next().unwrap().chars().count() > EB_MAX_LINE);
+        assert!(line_is_mechanically_fixable(source.trim_end()));
+
+        let result = format_style(&source);
+
+        assert!(result.remaining.is_empty(), "{:?}", result.remaining);
+        assert!(result.text.contains("'source_urls': ["));
+        assert!(result.text.contains(" + "));
+        assert!(result
+            .text
+            .lines()
+            .all(|line| line.chars().count() <= EB_MAX_LINE));
+    }
+
+    #[test]
     fn format_comment_wrap() {
         let src = format!("# {}\n", "word ".repeat(40));
         let r = format_style(&src);
