@@ -442,6 +442,10 @@ impl PackageSourceIndex {
     ) {
         let name = infer_foreign_package_name(&path, &root.path, format)
             .map(|name| provider_name_for_foreign(&name, config_layers));
+        let error = match format {
+            ForeignFormat::CondaForge => format!("conda YAML parse: {error}"),
+            ForeignFormat::Spack => format!("Spack package parse: {error}"),
+        };
         self.parse_failures.push(SourceParseFailure {
             name,
             path,
