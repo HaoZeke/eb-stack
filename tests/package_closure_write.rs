@@ -302,4 +302,10 @@ source:
         .is_file());
     assert!(!out.join("build-order.json").exists());
     assert!(!out.join("closure.plan.json").exists());
+
+    let second = write_package_bundle(&bundle, &out).expect("rewrite same bundle");
+    assert_eq!(
+        std::fs::read_to_string(written.easyconfigs[0].clone()).expect("first recipe"),
+        std::fs::read_to_string(second.easyconfigs[0].clone()).expect("second recipe")
+    );
 }

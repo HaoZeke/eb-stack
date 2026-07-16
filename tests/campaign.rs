@@ -292,6 +292,43 @@ fn campaign_uses_declared_closure_build_order() {
 }
 
 #[test]
+fn campaign_adds_the_staged_bundle_overlay_to_robot_paths() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipe = bundle.join("easyconfigs/a/Alpha/Alpha.eb");
+    std::fs::create_dir_all(recipe.parent().unwrap()).expect("recipe directory");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"Alpha","version":"1.0"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .expect("lock");
+    write_valid_recipe(&recipe, "Alpha", "1.0");
+
+    let state = run_campaign(&CampaignRequest {
+        bundle: bundle.clone(),
+        target: target("false"),
+        state_path: temp.path().join("campaign.json"),
+    })
+    .expect("campaign");
+    let finding = state.findings.last().expect("build finding");
+    let expected = format!(
+        "--robot=/tmp:{}",
+        bundle.join("easyconfigs").display()
+    );
+    assert!(
+        finding.command.args.iter().any(|argument| argument == &expected),
+        "expected {expected:?} in {:?}",
+        finding.command
+    );
+}
+
+#[test]
 fn finding_queue_enforces_ownership_and_records_resolution() {
     let temp = tempfile::tempdir().expect("tempdir");
     let bundle = temp.path().join("bundle");
