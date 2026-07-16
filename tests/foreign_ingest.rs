@@ -47,6 +47,28 @@ fn conda_zlib_parses_into_a_canonical_plan() {
 }
 
 #[test]
+fn conda_jinja_replace_filter_expands_package_versions() {
+    let source = r#"
+{% set version = "1.2-rc1" %}
+package:
+  name: template-filter-fixture
+  version: {{ version | replace('-', '') }}
+source:
+  url: https://example.invalid/template-filter-fixture-{{ version }}.tar.gz
+  sha256: 1111111111111111111111111111111111111111111111111111111111111111
+"#;
+
+    let recipe = parse_foreign_str(ForeignFormat::CondaForge, source)
+        .expect("parse conda recipe using a standard replace filter");
+
+    assert_eq!(recipe.version, "1.2rc1");
+    assert_eq!(
+        recipe.sources[0].url.as_deref(),
+        Some("https://example.invalid/template-filter-fixture-1.2-rc1.tar.gz")
+    );
+}
+
+#[test]
 fn conda_eon_expands_context_multi_source_and_selectors() {
     let path = root().join("conda_eon/recipe.yaml");
     let recipe = parse_foreign_path(&path, Some(ForeignFormat::CondaForge)).expect("eOn");
