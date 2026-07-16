@@ -79,6 +79,10 @@ fn failure_classifier_preserves_the_build_error_domain() {
             BuildFindingClass::Compile,
         ),
         (
+            "Checksum verification for source successful\nmake[2]: *** [Makefile:42: all] Error 2\nInstallation failed",
+            BuildFindingClass::Compile,
+        ),
+        (
             "patch dependency is installed\nCMake Error at CMakeLists.txt:42\nInstallation failed",
             BuildFindingClass::Configure,
         ),
