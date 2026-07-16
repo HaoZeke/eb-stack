@@ -50,6 +50,11 @@ impl SourceRootKind {
 pub struct SourceRoot {
     pub kind: SourceRootKind,
     pub path: PathBuf,
+    /// Package-neutral authoring layers applied to foreign recipes discovered
+    /// under this root. This is where shared provider aliases and exclusions
+    /// live; package-specific policy remains an explicit catalog override.
+    #[serde(default)]
+    pub package_config: Vec<PathBuf>,
 }
 
 /// Layered ordered source roots (package-neutral public configuration).
@@ -77,6 +82,10 @@ pub struct DiscoveredCandidate {
     pub format: Option<ForeignFormat>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toolchain: Option<Toolchain>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub versionsuffix: Option<String>,
+    #[serde(default)]
+    pub package_config: Vec<PathBuf>,
     #[serde(default)]
     pub source_checksums: Vec<String>,
 }
@@ -98,6 +107,10 @@ pub enum PackageSourceError {
     Io(String, #[source] std::io::Error),
     #[error("package-sources entry path cannot be empty")]
     EmptyPath,
+    #[error("package-sources package_config path cannot be empty")]
+    EmptyPackageConfigPath,
+    #[error("EasyBuild source roots cannot declare package_config layers")]
+    EasyBuildPackageConfig,
     #[error("package-sources discovery: {0}")]
     Discovery(String),
 }
@@ -152,6 +165,16 @@ impl PackageSourceRoots {
                     root.path = base_dir.join(&root.path);
                 }
             }
+            for config in &mut root.package_config {
+                if config.as_os_str().is_empty() {
+                    return Err(PackageSourceError::EmptyPackageConfigPath);
+                }
+                if !config.is_absolute() {
+                    if let Some(base_dir) = &base {
+                        *config = base_dir.join(&*config);
+                    }
+                }
+            }
         }
         roots.validate()?;
         Ok(roots)
@@ -169,6 +192,16 @@ impl PackageSourceRoots {
             if root.path.as_os_str().is_empty() {
                 return Err(PackageSourceError::EmptyPath);
             }
+            if root.kind == SourceRootKind::EasyBuild && !root.package_config.is_empty() {
+                return Err(PackageSourceError::EasyBuildPackageConfig);
+            }
+            if root
+                .package_config
+                .iter()
+                .any(|path| path.as_os_str().is_empty())
+            {
+                return Err(PackageSourceError::EmptyPackageConfigPath);
+            }
         }
         Ok(())
     }
@@ -179,7 +212,11 @@ impl PackageSourceRoots {
     }
 
     pub fn push(&mut self, kind: SourceRootKind, path: PathBuf) {
-        self.source_roots.push(SourceRoot { kind, path });
+        self.source_roots.push(SourceRoot {
+            kind,
+            path,
+            package_config: Vec::new(),
+        });
     }
 }
 
@@ -190,8 +227,8 @@ impl PackageSourceIndex {
         for root in &roots.source_roots {
             match root.kind {
                 SourceRootKind::EasyBuild => index.index_easybuild(&root.path)?,
-                SourceRootKind::CondaForge => index.index_conda(&root.path)?,
-                SourceRootKind::Spack => index.index_spack(&root.path)?,
+                SourceRootKind::CondaForge => index.index_conda(root)?,
+                SourceRootKind::Spack => index.index_spack(root)?,
             }
         }
         Ok(index)
@@ -218,17 +255,17 @@ impl PackageSourceIndex {
         Ok(())
     }
 
-    fn index_conda(&mut self, root: &Path) -> Result<(), PackageSourceError> {
-        if !root.exists() {
+    fn index_conda(&mut self, root: &SourceRoot) -> Result<(), PackageSourceError> {
+        if !root.path.exists() {
             return Ok(());
         }
         let mut paths = Vec::new();
         collect_named_files(
-            root,
+            &root.path,
             &["meta.yaml", "meta.yml", "recipe.yaml", "recipe.yml"],
             &mut paths,
         )
-        .map_err(|error| PackageSourceError::Io(root.display().to_string(), error))?;
+        .map_err(|error| PackageSourceError::Io(root.path.display().to_string(), error))?;
         paths.sort();
         for path in paths {
             match parse_foreign_path(&path, Some(ForeignFormat::CondaForge)) {
@@ -240,6 +277,8 @@ impl PackageSourceIndex {
                         kind: SourceRootKind::CondaForge,
                         format: Some(ForeignFormat::CondaForge),
                         toolchain: None,
+                        versionsuffix: None,
+                        package_config: root.package_config.clone(),
                         source_checksums: foreign_checksums(&recipe.sha256, &recipe.sources),
                     });
                 }
@@ -249,13 +288,13 @@ impl PackageSourceIndex {
         Ok(())
     }
 
-    fn index_spack(&mut self, root: &Path) -> Result<(), PackageSourceError> {
-        if !root.exists() {
+    fn index_spack(&mut self, root: &SourceRoot) -> Result<(), PackageSourceError> {
+        if !root.path.exists() {
             return Ok(());
         }
         let mut paths = Vec::new();
-        collect_named_files(root, &["package.py"], &mut paths)
-            .map_err(|error| PackageSourceError::Io(root.display().to_string(), error))?;
+        collect_named_files(&root.path, &["package.py"], &mut paths)
+            .map_err(|error| PackageSourceError::Io(root.path.display().to_string(), error))?;
         paths.sort();
         for path in paths {
             // Only index paths that look like Spack package recipes.
@@ -271,6 +310,8 @@ impl PackageSourceIndex {
                         kind: SourceRootKind::Spack,
                         format: Some(ForeignFormat::Spack),
                         toolchain: None,
+                        versionsuffix: None,
+                        package_config: root.package_config.clone(),
                         source_checksums: foreign_checksums(&recipe.sha256, &recipe.sources),
                     });
                 }
@@ -289,6 +330,8 @@ fn discovered_from_eb_candidate(candidate: Candidate) -> DiscoveredCandidate {
         kind: SourceRootKind::EasyBuild,
         format: None,
         toolchain: Some(candidate.toolchain),
+        versionsuffix: candidate.versionsuffix,
+        package_config: Vec::new(),
         source_checksums: Vec::new(),
     }
 }
@@ -430,40 +473,93 @@ fn select_easybuild_provider(
     target_parent: &Toolchain,
     hierarchy: Option<&ToolchainHierarchy>,
 ) -> Result<PackageSourceProvider, ProviderDiscoveryError> {
-    // Collapse same name+version across toolchains to one identity; multiple
-    // distinct versions that all satisfy the requirement are ambiguous.
-    let mut versions = matches
+    let mut unique = Vec::new();
+    for candidate in matches {
+        if !unique.contains(candidate) {
+            unique.push(candidate.clone());
+        }
+    }
+
+    // A dependency without a suffix or toolchain-family requirement cannot
+    // choose between independently installable EasyBuild variants.
+    let mut identities = unique
         .iter()
-        .map(|candidate| candidate.version.as_str())
+        .map(|candidate| {
+            (
+                candidate.version.as_str(),
+                candidate.versionsuffix.as_deref().unwrap_or(""),
+                candidate
+                    .toolchain
+                    .as_ref()
+                    .map(|toolchain| toolchain.name.as_str())
+                    .unwrap_or(""),
+            )
+        })
         .collect::<Vec<_>>();
-    versions.sort_by(|a, b| cmp_version(a, b));
-    versions.dedup();
-    if versions.len() > 1 {
+    identities.sort();
+    identities.dedup();
+    if identities.len() > 1 {
         return Err(ProviderDiscoveryError::Ambiguous {
             name: hole.name.clone(),
             version_req: format!(" ({})", hole.version_req),
-            count: versions.len(),
-            candidates: matches.to_vec(),
+            count: unique.len(),
+            candidates: unique,
         });
     }
-    // Deterministic recipe pick: root order already baked into index order;
-    // break ties by path.
-    let mut ordered = matches.to_vec();
-    ordered.sort_by(|a, b| a.path.cmp(&b.path));
-    let selected = ordered
-        .into_iter()
-        .next()
-        .expect("non-empty easybuild matches");
+
+    // Within one version/family/suffix identity, the newest source toolchain
+    // generation is the most direct annual-bump baseline. Equal-generation
+    // recipes at different paths remain ambiguous because their mechanics may
+    // differ even though their filenames claim the same identity.
+    unique.sort_by(|left, right| {
+        cmp_version(
+            left.toolchain
+                .as_ref()
+                .map(|toolchain| toolchain.version.as_str())
+                .unwrap_or(""),
+            right
+                .toolchain
+                .as_ref()
+                .map(|toolchain| toolchain.version.as_str())
+                .unwrap_or(""),
+        )
+    });
+    let selected = unique.last().expect("non-empty easybuild matches");
+    let selected_generation = selected
+        .toolchain
+        .as_ref()
+        .map(|toolchain| toolchain.version.as_str())
+        .unwrap_or("");
+    let same_generation = unique
+        .iter()
+        .filter(|candidate| {
+            candidate
+                .toolchain
+                .as_ref()
+                .map(|toolchain| toolchain.version.as_str())
+                .unwrap_or("")
+                == selected_generation
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if same_generation.len() > 1 {
+        return Err(ProviderDiscoveryError::Ambiguous {
+            name: hole.name.clone(),
+            version_req: format!(" ({})", hole.version_req),
+            count: same_generation.len(),
+            candidates: same_generation,
+        });
+    }
     let bump_toolchain =
         map_source_toolchain_to_target(selected.toolchain.as_ref(), target_parent, hierarchy);
     Ok(PackageSourceProvider {
         name: selected.name.clone(),
         provider: CatalogProviderKind::EasyBuildBump,
         version: Some(selected.version.clone()),
-        source: selected.path,
+        source: selected.path.clone(),
         format: None,
         package_config: Vec::new(),
-        source_checksums: selected.source_checksums,
+        source_checksums: selected.source_checksums.clone(),
         profile: "default".into(),
         toolchain: bump_toolchain,
         stack_policy: None,
@@ -475,40 +571,25 @@ fn select_foreign_provider(
     hole: &UnsatisfiedDirectDependency,
     toolchain: &Toolchain,
 ) -> Result<PackageSourceProvider, ProviderDiscoveryError> {
-    match matches {
+    let mut unique = Vec::new();
+    for candidate in matches {
+        if !unique.contains(candidate) {
+            unique.push(candidate.clone());
+        }
+    }
+    match unique.as_slice() {
         [] => Err(ProviderDiscoveryError::Missing {
             name: hole.name.clone(),
             version_req: format!(" ({})", hole.version_req),
             candidates: Vec::new(),
         }),
         [selected] => Ok(provider_from_foreign(selected, toolchain)),
-        many => {
-            // Multiple recipes: allow only when they share one name+version+format path group.
-            let mut keys = many
-                .iter()
-                .map(|candidate| {
-                    format!(
-                        "{}@{}@{}",
-                        package_identity(&candidate.name),
-                        candidate.version,
-                        candidate.kind.as_str()
-                    )
-                })
-                .collect::<Vec<_>>();
-            keys.sort();
-            keys.dedup();
-            if keys.len() == 1 {
-                let mut ordered = many.to_vec();
-                ordered.sort_by(|a, b| a.path.cmp(&b.path));
-                return Ok(provider_from_foreign(&ordered[0], toolchain));
-            }
-            Err(ProviderDiscoveryError::Ambiguous {
-                name: hole.name.clone(),
-                version_req: format!(" ({})", hole.version_req),
-                count: many.len(),
-                candidates: many.to_vec(),
-            })
-        }
+        many => Err(ProviderDiscoveryError::Ambiguous {
+            name: hole.name.clone(),
+            version_req: format!(" ({})", hole.version_req),
+            count: many.len(),
+            candidates: many.to_vec(),
+        }),
     }
 }
 
@@ -522,7 +603,7 @@ fn provider_from_foreign(
         version: Some(selected.version.clone()),
         source: selected.path.clone(),
         format: selected.format,
-        package_config: Vec::new(),
+        package_config: selected.package_config.clone(),
         source_checksums: selected.source_checksums.clone(),
         profile: "default".into(),
         toolchain: toolchain.clone(),

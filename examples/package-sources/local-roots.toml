@@ -23,7 +23,9 @@ path = "easyconfigs"
 [[source_roots]]
 kind = "conda-forge"
 path = "conda-recipes"
+package_config = ["../packages/common.toml"]
 
 [[source_roots]]
 kind = "spack"
 path = "spack-packages"
+package_config = ["../packages/common.toml"]

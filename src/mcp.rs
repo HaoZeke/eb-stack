@@ -366,6 +366,9 @@ fn load_package_source_roots(arguments: &Value) -> Result<PackageSourceRoots, St
         schema_version: 1,
         source_roots: Vec::new(),
     };
+    for path in string_array(arguments, "easyconfigs")? {
+        roots.push(SourceRootKind::EasyBuild, PathBuf::from(path));
+    }
     for path in string_array(arguments, "package_sources")? {
         let layer =
             PackageSourceRoots::from_path(Path::new(&path)).map_err(|error| error.to_string())?;
