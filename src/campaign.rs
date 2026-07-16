@@ -582,10 +582,13 @@ pub fn classify_build_failure(
             || text.contains("executable file not found")
             || text.contains("env:")
             || exit_code == Some(127));
-    let checksum_failure = text.contains("checksum verification")
-        || text.contains("checksum mismatch")
-        || text.contains("checksums do not match")
-        || text.contains("checksum failed");
+    let checksum_failure = text.lines().any(|line| {
+        line.contains("checksum mismatch")
+            || line.contains("checksums do not match")
+            || line.contains("checksum failed")
+            || line.contains("checksum verification")
+                && (line.contains("failed") || line.contains("failure"))
+    });
     let source_failure = text.contains("failed to download")
         || text.contains("download failed")
         || text.contains("unable to download")
