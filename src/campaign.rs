@@ -150,7 +150,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         .pointer("/package/version")
         .and_then(Value::as_str)
         .ok_or_else(|| CampaignError::InvalidBundle("manifest has no package.version".into()))?;
-    let recipes = discover_files(&request.bundle.join("easyconfigs"), "eb")?;
+    let recipes = load_campaign_recipes(&request.bundle)?;
     if recipes.is_empty() {
         return Err(CampaignError::InvalidBundle(
             "bundle has no EasyBuild recipes".into(),
@@ -847,6 +847,61 @@ fn easybuild_output_paths(output: &str) -> Vec<PathBuf> {
     paths.sort();
     paths.dedup();
     paths
+}
+
+/// Prefer declared closure build order; fall back to recursive easyconfig discovery.
+fn load_campaign_recipes(bundle: &Path) -> Result<Vec<PathBuf>, CampaignError> {
+    let build_order_path = bundle.join("build-order.json");
+    if build_order_path.is_file() {
+        return load_declared_build_order(bundle, &build_order_path);
+    }
+    discover_files(&bundle.join("easyconfigs"), "eb")
+}
+
+fn load_declared_build_order(
+    bundle: &Path,
+    build_order_path: &Path,
+) -> Result<Vec<PathBuf>, CampaignError> {
+    let document: Value = read_json(build_order_path)?;
+    let schema_version = document
+        .get("schema_version")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            CampaignError::InvalidBundle("build-order.json missing schema_version".into())
+        })?;
+    if schema_version != 1 {
+        return Err(CampaignError::InvalidBundle(format!(
+            "unsupported build-order.json schema version {schema_version}"
+        )));
+    }
+    let recipes = document
+        .get("recipes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| CampaignError::InvalidBundle("build-order.json missing recipes".into()))?;
+    let mut paths = Vec::with_capacity(recipes.len());
+    for entry in recipes {
+        let relative = entry.as_str().ok_or_else(|| {
+            CampaignError::InvalidBundle("build-order.json recipes must be strings".into())
+        })?;
+        if relative.is_empty() || Path::new(relative).is_absolute() {
+            return Err(CampaignError::InvalidBundle(format!(
+                "build-order recipe must be a non-empty relative path: {relative}"
+            )));
+        }
+        if relative.split(['/', '\\']).any(|part| part == "..") {
+            return Err(CampaignError::InvalidBundle(format!(
+                "build-order recipe escapes bundle: {relative}"
+            )));
+        }
+        let path = bundle.join(relative);
+        if !path.is_file() {
+            return Err(CampaignError::InvalidBundle(format!(
+                "build-order recipe missing: {relative}"
+            )));
+        }
+        paths.push(path);
+    }
+    Ok(paths)
 }
 
 fn discover_files(root: &Path, extension: &str) -> Result<Vec<PathBuf>, CampaignError> {

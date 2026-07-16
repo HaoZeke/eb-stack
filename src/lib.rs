@@ -52,7 +52,15 @@ pub use hierarchy::{
     HierarchyError, ResolveDepOpts, SourceDepSpec, ToolchainHierarchy,
 };
 pub use manifest::package_plan_from_foreign;
-pub use package_closure::{plan_package_closure, PackageClosure, PackageClosureError};
+pub use package_catalog::{
+    resolve_package_catalog_layers, PackageCatalogError, PackageCatalogLayer, PackageSourceCatalog,
+    PackageSourceProvider, PACKAGE_CATALOG_SCHEMA_VERSION,
+};
+pub use package_closure::{
+    merge_closure_sboms, package_layout_segment, plan_package_closure, write_package_closure,
+    ClosureBuildOrder, ClosurePackageRef, ClosurePlanDocument, PackageClosure, PackageClosureError,
+    WrittenPackageClosure, CLOSURE_BUNDLE_SCHEMA_VERSION,
+};
 pub use package_emit::{emit_profile_easyconfigs, EmittedEasyconfig, PackageEmitError};
 pub use package_solve::{
     solve_package_profile, solve_package_profile_with_hierarchy, unsatisfied_direct_dependencies,
@@ -60,9 +68,9 @@ pub use package_solve::{
 };
 pub use package_workflow::{
     complete_package_bundle, complete_package_bundle_with_hierarchy, inspect_new_package,
-    plan_new_package, plan_package_bump, prepare_new_package_plan, write_package_bundle,
-    BumpPackageRequest, NewPackageRequest, PackageBundle, PackageWorkflowError,
-    WrittenPackageBundle,
+    plan_new_package, plan_package_bump, prepare_new_package_plan, relative_posix,
+    validate_path_segment, write_package_bundle, write_package_bundle_into, BumpPackageRequest,
+    NewPackageRequest, PackageBundle, PackageWorkflowError, WrittenPackageBundle,
 };
 pub use report::{
     classify_stack_diff, format_build_list, format_stack_diff_markdown, ordered_build_paths,

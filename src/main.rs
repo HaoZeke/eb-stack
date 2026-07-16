@@ -12,10 +12,11 @@ use eb_stack::target::{doctor_target, resolve_target_layers, BuildTarget, Target
 use eb_stack::{
     check_recipe_deps, format_style, format_style_file, inspect_new_package, lint_style,
     load_json_file, lock_to_cyclonedx, packaging_gate, parse_easyconfig_trees, plan_new_package,
-    plan_package_bump, resolve_easyconfig_file,
-    solve_from_easyconfigs_with_baseline_version_and_extras, write_json_pretty,
-    write_package_bundle, BumpPackageRequest, ForeignFormat, NewPackageRequest, PackageBundle,
-    SolveExtraOut, StackLock, Toolchain,
+    plan_package_bump, plan_package_closure, resolve_easyconfig_file,
+    resolve_package_catalog_layers, solve_from_easyconfigs_with_baseline_version_and_extras,
+    write_json_pretty, write_package_bundle, write_package_closure, BumpPackageRequest,
+    ForeignFormat, NewPackageRequest, PackageBundle, PackageCatalogLayer, SolveExtraOut, StackLock,
+    Toolchain,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -99,6 +100,13 @@ struct PackagePlanArgs {
     /// Positional SHA-256 override; repeat once for every source artifact.
     #[arg(long = "source-checksum", value_name = "SHA256")]
     source_checksums: Vec<String>,
+    /// Optional package-source catalog layers for recursive robot-hole closure.
+    ///
+    /// When present, plan a catalog-backed package closure and write one closed
+    /// bundle (root artifacts, companion packages, shared easyconfig overlay,
+    /// build-order, and aggregate SBOM). Argument order is layer order.
+    #[arg(long = "package-catalog", value_name = "CATALOG.toml")]
+    package_catalogs: Vec<PathBuf>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -299,7 +307,7 @@ fn run_package(command: PackageCommand) -> Result<()> {
                 &args.inspect.toolchain_version,
             );
             let stack_policy = load_stack_policy(&args.stack_policy)?;
-            let bundle = plan_new_package(&NewPackageRequest {
+            let request = NewPackageRequest {
                 source: args.inspect.source,
                 format: parse_format(&args.inspect.format)?,
                 toolchain,
@@ -307,15 +315,52 @@ fn run_package(command: PackageCommand) -> Result<()> {
                 package_layers: load_package_layers(&args.inspect.package_configs)?,
                 easyconfig_roots: args.easyconfigs,
                 stack_policy,
-            })?;
-            let written = write_package_bundle(&bundle, &args.inspect.out_dir)?;
-            println!("manifest={}", written.manifest.display());
-            println!("sbom={}", written.sbom.display());
-            for path in written.locks {
+            };
+            if args.package_catalogs.is_empty() {
+                let bundle = plan_new_package(&request)?;
+                let written = write_package_bundle(&bundle, &args.inspect.out_dir)?;
+                println!("manifest={}", written.manifest.display());
+                println!("sbom={}", written.sbom.display());
+                for path in written.locks {
+                    println!("lock={}", path.display());
+                }
+                for path in written.easyconfigs {
+                    println!("easyconfig={}", path.display());
+                }
+                return Ok(());
+            }
+
+            let mut layers = Vec::with_capacity(args.package_catalogs.len());
+            for path in &args.package_catalogs {
+                layers.push(
+                    PackageCatalogLayer::from_path(path)
+                        .with_context(|| format!("load package catalog {}", path.display()))?,
+                );
+            }
+            let catalog = resolve_package_catalog_layers(&layers)
+                .context("resolve package-source catalog layers")?;
+            let closure = plan_package_closure(&request, &catalog)?;
+            let written = write_package_closure(&closure, &args.inspect.out_dir)?;
+            println!("closure_plan={}", written.closure_plan.display());
+            println!("closure_sbom={}", written.closure_sbom.display());
+            println!("build_order={}", written.build_order.display());
+            println!("manifest={}", written.root.manifest.display());
+            println!("sbom={}", written.root.sbom.display());
+            for path in &written.root.locks {
                 println!("lock={}", path.display());
             }
-            for path in written.easyconfigs {
+            for path in &written.root.easyconfigs {
                 println!("easyconfig={}", path.display());
+            }
+            for companion in &written.companions {
+                println!("companion_manifest={}", companion.manifest.display());
+                println!("companion_sbom={}", companion.sbom.display());
+                for path in &companion.locks {
+                    println!("companion_lock={}", path.display());
+                }
+                for path in &companion.easyconfigs {
+                    println!("easyconfig={}", path.display());
+                }
             }
             Ok(())
         }

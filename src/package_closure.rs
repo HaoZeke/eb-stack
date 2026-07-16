@@ -1,8 +1,12 @@
-//! Catalog-backed recursive package-closure planner.
+//! Catalog-backed recursive package-closure planner and aggregate bundle writer.
 //!
 //! Closes a root foreign package plan over robot candidates and catalog-backed
 //! companions. Compatible robot candidates win; catalog packages are planned
 //! only for typed robot holes. Package names never appear as control flow.
+//!
+//! The aggregate writer places root artifacts at the bundle root, companion
+//! artifacts under `packages/<name>-<version>-<toolchain>/`, and every recipe
+//! and verified patch into one shared `easyconfigs/` overlay.
 
 use crate::domain::Candidate;
 use crate::eb_parse::resolve_easyconfig_str;
@@ -13,13 +17,19 @@ use crate::package_solve::{
     unsatisfied_direct_dependencies, ProfileSolveError, UnsatisfiedDirectDependency,
 };
 use crate::package_workflow::{
-    complete_package_bundle, prepare_new_package_plan, NewPackageRequest, PackageBundle,
-    PackageWorkflowError,
+    complete_package_bundle, prepare_new_package_plan, relative_posix, validate_path_segment,
+    write_json, write_package_bundle_into, NewPackageRequest, PackageBundle, PackageWorkflowError,
+    WrittenPackageBundle,
 };
 use crate::version::matches_req;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+
+/// Schema version for `build-order.json` and `closure.plan.json`.
+pub const CLOSURE_BUNDLE_SCHEMA_VERSION: u32 = 1;
 
 /// Root package bundle plus generated companions in topological build order.
 #[derive(Debug, Clone)]
@@ -27,6 +37,49 @@ pub struct PackageClosure {
     pub root: PackageBundle,
     /// Generated companion bundles, dependencies before dependents.
     pub companions: Vec<PackageBundle>,
+}
+
+/// Paths written for a closed multi-package bundle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WrittenPackageClosure {
+    pub root: WrittenPackageBundle,
+    pub companions: Vec<WrittenPackageBundle>,
+    pub build_order: PathBuf,
+    pub closure_plan: PathBuf,
+    pub closure_sbom: PathBuf,
+}
+
+/// Declared EasyBuild build order for a closed package bundle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClosureBuildOrder {
+    pub schema_version: u32,
+    /// Bundle-relative recipe paths using `/` separators.
+    pub recipes: Vec<String>,
+}
+
+/// Aggregate description of a written package closure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClosurePlanDocument {
+    pub schema_version: u32,
+    pub root: ClosurePackageRef,
+    pub companions: Vec<ClosurePackageRef>,
+    pub build_order: String,
+}
+
+/// One package identity inside a written closure layout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClosurePackageRef {
+    pub name: String,
+    pub version: String,
+    pub toolchain: crate::domain::Toolchain,
+    /// Bundle-relative directory (`.` for the root package).
+    pub directory: String,
+    pub manifest: String,
+    pub sbom: String,
+    pub recipes: Vec<String>,
 }
 
 #[derive(Debug, Error)]
@@ -71,6 +124,10 @@ pub enum PackageClosureError {
     ProfileAmbiguity { package: String, reason: String },
     #[error("generated companion candidate: {0}")]
     GeneratedCandidate(String),
+    #[error("package-closure bundle layout: {0}")]
+    Layout(String),
+    #[error("aggregate package-closure SBOM: {0}")]
+    AggregateSbom(String),
 }
 
 fn path_display(path: &[String]) -> String {
@@ -117,6 +174,256 @@ pub fn plan_package_closure(
         .collect();
 
     Ok(PackageClosure { root, companions })
+}
+
+/// Write a planned package closure into a single campaign-ready bundle layout.
+///
+/// Root manifest/SBOM/locks stay at the bundle root. Each companion is written
+/// under `packages/<name>-<version>-<toolchain-name>-<toolchain-version>/`.
+/// Every recipe and verified patch lands in one shared `easyconfigs/` overlay;
+/// colliding destinations are rejected. Profile order within each package is
+/// preserved; companions precede the root in `build-order.json`.
+pub fn write_package_closure(
+    closure: &PackageClosure,
+    output_directory: &Path,
+) -> Result<WrittenPackageClosure, PackageClosureError> {
+    std::fs::create_dir_all(output_directory)
+        .map_err(|error| PackageWorkflowError::Io(output_directory.to_path_buf(), error))?;
+
+    let mut claimed = BTreeMap::new();
+    let root = write_package_bundle_into(
+        &closure.root,
+        output_directory,
+        output_directory,
+        &mut claimed,
+    )?;
+
+    let mut written_companions = Vec::with_capacity(closure.companions.len());
+    let mut companion_refs = Vec::with_capacity(closure.companions.len());
+    for companion in &closure.companions {
+        let segment = package_layout_segment(companion)?;
+        let artifact_directory = output_directory.join("packages").join(&segment);
+        let written = write_package_bundle_into(
+            companion,
+            &artifact_directory,
+            output_directory,
+            &mut claimed,
+        )?;
+        companion_refs.push(package_ref_from_written(
+            companion,
+            &written,
+            output_directory,
+            &format!("packages/{segment}"),
+        )?);
+        written_companions.push(written);
+    }
+
+    let root_ref = package_ref_from_written(&closure.root, &root, output_directory, ".")?;
+
+    let mut recipes = Vec::new();
+    for companion in &written_companions {
+        for path in &companion.easyconfigs {
+            recipes.push(bundle_relative(output_directory, path)?);
+        }
+    }
+    for path in &root.easyconfigs {
+        recipes.push(bundle_relative(output_directory, path)?);
+    }
+
+    let build_order_doc = ClosureBuildOrder {
+        schema_version: CLOSURE_BUNDLE_SCHEMA_VERSION,
+        recipes: recipes.clone(),
+    };
+    let build_order = output_directory.join("build-order.json");
+    write_json(&build_order, &build_order_doc)?;
+
+    let closure_plan_doc = ClosurePlanDocument {
+        schema_version: CLOSURE_BUNDLE_SCHEMA_VERSION,
+        root: root_ref,
+        companions: companion_refs,
+        build_order: "build-order.json".into(),
+    };
+    let closure_plan = output_directory.join("closure.plan.json");
+    write_json(&closure_plan, &closure_plan_doc)?;
+
+    let aggregate = merge_closure_sboms(
+        std::iter::once(&closure.root.sbom)
+            .chain(closure.companions.iter().map(|bundle| &bundle.sbom)),
+    )?;
+    let closure_sbom = output_directory.join("closure.sbom.cdx.json");
+    write_json(&closure_sbom, &aggregate)?;
+
+    Ok(WrittenPackageClosure {
+        root,
+        companions: written_companions,
+        build_order,
+        closure_plan,
+        closure_sbom,
+    })
+}
+
+/// Deterministic companion directory segment under `packages/`.
+///
+/// Format: `<name>-<version>-<toolchain-name>-<toolchain-version>`. Each field
+/// is validated as a single safe path component so no package-specific branches
+/// are required to keep the layout inside the bundle.
+pub fn package_layout_segment(bundle: &PackageBundle) -> Result<String, PackageClosureError> {
+    let name = &bundle.plan.package.name;
+    let version = &bundle.plan.package.version;
+    let toolchain = &bundle.plan.build.toolchain;
+    validate_path_segment(name, "package name")?;
+    validate_path_segment(version, "package version")?;
+    validate_path_segment(&toolchain.name, "toolchain name")?;
+    validate_path_segment(&toolchain.version, "toolchain version")?;
+    Ok(format!(
+        "{}-{}-{}-{}",
+        name, version, toolchain.name, toolchain.version
+    ))
+}
+
+fn package_ref_from_written(
+    bundle: &PackageBundle,
+    written: &WrittenPackageBundle,
+    output_directory: &Path,
+    directory: &str,
+) -> Result<ClosurePackageRef, PackageClosureError> {
+    let mut recipes = Vec::with_capacity(written.easyconfigs.len());
+    for path in &written.easyconfigs {
+        recipes.push(bundle_relative(output_directory, path)?);
+    }
+    Ok(ClosurePackageRef {
+        name: bundle.plan.package.name.clone(),
+        version: bundle.plan.package.version.clone(),
+        toolchain: bundle.plan.build.toolchain.clone(),
+        directory: directory.into(),
+        manifest: bundle_relative(output_directory, &written.manifest)?,
+        sbom: bundle_relative(output_directory, &written.sbom)?,
+        recipes,
+    })
+}
+
+fn bundle_relative(root: &Path, path: &Path) -> Result<String, PackageClosureError> {
+    let relative = path.strip_prefix(root).map_err(|_| {
+        PackageClosureError::Layout(format!("path {} is outside bundle", path.display()))
+    })?;
+    Ok(relative_posix(relative))
+}
+
+/// Merge root and companion CycloneDX documents into one aggregate BOM.
+///
+/// Components and dependency graph edges are deduplicated by `bom-ref` when
+/// present, otherwise by a stable `type|name|version` identity. The result is a
+/// real CycloneDX JSON document, not a custom wrapper.
+pub fn merge_closure_sboms<'a, I>(sboms: I) -> Result<Value, PackageClosureError>
+where
+    I: IntoIterator<Item = &'a Value>,
+{
+    let mut components: Vec<Value> = Vec::new();
+    let mut seen_components: BTreeMap<String, usize> = BTreeMap::new();
+    let mut dependencies: Vec<Value> = Vec::new();
+    let mut seen_dep_refs: BTreeMap<String, usize> = BTreeMap::new();
+    let mut metadata_component: Option<Value> = None;
+    let mut bom_format = "CycloneDX".to_string();
+    let mut spec_version = "1.5".to_string();
+    let mut version = 1u64;
+
+    for sbom in sboms {
+        if let Some(format) = sbom.get("bomFormat").and_then(Value::as_str) {
+            bom_format = format.to_string();
+        }
+        if let Some(spec) = sbom.get("specVersion").and_then(Value::as_str) {
+            spec_version = spec.to_string();
+        }
+        if let Some(ver) = sbom.get("version").and_then(Value::as_u64) {
+            version = ver;
+        }
+        if metadata_component.is_none() {
+            if let Some(component) = sbom.pointer("/metadata/component").cloned() {
+                metadata_component = Some(component);
+            }
+        }
+        if let Some(list) = sbom.get("components").and_then(Value::as_array) {
+            for component in list {
+                let key = component_identity(component);
+                if seen_components.contains_key(&key) {
+                    continue;
+                }
+                seen_components.insert(key, components.len());
+                components.push(component.clone());
+            }
+        }
+        if let Some(list) = sbom.get("dependencies").and_then(Value::as_array) {
+            for edge in list {
+                let Some(reference) = edge.get("ref").and_then(Value::as_str).map(str::to_string)
+                else {
+                    continue;
+                };
+                if let Some(&index) = seen_dep_refs.get(&reference) {
+                    // Merge dependsOn lists for the same ref.
+                    let existing = &mut dependencies[index];
+                    let mut depends = existing
+                        .get("dependsOn")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .unwrap_or_default();
+                    if let Some(extra) = edge.get("dependsOn").and_then(Value::as_array) {
+                        for item in extra {
+                            if !depends.contains(item) {
+                                depends.push(item.clone());
+                            }
+                        }
+                    }
+                    if let Some(object) = existing.as_object_mut() {
+                        object.insert("dependsOn".into(), Value::Array(depends));
+                    }
+                    continue;
+                }
+                seen_dep_refs.insert(reference, dependencies.len());
+                dependencies.push(edge.clone());
+            }
+        }
+    }
+
+    let mut metadata = Map::new();
+    if let Some(component) = metadata_component {
+        metadata.insert("component".into(), component);
+    }
+    metadata.insert(
+        "properties".into(),
+        json!([{
+            "name": "eb-stack:document-kind",
+            "value": "package-closure"
+        }]),
+    );
+
+    let mut aggregate = Map::new();
+    aggregate.insert("bomFormat".into(), Value::String(bom_format));
+    aggregate.insert("specVersion".into(), Value::String(spec_version));
+    aggregate.insert("version".into(), json!(version));
+    aggregate.insert("metadata".into(), Value::Object(metadata));
+    aggregate.insert("components".into(), Value::Array(components));
+    aggregate.insert("dependencies".into(), Value::Array(dependencies));
+    Ok(Value::Object(aggregate))
+}
+
+fn component_identity(component: &Value) -> String {
+    if let Some(bom_ref) = component
+        .get("bom-ref")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        return format!("ref:{bom_ref}");
+    }
+    let kind = component
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let name = component.get("name").and_then(Value::as_str).unwrap_or("");
+    let version = component
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    format!("id:{kind}|{name}|{version}")
 }
 
 struct GeneratedEntry {

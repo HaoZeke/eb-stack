@@ -557,20 +557,35 @@ pub fn write_package_bundle(
     bundle: &PackageBundle,
     output_directory: &Path,
 ) -> Result<WrittenPackageBundle, PackageWorkflowError> {
+    let mut claimed = BTreeMap::new();
+    write_package_bundle_into(bundle, output_directory, output_directory, &mut claimed)
+}
+
+/// Write package artifacts under `artifact_directory` and recipes/patches under the
+/// shared `recipe_bundle_root/easyconfigs/<letter>/<name>/` overlay.
+///
+/// `claimed_paths` tracks every overlay destination (posix-relative to
+/// `recipe_bundle_root`) so multi-package writers can reject collisions.
+pub fn write_package_bundle_into(
+    bundle: &PackageBundle,
+    artifact_directory: &Path,
+    recipe_bundle_root: &Path,
+    claimed_paths: &mut BTreeMap<String, String>,
+) -> Result<WrittenPackageBundle, PackageWorkflowError> {
     let inspection_only = bundle.locks.is_empty() && bundle.easyconfigs.is_empty();
     if !inspection_only {
         require_source_checksums(&bundle.plan)?;
     }
-    std::fs::create_dir_all(output_directory)
-        .map_err(|error| PackageWorkflowError::Io(output_directory.to_path_buf(), error))?;
-    let manifest = output_directory.join("package.plan.json");
-    let sbom = output_directory.join("package.sbom.cdx.json");
+    std::fs::create_dir_all(artifact_directory)
+        .map_err(|error| PackageWorkflowError::Io(artifact_directory.to_path_buf(), error))?;
+    let manifest = artifact_directory.join("package.plan.json");
+    let sbom = artifact_directory.join("package.sbom.cdx.json");
     write_json(&manifest, &bundle.plan)?;
     write_json(&sbom, &bundle.sbom)?;
 
     let mut locks = Vec::new();
     if !inspection_only {
-        let lock_directory = output_directory.join("locks");
+        let lock_directory = artifact_directory.join("locks");
         std::fs::create_dir_all(&lock_directory)
             .map_err(|error| PackageWorkflowError::Io(lock_directory.clone(), error))?;
         for lock in &bundle.locks {
@@ -583,14 +598,18 @@ pub fn write_package_bundle(
     let mut easyconfigs = Vec::new();
     let mut patches = Vec::new();
     if !inspection_only {
-        let recipe_directory = output_directory
+        let package_name = &bundle.plan.package.name;
+        validate_path_segment(package_name, "package name")?;
+        let recipe_directory = recipe_bundle_root
             .join("easyconfigs")
-            .join(easyconfig_letter_dir(&bundle.plan.package.name))
-            .join(&bundle.plan.package.name);
+            .join(easyconfig_letter_dir(package_name))
+            .join(package_name);
         std::fs::create_dir_all(&recipe_directory)
             .map_err(|error| PackageWorkflowError::Io(recipe_directory.clone(), error))?;
         for recipe in &bundle.easyconfigs {
+            validate_path_segment(&recipe.filename, "easyconfig filename")?;
             let path = recipe_directory.join(&recipe.filename);
+            claim_overlay_path(recipe_bundle_root, &path, &recipe.text, claimed_paths)?;
             std::fs::write(&path, &recipe.text)
                 .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
             easyconfigs.push(path);
@@ -602,8 +621,12 @@ pub fn write_package_bundle(
             {
                 continue;
             }
+            validate_path_segment(&patch.filename, "patch filename")?;
             let source = validate_patch_source(patch)?;
             let path = recipe_directory.join(&patch.filename);
+            let content = std::fs::read_to_string(&source)
+                .map_err(|error| PackageWorkflowError::PatchIo(source.clone(), error))?;
+            claim_overlay_path(recipe_bundle_root, &path, &content, claimed_paths)?;
             std::fs::copy(&source, &path)
                 .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
             patches.push(path);
@@ -619,7 +642,97 @@ pub fn write_package_bundle(
     })
 }
 
-fn write_json(path: &Path, value: &impl serde::Serialize) -> Result<(), PackageWorkflowError> {
+/// Reject path segments that would escape the bundle layout.
+pub fn validate_path_segment(segment: &str, kind: &str) -> Result<(), PackageWorkflowError> {
+    if segment.is_empty() {
+        return Err(PackageWorkflowError::UnsafePathSegment {
+            kind: kind.into(),
+            value: segment.into(),
+            reason: "empty".into(),
+        });
+    }
+    if segment == "." || segment == ".." {
+        return Err(PackageWorkflowError::UnsafePathSegment {
+            kind: kind.into(),
+            value: segment.into(),
+            reason: "reserved relative segment".into(),
+        });
+    }
+    if segment.contains('/') || segment.contains('\\') || segment.contains('\0') {
+        return Err(PackageWorkflowError::UnsafePathSegment {
+            kind: kind.into(),
+            value: segment.into(),
+            reason: "contains path separator or NUL".into(),
+        });
+    }
+    if Path::new(segment).components().count() != 1 {
+        return Err(PackageWorkflowError::UnsafePathSegment {
+            kind: kind.into(),
+            value: segment.into(),
+            reason: "must be a single path component".into(),
+        });
+    }
+    Ok(())
+}
+
+fn claim_overlay_path(
+    recipe_bundle_root: &Path,
+    absolute: &Path,
+    content: &str,
+    claimed_paths: &mut BTreeMap<String, String>,
+) -> Result<(), PackageWorkflowError> {
+    let relative = absolute.strip_prefix(recipe_bundle_root).map_err(|_| {
+        PackageWorkflowError::OverlayPathOutsideBundle {
+            path: absolute.to_path_buf(),
+            root: recipe_bundle_root.to_path_buf(),
+        }
+    })?;
+    let key = relative_posix(relative);
+    if let Some(previous) = claimed_paths.get(&key) {
+        if previous != content {
+            return Err(PackageWorkflowError::OverlayCollision {
+                path: key,
+                reason: "destination already claimed with different content".into(),
+            });
+        }
+        return Err(PackageWorkflowError::OverlayCollision {
+            path: key,
+            reason: "destination already claimed".into(),
+        });
+    }
+    if absolute.exists() {
+        let existing = std::fs::read_to_string(absolute)
+            .map_err(|error| PackageWorkflowError::Io(absolute.to_path_buf(), error))?;
+        if existing != content {
+            return Err(PackageWorkflowError::OverlayCollision {
+                path: key,
+                reason: "file already exists with different content".into(),
+            });
+        }
+        return Err(PackageWorkflowError::OverlayCollision {
+            path: key,
+            reason: "file already exists".into(),
+        });
+    }
+    claimed_paths.insert(key, content.to_string());
+    Ok(())
+}
+
+/// Join path components with `/` regardless of host separator.
+pub fn relative_posix(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(part) => Some(part.to_string_lossy()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+pub(crate) fn write_json(
+    path: &Path,
+    value: &impl serde::Serialize,
+) -> Result<(), PackageWorkflowError> {
     let mut text = serde_json::to_string_pretty(value)
         .map_err(|error| PackageWorkflowError::Json(path.to_path_buf(), error))?;
     text.push('\n');
@@ -676,4 +789,14 @@ pub enum PackageWorkflowError {
     Io(PathBuf, std::io::Error),
     #[error("serialize {0}: {1}")]
     Json(PathBuf, serde_json::Error),
+    #[error("unsafe {kind} path segment {value:?}: {reason}")]
+    UnsafePathSegment {
+        kind: String,
+        value: String,
+        reason: String,
+    },
+    #[error("easyconfig overlay collision at {path}: {reason}")]
+    OverlayCollision { path: String, reason: String },
+    #[error("overlay path {path} is outside recipe bundle root {root}")]
+    OverlayPathOutsideBundle { path: PathBuf, root: PathBuf },
 }
