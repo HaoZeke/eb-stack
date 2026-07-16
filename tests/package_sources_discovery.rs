@@ -260,6 +260,39 @@ fn easybuild_variants_require_an_unambiguous_source_identity() {
 }
 
 #[test]
+fn source_toolchain_families_outside_target_hierarchy_are_ignored() {
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let robot = root.join("robot");
+    let eb_sources = root.join("eb-sources");
+    std::fs::create_dir_all(&robot).unwrap();
+    write(
+        &eb_sources.join("bravo-1.5-GCC-14.3.0.eb"),
+        "name = 'bravo'\n\
+         version = '1.5'\n\
+         toolchain = {'name': 'GCC', 'version': '14.3.0'}\n",
+    );
+    write(
+        &eb_sources.join("bravo-1.5-intel-compilers-2025.2.0.eb"),
+        "name = 'bravo'\n\
+         version = '1.5'\n\
+         toolchain = {'name': 'intel-compilers', 'version': '2025.2.0'}\n",
+    );
+    let alpha = conda_recipe(root, "alpha.yaml", "alpha", "1.0", &["bravo >=1.0"]);
+    let mut sources = PackageSourceRoots {
+        schema_version: 1,
+        source_roots: Vec::new(),
+    };
+    sources.push(SourceRootKind::EasyBuild, eb_sources);
+    let closure =
+        plan_package_closure_with_sources(&request(alpha, robot), &empty_catalog(), &sources)
+            .expect("foss target admits GCC source family");
+    assert_eq!(closure.companions.len(), 1);
+    assert_eq!(closure.companions[0].plan.build.toolchain.name, "GCC");
+    assert_eq!(closure.companions[0].plan.build.toolchain.version, "15.2.0");
+}
+
+#[test]
 fn conda_fallback_without_catalog() {
     let temp = tempfile::tempdir().expect("temp");
     let root = temp.path();
