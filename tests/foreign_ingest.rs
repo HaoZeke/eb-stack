@@ -343,6 +343,38 @@ fn spack_zlib_and_eon_preserve_build_system_information() {
 }
 
 #[test]
+fn spack_version_prefixes_become_solver_ranges_not_exact_versions() {
+    let source = r#"
+class Orbit(CMakePackage):
+    homepage = "https://example.invalid/orbit"
+    url = "https://example.invalid/orbit-1.0.tar.gz"
+    version("1.0", sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+    depends_on("major@3")
+    depends_on("minor@3.2")
+    depends_on("exact@=3.2")
+    depends_on("upper@:3")
+    depends_on("lower@3:")
+    depends_on("bounded@1.2:1.4")
+"#;
+    let recipe = parse_foreign_str(ForeignFormat::Spack, source).expect("Spack prefixes");
+    let plan = package_plan_from_foreign(&recipe, &toolchain("2026.1"));
+    let constraint = |name: &str| {
+        plan.dependencies
+            .iter()
+            .find(|dependency| dependency.name == name)
+            .and_then(|dependency| dependency.constraint.as_deref())
+    };
+
+    assert_eq!(constraint("major"), Some(">=3,<4"));
+    assert_eq!(constraint("minor"), Some(">=3.2,<3.3"));
+    assert_eq!(constraint("exact"), Some("==3.2"));
+    assert_eq!(constraint("upper"), Some("<4"));
+    assert_eq!(constraint("lower"), Some(">=3"));
+    assert_eq!(constraint("bounded"), Some(">=1.2,<1.5"));
+}
+
+#[test]
 fn spack_qmcpack_preserves_variants_rules_and_conditions() {
     let recipe =
         parse_foreign_path(&root().join("spack_qmcpack/package.py"), None).expect("QMCPACK");
