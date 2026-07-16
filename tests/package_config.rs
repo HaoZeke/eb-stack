@@ -493,6 +493,18 @@ fn public_qmcpack_policy_encodes_build_and_verification_contract() {
         paths.get("PYTHONPATH"),
         Some(&EasyconfigValue::String("lib".into()))
     );
+    let dependency_policy = config
+        .dependencies
+        .as_ref()
+        .expect("QMCPACK dependency policy");
+    for name in ["Ninja", "pkgconf"] {
+        assert!(dependency_policy.requirements.iter().any(|requirement| {
+            requirement.name == name && requirement.roles == vec![DependencyRole::Build]
+        }));
+    }
+    assert!(dependency_policy.requirements.iter().any(|requirement| {
+        requirement.name == "Boost" && requirement.roles == vec![DependencyRole::Run]
+    }));
 }
 
 #[test]
