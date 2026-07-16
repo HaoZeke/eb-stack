@@ -81,7 +81,7 @@ dependencies = [
 # source directory, and the PyTorch paths use its Python 3.12 layout.
 preconfigopts = 'export PATH=$EBROOTRUST/bin:$PATH && '
 preconfigopts += 'unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS && '
-preconfigopts += 'export RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER= && '
+preconfigopts += 'unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER && '
 preconfigopts += 'mkdir -p %(builddir)s/readcon-stage && ( cd %(builddir)s/eOn-%(version)s/subprojects/readcon-core && '
 preconfigopts += 'cargo --version && rustc --version && '
 preconfigopts += 'cargo cinstall --locked --release --prefix %(builddir)s/readcon-stage --libdir lib --includedir '

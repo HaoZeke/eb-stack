@@ -21,7 +21,7 @@ source = "patches/eon/eOn-2.16.0_safemath-eigen5-core-guard.patch"
 preconfigopts = { concat = [
   "export PATH=$EBROOTRUST/bin:$PATH && ",
   "unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS && ",
-  "export RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER= && ",
+  "unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER && ",
   "mkdir -p %(builddir)s/readcon-stage && ",
   "(cd %(builddir)s/%(name)s-%(version)s/readcon-core-src && ",
   "cargo --version && rustc --version && ",
