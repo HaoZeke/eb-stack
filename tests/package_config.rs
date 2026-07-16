@@ -667,6 +667,14 @@ fn public_eon_policy_encodes_the_repaired_build_contract() {
             requirement.name == name && requirement.roles == [DependencyRole::Build]
         }));
     }
+    for name in ["Highway", "inih"] {
+        assert!(
+            requirements.iter().any(|requirement| {
+                requirement.name == name && requirement.roles == [DependencyRole::Run]
+            }),
+            "eOn preconfig references require {name} as a runtime dependency"
+        );
+    }
     let eigen = requirements
         .iter()
         .find(|requirement| requirement.name == "Eigen")
