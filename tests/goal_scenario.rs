@@ -4,8 +4,8 @@ use eb_stack::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
 use eb_stack::package_config::PackageConfigLayer;
 use eb_stack::version::matches_req;
 use eb_stack::{
-    inspect_new_package, plan_new_package, resolve_easyconfig_file, write_package_bundle,
-    ForeignFormat, NewPackageRequest, Toolchain,
+    inspect_new_package, lint_style, plan_new_package, resolve_easyconfig_file,
+    write_package_bundle, ForeignFormat, NewPackageRequest, Toolchain,
 };
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -131,6 +131,13 @@ fn run_package(
     assert_eq!(written.locks.len(), expected_profiles);
     assert_eq!(written.easyconfigs.len(), expected_profiles);
     for easyconfig in written.easyconfigs {
+        let text = std::fs::read_to_string(&easyconfig).expect("read emitted recipe");
+        let style_findings = lint_style(&text);
+        assert!(
+            style_findings.is_empty(),
+            "{} has style findings: {style_findings:?}",
+            easyconfig.display()
+        );
         let recipe = resolve_easyconfig_file(&easyconfig).expect("reparse emitted recipe");
         assert_eq!(recipe.name, expected_name);
         assert_eq!(recipe.toolchain, toolchain());
