@@ -34,7 +34,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             id: format!("dep:{index}:{name}", name = dependency.name),
             name: dependency.name.clone(),
             eb_name: None,
-            constraint: canonical_version_constraint(dependency.pin.as_deref()),
+            constraint: canonical_version_constraint(recipe.format, dependency.pin.as_deref()),
             roles: dependency_roles(&dependency.role),
             condition: dependency.condition.clone(),
             virtual_capability: foreign_virtual_capability(&dependency.name),
@@ -171,14 +171,65 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
     }
 }
 
-fn canonical_version_constraint(pin: Option<&str>) -> Option<String> {
+fn canonical_version_constraint(format: ForeignFormat, pin: Option<&str>) -> Option<String> {
     let pin = pin.map(str::trim).filter(|pin| !pin.is_empty())?;
     let version_field = pin.split_whitespace().next().unwrap_or(pin);
     if version_field.contains('*') && !version_field.chars().any(|value| value.is_ascii_digit()) {
         None
+    } else if format == ForeignFormat::Spack {
+        canonical_spack_version_constraint(version_field)
     } else {
         Some(pin.to_string())
     }
+}
+
+fn canonical_spack_version_constraint(version: &str) -> Option<String> {
+    let version = version.trim();
+    if version.is_empty() {
+        return None;
+    }
+    if let Some(exact) = version.strip_prefix('=') {
+        return Some(format!("=={exact}"));
+    }
+    if matches!(version.chars().next(), Some('<' | '>' | '!' | '~')) {
+        return Some(version.to_string());
+    }
+    if let Some((minimum, maximum)) = version.split_once(':') {
+        let minimum = minimum.trim();
+        let maximum = maximum.trim();
+        let mut terms = Vec::new();
+        if !minimum.is_empty() {
+            terms.push(format!(">={minimum}"));
+        }
+        if !maximum.is_empty() {
+            terms.push(spack_prefix_successor(maximum).map_or_else(
+                || format!("<={maximum}"),
+                |successor| format!("<{successor}"),
+            ));
+        }
+        return (!terms.is_empty()).then(|| terms.join(","));
+    }
+    spack_prefix_successor(version)
+        .map(|successor| format!(">={version},<{successor}"))
+        .or_else(|| Some(format!("=={version}")))
+}
+
+fn spack_prefix_successor(version: &str) -> Option<String> {
+    let version = version.strip_suffix(".*").unwrap_or(version);
+    let mut components = version
+        .split('.')
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    let last = components.last_mut()?;
+    *last = last.checked_add(1)?;
+    Some(
+        components
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join("."),
+    )
 }
 
 fn dependency_roles(role: &str) -> Vec<DependencyRole> {
