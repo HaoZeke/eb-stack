@@ -507,7 +507,10 @@ pub fn write_package_bundle(
     bundle: &PackageBundle,
     output_directory: &Path,
 ) -> Result<WrittenPackageBundle, PackageWorkflowError> {
-    require_source_checksums(&bundle.plan)?;
+    let inspection_only = bundle.locks.is_empty() && bundle.easyconfigs.is_empty();
+    if !inspection_only {
+        require_source_checksums(&bundle.plan)?;
+    }
     std::fs::create_dir_all(output_directory)
         .map_err(|error| PackageWorkflowError::Io(output_directory.to_path_buf(), error))?;
     let manifest = output_directory.join("package.plan.json");
@@ -515,36 +518,40 @@ pub fn write_package_bundle(
     write_json(&manifest, &bundle.plan)?;
     write_json(&sbom, &bundle.sbom)?;
 
-    let lock_directory = output_directory.join("locks");
-    std::fs::create_dir_all(&lock_directory)
-        .map_err(|error| PackageWorkflowError::Io(lock_directory.clone(), error))?;
     let mut locks = Vec::new();
-    for lock in &bundle.locks {
-        let path = lock_directory.join(format!("{}.lock.json", lock.profile));
-        write_json(&path, lock)?;
-        locks.push(path);
+    if !inspection_only {
+        let lock_directory = output_directory.join("locks");
+        std::fs::create_dir_all(&lock_directory)
+            .map_err(|error| PackageWorkflowError::Io(lock_directory.clone(), error))?;
+        for lock in &bundle.locks {
+            let path = lock_directory.join(format!("{}.lock.json", lock.profile));
+            write_json(&path, lock)?;
+            locks.push(path);
+        }
     }
 
-    let recipe_directory = output_directory
-        .join("easyconfigs")
-        .join(easyconfig_letter_dir(&bundle.plan.package.name))
-        .join(&bundle.plan.package.name);
-    std::fs::create_dir_all(&recipe_directory)
-        .map_err(|error| PackageWorkflowError::Io(recipe_directory.clone(), error))?;
     let mut easyconfigs = Vec::new();
-    for recipe in &bundle.easyconfigs {
-        let path = recipe_directory.join(&recipe.filename);
-        std::fs::write(&path, &recipe.text)
-            .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
-        easyconfigs.push(path);
-    }
     let mut patches = Vec::new();
-    for patch in &bundle.plan.build.patches {
-        let source = validate_patch_source(patch)?;
-        let path = recipe_directory.join(&patch.filename);
-        std::fs::copy(&source, &path)
-            .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
-        patches.push(path);
+    if !inspection_only {
+        let recipe_directory = output_directory
+            .join("easyconfigs")
+            .join(easyconfig_letter_dir(&bundle.plan.package.name))
+            .join(&bundle.plan.package.name);
+        std::fs::create_dir_all(&recipe_directory)
+            .map_err(|error| PackageWorkflowError::Io(recipe_directory.clone(), error))?;
+        for recipe in &bundle.easyconfigs {
+            let path = recipe_directory.join(&recipe.filename);
+            std::fs::write(&path, &recipe.text)
+                .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
+            easyconfigs.push(path);
+        }
+        for patch in &bundle.plan.build.patches {
+            let source = validate_patch_source(patch)?;
+            let path = recipe_directory.join(&patch.filename);
+            std::fs::copy(&source, &path)
+                .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
+            patches.push(path);
+        }
     }
 
     Ok(WrittenPackageBundle {
