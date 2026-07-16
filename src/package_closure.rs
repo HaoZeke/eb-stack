@@ -1,17 +1,18 @@
-//! Catalog-backed recursive package-closure planner and aggregate bundle writer.
+//! Recursive package-closure planner and aggregate bundle writer.
 //!
-//! Closes a root foreign package plan over robot candidates and catalog-backed
-//! companions. Compatible robot candidates win; catalog packages are planned
-//! only for typed robot holes. Catalog providers may be foreign (conda-forge /
-//! Spack) or `easybuild-bump` (retarget an existing EasyBuild recipe). Package
-//! names never appear as control flow.
+//! Closes a root foreign package plan over robot candidates, optional catalog
+//! overrides, and ordered local source roots (EasyBuild / conda-forge / Spack).
+//! Compatible robot candidates win. Holes resolve robot-first, then catalog
+//! overrides, then EasyBuild cross-generation bump, then an unambiguous foreign
+//! recipe. Package names never appear as control flow.
 //!
 //! The aggregate writer places root artifacts at the bundle root, companion
 //! artifacts under `packages/<name>-<version>-<toolchain>/`, and every recipe
 //! and verified patch into one shared `easyconfigs/` overlay.
 
-use crate::domain::Candidate;
-use crate::eb_parse::resolve_easyconfig_str;
+use crate::domain::{Candidate, Toolchain};
+use crate::eb_parse::{resolve_easyconfig_file, resolve_easyconfig_str};
+use crate::hierarchy::{hierarchy_for_with_tree, ToolchainHierarchy};
 use crate::package::{OutputRequest, PackagePlan, ProfileEnvironment, StackPolicy};
 use crate::package_catalog::{
     CatalogProviderKind, PackageCatalogError, PackageSourceCatalog, PackageSourceProvider,
@@ -19,6 +20,10 @@ use crate::package_catalog::{
 use crate::package_config::PackageConfigLayer;
 use crate::package_solve::{
     unsatisfied_direct_dependencies, ProfileSolveError, UnsatisfiedDirectDependency,
+};
+use crate::package_sources::{
+    discover_provider_for_hole, map_source_toolchain_to_target, DiscoveredCandidate,
+    PackageSourceError, PackageSourceIndex, PackageSourceRoots, ProviderDiscoveryError,
 };
 use crate::package_workflow::{
     complete_package_bump, complete_package_bundle, prepare_new_package_plan, prepare_package_bump,
@@ -93,6 +98,8 @@ pub enum PackageClosureError {
     Workflow(#[from] PackageWorkflowError),
     #[error(transparent)]
     Catalog(#[from] PackageCatalogError),
+    #[error(transparent)]
+    SourceRoots(#[from] PackageSourceError),
     #[error("package profile solve: {0}")]
     Solve(#[from] ProfileSolveError),
     #[error("dependency cycle: {}", path_display(.path))]
@@ -106,6 +113,19 @@ pub enum PackageClosureError {
         name: String,
         version: String,
         count: usize,
+    },
+    #[error("no package source for {name}{version_req}")]
+    MissingSource {
+        name: String,
+        version_req: String,
+        candidates: Vec<DiscoveredCandidate>,
+    },
+    #[error("ambiguous package sources for {name}{version_req}: {count} compatible candidates")]
+    AmbiguousSource {
+        name: String,
+        version_req: String,
+        count: usize,
+        candidates: Vec<DiscoveredCandidate>,
     },
     #[error(
         "catalog provider {name} version {provided} does not satisfy dependency requirement {required}"
@@ -139,14 +159,27 @@ fn path_display(path: &[String]) -> String {
     path.join(" -> ")
 }
 
-/// Plan a root package and recursively close catalog-backed robot holes.
+/// Plan a root package and recursively close robot holes (catalog only).
+///
+/// Prefer [`plan_package_closure_with_sources`] when ordered EasyBuild /
+/// conda-forge / Spack source roots are configured.
+pub fn plan_package_closure(
+    request: &NewPackageRequest,
+    catalog: &PackageSourceCatalog,
+) -> Result<PackageClosure, PackageClosureError> {
+    plan_package_closure_with_sources(request, catalog, &PackageSourceRoots::default())
+}
+
+/// Plan a root package and close robot holes via catalog overrides and source roots.
 ///
 /// The EasyBuild robot is parsed once. Each requested root profile is solved
 /// against robot candidates plus generated companions. Holes are discovered by
 /// inspecting the admitted candidate universe, never by parsing solver text.
-pub fn plan_package_closure(
+/// Explicit catalog entries override discovery for the same identity.
+pub fn plan_package_closure_with_sources(
     request: &NewPackageRequest,
     catalog: &PackageSourceCatalog,
+    source_roots: &PackageSourceRoots,
 ) -> Result<PackageClosure, PackageClosureError> {
     if request.easyconfig_roots.is_empty() {
         return Err(PackageWorkflowError::NoEasyconfigRoots.into());
@@ -159,12 +192,18 @@ pub fn plan_package_closure(
     let tree = crate::eb_parse::parse_easyconfig_trees(&roots)
         .map_err(|error| PackageWorkflowError::Robot(error.to_string()))?;
 
+    let source_index = PackageSourceIndex::build(source_roots)?;
+    let target_hierarchy = hierarchy_for_with_tree(&request.toolchain, None, &tree.candidates).ok();
+
     let (plan, sbom) = prepare_new_package_plan(request)?;
     let mut state = ClosureState {
         robot: tree.candidates,
         generated: HashMap::new(),
         topo: Vec::new(),
         catalog,
+        source_index,
+        target_toolchain: request.toolchain.clone(),
+        target_hierarchy,
         easyconfig_roots: request.easyconfig_roots.clone(),
         default_stack_policy: request.stack_policy.clone(),
     };
@@ -466,6 +505,9 @@ struct ClosureState<'a> {
     generated: HashMap<String, GeneratedEntry>,
     topo: Vec<String>,
     catalog: &'a PackageSourceCatalog,
+    source_index: PackageSourceIndex,
+    target_toolchain: Toolchain,
+    target_hierarchy: Option<ToolchainHierarchy>,
     easyconfig_roots: Vec<PathBuf>,
     default_stack_policy: StackPolicy,
 }
@@ -561,7 +603,18 @@ impl ClosureState<'_> {
             return Err(PackageClosureError::Cycle { path: cycle });
         }
 
-        let provider = select_catalog_provider(self.catalog, hole)?;
+        let mut provider = resolve_provider_for_hole(
+            self.catalog,
+            &self.source_index,
+            hole,
+            &self.target_toolchain,
+            self.target_hierarchy.as_ref(),
+        )?;
+        refine_bump_toolchain(
+            &mut provider,
+            &self.target_toolchain,
+            self.target_hierarchy.as_ref(),
+        )?;
 
         if let Some(provided_version) = provider.version.as_deref() {
             if !matches_req(provided_version, &hole.version_req) {
@@ -573,7 +626,7 @@ impl ClosureState<'_> {
             }
         }
 
-        let key = companion_key(provider);
+        let key = companion_key(&provider);
         if self.generated.contains_key(&key) {
             // Already closed; verify the generated candidate still satisfies the hole.
             let entry = self.generated.get(&key).expect("just checked");
@@ -592,7 +645,7 @@ impl ClosureState<'_> {
         }
 
         let (prepared, companion_policy) = prepare_companion_from_provider(
-            provider,
+            &provider,
             &self.easyconfig_roots,
             &self.default_stack_policy,
         )?;
@@ -670,49 +723,115 @@ fn prepare_companion_from_provider(
     }
 }
 
-fn select_catalog_provider<'a>(
-    catalog: &'a PackageSourceCatalog,
+/// Catalog overrides win when present; otherwise discover from source roots.
+fn resolve_provider_for_hole(
+    catalog: &PackageSourceCatalog,
+    source_index: &PackageSourceIndex,
     hole: &UnsatisfiedDirectDependency,
-) -> Result<&'a PackageSourceProvider, PackageClosureError> {
+    target_toolchain: &Toolchain,
+    hierarchy: Option<&ToolchainHierarchy>,
+) -> Result<PackageSourceProvider, PackageClosureError> {
     let named = catalog
         .providers()
         .iter()
         .filter(|provider| package_identity(&provider.name) == package_identity(&hole.name))
         .collect::<Vec<_>>();
-    if named.is_empty() {
-        return Err(PackageClosureError::MissingProvider {
-            name: hole.name.clone(),
-            version: format!(" ({})", hole.version_req),
-        });
+    if !named.is_empty() {
+        let compatible = named
+            .iter()
+            .copied()
+            .filter(|provider| {
+                provider
+                    .version
+                    .as_deref()
+                    .is_none_or(|version| matches_req(version, &hole.version_req))
+            })
+            .collect::<Vec<_>>();
+        return match compatible.as_slice() {
+            [provider] => Ok((*provider).clone()),
+            [] => Err(PackageClosureError::IncompatibleProviderVersion {
+                name: hole.name.clone(),
+                provided: named
+                    .iter()
+                    .filter_map(|provider| provider.version.as_deref())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                required: hole.version_req.clone(),
+            }),
+            many => Err(PackageClosureError::AmbiguousProvider {
+                name: hole.name.clone(),
+                version: format!(" ({})", hole.version_req),
+                count: many.len(),
+            }),
+        };
     }
 
-    let compatible = named
-        .iter()
-        .copied()
-        .filter(|provider| {
-            provider
-                .version
-                .as_deref()
-                .is_none_or(|version| matches_req(version, &hole.version_req))
-        })
-        .collect::<Vec<_>>();
-    match compatible.as_slice() {
-        [provider] => Ok(*provider),
-        [] => Err(PackageClosureError::IncompatibleProviderVersion {
-            name: hole.name.clone(),
-            provided: named
-                .iter()
-                .filter_map(|provider| provider.version.as_deref())
-                .collect::<Vec<_>>()
-                .join(", "),
-            required: hole.version_req.clone(),
-        }),
-        many => Err(PackageClosureError::AmbiguousProvider {
-            name: hole.name.clone(),
-            version: format!(" ({})", hole.version_req),
-            count: many.len(),
-        }),
+    discover_provider_for_hole(source_index, hole, target_toolchain, hierarchy).map_err(|error| {
+        match error {
+            ProviderDiscoveryError::Missing {
+                name,
+                version_req,
+                candidates,
+            } => {
+                if candidates.is_empty()
+                    && source_index.easybuild_candidates().is_empty()
+                    && source_index.foreign_candidates().is_empty()
+                {
+                    PackageClosureError::MissingProvider {
+                        name,
+                        version: version_req,
+                    }
+                } else {
+                    PackageClosureError::MissingSource {
+                        name,
+                        version_req,
+                        candidates,
+                    }
+                }
+            }
+            ProviderDiscoveryError::Ambiguous {
+                name,
+                version_req,
+                count,
+                candidates,
+            } => PackageClosureError::AmbiguousSource {
+                name,
+                version_req,
+                count,
+                candidates,
+            },
+            ProviderDiscoveryError::Incompatible {
+                name,
+                provided,
+                required,
+                ..
+            } => PackageClosureError::IncompatibleProviderVersion {
+                name,
+                provided,
+                required,
+            },
+        }
+    })
+}
+
+/// For EasyBuild-bump providers, remap the source recipe's toolchain family
+/// onto the target hierarchy (GCCcore → GCCcore member, not composite parent).
+fn refine_bump_toolchain(
+    provider: &mut PackageSourceProvider,
+    target_toolchain: &Toolchain,
+    hierarchy: Option<&ToolchainHierarchy>,
+) -> Result<(), PackageClosureError> {
+    if provider.provider != CatalogProviderKind::EasyBuildBump {
+        return Ok(());
     }
+    let resolved = resolve_easyconfig_file(&provider.source)
+        .map_err(|error| PackageClosureError::GeneratedCandidate(error.to_string()))?;
+    provider.toolchain =
+        map_source_toolchain_to_target(Some(&resolved.toolchain), target_toolchain, hierarchy);
+    if provider.version.is_none() {
+        provider.version = Some(resolved.version);
+    }
+    Ok(())
 }
 
 fn provider_stack_policy(

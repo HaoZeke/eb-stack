@@ -16,6 +16,7 @@ pub mod package_closure;
 pub mod package_config;
 pub mod package_emit;
 pub mod package_solve;
+pub mod package_sources;
 pub mod package_workflow;
 pub mod report;
 pub mod resolvo_provider;
@@ -57,14 +58,21 @@ pub use package_catalog::{
     PackageSourceCatalog, PackageSourceProvider, PACKAGE_CATALOG_SCHEMA_VERSION,
 };
 pub use package_closure::{
-    merge_closure_sboms, package_layout_segment, plan_package_closure, write_package_closure,
-    ClosureBuildOrder, ClosurePackageRef, ClosurePlanDocument, PackageClosure, PackageClosureError,
-    WrittenPackageClosure, CLOSURE_BUNDLE_SCHEMA_VERSION,
+    merge_closure_sboms, package_layout_segment, plan_package_closure,
+    plan_package_closure_with_sources, write_package_closure, ClosureBuildOrder, ClosurePackageRef,
+    ClosurePlanDocument, PackageClosure, PackageClosureError, WrittenPackageClosure,
+    CLOSURE_BUNDLE_SCHEMA_VERSION,
 };
 pub use package_emit::{emit_profile_easyconfigs, EmittedEasyconfig, PackageEmitError};
 pub use package_solve::{
     solve_package_profile, solve_package_profile_with_hierarchy, unsatisfied_direct_dependencies,
     unsatisfied_direct_dependencies_with_hierarchy, ProfileSolveError, UnsatisfiedDirectDependency,
+};
+pub use package_sources::{
+    discover_provider_for_hole, map_source_toolchain_to_target,
+    package_identity as source_package_identity, DiscoveredCandidate, PackageSourceError,
+    PackageSourceIndex, PackageSourceRoots, ProviderDiscoveryError, SourceRoot, SourceRootKind,
+    PACKAGE_SOURCE_ROOTS_SCHEMA_VERSION,
 };
 pub use package_workflow::{
     complete_package_bump, complete_package_bundle, complete_package_bundle_with_hierarchy,
