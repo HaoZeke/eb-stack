@@ -219,3 +219,75 @@ version = "2026.1"
     assert!(output.join("closure.sbom.cdx.json").is_file());
     assert!(output.join("build-order.json").is_file());
 }
+
+#[test]
+fn mcp_package_plan_reuses_robot_roots_for_cross_generation_bumps() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("alpha.yaml");
+    let stack = temp.path().join("stack.toml");
+    let robot = temp.path().join("robot");
+    let output = temp.path().join("output");
+    std::fs::create_dir(&robot).expect("robot");
+    std::fs::write(
+        &root,
+        r#"package:
+  name: alpha
+  version: "1.0"
+source:
+  url: https://example.invalid/alpha-1.0.tar.gz
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+requirements:
+  host:
+    - bravo >=1.5
+"#,
+    )
+    .expect("root recipe");
+    std::fs::write(
+        &stack,
+        r#"schema_version = 1
+name = "site"
+[toolchain]
+name = "foss"
+version = "2026.1"
+"#,
+    )
+    .expect("stack");
+    std::fs::write(
+        robot.join("bravo-1.5-foss-2023b.eb"),
+        "name = 'bravo'\n\
+         version = '1.5'\n\
+         homepage = 'https://example.invalid/bravo'\n\
+         description = 'synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2023b'}\n\
+         sources = ['bravo-1.5.tar.gz']\n\
+         checksums = ['bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb']\n\
+         moduleclass = 'lib'\n",
+    )
+    .expect("source easyconfig");
+
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_package_plan",
+            "arguments": {
+                "source": root,
+                "format": "conda-forge",
+                "toolchain_name": "foss",
+                "toolchain_version": "2026.1",
+                "easyconfigs": [robot],
+                "stack_policy": stack,
+                "out_dir": output
+            }
+        }
+    }))
+    .expect("package plan response");
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let body = &response["result"]["structuredContent"];
+    assert_eq!(body["companions"].as_array().map(Vec::len), Some(1));
+    assert!(output.join("closure.plan.json").is_file());
+    assert!(output
+        .join("easyconfigs/b/bravo/bravo-1.5-foss-2026.1.eb")
+        .is_file());
+}

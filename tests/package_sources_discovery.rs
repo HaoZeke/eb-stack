@@ -185,6 +185,45 @@ fn easybuild_gcccore_source_targets_hierarchy_member_not_foss() {
 }
 
 #[test]
+fn easybuild_variants_require_an_unambiguous_source_identity() {
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let robot = root.join("robot");
+    let eb_sources = root.join("eb-sources");
+    std::fs::create_dir_all(&robot).unwrap();
+    write(
+        &eb_sources.join("bravo-1.5-foss-2023b.eb"),
+        "name = 'bravo'\n\
+         version = '1.5'\n\
+         toolchain = {'name': 'foss', 'version': '2023b'}\n",
+    );
+    write(
+        &eb_sources.join("bravo-1.5-MPI-foss-2023b.eb"),
+        "name = 'bravo'\n\
+         version = '1.5'\n\
+         versionsuffix = '-MPI'\n\
+         toolchain = {'name': 'foss', 'version': '2023b'}\n",
+    );
+    let alpha = conda_recipe(root, "alpha.yaml", "alpha", "1.0", &["bravo >=1.0"]);
+    let mut sources = PackageSourceRoots {
+        schema_version: 1,
+        source_roots: Vec::new(),
+    };
+    sources.push(SourceRootKind::EasyBuild, eb_sources);
+    let err = plan_package_closure_with_sources(&request(alpha, robot), &empty_catalog(), &sources)
+        .expect_err("variant selection must be explicit");
+    match err {
+        PackageClosureError::AmbiguousSource {
+            count, candidates, ..
+        } => {
+            assert_eq!(count, 2);
+            assert_eq!(candidates.len(), 2);
+        }
+        other => panic!("expected AmbiguousSource, got {other}"),
+    }
+}
+
+#[test]
 fn conda_fallback_without_catalog() {
     let temp = tempfile::tempdir().expect("temp");
     let root = temp.path();
@@ -216,6 +255,61 @@ source:
     assert_eq!(closure.companions[0].plan.package.name, "bravolib");
     assert_eq!(closure.companions[0].plan.package.version, "2.0");
     assert_eq!(closure.companions[0].plan.origin, PackageOrigin::CondaForge);
+}
+
+#[test]
+fn discovered_foreign_recipe_inherits_relative_root_package_config() {
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let robot = root.join("robot");
+    let conda = root.join("conda");
+    std::fs::create_dir_all(&robot).unwrap();
+    robot_eb(&robot, "Zeta", "3.0");
+    let alpha = conda_recipe(root, "alpha.yaml", "alpha", "1.0", &["bravo >=1.0"]);
+    conda_recipe(
+        &conda,
+        "bravo/meta.yaml",
+        "bravo",
+        "1.5",
+        &["foreign-zeta >=3.0"],
+    );
+    write(
+        &root.join("common.toml"),
+        r#"schema_version = 1
+[dependencies.aliases]
+"foreign-zeta" = "Zeta"
+"#,
+    );
+    write(
+        &root.join("sources.toml"),
+        r#"schema_version = 1
+[[source_roots]]
+kind = "conda-forge"
+path = "conda"
+package_config = ["common.toml"]
+"#,
+    );
+    let sources = PackageSourceRoots::from_path(&root.join("sources.toml")).expect("sources");
+    assert_eq!(
+        sources.source_roots[0].package_config,
+        vec![root.join("common.toml")]
+    );
+
+    let closure =
+        plan_package_closure_with_sources(&request(alpha, robot), &empty_catalog(), &sources)
+            .expect("shared alias closes companion");
+    let bravo = closure
+        .companions
+        .iter()
+        .find(|companion| companion.plan.package.name == "bravo")
+        .expect("bravo companion");
+    let dependency = bravo
+        .plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "foreign-zeta")
+        .expect("foreign dependency");
+    assert_eq!(dependency.eb_name.as_deref(), Some("Zeta"));
 }
 
 #[test]
