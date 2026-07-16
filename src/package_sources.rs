@@ -92,12 +92,27 @@ pub struct DiscoveredCandidate {
     pub source_checksums: Vec<String>,
 }
 
+/// A recipe that was found under a configured source root but could not be
+/// parsed. `name` is retained when it can be inferred without interpreting the
+/// invalid recipe, allowing lookup to distinguish relevant failures from
+/// unrelated syntax that appears elsewhere in a broad source tree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceParseFailure {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub path: PathBuf,
+    pub kind: SourceRootKind,
+    pub format: ForeignFormat,
+    pub error: String,
+}
+
 /// Indexed view of all configured source roots for hole resolution.
 #[derive(Debug, Clone, Default)]
 pub struct PackageSourceIndex {
     easybuild: Vec<DiscoveredCandidate>,
     easybuild_solver: Vec<Candidate>,
     foreign: Vec<DiscoveredCandidate>,
+    parse_failures: Vec<SourceParseFailure>,
 }
 
 #[derive(Debug, Error)]
@@ -146,6 +161,12 @@ pub enum ProviderDiscoveryError {
         provided: String,
         required: String,
         candidates: Vec<DiscoveredCandidate>,
+    },
+    #[error("package source for {name}{version_req} could not be parsed: {failures:?}")]
+    SourceParseFailure {
+        name: String,
+        version_req: String,
+        failures: Vec<SourceParseFailure>,
     },
 }
 
@@ -267,6 +288,10 @@ impl PackageSourceIndex {
         &self.foreign
     }
 
+    pub fn parse_failures(&self) -> &[SourceParseFailure] {
+        &self.parse_failures
+    }
+
     pub(crate) fn retargeted_candidates_for_providers(
         &self,
         providers: &[PackageSourceProvider],
@@ -354,7 +379,13 @@ impl PackageSourceIndex {
                         source_checksums: foreign_checksums(&recipe.sha256, &recipe.sources),
                     });
                 }
-                Err(_) => continue,
+                Err(error) => self.record_foreign_parse_failure(
+                    root,
+                    path,
+                    ForeignFormat::CondaForge,
+                    &config_layers,
+                    error.to_string(),
+                ),
             }
         }
         Ok(())
@@ -389,11 +420,109 @@ impl PackageSourceIndex {
                         source_checksums: foreign_checksums(&recipe.sha256, &recipe.sources),
                     });
                 }
-                Err(_) => continue,
+                Err(error) => self.record_foreign_parse_failure(
+                    root,
+                    path,
+                    ForeignFormat::Spack,
+                    &config_layers,
+                    error.to_string(),
+                ),
             }
         }
         Ok(())
     }
+
+    fn record_foreign_parse_failure(
+        &mut self,
+        root: &SourceRoot,
+        path: PathBuf,
+        format: ForeignFormat,
+        config_layers: &[PackageConfigLayer],
+        error: String,
+    ) {
+        let name = infer_foreign_package_name(&path, &root.path, format)
+            .map(|name| provider_name_for_foreign(&name, config_layers));
+        self.parse_failures.push(SourceParseFailure {
+            name,
+            path,
+            kind: root.kind,
+            format,
+            error,
+        });
+    }
+}
+
+fn infer_foreign_package_name(path: &Path, root: &Path, format: ForeignFormat) -> Option<String> {
+    if format == ForeignFormat::CondaForge {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            if let Some(name) = infer_conda_package_name(&text) {
+                return Some(name);
+            }
+        }
+    }
+    infer_package_name_from_path(path, root, format)
+}
+
+fn infer_conda_package_name(text: &str) -> Option<String> {
+    let mut in_package = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indented = line.starts_with(' ') || line.starts_with('\t');
+        if !in_package {
+            if !indented && trimmed == "package:" {
+                in_package = true;
+            }
+            continue;
+        }
+        if !indented {
+            return None;
+        }
+        let Some(value) = trimmed.strip_prefix("name:") else {
+            continue;
+        };
+        let value = value
+            .split('#')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .trim_matches(['\'', '"']);
+        if !value.is_empty()
+            && value
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || "-_.+".contains(character))
+        {
+            return Some(value.to_string());
+        }
+        return None;
+    }
+    None
+}
+
+fn infer_package_name_from_path(path: &Path, root: &Path, format: ForeignFormat) -> Option<String> {
+    let parent = path.parent()?;
+    let package_dir = match format {
+        ForeignFormat::CondaForge
+            if parent
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("recipe")) =>
+        {
+            parent.parent()?
+        }
+        ForeignFormat::CondaForge | ForeignFormat::Spack => parent,
+    };
+    let package_dir = if package_dir == root {
+        root.file_name()?.to_str()?
+    } else {
+        package_dir.file_name()?.to_str()?
+    };
+    let name = package_dir
+        .strip_suffix("-feedstock")
+        .unwrap_or(package_dir);
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 fn load_package_config_layers(
@@ -607,6 +736,25 @@ pub fn discover_provider_candidates_for_hole(
         .filter(|candidate| matches_req(&candidate.version, &hole.version_req))
         .cloned()
         .collect::<Vec<_>>();
+
+    let parse_failures = index
+        .parse_failures
+        .iter()
+        .filter(|failure| {
+            failure
+                .name
+                .as_deref()
+                .is_some_and(|name| package_identity(name) == identity)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !parse_failures.is_empty() {
+        return Err(ProviderDiscoveryError::SourceParseFailure {
+            name: hole.name.clone(),
+            version_req: format!(" ({})", hole.version_req),
+            failures: parse_failures,
+        });
+    }
 
     select_foreign_provider(&foreign_matches, hole, target_parent).map(|provider| vec![provider])
 }

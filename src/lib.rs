@@ -71,8 +71,8 @@ pub use package_solve::{
 pub use package_sources::{
     discover_provider_for_hole, map_source_toolchain_to_target,
     package_identity as source_package_identity, DiscoveredCandidate, PackageSourceError,
-    PackageSourceIndex, PackageSourceRoots, ProviderDiscoveryError, SourceRoot, SourceRootKind,
-    PACKAGE_SOURCE_ROOTS_SCHEMA_VERSION,
+    PackageSourceIndex, PackageSourceRoots, ProviderDiscoveryError, SourceParseFailure, SourceRoot,
+    SourceRootKind, PACKAGE_SOURCE_ROOTS_SCHEMA_VERSION,
 };
 pub use package_workflow::{
     complete_package_bump, complete_package_bundle, complete_package_bundle_with_hierarchy,

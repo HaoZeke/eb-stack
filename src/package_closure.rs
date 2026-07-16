@@ -25,6 +25,7 @@ use crate::package_solve::{
 use crate::package_sources::{
     discover_provider_candidates_for_hole, map_source_toolchain_to_target, DiscoveredCandidate,
     PackageSourceError, PackageSourceIndex, PackageSourceRoots, ProviderDiscoveryError,
+    SourceParseFailure,
 };
 use crate::package_workflow::{
     complete_package_bump, complete_package_bundle, prepare_new_package_plan, prepare_package_bump,
@@ -127,6 +128,12 @@ pub enum PackageClosureError {
         version_req: String,
         count: usize,
         candidates: Vec<DiscoveredCandidate>,
+    },
+    #[error("package source for {name}{version_req} could not be parsed: {failures:?}")]
+    SourceParseFailure {
+        name: String,
+        version_req: String,
+        failures: Vec<SourceParseFailure>,
     },
     #[error(
         "catalog provider {name} version {provided} does not satisfy dependency requirement {required}"
@@ -898,6 +905,15 @@ fn resolve_provider_candidates_for_hole(
                 name,
                 provided,
                 required,
+            },
+            ProviderDiscoveryError::SourceParseFailure {
+                name,
+                version_req,
+                failures,
+            } => PackageClosureError::SourceParseFailure {
+                name,
+                version_req,
+                failures,
             },
         },
     )
