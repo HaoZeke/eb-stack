@@ -73,6 +73,7 @@ pub fn inspect_new_package(
     let recipe = parse_foreign_path(source, format)
         .map_err(|error| PackageWorkflowError::Foreign(error.to_string()))?;
     let mut plan = package_plan_from_foreign(&recipe, toolchain);
+    materialize_foreign_local_patches(&mut plan, source)?;
     if !package_layers.is_empty() {
         apply_package_layers(&mut plan, package_layers)
             .map_err(|error| PackageWorkflowError::Config(error.to_string()))?;
@@ -81,6 +82,54 @@ pub fn inspect_new_package(
     let sbom = package_plan_to_cyclonedx(&plan)
         .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
     Ok((plan, sbom))
+}
+
+fn materialize_foreign_local_patches(
+    plan: &mut PackagePlan,
+    recipe_source: &Path,
+) -> Result<(), PackageWorkflowError> {
+    let Some(recipe_directory) = recipe_source.parent() else {
+        return Ok(());
+    };
+    for patch in &mut plan.build.patches {
+        if patch.sha256.is_some() || patch.source.is_some() || patch.resolved_source.is_some() {
+            continue;
+        }
+        if patch.filename.contains("://") {
+            continue;
+        }
+        let declared_source = PathBuf::from(&patch.filename);
+        let resolved_source = if declared_source.is_absolute() {
+            declared_source.clone()
+        } else {
+            recipe_directory.join(&declared_source)
+        };
+        if !resolved_source.is_file() {
+            continue;
+        }
+        let bytes = std::fs::read(&resolved_source)
+            .map_err(|error| PackageWorkflowError::PatchIo(resolved_source.clone(), error))?;
+        let filename = resolved_source
+            .file_name()
+            .and_then(|filename| filename.to_str())
+            .ok_or_else(|| PackageWorkflowError::MissingPatchSource(patch.filename.clone()))?
+            .to_string();
+        patch.filename = filename;
+        patch.sha256 = Some(sha256_hex(&bytes));
+        patch.source = Some(declared_source.display().to_string());
+        patch.resolved_source = Some(resolved_source);
+    }
+    Ok(())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut checksum = String::with_capacity(64);
+    for byte in digest {
+        write!(&mut checksum, "{byte:02x}")
+            .expect("writing a SHA-256 digest to String cannot fail");
+    }
+    checksum
 }
 
 /// Parse foreign source, apply package layers and optional checksum overrides.
@@ -314,11 +363,7 @@ fn validate_patch_source(patch: &PatchArtifact) -> Result<PathBuf, PackageWorkfl
         .ok_or_else(|| PackageWorkflowError::MissingPatchSource(patch.filename.clone()))?;
     let bytes = std::fs::read(&source)
         .map_err(|error| PackageWorkflowError::PatchIo(source.clone(), error))?;
-    let digest = Sha256::digest(&bytes);
-    let mut actual = String::with_capacity(64);
-    for byte in digest {
-        write!(&mut actual, "{byte:02x}").expect("writing a SHA-256 digest to String cannot fail");
-    }
+    let actual = sha256_hex(&bytes);
     let expected = patch.sha256.as_deref().unwrap_or_default();
     if actual != expected {
         return Err(PackageWorkflowError::PatchChecksumMismatch {
