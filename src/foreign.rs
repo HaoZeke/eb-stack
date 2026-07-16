@@ -944,6 +944,30 @@ fn condition_all(left: ConditionExpr, right: ConditionExpr) -> ConditionExpr {
     }
 }
 
+fn condition_any(left: ConditionExpr, right: ConditionExpr) -> ConditionExpr {
+    match (left, right) {
+        (ConditionExpr::Always, _) | (_, ConditionExpr::Always) => ConditionExpr::Always,
+        (ConditionExpr::Never, expression) | (expression, ConditionExpr::Never) => expression,
+        (ConditionExpr::Any(mut left), ConditionExpr::Any(right)) => {
+            for expression in right {
+                if !left.contains(&expression) {
+                    left.push(expression);
+                }
+            }
+            ConditionExpr::Any(left)
+        }
+        (ConditionExpr::Any(mut expressions), expression)
+        | (expression, ConditionExpr::Any(mut expressions)) => {
+            if !expressions.contains(&expression) {
+                expressions.push(expression);
+            }
+            ConditionExpr::Any(expressions)
+        }
+        (left, right) if left == right => left,
+        (left, right) => ConditionExpr::Any(vec![left, right]),
+    }
+}
+
 fn parse_conda_selector(selector: &str) -> ConditionExpr {
     let selector = strip_selector_outer_parentheses(selector.trim());
     if let Some((left, right)) = split_selector_top_level(selector, " or ") {
@@ -1519,7 +1543,22 @@ fn parse_spack_depends_on(
             Confidence::Exact,
         );
         if let Some(dependency) = parse_spack_depends_on_call(call, notes, provenance) {
-            out.push(dependency);
+            if let Some(existing) = out.iter_mut().find(|existing: &&mut ForeignDep| {
+                existing.name == dependency.name
+                    && existing.pin == dependency.pin
+                    && existing.role == dependency.role
+                    && existing.original_spec == dependency.original_spec
+            }) {
+                existing.condition =
+                    condition_any(existing.condition.clone(), dependency.condition);
+                for provenance in dependency.provenance {
+                    if !existing.provenance.contains(&provenance) {
+                        existing.provenance.push(provenance);
+                    }
+                }
+            } else {
+                out.push(dependency);
+            }
         }
     }
     out
