@@ -31,6 +31,18 @@ dirs = ["lib/nexus"]
 [build.easyconfig_parameters.modextrapaths]
 PYTHONPATH = "lib"
 
+[[dependencies.requirements]]
+name = "Ninja"
+roles = ["build"]
+
+[[dependencies.requirements]]
+name = "pkgconf"
+roles = ["build"]
+
+[[dependencies.requirements]]
+name = "Boost"
+roles = ["run"]
+
 [[profiles]]
 name = "default"
 default = true
