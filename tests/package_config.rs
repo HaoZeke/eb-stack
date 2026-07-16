@@ -1,6 +1,7 @@
 use eb_stack::package::{
-    materialize_profile, package_plan_to_cyclonedx, ConditionExpr, DependencyRole, EasyconfigValue,
-    PatchArtifact, ProfileEnvironment, StackPolicy, STACK_POLICY_SCHEMA_VERSION,
+    materialize_profile, package_plan_to_cyclonedx, ConditionExpr, ConditionPredicate,
+    DependencyRole, EasyconfigValue, PatchArtifact, ProfileEnvironment, StackPolicy,
+    STACK_POLICY_SCHEMA_VERSION,
 };
 use eb_stack::package_config::{apply_package_layers, DependencyAlias, PackageConfigLayer};
 use eb_stack::{
@@ -264,6 +265,48 @@ sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     assert_eq!(
         plan.build.patches[0].sha256.as_deref(),
         Some("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+    );
+}
+
+#[test]
+fn package_profile_supplies_target_context_for_foreign_selectors() {
+    let config = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[profiles]]
+name = "default"
+platform = "linux"
+architecture = "x86_64"
+"#,
+    )
+    .expect("package config with target context");
+    let mut plan = qmcpack_plan();
+    let mut linux = plan.dependencies[0].clone();
+    linux.id = "linux-only".into();
+    linux.name = "linux-only".into();
+    linux.condition = ConditionExpr::Predicate(ConditionPredicate::Platform {
+        name: "linux".into(),
+    });
+    let mut windows = linux.clone();
+    windows.id = "windows-only".into();
+    windows.name = "windows-only".into();
+    windows.condition = ConditionExpr::Predicate(ConditionPredicate::Platform {
+        name: "win".into(),
+    });
+    plan.dependencies = vec![linux, windows];
+
+    apply_package_layers(&mut plan, &[config]).expect("apply target context");
+    let materialized = materialize_profile(&plan, "default", &ProfileEnvironment::default())
+        .expect("materialize configured target");
+
+    assert_eq!(
+        materialized
+            .dependencies
+            .iter()
+            .map(|dependency| dependency.name.as_str())
+            .collect::<Vec<_>>(),
+        ["linux-only"]
     );
 }
 
