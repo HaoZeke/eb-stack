@@ -291,9 +291,8 @@ architecture = "x86_64"
     let mut windows = linux.clone();
     windows.id = "windows-only".into();
     windows.name = "windows-only".into();
-    windows.condition = ConditionExpr::Predicate(ConditionPredicate::Platform {
-        name: "win".into(),
-    });
+    windows.condition =
+        ConditionExpr::Predicate(ConditionPredicate::Platform { name: "win".into() });
     plan.dependencies = vec![linux, windows];
 
     apply_package_layers(&mut plan, &[config]).expect("apply target context");
