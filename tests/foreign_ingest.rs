@@ -93,7 +93,10 @@ requirements:
 
     assert_eq!(recipe.name, "selector-assignment");
     assert_eq!(recipe.version, "1.0");
-    assert!(recipe.dependencies.iter().any(|dependency| dependency.name == "make"));
+    assert!(recipe
+        .dependencies
+        .iter()
+        .any(|dependency| dependency.name == "make"));
 }
 
 #[test]
