@@ -492,10 +492,7 @@ fn record_interrupted_attempt(state: &mut CampaignState, state_path: &Path) {
     let recipe = state.current_recipe.take().unwrap_or_default();
     let attempt = state.attempts;
     state.findings.push(BuildFinding {
-        id: format!(
-            "attempt:{attempt}:finding:{}",
-            state.findings.len() + 1
-        ),
+        id: format!("attempt:{attempt}:finding:{}", state.findings.len() + 1),
         class: BuildFindingClass::Interrupted,
         disposition: FindingDisposition::Retryable,
         stage: "campaign".into(),
