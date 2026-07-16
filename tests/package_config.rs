@@ -225,6 +225,43 @@ versionsuffix = ["-kokkos"]
 }
 
 #[test]
+fn package_config_patch_merge_preserves_foreign_recipe_patches() {
+    let config = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[build]
+patches_mode = "merge"
+
+[[build.patches]]
+filename = "easybuild-policy.patch"
+sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+"#,
+    )
+    .expect("package config with merged patches");
+    let mut plan = qmcpack_plan();
+    plan.build.patches = vec![PatchArtifact {
+        filename: "foreign-recipe.patch".into(),
+        sha256: Some(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+        ),
+        source: Some("foreign-recipe.patch".into()),
+        resolved_source: None,
+    }];
+
+    apply_package_layers(&mut plan, &[config]).expect("merge package patches");
+
+    assert_eq!(
+        plan.build
+            .patches
+            .iter()
+            .map(|patch| patch.filename.as_str())
+            .collect::<Vec<_>>(),
+        ["foreign-recipe.patch", "easybuild-policy.patch"]
+    );
+}
+
+#[test]
 fn package_config_rejects_unknown_schema() {
     let error =
         PackageConfigLayer::from_toml_str("schema_version = 99").expect_err("unsupported schema");
