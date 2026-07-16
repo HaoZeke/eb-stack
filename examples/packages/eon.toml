@@ -102,6 +102,12 @@ roles = ["build"]
 name = "Eigen"
 constraint = "==5.0.0"
 
+[[dependencies.requirements]]
+name = "Highway"
+
+[[dependencies.requirements]]
+name = "inih"
+
 [[profiles]]
 name = "default"
 default = true
