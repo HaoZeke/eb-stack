@@ -293,6 +293,35 @@ fn typed_easyconfig_parameters_render_as_conventional_python_data() {
 }
 
 #[test]
+fn typed_string_fragments_render_as_conventional_augmented_assignments() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.build.easyconfig_parameters.insert(
+        "preconfigopts".into(),
+        EasyconfigValue::Concat(eb_stack::package::EasyconfigStringConcat {
+            concat: vec![
+                "export TOOL_ROOT=$EBROOTTOOL && ".into(),
+                "tool --locked --release && ".into(),
+                "export PKG_CONFIG_PATH=/stage/lib/pkgconfig".into(),
+            ],
+        }),
+    );
+    plan.profiles = qmcpack_profiles();
+    plan.outputs.truncate(1);
+    let mut lock = profile_lock("default", "");
+    lock.package.clone_from(&plan.package.name);
+
+    let emitted = emit_profile_easyconfigs(&plan, &[lock]).expect("emit string fragments");
+    let text = &emitted[0].text;
+
+    assert!(text.contains("preconfigopts = 'export TOOL_ROOT=$EBROOTTOOL && '"));
+    assert!(text.contains("preconfigopts += 'tool --locked --release && '"));
+    assert!(text.contains("preconfigopts += 'export PKG_CONFIG_PATH=/stage/lib/pkgconfig'"));
+    assert!(!text.contains("'concat':"));
+    assert!(lint_style(text).is_empty(), "{:?}", lint_style(text));
+}
+
+#[test]
 fn patch_artifacts_emit_names_and_positional_checksums_after_sources() {
     let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
     let mut plan = package_plan_from_foreign(&recipe, &toolchain());

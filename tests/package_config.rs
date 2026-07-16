@@ -526,10 +526,11 @@ fn public_eon_policy_encodes_the_repaired_build_contract() {
         .as_ref()
         .is_some_and(|path| path.is_file()));
 
-    let Some(EasyconfigValue::String(preconfig)) = build.easyconfig_parameters.get("preconfigopts")
+    let Some(EasyconfigValue::Concat(preconfig)) = build.easyconfig_parameters.get("preconfigopts")
     else {
-        panic!("preconfigopts must be typed data");
+        panic!("preconfigopts must be typed string fragments");
     };
+    let preconfig = preconfig.concat.join("");
     for required in [
         "cargo cinstall --locked --release",
         "RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER=",
