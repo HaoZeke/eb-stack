@@ -240,6 +240,58 @@ fn campaign_state_persists_claims_attempts_and_resume() {
 }
 
 #[test]
+fn campaign_uses_declared_closure_build_order() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let root_recipe = bundle.join("easyconfigs/a/Alpha/Alpha.eb");
+    let companion_recipe = bundle.join("easyconfigs/z/Zulu/Zulu.eb");
+    std::fs::create_dir_all(root_recipe.parent().unwrap()).expect("root recipe directory");
+    std::fs::create_dir_all(companion_recipe.parent().unwrap())
+        .expect("companion recipe directory");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"Alpha","version":"1.0"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .expect("lock");
+    write_valid_recipe(&root_recipe, "Alpha", "1.0");
+    write_valid_recipe(&companion_recipe, "Zulu", "2.0");
+    std::fs::write(
+        bundle.join("build-order.json"),
+        r#"{
+  "schema_version": 1,
+  "recipes": [
+    "easyconfigs/z/Zulu/Zulu.eb",
+    "easyconfigs/a/Alpha/Alpha.eb"
+  ]
+}"#,
+    )
+    .expect("build order");
+
+    let state = run_campaign(&CampaignRequest {
+        bundle,
+        target: target("true"),
+        state_path: temp.path().join("campaign.json"),
+    })
+    .expect("campaign");
+    let built = state
+        .history
+        .iter()
+        .filter(|event| event.detail == "EasyBuild command succeeded")
+        .filter_map(|event| event.recipe.as_deref())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        built,
+        ["easyconfigs/z/Zulu/Zulu.eb", "easyconfigs/a/Alpha/Alpha.eb"]
+    );
+}
+
+#[test]
 fn finding_queue_enforces_ownership_and_records_resolution() {
     let temp = tempfile::tempdir().expect("tempdir");
     let bundle = temp.path().join("bundle");
