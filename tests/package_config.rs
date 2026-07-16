@@ -234,6 +234,10 @@ schema_version = 1
 patches_mode = "merge"
 
 [[build.patches]]
+filename = "foreign-recipe.patch"
+sha256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+
+[[build.patches]]
 filename = "easybuild-policy.patch"
 sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 "#,
@@ -256,6 +260,10 @@ sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
             .map(|patch| patch.filename.as_str())
             .collect::<Vec<_>>(),
         ["foreign-recipe.patch", "easybuild-policy.patch"]
+    );
+    assert_eq!(
+        plan.build.patches[0].sha256.as_deref(),
+        Some("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
     );
 }
 
