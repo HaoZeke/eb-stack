@@ -327,6 +327,56 @@ source:
 }
 
 #[test]
+fn requested_unparseable_source_reports_its_parse_diagnostic() {
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let robot = root.join("robot");
+    let conda = root.join("conda");
+    std::fs::create_dir_all(&robot).unwrap();
+    let alpha = conda_recipe(root, "alpha.yaml", "alpha", "1.0", &["bravolib >=1.0"]);
+    let broken = conda.join("bravolib-feedstock").join("recipe/meta.yaml");
+    write(
+        &broken,
+        r#"package:
+  name: bravolib
+  version: {{ unsupported_expression() }}
+"#,
+    );
+    write(
+        &conda.join("unrelated-feedstock/recipe/meta.yaml"),
+        r#"package:
+  name: unrelated
+  version: {{ unsupported_expression() }}
+"#,
+    );
+    let mut sources = PackageSourceRoots {
+        schema_version: 1,
+        source_roots: Vec::new(),
+    };
+    sources.push(SourceRootKind::CondaForge, conda);
+
+    let error =
+        plan_package_closure_with_sources(&request(alpha, robot), &empty_catalog(), &sources)
+            .expect_err("requested broken source must retain its parse failure");
+
+    match error {
+        PackageClosureError::SourceParseFailure {
+            name,
+            version_req,
+            failures,
+        } => {
+            assert_eq!(name, "bravolib");
+            assert_eq!(version_req, " (>=1.0)");
+            assert_eq!(failures.len(), 1);
+            assert_eq!(failures[0].path, broken);
+            assert_eq!(failures[0].name.as_deref(), Some("bravolib"));
+            assert!(failures[0].error.contains("conda YAML parse"));
+        }
+        other => panic!("expected SourceParseFailure, got {other}"),
+    }
+}
+
+#[test]
 fn discovered_foreign_recipe_inherits_relative_root_package_config() {
     let temp = tempfile::tempdir().expect("temp");
     let root = temp.path();
