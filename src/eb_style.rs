@@ -398,7 +398,7 @@ fn parse_string_assignment(line: &str) -> Option<StringAssignment<'_>> {
 fn contains_unescaped_delimiter(content: &str, delimiter: char) -> bool {
     let mut backslashes = 0usize;
     for character in content.chars() {
-        if character == delimiter && backslashes % 2 == 0 {
+        if character == delimiter && backslashes.is_multiple_of(2) {
             return true;
         }
         if character == '\\' {
