@@ -781,6 +781,7 @@ fn prepare_companion_from_provider(
                 foreign_request_from_provider(provider, easyconfig_roots, default_stack_policy)?;
             let (mut companion_plan, companion_sbom) =
                 prepare_new_package_plan(&companion_request)?;
+            companion_plan.package.name.clone_from(&provider.name);
             select_provider_profile(&mut companion_plan, &provider.profile)?;
             let policy = companion_request.stack_policy.clone();
             Ok((

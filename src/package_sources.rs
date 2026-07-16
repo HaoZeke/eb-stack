@@ -11,6 +11,7 @@ use crate::eb_parse::parse_easyconfig_tree;
 use crate::foreign::{detect_foreign_format, parse_foreign_path, ForeignFormat};
 use crate::hierarchy::{hierarchy_for, is_system_toolchain, known_hierarchy, ToolchainHierarchy};
 use crate::package_catalog::{CatalogProviderKind, PackageSourceProvider};
+use crate::package_config::PackageConfigLayer;
 use crate::package_solve::UnsatisfiedDirectDependency;
 use crate::version::{cmp_version, matches_req};
 use serde::{Deserialize, Serialize};
@@ -115,6 +116,8 @@ pub enum PackageSourceError {
     EasyBuildPackageConfig,
     #[error("package-sources discovery: {0}")]
     Discovery(String),
+    #[error("package-sources package config {0}: {1}")]
+    PackageConfig(String, String),
 }
 
 /// Typed discovery failure with candidate evidence for operators and tests.
@@ -333,12 +336,14 @@ impl PackageSourceIndex {
             &mut paths,
         )
         .map_err(|error| PackageSourceError::Io(root.path.display().to_string(), error))?;
+        let config_layers = load_package_config_layers(&root.package_config)?;
         paths.sort();
         for path in paths {
             match parse_foreign_path(&path, Some(ForeignFormat::CondaForge)) {
                 Ok(recipe) => {
+                    let name = provider_name_for_foreign(&recipe.name, &config_layers);
                     self.foreign.push(DiscoveredCandidate {
-                        name: recipe.name,
+                        name,
                         version: recipe.version,
                         path,
                         kind: SourceRootKind::CondaForge,
@@ -362,6 +367,7 @@ impl PackageSourceIndex {
         let mut paths = Vec::new();
         collect_named_files(&root.path, &["package.py"], &mut paths)
             .map_err(|error| PackageSourceError::Io(root.path.display().to_string(), error))?;
+        let config_layers = load_package_config_layers(&root.package_config)?;
         paths.sort();
         for path in paths {
             // Only index paths that look like Spack package recipes.
@@ -370,8 +376,9 @@ impl PackageSourceIndex {
             }
             match parse_foreign_path(&path, Some(ForeignFormat::Spack)) {
                 Ok(recipe) => {
+                    let name = provider_name_for_foreign(&recipe.name, &config_layers);
                     self.foreign.push(DiscoveredCandidate {
-                        name: recipe.name,
+                        name,
                         version: recipe.version,
                         path,
                         kind: SourceRootKind::Spack,
@@ -387,6 +394,40 @@ impl PackageSourceIndex {
         }
         Ok(())
     }
+}
+
+fn load_package_config_layers(
+    paths: &[PathBuf],
+) -> Result<Vec<PackageConfigLayer>, PackageSourceError> {
+    paths
+        .iter()
+        .map(|path| {
+            PackageConfigLayer::from_path(path).map_err(|error| {
+                PackageSourceError::PackageConfig(path.display().to_string(), error.to_string())
+            })
+        })
+        .collect()
+}
+
+fn provider_name_for_foreign(name: &str, layers: &[PackageConfigLayer]) -> String {
+    let mut provider = name.to_string();
+    for layer in layers {
+        if let Some(alias) = layer.dependencies.as_ref().and_then(|dependencies| {
+            dependencies.aliases.iter().find_map(|(foreign, alias)| {
+                (package_identity(foreign) == package_identity(&provider)).then_some(alias)
+            })
+        }) {
+            provider = alias.provider().to_string();
+        }
+        if let Some(name) = layer
+            .package
+            .as_ref()
+            .and_then(|package| package.name.as_ref())
+        {
+            provider.clone_from(name);
+        }
+    }
+    provider
 }
 
 fn discovered_from_eb_candidate(candidate: Candidate) -> DiscoveredCandidate {
