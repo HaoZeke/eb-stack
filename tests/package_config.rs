@@ -510,6 +510,7 @@ fn public_eon_policy_encodes_the_repaired_build_contract() {
         build.build_systems.as_deref(),
         Some(&["Meson".into(), "Ninja".into()][..])
     );
+    assert_eq!(build.source_root.as_deref(), Some("%(name)s-%(version)s"));
     assert_eq!(build.moduleclass.as_deref(), Some("chem"));
     let patches = build.patches.as_ref().expect("checked patch policy");
     assert_eq!(patches.len(), 1);

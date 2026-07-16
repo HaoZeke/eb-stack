@@ -415,6 +415,7 @@ fn conda_target_directories_emit_rattler_compatible_source_staging() {
     let recipe = parse_foreign_path(&source, Some(ForeignFormat::CondaForge)).expect("parse");
     let mut plan = package_plan_from_foreign(&recipe, &toolchain());
     plan.package.name = "eOn".into();
+    plan.build.source_root = Some("%(name)s-%(version)s".into());
     plan.build.config_options = vec![
         "-Dbuildtype=release".into(),
         "-Dwith_tests=false".into(),
@@ -461,10 +462,11 @@ fn conda_target_directories_emit_rattler_compatible_source_staging() {
     assert!(text.contains("'filename': 'v2.2.1.tar.gz'"));
     let normalized = text.replace("' +\n            '", "");
     assert!(normalized.contains(
-        "'extract_cmd': 'mkdir -p %(builddir)s/subprojects/rgpot && tar -xf %s -C \
-         %(builddir)s/subprojects/rgpot --strip-components=1'"
+        "'extract_cmd': 'mkdir -p %(builddir)s/%(name)s-%(version)s/subprojects/rgpot && \
+         tar -xf %s -C %(builddir)s/%(name)s-%(version)s/subprojects/rgpot --strip-components=1'"
     ));
-    assert!(normalized.contains("%(builddir)s/readcon-core-src --strip-components=1"));
+    assert!(normalized
+        .contains("%(builddir)s/%(name)s-%(version)s/readcon-core-src --strip-components=1"));
     assert!(lint_style(text).is_empty(), "{:?}", lint_style(text));
 }
 
