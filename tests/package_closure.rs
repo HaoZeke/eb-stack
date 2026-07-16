@@ -2,12 +2,12 @@
 //!
 //! Synthetic package names only — no production package identities.
 
-use eb_stack::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
+use eb_stack::package::{PackageOrigin, StackPolicy, STACK_POLICY_SCHEMA_VERSION};
 use eb_stack::package_catalog::{
     resolve_package_catalog_layers, PackageCatalogLayer, PackageSourceCatalog,
 };
-use eb_stack::package_closure::{plan_package_closure, PackageClosureError};
-use eb_stack::{ForeignFormat, NewPackageRequest, Toolchain};
+use eb_stack::package_closure::{plan_package_closure, write_package_closure, PackageClosureError};
+use eb_stack::{resolve_easyconfig_str, ForeignFormat, NewPackageRequest, Toolchain};
 use std::path::{Path, PathBuf};
 
 const CHECKSUM: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -143,8 +143,7 @@ toolchain = {{ name = "foss", version = "2026.1" }}
         "Bravo must be the generated candidate, path={}",
         bravo_dep.easyconfig_path
     );
-    let charlie_dep = closure.companions[0]
-        .locks[0]
+    let charlie_dep = closure.companions[0].locks[0]
         .dependencies
         .iter()
         .find(|d| d.name.eq_ignore_ascii_case("charlie"))
@@ -342,7 +341,10 @@ toolchain = {{ name = "foss", version = "2026.1" }}
         .iter()
         .position(|c| c.plan.package.name == "delta")
         .unwrap();
-    assert!(echo_pos < bravo_pos && echo_pos < delta_pos, "echo before dependents");
+    assert!(
+        echo_pos < bravo_pos && echo_pos < delta_pos,
+        "echo before dependents"
+    );
 }
 
 #[test]
@@ -521,7 +523,10 @@ toolchain = {{ name = "foss", version = "2026.1" }}
         } => {
             assert!(name.to_lowercase().contains("bravo"), "{name}");
             assert_eq!(provided, "1.0");
-            assert!(required.contains('5') || required.contains(">="), "{required}");
+            assert!(
+                required.contains('5') || required.contains(">="),
+                "{required}"
+            );
         }
         other => panic!("expected IncompatibleProviderVersion, got {other}"),
     }
@@ -664,7 +669,12 @@ toolchain = {{ name = "foss", version = "2026.1" }}
     let closure = plan_package_closure(&req, &catalog).expect("close multi-profile");
 
     assert_eq!(closure.root.locks.len(), 2);
-    let profiles: Vec<_> = closure.root.locks.iter().map(|l| l.profile.as_str()).collect();
+    let profiles: Vec<_> = closure
+        .root
+        .locks
+        .iter()
+        .map(|l| l.profile.as_str())
+        .collect();
     assert!(profiles.contains(&"default"));
     assert!(profiles.contains(&"complex"));
     assert_eq!(closure.companions.len(), 1);
@@ -678,4 +688,409 @@ toolchain = {{ name = "foss", version = "2026.1" }}
             lock.profile
         );
     }
+}
+
+/// Source EasyBuild recipe for catalog `easybuild-bump` providers (synthetic names).
+fn source_eb(
+    root: &Path,
+    file: &str,
+    name: &str,
+    version: &str,
+    toolchain_version: &str,
+    deps: &[(&str, &str)],
+    body_extra: &str,
+) -> PathBuf {
+    let mut body = format!(
+        "name = '{name}'\n\
+         version = '{version}'\n\
+         homepage = 'https://example.invalid/{name}'\n\
+         description = \"synthetic {name}\"\n\
+         toolchain = {{'name': 'foss', 'version': '{toolchain_version}'}}\n\
+         sources = ['{name}-{version}.tar.gz']\n\
+         checksums = ['cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc']\n\
+         moduleclass = 'lib'\n"
+    );
+    if !deps.is_empty() {
+        body.push_str("dependencies = [\n");
+        for (dep_name, dep_ver) in deps {
+            body.push_str(&format!("    ('{dep_name}', '{dep_ver}'),\n"));
+        }
+        body.push_str("]\n");
+    }
+    body.push_str(body_extra);
+    let path = root.join(file);
+    write(&path, &body);
+    path
+}
+
+#[test]
+fn robot_hole_closed_by_easybuild_bump_provider() {
+    // Alpha (foreign) -> missing Bravo, which has an EasyBuild recipe at another generation.
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let robot = root.join("robot");
+    std::fs::create_dir_all(&robot).unwrap();
+    // Target robot has Charlie; Bravo is absent and must be retargeted.
+    robot_eb(&robot, "Charlie", "1.0", &[]);
+
+    let alpha = conda_recipe(root, "alpha.yaml", "alpha", "1.0", &["bravo >=1.0"]);
+    let _bravo_src = source_eb(
+        root,
+        "bravo-1.5-foss-2023b.eb",
+        "bravo",
+        "1.5",
+        "2023b",
+        &[("Charlie", "1.0")],
+        "configopts = '--enable-feature-x'\n",
+    );
+
+    let catalog = catalog_from_toml(
+        root,
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "bravo"
+provider = "easybuild-bump"
+version = "1.5"
+source = "bravo-1.5-foss-2023b.eb"
+toolchain = { name = "foss", version = "2026.1" }
+"#,
+    );
+
+    let closure = plan_package_closure(&request(alpha, robot), &catalog).expect("close via bump");
+    assert_eq!(closure.companions.len(), 1);
+    let bravo = &closure.companions[0];
+    assert_eq!(bravo.plan.origin, PackageOrigin::EasyBuild);
+    assert_eq!(bravo.plan.package.name, "bravo");
+    assert_eq!(bravo.plan.package.version, "1.5");
+    assert_eq!(bravo.plan.build.toolchain.version, "2026.1");
+    assert_eq!(bravo.locks.len(), 1);
+    assert_eq!(bravo.locks[0].solver, "resolvo");
+    assert!(bravo.locks[0]
+        .dependencies
+        .iter()
+        .any(|dep| dep.name.eq_ignore_ascii_case("charlie") && dep.version == "1.0"));
+    assert_eq!(bravo.easyconfigs.len(), 1);
+    let recipe = resolve_easyconfig_str(&bravo.easyconfigs[0].text).expect("parse bumped");
+    assert_eq!(recipe.toolchain.name, "foss");
+    assert_eq!(recipe.toolchain.version, "2026.1");
+    assert_eq!(recipe.version, "1.5");
+}
+
+#[test]
+fn easybuild_bump_preserves_recipe_mechanics_and_checksum_identity() {
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let robot = root.join("robot");
+    std::fs::create_dir_all(&robot).unwrap();
+
+    let alpha = conda_recipe(root, "alpha.yaml", "alpha", "1.0", &["bravo >=2.0"]);
+    let source_body = "\
+name = 'bravo'
+version = '2.0'
+homepage = 'https://example.invalid/bravo'
+description = \"preserve mechanics\"
+toolchain = {'name': 'foss', 'version': '2023b'}
+sources = ['bravo-2.0.tar.gz']
+patches = [
+    'bravo-portability.patch',
+]
+checksums = [
+    {'bravo-2.0.tar.gz': 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'},
+    {'bravo-portability.patch': 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},
+]
+configopts = '--with-special-flag'
+moduleclass = 'tools'
+";
+    write(&root.join("bravo-2.0-foss-2023b.eb"), source_body);
+
+    let catalog = catalog_from_toml(
+        root,
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "bravo"
+provider = "easybuild-bump"
+version = "2.0"
+source = "bravo-2.0-foss-2023b.eb"
+toolchain = { name = "foss", version = "2026.1" }
+"#,
+    );
+
+    let closure = plan_package_closure(&request(alpha, robot), &catalog).expect("close");
+    let text = &closure.companions[0].easyconfigs[0].text;
+    assert!(
+        text.contains("configopts = '--with-special-flag'"),
+        "build mechanics must stay: {text}"
+    );
+    assert!(
+        text.contains("moduleclass = 'tools'"),
+        "moduleclass must stay: {text}"
+    );
+    assert!(
+        text.contains("'bravo-2.0.tar.gz': 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'"),
+        "source checksum identity: {text}"
+    );
+    assert!(
+        text.contains("'bravo-portability.patch': 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'"),
+        "patch checksum order/identity: {text}"
+    );
+    assert!(
+        text.contains("toolchain = {'name': 'foss', 'version': '2026.1'}")
+            || text.contains("toolchain = {\"name\": \"foss\", \"version\": \"2026.1\"}")
+            || (text.contains("foss") && text.contains("2026.1")),
+        "toolchain retargeted: {text}"
+    );
+    // Source artifact order: tarball before patch.
+    let tar_pos = text.find("bravo-2.0.tar.gz").expect("tarball key");
+    let patch_pos = text.find("bravo-portability.patch").expect("patch key");
+    assert!(tar_pos < patch_pos, "checksum order preserved");
+}
+
+#[test]
+fn easybuild_bump_records_preferred_stack_pin_fallback_in_lock() {
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let robot = root.join("robot");
+    std::fs::create_dir_all(&robot).unwrap();
+    // Only the fallback HDF5 version is available; preferred 1.14.2 is not.
+    robot_eb(&robot, "HDF5", "1.14.3", &[]);
+
+    let alpha = conda_recipe(root, "alpha.yaml", "alpha", "1.0", &["bravo >=1.0"]);
+    let _bravo_src = source_eb(
+        root,
+        "bravo-1.0-foss-2023b.eb",
+        "bravo",
+        "1.0",
+        "2023b",
+        &[("HDF5", "1.14.0")],
+        "",
+    );
+
+    let stack_path = root.join("stack.toml");
+    write(
+        &stack_path,
+        r#"
+schema_version = 1
+name = "preferred-hdf5"
+
+[toolchain]
+name = "foss"
+version = "2026.1"
+
+[[pins]]
+name = "HDF5"
+version_requirement = "==1.14.2"
+mode = "preferred"
+source = "site stack"
+"#,
+    );
+
+    let catalog = catalog_from_toml(
+        root,
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "bravo"
+provider = "easybuild-bump"
+version = "1.0"
+source = "bravo-1.0-foss-2023b.eb"
+toolchain = { name = "foss", version = "2026.1" }
+stack_policy = "stack.toml"
+"#,
+    );
+
+    let closure = plan_package_closure(&request(alpha, robot), &catalog).expect("close with pin");
+    let lock = &closure.companions[0].locks[0];
+    let hdf5 = lock
+        .dependencies
+        .iter()
+        .find(|dep| dep.name == "HDF5")
+        .expect("HDF5 selected");
+    assert_eq!(hdf5.version, "1.14.3");
+    let outcome = lock
+        .pin_outcomes
+        .iter()
+        .find(|outcome| outcome.name == "HDF5")
+        .expect("HDF5 pin outcome");
+    assert!(outcome.fallback, "preferred pin must record fallback");
+    assert_eq!(outcome.requested, "==1.14.2");
+    assert_eq!(outcome.selected_version.as_deref(), Some("1.14.3"));
+}
+
+#[test]
+fn mixed_foreign_and_bump_providers_topo_order_and_dedup() {
+    // Alpha (foreign) -> Bravo (bump) -> Charlie (foreign hole); Charlie shared.
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let robot = root.join("robot");
+    std::fs::create_dir_all(&robot).unwrap();
+
+    let alpha = conda_recipe(root, "alpha.yaml", "alpha", "1.0", &["bravo >=1.0"]);
+    let _bravo_src = source_eb(
+        root,
+        "bravo-1.0-foss-2023b.eb",
+        "bravo",
+        "1.0",
+        "2023b",
+        &[("charlie", "1.0")],
+        "",
+    );
+    let _charlie = conda_recipe(root, "charlie.yaml", "charlie", "1.0", &[]);
+
+    let catalog = catalog_from_toml(
+        root,
+        &format!(
+            r#"
+schema_version = 1
+
+[[packages]]
+name = "bravo"
+provider = "easybuild-bump"
+version = "1.0"
+source = "bravo-1.0-foss-2023b.eb"
+toolchain = {{ name = "foss", version = "2026.1" }}
+
+[[packages]]
+name = "charlie"
+version = "1.0"
+source = "charlie.yaml"
+format = "conda-forge"
+source_checksums = ["{CHECKSUM}"]
+profile = "default"
+toolchain = {{ name = "foss", version = "2026.1" }}
+"#
+        ),
+    );
+
+    let closure = plan_package_closure(&request(alpha, robot), &catalog).expect("mixed close");
+    let names: Vec<_> = closure
+        .companions
+        .iter()
+        .map(|c| c.plan.package.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["charlie", "bravo"],
+        "foreign child before bumped parent: {names:?}"
+    );
+    assert_eq!(
+        closure.companions[1].plan.origin,
+        PackageOrigin::EasyBuild,
+        "bravo is bump-origin"
+    );
+    assert_ne!(
+        closure.companions[0].plan.origin,
+        PackageOrigin::EasyBuild,
+        "charlie is foreign-origin"
+    );
+
+    // Charlie appears once even if another path also needed it.
+    let charlie_count = closure
+        .companions
+        .iter()
+        .filter(|c| c.plan.package.name == "charlie")
+        .count();
+    assert_eq!(charlie_count, 1);
+}
+
+#[test]
+fn easybuild_bump_companion_in_aggregate_bundle() {
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let robot = root.join("robot");
+    std::fs::create_dir_all(&robot).unwrap();
+
+    let alpha = conda_recipe(root, "alpha.yaml", "alpha", "1.0", &["bravo >=1.0"]);
+    let _bravo_src = source_eb(
+        root,
+        "bravo-1.5-foss-2023b.eb",
+        "bravo",
+        "1.5",
+        "2023b",
+        &[],
+        "",
+    );
+    let catalog = catalog_from_toml(
+        root,
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "bravo"
+provider = "easybuild-bump"
+version = "1.5"
+source = "bravo-1.5-foss-2023b.eb"
+toolchain = { name = "foss", version = "2026.1" }
+"#,
+    );
+
+    let closure = plan_package_closure(&request(alpha, robot), &catalog).expect("plan");
+    let out = root.join("bundle");
+    let written = write_package_closure(&closure, &out).expect("write");
+
+    assert!(out
+        .join("packages/bravo-1.5-foss-2026.1/package.plan.json")
+        .is_file());
+    assert!(out
+        .join("packages/bravo-1.5-foss-2026.1/package.sbom.cdx.json")
+        .is_file());
+    assert!(out
+        .join("packages/bravo-1.5-foss-2026.1/locks/default.lock.json")
+        .is_file());
+    assert!(out
+        .join("easyconfigs/b/bravo/bravo-1.5-foss-2026.1.eb")
+        .is_file());
+
+    let plan: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join("packages/bravo-1.5-foss-2026.1/package.plan.json"))
+            .expect("plan"),
+    )
+    .expect("json");
+    assert_eq!(plan["origin"], "easy-build");
+
+    let lock: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            out.join("packages/bravo-1.5-foss-2026.1/locks/default.lock.json"),
+        )
+        .expect("lock"),
+    )
+    .expect("json");
+    assert_eq!(lock["solver"], "resolvo");
+
+    let build_order: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&written.build_order).expect("order"))
+            .expect("json");
+    let recipes = build_order["recipes"].as_array().expect("recipes");
+    assert!(
+        recipes
+            .iter()
+            .any(|r| r.as_str() == Some("easyconfigs/b/bravo/bravo-1.5-foss-2026.1.eb")),
+        "{recipes:?}"
+    );
+    // Companion before root.
+    let bravo_idx = recipes
+        .iter()
+        .position(|r| r.as_str().is_some_and(|s| s.contains("bravo")))
+        .expect("bravo");
+    let alpha_idx = recipes
+        .iter()
+        .position(|r| r.as_str().is_some_and(|s| s.contains("alpha")))
+        .expect("alpha");
+    assert!(bravo_idx < alpha_idx);
+
+    let aggregate: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&written.closure_sbom).expect("sbom"))
+            .expect("json");
+    let names: Vec<_> = aggregate["components"]
+        .as_array()
+        .expect("components")
+        .iter()
+        .filter_map(|c| c["name"].as_str())
+        .collect();
+    assert!(names.contains(&"alpha"));
+    assert!(names.contains(&"bravo"));
 }

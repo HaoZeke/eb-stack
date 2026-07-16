@@ -192,6 +192,40 @@ Repeat `--source-checksum` in manifest source order when the foreign recipe
 lacks archive hashes. A VCS commit is not an archive SHA-256; never omit the
 checksum or invent one from the commit.
 
+## Catalog-backed robot holes
+
+When the target robot has no compatible candidate for a direct dependency,
+layer a package-source catalog with repeatable `--package-catalog`:
+
+```sh
+eb-stack package plan \
+  --source path/to/recipe.yaml \
+  --format conda-forge \
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  --source-checksum SHA256 \
+  --easyconfigs /path/to/robot \
+  --stack-policy stacks/site.toml \
+  --package-catalog examples/package-catalog/mixed-providers.toml \
+  --out-dir work/closed
+```
+
+| Catalog `provider` | Use when |
+|---|---|
+| `foreign` (default) | Author from the dependency's conda-forge or Spack recipe. |
+| `easybuild-bump` | An EasyBuild recipe already exists at another generation; retarget it through the annual-bump pipeline. |
+
+Prefer `easybuild-bump` over inventing a foreign entry for the same software
+when a reviewed `.eb` is the authoritative input. Do not substitute a
+conda-forge or Spack archive with a different artifact identity. Bump
+providers reject `format`, `package_config`, non-default `profile`, and
+multiple source checksums. Stack policy remains a Resolvo input for every
+companion, including preferred-pin fallback evidence in the companion lock.
+
+The closed bundle includes companion manifests/SBOMs/locks under
+`packages/…`, one shared `easyconfigs/` overlay, topological
+`build-order.json`, and `closure.sbom.cdx.json`.
+
 ## Check emitted recipes
 
 Run mechanical checks for every emitted recipe:

@@ -330,12 +330,14 @@ fn validate_patch_source(patch: &PatchArtifact) -> Result<PathBuf, PackageWorkfl
     Ok(source)
 }
 
-pub fn plan_package_bump(
+/// Parse an existing EasyBuild recipe into a retargeted EasyBuild-origin plan.
+///
+/// Does not solve dependencies or emit the next-generation recipe. Used by both
+/// standalone `package bump` and catalog-backed closure planning for
+/// `easybuild-bump` providers.
+pub fn prepare_package_bump(
     request: &BumpPackageRequest,
-) -> Result<PackageBundle, PackageWorkflowError> {
-    if request.easyconfig_roots.is_empty() {
-        return Err(PackageWorkflowError::NoEasyconfigRoots);
-    }
+) -> Result<(PackagePlan, Value), PackageWorkflowError> {
     let resolved = resolve_easyconfig_file(&request.source)
         .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     let mut plan = package_plan_from_easyconfig(
@@ -345,17 +347,20 @@ pub fn plan_package_bump(
         request.source_checksum.as_deref(),
     );
     refresh_checksum_residuals(&mut plan);
-    let roots = request
-        .easyconfig_roots
-        .iter()
-        .map(PathBuf::as_path)
-        .collect::<Vec<_>>();
-    let tree = parse_easyconfig_trees(&roots)
-        .map_err(|error| PackageWorkflowError::Robot(error.to_string()))?;
-    let mut stack_policy = request.stack_policy.clone();
-    for (name, version) in &request.overrides {
-        stack_policy.pins.retain(|pin| pin.name != *name);
-        stack_policy.pins.push(StackPin {
+    let sbom = package_plan_to_cyclonedx(&plan)
+        .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
+    Ok((plan, sbom))
+}
+
+/// Fold package-specific `--dep` overrides into locked stack pins.
+pub fn stack_policy_with_bump_overrides(
+    stack_policy: &StackPolicy,
+    overrides: &HashMap<String, String>,
+) -> StackPolicy {
+    let mut policy = stack_policy.clone();
+    for (name, version) in overrides {
+        policy.pins.retain(|pin| pin.name != *name);
+        policy.pins.push(StackPin {
             name: name.clone(),
             version_requirement: format!("=={version}"),
             toolchain: None,
@@ -364,12 +369,26 @@ pub fn plan_package_bump(
             source: Some("package bump override".into()),
         });
     }
+    policy
+}
+
+/// Solve the bump plan against a candidate universe and emit the retargeted `.eb`.
+///
+/// Preserves source recipe build mechanics, source/patch identity, and checksum
+/// order via the annual-bump emitter. Stack-policy preferred pins remain a
+/// Resolvo input; lock evidence records selection and fallback outcomes.
+pub fn complete_package_bump(
+    request: &BumpPackageRequest,
+    mut plan: PackagePlan,
+    candidates: &[crate::domain::Candidate],
+    stack_policy: &StackPolicy,
+) -> Result<PackageBundle, PackageWorkflowError> {
     let lock = solve_package_profile_with_hierarchy(
         &plan,
         "default",
         &Default::default(),
-        &tree.candidates,
-        &stack_policy,
+        candidates,
+        stack_policy,
         request.hierarchy_fixture.as_deref(),
     )
     .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?;
@@ -411,6 +430,24 @@ pub fn plan_package_bump(
             text: result.text,
         }],
     })
+}
+
+pub fn plan_package_bump(
+    request: &BumpPackageRequest,
+) -> Result<PackageBundle, PackageWorkflowError> {
+    if request.easyconfig_roots.is_empty() {
+        return Err(PackageWorkflowError::NoEasyconfigRoots);
+    }
+    let (plan, _sbom) = prepare_package_bump(request)?;
+    let roots = request
+        .easyconfig_roots
+        .iter()
+        .map(PathBuf::as_path)
+        .collect::<Vec<_>>();
+    let tree = parse_easyconfig_trees(&roots)
+        .map_err(|error| PackageWorkflowError::Robot(error.to_string()))?;
+    let stack_policy = stack_policy_with_bump_overrides(&request.stack_policy, &request.overrides);
+    complete_package_bump(request, plan, &tree.candidates, &stack_policy)
 }
 
 fn package_plan_from_easyconfig(

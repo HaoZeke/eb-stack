@@ -1,0 +1,49 @@
+# Public package-source catalog example (package-neutral).
+#
+# Layer this file (and optional site overlays) with:
+#   eb-stack package plan ... --package-catalog examples/package-catalog/mixed-providers.toml
+#
+# Provider kinds:
+#   foreign (default)  — plan a robot hole from conda-forge or Spack.
+#   easybuild-bump     — retarget an existing .eb through the annual-bump
+#                        pipeline. Prefer this when the dependency already has
+#                        an EasyBuild recipe at another generation; do not
+#                        substitute a foreign archive with a different artifact
+#                        identity.
+#
+# Paths resolve relative to this catalog file. Stack policy is a Resolvo input
+# (preferred pins may fall back; locks record the outcome).
+
+schema_version = 1
+
+# --- foreign (default): no EasyBuild recipe available for this identity -------
+[[packages]]
+name = "ExampleForeignLib"
+version = "1.2.0"
+# provider = "foreign"   # optional; foreign is the schema-1 default
+source = "sources/example-foreign/recipe.yaml"
+format = "conda-forge"
+package_config = ["../packages/common.toml"]
+source_checksums = [
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+]
+profile = "default"
+toolchain = { name = "foss", version = "2026.1" }
+
+# --- easybuild-bump: authoritative input is an existing EasyBuild recipe ------
+[[packages]]
+name = "ExampleRetargetLib"
+provider = "easybuild-bump"
+version = "3.1.0"
+source = "sources/example-retarget/ExampleRetargetLib-3.1.0-foss-2023b.eb"
+toolchain = { name = "foss", version = "2026.1" }
+# At most one source checksum (annual-bump semantics). Omit for toolchain-only
+# retargets that keep the source recipe's application version and checksums.
+# source_checksums = [
+#   "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+# ]
+# Optional per-provider stack policy (preferred/locked pins):
+# stack_policy = "../stacks/foss-2026.1.toml"
+#
+# Forbidden on easybuild-bump (typed catalog errors):
+#   format, package_config, non-default profile, multiple source_checksums

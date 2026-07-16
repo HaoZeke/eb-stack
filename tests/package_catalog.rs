@@ -1,7 +1,7 @@
 //! Package-source catalog: layered TOML providers for recursive hole planning.
 
 use eb_stack::package_catalog::{
-    resolve_package_catalog_layers, PackageCatalogError, PackageCatalogLayer,
+    resolve_package_catalog_layers, CatalogProviderKind, PackageCatalogError, PackageCatalogLayer,
     PACKAGE_CATALOG_SCHEMA_VERSION,
 };
 use eb_stack::{ForeignFormat, Toolchain};
@@ -397,4 +397,318 @@ toolchain = { name = "foss", version = "2026.1" }
     let catalog = resolve_package_catalog_layers(&[layer]).expect("resolve");
     let provider = catalog.lookup("Lib", None).expect("lookup");
     assert_eq!(provider.format, None);
+}
+
+#[test]
+fn legacy_foreign_entries_default_provider_kind() {
+    let layer = PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "LegacyLib"
+version = "1.0"
+source = "legacy.yaml"
+format = "conda-forge"
+source_checksums = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+package_config = ["policy.toml"]
+profile = "default"
+toolchain = { name = "foss", version = "2026.1" }
+"#,
+    )
+    .expect("legacy foreign parse");
+    let catalog = resolve_package_catalog_layers(&[layer]).expect("resolve");
+    let provider = catalog.lookup("LegacyLib", Some("1.0")).expect("lookup");
+    assert_eq!(provider.provider, CatalogProviderKind::Foreign);
+    assert_eq!(provider.format, Some(ForeignFormat::CondaForge));
+    assert_eq!(provider.package_config.len(), 1);
+}
+
+#[test]
+fn explicit_foreign_provider_kind_is_accepted() {
+    let layer = PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+provider = "foreign"
+source = "x.py"
+format = "spack"
+toolchain = { name = "foss", version = "2026.1" }
+"#,
+    )
+    .expect("parse");
+    let catalog = resolve_package_catalog_layers(&[layer]).expect("resolve");
+    assert_eq!(
+        catalog.lookup("Lib", None).unwrap().provider,
+        CatalogProviderKind::Foreign
+    );
+}
+
+#[test]
+fn easybuild_bump_provider_resolves_recipe_path_and_optional_version() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    std::fs::create_dir_all(root.join("catalog")).unwrap();
+    std::fs::create_dir_all(root.join("recipes")).unwrap();
+    std::fs::write(
+        root.join("recipes/Lib-1.2-foss-2023b.eb"),
+        "name = 'Lib'\nversion = '1.2'\n",
+    )
+    .unwrap();
+    let path = write_catalog(
+        root,
+        "catalog/bump.toml",
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+provider = "easybuild-bump"
+version = "1.2"
+source = "../recipes/Lib-1.2-foss-2023b.eb"
+toolchain = { name = "foss", version = "2026.1" }
+source_checksums = ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
+"#,
+    );
+    let layer = PackageCatalogLayer::from_path(&path).expect("layer");
+    let catalog = resolve_package_catalog_layers(&[layer]).expect("resolve");
+    let provider = catalog.lookup("Lib", Some("1.2")).expect("lookup");
+    assert_eq!(provider.provider, CatalogProviderKind::EasyBuildBump);
+    assert_eq!(provider.version.as_deref(), Some("1.2"));
+    assert_eq!(provider.profile, "default");
+    assert!(provider.format.is_none());
+    assert!(provider.package_config.is_empty());
+    assert_eq!(provider.source_checksums.len(), 1);
+    assert_eq!(
+        provider.source.canonicalize().unwrap(),
+        root.join("recipes/Lib-1.2-foss-2023b.eb")
+            .canonicalize()
+            .unwrap()
+    );
+}
+
+#[test]
+fn easybuild_bump_rejects_foreign_format_field() {
+    let err = resolve_package_catalog_layers(&[PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+provider = "easybuild-bump"
+source = "Lib-1.0-foss-2023b.eb"
+format = "conda-forge"
+toolchain = { name = "foss", version = "2026.1" }
+"#,
+    )
+    .expect("parse")])
+    .expect_err("format incompatible");
+    assert!(
+        matches!(
+            err,
+            PackageCatalogError::IncompatibleBumpField { ref field, .. } if field == "format"
+        ),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn easybuild_bump_rejects_package_config_field() {
+    let err = resolve_package_catalog_layers(&[PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+provider = "easybuild-bump"
+source = "Lib-1.0-foss-2023b.eb"
+package_config = ["pkg.toml"]
+toolchain = { name = "foss", version = "2026.1" }
+"#,
+    )
+    .expect("parse")])
+    .expect_err("package_config incompatible");
+    assert!(
+        matches!(
+            err,
+            PackageCatalogError::IncompatibleBumpField { ref field, .. } if field == "package_config"
+        ),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn easybuild_bump_rejects_non_default_profile() {
+    let err = resolve_package_catalog_layers(&[PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+provider = "easybuild-bump"
+source = "Lib-1.0-foss-2023b.eb"
+profile = "complex"
+toolchain = { name = "foss", version = "2026.1" }
+"#,
+    )
+    .expect("parse")])
+    .expect_err("profile incompatible");
+    assert!(
+        matches!(
+            err,
+            PackageCatalogError::IncompatibleBumpField { ref field, .. } if field == "profile"
+        ),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn easybuild_bump_rejects_multiple_source_checksums() {
+    let err = resolve_package_catalog_layers(&[PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+provider = "easybuild-bump"
+source = "Lib-1.0-foss-2023b.eb"
+toolchain = { name = "foss", version = "2026.1" }
+source_checksums = [
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+]
+"#,
+    )
+    .expect("parse")])
+    .expect_err("multiple checksums");
+    assert!(
+        matches!(err, PackageCatalogError::MultipleBumpChecksums { .. }),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn easybuild_bump_requires_source_and_toolchain() {
+    let err = resolve_package_catalog_layers(&[PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+provider = "easybuild-bump"
+version = "1.0"
+"#,
+    )
+    .expect("parse")])
+    .expect_err("incomplete bump");
+    assert!(
+        matches!(
+            err,
+            PackageCatalogError::MissingSource { .. }
+                | PackageCatalogError::MissingToolchain { .. }
+        ),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn later_layer_can_switch_provider_kind_to_easybuild_bump() {
+    let base = PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+version = "1.0"
+source = "a/package.py"
+format = "spack"
+package_config = ["policy.toml"]
+profile = "complex"
+toolchain = { name = "foss", version = "2026.1" }
+"#,
+    )
+    .expect("base");
+    let overlay = PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+version = "1.0"
+provider = "easybuild-bump"
+source = "Lib-1.0-foss-2023b.eb"
+toolchain = { name = "foss", version = "2024a" }
+"#,
+    )
+    .expect("overlay");
+    let catalog = resolve_package_catalog_layers(&[base, overlay]).expect("switch to bump");
+    let provider = catalog.lookup("Lib", Some("1.0")).expect("lookup");
+    assert_eq!(provider.provider, CatalogProviderKind::EasyBuildBump);
+    assert!(provider.format.is_none());
+    assert!(provider.package_config.is_empty());
+    assert_eq!(provider.profile, "default");
+    assert_eq!(provider.source, PathBuf::from("Lib-1.0-foss-2023b.eb"));
+    assert_eq!(
+        provider.toolchain,
+        Toolchain {
+            name: "foss".into(),
+            version: "2024a".into(),
+        }
+    );
+}
+
+#[test]
+fn later_layer_setting_bump_with_format_is_rejected() {
+    let base = PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+version = "1.0"
+source = "a/package.py"
+toolchain = { name = "foss", version = "2026.1" }
+"#,
+    )
+    .expect("base");
+    let overlay = PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+version = "1.0"
+provider = "easybuild-bump"
+source = "Lib-1.0-foss-2023b.eb"
+format = "conda-forge"
+"#,
+    )
+    .expect("overlay");
+    let err = resolve_package_catalog_layers(&[base, overlay]).expect_err("format on bump");
+    assert!(
+        matches!(
+            err,
+            PackageCatalogError::IncompatibleBumpField { ref field, .. } if field == "format"
+        ),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn unknown_provider_kind_is_toml_error() {
+    let err = PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+provider = "spack-port"
+source = "x.py"
+toolchain = { name = "foss", version = "2026.1" }
+"#,
+    )
+    .expect_err("unknown kind");
+    assert!(matches!(err, PackageCatalogError::Toml(_)));
 }

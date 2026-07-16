@@ -1,10 +1,18 @@
-//! Public layered package-source catalog for recursive new-package closure planning.
+//! Public layered package-source catalog for recursive package-closure planning.
 //!
-//! Catalog data maps a canonical EasyBuild provider identity onto the foreign
-//! recipe path/format, package-config layers, positional source checksums,
-//! requested product profile, and toolchain policy needed to plan that package
-//! when the robot tree has no compatible candidate. Paths resolve relative to
-//! the catalog file. Package names never appear as Rust control flow.
+//! Catalog data maps a canonical EasyBuild provider identity onto authoring
+//! inputs needed when the robot tree has no compatible candidate. Two provider
+//! kinds are supported:
+//!
+//! - [`CatalogProviderKind::Foreign`] (TOML `foreign`, the default): conda-forge
+//!   or Spack recipe path, optional format, package-config layers, positional
+//!   source checksums, and product profile.
+//! - [`CatalogProviderKind::EasyBuildBump`] (TOML `easybuild-bump`): an existing
+//!   `.eb` recipe retargeted through the annual-bump pipeline. Foreign-only
+//!   fields are rejected; at most one source checksum is allowed.
+//!
+//! Paths resolve relative to the catalog file. Package names never appear as
+//! Rust control flow.
 
 use crate::domain::Toolchain;
 use crate::foreign::ForeignFormat;
@@ -14,6 +22,28 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 pub const PACKAGE_CATALOG_SCHEMA_VERSION: u32 = 1;
+
+/// How a catalog entry authors a missing EasyBuild provider.
+///
+/// Public TOML spellings are `foreign` (default) and `easybuild-bump`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum CatalogProviderKind {
+    /// Plan from a conda-forge or Spack recipe (default for schema-1 entries).
+    #[default]
+    Foreign,
+    /// Retarget an existing EasyBuild recipe through the annual-bump pipeline.
+    EasyBuildBump,
+}
+
+impl CatalogProviderKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Foreign => "foreign",
+            Self::EasyBuildBump => "easybuild-bump",
+        }
+    }
+}
 
 /// One public TOML layer of package-source providers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +62,9 @@ pub struct PackageCatalogLayer {
 #[serde(deny_unknown_fields)]
 pub struct PackageSourcePatch {
     pub name: String,
+    /// Provider kind; omitted entries resolve to [`CatalogProviderKind::Foreign`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<CatalogProviderKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -56,6 +89,7 @@ pub struct PackageSourcePatch {
 #[serde(deny_unknown_fields)]
 pub struct PackageSourceProvider {
     pub name: String,
+    pub provider: CatalogProviderKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     pub source: PathBuf,
@@ -87,12 +121,20 @@ pub enum PackageCatalogError {
     Io(String, #[source] std::io::Error),
     #[error("package catalog entry name cannot be empty")]
     EmptyPackageName,
-    #[error("package catalog entry {name} is missing a foreign recipe source path")]
+    #[error("package catalog entry {name} is missing a recipe source path")]
     MissingSource { name: String },
     #[error("package catalog entry {name} is missing toolchain policy")]
     MissingToolchain { name: String },
     #[error("package catalog entry {name} is incomplete: {reason}")]
     IncompleteProvider { name: String, reason: String },
+    #[error(
+        "package catalog entry {name}: field {field} is incompatible with provider easybuild-bump"
+    )]
+    IncompatibleBumpField { name: String, field: String },
+    #[error(
+        "package catalog entry {name}: easybuild-bump accepts at most one source checksum (annual-bump semantics)"
+    )]
+    MultipleBumpChecksums { name: String },
     #[error("duplicate package-source providers for {name}{version}: entries are ambiguous")]
     DuplicateProvider { name: String, version: String },
     #[error(
@@ -212,6 +254,7 @@ pub fn resolve_package_catalog_layers(
                     key.clone(),
                     MergedEntry {
                         name: patch.name.clone(),
+                        provider: None,
                         version: patch.version.clone(),
                         source: None,
                         format: None,
@@ -225,6 +268,22 @@ pub fn resolve_package_catalog_layers(
             }
             let entry = merged.get_mut(&key).expect("entry inserted");
             entry.name = patch.name.clone();
+            if let Some(provider) = patch.provider {
+                entry.provider = Some(provider);
+                if provider == CatalogProviderKind::EasyBuildBump {
+                    // Drop inherited foreign-authoring fields unless this patch
+                    // re-states them (which validation then rejects).
+                    if patch.format.is_none() {
+                        entry.format = None;
+                    }
+                    if patch.package_config.is_empty() {
+                        entry.package_config.clear();
+                    }
+                    if patch.profile.is_none() {
+                        entry.profile = None;
+                    }
+                }
+            }
             if patch.version.is_some() {
                 entry.version = patch.version.clone();
             }
@@ -269,6 +328,7 @@ pub fn resolve_package_catalog_layers(
 #[derive(Debug, Clone)]
 struct MergedEntry {
     name: String,
+    provider: Option<CatalogProviderKind>,
     version: Option<String>,
     source: Option<PathBuf>,
     format: Option<ForeignFormat>,
@@ -284,6 +344,7 @@ impl MergedEntry {
         if self.name.trim().is_empty() {
             return Err(PackageCatalogError::EmptyPackageName);
         }
+        let provider = self.provider.unwrap_or(CatalogProviderKind::Foreign);
         let source = self
             .source
             .ok_or_else(|| PackageCatalogError::MissingSource {
@@ -304,8 +365,19 @@ impl MergedEntry {
             .profile
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "default".into());
+
+        if provider == CatalogProviderKind::EasyBuildBump {
+            validate_bump_fields(&self.name, self.format, &self.package_config, &profile)?;
+            if self.source_checksums.len() > 1 {
+                return Err(PackageCatalogError::MultipleBumpChecksums {
+                    name: self.name.clone(),
+                });
+            }
+        }
+
         Ok(PackageSourceProvider {
             name: self.name,
+            provider,
             version: self.version.filter(|value| !value.trim().is_empty()),
             source,
             format: self.format,
@@ -316,6 +388,33 @@ impl MergedEntry {
             stack_policy: self.stack_policy,
         })
     }
+}
+
+fn validate_bump_fields(
+    name: &str,
+    format: Option<ForeignFormat>,
+    package_config: &[PathBuf],
+    profile: &str,
+) -> Result<(), PackageCatalogError> {
+    if format.is_some() {
+        return Err(PackageCatalogError::IncompatibleBumpField {
+            name: name.to_string(),
+            field: "format".into(),
+        });
+    }
+    if !package_config.is_empty() {
+        return Err(PackageCatalogError::IncompatibleBumpField {
+            name: name.to_string(),
+            field: "package_config".into(),
+        });
+    }
+    if profile != "default" {
+        return Err(PackageCatalogError::IncompatibleBumpField {
+            name: name.to_string(),
+            field: "profile".into(),
+        });
+    }
+    Ok(())
 }
 
 fn resolve_path(base_directory: Option<&Path>, path: &str) -> PathBuf {

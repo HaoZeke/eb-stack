@@ -6,6 +6,12 @@ All notable changes to this unreleased project are documented here.
 
 ### Added
 
+- Catalog provider kinds `foreign` (default) and `easybuild-bump` for
+  package-source catalog entries, so recursive package closure can retarget an
+  existing EasyBuild recipe through the annual-bump pipeline instead of
+  substituting a foreign archive.
+- Public package-neutral catalog example at
+  `examples/package-catalog/mixed-providers.toml`.
 - Canonical schema-versioned package plan shared by conda-forge, Spack, and
   EasyBuild inputs, with source provenance, structured conditions, variants,
   rules, build intent, product profiles, output requests, and residuals.

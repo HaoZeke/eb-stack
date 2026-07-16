@@ -20,6 +20,13 @@ BUNDLE/
 ~package bump~ also write one lock and one EasyBuild recipe for every requested
 profile. A campaign requires at least one lock and recipe.
 
+When ~package plan~ is given ~--package-catalog~ layers, the writer emits a
+closed package bundle: root artifacts at the bundle root, companions under
+~packages/<name>-<version>-<toolchain>/~, one shared ~easyconfigs/~ overlay,
+~build-order.json~, ~closure.plan.json~, and ~closure.sbom.cdx.json~. Companion
+providers may be ~foreign~ or ~easybuild-bump~; bump companions keep
+~origin = easybuild~ and use the annual-bump emitter.
+
 * Canonical package plan
 
 ~package.plan.json~ is the build manifest. Its ~schema_version~ is ~1~ and

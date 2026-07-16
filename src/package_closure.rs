@@ -2,7 +2,9 @@
 //!
 //! Closes a root foreign package plan over robot candidates and catalog-backed
 //! companions. Compatible robot candidates win; catalog packages are planned
-//! only for typed robot holes. Package names never appear as control flow.
+//! only for typed robot holes. Catalog providers may be foreign (conda-forge /
+//! Spack) or `easybuild-bump` (retarget an existing EasyBuild recipe). Package
+//! names never appear as control flow.
 //!
 //! The aggregate writer places root artifacts at the bundle root, companion
 //! artifacts under `packages/<name>-<version>-<toolchain>/`, and every recipe
@@ -11,15 +13,18 @@
 use crate::domain::Candidate;
 use crate::eb_parse::resolve_easyconfig_str;
 use crate::package::{OutputRequest, PackagePlan, ProfileEnvironment, StackPolicy};
-use crate::package_catalog::{PackageCatalogError, PackageSourceCatalog, PackageSourceProvider};
+use crate::package_catalog::{
+    CatalogProviderKind, PackageCatalogError, PackageSourceCatalog, PackageSourceProvider,
+};
 use crate::package_config::PackageConfigLayer;
 use crate::package_solve::{
     unsatisfied_direct_dependencies, ProfileSolveError, UnsatisfiedDirectDependency,
 };
 use crate::package_workflow::{
-    complete_package_bundle, prepare_new_package_plan, relative_posix, validate_path_segment,
-    write_json, write_package_bundle_into, NewPackageRequest, PackageBundle, PackageWorkflowError,
-    WrittenPackageBundle,
+    complete_package_bump, complete_package_bundle, prepare_new_package_plan, prepare_package_bump,
+    relative_posix, stack_policy_with_bump_overrides, validate_path_segment, write_json,
+    write_package_bundle_into, BumpPackageRequest, NewPackageRequest, PackageBundle,
+    PackageWorkflowError, WrittenPackageBundle,
 };
 use crate::version::matches_req;
 use serde::{Deserialize, Serialize};
@@ -165,7 +170,11 @@ pub fn plan_package_closure(
     };
 
     let root_path = vec![plan.package.name.clone()];
-    let root = state.close_package(plan, sbom, &request.stack_policy, &root_path)?;
+    let root = state.close_package(
+        PreparedCompanion::Foreign { plan, sbom },
+        &request.stack_policy,
+        &root_path,
+    )?;
 
     let companions = state
         .topo
@@ -431,6 +440,27 @@ struct GeneratedEntry {
     candidates: Vec<Candidate>,
 }
 
+/// Prepared companion ready for hole-filling and kind-specific completion.
+enum PreparedCompanion {
+    Foreign {
+        plan: PackagePlan,
+        sbom: Value,
+    },
+    Bump {
+        plan: PackagePlan,
+        request: BumpPackageRequest,
+        stack_policy: StackPolicy,
+    },
+}
+
+impl PreparedCompanion {
+    fn plan(&self) -> &PackagePlan {
+        match self {
+            Self::Foreign { plan, .. } | Self::Bump { plan, .. } => plan,
+        }
+    }
+}
+
 struct ClosureState<'a> {
     robot: Vec<Candidate>,
     generated: HashMap<String, GeneratedEntry>,
@@ -453,19 +483,34 @@ impl ClosureState<'_> {
 
     fn close_package(
         &mut self,
-        plan: PackagePlan,
-        sbom: serde_json::Value,
+        prepared: PreparedCompanion,
         stack_policy: &StackPolicy,
         path: &[String],
     ) -> Result<PackageBundle, PackageClosureError> {
         // Fill holes for every requested profile before the final multi-profile solve.
-        let profiles: Vec<String> = plan.outputs.iter().map(|o| o.profile.clone()).collect();
+        let profiles: Vec<String> = prepared
+            .plan()
+            .outputs
+            .iter()
+            .map(|output| output.profile.clone())
+            .collect();
         for profile in &profiles {
-            self.fill_holes_for_profile(&plan, profile, stack_policy, path)?;
+            self.fill_holes_for_profile(prepared.plan(), profile, stack_policy, path)?;
         }
 
         let candidates = self.universe();
-        complete_package_bundle(plan, sbom, &candidates, stack_policy).map_err(Into::into)
+        match prepared {
+            PreparedCompanion::Foreign { plan, sbom } => {
+                complete_package_bundle(plan, sbom, &candidates, stack_policy).map_err(Into::into)
+            }
+            PreparedCompanion::Bump {
+                plan,
+                request,
+                stack_policy: bump_policy,
+            } => {
+                complete_package_bump(&request, plan, &candidates, &bump_policy).map_err(Into::into)
+            }
+        }
     }
 
     fn fill_holes_for_profile(
@@ -546,21 +591,16 @@ impl ClosureState<'_> {
             });
         }
 
-        let companion_request =
-            request_from_provider(provider, &self.easyconfig_roots, &self.default_stack_policy)?;
-        let (mut companion_plan, companion_sbom) = prepare_new_package_plan(&companion_request)?;
-        select_provider_profile(&mut companion_plan, &provider.profile)?;
+        let (prepared, companion_policy) = prepare_companion_from_provider(
+            provider,
+            &self.easyconfig_roots,
+            &self.default_stack_policy,
+        )?;
 
         let mut child_path = path.to_vec();
-        child_path.push(companion_plan.package.name.clone());
+        child_path.push(prepared.plan().package.name.clone());
 
-        let companion_policy = companion_request.stack_policy.clone();
-        let companion_bundle = self.close_package(
-            companion_plan,
-            companion_sbom,
-            &companion_policy,
-            &child_path,
-        )?;
+        let companion_bundle = self.close_package(prepared, &companion_policy, &child_path)?;
 
         let candidates = candidates_from_bundle(&companion_bundle)?;
         // Final constraint check on emitted identity.
@@ -586,6 +626,47 @@ impl ClosureState<'_> {
             },
         );
         Ok(())
+    }
+}
+
+fn prepare_companion_from_provider(
+    provider: &PackageSourceProvider,
+    easyconfig_roots: &[PathBuf],
+    default_stack_policy: &StackPolicy,
+) -> Result<(PreparedCompanion, StackPolicy), PackageClosureError> {
+    match provider.provider {
+        CatalogProviderKind::Foreign => {
+            let companion_request =
+                foreign_request_from_provider(provider, easyconfig_roots, default_stack_policy)?;
+            let (mut companion_plan, companion_sbom) =
+                prepare_new_package_plan(&companion_request)?;
+            select_provider_profile(&mut companion_plan, &provider.profile)?;
+            let policy = companion_request.stack_policy.clone();
+            Ok((
+                PreparedCompanion::Foreign {
+                    plan: companion_plan,
+                    sbom: companion_sbom,
+                },
+                policy,
+            ))
+        }
+        CatalogProviderKind::EasyBuildBump => {
+            let bump_request =
+                bump_request_from_provider(provider, easyconfig_roots, default_stack_policy)?;
+            let (plan, _sbom) = prepare_package_bump(&bump_request)?;
+            let policy = stack_policy_with_bump_overrides(
+                &bump_request.stack_policy,
+                &bump_request.overrides,
+            );
+            Ok((
+                PreparedCompanion::Bump {
+                    plan,
+                    request: bump_request,
+                    stack_policy: policy.clone(),
+                },
+                policy,
+            ))
+        }
     }
 }
 
@@ -634,7 +715,20 @@ fn select_catalog_provider<'a>(
     }
 }
 
-fn request_from_provider(
+fn provider_stack_policy(
+    provider: &PackageSourceProvider,
+    default_stack_policy: &StackPolicy,
+) -> Result<StackPolicy, PackageClosureError> {
+    if let Some(path) = &provider.stack_policy {
+        load_stack_policy(path)
+    } else {
+        let mut policy = default_stack_policy.clone();
+        policy.toolchain = provider.toolchain.clone();
+        Ok(policy)
+    }
+}
+
+fn foreign_request_from_provider(
     provider: &PackageSourceProvider,
     easyconfig_roots: &[PathBuf],
     default_stack_policy: &StackPolicy,
@@ -646,13 +740,6 @@ fn request_from_provider(
                 .map_err(|error| PackageWorkflowError::Config(error.to_string()))?,
         );
     }
-    let stack_policy = if let Some(path) = &provider.stack_policy {
-        load_stack_policy(path)?
-    } else {
-        let mut policy = default_stack_policy.clone();
-        policy.toolchain = provider.toolchain.clone();
-        policy
-    };
     Ok(NewPackageRequest {
         source: provider.source.clone(),
         format: provider.format,
@@ -660,7 +747,30 @@ fn request_from_provider(
         source_checksums: provider.source_checksums.clone(),
         package_layers,
         easyconfig_roots: easyconfig_roots.to_vec(),
-        stack_policy,
+        stack_policy: provider_stack_policy(provider, default_stack_policy)?,
+    })
+}
+
+fn bump_request_from_provider(
+    provider: &PackageSourceProvider,
+    easyconfig_roots: &[PathBuf],
+    default_stack_policy: &StackPolicy,
+) -> Result<BumpPackageRequest, PackageClosureError> {
+    if provider.source_checksums.len() > 1 {
+        return Err(PackageCatalogError::MultipleBumpChecksums {
+            name: provider.name.clone(),
+        }
+        .into());
+    }
+    Ok(BumpPackageRequest {
+        source: provider.source.clone(),
+        toolchain: provider.toolchain.clone(),
+        version: provider.version.clone(),
+        source_checksum: provider.source_checksums.first().cloned(),
+        easyconfig_roots: easyconfig_roots.to_vec(),
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: provider_stack_policy(provider, default_stack_policy)?,
     })
 }
 

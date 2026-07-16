@@ -242,9 +242,47 @@ eb-stack recipe check \
   --easyconfigs /tmp/eon/easyconfigs
 #+end_src
 
-Missing robot dependencies are real package work. Add their foreign recipe or
-an authored EasyBuild recipe and run the canonical planner again; do not create
-placeholder recipes with dummy checksums.
+Missing robot dependencies are real package work. Close them with a layered
+package-source catalog rather than inventing placeholders or dummy checksums.
+
+* Catalog-backed robot holes
+
+Pass one or more ~--package-catalog~ layers when ~package plan~ must recursively
+close robot holes. Compatible robot candidates still win; the catalog is only
+consulted for unsatisfied direct dependencies.
+
+#+begin_src bash
+eb-stack package plan \
+  --source path/to/root-recipe.yaml \
+  --format conda-forge \
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  --source-checksum SHA256 \
+  --easyconfigs /path/to/robot \
+  --stack-policy stacks/site.toml \
+  --package-catalog examples/package-catalog/mixed-providers.toml \
+  --out-dir work/closed-root
+#+end_src
+
+Each catalog entry maps an EasyBuild provider identity to authoring inputs.
+Provider kinds:
+
+| TOML ~provider~ | When to use |
+|-
+| ~foreign~ (default; may be omitted) | The dependency has no EasyBuild recipe; plan from its conda-forge or Spack recipe, package-config layers, checksums, and product profile. |
+| ~easybuild-bump~ | A compatible EasyBuild recipe already exists at another generation. Retarget it through the annual-bump pipeline (EasyBuild-origin plan, CycloneDX SBOM, Resolvo lock, deterministic emission). Do not replace that recipe with a foreign archive of a different artifact identity. |
+
+~easybuild-bump~ fields: ~source~ is the existing ~.eb~, ~toolchain~ is the
+target generation, optional ~version~ is the emitted package version used for
+provider matching, and at most one ~source_checksums~ entry has annual-bump
+semantics. Foreign-only fields (~format~, ~package_config~, non-default
+~profile~, multiple checksums) are typed catalog errors.
+
+Companions land under ~packages/<name>-<version>-<toolchain>/~, share one
+~easyconfigs/~ overlay with the root, appear in topological ~build-order.json~,
+and contribute to ~closure.sbom.cdx.json~. A bumped companion whose own
+dependency is another catalog hole builds after that child and before its
+consumer. See ~examples/package-catalog/mixed-providers.toml~.
 
 * Route the build
 

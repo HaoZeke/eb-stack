@@ -53,8 +53,8 @@ pub use hierarchy::{
 };
 pub use manifest::package_plan_from_foreign;
 pub use package_catalog::{
-    resolve_package_catalog_layers, PackageCatalogError, PackageCatalogLayer, PackageSourceCatalog,
-    PackageSourceProvider, PACKAGE_CATALOG_SCHEMA_VERSION,
+    resolve_package_catalog_layers, CatalogProviderKind, PackageCatalogError, PackageCatalogLayer,
+    PackageSourceCatalog, PackageSourceProvider, PACKAGE_CATALOG_SCHEMA_VERSION,
 };
 pub use package_closure::{
     merge_closure_sboms, package_layout_segment, plan_package_closure, write_package_closure,
@@ -67,10 +67,11 @@ pub use package_solve::{
     unsatisfied_direct_dependencies_with_hierarchy, ProfileSolveError, UnsatisfiedDirectDependency,
 };
 pub use package_workflow::{
-    complete_package_bundle, complete_package_bundle_with_hierarchy, inspect_new_package,
-    plan_new_package, plan_package_bump, prepare_new_package_plan, relative_posix,
-    validate_path_segment, write_package_bundle, write_package_bundle_into, BumpPackageRequest,
-    NewPackageRequest, PackageBundle, PackageWorkflowError, WrittenPackageBundle,
+    complete_package_bump, complete_package_bundle, complete_package_bundle_with_hierarchy,
+    inspect_new_package, plan_new_package, plan_package_bump, prepare_new_package_plan,
+    prepare_package_bump, relative_posix, stack_policy_with_bump_overrides, validate_path_segment,
+    write_package_bundle, write_package_bundle_into, BumpPackageRequest, NewPackageRequest,
+    PackageBundle, PackageWorkflowError, WrittenPackageBundle,
 };
 pub use report::{
     classify_stack_diff, format_build_list, format_stack_diff_markdown, ordered_build_paths,

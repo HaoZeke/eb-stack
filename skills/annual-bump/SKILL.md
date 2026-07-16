@@ -7,6 +7,13 @@ description: Retarget an existing EasyBuild easyconfig to a new toolchain or app
 
 Use this skill only when an EasyBuild recipe already exists. Use `skills/new-package/SKILL.md` for conda-forge or Spack imports.
 
+When a **new-package** plan hits a robot hole for software that already has an
+EasyBuild recipe at another generation, declare a catalog entry with
+`provider = "easybuild-bump"` (see `examples/package-catalog/mixed-providers.toml`
+and `skills/new-package/SKILL.md`). The closure planner runs this same prepare
+→ Resolvo → emit pipeline for that companion; do not replace the existing
+recipe with a foreign archive of a different artifact identity.
+
 ## Mechanical contract
 
 `package bump` parses the source EasyBuild recipe into the same canonical model used by new packages, retargets its toolchain or application version, solves its dependencies with Resolvo, and writes a bundle containing:
