@@ -150,7 +150,7 @@ fn apply_source_checksums(
 }
 
 fn require_source_checksums(plan: &PackagePlan) -> Result<(), PackageWorkflowError> {
-    if plan.sources.is_empty() {
+    if plan.sources.is_empty() && plan.origin != PackageOrigin::EasyBuild {
         return Err(PackageWorkflowError::NoSourceArtifacts);
     }
     let missing = plan
@@ -177,7 +177,12 @@ fn require_source_checksums(plan: &PackagePlan) -> Result<(), PackageWorkflowErr
     }
     for patch in &plan.build.patches {
         validate_patch_checksum(patch)?;
-        validate_patch_source(patch)?;
+        if plan.origin != PackageOrigin::EasyBuild
+            || patch.resolved_source.is_some()
+            || patch.source.is_some()
+        {
+            validate_patch_source(patch)?;
+        }
     }
     Ok(())
 }
@@ -230,8 +235,17 @@ fn refresh_checksum_residuals(plan: &mut PackagePlan) {
             id: "patch:missing-source".into(),
             stage: ResidualStage::Normalize,
             category: "patch-asset".into(),
-            severity: ResidualSeverity::Blocking,
-            summary: "one or more patch artifacts have no source file".into(),
+            severity: if plan.origin == PackageOrigin::EasyBuild {
+                ResidualSeverity::Judgment
+            } else {
+                ResidualSeverity::Blocking
+            },
+            summary: if plan.origin == PackageOrigin::EasyBuild {
+                "one or more imported patch artifacts are not available beside the easyconfig"
+                    .into()
+            } else {
+                "one or more patch artifacts have no source file".into()
+            },
             evidence: Some(missing_patch_sources.join(", ")),
             provenance: None,
         });
@@ -297,6 +311,7 @@ pub fn plan_package_bump(
         request.version.as_deref(),
         request.source_checksum.as_deref(),
     );
+    refresh_checksum_residuals(&mut plan);
     let roots = request
         .easyconfig_roots
         .iter()
@@ -427,7 +442,8 @@ fn package_plan_from_easyconfig(
         .map(|(index, filename)| {
             let resolved_source = Path::new(&recipe.easyconfig_path)
                 .parent()
-                .map(|directory| directory.join(filename));
+                .map(|directory| directory.join(filename))
+                .filter(|source| source.is_file());
             PatchArtifact {
                 filename: filename.clone(),
                 sha256: recipe.checksums.get(source_count + index).cloned(),
@@ -546,6 +562,12 @@ pub fn write_package_bundle(
             easyconfigs.push(path);
         }
         for patch in &bundle.plan.build.patches {
+            if bundle.plan.origin == PackageOrigin::EasyBuild
+                && patch.resolved_source.is_none()
+                && patch.source.is_none()
+            {
+                continue;
+            }
             let source = validate_patch_source(patch)?;
             let path = recipe_directory.join(&patch.filename);
             std::fs::copy(&source, &path)
