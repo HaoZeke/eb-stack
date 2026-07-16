@@ -700,20 +700,6 @@ fn claim_overlay_path(
             reason: "destination already claimed".into(),
         });
     }
-    if absolute.exists() {
-        let existing = std::fs::read_to_string(absolute)
-            .map_err(|error| PackageWorkflowError::Io(absolute.to_path_buf(), error))?;
-        if existing != content {
-            return Err(PackageWorkflowError::OverlayCollision {
-                path: key,
-                reason: "file already exists with different content".into(),
-            });
-        }
-        return Err(PackageWorkflowError::OverlayCollision {
-            path: key,
-            reason: "file already exists".into(),
-        });
-    }
     claimed_paths.insert(key, content.to_string());
     Ok(())
 }

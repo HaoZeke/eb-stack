@@ -299,6 +299,15 @@ impl BuildTarget {
     }
 
     pub fn build_command(&self, recipe: &str) -> CommandPlan {
+        self.build_command_with_robot_paths(recipe, &[])
+    }
+
+    /// Route an EasyBuild command with additional robot roots after configured roots.
+    pub fn build_command_with_robot_paths(
+        &self,
+        recipe: &str,
+        additional_robot_paths: &[String],
+    ) -> CommandPlan {
         let mut tokens = vec!["env".to_string()];
         tokens.push(format!("EASYBUILD_TMPDIR={}", self.easybuild.tmp_root));
         tokens.extend(
@@ -308,8 +317,14 @@ impl BuildTarget {
                 .map(|(name, value)| format!("{name}={value}")),
         );
         tokens.push(self.easybuild.command.clone());
-        if !self.easybuild.robot_paths.is_empty() {
-            tokens.push(format!("--robot={}", self.easybuild.robot_paths.join(":")));
+        let mut robot_paths = self.easybuild.robot_paths.clone();
+        for path in additional_robot_paths {
+            if !robot_paths.contains(path) {
+                robot_paths.push(path.clone());
+            }
+        }
+        if !robot_paths.is_empty() {
+            tokens.push(format!("--robot={}", robot_paths.join(":")));
         }
         tokens.push(format!("--buildpath={}/build", self.easybuild.work_root));
         tokens.push(recipe.to_string());

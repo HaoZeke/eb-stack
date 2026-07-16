@@ -327,6 +327,9 @@ fn run_package(command: PackageCommand) -> Result<()> {
                 for path in written.easyconfigs {
                     println!("easyconfig={}", path.display());
                 }
+                for path in written.patches {
+                    println!("patch={}", path.display());
+                }
                 return Ok(());
             }
 
@@ -352,6 +355,9 @@ fn run_package(command: PackageCommand) -> Result<()> {
             for path in &written.root.easyconfigs {
                 println!("easyconfig={}", path.display());
             }
+            for path in &written.root.patches {
+                println!("patch={}", path.display());
+            }
             for companion in &written.companions {
                 println!("companion_manifest={}", companion.manifest.display());
                 println!("companion_sbom={}", companion.sbom.display());
@@ -360,6 +366,9 @@ fn run_package(command: PackageCommand) -> Result<()> {
                 }
                 for path in &companion.easyconfigs {
                     println!("easyconfig={}", path.display());
+                }
+                for path in &companion.patches {
+                    println!("companion_patch={}", path.display());
                 }
             }
             Ok(())

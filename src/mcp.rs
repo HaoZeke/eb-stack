@@ -11,6 +11,8 @@ use crate::eb_parse::{
 use crate::eb_style::{format_style_file, lint_style};
 use crate::foreign::ForeignFormat;
 use crate::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
+use crate::package_catalog::{resolve_package_catalog_layers, PackageCatalogLayer};
+use crate::package_closure::{plan_package_closure, write_package_closure};
 use crate::package_config::PackageConfigLayer;
 use crate::package_workflow::{
     inspect_new_package, plan_new_package, plan_package_bump, write_package_bundle,
@@ -125,6 +127,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("toolchain_name", "string"),
                 ("package_configs", "array"),
                 ("source_checksums", "array"),
+                ("package_catalogs", "array"),
             ],
         ),
         tool(
@@ -292,16 +295,60 @@ fn package_plan(arguments: &Value) -> Result<Value, String> {
         easyconfig_roots: path_array(arguments, "easyconfigs")?,
         stack_policy,
     };
-    let bundle = plan_new_package(&request).map_err(|error| error.to_string())?;
-    let written = write_package_bundle(&bundle, &required_path(arguments, "out_dir")?)
-        .map_err(|error| error.to_string())?;
+    let output = required_path(arguments, "out_dir")?;
+    let catalog_paths = string_array(arguments, "package_catalogs")?
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    if catalog_paths.is_empty() {
+        let bundle = plan_new_package(&request).map_err(|error| error.to_string())?;
+        let written = write_package_bundle(&bundle, &output).map_err(|error| error.to_string())?;
+        return Ok(json!({
+            "package": bundle.plan.package.name,
+            "version": bundle.plan.package.version,
+            "manifest": written.manifest,
+            "sbom": written.sbom,
+            "locks": written.locks,
+            "easyconfigs": written.easyconfigs,
+            "patches": written.patches,
+            "claims": {"resolves": true, "builds": false, "binary_verified": false}
+        }));
+    }
+
+    let mut layers = Vec::with_capacity(catalog_paths.len());
+    for path in catalog_paths {
+        layers.push(PackageCatalogLayer::from_path(&path).map_err(|error| error.to_string())?);
+    }
+    let catalog = resolve_package_catalog_layers(&layers).map_err(|error| error.to_string())?;
+    let closure = plan_package_closure(&request, &catalog).map_err(|error| error.to_string())?;
+    let package = closure.root.plan.package.name.clone();
+    let version = closure.root.plan.package.version.clone();
+    let written = write_package_closure(&closure, &output).map_err(|error| error.to_string())?;
+    let companions = written
+        .companions
+        .iter()
+        .map(|companion| {
+            json!({
+                "manifest": companion.manifest,
+                "sbom": companion.sbom,
+                "locks": companion.locks,
+                "easyconfigs": companion.easyconfigs,
+                "patches": companion.patches,
+            })
+        })
+        .collect::<Vec<_>>();
     Ok(json!({
-        "package": bundle.plan.package.name,
-        "version": bundle.plan.package.version,
-        "manifest": written.manifest,
-        "sbom": written.sbom,
-        "locks": written.locks,
-        "easyconfigs": written.easyconfigs,
+        "package": package,
+        "version": version,
+        "manifest": written.root.manifest,
+        "sbom": written.root.sbom,
+        "locks": written.root.locks,
+        "easyconfigs": written.root.easyconfigs,
+        "patches": written.root.patches,
+        "companions": companions,
+        "closure_plan": written.closure_plan,
+        "closure_sbom": written.closure_sbom,
+        "build_order": written.build_order,
         "claims": {"resolves": true, "builds": false, "binary_verified": false}
     }))
 }

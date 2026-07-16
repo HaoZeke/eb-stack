@@ -306,9 +306,14 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         let staged_recipe = Path::new(&staged_bundle).join(relative_recipe);
         state.current_recipe = Some(recipe_text.clone());
         write_state(&request.state_path, &state)?;
-        let command = request
-            .target
-            .build_command(&staged_recipe.display().to_string());
+        let staged_overlay = Path::new(&staged_bundle)
+            .join("easyconfigs")
+            .display()
+            .to_string();
+        let command = request.target.build_command_with_robot_paths(
+            &staged_recipe.display().to_string(),
+            &[staged_overlay],
+        );
         let output = match command.execute() {
             Ok(output) => output,
             Err(error) => {
