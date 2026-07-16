@@ -117,7 +117,9 @@ config_options = ["-Dwith_cli=true"]
         "{missing_patch_checksum}"
     );
 
-    let patch_checksum = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let patch_source = temp.path().join("eOn-2.16.0-portability.patch");
+    std::fs::write(&patch_source, "portable patch\n").expect("write patch asset");
+    let patch_checksum = "a35aa78c890e616e051e84c9df0a1187cd88b852610748804c97388c3a9cb2c5";
     let profile_with_patch = PackageConfigLayer::from_toml_str(&format!(
         r#"
 schema_version = 1
@@ -126,11 +128,13 @@ name = "eOn"
 [[build.patches]]
 filename = "eOn-2.16.0-portability.patch"
 sha256 = "{patch_checksum}"
+source = "{patch_source}"
 [[profiles]]
 name = "default"
 default = true
 config_options = ["-Dwith_cli=true"]
-"#
+"#,
+        patch_source = patch_source.display(),
     ))
     .expect("checksummed patch config");
     let bundle = plan_new_package(&NewPackageRequest {
@@ -166,6 +170,12 @@ config_options = ["-Dwith_cli=true"]
     assert!(written.sbom.is_file());
     assert_eq!(written.locks.len(), 1);
     assert_eq!(written.easyconfigs.len(), 1);
+    assert_eq!(written.patches.len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(&written.patches[0]).expect("copied patch"),
+        "portable patch\n"
+    );
+    assert_eq!(written.patches[0].parent(), written.easyconfigs[0].parent());
     let parsed = resolve_easyconfig_file(&written.easyconfigs[0]).expect("parse emitted recipe");
     assert_eq!(parsed.name, "eOn");
     assert_eq!(parsed.dependencies[0].name, "zlib");
