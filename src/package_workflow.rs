@@ -516,6 +516,7 @@ fn package_plan_from_easyconfig(
             toolchain: toolchain.clone(),
             easyblock: recipe.easyblock.clone(),
             build_systems: Vec::new(),
+            source_root: None,
             config_options: recipe.configopts.iter().cloned().collect(),
             moduleclass: recipe.moduleclass.clone(),
             patches,

@@ -49,6 +49,8 @@ pub struct BuildPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_systems: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_options: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moduleclass: Option<String>,
@@ -300,6 +302,9 @@ pub fn apply_package_layers(
             }
             if let Some(build_systems) = &build.build_systems {
                 plan.build.build_systems = build_systems.clone();
+            }
+            if let Some(source_root) = &build.source_root {
+                plan.build.source_root = Some(source_root.clone());
             }
             if let Some(config_options) = &build.config_options {
                 plan.build.config_options = config_options.clone();

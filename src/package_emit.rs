@@ -130,7 +130,11 @@ fn render_easyconfig(
     } else {
         format!("toolchainopts = {{{toolchain_options}}}\n")
     };
-    let (source_lines, checksum_lines) = render_sources(&materialized.sources, &plan.build.patches);
+    let (source_lines, checksum_lines) = render_sources(
+        &materialized.sources,
+        &plan.build.patches,
+        materialized.build.source_root.as_deref(),
+    );
     let patch_line = if plan.build.patches.is_empty() {
         String::new()
     } else {
@@ -290,6 +294,7 @@ fn render_easyconfig_table(
 fn render_sources(
     source_artifacts: &[crate::package::SourceArtifact],
     patches: &[crate::package::PatchArtifact],
+    source_root: Option<&str>,
 ) -> (String, String) {
     let sources = source_artifacts
         .iter()
@@ -305,7 +310,7 @@ fn render_sources(
                     (Some(git), _) => Some(git.clone()),
                     _ => None,
                 })?;
-            Some(render_source(source, &url))
+            Some(render_source(source, &url, source_root))
         })
         .collect::<Vec<_>>();
     let checksums = source_artifacts
@@ -320,18 +325,29 @@ fn render_sources(
     )
 }
 
-fn render_source(source: &crate::package::SourceArtifact, url: &str) -> String {
+fn render_source(
+    source: &crate::package::SourceArtifact,
+    url: &str,
+    source_root: Option<&str>,
+) -> String {
     let Some(target) = source.target_directory.as_deref() else {
         return format!("'{}'", escape_single(url));
     };
     let Some((source_url, download_filename)) = split_source_url(url) else {
         return format!("'{}'", escape_single(url));
     };
-    if !safe_relative_target(target) || !is_tar_archive(download_filename) {
+    if !safe_relative_target(target)
+        || source_root.is_some_and(|root| !safe_relative_source_root(root))
+        || !is_tar_archive(download_filename)
+    {
         return format!("'{}'", escape_single(url));
     }
 
     let filename = source.filename.as_deref().unwrap_or(download_filename);
+    let staging_directory = source_root.map_or_else(
+        || format!("%(builddir)s/{target}"),
+        |root| format!("%(builddir)s/{root}/{target}"),
+    );
     let mut fields = vec!["{".to_string()];
     fields.push(format!(
         "    'source_urls': ['{}'],",
@@ -345,8 +361,8 @@ fn render_source(source: &crate::package::SourceArtifact, url: &str) -> String {
     }
     fields.push(format!("    'filename': '{}',", escape_single(filename)));
     fields.push(format!(
-        "    'extract_cmd': 'mkdir -p %(builddir)s/{target} && ' +\n        \
-                 'tar -xf %s -C %(builddir)s/{target} --strip-components=1',"
+        "    'extract_cmd': 'mkdir -p {staging_directory} && ' +\n        \
+                 'tar -xf %s -C {staging_directory} --strip-components=1',"
     ));
     fields.push("}".to_string());
     fields.join("\n")
@@ -365,6 +381,18 @@ fn safe_relative_target(target: &str) -> bool {
                 && component
                     .chars()
                     .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '+'))
+        })
+}
+
+fn safe_relative_source_root(root: &str) -> bool {
+    !root.is_empty()
+        && !root.starts_with('/')
+        && root.split('/').all(|component| {
+            !matches!(component, "" | "." | "..")
+                && component.chars().all(|ch| {
+                    ch.is_ascii_alphanumeric()
+                        || matches!(ch, '-' | '_' | '.' | '+' | '%' | '(' | ')')
+                })
         })
 }
 

@@ -72,6 +72,7 @@ fn qmcpack_plan() -> PackagePlan {
             },
             easyblock: Some("CMakeNinja".into()),
             build_systems: vec!["CMakePackage".into()],
+            source_root: None,
             config_options: vec!["-DQMC_MPI=ON".into(), "-DQMC_OMP=ON".into()],
             moduleclass: Some("chem".into()),
             patches: Vec::new(),

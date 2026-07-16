@@ -150,6 +150,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             toolchain: toolchain.clone(),
             easyblock: Some(easyblock),
             build_systems: recipe.build_system_hints.clone(),
+            source_root: None,
             config_options,
             moduleclass: None,
             patches: recipe

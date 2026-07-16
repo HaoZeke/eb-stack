@@ -544,6 +544,8 @@ pub struct BuildSpec {
     pub easyblock: Option<String>,
     #[serde(default)]
     pub build_systems: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_root: Option<String>,
     #[serde(default)]
     pub config_options: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
