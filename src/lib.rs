@@ -12,6 +12,7 @@ mod manifest;
 pub mod mcp;
 pub mod package;
 pub mod package_catalog;
+pub mod package_closure;
 pub mod package_config;
 pub mod package_emit;
 pub mod package_solve;
@@ -51,12 +52,15 @@ pub use hierarchy::{
     HierarchyError, ResolveDepOpts, SourceDepSpec, ToolchainHierarchy,
 };
 pub use manifest::package_plan_from_foreign;
+pub use package_closure::{plan_package_closure, PackageClosure, PackageClosureError};
 pub use package_emit::{emit_profile_easyconfigs, EmittedEasyconfig, PackageEmitError};
 pub use package_solve::{
-    solve_package_profile, solve_package_profile_with_hierarchy, ProfileSolveError,
+    solve_package_profile, solve_package_profile_with_hierarchy, unsatisfied_direct_dependencies,
+    unsatisfied_direct_dependencies_with_hierarchy, ProfileSolveError, UnsatisfiedDirectDependency,
 };
 pub use package_workflow::{
-    inspect_new_package, plan_new_package, plan_package_bump, write_package_bundle,
+    complete_package_bundle, complete_package_bundle_with_hierarchy, inspect_new_package,
+    plan_new_package, plan_package_bump, prepare_new_package_plan, write_package_bundle,
     BumpPackageRequest, NewPackageRequest, PackageBundle, PackageWorkflowError,
     WrittenPackageBundle,
 };

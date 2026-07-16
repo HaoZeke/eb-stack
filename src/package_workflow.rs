@@ -15,7 +15,7 @@ use crate::package::{
 };
 use crate::package_config::{apply_package_layers, PackageConfigLayer};
 use crate::package_emit::{emit_profile_easyconfigs, EmittedEasyconfig};
-use crate::package_solve::{solve_package_profile, solve_package_profile_with_hierarchy};
+use crate::package_solve::solve_package_profile_with_hierarchy;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -83,12 +83,13 @@ pub fn inspect_new_package(
     Ok((plan, sbom))
 }
 
-pub fn plan_new_package(
+/// Parse foreign source, apply package layers and optional checksum overrides.
+///
+/// Does not solve profiles or emit recipes. Used by both single-package planning
+/// and recursive package-closure expansion against a shared robot universe.
+pub fn prepare_new_package_plan(
     request: &NewPackageRequest,
-) -> Result<PackageBundle, PackageWorkflowError> {
-    if request.easyconfig_roots.is_empty() {
-        return Err(PackageWorkflowError::NoEasyconfigRoots);
-    }
+) -> Result<(PackagePlan, Value), PackageWorkflowError> {
     let (mut plan, mut sbom) = inspect_new_package(
         &request.source,
         request.format,
@@ -100,22 +101,37 @@ pub fn plan_new_package(
         sbom = package_plan_to_cyclonedx(&plan)
             .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
     }
-    let roots = request
-        .easyconfig_roots
-        .iter()
-        .map(PathBuf::as_path)
-        .collect::<Vec<_>>();
-    let tree = parse_easyconfig_trees(&roots)
-        .map_err(|error| PackageWorkflowError::Robot(error.to_string()))?;
+    Ok((plan, sbom))
+}
+
+/// Solve every plan output profile and emit easyconfigs against a candidate universe.
+pub fn complete_package_bundle(
+    plan: PackagePlan,
+    sbom: Value,
+    candidates: &[crate::domain::Candidate],
+    stack_policy: &StackPolicy,
+) -> Result<PackageBundle, PackageWorkflowError> {
+    complete_package_bundle_with_hierarchy(plan, sbom, candidates, stack_policy, None)
+}
+
+/// Like [`complete_package_bundle`], with an optional hierarchy fixture path.
+pub fn complete_package_bundle_with_hierarchy(
+    plan: PackagePlan,
+    sbom: Value,
+    candidates: &[crate::domain::Candidate],
+    stack_policy: &StackPolicy,
+    hierarchy_fixture: Option<&Path>,
+) -> Result<PackageBundle, PackageWorkflowError> {
     let mut locks = Vec::new();
     for output in &plan.outputs {
         locks.push(
-            solve_package_profile(
+            solve_package_profile_with_hierarchy(
                 &plan,
                 &output.profile,
                 &Default::default(),
-                &tree.candidates,
-                &request.stack_policy,
+                candidates,
+                stack_policy,
+                hierarchy_fixture,
             )
             .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?,
         );
@@ -129,6 +145,23 @@ pub fn plan_new_package(
         locks,
         easyconfigs,
     })
+}
+
+pub fn plan_new_package(
+    request: &NewPackageRequest,
+) -> Result<PackageBundle, PackageWorkflowError> {
+    if request.easyconfig_roots.is_empty() {
+        return Err(PackageWorkflowError::NoEasyconfigRoots);
+    }
+    let (plan, sbom) = prepare_new_package_plan(request)?;
+    let roots = request
+        .easyconfig_roots
+        .iter()
+        .map(PathBuf::as_path)
+        .collect::<Vec<_>>();
+    let tree = parse_easyconfig_trees(&roots)
+        .map_err(|error| PackageWorkflowError::Robot(error.to_string()))?;
+    complete_package_bundle(plan, sbom, &tree.candidates, &request.stack_policy)
 }
 
 fn apply_source_checksums(

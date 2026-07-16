@@ -24,6 +24,90 @@ pub enum ProfileSolveError {
     MissingSelection(String),
 }
 
+/// A direct profile dependency with no compatible candidate in the universe.
+///
+/// Detected by inspecting the admitted candidate set — never by parsing
+/// Resolvo or solver error text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsatisfiedDirectDependency {
+    pub name: String,
+    pub version_req: String,
+    pub build: bool,
+}
+
+/// List direct dependencies that have no compatible candidate after hierarchy
+/// admission and stack-pin closure expansion.
+pub fn unsatisfied_direct_dependencies(
+    plan: &PackagePlan,
+    profile_name: &str,
+    environment: &ProfileEnvironment,
+    candidates: &[Candidate],
+    stack_policy: &StackPolicy,
+) -> Result<Vec<UnsatisfiedDirectDependency>, ProfileSolveError> {
+    unsatisfied_direct_dependencies_with_hierarchy(
+        plan,
+        profile_name,
+        environment,
+        candidates,
+        stack_policy,
+        None,
+    )
+}
+
+/// Like [`unsatisfied_direct_dependencies`], with an optional hierarchy fixture.
+pub fn unsatisfied_direct_dependencies_with_hierarchy(
+    plan: &PackagePlan,
+    profile_name: &str,
+    environment: &ProfileEnvironment,
+    candidates: &[Candidate],
+    stack_policy: &StackPolicy,
+    hierarchy_fixture: Option<&Path>,
+) -> Result<Vec<UnsatisfiedDirectDependency>, ProfileSolveError> {
+    let materialized = materialize_profile(plan, profile_name, environment)
+        .map_err(|error| ProfileSolveError::Materialize(error.to_string()))?;
+    let hierarchy = hierarchy_for_with_tree(&plan.build.toolchain, hierarchy_fixture, candidates)
+        .map_err(|error| ProfileSolveError::Resolve(error.to_string()))?;
+    let mut admitted = filter_candidates_in_hierarchy(candidates, &hierarchy);
+    admit_stack_pin_closures(candidates, &mut admitted, stack_policy);
+
+    let mut holes = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for dependency in &materialized.dependencies {
+        if dependency.solver_excluded || dependency.virtual_capability.is_some() {
+            continue;
+        }
+        let name = dependency
+            .eb_name
+            .clone()
+            .unwrap_or_else(|| match_robot_name(&dependency.name, candidates));
+        let build_only = !dependency.roles.is_empty()
+            && dependency
+                .roles
+                .iter()
+                .all(|role| matches!(role, DependencyRole::Build | DependencyRole::Test));
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let version_req = normalize_requirement(dependency.constraint.as_deref());
+        let has_compatible = admitted.iter().any(|candidate| {
+            package_identities_match(&candidate.name, &name)
+                && matches_req(&candidate.version, &version_req)
+        });
+        if !has_compatible {
+            holes.push(UnsatisfiedDirectDependency {
+                name,
+                version_req,
+                build: build_only,
+            });
+        }
+    }
+    Ok(holes)
+}
+
+fn package_identities_match(left: &str, right: &str) -> bool {
+    normalize_package_identity(left) == normalize_package_identity(right)
+}
+
 pub fn solve_package_profile(
     plan: &PackagePlan,
     profile_name: &str,
