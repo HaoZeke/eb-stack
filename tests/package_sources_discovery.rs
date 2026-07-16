@@ -150,6 +150,42 @@ fn easybuild_cross_generation_bump_without_catalog() {
 }
 
 #[test]
+fn resolvo_selects_one_compatible_easybuild_source_version() {
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let robot = root.join("robot");
+    let eb_sources = root.join("eb-sources");
+    std::fs::create_dir_all(&robot).unwrap();
+    for version in ["1.0", "1.5"] {
+        write(
+            &eb_sources.join(format!("bravo-{version}-foss-2023b.eb")),
+            &format!(
+                "name = 'bravo'\n\
+                 version = '{version}'\n\
+                 homepage = 'https://example.invalid/bravo'\n\
+                 description = 'synthetic'\n\
+                 toolchain = {{'name': 'foss', 'version': '2023b'}}\n\
+                 sources = ['bravo-{version}.tar.gz']\n\
+                 checksums = ['cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc']\n\
+                 moduleclass = 'lib'\n"
+            ),
+        );
+    }
+    let alpha = conda_recipe(root, "alpha.yaml", "alpha", "1.0", &["bravo >=1.0"]);
+    let mut sources = PackageSourceRoots {
+        schema_version: 1,
+        source_roots: Vec::new(),
+    };
+    sources.push(SourceRootKind::EasyBuild, eb_sources);
+    let closure =
+        plan_package_closure_with_sources(&request(alpha, robot), &empty_catalog(), &sources)
+            .expect("Resolvo source selection");
+    assert_eq!(closure.companions.len(), 1);
+    assert_eq!(closure.companions[0].plan.package.name, "bravo");
+    assert_eq!(closure.companions[0].plan.package.version, "1.5");
+}
+
+#[test]
 fn easybuild_gcccore_source_targets_hierarchy_member_not_foss() {
     let temp = tempfile::tempdir().expect("temp");
     let root = temp.path();
