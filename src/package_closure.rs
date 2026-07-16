@@ -7,7 +7,7 @@
 use crate::domain::Candidate;
 use crate::eb_parse::resolve_easyconfig_str;
 use crate::package::{OutputRequest, PackagePlan, ProfileEnvironment, StackPolicy};
-use crate::package_catalog::{PackageSourceCatalog, PackageSourceProvider};
+use crate::package_catalog::{PackageCatalogError, PackageSourceCatalog, PackageSourceProvider};
 use crate::package_config::PackageConfigLayer;
 use crate::package_solve::{
     unsatisfied_direct_dependencies, ProfileSolveError, UnsatisfiedDirectDependency,
