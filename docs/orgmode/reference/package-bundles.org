@@ -31,7 +31,7 @@ unknown fields are rejected by the Rust model.
 | ~sources~ | URLs, filenames, SHA-256 values, VCS identities, staging directories, and provenance |
 | ~dependencies~ | Names, constraints, roles, structured conditions, virtual capabilities, and provenance |
 | ~rules~ | Preserved conflicts and requirements |
-| ~build~ | Toolchain, easyblock, build systems, configuration options, patches, and module class |
+| ~build~ | Toolchain, easyblock, build systems, configuration options, checksummed patches, typed easyconfig parameters, and module class |
 | ~profiles~ | Independently installable product configurations |
 | ~outputs~ | Requested profile and stack-policy pairs |
 | ~residuals~ | Explicit parser, normalization, resolution, emission, build, or verification work |
@@ -46,6 +46,20 @@ Residual severity has three values:
 - ~mechanical~: deterministic formatting or metadata work;
 - ~judgment~: package-authoring or target evidence is required;
 - ~blocking~: the next pipeline stage cannot make a valid claim.
+
+The build manifest stores patches as artifacts:
+
+#+begin_src json
+{
+  "filename": "Orbit-2.0-portability.patch",
+  "sha256": "4f43b42fdcf84d0cf634d993dd944f252c8243dc612a919fe2825d56f937c8eb"
+}
+#+end_src
+
+~easyconfig_parameters~ accepts strings, integers, booleans, lists, and
+tables. It cannot contain executable expressions. Build-level parameters are
+defaults for every emitted recipe; profile-level parameters replace matching
+keys for one variant.
 
 * Planned CycloneDX SBOM
 
@@ -137,7 +151,7 @@ A foreign VCS commit is immutable source identity but is not the SHA-256 of
 the downloaded archive. Supply one ~--source-checksum~ per source artifact when
 the foreign recipe lacks archive hashes. ~package inspect~ keeps the missing
 checksum as a blocking residual; ~package plan~ refuses to emit recipes until
-all source checksums are complete and valid.
+all source and patch checksums are complete and valid.
 
 Run the three recipe gates before a campaign:
 

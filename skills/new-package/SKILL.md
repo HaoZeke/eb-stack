@@ -44,6 +44,28 @@ easyblock policy, module class, build options, and patches. `easyblock =
 "auto"` omits the parameter so EasyBuild can select a software-specific
 easyblock. These are packaging decisions, not parser rules.
 
+Represent easyblock-specific inputs under `[build.easyconfig_parameters]` or
+`[profiles.easyconfig_parameters]`. Values are typed TOML strings, integers,
+booleans, lists, or tables; never place Python expressions in package policy.
+Profile values override build defaults for one emitted recipe.
+
+Use `[[dependencies.requirements]]` for EasyBuild product requirements absent
+from foreign metadata. Requirements merge with matching foreign provider
+edges and otherwise enter the canonical manifest, SBOM, and Resolvo solve as
+new dependency intents. Put compatibility constraints here only when they are
+real package constraints; put site preferences in stack policy.
+
+Declare patches as checked artifacts:
+
+```toml
+[[build.patches]]
+filename = "Package-1.0-portability.patch"
+sha256 = "4f43b42fdcf84d0cf634d993dd944f252c8243dc612a919fe2825d56f937c8eb"
+```
+
+`package plan` rejects missing or malformed patch checksums. Checksum order in
+the emitted easyconfig is all source artifacts followed by all patch artifacts.
+
 Create one product profile per independently installable variant. Each profile emits one `.eb` file.
 
 - Keep the default CPU or standard MPI/OpenMP profile unsuffixed.

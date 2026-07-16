@@ -94,6 +94,58 @@ The original foreign spelling and constraint remain in dependency provenance.
 Aliases only control robot matching and solving; they do not teach the parser
 about a package.
 
+Easyblock-specific parameters are typed TOML data. They are emitted as normal
+Python values, but configuration cannot inject Python expressions:
+
+#+begin_src toml
+[build.easyconfig_parameters]
+general_packages = ["ASPHERE", "KSPACE", "MOLECULE"]
+build_shared_libs = true
+
+[[profiles]]
+name = "cuda"
+
+[profiles.easyconfig_parameters]
+cuda_compute_capabilities = ["80", "90"]
+#+end_src
+
+Build-level values apply to every product profile. A profile value with the
+same key replaces the build-level value for that emitted recipe.
+
+Use a requirement when EasyBuild product policy needs a dependency that the
+foreign recipe does not declare. If a matching foreign edge exists, the
+requirement makes that edge unconditional and merges its roles. Otherwise it
+creates a canonical dependency before the SBOM and Resolvo lock are produced:
+
+#+begin_src toml
+[[dependencies.requirements]]
+name = "CMake"
+constraint = ">=3.30"
+roles = ["build"]
+
+[[dependencies.requirements]]
+name = "VTK"
+roles = ["run"]
+#+end_src
+
+Do not put selected versions in this table merely to reproduce a neighboring
+easyconfig. Constraints describe package compatibility; stack preferences and
+distribution pins belong in Resolvo policy.
+
+Patches are artifacts, not bare recipe text. Every patch has a filename and a
+reviewed SHA-256. EasyBuild checksum order is all sources followed by all
+patches:
+
+#+begin_src toml
+[[build.patches]]
+filename = "Orbit-2.0-portability.patch"
+sha256 = "4f43b42fdcf84d0cf634d993dd944f252c8243dc612a919fe2825d56f937c8eb"
+#+end_src
+
+~package inspect~ records a blocking ~patch:missing-sha256~ residual for an
+unchecked patch. ~package plan~ refuses to emit a buildable bundle until every
+source and patch checksum is present.
+
 A QMCPACK profile set commonly contains a default MPI+OpenMP build and a
 separate ~-complex~ recipe:
 
