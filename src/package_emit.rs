@@ -208,10 +208,25 @@ fn render_easyconfig_parameters(parameters: &BTreeMap<String, EasyconfigValue>) 
     }
     let mut rendered = parameters
         .iter()
-        .map(|(name, value)| format!("{name} = {}", render_easyconfig_value(value, 0)))
+        .map(|(name, value)| match value {
+            EasyconfigValue::Concat(fragments) => render_string_concat(name, &fragments.concat),
+            _ => format!("{name} = {}", render_easyconfig_value(value, 0)),
+        })
         .collect::<Vec<_>>()
         .join("\n");
     rendered.push_str("\n\n");
+    rendered
+}
+
+fn render_string_concat(name: &str, fragments: &[String]) -> String {
+    let mut fragments = fragments.iter();
+    let Some(first) = fragments.next() else {
+        return format!("{name} = ''");
+    };
+    let mut rendered = format!("{name} = '{}'", escape_single(first));
+    for fragment in fragments {
+        rendered.push_str(&format!("\n{name} += '{}'", escape_single(fragment)));
+    }
     rendered
 }
 
@@ -221,6 +236,9 @@ fn render_easyconfig_value(value: &EasyconfigValue, indentation: usize) -> Strin
         EasyconfigValue::Integer(value) => value.to_string(),
         EasyconfigValue::String(value) => format!("'{}'", escape_single(value)),
         EasyconfigValue::List(values) => render_easyconfig_sequence(values, indentation),
+        EasyconfigValue::Concat(fragments) => {
+            format!("'{}'", escape_single(&fragments.concat.join("")))
+        }
         EasyconfigValue::Table(values) => render_easyconfig_table(values, indentation),
     }
 }

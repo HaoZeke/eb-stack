@@ -481,12 +481,19 @@ pub struct PackageRule {
 /// Expressions are deliberately absent: package configuration describes
 /// easyblock inputs without becoming an arbitrary Python execution surface.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EasyconfigStringConcat {
+    pub concat: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum EasyconfigValue {
     Bool(bool),
     Integer(i64),
     String(String),
     List(Vec<EasyconfigValue>),
+    Concat(EasyconfigStringConcat),
     Table(BTreeMap<String, EasyconfigValue>),
 }
 
