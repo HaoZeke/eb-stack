@@ -7,7 +7,7 @@
 use crate::domain::Candidate;
 use crate::eb_parse::resolve_easyconfig_str;
 use crate::package::{OutputRequest, PackagePlan, ProfileEnvironment, StackPolicy};
-use crate::package_catalog::{PackageCatalogError, PackageSourceCatalog, PackageSourceProvider};
+use crate::package_catalog::{PackageSourceCatalog, PackageSourceProvider};
 use crate::package_config::PackageConfigLayer;
 use crate::package_solve::{
     unsatisfied_direct_dependencies, ProfileSolveError, UnsatisfiedDirectDependency,
@@ -56,6 +56,14 @@ pub enum PackageClosureError {
         name: String,
         provided: String,
         required: String,
+    },
+    #[error(
+        "generated candidate for {name} ({required}) is not admitted for profile {profile} by the target hierarchy or stack policy"
+    )]
+    GeneratedCandidateNotAdmitted {
+        name: String,
+        required: String,
+        profile: String,
     },
     #[error("package {package} has no product profile {profile}")]
     MissingProfile { package: String, profile: String },
@@ -160,8 +168,7 @@ impl ClosureState<'_> {
         stack_policy: &StackPolicy,
         path: &[String],
     ) -> Result<(), PackageClosureError> {
-        // Bound iterations: each hole either generates a new companion or errors.
-        for _ in 0..10_000 {
+        loop {
             let candidates = self.universe();
             let holes = unsatisfied_direct_dependencies(
                 plan,
@@ -173,13 +180,19 @@ impl ClosureState<'_> {
             if holes.is_empty() {
                 return Ok(());
             }
-            for hole in holes {
-                self.ensure_companion_for_hole(&hole, path)?;
+            let generated_before = self.generated.len();
+            for hole in &holes {
+                self.ensure_companion_for_hole(hole, path)?;
+            }
+            if self.generated.len() == generated_before {
+                let hole = &holes[0];
+                return Err(PackageClosureError::GeneratedCandidateNotAdmitted {
+                    name: hole.name.clone(),
+                    required: hole.version_req.clone(),
+                    profile: profile.to_string(),
+                });
             }
         }
-        Err(PackageClosureError::GeneratedCandidate(
-            "exceeded maximum hole-fill iterations".into(),
-        ))
     }
 
     fn ensure_companion_for_hole(
@@ -196,37 +209,16 @@ impl ClosureState<'_> {
             return Err(PackageClosureError::Cycle { path: cycle });
         }
 
-        let version_hint = exact_version_hint(&hole.version_req);
-        let provider = match self.catalog.lookup(&hole.name, version_hint.as_deref()) {
-            Ok(provider) => provider,
-            Err(PackageCatalogError::MissingProvider { name, version }) => {
-                return Err(PackageClosureError::MissingProvider { name, version });
-            }
-            Err(PackageCatalogError::AmbiguousProvider {
-                name,
-                version,
-                count,
-            }) => {
-                return Err(PackageClosureError::AmbiguousProvider {
-                    name,
-                    version,
-                    count,
+        let provider = select_catalog_provider(self.catalog, hole)?;
+
+        if let Some(provided_version) = provider.version.as_deref() {
+            if !matches_req(provided_version, &hole.version_req) {
+                return Err(PackageClosureError::IncompatibleProviderVersion {
+                    name: provider.name.clone(),
+                    provided: provided_version.to_string(),
+                    required: hole.version_req.clone(),
                 });
             }
-            Err(error) => return Err(error.into()),
-        };
-
-        let provided_version = provider
-            .version
-            .clone()
-            .or_else(|| version_hint.clone())
-            .unwrap_or_else(|| "0".into());
-        if !matches_req(&provided_version, &hole.version_req) {
-            return Err(PackageClosureError::IncompatibleProviderVersion {
-                name: provider.name.clone(),
-                provided: provided_version,
-                required: hole.version_req.clone(),
-            });
         }
 
         let key = companion_key(provider);
@@ -287,6 +279,51 @@ impl ClosureState<'_> {
             },
         );
         Ok(())
+    }
+}
+
+fn select_catalog_provider<'a>(
+    catalog: &'a PackageSourceCatalog,
+    hole: &UnsatisfiedDirectDependency,
+) -> Result<&'a PackageSourceProvider, PackageClosureError> {
+    let named = catalog
+        .providers()
+        .iter()
+        .filter(|provider| package_identity(&provider.name) == package_identity(&hole.name))
+        .collect::<Vec<_>>();
+    if named.is_empty() {
+        return Err(PackageClosureError::MissingProvider {
+            name: hole.name.clone(),
+            version: format!(" ({})", hole.version_req),
+        });
+    }
+
+    let compatible = named
+        .iter()
+        .copied()
+        .filter(|provider| {
+            provider
+                .version
+                .as_deref()
+                .is_none_or(|version| matches_req(version, &hole.version_req))
+        })
+        .collect::<Vec<_>>();
+    match compatible.as_slice() {
+        [provider] => Ok(*provider),
+        [] => Err(PackageClosureError::IncompatibleProviderVersion {
+            name: hole.name.clone(),
+            provided: named
+                .iter()
+                .filter_map(|provider| provider.version.as_deref())
+                .collect::<Vec<_>>()
+                .join(", "),
+            required: hole.version_req.clone(),
+        }),
+        many => Err(PackageClosureError::AmbiguousProvider {
+            name: hole.name.clone(),
+            version: format!(" ({})", hole.version_req),
+            count: many.len(),
+        }),
     }
 }
 
@@ -406,25 +443,6 @@ fn companion_key(provider: &PackageSourceProvider) -> String {
     )
 }
 
-fn exact_version_hint(version_req: &str) -> Option<String> {
-    let trimmed = version_req.trim();
-    if let Some(rest) = trimmed.strip_prefix("==") {
-        let version = rest.trim();
-        if !version.is_empty() {
-            return Some(version.to_string());
-        }
-    }
-    // Bare pin without operator is normalized to == by the solve path; accept it too.
-    if !trimmed.is_empty()
-        && !trimmed.starts_with(['>', '<', '=', '!', '~'])
-        && !trimmed.contains(',')
-        && !trimmed.contains(':')
-    {
-        return Some(trimmed.to_string());
-    }
-    None
-}
-
 fn package_identity(name: &str) -> String {
     name.chars()
         .filter(|character| character.is_ascii_alphanumeric())
@@ -435,13 +453,6 @@ fn package_identity(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn exact_version_hint_parses_equality() {
-        assert_eq!(exact_version_hint("==1.2.3").as_deref(), Some("1.2.3"));
-        assert_eq!(exact_version_hint(">=1.0"), None);
-        assert_eq!(exact_version_hint(">=0"), None);
-    }
 
     #[test]
     fn package_identity_normalizes() {
