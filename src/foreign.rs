@@ -612,7 +612,7 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>) {
     let mut dates: HashMap<String, NaiveDate> = HashMap::new();
 
     let set_re = Regex::new(
-        r#"(?m)^[ \t]*\{%\s*set\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^\r\n]*?)\s*%\}[ \t]*(?:\r?\n|$)"#,
+        r#"(?m)^[ \t]*\{%\s*set\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^\r\n]*?)\s*%\}[ \t]*(?:#.*)?(?:\r?\n|$)"#,
     )
     .expect("set re");
     let mut unresolved_sets = Vec::new();
