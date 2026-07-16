@@ -157,6 +157,10 @@ pub struct ProfilePatch {
     pub default: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub versionsuffix: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub architecture: Option<String>,
     #[serde(default)]
     pub features: BTreeMap<String, bool>,
     #[serde(default)]
@@ -399,6 +403,8 @@ pub fn apply_package_layers(
                     name: patch.name.clone(),
                     default: false,
                     versionsuffix: Vec::new(),
+                    platform: None,
+                    architecture: None,
                     features: BTreeMap::new(),
                     parameters: BTreeMap::new(),
                     toolchain_options: BTreeMap::new(),
@@ -413,6 +419,12 @@ pub fn apply_package_layers(
             }
             if let Some(versionsuffix) = &patch.versionsuffix {
                 profile.versionsuffix = versionsuffix.clone();
+            }
+            if let Some(platform) = &patch.platform {
+                profile.platform = Some(platform.clone());
+            }
+            if let Some(architecture) = &patch.architecture {
+                profile.architecture = Some(architecture.clone());
             }
             profile.features.extend(patch.features.clone());
             profile.parameters.extend(patch.parameters.clone());

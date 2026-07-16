@@ -35,6 +35,8 @@ fn qmcpack_profiles() -> Vec<ProductProfile> {
             name: "default".into(),
             default: true,
             versionsuffix: Vec::new(),
+            platform: None,
+            architecture: None,
             features: common_features.clone(),
             parameters: BTreeMap::from([("build_type".into(), "Release".into())]),
             toolchain_options: common_toolchain.clone(),
@@ -51,6 +53,8 @@ fn qmcpack_profiles() -> Vec<ProductProfile> {
             name: "complex".into(),
             default: false,
             versionsuffix: vec!["-complex".into()],
+            platform: None,
+            architecture: None,
             features: common_features
                 .into_iter()
                 .map(|(name, enabled)| {
@@ -431,6 +435,8 @@ fn conda_target_directories_emit_rattler_compatible_source_staging() {
         name: "default".into(),
         default: true,
         versionsuffix: Vec::new(),
+        platform: None,
+        architecture: None,
         features: BTreeMap::new(),
         parameters: BTreeMap::new(),
         toolchain_options: BTreeMap::new(),

@@ -118,6 +118,11 @@ build policy, and independently installable profiles live in package config.
 Each profile emits one `.eb` file; MPI/OpenMP toolchain options alone do not
 require a suffix.
 
+Profiles can declare `platform` and `architecture` target context. Foreign
+selectors are evaluated against those values before dependency solving, so a
+target-specific dependency becomes a real Resolvo requirement instead of
+silently disappearing when planning runs on another host.
+
 The Spack adapter parses Python into an AST without importing the recipe. It
 statically evaluates literal data, bounded loops, formatting, and `when`
 scopes; unsupported runtime expressions become source-located residuals rather

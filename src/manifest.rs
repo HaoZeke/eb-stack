@@ -85,6 +85,8 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
         name: "default".into(),
         default: true,
         versionsuffix: Vec::new(),
+        platform: None,
+        architecture: None,
         features,
         parameters,
         toolchain_options: BTreeMap::new(),

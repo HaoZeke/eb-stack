@@ -170,6 +170,8 @@ name = "QMCPACK"
 [[profiles]]
 name = "default"
 default = true
+platform = "linux"
+architecture = "x86_64"
 versionsuffix = []
 config_options = ["-DQMC_MPI=ON", "-DQMC_OMP=ON", "-DQMC_COMPLEX=OFF"]
 
@@ -187,6 +189,12 @@ default = false
 versionsuffix = ["-complex"]
 config_options = ["-DQMC_MPI=ON", "-DQMC_OMP=ON", "-DQMC_COMPLEX=ON"]
 #+end_src
+
+~platform~ and ~architecture~ are target context for foreign selectors. Put a
+site-wide value such as ~platform = "linux"~ in a common package layer, then
+override it in a product profile only when that output targets a different
+environment. Resolvo sees dependencies only after selectors are materialized
+against this explicit context.
 
 Verification placeholders are ~{module}~, ~{package}~, ~{version}~,
 ~{profile}~, and ~{versionsuffix}~.

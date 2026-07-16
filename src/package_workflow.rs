@@ -573,6 +573,8 @@ fn package_plan_from_easyconfig(
         name: "default".into(),
         default: true,
         versionsuffix,
+        platform: None,
+        architecture: None,
         features: BTreeMap::new(),
         parameters: BTreeMap::new(),
         toolchain_options: BTreeMap::new(),

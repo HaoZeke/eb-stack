@@ -82,6 +82,8 @@ fn qmcpack_plan() -> PackagePlan {
             name: "default".into(),
             default: true,
             versionsuffix: Vec::new(),
+            platform: None,
+            architecture: None,
             features,
             parameters: BTreeMap::new(),
             toolchain_options: BTreeMap::from([("usempi".into(), true), ("openmp".into(), true)]),

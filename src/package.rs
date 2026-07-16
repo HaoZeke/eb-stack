@@ -572,6 +572,10 @@ pub struct ProductProfile {
     pub default: bool,
     #[serde(default)]
     pub versionsuffix: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub architecture: Option<String>,
     #[serde(default)]
     pub features: BTreeMap<String, bool>,
     #[serde(default)]
@@ -687,8 +691,14 @@ pub fn materialize_profile(
         dependency_features: environment.dependency_features.clone(),
         compiler: environment.compiler.clone(),
         toolchain: Some(plan.build.toolchain.clone()),
-        platform: environment.platform.clone(),
-        architecture: environment.architecture.clone(),
+        platform: environment
+            .platform
+            .clone()
+            .or_else(|| profile.platform.clone()),
+        architecture: environment
+            .architecture
+            .clone()
+            .or_else(|| profile.architecture.clone()),
         variables,
     };
     let dependencies = plan

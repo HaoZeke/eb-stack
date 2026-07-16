@@ -1,5 +1,11 @@
 schema_version = 1
 
+# EasyBuild targets are Linux systems. This context resolves foreign platform
+# selectors during manifest materialization; package layers can refine it.
+[[profiles]]
+name = "default"
+platform = "linux"
+
 # Cross-ecosystem names that cannot be derived by case and punctuation
 # normalization. Sites can layer another package config after this file.
 [dependencies]
