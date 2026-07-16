@@ -631,7 +631,7 @@ fn public_eon_policy_encodes_the_repaired_build_contract() {
     let preconfig = preconfig.concat.join("");
     for required in [
         "cargo cinstall --locked --release",
-        "RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER=",
+        "unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER",
         "readcon-stage",
         "EBROOTMETATENSORMINTORCH",
         "EBROOTMETATOMICMINTORCH",
@@ -642,7 +642,7 @@ fn public_eon_policy_encodes_the_repaired_build_contract() {
             "preconfigopts missing {required}"
         );
     }
-    assert!(!preconfig.contains("unset RUSTC_WRAPPER"));
+    assert!(!preconfig.contains("export RUSTC_WRAPPER="));
     assert!(matches!(
         build.easyconfig_parameters.get("postinstallcmds"),
         Some(EasyconfigValue::List(commands)) if commands.len() >= 4
