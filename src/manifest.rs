@@ -158,6 +158,8 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
                 .map(|filename| PatchArtifact {
                     filename: filename.clone(),
                     sha256: None,
+                    source: None,
+                    resolved_source: None,
                 })
                 .collect(),
             easyconfig_parameters: BTreeMap::new(),

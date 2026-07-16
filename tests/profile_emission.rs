@@ -304,6 +304,8 @@ fn patch_artifacts_emit_names_and_positional_checksums_after_sources() {
     plan.build.patches = vec![PatchArtifact {
         filename: "Orbit-2.0-portability.patch".into(),
         sha256: Some("4f43b42fdcf84d0cf634d993dd944f252c8243dc612a919fe2825d56f937c8eb".into()),
+        source: None,
+        resolved_source: None,
     }];
     let mut lock = profile_lock("default", "");
     lock.package.clone_from(&plan.package.name);

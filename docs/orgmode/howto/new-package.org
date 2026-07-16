@@ -140,11 +140,14 @@ patches:
 [[build.patches]]
 filename = "Orbit-2.0-portability.patch"
 sha256 = "4f43b42fdcf84d0cf634d993dd944f252c8243dc612a919fe2825d56f937c8eb"
+source = "patches/Orbit-2.0-portability.patch"
 #+end_src
 
 ~package inspect~ records a blocking ~patch:missing-sha256~ residual for an
 unchecked patch. ~package plan~ refuses to emit a buildable bundle until every
-source and patch checksum is present.
+source and patch checksum is present. Relative patch sources resolve against
+the package TOML file, and ~package plan~ copies verified patch bytes beside
+the emitted easyconfig.
 
 A QMCPACK profile set commonly contains a default MPI+OpenMP build and a
 separate ~-complex~ recipe:

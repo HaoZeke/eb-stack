@@ -185,6 +185,8 @@ versionsuffix = ["-kokkos"]
     plan.build.patches = vec![PatchArtifact {
         filename: "foreign-feedstock.patch".into(),
         sha256: None,
+        source: None,
+        resolved_source: None,
     }];
     apply_package_layers(&mut plan, &[config]).expect("apply package config");
 

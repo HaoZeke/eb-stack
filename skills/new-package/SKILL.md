@@ -61,10 +61,13 @@ Declare patches as checked artifacts:
 [[build.patches]]
 filename = "Package-1.0-portability.patch"
 sha256 = "4f43b42fdcf84d0cf634d993dd944f252c8243dc612a919fe2825d56f937c8eb"
+source = "patches/Package-1.0-portability.patch"
 ```
 
 `package plan` rejects missing or malformed patch checksums. Checksum order in
 the emitted easyconfig is all source artifacts followed by all patch artifacts.
+Relative sources resolve against the package TOML, and verified patch bytes are
+copied beside the emitted easyconfig.
 
 Create one product profile per independently installable variant. Each profile emits one `.eb` file.
 

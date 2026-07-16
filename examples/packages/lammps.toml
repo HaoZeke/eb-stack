@@ -20,14 +20,17 @@ moduleclass = "chem"
 [[build.patches]]
 filename = "LAMMPS-22Jul2025_install_lammps_python_package_in_eb_software_module.patch"
 sha256 = "0cab0fa4dc8b2c68b45cd9df4398b9c2c37d69dcd1dc054aacb44f78698a2c84"
+source = "patches/lammps/LAMMPS-22Jul2025_install_lammps_python_package_in_eb_software_module.patch"
 
 [[build.patches]]
 filename = "LAMMPS-2Aug2023_python_venv.patch"
 sha256 = "87fd13b0c66f0886877885412ff13dfd092782e2237ba1fae157f803437828d6"
+source = "patches/lammps/LAMMPS-2Aug2023_python_venv.patch"
 
 [[build.patches]]
 filename = "LAMMPS-22Jul2025_update4_DihedralStyle.patch"
 sha256 = "c265db38195f8830a36d5cde409d2ded1f8e9c47275eb29f0458e113d66f90f7"
+source = "patches/lammps/LAMMPS-22Jul2025_update4_DihedralStyle.patch"
 
 # Inputs implemented by the selected EasyBuild easyblock are typed data, not
 # Python snippets. Profile layers can override individual parameters.

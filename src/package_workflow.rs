@@ -17,7 +17,9 @@ use crate::package_config::{apply_package_layers, PackageConfigLayer};
 use crate::package_emit::{emit_profile_easyconfigs, EmittedEasyconfig};
 use crate::package_solve::{solve_package_profile, solve_package_profile_with_hierarchy};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -59,6 +61,7 @@ pub struct WrittenPackageBundle {
     pub sbom: PathBuf,
     pub locks: Vec<PathBuf>,
     pub easyconfigs: Vec<PathBuf>,
+    pub patches: Vec<PathBuf>,
 }
 
 pub fn inspect_new_package(
@@ -174,6 +177,7 @@ fn require_source_checksums(plan: &PackagePlan) -> Result<(), PackageWorkflowErr
     }
     for patch in &plan.build.patches {
         validate_patch_checksum(patch)?;
+        validate_patch_source(patch)?;
     }
     Ok(())
 }
@@ -182,7 +186,7 @@ fn refresh_checksum_residuals(plan: &mut PackagePlan) {
     plan.residuals.retain(|residual| {
         !matches!(
             residual.id.as_str(),
-            "source:missing-sha256" | "patch:missing-sha256"
+            "source:missing-sha256" | "patch:missing-sha256" | "patch:missing-source"
         )
     });
     if plan.sources.iter().any(|source| source.sha256.is_none()) {
@@ -214,6 +218,24 @@ fn refresh_checksum_residuals(plan: &mut PackagePlan) {
             provenance: None,
         });
     }
+    let missing_patch_sources = plan
+        .build
+        .patches
+        .iter()
+        .filter(|patch| patch.resolved_source.is_none() && patch.source.is_none())
+        .map(|patch| patch.filename.as_str())
+        .collect::<Vec<_>>();
+    if !missing_patch_sources.is_empty() {
+        plan.residuals.push(Residual {
+            id: "patch:missing-source".into(),
+            stage: ResidualStage::Normalize,
+            category: "patch-asset".into(),
+            severity: ResidualSeverity::Blocking,
+            summary: "one or more patch artifacts have no source file".into(),
+            evidence: Some(missing_patch_sources.join(", ")),
+            provenance: None,
+        });
+    }
 }
 
 fn validate_source_checksum(index: usize, checksum: &str) -> Result<(), PackageWorkflowError> {
@@ -235,6 +257,30 @@ fn validate_patch_checksum(patch: &PatchArtifact) -> Result<(), PackageWorkflowE
         });
     }
     Ok(())
+}
+
+fn validate_patch_source(patch: &PatchArtifact) -> Result<PathBuf, PackageWorkflowError> {
+    let source = patch
+        .resolved_source
+        .clone()
+        .or_else(|| patch.source.as_deref().map(PathBuf::from))
+        .ok_or_else(|| PackageWorkflowError::MissingPatchSource(patch.filename.clone()))?;
+    let bytes = std::fs::read(&source)
+        .map_err(|error| PackageWorkflowError::PatchIo(source.clone(), error))?;
+    let digest = Sha256::digest(&bytes);
+    let mut actual = String::with_capacity(64);
+    for byte in digest {
+        write!(&mut actual, "{byte:02x}").expect("writing a SHA-256 digest to String cannot fail");
+    }
+    let expected = patch.sha256.as_deref().unwrap_or_default();
+    if actual != expected {
+        return Err(PackageWorkflowError::PatchChecksumMismatch {
+            filename: patch.filename.clone(),
+            expected: expected.to_string(),
+            actual,
+        });
+    }
+    Ok(source)
 }
 
 pub fn plan_package_bump(
@@ -378,9 +424,18 @@ fn package_plan_from_easyconfig(
         .patch_names
         .iter()
         .enumerate()
-        .map(|(index, filename)| PatchArtifact {
-            filename: filename.clone(),
-            sha256: recipe.checksums.get(source_count + index).cloned(),
+        .map(|(index, filename)| {
+            let resolved_source = Path::new(&recipe.easyconfig_path)
+                .parent()
+                .map(|directory| directory.join(filename));
+            PatchArtifact {
+                filename: filename.clone(),
+                sha256: recipe.checksums.get(source_count + index).cloned(),
+                source: resolved_source
+                    .as_deref()
+                    .map(|source| source.display().to_string()),
+                resolved_source,
+            }
         })
         .collect();
     let profile = ProductProfile {
@@ -452,6 +507,7 @@ pub fn write_package_bundle(
     bundle: &PackageBundle,
     output_directory: &Path,
 ) -> Result<WrittenPackageBundle, PackageWorkflowError> {
+    require_source_checksums(&bundle.plan)?;
     std::fs::create_dir_all(output_directory)
         .map_err(|error| PackageWorkflowError::Io(output_directory.to_path_buf(), error))?;
     let manifest = output_directory.join("package.plan.json");
@@ -482,12 +538,21 @@ pub fn write_package_bundle(
             .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
         easyconfigs.push(path);
     }
+    let mut patches = Vec::new();
+    for patch in &bundle.plan.build.patches {
+        let source = validate_patch_source(patch)?;
+        let path = recipe_directory.join(&patch.filename);
+        std::fs::copy(&source, &path)
+            .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
+        patches.push(path);
+    }
 
     Ok(WrittenPackageBundle {
         manifest,
         sbom,
         locks,
         easyconfigs,
+        patches,
     })
 }
 
@@ -528,6 +593,16 @@ pub enum PackageWorkflowError {
         "patch checksum for {filename} must be exactly 64 hexadecimal characters, got {checksum:?}"
     )]
     InvalidPatchChecksum { filename: String, checksum: String },
+    #[error("patch {0} has no source asset")]
+    MissingPatchSource(String),
+    #[error("read patch source {0}: {1}")]
+    PatchIo(PathBuf, std::io::Error),
+    #[error("patch checksum mismatch for {filename}: expected {expected}, got {actual}")]
+    PatchChecksumMismatch {
+        filename: String,
+        expected: String,
+        actual: String,
+    },
     #[error("EasyBuild robot parse: {0}")]
     Robot(String),
     #[error("package profile solve: {0}")]

@@ -138,6 +138,7 @@ general_packages = ["ASPHERE", "KSPACE", "MOLECULE"]
 [[build.patches]]
 filename = "Orbit-2.0-portability.patch"
 sha256 = "4f43b42fdcf84d0cf634d993dd944f252c8243dc612a919fe2825d56f937c8eb"
+source = "patches/Orbit-2.0-portability.patch"
 
 [[dependencies.requirements]]
 name = "VTK"
@@ -147,7 +148,8 @@ roles = ["run"]
 Easyconfig parameters are typed data, not Python fragments. Requirements
 enter the canonical manifest and CycloneDX SBOM before Resolvo selects a
 version. Package planning requires every source and patch SHA-256; emitted
-checksums remain positional with sources first and patches second.
+checksums remain positional with sources first and patches second. Verified
+patch assets are copied beside every emitted recipe.
 
 ```sh
 eb-stack package plan \

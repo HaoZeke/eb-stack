@@ -155,7 +155,8 @@ pub struct ProfilePatch {
 
 impl PackageConfigLayer {
     pub fn from_toml_str(input: &str) -> Result<Self, PackageConfigError> {
-        let layer: Self = toml::from_str(input)?;
+        let mut layer: Self = toml::from_str(input)?;
+        layer.resolve_patch_sources(None);
         layer.validate()?;
         Ok(layer)
     }
@@ -163,7 +164,29 @@ impl PackageConfigLayer {
     pub fn from_path(path: &Path) -> Result<Self, PackageConfigError> {
         let input = std::fs::read_to_string(path)
             .map_err(|error| PackageConfigError::Io(path.display().to_string(), error))?;
-        Self::from_toml_str(&input)
+        let mut layer: Self = toml::from_str(&input)?;
+        layer.resolve_patch_sources(path.parent());
+        layer.validate()?;
+        Ok(layer)
+    }
+
+    fn resolve_patch_sources(&mut self, base_directory: Option<&Path>) {
+        let Some(patches) = self.build.as_mut().and_then(|build| build.patches.as_mut()) else {
+            return;
+        };
+        for patch in patches {
+            let Some(source) = patch.source.as_deref() else {
+                continue;
+            };
+            let source = Path::new(source);
+            patch.resolved_source = Some(if source.is_absolute() {
+                source.to_path_buf()
+            } else if let Some(base_directory) = base_directory {
+                base_directory.join(source)
+            } else {
+                source.to_path_buf()
+            });
+        }
     }
 
     fn validate(&self) -> Result<(), PackageConfigError> {
@@ -209,6 +232,18 @@ impl PackageConfigLayer {
         }
         if let Some(build) = &self.build {
             validate_easyconfig_parameter_names(&build.easyconfig_parameters)?;
+            if let Some(patches) = &build.patches {
+                for patch in patches {
+                    let path = Path::new(&patch.filename);
+                    if path.file_name().and_then(|name| name.to_str())
+                        != Some(patch.filename.as_str())
+                    {
+                        return Err(PackageConfigError::InvalidPatchFilename(
+                            patch.filename.clone(),
+                        ));
+                    }
+                }
+            }
         }
         for profile in &self.profiles {
             validate_easyconfig_parameter_names(&profile.easyconfig_parameters)?;
@@ -511,6 +546,8 @@ pub enum PackageConfigError {
     EmptyDependencyRequirement,
     #[error("dependency requirement {0} must have at least one role")]
     EmptyDependencyRoles(String),
+    #[error("patch filename must not contain a directory: {0:?}")]
+    InvalidPatchFilename(String),
     #[error("profile {profile} inherits missing profile {parent}")]
     MissingParent { profile: String, parent: String },
     #[error("package plan must contain exactly one default profile, found {0}")]

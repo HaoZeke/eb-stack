@@ -17,6 +17,7 @@ use cyclonedx_bom::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -491,6 +492,10 @@ pub struct PatchArtifact {
     pub filename: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip)]
+    pub resolved_source: Option<PathBuf>,
 }
 
 pub(crate) fn is_easyconfig_parameter_name(name: &str) -> bool {
