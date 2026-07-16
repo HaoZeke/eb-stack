@@ -37,6 +37,7 @@ pub enum BuildFindingClass {
     Transport,
     Executor,
     Runtime,
+    Source,
     Checksum,
     Patch,
     DependencyMissing,
@@ -580,6 +581,11 @@ pub fn classify_build_failure(
         || text.contains("checksum mismatch")
         || text.contains("checksums do not match")
         || text.contains("checksum failed");
+    let source_failure = text.contains("failed to download")
+        || text.contains("download failed")
+        || text.contains("unable to download")
+        || text.contains("could not download")
+        || text.contains("couldn't find file") && text.contains("downloading it didn't work");
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -607,6 +613,8 @@ pub fn classify_build_failure(
         BuildFindingClass::Runtime
     } else if checksum_failure {
         BuildFindingClass::Checksum
+    } else if source_failure {
+        BuildFindingClass::Source
     } else if patch_failure {
         BuildFindingClass::Patch
     } else if text.contains("no such file or directory")
