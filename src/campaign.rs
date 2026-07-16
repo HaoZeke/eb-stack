@@ -37,6 +37,7 @@ pub enum BuildFindingClass {
     Transport,
     Executor,
     Runtime,
+    Interrupted,
     Source,
     Checksum,
     Patch,
@@ -192,6 +193,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         }
     };
 
+    record_interrupted_attempt(&mut state, &request.state_path);
     state.attempts += 1;
     state.target = request.target.name.clone();
     state.status = CampaignStatus::Running;
@@ -481,6 +483,47 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
     });
     write_state(&request.state_path, &state)?;
     Ok(state)
+}
+
+fn record_interrupted_attempt(state: &mut CampaignState, state_path: &Path) {
+    if state.status != CampaignStatus::Running {
+        return;
+    }
+    let recipe = state.current_recipe.take().unwrap_or_default();
+    let attempt = state.attempts;
+    state.findings.push(BuildFinding {
+        id: format!(
+            "attempt:{attempt}:finding:{}",
+            state.findings.len() + 1
+        ),
+        class: BuildFindingClass::Interrupted,
+        disposition: FindingDisposition::Retryable,
+        stage: "campaign".into(),
+        recipe: recipe.clone(),
+        target: state.target.clone(),
+        summary: "campaign controller exited before recording a terminal state".into(),
+        evidence: "an exclusive campaign lock was acquired while the persisted state was running"
+            .into(),
+        command: CommandPlan {
+            program: "campaign-controller".into(),
+            args: vec![state_path.display().to_string()],
+        },
+        exit_code: None,
+        attempt,
+        status: FindingStatus::Superseded,
+        owner: None,
+        resolution: Some(FindingResolution {
+            action: "resumed campaign after controller interruption".into(),
+            evidence: "the new controller acquired the exclusive campaign lock".into(),
+            changes: Vec::new(),
+        }),
+    });
+    state.history.push(CampaignEvent {
+        attempt,
+        status: CampaignStatus::Failed,
+        recipe: (!recipe.is_empty()).then_some(recipe),
+        detail: "recorded interrupted campaign controller".into(),
+    });
 }
 
 pub fn claim_finding(
@@ -790,7 +833,9 @@ fn disposition(class: BuildFindingClass) -> FindingDisposition {
         BuildFindingClass::Transport | BuildFindingClass::Executor | BuildFindingClass::Runtime => {
             FindingDisposition::TargetRepair
         }
-        BuildFindingClass::Resource | BuildFindingClass::Timeout => FindingDisposition::Retryable,
+        BuildFindingClass::Interrupted
+        | BuildFindingClass::Resource
+        | BuildFindingClass::Timeout => FindingDisposition::Retryable,
         BuildFindingClass::Checksum => FindingDisposition::Mechanical,
         _ => FindingDisposition::RequiresJudgment,
     }
