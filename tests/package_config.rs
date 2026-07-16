@@ -242,9 +242,7 @@ sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     let mut plan = qmcpack_plan();
     plan.build.patches = vec![PatchArtifact {
         filename: "foreign-recipe.patch".into(),
-        sha256: Some(
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
-        ),
+        sha256: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
         source: Some("foreign-recipe.patch".into()),
         resolved_source: None,
     }];
