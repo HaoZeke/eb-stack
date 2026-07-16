@@ -1428,7 +1428,7 @@ pub fn candidate_matches_dep(c: &Candidate, dep: &ResolvedDep) -> bool {
 /// toolchain pin, only candidates whose toolchain is a member of `hierarchy`
 /// count (e.g. CapnProto on GCCcore-14.x does not satisfy foss-2026.1 which
 /// needs GCCcore-15.2.0). Explicit fourth-tuple pins still match exactly,
-/// including cross-generation residuals (`xtb`/gfbf-2024a).
+/// including explicitly selected cross-generation dependencies.
 pub fn candidate_matches_dep_for_recipe(
     c: &Candidate,
     dep: &ResolvedDep,
@@ -2377,9 +2377,8 @@ builddependencies = [
 
     #[test]
     fn checksum_lint_flags_patch_checksum_in_source_slot() {
-        // The eOn-2026.1 incident: the patch checksum inserted at position 1
-        // (a source slot). Counts match, so only positional key matching
-        // catches it before eb aborts a build with "Missing checksum for X".
+        // Counts match, so only positional key matching catches a patch
+        // checksum occupying a source slot before EasyBuild starts the build.
         let r = checksum_recipe(
             "[{'app-1.0.tar.gz': 'aa11'}, {'App-1.0_fix.patch': 'dd44'},\n \
              {'sub-2.0.tar.gz': 'bb22'}, {'core-3.0.tar.gz': 'cc33'}]",

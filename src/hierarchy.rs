@@ -840,10 +840,8 @@ mod tests {
 
     #[test]
     fn known_foss_2026_1_includes_required_levels() {
-        // foss-2026.1 is the landable target generation used across the eOn /
-        // QMCPACK fixtures and skills. It must be a known hierarchy so `plan`
-        // resolves dependency versions without a full easyconfigs robot that
-        // carries the foss-2026.1 toolchain-definition recipe.
+        // An embedded generation lets `plan` resolve dependency versions when
+        // the supplied robot lacks the matching toolchain-definition recipe.
         let h = known_hierarchy(&foss("2026.1")).expect("embedded foss-2026.1");
         let labels = h.member_labels();
         for need in [
