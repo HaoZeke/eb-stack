@@ -716,6 +716,42 @@ class Leaflib(Package):
     }
 
     #[test]
+    fn closure_index_reuses_candidates_for_covered_easybuild_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("robot");
+        write(&root.join("broken.eb"), "name =\n");
+        let candidate = Candidate {
+            name: "Reusable".into(),
+            version: "1.0".into(),
+            toolchain: Toolchain {
+                name: "foss".into(),
+                version: "2026.1".into(),
+            },
+            versionsuffix: None,
+            easyconfig_path: root
+                .join("Reusable-1.0-foss-2026.1.eb")
+                .display()
+                .to_string(),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+        };
+        let mut roots = PackageSourceRoots {
+            schema_version: 1,
+            source_roots: Vec::new(),
+        };
+        roots.push(SourceRootKind::EasyBuild, root.clone());
+        let index = PackageSourceIndex::build_with_easybuild_candidates(
+            &roots,
+            std::slice::from_ref(&candidate),
+            &[root],
+        )
+        .expect("covered root is not parsed twice");
+        assert_eq!(index.easybuild_candidates().len(), 1);
+        assert_eq!(index.easybuild_candidates()[0].name, candidate.name);
+    }
+
+    #[test]
     fn discovery_prefers_easybuild_over_foreign_for_same_identity() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
