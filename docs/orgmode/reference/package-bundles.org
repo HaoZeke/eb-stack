@@ -13,6 +13,7 @@ BUNDLE/
   package.sbom.cdx.json
   locks/<profile>.lock.json
   easyconfigs/<letter>/<name>/<recipe>.eb
+  easyconfigs/<letter>/<name>/<patch files>
 #+end_src
 
 ~package inspect~ writes only the plan and planned SBOM. ~package plan~ and
@@ -52,9 +53,15 @@ The build manifest stores patches as artifacts:
 #+begin_src json
 {
   "filename": "Orbit-2.0-portability.patch",
-  "sha256": "4f43b42fdcf84d0cf634d993dd944f252c8243dc612a919fe2825d56f937c8eb"
+  "sha256": "4f43b42fdcf84d0cf634d993dd944f252c8243dc612a919fe2825d56f937c8eb",
+  "source": "patches/Orbit-2.0-portability.patch"
 }
 #+end_src
+
+Relative patch sources resolve against the package-policy TOML. Planning
+verifies the declared SHA-256 before copying each patch beside every emitted
+recipe. The manifest retains the portable source path; machine-local resolved
+paths do not enter the bundle.
 
 ~easyconfig_parameters~ accepts strings, integers, booleans, lists, and
 tables. It cannot contain executable expressions. Build-level parameters are
@@ -144,8 +151,9 @@ outcome as a typed finding.
 
 Generated recipes follow the conventional EasyBuild hierarchy and syntax.
 Sources and checksums remain positional: all source checksums precede patch
-checksums. Robot overlays are searched in command-line order, with later paths
-overriding earlier identities.
+checksums. Verified patch files are copied into the recipe directory. Robot
+overlays are searched in command-line order, with later paths overriding
+earlier identities.
 
 A foreign VCS commit is immutable source identity but is not the SHA-256 of
 the downloaded archive. Supply one ~--source-checksum~ per source artifact when
