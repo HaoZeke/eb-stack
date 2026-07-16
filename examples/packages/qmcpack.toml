@@ -2,6 +2,34 @@ schema_version = 1
 
 [package]
 name = "QMCPACK"
+homepage = "https://qmcpack.org"
+description = "QMCPACK is an open-source quantum Monte Carlo simulation code."
+license = "NCSA"
+
+[build]
+easyblock = "CMakeNinja"
+build_systems = ["CMake", "Ninja"]
+moduleclass = "chem"
+
+[build.easyconfig_parameters]
+start_dir = "%(namelower)s-%(version)s"
+test_cmd = "ctest"
+testopts = "-j %(parallel)s --output-on-failure -E 'performance|long'"
+sanity_check_commands = [
+  "qmcpack --version 2>&1 | grep -q 'QMCPACK version'",
+]
+
+[build.easyconfig_parameters.sanity_check_paths]
+files = [
+  "bin/qmcpack",
+  "bin/convert4qmc",
+  "bin/ppconvert",
+  "bin/qmcpack.settings",
+]
+dirs = ["lib/nexus"]
+
+[build.easyconfig_parameters.modextrapaths]
+PYTHONPATH = "lib"
 
 [[profiles]]
 name = "default"
