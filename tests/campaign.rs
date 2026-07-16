@@ -44,6 +44,10 @@ fn failure_classifier_preserves_the_build_error_domain() {
             BuildFindingClass::Checksum,
         ),
         (
+            "Couldn't find file rustc-1.78.0-src.tar.gz anywhere, and downloading it didn't work either",
+            BuildFindingClass::Source,
+        ),
+        (
             "CMake Error at CMakeLists.txt:42",
             BuildFindingClass::Configure,
         ),
