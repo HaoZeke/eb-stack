@@ -60,6 +60,14 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         package_plan["inputSchema"]["properties"]["package_catalogs"]["type"],
         "array"
     );
+    assert_eq!(
+        package_plan["inputSchema"]["properties"]["package_sources"]["type"],
+        "array"
+    );
+    assert_eq!(
+        package_plan["inputSchema"]["properties"]["easybuild_sources"]["type"],
+        "array"
+    );
     assert!(
         package_plan["inputSchema"]["properties"]
             .get("profile_configs")

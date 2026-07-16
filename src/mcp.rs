@@ -12,8 +12,9 @@ use crate::eb_style::{format_style_file, lint_style};
 use crate::foreign::ForeignFormat;
 use crate::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
 use crate::package_catalog::{resolve_package_catalog_layers, PackageCatalogLayer};
-use crate::package_closure::{plan_package_closure, write_package_closure};
+use crate::package_closure::{plan_package_closure_with_sources, write_package_closure};
 use crate::package_config::PackageConfigLayer;
+use crate::package_sources::{PackageSourceRoots, SourceRootKind};
 use crate::package_workflow::{
     inspect_new_package, plan_new_package, plan_package_bump, write_package_bundle,
     BumpPackageRequest, NewPackageRequest, PackageBundle,
@@ -128,6 +129,10 @@ fn tool_catalog() -> Vec<Value> {
                 ("package_configs", "array"),
                 ("source_checksums", "array"),
                 ("package_catalogs", "array"),
+                ("package_sources", "array"),
+                ("easybuild_sources", "array"),
+                ("conda_sources", "array"),
+                ("spack_sources", "array"),
             ],
         ),
         tool(
@@ -300,7 +305,9 @@ fn package_plan(arguments: &Value) -> Result<Value, String> {
         .into_iter()
         .map(PathBuf::from)
         .collect::<Vec<_>>();
-    if catalog_paths.is_empty() {
+    let source_roots = load_package_source_roots(arguments)?;
+    let use_closure = !catalog_paths.is_empty() || !source_roots.source_roots.is_empty();
+    if !use_closure {
         let bundle = plan_new_package(&request).map_err(|error| error.to_string())?;
         let written = write_package_bundle(&bundle, &output).map_err(|error| error.to_string())?;
         return Ok(json!({
@@ -320,7 +327,8 @@ fn package_plan(arguments: &Value) -> Result<Value, String> {
         layers.push(PackageCatalogLayer::from_path(&path).map_err(|error| error.to_string())?);
     }
     let catalog = resolve_package_catalog_layers(&layers).map_err(|error| error.to_string())?;
-    let closure = plan_package_closure(&request, &catalog).map_err(|error| error.to_string())?;
+    let closure = plan_package_closure_with_sources(&request, &catalog, &source_roots)
+        .map_err(|error| error.to_string())?;
     let package = closure.root.plan.package.name.clone();
     let version = closure.root.plan.package.version.clone();
     let written = write_package_closure(&closure, &output).map_err(|error| error.to_string())?;
@@ -351,6 +359,28 @@ fn package_plan(arguments: &Value) -> Result<Value, String> {
         "build_order": written.build_order,
         "claims": {"resolves": true, "builds": false, "binary_verified": false}
     }))
+}
+
+fn load_package_source_roots(arguments: &Value) -> Result<PackageSourceRoots, String> {
+    let mut roots = PackageSourceRoots {
+        schema_version: 1,
+        source_roots: Vec::new(),
+    };
+    for path in string_array(arguments, "package_sources")? {
+        let layer =
+            PackageSourceRoots::from_path(Path::new(&path)).map_err(|error| error.to_string())?;
+        roots.extend_from(&layer);
+    }
+    for path in string_array(arguments, "easybuild_sources")? {
+        roots.push(SourceRootKind::EasyBuild, PathBuf::from(path));
+    }
+    for path in string_array(arguments, "conda_sources")? {
+        roots.push(SourceRootKind::CondaForge, PathBuf::from(path));
+    }
+    for path in string_array(arguments, "spack_sources")? {
+        roots.push(SourceRootKind::Spack, PathBuf::from(path));
+    }
+    Ok(roots)
 }
 
 fn package_bump(arguments: &Value) -> Result<Value, String> {

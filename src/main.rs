@@ -8,11 +8,12 @@ use eb_stack::campaign::{
 };
 use eb_stack::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
 use eb_stack::package_config::PackageConfigLayer;
+use eb_stack::package_sources::{PackageSourceRoots, SourceRootKind};
 use eb_stack::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use eb_stack::{
     check_recipe_deps, format_style, format_style_file, inspect_new_package, lint_style,
     load_json_file, lock_to_cyclonedx, packaging_gate, parse_easyconfig_trees, plan_new_package,
-    plan_package_bump, plan_package_closure, resolve_easyconfig_file,
+    plan_package_bump, plan_package_closure_with_sources, resolve_easyconfig_file,
     resolve_package_catalog_layers, solve_from_easyconfigs_with_baseline_version_and_extras,
     write_json_pretty, write_package_bundle, write_package_closure, BumpPackageRequest,
     ForeignFormat, NewPackageRequest, PackageBundle, PackageCatalogLayer, SolveExtraOut, StackLock,
@@ -102,11 +103,23 @@ struct PackagePlanArgs {
     source_checksums: Vec<String>,
     /// Optional package-source catalog layers for recursive robot-hole closure.
     ///
-    /// When present, plan a catalog-backed package closure and write one closed
-    /// bundle (root artifacts, companion packages, shared easyconfig overlay,
-    /// build-order, and aggregate SBOM). Argument order is layer order.
+    /// Explicit catalog entries are ordered overrides. Argument order is layer
+    /// order. Closure also activates when `--package-sources` or per-kind
+    /// source roots are configured.
     #[arg(long = "package-catalog", value_name = "CATALOG.toml")]
     package_catalogs: Vec<PathBuf>,
+    /// Optional package-neutral source-root TOML layers (EasyBuild / conda-forge / Spack).
+    #[arg(long = "package-sources", value_name = "SOURCES.toml")]
+    package_sources: Vec<PathBuf>,
+    /// Ordered EasyBuild easyconfig trees used to discover cross-generation recipes.
+    #[arg(long = "easybuild-source", value_name = "DIR")]
+    easybuild_sources: Vec<PathBuf>,
+    /// Ordered conda-forge recipe or feedstock trees for foreign discovery.
+    #[arg(long = "conda-source", value_name = "DIR")]
+    conda_sources: Vec<PathBuf>,
+    /// Ordered Spack package trees for foreign discovery.
+    #[arg(long = "spack-source", value_name = "DIR")]
+    spack_sources: Vec<PathBuf>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -307,6 +320,9 @@ fn run_package(command: PackageCommand) -> Result<()> {
                 &args.inspect.toolchain_version,
             );
             let stack_policy = load_stack_policy(&args.stack_policy)?;
+            let source_roots = load_package_source_roots(&args)?;
+            let use_closure =
+                !args.package_catalogs.is_empty() || !source_roots.source_roots.is_empty();
             let request = NewPackageRequest {
                 source: args.inspect.source,
                 format: parse_format(&args.inspect.format)?,
@@ -316,7 +332,7 @@ fn run_package(command: PackageCommand) -> Result<()> {
                 easyconfig_roots: args.easyconfigs,
                 stack_policy,
             };
-            if args.package_catalogs.is_empty() {
+            if !use_closure {
                 let bundle = plan_new_package(&request)?;
                 let written = write_package_bundle(&bundle, &args.inspect.out_dir)?;
                 println!("manifest={}", written.manifest.display());
@@ -342,7 +358,7 @@ fn run_package(command: PackageCommand) -> Result<()> {
             }
             let catalog = resolve_package_catalog_layers(&layers)
                 .context("resolve package-source catalog layers")?;
-            let closure = plan_package_closure(&request, &catalog)?;
+            let closure = plan_package_closure_with_sources(&request, &catalog, &source_roots)?;
             let written = write_package_closure(&closure, &args.inspect.out_dir)?;
             println!("closure_plan={}", written.closure_plan.display());
             println!("closure_sbom={}", written.closure_sbom.display());
@@ -624,6 +640,28 @@ fn run_campaign(command: CampaignCommand) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn load_package_source_roots(args: &PackagePlanArgs) -> Result<PackageSourceRoots> {
+    let mut roots = PackageSourceRoots {
+        schema_version: 1,
+        source_roots: Vec::new(),
+    };
+    for path in &args.package_sources {
+        let layer = PackageSourceRoots::from_path(path)
+            .with_context(|| format!("load package sources {}", path.display()))?;
+        roots.extend_from(&layer);
+    }
+    for path in &args.easybuild_sources {
+        roots.push(SourceRootKind::EasyBuild, path.clone());
+    }
+    for path in &args.conda_sources {
+        roots.push(SourceRootKind::CondaForge, path.clone());
+    }
+    for path in &args.spack_sources {
+        roots.push(SourceRootKind::Spack, path.clone());
+    }
+    Ok(roots)
 }
 
 fn parse_format(value: &str) -> Result<Option<ForeignFormat>> {
