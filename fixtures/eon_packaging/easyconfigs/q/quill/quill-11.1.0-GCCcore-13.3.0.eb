@@ -6,9 +6,7 @@ version = '11.1.0'
 homepage = 'https://github.com/odygrd/quill'
 description = """Quill is an asynchronous low-latency C++ logging library
 with compile-time format-string checks, minimal application-thread
-overhead, and structured logging support.
-
-Required by eOn's client (eonclient) for logging."""
+overhead, and structured logging support."""
 
 toolchain = {'name': 'GCCcore', 'version': '13.3.0'}
 toolchainopts = {'pic': True}
@@ -22,7 +20,7 @@ builddependencies = [
     ('CMake', '3.29.3'),
 ]
 
-# eOn only needs headers + CMake package config (header-only style install).
+# Install the public headers and CMake package configuration without optional targets.
 configopts = '-DQUILL_BUILD_EXAMPLES=OFF -DQUILL_BUILD_TESTS=OFF -DQUILL_BUILD_BENCHMARKS=OFF -DQUILL_ENABLE_INSTALL=ON'
 
 sanity_check_paths = {

@@ -1,15 +1,9 @@
-# Companion: Rust 1.88.0 on GCCcore-13.3.0 (foss-2024a).
-# Upstream easyconfigs only ship Rust-1.88.0 on GCCcore-14.3.0+; eOn/readcon-core
-# v0.13.1 requires rust-version = 1.88 (meson enforces >= 1.88.0). Adapted from
-# Rust-1.86.0-GCCcore-13.3.0.eb + Rust-1.88.0 sources.
 name = 'Rust'
 version = '1.88.0'
 
 homepage = 'https://www.rust-lang.org'
 description = """Rust is a systems programming language that runs blazingly fast, prevents segfaults,
- and guarantees thread safety.
-
-Companion pin for eOn 2.16.0 / readcon-core 0.13.1 on foss-2024a (GCCcore-13.3.0)."""
+ and guarantees thread safety."""
 
 toolchain = {'name': 'GCCcore', 'version': '13.3.0'}
 

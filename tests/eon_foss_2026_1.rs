@@ -1,4 +1,4 @@
-//! eOn 2.16.0 on foss-2026.1: landable PR recipe set under fixtures/eon_foss_2026_1.
+//! eOn 2.16.0 on foss-2026.1 regression recipes under fixtures/eon_foss_2026_1.
 //!
 //! Distinct from fixtures/eon_packaging (foss-2024a site/feedstock parity).
 //! Drive the real shipped parse, resolve, and recipe-check path.
@@ -17,7 +17,7 @@ fn drafts() -> PathBuf {
 }
 
 #[test]
-fn resolve_eon_landable_foss_2026_1() {
+fn resolve_eon_foss_2026_1_fixture() {
     let p = drafts().join("e/eOn/eOn-2.16.0-foss-2026.1.eb");
     let r = resolve_easyconfig_file(&p).expect("resolve eOn foss-2026.1");
     assert_eq!(r.name, "eOn");
@@ -236,7 +236,7 @@ fn eon_2026_1_check_recipe_drafts_plus_robot() {
     );
     assert!(
         check.ok(),
-        "landable eOn foss-2026.1 must resolve with drafts+robot: missing={:?}",
+        "eOn foss-2026.1 fixture must resolve with overlay and robot: missing={:?}",
         check.missing
     );
     assert!(check.found.iter().any(|f| f.contains("metatomic-torch")));
@@ -250,7 +250,7 @@ fn eon_2024a_and_2026_1_fixtures_coexist() {
         .join("fixtures/eon_packaging/easyconfigs/e/eOn/eOn-2.16.0-foss-2024a.eb");
     let a26 = drafts().join("e/eOn/eOn-2.16.0-foss-2026.1.eb");
     assert!(a24.is_file(), "2024a site-parity fixture missing");
-    assert!(a26.is_file(), "2026.1 landable fixture missing");
+    assert!(a26.is_file(), "2026.1 regression fixture missing");
     let r24 = resolve_easyconfig_file(&a24).unwrap();
     let r26 = resolve_easyconfig_file(&a26).unwrap();
     assert_eq!(r24.toolchain.version, "2024a");

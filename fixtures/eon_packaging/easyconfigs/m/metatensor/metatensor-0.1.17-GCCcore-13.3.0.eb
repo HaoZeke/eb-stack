@@ -1,5 +1,3 @@
-# Companion: metatensor-core C library for eOn / metatensor-torch.
-# Not yet in easybuild-easyconfigs; lives under eOn overlay robot path.
 easyblock = 'CMakeMake'
 
 name = 'metatensor'

@@ -166,7 +166,7 @@ eb-stack package plan \
 ```
 
 The shipped eOn stack policy carries its reviewed cross-generation PyTorch,
-xtb, Eigen, and Meson identities as `preferred` pins. Resolvo admits those
+xtb, and Eigen identities as `preferred` pins. Resolvo admits those
 artifact closures and records either the selected identity or a compatible
 fallback. The generic `foss-2026.1.toml` template remains unpinned for other
 packages.
