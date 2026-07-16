@@ -498,7 +498,7 @@ enum PreparedCompanion {
         sbom: Value,
     },
     Bump {
-        plan: PackagePlan,
+        plan: Box<PackagePlan>,
         request: BumpPackageRequest,
         stack_policy: StackPolicy,
     },
@@ -507,7 +507,8 @@ enum PreparedCompanion {
 impl PreparedCompanion {
     fn plan(&self) -> &PackagePlan {
         match self {
-            Self::Foreign { plan, .. } | Self::Bump { plan, .. } => plan,
+            Self::Foreign { plan, .. } => plan,
+            Self::Bump { plan, .. } => plan.as_ref(),
         }
     }
 }
@@ -561,9 +562,8 @@ impl ClosureState<'_> {
                 plan,
                 request,
                 stack_policy: bump_policy,
-            } => {
-                complete_package_bump(&request, plan, &candidates, &bump_policy).map_err(Into::into)
-            }
+            } => complete_package_bump(&request, *plan, &candidates, &bump_policy)
+                .map_err(Into::into),
         }
     }
 
@@ -764,7 +764,7 @@ impl ClosureState<'_> {
         providers
             .iter()
             .find(|provider| {
-                provider.source == PathBuf::from(&selected.easyconfig_path)
+                provider.source.as_path() == Path::new(&selected.easyconfig_path)
                     && provider.version.as_deref() == Some(selected.version.as_str())
             })
             .cloned()
@@ -809,7 +809,7 @@ fn prepare_companion_from_provider(
             );
             Ok((
                 PreparedCompanion::Bump {
-                    plan,
+                    plan: Box::new(plan),
                     request: bump_request,
                     stack_policy: policy.clone(),
                 },
