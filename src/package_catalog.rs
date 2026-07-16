@@ -33,6 +33,7 @@ pub enum CatalogProviderKind {
     #[default]
     Foreign,
     /// Retarget an existing EasyBuild recipe through the annual-bump pipeline.
+    #[serde(rename = "easybuild-bump")]
     EasyBuildBump,
 }
 
