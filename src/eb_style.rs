@@ -84,6 +84,8 @@ pub fn line_is_mechanically_fixable(line: &str) -> bool {
         return true;
     }
     parse_string_assignment(line).is_some()
+        || parse_dictionary_string_list(line).is_some()
+        || parse_list_string_item(line).is_some()
 }
 
 /// Rewrite fixable long lines; leave other long lines intact (still reported).
@@ -157,11 +159,83 @@ fn try_format_line(line: &str) -> Option<Vec<String>> {
     if let Some(asg) = parse_string_assignment(line) {
         return Some(format_string_assignment(&asg));
     }
+    if let Some(field) = parse_dictionary_string_list(line) {
+        return Some(format_dictionary_string_list(&field));
+    }
     // List / tuple element: `    'long…',` or `    "long…",`
     if let Some(item) = parse_list_string_item(line) {
         return Some(format_list_string_item(&item));
     }
     None
+}
+
+#[derive(Debug)]
+struct DictionaryStringList<'a> {
+    indent: &'a str,
+    key_quote: char,
+    key: &'a str,
+    value_quote: char,
+    value: &'a str,
+    trailing_comma: bool,
+}
+
+fn parse_dictionary_string_list(line: &str) -> Option<DictionaryStringList<'_>> {
+    let indent_len = line.len() - line.trim_start().len();
+    let indent = &line[..indent_len];
+    let rest = line[indent_len..].trim_end();
+    let trailing_comma = rest.ends_with(',');
+    let rest = rest.strip_suffix(',').unwrap_or(rest).trim_end();
+    let key_quote = rest.chars().next()?;
+    if key_quote != '\'' && key_quote != '"' {
+        return None;
+    }
+    let key_body = &rest[key_quote.len_utf8()..];
+    let key_end = key_body.find(key_quote)?;
+    let key = &key_body[..key_end];
+    if key.contains(key_quote) {
+        return None;
+    }
+    let after_key = key_body[key_end + key_quote.len_utf8()..].trim_start();
+    let list = after_key.strip_prefix(':')?.trim_start();
+    let list = list.strip_prefix('[')?.strip_suffix(']')?.trim();
+    let value_quote = list.chars().next()?;
+    if value_quote != '\'' && value_quote != '"' || !list.ends_with(value_quote) {
+        return None;
+    }
+    let value = &list[value_quote.len_utf8()..list.len() - value_quote.len_utf8()];
+    if value.contains(value_quote) || value.contains('\n') {
+        return None;
+    }
+    Some(DictionaryStringList {
+        indent,
+        key_quote,
+        key,
+        value_quote,
+        value,
+        trailing_comma,
+    })
+}
+
+fn format_dictionary_string_list(field: &DictionaryStringList<'_>) -> Vec<String> {
+    let mut lines = vec![format!(
+        "{}{quote}{}{quote}: [",
+        field.indent,
+        field.key,
+        quote = field.key_quote
+    )];
+    let item_indent = format!("{}    ", field.indent);
+    lines.extend(format_list_string_item(&ListStringItem {
+        indent: &item_indent,
+        quote: field.value_quote,
+        content: field.value,
+        trailing_comma: true,
+    }));
+    lines.push(format!(
+        "{}]{}",
+        field.indent,
+        if field.trailing_comma { "," } else { "" }
+    ));
+    lines
 }
 
 #[derive(Debug)]
