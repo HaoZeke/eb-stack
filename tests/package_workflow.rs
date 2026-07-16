@@ -1,9 +1,10 @@
 use eb_stack::package::{StackPin, StackPinMode, StackPolicy, STACK_POLICY_SCHEMA_VERSION};
 use eb_stack::package_config::PackageConfigLayer;
 use eb_stack::{
-    plan_new_package, resolve_easyconfig_file, write_package_bundle, ForeignFormat,
-    NewPackageRequest, Toolchain,
+    inspect_new_package, plan_new_package, resolve_easyconfig_file, write_package_bundle,
+    ForeignFormat, NewPackageRequest, Toolchain,
 };
+use sha2::{Digest, Sha256};
 
 fn toolchain() -> Toolchain {
     Toolchain {
@@ -189,4 +190,47 @@ config_options = ["-Dwith_cli=true"]
         .configopts
         .as_deref()
         .is_some_and(|options| options.contains("-Dwith_cli=true")));
+}
+
+#[test]
+fn foreign_recipe_local_patches_are_hashed_and_resolved() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let recipe_dir = temp.path().join("recipe");
+    let patch = recipe_dir.join("patches/fix.patch");
+    std::fs::create_dir_all(patch.parent().expect("patch parent")).expect("patch directory");
+    let patch_bytes = b"authoritative patch bytes\n";
+    std::fs::write(&patch, patch_bytes).expect("write patch");
+    let source = recipe_dir.join("meta.yaml");
+    std::fs::write(
+        &source,
+        r#"package:
+  name: patch-fixture
+  version: "1.0"
+source:
+  url: https://example.invalid/patch-fixture-1.0.tar.gz
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  patches:
+    - patches/fix.patch
+"#,
+    )
+    .expect("write recipe");
+
+    let (plan, _) =
+        inspect_new_package(&source, Some(ForeignFormat::CondaForge), &toolchain(), &[])
+            .expect("inspect recipe with a local patch");
+
+    let artifact = plan.build.patches.first().expect("patch artifact");
+    assert_eq!(artifact.filename, "fix.patch");
+    assert_eq!(artifact.source.as_deref(), Some("patches/fix.patch"));
+    assert_eq!(artifact.resolved_source.as_deref(), Some(patch.as_path()));
+    assert_eq!(
+        artifact.sha256,
+        Some(format!("{:x}", Sha256::digest(patch_bytes)))
+    );
+    assert!(!plan.residuals.iter().any(|residual| {
+        matches!(
+            residual.id.as_str(),
+            "patch:missing-sha256" | "patch:missing-source"
+        )
+    }));
 }
