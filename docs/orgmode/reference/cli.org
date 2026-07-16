@@ -54,6 +54,9 @@ eb-stack package plan \
 
 Package configs apply in argument order; later metadata, build policy, aliases,
 and profile values override earlier layers. Later robot paths override earlier paths for the same EasyBuild identity.
+~build.patches~ replaces the existing patch list by default. Set
+~patches_mode = "merge"~ in the layer's ~[build]~ table to retain foreign or
+preceding patches while adding or refining artifacts by filename.
 Each requested product profile is solved independently and emits one lock plus
 one conventional ~.eb~ file. The default profile has no suffix; non-default
 profiles use their declared ~versionsuffix~.

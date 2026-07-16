@@ -137,11 +137,20 @@ reviewed SHA-256. EasyBuild checksum order is all sources followed by all
 patches:
 
 #+begin_src toml
+[build]
+patches_mode = "merge"
+
 [[build.patches]]
 filename = "Orbit-2.0-portability.patch"
 sha256 = "4f43b42fdcf84d0cf634d993dd944f252c8243dc612a919fe2825d56f937c8eb"
 source = "patches/Orbit-2.0-portability.patch"
 #+end_src
+
+A layer that declares ~build.patches~ replaces the preceding list unless it
+sets ~patches_mode = "merge"~. Merge mode preserves foreign recipe patches,
+adds new filenames, and replaces an existing artifact when the layer supplies
+the same filename. This lets reviewed EasyBuild metadata refine a foreign
+patch without duplicating it.
 
 ~package inspect~ records a blocking ~patch:missing-sha256~ residual for an
 unchecked patch. ~package plan~ refuses to emit a buildable bundle until every

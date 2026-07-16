@@ -54,10 +54,26 @@ pub struct BuildPatch {
     pub config_options: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moduleclass: Option<String>,
+    #[serde(default)]
+    pub patches_mode: PatchMergeMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub patches: Option<Vec<PatchArtifact>>,
     #[serde(default)]
     pub easyconfig_parameters: BTreeMap<String, EasyconfigValue>,
+}
+
+/// How a package layer combines its patches with artifacts extracted from the
+/// source recipe or preceding configuration layers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum PatchMergeMode {
+    /// The layer owns the complete patch list, including an explicitly empty
+    /// list used to clear source-recipe patches.
+    #[default]
+    Replace,
+    /// Preserve existing patches, append new filenames, and replace an
+    /// existing artifact when the layer supplies the same filename.
+    Merge,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -313,7 +329,23 @@ pub fn apply_package_layers(
                 plan.build.moduleclass = Some(moduleclass.clone());
             }
             if let Some(patches) = &build.patches {
-                plan.build.patches = patches.clone();
+                match build.patches_mode {
+                    PatchMergeMode::Replace => plan.build.patches = patches.clone(),
+                    PatchMergeMode::Merge => {
+                        for patch in patches {
+                            if let Some(existing) = plan
+                                .build
+                                .patches
+                                .iter_mut()
+                                .find(|existing| existing.filename == patch.filename)
+                            {
+                                *existing = patch.clone();
+                            } else {
+                                plan.build.patches.push(patch.clone());
+                            }
+                        }
+                    }
+                }
             }
             plan.build
                 .easyconfig_parameters

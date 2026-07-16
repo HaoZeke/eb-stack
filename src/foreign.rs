@@ -151,7 +151,8 @@ pub struct ForeignRecipe {
     /// Mechanically extracted configure flags (e.g. Spack meson_args / cmake_args literals).
     #[serde(default)]
     pub configopts: Option<String>,
-    /// Patch filenames / URLs recorded from foreign recipe (not applied).
+    /// Patch filenames / URLs recorded from the foreign recipe for canonical
+    /// planning and bundle materialization.
     #[serde(default)]
     pub patches: Vec<String>,
     /// Spack variants (and residual conda features when recorded).

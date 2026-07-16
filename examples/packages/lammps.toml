@@ -11,6 +11,7 @@ atomic, mesoscopic, and continuum systems."""
 [build]
 easyblock = "auto"
 build_systems = ["CMake"]
+patches_mode = "merge"
 config_options = [
   "-DCMAKE_CXX_STANDARD=17",
   "-DCMAKE_CXX_STANDARD_REQUIRED=on",

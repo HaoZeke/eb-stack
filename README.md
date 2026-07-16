@@ -145,6 +145,12 @@ name = "VTK"
 roles = ["run"]
 ```
 
+By default, a layer that declares `build.patches` replaces the preceding patch
+list. Set `patches_mode = "merge"` in `[build]` to preserve patches extracted
+from conda-forge or Spack while adding EasyBuild policy patches. A merged entry
+with the same filename replaces that artifact, so a reviewed checksum and
+source path can refine foreign metadata without creating a duplicate.
+
 Easyconfig parameters are typed data, not Python fragments. Requirements
 enter the canonical manifest and CycloneDX SBOM before Resolvo selects a
 version. Package planning requires every source and patch SHA-256; emitted
