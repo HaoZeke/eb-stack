@@ -47,7 +47,10 @@ parity between the library and ~eb-stack package bump~ CLI paths.
 Run the public regression:
 
 #+begin_src bash
-cargo test --locked +  --test reproduce_real_prs +  --test bump_emit +  -- --nocapture
+cargo test --locked \
+  --test reproduce_real_prs \
+  --test bump_emit \
+  -- --nocapture
 #+end_src
 
 This is a fixed regression matrix, not a success-rate estimate for arbitrary
@@ -68,7 +71,14 @@ The conda-forge eOn and Spack QMCPACK fixtures exercise a different boundary:
 Run those deterministic suites:
 
 #+begin_src bash
-cargo test --locked +  --test foreign_ingest +  --test foreign_conditions +  --test profile_emission +  --test eon_foss_2026_1 +  --test qmcpack_foss_2026_1 +  --test eon_packaging +  -- --nocapture
+cargo test --locked \
+  --test foreign_ingest \
+  --test foreign_conditions \
+  --test profile_emission \
+  --test eon_foss_2026_1 \
+  --test qmcpack_foss_2026_1 \
+  --test eon_packaging \
+  -- --nocapture
 #+end_src
 
 These tests establish parser, solver, and emitter behavior. They do not replace
@@ -82,7 +92,8 @@ least 90% restricted-DSL coverage, and exercises canonical GROMACS, numba, and
 nglview bumps against that live candidate universe:
 
 #+begin_src bash
-EB_EASYCONFIGS=/path/to/easybuild-easyconfigs/easybuild/easyconfigs +  cargo test --locked --test real_tree_scale -- --nocapture
+EB_EASYCONFIGS=/path/to/easybuild-easyconfigs/easybuild/easyconfigs \
+  cargo test --locked --test real_tree_scale -- --nocapture
 #+end_src
 
 Files outside the restricted EasyBuild DSL are reported as skipped paths with

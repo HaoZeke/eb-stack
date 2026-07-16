@@ -1,6 +1,4 @@
-# Companion Meson for the cross-generation eOn stack selection.
-# eOn 2.16.0 requires Meson >= 1.8.0; the complete artifact identity is a
-# preferred Resolvo pin because the target-generation hierarchy lacks it.
+# Cross-generation Meson compatibility fixture.
 easyblock = 'PythonPackage'
 
 name = 'Meson'

@@ -168,12 +168,12 @@ jobs:
             echo "expected recipe check to fail without robot deps" >&2
             exit 1
           fi
-      - name: recipe packaging gate on eOn landable fixture
+      - name: recipe packaging gate on eOn regression fixture
         run: |
           set -euo pipefail
           BIN=./target/release/eb-stack
           # Drafts alone leave stack deps missing; exit non-zero is correct.
-          # Still exercises parse + packaging_gate on the landable recipe.
+          # Still exercises parse + packaging_gate on the regression recipe.
           if "$BIN" recipe check \
             --recipe fixtures/eon_foss_2026_1/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb \
             --easyconfigs fixtures/eon_foss_2026_1/easyconfigs \
