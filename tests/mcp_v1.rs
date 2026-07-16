@@ -118,3 +118,96 @@ tmp_root = "/tmp"
     assert_eq!(body["target"], "local-doctor");
     assert_eq!(body["ok"], true);
 }
+
+#[test]
+fn mcp_package_plan_writes_the_same_catalog_backed_closure_as_the_cli() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("alpha.yaml");
+    let companion = temp.path().join("bravo.yaml");
+    let catalog = temp.path().join("catalog.toml");
+    let stack = temp.path().join("stack.toml");
+    let robot = temp.path().join("robot");
+    let output = temp.path().join("output");
+    std::fs::create_dir(&robot).expect("robot");
+    std::fs::write(
+        &root,
+        r#"
+package:
+  name: alpha
+  version: "1.0"
+source:
+  url: https://example.invalid/alpha-1.0.tar.gz
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+requirements:
+  host:
+    - bravo >=1.0
+"#,
+    )
+    .expect("root recipe");
+    std::fs::write(
+        &companion,
+        r#"
+package:
+  name: bravo
+  version: "1.5"
+source:
+  url: https://example.invalid/bravo-1.5.tar.gz
+  sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+"#,
+    )
+    .expect("companion recipe");
+    std::fs::write(
+        &catalog,
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "bravo"
+version = "1.5"
+source = "bravo.yaml"
+format = "conda-forge"
+toolchain = { name = "foss", version = "2026.1" }
+"#,
+    )
+    .expect("catalog");
+    std::fs::write(
+        &stack,
+        r#"
+schema_version = 1
+name = "site"
+[toolchain]
+name = "foss"
+version = "2026.1"
+"#,
+    )
+    .expect("stack");
+
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_package_plan",
+            "arguments": {
+                "source": root,
+                "format": "conda-forge",
+                "toolchain_name": "foss",
+                "toolchain_version": "2026.1",
+                "easyconfigs": [robot],
+                "stack_policy": stack,
+                "package_catalogs": [catalog],
+                "out_dir": output
+            }
+        }
+    }))
+    .expect("package plan response");
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let body = &response["result"]["structuredContent"];
+    assert!(body["closure_plan"].as_str().is_some(), "{body}");
+    assert!(body["closure_sbom"].as_str().is_some(), "{body}");
+    assert!(body["build_order"].as_str().is_some(), "{body}");
+    assert_eq!(body["companions"].as_array().map(Vec::len), Some(1));
+    assert!(output.join("closure.plan.json").is_file());
+    assert!(output.join("closure.sbom.cdx.json").is_file());
+    assert!(output.join("build-order.json").is_file());
+}
