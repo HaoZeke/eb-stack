@@ -706,6 +706,23 @@ mod tests {
     }
 
     #[test]
+    fn format_list_item_with_escaped_delimiter() {
+        let long = "    'command --expression \\\'value with spaces\\\' --input %(builddir)s/a/very/long/path/to/an/input/artifact --output %(installdir)s/a/very/long/path/to/an/output/artifact',\n";
+        assert!(long.lines().next().unwrap().chars().count() > EB_MAX_LINE);
+        assert!(line_is_mechanically_fixable(long.trim_end()));
+
+        let result = format_style(long);
+
+        assert!(result.remaining.is_empty(), "{:?}", result.remaining);
+        assert!(result.text.contains("\\\'value with spaces\\\'"));
+        assert!(result.text.contains(" + "));
+        assert!(result
+            .text
+            .lines()
+            .all(|line| line.chars().count() <= EB_MAX_LINE));
+    }
+
+    #[test]
     fn format_dictionary_single_string_list() {
         let url = format!(
             "https://example.invalid/releases/{}/",
