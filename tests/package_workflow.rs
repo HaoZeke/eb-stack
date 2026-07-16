@@ -5,6 +5,7 @@ use eb_stack::{
     ForeignFormat, NewPackageRequest, Toolchain,
 };
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 
 fn toolchain() -> Toolchain {
     Toolchain {
@@ -220,13 +221,17 @@ source:
             .expect("inspect recipe with a local patch");
 
     let artifact = plan.build.patches.first().expect("patch artifact");
+    let expected_sha256 =
+        Sha256::digest(patch_bytes)
+            .iter()
+            .fold(String::new(), |mut output, byte| {
+                write!(&mut output, "{byte:02x}").expect("format digest");
+                output
+            });
     assert_eq!(artifact.filename, "fix.patch");
     assert_eq!(artifact.source.as_deref(), Some("patches/fix.patch"));
     assert_eq!(artifact.resolved_source.as_deref(), Some(patch.as_path()));
-    assert_eq!(
-        artifact.sha256,
-        Some(format!("{:x}", Sha256::digest(patch_bytes)))
-    );
+    assert_eq!(artifact.sha256.as_deref(), Some(expected_sha256.as_str()));
     assert!(!plan.residuals.iter().any(|residual| {
         matches!(
             residual.id.as_str(),
