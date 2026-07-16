@@ -84,6 +84,41 @@ cargo test --locked \
 These tests establish parser, solver, and emitter behavior. They do not replace
 ~campaign run~ on the selected EasyBuild target.
 
+* Cross-source LAMMPS control
+
+LAMMPS is a cross-source control for the generic foreign-package path. The
+conda-forge and Spack fixtures describe the same upstream product through
+different recipe languages. The conda fixture exercises multiple sources,
+feedstock patches, selectors, and build/output dependency roles; the Spack
+fixture exercises version URL generation, resources, variants, conflicts, and
+conditional dependencies.
+
+Both inputs pass through the same parser-neutral package plan, selector
+materialization, Resolvo selection, CycloneDX emission, closure expansion, and
+EasyBuild renderer used by other packages. Production parser code does not
+dispatch on the LAMMPS package name. ~examples/packages/lammps.toml~ is public,
+authored EasyBuild product policy: it records easyblock parameters, package
+features, verification commands, and reviewed patches in data rather than
+embedding those decisions in a parser.
+
+The generated conda closure includes source-only dependencies such as ~mlip~
+and ~n2p2~ when their Linux selectors apply. Feedstock patches survive package
+policy through ~patches_mode = "merge"~, and same-filename policy entries may
+replace their metadata without duplicating an artifact. Recipe checks over the
+root and generated companions establish the *resolves* rung. They deliberately
+make no *builds* or *binary-verified* claim without a target campaign.
+
+Run the cross-source parser and profile regressions:
+
+#+begin_src bash
+cargo test --locked \
+  --test foreign_ingest \
+  --test foreign_conditions \
+  --test package_config \
+  --test profile_emission \
+  -- --nocapture
+#+end_src
+
 * Real-tree parser scale
 
 ~tests/real_tree_scale.rs~ walks an unfiltered EasyBuild checkout when
