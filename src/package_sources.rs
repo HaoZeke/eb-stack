@@ -14,6 +14,7 @@ use crate::package_catalog::{CatalogProviderKind, PackageSourceProvider};
 use crate::package_solve::UnsatisfiedDirectDependency;
 use crate::version::{cmp_version, matches_req};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -94,6 +95,7 @@ pub struct DiscoveredCandidate {
 #[derive(Debug, Clone, Default)]
 pub struct PackageSourceIndex {
     easybuild: Vec<DiscoveredCandidate>,
+    easybuild_solver: Vec<Candidate>,
     foreign: Vec<DiscoveredCandidate>,
 }
 
@@ -237,12 +239,9 @@ impl PackageSourceIndex {
         covered_easybuild_roots: &[PathBuf],
     ) -> Result<Self, PackageSourceError> {
         let mut index = Self::default();
-        index.easybuild.extend(
-            easybuild_candidates
-                .iter()
-                .cloned()
-                .map(discovered_from_eb_candidate),
-        );
+        for candidate in easybuild_candidates {
+            index.push_easybuild_candidate(candidate.clone());
+        }
         for root in &roots.source_roots {
             match root.kind {
                 SourceRootKind::EasyBuild
@@ -265,6 +264,45 @@ impl PackageSourceIndex {
         &self.foreign
     }
 
+    pub(crate) fn retargeted_candidates_for_providers(
+        &self,
+        providers: &[PackageSourceProvider],
+        target_parent: &Toolchain,
+        hierarchy: Option<&ToolchainHierarchy>,
+    ) -> Vec<Candidate> {
+        let paths = providers
+            .iter()
+            .filter(|provider| provider.provider == CatalogProviderKind::EasyBuildBump)
+            .map(|provider| provider.source.clone())
+            .collect::<HashSet<_>>();
+        self.easybuild_solver
+            .iter()
+            .filter(|candidate| paths.contains(Path::new(&candidate.easyconfig_path)))
+            .cloned()
+            .map(|mut candidate| {
+                candidate.toolchain = map_source_toolchain_to_target(
+                    Some(&candidate.toolchain),
+                    target_parent,
+                    hierarchy,
+                );
+                for dependency in candidate
+                    .dependencies
+                    .iter_mut()
+                    .chain(candidate.builddependencies.iter_mut())
+                {
+                    if let Some(toolchain) = dependency.toolchain.as_mut() {
+                        *toolchain = map_source_toolchain_to_target(
+                            Some(toolchain),
+                            target_parent,
+                            hierarchy,
+                        );
+                    }
+                }
+                candidate
+            })
+            .collect()
+    }
+
     fn index_easybuild(&mut self, root: &Path) -> Result<(), PackageSourceError> {
         if !root.exists() {
             return Ok(());
@@ -273,9 +311,15 @@ impl PackageSourceIndex {
             PackageSourceError::Discovery(format!("easybuild root {}: {error}", root.display()))
         })?;
         for candidate in tree.candidates {
-            self.easybuild.push(discovered_from_eb_candidate(candidate));
+            self.push_easybuild_candidate(candidate);
         }
         Ok(())
+    }
+
+    fn push_easybuild_candidate(&mut self, candidate: Candidate) {
+        self.easybuild
+            .push(discovered_from_eb_candidate(candidate.clone()));
+        self.easybuild_solver.push(candidate);
     }
 
     fn index_conda(&mut self, root: &SourceRoot) -> Result<(), PackageSourceError> {
@@ -463,6 +507,39 @@ pub fn discover_provider_for_hole(
     target_parent: &Toolchain,
     hierarchy: Option<&ToolchainHierarchy>,
 ) -> Result<PackageSourceProvider, ProviderDiscoveryError> {
+    let providers = discover_provider_candidates_for_hole(index, hole, target_parent, hierarchy)?;
+    match providers.as_slice() {
+        [provider] => Ok(provider.clone()),
+        many => {
+            let paths = many
+                .iter()
+                .map(|provider| provider.source.as_path())
+                .collect::<HashSet<_>>();
+            let candidates = index
+                .easybuild
+                .iter()
+                .filter(|candidate| paths.contains(candidate.path.as_path()))
+                .cloned()
+                .collect::<Vec<_>>();
+            Err(ProviderDiscoveryError::Ambiguous {
+                name: hole.name.clone(),
+                version_req: format!(" ({})", hole.version_req),
+                count: many.len(),
+                candidates,
+            })
+        }
+    }
+}
+
+/// Return every compatible provider version after variant and source-generation
+/// ambiguity has been removed. Closure planning gives multiple EasyBuild
+/// versions to Resolvo and emits only the selected annual bump.
+pub fn discover_provider_candidates_for_hole(
+    index: &PackageSourceIndex,
+    hole: &UnsatisfiedDirectDependency,
+    target_parent: &Toolchain,
+    hierarchy: Option<&ToolchainHierarchy>,
+) -> Result<Vec<PackageSourceProvider>, ProviderDiscoveryError> {
     let identity = package_identity(&hole.name);
 
     // Robot-first is enforced by the caller (only holes reach here). Prefer an
@@ -476,7 +553,7 @@ pub fn discover_provider_for_hole(
         .collect::<Vec<_>>();
 
     if !eb_matches.is_empty() {
-        return select_easybuild_provider(&eb_matches, hole, target_parent, hierarchy);
+        return select_easybuild_providers(&eb_matches, hole, target_parent, hierarchy);
     }
 
     let foreign_matches = index
@@ -487,15 +564,15 @@ pub fn discover_provider_for_hole(
         .cloned()
         .collect::<Vec<_>>();
 
-    select_foreign_provider(&foreign_matches, hole, target_parent)
+    select_foreign_provider(&foreign_matches, hole, target_parent).map(|provider| vec![provider])
 }
 
-fn select_easybuild_provider(
+fn select_easybuild_providers(
     matches: &[DiscoveredCandidate],
     hole: &UnsatisfiedDirectDependency,
     target_parent: &Toolchain,
     hierarchy: Option<&ToolchainHierarchy>,
-) -> Result<PackageSourceProvider, ProviderDiscoveryError> {
+) -> Result<Vec<PackageSourceProvider>, ProviderDiscoveryError> {
     let mut unique = Vec::new();
     for candidate in matches {
         if !unique.contains(candidate) {
@@ -503,79 +580,102 @@ fn select_easybuild_provider(
         }
     }
 
-    // A dependency without a suffix or toolchain-family requirement cannot
-    // choose between independently installable EasyBuild variants.
-    let mut identities = unique
+    let mut versions = unique
         .iter()
-        .map(|candidate| {
-            (
-                candidate.version.as_str(),
-                candidate.versionsuffix.as_deref().unwrap_or(""),
+        .map(|candidate| candidate.version.clone())
+        .collect::<Vec<_>>();
+    versions.sort_by(|left, right| cmp_version(left, right));
+    versions.dedup();
+
+    let mut providers = Vec::new();
+    for version in versions {
+        let mut version_candidates = unique
+            .iter()
+            .filter(|candidate| candidate.version == version)
+            .cloned()
+            .collect::<Vec<_>>();
+        // A dependency without a suffix or toolchain-family requirement cannot
+        // choose between independently installable EasyBuild variants.
+        let mut variants = version_candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.versionsuffix.as_deref().unwrap_or(""),
+                    candidate
+                        .toolchain
+                        .as_ref()
+                        .map(|toolchain| toolchain.name.as_str())
+                        .unwrap_or(""),
+                )
+            })
+            .collect::<Vec<_>>();
+        variants.sort();
+        variants.dedup();
+        if variants.len() > 1 {
+            return Err(ProviderDiscoveryError::Ambiguous {
+                name: hole.name.clone(),
+                version_req: format!(" ({})", hole.version_req),
+                count: version_candidates.len(),
+                candidates: version_candidates,
+            });
+        }
+
+        // Within one version/family/suffix identity, the newest source
+        // toolchain generation is the most direct annual-bump baseline.
+        version_candidates.sort_by(|left, right| {
+            cmp_version(
+                left.toolchain
+                    .as_ref()
+                    .map(|toolchain| toolchain.version.as_str())
+                    .unwrap_or(""),
+                right
+                    .toolchain
+                    .as_ref()
+                    .map(|toolchain| toolchain.version.as_str())
+                    .unwrap_or(""),
+            )
+        });
+        let selected = version_candidates
+            .last()
+            .expect("non-empty version candidates");
+        let selected_generation = selected
+            .toolchain
+            .as_ref()
+            .map(|toolchain| toolchain.version.as_str())
+            .unwrap_or("");
+        let same_generation = version_candidates
+            .iter()
+            .filter(|candidate| {
                 candidate
                     .toolchain
                     .as_ref()
-                    .map(|toolchain| toolchain.name.as_str())
-                    .unwrap_or(""),
-            )
-        })
-        .collect::<Vec<_>>();
-    identities.sort();
-    identities.dedup();
-    if identities.len() > 1 {
-        return Err(ProviderDiscoveryError::Ambiguous {
-            name: hole.name.clone(),
-            version_req: format!(" ({})", hole.version_req),
-            count: unique.len(),
-            candidates: unique,
-        });
+                    .map(|toolchain| toolchain.version.as_str())
+                    .unwrap_or("")
+                    == selected_generation
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if same_generation.len() > 1 {
+            return Err(ProviderDiscoveryError::Ambiguous {
+                name: hole.name.clone(),
+                version_req: format!(" ({})", hole.version_req),
+                count: same_generation.len(),
+                candidates: same_generation,
+            });
+        }
+        providers.push(provider_from_easybuild(selected, target_parent, hierarchy));
     }
+    Ok(providers)
+}
 
-    // Within one version/family/suffix identity, the newest source toolchain
-    // generation is the most direct annual-bump baseline. Equal-generation
-    // recipes at different paths remain ambiguous because their mechanics may
-    // differ even though their filenames claim the same identity.
-    unique.sort_by(|left, right| {
-        cmp_version(
-            left.toolchain
-                .as_ref()
-                .map(|toolchain| toolchain.version.as_str())
-                .unwrap_or(""),
-            right
-                .toolchain
-                .as_ref()
-                .map(|toolchain| toolchain.version.as_str())
-                .unwrap_or(""),
-        )
-    });
-    let selected = unique.last().expect("non-empty easybuild matches");
-    let selected_generation = selected
-        .toolchain
-        .as_ref()
-        .map(|toolchain| toolchain.version.as_str())
-        .unwrap_or("");
-    let same_generation = unique
-        .iter()
-        .filter(|candidate| {
-            candidate
-                .toolchain
-                .as_ref()
-                .map(|toolchain| toolchain.version.as_str())
-                .unwrap_or("")
-                == selected_generation
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if same_generation.len() > 1 {
-        return Err(ProviderDiscoveryError::Ambiguous {
-            name: hole.name.clone(),
-            version_req: format!(" ({})", hole.version_req),
-            count: same_generation.len(),
-            candidates: same_generation,
-        });
-    }
+fn provider_from_easybuild(
+    selected: &DiscoveredCandidate,
+    target_parent: &Toolchain,
+    hierarchy: Option<&ToolchainHierarchy>,
+) -> PackageSourceProvider {
     let bump_toolchain =
         map_source_toolchain_to_target(selected.toolchain.as_ref(), target_parent, hierarchy);
-    Ok(PackageSourceProvider {
+    PackageSourceProvider {
         name: selected.name.clone(),
         provider: CatalogProviderKind::EasyBuildBump,
         version: Some(selected.version.clone()),
@@ -586,7 +686,7 @@ fn select_easybuild_provider(
         profile: "default".into(),
         toolchain: bump_toolchain,
         stack_policy: None,
-    })
+    }
 }
 
 fn select_foreign_provider(

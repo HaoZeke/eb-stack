@@ -19,10 +19,11 @@ use crate::package_catalog::{
 };
 use crate::package_config::PackageConfigLayer;
 use crate::package_solve::{
-    unsatisfied_direct_dependencies, ProfileSolveError, UnsatisfiedDirectDependency,
+    solve_package_profile_with_hierarchy, unsatisfied_direct_dependencies, ProfileSolveError,
+    UnsatisfiedDirectDependency,
 };
 use crate::package_sources::{
-    discover_provider_for_hole, map_source_toolchain_to_target, DiscoveredCandidate,
+    discover_provider_candidates_for_hole, map_source_toolchain_to_target, DiscoveredCandidate,
     PackageSourceError, PackageSourceIndex, PackageSourceRoots, ProviderDiscoveryError,
 };
 use crate::package_workflow::{
@@ -580,7 +581,7 @@ impl ClosureState<'_> {
             }
             let generated_before = self.generated.len();
             for hole in &holes {
-                self.ensure_companion_for_hole(hole, path)?;
+                self.ensure_companion_for_hole(plan, profile, stack_policy, hole, path)?;
             }
             if self.generated.len() == generated_before {
                 let hole = &holes[0];
@@ -595,6 +596,9 @@ impl ClosureState<'_> {
 
     fn ensure_companion_for_hole(
         &mut self,
+        plan: &PackagePlan,
+        profile: &str,
+        stack_policy: &StackPolicy,
         hole: &UnsatisfiedDirectDependency,
         path: &[String],
     ) -> Result<(), PackageClosureError> {
@@ -607,13 +611,17 @@ impl ClosureState<'_> {
             return Err(PackageClosureError::Cycle { path: cycle });
         }
 
-        let mut provider = resolve_provider_for_hole(
+        let providers = resolve_provider_candidates_for_hole(
             self.catalog,
             &self.source_index,
             hole,
             &self.target_toolchain,
             self.target_hierarchy.as_ref(),
         )?;
+        let mut provider = match providers.as_slice() {
+            [provider] => provider.clone(),
+            many => self.select_source_provider(plan, profile, stack_policy, hole, many)?,
+        };
         refine_bump_toolchain(
             &mut provider,
             &self.target_toolchain,
@@ -684,6 +692,82 @@ impl ClosureState<'_> {
         );
         Ok(())
     }
+
+    fn select_source_provider(
+        &self,
+        plan: &PackagePlan,
+        profile: &str,
+        stack_policy: &StackPolicy,
+        hole: &UnsatisfiedDirectDependency,
+        providers: &[PackageSourceProvider],
+    ) -> Result<PackageSourceProvider, PackageClosureError> {
+        let identity = package_identity(&hole.name);
+        let mut selection_plan = plan.clone();
+        selection_plan.dependencies.retain(|dependency| {
+            let name = dependency
+                .eb_name
+                .as_deref()
+                .unwrap_or(dependency.name.as_str());
+            package_identity(name) == identity
+        });
+        if selection_plan.dependencies.is_empty() {
+            return Err(PackageClosureError::GeneratedCandidate(format!(
+                "cannot isolate dependency {} for source-version selection",
+                hole.name
+            )));
+        }
+
+        let mut candidates = self.universe();
+        let mut prospective = self.source_index.retargeted_candidates_for_providers(
+            providers,
+            &self.target_toolchain,
+            self.target_hierarchy.as_ref(),
+        );
+        // Recursive closure validates the selected recipe's dependencies. The
+        // selection solve is scoped to the direct package identity so metadata
+        // version choice does not depend on which companion is generated first.
+        for candidate in &mut prospective {
+            candidate.dependencies.clear();
+            candidate.builddependencies.clear();
+        }
+        for candidate in prospective {
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+
+        let lock = solve_package_profile_with_hierarchy(
+            &selection_plan,
+            profile,
+            &ProfileEnvironment::default(),
+            &candidates,
+            stack_policy,
+            None,
+        )?;
+        let selected = lock
+            .dependencies
+            .iter()
+            .find(|dependency| package_identity(&dependency.name) == identity)
+            .ok_or_else(|| {
+                PackageClosureError::GeneratedCandidate(format!(
+                    "Resolvo did not select a source version for {}",
+                    hole.name
+                ))
+            })?;
+        providers
+            .iter()
+            .find(|provider| {
+                provider.source == PathBuf::from(&selected.easyconfig_path)
+                    && provider.version.as_deref() == Some(selected.version.as_str())
+            })
+            .cloned()
+            .ok_or_else(|| {
+                PackageClosureError::GeneratedCandidate(format!(
+                    "Resolvo selected {} {} from {}, which is not an admissible source provider",
+                    selected.name, selected.version, selected.easyconfig_path
+                ))
+            })
+    }
 }
 
 fn prepare_companion_from_provider(
@@ -728,13 +812,13 @@ fn prepare_companion_from_provider(
 }
 
 /// Catalog overrides win when present; otherwise discover from source roots.
-fn resolve_provider_for_hole(
+fn resolve_provider_candidates_for_hole(
     catalog: &PackageSourceCatalog,
     source_index: &PackageSourceIndex,
     hole: &UnsatisfiedDirectDependency,
     target_toolchain: &Toolchain,
     hierarchy: Option<&ToolchainHierarchy>,
-) -> Result<PackageSourceProvider, PackageClosureError> {
+) -> Result<Vec<PackageSourceProvider>, PackageClosureError> {
     let named = catalog
         .providers()
         .iter()
@@ -752,7 +836,7 @@ fn resolve_provider_for_hole(
             })
             .collect::<Vec<_>>();
         return match compatible.as_slice() {
-            [provider] => Ok((*provider).clone()),
+            [provider] => Ok(vec![(*provider).clone()]),
             [] => Err(PackageClosureError::IncompatibleProviderVersion {
                 name: hole.name.clone(),
                 provided: named
@@ -770,8 +854,8 @@ fn resolve_provider_for_hole(
         };
     }
 
-    discover_provider_for_hole(source_index, hole, target_toolchain, hierarchy).map_err(|error| {
-        match error {
+    discover_provider_candidates_for_hole(source_index, hole, target_toolchain, hierarchy).map_err(
+        |error| match error {
             ProviderDiscoveryError::Missing {
                 name,
                 version_req,
@@ -814,8 +898,8 @@ fn resolve_provider_for_hole(
                 provided,
                 required,
             },
-        }
-    })
+        },
+    )
 }
 
 /// For EasyBuild-bump providers, remap the source recipe's toolchain family
