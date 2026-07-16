@@ -604,7 +604,7 @@ fn collect_conda_source_patches(source: &YamlValue, patches: &mut Vec<String>) {
 }
 
 /// Expand deterministic `{% set %}` expressions, `context:` scalars, and
-/// simple `${{ x }}` / `{{ x }}` / `|lower` substitutions.
+/// supported variable-filter expressions in `${{ ... }}` / `{{ ... }}`.
 fn expand_conda_templates(text: &str) -> (String, Vec<String>) {
     let mut notes = Vec::new();
     let mut vars: HashMap<String, String> = HashMap::new();
@@ -701,26 +701,7 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>) {
     }
     out = remove_duplicate_selector_keys(&out, &mut notes);
 
-    // Replace longer keys first
-    let mut keys: Vec<_> = vars.keys().cloned().collect();
-    keys.sort_by_key(|k| std::cmp::Reverse(k.len()));
-    for k in keys {
-        let v = vars.get(&k).unwrap();
-        let v_lower = v.to_ascii_lowercase();
-        // ${{ var }}  ${{ var|lower }}
-        for (pat, rep) in [
-            (format!("${{{{ {k} }}}}"), v.as_str()),
-            (format!("${{{{{k}}}}}"), v.as_str()),
-            (format!("${{{{ {k}|lower }}}}"), v_lower.as_str()),
-            (format!("${{{{{k}|lower}}}}"), v_lower.as_str()),
-            (format!("{{{{ {k} }}}}"), v.as_str()),
-            (format!("{{{{{k}}}}}"), v.as_str()),
-            (format!("{{{{ {k}|lower }}}}"), v_lower.as_str()),
-            (format!("{{{{{k}|lower}}}}"), v_lower.as_str()),
-        ] {
-            out = out.replace(&pat, rep);
-        }
-    }
+    out = expand_conda_variable_expressions(&out, &vars);
 
     if out.contains("{{") || out.contains("${{") {
         notes.push(
@@ -730,6 +711,55 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>) {
     }
 
     (out, notes)
+}
+
+fn expand_conda_variable_expressions(text: &str, vars: &HashMap<String, String>) -> String {
+    let expression_re =
+        Regex::new(r#"(?:\$\{\{|\{\{)\s*([^{}\r\n]+?)\s*\}\}"#).expect("template expression re");
+    let identifier_re = Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*$").expect("template identifier re");
+    let replace_re = Regex::new(
+        r#"^replace\(\s*(?:\"([^\"]*)\"|'([^']*)')\s*,\s*(?:\"([^\"]*)\"|'([^']*)')\s*\)$"#,
+    )
+    .expect("replace filter re");
+
+    expression_re
+        .replace_all(text, |capture: &regex::Captures<'_>| {
+            evaluate_conda_variable_expression(
+                capture.get(1).expect("expression capture").as_str(),
+                vars,
+                &identifier_re,
+                &replace_re,
+            )
+            .unwrap_or_else(|| capture[0].to_string())
+        })
+        .to_string()
+}
+
+fn evaluate_conda_variable_expression(
+    expression: &str,
+    vars: &HashMap<String, String>,
+    identifier_re: &Regex,
+    replace_re: &Regex,
+) -> Option<String> {
+    let mut segments = expression.split('|').map(str::trim);
+    let variable = segments.next()?;
+    if !identifier_re.is_match(variable) {
+        return None;
+    }
+    let mut value = vars.get(variable)?.clone();
+
+    for filter in segments {
+        if filter == "lower" {
+            value.make_ascii_lowercase();
+            continue;
+        }
+        let captures = replace_re.captures(filter)?;
+        let from = captures.get(1).or_else(|| captures.get(2))?.as_str();
+        let to = captures.get(3).or_else(|| captures.get(4))?.as_str();
+        value = value.replace(from, to);
+    }
+
+    Some(value)
 }
 
 enum CondaTemplateValue {
