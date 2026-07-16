@@ -528,6 +528,91 @@ toolchain = {{ name = "foss", version = "2026.1" }}
 }
 
 #[test]
+fn range_constraint_filters_catalog_versions_before_ambiguity() {
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let robot = root.join("robot");
+    std::fs::create_dir_all(&robot).unwrap();
+
+    let alpha = conda_recipe(root, "alpha.yaml", "alpha", "1.0", &["bravo >=1.0"]);
+    let _old = conda_recipe(root, "bravo-old.yaml", "bravo", "0.5", &[]);
+    let _compatible = conda_recipe(root, "bravo-compatible.yaml", "bravo", "1.5", &[]);
+    let catalog = catalog_from_toml(
+        root,
+        &format!(
+            r#"
+schema_version = 1
+
+[[packages]]
+name = "bravo"
+version = "0.5"
+source = "bravo-old.yaml"
+format = "conda-forge"
+source_checksums = ["{CHECKSUM}"]
+profile = "default"
+toolchain = {{ name = "foss", version = "2026.1" }}
+
+[[packages]]
+name = "bravo"
+version = "1.5"
+source = "bravo-compatible.yaml"
+format = "conda-forge"
+source_checksums = ["{CHECKSUM}"]
+profile = "default"
+toolchain = {{ name = "foss", version = "2026.1" }}
+"#
+        ),
+    );
+
+    let closure = plan_package_closure(&request(alpha, robot), &catalog).expect("close range");
+    assert_eq!(closure.companions.len(), 1);
+    assert_eq!(closure.companions[0].plan.package.version, "1.5");
+}
+
+#[test]
+fn generated_candidate_rejected_by_hierarchy_is_a_typed_error() {
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let robot = root.join("robot");
+    std::fs::create_dir_all(&robot).unwrap();
+
+    let alpha = conda_recipe(root, "alpha.yaml", "alpha", "1.0", &["bravo >=1.0"]);
+    let _bravo = conda_recipe(root, "bravo.yaml", "bravo", "1.5", &[]);
+    let catalog = catalog_from_toml(
+        root,
+        &format!(
+            r#"
+schema_version = 1
+
+[[packages]]
+name = "bravo"
+version = "1.5"
+source = "bravo.yaml"
+format = "conda-forge"
+source_checksums = ["{CHECKSUM}"]
+profile = "default"
+toolchain = {{ name = "foss", version = "2025a" }}
+"#
+        ),
+    );
+
+    let error = plan_package_closure(&request(alpha, robot), &catalog)
+        .expect_err("cross-generation candidate needs an admitting stack pin");
+    match error {
+        PackageClosureError::GeneratedCandidateNotAdmitted {
+            name,
+            required,
+            profile,
+        } => {
+            assert_eq!(name, "bravo");
+            assert_eq!(required, ">=1.0");
+            assert_eq!(profile, "default");
+        }
+        other => panic!("expected GeneratedCandidateNotAdmitted, got {other}"),
+    }
+}
+
+#[test]
 fn separate_root_profiles_each_solve_against_shared_closure() {
     use eb_stack::package_config::PackageConfigLayer;
 
