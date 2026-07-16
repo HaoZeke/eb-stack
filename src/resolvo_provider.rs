@@ -191,25 +191,30 @@ impl EbProvider {
         let mut excluded_ranks: HashMap<String, HashMap<u32, String>> = HashMap::new();
         if let Some(stack) = stack_policy {
             for pin in &stack.pins {
-                let matching = matching_ranks(
+                let matching_result = matching_ranks(
                     &candidates,
                     &ranks,
                     &pin.name,
                     &pin.version_requirement,
                     pin.toolchain.as_ref(),
                     pin.versionsuffix.as_deref(),
-                )?;
-                let selected_rank = matching.last().copied().ok_or_else(|| {
-                    format!(
-                        "stack pin {} {} matches no candidates",
-                        pin.name, pin.version_requirement
-                    )
-                })?;
+                );
                 match pin.mode {
                     StackPinMode::Preferred => {
-                        favored_ranks.insert(pin.name.clone(), selected_rank);
+                        if let Ok(matching) = matching_result {
+                            if let Some(selected_rank) = matching.last().copied() {
+                                favored_ranks.insert(pin.name.clone(), selected_rank);
+                            }
+                        }
                     }
                     StackPinMode::Locked => {
+                        let matching = matching_result?;
+                        if matching.is_empty() {
+                            return Err(format!(
+                                "stack pin {} {} matches no candidates",
+                                pin.name, pin.version_requirement
+                            ));
+                        }
                         let allowed = if let Some(existing) = pin_ranks.get(&pin.name) {
                             matching
                                 .into_iter()
@@ -644,6 +649,16 @@ fn solve_with_stack_policy_scope(
         .pins
         .iter()
         .map(|pin| {
+            let preferred_candidate_available = candidates.iter().any(|candidate| {
+                candidate.name == pin.name
+                    && matches_req(&candidate.version, &pin.version_requirement)
+                    && pin.toolchain.as_ref().is_none_or(|toolchain| {
+                        crate::hierarchy::toolchains_match(&candidate.toolchain, toolchain)
+                    })
+                    && pin.versionsuffix.as_deref().is_none_or(|versionsuffix| {
+                        candidate.versionsuffix.as_deref().unwrap_or_default() == versionsuffix
+                    })
+            });
             let selected_candidate = selected.iter().find(|candidate| candidate.name == pin.name);
             let selected_version = selected_candidate.map(|candidate| candidate.version.clone());
             let selected_toolchain =
@@ -670,8 +685,13 @@ fn solve_with_stack_policy_scope(
                 selected_versionsuffix,
                 fallback,
                 fallback_reason: fallback.then(|| {
-                    "favored candidate did not participate in the complete Resolvo solution"
-                        .to_string()
+                    if preferred_candidate_available {
+                        "favored candidate did not participate in the complete Resolvo solution"
+                            .to_string()
+                    } else {
+                        "preferred identity has no admitted candidate; Resolvo selected a compatible fallback"
+                            .to_string()
+                    }
                 }),
             }
         })
