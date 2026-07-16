@@ -147,19 +147,24 @@ pub fn load_hierarchy_fixture(path: &Path) -> Result<ToolchainHierarchy, Hierarc
 
 /// Built-in hierarchy fixtures embedded at compile time (no EasyBuild at test/runtime).
 pub fn known_hierarchy(parent: &Toolchain) -> Option<ToolchainHierarchy> {
-    // Bare compiler-toolchain targets: retargeting a companion recipe down onto
-    // a site's base compiler (e.g. GCCcore-13.3.0). The hierarchy is simply
-    // [SYSTEM, <that GCCcore>], so no hand-fed --hierarchy-fixture is needed.
-    if parent.name == "GCCcore" && !parent.version.is_empty() {
+    // Bare GCC-family compiler targets arise when a companion recipe is
+    // retargeted to a member of a composite hierarchy. GCCcore admits SYSTEM;
+    // GCC additionally admits its same-version GCCcore base.
+    if matches!(parent.name.as_str(), "GCCcore" | "GCC") && !parent.version.is_empty() {
+        let mut members = vec![Toolchain {
+            name: "system".into(),
+            version: String::new(),
+        }];
+        if parent.name == "GCC" {
+            members.push(Toolchain {
+                name: "GCCcore".into(),
+                version: parent.version.clone(),
+            });
+        }
+        members.push(parent.clone());
         return Some(ToolchainHierarchy {
             parent: parent.clone(),
-            members: vec![
-                Toolchain {
-                    name: "system".into(),
-                    version: String::new(),
-                },
-                parent.clone(),
-            ],
+            members,
         });
     }
     let key = format!("{}-{}", parent.name, parent.version);
