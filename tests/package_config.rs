@@ -496,6 +496,123 @@ fn public_qmcpack_policy_encodes_build_and_verification_contract() {
 }
 
 #[test]
+fn public_eon_policy_encodes_the_repaired_build_contract() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let config = PackageConfigLayer::from_path(&root.join("examples/packages/eon.toml"))
+        .expect("eOn package config");
+    let package = config.package.as_ref().expect("package metadata");
+    let build = config.build.as_ref().expect("build policy");
+
+    assert_eq!(package.homepage.as_deref(), Some("https://eondocs.org/"));
+    assert_eq!(package.license.as_deref(), Some("BSD-3-Clause"));
+    assert_eq!(build.easyblock.as_deref(), Some("MesonNinja"));
+    assert_eq!(
+        build.build_systems.as_deref(),
+        Some(&["Meson".into(), "Ninja".into()][..])
+    );
+    assert_eq!(build.moduleclass.as_deref(), Some("chem"));
+    let patches = build.patches.as_ref().expect("checked patch policy");
+    assert_eq!(patches.len(), 1);
+    assert_eq!(
+        patches[0].filename,
+        "eOn-2.16.0_safemath-eigen5-core-guard.patch"
+    );
+    assert_eq!(
+        patches[0].sha256.as_deref(),
+        Some("34fd1abc414cccbfc2d454880f6df3136af2aa68c0bd65dc45c8894480a98e11")
+    );
+    assert!(patches[0]
+        .resolved_source
+        .as_ref()
+        .is_some_and(|path| path.is_file()));
+
+    let Some(EasyconfigValue::String(preconfig)) = build.easyconfig_parameters.get("preconfigopts")
+    else {
+        panic!("preconfigopts must be typed data");
+    };
+    for required in [
+        "cargo cinstall --locked --release",
+        "RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER=",
+        "readcon-stage",
+        "EBROOTMETATENSORMINTORCH",
+        "EBROOTMETATOMICMINTORCH",
+        "lib/python3.12/site-packages",
+    ] {
+        assert!(
+            preconfig.contains(required),
+            "preconfigopts missing {required}"
+        );
+    }
+    assert!(!preconfig.contains("unset RUSTC_WRAPPER"));
+    assert!(matches!(
+        build.easyconfig_parameters.get("postinstallcmds"),
+        Some(EasyconfigValue::List(commands)) if commands.len() >= 4
+    ));
+    assert!(matches!(
+        build.easyconfig_parameters.get("sanity_check_paths"),
+        Some(EasyconfigValue::Table(paths))
+            if matches!(paths.get("files"), Some(EasyconfigValue::List(files)) if files.len() >= 4)
+    ));
+    assert!(matches!(
+        build.easyconfig_parameters.get("sanity_check_commands"),
+        Some(EasyconfigValue::List(commands)) if commands.len() >= 6
+    ));
+
+    let requirements = &config
+        .dependencies
+        .as_ref()
+        .expect("EasyBuild product requirements")
+        .requirements;
+    for name in ["Rust", "cargo-c", "patchelf"] {
+        assert!(requirements.iter().any(|requirement| {
+            requirement.name == name && requirement.roles == [DependencyRole::Build]
+        }));
+    }
+    let eigen = requirements
+        .iter()
+        .find(|requirement| requirement.name == "Eigen")
+        .expect("Eigen 5 compatibility requirement");
+    assert_eq!(eigen.constraint.as_deref(), Some("==5.0.0"));
+
+    let common = PackageConfigLayer::from_path(&root.join("examples/packages/common.toml"))
+        .expect("common package aliases");
+    for (foreign, provider) in [
+        ("libmetatensor", "metatensor"),
+        ("libmetatensor-torch", "metatensor-torch"),
+        ("libmetatomic-torch", "metatomic-torch"),
+    ] {
+        assert_eq!(
+            common
+                .dependencies
+                .as_ref()
+                .and_then(|dependencies| dependencies.aliases.get(foreign))
+                .map(DependencyAlias::provider),
+            Some(provider)
+        );
+    }
+
+    let stack: StackPolicy = toml::from_str(
+        &std::fs::read_to_string(root.join("examples/stacks/eon-foss-2026.1.toml"))
+            .expect("eOn stack policy"),
+    )
+    .expect("parse eOn stack policy");
+    let eigen_pin = stack
+        .pins
+        .iter()
+        .find(|pin| pin.name == "Eigen")
+        .expect("Eigen stack pin");
+    assert_eq!(eigen_pin.version_requirement, "==5.0.0");
+    assert_eq!(
+        eigen_pin.toolchain,
+        Some(Toolchain {
+            name: "GCCcore".into(),
+            version: "15.2.0".into(),
+        })
+    );
+    assert!(!stack.pins.iter().any(|pin| pin.name == "Meson"));
+}
+
+#[test]
 fn public_package_config_examples_parse() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let common = PackageConfigLayer::from_path(&root.join("examples/packages/common.toml"))
