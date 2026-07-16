@@ -338,7 +338,7 @@ fn discovered_foreign_recipe_inherits_relative_root_package_config() {
     conda_recipe(
         &conda,
         "bravo/meta.yaml",
-        "bravo",
+        "foreign-bravo",
         "1.5",
         &["foreign-zeta >=3.0"],
     );
@@ -346,6 +346,7 @@ fn discovered_foreign_recipe_inherits_relative_root_package_config() {
         &root.join("common.toml"),
         r#"schema_version = 1
 [dependencies.aliases]
+"foreign-bravo" = "Bravo"
 "foreign-zeta" = "Zeta"
 "#,
     );
@@ -370,8 +371,9 @@ package_config = ["common.toml"]
     let bravo = closure
         .companions
         .iter()
-        .find(|companion| companion.plan.package.name == "bravo")
+        .find(|companion| companion.plan.package.name == "Bravo")
         .expect("bravo companion");
+    assert_eq!(bravo.plan.package.name, "Bravo");
     let dependency = bravo
         .plan
         .dependencies
