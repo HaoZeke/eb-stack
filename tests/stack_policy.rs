@@ -226,8 +226,7 @@ fn public_eon_stack_policy_records_cross_generation_fallbacks() {
     let expected = [
         ("PyTorch", "==2.9.1", "foss", "2024a"),
         ("xtb", "==6.7.1", "gfbf", "2024a"),
-        ("Eigen", "==3.4.0", "GCCcore", "14.3.0"),
-        ("Meson", "==1.8.2", "GCCcore", "13.3.0"),
+        ("Eigen", "==5.0.0", "GCCcore", "15.2.0"),
     ];
     assert_eq!(policy.pins.len(), expected.len());
     for (name, requirement, toolchain_name, toolchain_version) in expected {
@@ -243,4 +242,8 @@ fn public_eon_stack_policy_records_cross_generation_fallbacks() {
         assert_eq!(pin_toolchain.name, toolchain_name);
         assert_eq!(pin_toolchain.version, toolchain_version);
     }
+    assert!(
+        policy.pins.iter().all(|pin| pin.name != "Meson"),
+        "build-tool compatibility floors are not distribution identity pins"
+    );
 }
