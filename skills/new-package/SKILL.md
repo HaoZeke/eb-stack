@@ -320,7 +320,7 @@ releases automatically, but a remote workload can survive its controller.
 Hermes owns this loop until the requested claim is established:
 
 1. Read `campaign status`; inspect the newest open finding and its full command evidence.
-2. Classify before editing: `transport`, `executor`, `runtime`, `source`, `checksum`, `patch`, `dependency-missing`, `configure`, `compile`, `link`, `test`, `install`, `sanity`, `resource`, `timeout`, or `unknown`.
+2. Classify before editing: `transport`, `executor`, `runtime`, `interrupted`, `source`, `checksum`, `patch`, `dependency-missing`, `configure`, `compile`, `link`, `test`, `install`, `sanity`, `resource`, `timeout`, or `unknown`.
 3. Apply target repair for transport/executor/runtime findings; inspect the URL, mirror, cache, and routed network for source findings; retry resource/timeout findings with corrected allocation; apply deterministic checksum repair mechanically; use package judgment for the remaining recipe failures.
 4. Re-run recipe checks after recipe or profile changes.
 5. Re-run the same campaign command. Successful retries supersede matching open findings while retaining their evidence history.

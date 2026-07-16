@@ -72,6 +72,7 @@ compiler, linker, test, or runtime evidence.
 | ~transport~ | Host reachability and staged paths | Private site target layer |
 | ~executor~ | Scheduler command and allocation | Private site target layer |
 | ~runtime~ | Runtime executable, image, mounts, ABI, environment | Target TOML or container definition |
+| ~interrupted~ | Absence of the prior routed workload and ownership of the campaign lock | No artifact for a clean retry; target repair when a workload survived |
 | ~source~ | Upstream URL, mirror, cache, and target-runtime reachability | Recipe source or target runtime |
 | ~checksum~ | Source/patch order and upstream digest | Easyconfig checksum list |
 | ~patch~ | Patch source, order, and applicability | Patch plus Easyconfig |

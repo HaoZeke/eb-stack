@@ -125,10 +125,11 @@ A campaign stages one bundle, builds every emitted recipe, and runs profile
 verification commands. Its state stores attempts, exact routed commands,
 compact evidence, typed findings, ownership, resolutions, and the three claims.
 
-Spawn and exit failures are data, not lost control flow. They are classified
-as transport, executor, runtime, checksum, patch, dependency, configure,
-compile, link, test, install, sanity, resource, timeout, or unknown findings.
-Hermes drives retries; OMP workers coordinate through claim/resolve operations.
+Spawn, controller interruption, and exit failures are data, not lost control
+flow. They are classified as transport, executor, runtime, interrupted,
+checksum, patch, dependency, configure, compile, link, test, install, sanity,
+resource, timeout, or unknown findings. Hermes drives retries; OMP workers
+coordinate through claim/resolve operations.
 
 * API surface
 

@@ -126,6 +126,7 @@ classification so the finding reflects the actual compiler or runtime error.
 | ~transport~ | target-repair | SSH, rsync, host reachability, or staging path |
 | ~executor~ | target-repair | Slurm command, partition, account, or allocation syntax |
 | ~runtime~ | target-repair | Host/container executable, image, mounts, ABI, or environment |
+| ~interrupted~ | retryable | Abandoned running state after the exclusive controller lock becomes available |
 | ~source~ | requires-judgment | Upstream URL, mirror, source cache, or runtime network path |
 | ~checksum~ | mechanical | Source digest and positional source/patch checksum list |
 | ~patch~ | requires-judgment | Patch source, order, and applicability |

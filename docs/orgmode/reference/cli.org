@@ -191,9 +191,9 @@ eb-stack campaign finding resolve \
 
 ~campaign run~ resumes state with matching package identity, increments the
 attempt, stages the bundle, runs every emitted recipe, and executes each
-profile's verification commands. Transport, executor, runtime, checksum,
-patch, dependency, configure, compile, link, test, install, sanity, resource,
-timeout, and unknown failures are persisted as typed findings.
+profile's verification commands. Transport, executor, runtime, interrupted,
+checksum, patch, dependency, configure, compile, link, test, install, sanity,
+resource, timeout, and unknown failures are persisted as typed findings.
 
 Finding claims are exclusive. A resolution records an action, evidence, and
 changed paths. A successful retry supersedes matching open or in-progress
