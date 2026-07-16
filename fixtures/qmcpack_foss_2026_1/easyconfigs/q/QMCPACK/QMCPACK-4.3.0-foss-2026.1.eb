@@ -8,9 +8,6 @@ description = """
 QMCPACK is an open-source production-level many-body ab initio Quantum Monte
 Carlo code for computing the electronic structure of atoms, molecules, 2D
 nanomaterials and solids.
-
-This easyconfig builds the CPU real reference: MPI + OpenMP, full double
-precision (mixed precision off), no GPU offload.
 """
 
 toolchain = {'name': 'foss', 'version': '2026.1'}
@@ -24,7 +21,6 @@ sources = [{
 }]
 checksums = ['511d5f368db002f2f77504619e1ada8d4a3034200d25feef6773d12a6ed6d18e']
 
-# GitHub archive top-level is qmcpack-<ver>/ (repo name), not QMCPACK-<ver>/.
 start_dir = '%(namelower)s-%(version)s'
 
 builddependencies = [
@@ -34,28 +30,16 @@ builddependencies = [
 ]
 
 dependencies = [
-    ('HDF5', '2.1.1'),  # parallel (gompi) preferred with MPI builds
+    ('HDF5', '2.1.1'),
     ('Boost', '1.90.0'),
     ('libxml2', '2.15.1'),
-    # Runtime for Nexus workflow package + converter scripts under bin/
     ('Python', '3.14.2'),
-    # FFTW / BLAS / LAPACK / MPI come from the foss toolchain
 ]
 
-# Pin the CPU-real product; defaults match today but must not drift silently.
 configopts = '-DCMAKE_BUILD_TYPE=Release -DQMC_MPI=ON -DQMC_OMP=ON -DQMC_MIXED_PRECISION=OFF -DQMC_COMPLEX=OFF '
 configopts += '-DBUILD_AFQMC=OFF'
 
-# CMakeNinja defaults test_cmd to 'ninja', so runtest=True alone only re-invokes
-# ninja (no-op after a successful build). Drive ctest explicitly.
-#
-# ctest label taxonomy (QMCPACK): unit / deterministic / short / long /
-# performance. Build-verification = unit + deterministic + short (exact-value
-# checks, seconds each). The `long` label is multi-hour statistical validation
-# (VMC/DMC energies within Monte Carlo error bars, 15-40 min per test) meant for
-# a dedicated validation farm, not a package build_step; on a shared/CI host it
-# starves or ctest-times-out under contention. `performance` needs external
-# QMC_DATA. Both are excluded so test_step is a bounded build-verification.
+# CMakeNinja defaults to a no-op rebuild; run the bounded upstream test set.
 test_cmd = 'ctest'
 testopts = "-j %(parallel)s --output-on-failure -E 'performance|long'"
 
@@ -69,13 +53,11 @@ sanity_check_paths = {
     'dirs': ['lib/nexus'],
 }
 
-# Upstream qmcpack --version prints the banner then exits 1.
-# convert4qmc has no --help (prints "Unknown extension" and exits 0); path check only.
+# qmcpack --version prints the banner and exits nonzero.
 sanity_check_commands = [
     "qmcpack --version 2>&1 | grep -q 'QMCPACK version'",
 ]
 
-# Nexus lives under lib/nexus; put lib on PYTHONPATH for `import nexus`.
 modextrapaths = {'PYTHONPATH': 'lib'}
 
 moduleclass = 'chem'
