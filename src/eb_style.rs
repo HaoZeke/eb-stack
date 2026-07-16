@@ -203,7 +203,7 @@ fn parse_dictionary_string_list(line: &str) -> Option<DictionaryStringList<'_>> 
         return None;
     }
     let value = &list[value_quote.len_utf8()..list.len() - value_quote.len_utf8()];
-    if value.contains(value_quote) || value.contains('\n') {
+    if contains_unescaped_delimiter(value, value_quote) || value.contains('\n') {
         return None;
     }
     Some(DictionaryStringList {
@@ -260,7 +260,7 @@ fn parse_list_string_item(line: &str) -> Option<ListStringItem<'_>> {
         return None;
     }
     let content = &rest[quote.len_utf8()..rest.len() - quote.len_utf8()];
-    if content.contains(quote) || content.contains('\n') {
+    if contains_unescaped_delimiter(content, quote) || content.contains('\n') {
         return None;
     }
     Some(ListStringItem {
@@ -383,7 +383,7 @@ fn parse_string_assignment(line: &str) -> Option<StringAssignment<'_>> {
         return None;
     }
     // If the quote appears unescaped inside content, bail (ambiguous)
-    if content.contains(quote) {
+    if contains_unescaped_delimiter(content, quote) {
         return None;
     }
     Some(StringAssignment {
@@ -393,6 +393,21 @@ fn parse_string_assignment(line: &str) -> Option<StringAssignment<'_>> {
         quote,
         content,
     })
+}
+
+fn contains_unescaped_delimiter(content: &str, delimiter: char) -> bool {
+    let mut backslashes = 0usize;
+    for character in content.chars() {
+        if character == delimiter && backslashes % 2 == 0 {
+            return true;
+        }
+        if character == '\\' {
+            backslashes += 1;
+        } else {
+            backslashes = 0;
+        }
+    }
+    false
 }
 
 fn format_string_assignment(asg: &StringAssignment<'_>) -> Vec<String> {
