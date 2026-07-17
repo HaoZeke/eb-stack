@@ -25,7 +25,7 @@ closed package bundle: root artifacts at the bundle root, companions under
 ~packages/<name>-<version>-<toolchain>/~, one shared ~easyconfigs/~ overlay,
 ~build-order.json~, ~closure.plan.json~, and ~closure.sbom.cdx.json~. Companion
 providers may be ~foreign~ or ~easybuild-bump~; bump companions keep
-~origin = easybuild~ and use the annual-bump emitter.
+~origin = easy-build~ and use the annual-bump emitter.
 
 * Canonical package plan
 
