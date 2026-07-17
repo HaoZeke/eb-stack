@@ -201,6 +201,13 @@ fn spack_lammps_honors_preference_and_materializes_sources() {
         potential.target_directory.as_deref(),
         Some("potentials/C_10_10.mesocnt")
     );
+
+    let plan = package_plan_from_foreign(&recipe, &toolchain("2026.1"));
+    assert!(
+        plan.residuals.is_empty(),
+        "successfully materialized source logic is informational, not residual work: {:?}",
+        plan.residuals
+    );
 }
 
 #[test]
