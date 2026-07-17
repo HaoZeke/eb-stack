@@ -5,11 +5,14 @@ max_concurrency = 8
 timeout = 20
 accept = [200, 206, 429]
 
-# docs.rs / crates.io may 404 until published; GitHub rate-limits anonymous.
+# Package, site, and repository URLs may 404 until each public surface is published.
+# github.com/example is used only for structured artifact examples.
 exclude = [
   '^https://crates\.io/',
   '^https://docs\.rs/',
   '^https://eb-stack\.rgoswami\.me/',
+  '^https://github\.com/HaoZeke/eb-stack',
+  '^https://github\.com/example/',
 ]
 
 exclude_path = [
