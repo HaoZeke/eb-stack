@@ -363,4 +363,17 @@ fn package_bundle_json_is_portable_across_checkout_and_robot_roots() {
         .iter()
         .any(|artifact| artifact
             .contains(temp.path().to_str().expect("temporary path is valid UTF-8"))));
+
+    let manifest: serde_json::Value = serde_json::from_str(&left[0]).expect("manifest JSON");
+    assert_eq!(
+        manifest["dependencies"][0]["provenance"][0]["span"]["path"],
+        "conda-forge/recipe.yaml"
+    );
+    let sbom: serde_json::Value = serde_json::from_str(&left[1]).expect("SBOM JSON");
+    assert!(sbom["metadata"].get("timestamp").is_none());
+    let lock: serde_json::Value = serde_json::from_str(&left[2]).expect("lock JSON");
+    assert_eq!(
+        lock["dependencies"][0]["easyconfig_path"],
+        "bravo-1.5-foss-2026.1.eb"
+    );
 }
