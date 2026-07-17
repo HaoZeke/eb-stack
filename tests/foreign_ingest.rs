@@ -445,20 +445,110 @@ fn spack_qmcpack_preserves_variants_rules_and_conditions() {
         .dependencies
         .iter()
         .any(|dependency| dependency.name == "python"));
-    assert!(
-        recipe.patches.is_empty(),
-        "unresolved Spack patch directives are residuals, not EasyBuild patch filenames"
-    );
-    assert!(recipe
-        .notes
-        .iter()
-        .any(|note| note.contains("3 patch() directive")));
     let plan = package_plan_from_foreign(&recipe, &toolchain("2026.1"));
+    assert_eq!(recipe.patches.len(), 3, "static patch directives are preserved");
+    assert!(
+        plan.build.patches.is_empty(),
+        "QMCPACK 4.3.0 excludes patches constrained to 3.1.0:3.3.0"
+    );
+    assert!(
+        !recipe.notes.iter().any(|note| note.contains("patch") && note.contains("residual")),
+        "version-inapplicable static directives and patch methods are not residual work: {:?}",
+        recipe.notes
+    );
     assert_eq!(plan.package.name, "qmcpack");
     assert_eq!(plan.rules.len(), recipe.rules.len());
     assert!(plan.rules.len() >= 10);
     assert!(plan.dependencies.iter().any(|dependency| {
         dependency.name == "mpi" && dependency.virtual_capability.as_deref() == Some("mpi")
+    }));
+}
+
+#[test]
+fn spack_patches_preserve_artifacts_and_specialize_package_versions() {
+    let source = r#"
+class Orbit(Package):
+    homepage = "https://example.invalid/orbit"
+    url = "https://example.invalid/orbit-2.0.tar.gz"
+    version("2.0", sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+    patch(
+        "https://example.invalid/patches/current.patch?full_index=1",
+        sha256="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        when="@1.5:2.0",
+    )
+    patch(
+        "https://example.invalid/patches/old.patch",
+        sha256="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        when="@:1.4",
+    )
+    patch(
+        "https://example.invalid/patches/cuda.patch",
+        sha256="dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        when="+cuda",
+    )
+    variant("cuda", default=False, description="CUDA support")
+"#;
+    let recipe = parse_foreign_str(ForeignFormat::Spack, source).expect("Spack patches");
+
+    assert_eq!(recipe.patches.len(), 3);
+    assert_eq!(
+        recipe.patches[0].location,
+        "https://example.invalid/patches/current.patch?full_index=1"
+    );
+    assert_eq!(
+        recipe.patches[0].sha256.as_deref(),
+        Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    );
+    assert!(!recipe.patches[0].provenance.is_empty());
+
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain("2026.1"));
+    assert_eq!(
+        plan.build
+            .patches
+            .iter()
+            .map(|patch| patch.filename.as_str())
+            .collect::<Vec<_>>(),
+        ["current.patch", "cuda.patch"]
+    );
+    assert_eq!(
+        plan.build.patches[0].url.as_deref(),
+        Some("https://example.invalid/patches/current.patch?full_index=1")
+    );
+
+    let default = materialize_profile(&plan, "default", &ProfileEnvironment::default())
+        .expect("default profile");
+    assert_eq!(default.build.patches.len(), 1);
+    assert_eq!(default.build.patches[0].filename, "current.patch");
+
+    plan.profiles[0].features.insert("cuda".into(), true);
+    let cuda = materialize_profile(&plan, "default", &ProfileEnvironment::default())
+        .expect("CUDA profile");
+    assert_eq!(
+        cuda.build
+            .patches
+            .iter()
+            .map(|patch| patch.filename.as_str())
+            .collect::<Vec<_>>(),
+        ["current.patch", "cuda.patch"]
+    );
+}
+
+#[test]
+fn applicable_imperative_spack_patch_method_is_a_residual() {
+    let source = r#"
+class Orbit(Package):
+    homepage = "https://example.invalid/orbit"
+    url = "https://example.invalid/orbit-2.0.tar.gz"
+    version("2.0", sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+    @when("@2.0")
+    def patch(self):
+        filter_file("before", "after", "CMakeLists.txt")
+"#;
+    let recipe = parse_foreign_str(ForeignFormat::Spack, source).expect("Spack patch method");
+    assert!(recipe.notes.iter().any(|note| {
+        note.contains("residual") && note.contains("imperative patch method")
     }));
 }
 
