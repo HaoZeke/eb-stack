@@ -41,8 +41,8 @@ pub use eb_style::{
 };
 pub use foreign::{
     detect_foreign_format, parse_foreign_path, parse_foreign_str, ForeignDep, ForeignError,
-    ForeignFormat, ForeignPatch, ForeignRecipe, ForeignRule, ForeignRuleKind, ForeignSource,
-    ForeignVariant,
+    ForeignFormat, ForeignPatch, ForeignRecipe, ForeignResidual, ForeignRule, ForeignRuleKind,
+    ForeignSource, ForeignVariant,
 };
 pub use hierarchy::hierarchy_for_with_tree;
 pub use hierarchy::{

@@ -95,27 +95,20 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
         verification_commands: Vec::new(),
     };
 
-    let mut residuals = Vec::new();
-    for (index, note) in recipe
-        .notes
+    let mut residuals = recipe
+        .residuals
         .iter()
-        .chain(easyblock_notes.iter())
-        .filter(|note| {
-            let note = note.to_ascii_lowercase();
-            note.contains("residual") || note.contains("dynamic") || note.contains("no sha256")
-        })
         .enumerate()
-    {
-        residuals.push(Residual {
-            id: format!("foreign-note:{index}"),
+        .map(|(index, residual)| Residual {
+            id: format!("foreign:{}:{index}", residual.category),
             stage: ResidualStage::Parse,
-            category: "foreign-metadata".into(),
-            severity: ResidualSeverity::Judgment,
-            summary: note.clone(),
-            evidence: None,
-            provenance: None,
-        });
-    }
+            category: residual.category.clone(),
+            severity: residual.severity,
+            summary: residual.summary.clone(),
+            evidence: residual.evidence.clone(),
+            provenance: residual.provenance.clone(),
+        })
+        .collect::<Vec<_>>();
     if recipe.sources.iter().any(|source| source.sha256.is_none()) {
         residuals.push(Residual {
             id: "source:missing-sha256".into(),

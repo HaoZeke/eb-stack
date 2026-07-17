@@ -28,7 +28,9 @@
 //! Canonical package planning, Resolvo selection, and EasyBuild emission live
 //! in their dedicated stages.
 
-use crate::package::{ConditionExpr, ConditionPredicate, Confidence, Provenance, SourceSpan};
+use crate::package::{
+    ConditionExpr, ConditionPredicate, Confidence, Provenance, ResidualSeverity, SourceSpan,
+};
 use crate::spack_syntax::{parse_spack_syntax, StaticCall, StaticScopedCondition, StaticValue};
 use chrono::NaiveDate;
 use regex::Regex;
@@ -101,6 +103,18 @@ pub struct ForeignPatch {
     pub condition: ConditionExpr,
     #[serde(default)]
     pub provenance: Vec<Provenance>,
+}
+
+/// Parser work that cannot be represented mechanically in the canonical plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForeignResidual {
+    pub category: String,
+    pub severity: ResidualSeverity,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<Provenance>,
 }
 
 /// Variant / feature flag from Spack `variant()` or residual conda feature.
@@ -176,6 +190,9 @@ pub struct ForeignRecipe {
     pub rules: Vec<ForeignRule>,
     /// Human notes from the parser.
     pub notes: Vec<String>,
+    /// Typed work that remains after syntax normalization.
+    #[serde(default)]
+    pub residuals: Vec<ForeignResidual>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -246,6 +263,11 @@ fn set_recipe_source_path(recipe: &mut ForeignRecipe, path: &str) {
             provenance.span.path = path.to_string();
         }
     }
+    for residual in &mut recipe.residuals {
+        if let Some(provenance) = &mut residual.provenance {
+            provenance.span.path = path.to_string();
+        }
+    }
 }
 
 fn source_span(text: &str, start: usize, end: usize) -> SourceSpan {
@@ -289,6 +311,16 @@ fn provenance_for_text(text: &str, needle: &str, extractor: &str) -> Provenance 
     let start = text.find(needle).unwrap_or(0);
     let end = start.saturating_add(needle.len()).min(text.len());
     provenance_for_range(text, start, end, extractor, Confidence::Derived)
+}
+
+fn foreign_residual(category: &str, summary: impl Into<String>) -> ForeignResidual {
+    ForeignResidual {
+        category: category.into(),
+        severity: ResidualSeverity::Judgment,
+        summary: summary.into(),
+        evidence: None,
+        provenance: None,
+    }
 }
 
 fn extract_spack_config_flags(text: &str) -> Option<String> {
@@ -356,7 +388,7 @@ pub(crate) fn guess_easyblock(recipe: &ForeignRecipe, warnings: &mut Vec<String>
 
 fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let mut notes = Vec::new();
-    let (expanded, ctx_notes) = expand_conda_templates(text);
+    let (expanded, ctx_notes, mut residuals) = expand_conda_templates(text);
     notes.extend(ctx_notes);
     let expanded = structure_conda_requirement_selectors(&expanded);
 
@@ -507,14 +539,20 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
         .and_then(|v| v.as_mapping())
     {
         if b.get(YamlValue::from("number")).is_some() {
-            notes.push("conda: build.number present (not an EB field; residual)".into());
+            let summary = "conda: build.number present (not an EasyBuild field)";
+            notes.push(summary.into());
+            residuals.push(foreign_residual("build-metadata", summary));
         }
         if b.get(YamlValue::from("script")).is_some() {
-            notes.push("conda: build.script present — product build residual".into());
+            let summary = "conda: build.script requires EasyBuild product translation";
+            notes.push(summary.into());
+            residuals.push(foreign_residual("build-script", summary));
         }
     }
     if map.get(YamlValue::from("test")).is_some() {
-        notes.push("conda: test: section present — residual (not mapped to EB sanity)".into());
+        let summary = "conda: test section requires EasyBuild sanity translation";
+        notes.push(summary.into());
+        residuals.push(foreign_residual("test-metadata", summary));
     }
 
     // Build system hints from build deps
@@ -552,6 +590,7 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
         variants: Vec::new(),
         rules: Vec::new(),
         notes,
+        residuals,
     })
 }
 
@@ -633,8 +672,9 @@ fn collect_conda_source_patches(source: &YamlValue, patches: &mut Vec<String>) {
 
 /// Expand deterministic `{% set %}` expressions, `context:` scalars, and
 /// supported variable-filter expressions in `${{ ... }}` / `{{ ... }}`.
-fn expand_conda_templates(text: &str) -> (String, Vec<String>) {
+fn expand_conda_templates(text: &str) -> (String, Vec<String>, Vec<ForeignResidual>) {
     let mut notes = Vec::new();
+    let mut residuals = Vec::new();
     let mut vars: HashMap<String, String> = HashMap::new();
     let mut dates: HashMap<String, NaiveDate> = HashMap::new();
 
@@ -696,10 +736,12 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>) {
         ));
     }
     if !unresolved_sets.is_empty() {
-        notes.push(format!(
-            "unevaluated template assignment(s) retained as residuals: {}",
+        let summary = format!(
+            "unevaluated template assignment(s): {}",
             unresolved_sets.join(", ")
-        ));
+        );
+        notes.push(summary.clone());
+        residuals.push(foreign_residual("template-evaluation", summary));
     }
 
     let mut out = text.to_string();
@@ -732,13 +774,13 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>) {
     out = expand_conda_variable_expressions(&out, &vars);
 
     if out.contains("{{") || out.contains("${{") {
-        notes.push(
-            "residual Jinja/template constructs remain after expand (compiler macros, selectors)"
-                .into(),
-        );
+        let summary =
+            "Jinja/template constructs remain after expansion (compiler macros or selectors)";
+        notes.push(summary.into());
+        residuals.push(foreign_residual("template-evaluation", summary));
     }
 
-    (out, notes)
+    (out, notes, residuals)
 }
 
 fn expand_conda_variable_expressions(text: &str, vars: &HashMap<String, String>) -> String {
@@ -1193,6 +1235,11 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
     notes.push("Spack package.py: static Python AST evaluation (no execution)".into());
     let syntax = parse_spack_syntax(text).map_err(ForeignError::Parse)?;
     notes.extend(syntax.residuals.iter().cloned());
+    let mut residuals = syntax
+        .residuals
+        .iter()
+        .map(|summary| foreign_residual("dynamic-directive", summary.clone()))
+        .collect::<Vec<_>>();
     let class_name = syntax.class_name.as_str();
     let bases = syntax.bases.clone();
     let name = spack_class_to_pkg_name(class_name);
@@ -1255,9 +1302,10 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
                 preferred.version
             ));
         } else {
-            notes.push(
-                "dynamic url_for_version could not be materialized; stale class URL ignored".into(),
-            );
+            let summary =
+                "dynamic url_for_version could not be materialized; stale class URL ignored";
+            notes.push(summary.into());
+            residuals.push(foreign_residual("dynamic-source", summary));
         }
         materialized
     } else {
@@ -1333,10 +1381,21 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
         let condition =
             static_conditions(&method.scoped_when).specialize_package_version(&preferred.version);
         if condition != ConditionExpr::Never {
-            let line = source_span(text, method.start, method.end).start_line;
+            let provenance = provenance_for_range(
+                text,
+                method.start,
+                method.end,
+                "spack-static",
+                Confidence::Exact,
+            );
+            let summary = "imperative patch method requires EasyBuild translation";
             notes.push(format!(
-                "residual: imperative patch method requires EasyBuild translation at package.py:{line}"
+                "{summary} at package.py:{}",
+                provenance.span.start_line
             ));
+            let mut residual = foreign_residual("imperative-patch", summary);
+            residual.provenance = Some(provenance);
+            residuals.push(residual);
         }
     }
 
@@ -1359,6 +1418,7 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
         variants,
         rules,
         notes,
+        residuals,
     })
 }
 

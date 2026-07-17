@@ -564,11 +564,23 @@ class Orbit(Package):
     def patch(self):
         filter_file("before", "after", "CMakeLists.txt")
 "#;
-    let recipe = parse_foreign_str(ForeignFormat::Spack, source).expect("Spack patch method");
-    assert!(recipe
-        .notes
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source_path = temp.path().join("package.py");
+    std::fs::write(&source_path, source).expect("write Spack package");
+    let recipe = parse_foreign_path(&source_path, None).expect("Spack patch method");
+    let residual = recipe
+        .residuals
         .iter()
-        .any(|note| { note.contains("residual") && note.contains("imperative patch method") }));
+        .find(|residual| residual.category == "imperative-patch")
+        .expect("typed imperative patch residual");
+    assert!(residual.summary.contains("imperative patch method"));
+    assert_eq!(
+        residual
+            .provenance
+            .as_ref()
+            .map(|provenance| provenance.span.path.as_str()),
+        source_path.to_str()
+    );
 }
 
 #[test]
