@@ -296,7 +296,10 @@ fn admit_stack_pin_closures(
             .iter()
             .filter(|candidate| stack_pin_candidate_matches(candidate, pin))
         {
-            if paths.insert(candidate.easyconfig_path.clone()) {
+            // A version-only pin constrains candidates in the target
+            // hierarchy. Crossing toolchain generations requires the pin to
+            // identify the foreign toolchain explicitly.
+            if pin.toolchain.is_some() && paths.insert(candidate.easyconfig_path.clone()) {
                 admitted.push(candidate.clone());
                 queue.push_back(candidate.clone());
             }
