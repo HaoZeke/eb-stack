@@ -159,8 +159,10 @@ source path can refine foreign metadata without creating a duplicate.
 Easyconfig parameters are typed data, not Python fragments. Requirements
 enter the canonical manifest and CycloneDX SBOM before Resolvo selects a
 version. Package planning requires every source and patch SHA-256; emitted
-checksums remain positional with sources first and patches second. Verified
-patch assets are copied beside every emitted recipe.
+checksums remain positional with sources first and patches second. Local patch
+assets are verified and copied beside every emitted recipe. Checksum-addressed
+remote patches retain their exact URL in `patches`; EasyBuild downloads and
+verifies them during the build.
 
 ```sh
 eb-stack package plan \

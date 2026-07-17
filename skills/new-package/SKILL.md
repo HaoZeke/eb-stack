@@ -69,6 +69,13 @@ the emitted easyconfig is all source artifacts followed by all patch artifacts.
 Relative sources resolve against the package TOML, and verified patch bytes are
 copied beside the emitted easyconfig.
 
+Static Spack `patch()` directives are structured artifacts. Exact remote URLs,
+SHA-256 values, provenance, and `when` conditions survive ingestion. The
+selected package version removes inapplicable directives; feature conditions
+remain until profile materialization. EasyBuild downloads remote patch URLs and
+checks their positional checksum. An applicable imperative Spack `def patch`
+method is residual authoring work for the campaign agent.
+
 Create one product profile per independently installable variant. Each profile emits one `.eb` file.
 
 - Keep the default CPU or standard MPI/OpenMP profile unsuffixed.

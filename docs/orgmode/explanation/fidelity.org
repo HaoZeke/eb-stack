@@ -91,7 +91,9 @@ conda-forge and Spack fixtures describe the same upstream product through
 different recipe languages. The conda fixture exercises multiple sources,
 feedstock patches, selectors, and build/output dependency roles; the Spack
 fixture exercises version URL generation, resources, variants, conflicts, and
-conditional dependencies.
+conditional dependencies. Static Spack patch directives use the same artifact
+model as conda patches, including checksum and applicability; version-excluded
+patches do not leak into the selected build manifest.
 
 Both inputs pass through the same parser-neutral package plan, selector
 materialization, Resolvo selection, CycloneDX emission, closure expansion, and
