@@ -226,9 +226,11 @@ source = "distribution stack"
 A preferred pin is favored when jointly feasible. Resolvo may choose another
 compatible candidate and records the requested version, toolchain,
 versionsuffix, selected identity, and fallback. A locked pin cannot fall back.
-Omitting ~toolchain~ or ~versionsuffix~ leaves that part of the artifact
-identity unconstrained. Candidate exclusions record known target/build
-evidence and stay visible in the profile lock.
+Omitting ~toolchain~ leaves the pin unconstrained within the target hierarchy;
+cross-generation admission requires an explicit toolchain. Omitting
+~versionsuffix~ leaves that part of the artifact identity unconstrained.
+Candidate exclusions record known target/build evidence and stay visible in
+the profile lock.
 
 * Plan the complete bundle
 
