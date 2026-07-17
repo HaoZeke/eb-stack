@@ -142,7 +142,11 @@ fn conda_lammps_expands_deterministic_date_templates() {
         .as_deref()
         .is_some_and(|url| url.ends_with("stable_22Jul2025_update4.tar.gz")));
     assert_eq!(
-        recipe.patches,
+        recipe
+            .patches
+            .iter()
+            .map(|patch| patch.location.as_str())
+            .collect::<Vec<_>>(),
         [
             "macos_install.patch",
             "vcsgc_mtp_n2p2.patch",
@@ -446,13 +450,20 @@ fn spack_qmcpack_preserves_variants_rules_and_conditions() {
         .iter()
         .any(|dependency| dependency.name == "python"));
     let plan = package_plan_from_foreign(&recipe, &toolchain("2026.1"));
-    assert_eq!(recipe.patches.len(), 3, "static patch directives are preserved");
+    assert_eq!(
+        recipe.patches.len(),
+        3,
+        "static patch directives are preserved"
+    );
     assert!(
         plan.build.patches.is_empty(),
         "QMCPACK 4.3.0 excludes patches constrained to 3.1.0:3.3.0"
     );
     assert!(
-        !recipe.notes.iter().any(|note| note.contains("patch") && note.contains("residual")),
+        !recipe
+            .notes
+            .iter()
+            .any(|note| note.contains("patch") && note.contains("residual")),
         "version-inapplicable static directives and patch methods are not residual work: {:?}",
         recipe.notes
     );
@@ -547,9 +558,10 @@ class Orbit(Package):
         filter_file("before", "after", "CMakeLists.txt")
 "#;
     let recipe = parse_foreign_str(ForeignFormat::Spack, source).expect("Spack patch method");
-    assert!(recipe.notes.iter().any(|note| {
-        note.contains("residual") && note.contains("imperative patch method")
-    }));
+    assert!(recipe
+        .notes
+        .iter()
+        .any(|note| { note.contains("residual") && note.contains("imperative patch method") }));
 }
 
 #[test]

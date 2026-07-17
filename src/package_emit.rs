@@ -132,17 +132,22 @@ fn render_easyconfig(
     };
     let (source_lines, checksum_lines) = render_sources(
         &materialized.sources,
-        &plan.build.patches,
+        &materialized.build.patches,
         materialized.build.source_root.as_deref(),
     );
-    let patch_line = if plan.build.patches.is_empty() {
+    let patch_line = if materialized.build.patches.is_empty() {
         String::new()
     } else {
-        let patches = plan
+        let patches = materialized
             .build
             .patches
             .iter()
-            .map(|patch| format!("'{}'", escape_single(&patch.filename)))
+            .map(|patch| {
+                format!(
+                    "'{}'",
+                    escape_single(patch.url.as_deref().unwrap_or(&patch.filename))
+                )
+            })
             .collect::<Vec<_>>();
         format!("patches = {}\n", render_multiline_list(&patches))
     };

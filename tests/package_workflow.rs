@@ -239,3 +239,48 @@ source:
         )
     }));
 }
+
+#[test]
+fn remote_spack_patches_need_no_local_bundle_asset() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("package.py");
+    std::fs::write(
+        &source,
+        r#"
+class Orbit(Package):
+    homepage = "https://example.invalid/orbit"
+    url = "https://example.invalid/orbit-2.0.tar.gz"
+    version("2.0", sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    patch(
+        "https://example.invalid/commits/fix.patch?full_index=1",
+        sha256="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    )
+"#,
+    )
+    .expect("write Spack package");
+    let robot = temp.path().join("robot");
+    std::fs::create_dir(&robot).expect("robot directory");
+    let bundle = plan_new_package(&NewPackageRequest {
+        source,
+        format: Some(ForeignFormat::Spack),
+        toolchain: toolchain(),
+        source_checksums: Vec::new(),
+        package_layers: Vec::new(),
+        easyconfig_roots: vec![robot],
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "test".into(),
+            toolchain: toolchain(),
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+    })
+    .expect("plan remote patch");
+
+    let written = write_package_bundle(&bundle, &temp.path().join("bundle"))
+        .expect("write remote-patch bundle");
+    assert!(written.patches.is_empty());
+    let easyconfig = std::fs::read_to_string(&written.easyconfigs[0]).expect("easyconfig");
+    assert!(easyconfig
+        .contains("patches = [\n    'https://example.invalid/commits/fix.patch?full_index=1',\n]"));
+}

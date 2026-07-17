@@ -62,6 +62,13 @@ pub(crate) struct StaticCall {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub(crate) struct StaticDynamicPatch {
+    pub(crate) scoped_when: Vec<StaticScopedCondition>,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum StaticScopedCondition {
     Spec(String),
     Opaque(String),
@@ -91,6 +98,7 @@ pub(crate) struct SpackSyntax {
     pub(crate) bases: Vec<String>,
     pub(crate) attributes: BTreeMap<String, StaticValue>,
     pub(crate) calls: Vec<StaticCall>,
+    pub(crate) dynamic_patches: Vec<StaticDynamicPatch>,
     pub(crate) residuals: Vec<String>,
 }
 
@@ -119,6 +127,7 @@ pub(crate) fn parse_spack_syntax(source: &str) -> Result<SpackSyntax, String> {
         bases,
         attributes: evaluator.attributes,
         calls: evaluator.calls,
+        dynamic_patches: evaluator.dynamic_patches,
         residuals: evaluator.residuals,
     })
 }
@@ -128,6 +137,7 @@ struct StaticEvaluator<'a> {
     environment: BTreeMap<String, StaticValue>,
     attributes: BTreeMap<String, StaticValue>,
     calls: Vec<StaticCall>,
+    dynamic_patches: Vec<StaticDynamicPatch>,
     residuals: Vec<String>,
     scoped_when: Vec<StaticScopedCondition>,
 }
@@ -139,6 +149,7 @@ impl<'a> StaticEvaluator<'a> {
             environment: BTreeMap::new(),
             attributes: BTreeMap::new(),
             calls: Vec::new(),
+            dynamic_patches: Vec::new(),
             residuals: Vec::new(),
             scoped_when: Vec::new(),
         }
@@ -166,8 +177,8 @@ impl<'a> StaticEvaluator<'a> {
             ast::Stmt::For(statement) => self.walk_for(statement),
             ast::Stmt::With(statement) => self.walk_with(statement),
             ast::Stmt::If(statement) => self.walk_if(statement),
-            ast::Stmt::FunctionDef(_)
-            | ast::Stmt::AsyncFunctionDef(_)
+            ast::Stmt::FunctionDef(function) => self.record_patch_method(function),
+            ast::Stmt::AsyncFunctionDef(_)
             | ast::Stmt::ClassDef(_)
             | ast::Stmt::Import(_)
             | ast::Stmt::ImportFrom(_)
@@ -342,6 +353,37 @@ impl<'a> StaticEvaluator<'a> {
             args,
             kwargs,
             scoped_when: self.scoped_when.clone(),
+            start: text_offset(range.start()),
+            end: text_offset(range.end()),
+        });
+    }
+
+    fn record_patch_method(&mut self, function: &ast::StmtFunctionDef) {
+        if function.name.as_str() != "patch" {
+            return;
+        }
+        let mut scoped_when = self.scoped_when.clone();
+        for decorator in &function.decorator_list {
+            let condition = match decorator {
+                ast::Expr::Call(call)
+                    if expression_name(&call.func).as_deref() == Some("when")
+                        && call.args.len() == 1 =>
+                {
+                    match self
+                        .evaluate(&call.args[0])
+                        .and_then(|value| value.as_string())
+                    {
+                        Some(condition) => StaticScopedCondition::Spec(condition),
+                        None => StaticScopedCondition::Opaque(self.source_fragment(&call.args[0])),
+                    }
+                }
+                _ => continue,
+            };
+            scoped_when.push(condition);
+        }
+        let range = function.range();
+        self.dynamic_patches.push(StaticDynamicPatch {
+            scoped_when,
             start: text_offset(range.start()),
             end: text_offset(range.end()),
         });

@@ -158,11 +158,24 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             patches: recipe
                 .patches
                 .iter()
-                .map(|filename| PatchArtifact {
-                    filename: filename.clone(),
-                    sha256: None,
-                    source: None,
-                    resolved_source: None,
+                .filter_map(|patch| {
+                    let condition = patch.condition.specialize_package_version(&recipe.version);
+                    if condition == crate::package::ConditionExpr::Never {
+                        return None;
+                    }
+                    let remote = is_remote_patch(&patch.location);
+                    Some(PatchArtifact {
+                        filename: if remote {
+                            remote_patch_filename(&patch.location)?
+                        } else {
+                            patch.location.clone()
+                        },
+                        sha256: patch.sha256.clone(),
+                        url: remote.then(|| patch.location.clone()),
+                        source: None,
+                        condition,
+                        resolved_source: None,
+                    })
                 })
                 .collect(),
             easyconfig_parameters: BTreeMap::new(),
@@ -174,6 +187,22 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
         }],
         residuals,
     }
+}
+
+fn is_remote_patch(location: &str) -> bool {
+    ["http://", "https://", "ftp://"]
+        .iter()
+        .any(|prefix| location.starts_with(prefix))
+}
+
+fn remote_patch_filename(location: &str) -> Option<String> {
+    let path = location
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(location)
+        .trim_end_matches('/');
+    let filename = path.rsplit('/').next()?;
+    (!filename.is_empty()).then(|| filename.to_string())
 }
 
 fn canonical_version_constraint(format: ForeignFormat, pin: Option<&str>) -> Option<String> {

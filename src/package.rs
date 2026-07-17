@@ -300,6 +300,29 @@ pub struct ConditionContext {
 }
 
 impl ConditionExpr {
+    /// Resolve package-version predicates while preserving conditions that
+    /// depend on a profile, toolchain, platform, or dependency selection.
+    pub fn specialize_package_version(&self, package_version: &str) -> Self {
+        match self {
+            Self::Always | Self::Never => self.clone(),
+            Self::Predicate(ConditionPredicate::PackageVersion { requirement }) => {
+                if matches_req(package_version, requirement) {
+                    Self::Always
+                } else {
+                    Self::Never
+                }
+            }
+            Self::Predicate(_) | Self::Opaque { .. } => self.clone(),
+            Self::All(expressions) => specialize_all(expressions, package_version),
+            Self::Any(expressions) => specialize_any(expressions, package_version),
+            Self::Not(expression) => match expression.specialize_package_version(package_version) {
+                Self::Always => Self::Never,
+                Self::Never => Self::Always,
+                expression => Self::Not(Box::new(expression)),
+            },
+        }
+    }
+
     pub fn evaluate(&self, context: &ConditionContext) -> bool {
         match self {
             Self::Always => true,
@@ -310,6 +333,40 @@ impl ConditionExpr {
             Self::Not(expression) => !expression.evaluate(context),
             Self::Opaque { .. } => false,
         }
+    }
+}
+
+fn specialize_all(expressions: &[ConditionExpr], package_version: &str) -> ConditionExpr {
+    let mut specialized = Vec::new();
+    for expression in expressions {
+        match expression.specialize_package_version(package_version) {
+            ConditionExpr::Never => return ConditionExpr::Never,
+            ConditionExpr::Always => {}
+            ConditionExpr::All(nested) => specialized.extend(nested),
+            expression => specialized.push(expression),
+        }
+    }
+    match specialized.len() {
+        0 => ConditionExpr::Always,
+        1 => specialized.pop().unwrap_or(ConditionExpr::Always),
+        _ => ConditionExpr::All(specialized),
+    }
+}
+
+fn specialize_any(expressions: &[ConditionExpr], package_version: &str) -> ConditionExpr {
+    let mut specialized = Vec::new();
+    for expression in expressions {
+        match expression.specialize_package_version(package_version) {
+            ConditionExpr::Always => return ConditionExpr::Always,
+            ConditionExpr::Never => {}
+            ConditionExpr::Any(nested) => specialized.extend(nested),
+            expression => specialized.push(expression),
+        }
+    }
+    match specialized.len() {
+        0 => ConditionExpr::Never,
+        1 => specialized.pop().unwrap_or(ConditionExpr::Never),
+        _ => ConditionExpr::Any(specialized),
     }
 }
 
@@ -503,8 +560,13 @@ pub struct PatchArtifact {
     pub filename: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
+    /// Exact remote patch URL accepted by EasyBuild's `patches` parameter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    #[serde(default)]
+    pub condition: ConditionExpr,
     #[serde(skip)]
     pub resolved_source: Option<PathBuf>,
 }
@@ -719,10 +781,14 @@ pub fn materialize_profile(
         .filter(|rule| rule.condition.evaluate(&context))
         .cloned()
         .collect();
+    let mut build = plan.build.clone();
+    build
+        .patches
+        .retain(|patch| patch.condition.evaluate(&context));
 
     Ok(MaterializedProfile {
         package: plan.package.clone(),
-        build: plan.build.clone(),
+        build,
         sources,
         versionsuffix: profile.versionsuffix.concat(),
         profile,

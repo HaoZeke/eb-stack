@@ -5,7 +5,8 @@ use eb_stack::package::{
 };
 use eb_stack::{
     emit_profile_easyconfigs, lint_style, package_plan_from_foreign, parse_foreign_path,
-    resolve_easyconfig_str, solve_package_profile, Candidate, DepReq, ForeignFormat, Toolchain,
+    parse_foreign_str, resolve_easyconfig_str, solve_package_profile, Candidate, DepReq,
+    ForeignFormat, Toolchain,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -337,7 +338,9 @@ fn patch_artifacts_emit_names_and_positional_checksums_after_sources() {
     plan.build.patches = vec![PatchArtifact {
         filename: "Orbit-2.0-portability.patch".into(),
         sha256: Some("4f43b42fdcf84d0cf634d993dd944f252c8243dc612a919fe2825d56f937c8eb".into()),
+        url: None,
         source: None,
+        condition: ConditionExpr::Always,
         resolved_source: None,
     }];
     let mut lock = profile_lock("default", "");
@@ -352,6 +355,43 @@ fn patch_artifacts_emit_names_and_positional_checksums_after_sources() {
         .expect("source checksum");
     let patch_checksum = text
         .find("4f43b42fdcf84d0cf634d993dd944f252c8243dc612a919fe2825d56f937c8eb")
+        .expect("patch checksum");
+    assert!(source_checksum < patch_checksum);
+    assert!(lint_style(text).is_empty(), "{:?}", lint_style(text));
+}
+
+#[test]
+fn remote_spack_patch_is_an_easybuild_patch_url() {
+    let recipe = parse_foreign_str(
+        ForeignFormat::Spack,
+        r#"
+class Orbit(Package):
+    homepage = "https://example.invalid/orbit"
+    url = "https://example.invalid/orbit-2.0.tar.gz"
+    version("2.0", sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    patch(
+        "https://example.invalid/commits/fix.patch?full_index=1",
+        sha256="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    )
+"#,
+    )
+    .expect("Spack remote patch");
+    let plan = package_plan_from_foreign(&recipe, &toolchain());
+    let mut lock = profile_lock("default", "");
+    lock.package.clone_from(&plan.package.name);
+    lock.version.clone_from(&plan.package.version);
+    lock.dependencies.clear();
+
+    let emitted = emit_profile_easyconfigs(&plan, &[lock]).expect("emit remote patch");
+    let text = &emitted[0].text;
+
+    assert!(text
+        .contains("patches = [\n    'https://example.invalid/commits/fix.patch?full_index=1',\n]"));
+    let source_checksum = text
+        .find("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        .expect("source checksum");
+    let patch_checksum = text
+        .find("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
         .expect("patch checksum");
     assert!(source_checksum < patch_checksum);
     assert!(lint_style(text).is_empty(), "{:?}", lint_style(text));

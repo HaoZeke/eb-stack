@@ -92,13 +92,10 @@ fn materialize_foreign_local_patches(
         return Ok(());
     };
     for patch in &mut plan.build.patches {
-        if patch.sha256.is_some() || patch.source.is_some() || patch.resolved_source.is_some() {
+        if patch.url.is_some() || patch.resolved_source.is_some() {
             continue;
         }
-        if patch.filename.contains("://") {
-            continue;
-        }
-        let declared_source = PathBuf::from(&patch.filename);
+        let declared_source = PathBuf::from(patch.source.as_deref().unwrap_or(&patch.filename));
         let resolved_source = if declared_source.is_absolute() {
             declared_source.clone()
         } else {
@@ -115,7 +112,9 @@ fn materialize_foreign_local_patches(
             .ok_or_else(|| PackageWorkflowError::MissingPatchSource(patch.filename.clone()))?
             .to_string();
         patch.filename = filename;
-        patch.sha256 = Some(sha256_hex(&bytes));
+        if patch.sha256.is_none() {
+            patch.sha256 = Some(sha256_hex(&bytes));
+        }
         patch.source = Some(declared_source.display().to_string());
         patch.resolved_source = Some(resolved_source);
     }
@@ -259,9 +258,10 @@ fn require_source_checksums(plan: &PackagePlan) -> Result<(), PackageWorkflowErr
     }
     for patch in &plan.build.patches {
         validate_patch_checksum(patch)?;
-        if plan.origin != PackageOrigin::EasyBuild
-            || patch.resolved_source.is_some()
-            || patch.source.is_some()
+        if patch.url.is_none()
+            && (plan.origin != PackageOrigin::EasyBuild
+                || patch.resolved_source.is_some()
+                || patch.source.is_some())
         {
             validate_patch_source(patch)?;
         }
@@ -309,7 +309,9 @@ fn refresh_checksum_residuals(plan: &mut PackagePlan) {
         .build
         .patches
         .iter()
-        .filter(|patch| patch.resolved_source.is_none() && patch.source.is_none())
+        .filter(|patch| {
+            patch.url.is_none() && patch.resolved_source.is_none() && patch.source.is_none()
+        })
         .map(|patch| patch.filename.as_str())
         .collect::<Vec<_>>();
     if !missing_patch_sources.is_empty() {
@@ -562,9 +564,11 @@ fn package_plan_from_easyconfig(
             PatchArtifact {
                 filename: filename.clone(),
                 sha256: recipe.checksums.get(source_count + index).cloned(),
+                url: None,
                 source: resolved_source
                     .as_deref()
                     .map(|source| source.display().to_string()),
+                condition: ConditionExpr::Always,
                 resolved_source,
             }
         })
@@ -699,6 +703,9 @@ pub fn write_package_bundle_into(
             easyconfigs.push(path);
         }
         for patch in &bundle.plan.build.patches {
+            if patch.url.is_some() {
+                continue;
+            }
             if bundle.plan.origin == PackageOrigin::EasyBuild
                 && patch.resolved_source.is_none()
                 && patch.source.is_none()

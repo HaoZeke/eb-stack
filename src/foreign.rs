@@ -90,6 +90,19 @@ pub struct ForeignSource {
     pub condition: ConditionExpr,
 }
 
+/// A patch directive preserved from a foreign recipe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForeignPatch {
+    /// Local path or exact remote URL as declared by the source recipe.
+    pub location: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    #[serde(default)]
+    pub condition: ConditionExpr,
+    #[serde(default)]
+    pub provenance: Vec<Provenance>,
+}
+
 /// Variant / feature flag from Spack `variant()` or residual conda feature.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ForeignVariant {
@@ -151,10 +164,10 @@ pub struct ForeignRecipe {
     /// Mechanically extracted configure flags (e.g. Spack meson_args / cmake_args literals).
     #[serde(default)]
     pub configopts: Option<String>,
-    /// Patch filenames / URLs recorded from the foreign recipe for canonical
-    /// planning and bundle materialization.
+    /// Patch artifacts recorded from the foreign recipe for canonical planning
+    /// and bundle materialization.
     #[serde(default)]
-    pub patches: Vec<String>,
+    pub patches: Vec<ForeignPatch>,
     /// Spack variants (and residual conda features when recorded).
     #[serde(default)]
     pub variants: Vec<ForeignVariant>,
@@ -227,6 +240,11 @@ fn set_recipe_source_path(recipe: &mut ForeignRecipe, path: &str) {
     }
     for rule in &mut recipe.rules {
         rule.provenance.span.path = path.to_string();
+    }
+    for patch in &mut recipe.patches {
+        for provenance in &mut patch.provenance {
+            provenance.span.path = path.to_string();
+        }
     }
 }
 
@@ -473,6 +491,15 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
     if !patches.is_empty() {
         notes.push(format!("conda: {} patch path(s) recorded", patches.len()));
     }
+    let patches = patches
+        .into_iter()
+        .map(|location| ForeignPatch {
+            provenance: vec![provenance_for_text(text, &location, "conda-static")],
+            location,
+            sha256: None,
+            condition: ConditionExpr::Always,
+        })
+        .collect();
 
     // build.number residual
     if let Some(b) = map
@@ -1301,16 +1328,16 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
         ));
     }
 
-    let patch_n = syntax
-        .calls
-        .iter()
-        .filter(|call| call.name == "patch")
-        .count();
-    let patches = Vec::new();
-    if patch_n > 0 {
-        notes.push(format!(
-            "{patch_n} patch() directive(s) — recorded as residual patch count"
-        ));
+    let patches = parse_spack_patches(text, &syntax.calls);
+    for method in &syntax.dynamic_patches {
+        let condition =
+            static_conditions(&method.scoped_when).specialize_package_version(&preferred.version);
+        if condition != ConditionExpr::Never {
+            let line = source_span(text, method.start, method.end).start_line;
+            notes.push(format!(
+                "residual: imperative patch method requires EasyBuild translation at package.py:{line}"
+            ));
+        }
     }
 
     Ok(ForeignRecipe {
@@ -1350,7 +1377,11 @@ fn static_placement_target(value: Option<&StaticValue>) -> Option<String> {
 }
 
 fn static_scoped_condition(call: &StaticCall) -> ConditionExpr {
-    call.scoped_when
+    static_conditions(&call.scoped_when)
+}
+
+fn static_conditions(conditions: &[StaticScopedCondition]) -> ConditionExpr {
+    conditions
         .iter()
         .map(|condition| match condition {
             StaticScopedCondition::Spec(spec) => parse_spack_condition(spec),
@@ -1359,6 +1390,33 @@ fn static_scoped_condition(call: &StaticCall) -> ConditionExpr {
             },
         })
         .fold(ConditionExpr::Always, condition_all)
+}
+
+fn parse_spack_patches(text: &str, calls: &[StaticCall]) -> Vec<ForeignPatch> {
+    calls
+        .iter()
+        .filter(|call| call.name == "patch")
+        .filter_map(|call| {
+            let location = call.arg_string(0)?;
+            let direct = call
+                .kw_string("when")
+                .as_deref()
+                .map(parse_spack_condition)
+                .unwrap_or(ConditionExpr::Always);
+            Some(ForeignPatch {
+                location,
+                sha256: call.kw_string("sha256"),
+                condition: condition_all(static_scoped_condition(call), direct),
+                provenance: vec![provenance_for_range(
+                    text,
+                    call.start,
+                    call.end,
+                    "spack-static",
+                    Confidence::Exact,
+                )],
+            })
+        })
+        .collect()
 }
 
 fn spack_license(calls: &[StaticCall]) -> Option<String> {
