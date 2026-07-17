@@ -359,9 +359,8 @@ fn package_bundle_json_is_portable_across_checkout_and_robot_roots() {
     let right = write_portability_fixture(&temp.path().join("right"));
 
     assert_eq!(left, right);
-    assert!(!left.iter().any(|artifact| artifact.contains(
-        temp.path()
-            .to_str()
-            .expect("temporary path is valid UTF-8")
-    )));
+    assert!(!left
+        .iter()
+        .any(|artifact| artifact
+            .contains(temp.path().to_str().expect("temporary path is valid UTF-8"))));
 }
