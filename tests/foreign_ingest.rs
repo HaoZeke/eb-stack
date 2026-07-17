@@ -168,6 +168,33 @@ fn conda_lammps_expands_deterministic_date_templates() {
         .pin
         .as_deref()
         .is_none_or(|pin| !pin.contains("{{"))));
+    assert!(
+        recipe.residuals.is_empty(),
+        "native EasyBuild planning fully represents conda build metadata and toolchain macros: {:?}",
+        recipe.residuals
+    );
+}
+
+#[test]
+fn unresolved_conda_package_template_remains_typed_work() {
+    let source = r#"
+package:
+  name: orbit
+  version: 1.0
+source:
+  url: https://example.invalid/orbit-1.0.tar.gz
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+requirements:
+  host:
+    - backend-${{ unknown_backend }}
+"#;
+
+    let recipe = parse_foreign_str(ForeignFormat::CondaForge, source)
+        .expect("parse unresolved conda template");
+    assert!(recipe
+        .residuals
+        .iter()
+        .any(|residual| residual.category == "template-evaluation"));
 }
 
 #[test]
