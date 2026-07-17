@@ -76,6 +76,11 @@ remain until profile materialization. EasyBuild downloads remote patch URLs and
 checks their positional checksum. An applicable imperative Spack `def patch`
 method is residual authoring work for the campaign agent.
 
+Treat parser notes as diagnostics only. The canonical manifest and residual
+queue are driven by typed residual records; never infer work by matching words
+in note text. Successful source materialization can mention dynamic recipe
+logic without becoming residual work.
+
 Create one product profile per independently installable variant. Each profile emits one `.eb` file.
 
 - Keep the default CPU or standard MPI/OpenMP profile unsuffixed.

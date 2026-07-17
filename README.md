@@ -128,6 +128,11 @@ statically evaluates literal data, bounded loops, formatting, and `when`
 scopes; unsupported runtime expressions become source-located residuals rather
 than guessed dependencies.
 
+Parser notes are informational. Planning consumes only typed residual records,
+so a note about successfully materializing dynamic source logic cannot
+accidentally enqueue Hermes work. Genuine residuals carry a category, severity,
+summary, and optional evidence and source provenance.
+
 Aliases use `foreign = "EasyBuild"` when both names share a version domain.
 Component-to-provider mappings use
 `foreign = { provider = "EasyBuild", constraint = "drop" }`, so a component

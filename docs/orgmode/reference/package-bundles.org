@@ -49,11 +49,31 @@ text, and one of ~exact~, ~derived~, or ~ambiguous~. The static foreign
 adapters preserve facts they can prove and put dynamic or ambiguous logic in
 ~residuals~ instead of inventing EasyBuild metadata.
 
+Parser notes are diagnostics, not a work queue. Canonical planning never
+searches note text for words such as ~dynamic~ or ~residual~. A successfully
+materialized ~url_for_version~, for example, may remain visible as a note but
+does not create residual work. Anything that needs mechanical repair or
+authoring judgment is represented by a typed residual with ~category~,
+~severity~, ~summary~, optional ~evidence~, and optional source ~provenance~.
+
 Residual severity has three values:
 
 - ~mechanical~: deterministic formatting or metadata work;
 - ~judgment~: package-authoring or target evidence is required;
 - ~blocking~: the next pipeline stage cannot make a valid claim.
+
+#+begin_src json
+{
+  "id": "foreign:imperative-patch:0",
+  "stage": "parse",
+  "category": "imperative-patch",
+  "severity": "judgment",
+  "summary": "imperative patch method requires EasyBuild translation",
+  "provenance": {
+    "span": {"path": "package.py", "start_line": 42}
+  }
+}
+#+end_src
 
 The build manifest stores patches as artifacts:
 

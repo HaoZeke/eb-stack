@@ -42,6 +42,11 @@ A directive enters the canonical model only when its arguments evaluate to
 static values. Unsupported expressions become source-located residuals instead
 of partial strings or guessed facts.
 
+Adapters also emit informational notes about successful normalization. Notes
+never determine whether work remains: only structured residual records cross
+into the canonical plan and campaign queue. This keeps language used in a
+diagnostic from changing build behavior.
+
 Adapters do not choose EasyBuild dependency versions or emit placeholder
 recipes. Their output is package intent plus explicit residuals.
 

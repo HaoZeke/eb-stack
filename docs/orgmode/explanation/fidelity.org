@@ -142,7 +142,9 @@ model.
 
 - *Static foreign parsing:* dynamic Python, Jinja, helper calls, or imported
   logic that cannot be proven from source becomes a residual. The parser does
-  not execute conda-forge or Spack recipe code.
+  not execute conda-forge or Spack recipe code. Informational parser notes do
+  not become residuals merely because their text describes dynamic source
+  logic; residual classification is typed at the parser boundary.
 - *Candidate-universe scope:* Resolvo can select only identities present in
   the supplied robot trees. Pass upstream first and overlays afterward so the
   reviewed site identity wins.
