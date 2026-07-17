@@ -21,7 +21,8 @@ use crate::package_workflow::{
 };
 use crate::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use crate::{
-    load_json_file, solve_from_easyconfigs_with_baseline_version_and_extras, SolveExtraOut,
+    load_json_file, lock_to_cyclonedx, solve_from_easyconfigs_with_baseline_version_and_extras,
+    write_json_pretty, SolveExtraOut, StackLock,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -135,7 +136,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("spack_sources", "array"),
             ],
         ),
-        tool(
+        tool_with_optional(
             "eb_package_bump",
             "Retarget an EasyBuild recipe and emit its canonical SBOM, Resolvo lock, and recipe bundle.",
             &[
@@ -145,18 +146,33 @@ fn tool_catalog() -> Vec<Value> {
                 ("easyconfigs", "array"),
                 ("out_dir", "string"),
             ],
+            &[
+                ("version", "string"),
+                ("source_checksum", "string"),
+                ("dependencies", "object"),
+                ("hierarchy_fixture", "string"),
+                ("stack_policy", "string"),
+            ],
         ),
-        tool(
+        tool_with_optional(
             "eb_recipe_check",
             "Check EasyBuild packaging metadata and robot dependency resolution.",
             &[("recipe", "string"), ("easyconfigs", "array")],
+            &[("require_configopts", "array")],
         ),
-        tool(
+        tool_with_optional(
+            "eb_recipe_lint",
+            "Report EasyBuild E501 style findings without rewriting recipes.",
+            &[("recipes", "array")],
+            &[],
+        ),
+        tool_with_optional(
             "eb_recipe_format",
             "Mechanically format EasyBuild E501 findings and report any residual lines.",
             &[("recipe", "string")],
+            &[("out", "string")],
         ),
-        tool(
+        tool_with_optional(
             "eb_stack_solve",
             "Solve a jointly consistent EasyBuild stack lock and optional reports.",
             &[
@@ -164,6 +180,19 @@ fn tool_catalog() -> Vec<Value> {
                 ("policy", "string"),
                 ("lock_out", "string"),
             ],
+            &[
+                ("baseline_easyconfigs", "string"),
+                ("baseline_toolchain_version", "string"),
+                ("sbom_out", "string"),
+                ("build_list_out", "string"),
+                ("stack_diff_out", "string"),
+            ],
+        ),
+        tool_with_optional(
+            "eb_stack_sbom",
+            "Emit CycloneDX from an existing stack lock.",
+            &[("lock", "string")],
+            &[("out", "string")],
         ),
         tool(
             "eb_target_list",
@@ -224,10 +253,10 @@ fn tool_with_optional(
         .iter()
         .chain(optional.iter())
         .map(|(name, kind)| {
-            let schema = if *kind == "array" {
-                json!({"type": "array", "items": {"type": "string"}})
-            } else {
-                json!({"type": kind})
+            let schema = match *kind {
+                "array" => json!({"type": "array", "items": {"type": "string"}}),
+                "object" => json!({"type": "object", "additionalProperties": {"type": "string"}}),
+                other => json!({"type": other}),
             };
             ((*name).to_string(), schema)
         })
@@ -250,8 +279,10 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_package_plan" => package_plan(arguments),
         "eb_package_bump" => package_bump(arguments),
         "eb_recipe_check" => recipe_check(arguments),
+        "eb_recipe_lint" => recipe_lint(arguments),
         "eb_recipe_format" => recipe_format(arguments),
         "eb_stack_solve" => stack_solve(arguments),
+        "eb_stack_sbom" => stack_sbom(arguments),
         "eb_target_list" => target_list(arguments),
         "eb_target_doctor" => target_doctor(arguments),
         "eb_campaign_run" => campaign_run(arguments),
@@ -447,6 +478,19 @@ fn recipe_check(arguments: &Value) -> Result<Value, String> {
     }))
 }
 
+fn recipe_lint(arguments: &Value) -> Result<Value, String> {
+    let paths = recipe_paths(arguments)?;
+    let mut results = Vec::with_capacity(paths.len());
+    for path in paths {
+        let text = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
+        results.push(json!({
+            "recipe": path,
+            "findings": lint_style(&text),
+        }));
+    }
+    Ok(json!({"results": results}))
+}
+
 fn recipe_format(arguments: &Value) -> Result<Value, String> {
     let recipe = required_path(arguments, "recipe")?;
     let before = std::fs::read_to_string(&recipe).map_err(|error| error.to_string())?;
@@ -485,6 +529,24 @@ fn stack_solve(arguments: &Value) -> Result<Value, String> {
         "packages": lock.packages.len(),
         "solver": lock.solver.engine,
         "claims": {"resolves": true, "builds": false, "binary_verified": false}
+    }))
+}
+
+fn stack_sbom(arguments: &Value) -> Result<Value, String> {
+    let lock_path = required_path(arguments, "lock")?;
+    let out = optional_path(arguments, "out").unwrap_or_else(|| PathBuf::from("stack.cdx.json"));
+    let lock: StackLock = load_json_file(&lock_path).map_err(|error| error.to_string())?;
+    let sbom = lock_to_cyclonedx(&lock);
+    write_json_pretty(&out, &sbom).map_err(|error| error.to_string())?;
+    let components = sbom
+        .get("components")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    Ok(json!({
+        "lock": lock_path,
+        "out": out,
+        "components": components,
     }))
 }
 
@@ -625,6 +687,17 @@ fn path_array(arguments: &Value, name: &str) -> Result<Vec<PathBuf>, String> {
         return Err(format!("argument {name} requires at least one path"));
     }
     Ok(values.into_iter().map(PathBuf::from).collect())
+}
+
+/// Accept either `recipes: [path, ...]` or a single `recipe` path.
+fn recipe_paths(arguments: &Value) -> Result<Vec<PathBuf>, String> {
+    if arguments.get("recipes").is_some() {
+        return path_array(arguments, "recipes");
+    }
+    if let Some(path) = optional_path(arguments, "recipe") {
+        return Ok(vec![path]);
+    }
+    Err("argument recipes requires at least one path".into())
 }
 
 fn string_array(arguments: &Value, name: &str) -> Result<Vec<String>, String> {

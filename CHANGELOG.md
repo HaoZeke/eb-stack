@@ -6,6 +6,14 @@ All notable changes to this unreleased project are documented here.
 
 ### Added
 
+- MCP tools `eb_recipe_lint` and `eb_stack_sbom`, plus explicit optional
+  schemas for `eb_package_bump`, `eb_recipe_check`, `eb_recipe_format`, and
+  `eb_stack_solve`, so the MCP catalog matches the version-one CLI surface.
+- CI job for package catalog, package closure, closure write, and source-root
+  discovery suites (previously only covered by local `cargo test --all-targets`).
+- Claim-ladder, command-surface, and pipeline diagrams (Graphviz source in the
+  manuals; PNG/SVG under `assets/illustrations/`). CLI reference documents
+  package catalog and source-root plan flags.
 - Package-neutral source-root discovery for package closure: ordered local
   EasyBuild, conda-forge, and Spack indexes close robot holes without a
   committed per-package catalog entry. Explicit catalogs remain optional

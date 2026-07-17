@@ -100,6 +100,20 @@ fn ci_enforces_the_declared_msrv_and_quality_gates() {
     ] {
         assert!(ci.contains(command), "test workflow must run {command}");
     }
+    for suite in [
+        "--test package_catalog",
+        "--test package_closure",
+        "--test package_closure_write",
+        "--test package_sources_discovery",
+        "--test mcp_v1",
+        "--test campaign",
+        "--test reproduce_real_prs",
+    ] {
+        assert!(
+            ci.contains(suite),
+            "test workflow must run deterministic suite {suite}"
+        );
+    }
     assert!(
         !ci.contains("&& exit 1 || true"),
         "expected-failure smoke checks must reject unexpected success"

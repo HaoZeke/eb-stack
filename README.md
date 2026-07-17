@@ -15,6 +15,10 @@
 
 ## Pipeline
 
+<p align="center">
+  <img src="assets/illustrations/04-pipeline.png" alt="eb-stack data flow from foreign recipes through Resolvo locks to campaigns" width="900">
+</p>
+
 ```text
 conda-forge / Spack / EasyBuild
               │
@@ -34,6 +38,10 @@ conda-forge / Spack / EasyBuild
 New packages and bumps use the same artifacts. A bump is an EasyBuild-origin plan plus SBOM and Resolvo lock, not a standalone text rewrite.
 
 ## Claim ladder
+
+<p align="center">
+  <img src="assets/illustrations/02-claim-ladder.png" alt="Claim ladder: inspect has no claim; plan/bump establish resolves; campaign establishes builds and binary-verified" width="420">
+</p>
 
 Report these claims independently:
 

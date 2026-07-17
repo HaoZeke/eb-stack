@@ -4,6 +4,24 @@
 The lifecycle has three claims. Treating them as one is the main source of
 incorrect status reports.
 
+#+begin_src dot :file ../images/claim-ladder.svg :exports results
+digraph C {
+  graph [fontname="Jost", fontsize=12, rankdir=TB, splines=true, bgcolor="transparent"];
+  node  [fontname="Jost", fontsize=12, shape=box, style="rounded,filled",
+         fillcolor="white", color="#004D40", fontcolor="#004D40"];
+  edge  [fontname="Jost", fontsize=11, color="#004D40"];
+
+  inspect [label="package inspect\n(no claim)"];
+  plan    [label="package plan / package bump\n→ resolves", fillcolor="#F1DB4B", fontcolor="#004D40"];
+  build   [label="campaign run\n→ builds", fillcolor="#004D40", fontcolor="white"];
+  verify  [label="profile verification commands\n→ binary-verified", fillcolor="#FF655D", fontcolor="white"];
+
+  inspect -> plan [style=dashed, label="no rung"];
+  plan -> build [label="target + EasyBuild"];
+  build -> verify [label="declared checks"];
+}
+#+end_src
+
 * Claim 1: resolves
 
 A package resolves when every requested profile has:

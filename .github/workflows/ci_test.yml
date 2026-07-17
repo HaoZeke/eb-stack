@@ -124,6 +124,23 @@ jobs:
             --test campaign \
             --test mcp_v1
 
+  package-closure:
+    name: package catalog + closure + source discovery
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Catalog providers, recursive closure, and source-root discovery
+        run: |
+          set -euo pipefail
+          cargo test --locked \
+            --test package_catalog \
+            --test package_closure \
+            --test package_closure_write \
+            --test package_sources_discovery \
+            -- --nocapture
+
   cli-smoke:
     name: CLI smoke (package bundle + recipe checks)
     runs-on: ubuntu-latest

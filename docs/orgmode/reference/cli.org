@@ -49,6 +49,11 @@ eb-stack package plan \
   --easyconfigs UPSTREAM \
   [--easyconfigs OVERLAY]... \
   --stack-policy STACK.toml \
+  [--package-catalog CATALOG.toml]... \
+  [--package-sources SOURCES.toml]... \
+  [--easybuild-source DIR]... \
+  [--conda-source DIR]... \
+  [--spack-source DIR]... \
   --out-dir BUNDLE
 #+end_src
 
@@ -66,6 +71,20 @@ only a VCS commit, repeat ~--source-checksum~ once for every source artifact in
 manifest order. The values replace the positional source checksums in both the
 manifest/SBOM and every emitted recipe. Planning fails before emission when
 the count, shape, or completeness is invalid.
+
+When a direct dependency has no compatible robot candidate, optional closure
+inputs close the hole without inventing versions:
+
+- ~--package-sources~ layers ordered EasyBuild / conda-forge / Spack roots;
+- ~--easybuild-source~, ~--conda-source~, and ~--spack-source~ push roots
+  without a TOML file (order is discovery order);
+- ~--package-catalog~ layers explicit foreign or ~easybuild-bump~ providers as
+  ordered overrides.
+
+Robot candidates win over catalog entries. A closed plan writes companion
+packages under ~packages/~, a shared ~easyconfigs/~ overlay, topological
+~build-order.json~, and ~closure.sbom.cdx.json~. See
+[[file:package-bundles.org][package bundles]] and the new-package how-to.
 
 ** ~package bump~
 
@@ -212,10 +231,11 @@ state, claim ladder, class/disposition table, and repair protocol.
 eb-stack mcp
 #+end_src
 
-The stdio server exposes:
+The stdio server exposes one tool per CLI workflow:
 
 - ~eb_package_inspect~, ~eb_package_plan~, ~eb_package_bump~;
-- ~eb_recipe_check~, ~eb_recipe_format~, ~eb_stack_solve~;
+- ~eb_recipe_check~, ~eb_recipe_lint~, ~eb_recipe_format~;
+- ~eb_stack_solve~, ~eb_stack_sbom~;
 - ~eb_target_list~, ~eb_target_doctor~;
 - ~eb_campaign_run~, ~eb_campaign_status~;
 - ~eb_campaign_finding_claim~, ~eb_campaign_finding_resolve~.
@@ -224,4 +244,8 @@ MCP results include the same artifacts, claims, findings, and next actions as
 the CLI. There is no separate compatibility command surface.
 
 ~eb_package_plan~ accepts the CLI's repeated source-checksum input as a
-~source_checksums~ string array.
+~source_checksums~ string array, and the catalog / source-root inputs as
+~package_catalogs~, ~package_sources~, ~easybuild_sources~, ~conda_sources~,
+and ~spack_sources~ arrays. ~eb_package_bump~ optionals include ~version~,
+~source_checksum~, ~dependencies~ (object map), ~hierarchy_fixture~, and
+~stack_policy~. ~eb_recipe_lint~ takes a ~recipes~ path array.

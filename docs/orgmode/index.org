@@ -139,6 +139,15 @@
 
 * What it is
 
+#+begin_export rst
+.. figure:: images/claim-ladder.svg
+   :alt: Claim ladder from inspect through resolves, builds, and binary-verified
+   :align: center
+
+   Independent claim ladder: planning establishes only *resolves*; campaigns own *builds* and *binary-verified*.
+#+end_export
+
+
   ~eb-stack~ parses conda-forge, Spack, and [[https://docs.easybuild.io/][EasyBuild]] recipes into one
   canonical package plan. It emits a planned CycloneDX SBOM, materializes
   independently installable profiles, applies distribution/site preferences

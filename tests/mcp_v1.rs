@@ -21,8 +21,10 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_package_plan",
         "eb_package_bump",
         "eb_recipe_check",
+        "eb_recipe_lint",
         "eb_recipe_format",
         "eb_stack_solve",
+        "eb_stack_sbom",
         "eb_target_list",
         "eb_target_doctor",
         "eb_campaign_run",
@@ -32,6 +34,54 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
+    assert_eq!(names.len(), 14, "unexpected MCP tools: {names:?}");
+
+    let package_bump = response["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "eb_package_bump")
+        .expect("package bump schema");
+    for optional in [
+        "version",
+        "source_checksum",
+        "dependencies",
+        "hierarchy_fixture",
+        "stack_policy",
+    ] {
+        assert!(
+            package_bump["inputSchema"]["properties"]
+                .get(optional)
+                .is_some(),
+            "bump schema missing optional {optional}"
+        );
+    }
+    assert_eq!(
+        package_bump["inputSchema"]["properties"]["dependencies"]["type"],
+        "object"
+    );
+
+    let recipe_lint = response["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "eb_recipe_lint")
+        .expect("recipe lint schema");
+    assert_eq!(
+        recipe_lint["inputSchema"]["properties"]["recipes"]["type"],
+        "array"
+    );
+
+    let stack_sbom = response["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "eb_stack_sbom")
+        .expect("stack sbom schema");
+    assert_eq!(
+        stack_sbom["inputSchema"]["properties"]["lock"]["type"],
+        "string"
+    );
     for removed in [
         "eb_ingest",
         "eb_plan",
@@ -290,4 +340,84 @@ version = "2026.1"
     assert!(output
         .join("easyconfigs/b/bravo/bravo-1.5-foss-2026.1.eb")
         .is_file());
+}
+
+#[test]
+fn mcp_recipe_lint_reports_style_findings() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let recipe = temp.path().join("long.eb");
+    let long = format!("name = 'tool'\n# {}\n", "x".repeat(200));
+    std::fs::write(&recipe, long).expect("recipe");
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_recipe_lint",
+            "arguments": {
+                "recipes": [recipe]
+            }
+        }
+    }))
+    .expect("lint response");
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let body = &response["result"]["structuredContent"];
+    let results = body["results"].as_array().expect("results");
+    assert_eq!(results.len(), 1);
+    assert!(
+        results[0]["findings"]
+            .as_array()
+            .map(|findings| !findings.is_empty())
+            .unwrap_or(false),
+        "expected E501 findings: {body}"
+    );
+}
+
+#[test]
+fn mcp_stack_sbom_writes_cyclonedx_from_lock() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let lock_path = temp.path().join("stack.lock.json");
+    let out = temp.path().join("stack.cdx.json");
+    std::fs::write(
+        &lock_path,
+        r#"{
+  "schema_version": 1,
+  "toolchain": {"name": "foss", "version": "2026.1"},
+  "packages": [
+    {
+      "name": "zlib",
+      "version": "1.2",
+      "toolchain": {"name": "foss", "version": "2026.1"},
+      "versionsuffix": null,
+      "easyconfig_path": "zlib-1.2-foss-2026.1.eb"
+    }
+  ],
+  "solver": {
+    "engine": "resolvo",
+    "engine_version": "0",
+    "timestamp": "2026-01-01T00:00:00Z"
+  }
+}"#,
+    )
+    .expect("lock");
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_stack_sbom",
+            "arguments": {
+                "lock": lock_path,
+                "out": out
+            }
+        }
+    }))
+    .expect("sbom response");
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let body = &response["result"]["structuredContent"];
+    assert!(out.is_file(), "{body}");
+    assert!(body["components"].as_u64().unwrap_or(0) >= 1, "{body}");
+    let sbom: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&out).expect("read sbom")).expect("json");
+    assert_eq!(sbom["bomFormat"], "CycloneDX");
 }

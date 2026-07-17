@@ -47,4 +47,9 @@ Run Rust builds and tests on the repository’s configured build machine when lo
 cargo test --locked --all-targets
 ```
 
-Focused suites cover known bump reproduction, foreign adapters, package bundles, profile emission, target routing, campaign state, CLI, and MCP. No affected suite may remain red in a completion claim.
+CI mirrors that gate as parallel jobs covering known bumps, packaging fixtures,
+foreign adapters, package bundles, catalog/closure/source discovery, profile
+emission, target routing, campaign state, CLI, and MCP. Optional
+`real_tree_scale` needs a local EasyBuild robot tree (`EB_EASYCONFIGS`) and is
+not required on GitHub runners. No affected suite may remain red in a
+completion claim.

@@ -1,18 +1,21 @@
 #+TITLE: Changelog
 #+OPTIONS: toc:nil num:nil
 
-The project has no public release. The complete unreleased change list lives
-in [[https://github.com/HaoZeke/eb-stack/blob/main/CHANGELOG.md][CHANGELOG.md]].
+The project has no tagged public release. Cargo, CITATION, and Sphinx report
+development version *0.3.0*. The complete change list lives in
+[[https://github.com/HaoZeke/eb-stack/blob/main/CHANGELOG.md][CHANGELOG.md]].
 
 The version-one design provides:
 
 - one canonical package plan for conda-forge, Spack, and EasyBuild;
 - planned CycloneDX plus per-profile Resolvo locks;
 - one conventional EasyBuild recipe per installable profile;
+- package-source catalogs, source-root discovery, and recursive closure;
 - in-solver stack pin fallback and candidate exclusions;
 - layered target routing and persisted typed build campaigns;
 - independent resolves, builds, and binary-verified claims;
-- matching CLI, MCP, new-package skill, and annual-bump skill workflows.
+- matching CLI, MCP (including recipe lint and stack SBOM), new-package
+  skill, and annual-bump skill workflows.
 
-The unreleased scaffold/compatibility command surface is removed rather than
-maintained alongside the canonical workflow.
+The scaffold/compatibility command surface is removed rather than maintained
+alongside the canonical workflow.

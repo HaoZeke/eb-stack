@@ -9,22 +9,54 @@ same canonical package model.
 
 #+begin_src dot :file ../images/pipeline.svg :exports results
 digraph P {
-  rankdir=LR;
-  node [shape=box, style="rounded,filled", fillcolor="white"];
-  foreign [label="conda-forge / Spack\nsyntax adapters"];
+  graph [fontname="Jost", fontsize=12, rankdir=LR, splines=true, bgcolor="transparent"];
+  node  [fontname="Jost", fontsize=12, shape=box, style="rounded,filled",
+         fillcolor="white", color="#004D40", fontcolor="#004D40"];
+  edge  [fontname="Jost", fontsize=11, color="#004D40"];
+
+  foreign   [label="conda-forge / Spack\nsyntax adapters"];
   easybuild [label="EasyBuild recipe\nadapter"];
-  plan [label="PackagePlan\npackage.plan.json", fillcolor="#F1DB4B"];
-  sbom [label="planned CycloneDX"];
-  profile [label="profile materialization"];
-  resolvo [label="stack policy + Resolvo", fillcolor="#004D40", fontcolor="white"];
-  lock [label="profile lock"];
-  emit [label="one .eb per profile"];
-  target [label="transport + executor\n+ runtime + workload"];
-  campaign [label="campaign state\n+ typed findings", fillcolor="#FF655D", fontcolor="white"];
+  plan      [label="PackagePlan\npackage.plan.json", fillcolor="#F1DB4B"];
+  sbom      [label="planned CycloneDX"];
+  profile   [label="profile materialization"];
+  resolvo   [label="stack policy + Resolvo", fillcolor="#004D40", fontcolor="white"];
+  lock      [label="profile lock"];
+  emit      [label="one .eb per profile"];
+  target    [label="transport + executor\n+ runtime + workload"];
+  campaign  [label="campaign state\n+ typed findings", fillcolor="#FF655D", fontcolor="white"];
+
   foreign -> plan;
   easybuild -> plan;
   plan -> sbom;
   plan -> profile -> resolvo -> lock -> emit -> target -> campaign;
+}
+#+end_src
+
+* Command surface
+
+CLI namespaces and matching MCP tools share one workflow graph:
+
+#+begin_src dot :file ../images/command-surface.svg :exports results
+digraph S {
+  graph [fontname="Jost", fontsize=12, rankdir=LR, splines=true, bgcolor="transparent"];
+  node  [fontname="Jost", fontsize=11, shape=box, style="rounded,filled",
+         fillcolor="white", color="#004D40", fontcolor="#004D40"];
+  edge  [fontname="Jost", fontsize=10, color="#004D40"];
+
+  package  [label="package\ninspect · plan · bump", fillcolor="#F1DB4B"];
+  recipe   [label="recipe\ncheck · lint · format"];
+  stack    [label="stack\nsolve · sbom"];
+  target   [label="target\nlist · doctor"];
+  campaign [label="campaign\nrun · status · finding", fillcolor="#FF655D", fontcolor="white"];
+  mcp      [label="mcp stdio\neb_* tools", fillcolor="#004D40", fontcolor="white"];
+
+  package -> recipe -> stack;
+  stack -> target -> campaign;
+  package -> mcp [style=dashed];
+  recipe -> mcp [style=dashed];
+  stack -> mcp [style=dashed];
+  target -> mcp [style=dashed];
+  campaign -> mcp [style=dashed];
 }
 #+end_src
 
