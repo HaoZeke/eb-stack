@@ -309,3 +309,59 @@ source:
         std::fs::read_to_string(second.easyconfigs[0].clone()).expect("second recipe")
     );
 }
+
+fn write_portability_fixture(root: &Path) -> Vec<String> {
+    let source = root.join("checkout/recipe.yaml");
+    write(
+        &source,
+        r#"
+package:
+  name: alpha
+  version: "1.0"
+source:
+  url: https://example.invalid/alpha-1.0.tar.gz
+requirements:
+  host:
+    - bravo >=1.5
+"#,
+    );
+    let robot = root.join("robot");
+    write(
+        &robot.join("bravo-1.5-foss-2026.1.eb"),
+        "name = 'bravo'\nversion = '1.5'\ntoolchain = {'name': 'foss', 'version': '2026.1'}\n",
+    );
+    let bundle = plan_new_package(&NewPackageRequest {
+        source,
+        format: Some(ForeignFormat::CondaForge),
+        toolchain: toolchain(),
+        source_checksums: vec![CHECKSUM.to_string()],
+        package_layers: Vec::new(),
+        easyconfig_roots: vec![robot],
+        stack_policy: policy(),
+    })
+    .expect("plan portable bundle");
+    let output = root.join("bundle");
+    write_package_bundle(&bundle, &output).expect("write portable bundle");
+    [
+        "package.plan.json",
+        "package.sbom.cdx.json",
+        "locks/default.lock.json",
+    ]
+    .iter()
+    .map(|path| std::fs::read_to_string(output.join(path)).expect("read bundle artifact"))
+    .collect()
+}
+
+#[test]
+fn package_bundle_json_is_portable_across_checkout_and_robot_roots() {
+    let temp = tempfile::tempdir().expect("temp");
+    let left = write_portability_fixture(&temp.path().join("left"));
+    let right = write_portability_fixture(&temp.path().join("right"));
+
+    assert_eq!(left, right);
+    assert!(!left.iter().any(|artifact| artifact.contains(
+        temp.path()
+            .to_str()
+            .expect("temporary path is valid UTF-8")
+    )));
+}
