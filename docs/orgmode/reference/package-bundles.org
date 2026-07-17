@@ -49,6 +49,12 @@ text, and one of ~exact~, ~derived~, or ~ambiguous~. The static foreign
 adapters preserve facts they can prove and put dynamic or ambiguous logic in
 ~residuals~ instead of inventing EasyBuild metadata.
 
+Written provenance paths are source identities rather than checkout locations:
+~conda-forge/recipe.yaml~, ~spack/package.py~, or the corresponding EasyBuild
+recipe name. Line and column spans still address the named input. Absolute
+checkout paths are used while reading local inputs but are not serialized into
+the bundle, so identical inputs produce identical manifests on different hosts.
+
 An EasyBuild-origin dependency carries ~toolchain~ when its tuple names an
 explicit dependency toolchain. Annual bump planning maps that toolchain family
 onto the target generation and requires Resolvo to select a matching artifact.
@@ -145,6 +151,11 @@ Consumers should preserve the lifecycle and ~eb_stack:*~ properties when
 copying the document into a wider stack report. Build evidence belongs in the
 campaign state, not in the planned SBOM.
 
+The planned SBOM omits a generation timestamp because its identity is the
+canonical input and dependency intent, not the wall-clock time of a CLI run.
+Campaign evidence records build and verification event times. This keeps the
+SBOM reproducible across checkout roots and repeated planning runs.
+
 * Product profiles and recipe names
 
 A profile represents one loadable product. Each requested profile is solved
@@ -184,7 +195,7 @@ that recipe:
       "name": "HDF5",
       "version": "2.1.1",
       "toolchain": {"name": "foss", "version": "2026.1"},
-      "easyconfig_path": "h/HDF5/HDF5-2.1.1-foss-2026.1.eb",
+      "easyconfig_path": "easybuild/easyconfigs/h/HDF5/HDF5-2.1.1-foss-2026.1.eb",
       "build": false
     }
   ],
@@ -195,8 +206,10 @@ that recipe:
 #+end_src
 
 Every locked dependency carries its selected EasyBuild identity and source
-recipe path. ~build~ distinguishes direct build dependencies from runtime or
-host dependencies.
+recipe path. Standard robot trees retain the path beginning at
+~easybuild/easyconfigs/~; other robot layouts retain the recipe filename.
+Machine-local robot prefixes are not serialized. ~build~ distinguishes direct
+build dependencies from runtime or host dependencies.
 
 ~pin_outcomes~ keeps stack preferences reviewable. A ~preferred~ pin may record
 ~fallback: true~ when Resolvo selects another jointly compatible candidate. A
