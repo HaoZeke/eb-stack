@@ -37,7 +37,7 @@ unknown fields are rejected by the Rust model.
 | ~origin~ | ~conda-forge~, ~spack~, or ~easy-build~ |
 | ~package~ | Normalized name, version, homepage, description, and license |
 | ~sources~ | URLs, filenames, SHA-256 values, VCS identities, staging directories, and provenance |
-| ~dependencies~ | Names, constraints, roles, structured conditions, virtual capabilities, and provenance |
+| ~dependencies~ | Names, constraints, optional explicit EasyBuild toolchains, roles, structured conditions, virtual capabilities, and provenance |
 | ~rules~ | Preserved conflicts and requirements |
 | ~build~ | Toolchain, easyblock, build systems, configuration options, checksummed patches, typed easyconfig parameters, and module class |
 | ~profiles~ | Independently installable product configurations |
@@ -48,6 +48,13 @@ Source and dependency provenance records the input span, extractor, original
 text, and one of ~exact~, ~derived~, or ~ambiguous~. The static foreign
 adapters preserve facts they can prove and put dynamic or ambiguous logic in
 ~residuals~ instead of inventing EasyBuild metadata.
+
+An EasyBuild-origin dependency carries ~toolchain~ when its tuple names an
+explicit dependency toolchain. Annual bump planning maps that toolchain family
+onto the target generation and requires Resolvo to select a matching artifact.
+An implicit tuple omits ~toolchain~ and may select the minimum non-SYSTEM
+member of the target hierarchy. SYSTEM is eligible only when the source tuple
+or parent recipe selects it explicitly.
 
 Parser notes are diagnostics, not a work queue. Canonical planning never
 searches note text for words such as ~dynamic~ or ~residual~. A successfully

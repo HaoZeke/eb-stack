@@ -49,6 +49,10 @@ eb-stack package bump \
 Preferred distribution pins participate in the SAT solve and may fall back.
 Locked pins are exact constraints. Both outcomes are recorded in the profile
 lock, so a site preference never becomes an invisible post-solve edit.
+When a selected pin belongs to another toolchain generation, the emitted
+dependency tuple includes that toolchain explicitly. Source dependencies that
+already use an explicit toolchain preserve their family and retarget its
+generation before solving.
 
 An explicit override is also a locked solver input:
 

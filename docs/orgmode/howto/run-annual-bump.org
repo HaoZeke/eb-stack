@@ -37,6 +37,14 @@ Repeat mechanically for the maintained set. Each successful bundle contains a
 manifest, planned SBOM, default profile lock, and recipe. The lock records stack
 pin fallbacks and exclusions, making generation policy reviewable.
 
+Explicit dependency toolchain families are retargeted with the parent
+generation: a ~gfbf-2023b~ dependency in a source recipe becomes a
+~gfbf-2024a~ solver requirement in this example. Implicit tuples stay implicit
+when Resolvo selects a dependency within the target hierarchy. A locked or
+preferred cross-generation pin is emitted as an explicit four-element
+EasyBuild tuple so the generated recipe records the artifact identity that the
+lock selected.
+
 * Validate generated recipes
 
 #+begin_src bash
