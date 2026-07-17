@@ -751,7 +751,7 @@ fn rewrite_dependency_tuple(
         }
     }
 
-    edits.sort_by(|left, right| right.0.cmp(&left.0));
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
     let mut rewritten = tuple.to_string();
     for (start, end, replacement) in edits {
         rewritten.replace_range(start..end, &replacement);
