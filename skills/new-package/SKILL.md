@@ -289,9 +289,10 @@ dependency or weaken the recipe.
 
 Cargo reads `.cargo/config.toml` files above its build directory. Keep a
 container target's `work_root` outside personal tool-configuration trees. A
-recipe that disables compiler wrappers must set `RUSTC_WRAPPER=` and
-`CARGO_BUILD_RUSTC_WRAPPER=` to empty values; `unset` reveals an inherited
-Cargo wrapper.
+recipe that disables compiler wrappers must `unset RUSTC_WRAPPER
+CARGO_BUILD_RUSTC_WRAPPER`. Empty values remain environment entries and Rust
+bootstrap can treat the empty string as a wrapper executable. The isolated
+work root prevents `unset` from revealing an inherited Cargo wrapper.
 
 ## Hermes build-evaluation loop
 

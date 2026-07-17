@@ -54,9 +54,10 @@ the scheduler memory request before changing the recipe or dependency choice.
 Cargo searches parent directories for `.cargo/config.toml`. Place `work_root`
 in a target-owned namespace rather than below a bind-mounted home directory
 with personal compiler-wrapper or linker settings. Rust-backed recipes that
-disable wrappers must keep `RUSTC_WRAPPER=` and
-`CARGO_BUILD_RUSTC_WRAPPER=` exported as empty values; unsetting them exposes
-the inherited Cargo configuration.
+disable wrappers must `unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER`. Empty
+values remain environment entries and Rust bootstrap can treat the empty
+string as a wrapper executable. The target-owned work root prevents `unset`
+from exposing an inherited Cargo wrapper.
 
 Sites that store target state below a user's home directory can expose the
 same host campaign directory at a neutral container path:

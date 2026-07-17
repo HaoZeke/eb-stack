@@ -76,9 +76,11 @@ Cargo searches for ~.cargo/config.toml~ from its working directory through
 parent directories. A container that bind-mounts a home directory can
 therefore inherit host-only compiler wrappers or linkers. Put ~work_root~ in a
 target-owned namespace that does not contain personal tool configuration.
-Rust-backed recipes that intentionally disable wrappers must export
-~RUSTC_WRAPPER=~ and ~CARGO_BUILD_RUSTC_WRAPPER=~ as empty values; unsetting
-them exposes any inherited Cargo configuration.
+Rust-backed recipes that intentionally disable wrappers must ~unset
+RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER~. Empty values remain present in the
+environment, and Rust bootstrap can interpret the empty string as a wrapper
+executable. The target-owned work root is what prevents ~unset~ from exposing
+an inherited Cargo wrapper.
 
 When site storage exists below a user's home directory, bind the target-owned
 campaign directory into a neutral container path and use that path for both
