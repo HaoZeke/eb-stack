@@ -2725,6 +2725,40 @@ builddependencies = [
     }
 
     #[test]
+    fn unpinned_dep_does_not_fall_through_to_system_toolchain() {
+        let mut recipe = blank_recipe();
+        recipe.toolchain = Toolchain {
+            name: "GCCcore".into(),
+            version: "15.2.0".into(),
+        };
+        recipe.builddependencies = vec![ResolvedDep {
+            name: "BuildTool".into(),
+            version: "3.0".into(),
+            versionsuffix: None,
+            toolchain: None,
+        }];
+        let system_only = Candidate {
+            name: "BuildTool".into(),
+            version: "3.0".into(),
+            toolchain: Toolchain {
+                name: "system".into(),
+                version: String::new(),
+            },
+            versionsuffix: None,
+            easyconfig_path: "BuildTool-3.0.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+        };
+
+        let check = check_recipe_deps(&recipe, &[system_only]);
+        assert!(
+            check.missing.iter().any(|missing| missing.name == "BuildTool"),
+            "an implicit dependency of a non-system recipe cannot select a SYSTEM recipe: {check:?}"
+        );
+    }
+
+    #[test]
     fn check_recipe_deps_reports_missing_and_found() {
         let mut r = blank_recipe();
         r.dependencies = vec![ResolvedDep {
