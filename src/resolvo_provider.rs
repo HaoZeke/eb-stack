@@ -284,6 +284,7 @@ impl EbProvider {
         &self,
         pkg: &str,
         version_req: &str,
+        toolchain: Option<&crate::domain::Toolchain>,
         versionsuffix: Option<&str>,
     ) -> Ranges<u32> {
         let Some(ranked) = self.ranks.get(pkg) else {
@@ -293,6 +294,10 @@ impl EbProvider {
         for (rank, idx) in ranked {
             let c = &self.candidates[*idx];
             if !matches_req(&c.version, version_req) {
+                continue;
+            }
+            if toolchain.is_some_and(|want| !crate::hierarchy::toolchains_match(&c.toolchain, want))
+            {
                 continue;
             }
             // When the dep carries a versionsuffix, only candidates with the
@@ -502,7 +507,12 @@ impl DependencyProvider for EbProvider {
                     .intern_string(format!("missing dependency package {}", d.name));
                 return Dependencies::Unknown(reason);
             };
-            let range = self.range_matching(&d.name, &d.version_req, d.versionsuffix.as_deref());
+            let range = self.range_matching(
+                &d.name,
+                &d.version_req,
+                d.toolchain.as_ref(),
+                d.versionsuffix.as_deref(),
+            );
             if range == Ranges::empty() {
                 let reason = self.pool.intern_string(format!(
                     "unresolved dependency {} {} from {}={}",
