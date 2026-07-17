@@ -533,7 +533,7 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
         })
         .collect();
 
-    // build.number residual
+    // build.number controls conda package revisions and has no EasyBuild field.
     if let Some(b) = map
         .get(YamlValue::from("build"))
         .and_then(|v| v.as_mapping())
@@ -541,7 +541,6 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
         if b.get(YamlValue::from("number")).is_some() {
             let summary = "conda: build.number present (not an EasyBuild field)";
             notes.push(summary.into());
-            residuals.push(foreign_residual("build-metadata", summary));
         }
         if b.get(YamlValue::from("script")).is_some() {
             let summary = "conda: build.script requires EasyBuild product translation";
@@ -764,9 +763,18 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>, Vec<ForeignResidu
             .expect("pure macro requirement re");
     let macro_requirement_count = pure_macro_requirement_re.find_iter(&out).count();
     out = pure_macro_requirement_re.replace_all(&out, "").to_string();
-    if macro_requirement_count > 0 {
+    let cross_python_requirement_re = Regex::new(
+        r#"(?m)^[ \t]*-[ \t]*cross-python_(?:\$\{\{|\{\{)[^\r\n]*\}\}[ \t]*(?:#.*)?(?:\r?\n|$)"#,
+    )
+    .expect("cross-python template requirement re");
+    let cross_python_requirement_count = cross_python_requirement_re.find_iter(&out).count();
+    out = cross_python_requirement_re
+        .replace_all(&out, "")
+        .to_string();
+    let toolchain_requirement_count = macro_requirement_count + cross_python_requirement_count;
+    if toolchain_requirement_count > 0 {
         notes.push(format!(
-            "skipped {macro_requirement_count} pure template requirement(s)"
+            "skipped {toolchain_requirement_count} toolchain or cross-build template requirement(s)"
         ));
     }
     out = remove_duplicate_selector_keys(&out, &mut notes);
