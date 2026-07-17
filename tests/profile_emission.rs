@@ -189,7 +189,7 @@ fn each_product_profile_emits_a_conventional_easyconfig() {
         .is_some_and(|options| options.contains("-DQMC_COMPLEX=OFF")));
     assert!(emitted[0]
         .text
-        .contains("toolchainopts = {'openmp': True, 'usempi': True}"));
+        .contains("toolchainopts = {'usempi': True, 'openmp': True}"));
 
     let complex = resolve_easyconfig_str(&emitted[1].text).expect("parse complex easyconfig");
     assert_eq!(complex.versionsuffix.as_deref(), Some("-complex"));
@@ -411,6 +411,28 @@ fn emitted_dependencies_preserve_locked_toolchain_and_versionsuffix_identity() {
     let mut lock = profile_lock("default", "");
     lock.dependencies = vec![
         LockedDependency {
+            name: "Boost".into(),
+            version: "1.90.0".into(),
+            versionsuffix: None,
+            toolchain: Toolchain {
+                name: "GCCcore".into(),
+                version: "15.2.0".into(),
+            },
+            easyconfig_path: "Boost-1.90.0-GCCcore-15.2.0.eb".into(),
+            build: false,
+        },
+        LockedDependency {
+            name: "HDF5".into(),
+            version: "2.1.1".into(),
+            versionsuffix: None,
+            toolchain: Toolchain {
+                name: "gompi".into(),
+                version: "2026.1".into(),
+            },
+            easyconfig_path: "HDF5-2.1.1-gompi-2026.1.eb".into(),
+            build: false,
+        },
+        LockedDependency {
             name: "PyTorch".into(),
             version: "2.9.1".into(),
             versionsuffix: None,
@@ -432,10 +454,17 @@ fn emitted_dependencies_preserve_locked_toolchain_and_versionsuffix_identity() {
     ];
 
     let emitted = emit_profile_easyconfigs(&plan, &[lock]).expect("emit locked identities");
-    assert!(emitted[0]
-        .text
-        .contains("('PyTorch', '2.9.1', '', ('foss', '2024a'))"));
-    assert!(emitted[0].text.contains("('PETSc', '3.24.0', '-complex')"));
+    let text = &emitted[0].text;
+    // Hierarchy members use conventional short tuples.
+    assert!(text.contains("('Boost', '1.90.0')"), "{text}");
+    assert!(text.contains("('HDF5', '2.1.1')"), "{text}");
+    assert!(
+        !text.contains("('Boost', '1.90.0', '', ('GCCcore', '15.2.0'))"),
+        "{text}"
+    );
+    // Cross-generation pins keep the full EasyBuild identity.
+    assert!(text.contains("('PyTorch', '2.9.1', '', ('foss', '2024a'))"));
+    assert!(text.contains("('PETSc', '3.24.0', '-complex')"));
 
     let resolved = resolve_easyconfig_str(&emitted[0].text).expect("parse emitted easyconfig");
     let pytorch = resolved
@@ -450,6 +479,50 @@ fn emitted_dependencies_preserve_locked_toolchain_and_versionsuffix_identity() {
             version: "2024a".into(),
         })
     );
+}
+
+#[test]
+fn github_tag_archive_emits_conventional_github_source_form() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.package.name = "QMCPACK".into();
+    plan.package.version = "4.3.0".into();
+    plan.profiles = qmcpack_profiles();
+    plan.outputs.truncate(1);
+    // Single primary GitHub tag archive with no target_directory staging.
+    plan.sources = vec![eb_stack::package::SourceArtifact {
+        url: Some("https://github.com/QMCPACK/qmcpack/archive/refs/tags/v4.3.0.tar.gz".into()),
+        git: None,
+        tag: None,
+        commit: None,
+        sha256: Some("511d5f368db002f2f77504619e1ada8d4a3034200d25feef6773d12a6ed6d18e".into()),
+        filename: None,
+        target_directory: None,
+        condition: ConditionExpr::Always,
+        provenance: Vec::new(),
+    }];
+    let mut lock = profile_lock("default", "");
+    lock.package = "QMCPACK".into();
+    lock.version = "4.3.0".into();
+    lock.dependencies.clear();
+
+    let emitted = emit_profile_easyconfigs(&plan, &[lock]).expect("emit github primary");
+    let text = &emitted[0].text;
+    assert!(text.contains("github_account = 'QMCPACK'"), "{text}");
+    assert!(text.contains("source_urls = [GITHUB_SOURCE]"), "{text}");
+    assert!(
+        text.contains("'download_filename': 'v%(version)s.tar.gz'"),
+        "{text}"
+    );
+    assert!(text.contains("'filename': SOURCELOWER_TAR_GZ"), "{text}");
+    assert!(
+        !text.contains("https://github.com/QMCPACK/qmcpack/archive"),
+        "absolute GitHub archive URL must not be emitted: {text}"
+    );
+    assert!(text.contains(
+        "checksums = [\n    '511d5f368db002f2f77504619e1ada8d4a3034200d25feef6773d12a6ed6d18e',\n]"
+    ) || text.contains("'511d5f368db002f2f77504619e1ada8d4a3034200d25feef6773d12a6ed6d18e'"));
+    assert!(lint_style(text).is_empty(), "{:?}", lint_style(text));
 }
 
 #[test]

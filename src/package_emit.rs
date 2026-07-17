@@ -1,6 +1,15 @@
 //! Deterministic EasyBuild recipe-set emission from materialized package profiles.
+//!
+//! Emission targets conventional EasyBuild style used by easybuilders/easyconfigs:
+//! - primary GitHub tag archives use `github_account` / `GITHUB_SOURCE` /
+//!   `SOURCELOWER_TAR_GZ` when they match the package identity;
+//! - dependency tuples omit the toolchain when the lock identity sits on the
+//!   package toolchain or a hierarchy member (GCCcore/gompi under foss, …);
+//! - cross-generation pins keep an explicit four-element tuple.
 
+use crate::domain::Toolchain;
 use crate::eb_parse::easyconfig_basename;
+use crate::hierarchy::{hierarchy_for, hierarchy_member_rank};
 use crate::package::{
     is_easyconfig_parameter_name, materialize_profile, EasyconfigValue, PackagePlan,
     ProfileEnvironment, ProfileLock,
@@ -119,18 +128,15 @@ fn render_easyconfig(
     } else {
         format!("versionsuffix = '{}'\n", escape_single(versionsuffix))
     };
-    let toolchain_options = profile
-        .toolchain_options
-        .iter()
-        .map(|(name, enabled)| format!("'{name}': {}", python_bool(*enabled)))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let toolchain_options = render_toolchain_options(&profile.toolchain_options);
     let toolchain_options_line = if toolchain_options.is_empty() {
         String::new()
     } else {
         format!("toolchainopts = {{{toolchain_options}}}\n")
     };
-    let (source_lines, checksum_lines) = render_sources(
+    let source_block = render_sources(
+        &plan.package.name,
+        &plan.package.version,
         &materialized.sources,
         &materialized.build.patches,
         materialized.build.source_root.as_deref(),
@@ -191,6 +197,7 @@ homepage = '{homepage}'\n\
 description = \"\"\"{description}\"\"\"\n\n\
 toolchain = {{'name': '{toolchain_name}', 'version': '{toolchain_version}'}}\n\
 {toolchain_options_line}\n\
+{source_prelude}\
 {source_lines}\n\
 {checksum_lines}\n\
 {patch_line}\
@@ -205,10 +212,45 @@ moduleclass = '{moduleclass}'\n",
         description = description.replace("\"\"\"", "\\\"\\\"\\\""),
         toolchain_name = escape_single(&plan.build.toolchain.name),
         toolchain_version = escape_single(&plan.build.toolchain.version),
+        source_prelude = source_block.prelude,
+        source_lines = source_block.sources,
+        checksum_lines = source_block.checksums,
         build_dependencies = render_list(&build_dependencies),
         runtime_dependencies = render_list(&runtime_dependencies),
     );
     crate::eb_style::format_style(&rendered).text
+}
+
+/// Prefer conventional EasyBuild key order for common toolchainopts.
+fn render_toolchain_options(options: &BTreeMap<String, bool>) -> String {
+    const PREFERRED: &[&str] = &["usempi", "openmp", "pic", "opt", "debug"];
+    let mut names = options.keys().cloned().collect::<Vec<_>>();
+    names.sort_by(|left, right| {
+        let left_rank = PREFERRED
+            .iter()
+            .position(|name| name == left)
+            .unwrap_or(PREFERRED.len());
+        let right_rank = PREFERRED
+            .iter()
+            .position(|name| name == right)
+            .unwrap_or(PREFERRED.len());
+        left_rank.cmp(&right_rank).then_with(|| left.cmp(right))
+    });
+    names
+        .into_iter()
+        .filter_map(|name| {
+            options
+                .get(&name)
+                .map(|enabled| format!("'{name}': {}", python_bool(*enabled)))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+struct SourceBlock {
+    prelude: String,
+    sources: String,
+    checksums: String,
 }
 
 fn render_easyconfig_parameters(parameters: &BTreeMap<String, EasyconfigValue>) -> String {
@@ -297,11 +339,13 @@ fn render_easyconfig_table(
 }
 
 fn render_sources(
+    package_name: &str,
+    package_version: &str,
     source_artifacts: &[crate::package::SourceArtifact],
     patches: &[crate::package::PatchArtifact],
     source_root: Option<&str>,
-) -> (String, String) {
-    let sources = source_artifacts
+) -> SourceBlock {
+    let resolved = source_artifacts
         .iter()
         .filter_map(|source| {
             let url = source
@@ -315,19 +359,114 @@ fn render_sources(
                     (Some(git), _) => Some(git.clone()),
                     _ => None,
                 })?;
-            Some(render_source(source, &url, source_root))
+            Some((source, url))
         })
         .collect::<Vec<_>>();
+
     let checksums = source_artifacts
         .iter()
         .filter_map(|source| source.sha256.as_ref())
         .chain(patches.iter().filter_map(|patch| patch.sha256.as_ref()))
         .map(|checksum| format!("'{}'", escape_single(checksum)))
         .collect::<Vec<_>>();
-    (
-        format!("sources = {}", render_multiline_list(&sources)),
-        format!("checksums = {}", render_multiline_list(&checksums)),
-    )
+    let checksum_lines = format!("checksums = {}", render_multiline_list(&checksums));
+
+    if let [(source, url)] = resolved.as_slice() {
+        if source.target_directory.is_none() {
+            if let Some(block) =
+                try_render_github_primary(package_name, package_version, source, url)
+            {
+                return SourceBlock {
+                    prelude: block.prelude,
+                    sources: block.sources,
+                    checksums: checksum_lines,
+                };
+            }
+        }
+    }
+
+    let sources = resolved
+        .iter()
+        .map(|(source, url)| render_source(source, url, source_root))
+        .collect::<Vec<_>>();
+    SourceBlock {
+        prelude: String::new(),
+        sources: format!("sources = {}", render_multiline_list(&sources)),
+        checksums: checksum_lines,
+    }
+}
+
+/// Conventional EasyBuild form for a single primary GitHub tag archive.
+fn try_render_github_primary(
+    package_name: &str,
+    package_version: &str,
+    source: &crate::package::SourceArtifact,
+    url: &str,
+) -> Option<SourceBlock> {
+    let (account, repo, tag) = parse_github_tag_archive(url)?;
+    let namelower = package_name.to_ascii_lowercase();
+    let uses_source_lower = repo.eq_ignore_ascii_case(&namelower);
+    let download_filename = if tag == format!("v{package_version}") {
+        "v%(version)s.tar.gz".to_string()
+    } else if tag == package_version {
+        "%(version)s.tar.gz".to_string()
+    } else {
+        format!("{tag}.tar.gz")
+    };
+    let filename_expr = if uses_source_lower && tag.ends_with(package_version) {
+        "SOURCELOWER_TAR_GZ".to_string()
+    } else if let Some(filename) = source.filename.as_deref() {
+        format!("'{}'", escape_single(filename))
+    } else {
+        format!("'{repo}-{package_version}.tar.gz'")
+    };
+
+    let prelude = format!(
+        "github_account = '{}'\nsource_urls = [GITHUB_SOURCE]\n",
+        escape_single(&account)
+    );
+    // Same multi-line dict shape as staged multi-source entries so format_style
+    // and review tooling see conventional indentation.
+    let dict = [
+        "{".to_string(),
+        format!("    'download_filename': '{download_filename}',"),
+        format!("    'filename': {filename_expr},"),
+        "}".to_string(),
+    ]
+    .join("\n");
+    Some(SourceBlock {
+        prelude,
+        sources: format!(
+            "sources = {}",
+            render_multiline_list(std::slice::from_ref(&dict))
+        ),
+        checksums: String::new(),
+    })
+}
+
+/// Parse `https://github.com/{account}/{repo}/archive/refs/tags/{tag}.tar.gz`.
+fn parse_github_tag_archive(url: &str) -> Option<(String, String, String)> {
+    let rest = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("http://github.com/"))?;
+    let mut parts = rest.split('/');
+    let account = parts.next()?.to_string();
+    let repo = parts.next()?.to_string();
+    if parts.next()? != "archive" || parts.next()? != "refs" || parts.next()? != "tags" {
+        return None;
+    }
+    let file = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let tag = file
+        .strip_suffix(".tar.gz")
+        .or_else(|| file.strip_suffix(".tgz"))?
+        .to_string();
+    if account.is_empty() || repo.is_empty() || tag.is_empty() {
+        return None;
+    }
+    Some((account, repo, tag))
 }
 
 fn render_source(
@@ -412,9 +551,12 @@ fn is_tar_archive(filename: &str) -> bool {
 
 fn render_dependency(
     dependency: &crate::package::LockedDependency,
-    package_toolchain: &crate::domain::Toolchain,
+    package_toolchain: &Toolchain,
 ) -> String {
-    if dependency.toolchain != *package_toolchain {
+    // Conventional easyconfigs omit the toolchain when EasyBuild can resolve it
+    // through the package hierarchy (e.g. Boost on GCCcore under foss). Keep an
+    // explicit identity only for cross-generation or out-of-hierarchy pins.
+    if dependency_requires_explicit_toolchain(dependency, package_toolchain) {
         return format!(
             "('{}', '{}', '{}', ('{}', '{}'))",
             escape_single(&dependency.name),
@@ -436,6 +578,20 @@ fn render_dependency(
             escape_single(&dependency.name),
             escape_single(&dependency.version)
         ),
+    }
+}
+
+fn dependency_requires_explicit_toolchain(
+    dependency: &crate::package::LockedDependency,
+    package_toolchain: &Toolchain,
+) -> bool {
+    if dependency.toolchain == *package_toolchain {
+        return false;
+    }
+    match hierarchy_for(package_toolchain, None) {
+        Ok(hierarchy) => hierarchy_member_rank(&hierarchy, &dependency.toolchain).is_none(),
+        // Unknown parent: keep the full identity rather than guessing.
+        Err(_) => true,
     }
 }
 
