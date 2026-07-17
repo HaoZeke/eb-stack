@@ -499,6 +499,10 @@ pub struct DependencyIntent {
     pub eb_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub constraint: Option<String>,
+    /// Explicit EasyBuild dependency toolchain after generation retargeting.
+    /// `None` keeps minimal-toolchain selection within the output hierarchy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toolchain: Option<Toolchain>,
     #[serde(default)]
     pub roles: Vec<DependencyRole>,
     #[serde(default)]

@@ -16,6 +16,7 @@ use crate::package::{
 use crate::package_config::{apply_package_layers, PackageConfigLayer};
 use crate::package_emit::{emit_profile_easyconfigs, EmittedEasyconfig};
 use crate::package_solve::solve_package_profile_with_hierarchy;
+use crate::package_sources::map_source_toolchain_to_target;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -444,12 +445,18 @@ pub fn complete_package_bump(
         .iter()
         .map(|dependency| (dependency.name.clone(), dependency.version.clone()))
         .collect::<HashMap<_, _>>();
+    let dependency_toolchains = lock
+        .dependencies
+        .iter()
+        .map(|dependency| (dependency.name.clone(), dependency.toolchain.clone()))
+        .collect::<HashMap<_, _>>();
     let result = emit_next_generation_from_path(
         &request.source,
         &EmitParams {
             toolchain: request.toolchain.clone(),
             version: request.version.clone(),
             dep_versions: dependency_versions,
+            dep_toolchains: dependency_toolchains,
             source_checksum: request.source_checksum.clone(),
         },
     )
@@ -538,7 +545,7 @@ fn package_plan_from_easyconfig(
             .iter()
             .enumerate()
             .map(|(index, dependency)| {
-                dependency_from_easyconfig(dependency, DependencyRole::Run, index)
+                dependency_from_easyconfig(dependency, DependencyRole::Run, index, toolchain)
             }),
     );
     let runtime_count = dependencies.len();
@@ -548,7 +555,12 @@ fn package_plan_from_easyconfig(
             .iter()
             .enumerate()
             .map(|(index, dependency)| {
-                dependency_from_easyconfig(dependency, DependencyRole::Build, runtime_count + index)
+                dependency_from_easyconfig(
+                    dependency,
+                    DependencyRole::Build,
+                    runtime_count + index,
+                    toolchain,
+                )
             }),
     );
     let versionsuffix = recipe.versionsuffix.iter().cloned().collect::<Vec<_>>();
@@ -623,6 +635,7 @@ fn dependency_from_easyconfig(
     dependency: &ResolvedDep,
     role: DependencyRole,
     index: usize,
+    target_toolchain: &Toolchain,
 ) -> DependencyIntent {
     let external = dependency
         .toolchain
@@ -633,6 +646,9 @@ fn dependency_from_easyconfig(
         name: dependency.name.clone(),
         eb_name: Some(dependency.name.clone()),
         constraint: Some(format!(">={}", dependency.version)),
+        toolchain: dependency.toolchain.as_ref().map(|source_toolchain| {
+            map_source_toolchain_to_target(Some(source_toolchain), target_toolchain, None)
+        }),
         roles: vec![role],
         condition: ConditionExpr::Always,
         virtual_capability: external.then(|| format!("external:system:{}", dependency.name)),

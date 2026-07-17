@@ -2,8 +2,8 @@
 
 use crate::domain::{Candidate, DepReq, Policy};
 use crate::hierarchy::{
-    filter_candidates_in_hierarchy, hierarchy_for_with_tree, is_system_toolchain,
-    toolchains_match, ToolchainHierarchy,
+    filter_candidates_in_hierarchy, hierarchy_for_with_tree, is_system_toolchain, toolchains_match,
+    ToolchainHierarchy,
 };
 use crate::package::{
     materialize_profile, DependencyRole, LockedDependency, PackageOrigin, PackagePlan,
@@ -93,7 +93,12 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
         let has_compatible = admitted.iter().any(|candidate| {
             package_identities_match(&candidate.name, &name)
                 && matches_req(&candidate.version, &version_req)
+                && dependency
+                    .toolchain
+                    .as_ref()
+                    .is_none_or(|toolchain| toolchains_match(&candidate.toolchain, toolchain))
                 && !(plan.origin == PackageOrigin::EasyBuild
+                    && dependency.toolchain.is_none()
                     && is_system_toolchain(&candidate.toolchain))
         });
         if !has_compatible {
@@ -160,14 +165,14 @@ pub fn solve_package_profile_with_hierarchy(
             .entry(name.clone())
             .and_modify(|existing| *existing &= build_only)
             .or_insert(build_only);
-        if plan.origin == PackageOrigin::EasyBuild {
+        if plan.origin == PackageOrigin::EasyBuild && dependency.toolchain.is_none() {
             implicit_easybuild_dependencies.insert(name.clone());
         }
         let requirement = DepReq {
             name: name.clone(),
             version_req: normalize_requirement(dependency.constraint.as_deref()),
             versionsuffix: None,
-            toolchain: None,
+            toolchain: dependency.toolchain.clone(),
         };
         if build_only {
             build_dependencies.push(requirement);

@@ -37,6 +37,10 @@ pub struct EmitParams {
     /// Otherwise the operator already present on the source version (if any) is
     /// preserved and only the version token is replaced.
     pub dep_versions: HashMap<String, String>,
+    /// Solver-selected dependency toolchains keyed by package name.
+    /// Explicit tuples are retargeted, and selections outside the output
+    /// hierarchy are made explicit in otherwise implicit tuples.
+    pub dep_toolchains: HashMap<String, Toolchain>,
     /// New sha256 for the source tarball, used only when `version` changes.
     /// When `None` and the version changes, the source checksum entry's key
     /// is still renamed to the new versioned tarball name, but the checksum
@@ -92,9 +96,21 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
     if params.version.is_some() {
         text = rewrite_string_assign(&text, "version", &app_version)?;
     }
-    if !params.dep_versions.is_empty() {
-        text = rewrite_dep_list_versions(&text, "dependencies", &params.dep_versions)?;
-        text = rewrite_dep_list_versions(&text, "builddependencies", &params.dep_versions)?;
+    if !params.dep_versions.is_empty() || !params.dep_toolchains.is_empty() {
+        text = rewrite_dep_list_selections(
+            &text,
+            "dependencies",
+            &params.dep_versions,
+            &params.dep_toolchains,
+            &params.toolchain,
+        )?;
+        text = rewrite_dep_list_selections(
+            &text,
+            "builddependencies",
+            &params.dep_versions,
+            &params.dep_toolchains,
+            &params.toolchain,
+        )?;
     }
 
     let mut warnings = Vec::new();
@@ -438,18 +454,25 @@ fn list_is_nonempty(src: &str, key: &str) -> bool {
     matches!(find_list_span(src, key), Ok(Some((s, e))) if !src[s..e].trim().is_empty())
 }
 
-/// Rewrite version strings inside `key = [ ... ]` for named deps present in `overrides`.
-fn rewrite_dep_list_versions(
+/// Apply solver-selected versions and toolchains inside `key = [ ... ]`.
+fn rewrite_dep_list_selections(
     src: &str,
     key: &str,
-    overrides: &HashMap<String, String>,
+    version_overrides: &HashMap<String, String>,
+    toolchain_overrides: &HashMap<String, Toolchain>,
+    target_toolchain: &Toolchain,
 ) -> Result<String, EmitError> {
     let Some((list_open_end, list_close_start)) = find_list_span(src, key)? else {
         // No such list — nothing to rewrite (not an error).
         return Ok(src.to_string());
     };
     let body = &src[list_open_end..list_close_start];
-    let new_body = rewrite_dep_tuples_in_body(body, overrides)?;
+    let new_body = rewrite_dep_tuples_in_body(
+        body,
+        version_overrides,
+        toolchain_overrides,
+        target_toolchain,
+    )?;
     let mut out = String::with_capacity(src.len() + 32);
     out.push_str(&src[..list_open_end]);
     out.push_str(&new_body);
@@ -583,41 +606,221 @@ fn rewrite_source_checksum(
     Ok((out, stale))
 }
 
+#[derive(Debug)]
+struct QuotedToken {
+    start: usize,
+    end: usize,
+    depth: usize,
+    quote: char,
+}
+
 fn rewrite_dep_tuples_in_body(
     body: &str,
-    overrides: &HashMap<String, String>,
+    version_overrides: &HashMap<String, String>,
+    toolchain_overrides: &HashMap<String, Toolchain>,
+    target_toolchain: &Toolchain,
 ) -> Result<String, EmitError> {
-    // ('Name', 'ver') or ("Name", "ver") — no backreferences (regex crate).
-    // Replace only the version (second) string when name is in overrides.
-    let re = regex::Regex::new(
-        r#"\(\s*'(?P<n1>[^']+)'\s*,\s*'(?P<v1>[^']+)'|\(\s*"(?P<n2>[^"]+)"\s*,\s*"(?P<v2>[^"]+)""#,
-    )
-    .map_err(|e| EmitError::Rewrite(e.to_string()))?;
-
-    let out = re.replace_all(body, |caps: &regex::Captures| {
-        let full = caps.get(0).unwrap().as_str();
-        let (name, ver, ver_name) = if let Some(n) = caps.name("n1") {
-            (n.as_str(), caps.name("v1").unwrap().as_str(), "v1")
-        } else {
-            (
-                caps.name("n2").unwrap().as_str(),
-                caps.name("v2").unwrap().as_str(),
-                "v2",
-            )
-        };
-        if let Some(new_ver) = overrides.get(name) {
-            let applied = apply_version_override(ver, new_ver);
-            let ver_m = caps.name(ver_name).unwrap();
-            let start = ver_m.start() - caps.get(0).unwrap().start();
-            let end = ver_m.end() - caps.get(0).unwrap().start();
-            let mut s = full.to_string();
-            s.replace_range(start..end, &applied);
-            s
-        } else {
-            full.to_string()
+    let mut rewritten = body.to_string();
+    for (start, end) in dependency_tuple_spans(body)?.into_iter().rev() {
+        let tuple = &body[start..end];
+        let replacement = rewrite_dependency_tuple(
+            tuple,
+            version_overrides,
+            toolchain_overrides,
+            target_toolchain,
+        )?;
+        if replacement != tuple {
+            rewritten.replace_range(start..end, &replacement);
         }
-    });
-    Ok(out.into_owned())
+    }
+    Ok(rewritten)
+}
+
+fn dependency_tuple_spans(body: &str) -> Result<Vec<(usize, usize)>, EmitError> {
+    let bytes = body.as_bytes();
+    let mut spans = Vec::new();
+    let mut depth = 0usize;
+    let mut start = None;
+    let mut quote = None;
+    let mut escaped = false;
+    let mut comment = false;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        if comment {
+            if byte == b'\n' {
+                comment = false;
+            }
+            continue;
+        }
+        if let Some(active_quote) = quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == active_quote {
+                quote = None;
+            }
+            continue;
+        }
+        match byte {
+            b'#' => comment = true,
+            b'\'' | b'"' => quote = Some(byte),
+            b'(' => {
+                if depth == 0 {
+                    start = Some(index);
+                }
+                depth += 1;
+            }
+            b')' => {
+                if depth == 0 {
+                    return Err(EmitError::Rewrite(
+                        "unbalanced dependency tuple closing parenthesis".into(),
+                    ));
+                }
+                depth -= 1;
+                if depth == 0 {
+                    spans.push((start.take().expect("tuple start"), index + 1));
+                }
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 || quote.is_some() {
+        return Err(EmitError::Rewrite(
+            "unclosed dependency tuple or string".into(),
+        ));
+    }
+    Ok(spans)
+}
+
+fn rewrite_dependency_tuple(
+    tuple: &str,
+    version_overrides: &HashMap<String, String>,
+    toolchain_overrides: &HashMap<String, Toolchain>,
+    target_toolchain: &Toolchain,
+) -> Result<String, EmitError> {
+    let (tokens, outer_commas) = dependency_tuple_tokens(tuple)?;
+    let top = tokens
+        .iter()
+        .filter(|token| token.depth == 1)
+        .collect::<Vec<_>>();
+    if top.len() < 2 {
+        return Ok(tuple.to_string());
+    }
+    let name = &tuple[top[0].start..top[0].end];
+    let version_override = version_overrides.get(name);
+    let toolchain_override = toolchain_overrides.get(name);
+    if version_override.is_none() && toolchain_override.is_none() {
+        return Ok(tuple.to_string());
+    }
+
+    let mut edits = Vec::new();
+    if let Some(version) = version_override {
+        edits.push((
+            top[1].start,
+            top[1].end,
+            apply_version_override(&tuple[top[1].start..top[1].end], version),
+        ));
+    }
+    if let Some(toolchain) = toolchain_override {
+        let nested = tokens
+            .iter()
+            .filter(|token| token.depth == 2)
+            .collect::<Vec<_>>();
+        if nested.len() >= 2 {
+            edits.push((nested[0].start, nested[0].end, toolchain.name.clone()));
+            edits.push((nested[1].start, nested[1].end, toolchain.version.clone()));
+        } else if dependency_toolchain_must_be_explicit(toolchain, target_toolchain) {
+            if outer_commas >= 3 {
+                return Err(EmitError::Rewrite(format!(
+                    "dependency {name} has an unsupported explicit toolchain expression"
+                )));
+            }
+            let quote = top[0].quote;
+            let suffix = if outer_commas == 1 {
+                format!(
+                    ", {quote}{quote}, ({quote}{}{quote}, {quote}{}{quote})",
+                    toolchain.name, toolchain.version
+                )
+            } else {
+                format!(
+                    ", ({quote}{}{quote}, {quote}{}{quote})",
+                    toolchain.name, toolchain.version
+                )
+            };
+            edits.push((tuple.len() - 1, tuple.len() - 1, suffix));
+        }
+    }
+
+    edits.sort_by(|left, right| right.0.cmp(&left.0));
+    let mut rewritten = tuple.to_string();
+    for (start, end, replacement) in edits {
+        rewritten.replace_range(start..end, &replacement);
+    }
+    Ok(rewritten)
+}
+
+fn dependency_tuple_tokens(tuple: &str) -> Result<(Vec<QuotedToken>, usize), EmitError> {
+    let bytes = tuple.as_bytes();
+    let mut tokens = Vec::new();
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut token_start = 0usize;
+    let mut escaped = false;
+    let mut comment = false;
+    let mut outer_commas = 0usize;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        if comment {
+            if byte == b'\n' {
+                comment = false;
+            }
+            continue;
+        }
+        if let Some(active_quote) = quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == active_quote {
+                tokens.push(QuotedToken {
+                    start: token_start,
+                    end: index,
+                    depth,
+                    quote: active_quote as char,
+                });
+                quote = None;
+            }
+            continue;
+        }
+        match byte {
+            b'#' => comment = true,
+            b'\'' | b'"' => {
+                quote = Some(byte);
+                token_start = index + 1;
+            }
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            b',' if depth == 1 => outer_commas += 1,
+            _ => {}
+        }
+    }
+    if quote.is_some() {
+        return Err(EmitError::Rewrite(
+            "unclosed string in dependency tuple".into(),
+        ));
+    }
+    Ok((tokens, outer_commas))
+}
+
+fn dependency_toolchain_must_be_explicit(selected: &Toolchain, target: &Toolchain) -> bool {
+    if crate::hierarchy::is_system_toolchain(target) {
+        return !crate::hierarchy::is_system_toolchain(selected);
+    }
+    if crate::hierarchy::is_system_toolchain(selected) {
+        return true;
+    }
+    crate::hierarchy::hierarchy_for(target, None)
+        .map(|hierarchy| !hierarchy.contains(selected))
+        .unwrap_or_else(|_| !crate::hierarchy::toolchains_match(selected, target))
 }
 
 #[cfg(test)]
@@ -665,6 +868,7 @@ builddependencies = [
             toolchain: foss("2025b"),
             version: None,
             dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
             source_checksum: None,
         };
         let r = emit_next_generation(MINIMAL, &params).expect("emit");
@@ -701,6 +905,7 @@ builddependencies = [
             toolchain: foss("2025b"),
             version: Some("2025.0".into()),
             dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
             source_checksum: None,
         };
         let r = emit_next_generation(MINIMAL, &params).expect("emit");
@@ -722,6 +927,7 @@ builddependencies = [
             toolchain: foss("2025b"),
             version: Some("2025.0".into()),
             dep_versions: deps,
+            dep_toolchains: HashMap::new(),
             source_checksum: None,
         };
         let r = emit_next_generation(MINIMAL, &params).expect("emit");
@@ -742,6 +948,7 @@ builddependencies = [
             toolchain: foss("2025b"),
             version: None,
             dep_versions: deps,
+            dep_toolchains: HashMap::new(),
             source_checksum: None,
         };
         let r = emit_next_generation(WITH_BUILDDEPS, &params).expect("emit");
@@ -761,6 +968,7 @@ builddependencies = [
             toolchain: foss("2025b"),
             version: None,
             dep_versions: deps,
+            dep_toolchains: HashMap::new(),
             source_checksum: None,
         };
         let r = emit_next_generation(WITH_BUILDDEPS, &params).expect("emit");
@@ -782,6 +990,7 @@ builddependencies = [
             toolchain: foss("2025b"),
             version: Some("2.0".into()),
             dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
             source_checksum: None,
         };
         let r = emit_next_generation(src, &params).expect("emit");
@@ -823,6 +1032,7 @@ dependencies = [
             toolchain: nvhpc("25.11-CUDA-12.8.0"),
             version: Some("5.0.7".into()),
             dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
             source_checksum: Some(
                 "119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd".into(),
             ),
@@ -849,6 +1059,7 @@ dependencies = [
             toolchain: nvhpc("25.11-CUDA-12.8.0"),
             version: Some("5.0.7".into()),
             dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
             source_checksum: None,
         };
         let r = emit_next_generation(WITH_CHECKSUMS, &params).expect("emit");
@@ -867,6 +1078,7 @@ dependencies = [
             toolchain: nvhpc("25.11-CUDA-12.8.0"),
             version: None,
             dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
             source_checksum: None,
         };
         let r = emit_next_generation(WITH_CHECKSUMS, &params).expect("emit");
