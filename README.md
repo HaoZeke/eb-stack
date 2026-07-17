@@ -133,6 +133,10 @@ so a note about successfully materializing dynamic source logic cannot
 accidentally enqueue Hermes work. Genuine residuals carry a category, severity,
 summary, and optional evidence and source provenance.
 
+Conda revision numbers and compiler/stdlib/cross-build template requirements
+are toolchain diagnostics rather than package-authoring work. Unknown templates
+inside ordinary package identities remain explicit residuals.
+
 Aliases use `foreign = "EasyBuild"` when both names share a version domain.
 Component-to-provider mappings use
 `foreign = { provider = "EasyBuild", constraint = "drop" }`, so a component

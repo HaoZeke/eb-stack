@@ -55,6 +55,10 @@ materialized ~url_for_version~, for example, may remain visible as a note but
 does not create residual work. Anything that needs mechanical repair or
 authoring judgment is represented by a typed residual with ~category~,
 ~severity~, ~summary~, optional ~evidence~, and optional source ~provenance~.
+Conda ~build.number~ and compiler, standard-library, or ~cross-python~ template
+requirements are also notes because the EasyBuild toolchain represents those
+concerns. An unresolved template in an ordinary package identity remains a
+~template-evaluation~ residual.
 
 Residual severity has three values:
 

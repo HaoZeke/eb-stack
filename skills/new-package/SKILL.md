@@ -79,7 +79,9 @@ method is residual authoring work for the campaign agent.
 Treat parser notes as diagnostics only. The canonical manifest and residual
 queue are driven by typed residual records; never infer work by matching words
 in note text. Successful source materialization can mention dynamic recipe
-logic without becoming residual work.
+logic without becoming residual work. Conda build numbers and toolchain macros
+are informational; unresolved templates in normal package identities remain
+`template-evaluation` work.
 
 Create one product profile per independently installable variant. Each profile emits one `.eb` file.
 
