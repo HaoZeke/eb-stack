@@ -122,6 +122,11 @@ fn conda_eon_expands_context_multi_source_and_selectors() {
         .dependencies
         .iter()
         .any(|dependency| dependency.name.contains("metatomic") || dependency.name == "xtb"));
+    assert!(
+        recipe.residuals.is_empty(),
+        "native EasyBuild planning fully represents conda build metadata and toolchain macros: {:?}",
+        recipe.residuals
+    );
 }
 
 #[test]
@@ -168,11 +173,6 @@ fn conda_lammps_expands_deterministic_date_templates() {
         .pin
         .as_deref()
         .is_none_or(|pin| !pin.contains("{{"))));
-    assert!(
-        recipe.residuals.is_empty(),
-        "native EasyBuild planning fully represents conda build metadata and toolchain macros: {:?}",
-        recipe.residuals
-    );
 }
 
 #[test]
