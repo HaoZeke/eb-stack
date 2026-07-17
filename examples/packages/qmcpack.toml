@@ -14,7 +14,7 @@ moduleclass = "chem"
 [build.easyconfig_parameters]
 start_dir = "%(namelower)s-%(version)s"
 test_cmd = "ctest"
-testopts = "-j %(parallel)s --output-on-failure -E 'performance|long'"
+testopts = "-L deterministic -j %(parallel)s --output-on-failure"
 sanity_check_commands = [
   "qmcpack --version 2>&1 | grep -q 'QMCPACK version'",
 ]
