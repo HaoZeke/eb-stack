@@ -10,8 +10,8 @@ use crate::manifest::package_plan_from_foreign;
 use crate::package::{
     package_plan_to_cyclonedx, BuildSpec, ConditionExpr, DependencyIntent, DependencyRole,
     OutputRequest, PackageMetadata, PackageOrigin, PackagePlan, PatchArtifact, ProductProfile,
-    ProfileLock, Residual, ResidualSeverity, ResidualStage, SourceArtifact, StackPin, StackPinMode,
-    StackPolicy, PACKAGE_SCHEMA_VERSION,
+    ProfileLock, Provenance, Residual, ResidualSeverity, ResidualStage, SourceArtifact, StackPin,
+    StackPinMode, StackPolicy, PACKAGE_SCHEMA_VERSION,
 };
 use crate::package_config::{apply_package_layers, PackageConfigLayer};
 use crate::package_emit::{emit_profile_easyconfigs, EmittedEasyconfig};
@@ -684,7 +684,7 @@ pub fn write_package_bundle_into(
         .map_err(|error| PackageWorkflowError::Io(artifact_directory.to_path_buf(), error))?;
     let manifest = artifact_directory.join("package.plan.json");
     let sbom = artifact_directory.join("package.sbom.cdx.json");
-    write_json(&manifest, &bundle.plan)?;
+    write_json(&manifest, &portable_package_plan(&bundle.plan))?;
     write_json(&sbom, &bundle.sbom)?;
 
     let mut locks = Vec::new();
@@ -694,7 +694,7 @@ pub fn write_package_bundle_into(
             .map_err(|error| PackageWorkflowError::Io(lock_directory.clone(), error))?;
         for lock in &bundle.locks {
             let path = lock_directory.join(format!("{}.lock.json", lock.profile));
-            write_json(&path, lock)?;
+            write_json(&path, &portable_profile_lock(lock))?;
             locks.push(path);
         }
     }
@@ -747,6 +747,85 @@ pub fn write_package_bundle_into(
         easyconfigs,
         patches,
     })
+}
+
+fn portable_package_plan(plan: &PackagePlan) -> PackagePlan {
+    let mut portable = plan.clone();
+    for source in &mut portable.sources {
+        normalize_provenance_paths(&portable.origin, &mut source.provenance);
+    }
+    for dependency in &mut portable.dependencies {
+        normalize_provenance_paths(&portable.origin, &mut dependency.provenance);
+    }
+    for rule in &mut portable.rules {
+        normalize_provenance_path(&portable.origin, &mut rule.provenance);
+    }
+    for residual in &mut portable.residuals {
+        if let Some(provenance) = &mut residual.provenance {
+            normalize_provenance_path(&portable.origin, provenance);
+        }
+    }
+    for patch in &mut portable.build.patches {
+        if patch.resolved_source.is_some()
+            || patch
+                .source
+                .as_deref()
+                .is_some_and(|source| Path::new(source).is_absolute())
+        {
+            patch.source = Some(patch.filename.clone());
+        }
+    }
+    portable
+}
+
+fn normalize_provenance_paths(origin: &PackageOrigin, provenance: &mut [Provenance]) {
+    for item in provenance {
+        normalize_provenance_path(origin, item);
+    }
+}
+
+fn normalize_provenance_path(origin: &PackageOrigin, provenance: &mut Provenance) {
+    let filename = Path::new(&provenance.span.path)
+        .file_name()
+        .and_then(|filename| filename.to_str())
+        .unwrap_or(&provenance.span.path);
+    let origin = match origin {
+        PackageOrigin::CondaForge => "conda-forge",
+        PackageOrigin::Spack => "spack",
+        PackageOrigin::EasyBuild => "easybuild",
+    };
+    provenance.span.path = format!("{origin}/{filename}");
+}
+
+fn portable_profile_lock(lock: &ProfileLock) -> ProfileLock {
+    let mut portable = lock.clone();
+    for dependency in &mut portable.dependencies {
+        dependency.easyconfig_path = portable_easyconfig_path(&dependency.easyconfig_path);
+    }
+    portable
+}
+
+fn portable_easyconfig_path(path: &str) -> String {
+    let path = Path::new(path);
+    if !path.is_absolute() {
+        return relative_posix(path);
+    }
+    let components = path
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if let Some(index) = components
+        .windows(2)
+        .position(|parts| parts[0] == "easybuild" && parts[1] == "easyconfigs")
+    {
+        return components[index..].join("/");
+    }
+    path.file_name()
+        .map(|filename| filename.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// Reject path segments that would escape the bundle layout.

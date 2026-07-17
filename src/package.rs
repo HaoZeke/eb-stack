@@ -951,6 +951,7 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
     );
 
     let mut metadata = Metadata::new().unwrap_or_default();
+    metadata.timestamp = None;
     metadata.tools = Some(Tools::List(vec![Tool::new(
         "eb-stack",
         "eb-stack",
