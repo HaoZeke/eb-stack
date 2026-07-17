@@ -2,11 +2,12 @@
 
 use crate::domain::{Candidate, DepReq, Policy};
 use crate::hierarchy::{
-    filter_candidates_in_hierarchy, hierarchy_for_with_tree, toolchains_match, ToolchainHierarchy,
+    filter_candidates_in_hierarchy, hierarchy_for_with_tree, is_system_toolchain,
+    toolchains_match, ToolchainHierarchy,
 };
 use crate::package::{
-    materialize_profile, DependencyRole, LockedDependency, PackagePlan, ProfileEnvironment,
-    ProfileLock, StackPolicy, PROFILE_LOCK_SCHEMA_VERSION,
+    materialize_profile, DependencyRole, LockedDependency, PackageOrigin, PackagePlan,
+    ProfileEnvironment, ProfileLock, StackPolicy, PROFILE_LOCK_SCHEMA_VERSION,
 };
 use crate::resolvo_provider::solve_curated_with_stack_policy;
 use crate::version::matches_req;
@@ -92,6 +93,8 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
         let has_compatible = admitted.iter().any(|candidate| {
             package_identities_match(&candidate.name, &name)
                 && matches_req(&candidate.version, &version_req)
+                && !(plan.origin == PackageOrigin::EasyBuild
+                    && is_system_toolchain(&candidate.toolchain))
         });
         if !has_compatible {
             holes.push(UnsatisfiedDirectDependency {
@@ -137,6 +140,7 @@ pub fn solve_package_profile_with_hierarchy(
         .map_err(|error| ProfileSolveError::Materialize(error.to_string()))?;
     let synthetic_name = format!("__package_profile__{}__{}", plan.package.name, profile_name);
     let mut direct_roles: BTreeMap<String, bool> = BTreeMap::new();
+    let mut implicit_easybuild_dependencies = HashSet::new();
     let mut runtime_dependencies = Vec::new();
     let mut build_dependencies = Vec::new();
     for dependency in &materialized.dependencies {
@@ -156,6 +160,9 @@ pub fn solve_package_profile_with_hierarchy(
             .entry(name.clone())
             .and_modify(|existing| *existing &= build_only)
             .or_insert(build_only);
+        if plan.origin == PackageOrigin::EasyBuild {
+            implicit_easybuild_dependencies.insert(name.clone());
+        }
         let requirement = DepReq {
             name: name.clone(),
             version_req: normalize_requirement(dependency.constraint.as_deref()),
@@ -173,6 +180,10 @@ pub fn solve_package_profile_with_hierarchy(
         .map_err(|error| ProfileSolveError::Resolve(error.to_string()))?;
     let mut original_candidates = filter_candidates_in_hierarchy(candidates, &hierarchy);
     admit_stack_pin_closures(candidates, &mut original_candidates, stack_policy);
+    original_candidates.retain(|candidate| {
+        !(implicit_easybuild_dependencies.contains(&candidate.name)
+            && is_system_toolchain(&candidate.toolchain))
+    });
     let mut universe = original_candidates.clone();
     for candidate in &mut universe {
         // Existing robot recipes are independently built artifacts. Their

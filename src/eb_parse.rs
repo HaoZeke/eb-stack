@@ -1418,17 +1418,18 @@ impl RecipeDepCheck {
 ///
 /// When `dep.toolchain` is **None**, any toolchain with a matching
 /// name/version/suffix is accepted (legacy identity match). Prefer
-/// [`candidate_matches_dep_for_recipe`] so unpinned deps must live in the
-/// recipe generation hierarchy (closer to EasyBuild robot behaviour).
+/// [`candidate_matches_dep_for_recipe`] so implicit deps follow EasyBuild's
+/// minimal-toolchain search within the recipe generation.
 pub fn candidate_matches_dep(c: &Candidate, dep: &ResolvedDep) -> bool {
     candidate_matches_dep_core(c, dep, /*require_hierarchy*/ None)
 }
 
 /// Like [`candidate_matches_dep`], but when the dep has **no** explicit
-/// toolchain pin, only candidates whose toolchain is a member of `hierarchy`
-/// count (e.g. CapnProto on GCCcore-14.x does not satisfy foss-2026.1 which
-/// needs GCCcore-15.2.0). Explicit fourth-tuple pins still match exactly,
-/// including explicitly selected cross-generation dependencies.
+/// toolchain pin, only non-SYSTEM candidates in `hierarchy` count for a
+/// non-SYSTEM recipe. EasyBuild may minimize an implicit dependency to a
+/// generation member such as GCCcore, but it only selects SYSTEM when the
+/// dependency tuple says so explicitly. Explicit fourth-tuple pins still
+/// match exactly, including explicitly selected cross-generation dependencies.
 pub fn candidate_matches_dep_for_recipe(
     c: &Candidate,
     dep: &ResolvedDep,
@@ -1456,9 +1457,12 @@ fn candidate_matches_dep_core(
     if let Some(tc) = &dep.toolchain {
         return crate::hierarchy::toolchains_match(&c.toolchain, tc);
     }
-    // Unpinned: EasyBuild resolves within the parent recipe hierarchy.
+    // Implicit dependencies minimize within the generation, but do not fall
+    // through to SYSTEM unless the recipe itself uses SYSTEM.
     if let Some(h) = hierarchy {
-        return h.contains(&c.toolchain);
+        return h.contains(&c.toolchain)
+            && (crate::hierarchy::is_system_toolchain(&h.parent)
+                || !crate::hierarchy::is_system_toolchain(&c.toolchain));
     }
     true
 }
@@ -1467,9 +1471,9 @@ fn candidate_matches_dep_core(
 /// `universe` (any tree layer already merged). Does **not** run the SAT
 /// solver — this is the packaging/robot completeness gate used before `eb`.
 ///
-/// Unpinned deps must match a hierarchy member of the recipe toolchain
-/// (derived from the robot universe when possible), so an older-generation
-/// GCCcore candidate does not false-pass a newer foss recipe.
+/// Implicit deps must match a non-SYSTEM hierarchy member of the recipe
+/// toolchain (derived from the robot universe when possible), so neither an
+/// older-generation candidate nor a SYSTEM fallback can false-pass.
 pub fn check_recipe_deps(recipe: &ResolvedEasyconfig, universe: &[Candidate]) -> RecipeDepCheck {
     let hierarchy =
         crate::hierarchy::hierarchy_for_with_tree(&recipe.toolchain, None, universe).ok();
