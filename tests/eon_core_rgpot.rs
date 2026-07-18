@@ -206,12 +206,28 @@ fn eon_fat_2024a_and_core_2026_1_fixtures_coexist() {
 
 #[test]
 fn eon_core_recipe_copies_do_not_drift() {
-    // The same recipe seeds the tutorial overlay tree; both copies must
-    // stay identical to the draft-PR snapshot.
-    let canonical =
-        std::fs::read_to_string(drafts().join("e/eOn/eOn-2.17.1-foss-2026.1.eb")).unwrap();
-    let overlay = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/eon_foss_2026_1/easyconfigs/e/eOn/eOn-2.17.1-foss-2026.1.eb");
-    let overlay_text = std::fs::read_to_string(&overlay).unwrap();
-    assert_eq!(canonical, overlay_text, "fixture copies drifted");
+    // The same recipe seeds the tutorial overlay tree, and the catalog
+    // companions under examples/packages/companions close robot holes in
+    // package plans. Every copy must stay identical to the draft-PR
+    // snapshot.
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let pairs = [
+        (
+            "fixtures/eon_core_rgpot/easyconfigs/e/eOn/eOn-2.17.1-foss-2026.1.eb",
+            "fixtures/eon_foss_2026_1/easyconfigs/e/eOn/eOn-2.17.1-foss-2026.1.eb",
+        ),
+        (
+            "fixtures/eon_core_rgpot/easyconfigs/r/readcon-core/readcon-core-0.13.1-GCCcore-15.2.0.eb",
+            "examples/packages/companions/r/readcon-core/readcon-core-0.13.1-GCCcore-15.2.0.eb",
+        ),
+        (
+            "fixtures/eon_core_rgpot/easyconfigs/r/rgpot/rgpot-2.5.0-GCCcore-15.2.0.eb",
+            "examples/packages/companions/r/rgpot/rgpot-2.5.0-GCCcore-15.2.0.eb",
+        ),
+    ];
+    for (canonical_rel, copy_rel) in pairs {
+        let canonical = std::fs::read_to_string(manifest.join(canonical_rel)).unwrap();
+        let copy = std::fs::read_to_string(manifest.join(copy_rel)).unwrap();
+        assert_eq!(canonical, copy, "{copy_rel} drifted from {canonical_rel}");
+    }
 }

@@ -30,8 +30,6 @@ dependencies = [
     ('CapnProto', '1.4.0'),
 ]
 
-# eOn export profile: headers + rgpot.pc via meson install (v2.5.0+).
-# See upstream docs/eon_pkgconfig.md.
 configopts = '-Dpure_lib=true -Dwith_rpc_client_only=true '
 configopts += '-Dwith_tests=false -Dwith_examples=false '
 
