@@ -52,6 +52,15 @@ fn resolve_qmcpack_foss_2026_1() {
         "must set test_cmd=ctest (CMakeNinja ninja no-op trap)"
     );
     assert!(
+        txt.contains("PRTE_MCA_rmaps_default_mapping_policy")
+            && txt.contains(":oversubscribe"),
+        "parallel ctest needs PRRTE oversubscribe (netCDF/OTF-CPT pattern)"
+    );
+    assert!(
+        txt.contains("-L deterministic"),
+        "testopts must scope to deterministic label"
+    );
+    assert!(
         txt.contains("modextrapaths") && txt.contains("PYTHONPATH"),
         "Nexus PYTHONPATH required"
     );

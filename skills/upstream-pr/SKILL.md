@@ -120,6 +120,11 @@ five-file set a maintainer can read in one sitting.
   the `OMPI_/PRTE_ALLOW_RUN_AS_ROOT*` and
   `EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES` variables from
   `examples/targets/local-podman.toml`.
+- **OpenMPI 5 / PRRTE under parallel ctest:** multi-rank tests fail with
+  "not enough slots" when `ctest -j N` launches concurrent `mpiexec`.
+  Tree precedent (netCDF, OTF-CPT):
+  `pretestopts = 'export PRTE_MCA_rmaps_default_mapping_policy=:oversubscribe && '`.
+  Do not gut the deterministic suite to hide slot exhaustion.
 - **OS dependency checks know deb/rpm names only.** On Arch,
   `libibverbs-dev`/`rdma-core-devel` never match the installed
   `rdma-core`; verify the real files exist, then pass `--ignore-osdeps`.
