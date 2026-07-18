@@ -4,7 +4,21 @@ All notable changes to this unreleased project are documented here.
 
 ## Unreleased
 
+### Changed
+
+- The public eOn policy targets the core + `with_rgpot` product on a single
+  foss-2026.1 / GCCcore-15.2.0 generation: no cross-generation PyTorch/xtb
+  pins, no staged cargo-c preconfigopts, torch-family conda host deps
+  excluded from the solve, and readcon-core plus rgpot closed as authored
+  companion easyconfigs. `fixtures/eon_core_rgpot` freezes the upstream
+  eOn 2.17.1 draft PR file set as the regression surface.
+
 ### Added
+
+- `skills/upstream-pr/SKILL.md`: easybuild-easyconfigs PR conventions
+  distilled from real merged and rejected PRs (single-generation closures,
+  readable recipes, precedent citation, AI disclosure, test-report
+  lifecycle).
 
 - MCP tools `eb_recipe_lint` and `eb_stack_sbom`, plus explicit optional
   schemas for `eb_package_bump`, `eb_recipe_check`, `eb_recipe_format`, and
