@@ -16,7 +16,7 @@ successful build.
 
 ## Files
 
-- `e/eOn/eOn-2.17.1-foss-2026.1.eb` — core + rgpot recipe, identical to the
+- `e/eOn/eOn-2.17.2-foss-2026.1.eb` — core + rgpot recipe, identical to the
   `eon_core_rgpot` copy (drift-guarded by `tests/eon_core_rgpot.rs`)
 - Historical fat-product companions: metatensor 0.2.2, metatensor-torch
   0.10.0, metatomic-torch 0.1.15, quill 11.1.0, CapnProto 1.4.0 on

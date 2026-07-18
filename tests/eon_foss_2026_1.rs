@@ -18,10 +18,10 @@ fn drafts() -> PathBuf {
 
 #[test]
 fn resolve_eon_overlay_recipe() {
-    let p = drafts().join("e/eOn/eOn-2.17.1-foss-2026.1.eb");
+    let p = drafts().join("e/eOn/eOn-2.17.2-foss-2026.1.eb");
     let r = resolve_easyconfig_file(&p).expect("resolve eOn overlay recipe");
     assert_eq!(r.name, "eOn");
-    assert_eq!(r.version, "2.17.1");
+    assert_eq!(r.version, "2.17.2");
     assert_eq!(r.toolchain.name, "foss");
     assert_eq!(r.toolchain.version, "2026.1");
     assert_eq!(r.easyblock.as_deref(), Some("MesonNinja"));
@@ -119,7 +119,7 @@ fn eon_overlay_check_recipe_stays_loud_about_missing_deps() {
     // against this tree alone must fail loudly instead of pretending the
     // recipe resolves.
     let recipe =
-        resolve_easyconfig_file(&drafts().join("e/eOn/eOn-2.17.1-foss-2026.1.eb")).unwrap();
+        resolve_easyconfig_file(&drafts().join("e/eOn/eOn-2.17.2-foss-2026.1.eb")).unwrap();
     let drafts_root = drafts();
     let draft_tree = parse_easyconfig_trees(&[drafts_root.as_path()]).unwrap();
     let incomplete = check_recipe_deps(&recipe, &draft_tree.candidates);

@@ -193,7 +193,7 @@ jobs:
           # Drafts alone leave stack deps missing; exit non-zero is correct.
           # Still exercises parse + packaging_gate on the draft-PR snapshot.
           if "$BIN" recipe check \
-            --recipe fixtures/eon_core_rgpot/easyconfigs/e/eOn/eOn-2.17.1-foss-2026.1.eb \
+            --recipe fixtures/eon_core_rgpot/easyconfigs/e/eOn/eOn-2.17.2-foss-2026.1.eb \
             --easyconfigs fixtures/eon_core_rgpot/easyconfigs \
             --require-configopt=-Dwith_rgpot=true; then
             echo "expected recipe check to fail without robot deps" >&2

@@ -100,7 +100,7 @@ constraint = "==0.13.1"
 
 [[dependencies.requirements]]
 name = "rgpot"
-constraint = "==2.5.0"
+constraint = "==2.5.1"
 
 [[profiles]]
 name = "default"

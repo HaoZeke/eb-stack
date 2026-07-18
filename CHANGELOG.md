@@ -11,7 +11,7 @@ All notable changes to this unreleased project are documented here.
   pins, no staged cargo-c preconfigopts, torch-family conda host deps
   excluded from the solve, and readcon-core plus rgpot closed as authored
   companion easyconfigs. `fixtures/eon_core_rgpot` freezes the upstream
-  eOn 2.17.1 draft PR file set as the regression surface.
+  eOn 2.17.2 draft PR file set as the regression surface.
 
 ### Added
 
