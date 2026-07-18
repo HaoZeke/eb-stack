@@ -243,7 +243,7 @@ eb-stack package plan \
   --package-config examples/packages/common.toml \
   --package-config examples/packages/eon.toml \
   --easyconfigs /path/to/easybuild-easyconfigs/easybuild/easyconfigs \
-  --easyconfigs fixtures/eon_foss_2026_1/easyconfigs \
+  --easyconfigs fixtures/eon_core_rgpot/easyconfigs \
   --stack-policy examples/stacks/eon-foss-2026.1.toml \
   --out-dir /tmp/eon
 #+end_src

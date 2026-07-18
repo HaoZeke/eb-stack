@@ -75,6 +75,7 @@ cargo test --locked \
   --test foreign_ingest \
   --test foreign_conditions \
   --test profile_emission \
+  --test eon_core_rgpot \
   --test eon_foss_2026_1 \
   --test qmcpack_foss_2026_1 \
   --test eon_packaging \

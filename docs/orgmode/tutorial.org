@@ -24,7 +24,7 @@ mkdir -p \
 
 rsync -a /path/to/easybuild-easyconfigs/easybuild/easyconfigs/ \
   /tmp/eb-stack/robot/
-rsync -a fixtures/eon_foss_2026_1/easyconfigs/ \
+rsync -a fixtures/eon_core_rgpot/easyconfigs/ \
   /tmp/eb-stack/overlay/
 #+end_src
 
@@ -102,15 +102,16 @@ roles, pin outcomes, and candidate exclusions.
 
 * Understand stack pin fallback
 
-~examples/stacks/eon-foss-2026.1.toml~ records the reviewed cross-generation
-PyTorch, xtb, Eigen, and Meson identities needed by the complete eOn product
-without imposing them on unrelated package plans. Each is a ~preferred~ pin
-with the complete EasyBuild toolchain and versionsuffix identity. Resolvo
-admits the pinned artifact's dependency closure, then first tries that favored
-candidate. If another declared requirement or known exclusion makes it
-infeasible, the solver selects a compatible alternative and sets ~fallback =
-true~ with a reason in the lock. Change the mode to ~locked~ only when the
-stack requires that exact candidate and must fail otherwise.
+~examples/stacks/eon-foss-2026.1.toml~ records the Eigen 5 identity required
+by the safemath core-guard patch without imposing it on unrelated package
+plans. It is a ~preferred~ pin with the complete EasyBuild toolchain and
+versionsuffix identity. Resolvo admits the pinned artifact's dependency
+closure, then first tries that favored candidate. If another declared
+requirement or known exclusion makes it infeasible, the solver selects a
+compatible alternative and sets ~fallback = true~ with a reason in the lock.
+Change the mode to ~locked~ only when the stack requires that exact candidate
+and must fail otherwise. The core + rgpot product needs no cross-generation
+pins; every dependency sits on the foss-2026.1 / GCCcore-15.2.0 generation.
 
 This matters because a version range is not build evidence. A candidate can be
 SAT-compatible and still fail configure, compile, link, tests, install, or
