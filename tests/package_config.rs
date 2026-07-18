@@ -630,8 +630,8 @@ fn public_eon_policy_encodes_the_core_rgpot_contract() {
 
     // Core + rgpot product: no staging scripts, no install rewrites. The
     // emitted recipe must stay a conventional MesonNinja easyconfig.
-    assert!(build.easyconfig_parameters.get("preconfigopts").is_none());
-    assert!(build.easyconfig_parameters.get("postinstallcmds").is_none());
+    assert!(!build.easyconfig_parameters.contains_key("preconfigopts"));
+    assert!(!build.easyconfig_parameters.contains_key("postinstallcmds"));
     assert!(matches!(
         build.easyconfig_parameters.get("sanity_check_paths"),
         Some(EasyconfigValue::Table(paths))
