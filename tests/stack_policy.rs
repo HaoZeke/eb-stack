@@ -219,31 +219,20 @@ fn public_stack_policy_example_parses() {
 }
 
 #[test]
-fn public_eon_stack_policy_records_cross_generation_fallbacks() {
+fn public_eon_stack_policy_pins_only_the_patch_generation() {
+    // Core + rgpot product: the only stack identity is the Eigen 5 pin
+    // backing the safemath core-guard patch. Cross-generation PyTorch/xtb
+    // pins died with the fat product.
     let policy = parse_public_stack_policy("eon-foss-2026.1.toml");
     assert_eq!(policy.schema_version, STACK_POLICY_SCHEMA_VERSION);
     assert_eq!(policy.toolchain, toolchain());
-    let expected = [
-        ("PyTorch", "==2.9.1", "foss", "2024a"),
-        ("xtb", "==6.7.1", "gfbf", "2024a"),
-        ("Eigen", "==5.0.0", "GCCcore", "15.2.0"),
-    ];
-    assert_eq!(policy.pins.len(), expected.len());
-    for (name, requirement, toolchain_name, toolchain_version) in expected {
-        let pin = policy
-            .pins
-            .iter()
-            .find(|pin| pin.name == name)
-            .unwrap_or_else(|| panic!("missing public stack pin {name}"));
-        assert_eq!(pin.version_requirement, requirement);
-        assert_eq!(pin.mode, StackPinMode::Preferred);
-        assert_eq!(pin.versionsuffix.as_deref(), Some(""));
-        let pin_toolchain = pin.toolchain.as_ref().expect("pin toolchain");
-        assert_eq!(pin_toolchain.name, toolchain_name);
-        assert_eq!(pin_toolchain.version, toolchain_version);
-    }
-    assert!(
-        policy.pins.iter().all(|pin| pin.name != "Meson"),
-        "build-tool compatibility floors are not distribution identity pins"
-    );
+    assert_eq!(policy.pins.len(), 1);
+    let pin = &policy.pins[0];
+    assert_eq!(pin.name, "Eigen");
+    assert_eq!(pin.version_requirement, "==5.0.0");
+    assert_eq!(pin.mode, StackPinMode::Preferred);
+    assert_eq!(pin.versionsuffix.as_deref(), Some(""));
+    let pin_toolchain = pin.toolchain.as_ref().expect("pin toolchain");
+    assert_eq!(pin_toolchain.name, "GCCcore");
+    assert_eq!(pin_toolchain.version, "15.2.0");
 }
