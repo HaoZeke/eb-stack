@@ -320,6 +320,7 @@ eb-stack stack solve \
 
 - [New package](skills/new-package/SKILL.md): conda-forge/Spack → profiles → bundle → Hermes/OMP campaign.
 - [Annual bump](skills/annual-bump/SKILL.md): EasyBuild recipe → SBOM + Resolvo bump bundle → campaign.
+- [Upstream PR](skills/upstream-pr/SKILL.md): recipe set → maintainer-acceptable easybuild-easyconfigs PR, distilled from real merged and rejected PRs.
 
 The public issue and PR surface belongs to the human operator. The skills produce recipe sets and evidence; they do not open or mutate upstream issues or PRs.
 
