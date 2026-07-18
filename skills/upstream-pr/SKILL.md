@@ -104,7 +104,7 @@ five-file set a maintainer can read in one sitting.
   five-recipe report takes minutes; from scratch the same report costs a
   full toolchain build (hours). `eb --show-config` prints the *default*
   configuration, not the one past runs used: an empty default installpath
-  proves nothing about what exists elsewhere on the host.
+  says nothing about what exists elsewhere on the host.
 - **The PR is a moving target.** Re-fetch the PR head before every fixture
   freeze and before every test-report run; a report for superseded recipe
   versions is wasted work. Compare file contents by checksum, not by a
