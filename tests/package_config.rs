@@ -545,7 +545,9 @@ fn public_qmcpack_policy_encodes_build_and_verification_contract() {
     assert_eq!(
         build.easyconfig_parameters.get("testopts"),
         Some(&EasyconfigValue::String(
-            "-j %(parallel)s --output-on-failure -E 'performance|long'".into()
+            "-L deterministic -j %(parallel)s --output-on-failure \
+             -E 'unit_test_message-r12|unit_test_new_drivers_mpi-r16'"
+                .into()
         ))
     );
 
