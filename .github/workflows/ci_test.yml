@@ -82,6 +82,7 @@ jobs:
           # Robot-overlay checks skip cleanly when no easyconfigs tree is
           # present; resolve + packaging_gate always run against the fixtures.
           cargo test --locked \
+            --test eon_core_rgpot \
             --test eon_foss_2026_1 \
             --test qmcpack_foss_2026_1 \
             --test eon_packaging \
@@ -185,18 +186,15 @@ jobs:
             echo "expected recipe check to fail without robot deps" >&2
             exit 1
           fi
-      - name: recipe packaging gate on eOn regression fixture
+      - name: recipe packaging gate on eOn core fixture
         run: |
           set -euo pipefail
           BIN=./target/release/eb-stack
           # Drafts alone leave stack deps missing; exit non-zero is correct.
-          # Still exercises parse + packaging_gate on the regression recipe.
+          # Still exercises parse + packaging_gate on the draft-PR snapshot.
           if "$BIN" recipe check \
-            --recipe fixtures/eon_foss_2026_1/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb \
-            --easyconfigs fixtures/eon_foss_2026_1/easyconfigs \
-            --require-configopt=-Dwith_metatomic=true \
-            --require-configopt=-Dwith_xtb=true \
-            --require-configopt=-Dwith_serve=true \
+            --recipe fixtures/eon_core_rgpot/easyconfigs/e/eOn/eOn-2.17.1-foss-2026.1.eb \
+            --easyconfigs fixtures/eon_core_rgpot/easyconfigs \
             --require-configopt=-Dwith_rgpot=true; then
             echo "expected recipe check to fail without robot deps" >&2
             exit 1
