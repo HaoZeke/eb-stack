@@ -1,0 +1,6 @@
+schema_version = 1
+
+# Authored companion easyconfigs (robot overlay / hole-fill discovery).
+[[source_roots]]
+kind = "easybuild"
+path = "../packages/companions"

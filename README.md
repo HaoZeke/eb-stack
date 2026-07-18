@@ -195,11 +195,13 @@ eb-stack package plan \
   --out-dir /tmp/eon
 ```
 
-The shipped eOn stack policy carries its reviewed cross-generation PyTorch,
-xtb, and Eigen identities as `preferred` pins. Resolvo admits those
-artifact closures and records either the selected identity or a compatible
-fallback. The generic `foss-2026.1.toml` template remains unpinned for other
-packages.
+The shipped eOn package policy is **core + `with_rgpot`**: Fortran/CuH2
+client, readcon-core, and in-process RGPOT (engines dlopen at runtime). Fat
+metatomic/xTB/serve are off by default; conda host deps for those names are
+excluded from the solve. The stack policy only prefers Eigen 5 for the
+safemath patch path. Historical full-product fixtures under
+`fixtures/eon_packaging` and `fixtures/eon_foss_2026_1` remain as regression
+snapshots of the old feedstock-parity surface.
 
 Use `--format spack`, `examples/packages/common.toml`, and
 `examples/packages/qmcpack.toml` for QMCPACK’s

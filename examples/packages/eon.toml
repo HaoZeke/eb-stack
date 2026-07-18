@@ -14,42 +14,13 @@ moduleclass = "chem"
 
 [[build.patches]]
 filename = "eOn-2.16.0_safemath-eigen5-core-guard.patch"
-sha256 = "34fd1abc414cccbfc2d454880f6df3136af2aa68c0bd65dc45c8894480a98e11"
+sha256 = "fccc4ceb74f2ec7b225142071fcc2dde07f89df637f1aa0e57404831e650a59c"
 source = "patches/eon/eOn-2.16.0_safemath-eigen5-core-guard.patch"
 
 [build.easyconfig_parameters]
-preconfigopts = { concat = [
-  "export PATH=$EBROOTRUST/bin:$PATH && ",
-  "unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS && ",
-  "unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER && ",
-  "mkdir -p %(builddir)s/readcon-stage && ",
-  "(cd %(builddir)s/%(name)s-%(version)s/readcon-core-src && ",
-  "cargo --version && rustc --version && ",
-  "cargo cinstall --locked --release --prefix %(builddir)s/readcon-stage --libdir lib --includedir include --pkgconfigdir lib/pkgconfig && ",
-  "cd %(builddir)s/%(name)s-%(version)s && ",
-  "rm -f subprojects/xtb.wrap subprojects/vesin.wrap subprojects/rgpot.wrap subprojects/readcon-core.wrap && ",
-  "rm -rf readcon-core-src) && ",
-  "export PKG_CONFIG_PATH=%(builddir)s/readcon-stage/lib/pkgconfig:$EBROOTXTB/lib/pkgconfig:$EBROOTCAPNPROTO/lib/pkgconfig:$EBROOTQUILL/lib/pkgconfig:$EBROOTMETATENSOR/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH} && ",
-  "export LIBRARY_PATH=%(builddir)s/readcon-stage/lib${LIBRARY_PATH:+:$LIBRARY_PATH} && ",
-  "export LD_LIBRARY_PATH=%(builddir)s/readcon-stage/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} && ",
-  "export CMAKE_PREFIX_PATH=%(builddir)s/readcon-stage:$EBROOTPYTORCH:$EBROOTMETATENSOR:$EBROOTMETATENSORMINTORCH:$EBROOTMETATOMICMINTORCH:$EBROOTXTB:$EBROOTCAPNPROTO:$EBROOTQUILL:$EBROOTEIGEN:$EBROOTHIGHWAY:$EBROOTINIH${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && ",
-  "export PYTHONPATH=$EBROOTPYTORCH/lib/python3.12/site-packages${PYTHONPATH:+:$PYTHONPATH} && ",
-  "export LDFLAGS=\"-L%(builddir)s/readcon-stage/lib $LDFLAGS -Wl,--no-as-needed,$EBROOTPYTORCH/lib/python3.12/site-packages/torch/lib/libtorch.so -Wl,--as-needed\" && ",
-] }
-postinstallcmds = [
-  "mkdir -p %(installdir)s/lib %(installdir)s/include %(installdir)s/lib/pkgconfig",
-  "cp -a %(builddir)s/readcon-stage/lib/libreadcon_core* %(installdir)s/lib/",
-  "patchelf --force-rpath --set-rpath '$ORIGIN' %(installdir)s/lib/libreadcon_core.so.0.13.1",
-  "cp -a %(builddir)s/readcon-stage/include/readcon-core.h %(installdir)s/include/",
-  "sed 's|^prefix=.*|prefix=%(installdir)s|' %(builddir)s/readcon-stage/lib/pkgconfig/readcon-core.pc > %(installdir)s/lib/pkgconfig/readcon-core.pc",
-]
 sanity_check_commands = [
   "eonclient --help",
   "eonclient --version",
-  "bash -c \"ldd $(which eonclient) | grep -Ei 'libxtb'\"",
-  "bash -c \"ldd $(which eonclient) | grep -Ei 'metatomic'\"",
-  "bash -c \"ldd $(which eonclient) | grep -Ei 'capnp'\"",
-  "bash -c \"ldd $(which eonclient) | grep -Ei 'torch'\"",
   "python -c \"import eon; print(getattr(eon, '__version__', 'ok'))\"",
 ]
 modextrapaths = { PYTHONPATH = "lib/python%(pyshortver)s/site-packages" }
@@ -57,8 +28,6 @@ modextrapaths = { PYTHONPATH = "lib/python%(pyshortver)s/site-packages" }
 [build.easyconfig_parameters.sanity_check_paths]
 files = [
   "bin/eonclient",
-  "include/readcon-core.h",
-  "lib/libreadcon_core.so",
   "lib/python%(pyshortver)s/site-packages/eon/__init__.py",
 ]
 dirs = [
@@ -66,6 +35,24 @@ dirs = [
   "lib",
   "lib/python%(pyshortver)s/site-packages/eon",
 ]
+
+[dependencies]
+exclude_from_solve = [
+  "libtorch",
+  "pytorch",
+  "PyTorch",
+  "libmetatensor",
+  "libmetatensor-torch",
+  "libmetatomic-torch",
+  "metatensor",
+  "metatensor-torch",
+  "metatomic-torch",
+  "xtb",
+  "vesin",
+]
+
+[dependencies.aliases]
+libreadcon-core = "readcon-core"
 
 [[dependencies.requirements]]
 name = "Meson"
@@ -85,18 +72,13 @@ name = "CMake"
 roles = ["build"]
 
 [[dependencies.requirements]]
-name = "Rust"
-constraint = ">=1.88"
-roles = ["build"]
+name = "Python"
 
 [[dependencies.requirements]]
-name = "cargo-c"
-constraint = ">=0.10.17"
-roles = ["build"]
+name = "SciPy-bundle"
 
 [[dependencies.requirements]]
-name = "patchelf"
-roles = ["build"]
+name = "PyYAML"
 
 [[dependencies.requirements]]
 name = "Eigen"
@@ -108,38 +90,26 @@ name = "Highway"
 [[dependencies.requirements]]
 name = "inih"
 
+[[dependencies.requirements]]
+name = "quill"
+
+
+[[dependencies.requirements]]
+name = "readcon-core"
+constraint = "==0.13.1"
+
+[[dependencies.requirements]]
+name = "rgpot"
+constraint = "==2.5.0"
+
 [[profiles]]
 name = "default"
 default = true
 config_options = [
+  "--wrap-mode=nodownload",
   "-Dbuildtype=release",
   "-Dwith_tests=false",
-  "-Dwith_fortran=true",
-  "-Dwith_cuh2=true",
-  "-Dwith_metatomic=true",
-  "-Dwith_xtb=true",
-  "-Dwith_serve=true",
   "-Dwith_rgpot=true",
-  "-Dpip_metatomic=false",
-  "-Dtorch_path=$EBROOTPYTORCH/lib/python3.12/site-packages/torch",
-  "-Dwith_artn=false",
-  "-Dwith_ira=false",
-  "-Dwith_parallel_neb=false",
-  "-Dwith_catlearn=false",
-  "-Dwith_ase=false",
-  "-Dwith_ase_orca=false",
-  "-Dwith_ase_nwchem=false",
-  "-Dwith_gp_surrogate=false",
-  "-Dwith_gprd=false",
-  "-Dwith_vasp=false",
-  "-Dwith_ams=false",
-  "-Dwith_mpi=false",
-  "-Dwith_qsc=false",
-  "-Dwith_water=false",
-  "-Dwith_newpot=false",
-  "-Dnative_arch=false",
-  "-Dfast_math=false",
-  "-Duse_mkl=false",
 ]
 verification_commands = [
   { program = "bash", args = ["-lc", "module load {module} && eonclient --help && eonclient --version"] },
@@ -147,9 +117,9 @@ verification_commands = [
 ]
 
 [profiles.features]
-metatomic = true
-xtb = true
-serve = true
+metatomic = false
+xtb = false
+serve = false
 rgpot = true
 mpi = false
 

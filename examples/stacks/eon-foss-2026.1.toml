@@ -5,30 +5,12 @@ name = "eon-foss-2026.1"
 name = "foss"
 version = "2026.1"
 
-# eOn's complete product consumes identities that are not in the foss-2026.1
-# hierarchy. Preferred mode admits each pinned artifact and its closure into
-# Resolvo while retaining a recorded fallback when another candidate is the
-# only jointly feasible selection.
-[[pins]]
-name = "PyTorch"
-version_requirement = "==2.9.1"
-toolchain = { name = "foss", version = "2024a" }
-versionsuffix = ""
-mode = "preferred"
-source = "eOn/EESSI compatibility stack"
-
-[[pins]]
-name = "xtb"
-version_requirement = "==6.7.1"
-toolchain = { name = "gfbf", version = "2024a" }
-versionsuffix = ""
-mode = "preferred"
-source = "eOn/EESSI compatibility stack"
-
+# Core + with_rgpot product: no cross-generation PyTorch/xtb pins.
+# Eigen 5 matches the safemath core-guard patch for this generation.
 [[pins]]
 name = "Eigen"
 version_requirement = "==5.0.0"
 toolchain = { name = "GCCcore", version = "15.2.0" }
 versionsuffix = ""
 mode = "preferred"
-source = "eOn/EESSI compatibility stack"
+source = "eOn Eigen 5 safemath path"
