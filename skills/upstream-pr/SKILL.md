@@ -19,7 +19,7 @@ five-file set a maintainer can read in one sitting.
    lacks a dependency on the target generation, port that dependency on its
    own generation-consistent recipe or trim the product until the closure is
    single-generation. Compiler-level libraries sit on the matching
-   `GCCcore-X.Y.Z`; that is the same generation, not a mix.
+   `GCCcore-X.Y.Z`; a GCCcore level matching the target generation stays single-generation.
 2. **A recipe a maintainer cannot read is a recipe they will not merge.**
    Multi-page `preconfigopts` shell pipelines, staged sub-builds,
    `postinstallcmds` that rewrite rpaths and pkg-config prefixes: "Sorry, but
@@ -27,7 +27,7 @@ five-file set a maintainer can read in one sitting.
    build needs a staged component, make that component its own easyconfig
    (readcon-core became a standalone `cargo cinstall` recipe) instead of
    inlining its build.
-3. **Comment every deviation from the default easyblock path** with the WHY,
+3. **Comment every deviation from the default easyblock path** with the reason,
    and cite tree precedent when one exists. The accepted readcon-core recipe
    carries "same pattern as librsvg-2.61.0-GCCcore-14.3.0.eb with cargo-c" —
    maintainers verify against precedent, not against your reasoning.
@@ -37,7 +37,7 @@ five-file set a maintainer can read in one sitting.
    section such as "Build-eval facilitated by gpt-120b and eb-stack."
    Non-disclosure is discovered, not forgiven.
 5. **Never re-add what develop already has.** Before adding any companion,
-   check the robot tree at the target generation. Shipping a duplicate of an
+   check the robot tree at the target generation. A duplicate of an
    existing recipe reads as not having looked.
 6. **Do not open, edit, or comment on the PR surface autonomously.** Prepare
    files and paste-ready text; the human owns the surface (see the claims
@@ -46,20 +46,20 @@ five-file set a maintainer can read in one sitting.
 ## The accepted shape (#26480 and every sampled merged PR)
 
 - **Small file count.** Sampled merged new-software PRs carry 1-4 files;
-  #26480 carries five. One software plus its genuinely-new companions is the
+  #26480 carries five. One software plus its new-to-develop companions is the
   ceiling; unrelated packages go in separate PRs.
 - **Title format is mechanical:** `{moduleclass}[toolchain/version] Name
   vX.Y.Z`. Multiple classes or toolchains join with commas:
   `{chem,lib}[foss/2026.1,GCCcore/15.2.0] eOn v2.17.1 and deps`.
 - **The body is nearly empty.** `(created using eb --new-pr)`, an optional
   one-line context ("Backported from 2025b..."), the AI disclosure. Test
-  reports, not prose, carry the proof. A long architecture essay in the body
+  reports, not prose, establish that the recipes build. A long architecture essay in the body
   is a tell that the recipe cannot speak for itself.
 - **Trim the product before porting the world.** The fat eOn product needed
   torch, xtb, and a serve stack; the accepted recipe builds the core client
   with `-Dwith_rgpot=true` and lets engines load at runtime via dlopen. A
-  smaller honest product beats a complete unbuildable one; later PRs can
-  grow it.
+  smaller product that builds beats a complete one that does not; later
+  PRs can grow it.
 - **Choose the lowest sufficient toolchain.** Pure C/C++/Rust libraries with
   no toolchain-lib dependency go on `GCCcore` (CapnProto, quill,
   readcon-core, rgpot); only recipes needing MPI/BLAS/FFTW sit on full
@@ -93,20 +93,20 @@ five-file set a maintainer can read in one sitting.
 3. Community bot testing is requested with `@boegelbot please test @
    jsc-zen3` (maintainers often trigger it themselves).
 4. A maintainer reproduces SUCCESS, replies "Going in, thanks @author!" and
-   merges. There is no CI gate on the PR itself; test reports are the gate.
+   merges. The PR itself runs no CI; test reports decide acceptance.
 
 ## How eb-stack output maps onto this
 
 - `package plan` / `package bump` emit the conventional `.eb`; `recipe
   format`, `recipe lint`, and `recipe check` must pass against the robot
   tree plus the draft overlay before any PR text is drafted.
-- The claim ladder gates the PR wording: `resolves` alone justifies only a
+- The claim ladder constrains the PR wording: `resolves` alone justifies only a
   draft PR; write "built and sanity-checked on <target>" only when a
   campaign established `builds`/`binary-verified` there, and name the
   toolchain generation it ran on. #26435 claimed a 2026.1 recipe set from a
   2024a build evidence base; reviewers noticed immediately.
 - Freeze the exact PR file set as a fixture tree (see
   `fixtures/eon_core_rgpot/`) with tests asserting the non-negotiables:
-  single-generation dependency closure, no staging parameters, gate
+  single-generation dependency closure, no staging parameters, required
   configopts. Regressions against a live upstream PR are then caught before
   the human pushes an update.
