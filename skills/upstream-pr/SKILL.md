@@ -95,6 +95,38 @@ five-file set a maintainer can read in one sitting.
 4. A maintainer reproduces SUCCESS, replies "Going in, thanks @author!" and
    merges. The PR itself runs no CI; test reports decide acceptance.
 
+## Producing the test report (where the hours actually go)
+
+- **Find the existing site stack before building anything.** A prior test
+  report on any of the author's PRs embeds the full EasyBuild
+  configuration, including `buildpath`/`installpath` — that names the
+  prefix with the installed generation. Against an installed stack a
+  five-recipe report takes minutes; from scratch the same report costs a
+  full toolchain build (hours). `eb --show-config` prints the *default*
+  configuration, not the one past runs used: an empty default installpath
+  proves nothing about what exists elsewhere on the host.
+- **The PR is a moving target.** Re-fetch the PR head before every fixture
+  freeze and before every test-report run; a report for superseded recipe
+  versions is wasted work. Compare file contents by checksum, not by a
+  wrapped `diff`.
+- **Bleeding-edge hosts break the bootstrap, not the build.** With glibc
+  >= 2.43 the gprofng in every binutils <= 2.45 fails to compile
+  (`CALL_UTIL` re-expands glibc's `_Generic` function macros), so a
+  from-scratch system-toolchain bootstrap dies immediately; an installed
+  toolchain never triggers it. Route from-scratch builds through the
+  Rocky 9 container (`skills/new-package/container/rocky9`).
+- **Container runs need capabilities and root-run overrides**:
+  `--cap-add=NET_RAW` (Perl's Net-Ping ICMP tests fail without it) plus
+  the `OMPI_/PRTE_ALLOW_RUN_AS_ROOT*` and
+  `EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES` variables from
+  `examples/targets/local-podman.toml`.
+- **OS dependency checks know deb/rpm names only.** On Arch,
+  `libibverbs-dev`/`rdma-core-devel` never match the installed
+  `rdma-core`; verify the real files exist, then pass `--ignore-osdeps`.
+- **Uploads read the GitHub token from python keyring only** (no env
+  fallback). Verify with `eb --check-github --github-user=<user>`; the
+  upload itself posts a gist plus a PR comment and takes seconds.
+
 ## How eb-stack output maps onto this
 
 - `package plan` / `package bump` emit the conventional `.eb`; `recipe
