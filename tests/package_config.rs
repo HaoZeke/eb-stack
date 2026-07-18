@@ -597,7 +597,7 @@ fn public_qmcpack_policy_encodes_build_and_verification_contract() {
 }
 
 #[test]
-fn public_eon_policy_encodes_the_repaired_build_contract() {
+fn public_eon_policy_encodes_the_core_rgpot_contract() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let config = PackageConfigLayer::from_path(&root.join("examples/packages/eon.toml"))
         .expect("eOn package config");
@@ -621,69 +621,96 @@ fn public_eon_policy_encodes_the_repaired_build_contract() {
     );
     assert_eq!(
         patches[0].sha256.as_deref(),
-        Some("34fd1abc414cccbfc2d454880f6df3136af2aa68c0bd65dc45c8894480a98e11")
+        Some("fccc4ceb74f2ec7b225142071fcc2dde07f89df637f1aa0e57404831e650a59c")
     );
     assert!(patches[0]
         .resolved_source
         .as_ref()
         .is_some_and(|path| path.is_file()));
 
-    let Some(EasyconfigValue::Concat(preconfig)) = build.easyconfig_parameters.get("preconfigopts")
-    else {
-        panic!("preconfigopts must be typed string fragments");
-    };
-    let preconfig = preconfig.concat.join("");
-    for required in [
-        "cargo cinstall --locked --release",
-        "unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER",
-        "readcon-stage",
-        "EBROOTMETATENSORMINTORCH",
-        "EBROOTMETATOMICMINTORCH",
-        "lib/python3.12/site-packages",
-    ] {
-        assert!(
-            preconfig.contains(required),
-            "preconfigopts missing {required}"
-        );
-    }
-    assert!(!preconfig.contains("export RUSTC_WRAPPER="));
-    assert!(matches!(
-        build.easyconfig_parameters.get("postinstallcmds"),
-        Some(EasyconfigValue::List(commands)) if commands.len() >= 4
-    ));
+    // Core + rgpot product: no staging scripts, no install rewrites. The
+    // emitted recipe must stay a conventional MesonNinja easyconfig.
+    assert!(build.easyconfig_parameters.get("preconfigopts").is_none());
+    assert!(build.easyconfig_parameters.get("postinstallcmds").is_none());
     assert!(matches!(
         build.easyconfig_parameters.get("sanity_check_paths"),
         Some(EasyconfigValue::Table(paths))
-            if matches!(paths.get("files"), Some(EasyconfigValue::List(files)) if files.len() >= 4)
+            if matches!(paths.get("files"), Some(EasyconfigValue::List(files)) if files.len() >= 2)
     ));
     assert!(matches!(
         build.easyconfig_parameters.get("sanity_check_commands"),
-        Some(EasyconfigValue::List(commands)) if commands.len() >= 6
+        Some(EasyconfigValue::List(commands)) if commands.len() >= 3
     ));
 
-    let requirements = &config
+    let dependencies = config
         .dependencies
         .as_ref()
-        .expect("EasyBuild product requirements")
-        .requirements;
-    for name in ["Rust", "cargo-c", "patchelf"] {
+        .expect("EasyBuild product requirements");
+    for excluded in ["PyTorch", "metatensor-torch", "metatomic-torch", "xtb"] {
+        assert!(
+            dependencies
+                .exclude_from_solve
+                .iter()
+                .any(|name| name == excluded),
+            "fat-product dependency {excluded} must stay out of the core solve"
+        );
+    }
+    assert_eq!(
+        dependencies
+            .aliases
+            .get("libreadcon-core")
+            .map(DependencyAlias::provider),
+        Some("readcon-core")
+    );
+    let requirements = &dependencies.requirements;
+    for name in ["Meson", "Ninja", "pkgconf", "CMake"] {
         assert!(requirements.iter().any(|requirement| {
             requirement.name == name && requirement.roles == [DependencyRole::Build]
         }));
     }
-    for name in ["Highway", "inih"] {
+    assert!(!requirements
+        .iter()
+        .any(|requirement| ["Rust", "cargo-c", "patchelf"].contains(&requirement.name.as_str())));
+    for name in [
+        "Python",
+        "SciPy-bundle",
+        "PyYAML",
+        "Highway",
+        "inih",
+        "quill",
+    ] {
         assert!(
             requirements.iter().any(|requirement| {
                 requirement.name == name && requirement.roles == [DependencyRole::Run]
             }),
-            "eOn preconfig references require {name} as a runtime dependency"
+            "core product requires {name} as a runtime dependency"
         );
     }
-    let eigen = requirements
-        .iter()
-        .find(|requirement| requirement.name == "Eigen")
-        .expect("Eigen 5 compatibility requirement");
-    assert_eq!(eigen.constraint.as_deref(), Some("==5.0.0"));
+    for (name, constraint) in [
+        ("Eigen", "==5.0.0"),
+        ("readcon-core", "==0.13.1"),
+        ("rgpot", "==2.5.0"),
+    ] {
+        let requirement = requirements
+            .iter()
+            .find(|requirement| requirement.name == name)
+            .unwrap_or_else(|| panic!("missing pinned requirement {name}"));
+        assert_eq!(requirement.constraint.as_deref(), Some(constraint));
+    }
+
+    let profile = &config.profiles[0];
+    let options = profile.config_options.as_deref().unwrap_or_default();
+    assert!(options.iter().any(|option| option == "-Dwith_rgpot=true"));
+    for fat in [
+        "-Dwith_metatomic=true",
+        "-Dwith_xtb=true",
+        "-Dwith_serve=true",
+    ] {
+        assert!(
+            !options.iter().any(|option| option == fat),
+            "core profile must not enable {fat}"
+        );
+    }
 
     let common = PackageConfigLayer::from_path(&root.join("examples/packages/common.toml"))
         .expect("common package aliases");
@@ -720,7 +747,13 @@ fn public_eon_policy_encodes_the_repaired_build_contract() {
             version: "15.2.0".into(),
         })
     );
-    assert!(!stack.pins.iter().any(|pin| pin.name == "Meson"));
+    // Single-generation policy: no cross-generation PyTorch/xtb pins survive.
+    for cross in ["PyTorch", "xtb", "Meson"] {
+        assert!(
+            !stack.pins.iter().any(|pin| pin.name == cross),
+            "stack policy must not pin {cross}"
+        );
+    }
 }
 
 #[test]
