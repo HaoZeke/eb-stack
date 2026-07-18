@@ -18,8 +18,8 @@ five-file set a maintainer can read in one sitting.
    generations, it shouldn't be done" and closed #26435. If the robot tree
    lacks a dependency on the target generation, port that dependency on its
    own generation-consistent recipe or trim the product until the closure is
-   single-generation. Compiler-level libraries sit on the matching
-   `GCCcore-X.Y.Z`; a GCCcore level matching the target generation stays single-generation.
+   single-generation. Compiler-level libraries sit on the `GCCcore-X.Y.Z`
+   matching the target generation; that placement stays single-generation.
 2. **A recipe a maintainer cannot read is a recipe they will not merge.**
    Multi-page `preconfigopts` shell pipelines, staged sub-builds,
    `postinstallcmds` that rewrite rpaths and pkg-config prefixes: "Sorry, but
