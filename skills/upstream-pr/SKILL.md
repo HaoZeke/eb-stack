@@ -123,10 +123,25 @@ eb-stack still owns planning (`package plan`, `recipe check`, fixtures). The
 - **Title format is mechanical:** `{moduleclass}[toolchain/version] Name
   vX.Y.Z`. Multiple classes or toolchains join with commas:
   `{chem,lib}[foss/2026.1,GCCcore/15.2.0] eOn v2.17.1 and deps`.
-- **The body is nearly empty.** `(created using eb --new-pr)`, an optional
-  one-line context ("Backported from 2025b..."), the AI disclosure. Test
-  reports, not prose, establish that the recipes build. A long architecture
-  essay in the body is a tell that the recipe cannot speak for itself.
+- **The body is nearly empty and human.** Default template from
+  `eb --new-pr`: the created-using line, optional one short factual line
+  ("Backported from 2025b"), mandatory AI disclosure. That is the whole
+  body. **Test reports, not prose, prove the recipes build.**
+
+  **Banned in PR title, body, and review replies (agent-drafted or posted):**
+  - Architecture essays, feature marketing, "this PR adds a robust…" filler
+  - Bullet novels of design rationale, claim ladders, or internal host paths
+  - LLM tells: "I'd be happy to", "happy to help", "in summary", "in
+    conclusion", "comprehensive", "leverages", "streamlines", "ensures",
+    "seamless", emoji, fake enthusiasm, apologetic padding
+  - Process narration ("agent fixed", "campaign established", vault IDs,
+    internal hostnames, "as an AI")
+  - Invented reviewer-facing status that is not a real SUCCESS gist link
+
+  If a maintainer needs background, put it in chat or a vault note — not in
+  the public PR. When asked to draft wording, match HaoZeke-short past PRs:
+  dry, sparse, no sales pitch. Prefer leaving the body alone over expanding
+  it.
 - **Trim the product before porting the world.** The fat eOn product needed
   torch, xtb, and a serve stack; the accepted recipe builds the core client
   with `-Dwith_rgpot=true` and lets engines load at runtime via dlopen. A
