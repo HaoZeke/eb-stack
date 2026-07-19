@@ -275,6 +275,13 @@ eb-stack recipe check \
 
 Fix the code under test when a check fails. Do not drop checksums, weaken sanity paths, remove dependencies, or skip tests to clear a finding. Use EasyBuild’s `--check-contrib` and `--inject-checksums` on the EasyBuild host when packaging metadata needs them.
 
+When the goal is an **upstream easybuild-easyconfigs PR**, switch to
+`skills/upstream-pr/SKILL.md`. After recipes exist, the contribution path is
+the EasyBuild CLI only: `eb --check-contrib`, then
+`eb --from-pr <N> --upload-test-report` on a host that already has the target
+generation (or Rocky 9 when bootstrap is intentional). Do not post hand-written
+SUCCESS comments or skip `eb` for “faster” evidence.
+
 ## Route the build
 
 Target configuration is layered as transport → executor → runtime → EasyBuild workload. Keep site hostnames and paths in site-local TOML, not in the public skill.

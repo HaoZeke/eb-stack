@@ -6,6 +6,7 @@ Use the matching public skill and execute it through the requested claim rung:
 |---|---|
 | conda-forge or Spack → new EasyBuild package | `skills/new-package/SKILL.md` |
 | existing `.eb` → new toolchain/application version | `skills/annual-bump/SKILL.md` |
+| upstream easybuild-easyconfigs PR / test report | `skills/upstream-pr/SKILL.md` |
 
 ## Canonical procedure
 
@@ -16,6 +17,10 @@ Use the matching public skill and execute it through the requested claim rung:
 5. Run `eb-stack target doctor` before a build campaign.
 6. Run or resume `eb-stack campaign run` on the configured EasyBuild target until the requested claim rung is established.
 7. Use `campaign finding claim|resolve` for OMP coordination. Never edit campaign JSON directly or steal an owned finding.
+8. For an **upstream easyconfigs PR**, after recipes are ready, use the EasyBuild
+   CLI on the build host: `eb --check-contrib`, then
+   `eb --from-pr <N> --robot --upload-test-report` (see `skills/upstream-pr/SKILL.md`).
+   Do not invent substitutes for contribution checks or test-report upload.
 
 ## Non-negotiables
 
