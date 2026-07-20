@@ -39,11 +39,13 @@ publicly by any other channel.
 **PR surface ownership (precise):**
 
 - Human owns title, body, review replies, and any `gh`/`gh api` mutation of
-  issues or PRs.
+  issues or PRs. Default: **do not touch title or body at all** unless the
+  human explicitly asks for a specific edit in the live turn.
 - **Exception:** `eb --upload-test-report` may post the standard test-report
   comment and gist. That is the EB contribution workflow, not agent freestyle.
-- Still forbidden: editing title/body via API, "fixing" wording, or posting
-  prose that is not the EB test-report format.
+- Still forbidden: editing title/body via API, "improving" wording, posting
+  prose that is not the EB test-report format, or dumping AI essay text into
+  the PR (see "body is nearly empty and human" below).
 
 Canonical contribution docs: https://docs.easybuild.io/contributing/
 
@@ -150,7 +152,80 @@ eb-stack still owns planning (`package plan`, `recipe check`, fixtures). The
 - **Choose the lowest sufficient toolchain.** Pure C/C++/Rust libraries with
   no toolchain-lib dependency go on `GCCcore` (CapnProto, quill,
   readcon-core, rgpot); only recipes needing MPI/BLAS/FFTW sit on full
-  `foss`.
+  `foss`. See also https://github.com/easybuilders/easybuild/wiki/Review-process-for-contributions#toolchain
+
+### Dependency toolchains on foss apps (#26480 / casparvl)
+
+On a **foss** (or other high-level) easyconfig, **do not hard-code** the
+dependency toolchain as `('', ('GCCcore', 'X.Y.Z'))` for pure GCCcore libs.
+That is reserved for exceptional cases (e.g. defining `foss` itself).
+
+Robot walks the **same toolchain and all subtoolchains** (`foss` →
+`gfbf`/`gompi`/… → eventually `GCCcore`). Plain deps are enough:
+
+```python
+# WRONG on foss/2026.1 — casparvl #26480
+('quill', '11.1.0', '', ('GCCcore', '15.2.0')),
+
+# RIGHT — robot finds quill-*-GCCcore-15.2.0.eb via subtoolchains
+('quill', '11.1.0'),
+```
+
+Companion easyconfigs still **live** on `GCCcore` (lower toolchain for reuse).
+Only the **consumer** recipe must not pin them.
+
+Before claiming ready: `eb --review-pr <N>` and dry-run the top-level
+easyconfig with `--robot --dry-run-short` and confirm GCCcore modules resolve
+without 4-tuples.
+
+### Prefer unit tests when they exist (#26480)
+
+- CMake: build tests on + `runtest = True` (CMakeMake maps that to `ctest`).
+  Parameter name is **`runtest`**, not `runtests`.
+- MesonNinja: `runtest = 'meson'` and
+  `testopts = 'test -C %(builddir)s/easybuild_obj'` (see xtb easyconfigs).
+- If a tiny FS/clock-sensitive subset fails, exclude with quoted `-E` and a
+  one-line comment; do not disable the whole suite.
+- Do not ship `-Dwith_tests=false` / `QUILL_BUILD_TESTS=OFF` without a
+  measured reason written as a short comment.
+- **If the package's own test build is broken for the product shape you
+  ship, do not EB-patch around it.** Fix the package upstream, cut a
+  **minor** release, and point the easyconfig at that release. #26480
+  rgpot: `with_rpc_client_only=true` + `with_tests=true` fails configure
+  (`rgpot_bridge_dep` typo) and link (UnitsTest needs `rgpot_core`, not
+  built in client-only). Answer is rgpot 2.5.2+, not a `.patch` in the PR.
+
+### No easyconfig patches for upstream bugs (#26480)
+
+- EasyBuild patches are for site/toolchain glue, not for fixing the
+  software under test when you control the release.
+- Package bug → fix upstream → tag minor → bump `version` + `checksums`.
+- Never ship a broken `with_tests=true` behind a one-line meson patch
+  "so the PR looks green."
+
+### Do not invent RPATH with patchelf (#26480 readcon)
+
+`patchelf --force-rpath --set-rpath '$ORIGIN'` overrides EasyBuild's RPATH
+policy (`--rpath` default True since EB 5) and discards whatever the
+toolchain wrote. It was only "working" because EB's sanity check looks for
+a literal `(RPATH)` section via `readelf -d` — inventing `$ORIGIN` faked
+that section without fixing any real dependency.
+
+For cargo-c installs (readcon-core):
+
+1. Check `readelf -d lib….so | grep NEEDED`. If the only non-system deps
+   are `libgcc_s` / `libc`, modules + GCCcore already resolve them.
+2. cargo-c does **not** go through EB RPATH link wrappers, so the installed
+   `.so` often has **no** RPATH section. EB then fails sanity with
+   `No '(RPATH)' found` when `--rpath` is on (default since EB 5).
+3. **Correct fix:** drop patchelf, set the documented easyconfig knob
+   `check_readelf_rpath = False` with a one-line reason. Tree precedent:
+   QEMU, table2asn, Dakota, HPCToolkit.
+4. Do **not** gate a fake `$ORIGIN` rewrite with `%(rpath_enabled)s` —
+   that still clobbers policy when rpath is on.
+5. readcon-core stays a **required** eOn dep (`.con` I/O via
+   `dependency('readcon-core')` in `client/meson.build`); the RPATH ding
+   is not a reason to drop the package.
 
 ## Recipe style the linter will not fully catch
 

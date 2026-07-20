@@ -53,18 +53,36 @@ fn resolve_eon_core_rgpot_recipe() {
         assert!(names.contains(&need), "missing dep {need} in {names:?}");
     }
 
-    // Single-generation contract: every dependency either inherits the
-    // recipe toolchain or sits on the matching GCCcore compiler level.
+    // On foss apps, do not hard-code GCCcore dep toolchains (casparvl
+    // #26480). Robot walks foss subtoolchains and finds GCCcore modules.
     for dep in &r.dependencies {
-        if let Some(tc) = dep.toolchain.as_ref() {
-            assert!(
-                tc.name == "GCCcore" && tc.version == "15.2.0",
-                "cross-generation dependency {}: {:?}",
-                dep.name,
-                tc
-            );
-        }
+        assert!(
+            dep.toolchain.is_none(),
+            "do not hard-code dep toolchain on foss app: {} {:?}",
+            dep.name,
+            dep.toolchain
+        );
     }
+}
+
+#[test]
+fn readcon_core_no_patchelf_uses_check_readelf_rpath() {
+    let text = std::fs::read_to_string(
+        drafts().join("r/readcon-core/readcon-core-0.13.1-GCCcore-15.2.0.eb"),
+    )
+    .unwrap();
+    assert!(
+        !text.contains("('patchelf'") && !text.contains("patchelf --"),
+        "cargo-c install must not depend on or invoke patchelf"
+    );
+    assert!(
+        text.contains("check_readelf_rpath = False"),
+        "cargo-c skips EB RPATH wrappers; disable readelf RPATH presence check"
+    );
+    assert!(
+        !text.contains("postinstallcmds"),
+        "no postinstall RPATH rewrite"
+    );
 }
 
 #[test]
@@ -89,9 +107,9 @@ fn eon_core_recipe_stays_conventional() {
 fn resolve_core_rgpot_companions() {
     let cases = [
         (
-            "r/rgpot/rgpot-2.5.1-GCCcore-15.2.0.eb",
+            "r/rgpot/rgpot-2.5.3-GCCcore-15.2.0.eb",
             "rgpot",
-            "2.5.1",
+            "2.5.3",
             "GCCcore",
             "15.2.0",
         ),
@@ -221,8 +239,8 @@ fn eon_core_recipe_copies_do_not_drift() {
             "examples/packages/companions/r/readcon-core/readcon-core-0.13.1-GCCcore-15.2.0.eb",
         ),
         (
-            "fixtures/eon_core_rgpot/easyconfigs/r/rgpot/rgpot-2.5.1-GCCcore-15.2.0.eb",
-            "examples/packages/companions/r/rgpot/rgpot-2.5.1-GCCcore-15.2.0.eb",
+            "fixtures/eon_core_rgpot/easyconfigs/r/rgpot/rgpot-2.5.3-GCCcore-15.2.0.eb",
+            "examples/packages/companions/r/rgpot/rgpot-2.5.3-GCCcore-15.2.0.eb",
         ),
     ];
     for (canonical_rel, copy_rel) in pairs {
