@@ -10,7 +10,7 @@ repository = "https://github.com/HaoZeke/eb-stack"
 homepage = "https://eb-stack.rgoswami.me"
 documentation = "https://eb-stack.rgoswami.me"
 readme = "README.md"
-keywords = ["easybuild", "hpc", "dependency-resolution", "toolchain", "sbom"]
+keywords = ["easybuild", "hpc", "resolvo", "toolchain", "sbom"]
 categories = ["command-line-utilities", "development-tools", "science"]
 exclude = [
     ".claude/",
@@ -23,6 +23,11 @@ exclude = [
 [[bin]]
 name = "eb-stack"
 path = "src/main.rs"
+
+# cargo-dist builds with --profile=dist
+[profile.dist]
+inherits = "release"
+lto = "thin"
 
 [dependencies]
 anyhow = "1"
