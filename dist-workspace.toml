@@ -1,0 +1,18 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist' (cargo-dist)
+[dist]
+cargo-dist-version = "0.30.3"
+ci = "github"
+# Hand-written ci_release.yml is replaced by dist generate; allow-dirty if needed.
+installers = ["shell", "powershell"]
+targets = [
+  "aarch64-apple-darwin",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-apple-darwin",
+  "x86_64-unknown-linux-gnu",
+  "x86_64-pc-windows-msvc",
+]
+# Publish the binary as eb-stack; crate package is eb_stack.
+pr-run-mode = "plan"

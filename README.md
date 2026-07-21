@@ -11,6 +11,8 @@
 
 [![CI](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_test.yml/badge.svg)](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_test.yml)
 [![Docs](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_docs.yml/badge.svg)](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_docs.yml)
+[![crates.io](https://img.shields.io/crates/v/eb_stack.svg)](https://crates.io/crates/eb_stack)
+[![docs](https://img.shields.io/badge/docs-eb--stack.rgoswami.me-blue)](https://eb-stack.rgoswami.me)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ## Pipeline
@@ -53,7 +55,28 @@ Report these claims independently:
 
 ## Install
 
-Rust 1.88 or newer is required for the locked dependency graph.
+The crate is `eb_stack` on crates.io; the installed binary is `eb-stack`.
+Rust 1.88 or newer is required when building from source.
+
+Pre-built binary (fastest):
+
+```sh
+cargo binstall eb_stack
+```
+
+Shell installer (Linux/macOS):
+
+```sh
+curl -LsSf https://github.com/HaoZeke/eb-stack/releases/latest/download/eb_stack-installer.sh | sh
+```
+
+From crates.io:
+
+```sh
+cargo install eb_stack --locked
+```
+
+From source:
 
 ```sh
 git clone https://github.com/HaoZeke/eb-stack.git
@@ -64,6 +87,8 @@ install -m755 target/release/eb-stack ~/.local/bin/eb-stack
 ```
 
 Build the Rust binary on a suitable build host. EasyBuild installs belong on the target selected by the public target configuration, not necessarily on the machine running the CLI.
+
+Documentation: [https://eb-stack.rgoswami.me](https://eb-stack.rgoswami.me)
 
 ## Inspect from a fresh clone
 

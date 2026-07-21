@@ -7,9 +7,12 @@ a configured local or SSH target, optionally through Slurm, Podman, or Docker.
 
 ## Supported versions
 
-The project has no tagged public release. Security fixes apply to the current
-`main` branch (Cargo development version 0.3.0) until versioned Git tags are
-published.
+| Version | Supported |
+|---------|-----------|
+| 0.3.x   | Yes       |
+| < 0.3   | No        |
+
+Security fixes apply to the latest `0.3.x` release and to `main`.
 
 ## Trust boundaries
 

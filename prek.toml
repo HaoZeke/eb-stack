@@ -1,0 +1,45 @@
+# Git hooks via prek (https://prek.j178.dev). Install: prek install
+#:schema https://www.schemastore.org/prek.json
+
+exclude = """(?x)(
+    ^\\.pixi/|
+    ^\\.venv-docs/|
+    ^docs/build/|
+    ^docs/source/crates/|
+    ^target/|
+    ^work/|
+    ^Cargo\\.lock$|
+    ^pixi\\.lock$|
+    ^.*\\.svg$|
+    ^.*\\.png$|
+    ^.*\\.jpg$|
+    ^.*\\.patch$|
+    ^skills/new-package/overlays/|
+    ^fixtures/foreign_ingest/
+)"""
+
+[[repos]]
+repo = "builtin"
+hooks = [
+  { id = "trailing-whitespace" },
+  { id = "end-of-file-fixer" },
+  { id = "check-yaml" },
+  { id = "check-toml" },
+  { id = "check-merge-conflict" },
+  { id = "check-added-large-files", args = ["--maxkb=1500"] },
+  { id = "detect-private-key" },
+]
+
+[[repos]]
+repo = "https://github.com/codespell-project/codespell"
+rev = "v2.4.1"
+hooks = [
+  {
+    id = "codespell",
+    args = [
+      "--skip=*.lock,*.svg,*.png,*.jpg,*.eb,*.patch,Cargo.lock,pixi.lock",
+      "-L",
+      "unparseable,unparsable,intack,notin,thirdparty,anlysis,libray",
+    ],
+  },
+]

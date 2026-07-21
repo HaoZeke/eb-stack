@@ -1,6 +1,6 @@
 # QMCPACK foss-2026.1 packaging fixtures
 
-**Upstream PR:** easybuilders/easybuild-easyconfigs #26437  
+**Upstream PR:** easybuilders/easybuild-easyconfigs #26437
 **Fork branch:** HaoZeke/easybuild-easyconfigs `20260710_new_pr_QMCPACK430`
 
 ## Files

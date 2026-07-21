@@ -6,6 +6,14 @@ version = "0.3.0"
 
 [dependencies]
 
+[feature.dev.tasks]
+test = { cmd = "cargo test --locked --all-targets", description = "Full locked test gate" }
+fmt-check = { cmd = "cargo fmt --all --check", description = "Rust formatting check" }
+clippy = { cmd = "cargo clippy --locked --all-targets -- -D warnings", description = "Clippy with warnings as errors" }
+prek = { cmd = "prek run -a", description = "Run all prek hooks" }
+check = { cmd = "cargo fmt --all --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked --lib", description = "fmt + clippy + lib tests" }
+package = { cmd = "cargo package --locked", description = "Source package dry-run for crates.io" }
+
 [feature.docs.dependencies]
 python = ">=3.12,<4"
 emacs = ">=30.2,<31"
@@ -28,4 +36,5 @@ docdel = { cmd = "rm -rf build source/*.rst source/**/*.rst source/crates 2>/dev
 linkcheck = { cmd = "lychee --config lychee.toml --no-progress 'docs/build/**/*.html' README.md" }
 
 [environments]
+dev = { features = ["dev"], solve-group = "default" }
 docs = { features = ["docs"] }

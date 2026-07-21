@@ -1,8 +1,13 @@
 # Changelog
 
-All notable changes to this unreleased project are documented here.
+All notable changes to this project are documented here.
 
 ## Unreleased
+
+## 0.3.0 - 2026-07-21
+
+First public release: package plan/bump/campaign CLI, Resolvo locks, CycloneDX
+SBOMs, multi-platform installers (cargo-dist), and operator documentation.
 
 ### Changed
 
