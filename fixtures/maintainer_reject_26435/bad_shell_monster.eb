@@ -1,0 +1,21 @@
+easyblock = 'MesonNinja'
+name = 'ShellMonster'
+version = '1.0.0'
+homepage = 'https://example.invalid/'
+description = "fixture: staged preconfigopts shell pipeline"
+toolchain = {'name': 'foss', 'version': '2026.1'}
+sources = ['shell-1.0.0.tar.gz']
+checksums = ['bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb']
+preconfigopts = 'export PATH=$EBROOTRUST/bin:$PATH && '
+preconfigopts += 'mkdir -p %(builddir)s/stage && '
+preconfigopts += '(cd %(builddir)s/src && cargo cinstall --locked --release --prefix %(builddir)s/stage) && '
+preconfigopts += 'export PKG_CONFIG_PATH=%(builddir)s/stage/lib/pkgconfig:$PKG_CONFIG_PATH && '
+preconfigopts += 'export LD_LIBRARY_PATH=%(builddir)s/stage/lib:$LD_LIBRARY_PATH && '
+preconfigopts += 'export CMAKE_PREFIX_PATH=%(builddir)s/stage:$CMAKE_PREFIX_PATH && '
+postinstallcmds = [
+    'patchelf --force-rpath --set-rpath \'$ORIGIN\' %(installdir)s/lib/libfoo.so',
+]
+dependencies = [
+    ('Python', '3.14.2', '', ('GCCcore', '15.2.0')),
+]
+moduleclass = 'tools'

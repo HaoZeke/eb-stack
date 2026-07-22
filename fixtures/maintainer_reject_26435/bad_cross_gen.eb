@@ -1,0 +1,14 @@
+easyblock = 'ConfigureMake'
+name = 'BadMix'
+version = '1.0.0'
+homepage = 'https://example.invalid/'
+description = "fixture: cross-generation pin"
+toolchain = {'name': 'foss', 'version': '2026.1'}
+sources = ['bad-1.0.0.tar.gz']
+checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']
+dependencies = [
+    ('PyTorch', '2.9.1', '', ('foss', '2024a')),
+    ('xtb', '6.7.1', '', ('gfbf', '2024a')),
+    ('Python', '3.14.2', '', ('GCCcore', '15.2.0')),
+]
+moduleclass = 'tools'

@@ -1,0 +1,13 @@
+easyblock = 'ConfigureMake'
+name = 'GoodSingle'
+version = '1.0.0'
+homepage = 'https://example.invalid/'
+description = "fixture: single-generation GCCcore dep without high-level pin"
+toolchain = {'name': 'foss', 'version': '2026.1'}
+sources = ['good-1.0.0.tar.gz']
+checksums = ['cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc']
+dependencies = [
+    ('Python', '3.14.2'),
+    ('zlib', '1.3.1'),
+]
+moduleclass = 'tools'

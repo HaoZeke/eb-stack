@@ -11,13 +11,13 @@ use eb_stack::package_config::PackageConfigLayer;
 use eb_stack::package_sources::{PackageSourceRoots, SourceRootKind};
 use eb_stack::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use eb_stack::{
-    check_recipe_deps, format_style, format_style_file, inspect_new_package, lint_style,
-    load_json_file, lock_to_cyclonedx, packaging_gate, parse_easyconfig_trees, plan_new_package,
-    plan_package_bump, plan_package_closure_with_sources, resolve_easyconfig_file,
-    resolve_package_catalog_layers, solve_from_easyconfigs_with_baseline_version_and_extras,
-    write_json_pretty, write_package_bundle, write_package_closure, BumpPackageRequest,
-    ForeignFormat, NewPackageRequest, PackageBundle, PackageCatalogLayer, SolveExtraOut, StackLock,
-    Toolchain,
+    check_maintainer_acceptability, check_maintainer_acceptability_text, check_recipe_deps,
+    format_style, format_style_file, inspect_new_package, lint_style, load_json_file,
+    lock_to_cyclonedx, packaging_gate, parse_easyconfig_trees, plan_new_package, plan_package_bump,
+    plan_package_closure_with_sources, resolve_easyconfig_file, resolve_package_catalog_layers,
+    solve_from_easyconfigs_with_baseline_version_and_extras, write_json_pretty,
+    write_package_bundle, write_package_closure, BumpPackageRequest, ForeignFormat,
+    NewPackageRequest, PackageBundle, PackageCatalogLayer, SolveExtraOut, StackLock, Toolchain,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -431,11 +431,30 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             metadata_only,
         } => {
             let resolved = resolve_easyconfig_file(&recipe).map_err(anyhow::Error::msg)?;
+            let source_text = std::fs::read_to_string(&recipe)
+                .with_context(|| format!("read {}", recipe.display()))?;
             let required = require_configopts
                 .iter()
                 .map(String::as_str)
                 .collect::<Vec<_>>();
             let gate = packaging_gate(&resolved, &required);
+            let maintainer = check_maintainer_acceptability(&resolved, &source_text);
+            println!(
+                "maintainer_acceptability={}",
+                serde_json::to_string_pretty(&maintainer)?
+            );
+            if !maintainer.ok_for_upstream() {
+                let errors: Vec<_> = maintainer
+                    .findings
+                    .iter()
+                    .filter(|f| f.is_error())
+                    .map(|f| format!("{}: {}", f.code, f.message))
+                    .collect();
+                bail!(
+                    "maintainer-acceptability failed (easybuild-easyconfigs #26435 class): {}",
+                    errors.join("; ")
+                );
+            }
             if metadata_only {
                 if let Err(errors) = gate {
                     bail!("packaging gate failed: {}", errors.join("; "));
@@ -458,14 +477,39 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
         }
         RecipeCommand::Lint { paths } => {
             let mut findings = Vec::new();
+            let mut maintainer_all = Vec::new();
             for path in paths {
                 let text = std::fs::read_to_string(&path)
                     .with_context(|| format!("read {}", path.display()))?;
                 findings.extend(lint_style(&text));
+                let report = check_maintainer_acceptability_text(&text);
+                for f in report.findings {
+                    maintainer_all.push(serde_json::json!({
+                        "path": path.display().to_string(),
+                        "code": f.code,
+                        "severity": f.severity,
+                        "message": f.message,
+                        "evidence": f.evidence,
+                    }));
+                }
             }
-            println!("{}", serde_json::to_string_pretty(&findings)?);
-            if !findings.is_empty() {
-                bail!("{} style findings", findings.len());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "style": findings,
+                    "maintainer_acceptability": maintainer_all,
+                }))?
+            );
+            let maintainer_errors = maintainer_all
+                .iter()
+                .filter(|v| v.get("severity").and_then(|s| s.as_str()) == Some("error"))
+                .count();
+            if !findings.is_empty() || maintainer_errors > 0 {
+                bail!(
+                    "{} style findings, {} maintainer-acceptability errors",
+                    findings.len(),
+                    maintainer_errors
+                );
             }
             Ok(())
         }

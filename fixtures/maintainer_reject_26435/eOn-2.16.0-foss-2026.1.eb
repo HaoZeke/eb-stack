@@ -1,0 +1,127 @@
+easyblock = 'MesonNinja'
+
+name = 'eOn'
+version = '2.16.0'
+
+homepage = 'https://eondocs.org/'
+description = """eOn models the evolution of atomic-scale systems over long time scales."""
+
+toolchain = {'name': 'foss', 'version': '2026.1'}
+toolchainopts = {'openmp': True, 'pic': True}
+
+sources = [
+    'https://github.com/TheochemUI/eOn/releases/download/v2.16.0/eon-v2.16.0.tar.xz',
+    {
+        'source_urls': ['https://github.com/OmniPotentRPC/rgpot/archive/refs/tags/'],
+        'filename': 'v2.2.1.tar.gz',
+        'extract_cmd': 'mkdir -p %(builddir)s/%(name)s-%(version)s/subprojects/rgpot && ' +
+            'tar -xf %s -C %(builddir)s/%(name)s-%(version)s/subprojects/rgpot --strip-components=1',
+    },
+    {
+        'source_urls': ['https://github.com/lode-org/readcon-core/archive/refs/tags/'],
+        'filename': 'v0.13.1.tar.gz',
+        'extract_cmd': 'mkdir -p %(builddir)s/%(name)s-%(version)s/readcon-core-src && ' +
+            'tar -xf %s -C %(builddir)s/%(name)s-%(version)s/readcon-core-src --strip-components=1',
+    },
+]
+checksums = [
+    '3d4da89a393c8821bf370cb97c9d2403718d83f9cbb5e8b918cd90af14ed52dc',
+    'd4687bc719e19174e89288dd16dd45d7a8645d7205c7f8d8fc4d677266055918',
+    'a261e69b87228dcc8f161eef800590b0395b4c93605b838c6216d40a1780f0bf',
+    '34fd1abc414cccbfc2d454880f6df3136af2aa68c0bd65dc45c8894480a98e11',
+]
+patches = [
+    'eOn-2.16.0_safemath-eigen5-core-guard.patch',
+]
+configopts = '-Dbuildtype=release -Dwith_tests=false -Dwith_fortran=true -Dwith_cuh2=true -Dwith_metatomic=true '
+configopts += '-Dwith_xtb=true -Dwith_serve=true -Dwith_rgpot=true -Dpip_metatomic=false '
+configopts += '-Dtorch_path=$EBROOTPYTORCH/lib/python3.12/site-packages/torch -Dwith_artn=false -Dwith_ira=false '
+configopts += '-Dwith_parallel_neb=false -Dwith_catlearn=false -Dwith_ase=false -Dwith_ase_orca=false '
+configopts += '-Dwith_ase_nwchem=false -Dwith_gp_surrogate=false -Dwith_gprd=false -Dwith_vasp=false '
+configopts += '-Dwith_ams=false -Dwith_mpi=false -Dwith_qsc=false -Dwith_water=false -Dwith_newpot=false '
+configopts += '-Dnative_arch=false -Dfast_math=false -Duse_mkl=false'
+modextrapaths = {
+    'PYTHONPATH': 'lib/python%(pyshortver)s/site-packages',
+}
+postinstallcmds = [
+    'mkdir -p %(installdir)s/lib %(installdir)s/include %(installdir)s/lib/pkgconfig',
+    'cp -a %(builddir)s/readcon-stage/lib/libreadcon_core* %(installdir)s/lib/',
+    'patchelf --force-rpath --set-rpath \'$ORIGIN\' %(installdir)s/lib/libreadcon_core.so.0.13.1',
+    'cp -a %(builddir)s/readcon-stage/include/readcon-core.h %(installdir)s/include/',
+    ('sed \'s|^prefix=.*|prefix=%(installdir)s|\' %(builddir)s/readcon-stage/lib/pkgconfig/readcon-core.pc > '
+     + '%(installdir)s/lib/pkgconfig/readcon-core.pc'),
+]
+preconfigopts = 'export PATH=$EBROOTRUST/bin:$PATH && '
+preconfigopts += 'unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS && '
+preconfigopts += 'unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER && '
+preconfigopts += 'mkdir -p %(builddir)s/readcon-stage && '
+preconfigopts += '(cd %(builddir)s/%(name)s-%(version)s/readcon-core-src && '
+preconfigopts += 'cargo --version && rustc --version && '
+preconfigopts += 'cargo cinstall --locked --release --prefix %(builddir)s/readcon-stage --libdir lib --includedir '
+preconfigopts += 'include --pkgconfigdir lib/pkgconfig && '
+preconfigopts += 'cd %(builddir)s/%(name)s-%(version)s && '
+preconfigopts += 'rm -f subprojects/xtb.wrap subprojects/vesin.wrap subprojects/rgpot.wrap '
+preconfigopts += 'subprojects/readcon-core.wrap && '
+preconfigopts += 'rm -rf readcon-core-src) && '
+preconfigopts += 'export PKG_CONFIG_PATH=%(builddir)s/readcon-stage/lib/pkgconfig:$EBROOTXTB/lib/pkgconfig:'
+preconfigopts += '$EBROOTCAPNPROTO/lib/pkgconfig:$EBROOTQUILL/lib/pkgconfig:'
+preconfigopts += '$EBROOTMETATENSOR/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH} && '
+preconfigopts += 'export LIBRARY_PATH=%(builddir)s/readcon-stage/lib${LIBRARY_PATH:+:$LIBRARY_PATH} && '
+preconfigopts += 'export LD_LIBRARY_PATH=%(builddir)s/readcon-stage/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} && '
+preconfigopts += 'export CMAKE_PREFIX_PATH=%(builddir)s/readcon-stage:$EBROOTPYTORCH:$EBROOTMETATENSOR:'
+preconfigopts += '$EBROOTMETATENSORMINTORCH:$EBROOTMETATOMICMINTORCH:$EBROOTXTB:$EBROOTCAPNPROTO:$EBROOTQUILL:'
+preconfigopts += '$EBROOTEIGEN:$EBROOTHIGHWAY:$EBROOTINIH${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH} && '
+preconfigopts += 'export PYTHONPATH=$EBROOTPYTORCH/lib/python3.12/site-packages${PYTHONPATH:+:$PYTHONPATH} && '
+preconfigopts += 'export LDFLAGS="-L%(builddir)s/readcon-stage/lib $LDFLAGS '
+preconfigopts += '-Wl,--no-as-needed,$EBROOTPYTORCH/lib/python3.12/site-packages/torch/lib/libtorch.so '
+preconfigopts += '-Wl,--as-needed" && '
+sanity_check_commands = [
+    'eonclient --help',
+    'eonclient --version',
+    'bash -c "ldd $(which eonclient) | grep -Ei \'libxtb\'"',
+    'bash -c "ldd $(which eonclient) | grep -Ei \'metatomic\'"',
+    'bash -c "ldd $(which eonclient) | grep -Ei \'capnp\'"',
+    'bash -c "ldd $(which eonclient) | grep -Ei \'torch\'"',
+    'python -c "import eon; print(getattr(eon, \'__version__\', \'ok\'))"',
+]
+sanity_check_paths = {
+    'dirs': [
+        'bin',
+        'lib',
+        'lib/python%(pyshortver)s/site-packages/eon',
+    ],
+    'files': [
+        'bin/eonclient',
+        'include/readcon-core.h',
+        'lib/libreadcon_core.so',
+        'lib/python%(pyshortver)s/site-packages/eon/__init__.py',
+    ],
+}
+
+builddependencies = [
+    ('CMake', '4.2.1', '', ('GCCcore', '15.2.0')),
+    ('Meson', '1.10.2', '', ('GCCcore', '15.2.0')),
+    ('Ninja', '1.13.2', '', ('GCCcore', '15.2.0')),
+    ('Rust', '1.94.1', '', ('GCCcore', '15.2.0')),
+    ('cargo-c', '0.10.23', '', ('GCCcore', '15.2.0')),
+    ('patchelf', '0.18.0', '', ('GCCcore', '15.2.0')),
+    ('pkgconf', '2.5.1', '', ('GCCcore', '15.2.0')),
+]
+
+dependencies = [
+    ('CapnProto', '1.4.0', '', ('GCCcore', '15.2.0')),
+    ('Eigen', '5.0.0', '', ('GCCcore', '15.2.0')),
+    ('Highway', '1.4.0', '', ('GCCcore', '15.2.0')),
+    ('PyTorch', '2.9.1', '', ('foss', '2024a')),
+    ('PyYAML', '6.0.3', '', ('GCCcore', '15.2.0')),
+    ('Python', '3.14.2', '', ('GCCcore', '15.2.0')),
+    ('SciPy-bundle', '2026.05', '', ('gfbf', '2026.1')),
+    ('inih', '62', '', ('GCCcore', '15.2.0')),
+    ('metatensor', '0.2.2', '', ('GCCcore', '15.2.0')),
+    ('metatensor-torch', '0.10.0'),
+    ('metatomic-torch', '0.1.15'),
+    ('quill', '11.1.0', '', ('GCCcore', '15.2.0')),
+    ('xtb', '6.7.1', '', ('gfbf', '2024a')),
+]
+
+moduleclass = 'chem'

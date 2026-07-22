@@ -7,6 +7,7 @@ Use the matching public skill and execute it through the requested claim rung:
 | conda-forge or Spack → new EasyBuild package | `skills/new-package/SKILL.md` |
 | existing `.eb` → new toolchain/application version | `skills/annual-bump/SKILL.md` |
 | upstream easybuild-easyconfigs PR / test report | `skills/upstream-pr/SKILL.md` |
+| EasyBuild do/don't (incl. #26435 class) | `skills/easybuild-dos-donts/SKILL.md` |
 
 ## Canonical procedure
 
