@@ -37,9 +37,9 @@ pub use eb_parse::{
     RecipeDepCheck, ResolvedDep, ResolvedEasyconfig, ResolvedExt, SkippedEasyconfig,
 };
 pub use eb_maintainer::{
-    check_cross_generation_pins, check_maintainer_acceptability,
-    check_maintainer_acceptability_text, check_shell_monsters, MaintainerFinding,
-    MaintainerReport, MaintainerSeverity,
+    check_cross_generation_pins, check_dep_toolchain_pins, check_duplicate_upstream,
+    check_fat_build, check_maintainer_acceptability, check_maintainer_acceptability_text,
+    check_shell_monsters, MaintainerFinding, MaintainerReport, MaintainerSeverity,
 };
 pub use eb_style::{
     format_style, format_style_file, lint_style, FormatStyleResult, StyleError, StyleFinding,

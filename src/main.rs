@@ -11,7 +11,8 @@ use eb_stack::package_config::PackageConfigLayer;
 use eb_stack::package_sources::{PackageSourceRoots, SourceRootKind};
 use eb_stack::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use eb_stack::{
-    check_maintainer_acceptability, check_maintainer_acceptability_text, check_recipe_deps,
+    check_duplicate_upstream, check_maintainer_acceptability, check_maintainer_acceptability_text,
+    check_recipe_deps,
     format_style, format_style_file, inspect_new_package, lint_style, load_json_file,
     lock_to_cyclonedx, packaging_gate, parse_easyconfig_trees, plan_new_package, plan_package_bump,
     plan_package_closure_with_sources, resolve_easyconfig_file, resolve_package_catalog_layers,
@@ -464,8 +465,20 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             }
             let roots = easyconfigs.iter().map(PathBuf::as_path).collect::<Vec<_>>();
             let tree = parse_easyconfig_trees(&roots).map_err(anyhow::Error::msg)?;
+            // Needs the robot tree, so it runs here rather than with the
+            // text-only maintainer gates above.
+            let duplicates = check_duplicate_upstream(&resolved, &tree.candidates);
+            if !duplicates.is_empty() {
+                println!(
+                    "duplicate_upstream={}",
+                    serde_json::to_string_pretty(&duplicates)?
+                );
+            }
             let check = check_recipe_deps(&resolved, &tree.candidates);
             println!("{}", serde_json::to_string_pretty(&check)?);
+            if let Some(dup) = duplicates.iter().find(|f| f.is_error()) {
+                bail!("{}: {}", dup.code, dup.message);
+            }
             if let Err(errors) = gate {
                 bail!("packaging gate failed: {}", errors.join("; "));
             }

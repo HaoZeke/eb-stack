@@ -12,7 +12,7 @@
 //! These are mechanical gates for `recipe check` / `recipe lint`. They do **not**
 //! replace `eb --check-contrib` or a SUCCESS test report.
 
-use crate::domain::Toolchain;
+use crate::domain::{Candidate, Toolchain};
 use crate::eb_parse::ResolvedEasyconfig;
 use crate::hierarchy::{is_system_toolchain, known_hierarchy};
 use serde::{Deserialize, Serialize};
@@ -406,6 +406,56 @@ pub fn check_fat_build(text: &str) -> Vec<MaintainerFinding> {
     out
 }
 
+/// Re-adding an easyconfig the robot tree already ships: hard error (#26480).
+///
+/// Do/don't rule 8. A PR that rewrites a file `develop` already has at the same
+/// name-version-toolchain is pure churn: reviewers see an unexplained diff
+/// against a working recipe, and the contributor's own version is usually worse
+/// (different source URL, missing dependencies) because it was written blind.
+///
+/// `candidates` is the robot tree the recipe will be built against. The recipe
+/// under review is expected to come from a *draft* tree, so a self-match on the
+/// same path is ignored.
+pub fn check_duplicate_upstream(
+    recipe: &ResolvedEasyconfig,
+    candidates: &[Candidate],
+) -> Vec<MaintainerFinding> {
+    let mut out = Vec::new();
+    for candidate in candidates {
+        if candidate.easyconfig_path == recipe.easyconfig_path {
+            continue;
+        }
+        if !candidate.name.eq_ignore_ascii_case(&recipe.name)
+            || candidate.version != recipe.version
+            || !candidate.toolchain.name.eq_ignore_ascii_case(&recipe.toolchain.name)
+            || candidate.toolchain.version != recipe.toolchain.version
+        {
+            continue;
+        }
+        let lhs = candidate.versionsuffix.as_deref().unwrap_or("");
+        let rhs = recipe.versionsuffix.as_deref().unwrap_or("");
+        if lhs != rhs {
+            continue;
+        }
+        out.push(MaintainerFinding::error(
+            "EB_MAINT_DUPLICATE_UPSTREAM",
+            format!(
+                "{}-{} on {}-{} already exists in the robot tree at {}; drop it from the PR and depend on the existing recipe (easybuild-easyconfigs do/don't 8)",
+                recipe.name,
+                recipe.version,
+                recipe.toolchain.name,
+                recipe.toolchain.version,
+                candidate.easyconfig_path
+            ),
+            Some(
+                "Do not re-add packages that develop already has at the target generation".into(),
+            ),
+        ));
+        break;
+    }
+    out
+}
+
 /// Full maintainer-acceptability report from resolved recipe + source text.
 pub fn check_maintainer_acceptability(
     recipe: &ResolvedEasyconfig,
@@ -641,6 +691,89 @@ mod tests {
             report.findings.is_empty(),
             "the shipped fat rgpot recipe must pass every maintainer gate: {report:?}"
         );
+    }
+
+    fn candidate(name: &str, version: &str, tc: &str, tc_ver: &str, path: &str) -> Candidate {
+        Candidate {
+            name: name.into(),
+            version: version.into(),
+            toolchain: Toolchain {
+                name: tc.into(),
+                version: tc_ver.into(),
+            },
+            versionsuffix: None,
+            easyconfig_path: path.into(),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn duplicate_upstream_is_an_error() {
+        // The real #26480 slip: nanobind-2.13.0-GCCcore-15.2.0 was written from
+        // scratch and pushed over the copy develop already shipped.
+        let (recipe, _) = load("fixtures/maintainer_fat_26480/good_fat.eb");
+        let robot = vec![candidate(
+            &recipe.name,
+            &recipe.version,
+            &recipe.toolchain.name,
+            &recipe.toolchain.version,
+            "/robot/g/GoodFat/GoodFat-1.0.0-GCCcore-15.2.0.eb",
+        )];
+        let findings = check_duplicate_upstream(&recipe, &robot);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].code, "EB_MAINT_DUPLICATE_UPSTREAM");
+        assert!(findings[0].is_error());
+    }
+
+    #[test]
+    fn duplicate_upstream_ignores_self_and_other_versions() {
+        let (recipe, _) = load("fixtures/maintainer_fat_26480/good_fat.eb");
+        // Same file resolved from the draft tree must not flag itself.
+        let mut me = candidate(
+            &recipe.name,
+            &recipe.version,
+            &recipe.toolchain.name,
+            &recipe.toolchain.version,
+            &recipe.easyconfig_path,
+        );
+        me.easyconfig_path = recipe.easyconfig_path.clone();
+        assert!(check_duplicate_upstream(&recipe, &[me]).is_empty());
+
+        // A different version or generation is a legitimate new contribution.
+        let others = vec![
+            candidate(
+                &recipe.name,
+                "0.9.0",
+                &recipe.toolchain.name,
+                &recipe.toolchain.version,
+                "/robot/old.eb",
+            ),
+            candidate(
+                &recipe.name,
+                &recipe.version,
+                "GCCcore",
+                "14.3.0",
+                "/robot/prev-gen.eb",
+            ),
+        ];
+        assert!(check_duplicate_upstream(&recipe, &others).is_empty());
+    }
+
+    #[test]
+    fn duplicate_upstream_respects_versionsuffix_variants() {
+        let (recipe, _) = load("fixtures/maintainer_fat_26480/good_fat.eb");
+        // A -client variant upstream is a different product, not a duplicate.
+        let mut variant = candidate(
+            &recipe.name,
+            &recipe.version,
+            &recipe.toolchain.name,
+            &recipe.toolchain.version,
+            "/robot/variant.eb",
+        );
+        variant.versionsuffix = Some("-client".into());
+        assert!(check_duplicate_upstream(&recipe, &[variant]).is_empty());
     }
 
     #[test]
