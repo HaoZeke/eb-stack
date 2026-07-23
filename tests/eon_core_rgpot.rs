@@ -1,10 +1,12 @@
 //! eOn 2.17.10 core + rgpot recipes under fixtures/eon_core_rgpot.
 //!
 //! Frozen snapshot of the upstream draft PR set (easybuild-easyconfigs
-//! #26480): eOn plus CapnProto, quill, readcon-core, and rgpot companions,
-//! all on the single foss-2026.1 / GCCcore-15.2.0 generation. This is the
-//! shape maintainers accept: conventional parameters, no staging scripts,
-//! no cross-generation dependencies.
+//! #26480): eOn plus CapnProto, quill, readcon-core, rgpot, and nanobind
+//! companions, all on the single foss-2026.1 / GCCcore-15.2.0 generation.
+//! This is the shape maintainers accept: conventional parameters, no staging
+//! scripts, no cross-generation dependencies, and fat companions (rgpot
+//! carries every optional feature whose dependencies exist in the
+//! generation; casparvl review on #26480).
 
 use eb_stack::{
     check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,
@@ -86,6 +88,58 @@ fn readcon_core_no_patchelf_uses_check_readelf_rpath() {
 }
 
 #[test]
+fn rgpot_companion_builds_fat() {
+    // casparvl on #26480: install packages as fat as possible; features stay
+    // off only when their dependencies are missing from the generation.
+    let r = resolve_easyconfig_file(&drafts().join("r/rgpot/rgpot-2.5.3-GCCcore-15.2.0.eb"))
+        .expect("resolve fat rgpot");
+    let opts = r.configopts.as_deref().unwrap_or("");
+    for on in [
+        "-Dpure_lib=false",
+        "-Dwith_rpc=true",
+        "-Dwith_eigen=true",
+        "-Dwith_python=true",
+        "-Dwith_tests=true",
+        "-Dwith_examples=true",
+    ] {
+        assert!(opts.contains(on), "fat rgpot must set {on}: {opts}");
+    }
+    assert!(
+        !opts.contains("-Dwith_rpc_client_only=true"),
+        "client-only is the thin shape casparvl flagged: {opts}"
+    );
+
+    let deps: Vec<_> = r.dependencies.iter().map(|d| d.name.as_str()).collect();
+    for need in ["CapnProto", "fmt", "Python"] {
+        assert!(deps.contains(&need), "fat rgpot needs dep {need}: {deps:?}");
+    }
+    let build_deps: Vec<_> = r
+        .builddependencies
+        .iter()
+        .map(|d| d.name.as_str())
+        .collect();
+    for need in ["Eigen", "nanobind", "Catch2"] {
+        assert!(
+            build_deps.contains(&need),
+            "fat rgpot needs builddep {need}: {build_deps:?}"
+        );
+    }
+
+    let text =
+        std::fs::read_to_string(drafts().join("r/rgpot/rgpot-2.5.3-GCCcore-15.2.0.eb")).unwrap();
+    for surface in ["bin/potserv", "librgpot", "site-packages/rgpot", "runtest"] {
+        assert!(text.contains(surface), "fat rgpot sanity covers {surface}");
+    }
+    // Off-flags must each carry a why in the comment block above configopts.
+    for justified_off in ["with_xtb", "with_tblite", "with_metatomic", "with_xtensor"] {
+        assert!(
+            text.contains(justified_off),
+            "off feature {justified_off} needs an in-recipe justification"
+        );
+    }
+}
+
+#[test]
 fn eon_core_recipe_stays_conventional() {
     let text = std::fs::read_to_string(drafts().join("e/eOn/eOn-2.17.10-foss-2026.1.eb")).unwrap();
     for banned in [
@@ -138,6 +192,13 @@ fn resolve_core_rgpot_companions() {
             "q/quill/quill-11.1.0-GCCcore-15.2.0.eb",
             "quill",
             "11.1.0",
+            "GCCcore",
+            "15.2.0",
+        ),
+        (
+            "n/nanobind/nanobind-2.13.0-GCCcore-15.2.0.eb",
+            "nanobind",
+            "2.13.0",
             "GCCcore",
             "15.2.0",
         ),
@@ -241,6 +302,10 @@ fn eon_core_recipe_copies_do_not_drift() {
         (
             "fixtures/eon_core_rgpot/easyconfigs/r/rgpot/rgpot-2.5.3-GCCcore-15.2.0.eb",
             "examples/packages/companions/r/rgpot/rgpot-2.5.3-GCCcore-15.2.0.eb",
+        ),
+        (
+            "fixtures/eon_core_rgpot/easyconfigs/n/nanobind/nanobind-2.13.0-GCCcore-15.2.0.eb",
+            "examples/packages/companions/n/nanobind/nanobind-2.13.0-GCCcore-15.2.0.eb",
         ),
     ];
     for (canonical_rel, copy_rel) in pairs {

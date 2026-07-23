@@ -5,7 +5,8 @@ version = '2.5.3'
 
 homepage = 'https://github.com/OmniPotentRPC/rgpot'
 description = """Potential frontends with Cap'n Proto RPC (NWChem/CPMD clients;
-engines are loaded at runtime via dlopen)."""
+engines are loaded at runtime via dlopen). Built fat: RPC server (potserv),
+Eigen array backend, and nanobind Python bindings."""
 
 toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
 toolchainopts = {'pic': True, 'cstd': 'c++20'}
@@ -25,28 +26,49 @@ builddependencies = [
     ('pkgconf', '2.5.1'),
     ('CMake', '4.2.1'),
     ('Catch2', '3.14.0'),
+    ('Eigen', '5.0.0'),
+    ('nanobind', '2.13.0'),
 ]
 
 dependencies = [
     ('CapnProto', '1.4.0'),
+    ('fmt', '12.2.0'),
+    ('Python', '3.14.2'),
 ]
 
-configopts = '-Dpure_lib=true -Dwith_rpc_client_only=true '
-configopts += '-Dwith_tests=true -Dwith_examples=false '
+# Fat build: full RPC (server + clients), Eigen backend, Python bindings,
+# unit tests and example tests. Left off because their dependencies have no
+# 2026.1-generation easyconfigs yet: with_xtb, with_tblite (both would also
+# promote the toolchain for BLAS), with_metatomic (torch stack),
+# with_xtensor (Eigen is the array backend here). with_rust_core needs a
+# cargo network fetch at build time and with_cache needs RocksDB.
+configopts = '-Dpure_lib=false -Dwith_rpc=true -Dwith_eigen=true '
+configopts += '-Dwith_python=true -Dwith_tests=true -Dwith_examples=true '
 
 runtest = 'meson'
 testopts = 'test -C %(builddir)s/easybuild_obj'
 
 sanity_check_paths = {
     'files': [
+        'bin/potserv',
+        'lib/librgpot.%s' % SHLIB_EXT,
         'lib/libnwchempot.a',
         'lib/libcpmdpot.a',
         'lib/libptlrpc.%s' % SHLIB_EXT,
         'lib/pkgconfig/rgpot.pc',
     ],
-    'dirs': ['include/rgpot', 'lib'],
+    'dirs': [
+        'include/rgpot',
+        'lib',
+        'lib/python%(pyshortver)s/site-packages/rgpot',
+    ],
 }
 
-sanity_check_commands = ["pkg-config --exists rgpot"]
+sanity_check_commands = [
+    "pkg-config --exists rgpot",
+    "python -c 'import rgpot'",
+]
+
+modextrapaths = {'PYTHONPATH': 'lib/python%(pyshortver)s/site-packages'}
 
 moduleclass = 'lib'
