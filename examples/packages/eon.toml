@@ -100,7 +100,7 @@ constraint = "==0.13.1"
 
 [[dependencies.requirements]]
 name = "rgpot"
-constraint = "==2.5.1"
+constraint = "==2.5.3"
 
 [[profiles]]
 name = "default"
@@ -108,7 +108,7 @@ default = true
 config_options = [
   "--wrap-mode=nodownload",
   "-Dbuildtype=release",
-  "-Dwith_tests=false",
+  "-Dwith_tests=true",
   "-Dwith_rgpot=true",
 ]
 verification_commands = [

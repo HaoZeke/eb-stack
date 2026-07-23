@@ -691,7 +691,7 @@ fn public_eon_policy_encodes_the_core_rgpot_contract() {
     for (name, constraint) in [
         ("Eigen", "==5.0.0"),
         ("readcon-core", "==0.13.1"),
-        ("rgpot", "==2.5.1"),
+        ("rgpot", "==2.5.3"),
     ] {
         let requirement = requirements
             .iter()

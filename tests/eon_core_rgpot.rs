@@ -1,4 +1,4 @@
-//! eOn 2.17.2 core + rgpot recipes under fixtures/eon_core_rgpot.
+//! eOn 2.17.10 core + rgpot recipes under fixtures/eon_core_rgpot.
 //!
 //! Frozen snapshot of the upstream draft PR set (easybuild-easyconfigs
 //! #26480): eOn plus CapnProto, quill, readcon-core, and rgpot companions,
@@ -21,10 +21,10 @@ fn drafts() -> PathBuf {
 
 #[test]
 fn resolve_eon_core_rgpot_recipe() {
-    let p = drafts().join("e/eOn/eOn-2.17.2-foss-2026.1.eb");
+    let p = drafts().join("e/eOn/eOn-2.17.10-foss-2026.1.eb");
     let r = resolve_easyconfig_file(&p).expect("resolve eOn core+rgpot");
     assert_eq!(r.name, "eOn");
-    assert_eq!(r.version, "2.17.2");
+    assert_eq!(r.version, "2.17.10");
     assert_eq!(r.toolchain.name, "foss");
     assert_eq!(r.toolchain.version, "2026.1");
     assert_eq!(r.easyblock.as_deref(), Some("MesonNinja"));
@@ -87,7 +87,7 @@ fn readcon_core_no_patchelf_uses_check_readelf_rpath() {
 
 #[test]
 fn eon_core_recipe_stays_conventional() {
-    let text = std::fs::read_to_string(drafts().join("e/eOn/eOn-2.17.2-foss-2026.1.eb")).unwrap();
+    let text = std::fs::read_to_string(drafts().join("e/eOn/eOn-2.17.10-foss-2026.1.eb")).unwrap();
     for banned in [
         "preconfigopts",
         "postinstallcmds",
@@ -162,7 +162,7 @@ fn resolve_core_rgpot_companions() {
 #[test]
 fn eon_core_check_recipe_drafts_plus_robot() {
     let recipe =
-        resolve_easyconfig_file(&drafts().join("e/eOn/eOn-2.17.2-foss-2026.1.eb")).unwrap();
+        resolve_easyconfig_file(&drafts().join("e/eOn/eOn-2.17.10-foss-2026.1.eb")).unwrap();
     let drafts_root = drafts();
     let draft_tree = parse_easyconfig_trees(&[drafts_root.as_path()]).unwrap();
     let incomplete = check_recipe_deps(&recipe, &draft_tree.candidates);
@@ -213,7 +213,7 @@ fn eon_fat_2024a_and_core_2026_1_fixtures_coexist() {
     // the full product, the 2026.1 tree carries the core + rgpot product.
     let a24 = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("fixtures/eon_packaging/easyconfigs/e/eOn/eOn-2.16.0-foss-2024a.eb");
-    let a26 = drafts().join("e/eOn/eOn-2.17.2-foss-2026.1.eb");
+    let a26 = drafts().join("e/eOn/eOn-2.17.10-foss-2026.1.eb");
     assert!(a24.is_file(), "2024a site-parity fixture missing");
     assert!(a26.is_file(), "2026.1 core fixture missing");
     let r24 = resolve_easyconfig_file(&a24).unwrap();
@@ -231,8 +231,8 @@ fn eon_core_recipe_copies_do_not_drift() {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let pairs = [
         (
-            "fixtures/eon_core_rgpot/easyconfigs/e/eOn/eOn-2.17.2-foss-2026.1.eb",
-            "fixtures/eon_foss_2026_1/easyconfigs/e/eOn/eOn-2.17.2-foss-2026.1.eb",
+            "fixtures/eon_core_rgpot/easyconfigs/e/eOn/eOn-2.17.10-foss-2026.1.eb",
+            "fixtures/eon_foss_2026_1/easyconfigs/e/eOn/eOn-2.17.10-foss-2026.1.eb",
         ),
         (
             "fixtures/eon_core_rgpot/easyconfigs/r/readcon-core/readcon-core-0.13.1-GCCcore-15.2.0.eb",
