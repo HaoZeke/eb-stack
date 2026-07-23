@@ -204,9 +204,9 @@ fn resolve_core_rgpot_companions() {
             "15.2.0",
         ),
         (
-            "r/RocksDB/RocksDB-11.1.2-GCCcore-15.2.0.eb",
+            "r/RocksDB/RocksDB-10.10.1-GCCcore-15.2.0.eb",
             "RocksDB",
-            "11.1.2",
+            "10.10.1",
             "GCCcore",
             "15.2.0",
         ),
@@ -316,8 +316,8 @@ fn eon_core_recipe_copies_do_not_drift() {
             "examples/packages/companions/n/nanobind/nanobind-2.13.0-GCCcore-15.2.0.eb",
         ),
         (
-            "fixtures/eon_core_rgpot/easyconfigs/r/RocksDB/RocksDB-11.1.2-GCCcore-15.2.0.eb",
-            "examples/packages/companions/r/RocksDB/RocksDB-11.1.2-GCCcore-15.2.0.eb",
+            "fixtures/eon_core_rgpot/easyconfigs/r/RocksDB/RocksDB-10.10.1-GCCcore-15.2.0.eb",
+            "examples/packages/companions/r/RocksDB/RocksDB-10.10.1-GCCcore-15.2.0.eb",
         ),
     ];
     for (canonical_rel, copy_rel) in pairs {

@@ -1,7 +1,7 @@
 easyblock = 'CMakeMake'
 
 name = 'RocksDB'
-version = '11.1.2'
+version = '10.10.1'
 
 homepage = 'https://rocksdb.org/'
 description = """RocksDB is an embeddable persistent key-value store for fast
@@ -12,7 +12,7 @@ toolchainopts = {'pic': True}
 
 source_urls = ['https://github.com/facebook/rocksdb/archive/refs/tags/']
 sources = ['v%(version)s.tar.gz']
-checksums = ['3aba946031d27734eeea68ced7dd6f46629ba23a7b49945eb29aea68d1595311']
+checksums = ['df2ff348f3fac8578fd4b727eee7267aaf90cd403c99b55e898d1db63fa8cff5']
 
 builddependencies = [
     ('binutils', '2.45'),
