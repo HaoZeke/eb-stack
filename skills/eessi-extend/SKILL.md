@@ -33,9 +33,16 @@ EasyBuild toolchain generation, and a gap ends the attempt.
 ls /cvmfs/software.eessi.io/versions/          # list only; do not descend yet
 ```
 
-**Never descend into a version speculatively.** A published version can still be
-untraversable, and one stray `ls` into a bad one wedges `/cvmfs` for every user on
-the host (see below). List, decide, then touch only the version you will use.
+**Never descend into a version speculatively.** A listed version can be an
+unpopulated placeholder with no `init/` at all, and one stray `ls` into it wedges
+`/cvmfs` for every user on the host (see below) — the lookup neither resolves nor
+errors. List, then confirm a version is real before using it:
+
+```sh
+ls /cvmfs/software.eessi.io/versions/<ver>/init/lmod/bash   # must exist
+```
+
+Do that check from a container client if the host mount is at all suspect.
 
 Then check the target generation against that version's supported top-level
 toolchains. `EESSI-extend` refuses an unsupported one and prints the opt-in:
@@ -111,18 +118,28 @@ answers, and the Stratum-1 returns HTTP 200 to `curl` in milliseconds, yet every
 `ls` into a nested path blocks in uninterruptible `D` state and poisons the shell
 and any tmux session started from it. `timeout` cannot kill a `D`-state reader.
 
-Diagnose before blaming the network. Root-catalog fetches succeeding while nested
-traversal stalls (`cvmfs_config stat` showing negative `EXPIRES`, `RX=0`,
-`SPEED=0`) points at a corrupt shared cache, not connectivity. Recovery, as root:
+Free the wedge first — this works as an ordinary user via polkit, and does not
+need the root password:
 
 ```sh
-cvmfs_config killall            # what actually clears it; systemctl stop alone fails
-rm -rf /var/lib/cvmfs/shared    # drop the suspect cache
-systemctl start cvmfs-<repo>.mount
+systemctl kill --signal=SIGKILL cvmfs-<repo>.mount   # clears D-state readers
+systemctl restart cvmfs-<repo>.mount
 ```
 
 Recover from a terminal that did **not** run the hanging command — a root shell
-that did is itself stuck behind its own FUSE operation.
+that did is itself stuck behind its own FUSE operation. For one-shot root
+commands where `sudo` wants a password, try `systemd-run --pipe --quiet <cmd>`
+before driving a `sudo su` tmux pane; escaped quotes in `send-keys` silently
+leave that shell at a continuation prompt swallowing every later keystroke.
+
+Diagnosing further is often not worth it. On one host, root-catalog fetches
+succeeded while nested traversal stalled, and none of these changed anything:
+wiping `/var/lib/cvmfs/shared`, adding a second Stratum-1, disabling
+`CVMFS_LOW_SPEED_LIMIT` / `CVMFS_TIMEOUT*` / `CVMFS_MAX_RETRIES` /
+`CVMFS_IPFAMILY_PREFER`, or adding `cvmfs-config.cern.ch` to
+`CVMFS_REPOSITORIES`. Meanwhile the container mounted CVMFS itself on the same
+host and network and traversed everything instantly. Revert your experiments and
+use the container.
 
 Do not fight it if you lack root. Apptainer mounts CVMFS itself, needing only
 unprivileged user namespaces, and is immune to the host client's state:
