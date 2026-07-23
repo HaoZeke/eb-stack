@@ -1,0 +1,13 @@
+easyblock = 'ConfigureMake'
+name = 'BadPin'
+version = '1.0.0'
+homepage = 'https://example.invalid/'
+description = "fixture: in-hierarchy dependency toolchain hard-coded on a foss app"
+toolchain = {'name': 'foss', 'version': '2026.1'}
+sources = ['badpin-1.0.0.tar.gz']
+checksums = ['bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb']
+dependencies = [
+    ('nlohmann_json', '3.12.0', '', ('GCCcore', '15.2.0')),
+    ('zlib', '2.3.2'),
+]
+moduleclass = 'tools'

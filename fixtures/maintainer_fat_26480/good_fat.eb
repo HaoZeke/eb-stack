@@ -1,0 +1,15 @@
+easyblock = 'MesonNinja'
+name = 'GoodFat'
+version = '1.0.0'
+homepage = 'https://example.invalid/'
+description = "fixture: fat single-generation build with tests compiled and run"
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+sources = ['goodfat-1.0.0.tar.gz']
+checksums = ['eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee']
+dependencies = [
+    ('zlib', '2.3.2'),
+]
+configopts = '-Dbuildtype=release -Dwith_tests=true -Dwith_server=true'
+runtest = 'meson'
+testopts = 'test -C %(builddir)s/easybuild_obj'
+moduleclass = 'tools'

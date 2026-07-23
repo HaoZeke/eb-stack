@@ -5,10 +5,12 @@ description: Do/don't list for EasyBuild easyconfigs and contributions. Distille
 
 # EasyBuild dos and don'ts
 
-Mechanical enforcement of the two #26435 hard classes lives in
-`eb-stack recipe check` / `recipe lint` (`EB_MAINT_CROSS_GEN`,
-`EB_MAINT_SHELL_MONSTER`, `EB_MAINT_PATCHELF_RPATH`). This skill is the human
-and agent contract around those gates plus contribution practice.
+Mechanical enforcement lives in `eb-stack recipe check` / `recipe lint`.
+Hard errors are the two #26435 classes (`EB_MAINT_CROSS_GEN`,
+`EB_MAINT_SHELL_MONSTER`, `EB_MAINT_PATCHELF_RPATH`); warnings are the
+#26480 review classes (`EB_MAINT_THIN_BUILD`, `EB_MAINT_TESTS_OFF`,
+`EB_MAINT_DEP_TOOLCHAIN_PIN`). This skill is the human and agent contract
+around those gates plus contribution practice.
 
 ## DO
 
@@ -25,28 +27,38 @@ and agent contract around those gates plus contribution practice.
    sanity checks, `moduleclass` last.
 5. **Comment every deviation** from the default easyblock path with why, and
    cite tree precedent when one exists.
-6. **Run unit tests when they exist.** Prefer a minor upstream release over an
-   EB patch that fakes green.
+6. **Run unit tests when they exist.** Compile them (`with_tests=true` /
+   `BUILD_TESTS=ON`) *and* run them (`runtest`). Prefer a minor upstream
+   release over an EB patch that fakes green (#26480: "We typically do prefer
+   to run unit tests (if they exist) to validate the sanity of the
+   installation").
 7. **Keep recipes readable.** Short configopts; prefer Meson/CMake options over
    shell pipelines.
-8. **Trim the product.** A smaller product that builds beats a complete one that
-   needs cross-generation pins or multi-page staging.
+8. **Build fat.** Enable every optional feature whose dependencies exist in
+   the generation; author first-time companion easyconfigs for missing deps
+   instead of switching features off. Features that are mutually exclusive or
+   structurally blocked (BLAS-backed dep in a GCCcore recipe) go to a
+   `versionsuffix` variant, with the off-flag justified in a recipe comment
+   (#26480: "we typically install packages as 'fat' as possible").
+9. **Trim the product, not the package.** A smaller *product scope* (fewer
+   recipes per PR) beats cross-generation pins or multi-page staging; within
+   one recipe, fat beats thin.
 
 ### Contribution workflow (EasyBuild CLI is the interface)
 
-9. `eb --check-contrib` on every easyconfig before PR text.
-10. `eb --check-github --github-user=<user>` before long builds / uploads.
-11. `eb --from-pr <N> --robot ... --upload-test-report` for evidence.
-12. `eb -D` / `eb -x` as pre-flight before hours of robot time.
-13. `eb --inject-checksums` on the EasyBuild host (never invent hashes).
-14. `eb --new-pr` with title `{moduleclass}[toolchain/version] Name vX.Y.Z`.
-15. Reuse an installed foss/GCCcore prefix when a prior SUCCESS gist has one.
+10. `eb --check-contrib` on every easyconfig before PR text.
+11. `eb --check-github --github-user=<user>` before long builds / uploads.
+12. `eb --from-pr <N> --robot ... --upload-test-report` for evidence.
+13. `eb -D` / `eb -x` as pre-flight before hours of robot time.
+14. `eb --inject-checksums` on the EasyBuild host (never invent hashes).
+15. `eb --new-pr` with title `{moduleclass}[toolchain/version] Name vX.Y.Z`.
+16. Reuse an installed foss/GCCcore prefix when a prior SUCCESS gist has one.
 
 ### Evidence and claims
 
-16. Separate claims: resolves (eb-stack) != builds != binary-verified != SUCCESS report.
-17. Disclose AI in the PR body per EasyBuild policy.
-18. Freeze accepted/rejected PR shapes as fixtures and re-run maintainer checks.
+17. Separate claims: resolves (eb-stack) != builds != binary-verified != SUCCESS report.
+18. Disclose AI in the PR body per EasyBuild policy.
+19. Freeze accepted/rejected PR shapes as fixtures and re-run maintainer checks.
 
 ## DON'T
 
@@ -94,5 +106,6 @@ eb --from-pr <N> --robot --upload-test-report --github-user="$GH_USER"
 ## Related
 
 - `skills/upstream-pr/SKILL.md` — full contribution sequence
-- `fixtures/maintainer_reject_26435/` — frozen reject surfaces
+- `fixtures/maintainer_reject_26435/` — frozen reject surfaces (hard errors)
+- `fixtures/maintainer_fat_26480/` — frozen fat-build review surfaces (warnings)
 - `src/eb_maintainer.rs` — codes `EB_MAINT_*`

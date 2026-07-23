@@ -335,6 +335,7 @@ const THIN_FLAGS: &[&str] = &[
 /// Config flags that switch an existing test suite off.
 const TESTS_OFF_FLAGS: &[&str] = &[
     "with_tests=false",
+    "with_tests=off",
     "build_tests=off",
     "build_testing=off",
     "enable_tests=off",
@@ -554,6 +555,91 @@ mod tests {
             report.ok_for_upstream(),
             "unexpected findings: {:?}",
             report
+        );
+    }
+
+    #[test]
+    fn thin_pr_head_fires_thin_build_warning() {
+        let (recipe, text) = load("fixtures/maintainer_fat_26480/rgpot-2.5.3-thin-pr-head.eb");
+        let report = check_maintainer_acceptability(&recipe, &text);
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.code == "EB_MAINT_THIN_BUILD"),
+            "{report:?}"
+        );
+        // Warning class: still upstreamable, but flagged for justification.
+        assert!(report.ok_for_upstream());
+        assert!(report.has_warnings());
+    }
+
+    #[test]
+    fn dep_toolchain_pin_fires_warning_not_error() {
+        let (recipe, text) = load("fixtures/maintainer_fat_26480/bad_dep_pin.eb");
+        let report = check_maintainer_acceptability(&recipe, &text);
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.code == "EB_MAINT_DEP_TOOLCHAIN_PIN"),
+            "{report:?}"
+        );
+        assert!(
+            !report.findings.iter().any(|f| f.code == "EB_MAINT_CROSS_GEN"),
+            "in-hierarchy pin is not the cross-generation error: {report:?}"
+        );
+        assert!(report.ok_for_upstream());
+    }
+
+    #[test]
+    fn tests_off_fires_warning() {
+        let (recipe, text) = load("fixtures/maintainer_fat_26480/bad_tests_off.eb");
+        let report = check_maintainer_acceptability(&recipe, &text);
+        assert!(
+            report.findings.iter().any(|f| f.code == "EB_MAINT_TESTS_OFF"),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn tests_built_but_never_run_fires_warning() {
+        let text = "configopts = '-Dwith_tests=true'\nmoduleclass = 'tools'\n";
+        let findings = check_fat_build(text);
+        assert!(
+            findings.iter().any(|f| f.code == "EB_MAINT_TESTS_OFF"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn versionsuffix_variant_may_stay_thin() {
+        let text = "versionsuffix = '-client'\nconfigopts = '-Dwith_rpc_client_only=true'\n";
+        let findings = check_fat_build(text);
+        assert!(
+            !findings.iter().any(|f| f.code == "EB_MAINT_THIN_BUILD"),
+            "deliberate versionsuffix variants are the sanctioned thin shape: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn good_fat_control_is_clean() {
+        let (recipe, text) = load("fixtures/maintainer_fat_26480/good_fat.eb");
+        let report = check_maintainer_acceptability(&recipe, &text);
+        assert!(
+            report.findings.is_empty(),
+            "fat control must be finding-free: {report:?}"
+        );
+    }
+
+    #[test]
+    fn fat_rgpot_fixture_is_finding_free() {
+        let (recipe, text) =
+            load("fixtures/eon_core_rgpot/easyconfigs/r/rgpot/rgpot-2.5.3-GCCcore-15.2.0.eb");
+        let report = check_maintainer_acceptability(&recipe, &text);
+        assert!(
+            report.findings.is_empty(),
+            "the shipped fat rgpot recipe must pass every maintainer gate: {report:?}"
         );
     }
 
