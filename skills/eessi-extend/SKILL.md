@@ -24,6 +24,38 @@ EESSI adds one rung above `binary-verified`:
 An `eb --from-pr` SUCCESS on a normal builder does **not** establish it: EESSI
 supplies a different sysroot and compatibility layer. Report it separately.
 
+## Pre-flight: is your generation even in EESSI?
+
+Run this **before** anything else. EESSI's compatibility layer lags the newest
+EasyBuild toolchain generation, and a gap ends the attempt.
+
+```sh
+ls /cvmfs/software.eessi.io/versions/          # published versions, fresh client only
+```
+
+Read that list from a **freshly mounted** client. A stale host catalog can list a
+version that does not exist; confirm inside the container if the host mount is
+old.
+
+Then check the target generation against that version's supported top-level
+toolchains. `EESSI-extend` refuses an unsupported one and prints the opt-in:
+
+```sh
+export EESSI_SITE_TOP_LEVEL_TOOLCHAINS_2025_06='[{"name": "GCCcore", "version": "15.2.0"}]'
+```
+
+Setting that variable makes EasyBuild *plan* the build, but if the generation is
+not in the compatibility layer every dependency is `[SKIPPED]` and the run starts
+by bootstrapping the compiler itself (`gcc-<ver>.tar.gz`, ~180 MB). **Do not do
+that**: it duplicates what the EESSI bot does centrally and contradicts the
+don't-bootstrap-from-scratch rule. A generation gap means the honest ceiling is
+`builds` / `binary-verified` on a normal target, and the EESSI entry waits for a
+version whose layer carries the generation.
+
+Also check whether EESSI's bundled EasyBuild has every easyconfig in the closure
+(`eb --version` inside EESSI, then resolve). Anything newer than that release
+must come from a PR via `from-commit`.
+
 ## Initialize EESSI and install with EESSI-extend
 
 `EESSI-extend` is a module EESSI ships that loads and pre-configures EasyBuild
@@ -40,6 +72,12 @@ module load EESSI-extend
 eb --show-config                     # confirm the prefix EESSI-extend chose
 eb <easyconfig>.eb --robot
 ```
+
+`installpath` resolves to a microarchitecture-qualified path under your prefix
+(`.../versions/<ver>/software/linux/x86_64/amd/zen5`), and `robot-paths` points at
+EESSI's own bundled EasyBuild easyconfigs. The module also suggests setting
+`$EASYBUILD_SOURCEPATH` to reuse sources and `$WORKING_DIR` (commonly `/dev/shm`)
+to move the build directory.
 
 Pick exactly one install-prefix variable before loading the module; the module
 reads it at load time, so set it first:
@@ -65,6 +103,37 @@ eb --from-commit <sha> --robot
 ```
 
 Always use the newest EasyBuild EESSI provides (`module avail EasyBuild`).
+
+## When the host CVMFS client is unusable
+
+A host CVMFS mount can wedge: `cvmfs_config probe` reports OK and the Stratum-1
+answers `curl` in milliseconds, yet every `ls /cvmfs/...` blocks in
+uninterruptible state and poisons the shell and any tmux session started from it.
+`cvmfs_config reload` needs root.
+
+Do not fight it. Apptainer mounts CVMFS itself, needing only unprivileged user
+namespaces:
+
+```sh
+git clone --depth 1 https://github.com/EESSI/software-layer-scripts.git
+export APPTAINER_CACHEDIR=$PWD/storage/apptainer-cache
+./software-layer-scripts/eessi_container.sh \
+  --mode exec --access ro --storage $PWD/storage \
+  --extra-bind-paths "$PWD/ecs:/ecs:ro" \
+  -- /bin/bash /ecs/run-extend.sh
+```
+
+Four things that bite:
+
+- `eessi_container.sh` lives in **`EESSI/software-layer-scripts`**, not in
+  `EESSI/software-layer` (it moved; the latter no longer has it).
+- `--mode run` warns and behaves as `exec`; pass `exec` directly.
+- The script you run must sit **inside** a bound path. `/ecs/../run-extend.sh`
+  resolves outside the bind mount and fails with "No such file or directory".
+- Set `APPTAINER_CACHEDIR`, not `SINGULARITY_CACHEDIR`; with both set the latter
+  wins and the former is silently ignored.
+
+Use `--access rw` only when the run must write into the repository overlay.
 
 ## Building without EasyBuild: buildenv
 
@@ -134,6 +203,8 @@ software layer, however green it is locally.
    entry references the easyconfig, it does not restate it.
 6. Do not claim all-CPU-target coverage from a single host build; that claim
    belongs to the bot run.
+7. Do not bootstrap a whole toolchain generation into a user prefix to force a
+   too-new recipe onto an older EESSI; report the generation gap instead.
 
 ## Related
 
@@ -142,3 +213,4 @@ software layer, however green it is locally.
 - <https://eessi.io/docs/using_eessi/building_on_eessi>
 - <https://eessi.io/docs/adding_software/overview>
 - <https://www.eessi.io/docs/adding_software/opening_pr>
+- Internal run log: `Software/eb-stack/eessi-extend-verification-2026-07-23.org`
