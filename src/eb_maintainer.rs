@@ -1,8 +1,13 @@
-//! Maintainer-acceptability checks distilled from real upstream rejections.
+//! Maintainer-acceptability checks distilled from real upstream reviews.
 //!
-//! Primary source: easybuild-easyconfigs PR #26435 (ocaisa CHANGES_REQUESTED):
-//! - cross-generation dependency pins ("mixing two different toolchain generations")
-//! - staged/incomprehensible shell in preconfigopts/postinstallcmds
+//! Primary sources:
+//! - easybuild-easyconfigs PR #26435 (CHANGES_REQUESTED): cross-generation
+//!   dependency pins ("mixing two different toolchain generations") and
+//!   staged/incomprehensible shell in preconfigopts/postinstallcmds.
+//! - easybuild-easyconfigs PR #26480 review: hard-coded dependency toolchain
+//!   tuples the robot would resolve itself, test suites that exist but are
+//!   disabled or never run, and thin builds where the tree convention is to
+//!   install packages as fat as possible.
 //!
 //! These are mechanical gates for `recipe check` / `recipe lint`. They do **not**
 //! replace `eb --check-contrib` or a SUCCESS test report.
@@ -275,6 +280,131 @@ pub fn check_shell_monsters(text: &str) -> Vec<MaintainerFinding> {
     out
 }
 
+/// Dependency toolchain tuples the robot would resolve itself: warning (#26480).
+///
+/// Cross-generation pins are the hard error above; this catches the softer
+/// review class where the pin is *in* the recipe hierarchy but still
+/// hard-coded. EasyBuild only hard-codes dependency toolchains in very
+/// exceptional cases (defining a higher-level toolchain); everywhere else the
+/// robot walks the subtoolchains of the recipe generation.
+pub fn check_dep_toolchain_pins(recipe: &ResolvedEasyconfig) -> Vec<MaintainerFinding> {
+    let parent = &recipe.toolchain;
+    if !is_high_level_toolchain(&parent.name) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (role, deps) in [
+        ("dependencies", &recipe.dependencies),
+        ("builddependencies", &recipe.builddependencies),
+    ] {
+        for dep in deps.iter() {
+            let Some(dep_tc) = dep.toolchain.as_ref() else {
+                continue;
+            };
+            if is_system_toolchain(dep_tc) {
+                continue;
+            }
+            if !dep_in_recipe_hierarchy(parent, dep_tc) {
+                // Cross-generation: already a hard error elsewhere.
+                continue;
+            }
+            out.push(MaintainerFinding::warning(
+                "EB_MAINT_DEP_TOOLCHAIN_PIN",
+                format!(
+                    "{role} entry {} hard-codes toolchain {}-{}; the robot resolves {}-{} subtoolchains itself, so use a plain (name, version) tuple (easybuild-easyconfigs #26480 review)",
+                    dep.name, dep_tc.name, dep_tc.version, parent.name, parent.version
+                ),
+                Some(
+                    "No need to specify the toolchain here - in fact we only hard-code the toolchain for the dependency in very exceptional cases".into(),
+                ),
+            ));
+        }
+    }
+    out
+}
+
+/// Thin-build flags that keep optional features off without a versionsuffix
+/// variant. Tree convention is to install as fat as possible (#26480 review).
+const THIN_FLAGS: &[&str] = &[
+    "pure_lib=true",
+    "client_only=true",
+    "minimal=true",
+    "headers_only=true",
+];
+
+/// Config flags that switch an existing test suite off.
+const TESTS_OFF_FLAGS: &[&str] = &[
+    "with_tests=false",
+    "build_tests=off",
+    "build_testing=off",
+    "enable_tests=off",
+    "enable_testing=off",
+];
+
+/// Config flags that build a test suite (pair them with `runtest`).
+const TESTS_ON_FLAGS: &[&str] = &[
+    "with_tests=true",
+    "build_tests=on",
+    "build_testing=on",
+    "enable_tests=on",
+    "enable_testing=on",
+];
+
+/// Fat-build and run-the-tests review classes from #26480: warnings.
+pub fn check_fat_build(text: &str) -> Vec<MaintainerFinding> {
+    let mut out = Vec::new();
+    let configopts_blob: String = text
+        .lines()
+        .filter(|l| l.trim_start().starts_with("configopts"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
+    let has_versionsuffix = text
+        .lines()
+        .any(|l| l.trim_start().starts_with("versionsuffix"));
+
+    if !has_versionsuffix {
+        if let Some(flag) = THIN_FLAGS.iter().find(|f| configopts_blob.contains(**f)) {
+            out.push(MaintainerFinding::warning(
+                "EB_MAINT_THIN_BUILD",
+                format!(
+                    "configopts keeps the build thin ({flag}); EasyBuild installs packages as fat as possible, and mutually exclusive choices get a versionsuffix variant (easybuild-easyconfigs #26480 review)"
+                ),
+                Some(
+                    "we typically install packages as 'fat' as possible, i.e. with as many optional features enabled as we can".into(),
+                ),
+            ));
+        }
+    }
+
+    let has_runtest = text.lines().any(|l| {
+        let t = l.trim_start();
+        (t.starts_with("runtest") && !t.starts_with("runtest = False"))
+            || t.starts_with("runtests = True")
+    });
+    if let Some(flag) = TESTS_OFF_FLAGS.iter().find(|f| configopts_blob.contains(**f)) {
+        out.push(MaintainerFinding::warning(
+            "EB_MAINT_TESTS_OFF",
+            format!(
+                "configopts disables the package test suite ({flag}); maintainers prefer compiling and running unit tests to validate the installation (easybuild-easyconfigs #26480 review)"
+            ),
+            Some(
+                "We typically do prefer to run unit tests (if they exist) to validate the sanity of the installation".into(),
+            ),
+        ));
+    } else if TESTS_ON_FLAGS.iter().any(|f| configopts_blob.contains(*f)) && !has_runtest {
+        out.push(MaintainerFinding::warning(
+            "EB_MAINT_TESTS_OFF",
+            "test suite is compiled but never run: pair the tests-on config flag with runtest so the test step executes it".to_string(),
+            Some(
+                "We typically do prefer to run unit tests (if they exist) to validate the sanity of the installation".into(),
+            ),
+        ));
+    }
+
+    out
+}
+
 /// Full maintainer-acceptability report from resolved recipe + source text.
 pub fn check_maintainer_acceptability(
     recipe: &ResolvedEasyconfig,
@@ -282,7 +412,9 @@ pub fn check_maintainer_acceptability(
 ) -> MaintainerReport {
     let mut findings = Vec::new();
     findings.extend(check_cross_generation_pins(recipe));
+    findings.extend(check_dep_toolchain_pins(recipe));
     findings.extend(check_shell_monsters(source_text));
+    findings.extend(check_fat_build(source_text));
     MaintainerReport { findings }
 }
 
@@ -290,6 +422,7 @@ pub fn check_maintainer_acceptability(
 /// regex for four-element foss/gfbf pins that disagree with the recipe toolchain line.
 pub fn check_maintainer_acceptability_text(source_text: &str) -> MaintainerReport {
     let mut findings = check_shell_monsters(source_text);
+    findings.extend(check_fat_build(source_text));
     // Lightweight cross-gen when resolve is unavailable: look for foss/gfbf/gompi
     // version tokens that differ from the recipe toolchain version.
     if let Some(recipe_ver) = recipe_toolchain_version_from_text(source_text) {

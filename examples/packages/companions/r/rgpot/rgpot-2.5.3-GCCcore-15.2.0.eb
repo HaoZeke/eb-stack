@@ -34,16 +34,21 @@ dependencies = [
     ('CapnProto', '1.4.0'),
     ('fmt', '12.2.0'),
     ('Python', '3.14.2'),
+    ('RocksDB', '11.1.2'),
 ]
 
 # Fat build: full RPC (server + clients), Eigen backend, Python bindings,
-# unit tests and example tests. Left off because their dependencies have no
-# 2026.1-generation easyconfigs yet: with_xtb, with_tblite (both would also
-# promote the toolchain for BLAS), with_metatomic (torch stack),
-# with_xtensor (Eigen is the array backend here). with_rust_core needs a
-# cargo network fetch at build time and with_cache needs RocksDB.
+# RocksDB-backed potential cache, unit and example tests. The metatomic and
+# NWChem/CPMD dlopen frontends always compile; their engines load at
+# runtime. xxhash for the cache comes from the hash-pinned meson wrap.
+# Off because a GCCcore recipe cannot link them: with_xtb and with_tblite
+# need BLAS-backed packages (gfbf generation; a versionsuffix variant
+# belongs there), with_metatomic links the torch stack, with_xtensor
+# duplicates the Eigen backend, with_rust_core needs a cargo network fetch
+# at build time.
 configopts = '-Dpure_lib=false -Dwith_rpc=true -Dwith_eigen=true '
-configopts += '-Dwith_python=true -Dwith_tests=true -Dwith_examples=true '
+configopts += '-Dwith_python=true -Dwith_cache=true '
+configopts += '-Dwith_tests=true -Dwith_examples=true '
 
 runtest = 'meson'
 testopts = 'test -C %(builddir)s/easybuild_obj'

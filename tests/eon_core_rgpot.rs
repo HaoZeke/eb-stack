@@ -99,6 +99,7 @@ fn rgpot_companion_builds_fat() {
         "-Dwith_rpc=true",
         "-Dwith_eigen=true",
         "-Dwith_python=true",
+        "-Dwith_cache=true",
         "-Dwith_tests=true",
         "-Dwith_examples=true",
     ] {
@@ -110,7 +111,7 @@ fn rgpot_companion_builds_fat() {
     );
 
     let deps: Vec<_> = r.dependencies.iter().map(|d| d.name.as_str()).collect();
-    for need in ["CapnProto", "fmt", "Python"] {
+    for need in ["CapnProto", "fmt", "Python", "RocksDB"] {
         assert!(deps.contains(&need), "fat rgpot needs dep {need}: {deps:?}");
     }
     let build_deps: Vec<_> = r
@@ -199,6 +200,13 @@ fn resolve_core_rgpot_companions() {
             "n/nanobind/nanobind-2.13.0-GCCcore-15.2.0.eb",
             "nanobind",
             "2.13.0",
+            "GCCcore",
+            "15.2.0",
+        ),
+        (
+            "r/RocksDB/RocksDB-11.1.2-GCCcore-15.2.0.eb",
+            "RocksDB",
+            "11.1.2",
             "GCCcore",
             "15.2.0",
         ),
@@ -306,6 +314,10 @@ fn eon_core_recipe_copies_do_not_drift() {
         (
             "fixtures/eon_core_rgpot/easyconfigs/n/nanobind/nanobind-2.13.0-GCCcore-15.2.0.eb",
             "examples/packages/companions/n/nanobind/nanobind-2.13.0-GCCcore-15.2.0.eb",
+        ),
+        (
+            "fixtures/eon_core_rgpot/easyconfigs/r/RocksDB/RocksDB-11.1.2-GCCcore-15.2.0.eb",
+            "examples/packages/companions/r/RocksDB/RocksDB-11.1.2-GCCcore-15.2.0.eb",
         ),
     ];
     for (canonical_rel, copy_rel) in pairs {
