@@ -26,12 +26,14 @@ builddependencies = [
     ('pkgconf', '2.5.1'),
     ('CMake', '4.2.1'),
     ('Catch2', '3.14.0'),
-    ('Eigen', '5.0.0'),
     ('nanobind', '2.13.0'),
 ]
 
+# Eigen, fmt, RocksDB, and xxHash appear in the installed rgpot.pc Requires
+# line, so they are runtime dependencies rather than build-only.
 dependencies = [
     ('CapnProto', '1.4.0'),
+    ('Eigen', '5.0.0'),
     ('fmt', '12.2.0'),
     ('Python', '3.14.2'),
     ('RocksDB', '10.10.1'),
@@ -41,9 +43,7 @@ dependencies = [
 # Fat build: full RPC (server + clients), Eigen backend, Python bindings,
 # RocksDB-backed potential cache, unit and example tests. The metatomic and
 # NWChem/CPMD dlopen frontends always compile; their engines load at
-# runtime. The cache links xxhash from the meson wrap, and the installed
-# rgpot.pc lists libxxhash in Requires, so consumers need the xxHash
-# module for `pkg-config --exists rgpot` to resolve.
+# runtime. The cache links xxhash from the meson wrap.
 # Off because a GCCcore recipe cannot link them: with_xtb and with_tblite
 # need BLAS-backed packages (gfbf generation; a versionsuffix variant
 # belongs there), with_metatomic links the torch stack, with_xtensor
