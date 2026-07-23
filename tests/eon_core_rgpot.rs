@@ -111,7 +111,7 @@ fn rgpot_companion_builds_fat() {
     );
 
     let deps: Vec<_> = r.dependencies.iter().map(|d| d.name.as_str()).collect();
-    for need in ["CapnProto", "fmt", "Python", "RocksDB"] {
+    for need in ["CapnProto", "fmt", "Python", "RocksDB", "xxHash"] {
         assert!(deps.contains(&need), "fat rgpot needs dep {need}: {deps:?}");
     }
     let build_deps: Vec<_> = r

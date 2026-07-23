@@ -35,12 +35,15 @@ dependencies = [
     ('fmt', '12.2.0'),
     ('Python', '3.14.2'),
     ('RocksDB', '10.10.1'),
+    ('xxHash', '0.8.3'),
 ]
 
 # Fat build: full RPC (server + clients), Eigen backend, Python bindings,
 # RocksDB-backed potential cache, unit and example tests. The metatomic and
 # NWChem/CPMD dlopen frontends always compile; their engines load at
-# runtime. xxhash for the cache comes from the hash-pinned meson wrap.
+# runtime. The cache links xxhash from the meson wrap, and the installed
+# rgpot.pc lists libxxhash in Requires, so consumers need the xxHash
+# module for `pkg-config --exists rgpot` to resolve.
 # Off because a GCCcore recipe cannot link them: with_xtb and with_tblite
 # need BLAS-backed packages (gfbf generation; a versionsuffix variant
 # belongs there), with_metatomic links the torch stack, with_xtensor
