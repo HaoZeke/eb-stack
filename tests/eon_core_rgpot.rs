@@ -99,7 +99,6 @@ fn rgpot_companion_builds_fat() {
         "-Dwith_rpc=true",
         "-Dwith_eigen=true",
         "-Dwith_python=true",
-        "-Dwith_cache=true",
         "-Dwith_tests=true",
         "-Dwith_examples=true",
     ] {
@@ -111,7 +110,7 @@ fn rgpot_companion_builds_fat() {
     );
 
     let deps: Vec<_> = r.dependencies.iter().map(|d| d.name.as_str()).collect();
-    for need in ["CapnProto", "Eigen", "fmt", "Python", "RocksDB", "xxHash"] {
+    for need in ["CapnProto", "Eigen", "fmt", "Python"] {
         assert!(deps.contains(&need), "fat rgpot needs dep {need}: {deps:?}");
     }
     let build_deps: Vec<_> = r
@@ -132,7 +131,13 @@ fn rgpot_companion_builds_fat() {
         assert!(text.contains(surface), "fat rgpot sanity covers {surface}");
     }
     // Off-flags must each carry a why in the comment block above configopts.
-    for justified_off in ["with_xtb", "with_tblite", "with_metatomic", "with_xtensor"] {
+    for justified_off in [
+        "with_xtb",
+        "with_tblite",
+        "with_metatomic",
+        "with_xtensor",
+        "with_cache",
+    ] {
         assert!(
             text.contains(justified_off),
             "off feature {justified_off} needs an in-recipe justification"
@@ -200,13 +205,6 @@ fn resolve_core_rgpot_companions() {
             "n/nanobind/nanobind-2.13.0-GCCcore-15.2.0.eb",
             "nanobind",
             "2.13.0",
-            "GCCcore",
-            "15.2.0",
-        ),
-        (
-            "r/RocksDB/RocksDB-10.10.1-GCCcore-15.2.0.eb",
-            "RocksDB",
-            "10.10.1",
             "GCCcore",
             "15.2.0",
         ),
@@ -314,10 +312,6 @@ fn eon_core_recipe_copies_do_not_drift() {
         (
             "fixtures/eon_core_rgpot/easyconfigs/n/nanobind/nanobind-2.13.0-GCCcore-15.2.0.eb",
             "examples/packages/companions/n/nanobind/nanobind-2.13.0-GCCcore-15.2.0.eb",
-        ),
-        (
-            "fixtures/eon_core_rgpot/easyconfigs/r/RocksDB/RocksDB-10.10.1-GCCcore-15.2.0.eb",
-            "examples/packages/companions/r/RocksDB/RocksDB-10.10.1-GCCcore-15.2.0.eb",
         ),
     ];
     for (canonical_rel, copy_rel) in pairs {
