@@ -467,6 +467,14 @@ impl<'a> Parser<'a> {
                 (Some(Value::Str(a)), Value::Str(b)) => {
                     self.env.insert(name, Value::Str(a + &b));
                 }
+                (Some(Value::List(mut a)), Value::List(b) | Value::Tuple(b)) => {
+                    a.extend(b);
+                    self.env.insert(name, Value::List(a));
+                }
+                (Some(Value::Tuple(mut a)), Value::Tuple(b)) => {
+                    a.extend(b);
+                    self.env.insert(name, Value::Tuple(a));
+                }
                 (_, v) => {
                     self.env.insert(name, v);
                 }
@@ -531,6 +539,22 @@ impl<'a> Parser<'a> {
                         }
                         (Value::Str(fmt), Value::Int(arg)) => {
                             Value::Str(python_percent_format_one(&fmt, &arg.to_string()))
+                        }
+                        (Value::Str(fmt), Value::Tuple(args)) => {
+                            let mut out = fmt;
+                            for arg in &args {
+                                let s = match arg {
+                                    Value::Str(s) => s.clone(),
+                                    Value::Int(i) => i.to_string(),
+                                    other => {
+                                        return Err(self.err(format!(
+                                            "unsupported % tuple operand: {other:?}"
+                                        )));
+                                    }
+                                };
+                                out = python_percent_format_one(&out, &s);
+                            }
+                            Value::Str(out)
                         }
                         (a, b) => {
                             return Err(self.err(format!("unsupported % operands: {a:?} % {b:?}")));
@@ -787,16 +811,16 @@ fn unescape_python_str(s: &str) -> String {
     s.to_string()
 }
 
-/// Minimal Python-style `%s` / `%d` single-arg formatting used in easyconfigs.
+/// Minimal Python-style `%s` / `%d` formatting used in easyconfigs. Replaces
+/// the leftmost conversion so tuple args substitute in positional order.
 fn python_percent_format_one(fmt: &str, arg: &str) -> String {
-    if let Some(idx) = fmt.find("%s") {
-        let mut out = String::with_capacity(fmt.len() + arg.len());
-        out.push_str(&fmt[..idx]);
-        out.push_str(arg);
-        out.push_str(&fmt[idx + 2..]);
-        return out;
-    }
-    if let Some(idx) = fmt.find("%d") {
+    let idx = match (fmt.find("%s"), fmt.find("%d")) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    };
+    if let Some(idx) = idx {
         let mut out = String::with_capacity(fmt.len() + arg.len());
         out.push_str(&fmt[..idx]);
         out.push_str(arg);
@@ -2797,5 +2821,43 @@ builddependencies = [
             .missing
             .iter()
             .any(|m| m.name == "Meson" && m.role == "build"));
+    }
+    #[test]
+    fn aug_assign_extends_dependency_list() {
+        let src = r#"
+name = 'demo'
+version = '1.0'
+toolchain = {'name': 'foss', 'version': '2025b'}
+dependencies = [('zlib', '1.3.1')]
+dependencies += [('OpenBLAS', '0.3.27')]
+"#;
+        let r = resolve_easyconfig_str(src).expect("resolve");
+        let names: Vec<&str> = r.dependencies.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["zlib", "OpenBLAS"], "+= must extend, not replace");
+    }
+
+    #[test]
+    fn percent_format_with_tuple_args() {
+        let src = r#"
+name = 'demo'
+version = '2.1'
+local_slug = '%s-%s' % (name, version)
+homepage = 'https://example.org/%s' % local_slug
+toolchain = {'name': 'GCCcore', 'version': '14.3.0'}
+"#;
+        let r = resolve_easyconfig_str(src).expect("resolve");
+        assert_eq!(r.homepage.as_deref(), Some("https://example.org/demo-2.1"));
+    }
+
+    #[test]
+    fn percent_format_replaces_leftmost_conversion() {
+        let src = r#"
+name = 'demo'
+version = '1.0'
+homepage = 'https://example.org/v%d/%s' % (3, name)
+toolchain = {'name': 'GCCcore', 'version': '14.3.0'}
+"#;
+        let r = resolve_easyconfig_str(src).expect("resolve");
+        assert_eq!(r.homepage.as_deref(), Some("https://example.org/v3/demo"));
     }
 }
