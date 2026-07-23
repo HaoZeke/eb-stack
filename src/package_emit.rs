@@ -1,6 +1,7 @@
 //! Deterministic EasyBuild recipe-set emission from materialized package profiles.
 //!
 //! Emission targets conventional EasyBuild style used by easybuilders/easyconfigs:
+//!
 //! - primary GitHub tag archives use `github_account` / `GITHUB_SOURCE` /
 //!   `SOURCELOWER_TAR_GZ` when they match the package identity;
 //! - dependency tuples omit the toolchain when the lock identity sits on the

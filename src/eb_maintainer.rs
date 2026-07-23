@@ -1,6 +1,7 @@
 //! Maintainer-acceptability checks distilled from real upstream reviews.
 //!
 //! Primary sources:
+//!
 //! - easybuild-easyconfigs PR #26435 (CHANGES_REQUESTED): cross-generation
 //!   dependency pins ("mixing two different toolchain generations") and
 //!   staged/incomprehensible shell in preconfigopts/postinstallcmds.
