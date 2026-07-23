@@ -1,8 +1,10 @@
 //! eOn 2.17.10 core + rgpot recipes under fixtures/eon_core_rgpot.
 //!
 //! Frozen snapshot of the upstream draft PR set (easybuild-easyconfigs
-//! #26480): eOn plus CapnProto, quill, readcon-core, rgpot, and nanobind
-//! companions, all on the single foss-2026.1 / GCCcore-15.2.0 generation.
+//! #26480): eOn plus CapnProto, quill, readcon-core, and rgpot companions,
+//! all on the single foss-2026.1 / GCCcore-15.2.0 generation. nanobind is
+//! not here: develop already ships it at this generation, so the PR must
+//! not re-add it.
 //! This is the shape maintainers accept: conventional parameters, no staging
 //! scripts, no cross-generation dependencies, and fat companions (rgpot
 //! carries every optional feature whose dependencies exist in the
@@ -202,13 +204,6 @@ fn resolve_core_rgpot_companions() {
             "15.2.0",
         ),
         (
-            "n/nanobind/nanobind-2.13.0-GCCcore-15.2.0.eb",
-            "nanobind",
-            "2.13.0",
-            "GCCcore",
-            "15.2.0",
-        ),
-        (
             "i/inih/inih-62-GCCcore-15.2.0.eb",
             "inih",
             "62",
@@ -224,6 +219,56 @@ fn resolve_core_rgpot_companions() {
         assert_eq!(r.toolchain.name, tc_name, "{rel}");
         assert_eq!(r.toolchain.version, tc_ver, "{rel}");
     }
+}
+
+#[test]
+fn pr_fixture_does_not_re_add_what_the_robot_tree_already_has() {
+    // Do/don't #8: never re-add a package develop already ships at the target
+    // generation. nanobind-2.13.0-GCCcore-15.2.0 was written from scratch and
+    // pushed over develop's copy before this guard existed.
+    let home = std::env::var("HOME").unwrap_or_default();
+    let robot = PathBuf::from(&home).join(".venvs/easybuild/easybuild/easyconfigs");
+    if !robot.is_dir() {
+        eprintln!("skip duplicate-upstream guard: {robot:?} missing");
+        return;
+    }
+    let mut upstream = std::collections::HashSet::new();
+    for entry in walk_eb_files(&robot) {
+        if let Some(name) = entry.file_name().and_then(|n| n.to_str()) {
+            upstream.insert(name.to_string());
+        }
+    }
+    let mut duplicates = Vec::new();
+    for entry in walk_eb_files(&drafts()) {
+        if let Some(name) = entry.file_name().and_then(|n| n.to_str()) {
+            if upstream.contains(name) {
+                duplicates.push(name.to_string());
+            }
+        }
+    }
+    assert!(
+        duplicates.is_empty(),
+        "PR fixture re-adds easyconfigs the robot tree already has: {duplicates:?}"
+    );
+}
+
+fn walk_eb_files(root: &std::path::Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("eb") {
+                out.push(path);
+            }
+        }
+    }
+    out
 }
 
 #[test]
@@ -308,10 +353,6 @@ fn eon_core_recipe_copies_do_not_drift() {
         (
             "fixtures/eon_core_rgpot/easyconfigs/r/rgpot/rgpot-2.5.3-GCCcore-15.2.0.eb",
             "examples/packages/companions/r/rgpot/rgpot-2.5.3-GCCcore-15.2.0.eb",
-        ),
-        (
-            "fixtures/eon_core_rgpot/easyconfigs/n/nanobind/nanobind-2.13.0-GCCcore-15.2.0.eb",
-            "examples/packages/companions/n/nanobind/nanobind-2.13.0-GCCcore-15.2.0.eb",
         ),
     ];
     for (canonical_rel, copy_rel) in pairs {
