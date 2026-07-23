@@ -30,12 +30,12 @@ Run this **before** anything else. EESSI's compatibility layer lags the newest
 EasyBuild toolchain generation, and a gap ends the attempt.
 
 ```sh
-ls /cvmfs/software.eessi.io/versions/          # published versions, fresh client only
+ls /cvmfs/software.eessi.io/versions/          # list only; do not descend yet
 ```
 
-Read that list from a **freshly mounted** client. A stale host catalog can list a
-version that does not exist; confirm inside the container if the host mount is
-old.
+**Never descend into a version speculatively.** A published version can still be
+untraversable, and one stray `ls` into a bad one wedges `/cvmfs` for every user on
+the host (see below). List, decide, then touch only the version you will use.
 
 Then check the target generation against that version's supported top-level
 toolchains. `EESSI-extend` refuses an unsupported one and prints the opt-in:
@@ -106,13 +106,26 @@ Always use the newest EasyBuild EESSI provides (`module avail EasyBuild`).
 
 ## When the host CVMFS client is unusable
 
-A host CVMFS mount can wedge: `cvmfs_config probe` reports OK and the Stratum-1
-answers `curl` in milliseconds, yet every `ls /cvmfs/...` blocks in
-uninterruptible state and poisons the shell and any tmux session started from it.
-`cvmfs_config reload` needs root.
+A host CVMFS mount can wedge: `cvmfs_config probe` reports OK, `cvmfs_talk`
+answers, and the Stratum-1 returns HTTP 200 to `curl` in milliseconds, yet every
+`ls` into a nested path blocks in uninterruptible `D` state and poisons the shell
+and any tmux session started from it. `timeout` cannot kill a `D`-state reader.
 
-Do not fight it. Apptainer mounts CVMFS itself, needing only unprivileged user
-namespaces:
+Diagnose before blaming the network. Root-catalog fetches succeeding while nested
+traversal stalls (`cvmfs_config stat` showing negative `EXPIRES`, `RX=0`,
+`SPEED=0`) points at a corrupt shared cache, not connectivity. Recovery, as root:
+
+```sh
+cvmfs_config killall            # what actually clears it; systemctl stop alone fails
+rm -rf /var/lib/cvmfs/shared    # drop the suspect cache
+systemctl start cvmfs-<repo>.mount
+```
+
+Recover from a terminal that did **not** run the hanging command — a root shell
+that did is itself stuck behind its own FUSE operation.
+
+Do not fight it if you lack root. Apptainer mounts CVMFS itself, needing only
+unprivileged user namespaces, and is immune to the host client's state:
 
 ```sh
 git clone --depth 1 https://github.com/EESSI/software-layer-scripts.git
