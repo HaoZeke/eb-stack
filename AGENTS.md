@@ -8,6 +8,7 @@ Use the matching public skill and execute it through the requested claim rung:
 | existing `.eb` → new toolchain/application version | `skills/annual-bump/SKILL.md` |
 | upstream easybuild-easyconfigs PR / test report | `skills/upstream-pr/SKILL.md` |
 | EasyBuild do/don't (incl. #26435 class) | `skills/easybuild-dos-donts/SKILL.md` |
+| EESSI-extend test / EESSI software-layer PR | `skills/eessi-extend/SKILL.md` |
 
 ## Canonical procedure
 
@@ -29,7 +30,7 @@ Use the matching public skill and execute it through the requested claim rung:
 - SAT compatibility is not build evidence. Hermes owns classified target/recipe/policy repair and repeats the campaign through verification.
 - Fix code and recipes under test. Never remove assertions, dependencies, checksums, sanity checks, or tests to clear a failure.
 - Run EasyBuild installs on the configured target, scheduler, and runtime. Keep `EASYBUILD_TMPDIR` on durable storage.
-- Report `resolves`, `builds`, and `binary-verified` separately. A plan establishes only `resolves`; a build without declared verification does not establish `binary-verified`.
+- Report `resolves`, `builds`, and `binary-verified` separately. A plan establishes only `resolves`; a build without declared verification does not establish `binary-verified`. `eessi-verified` is a further rung owned by `skills/eessi-extend/SKILL.md`; a build on a normal target never establishes it.
 - The public issue and PR surface belongs to the human operator. Prepare paste-ready material and evidence without opening or mutating remote issues or PRs.
 
 ## Version-one CLI

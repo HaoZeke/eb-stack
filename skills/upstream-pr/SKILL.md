@@ -360,6 +360,16 @@ Do not delete comments or invent a manual "actually it works" post.
   contribution-critical flags. Regressions against a live upstream PR are
   then caught before the human pushes an update.
 
+## Not this skill: EESSI
+
+Getting a recipe into the EESSI software layer is a **separate** track with its
+own skill, `skills/eessi-extend/SKILL.md`: test through the `EESSI-extend`
+module, then add an easystack entry and open a PR to `EESSI/software-layer`.
+Keep the two apart. An easyconfigs PR body never mentions EESSI deployment, and
+a software-layer PR never restates easyconfig content. A SUCCESS test report
+from this skill does not establish `eessi-verified`; the EESSI compatibility
+layer supplies a different sysroot.
+
 ## Internal campaign notes (vault)
 
 - eOn #26480: `Software/eOn/easybuild-pr-26480-core-rgpot-2.17.2-campaign.org`

@@ -106,6 +106,7 @@ eb --from-pr <N> --robot --upload-test-report --github-user="$GH_USER"
 ## Related
 
 - `skills/upstream-pr/SKILL.md` — full contribution sequence
+- `skills/eessi-extend/SKILL.md` — EESSI-extend testing and software-layer PRs (separate track)
 - `fixtures/maintainer_reject_26435/` — frozen reject surfaces (hard errors)
 - `fixtures/maintainer_fat_26480/` — frozen fat-build review surfaces (warnings)
 - `src/eb_maintainer.rs` — codes `EB_MAINT_*`
