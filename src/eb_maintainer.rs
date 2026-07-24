@@ -1,6 +1,7 @@
 //! Maintainer-acceptability checks distilled from real upstream reviews.
 //!
 //! Primary sources:
+//!
 //! - easybuild-easyconfigs PR #26435 (CHANGES_REQUESTED): cross-generation
 //!   dependency pins ("mixing two different toolchain generations") and
 //!   staged/incomprehensible shell in preconfigopts/postinstallcmds.
@@ -105,16 +106,15 @@ fn dep_in_recipe_hierarchy(recipe_tc: &Toolchain, dep_tc: &Toolchain) -> bool {
     if is_system_toolchain(dep_tc) {
         return true;
     }
-    if recipe_tc.name.eq_ignore_ascii_case(&dep_tc.name)
-        && recipe_tc.version == dep_tc.version
-    {
+    if recipe_tc.name.eq_ignore_ascii_case(&dep_tc.name) && recipe_tc.version == dep_tc.version {
         return true;
     }
     // Subtoolchain of the same generation (e.g. GCCcore-15.2.0 under foss-2026.1).
     if let Some(h) = known_hierarchy(recipe_tc) {
-        return h.members.iter().any(|m| {
-            m.name.eq_ignore_ascii_case(&dep_tc.name) && m.version == dep_tc.version
-        });
+        return h
+            .members
+            .iter()
+            .any(|m| m.name.eq_ignore_ascii_case(&dep_tc.name) && m.version == dep_tc.version);
     }
     // Without a hierarchy fixture: same high-level version string only.
     if is_high_level_toolchain(&recipe_tc.name) && is_high_level_toolchain(&dep_tc.name) {
@@ -161,9 +161,10 @@ pub fn check_cross_generation_pins(recipe: &ResolvedEasyconfig) -> Vec<Maintaine
                         parent.name,
                         parent.version
                     ),
-                    Some(format!(
+                    Some(
                         "This is mixing two different toolchain generations, it shouldn't be done"
-                    )),
+                            .to_string(),
+                    ),
                 ));
                 continue;
             }
@@ -266,9 +267,8 @@ pub fn check_shell_monsters(text: &str) -> Vec<MaintainerFinding> {
             if t.starts_with("preconfigopts +=") || t.starts_with("preconfigopts+=") {
                 consecutive += 1;
                 max_uncommented = max_uncommented.max(consecutive);
-            } else if t.starts_with('#') {
-                consecutive = 0;
             } else if !t.is_empty() {
+                // Comments and any other content both break the uncommented run.
                 consecutive = 0;
             }
         }
@@ -383,7 +383,10 @@ pub fn check_fat_build(text: &str) -> Vec<MaintainerFinding> {
         (t.starts_with("runtest") && !t.starts_with("runtest = False"))
             || t.starts_with("runtests = True")
     });
-    if let Some(flag) = TESTS_OFF_FLAGS.iter().find(|f| configopts_blob.contains(**f)) {
+    if let Some(flag) = TESTS_OFF_FLAGS
+        .iter()
+        .find(|f| configopts_blob.contains(**f))
+    {
         out.push(MaintainerFinding::warning(
             "EB_MAINT_TESTS_OFF",
             format!(
@@ -427,7 +430,10 @@ pub fn check_duplicate_upstream(
         }
         if !candidate.name.eq_ignore_ascii_case(&recipe.name)
             || candidate.version != recipe.version
-            || !candidate.toolchain.name.eq_ignore_ascii_case(&recipe.toolchain.name)
+            || !candidate
+                .toolchain
+                .name
+                .eq_ignore_ascii_case(&recipe.toolchain.name)
             || candidate.toolchain.version != recipe.toolchain.version
         {
             continue;
@@ -511,9 +517,7 @@ fn recipe_toolchain_version_from_text(text: &str) -> Option<String> {
                     if let Some(colon) = rest.find(':') {
                         let vpart = rest[colon + 1..].trim();
                         let vpart = vpart.trim_start_matches(['\'', '"', ' ']);
-                        let end = vpart
-                            .find(['\'', '"', ',', '}'])
-                            .unwrap_or(vpart.len());
+                        let end = vpart.find(['\'', '"', ',', '}']).unwrap_or(vpart.len());
                         let v = &vpart[..end];
                         if !v.is_empty() && v != "version" {
                             return Some(v.to_string());
@@ -526,7 +530,9 @@ fn recipe_toolchain_version_from_text(text: &str) -> Option<String> {
         if let Some(idx) = t.find("\"version\"") {
             let rest = &t[idx..];
             if let Some(colon) = rest.find(':') {
-                let vpart = rest[colon + 1..].trim().trim_start_matches(['\'', '"', ' ']);
+                let vpart = rest[colon + 1..]
+                    .trim()
+                    .trim_start_matches(['\'', '"', ' ']);
                 let end = vpart.find(['\'', '"', ',', '}']).unwrap_or(vpart.len());
                 let v = &vpart[..end];
                 if !v.is_empty() {
@@ -543,8 +549,14 @@ fn high_level_dep_pins_from_text(text: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let re = regex_lite_high_level_pin();
     for cap in re.captures_iter(text) {
-        let pkg = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
-        let gen = cap.get(3).map(|m| m.as_str().to_string()).unwrap_or_default();
+        let pkg = cap
+            .get(1)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_default();
+        let gen = cap
+            .get(3)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_default();
         if !pkg.is_empty() && !gen.is_empty() {
             out.push((pkg, gen));
         }
@@ -576,7 +588,10 @@ mod tests {
         let (recipe, text) = load("fixtures/maintainer_reject_26435/bad_cross_gen.eb");
         let report = check_maintainer_acceptability(&recipe, &text);
         assert!(
-            report.findings.iter().any(|f| f.code == "EB_MAINT_CROSS_GEN"),
+            report
+                .findings
+                .iter()
+                .any(|f| f.code == "EB_MAINT_CROSS_GEN"),
             "{:?}",
             report
         );
@@ -636,7 +651,10 @@ mod tests {
             "{report:?}"
         );
         assert!(
-            !report.findings.iter().any(|f| f.code == "EB_MAINT_CROSS_GEN"),
+            !report
+                .findings
+                .iter()
+                .any(|f| f.code == "EB_MAINT_CROSS_GEN"),
             "in-hierarchy pin is not the cross-generation error: {report:?}"
         );
         assert!(report.ok_for_upstream());
@@ -647,7 +665,10 @@ mod tests {
         let (recipe, text) = load("fixtures/maintainer_fat_26480/bad_tests_off.eb");
         let report = check_maintainer_acceptability(&recipe, &text);
         assert!(
-            report.findings.iter().any(|f| f.code == "EB_MAINT_TESTS_OFF"),
+            report
+                .findings
+                .iter()
+                .any(|f| f.code == "EB_MAINT_TESTS_OFF"),
             "{report:?}"
         );
     }
@@ -783,7 +804,10 @@ mod tests {
         let recipe = resolve_easyconfig_str(&text).expect("parse 26435 eOn");
         let report = check_maintainer_acceptability(&recipe, &text);
         assert!(
-            report.findings.iter().any(|f| f.code == "EB_MAINT_CROSS_GEN"),
+            report
+                .findings
+                .iter()
+                .any(|f| f.code == "EB_MAINT_CROSS_GEN"),
             "expected cross-gen on real #26435: {:?}",
             report
         );

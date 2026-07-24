@@ -12,13 +12,13 @@ use eb_stack::package_sources::{PackageSourceRoots, SourceRootKind};
 use eb_stack::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use eb_stack::{
     check_duplicate_upstream, check_maintainer_acceptability, check_maintainer_acceptability_text,
-    check_recipe_deps,
-    format_style, format_style_file, inspect_new_package, lint_style, load_json_file,
-    lock_to_cyclonedx, packaging_gate, parse_easyconfig_trees, plan_new_package, plan_package_bump,
-    plan_package_closure_with_sources, resolve_easyconfig_file, resolve_package_catalog_layers,
-    solve_from_easyconfigs_with_baseline_version_and_extras, write_json_pretty,
-    write_package_bundle, write_package_closure, BumpPackageRequest, ForeignFormat,
-    NewPackageRequest, PackageBundle, PackageCatalogLayer, SolveExtraOut, StackLock, Toolchain,
+    check_recipe_deps, format_style, format_style_file, inspect_new_package, lint_style,
+    load_json_file, lock_to_cyclonedx, packaging_gate, parse_easyconfig_trees, plan_new_package,
+    plan_package_bump, plan_package_closure_with_sources, resolve_easyconfig_file,
+    resolve_package_catalog_layers, solve_from_easyconfigs_with_baseline_version_and_extras,
+    write_json_pretty, write_package_bundle, write_package_closure, BumpPackageRequest,
+    ForeignFormat, NewPackageRequest, PackageBundle, PackageCatalogLayer, SolveExtraOut, StackLock,
+    Toolchain,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

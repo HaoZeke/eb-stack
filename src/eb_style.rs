@@ -362,10 +362,8 @@ fn parse_string_assignment(line: &str) -> Option<StringAssignment<'_>> {
     let after_key = rest[key_end..].trim_start();
     let (op, after_op) = if let Some(r) = after_key.strip_prefix("+=") {
         ("+=", r.trim_start())
-    } else if let Some(r) = after_key.strip_prefix('=') {
-        ("=", r.trim_start())
     } else {
-        return None;
+        ("=", after_key.strip_prefix('=')?.trim_start())
     };
     let quote = after_op.chars().next()?;
     if quote != '\'' && quote != '"' {
