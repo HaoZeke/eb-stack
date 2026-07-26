@@ -467,6 +467,14 @@ impl<'a> Parser<'a> {
                 (Some(Value::Str(a)), Value::Str(b)) => {
                     self.env.insert(name, Value::Str(a + &b));
                 }
+                (Some(Value::List(mut a)), Value::List(b) | Value::Tuple(b)) => {
+                    a.extend(b);
+                    self.env.insert(name, Value::List(a));
+                }
+                (Some(Value::Tuple(mut a)), Value::Tuple(b)) => {
+                    a.extend(b);
+                    self.env.insert(name, Value::Tuple(a));
+                }
                 (_, v) => {
                     self.env.insert(name, v);
                 }
@@ -531,6 +539,33 @@ impl<'a> Parser<'a> {
                         }
                         (Value::Str(fmt), Value::Int(arg)) => {
                             Value::Str(python_percent_format_one(&fmt, &arg.to_string()))
+                        }
+                        (Value::Str(fmt), Value::Tuple(args)) => {
+                            // Python raises TypeError when the operand count does not
+                            // match the conversion count. Silently dropping extra
+                            // operands (or leaving a `%s` unfilled) would put a wrong
+                            // value in the field instead of skipping it, so refuse.
+                            let need = count_percent_conversions(&fmt);
+                            if need != args.len() {
+                                return Err(self.err(format!(
+                                    "% format has {need} conversion(s) but {} operand(s)",
+                                    args.len()
+                                )));
+                            }
+                            let mut out = fmt;
+                            for arg in &args {
+                                let s = match arg {
+                                    Value::Str(s) => s.clone(),
+                                    Value::Int(i) => i.to_string(),
+                                    other => {
+                                        return Err(self.err(format!(
+                                            "unsupported % tuple operand: {other:?}"
+                                        )));
+                                    }
+                                };
+                                out = python_percent_format_one(&out, &s);
+                            }
+                            Value::Str(out)
                         }
                         (a, b) => {
                             return Err(self.err(format!("unsupported % operands: {a:?} % {b:?}")));
@@ -787,16 +822,43 @@ fn unescape_python_str(s: &str) -> String {
     s.to_string()
 }
 
-/// Minimal Python-style `%s` / `%d` single-arg formatting used in easyconfigs.
-fn python_percent_format_one(fmt: &str, arg: &str) -> String {
-    if let Some(idx) = fmt.find("%s") {
-        let mut out = String::with_capacity(fmt.len() + arg.len());
-        out.push_str(&fmt[..idx]);
-        out.push_str(arg);
-        out.push_str(&fmt[idx + 2..]);
-        return out;
+/// Count `%s` / `%d` conversions, skipping `%%` escapes. Used to reject a
+/// tuple `%` whose operand count disagrees with the format string, which
+/// Python treats as a TypeError rather than a partial substitution.
+fn count_percent_conversions(fmt: &str) -> usize {
+    let b = fmt.as_bytes();
+    let mut i = 0;
+    let mut n = 0;
+    while i + 1 < b.len() {
+        if b[i] == b'%' {
+            match b[i + 1] {
+                b'%' => {
+                    i += 2;
+                    continue;
+                }
+                b's' | b'd' => {
+                    n += 1;
+                    i += 2;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        i += 1;
     }
-    if let Some(idx) = fmt.find("%d") {
+    n
+}
+
+/// Minimal Python-style `%s` / `%d` formatting used in easyconfigs. Replaces
+/// the leftmost conversion so tuple args substitute in positional order.
+fn python_percent_format_one(fmt: &str, arg: &str) -> String {
+    let idx = match (fmt.find("%s"), fmt.find("%d")) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    };
+    if let Some(idx) = idx {
         let mut out = String::with_capacity(fmt.len() + arg.len());
         out.push_str(&fmt[..idx]);
         out.push_str(arg);
@@ -2797,5 +2859,77 @@ builddependencies = [
             .missing
             .iter()
             .any(|m| m.name == "Meson" && m.role == "build"));
+    }
+    #[test]
+    fn aug_assign_extends_dependency_list() {
+        let src = r#"
+name = 'demo'
+version = '1.0'
+toolchain = {'name': 'foss', 'version': '2025b'}
+dependencies = [('zlib', '1.3.1')]
+dependencies += [('OpenBLAS', '0.3.27')]
+"#;
+        let r = resolve_easyconfig_str(src).expect("resolve");
+        let names: Vec<&str> = r.dependencies.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["zlib", "OpenBLAS"], "+= must extend, not replace");
+    }
+
+    #[test]
+    fn percent_format_with_tuple_args() {
+        let src = r#"
+name = 'demo'
+version = '2.1'
+local_slug = '%s-%s' % (name, version)
+homepage = 'https://example.org/%s' % local_slug
+toolchain = {'name': 'GCCcore', 'version': '14.3.0'}
+"#;
+        let r = resolve_easyconfig_str(src).expect("resolve");
+        assert_eq!(r.homepage.as_deref(), Some("https://example.org/demo-2.1"));
+    }
+
+    #[test]
+    fn percent_format_replaces_leftmost_conversion() {
+        let src = r#"
+name = 'demo'
+version = '1.0'
+homepage = 'https://example.org/v%d/%s' % (3, name)
+toolchain = {'name': 'GCCcore', 'version': '14.3.0'}
+"#;
+        let r = resolve_easyconfig_str(src).expect("resolve");
+        assert_eq!(r.homepage.as_deref(), Some("https://example.org/v3/demo"));
+    }
+    #[test]
+    fn percent_format_arity_mismatch_skips_the_field_instead_of_guessing() {
+        // Python raises TypeError for both shapes. The parser must not emit a
+        // partially-substituted value: before the arity check, `too_many` silently
+        // dropped `version` and `too_few` left a literal `%s` in the URL.
+        let too_many = r#"
+name = 'demo'
+version = '1.0'
+homepage = 'https://example.org/%s' % (name, version)
+toolchain = {'name': 'GCCcore', 'version': '14.3.0'}
+"#;
+        let r = resolve_easyconfig_str(too_many).expect("file still resolves");
+        assert_eq!(
+            r.homepage, None,
+            "extra operand must skip the field, not be dropped silently"
+        );
+
+        let too_few = r#"
+name = 'demo'
+version = '1.0'
+homepage = 'https://example.org/%s/%s' % (name,)
+toolchain = {'name': 'GCCcore', 'version': '14.3.0'}
+"#;
+        let r = resolve_easyconfig_str(too_few).expect("file still resolves");
+        assert_eq!(r.homepage, None, "unfilled conversion must skip the field");
+    }
+
+    #[test]
+    fn percent_escape_is_not_counted_as_a_conversion() {
+        // `%%` is a literal percent, so this format has exactly one real conversion.
+        assert_eq!(count_percent_conversions("100%% of %s"), 1);
+        assert_eq!(count_percent_conversions("%s-%s"), 2);
+        assert_eq!(count_percent_conversions("no conversions here"), 0);
     }
 }

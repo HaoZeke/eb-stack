@@ -28,6 +28,11 @@ pub mod target;
 pub mod version;
 
 pub use domain::*;
+pub use eb_maintainer::{
+    check_cross_generation_pins, check_dep_toolchain_pins, check_duplicate_upstream,
+    check_fat_build, check_maintainer_acceptability, check_maintainer_acceptability_text,
+    check_shell_monsters, MaintainerFinding, MaintainerReport, MaintainerSeverity,
+};
 pub use eb_parse::candidate_matches_dep_for_recipe;
 pub use eb_parse::{
     candidate_matches_dep, check_recipe_deps, easyconfig_basename, easyconfig_letter_dir,
@@ -35,11 +40,6 @@ pub use eb_parse::{
     parse_easyconfig_file, parse_easyconfig_tree, parse_easyconfig_trees, resolve_easyconfig_file,
     resolve_easyconfig_str, validate_lock_deps, version_field_to_req, MissingDep, ParseTreeResult,
     RecipeDepCheck, ResolvedDep, ResolvedEasyconfig, ResolvedExt, SkippedEasyconfig,
-};
-pub use eb_maintainer::{
-    check_cross_generation_pins, check_dep_toolchain_pins, check_duplicate_upstream,
-    check_fat_build, check_maintainer_acceptability, check_maintainer_acceptability_text,
-    check_shell_monsters, MaintainerFinding, MaintainerReport, MaintainerSeverity,
 };
 pub use eb_style::{
     format_style, format_style_file, lint_style, FormatStyleResult, StyleError, StyleFinding,

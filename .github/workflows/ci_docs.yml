@@ -58,10 +58,13 @@ jobs:
       - name: Assert version-one CLI and Rust API docs
         run: |
           set -euo pipefail
-          grep -q 'package plan' docs/build/reference/cli.html
-          grep -q 'campaign run' docs/build/reference/cli.html
-          grep -q 'eb_package_plan' docs/build/reference/cli.html
-          grep -q 'eb-stack mcp' docs/build/reference/cli.html
+          # Sphinx splits code literals into per-word <span class="pre"> elements,
+          # so multi-word phrases only exist in the tag-stripped text.
+          cli_text=$(sed -e 's/&#160;/ /g' -e 's/<[^>]*>//g' docs/build/reference/cli.html)
+          grep -q 'package plan' <<<"$cli_text"
+          grep -q 'campaign run' <<<"$cli_text"
+          grep -q 'eb_package_plan' <<<"$cli_text"
+          grep -q 'eb-stack mcp' <<<"$cli_text"
           # In-site Rust API
           test -f docs/build/reference/rust-api.html
           test -f docs/build/crates/eb_stack/lib.html
