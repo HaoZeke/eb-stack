@@ -18,7 +18,7 @@ jobs:
     name: format, clippy, and public metadata
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -36,7 +36,7 @@ jobs:
     name: Rust 1.88 minimum
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.88.0
@@ -48,7 +48,7 @@ jobs:
     name: cargo test --lib
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Library unit tests
@@ -58,7 +58,7 @@ jobs:
     name: known-bump regression (reproduce_real_prs + bump_emit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Replay frozen maintainer toolchain bumps
@@ -73,7 +73,7 @@ jobs:
     name: packaging fixtures (eOn + QMCPACK)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Parse, resolve, packaging_gate on frozen PR recipe sets
@@ -93,7 +93,7 @@ jobs:
     name: solve + build-list + stack-diff
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Co-select and report fixtures
@@ -103,7 +103,7 @@ jobs:
     name: canonical package + campaign workflows
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Parse, materialize, solve, route, and coordinate campaigns
@@ -129,7 +129,7 @@ jobs:
     name: package catalog + closure + source discovery
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Catalog providers, recursive closure, and source-root discovery
@@ -147,7 +147,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [unit, known-bumps]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build release binary
