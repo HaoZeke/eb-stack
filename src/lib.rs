@@ -38,7 +38,6 @@ pub mod resolvo_provider;
 pub mod sbom;
 pub mod select;
 mod spack_syntax;
-#[allow(missing_docs, reason = "87 items still undocumented")]
 pub mod target;
 pub mod version;
 

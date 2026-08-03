@@ -6,155 +6,233 @@ use std::path::Path;
 use std::process::Command;
 use thiserror::Error;
 
+/// Schema version of a target configuration layer.
 pub const TARGET_CONFIG_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// One TOML layer of build-target configuration.
 pub struct TargetConfigLayer {
+    /// Must equal [`TARGET_CONFIG_SCHEMA_VERSION`].
     pub schema_version: u32,
     #[serde(default)]
+    /// Target definitions, merged by name across layers.
     pub targets: Vec<TargetPatch>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// A target definition, or an override of one from an earlier layer.
+///
+/// Each layer is optional so a site can override just the piece it cares
+/// about, e.g. only the scheduler account.
 pub struct TargetPatch {
+    /// Target name, the key layers merge on.
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// How commands reach the machine.
     pub transport: Option<TargetTransport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// How work is scheduled once there.
     pub executor: Option<TargetExecutor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// What the build runs inside.
     pub runtime: Option<TargetRuntime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// How EasyBuild itself is invoked.
     pub easybuild: Option<EasyBuildWorkload>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+/// How a command gets to the target machine.
 pub enum TargetTransport {
+    /// Run on this machine.
     Local,
+    /// Run over SSH.
     Ssh {
+        /// Host to connect to, as ssh understands it.
         host: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Port, when it is not the default.
         port: Option<u16>,
         #[serde(default = "default_ssh_command")]
+        /// SSH client program.
         command: String,
         #[serde(default = "default_rsync_command")]
+        /// Program used to copy the bundle across.
         sync_command: String,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+/// How work is scheduled on the target.
 pub enum TargetExecutor {
+    /// Run immediately, in the foreground.
     Direct,
+    /// Submit through Slurm and wait.
     Slurm {
         #[serde(default = "default_srun_command")]
+        /// Submission program.
         command: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Partition to submit to.
         partition: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Account to charge.
         account: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// CPUs to request.
         cpus: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Memory to request, in the scheduler's own units.
         memory: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Wall-clock limit, in the scheduler's own format.
         time: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Generic resources, e.g. GPUs.
         gres: Option<String>,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+/// What the build runs inside.
+///
+/// A container limits ABI contamination. It is not by itself a security
+/// boundary, so mount only what the build needs.
 pub enum TargetRuntime {
+    /// Directly on the host.
     Host,
+    /// Inside a Podman container.
     Podman {
+        /// Image to run.
         image: String,
         #[serde(default = "default_podman_command")]
+        /// Container program.
         command: String,
         #[serde(default)]
+        /// Extra arguments passed to it.
         args: Vec<String>,
         #[serde(default)]
+        /// Mounts, in the runtime's own syntax.
         mounts: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Working directory inside the container.
         workdir: Option<String>,
     },
+    /// Inside a Docker container.
     Docker {
+        /// Image to run.
         image: String,
         #[serde(default = "default_docker_command")]
+        /// Container program.
         command: String,
         #[serde(default)]
+        /// Extra arguments passed to it.
         args: Vec<String>,
         #[serde(default)]
+        /// Mounts, in the runtime's own syntax.
         mounts: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Working directory inside the container.
         workdir: Option<String>,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// How EasyBuild is invoked on the target.
 pub struct EasyBuildWorkload {
+    /// The eb program.
     pub command: String,
     #[serde(default)]
+    /// Robot search paths, in order.
     pub robot_paths: Vec<String>,
+    /// Where builds are staged.
     pub work_root: String,
+    /// Temporary space. Point this at disk, not a small tmpfs.
     pub tmp_root: String,
     #[serde(default)]
+    /// Environment variables set for the build.
     pub environment: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// A fully resolved target: every layer decided.
 pub struct BuildTarget {
+    /// Target name.
     pub name: String,
+    /// How commands reach it.
     pub transport: TargetTransport,
+    /// How work is scheduled.
     pub executor: TargetExecutor,
+    /// What the build runs inside.
     pub runtime: TargetRuntime,
+    /// How EasyBuild is invoked.
     pub easybuild: EasyBuildWorkload,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// A command as it will be run, after every layer has wrapped it.
+///
+/// Kept as program and arguments rather than a string so it can be executed
+/// without a shell, and quoted back to a reader exactly as it ran.
 pub struct CommandPlan {
+    /// Program to execute.
     pub program: String,
+    /// Arguments, already ordered.
     pub args: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// One probe of a target layer and what it returned.
 pub struct DoctorCheck {
+    /// Layer probed: transport, executor, runtime, or easybuild.
     pub layer: String,
+    /// The command run, so it can be repeated by hand.
     pub command: CommandPlan,
+    /// Whether the probe passed.
     pub success: bool,
+    /// Exit status, when the process produced one.
     pub exit_code: Option<i32>,
+    /// Captured standard output.
     pub stdout: String,
+    /// Captured standard error.
     pub stderr: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// The result of probing every layer of a target.
 pub struct TargetDoctorReport {
+    /// Target probed.
     pub target: String,
+    /// One check per layer, in the order they were run.
     pub checks: Vec<DoctorCheck>,
 }
 
 impl TargetDoctorReport {
+    /// Whether every check passed.
     pub fn ok(&self) -> bool {
         self.checks.iter().all(|check| check.success)
     }
 }
 
 impl TargetConfigLayer {
+    /// Parse a target layer from TOML text.
     pub fn from_toml_str(input: &str) -> Result<Self, TargetError> {
         let layer: Self = toml::from_str(input)?;
         layer.validate()?;
         Ok(layer)
     }
 
+    /// Parse a target layer from a file.
     pub fn from_path(path: &Path) -> Result<Self, TargetError> {
         let input = std::fs::read_to_string(path)
             .map_err(|error| TargetError::Io(path.display().to_string(), error))?;
@@ -176,6 +254,10 @@ impl TargetConfigLayer {
     }
 }
 
+/// Merge layers by target name and return the fully resolved targets.
+///
+/// A later layer overrides an earlier one field by field, so a site layer can
+/// change the scheduler account without restating the transport.
 pub fn resolve_target_layers(
     layers: &[TargetConfigLayer],
 ) -> Result<Vec<BuildTarget>, TargetError> {
@@ -237,6 +319,7 @@ pub fn resolve_target_layers(
 }
 
 impl BuildTarget {
+    /// Where the bundle will live on the target.
     pub fn staged_bundle_path(&self, local_bundle: &Path) -> String {
         match &self.transport {
             TargetTransport::Local => local_bundle.display().to_string(),
@@ -251,6 +334,7 @@ impl BuildTarget {
         }
     }
 
+    /// Copy the bundle to the target and return its path there.
     pub fn stage_bundle(&self, local_bundle: &Path) -> Result<String, TargetError> {
         let destination = self.staged_bundle_path(local_bundle);
         let TargetTransport::Ssh {
@@ -298,6 +382,7 @@ impl BuildTarget {
         Ok(destination)
     }
 
+    /// The command that builds one recipe, wrapped by every layer.
     pub fn build_command(&self, recipe: &str) -> CommandPlan {
         self.build_command_with_robot_paths(recipe, &[])
     }
@@ -331,6 +416,7 @@ impl BuildTarget {
         self.route_tokens(self.runtime_tokens(tokens), true)
     }
 
+    /// The command that runs a verification program on the target.
     pub fn verification_command(&self, program: &str, args: &[String]) -> CommandPlan {
         let mut tokens = vec!["env".to_string()];
         tokens.extend(
@@ -451,6 +537,10 @@ impl CommandPlan {
         }
     }
 
+    /// Run the command and capture its output.
+    ///
+    /// Executed without a shell, so nothing in the plan is re-parsed for
+    /// metacharacters.
     pub fn execute(&self) -> Result<std::process::Output, TargetError> {
         Command::new(&self.program)
             .args(&self.args)
@@ -459,6 +549,10 @@ impl CommandPlan {
     }
 }
 
+/// Probe every layer of a target and report what answered.
+///
+/// Run this before a campaign: a target that cannot be reached should fail
+/// here rather than halfway through a build.
 pub fn doctor_target(target: &BuildTarget) -> Result<TargetDoctorReport, TargetError> {
     let transport = target.route_tokens(vec!["true".into()], false);
     let executor = target.route_tokens(vec!["true".into()], true);
@@ -548,23 +642,34 @@ fn default_docker_command() -> String {
 }
 
 #[derive(Debug, Error)]
+/// Why a target could not be configured or reached.
 pub enum TargetError {
     #[error("unsupported target config schema version {0}")]
+    /// The layer declares a schema this build does not read.
     UnsupportedSchema(u32),
     #[error("target config TOML: {0}")]
+    /// The layer is not valid TOML.
     Toml(#[from] toml::de::Error),
     #[error("read target config {0}: {1}")]
+    /// A target file could not be read.
     Io(String, std::io::Error),
     #[error("target name cannot be empty")]
+    /// A target has no name, so no layer could merge onto it.
     EmptyName,
     #[error("target {0} has no {1} layer")]
+    /// A target left a layer undefined that has no default.
     MissingLayer(String, &'static str),
     #[error("spawn target command {0}: {1}")]
+    /// The command could not be started.
     Spawn(String, std::io::Error),
     #[error("target command {program} failed with exit {exit_code:?}: {stderr}")]
+    /// The command ran and failed.
     CommandFailed {
+        /// Program that failed.
         program: String,
+        /// Exit status, when there was one.
         exit_code: Option<i32>,
+        /// What it printed on standard error.
         stderr: String,
     },
 }
