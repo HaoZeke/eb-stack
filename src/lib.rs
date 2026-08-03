@@ -37,7 +37,6 @@ pub mod package_solve;
 pub mod package_sources;
 #[allow(missing_docs, reason = "70 items still undocumented")]
 pub mod package_workflow;
-#[allow(missing_docs, reason = "11 items still undocumented")]
 pub mod report;
 #[allow(missing_docs, reason = "7 items still undocumented")]
 pub mod resolvo_provider;

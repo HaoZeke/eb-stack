@@ -109,13 +109,19 @@ pub fn ordered_packages<'a>(
 /// Classification of one logical package between baseline and solved locks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackageChangeKind {
+    /// Present in both locks at the same version.
     Unchanged,
+    /// In the solved lock only: the solve pulled it in.
     Added,
+    /// In the baseline only: nothing in the solved stack needs it.
     Removed,
+    /// In both, at different versions. The direction is not implied; read
+    /// `baseline_version` against `solved_version` to see which way it moved.
     VersionBumped,
 }
 
 impl PackageChangeKind {
+    /// The stable kebab-case name used in reports and machine-read output.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Unchanged => "unchanged",
@@ -129,11 +135,18 @@ impl PackageChangeKind {
 /// One logical package's baseline-vs-solved change for human review.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageChange {
+    /// Logical package name, the key the two locks are matched on.
     pub name: String,
+    /// Which side of the comparison this package fell on.
     pub kind: PackageChangeKind,
+    /// Version in the baseline lock. `None` when the package is `Added`.
     pub baseline_version: Option<String>,
+    /// Version in the solved lock. `None` when the package is `Removed`.
     pub solved_version: Option<String>,
+    /// Easyconfig backing the baseline version, when that lock recorded one.
+    /// Absent for an `Added` package and for a lock written without paths.
     pub baseline_easyconfig_path: Option<String>,
+    /// Easyconfig backing the solved version, on the same terms.
     pub solved_easyconfig_path: Option<String>,
 }
 
