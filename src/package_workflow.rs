@@ -25,46 +25,83 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
+/// Everything needed to turn a foreign recipe into an installable bundle.
 pub struct NewPackageRequest {
+    /// Foreign recipe to ingest: a conda-forge meta.yaml or a spack package.py.
     pub source: PathBuf,
+    /// Force a format instead of detecting it from the file.
     pub format: Option<ForeignFormat>,
+    /// Toolchain generation the emitted recipes target.
     pub toolchain: Toolchain,
     /// Positional SHA-256 overrides, one for every canonical source artifact.
     pub source_checksums: Vec<String>,
+    /// Configuration layers applied over the extracted plan, in order.
     pub package_layers: Vec<PackageConfigLayer>,
+    /// Robot trees searched for dependency providers. At least one is
+    /// required; an empty list is rejected rather than solved against nothing.
     pub easyconfig_roots: Vec<PathBuf>,
+    /// Policy governing the dependency solve.
     pub stack_policy: StackPolicy,
 }
 
 #[derive(Debug, Clone)]
+/// Everything needed to carry an existing easyconfig to a new generation.
 pub struct BumpPackageRequest {
+    /// The easyconfig being bumped.
     pub source: PathBuf,
+    /// Toolchain generation to move to.
     pub toolchain: Toolchain,
+    /// New package version. `None` keeps the source version and changes only
+    /// the toolchain.
     pub version: Option<String>,
+    /// SHA-256 of the new source tarball. Absent leaves the existing checksum
+    /// in place and marks it stale, because a version change invalidates it.
     pub source_checksum: Option<String>,
+    /// Robot trees searched for dependency providers.
     pub easyconfig_roots: Vec<PathBuf>,
+    /// Toolchain hierarchy to resolve against, when not derived from the tree.
     pub hierarchy_fixture: Option<PathBuf>,
+    /// Dependency name to version, pinning what the solve may pick.
     pub overrides: HashMap<String, String>,
+    /// Policy governing the dependency solve.
     pub stack_policy: StackPolicy,
 }
 
 #[derive(Debug, Clone)]
+/// A planned package, in memory and not yet written anywhere.
+///
+/// `locks` and `easyconfigs` are both empty for an inspection-only run, which
+/// is how a caller tells the two apart.
 pub struct PackageBundle {
+    /// Canonical plan after ingest and every configuration layer.
     pub plan: PackagePlan,
+    /// Planned CycloneDX SBOM. Records intent, not an installed filesystem.
     pub sbom: Value,
+    /// One dependency lock per profile.
     pub locks: Vec<ProfileLock>,
+    /// Emitted easyconfigs, one per profile.
     pub easyconfigs: Vec<EmittedEasyconfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Where a written bundle landed, so a caller can report or verify the paths.
 pub struct WrittenPackageBundle {
+    /// The package plan as written.
     pub manifest: PathBuf,
+    /// The planned SBOM as written.
     pub sbom: PathBuf,
+    /// One lock file per profile.
     pub locks: Vec<PathBuf>,
+    /// Emitted easyconfigs, inside the robot-shaped overlay.
     pub easyconfigs: Vec<PathBuf>,
+    /// Patch files copied next to the recipes that apply them.
     pub patches: Vec<PathBuf>,
 }
 
+/// Ingest a foreign recipe and apply configuration layers, without solving.
+///
+/// Returns the plan and its planned SBOM. Nothing is written and no robot tree
+/// is consulted, so this is the cheap look before committing to a bundle.
 pub fn inspect_new_package(
     source: &Path,
     format: Option<ForeignFormat>,
@@ -136,6 +173,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 ///
 /// Does not solve profiles or emit recipes. Used by both single-package planning
 /// and recursive package-closure expansion against a shared robot universe.
+/// [`inspect_new_package`] for a request, then apply the positional source
+/// checksums it carries.
 pub fn prepare_new_package_plan(
     request: &NewPackageRequest,
 ) -> Result<(PackagePlan, Value), PackageWorkflowError> {
@@ -154,6 +193,7 @@ pub fn prepare_new_package_plan(
 }
 
 /// Solve every plan output profile and emit easyconfigs against a candidate universe.
+/// Solve every profile against `candidates` and emit its easyconfig.
 pub fn complete_package_bundle(
     plan: PackagePlan,
     sbom: Value,
@@ -196,6 +236,11 @@ pub fn complete_package_bundle_with_hierarchy(
     })
 }
 
+/// The whole new-package path: ingest, layer, solve, emit.
+///
+/// Fails with [`PackageWorkflowError::NoEasyconfigRoots`] rather than solving
+/// against an empty universe, which would silently produce a bundle whose
+/// dependencies resolve to nothing.
 pub fn plan_new_package(
     request: &NewPackageRequest,
 ) -> Result<PackageBundle, PackageWorkflowError> {
@@ -383,6 +428,7 @@ fn validate_patch_source(patch: &PatchArtifact) -> Result<PathBuf, PackageWorkfl
 /// Does not solve dependencies or emit the next-generation recipe. Used by both
 /// standalone `package bump` and catalog-backed closure planning for
 /// `easybuild-bump` providers.
+/// Read the source easyconfig and build the plan for its new generation.
 pub fn prepare_package_bump(
     request: &BumpPackageRequest,
 ) -> Result<(PackagePlan, Value), PackageWorkflowError> {
@@ -401,6 +447,8 @@ pub fn prepare_package_bump(
 }
 
 /// Fold package-specific `--dep` overrides into locked stack pins.
+/// The policy with each override applied as an exact pin, replacing any pin
+/// the policy already held for that package.
 pub fn stack_policy_with_bump_overrides(
     stack_policy: &StackPolicy,
     overrides: &HashMap<String, String>,
@@ -425,6 +473,7 @@ pub fn stack_policy_with_bump_overrides(
 /// Preserves source recipe build mechanics, source/patch identity, and checksum
 /// order via the annual-bump emitter. Stack-policy preferred pins remain a
 /// Resolvo input; lock evidence records selection and fallback outcomes.
+/// Solve the bumped plan and emit the new easyconfig.
 pub fn complete_package_bump(
     request: &BumpPackageRequest,
     mut plan: PackagePlan,
@@ -486,6 +535,10 @@ pub fn complete_package_bump(
     })
 }
 
+/// The whole bump path: read, re-target, solve, emit.
+///
+/// Fails with [`PackageWorkflowError::NoEasyconfigRoots`] rather than solving
+/// against an empty universe.
 pub fn plan_package_bump(
     request: &BumpPackageRequest,
 ) -> Result<PackageBundle, PackageWorkflowError> {
@@ -657,6 +710,7 @@ fn dependency_from_easyconfig(
     }
 }
 
+/// Write a bundle to one directory, artifacts and recipe overlay together.
 pub fn write_package_bundle(
     bundle: &PackageBundle,
     output_directory: &Path,
@@ -829,6 +883,11 @@ fn portable_easyconfig_path(path: &str) -> String {
 }
 
 /// Reject path segments that would escape the bundle layout.
+/// Reject a path segment that could escape the bundle root.
+///
+/// Package and profile names reach the filesystem, and a recipe is untrusted
+/// input, so an empty segment, a separator, or a parent reference is an error
+/// rather than something to sanitise and continue with.
 pub fn validate_path_segment(segment: &str, kind: &str) -> Result<(), PackageWorkflowError> {
     if segment.is_empty() {
         return Err(PackageWorkflowError::UnsafePathSegment {
@@ -891,6 +950,10 @@ fn claim_overlay_path(
 }
 
 /// Join path components with `/` regardless of host separator.
+/// A path as posix-separated text, keeping only normal components.
+///
+/// Used for overlay keys so collision detection compares the same string on
+/// every platform.
 pub fn relative_posix(path: &Path) -> String {
     path.components()
         .filter_map(|component| match component {
@@ -912,63 +975,143 @@ pub(crate) fn write_json(
 }
 
 #[derive(Debug, Error)]
+/// Why a package could not be planned or written.
 pub enum PackageWorkflowError {
+    /// The foreign recipe could not be read or understood.
     #[error("foreign package parse: {0}")]
     Foreign(String),
+    /// The source easyconfig could not be resolved into a plan.
     #[error("EasyBuild package adapter: {0}")]
     EasyBuild(String),
+    /// A configuration layer was invalid or could not be applied.
     #[error("package config: {0}")]
     Config(String),
+    /// The planned SBOM could not be produced.
     #[error("package SBOM: {0}")]
     Sbom(String),
+    /// No robot tree was given. Solving against nothing would produce a
+    /// bundle whose dependencies silently resolve to nothing.
     #[error("at least one EasyBuild robot root is required")]
     NoEasyconfigRoots,
+    /// The recipe declares nothing to download, so there is nothing to build.
     #[error("foreign package plan has no source artifacts")]
     NoSourceArtifacts,
+    /// The number of positional checksums does not match the artifact count.
     #[error(
         "source checksum override count mismatch: expected {expected} positional SHA-256 values, got {actual}"
     )]
-    SourceChecksumCount { expected: usize, actual: usize },
+    SourceChecksumCount {
+        /// Source artifacts the plan carries.
+        expected: usize,
+        /// Checksums supplied.
+        actual: usize,
+    },
+    /// A source checksum is not a SHA-256 hex digest.
     #[error("source checksum {index} must be exactly 64 hexadecimal characters, got {checksum:?}")]
-    InvalidSourceChecksum { index: usize, checksum: String },
+    InvalidSourceChecksum {
+        /// Position of the offending value.
+        index: usize,
+        /// The value as given.
+        checksum: String,
+    },
+    /// Some source artifacts have no checksum, so the recipe would download
+    /// unverified bytes.
     #[error(
         "source checksum required for artifact positions {0:?}; repeat --source-checksum once per source artifact"
     )]
-    MissingSourceChecksums(Vec<usize>),
+    MissingSourceChecksums(
+        /// Artifact positions still without a checksum.
+        Vec<usize>,
+    ),
+    /// Some patches have no checksum.
     #[error("patch checksum required for artifacts {0:?}")]
-    MissingPatchChecksums(Vec<String>),
+    MissingPatchChecksums(
+        /// Patch filenames still without a checksum.
+        Vec<String>,
+    ),
+    /// A patch checksum is not a SHA-256 hex digest.
     #[error(
         "patch checksum for {filename} must be exactly 64 hexadecimal characters, got {checksum:?}"
     )]
-    InvalidPatchChecksum { filename: String, checksum: String },
+    InvalidPatchChecksum {
+        /// Patch the value belongs to.
+        filename: String,
+        /// The value as given.
+        checksum: String,
+    },
+    /// A patch is declared but names no file to copy.
     #[error("patch {0} has no source asset")]
-    MissingPatchSource(String),
+    MissingPatchSource(
+        /// Patch that names no file to read.
+        String,
+    ),
+    /// A patch file could not be read.
     #[error("read patch source {0}: {1}")]
-    PatchIo(PathBuf, std::io::Error),
+    PatchIo(
+        /// Patch file that could not be read.
+        PathBuf,
+        /// Underlying error.
+        std::io::Error,
+    ),
+    /// A patch on disk does not hash to what the plan declared.
     #[error("patch checksum mismatch for {filename}: expected {expected}, got {actual}")]
     PatchChecksumMismatch {
+        /// Patch whose bytes disagree with the declared checksum.
         filename: String,
+        /// Checksum the plan declared.
         expected: String,
+        /// Checksum of the bytes on disk.
         actual: String,
     },
+    /// A robot tree could not be parsed.
     #[error("EasyBuild robot parse: {0}")]
     Robot(String),
+    /// No dependency selection satisfies a profile.
     #[error("package profile solve: {0}")]
     Solve(String),
+    /// The easyconfig could not be rendered.
     #[error("EasyBuild recipe emission: {0}")]
     Emit(String),
+    /// A bundle file could not be written.
     #[error("write {0}: {1}")]
-    Io(PathBuf, std::io::Error),
+    Io(
+        /// Path being written.
+        PathBuf,
+        /// Underlying error.
+        std::io::Error,
+    ),
+    /// A bundle file could not be serialized.
     #[error("serialize {0}: {1}")]
-    Json(PathBuf, serde_json::Error),
+    Json(
+        /// Path being serialized.
+        PathBuf,
+        /// Underlying error.
+        serde_json::Error,
+    ),
+    /// A name that reaches the filesystem could escape the bundle root.
     #[error("unsafe {kind} path segment {value:?}: {reason}")]
     UnsafePathSegment {
+        /// What the segment names, e.g. package or profile.
         kind: String,
+        /// The segment as given.
         value: String,
+        /// Why it was refused.
         reason: String,
     },
+    /// Two packages claim the same overlay destination.
     #[error("easyconfig overlay collision at {path}: {reason}")]
-    OverlayCollision { path: String, reason: String },
+    OverlayCollision {
+        /// Overlay destination two packages both claim.
+        path: String,
+        /// What already claimed it.
+        reason: String,
+    },
+    /// A resolved overlay path lies outside the bundle root.
     #[error("overlay path {path} is outside recipe bundle root {root}")]
-    OverlayPathOutsideBundle { path: PathBuf, root: PathBuf },
+    OverlayPathOutsideBundle {
+        /// Destination that escaped the root.
+        path: PathBuf,
+        /// Root it had to stay within.
+        root: PathBuf,
+    },
 }

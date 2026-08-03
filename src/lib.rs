@@ -33,7 +33,6 @@ pub mod package_emit;
 pub mod package_solve;
 #[allow(missing_docs, reason = "55 items still undocumented")]
 pub mod package_sources;
-#[allow(missing_docs, reason = "70 items still undocumented")]
 pub mod package_workflow;
 pub mod report;
 #[allow(missing_docs, reason = "7 items still undocumented")]
