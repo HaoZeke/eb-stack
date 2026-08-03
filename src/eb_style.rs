@@ -28,6 +28,7 @@ pub struct StyleFinding {
     pub column: usize,
     /// pycodestyle code (`E501`).
     pub code: String,
+    /// Human-readable description of the finding.
     pub message: String,
     /// True when `format_style` can rewrite this line deterministically.
     pub mechanical: bool,
@@ -36,6 +37,7 @@ pub struct StyleFinding {
 /// Result of a format pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FormatStyleResult {
+    /// The formatted source.
     pub text: String,
     /// Number of physical lines that were rewritten.
     pub lines_rewritten: usize,
@@ -44,12 +46,15 @@ pub struct FormatStyleResult {
 }
 
 #[derive(Debug, Error)]
+/// Why a style pass could not run.
 pub enum StyleError {
     #[error("io: {0}")]
+    /// The file could not be read or written.
     Io(String),
 }
 
 impl StyleFinding {
+    /// A long-line finding for `line`, which is `len` characters.
     pub fn e501(line: usize, len: usize, mechanical: bool) -> Self {
         Self {
             line,

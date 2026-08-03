@@ -5,15 +5,12 @@ pub mod artifact_class;
 pub mod campaign;
 pub mod domain;
 mod eb_emit;
-#[allow(missing_docs, reason = "8 items still undocumented")]
 pub mod eb_maintainer;
 pub mod eb_parse;
-#[allow(missing_docs, reason = "5 items still undocumented")]
 pub mod eb_style;
 /// EasyBuild's built-in `%(...)s` template constants and their expansions.
 pub mod eb_template_constants;
 mod foreign;
-#[allow(missing_docs, reason = "10 items still undocumented")]
 pub mod hierarchy;
 mod manifest;
 pub mod mcp;
@@ -21,14 +18,11 @@ pub mod package;
 pub mod package_catalog;
 pub mod package_closure;
 pub mod package_config;
-#[allow(missing_docs, reason = "14 items still undocumented")]
 pub mod package_emit;
-#[allow(missing_docs, reason = "9 items still undocumented")]
 pub mod package_solve;
 pub mod package_sources;
 pub mod package_workflow;
 pub mod report;
-#[allow(missing_docs, reason = "7 items still undocumented")]
 pub mod resolvo_provider;
 pub mod sbom;
 pub mod select;

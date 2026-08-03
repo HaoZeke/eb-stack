@@ -23,7 +23,9 @@ use version_ranges::Ranges;
 
 /// Maps (package NameId, version rank) -> candidate index.
 pub struct EbProvider {
+    /// Interned names and version ranges the solver works over.
     pub pool: Pool<Ranges<u32>>,
+    /// Candidates, indexed by solvable id.
     pub candidates: Vec<Candidate>,
     /// package name -> NameId
     name_ids: HashMap<String, NameId>,
@@ -43,6 +45,7 @@ pub struct EbProvider {
 }
 
 impl EbProvider {
+    /// Build a provider from a candidate set and a policy.
     pub fn from_universe(
         candidates_in: &[Candidate],
         policy: &Policy,
@@ -51,6 +54,7 @@ impl EbProvider {
         Self::from_universe_with_stack_policy(candidates_in, policy, baseline, None)
     }
 
+    /// As [`Self::from_universe`], also applying a site stack policy.
     pub fn from_universe_with_stack_policy(
         candidates_in: &[Candidate],
         policy: &Policy,
@@ -334,6 +338,7 @@ impl EbProvider {
             .map(String::as_str)
     }
 
+    /// The requirements standing for the application roots.
     pub fn root_requirements(&self, roots: &[String]) -> Vec<resolvo::ConditionalRequirement> {
         roots
             .iter()
@@ -358,6 +363,7 @@ impl EbProvider {
             .collect()
     }
 
+    /// The candidate a solvable id refers to.
     pub fn candidate_for_solvable(&self, id: SolvableId) -> &Candidate {
         let rec = self.pool.resolve_solvable(id);
         let name = self.pool.resolve_package_name(rec.name);
@@ -622,6 +628,7 @@ fn solve_feasibility_with_stack_policy(
     }
 }
 
+/// Co-select a stack under a policy, honouring site pins and exclusions.
 pub fn solve_with_stack_policy(
     candidates: &[Candidate],
     policy: &Policy,

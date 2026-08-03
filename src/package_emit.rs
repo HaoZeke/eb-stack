@@ -19,30 +19,44 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// One rendered easyconfig, in memory.
 pub struct EmittedEasyconfig {
+    /// Profile it was emitted for.
     pub profile: String,
+    /// Conventional EasyBuild filename.
     pub filename: String,
+    /// The recipe source.
     pub text: String,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
+/// Why an easyconfig could not be rendered.
 pub enum PackageEmitError {
     #[error("profile materialization: {0}")]
+    /// The profile's conditions could not be resolved.
     Materialize(String),
     #[error("profile {0} has no lock")]
+    /// No lock was supplied for a profile that needs one.
     MissingLock(String),
     #[error("profile lock for {profile} does not match {package}-{version}")]
+    /// The supplied lock is for a different package or version.
     LockIdentity {
+        /// Profile whose lock disagrees.
         profile: String,
+        /// Package the lock names.
         package: String,
+        /// Version the lock names.
         version: String,
     },
     #[error("profile lock for {0} has a mismatched toolchain or versionsuffix")]
+    /// The lock does not match the profile's configuration.
     LockConfiguration(String),
     #[error("invalid EasyBuild parameter name {0:?}")]
+    /// A raw parameter is not a name EasyBuild recognises.
     InvalidEasyconfigParameter(String),
 }
 
+/// Render one easyconfig per profile, using each profile's lock.
 pub fn emit_profile_easyconfigs(
     plan: &PackagePlan,
     locks: &[ProfileLock],

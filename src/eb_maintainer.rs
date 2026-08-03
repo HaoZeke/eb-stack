@@ -31,10 +31,14 @@ pub enum MaintainerSeverity {
 /// One maintainer-acceptability finding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MaintainerFinding {
+    /// Stable finding code, e.g. `EB001`.
     pub code: String,
+    /// Whether this blocks upstream acceptance or merely warns.
     pub severity: MaintainerSeverity,
+    /// What a maintainer would say about it.
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// The line or value it was raised on.
     pub evidence: Option<String>,
 }
 
@@ -57,6 +61,7 @@ impl MaintainerFinding {
         }
     }
 
+    /// Whether this finding blocks acceptance.
     pub fn is_error(&self) -> bool {
         self.severity == MaintainerSeverity::Error
     }
@@ -65,14 +70,17 @@ impl MaintainerFinding {
 /// Composite result for CLI/MCP.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MaintainerReport {
+    /// Everything found, errors and warnings alike.
     pub findings: Vec<MaintainerFinding>,
 }
 
 impl MaintainerReport {
+    /// Whether the recipe carries no blocking finding.
     pub fn ok_for_upstream(&self) -> bool {
         self.findings.iter().all(|f| !f.is_error())
     }
 
+    /// Whether anything non-blocking was found.
     pub fn has_warnings(&self) -> bool {
         self.findings
             .iter()

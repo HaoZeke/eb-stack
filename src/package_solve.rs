@@ -16,12 +16,16 @@ use std::path::Path;
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
+/// Why a profile's dependencies could not be selected.
 pub enum ProfileSolveError {
     #[error("profile materialization: {0}")]
+    /// The profile's conditions could not be resolved.
     Materialize(String),
     #[error("profile dependency solve: {0}")]
+    /// No selection satisfies the profile.
     Resolve(String),
     #[error("Resolvo did not select direct dependency {0}")]
+    /// A required dependency has no selection in the result.
     MissingSelection(String),
 }
 
@@ -31,8 +35,11 @@ pub enum ProfileSolveError {
 /// Resolvo or solver error text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnsatisfiedDirectDependency {
+    /// Dependency name.
     pub name: String,
+    /// Version requirement it must satisfy.
     pub version_req: String,
+    /// True for a build-time-only dependency.
     pub build: bool,
 }
 
@@ -116,6 +123,7 @@ fn package_identities_match(left: &str, right: &str) -> bool {
     normalize_package_identity(left) == normalize_package_identity(right)
 }
 
+/// Select dependencies for one profile against a candidate set.
 pub fn solve_package_profile(
     plan: &PackagePlan,
     profile_name: &str,
@@ -133,6 +141,8 @@ pub fn solve_package_profile(
     )
 }
 
+/// As [`solve_package_profile`], resolving against a toolchain hierarchy so
+/// a dependency may be taken from a subtoolchain.
 pub fn solve_package_profile_with_hierarchy(
     plan: &PackagePlan,
     profile_name: &str,

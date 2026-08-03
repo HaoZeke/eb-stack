@@ -34,7 +34,9 @@ const CONSENSUS_CLEAR_MAJORITY_DEN: usize = 5; // 4/5 = 80%
 /// (e.g. `system`, `GCCcore`, `GCC`, `gfbf`, `gompi`, `foss`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolchainHierarchy {
+    /// The toolchain the members are subtoolchains of.
     pub parent: Toolchain,
+    /// Subtoolchains, which a dependency may be built against instead.
     pub members: Vec<Toolchain>,
 }
 
@@ -50,14 +52,19 @@ struct HierarchyFixture {
 }
 
 #[derive(Debug, Error)]
+/// Why a toolchain hierarchy could not be resolved.
 pub enum HierarchyError {
     #[error("IO {0}: {1}")]
+    /// A hierarchy file could not be read.
     Io(String, #[source] std::io::Error),
     #[error("parse hierarchy fixture {0}: {1}")]
+    /// A hierarchy file could not be understood.
     Parse(String, String),
     #[error("no known hierarchy for toolchain {0}-{1}")]
+    /// A toolchain named in the hierarchy is not defined.
     UnknownToolchain(String, String),
     #[error("dependency {0} not found in universe under hierarchy of {1}-{2}{3}")]
+    /// A dependency could not be placed anywhere in the hierarchy.
     MissingDep(String, String, String, String),
 }
 
@@ -675,8 +682,11 @@ pub fn resolve_dep_versions_in_hierarchy_strict(
 /// One dependency as scraped from a source recipe (name + version + optional suffix).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceDepSpec {
+    /// Dependency name.
     pub name: String,
+    /// Version required.
     pub version: String,
+    /// Versionsuffix required, when the entry names one.
     pub versionsuffix: Option<String>,
     /// 4th tuple element is EasyBuild `SYSTEM` (pseudo-external / binary pin).
     pub system_toolchain: bool,
