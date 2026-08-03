@@ -55,8 +55,20 @@ pub fn require_easyconfigs_tree(test_name: &str) -> Option<PathBuf> {
     if require_tree() {
         panic!("{message} ({REQUIRE_ENV} is set, so a skip is a failure)");
     }
-    eprintln!("{message}");
+    announce(&message);
     None
+}
+
+/// Write straight to the process stderr rather than through `eprintln!`.
+///
+/// libtest captures the print macros and only replays them for a failing test,
+/// so a skip announced with `eprintln!` is invisible in exactly the default run
+/// this marker exists to make honest. The real handle is not captured.
+fn announce(message: &str) {
+    use std::io::Write as _;
+    let mut err = std::io::stderr();
+    let _ = writeln!(err, "{message}");
+    let _ = err.flush();
 }
 
 fn require_tree() -> bool {
