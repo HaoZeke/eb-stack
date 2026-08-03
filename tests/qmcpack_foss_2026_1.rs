@@ -6,6 +6,8 @@ use eb_stack::{
 };
 use std::path::PathBuf;
 
+mod common;
+
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/qmcpack_foss_2026_1")
 }
@@ -82,12 +84,9 @@ fn qmcpack_check_recipe_against_robot() {
         incomplete.found
     );
 
-    let home = std::env::var("HOME").unwrap_or_default();
-    let real = PathBuf::from(&home).join(".venvs/easybuild/easybuild/easyconfigs");
-    if !real.is_dir() {
-        eprintln!("skip robot check: {real:?} missing");
+    let Some(real) = common::require_easyconfigs_tree("qmcpack_foss_2026_1::robot_check") else {
         return;
-    }
+    };
     let robot = parse_easyconfig_trees(&[real.as_path()]).expect("robot");
     let check = check_recipe_deps(&recipe, &robot.candidates);
     eprintln!(

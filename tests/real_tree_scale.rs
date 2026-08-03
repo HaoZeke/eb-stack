@@ -9,21 +9,7 @@ use eb_stack::{
 };
 use std::path::{Path, PathBuf};
 
-fn easyconfigs_root() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("EB_EASYCONFIGS") {
-        let p = PathBuf::from(p);
-        if p.is_dir() {
-            return Some(p);
-        }
-    }
-    let home = std::env::var("HOME").ok()?;
-    let p = PathBuf::from(home).join(".venvs/easybuild/easybuild/easyconfigs");
-    if p.is_dir() {
-        Some(p)
-    } else {
-        None
-    }
-}
+mod common;
 
 fn find_eb(root: &Path, name: &str) -> PathBuf {
     // Prefer exact relative layout letter/name/file
@@ -90,8 +76,7 @@ fn canonical_bump(
 
 #[test]
 fn real_tree_parse_coverage_high_nineties() {
-    let Some(root) = easyconfigs_root() else {
-        eprintln!("skip: no real easyconfigs tree (set EB_EASYCONFIGS)");
+    let Some(root) = common::require_easyconfigs_tree("real_tree_scale::parse_coverage") else {
         return;
     };
     let t0 = std::time::Instant::now();
@@ -131,8 +116,7 @@ fn real_tree_parse_coverage_high_nineties() {
 
 #[test]
 fn real_tree_auto_bump_gromacs_and_two_hard_pairs() {
-    let Some(root) = easyconfigs_root() else {
-        eprintln!("skip: no real easyconfigs tree");
+    let Some(root) = common::require_easyconfigs_tree("real_tree_scale::auto_bump") else {
         return;
     };
     let out_dir = std::env::var("EB_STACK_SCALE_OUT")

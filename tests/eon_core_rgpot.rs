@@ -15,6 +15,8 @@ use eb_stack::{
 };
 use std::path::PathBuf;
 
+mod common;
+
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/eon_core_rgpot")
 }
@@ -226,12 +228,10 @@ fn pr_fixture_does_not_re_add_what_the_robot_tree_already_has() {
     // Do/don't #8: never re-add a package develop already ships at the target
     // generation. nanobind-2.13.0-GCCcore-15.2.0 was written from scratch and
     // pushed over develop's copy before this guard existed.
-    let home = std::env::var("HOME").unwrap_or_default();
-    let robot = PathBuf::from(&home).join(".venvs/easybuild/easybuild/easyconfigs");
-    if !robot.is_dir() {
-        eprintln!("skip duplicate-upstream guard: {robot:?} missing");
+    let Some(robot) = common::require_easyconfigs_tree("eon_core_rgpot::duplicate_upstream_guard")
+    else {
         return;
-    }
+    };
     let mut upstream = std::collections::HashSet::new();
     for entry in walk_eb_files(&robot) {
         if let Some(name) = entry.file_name().and_then(|n| n.to_str()) {
@@ -290,12 +290,9 @@ fn eon_core_check_recipe_drafts_plus_robot() {
         );
     }
 
-    let home = std::env::var("HOME").unwrap_or_default();
-    let real = PathBuf::from(&home).join(".venvs/easybuild/easybuild/easyconfigs");
-    if !real.is_dir() {
-        eprintln!("skip full robot overlay: {real:?} missing");
+    let Some(real) = common::require_easyconfigs_tree("eon_core_rgpot::full_robot_overlay") else {
         return;
-    }
+    };
     let drafts_root2 = drafts();
     let merged =
         parse_easyconfig_trees(&[real.as_path(), drafts_root2.as_path()]).expect("overlay");

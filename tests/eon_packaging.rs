@@ -10,6 +10,8 @@ use eb_stack::{
 };
 use std::path::PathBuf;
 
+mod common;
+
 /// Minimum Meson version required by eOn 2.16.0 (from project meson_version).
 const EON_MESON_FLOOR: (u64, u64, u64) = (1, 8, 0);
 
@@ -255,12 +257,9 @@ fn eon_full_recipe_deps_found_in_drafts_plus_real_robot() {
         );
     }
 
-    let home = std::env::var("HOME").unwrap_or_default();
-    let real = PathBuf::from(&home).join(".venvs/easybuild/easybuild/easyconfigs");
-    if !real.is_dir() {
-        eprintln!("skip full robot check: {real:?} missing");
+    let Some(real) = common::require_easyconfigs_tree("eon_packaging::full_robot_check") else {
         return;
-    }
+    };
     let real_only = parse_easyconfig_trees(&[real.as_path()]).expect("real robot");
     let without_drafts = check_recipe_deps(&recipe, &real_only.candidates);
     // Upstream robot lacks companions (quill, metatomic stack, Meson 1.8.2).
