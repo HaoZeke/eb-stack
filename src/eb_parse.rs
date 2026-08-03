@@ -15,20 +15,26 @@ use std::path::Path;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+/// Why an easyconfig could not be read.
 pub enum ParseError {
     #[error("IO {0}: {1}")]
+    /// The file could not be read.
     Io(String, #[source] std::io::Error),
     #[error("parse {0}: {1}")]
+    /// The file could not be understood. Carries the path and the reason,
+    /// including a line number where the failure was positional.
     Parse(String, String),
 }
 
 /// One resolved dependency entry (2–4 element EasyBuild dependency tuple).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedDep {
+    /// Dependency name.
     pub name: String,
     /// Raw version field after template/local resolution (may be `1.2.3` or `>=1.2`).
     pub version: String,
     #[serde(default)]
+    /// Versionsuffix required, when the entry names one.
     pub versionsuffix: Option<String>,
     /// Per-dependency toolchain override (`None` = inherit the easyconfig toolchain).
     #[serde(default)]
@@ -38,7 +44,9 @@ pub struct ResolvedDep {
 /// One `exts_list` entry after resolution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedExt {
+    /// Extension name.
     pub name: String,
+    /// Extension version.
     pub version: String,
 }
 
@@ -49,16 +57,23 @@ pub struct ResolvedExt {
 /// (`easyblock`, `configopts`, `moduleclass`, …).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedEasyconfig {
+    /// Package name.
     pub name: String,
+    /// Package version after template expansion.
     pub version: String,
     #[serde(default)]
+    /// Versionsuffix, when the easyconfig sets one.
     pub versionsuffix: Option<String>,
+    /// Toolchain this recipe builds against.
     pub toolchain: Toolchain,
     #[serde(default)]
+    /// Runtime dependencies.
     pub dependencies: Vec<ResolvedDep>,
     #[serde(default)]
+    /// Build-time-only dependencies.
     pub builddependencies: Vec<ResolvedDep>,
     #[serde(default)]
+    /// Bundled extensions.
     pub exts_list: Vec<ResolvedExt>,
     /// Path of the source `.eb` when parsed from disk (empty for in-memory text).
     #[serde(default)]
@@ -1424,22 +1439,28 @@ pub fn parse_easyconfig_file(path: &Path) -> Result<Candidate, ParseError> {
 /// One easyconfig path that could not be parsed into a candidate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkippedEasyconfig {
+    /// Easyconfig that was skipped.
     pub path: String,
+    /// Why it could not be parsed.
     pub error: String,
 }
 
 /// Result of walking an easyconfig tree: successes + skipped unparseable files.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ParseTreeResult {
+    /// Everything that parsed.
     pub candidates: Vec<Candidate>,
+    /// Everything that did not, kept so a tree is never silently partial.
     pub skipped: Vec<SkippedEasyconfig>,
 }
 
 impl ParseTreeResult {
+    /// How many easyconfigs failed to parse.
     pub fn skip_count(&self) -> usize {
         self.skipped.len()
     }
 
+    /// How many parsed successfully.
     pub fn parsed_count(&self) -> usize {
         self.candidates.len()
     }
@@ -1499,31 +1520,48 @@ pub fn parse_easyconfig_tree(root: &Path) -> Result<ParseTreeResult, ParseError>
 /// One missing (or unmatched) dependency from a packaging/robot check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MissingDep {
+    /// Dependency that could not be matched.
     pub name: String,
+    /// Version the recipe asked for.
     pub version: String,
+    /// Versionsuffix required, when one was.
     pub versionsuffix: Option<String>,
+    /// Toolchain required, when the entry pinned one.
     pub toolchain: Option<Toolchain>,
     /// Runtime vs build-time role in the recipe.
     pub role: String,
+    /// Why nothing matched: absent entirely, or present at the wrong
+    /// version or toolchain.
     pub reason: String,
 }
 
 /// Result of checking that a recipe's deps exist somewhere in a robot universe.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecipeDepCheck {
+    /// Easyconfig that was checked.
     pub recipe: String,
+    /// Package it declares.
     pub name: String,
+    /// Version it declares.
     pub version: String,
+    /// Toolchain it targets.
     pub toolchain: Toolchain,
+    /// Easyblock it uses, when it sets one.
     pub easyblock: Option<String>,
+    /// Configure flags, after template expansion.
     pub configopts: Option<String>,
+    /// Moduleclass, when it sets one.
     pub moduleclass: Option<String>,
+    /// How many checksum entries it carries.
     pub checksum_count: usize,
+    /// Dependencies the robot tree does not provide.
     pub missing: Vec<MissingDep>,
+    /// Dependencies that were matched.
     pub found: Vec<String>,
 }
 
 impl RecipeDepCheck {
+    /// Whether every dependency was found.
     pub fn ok(&self) -> bool {
         self.missing.is_empty()
     }
@@ -1793,6 +1831,7 @@ pub fn parse_easyconfig_trees(roots: &[&Path]) -> Result<ParseTreeResult, ParseE
     Ok(acc)
 }
 
+/// Candidates built against exactly this toolchain.
 pub fn filter_toolchain(cands: &[Candidate], tc: &Toolchain) -> Vec<Candidate> {
     cands
         .iter()
@@ -1801,6 +1840,9 @@ pub fn filter_toolchain(cands: &[Candidate], tc: &Toolchain) -> Vec<Candidate> {
         .collect()
 }
 
+/// Build a lock from an already-selected candidate set.
+///
+/// The caller has done the choosing; this records it.
 pub fn lock_from_candidates(
     cands: &[Candidate],
     generation_label: Option<String>,
@@ -1838,6 +1880,10 @@ pub fn lock_from_candidates(
     }
 }
 
+/// Check that every dependency of every locked package is itself locked.
+///
+/// A lock that omits a transitive dependency installs a stack that cannot
+/// build, so this is worth checking before one is trusted.
 pub fn validate_lock_deps(lock: &StackLock, cands: &[Candidate]) -> Result<(), String> {
     use std::collections::HashMap as Map;
     let by_name: Map<&str, &str> = lock

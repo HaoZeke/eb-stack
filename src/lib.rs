@@ -7,7 +7,6 @@ pub mod domain;
 mod eb_emit;
 #[allow(missing_docs, reason = "8 items still undocumented")]
 pub mod eb_maintainer;
-#[allow(missing_docs, reason = "39 items still undocumented")]
 pub mod eb_parse;
 #[allow(missing_docs, reason = "5 items still undocumented")]
 pub mod eb_style;
