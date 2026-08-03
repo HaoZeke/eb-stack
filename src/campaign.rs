@@ -1216,9 +1216,9 @@ pub enum CampaignError {
     /// No finding with that identifier.
     FindingNotFound(String),
     #[error("campaign finding {id} is owned by {owner}")]
-    /// The finding is claimed by someone else.
+    /// The finding is claimed by another owner.
     FindingOwned {
-        /// Finding someone else holds.
+        /// Finding that another owner holds.
         id: String,
         /// Who holds it.
         owner: String,
