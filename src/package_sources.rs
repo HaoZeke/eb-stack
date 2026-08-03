@@ -19,6 +19,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+/// Schema version of a source-roots configuration.
 pub const PACKAGE_SOURCE_ROOTS_SCHEMA_VERSION: u32 = 1;
 
 /// Kind of local recipe index under a source root.
@@ -37,6 +38,7 @@ pub enum SourceRootKind {
 }
 
 impl SourceRootKind {
+    /// The stable kebab-case name used in configuration and output.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::EasyBuild => "easybuild",
@@ -50,7 +52,9 @@ impl SourceRootKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceRoot {
+    /// What kind of recipes this root holds.
     pub kind: SourceRootKind,
+    /// Directory to walk.
     pub path: PathBuf,
     /// Package-neutral authoring layers applied to foreign recipes discovered
     /// under this root. This is where shared provider aliases and exclusions
@@ -64,8 +68,10 @@ pub struct SourceRoot {
 #[serde(deny_unknown_fields)]
 pub struct PackageSourceRoots {
     #[serde(default = "default_schema_version")]
+    /// Must equal [`PACKAGE_SOURCE_ROOTS_SCHEMA_VERSION`].
     pub schema_version: u32,
     #[serde(default)]
+    /// Roots searched for package sources, in order.
     pub source_roots: Vec<SourceRoot>,
 }
 
@@ -76,19 +82,28 @@ fn default_schema_version() -> u32 {
 /// One discovered recipe candidate with enough identity for selection evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiscoveredCandidate {
+    /// Package name as the recipe declares it.
     pub name: String,
+    /// Version the recipe declares.
     pub version: String,
+    /// Recipe file this was read from.
     pub path: PathBuf,
+    /// Which root it came from.
     pub kind: SourceRootKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Foreign format, when the recipe is not an easyconfig.
     pub format: Option<ForeignFormat>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Toolchain the recipe targets, for an easyconfig.
     pub toolchain: Option<Toolchain>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Versionsuffix, when the recipe carries one.
     pub versionsuffix: Option<String>,
     #[serde(default)]
+    /// Configuration layers to apply when this candidate is generated from.
     pub package_config: Vec<PathBuf>,
     #[serde(default)]
+    /// Positional source checksums the root supplies for this candidate.
     pub source_checksums: Vec<String>,
 }
 
@@ -99,10 +114,16 @@ pub struct DiscoveredCandidate {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceParseFailure {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Package name, when enough was parsed to learn it.
     pub name: Option<String>,
+    /// Recipe that failed to parse.
     pub path: PathBuf,
+    /// Root it came from.
     pub kind: SourceRootKind,
+    /// Format it was read as.
     pub format: ForeignFormat,
+    /// Why it failed. Kept so a missing provider can be explained by a
+    /// parse failure rather than looking like an absent recipe.
     pub error: String,
 }
 
@@ -116,22 +137,32 @@ pub struct PackageSourceIndex {
 }
 
 #[derive(Debug, Error)]
+/// Why source roots could not be configured or read.
 pub enum PackageSourceError {
     #[error("unsupported package-sources schema version {0}")]
+    /// The configuration declares a schema this build does not read.
     UnsupportedSchema(u32),
     #[error("package-sources TOML: {0}")]
+    /// The configuration is not valid TOML.
     Toml(#[from] toml::de::Error),
     #[error("read package-sources {0}: {1}")]
+    /// A configured path could not be read.
     Io(String, #[source] std::io::Error),
     #[error("package-sources entry path cannot be empty")]
+    /// A root has an empty path.
     EmptyPath,
     #[error("package-sources package_config path cannot be empty")]
+    /// A configuration layer path is empty.
     EmptyPackageConfigPath,
     #[error("EasyBuild source roots cannot declare package_config layers")]
+    /// An easyconfig root was given configuration layers, which only apply
+    /// when generating from a foreign recipe.
     EasyBuildPackageConfig,
     #[error("package-sources discovery: {0}")]
+    /// A root could not be walked.
     Discovery(String),
     #[error("package-sources package config {0}: {1}")]
+    /// A configuration layer for a discovered candidate was invalid.
     PackageConfig(String, String),
 }
 
@@ -141,42 +172,62 @@ pub enum ProviderDiscoveryError {
     #[error(
         "no package source for {name}{version_req}: scanned roots but found no compatible recipe"
     )]
+    /// No candidate matched the requirement.
     Missing {
+        /// Package that was needed.
         name: String,
+        /// Requirement it had to meet.
         version_req: String,
+        /// Candidates considered and rejected.
         candidates: Vec<DiscoveredCandidate>,
     },
     #[error("ambiguous package sources for {name}{version_req}: {count} compatible candidates")]
+    /// Several candidates matched and none is clearly right.
     Ambiguous {
+        /// Package with several matches.
         name: String,
+        /// Requirement they all meet.
         version_req: String,
+        /// How many matched.
         count: usize,
+        /// The candidates in question.
         candidates: Vec<DiscoveredCandidate>,
     },
     #[error(
         "discovered provider {name} version {provided} does not satisfy requirement {required}"
     )]
+    /// A candidate exists but cannot satisfy the required version.
     Incompatible {
+        /// Package whose candidate is the wrong version.
         name: String,
+        /// Version available.
         provided: String,
+        /// Version needed.
         required: String,
+        /// Candidates considered.
         candidates: Vec<DiscoveredCandidate>,
     },
     #[error("package source for {name}{version_req} could not be parsed: {failures:?}")]
+    /// Every candidate that could have matched failed to parse.
     SourceParseFailure {
+        /// Package whose candidates all failed to parse.
         name: String,
+        /// Requirement that had to be met.
         version_req: String,
+        /// Why each candidate failed.
         failures: Vec<SourceParseFailure>,
     },
 }
 
 impl PackageSourceRoots {
+    /// Parse source roots from TOML text.
     pub fn from_toml_str(input: &str) -> Result<Self, PackageSourceError> {
         let roots: Self = toml::from_str(input)?;
         roots.validate()?;
         Ok(roots)
     }
 
+    /// Parse source roots from a file, resolving relative paths against it.
     pub fn from_path(path: &Path) -> Result<Self, PackageSourceError> {
         let input = std::fs::read_to_string(path)
             .map_err(|error| PackageSourceError::Io(path.display().to_string(), error))?;
@@ -206,6 +257,7 @@ impl PackageSourceRoots {
         Ok(roots)
     }
 
+    /// Whether any root is configured.
     pub fn is_empty(&self) -> bool {
         self.source_roots.is_empty()
     }
@@ -237,6 +289,7 @@ impl PackageSourceRoots {
         self.source_roots.extend(other.source_roots.iter().cloned());
     }
 
+    /// Add a root with no configuration layers.
     pub fn push(&mut self, kind: SourceRootKind, path: PathBuf) {
         self.source_roots.push(SourceRoot {
             kind,
@@ -280,14 +333,17 @@ impl PackageSourceIndex {
         Ok(index)
     }
 
+    /// Candidates parsed from easyconfig roots.
     pub fn easybuild_candidates(&self) -> &[DiscoveredCandidate] {
         &self.easybuild
     }
 
+    /// Candidates parsed from foreign-recipe roots.
     pub fn foreign_candidates(&self) -> &[DiscoveredCandidate] {
         &self.foreign
     }
 
+    /// Recipes that could not be parsed, so a gap can be explained.
     pub fn parse_failures(&self) -> &[SourceParseFailure] {
         &self.parse_failures
     }
@@ -952,6 +1008,10 @@ fn provider_from_foreign(
     }
 }
 
+/// A name reduced to lowercase alphanumerics, for matching across
+/// ecosystems that punctuate differently.
+///
+/// `readcon-core` and `ReadCon_Core` become the same identity.
 pub fn package_identity(name: &str) -> String {
     name.chars()
         .filter(|character| character.is_ascii_alphanumeric())
