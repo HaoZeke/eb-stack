@@ -20,7 +20,6 @@ pub mod hierarchy;
 mod manifest;
 pub mod mcp;
 pub mod package;
-#[allow(missing_docs, reason = "52 items still undocumented")]
 pub mod package_catalog;
 pub mod package_closure;
 pub mod package_config;

@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+/// Schema version of a package catalog.
 pub const PACKAGE_CATALOG_SCHEMA_VERSION: u32 = 1;
 
 /// How a catalog entry authors a missing EasyBuild provider.
@@ -38,6 +39,7 @@ pub enum CatalogProviderKind {
 }
 
 impl CatalogProviderKind {
+    /// The stable kebab-case name used in configuration and output.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Foreign => "foreign",
@@ -50,8 +52,10 @@ impl CatalogProviderKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageCatalogLayer {
+    /// Must equal [`PACKAGE_CATALOG_SCHEMA_VERSION`].
     pub schema_version: u32,
     #[serde(default)]
+    /// Declared providers, merged by name across layers.
     pub packages: Vec<PackageSourcePatch>,
     /// Directory used to resolve relative paths when this layer was loaded from disk.
     #[serde(skip)]
@@ -62,23 +66,31 @@ pub struct PackageCatalogLayer {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct PackageSourcePatch {
+    /// Package this entry provides.
     pub name: String,
     /// Provider kind; omitted entries resolve to [`CatalogProviderKind::Foreign`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<CatalogProviderKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Version it provides, when the entry pins one.
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Recipe to generate from.
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Format of that recipe, when it cannot be detected.
     pub format: Option<ForeignFormat>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Configuration layers applied when generating.
     pub package_config: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Positional source checksums for the generated package.
     pub source_checksums: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Profile to build. Defaults to the package's own default.
     pub profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Toolchain to generate for.
     pub toolchain: Option<Toolchain>,
     /// Optional stack-policy TOML/JSON path used when planning this provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,20 +101,30 @@ pub struct PackageSourcePatch {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageSourceProvider {
+    /// Package provided.
     pub name: String,
+    /// Whether this generates a new package or bumps an existing one.
     pub provider: CatalogProviderKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Version provided, when pinned.
     pub version: Option<String>,
+    /// Recipe to generate from.
     pub source: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Format of that recipe.
     pub format: Option<ForeignFormat>,
     #[serde(default)]
+    /// Configuration layers, resolved to paths.
     pub package_config: Vec<PathBuf>,
     #[serde(default)]
+    /// Positional source checksums.
     pub source_checksums: Vec<String>,
+    /// Profile to build.
     pub profile: String,
+    /// Toolchain to generate for.
     pub toolchain: Toolchain,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Stack policy governing this provider's own solve.
     pub stack_policy: Option<PathBuf>,
 }
 
@@ -113,44 +135,90 @@ pub struct PackageSourceCatalog {
 }
 
 #[derive(Debug, Error)]
+/// Why a catalog could not be read or resolved.
 pub enum PackageCatalogError {
     #[error("unsupported package catalog schema version {0}")]
+    /// The catalog declares a schema this build does not read.
     UnsupportedSchema(u32),
     #[error("package catalog TOML: {0}")]
+    /// The catalog is not valid TOML.
     Toml(#[from] toml::de::Error),
     #[error("read package catalog {0}: {1}")]
+    /// A catalog file could not be read.
     Io(String, #[source] std::io::Error),
     #[error("package catalog entry name cannot be empty")]
+    /// An entry has no package name.
     EmptyPackageName,
     #[error("package catalog entry {name} is missing a recipe source path")]
-    MissingSource { name: String },
+    /// An entry names no recipe to generate from.
+    MissingSource {
+        /// Entry with no recipe.
+        name: String,
+    },
     #[error("package catalog entry {name} is missing toolchain policy")]
-    MissingToolchain { name: String },
+    /// An entry names no toolchain and none could be inferred.
+    MissingToolchain {
+        /// Entry with no toolchain.
+        name: String,
+    },
     #[error("package catalog entry {name} is incomplete: {reason}")]
-    IncompleteProvider { name: String, reason: String },
+    /// An entry is missing something it needs to be usable.
+    IncompleteProvider {
+        /// Entry that is unusable.
+        name: String,
+        /// What it is missing.
+        reason: String,
+    },
     #[error(
         "package catalog entry {name}: field {field} is incompatible with provider easybuild-bump"
     )]
-    IncompatibleBumpField { name: String, field: String },
+    /// A bump entry sets a field that only applies when generating anew.
+    IncompatibleBumpField {
+        /// Bump entry at fault.
+        name: String,
+        /// Field that does not apply to a bump.
+        field: String,
+    },
     #[error(
         "package catalog entry {name}: easybuild-bump accepts at most one source checksum (annual-bump semantics)"
     )]
-    MultipleBumpChecksums { name: String },
+    /// A bump entry gave more than one checksum; a bump has one source.
+    MultipleBumpChecksums {
+        /// Bump entry at fault.
+        name: String,
+    },
     #[error("duplicate package-source providers for {name}{version}: entries are ambiguous")]
-    DuplicateProvider { name: String, version: String },
+    /// Two entries provide the same package and version.
+    DuplicateProvider {
+        /// Package declared twice.
+        name: String,
+        /// Version they both claim.
+        version: String,
+    },
     #[error(
         "ambiguous package-source providers for {name}{version}: {count} catalog entries match"
     )]
+    /// Several entries could provide it and none is clearly right.
     AmbiguousProvider {
+        /// Package with several providers.
         name: String,
+        /// Version required.
         version: String,
+        /// How many entries matched.
         count: usize,
     },
     #[error("no package-source catalog entry for {name}{version}")]
-    MissingProvider { name: String, version: String },
+    /// Nothing in the catalog provides what was asked for.
+    MissingProvider {
+        /// Package nothing provides.
+        name: String,
+        /// Version that was required.
+        version: String,
+    },
 }
 
 impl PackageCatalogLayer {
+    /// Parse a catalog from TOML text.
     pub fn from_toml_str(input: &str) -> Result<Self, PackageCatalogError> {
         let mut layer: Self = toml::from_str(input)?;
         layer.base_directory = None;
@@ -158,6 +226,7 @@ impl PackageCatalogLayer {
         Ok(layer)
     }
 
+    /// Parse a catalog from a file, resolving relative paths against it.
     pub fn from_path(path: &Path) -> Result<Self, PackageCatalogError> {
         let input = std::fs::read_to_string(path)
             .map_err(|error| PackageCatalogError::Io(path.display().to_string(), error))?;
@@ -181,6 +250,7 @@ impl PackageCatalogLayer {
 }
 
 impl PackageSourceCatalog {
+    /// Every resolved provider, in declaration order.
     pub fn providers(&self) -> &[PackageSourceProvider] {
         &self.providers
     }
