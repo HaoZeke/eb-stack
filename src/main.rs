@@ -159,6 +159,19 @@ enum RecipeCommand {
         require_configopts: Vec<String>,
         #[arg(long)]
         metadata_only: bool,
+        /// Classify the source URLs and verify a seeded checksum came from the
+        /// same artifact class. Fails the check on a class conflict.
+        #[arg(long)]
+        verify_sources: bool,
+        /// Ecosystem a checksum was copied from, e.g. conda-forge or spack.
+        #[arg(long, requires = "verify_sources")]
+        seeded_from: Option<String>,
+        /// The source URL that seeded checksum was computed over.
+        #[arg(long, requires = "seeded_from")]
+        seeded_source_url: Option<String>,
+        /// A git remote, when the seeding recipe built from a checkout.
+        #[arg(long, requires = "seeded_from")]
+        seeded_git: Option<String>,
     },
     /// Report EasyBuild E501 style findings.
     Lint {
@@ -430,8 +443,41 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             easyconfigs,
             require_configopts,
             metadata_only,
+            verify_sources: check_sources,
+            seeded_from,
+            seeded_source_url,
+            seeded_git,
         } => {
             let resolved = resolve_easyconfig_file(&recipe).map_err(anyhow::Error::msg)?;
+            if check_sources {
+                let seed = seeded_from.map(|origin| eb_stack::SeededChecksum {
+                    origin,
+                    source_url: seeded_source_url,
+                    git: seeded_git,
+                    sha256: resolved.checksums.first().cloned(),
+                });
+                let findings = eb_stack::verify_sources(&resolved.source_urls, seed.as_ref());
+                for url in &resolved.source_urls {
+                    println!("source_class={} url={url}", eb_stack::classify_url(url));
+                }
+                for finding in &findings {
+                    println!("{finding}");
+                }
+                let conflicts: Vec<&eb_stack::SourceFinding> = findings
+                    .iter()
+                    .filter(|f| f.level == eb_stack::FindingLevel::Error)
+                    .collect();
+                if !conflicts.is_empty() {
+                    bail!(
+                        "source verification failed: {}",
+                        conflicts
+                            .iter()
+                            .map(|f| f.message.as_str())
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    );
+                }
+            }
             let source_text = std::fs::read_to_string(&recipe)
                 .with_context(|| format!("read {}", recipe.display()))?;
             let required = require_configopts

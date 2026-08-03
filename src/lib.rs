@@ -1,5 +1,6 @@
 //! EasyBuild stack lock: parse `.eb` files, resolvo SAT co-select, planned SBOM.
 
+pub mod artifact_class;
 pub mod campaign;
 pub mod domain;
 mod eb_emit;
@@ -27,6 +28,10 @@ mod spack_syntax;
 pub mod target;
 pub mod version;
 
+pub use artifact_class::{
+    classify_foreign, classify_url, verify_sources, ArtifactClass, FindingLevel, SeededChecksum,
+    SourceFinding,
+};
 pub use domain::*;
 pub use eb_maintainer::{
     check_cross_generation_pins, check_dep_toolchain_pins, check_duplicate_upstream,

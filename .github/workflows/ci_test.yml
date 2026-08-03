@@ -121,6 +121,7 @@ jobs:
             --test bump_workflow \
             --test stack_policy \
             --test canonical_cli \
+            --test source_artifact_class \
             --test target_config \
             --test campaign \
             --test mcp_v1

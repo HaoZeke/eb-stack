@@ -81,6 +81,10 @@ pub struct ResolvedEasyconfig {
     /// Number of entries in `sources` (0 when the field is absent).
     #[serde(default)]
     pub sources_count: usize,
+    /// Expanded `source_urls` entries, used to classify which artifact the
+    /// recipe actually downloads.
+    #[serde(default)]
+    pub source_urls: Vec<String>,
     /// Patch file names from `patches` (tuple/dict entries reduced to the name).
     #[serde(default)]
     pub patch_names: Vec<String>,
@@ -1182,6 +1186,7 @@ pub fn resolve_easyconfig_str(src: &str) -> Result<ResolvedEasyconfig, ParseErro
     let homepage = opt_str_field(&parser.env, "homepage", &templates);
     let checksums = opt_str_list_field(&parser.env, "checksums", &templates);
     let sources_count = env_list_len(&parser.env, "sources", &templates);
+    let source_urls = env_string_list(&parser.env, "source_urls", &templates);
     let patch_names = patch_names_field(&parser.env, &templates);
     let checksum_entry_keys = checksum_entry_keys_field(&parser.env, &templates);
 
@@ -1200,6 +1205,7 @@ pub fn resolve_easyconfig_str(src: &str) -> Result<ResolvedEasyconfig, ParseErro
         homepage,
         checksums,
         sources_count,
+        source_urls,
         patch_names,
         checksum_entry_keys,
     })
@@ -1207,6 +1213,27 @@ pub fn resolve_easyconfig_str(src: &str) -> Result<ResolvedEasyconfig, ParseErro
 
 /// Length of a list-valued field after template expansion (0 when absent or
 /// not a list).
+/// Plain-string entries of a list field, templates expanded. Non-string
+/// entries are skipped rather than stringified, since a URL is the only shape
+/// worth classifying.
+fn env_string_list(
+    env: &HashMap<String, Value>,
+    key: &str,
+    templates: &HashMap<String, String>,
+) -> Vec<String> {
+    let Some(v) = env.get(key) else {
+        return Vec::new();
+    };
+    let v = apply_templates_value(v, templates);
+    let Ok(items) = value_list_as_slice(Some(&v)) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| item.as_str().map(str::to_string))
+        .collect()
+}
+
 fn env_list_len(
     env: &HashMap<String, Value>,
     key: &str,
@@ -2176,6 +2203,7 @@ mod tests {
             homepage: None,
             checksums: vec![],
             sources_count: 0,
+            source_urls: Vec::new(),
             patch_names: vec![],
             checksum_entry_keys: vec![],
         };
@@ -2603,6 +2631,7 @@ builddependencies = [
             homepage: None,
             checksums: vec![],
             sources_count: 0,
+            source_urls: Vec::new(),
             patch_names: vec![],
             checksum_entry_keys: vec![],
         }
