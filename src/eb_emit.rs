@@ -490,6 +490,26 @@ fn rewrite_dep_list_selections(
 /// `old_version` replaced with `new_version`. The checksum value is replaced
 /// with `new_checksum` when given; otherwise it is left as-is and the second
 /// return value is `true` (the value is now stale).
+/// Advance past whitespace and whole-line `#` comments to the first real entry.
+///
+/// An annotated checksums list names each file above its hash, so the first
+/// thing inside the brackets is often a comment rather than an entry.
+fn skip_to_first_entry(bytes: &[u8], from: usize) -> usize {
+    let mut i = from;
+    loop {
+        while i < bytes.len() && (bytes[i] as char).is_whitespace() {
+            i += 1;
+        }
+        if i < bytes.len() && bytes[i] == b'#' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        return i;
+    }
+}
+
 fn rewrite_source_checksum(
     src: &str,
     old_version: &str,
@@ -503,10 +523,7 @@ fn rewrite_source_checksum(
     let body = &src[list_open_end..list_close_start];
     let body_bytes = body.as_bytes();
 
-    let mut start = 0usize;
-    while start < body_bytes.len() && (body_bytes[start] as char).is_whitespace() {
-        start += 1;
-    }
+    let start = skip_to_first_entry(body_bytes, 0);
     if start >= body_bytes.len() {
         // Empty checksums list — nothing to rewrite.
         return Ok((src.to_string(), false));
@@ -1019,6 +1036,42 @@ dependencies = [
 ]
 ";
 
+    /// A checksums list that names each file in a comment above its hash, the
+    /// shape upstream uses for annotated multi-entry lists.
+    const WITH_COMMENTED_CHECKSUMS: &str = "\
+name = 'OpenMPI'
+version = '5.0.3'
+toolchain = {'name': 'NVHPC', 'version': '24.9-CUDA-12.6.0'}
+homepage = 'https://www.open-mpi.org/'
+sources = [SOURCELOWER_TAR_BZ2]
+patches = [
+    'OpenMPI-5.0.3_fix_hle_make_errors.patch',
+]
+checksums = [
+    # openmpi-5.0.3.tar.bz2
+    {'openmpi-5.0.3.tar.bz2': '990582f206b3ab32e938aa31bbf07c639368e4405dca196fabe7f0f76eeda90b'},
+    # OpenMPI-5.0.3_fix_hle_make_errors.patch
+    {'OpenMPI-5.0.3_fix_hle_make_errors.patch': '881c907a9f5901d5d6af41cd33dffdcecba4a67a9e5123e602542aea57a80895'},
+]
+dependencies = [
+    ('hwloc', '2.10.0'),
+]
+";
+
+    /// The same list with a bare-string first entry under its comment.
+    const WITH_COMMENTED_BARE_CHECKSUM: &str = "\
+name = 'OpenMPI'
+version = '5.0.3'
+toolchain = {'name': 'NVHPC', 'version': '24.9-CUDA-12.6.0'}
+homepage = 'https://www.open-mpi.org/'
+sources = [SOURCELOWER_TAR_BZ2]
+checksums = [
+    # openmpi-5.0.3.tar.bz2
+
+    '990582f206b3ab32e938aa31bbf07c639368e4405dca196fabe7f0f76eeda90b',
+]
+";
+
     fn nvhpc(ver: &str) -> Toolchain {
         Toolchain {
             name: "NVHPC".into(),
@@ -1051,6 +1104,80 @@ dependencies = [
         // patch set still needs human review after a version bump.
         assert_eq!(r.warnings.len(), 1, "warnings: {:?}", r.warnings);
         assert!(r.warnings[0].contains("patches"), "{:?}", r.warnings);
+    }
+
+    #[test]
+    fn a_comment_above_the_first_checksum_does_not_stop_the_rewrite() {
+        let params = EmitParams {
+            toolchain: nvhpc("25.11-CUDA-12.8.0"),
+            version: Some("5.0.7".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: Some(
+                "119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd".into(),
+            ),
+        };
+        let r = emit_next_generation(WITH_COMMENTED_CHECKSUMS, &params).expect("emit");
+        assert!(r.text.contains(
+            "{'openmpi-5.0.7.tar.bz2': '119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd'}"
+        ), "{}", r.text);
+        // The annotations survive: they are not the tool's to rewrite.
+        assert!(
+            r.text.contains("    # openmpi-5.0.3.tar.bz2\n"),
+            "{}",
+            r.text
+        );
+        assert!(
+            r.text
+                .contains("    # OpenMPI-5.0.3_fix_hle_make_errors.patch\n"),
+            "{}",
+            r.text
+        );
+        // The patch entry below the second comment is still left alone.
+        assert!(r.text.contains(
+            "{'OpenMPI-5.0.3_fix_hle_make_errors.patch': '881c907a9f5901d5d6af41cd33dffdcecba4a67a9e5123e602542aea57a80895'}"
+        ), "{}", r.text);
+    }
+
+    #[test]
+    fn a_comment_and_a_blank_line_above_a_bare_checksum_are_skipped() {
+        let params = EmitParams {
+            toolchain: nvhpc("25.11-CUDA-12.8.0"),
+            version: Some("5.0.7".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: Some(
+                "119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd".into(),
+            ),
+        };
+        let r = emit_next_generation(WITH_COMMENTED_BARE_CHECKSUM, &params).expect("emit");
+        assert!(
+            r.text
+                .contains("'119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd'"),
+            "{}",
+            r.text
+        );
+        assert!(
+            r.text.contains("    # openmpi-5.0.3.tar.bz2\n"),
+            "{}",
+            r.text
+        );
+    }
+
+    #[test]
+    fn skipping_stops_at_the_first_entry() {
+        // Asserting on what the index lands on, rather than on the index,
+        // keeps the test about the behaviour instead of about arithmetic.
+        fn landed_on(s: &str) -> &str {
+            &s[skip_to_first_entry(s.as_bytes(), 0)..]
+        }
+        assert_eq!(landed_on("{'a': 'b'}"), "{'a': 'b'}");
+        assert_eq!(landed_on("  \n  {'a': 'b'}"), "{'a': 'b'}");
+        assert_eq!(landed_on("\n  # note\n  'sha'"), "'sha'");
+        assert_eq!(landed_on("\n # one\n\n # two\n 'sha'"), "'sha'");
+        // A comment running to the end leaves nothing, which reads as empty.
+        assert_eq!(landed_on("\n # trailing"), "");
+        assert_eq!(landed_on(""), "");
     }
 
     #[test]
