@@ -10,55 +10,70 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use thiserror::Error;
 
+/// Schema version this build reads. A layer declaring anything else is
+/// rejected rather than interpreted.
 pub const PACKAGE_CONFIG_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// One TOML layer of package configuration.
+///
+/// Layers apply in order over a plan extracted from a foreign recipe; a later
+/// layer overrides an earlier one. Every section is optional, so a layer states
+/// only what it changes.
 pub struct PackageConfigLayer {
+    /// Must equal [`PACKAGE_CONFIG_SCHEMA_VERSION`].
     pub schema_version: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Package identity and metadata overrides.
     pub package: Option<PackagePatch>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Build-system and easyconfig-parameter overrides.
     pub build: Option<BuildPatch>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Dependency mapping, exclusions and additions.
     pub dependencies: Option<DependencyPatch>,
-    #[serde(default)]
+    /// Profile definitions, matched to existing profiles by name.
     pub profiles: Vec<ProfilePatch>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
+/// Package identity overrides. `None` leaves the extracted value alone.
 pub struct PackagePatch {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Rename the package, e.g. to EasyBuild's capitalisation.
     pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Override the version. Changing it records the recipe's version as the
+    /// upstream one, so the difference stays visible.
     pub version: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Project homepage for the emitted easyconfig.
     pub homepage: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Description for the emitted easyconfig.
     pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// License string for the emitted easyconfig.
     pub license: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
+/// Build-side overrides. Each `None` leaves the extracted value alone; a
+/// `Some` list replaces rather than appends, except where `patches_mode` says
+/// otherwise.
 pub struct BuildPatch {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// EasyBuild easyblock class, e.g. `CMakeMake`.
     pub easyblock: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Build systems the recipe uses, when the extraction guessed wrong.
     pub build_systems: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Subdirectory of the unpacked source to build from.
     pub source_root: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Configure flags, replacing any extracted set.
     pub config_options: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// EasyBuild moduleclass, e.g. `lib`.
     pub moduleclass: Option<String>,
-    #[serde(default)]
+    /// Whether `patches` replaces the existing list or merges into it.
     pub patches_mode: PatchMergeMode,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Patch artifacts. An explicitly empty list under `Replace` clears the
+    /// patches the source recipe carried.
     pub patches: Option<Vec<PatchArtifact>>,
-    #[serde(default)]
+    /// Raw easyconfig parameters written through verbatim. Keys are validated
+    /// against the known EasyBuild parameter names.
     pub easyconfig_parameters: BTreeMap<String, EasyconfigValue>,
 }
 
@@ -78,14 +93,16 @@ pub enum PatchMergeMode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
+/// How foreign dependency names become EasyBuild ones.
 pub struct DependencyPatch {
-    #[serde(default)]
+    /// Foreign name to EasyBuild provider, keyed by the foreign name.
     pub aliases: BTreeMap<String, DependencyAlias>,
-    #[serde(default)]
+    /// Virtual package to the concrete provider that satisfies it.
     pub virtuals: BTreeMap<String, String>,
-    #[serde(default)]
+    /// Foreign names the solve ignores entirely, for things the toolchain
+    /// already supplies.
     pub exclude_from_solve: Vec<String>,
-    #[serde(default)]
+    /// Requirements EasyBuild needs that the foreign recipe never declared.
     pub requirements: Vec<DependencyRequirement>,
 }
 
@@ -93,12 +110,14 @@ pub struct DependencyPatch {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DependencyRequirement {
+    /// EasyBuild package name required.
     pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Version constraint, or `None` for any version.
     pub constraint: Option<String>,
-    #[serde(default = "default_requirement_roles")]
+    /// Build, run, or both. Defaults to run-only, and must not be empty.
     pub roles: Vec<DependencyRole>,
-    #[serde(default)]
+    /// Feature flags gating this requirement: it applies only to a profile
+    /// whose features match every entry.
     pub features: BTreeMap<String, bool>,
 }
 
@@ -115,13 +134,15 @@ pub enum DependencyAlias {
     Direct(String),
     /// Control how a component constraint applies to a containing provider.
     Provider {
+        /// EasyBuild package that provides the foreign dependency.
         provider: String,
-        #[serde(default)]
+        /// Whether the foreign version constraint carries over.
         constraint: AliasConstraint,
     },
 }
 
 impl DependencyAlias {
+    /// The EasyBuild package this alias resolves to, either spelling.
     pub fn provider(&self) -> &str {
         match self {
             Self::Direct(provider) | Self::Provider { provider, .. } => provider,
@@ -141,41 +162,50 @@ impl DependencyAlias {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
+/// Whether a foreign version constraint survives an alias mapping.
 pub enum AliasConstraint {
+    /// Keep the constraint: the provider's versions mean the same thing.
     #[default]
     Preserve,
+    /// Discard it: the provider is a bundle whose versions do not correspond
+    /// to the component's, so carrying the constraint would be wrong.
     Drop,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// One build variant of the package, matched to an existing profile by name.
 pub struct ProfilePatch {
+    /// Profile name, the key layers are matched on. Must not be empty.
     pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Profile to inherit settings from. The parent must exist in the plan.
     pub inherits: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Whether this is the default profile. Exactly one profile must be the
+    /// default once every layer has applied.
     pub default: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Versionsuffix fragments, concatenated in order.
     pub versionsuffix: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Platform this profile targets, when it is restricted to one.
     pub platform: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Architecture this profile targets, when it is restricted to one.
     pub architecture: Option<String>,
-    #[serde(default)]
+    /// Feature flags, which gate conditional dependencies and rules.
     pub features: BTreeMap<String, bool>,
-    #[serde(default)]
+    /// Free-form parameters consumed by conditions.
     pub parameters: BTreeMap<String, String>,
-    #[serde(default)]
+    /// EasyBuild toolchain options such as `pic` or `openmp`.
     pub toolchain_options: BTreeMap<String, bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Configure flags for this profile, replacing the build-level set.
     pub config_options: Option<Vec<String>>,
-    #[serde(default)]
+    /// Raw easyconfig parameters for this profile only.
     pub easyconfig_parameters: BTreeMap<String, EasyconfigValue>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Commands proving the build works, run after installation.
     pub verification_commands: Option<Vec<VerificationCommand>>,
 }
 
 impl PackageConfigLayer {
+    /// Parse a layer from TOML text, resolving patch sources against no
+    /// directory and validating the result.
     pub fn from_toml_str(input: &str) -> Result<Self, PackageConfigError> {
         let mut layer: Self = toml::from_str(input)?;
         layer.resolve_patch_sources(None);
@@ -183,6 +213,8 @@ impl PackageConfigLayer {
         Ok(layer)
     }
 
+    /// Parse a layer from a file, resolving relative patch paths against the
+    /// file's own directory so a layer is movable with its patches.
     pub fn from_path(path: &Path) -> Result<Self, PackageConfigError> {
         let input = std::fs::read_to_string(path)
             .map_err(|error| PackageConfigError::Io(path.display().to_string(), error))?;
@@ -286,6 +318,10 @@ impl PackageConfigLayer {
     }
 }
 
+/// Apply layers to a plan in order, later layers overriding earlier ones.
+///
+/// Every layer is validated before it is applied, so a malformed layer fails
+/// the call rather than half-modifying the plan.
 pub fn apply_package_layers(
     plan: &mut PackagePlan,
     layers: &[PackageConfigLayer],
@@ -573,33 +609,55 @@ fn package_identity(name: &str) -> String {
 }
 
 #[derive(Debug, Error)]
+/// Why a package configuration layer could not be read or applied.
 pub enum PackageConfigError {
+    /// The layer declares a schema this build does not read.
     #[error("unsupported package config schema version {0}")]
     UnsupportedSchema(u32),
+    /// The file is not valid TOML, or has a field this schema rejects.
     #[error("package config TOML: {0}")]
     Toml(#[from] toml::de::Error),
+    /// The file could not be read.
     #[error("read package config {0}: {1}")]
     Io(String, std::io::Error),
+    /// A profile has no name, so no layer could ever match it.
     #[error("profile name cannot be empty")]
     EmptyProfileName,
+    /// The package override blanks the name.
     #[error("package name cannot be empty")]
     EmptyPackageName,
+    /// The package override blanks the version.
     #[error("package version cannot be empty")]
     EmptyPackageVersion,
+    /// The build override blanks the easyblock.
     #[error("EasyBuild easyblock cannot be empty")]
     EmptyEasyblock,
+    /// The build override blanks the moduleclass.
     #[error("EasyBuild moduleclass cannot be empty")]
     EmptyModuleclass,
+    /// A raw easyconfig parameter is not a name EasyBuild recognises, which
+    /// would emit a recipe eb rejects.
     #[error("invalid EasyBuild parameter name {0:?}")]
     InvalidEasyconfigParameter(String),
+    /// An added requirement has no package name.
     #[error("dependency requirement name cannot be empty")]
     EmptyDependencyRequirement,
+    /// An added requirement lists no roles, so it would apply nowhere.
     #[error("dependency requirement {0} must have at least one role")]
     EmptyDependencyRoles(String),
+    /// A patch names a path rather than a filename; EasyBuild takes the
+    /// basename only.
     #[error("patch filename must not contain a directory: {0:?}")]
     InvalidPatchFilename(String),
+    /// A profile inherits from one that does not exist in the plan.
     #[error("profile {profile} inherits missing profile {parent}")]
-    MissingParent { profile: String, parent: String },
+    MissingParent {
+        /// Profile declaring the inheritance.
+        profile: String,
+        /// Parent it names, which is absent.
+        parent: String,
+    },
+    /// After every layer applied, the plan has no single default profile.
     #[error("package plan must contain exactly one default profile, found {0}")]
     DefaultProfileCount(usize),
 }

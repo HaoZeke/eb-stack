@@ -26,7 +26,6 @@ pub mod package;
 pub mod package_catalog;
 #[allow(missing_docs, reason = "61 items still undocumented")]
 pub mod package_closure;
-#[allow(missing_docs, reason = "70 items still undocumented")]
 pub mod package_config;
 #[allow(missing_docs, reason = "14 items still undocumented")]
 pub mod package_emit;
