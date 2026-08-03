@@ -20,7 +20,6 @@ mod foreign;
 pub mod hierarchy;
 mod manifest;
 pub mod mcp;
-#[allow(missing_docs, reason = "258 items still undocumented")]
 pub mod package;
 #[allow(missing_docs, reason = "52 items still undocumented")]
 pub mod package_catalog;

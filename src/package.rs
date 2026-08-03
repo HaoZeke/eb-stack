@@ -489,6 +489,7 @@ impl ConditionExpr {
         }
     }
 
+    /// Whether this condition holds in `context`.
     pub fn evaluate(&self, context: &ConditionContext) -> bool {
         match self {
             Self::Always => true,
@@ -649,57 +650,84 @@ fn unquote_condition_literal(value: &str) -> String {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+/// When a dependency is needed.
 pub enum DependencyRole {
+    /// Needed to build, not at run time.
     Build,
+    /// Needed on the build host, for a cross build.
     Host,
+    /// Needed at run time.
     Run,
+    /// Needed only to run the test suite.
     Test,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// One dependency the recipe declares, before any solve.
 pub struct DependencyIntent {
+    /// Stable identifier within the plan, so a rule can refer to it.
     pub id: String,
+    /// Name as the foreign recipe spells it.
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// EasyBuild's name for the same thing, when they differ.
     pub eb_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Version requirement, or `None` for any version.
     pub constraint: Option<String>,
     /// Explicit EasyBuild dependency toolchain after generation retargeting.
     /// `None` keeps minimal-toolchain selection within the output hierarchy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toolchain: Option<Toolchain>,
     #[serde(default)]
+    /// When it is needed. Empty means the recipe never said.
     pub roles: Vec<DependencyRole>,
     #[serde(default)]
+    /// When this dependency applies. Defaults to always.
     pub condition: ConditionExpr,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Capability this satisfies, when it stands in for a virtual package.
     pub virtual_capability: Option<String>,
     #[serde(default)]
+    /// True when the solve must skip it, because the toolchain already
+    /// provides it.
     pub solver_excluded: bool,
     #[serde(default)]
+    /// Where this dependency was read from.
     pub provenance: Vec<Provenance>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+/// Whether a rule forbids a combination or demands one.
 pub enum PackageRuleKind {
+    /// The combination must not occur.
     Conflict,
+    /// The combination is required.
     Requirement,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// A constraint the recipe states beyond its dependency list.
 pub struct PackageRule {
+    /// Stable identifier within the plan.
     pub id: String,
+    /// Whether this forbids or requires.
     pub kind: PackageRuleKind,
+    /// The combination, in the foreign recipe's own spelling.
     pub spec: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Original `when=` text, kept for review alongside the lowered form.
     pub when: Option<String>,
     #[serde(default)]
+    /// When the rule applies, lowered from the selector.
     pub condition: ConditionExpr,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Message to show when the rule fires.
     pub message: Option<String>,
+    /// Where the rule was read from.
     pub provenance: Provenance,
 }
 
@@ -709,35 +737,51 @@ pub struct PackageRule {
 /// easyblock inputs without becoming an arbitrary Python execution surface.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// A value built by joining strings, kept in parts so they stay reviewable.
 pub struct EasyconfigStringConcat {
+    /// Fragments joined in order.
     pub concat: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
+/// A value written verbatim into an easyconfig parameter.
 pub enum EasyconfigValue {
+    /// A Python bool.
     Bool(bool),
+    /// A Python int.
     Integer(i64),
+    /// A Python string.
     String(String),
+    /// A Python list.
     List(Vec<EasyconfigValue>),
+    /// A string built by concatenation.
     Concat(EasyconfigStringConcat),
+    /// A Python dict.
     Table(BTreeMap<String, EasyconfigValue>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// A patch the build applies.
 pub struct PatchArtifact {
+    /// Filename EasyBuild references. A bare name, never a path.
     pub filename: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// SHA-256 of the patch bytes.
     pub sha256: Option<String>,
     /// Exact remote patch URL accepted by EasyBuild's `patches` parameter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Local path to copy the patch from.
     pub source: Option<String>,
     #[serde(default)]
+    /// When this patch applies.
     pub condition: ConditionExpr,
     #[serde(skip)]
+    /// Where the patch was found on disk, resolved relative to the layer that
+    /// named it. Not serialized: it is a detail of this run.
     pub resolved_source: Option<PathBuf>,
 }
 
@@ -770,126 +814,188 @@ pub(crate) fn is_easyconfig_parameter_name(name: &str) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// How the package is built, independent of profile.
 pub struct BuildSpec {
+    /// Toolchain the build targets.
     pub toolchain: Toolchain,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// EasyBuild easyblock class.
     pub easyblock: Option<String>,
     #[serde(default)]
+    /// Build systems detected or configured.
     pub build_systems: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Subdirectory of the unpacked source to build from.
     pub source_root: Option<String>,
     #[serde(default)]
+    /// Configure flags common to every profile.
     pub config_options: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// EasyBuild moduleclass.
     pub moduleclass: Option<String>,
     #[serde(default)]
+    /// Patches applied before configuring.
     pub patches: Vec<PatchArtifact>,
     #[serde(default)]
+    /// Raw easyconfig parameters written through verbatim.
     pub easyconfig_parameters: BTreeMap<String, EasyconfigValue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// A command that proves the installed build works.
 pub struct VerificationCommand {
+    /// Program to run.
     pub program: String,
     #[serde(default)]
+    /// Arguments passed to it.
     pub args: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// One build variant of the package.
 pub struct ProductProfile {
+    /// Profile name, unique within the plan.
     pub name: String,
     #[serde(default)]
+    /// Whether this is chosen when no profile is named. Exactly one profile
+    /// must be the default.
     pub default: bool,
     #[serde(default)]
+    /// Versionsuffix fragments, concatenated in order.
     pub versionsuffix: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Platform this profile is restricted to.
     pub platform: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Architecture this profile is restricted to.
     pub architecture: Option<String>,
     #[serde(default)]
+    /// Feature flags, which conditions test.
     pub features: BTreeMap<String, bool>,
     #[serde(default)]
+    /// Free-form parameters conditions may reference.
     pub parameters: BTreeMap<String, String>,
     #[serde(default)]
+    /// EasyBuild toolchain options such as `pic` or `openmp`.
     pub toolchain_options: BTreeMap<String, bool>,
     #[serde(default)]
+    /// Configure flags for this profile, on top of the build-level set.
     pub config_options: Vec<String>,
     #[serde(default)]
+    /// Raw easyconfig parameters for this profile.
     pub easyconfig_parameters: BTreeMap<String, EasyconfigValue>,
     #[serde(default)]
+    /// Commands proving this variant works.
     pub verification_commands: Vec<VerificationCommand>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// A request to emit one profile against one stack.
 pub struct OutputRequest {
+    /// Profile to emit.
     pub profile: String,
+    /// Stack policy to solve against.
     pub stack: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+/// Which step of the pipeline left work behind.
 pub enum ResidualStage {
+    /// Reading the foreign recipe.
     Parse,
+    /// Lowering it into the canonical plan.
     Normalize,
+    /// Selecting dependencies.
     Resolve,
+    /// Writing the easyconfig.
     Emit,
+    /// Building the package.
     Build,
+    /// Verifying the installed build.
     Verify,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+/// How much attention a residual needs.
 pub enum ResidualSeverity {
+    /// A mechanical gap; a tool could close it.
     Mechanical,
+    /// Needs a human decision.
     Judgment,
+    /// Must be resolved before the result can be trusted.
     Blocking,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Work the pipeline could not do mechanically, recorded rather than dropped
+/// so nothing is silently lost in translation.
 pub struct Residual {
+    /// Stable identifier within the plan.
     pub id: String,
+    /// Step that produced it.
     pub stage: ResidualStage,
+    /// Short machine-readable category.
     pub category: String,
+    /// How much attention it needs.
     pub severity: ResidualSeverity,
+    /// One-line description for a reviewer.
     pub summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Supporting text, such as the source that was not understood.
     pub evidence: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Where in the recipe it arose.
     pub provenance: Option<Provenance>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// The canonical description of a package: the shape every ingest lowers to
+/// and every emitter reads.
 pub struct PackagePlan {
+    /// Must equal [`PACKAGE_SCHEMA_VERSION`].
     pub schema_version: u32,
+    /// Ecosystem the definition came from.
     pub origin: PackageOrigin,
+    /// Package identity and metadata.
     pub package: PackageMetadata,
     #[serde(default)]
+    /// Artifacts the build downloads or checks out.
     pub sources: Vec<SourceArtifact>,
     #[serde(default)]
+    /// Dependencies declared, before any solve.
     pub dependencies: Vec<DependencyIntent>,
     #[serde(default)]
+    /// Constraints beyond the dependency list.
     pub rules: Vec<PackageRule>,
+    /// How the package is built.
     pub build: BuildSpec,
     #[serde(default)]
+    /// Build variants.
     pub profiles: Vec<ProductProfile>,
     #[serde(default)]
+    /// Profile and stack combinations to emit.
     pub outputs: Vec<OutputRequest>,
     #[serde(default)]
+    /// Work left for a human, carried rather than dropped.
     pub residuals: Vec<Residual>,
 }
 
 impl PackagePlan {
+    /// Parse a plan from JSON and check its schema version.
     pub fn from_json_str(input: &str) -> Result<Self, PackageError> {
         let plan: Self = serde_json::from_str(input)?;
         plan.validate_schema()?;
         Ok(plan)
     }
 
+    /// Reject a plan whose schema this build does not read.
     pub fn validate_schema(&self) -> Result<(), PackageError> {
         if self.schema_version != PACKAGE_SCHEMA_VERSION {
             return Err(PackageError::UnsupportedSchema(self.schema_version));
@@ -898,6 +1004,11 @@ impl PackagePlan {
     }
 }
 
+/// Resolve one profile's conditions against an environment.
+///
+/// Every conditional dependency, source and rule is evaluated, so the result
+/// describes exactly what will be built. Fails when the profile does not
+/// exist rather than falling back to the default.
 pub fn materialize_profile(
     plan: &PackagePlan,
     profile_name: &str,
@@ -968,14 +1079,19 @@ pub fn materialize_profile(
 }
 
 #[derive(Debug, Error)]
+/// Why a package plan could not be read or rendered.
 pub enum PackageError {
     #[error("unsupported package schema version {0}")]
+    /// The plan declares a schema this build does not read.
     UnsupportedSchema(u32),
     #[error("package profile {0} does not exist")]
+    /// The named profile is not in the plan.
     ProfileNotFound(String),
     #[error("package JSON: {0}")]
+    /// The plan is not valid JSON, or does not match the schema.
     Json(#[from] serde_json::Error),
     #[error("CycloneDX serialization: {0}")]
+    /// The SBOM could not be serialized.
     CycloneDx(String),
 }
 
@@ -983,6 +1099,10 @@ fn component_ref(name: &str, version: &str) -> String {
     format!("pkg:generic/{name}@{version}")
 }
 
+/// Build a CycloneDX BOM describing what the plan intends to install.
+///
+/// This records intent. It is not evidence of what a build produced, and it
+/// carries a checksum only where the plan had one.
 pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
     plan.validate_schema()?;
 
@@ -1170,6 +1290,7 @@ fn source_archive_url(source: &SourceArtifact) -> Option<String> {
     })
 }
 
+/// The planned BOM as JSON.
 pub fn package_plan_to_cyclonedx(plan: &PackagePlan) -> Result<Value, PackageError> {
     let bom = package_plan_to_bom(plan)?;
     let mut output = Vec::new();
