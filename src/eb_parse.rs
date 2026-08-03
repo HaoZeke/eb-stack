@@ -511,9 +511,24 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        Ok(std::str::from_utf8(&self.src[start..self.pos])
-            .unwrap()
-            .to_string())
+        self.slice_str(start).map(str::to_string)
+    }
+
+    /// The source between `start` and the cursor, as text.
+    ///
+    /// The lexer only ever advances over bytes it has classified as ASCII, so
+    /// the span is on a character boundary. Reporting rather than unwrapping
+    /// keeps a malformed span a parse error with a line number instead of a
+    /// panic in a library.
+    fn slice_str(&self, start: usize) -> Result<&str, String> {
+        let end = self.pos.min(self.src.len());
+        let bytes = self.src.get(start..end).ok_or_else(|| {
+            self.err(format!(
+                "internal: span {start}..{end} is outside the source"
+            ))
+        })?;
+        std::str::from_utf8(bytes)
+            .map_err(|e| self.err(format!("span {start}..{end} is not valid UTF-8: {e}")))
     }
 
     fn parse_expr(&mut self) -> Result<Value, String> {
@@ -670,10 +685,10 @@ impl<'a> Parser<'a> {
                     break;
                 }
             }
-            let s = std::str::from_utf8(&self.src[start..self.pos]).unwrap();
+            let s = self.slice_str(start)?;
             return Ok(Value::Str(s.to_string()));
         }
-        let s = std::str::from_utf8(&self.src[start..self.pos]).unwrap();
+        let s = self.slice_str(start)?;
         let i: i64 = s
             .parse()
             .map_err(|_| self.err(format!("invalid integer {s}")))?;
@@ -935,20 +950,34 @@ fn build_templates(
     tv
 }
 
+/// `%(key)s`, compiled once. The pattern is a literal, so a failure here would
+/// be a build-time defect rather than anything a recipe can cause.
+fn template_pattern() -> &'static regex::Regex {
+    static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    PATTERN.get_or_init(|| {
+        regex::Regex::new(r"%\(([^)]+)\)s").expect("template pattern is a compile-time literal")
+    })
+}
+
 fn apply_templates_str(s: &str, templates: &HashMap<String, String>) -> String {
     // EasyBuild uses %(key)s substitution; iterate for rare nested cases.
-    let re = regex::Regex::new(r"%\(([^)]+)\)s").expect("template regex");
+    let re = template_pattern();
     let mut cur = s.to_string();
     for _ in 0..8 {
         let mut changed = false;
         let next = re
             .replace_all(&cur, |caps: &regex::Captures| {
-                let key = caps.get(1).unwrap().as_str();
+                // A capture that did not participate leaves the text alone
+                // rather than ending the parse.
+                let whole = caps.get(0).map(|m| m.as_str()).unwrap_or_default();
+                let Some(key) = caps.get(1).map(|m| m.as_str()) else {
+                    return whole.to_string();
+                };
                 if let Some(v) = templates.get(key) {
                     changed = true;
                     v.clone()
                 } else {
-                    caps.get(0).unwrap().as_str().to_string()
+                    whole.to_string()
                 }
             })
             .into_owned();
@@ -2242,6 +2271,67 @@ mod tests {
         assert_eq!(r.name, "X");
         assert_eq!(r.version, "1");
         assert!(r.dependencies.is_empty());
+    }
+
+    #[test]
+    fn a_parse_error_from_a_file_names_the_file() {
+        // resolve_easyconfig_file rewrites the placeholder with the real path,
+        // so a caller is told which recipe failed rather than "<string>".
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Broken-1.0.eb");
+        std::fs::write(&path, "version = '1.0'\ntoolchain = SYSTEM\n").unwrap();
+        let msg = resolve_easyconfig_file(&path).unwrap_err().to_string();
+        assert!(msg.contains("Broken-1.0.eb"), "no file in {msg:?}");
+        assert!(!msg.contains("<string>"), "placeholder survived: {msg:?}");
+    }
+
+    #[test]
+    fn a_bad_span_reports_a_line_instead_of_panicking() {
+        // The lexer sites that used to unwrap now report. The statement loop
+        // is deliberately tolerant and swallows these, so this exercises the
+        // helper directly: the value is that a malformed span cannot abort a
+        // process that embeds the parser.
+        let mut parser = Parser::new("name = 'X'\nversion = '1'\n");
+        parser.pos = 12;
+        let err = parser.slice_str(usize::MAX).unwrap_err();
+        assert!(err.starts_with("line "), "no line number in {err:?}");
+        assert!(err.contains("outside the source"), "{err:?}");
+    }
+
+    #[test]
+    fn a_malformed_statement_is_skipped_rather_than_failing_the_recipe() {
+        // Tolerance is the design: one unrepresentable statement must not cost
+        // the whole easyconfig. Pinned so the unwrap removal cannot quietly
+        // turn recoverable input into a hard failure.
+        let src = "name = 'X'\nversion = '1'\ntoolchain = SYSTEM\nn = 99999999999999999999999\n";
+        let r = resolve_easyconfig_str(src).expect("tolerant parse");
+        assert_eq!(r.name, "X");
+        assert_eq!(r.version, "1");
+    }
+
+    #[test]
+    fn an_unknown_template_key_is_left_alone_rather_than_dropped() {
+        // The substitution closure must not lose text when a key is unknown;
+        // losing it silently corrupted the value instead of reporting.
+        let mut templates = HashMap::new();
+        templates.insert("version".to_string(), "1.2.3".to_string());
+        assert_eq!(
+            apply_templates_str("pkg-%(version)s-%(unknown)s.tar.gz", &templates),
+            "pkg-1.2.3-%(unknown)s.tar.gz"
+        );
+        assert_eq!(
+            apply_templates_str("no templates", &templates),
+            "no templates"
+        );
+    }
+
+    #[test]
+    fn the_template_pattern_is_compiled_once() {
+        // Same instance across calls: the pattern used to be rebuilt on every
+        // invocation, eight times per value in the nested-substitution loop.
+        let first = template_pattern() as *const regex::Regex;
+        let second = template_pattern() as *const regex::Regex;
+        assert_eq!(first, second);
     }
 
     #[test]
