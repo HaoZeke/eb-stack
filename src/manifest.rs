@@ -9,6 +9,7 @@ use crate::package::{
 };
 use std::collections::BTreeMap;
 
+/// Lower a parsed foreign recipe into the canonical package plan for a toolchain.
 pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) -> PackagePlan {
     let sources = recipe
         .sources

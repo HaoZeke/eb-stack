@@ -34,6 +34,7 @@ pub enum ArtifactClass {
 }
 
 impl ArtifactClass {
+    /// The stable lowercase name used in output and messages.
     pub fn as_str(self) -> &'static str {
         match self {
             ArtifactClass::GitHubTagArchive => "github-tag-archive",
@@ -168,7 +169,9 @@ pub enum FindingLevel {
 /// One statement about a source and the checksum attached to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceFinding {
+    /// Whether this is a known mismatch or merely unverified.
     pub level: FindingLevel,
+    /// What was found, in terms a reviewer can act on.
     pub message: String,
 }
 
@@ -207,6 +210,7 @@ pub struct SeededChecksum {
     pub source_url: Option<String>,
     /// A git remote, when the foreign recipe built from a checkout.
     pub git: Option<String>,
+    /// The value copied across, quoted back in a mismatch message.
     pub sha256: Option<String>,
 }
 

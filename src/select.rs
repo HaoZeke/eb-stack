@@ -16,9 +16,12 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+/// Why a co-selection could not be produced.
 pub enum SelectError {
+    /// No candidate in the tree provides the named package.
     #[error("no candidates for package {0}")]
     MissingPackage(String),
+    /// The requested set has no simultaneously satisfiable solution.
     #[error("unsatisfiable stack: {0}")]
     Unsat(String),
 }

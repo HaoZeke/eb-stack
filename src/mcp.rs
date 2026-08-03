@@ -29,6 +29,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
+/// Serve MCP over a line-delimited JSON-RPC stream until the reader ends.
 pub fn run_server<R: BufRead, W: Write>(reader: R, mut writer: W) -> std::io::Result<()> {
     for line in reader.lines() {
         let line = line?;
@@ -52,6 +53,7 @@ pub fn run_server<R: BufRead, W: Write>(reader: R, mut writer: W) -> std::io::Re
     Ok(())
 }
 
+/// Answer one JSON-RPC message. `None` for a notification, which takes no reply.
 pub fn handle_message(message: &Value) -> Option<Value> {
     let id = message.get("id").cloned().unwrap_or(Value::Null);
     let method = message.get("method").and_then(Value::as_str).unwrap_or("");

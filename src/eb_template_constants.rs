@@ -149,4 +149,5 @@ pub const EB_TEMPLATE_CONSTANTS: &[(&str, &str)] = &[
         "https://xorg.freedesktop.org/archive/individual/xcb/",
     ),
 ];
+/// How many template constants the table carries, for a coverage assertion.
 pub const EB_TEMPLATE_CONSTANTS_COUNT: usize = 78;

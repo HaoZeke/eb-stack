@@ -23,7 +23,9 @@ use std::cmp::Ordering;
 /// tokenization and never produce a `Part`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Part {
+    /// A run of digits, compared numerically.
     Num(u64),
+    /// A run of letters, lowercased and compared lexically.
     Alpha(String),
 }
 
@@ -65,6 +67,7 @@ pub fn parse_version_parts(v: &str) -> Vec<Part> {
     parts
 }
 
+/// Order two version strings by their tokenized parts, digits before letters.
 pub fn cmp_version(a: &str, b: &str) -> Ordering {
     let pa = parse_version_parts(a);
     let pb = parse_version_parts(b);

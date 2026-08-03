@@ -1,30 +1,50 @@
 //! EasyBuild stack lock: parse `.eb` files, resolvo SAT co-select, planned SBOM.
+#![warn(missing_docs)]
 
 pub mod artifact_class;
+#[allow(missing_docs, reason = "97 items still undocumented")]
 pub mod campaign;
+#[allow(missing_docs, reason = "48 items still undocumented")]
 pub mod domain;
 mod eb_emit;
+#[allow(missing_docs, reason = "8 items still undocumented")]
 pub mod eb_maintainer;
+#[allow(missing_docs, reason = "39 items still undocumented")]
 pub mod eb_parse;
+#[allow(missing_docs, reason = "5 items still undocumented")]
 pub mod eb_style;
+/// EasyBuild's built-in `%(...)s` template constants and their expansions.
 pub mod eb_template_constants;
+#[allow(missing_docs, reason = "47 items still undocumented")]
 mod foreign;
+#[allow(missing_docs, reason = "10 items still undocumented")]
 pub mod hierarchy;
 mod manifest;
 pub mod mcp;
+#[allow(missing_docs, reason = "258 items still undocumented")]
 pub mod package;
+#[allow(missing_docs, reason = "52 items still undocumented")]
 pub mod package_catalog;
+#[allow(missing_docs, reason = "61 items still undocumented")]
 pub mod package_closure;
+#[allow(missing_docs, reason = "70 items still undocumented")]
 pub mod package_config;
+#[allow(missing_docs, reason = "14 items still undocumented")]
 pub mod package_emit;
+#[allow(missing_docs, reason = "9 items still undocumented")]
 pub mod package_solve;
+#[allow(missing_docs, reason = "55 items still undocumented")]
 pub mod package_sources;
+#[allow(missing_docs, reason = "70 items still undocumented")]
 pub mod package_workflow;
+#[allow(missing_docs, reason = "11 items still undocumented")]
 pub mod report;
+#[allow(missing_docs, reason = "7 items still undocumented")]
 pub mod resolvo_provider;
 pub mod sbom;
 pub mod select;
 mod spack_syntax;
+#[allow(missing_docs, reason = "87 items still undocumented")]
 pub mod target;
 pub mod version;
 
@@ -112,11 +132,13 @@ use thiserror::Error;
 
 use crate::version::cmp_version;
 
+/// Read and deserialize a JSON file, naming the path in either failure.
 pub fn load_json_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let s = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     serde_json::from_str(&s).with_context(|| format!("parse {}", path.display()))
 }
 
+/// Write pretty-printed JSON, creating the parent directory first.
 pub fn write_json_pretty(path: &Path, value: &impl serde::Serialize) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -139,7 +161,12 @@ pub enum BaselineGenError {
         "no toolchain generation lower than target {target} among {found:?}; \
          pass --baseline-toolchain-version or provide a lower generation in the baseline tree"
     )]
-    NoLowerGeneration { target: String, found: Vec<String> },
+    NoLowerGeneration {
+        /// Generation that was asked for.
+        target: String,
+        /// Generations present in the tree instead.
+        found: Vec<String>,
+    },
 }
 
 /// Choose the baseline toolchain version for a same-family multi-generation tree.
@@ -233,6 +260,7 @@ pub fn filter_baseline_candidates(
     }
 }
 
+/// Write text to a path, creating the parent directory first.
 pub fn write_text(path: &Path, text: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -244,7 +272,9 @@ pub fn write_text(path: &Path, text: &str) -> Result<()> {
 /// Optional operator artifacts written after a successful solve.
 #[derive(Debug, Clone, Default)]
 pub struct SolveExtraOut<'a> {
+    /// Where to write the ordered build list, when one is wanted.
     pub build_list_out: Option<&'a Path>,
+    /// Where to write the stack diff against the baseline, when one is wanted.
     pub stack_diff_out: Option<&'a Path>,
 }
 
