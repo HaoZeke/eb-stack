@@ -40,6 +40,19 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use thiserror::Error;
 
+/// A regex compiled once, on first use.
+///
+/// Every pattern here is a literal in this file, so a compile failure would be
+/// a defect in this source rather than anything a recipe can cause: no input a
+/// caller supplies can reach it. Compiling once also stops a parse rebuilding
+/// the same automaton for every line it scans.
+macro_rules! static_regex {
+    ($pattern:expr) => {{
+        static COMPILED: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+        COMPILED.get_or_init(|| Regex::new($pattern).expect("pattern is a literal in this file"))
+    }};
+}
+
 /// Origin of a foreign recipe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -594,8 +607,7 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
 }
 
 fn structure_conda_requirement_selectors(text: &str) -> String {
-    let selector = Regex::new(r#"^(\s*)-\s+(.+?)\s+#\s*\[([^]]+)\]\s*$"#)
-        .expect("static conda selector regex");
+    let selector = static_regex!(r#"^(\s*)-\s+(.+?)\s+#\s*\[([^]]+)\]\s*$"#);
     let mut output = Vec::new();
     let mut requirements_indent = None;
 
@@ -677,10 +689,9 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>, Vec<ForeignResidu
     let mut vars: HashMap<String, String> = HashMap::new();
     let mut dates: HashMap<String, NaiveDate> = HashMap::new();
 
-    let set_re = Regex::new(
-        r#"(?m)^[ \t]*\{%\s*set\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^\r\n]*?)\s*%\}[ \t]*(?:#.*)?(?:\r?\n|$)"#,
-    )
-    .expect("set re");
+    let set_re = static_regex!(
+        r#"(?m)^[ \t]*\{%\s*set\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^\r\n]*?)\s*%\}[ \t]*(?:#.*)?(?:\r?\n|$)"#
+    );
     let mut unresolved_sets = Vec::new();
     for c in set_re.captures_iter(text) {
         let name = c[1].to_string();
@@ -700,12 +711,11 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>, Vec<ForeignResidu
     }
 
     // rattler context: block — simple scalar keys only
-    let context_re = Regex::new(r"(?m)^context\s*:\s*$").expect("context re");
-    let context_end_re = Regex::new(r"^[A-Za-z_]").expect("context end re");
-    let context_scalar_re = Regex::new(
-        r#"^[ \t]+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*[\"']?([^\"'#\n]+?)[\"']?\s*(?:#.*)?$"#,
-    )
-    .expect("context scalar re");
+    let context_re = static_regex!(r"(?m)^context\s*:\s*$");
+    let context_end_re = static_regex!(r"^[A-Za-z_]");
+    let context_scalar_re = static_regex!(
+        r#"^[ \t]+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*[\"']?([^\"'#\n]+?)[\"']?\s*(?:#.*)?$"#
+    );
     if let Some(ctx_start) = context_re.find(text) {
         let rest = &text[ctx_start.end()..];
         for line in rest.lines() {
@@ -748,8 +758,7 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>, Vec<ForeignResidu
     // are substituted below; unresolved statements remain represented in notes.
     out = set_re.replace_all(&out, "").to_string();
     let control_re =
-        Regex::new(r#"(?m)^[ \t]*\{%\s*(?:if|elif|else|endif)\b[^\r\n]*%\}[ \t]*(?:\r?\n|$)"#)
-            .expect("control statement re");
+        static_regex!(r#"(?m)^[ \t]*\{%\s*(?:if|elif|else|endif)\b[^\r\n]*%\}[ \t]*(?:\r?\n|$)"#);
     let control_count = control_re.find_iter(&out).count();
     out = control_re.replace_all(&out, "").to_string();
     if control_count > 0 {
@@ -759,14 +768,12 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>, Vec<ForeignResidu
     }
 
     let pure_macro_requirement_re =
-        Regex::new(r#"(?m)^[ \t]*-[ \t]*(?:\$\{\{|\{\{)[^\r\n]*\}\}[ \t]*(?:#.*)?(?:\r?\n|$)"#)
-            .expect("pure macro requirement re");
+        static_regex!(r#"(?m)^[ \t]*-[ \t]*(?:\$\{\{|\{\{)[^\r\n]*\}\}[ \t]*(?:#.*)?(?:\r?\n|$)"#);
     let macro_requirement_count = pure_macro_requirement_re.find_iter(&out).count();
     out = pure_macro_requirement_re.replace_all(&out, "").to_string();
-    let cross_python_requirement_re = Regex::new(
-        r#"(?m)^[ \t]*-[ \t]*cross-python_(?:\$\{\{|\{\{)[^\r\n]*\}\}[ \t]*(?:#.*)?(?:\r?\n|$)"#,
-    )
-    .expect("cross-python template requirement re");
+    let cross_python_requirement_re = static_regex!(
+        r#"(?m)^[ \t]*-[ \t]*cross-python_(?:\$\{\{|\{\{)[^\r\n]*\}\}[ \t]*(?:#.*)?(?:\r?\n|$)"#
+    );
     let cross_python_requirement_count = cross_python_requirement_re.find_iter(&out).count();
     out = cross_python_requirement_re
         .replace_all(&out, "")
@@ -792,23 +799,26 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>, Vec<ForeignResidu
 }
 
 fn expand_conda_variable_expressions(text: &str, vars: &HashMap<String, String>) -> String {
-    let expression_re =
-        Regex::new(r#"(?:\$\{\{|\{\{)\s*([^{}\r\n]+?)\s*\}\}"#).expect("template expression re");
-    let identifier_re = Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*$").expect("template identifier re");
-    let replace_re = Regex::new(
-        r#"^replace\(\s*(?:\"([^\"]*)\"|'([^']*)')\s*,\s*(?:\"([^\"]*)\"|'([^']*)')\s*\)$"#,
-    )
-    .expect("replace filter re");
+    let expression_re = static_regex!(r#"(?:\$\{\{|\{\{)\s*([^{}\r\n]+?)\s*\}\}"#);
+    let identifier_re = static_regex!(r"^[A-Za-z_][A-Za-z0-9_]*$");
+    let replace_re = static_regex!(
+        r#"^replace\(\s*(?:\"([^\"]*)\"|'([^']*)')\s*,\s*(?:\"([^\"]*)\"|'([^']*)')\s*\)$"#
+    );
 
     expression_re
         .replace_all(text, |capture: &regex::Captures<'_>| {
-            evaluate_conda_variable_expression(
-                capture.get(1).expect("expression capture").as_str(),
-                vars,
-                &identifier_re,
-                &replace_re,
-            )
-            .unwrap_or_else(|| capture[0].to_string())
+            // A capture that did not participate leaves the expression as
+            // written rather than ending the parse.
+            match capture.get(1) {
+                Some(inner) => evaluate_conda_variable_expression(
+                    inner.as_str(),
+                    vars,
+                    identifier_re,
+                    replace_re,
+                )
+                .unwrap_or_else(|| capture[0].to_string()),
+                None => capture[0].to_string(),
+            }
         })
         .to_string()
 }
@@ -850,7 +860,7 @@ fn eval_conda_set_expression(
     vars: &HashMap<String, String>,
     dates: &HashMap<String, NaiveDate>,
 ) -> Option<CondaTemplateValue> {
-    let quoted = Regex::new(r#"^[\"']([^\"']*)[\"']$"#).expect("quoted expression re");
+    let quoted = static_regex!(r#"^[\"']([^\"']*)[\"']$"#);
     if let Some(value) = quoted
         .captures(expression)
         .and_then(|capture| capture.get(1))
@@ -858,7 +868,7 @@ fn eval_conda_set_expression(
         return Some(CondaTemplateValue::String(value.as_str().to_string()));
     }
 
-    let scalar = Regex::new(r"^[A-Za-z0-9_.+-]+$").expect("scalar expression re");
+    let scalar = static_regex!(r"^[A-Za-z0-9_.+-]+$");
     if scalar.is_match(expression) {
         return Some(CondaTemplateValue::String(
             vars.get(expression)
@@ -867,10 +877,9 @@ fn eval_conda_set_expression(
         ));
     }
 
-    let strptime = Regex::new(
-        r#"^datetime\.datetime\.strptime\(([A-Za-z_][A-Za-z0-9_]*)\.split\([\"']([^\"']*)[\"']\)\[([0-9]+)\],\s*[\"']([^\"']+)[\"']\)$"#,
-    )
-    .expect("strptime expression re");
+    let strptime = static_regex!(
+        r#"^datetime\.datetime\.strptime\(([A-Za-z_][A-Za-z0-9_]*)\.split\([\"']([^\"']*)[\"']\)\[([0-9]+)\],\s*[\"']([^\"']+)[\"']\)$"#
+    );
     if let Some(capture) = strptime.captures(expression) {
         let value = vars.get(&capture[1])?;
         let index = capture[3].parse::<usize>().ok()?;
@@ -880,8 +889,7 @@ fn eval_conda_set_expression(
     }
 
     let date_format =
-        Regex::new(r#"^[\"']\{:(%[^\"']+)\}[\"']\.format\(([A-Za-z_][A-Za-z0-9_]*)\)$"#)
-            .expect("date format expression re");
+        static_regex!(r#"^[\"']\{:(%[^\"']+)\}[\"']\.format\(([A-Za-z_][A-Za-z0-9_]*)\)$"#);
     if let Some(capture) = date_format.captures(expression) {
         let date = dates.get(&capture[2])?;
         return Some(CondaTemplateValue::String(
@@ -893,9 +901,8 @@ fn eval_conda_set_expression(
 }
 
 fn remove_duplicate_selector_keys(text: &str, notes: &mut Vec<String>) -> String {
-    let top_level_key = Regex::new(r"^([A-Za-z_][A-Za-z0-9_.-]*):").expect("top-level YAML key re");
-    let selector_key = Regex::new(r"^([ \t]+)([A-Za-z_][A-Za-z0-9_.-]*):[^#]*#\s*\[[^]]+\]\s*$")
-        .expect("selector-gated YAML key re");
+    let top_level_key = static_regex!(r"^([A-Za-z_][A-Za-z0-9_.-]*):");
+    let selector_key = static_regex!(r"^([ \t]+)([A-Za-z_][A-Za-z0-9_.-]*):[^#]*#\s*\[[^]]+\]\s*$");
     let mut section = String::new();
     let mut seen = HashSet::new();
     let mut duplicate_count = 0usize;
@@ -1260,13 +1267,8 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
 
     // version("X", sha256="...", tag="...", commit="...", url="...")
     let versions = parse_spack_versions(&syntax.calls)?;
-    if versions.is_empty() {
-        return Err(ForeignError::Parse(
-            "spack: no version(\"...\") directives found".into(),
-        ));
-    }
-
-    let preferred = pick_preferred_spack_version(&versions);
+    let preferred = pick_preferred_spack_version(&versions)
+        .ok_or_else(|| ForeignError::Parse("spack: no version(\"...\") directives found".into()))?;
     notes.push(format!(
         "preferred version {} (from {} version() directives)",
         preferred.version,
@@ -1336,8 +1338,7 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
     }
 
     // resource(name=..., url=..., sha256=..., destination=..., placement=...)
-    let placement_re = Regex::new(r#"placement\s*=\s*\{[^:}]+:\s*[\"']([^\"']+)[\"']\s*\}"#)
-        .expect("resource placement re");
+    let placement_re = static_regex!(r#"placement\s*=\s*\{[^:}]+:\s*[\"']([^\"']+)[\"']\s*\}"#);
     for call in resource_calls {
         if let Some(url) = call.kw_string("url") {
             let inherited_condition = static_scoped_condition(call);
@@ -1630,7 +1631,11 @@ fn parse_spack_version_call(call: &StaticCall) -> Option<SpackVersion> {
     })
 }
 
-fn pick_preferred_spack_version(versions: &[SpackVersion]) -> SpackVersion {
+/// The version a spack recipe should build, when it declares any.
+///
+/// `None` for an empty slice, so the caller reports a parse error rather than
+/// this panicking on an invariant it cannot see from here.
+fn pick_preferred_spack_version(versions: &[SpackVersion]) -> Option<SpackVersion> {
     let is_floating = |v: &str| {
         matches!(
             v.to_ascii_lowercase().as_str(),
@@ -1647,7 +1652,6 @@ fn pick_preferred_spack_version(versions: &[SpackVersion]) -> SpackVersion {
         })
         .or_else(|| versions.first())
         .cloned()
-        .expect("versions non-empty")
 }
 
 fn materialize_spack_url_for_version(
