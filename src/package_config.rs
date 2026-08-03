@@ -25,12 +25,16 @@ pub struct PackageConfigLayer {
     /// Must equal [`PACKAGE_CONFIG_SCHEMA_VERSION`].
     pub schema_version: u32,
     /// Package identity and metadata overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<PackagePatch>,
     /// Build-system and easyconfig-parameter overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<BuildPatch>,
     /// Dependency mapping, exclusions and additions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dependencies: Option<DependencyPatch>,
     /// Profile definitions, matched to existing profiles by name.
+    #[serde(default)]
     pub profiles: Vec<ProfilePatch>,
 }
 
@@ -39,15 +43,20 @@ pub struct PackageConfigLayer {
 /// Package identity overrides. `None` leaves the extracted value alone.
 pub struct PackagePatch {
     /// Rename the package, e.g. to EasyBuild's capitalisation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Override the version. Changing it records the recipe's version as the
     /// upstream one, so the difference stays visible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Project homepage for the emitted easyconfig.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
     /// Description for the emitted easyconfig.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// License string for the emitted easyconfig.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
 }
 
@@ -58,22 +67,30 @@ pub struct PackagePatch {
 /// otherwise.
 pub struct BuildPatch {
     /// EasyBuild easyblock class, e.g. `CMakeMake`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub easyblock: Option<String>,
     /// Build systems the recipe uses, when the extraction guessed wrong.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_systems: Option<Vec<String>>,
     /// Subdirectory of the unpacked source to build from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_root: Option<String>,
     /// Configure flags, replacing any extracted set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_options: Option<Vec<String>>,
     /// EasyBuild moduleclass, e.g. `lib`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moduleclass: Option<String>,
     /// Whether `patches` replaces the existing list or merges into it.
+    #[serde(default)]
     pub patches_mode: PatchMergeMode,
     /// Patch artifacts. An explicitly empty list under `Replace` clears the
     /// patches the source recipe carried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub patches: Option<Vec<PatchArtifact>>,
     /// Raw easyconfig parameters written through verbatim. Keys are validated
     /// against the known EasyBuild parameter names.
+    #[serde(default)]
     pub easyconfig_parameters: BTreeMap<String, EasyconfigValue>,
 }
 
@@ -96,13 +113,17 @@ pub enum PatchMergeMode {
 /// How foreign dependency names become EasyBuild ones.
 pub struct DependencyPatch {
     /// Foreign name to EasyBuild provider, keyed by the foreign name.
+    #[serde(default)]
     pub aliases: BTreeMap<String, DependencyAlias>,
     /// Virtual package to the concrete provider that satisfies it.
+    #[serde(default)]
     pub virtuals: BTreeMap<String, String>,
     /// Foreign names the solve ignores entirely, for things the toolchain
     /// already supplies.
+    #[serde(default)]
     pub exclude_from_solve: Vec<String>,
     /// Requirements EasyBuild needs that the foreign recipe never declared.
+    #[serde(default)]
     pub requirements: Vec<DependencyRequirement>,
 }
 
@@ -113,11 +134,14 @@ pub struct DependencyRequirement {
     /// EasyBuild package name required.
     pub name: String,
     /// Version constraint, or `None` for any version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub constraint: Option<String>,
     /// Build, run, or both. Defaults to run-only, and must not be empty.
+    #[serde(default = "default_requirement_roles")]
     pub roles: Vec<DependencyRole>,
     /// Feature flags gating this requirement: it applies only to a profile
     /// whose features match every entry.
+    #[serde(default)]
     pub features: BTreeMap<String, bool>,
 }
 
@@ -137,6 +161,7 @@ pub enum DependencyAlias {
         /// EasyBuild package that provides the foreign dependency.
         provider: String,
         /// Whether the foreign version constraint carries over.
+        #[serde(default)]
         constraint: AliasConstraint,
     },
 }
@@ -179,27 +204,38 @@ pub struct ProfilePatch {
     /// Profile name, the key layers are matched on. Must not be empty.
     pub name: String,
     /// Profile to inherit settings from. The parent must exist in the plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inherits: Option<String>,
     /// Whether this is the default profile. Exactly one profile must be the
     /// default once every layer has applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<bool>,
     /// Versionsuffix fragments, concatenated in order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub versionsuffix: Option<Vec<String>>,
     /// Platform this profile targets, when it is restricted to one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
     /// Architecture this profile targets, when it is restricted to one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub architecture: Option<String>,
     /// Feature flags, which gate conditional dependencies and rules.
+    #[serde(default)]
     pub features: BTreeMap<String, bool>,
     /// Free-form parameters consumed by conditions.
+    #[serde(default)]
     pub parameters: BTreeMap<String, String>,
     /// EasyBuild toolchain options such as `pic` or `openmp`.
+    #[serde(default)]
     pub toolchain_options: BTreeMap<String, bool>,
     /// Configure flags for this profile, replacing the build-level set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_options: Option<Vec<String>>,
     /// Raw easyconfig parameters for this profile only.
+    #[serde(default)]
     pub easyconfig_parameters: BTreeMap<String, EasyconfigValue>,
     /// Commands proving the build works, run after installation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification_commands: Option<Vec<VerificationCommand>>,
 }
 

@@ -866,3 +866,55 @@ fn public_package_config_examples_parse() {
             })
     }));
 }
+
+/// Optional fields must stay optional.
+///
+/// The `#[serde(default)]` attributes are easy to drop while editing a struct
+/// for unrelated reasons, and nothing else in the suite notices: every fixture
+/// happens to spell the fields out. A layer that omits them is the real shape a
+/// user writes, so it is worth one test of its own.
+#[test]
+fn a_layer_may_omit_every_optional_field() {
+    let layer = PackageConfigLayer::from_toml_str("schema_version = 1\n")
+        .expect("a layer that sets nothing is valid");
+    assert!(layer.package.is_none());
+    assert!(layer.build.is_none());
+    assert!(layer.dependencies.is_none());
+    assert!(layer.profiles.is_empty());
+
+    let minimal = PackageConfigLayer::from_toml_str(
+        "schema_version = 1\n\
+         [[profiles]]\n\
+         name = \"default\"\n\
+         [package]\n\
+         name = \"Thing\"\n\
+         [build]\n\
+         easyblock = \"CMakeMake\"\n\
+         [dependencies]\n",
+    );
+    let minimal = match minimal {
+        Ok(layer) => layer,
+        Err(error) => panic!("minimal layer rejected: {error}"),
+    };
+    let profile = &minimal.profiles[0];
+    assert!(profile.inherits.is_none());
+    assert!(profile.features.is_empty());
+    assert!(profile.toolchain_options.is_empty());
+    let build = minimal.build.as_ref().expect("build section");
+    assert!(build.patches.is_none());
+    assert!(build.easyconfig_parameters.is_empty());
+}
+
+/// A dependency requirement without `roles` defaults to run-only.
+#[test]
+fn a_requirement_defaults_to_the_run_role() {
+    let layer = PackageConfigLayer::from_toml_str(
+        "schema_version = 1\n\
+         [dependencies]\n\
+         [[dependencies.requirements]]\n\
+         name = \"HDF5\"\n",
+    )
+    .expect("requirement without roles is valid");
+    let requirement = &layer.dependencies.as_ref().unwrap().requirements[0];
+    assert_eq!(requirement.roles, vec![DependencyRole::Run]);
+}

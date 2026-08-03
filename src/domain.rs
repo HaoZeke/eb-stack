@@ -61,10 +61,12 @@ pub struct Candidate {
     pub toolchain: Toolchain,
     /// Suffix distinguishing variants of one version, e.g. `-CUDA-12.6.0`.
     /// `None` when the easyconfig sets none.
+    #[serde(default)]
     pub versionsuffix: Option<String>,
     /// Path the candidate was parsed from. Empty for an in-memory parse.
     pub easyconfig_path: String,
     /// Runtime requirements, which must also be installed.
+    #[serde(default)]
     pub dependencies: Vec<DepReq>,
     /// Build-time-only requirements (`builddependencies` in the easyconfig).
     /// Same `DepReq` semantics as runtime `dependencies`; kept separate so
@@ -83,6 +85,7 @@ pub struct Universe {
     pub toolchain: Toolchain,
     /// Human label for the generation, when the caller supplied one. Carried
     /// into the lock for provenance; it does not affect selection.
+    #[serde(default)]
     pub generation_label: Option<String>,
     /// Every variant available to choose from.
     pub candidates: Vec<Candidate>,
@@ -193,6 +196,7 @@ pub struct LockPackage {
     /// Toolchain the selected easyconfig builds against.
     pub toolchain: Toolchain,
     /// Versionsuffix of the selected variant, when it has one.
+    #[serde(default)]
     pub versionsuffix: Option<String>,
     /// Easyconfig the selection came from, so a lock can be traced back to a
     /// file. Empty when the candidate was parsed from memory.
@@ -219,6 +223,7 @@ pub struct StackLock {
     /// Toolchain the stack targets.
     pub toolchain: Toolchain,
     /// Generation label carried from the universe, when one was given.
+    #[serde(default)]
     pub generation_label: Option<String>,
     /// Selected packages, sorted by name for a stable diff.
     pub packages: Vec<LockPackage>,
