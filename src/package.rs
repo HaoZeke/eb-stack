@@ -21,134 +21,207 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use thiserror::Error;
 
+/// Schema version of a package plan document.
 pub const PACKAGE_SCHEMA_VERSION: u32 = 1;
+/// Schema version of a per-profile dependency lock.
 pub const PROFILE_LOCK_SCHEMA_VERSION: u32 = 1;
+/// Schema version of a stack policy document.
 pub const STACK_POLICY_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+/// How strictly a stack pin binds the solve.
 pub enum StackPinMode {
+    /// Take this version when it is available, otherwise fall back and say so.
     Preferred,
+    /// Take this version or fail; no fallback is acceptable.
     Locked,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// A version constraint the site imposes on one dependency.
 pub struct StackPin {
+    /// Package the pin applies to.
     pub name: String,
+    /// Version requirement, e.g. an exact version or a range.
     pub version_requirement: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Restrict the pin to one toolchain. `None` matches any.
     pub toolchain: Option<Toolchain>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Restrict the pin to one versionsuffix. `None` matches any.
     pub versionsuffix: Option<String>,
+    /// Whether a fallback is permitted when the pin cannot be met.
     pub mode: StackPinMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Where the pin came from, carried through for auditability.
     pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// A candidate the solve must not choose, and why.
 pub struct CandidateExclusion {
+    /// Package excluded.
     pub name: String,
+    /// Versions excluded, as a requirement expression.
     pub version_requirement: String,
+    /// Why it is excluded. Recorded in the lock so a reader is not left
+    /// guessing why an obvious candidate was skipped.
     pub reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Where the exclusion applies, when it is not global.
     pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Site rules a dependency solve must respect.
 pub struct StackPolicy {
+    /// Must equal [`STACK_POLICY_SCHEMA_VERSION`].
     pub schema_version: u32,
+    /// Policy name, for messages and provenance.
     pub name: String,
+    /// Toolchain generation the policy governs.
     pub toolchain: Toolchain,
     #[serde(default)]
+    /// Version constraints imposed on individual packages.
     pub pins: Vec<StackPin>,
     #[serde(default)]
+    /// Candidates the solve must not choose.
     pub exclusions: Vec<CandidateExclusion>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// What a pin actually achieved, recorded per solve.
 pub struct StackPinOutcome {
+    /// Package the pin named.
     pub name: String,
+    /// Version requirement as requested.
     pub requested: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Toolchain requested, when the pin restricted one.
     pub requested_toolchain: Option<Toolchain>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Versionsuffix requested, when the pin restricted one.
     pub requested_versionsuffix: Option<String>,
+    /// Version chosen. `None` when nothing satisfied the pin.
     pub selected_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Toolchain of the chosen candidate.
     pub selected_toolchain: Option<Toolchain>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Versionsuffix of the chosen candidate.
     pub selected_versionsuffix: Option<String>,
+    /// Whether the solve had to fall back off the pin. Only a `Preferred`
+    /// pin can reach this; a `Locked` pin fails the solve instead.
     pub fallback: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Why the fallback happened, when one did.
     pub fallback_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// The result of applying a stack policy to a candidate set.
 pub struct StackPolicySolve {
+    /// Candidates the policy allows, after pins and exclusions.
     pub selected: Vec<Candidate>,
+    /// One outcome per pin, including the ones that fell back.
     pub pin_outcomes: Vec<StackPinOutcome>,
+    /// Exclusions that were applied, echoed for the lock.
     pub exclusions: Vec<CandidateExclusion>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
+/// The conditions a profile evaluates against.
 pub struct ProfileEnvironment {
     #[serde(default)]
+    /// Feature flags per dependency, keyed by dependency then flag.
     pub dependency_features: BTreeMap<String, BTreeMap<String, bool>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Compiler in play, when a condition depends on it.
     pub compiler: Option<NamedVersion>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Target platform, when a condition depends on it.
     pub platform: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Target architecture, when a condition depends on it.
     pub architecture: Option<String>,
     #[serde(default)]
+    /// Free-form variables conditions may test.
     pub variables: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// One profile with every condition resolved: what will actually be built.
 pub struct MaterializedProfile {
+    /// Package identity and metadata.
     pub package: PackageMetadata,
+    /// Build system and easyconfig parameters.
     pub build: BuildSpec,
+    /// Source artifacts this profile downloads.
     pub sources: Vec<SourceArtifact>,
+    /// The profile this was materialized from.
     pub profile: ProductProfile,
+    /// Concatenated versionsuffix for the emitted recipe.
     pub versionsuffix: String,
+    /// Dependencies whose conditions held for this profile.
     pub dependencies: Vec<DependencyIntent>,
+    /// Rules whose conditions held for this profile.
     pub rules: Vec<PackageRule>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// One dependency as resolved into a lock.
 pub struct LockedDependency {
+    /// Package name.
     pub name: String,
+    /// Version selected.
     pub version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Versionsuffix of the selected variant, when it has one.
     pub versionsuffix: Option<String>,
+    /// Toolchain the selected easyconfig builds against.
     pub toolchain: Toolchain,
+    /// Easyconfig the selection came from.
     pub easyconfig_path: String,
+    /// True for a build-time-only dependency, so a consumer can tell the
+    /// runtime closure from the build closure.
     pub build: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// The reproducible dependency selection for one profile.
 pub struct ProfileLock {
+    /// Must equal [`PROFILE_LOCK_SCHEMA_VERSION`].
     pub schema_version: u32,
+    /// Package this lock belongs to.
     pub package: String,
+    /// Package version.
     pub version: String,
+    /// Profile name.
     pub profile: String,
+    /// Toolchain the profile targets.
     pub toolchain: Toolchain,
+    /// Versionsuffix of the emitted recipe.
     pub versionsuffix: String,
     #[serde(default)]
+    /// Every dependency selected, build and runtime alike.
     pub dependencies: Vec<LockedDependency>,
     #[serde(default)]
+    /// What each policy pin achieved.
     pub pin_outcomes: Vec<StackPinOutcome>,
     #[serde(default)]
+    /// Exclusions the policy applied.
     pub exclusions: Vec<CandidateExclusion>,
+    /// Solver that produced the lock.
     pub solver: String,
 }
 
