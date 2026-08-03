@@ -4,7 +4,6 @@
 pub mod artifact_class;
 #[allow(missing_docs, reason = "97 items still undocumented")]
 pub mod campaign;
-#[allow(missing_docs, reason = "48 items still undocumented")]
 pub mod domain;
 mod eb_emit;
 #[allow(missing_docs, reason = "8 items still undocumented")]

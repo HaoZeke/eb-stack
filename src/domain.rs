@@ -3,20 +3,30 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// An EasyBuild toolchain: the compiler and library generation a build targets.
 pub struct Toolchain {
+    /// Toolchain name as EasyBuild spells it, e.g. `foss`, `GCCcore`. The
+    /// EasyBuild `SYSTEM` toolchain appears here as `system`.
     pub name: String,
+    /// Generation string, e.g. `2026.1`. `system` for the system toolchain.
     pub version: String,
 }
 
 impl Toolchain {
+    /// `name-version`, the form used in easyconfig filenames and messages.
     pub fn label(&self) -> String {
         format!("{}-{}", self.name, self.version)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One dependency an easyconfig declares, after template resolution.
 pub struct DepReq {
+    /// Package name required.
     pub name: String,
+    /// Version field as written: an exact version, or a range such as `>=1.2`.
+    /// Not normalised, because the easyconfig's own spelling is what a
+    /// maintainer will look for.
     pub version_req: String,
     /// Optional versionsuffix on this dependency (e.g. `-CUDA-%(cudaver)s` after resolve).
     /// When set, selection treats it as part of the requirement identity.
@@ -31,19 +41,30 @@ pub struct DepReq {
 /// One bundled extension entry from an easyconfig `exts_list`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtEntry {
+    /// Extension name as listed in `exts_list`.
     pub name: String,
+    /// Extension version. Empty when the entry gave none.
     pub version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One installable variant the solver may choose: a parsed easyconfig.
+///
+/// Identity is name, version, toolchain and versionsuffix together; two
+/// easyconfigs differing in any of those are separate candidates.
 pub struct Candidate {
+    /// Package name.
     pub name: String,
+    /// Package version.
     pub version: String,
+    /// Toolchain this variant builds against.
     pub toolchain: Toolchain,
-    #[serde(default)]
+    /// Suffix distinguishing variants of one version, e.g. `-CUDA-12.6.0`.
+    /// `None` when the easyconfig sets none.
     pub versionsuffix: Option<String>,
+    /// Path the candidate was parsed from. Empty for an in-memory parse.
     pub easyconfig_path: String,
-    #[serde(default)]
+    /// Runtime requirements, which must also be installed.
     pub dependencies: Vec<DepReq>,
     /// Build-time-only requirements (`builddependencies` in the easyconfig).
     /// Same `DepReq` semantics as runtime `dependencies`; kept separate so
@@ -56,21 +77,31 @@ pub struct Candidate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The candidate set a solve draws from, scoped to one toolchain generation.
 pub struct Universe {
+    /// Toolchain the solve targets.
     pub toolchain: Toolchain,
-    #[serde(default)]
+    /// Human label for the generation, when the caller supplied one. Carried
+    /// into the lock for provenance; it does not affect selection.
     pub generation_label: Option<String>,
+    /// Every variant available to choose from.
     pub candidates: Vec<Candidate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A constraint fixing one package to a version or range.
 pub struct Pin {
+    /// Package the pin applies to.
     pub name: String,
+    /// Version requirement the selection must satisfy, same spelling rules as
+    /// [`DepReq::version_req`].
     pub version_req: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A demand that a package move forward relative to the baseline lock.
 pub struct RequireUpgrade {
+    /// Package that must advance.
     pub name: String,
     /// When true, the selected version of `name` must be strictly newer than
     /// the baseline lock's version. When false, construction fails with a
@@ -80,8 +111,12 @@ pub struct RequireUpgrade {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// What a solve is asked to produce: target toolchain, roots, and constraints.
 pub struct Policy {
+    /// Toolchain generation to select for.
     pub toolchain: Toolchain,
+    /// Application roots the stack exists to provide. Everything else is
+    /// pulled in only because a root needs it.
     pub roots: Vec<String>,
     /// Declared priority order over application roots for multi-root
     /// lexicographic newest selection. When omitted or empty, defaults to
@@ -89,10 +124,14 @@ pub struct Policy {
     /// reordering `roots` in the policy JSON.
     #[serde(default)]
     pub root_priority: Option<Vec<String>>,
+    /// Version constraints applied on top of what the candidates allow.
     #[serde(default)]
     pub pins: Vec<Pin>,
+    /// Package names the solve must not select at any version.
     #[serde(default)]
     pub forbid: Vec<String>,
+    /// Optimisation objective. `prefer_newer` when unset, which is the only
+    /// value the shipped solver implements.
     #[serde(default = "default_objective")]
     pub objective: String,
     /// Packages that must be strictly newer than baseline (when
@@ -145,33 +184,51 @@ impl Policy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One selected variant as recorded in a lock.
 pub struct LockPackage {
+    /// Package name.
     pub name: String,
+    /// Version selected.
     pub version: String,
+    /// Toolchain the selected easyconfig builds against.
     pub toolchain: Toolchain,
-    #[serde(default)]
+    /// Versionsuffix of the selected variant, when it has one.
     pub versionsuffix: Option<String>,
+    /// Easyconfig the selection came from, so a lock can be traced back to a
+    /// file. Empty when the candidate was parsed from memory.
     pub easyconfig_path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Provenance of a solve, so a lock says what produced it.
 pub struct SolverMeta {
+    /// Solver that produced the lock, e.g. `resolvo`.
     pub engine: String,
+    /// Version of that solver.
     pub engine_version: String,
+    /// When the solve ran, as an RFC 3339 timestamp.
     pub timestamp: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A complete, reproducible selection: every package a stack installs.
 pub struct StackLock {
+    /// Schema version of this lock document. Readers reject what they do not
+    /// know rather than guessing at an unfamiliar shape.
     pub schema_version: u32,
+    /// Toolchain the stack targets.
     pub toolchain: Toolchain,
-    #[serde(default)]
+    /// Generation label carried from the universe, when one was given.
     pub generation_label: Option<String>,
+    /// Selected packages, sorted by name for a stable diff.
     pub packages: Vec<LockPackage>,
+    /// What produced this lock.
     pub solver: SolverMeta,
 }
 
 impl StackLock {
+    /// The locked entry for `name`, or `None` when the stack has no such
+    /// package.
     pub fn package(&self, name: &str) -> Option<&LockPackage> {
         self.packages.iter().find(|p| p.name == name)
     }
