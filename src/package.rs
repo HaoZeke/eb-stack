@@ -227,148 +227,241 @@ pub struct ProfileLock {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Where in a foreign recipe a value came from.
 pub struct SourceSpan {
+    /// Recipe file, as given to the parser.
     pub path: String,
+    /// First line of the span, 1-based.
     pub start_line: u32,
+    /// First column, 1-based.
     pub start_column: u32,
+    /// Last line of the span, 1-based.
     pub end_line: u32,
+    /// Last column, 1-based.
     pub end_column: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+/// How sure the extractor is that it read a value correctly.
 pub enum Confidence {
+    /// Read directly; no interpretation was involved.
     Exact,
+    /// Inferred from surrounding context, and worth a reviewer's eye.
     Derived,
+    /// Could not be resolved to one meaning. Treat as needing review.
     Ambiguous,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// The trail from an extracted value back to the text it came from.
+///
+/// Carried so a reviewer can check a translated recipe against its source
+/// rather than trusting the extraction.
 pub struct Provenance {
+    /// Text the value was read from.
     pub span: SourceSpan,
+    /// Which extractor produced it.
     pub extractor: String,
+    /// The original text, before any normalisation.
     pub original: String,
+    /// How much the extractor trusts the reading.
     pub confidence: Confidence,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+/// Ecosystem a package definition came from.
 pub enum PackageOrigin {
+    /// A conda-forge `meta.yaml` or `recipe.yaml`.
     CondaForge,
+    /// A Spack `package.py`.
     Spack,
+    /// An EasyBuild easyconfig.
     EasyBuild,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Package identity as it will appear in the emitted recipe.
 pub struct PackageMetadata {
+    /// Package name, in EasyBuild's spelling.
     pub name: String,
+    /// Version the emitted recipe declares.
     pub version: String,
     /// Version identity used by the foreign recipe when it differs from the
     /// emitted EasyBuild version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Project homepage.
     pub homepage: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Short description for the module.
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// License string, as the recipe declares it.
     pub license: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
+/// One thing the build downloads or checks out.
+///
+/// A downloaded file carries `url` and `sha256`; a checkout carries `git`
+/// with a `tag` or `commit`. The two are alternatives, and a checkout has no
+/// artifact checksum to verify.
 pub struct SourceArtifact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Download URL, for a fetched artifact.
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Local filename to save as, when it differs from the URL basename.
     pub filename: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// SHA-256 of the downloaded bytes. Only meaningful for a download, and
+    /// only valid for the artifact class that URL serves.
     pub sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Remote to clone, for a checkout instead of a download.
     pub git: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Tag to check out.
     pub tag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Commit to check out, which pins more tightly than a tag.
     pub commit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Subdirectory to unpack into, when the build expects one.
     pub target_directory: Option<String>,
     #[serde(default)]
+    /// When this artifact applies. Defaults to always.
     pub condition: ConditionExpr,
     #[serde(default)]
+    /// Where this artifact was read from.
     pub provenance: Vec<Provenance>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+/// One testable fact about the build being configured.
 pub enum ConditionPredicate {
+    /// The package version satisfies a requirement.
     PackageVersion {
+        /// Version requirement to test.
         requirement: String,
     },
+    /// A profile feature flag has a given value.
     Feature {
+        /// Feature name.
         name: String,
+        /// Value it must have.
         enabled: bool,
     },
+    /// A dependency was built with a feature flag set a given way.
     DependencyFeature {
+        /// Dependency carrying the flag.
         dependency: String,
+        /// Feature name.
         name: String,
+        /// Value it must have.
         enabled: bool,
     },
+    /// The compiler matches, optionally at a version.
     Compiler {
+        /// Compiler name.
         name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Version to match, or any version when absent.
         version: Option<String>,
     },
+    /// The toolchain matches, optionally at a version.
     Toolchain {
+        /// Toolchain name.
         name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Version to match, or any version when absent.
         version: Option<String>,
     },
+    /// The target platform matches.
     Platform {
+        /// Platform name.
         name: String,
     },
+    /// The target architecture matches.
     Architecture {
+        /// Architecture name.
         name: String,
     },
+    /// A context variable compares as stated.
     VariableComparison {
+        /// Variable name or literal on the left.
         left: String,
+        /// Comparison operator.
         operator: String,
+        /// Value on the right.
         right: String,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(tag = "op", content = "args", rename_all = "kebab-case")]
+/// A condition gating a dependency, source, or rule.
+///
+/// Foreign selectors are lowered into this tree so they can be evaluated per
+/// profile. Anything that could not be lowered becomes [`Self::Opaque`]
+/// rather than being dropped or guessed at.
 pub enum ConditionExpr {
     #[default]
+    /// Always true, the default for an unconditional item.
     Always,
+    /// Never true, which excludes the item entirely.
     Never,
+    /// A single predicate.
     Predicate(ConditionPredicate),
+    /// True when every branch is.
     All(Vec<ConditionExpr>),
+    /// True when any branch is.
     Any(Vec<ConditionExpr>),
+    /// Negation.
     Not(Box<ConditionExpr>),
+    /// A selector that could not be lowered. Preserved verbatim so a
+    /// reviewer sees what was not understood instead of a silent drop.
     Opaque {
+        /// The selector text as written.
         source: String,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
+/// A name paired with a version, used where a full toolchain is too much.
 pub struct NamedVersion {
+    /// Name, e.g. a compiler.
     pub name: String,
+    /// Version string.
     pub version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// What a condition is evaluated against for one profile.
 pub struct ConditionContext {
+    /// Version of the package being built.
     pub package_version: String,
+    /// Feature flags of the profile.
     pub features: BTreeMap<String, bool>,
+    /// Feature flags of each selected dependency.
     pub dependency_features: BTreeMap<String, BTreeMap<String, bool>>,
+    /// Compiler in use, when known.
     pub compiler: Option<NamedVersion>,
+    /// Toolchain in use, when known.
     pub toolchain: Option<Toolchain>,
+    /// Target platform, when known.
     pub platform: Option<String>,
+    /// Target architecture, when known.
     pub architecture: Option<String>,
+    /// Free-form variables a comparison predicate may reference.
     pub variables: BTreeMap<String, String>,
 }
 
