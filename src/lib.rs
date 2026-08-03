@@ -2,7 +2,6 @@
 #![warn(missing_docs)]
 
 pub mod artifact_class;
-#[allow(missing_docs, reason = "97 items still undocumented")]
 pub mod campaign;
 pub mod domain;
 mod eb_emit;

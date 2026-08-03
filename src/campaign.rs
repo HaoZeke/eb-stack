@@ -13,132 +13,224 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+/// Schema version of a campaign state document.
 pub const CAMPAIGN_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone)]
+/// What to build, where, and where to keep the state.
 pub struct CampaignRequest {
+    /// Package bundle produced by the planning stage.
     pub bundle: PathBuf,
+    /// Where the build runs: local, SSH, scheduler, or container.
     pub target: BuildTarget,
+    /// State file. Also the lock: one campaign owns it at a time.
     pub state_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+/// Where a campaign has got to.
 pub enum CampaignStatus {
+    /// Created, nothing attempted yet.
     Planned,
+    /// An attempt is in flight.
     Running,
+    /// An attempt failed and left findings to work through.
     Failed,
+    /// Every recipe built and its claims were verified.
     Completed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+/// What kind of failure a build hit.
+///
+/// The class drives routing, so it distinguishes causes that need different
+/// responses: a transport failure is worth a retry, a checksum failure never
+/// is.
 pub enum BuildFindingClass {
+    /// The target could not be reached or files could not be moved.
     Transport,
+    /// The scheduler or container runtime refused the job.
     Executor,
+    /// The build process died without a usable diagnostic.
     Runtime,
+    /// The attempt was cancelled or the connection dropped.
     Interrupted,
+    /// A source artifact could not be fetched.
     Source,
+    /// A downloaded artifact did not match its declared hash.
     Checksum,
+    /// A patch failed to apply.
     Patch,
+    /// A required dependency is absent from the target.
     DependencyMissing,
+    /// The configure step failed.
     Configure,
+    /// Compilation failed.
     Compile,
+    /// Linking failed.
     Link,
+    /// The package test suite failed.
     Test,
+    /// The install step failed.
     Install,
+    /// EasyBuild's sanity check failed: it built but is not usable.
     Sanity,
+    /// The job ran out of memory, disk, or another quota.
     Resource,
+    /// The job exceeded its time limit.
     Timeout,
+    /// The output did not match any known signature. Left unclassified
+    ///     /// rather than guessed at, so it reaches a human.
     Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+/// What kind of intervention a finding needs.
 pub enum FindingDisposition {
+    /// A tool can fix it without a decision.
     Mechanical,
+    /// Worth retrying unchanged; the cause was transient.
     Retryable,
+    /// Needs a human to decide what correct means.
     RequiresJudgment,
+    /// The build target is at fault, not the recipe.
     TargetRepair,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
+/// How far a finding has been taken.
 pub enum FindingStatus {
     #[default]
+    /// Nobody has taken it.
     Open,
+    /// Claimed by an owner who is working on it.
     InProgress,
+    /// Closed with an action and evidence.
     Resolved,
+    /// Overtaken by events, e.g. a later attempt stopped hitting it.
     Superseded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// What was done about a finding, and the proof.
 pub struct FindingResolution {
+    /// What was changed or decided.
     pub action: String,
+    /// Why that is believed to have worked, in reviewable terms.
     pub evidence: String,
     #[serde(default)]
+    /// Files or recipes touched.
     pub changes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// One thing that went wrong, classified so it can be routed.
 pub struct BuildFinding {
+    /// Stable identifier, used to claim and resolve it.
     pub id: String,
+    /// What kind of failure it is.
     pub class: BuildFindingClass,
+    /// What kind of intervention it needs.
     pub disposition: FindingDisposition,
+    /// Build stage that failed.
     pub stage: String,
+    /// Recipe being built.
     pub recipe: String,
+    /// Target it was building on.
     pub target: String,
+    /// One line a reviewer can triage from.
     pub summary: String,
+    /// Captured output supporting the classification.
     pub evidence: String,
+    /// The command that failed, so it can be rerun by hand.
     pub command: CommandPlan,
+    /// Exit status, when the process produced one. Absent when it was
+    ///     /// killed or never started.
     pub exit_code: Option<i32>,
+    /// Attempt number this arose on.
     pub attempt: u32,
     #[serde(default)]
+    /// How far it has been taken.
     pub status: FindingStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Who claimed it, while it is in progress.
     pub owner: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// What closed it, once it is resolved.
     pub resolution: Option<FindingResolution>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
+/// What has actually been demonstrated, in increasing strength.
+///
+/// Each rung is a separate claim: solving is not building, and building is not
+/// evidence that the installed binaries run.
 pub struct ClaimLadder {
+    /// Dependencies were selected successfully.
     pub resolves: bool,
+    /// The recipes built.
     pub builds: bool,
+    /// The declared binaries were run and behaved.
     pub binary_verified: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// One entry in the campaign history.
 pub struct CampaignEvent {
+    /// Attempt this belongs to.
     pub attempt: u32,
+    /// Status after the event.
     pub status: CampaignStatus,
+    /// Recipe in play, when the event concerned one.
     pub recipe: Option<String>,
+    /// What happened.
     pub detail: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// The durable record of a campaign, rewritten under a lock.
 pub struct CampaignState {
+    /// Must equal [`CAMPAIGN_SCHEMA_VERSION`].
     pub schema_version: u32,
+    /// Package being built.
     pub package: String,
+    /// Package version.
     pub version: String,
+    /// Bundle the recipes came from.
     pub bundle: String,
+    /// Target the build runs on.
     pub target: String,
+    /// Where the campaign has got to.
     pub status: CampaignStatus,
+    /// How many attempts have been made.
     pub attempts: u32,
+    /// What has been demonstrated so far.
     pub claims: ClaimLadder,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Recipe in flight, while one is.
     pub current_recipe: Option<String>,
     #[serde(default)]
+    /// Everything that went wrong, open and closed alike.
     pub findings: Vec<BuildFinding>,
     #[serde(default)]
+    /// Ordered record of what happened.
     pub history: Vec<CampaignEvent>,
 }
 
+/// Run a campaign to completion or to its first unresolved failure.
+///
+/// Takes the state file lock for the duration, so a second campaign against
+/// the same state fails with [`CampaignError::Busy`] rather than interleaving
+/// writes with the first.
 pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, CampaignError> {
     let _lock = CampaignLock::acquire(&request.state_path)?;
     let manifest_path = request.bundle.join("package.plan.json");
@@ -523,6 +615,10 @@ fn record_interrupted_attempt(state: &mut CampaignState, state_path: &Path) {
     });
 }
 
+/// Take ownership of an open finding.
+///
+/// Fails when another owner already holds it, so two people cannot both
+/// believe they are fixing the same failure.
 pub fn claim_finding(
     state_path: &Path,
     finding_id: &str,
@@ -558,6 +654,9 @@ pub fn claim_finding(
     Ok(state)
 }
 
+/// Close a finding with an action and its evidence.
+///
+/// Only the owner may close it, and only while it is in progress.
 pub fn resolve_finding(
     state_path: &Path,
     finding_id: &str,
@@ -608,6 +707,10 @@ fn supersede_findings(state: &mut CampaignState, stage: &str, recipe: &str) {
     }
 }
 
+/// Classify a failed build stage from its output.
+///
+/// Routing depends on this: the class decides whether a failure is worth
+/// retrying, needs a recipe change, or means the target itself is broken.
 pub fn classify_build_failure(
     stage: &str,
     stdout: &str,
@@ -1095,26 +1198,47 @@ fn process_start_ticks(_pid: u32) -> Option<u64> {
 }
 
 #[derive(Debug, Error)]
+/// Why a campaign could not run or be updated.
 pub enum CampaignError {
     #[error("invalid package bundle: {0}")]
+    /// The bundle is missing or does not describe a buildable package.
     InvalidBundle(String),
     #[error("unsupported campaign schema version {0}")]
+    /// The state file declares a schema this build does not read.
     UnsupportedSchema(u32),
     #[error("campaign state package identity does not match the bundle")]
+    /// The state file describes a different package or bundle.
     StateIdentity,
     #[error("campaign state is busy: {0}")]
+    /// Another process holds the campaign lock.
     Busy(PathBuf),
     #[error("campaign finding {0} does not exist")]
+    /// No finding with that identifier.
     FindingNotFound(String),
     #[error("campaign finding {id} is owned by {owner}")]
-    FindingOwned { id: String, owner: String },
+    /// The finding is claimed by someone else.
+    FindingOwned {
+        /// Finding someone else holds.
+        id: String,
+        /// Who holds it.
+        owner: String,
+    },
     #[error("campaign finding {id} cannot be changed from status {status:?}")]
-    FindingState { id: String, status: FindingStatus },
+    /// The finding is not in a state that allows this.
+    FindingState {
+        /// Finding whose state forbids the operation.
+        id: String,
+        /// State it is actually in.
+        status: FindingStatus,
+    },
     #[error("target command: {0}")]
+    /// The build target could not be reached or prepared.
     Target(#[from] TargetError),
     #[error("read or write {0}: {1}")]
+    /// A campaign file could not be read or written.
     Io(PathBuf, std::io::Error),
     #[error("JSON {0}: {1}")]
+    /// A campaign file could not be parsed or serialized.
     Json(PathBuf, serde_json::Error),
 }
 
