@@ -57,11 +57,14 @@ macro_rules! static_regex {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ForeignFormat {
+    /// A conda-forge recipe: `meta.yaml` or `recipe.yaml`.
     CondaForge,
+    /// A Spack `package.py`.
     Spack,
 }
 
 impl ForeignFormat {
+    /// The stable kebab-case name used in output.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::CondaForge => "conda-forge",
@@ -73,6 +76,7 @@ impl ForeignFormat {
 /// One dependency name (and optional pin) drawn from a foreign recipe.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForeignDep {
+    /// Dependency name as the foreign recipe spells it.
     pub name: String,
     /// Pin / constraint as written in the foreign recipe when present.
     pub pin: Option<String>,
@@ -85,17 +89,25 @@ pub struct ForeignDep {
     #[serde(default)]
     pub condition: ConditionExpr,
     #[serde(default)]
+    /// Where this dependency was read from.
     pub provenance: Vec<Provenance>,
 }
 
 /// One source artifact (URL/git + optional checksum).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ForeignSource {
+    /// Download URL, for a fetched artifact.
     pub url: Option<String>,
+    /// Local filename, when the recipe names one.
     pub filename: Option<String>,
+    /// Hash of the downloaded bytes. Valid only for the artifact this URL
+    /// serves; a hash from a different artifact class describes other bytes.
     pub sha256: Option<String>,
+    /// Remote to clone, for a checkout rather than a download.
     pub git: Option<String>,
+    /// Tag to check out.
     pub tag: Option<String>,
+    /// Commit to check out.
     pub commit: Option<String>,
     /// Conda `target_directory` or Spack resource destination folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -111,79 +123,111 @@ pub struct ForeignPatch {
     /// Local path or exact remote URL as declared by the source recipe.
     pub location: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Hash of the patch bytes, when the recipe gives one.
     pub sha256: Option<String>,
     #[serde(default)]
+    /// When the patch applies.
     pub condition: ConditionExpr,
     #[serde(default)]
+    /// Where the patch was declared.
     pub provenance: Vec<Provenance>,
 }
 
 /// Parser work that cannot be represented mechanically in the canonical plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForeignResidual {
+    /// Short machine-readable category.
     pub category: String,
+    /// How much attention it needs.
     pub severity: ResidualSeverity,
+    /// One line a reviewer can triage from.
     pub summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The source text that was not understood.
     pub evidence: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Where in the recipe it arose.
     pub provenance: Option<Provenance>,
 }
 
 /// Variant / feature flag from Spack `variant()` or residual conda feature.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ForeignVariant {
+    /// Variant name.
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Default value, when the recipe states one.
     pub default: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// What the variant does.
     pub description: Option<String>,
     #[serde(default)]
+    /// When the variant is available.
     pub condition: ConditionExpr,
     #[serde(default)]
+    /// Where it was declared.
     pub provenance: Vec<Provenance>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+/// Whether a rule forbids a combination or demands one.
 pub enum ForeignRuleKind {
+    /// The combination must not occur.
     Conflict,
+    /// The combination is required.
     Requirement,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A constraint the foreign recipe states beyond its dependencies.
 pub struct ForeignRule {
+    /// Whether this forbids or requires.
     pub kind: ForeignRuleKind,
+    /// The combination, in the recipe's own spelling.
     pub spec: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Original `when=` text, kept beside the lowered condition.
     pub when: Option<String>,
     #[serde(default)]
+    /// When the rule applies, lowered from the selector.
     pub condition: ConditionExpr,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Message the recipe attaches to it.
     pub message: Option<String>,
+    /// Where the rule was read from.
     pub provenance: Provenance,
 }
 
 /// Syntax-normalized fields shared by all foreign recipe formats.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForeignRecipe {
+    /// Which ecosystem this came from.
     pub format: ForeignFormat,
+    /// Package name as the recipe declares it.
     pub name: String,
+    /// Version the recipe declares.
     pub version: String,
+    /// Project homepage.
     pub homepage: Option<String>,
     /// Preferred / primary source (first expanded URL or preferred Spack version).
     pub source_url: Option<String>,
+    /// Filename of the primary source.
     pub source_filename: Option<String>,
+    /// Hash of the primary source.
     pub sha256: Option<String>,
     /// All sources when the foreign recipe lists multiple (conda multi-source, etc.).
     #[serde(default)]
     pub sources: Vec<ForeignSource>,
+    /// One-line summary.
     pub summary: Option<String>,
     /// Longer description when available (conda about.description, Spack docstring).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// License string as the recipe declares it.
     pub license: Option<String>,
+    /// Dependencies as declared, before any mapping to EasyBuild names.
     pub dependencies: Vec<ForeignDep>,
     /// Build-system / base-class hints (e.g. Spack `MesonPackage`, `CMakePackage`).
     #[serde(default)]
@@ -209,12 +253,16 @@ pub struct ForeignRecipe {
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
+/// Why a foreign recipe could not be read.
 pub enum ForeignError {
     #[error("foreign recipe parse: {0}")]
+    /// The recipe could not be parsed.
     Parse(String),
     #[error("unsupported or undetected foreign recipe format for {0}")]
+    /// The recipe uses a construct this extractor does not handle.
     Unsupported(String),
     #[error("IO: {0}")]
+    /// The recipe file could not be read.
     Io(String),
 }
 

@@ -13,7 +13,6 @@ pub mod eb_parse;
 pub mod eb_style;
 /// EasyBuild's built-in `%(...)s` template constants and their expansions.
 pub mod eb_template_constants;
-#[allow(missing_docs, reason = "47 items still undocumented")]
 mod foreign;
 #[allow(missing_docs, reason = "10 items still undocumented")]
 pub mod hierarchy;
