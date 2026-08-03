@@ -46,6 +46,7 @@ pub const CLOSURE_BUNDLE_SCHEMA_VERSION: u32 = 1;
 /// Root package bundle plus generated companions in topological build order.
 #[derive(Debug, Clone)]
 pub struct PackageClosure {
+    /// The package that was asked for.
     pub root: PackageBundle,
     /// Generated companion bundles, dependencies before dependents.
     pub companions: Vec<PackageBundle>,
@@ -54,10 +55,15 @@ pub struct PackageClosure {
 /// Paths written for a closed multi-package bundle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WrittenPackageClosure {
+    /// Where the requested package landed.
     pub root: WrittenPackageBundle,
+    /// Where each generated companion landed, in build order.
     pub companions: Vec<WrittenPackageBundle>,
+    /// The build-order document.
     pub build_order: PathBuf,
+    /// The aggregate plan describing the whole closure.
     pub closure_plan: PathBuf,
+    /// The aggregate SBOM covering every package in it.
     pub closure_sbom: PathBuf,
 }
 
@@ -65,6 +71,7 @@ pub struct WrittenPackageClosure {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClosureBuildOrder {
+    /// Must equal [`CLOSURE_BUNDLE_SCHEMA_VERSION`].
     pub schema_version: u32,
     /// Bundle-relative recipe paths using `/` separators.
     pub recipes: Vec<String>,
@@ -74,9 +81,13 @@ pub struct ClosureBuildOrder {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClosurePlanDocument {
+    /// Must equal [`CLOSURE_BUNDLE_SCHEMA_VERSION`].
     pub schema_version: u32,
+    /// The requested package.
     pub root: ClosurePackageRef,
+    /// Generated companions, dependencies before dependents.
     pub companions: Vec<ClosurePackageRef>,
+    /// Bundle-relative path of the build-order document.
     pub build_order: String,
 }
 
@@ -84,82 +95,148 @@ pub struct ClosurePlanDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClosurePackageRef {
+    /// Package name.
     pub name: String,
+    /// Package version.
     pub version: String,
+    /// Toolchain the recipes target.
     pub toolchain: crate::domain::Toolchain,
     /// Bundle-relative directory (`.` for the root package).
     pub directory: String,
+    /// Bundle-relative path to the package plan.
     pub manifest: String,
+    /// Bundle-relative path to the package SBOM.
     pub sbom: String,
+    /// Bundle-relative paths of the emitted easyconfigs.
     pub recipes: Vec<String>,
 }
 
 #[derive(Debug, Error)]
+/// Why a package closure could not be completed.
+///
+/// Most variants name an ambiguity rather than a hard failure: closing a
+/// dependency graph means choosing providers, and a choice the tool cannot
+/// make on evidence is surfaced instead of guessed at.
 pub enum PackageClosureError {
     #[error(transparent)]
+    /// A package in the closure could not be planned or written.
     Workflow(#[from] PackageWorkflowError),
     #[error(transparent)]
+    /// The provider catalog could not be built.
     Catalog(#[from] PackageCatalogError),
     #[error(transparent)]
+    /// A configured source root could not be read.
     SourceRoots(#[from] PackageSourceError),
     #[error("package profile solve: {0}")]
+    /// A profile's dependency solve failed.
     Solve(#[from] ProfileSolveError),
     #[error("dependency cycle: {}", path_display(.path))]
-    Cycle { path: Vec<String> },
+    /// The dependency graph has a cycle, so no build order exists.
+    Cycle {
+        /// The cycle, in the order it was walked.
+        path: Vec<String>,
+    },
     #[error("no package-source catalog entry for {name}{version}")]
-    MissingProvider { name: String, version: String },
+    /// Nothing in the catalog provides a required package.
+    MissingProvider {
+        /// Package nothing provides.
+        name: String,
+        /// Version that was required.
+        version: String,
+    },
     #[error(
         "ambiguous package-source providers for {name}{version}: {count} catalog entries match"
     )]
+    /// Several candidates provide it and none is clearly right.
     AmbiguousProvider {
+        /// Package with several providers.
         name: String,
+        /// Version that was required.
         version: String,
+        /// How many candidates matched.
         count: usize,
     },
     #[error("no package source for {name}{version_req}")]
+    /// No source recipe was found to generate a needed companion from.
     MissingSource {
+        /// Package no source recipe was found for.
         name: String,
+        /// Version requirement that had to be met.
         version_req: String,
+        /// Sources that were considered and rejected.
         candidates: Vec<DiscoveredCandidate>,
     },
     #[error("ambiguous package sources for {name}{version_req}: {count} compatible candidates")]
+    /// Several source recipes match, so which to generate from is unclear.
     AmbiguousSource {
+        /// Package with several matching sources.
         name: String,
+        /// Version requirement that had to be met.
         version_req: String,
+        /// How many sources matched.
         count: usize,
+        /// The sources in question.
         candidates: Vec<DiscoveredCandidate>,
     },
     #[error("package source for {name}{version_req} could not be parsed: {failures:?}")]
+    /// Every candidate source recipe failed to parse.
     SourceParseFailure {
+        /// Package whose sources all failed to parse.
         name: String,
+        /// Version requirement that had to be met.
         version_req: String,
+        /// Why each candidate failed.
         failures: Vec<SourceParseFailure>,
     },
     #[error(
         "catalog provider {name} version {provided} does not satisfy dependency requirement {required}"
     )]
+    /// The available provider cannot satisfy the required version.
     IncompatibleProviderVersion {
+        /// Package whose provider is too old or too new.
         name: String,
+        /// Version the provider offers.
         provided: String,
+        /// Version that was needed.
         required: String,
     },
     #[error(
         "generated candidate for {name} ({required}) is not admitted for profile {profile} by the target hierarchy or stack policy"
     )]
+    /// A companion was generated but the solve still would not take it,
+    /// which means generating it did not close the gap.
     GeneratedCandidateNotAdmitted {
+        /// Companion that was generated.
         name: String,
+        /// Version the solve still demands.
         required: String,
+        /// Profile that would not take it.
         profile: String,
     },
     #[error("package {package} has no product profile {profile}")]
-    MissingProfile { package: String, profile: String },
+    /// A package has no profile by that name.
+    MissingProfile {
+        /// Package that has no such profile.
+        package: String,
+        /// Profile that was asked for.
+        profile: String,
+    },
     #[error("package {package} profile selection is ambiguous: {reason}")]
-    ProfileAmbiguity { package: String, reason: String },
+    /// Which profile to use could not be decided.
+    ProfileAmbiguity {
+        /// Package whose profile could not be decided.
+        package: String,
+        /// Why the choice is ambiguous.
+        reason: String,
+    },
     #[error("generated companion candidate: {0}")]
+    /// A generated companion was itself invalid.
     GeneratedCandidate(String),
     #[error("package-closure bundle layout: {0}")]
+    /// The closure could not be laid out on disk.
     Layout(String),
     #[error("aggregate package-closure SBOM: {0}")]
+    /// The combined SBOM could not be produced.
     AggregateSbom(String),
 }
 
