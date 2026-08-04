@@ -69,7 +69,10 @@ pub use hierarchy::{
     HierarchyError, ResolveDepOpts, SourceDepSpec, ToolchainHierarchy,
 };
 pub use manifest::package_plan_from_foreign;
-pub use miner::{is_backfill, is_toolchain_meta_recipe};
+pub use miner::{
+    compare_reproduction, is_backfill, is_toolchain_meta_recipe, normalize_for_scoring,
+    score_reproduction, DiffLine, DiffTag, ReproComparison, ReproScore,
+};
 pub use package_catalog::{
     resolve_package_catalog_layers, CatalogProviderKind, PackageCatalogError, PackageCatalogLayer,
     PackageSourceCatalog, PackageSourceProvider, PACKAGE_CATALOG_SCHEMA_VERSION,
