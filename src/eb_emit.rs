@@ -116,14 +116,17 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
     let mut warnings = Vec::new();
     if version_changed {
         if let Some(old_v) = source_version.as_deref() {
-            let (new_text, stale) = rewrite_source_checksum(
+            let rewrite = rewrite_source_checksum(
                 &text,
                 old_v,
                 &app_version,
                 params.source_checksum.as_deref(),
             )?;
-            text = new_text;
-            if stale {
+            text = rewrite.text;
+            if let Some(note) = rewrite.note {
+                warnings.push(note);
+            }
+            if rewrite.stale {
                 warnings.push(format!(
                     "source checksum is stale after version bump {old_v} -> {app_version}: \
                      the tarball key was renamed but the checksum value was left unchanged; \
@@ -510,15 +513,262 @@ fn skip_to_first_entry(bytes: &[u8], from: usize) -> usize {
     }
 }
 
+/// Checksum type names EasyBuild accepts as the first element of a
+/// `('<type>', '<value>')` entry. The list decides whether a two-element tuple
+/// is a typed checksum or a pair of alternative values, which is the only way to
+/// tell those two shapes apart.
+const CHECKSUM_TYPES: [&str; 7] = [
+    "adler32", "crc32", "md5", "sha1", "sha256", "sha512", "size",
+];
+
+fn is_checksum_type(token: &str) -> bool {
+    CHECKSUM_TYPES.contains(&token)
+}
+
+/// Quoted spans in source order, as (start, end, quote) with `end` exclusive of
+/// the closing quote's successor. Backslash escapes inside a span are honoured.
+fn quoted_tokens(s: &str) -> Vec<(usize, usize, char)> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'#' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            q @ (b'\'' | b'"') => {
+                let start = i;
+                i += 1;
+                let mut escaped = false;
+                while i < bytes.len() {
+                    if escaped {
+                        escaped = false;
+                    } else if bytes[i] == b'\\' {
+                        escaped = true;
+                    } else if bytes[i] == q {
+                        break;
+                    }
+                    i += 1;
+                }
+                let end = (i + 1).min(bytes.len());
+                out.push((start, end, q as char));
+                i = end;
+            }
+            _ => i += 1,
+        }
+    }
+    out
+}
+
+/// Span of one bracketed group starting at `start`, respecting quotes and
+/// comments so a delimiter inside a string cannot close it early.
+fn balanced_span(bytes: &[u8], start: usize, open: u8, close: u8) -> usize {
+    let mut depth = 0i32;
+    let mut i = start;
+    let mut quote: Option<u8> = None;
+    let mut escaped = false;
+    let mut comment = false;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if comment {
+            if byte == b'\n' {
+                comment = false;
+            }
+        } else if let Some(active) = quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == active {
+                quote = None;
+            }
+        } else if byte == b'#' {
+            comment = true;
+        } else if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+        } else if byte == open {
+            depth += 1;
+        } else if byte == close {
+            depth -= 1;
+            if depth == 0 {
+                return i + 1;
+            }
+        }
+        i += 1;
+    }
+    bytes.len()
+}
+
+/// A short, single-line rendering of an entry, for error messages that have to
+/// name the form they rejected.
+fn entry_excerpt(entry: &str) -> String {
+    let line = entry.lines().next().unwrap_or("").trim();
+    if line.chars().count() > 40 {
+        let cut: String = line.chars().take(40).collect();
+        format!("{cut}...")
+    } else {
+        line.to_string()
+    }
+}
+
+/// Span of the checksum entry beginning at `start`, whichever documented shape
+/// it takes.
+fn entry_span(bytes: &[u8], start: usize) -> Result<usize, EmitError> {
+    match bytes[start] {
+        b'{' => Ok(balanced_span(bytes, start, b'{', b'}')),
+        b'(' => Ok(balanced_span(bytes, start, b'(', b')')),
+        b'[' => Ok(balanced_span(bytes, start, b'[', b']')),
+        b'\'' | b'"' => {
+            let s = String::from_utf8_lossy(&bytes[start..]).to_string();
+            match quoted_tokens(&s).first() {
+                Some(&(_, end, _)) => Ok(start + end),
+                None => Ok(bytes.len()),
+            }
+        }
+        _ => {
+            let rest = String::from_utf8_lossy(&bytes[start..]).to_string();
+            Err(EmitError::Rewrite(format!(
+                "unrecognized source checksum entry form: expected a quoted checksum, \
+                 a ('<type>', '<value>') tuple, a list of checksums, or a \
+                 {{'<file>': <checksum>}} dict, found `{}`",
+                entry_excerpt(&rest)
+            )))
+        }
+    }
+}
+
+/// Outcome of rewriting one checksum value expression.
+struct ValueRewrite {
+    text: String,
+    /// The value could not be updated because no new checksum was supplied.
+    stale: bool,
+    /// Set when several checksums were replaced by the one new value, which a
+    /// reviewer has to see: alternatives and AND-lists carry information that a
+    /// single post-bump hash cannot.
+    note: Option<String>,
+}
+
+/// Rewrite one checksum *value*: a bare quoted hash, a typed
+/// `('<type>', '<value>')` tuple, a tuple of alternative values, or a list of
+/// values that all have to match. Used both for a top-level entry and for the
+/// value inside a `{'<file>': ...}` dict, which may itself be any of these.
+fn rewrite_checksum_value(
+    expr: &str,
+    new_checksum: Option<&str>,
+) -> Result<ValueRewrite, EmitError> {
+    let trimmed = expr.trim();
+    let Some(first) = trimmed.chars().next() else {
+        return Err(EmitError::Rewrite(
+            "empty source checksum value".to_string(),
+        ));
+    };
+    let lead = expr.len() - expr.trim_start().len();
+    let tail = expr.len() - expr.trim_end().len();
+    let rebuild = |body: String| format!("{}{}{}", &expr[..lead], body, &expr[expr.len() - tail..]);
+
+    // A single quoted hash: replace it, or report it stale.
+    if first == '\'' || first == '"' {
+        return Ok(match new_checksum {
+            Some(sha) => ValueRewrite {
+                text: rebuild(format!("{first}{sha}{first}")),
+                stale: false,
+                note: None,
+            },
+            None => ValueRewrite {
+                text: expr.to_string(),
+                stale: true,
+                note: None,
+            },
+        });
+    }
+
+    if first == '(' || first == '[' {
+        let tokens = quoted_tokens(trimmed);
+        let typed_pair = first == '('
+            && tokens.len() == 2
+            && is_checksum_type(&trimmed[tokens[0].0 + 1..tokens[0].1 - 1]);
+        if typed_pair {
+            // Keep the declared type, replace only the value.
+            let (vstart, vend, vquote) = tokens[1];
+            return Ok(match new_checksum {
+                Some(sha) => {
+                    let mut body = String::with_capacity(trimmed.len() + 16);
+                    body.push_str(&trimmed[..vstart]);
+                    body.push(vquote);
+                    body.push_str(sha);
+                    body.push(vquote);
+                    body.push_str(&trimmed[vend..]);
+                    ValueRewrite {
+                        text: rebuild(body),
+                        stale: false,
+                        note: None,
+                    }
+                }
+                None => ValueRewrite {
+                    text: expr.to_string(),
+                    stale: true,
+                    note: None,
+                },
+            });
+        }
+
+        // Alternatives (tuple) or an all-must-match list. After a version bump
+        // every one of them is wrong, so collapse to the single new value and
+        // say so; without a new value, leave the shape alone and report stale.
+        return Ok(match new_checksum {
+            Some(sha) => {
+                let kind = if first == '(' {
+                    "alternative checksums"
+                } else {
+                    "checksums that all had to match"
+                };
+                ValueRewrite {
+                    text: rebuild(format!("'{sha}'")),
+                    stale: false,
+                    note: Some(format!(
+                        "source checksum entry held {} {kind} and was replaced by the single \
+                         value given: review whether the new version needs the same shape",
+                        tokens.len()
+                    )),
+                }
+            }
+            None => ValueRewrite {
+                text: expr.to_string(),
+                stale: true,
+                note: None,
+            },
+        });
+    }
+
+    Err(EmitError::Rewrite(format!(
+        "unrecognized source checksum value form: expected a quoted checksum, \
+         a ('<type>', '<value>') tuple, or a list of checksums, found `{}`",
+        entry_excerpt(trimmed)
+    )))
+}
+
+/// Outcome of rewriting the source entry of a `checksums` list.
+struct ChecksumRewrite {
+    text: String,
+    stale: bool,
+    note: Option<String>,
+}
+
 fn rewrite_source_checksum(
     src: &str,
     old_version: &str,
     new_version: &str,
     new_checksum: Option<&str>,
-) -> Result<(String, bool), EmitError> {
+) -> Result<ChecksumRewrite, EmitError> {
     let Some((list_open_end, list_close_start)) = find_list_span(src, "checksums")? else {
         // No checksums list — nothing to rewrite (not an error).
-        return Ok((src.to_string(), false));
+        return Ok(ChecksumRewrite {
+            text: src.to_string(),
+            stale: false,
+            note: None,
+        });
     };
     let body = &src[list_open_end..list_close_start];
     let body_bytes = body.as_bytes();
@@ -526,101 +776,80 @@ fn rewrite_source_checksum(
     let start = skip_to_first_entry(body_bytes, 0);
     if start >= body_bytes.len() {
         // Empty checksums list — nothing to rewrite.
-        return Ok((src.to_string(), false));
+        return Ok(ChecksumRewrite {
+            text: src.to_string(),
+            stale: false,
+            note: None,
+        });
     }
 
-    let elem_end = if body_bytes[start] == b'{' {
-        let mut depth = 1i32;
-        let mut j = start + 1;
-        while j < body_bytes.len() {
-            match body_bytes[j] as char {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        j += 1;
-                        break;
-                    }
-                }
-                _ => {}
-            }
-            j += 1;
-        }
-        j
-    } else if body_bytes[start] == b'\'' || body_bytes[start] == b'"' {
-        let q = body_bytes[start];
-        let mut j = start + 1;
-        while j < body_bytes.len() && body_bytes[j] != q {
-            j += 1;
-        }
-        (j + 1).min(body_bytes.len())
-    } else {
-        return Err(EmitError::Rewrite(
-            "unrecognized source checksum entry form".into(),
-        ));
-    };
-
+    let elem_end = entry_span(body_bytes, start)?;
     let elem = &body[start..elem_end];
-    let mut stale = false;
 
-    let new_elem = if elem.starts_with('{') {
-        // Dict form: first quoted string is the tarball key, second is the sha.
-        // No backreferences (regex crate): match single- and double-quoted
-        // spans separately, then merge and sort by position.
-        let re_sq = regex::Regex::new(r"'[^']*'").map_err(|e| EmitError::Rewrite(e.to_string()))?;
-        let re_dq =
-            regex::Regex::new(r#""[^"]*""#).map_err(|e| EmitError::Rewrite(e.to_string()))?;
-        let mut matches: Vec<regex::Match> =
-            re_sq.find_iter(elem).chain(re_dq.find_iter(elem)).collect();
-        matches.sort_by_key(|m| m.start());
-        if matches.len() < 2 {
-            return Err(EmitError::Rewrite(
-                "malformed source checksum dict entry".into(),
-            ));
+    let (new_elem, stale, note) = if elem.starts_with('{') {
+        // Dict form: the first quoted string is the artifact filename, and
+        // everything after the colon that follows it is the checksum value,
+        // which may itself be a bare hash, a typed tuple, or a list.
+        let tokens = quoted_tokens(elem);
+        let Some(&(key_start, key_end, key_quote)) = tokens.first() else {
+            return Err(EmitError::Rewrite(format!(
+                "malformed source checksum dict entry: no quoted filename key in `{}`",
+                entry_excerpt(elem)
+            )));
+        };
+        let Some(colon_rel) = elem[key_end..].find(':') else {
+            return Err(EmitError::Rewrite(format!(
+                "malformed source checksum dict entry: no `:` after the filename key in `{}`",
+                entry_excerpt(elem)
+            )));
+        };
+        let value_start = key_end + colon_rel + 1;
+        let Some(brace_rel) = elem.rfind('}') else {
+            return Err(EmitError::Rewrite(format!(
+                "malformed source checksum dict entry: unterminated dict in `{}`",
+                entry_excerpt(elem)
+            )));
+        };
+        if brace_rel < value_start {
+            return Err(EmitError::Rewrite(format!(
+                "malformed source checksum dict entry: no value between `:` and `}}` in `{}`",
+                entry_excerpt(elem)
+            )));
         }
-        let key_m = matches[0];
-        let val_m = matches[1];
-        let key_quote = elem.as_bytes()[key_m.start()] as char;
-        let key_str = &elem[key_m.start() + 1..key_m.end() - 1];
+
+        let key_str = &elem[key_start + 1..key_end - 1];
         let new_key = if key_str.contains(old_version) {
             key_str.replacen(old_version, new_version, 1)
         } else {
             key_str.to_string()
         };
+        let value = rewrite_checksum_value(&elem[value_start..brace_rel], new_checksum)?;
 
         let mut out = String::with_capacity(elem.len() + 16);
-        out.push_str(&elem[..key_m.start()]);
+        out.push_str(&elem[..key_start]);
         out.push(key_quote);
         out.push_str(&new_key);
         out.push(key_quote);
-        out.push_str(&elem[key_m.end()..val_m.start()]);
-        if let Some(sha) = new_checksum {
-            let val_quote = elem.as_bytes()[val_m.start()] as char;
-            out.push(val_quote);
-            out.push_str(sha);
-            out.push(val_quote);
-        } else {
-            out.push_str(&elem[val_m.start()..val_m.end()]);
-            stale = true;
-        }
-        out.push_str(&elem[val_m.end()..]);
-        out
+        out.push_str(&elem[key_end..value_start]);
+        out.push_str(&value.text);
+        out.push_str(&elem[brace_rel..]);
+        (out, value.stale, value.note)
     } else {
-        // Bare-string checksum form: no filename key to rename.
-        if let Some(sha) = new_checksum {
-            let q = elem.chars().next().unwrap();
-            format!("{q}{sha}{q}")
-        } else {
-            stale = true;
-            elem.to_string()
-        }
+        // Bare hash, typed tuple, alternatives tuple, or AND-list: no filename
+        // key to rename.
+        let value = rewrite_checksum_value(elem, new_checksum)?;
+        (value.text, value.stale, value.note)
     };
 
     let mut out = String::with_capacity(src.len() + 16);
     out.push_str(&src[..list_open_end + start]);
     out.push_str(&new_elem);
     out.push_str(&src[list_open_end + elem_end..]);
-    Ok((out, stale))
+    Ok(ChecksumRewrite {
+        text: out,
+        stale,
+        note,
+    })
 }
 
 #[derive(Debug)]
@@ -1072,6 +1301,71 @@ checksums = [
 ]
 ";
 
+    /// Typed entry: `('<type>', '<value>')`. EasyBuild reads the first element
+    /// as the checksum type, so only the second may be rewritten.
+    const WITH_TYPED_TUPLE_CHECKSUM: &str = "\
+name = 'OpenMPI'
+version = '5.0.3'
+toolchain = {'name': 'NVHPC', 'version': '24.9-CUDA-12.6.0'}
+homepage = 'https://www.open-mpi.org/'
+sources = [SOURCELOWER_TAR_BZ2]
+checksums = [
+    ('sha256', '990582f206b3ab32e938aa31bbf07c639368e4405dca196fabe7f0f76eeda90b'),
+]
+";
+
+    /// Alternative checksums: a tuple whose elements are values, not a type and
+    /// a value. Any one of them matching is enough for EasyBuild.
+    const WITH_ALTERNATIVE_CHECKSUMS: &str = "\
+name = 'OpenMPI'
+version = '5.0.3'
+toolchain = {'name': 'NVHPC', 'version': '24.9-CUDA-12.6.0'}
+homepage = 'https://www.open-mpi.org/'
+sources = [SOURCELOWER_TAR_BZ2]
+checksums = [
+    ('990582f206b3ab32e938aa31bbf07c639368e4405dca196fabe7f0f76eeda90b',
+     '2f1c0b6b1e6d0e6b6c1f4e5a9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c'),
+]
+";
+
+    /// A list nested inside the entry: every checksum in it has to match.
+    const WITH_AND_LIST_CHECKSUM: &str = "\
+name = 'OpenMPI'
+version = '5.0.3'
+toolchain = {'name': 'NVHPC', 'version': '24.9-CUDA-12.6.0'}
+homepage = 'https://www.open-mpi.org/'
+sources = [SOURCELOWER_TAR_BZ2]
+checksums = [
+    ['990582f206b3ab32e938aa31bbf07c639368e4405dca196fabe7f0f76eeda90b',
+     ('md5', 'd0ca4e0f6ac0b9e0f0f0a0b0c0d0e0f0')],
+]
+";
+
+    /// The dict form carrying a typed tuple as its value, which is where a
+    /// position-based reader silently overwrites the type instead of the hash.
+    const WITH_DICT_TYPED_TUPLE_CHECKSUM: &str = "\
+name = 'OpenMPI'
+version = '5.0.3'
+toolchain = {'name': 'NVHPC', 'version': '24.9-CUDA-12.6.0'}
+homepage = 'https://www.open-mpi.org/'
+sources = [SOURCELOWER_TAR_BZ2]
+checksums = [
+    {'openmpi-5.0.3.tar.bz2': ('sha256', '990582f206b3ab32e938aa31bbf07c639368e4405dca196fabe7f0f76eeda90b')},
+]
+";
+
+    /// A form no EasyBuild version accepts, to pin the error message.
+    const WITH_UNKNOWN_CHECKSUM_FORM: &str = "\
+name = 'OpenMPI'
+version = '5.0.3'
+toolchain = {'name': 'NVHPC', 'version': '24.9-CUDA-12.6.0'}
+homepage = 'https://www.open-mpi.org/'
+sources = [SOURCELOWER_TAR_BZ2]
+checksums = [
+    CHECKSUM_FROM_ELSEWHERE,
+]
+";
+
     fn nvhpc(ver: &str) -> Toolchain {
         Toolchain {
             name: "NVHPC".into(),
@@ -1161,6 +1455,141 @@ checksums = [
             r.text.contains("    # openmpi-5.0.3.tar.bz2\n"),
             "{}",
             r.text
+        );
+    }
+
+    /// Params for a 5.0.3 -> 5.0.7 bump carrying a new source hash.
+    fn bump_with_checksum() -> EmitParams {
+        EmitParams {
+            toolchain: nvhpc("25.11-CUDA-12.8.0"),
+            version: Some("5.0.7".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: Some(NEW_SHA.into()),
+        }
+    }
+
+    const NEW_SHA: &str = "119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd";
+
+    #[test]
+    fn a_typed_tuple_keeps_its_type_and_takes_the_new_value() {
+        let r =
+            emit_next_generation(WITH_TYPED_TUPLE_CHECKSUM, &bump_with_checksum()).expect("emit");
+        assert!(
+            r.text.contains(&format!("('sha256', '{NEW_SHA}')")),
+            "{}",
+            r.text
+        );
+        // The type is not a checksum and must survive untouched.
+        assert!(!r.text.contains(&format!("('{NEW_SHA}'")), "{}", r.text);
+    }
+
+    #[test]
+    fn alternative_checksums_collapse_to_the_new_value_with_a_warning() {
+        let r =
+            emit_next_generation(WITH_ALTERNATIVE_CHECKSUMS, &bump_with_checksum()).expect("emit");
+        assert!(r.text.contains(&format!("'{NEW_SHA}'")), "{}", r.text);
+        // Neither stale alternative may survive a version bump.
+        assert!(!r.text.contains("990582f206b3ab32"), "{}", r.text);
+        assert!(!r.text.contains("2f1c0b6b1e6d0e6b"), "{}", r.text);
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.contains("alternative checksums")),
+            "warnings: {:?}",
+            r.warnings
+        );
+    }
+
+    #[test]
+    fn an_and_list_collapses_to_the_new_value_with_a_warning() {
+        let r = emit_next_generation(WITH_AND_LIST_CHECKSUM, &bump_with_checksum()).expect("emit");
+        assert!(r.text.contains(&format!("'{NEW_SHA}'")), "{}", r.text);
+        assert!(!r.text.contains("d0ca4e0f6ac0b9e0"), "{}", r.text);
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.contains("checksums that all had to match")),
+            "warnings: {:?}",
+            r.warnings
+        );
+    }
+
+    #[test]
+    fn a_dict_value_that_is_a_typed_tuple_has_only_its_value_replaced() {
+        let r = emit_next_generation(WITH_DICT_TYPED_TUPLE_CHECKSUM, &bump_with_checksum())
+            .expect("emit");
+        assert!(
+            r.text.contains(&format!(
+                "{{'openmpi-5.0.7.tar.bz2': ('sha256', '{NEW_SHA}')}}"
+            )),
+            "{}",
+            r.text
+        );
+    }
+
+    #[test]
+    fn every_documented_shape_bumps_without_erroring() {
+        // The bug this pins: one unsupported shape made `bump` exit non-zero and
+        // emit nothing, which leaves a maintainer with no file to review.
+        for (name, fixture) in [
+            ("dict", WITH_CHECKSUMS),
+            ("commented dict", WITH_COMMENTED_CHECKSUMS),
+            ("commented bare", WITH_COMMENTED_BARE_CHECKSUM),
+            ("typed tuple", WITH_TYPED_TUPLE_CHECKSUM),
+            ("alternatives", WITH_ALTERNATIVE_CHECKSUMS),
+            ("and-list", WITH_AND_LIST_CHECKSUM),
+            ("dict of typed tuple", WITH_DICT_TYPED_TUPLE_CHECKSUM),
+        ] {
+            let r = emit_next_generation(fixture, &bump_with_checksum());
+            assert!(r.is_ok(), "{name} shape failed to emit: {:?}", r.err());
+        }
+    }
+
+    #[test]
+    fn an_unknown_form_is_named_in_the_error() {
+        let err = emit_next_generation(WITH_UNKNOWN_CHECKSUM_FORM, &bump_with_checksum())
+            .expect_err("a form EasyBuild does not accept must not emit a file");
+        let msg = err.to_string();
+        // The message has to say what it saw, so the reader can fix the recipe
+        // rather than guess at what "unrecognized" meant.
+        assert!(msg.contains("CHECKSUM_FROM_ELSEWHERE"), "{msg}");
+        assert!(msg.contains("('<type>', '<value>')"), "{msg}");
+    }
+
+    #[test]
+    fn a_shape_without_a_new_checksum_is_left_alone_and_reported_stale() {
+        let params = EmitParams {
+            toolchain: nvhpc("25.11-CUDA-12.8.0"),
+            version: Some("5.0.7".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: None,
+        };
+        for fixture in [
+            WITH_TYPED_TUPLE_CHECKSUM,
+            WITH_ALTERNATIVE_CHECKSUMS,
+            WITH_AND_LIST_CHECKSUM,
+        ] {
+            let r = emit_next_generation(fixture, &params).expect("emit");
+            assert!(
+                r.warnings.iter().any(|w| w.contains("stale")),
+                "warnings: {:?}",
+                r.warnings
+            );
+            // Nothing invented: the old shape stays until a real hash arrives.
+            assert!(r.text.contains("990582f206b3ab32"), "{}", r.text);
+        }
+    }
+
+    #[test]
+    fn quoted_tokens_ignores_delimiters_inside_strings() {
+        let toks = quoted_tokens("('sha256', 'ab)cd')");
+        assert_eq!(toks.len(), 2);
+        assert_eq!(
+            balanced_span("('sha256', 'ab)cd')".as_bytes(), 0, b'(', b')'),
+            19,
+            "a paren inside a quoted hash must not close the tuple"
         );
     }
 
