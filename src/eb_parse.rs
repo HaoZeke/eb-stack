@@ -1934,6 +1934,44 @@ pub fn filter_toolchain(cands: &[Candidate], tc: &Toolchain) -> Vec<Candidate> {
         .collect()
 }
 
+/// Which versions of one package a universe already carries at one
+/// toolchain generation.
+///
+/// Struct-shaped like the other request types in this crate so the three
+/// fields cannot be transposed at a call site.
+#[derive(Debug, Clone, Copy)]
+pub struct ExistingVersionsQuery<'a> {
+    /// Universe from [`parse_easyconfig_tree`] or [`parse_easyconfig_trees`],
+    /// live checkout or historical merge-base tree alike.
+    pub universe: &'a [Candidate],
+    /// Package name to match, exactly.
+    pub name: &'a str,
+    /// Toolchain generation to match, name and version.
+    pub generation: &'a Toolchain,
+}
+
+/// Versions of `query.name` already present at `query.generation`, sorted
+/// newest first by the same comparison the miner uses.
+///
+/// This is the producer for [`crate::miner::is_backfill`]'s
+/// `existing_versions`: without it a caller has to hand-build that list,
+/// which is why backfill detection had no production call site.
+pub fn existing_versions(query: &ExistingVersionsQuery<'_>) -> Vec<String> {
+    let mut versions: Vec<String> = query
+        .universe
+        .iter()
+        .filter(|c| {
+            c.name == query.name
+                && c.toolchain.name == query.generation.name
+                && c.toolchain.version == query.generation.version
+        })
+        .map(|c| c.version.clone())
+        .collect();
+    versions.sort_by(|a, b| crate::version::cmp_version(b, a));
+    versions.dedup();
+    versions
+}
+
 /// Build a lock from an already-selected candidate set.
 ///
 /// The caller has done the choosing; this records it.
@@ -3264,4 +3302,48 @@ toolchain = {'name': 'GCCcore', 'version': '14.3.0'}
         assert_eq!(count_percent_conversions("%s-%s"), 2);
         assert_eq!(count_percent_conversions("no conversions here"), 0);
     }
+    #[test]
+    fn existing_versions_filters_by_name_and_generation_newest_first() {
+        let tc = |n: &str, v: &str| Toolchain {
+            name: n.into(),
+            version: v.into(),
+        };
+        let cand = |name: &str, ver: &str, t: Toolchain| Candidate {
+            name: name.into(),
+            version: ver.into(),
+            toolchain: t,
+            versionsuffix: None,
+            easyconfig_path: String::new(),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+        };
+        let universe = vec![
+            cand("CMake", "3.31.11", tc("GCCcore", "15.2.0")),
+            cand("CMake", "4.2.1", tc("GCCcore", "15.2.0")),
+            cand("CMake", "3.29.3", tc("GCCcore", "13.3.0")),
+            cand("Ninja", "1.12.1", tc("GCCcore", "15.2.0")),
+        ];
+        let gen = tc("GCCcore", "15.2.0");
+        let got = existing_versions(&ExistingVersionsQuery {
+            universe: &universe,
+            name: "CMake",
+            generation: &gen,
+        });
+        // Newest first, other generations and other packages excluded.
+        assert_eq!(got, vec!["4.2.1".to_string(), "3.31.11".to_string()]);
+
+        // This is exactly what makes a backfill detectable: 3.31.11 lands
+        // into a tree that already carries 4.2.1 at the same generation.
+        assert!(crate::miner::is_backfill("3.31.11", &got));
+        assert!(!crate::miner::is_backfill("4.3.0", &got));
+
+        let absent = existing_versions(&ExistingVersionsQuery {
+            universe: &universe,
+            name: "Nothing",
+            generation: &gen,
+        });
+        assert!(absent.is_empty());
+    }
+
 }

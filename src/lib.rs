@@ -46,6 +46,7 @@ pub use eb_maintainer::{
 pub use eb_parse::candidate_matches_dep_for_recipe;
 pub use eb_parse::{
     candidate_matches_dep, check_recipe_deps, easyconfig_basename, easyconfig_letter_dir,
+    existing_versions, ExistingVersionsQuery,
     filter_toolchain, lock_from_candidates, merge_candidates_with_precedence, packaging_gate,
     parse_easyconfig_file, parse_easyconfig_tree, parse_easyconfig_trees, resolve_easyconfig_file,
     resolve_easyconfig_file_reporting, resolve_easyconfig_str, resolve_easyconfig_str_reporting,
