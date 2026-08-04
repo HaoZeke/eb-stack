@@ -621,6 +621,41 @@ mod tests {
     }
 
     #[test]
+    fn rejects_real_pr_26480_patchelf_rpath_draft() {
+        // Real easybuilders/easybuild-easyconfigs PR #26480, first commit
+        // df310a91: readcon-core's postinstallcmds used `patchelf
+        // --force-rpath` before review replaced it.
+        let (recipe, text) =
+            load("fixtures/maintainer_rpath_26480/readcon-core-0.13.1-draft-patchelf.eb");
+        let report = check_maintainer_acceptability(&recipe, &text);
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.code == "EB_MAINT_PATCHELF_RPATH"),
+            "{report:?}"
+        );
+        assert!(!report.ok_for_upstream());
+    }
+
+    #[test]
+    fn accepts_real_pr_26480_readelf_rpath_fix() {
+        // Same recipe, real PR #26480 post-review commit cd9f7f61:
+        // `check_readelf_rpath = False` instead of patchelf.
+        let (recipe, text) = load(
+            "fixtures/eon_core_rgpot/easyconfigs/r/readcon-core/readcon-core-0.13.1-GCCcore-15.2.0.eb",
+        );
+        let report = check_maintainer_acceptability(&recipe, &text);
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.code == "EB_MAINT_PATCHELF_RPATH"),
+            "{report:?}"
+        );
+    }
+
+    #[test]
     fn accepts_clean_single_generation() {
         let (recipe, text) = load("fixtures/maintainer_reject_26435/good_single_gen.eb");
         let report = check_maintainer_acceptability(&recipe, &text);
