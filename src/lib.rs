@@ -74,11 +74,6 @@ pub use miner::{
     compare_reproduction, is_backfill, is_toolchain_meta_recipe, normalize_for_scoring,
     score_reproduction, DiffLine, DiffTag, ReproComparison, ReproScore,
 };
-pub use repro_report::{
-    check_case_against_ratchet, check_ratchet, read_case_scores, render_scoreboard_table,
-    score_with_allowance, write_case_score, RatchetViolation, ReproCaseScore, ReproRatchet,
-    ReproReportError, ScoredReproduction, StaleAllowance,
-};
 pub use package_catalog::{
     resolve_package_catalog_layers, CatalogProviderKind, PackageCatalogError, PackageCatalogLayer,
     PackageSourceCatalog, PackageSourceProvider, PACKAGE_CATALOG_SCHEMA_VERSION,
@@ -110,6 +105,11 @@ pub use package_workflow::{
 pub use report::{
     classify_stack_diff, format_build_list, format_stack_diff_markdown, ordered_build_paths,
     ordered_packages, PackageChange, PackageChangeKind,
+};
+pub use repro_report::{
+    check_case_against_ratchet, check_ratchet, read_case_scores, render_scoreboard_table,
+    score_with_allowance, write_case_score, RatchetViolation, ReproCaseScore, ReproRatchet,
+    ReproReportError, ScoredReproduction, StaleAllowance,
 };
 pub use resolvo_provider::solve_with_stack_policy;
 pub use sbom::{

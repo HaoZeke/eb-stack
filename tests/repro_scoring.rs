@@ -121,3 +121,127 @@ fn a_recipe_scores_exact_against_itself_across_the_fixture_corpus() {
         );
     }
 }
+
+/// The scoreboard's consumer: `eb-stack repro summary` over the artifacts a
+/// collected run wrote.
+mod summary_cli {
+    use eb_stack::{write_case_score, ReproCaseScore, ReproScore};
+    use std::path::Path;
+    use std::process::Command;
+
+    fn score(case: &str, allowance: Vec<String>, score: ReproScore) -> ReproCaseScore {
+        ReproCaseScore {
+            case: case.to_string(),
+            pull_request: None,
+            source: "source.eb".into(),
+            target: "target.eb".into(),
+            score,
+            allowance,
+            stale_allowance: Vec::new(),
+            residual_lines: 0,
+        }
+    }
+
+    fn seed(dir: &Path) {
+        write_case_score(
+            dir,
+            &score(
+                "reproduces_gromacs",
+                vec!["    ('pybind11', '2.12.0'),".into()],
+                ReproScore::Exact,
+            ),
+        )
+        .expect("write gromacs artifact");
+        write_case_score(
+            dir,
+            &score("reproduces_scafacos", Vec::new(), ReproScore::Semantic),
+        )
+        .expect("write scafacos artifact");
+    }
+
+    /// Written outside the score directory on purpose: every `.json` in
+    /// there is read as a case artifact, and a file that is not one is an
+    /// error rather than something to skip past.
+    fn ratchet_file(dir: &Path, gromacs: usize, total: usize) -> std::path::PathBuf {
+        let path = dir.join("ratchet.json");
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"note":"test","cases":{{"reproduces_gromacs":{gromacs},"reproduces_scafacos":0}},"total":{total}}}"#
+            ),
+        )
+        .expect("write ratchet");
+        path
+    }
+
+    fn summary(scores: &Path, ratchet: Option<&Path>) -> std::process::Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_eb-stack"));
+        command.args(["repro", "summary", "--scores", scores.to_str().unwrap()]);
+        if let Some(path) = ratchet {
+            command.args(["--ratchet", path.to_str().unwrap()]);
+        }
+        command.output().expect("run eb-stack repro summary")
+    }
+
+    #[test]
+    fn the_summary_prints_the_scoreboard_table() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        seed(dir.path());
+        let output = summary(dir.path(), None);
+        let text = String::from_utf8(output.stdout).expect("utf8 stdout");
+        assert!(output.status.success(), "{text}");
+        assert!(
+            text.contains("| reproduces_gromacs | - | EXACT | 1 | 0 |"),
+            "{text}"
+        );
+        assert!(
+            text.contains("| reproduces_scafacos | - | SEMANTIC | 0 | 0 |"),
+            "{text}"
+        );
+        assert!(text.contains("allowance total 1"), "{text}");
+    }
+
+    #[test]
+    fn the_summary_holds_a_run_to_the_committed_ratchet() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        seed(dir.path());
+        let elsewhere = tempfile::tempdir().expect("ratchet tempdir");
+        let matching = ratchet_file(elsewhere.path(), 1, 1);
+        let output = summary(dir.path(), Some(&matching));
+        let text = String::from_utf8(output.stdout).expect("utf8 stdout");
+        assert!(output.status.success(), "{text}");
+        assert!(text.contains("ratchet: 2 cases hold at 1"), "{text}");
+    }
+
+    #[test]
+    fn the_summary_fails_when_a_run_exceeds_the_ratchet() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        seed(dir.path());
+        let elsewhere = tempfile::tempdir().expect("ratchet tempdir");
+        let tightened = ratchet_file(elsewhere.path(), 0, 0);
+        let output = summary(dir.path(), Some(&tightened));
+        let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+        assert!(
+            !output.status.success(),
+            "a run that forgives more than the ratchet records must fail the command, not just \
+             print about it"
+        );
+        assert!(
+            stderr.contains("allowance grew to 1, ratchet records 0"),
+            "{stderr}"
+        );
+    }
+
+    #[test]
+    fn an_empty_score_directory_is_an_error_not_an_empty_table() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let output = summary(dir.path(), None);
+        let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+        assert!(
+            !output.status.success(),
+            "an empty directory means the suite did not run with EB_REPRO_SCORES set, and a \
+             zero-row table would read as a clean run"
+        );
+        assert!(stderr.contains("EB_REPRO_SCORES"), "{stderr}");
+    }
+}

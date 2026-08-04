@@ -236,7 +236,13 @@ fn reproduces_scafacos_1_0_4_foss_2023b_to_2024a() {
         ("pkgconf", "2.2.0"),
         ("GSL", "2.8"),
     ]);
-    assert_reproduces("reproduces_scafacos_1_0_4_foss_2023b_to_2024a", &source, &target, overrides, &[]);
+    assert_reproduces(
+        "reproduces_scafacos_1_0_4_foss_2023b_to_2024a",
+        &source,
+        &target,
+        overrides,
+        &[],
+    );
 }
 
 #[test]
@@ -268,7 +274,13 @@ fn reproduces_mdtraj_1_10_3_foss_2023b_to_2024a() {
         ("networkx", "3.4.2"),
         ("PyTables", "3.10.2"),
     ]);
-    assert_reproduces("reproduces_mdtraj_1_10_3_foss_2023b_to_2024a", &source, &target, overrides, &[]);
+    assert_reproduces(
+        "reproduces_mdtraj_1_10_3_foss_2023b_to_2024a",
+        &source,
+        &target,
+        overrides,
+        &[],
+    );
 }
 
 #[test]

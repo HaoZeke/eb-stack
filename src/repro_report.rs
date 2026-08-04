@@ -410,7 +410,8 @@ pub fn check_ratchet(ratchet: &ReproRatchet, scores: &[ReproCaseScore]) -> Vec<R
 /// The grind pastes this under a scored entry rather than transcribing
 /// numbers out of test output by hand.
 pub fn render_scoreboard_table(scores: &[ReproCaseScore]) -> String {
-    let mut out = String::from("| Case | PR | Score | Allowance | Residual |\n|---+---+---+---+---|\n");
+    let mut out =
+        String::from("| Case | PR | Score | Allowance | Residual |\n|---+---+---+---+---|\n");
     for score in scores {
         let pr = score
             .pull_request
@@ -531,7 +532,10 @@ mod tests {
              that is worth"
         );
         assert!(
-            scored.residual.iter().any(|line| line.contains("a dead comment")),
+            scored
+                .residual
+                .iter()
+                .any(|line| line.contains("a dead comment")),
             "the residual keeps the raw difference for display, got {:?}",
             scored.residual
         );
@@ -563,7 +567,10 @@ mod tests {
     #[test]
     fn a_grown_allowance_is_a_violation() {
         let ratchet = ratchet_with("gromacs", 1);
-        let score = score_with("gromacs", vec![PYBIND11.into(), "    ('extra', '1.0'),".into()]);
+        let score = score_with(
+            "gromacs",
+            vec![PYBIND11.into(), "    ('extra', '1.0'),".into()],
+        );
         assert_eq!(
             check_case_against_ratchet(&ratchet, &score),
             vec![RatchetViolation::Grew {
@@ -643,7 +650,10 @@ mod tests {
         ];
         let table = render_scoreboard_table(&scores);
         assert!(table.contains("| gromacs | - | EXACT | 1 | 0 |"), "{table}");
-        assert!(table.contains("| scafacos | - | EXACT | 0 | 0 |"), "{table}");
+        assert!(
+            table.contains("| scafacos | - | EXACT | 0 | 0 |"),
+            "{table}"
+        );
         assert!(table.contains("2 cases: 2 EXACT"), "{table}");
         assert!(table.contains("allowance total 1"), "{table}");
     }

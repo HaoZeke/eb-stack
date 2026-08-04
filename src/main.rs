@@ -61,8 +61,35 @@ enum Command {
         #[command(subcommand)]
         command: CampaignCommand,
     },
+    /// Read the reproduction grind's score artifacts.
+    Repro {
+        #[command(subcommand)]
+        command: ReproCommand,
+    },
     /// Serve the same workflows over MCP stdio.
     Mcp,
+}
+
+#[derive(Subcommand, Debug)]
+enum ReproCommand {
+    /// Summarize a collected reproduction run for the scoreboard.
+    ///
+    /// Reads the per-case JSON a suite run wrote under `EB_REPRO_SCORES`
+    /// and prints the scoreboard's own table shape. With `--ratchet`, it
+    /// also holds the run to the committed allowance counts and exits
+    /// nonzero on any disagreement, which is the same gate the suite
+    /// applies per case.
+    Summary {
+        /// Directory of per-case score artifacts.
+        #[arg(long)]
+        scores: PathBuf,
+        /// The committed allowance counts to check the run against.
+        #[arg(long)]
+        ratchet: Option<PathBuf>,
+        /// Print the collected scores as JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -300,6 +327,7 @@ fn main() -> Result<()> {
         Command::Stack { command } => run_stack(command),
         Command::Target { command } => run_target(command),
         Command::Campaign { command } => run_campaign(command),
+        Command::Repro { command } => run_repro(command),
         Command::Mcp => {
             let stdin = std::io::stdin();
             let stdout = std::io::stdout();
@@ -439,6 +467,48 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
         println!("easyconfig={}", path.display());
     }
     Ok(())
+}
+
+fn run_repro(command: ReproCommand) -> Result<()> {
+    match command {
+        ReproCommand::Summary {
+            scores,
+            ratchet,
+            json,
+        } => {
+            let collected = eb_stack::read_case_scores(&scores)
+                .with_context(|| format!("read repro scores from {}", scores.display()))?;
+            if collected.is_empty() {
+                anyhow::bail!(
+                    "no score artifacts in {}; run the reproduction suite with EB_REPRO_SCORES set to that directory",
+                    scores.display()
+                );
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&collected)?);
+            } else {
+                print!("{}", eb_stack::render_scoreboard_table(&collected));
+            }
+            let Some(ratchet_path) = ratchet else {
+                return Ok(());
+            };
+            let ratchet = eb_stack::ReproRatchet::read(&ratchet_path)
+                .with_context(|| format!("read ratchet {}", ratchet_path.display()))?;
+            let violations = eb_stack::check_ratchet(&ratchet, &collected);
+            if violations.is_empty() {
+                println!(
+                    "ratchet: {} cases hold at {}",
+                    collected.len(),
+                    ratchet.total
+                );
+                return Ok(());
+            }
+            for violation in &violations {
+                eprintln!("ratchet: {violation}");
+            }
+            anyhow::bail!("{} ratchet violation(s)", violations.len())
+        }
+    }
 }
 
 fn run_recipe(command: RecipeCommand) -> Result<()> {
