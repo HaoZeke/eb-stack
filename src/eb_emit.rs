@@ -451,14 +451,34 @@ fn find_list_span(src: &str, key: &str) -> Result<Option<(usize, usize)>, EmitEr
     let bytes = src.as_bytes();
     let mut depth = 1i32;
     let mut i = list_open_end;
+    // Brackets only count outside strings and comments: a '[' in a quoted
+    // filename or a ']' in a trailing comment must not move the span.
+    let mut in_string: Option<u8> = None;
+    let mut in_comment = false;
     while i < bytes.len() {
-        let c = bytes[i] as char;
-        if c == '[' {
-            depth += 1;
-        } else if c == ']' {
-            depth -= 1;
-            if depth == 0 {
-                break;
+        let c = bytes[i];
+        if in_comment {
+            if c == b'\n' {
+                in_comment = false;
+            }
+        } else if let Some(quote) = in_string {
+            if c == b'\\' {
+                i += 1; // skip the escaped byte
+            } else if c == quote {
+                in_string = None;
+            }
+        } else {
+            match c {
+                b'\'' | b'"' => in_string = Some(c),
+                b'#' => in_comment = true,
+                b'[' => depth += 1,
+                b']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
             }
         }
         i += 1;
@@ -1412,6 +1432,23 @@ checksums = [
     }
 
     #[test]
+    #[test]
+    fn list_span_ignores_brackets_in_comments_and_strings() {
+        let src = "patches = [\n    'weird[1].patch',  # see [upstream]\n    \"other]name.patch\",\n]\nmoduleclass = 'lib'\n";
+        let (s, e) = find_list_span(src, "patches").unwrap().unwrap();
+        let body = &src[s..e];
+        assert!(body.contains("weird[1].patch"), "{body}");
+        assert!(body.contains("other]name.patch"), "{body}");
+        // The span closes at the real bracket, before moduleclass.
+        assert!(!body.contains("moduleclass"), "{body}");
+    }
+
+    #[test]
+    fn list_span_still_errors_on_a_genuinely_unclosed_list() {
+        let src = "patches = [\n    'a.patch',\n";
+        assert!(find_list_span(src, "patches").is_err());
+    }
+
     fn version_bump_with_source_checksum_rewrites_source_entry() {
         let params = EmitParams {
             toolchain: nvhpc("25.11-CUDA-12.8.0"),
