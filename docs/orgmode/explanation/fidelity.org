@@ -139,6 +139,56 @@ parse errors; one file does not abort the tree walk. See
 [[file:parser-approach.org][the parser approach]] for the supported expression
 model.
 
+* Scoring a bump against a merged PR
+
+The reproduction grind scores an emitted bump against the file an
+EasyBuild maintainer actually merged. ~eb_stack::score_reproduction~
+places each file on one of three rungs:
+
+| Score | Means |
+|-
+| ~EXACT~ | Byte-identical to the merged file. |
+| ~SEMANTIC~ | Differs only in ways that cannot change the build. |
+| ~MATERIAL~ | A real difference in what would be built. |
+
+Two rungs used on the scoreboard have no place in this function, because
+they are decided before any comparison: ~ERROR~ (no file was produced)
+and ~excluded~ (the file was never a scoreable bump, such as a toolchain
+meta-recipe or a backfill). An exclusion is recorded with its reason
+rather than dropped from the denominator.
+
+~EXACT~ stays raw equality. Only the ~SEMANTIC~ against ~MATERIAL~ line
+is drawn on normalized text, by ~eb_stack::normalize_for_scoring~, which
+removes comment-only lines, comment tails, trailing whitespace, and runs
+of blank lines. String content survives verbatim: a triple-quoted
+~description~ carries its blank lines, its indentation, and any ~#~ it
+contains into the built module, so normalizing inside one would call two
+different module descriptions equivalent.
+
+The distinction is not academic. Scoring PR #25009 (LLVM v21.1.8, merge
+~3e86bdac~) found three divergences in one file: a stale commented-out
+~toolchainopts~ entry the bump preserved and the merge deleted, one
+blank-line difference, and a patch set the merge narrowed. A raw text
+diff reports all three as one ~MATERIAL~ verdict, which flattens exactly
+the distinction the ladder exists to make; the first two cannot change
+what gets built, and the third builds different sources.
+
+~eb_stack::compare_reproduction~ returns the score together with the raw
+line diff, never the normalized one. A forgiving verdict is only
+auditable if the reader can see the difference it forgave.
+
+Normalization that changed a recipe's meaning would not fail loudly.
+It would instead make two files that build different things score
+~SEMANTIC~. So ~tests/repro_scoring.rs~ asserts the property directly:
+normalizing a recipe leaves the resolved easyconfig identical, over the
+checked-in fixtures always and over the robot tree when one is present.
+
+#+begin_src bash
+EB_EASYCONFIGS=/path/to/easybuild-easyconfigs/easybuild/easyconfigs \
+  EB_REQUIRE_EASYCONFIGS=1 \
+  cargo test --locked --test repro_scoring -- --nocapture
+#+end_src
+
 * Limits that remain explicit
 
 - *Static foreign parsing:* dynamic Python, Jinja, helper calls, or imported
