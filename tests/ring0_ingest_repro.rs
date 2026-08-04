@@ -150,20 +150,106 @@ fn ingest_emits_a_parseable_recipe_for_a_brand_new_package() {
     assert_eq!(parsed.version, "2.17.10");
 }
 
+/// Top-level easyconfig parameter names assigned in a recipe, in file order.
+fn parameter_names(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|line| !line.starts_with([' ', '\t', '#', ')', ']', '}']))
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, _)| key.trim().to_string())
+        .filter(|key| !key.is_empty() && !key.contains(char::is_whitespace))
+        .collect()
+}
+
+/// Parameters the merged recipe sets that the emitted one does not.
+fn maintainer_remainder(emitted: &str, target: &str) -> Vec<String> {
+    let have = parameter_names(emitted);
+    parameter_names(target)
+        .into_iter()
+        .filter(|key| !have.contains(key))
+        .collect()
+}
+
 #[test]
-fn ring0_eon_scores_against_the_merged_recipe() {
+fn ring0_eon_reproduces_what_a_foreign_recipe_can_express() {
+    // The part ingest is answerable for. A Spack definition carries identity,
+    // sources, checksums, dependency edges and build switches, so those must
+    // come out right without hand-editing the emitted text.
+    let emitted = emit_eon_from_spack();
+    let parsed = resolve_easyconfig_str(&emitted).expect("emitted recipe must parse");
+    let merged = resolve_easyconfig_str(&merged_eon()).expect("merged recipe must parse");
+
+    assert_eq!(parsed.name, merged.name);
+    assert_eq!(parsed.version, merged.version);
+    assert_eq!(parsed.toolchain, merged.toolchain);
+    assert_eq!(parsed.versionsuffix, merged.versionsuffix);
+
+    let names = |deps: &[eb_stack::ResolvedDep]| -> Vec<String> {
+        let mut out: Vec<String> = deps.iter().map(|dep| dep.name.clone()).collect();
+        out.sort();
+        out
+    };
+    assert_eq!(
+        names(&parsed.dependencies),
+        names(&merged.dependencies),
+        "runtime dependency set"
+    );
+    assert_eq!(
+        names(&parsed.builddependencies),
+        names(&merged.builddependencies),
+        "build dependency set"
+    );
+}
+
+#[test]
+fn ring0_eon_records_the_maintainer_remainder() {
+    // The honest ring-0 number is not a single bucket: no foreign recipe encodes
+    // EasyBuild's own vocabulary, so some parameters can only come from the
+    // maintainer. Recording exactly which ones keeps the benchmark falsifiable
+    // -- the list shrinks only when the generation path genuinely learns to
+    // produce one of them, and this test fails when it does, on purpose.
     let emitted = emit_eon_from_spack();
     let target = merged_eon();
-    let score = score_reproduction(&emitted, &target);
 
-    // Ring 0's stated bar is SEMANTIC-or-better. Asserting it is how the bar
-    // gets enforced rather than described; when it fails, the diff below is the
-    // finding, and the number to record is in the message.
+    let remainder = maintainer_remainder(&emitted, &target);
+    let expected = [
+        "github_account",
+        "source_urls",
+        "runtest",
+        "testopts",
+        "sanity_check_paths",
+        "sanity_check_commands",
+        "modextrapaths",
+    ];
+    let unexpected: Vec<&String> = remainder
+        .iter()
+        .filter(|key| !expected.contains(&key.as_str()))
+        .collect();
     assert!(
-        matches!(score, ReproScore::Exact | ReproScore::Semantic),
-        "ring 0 eOn scored {} against the merged recipe, below the SEMANTIC bar.\n\
-         normalized diff:\n{}",
-        score.as_str(),
+        unexpected.is_empty(),
+        "ingest lost parameters beyond the recorded EasyBuild-only remainder: {unexpected:?}\n\
+         full remainder: {remainder:?}\n\
+         raw diff:\n{}",
         compare_reproduction(&emitted, &target).render_raw_diff()
     );
+
+    // The whole-file bucket is Material for as long as the remainder is
+    // non-empty, and saying so here keeps the scoreboard row and the test from
+    // drifting apart. When the remainder empties, this assertion is what tells
+    // you the bucket can be raised.
+    let score = score_reproduction(&emitted, &target);
+    if remainder.is_empty() {
+        assert!(
+            matches!(score, ReproScore::Exact | ReproScore::Semantic),
+            "nothing is missing yet the score is {}: the scorer and the \
+             parameter comparison disagree, which is itself the finding",
+            score.as_str()
+        );
+    } else {
+        assert_eq!(
+            score,
+            ReproScore::Material,
+            "a non-empty maintainer remainder must score Material, not {}",
+            score.as_str()
+        );
+    }
 }
