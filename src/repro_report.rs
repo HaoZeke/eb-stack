@@ -162,7 +162,14 @@ pub fn score_with_allowance(emitted: &str, target: &str, allowance: &[&str]) -> 
         }
     }
 
-    let stripped = target_lines.join("\n");
+    // Keep the target's final line terminator. Rebuilding the text from
+    // lines drops it, and a target that ends in a newline would then
+    // never compare equal to an emit that also does, putting every case
+    // one rung below what it earned.
+    let mut stripped = target_lines.join("\n");
+    if target.ends_with('\n') {
+        stripped.push('\n');
+    }
     let comparison = compare_reproduction(emitted, &stripped);
     ScoredReproduction {
         score: comparison.score,
@@ -462,6 +469,29 @@ mod tests {
 
     fn emitted_without_pybind11() -> String {
         "dependencies = [\n    ('Python', '3.12.3'),\n]".to_string()
+    }
+
+    #[test]
+    fn a_file_that_ends_in_a_newline_can_still_score_exact() {
+        // Both texts end in a newline, as real easyconfigs do. Rebuilding
+        // the target from its lines without putting the terminator back
+        // makes every case SEMANTIC, and a suite reproducing files byte
+        // for byte then reports nothing on the top rung.
+        let target = format!("{}\n", target_with_pybind11());
+        let emitted = format!("{}\n", emitted_without_pybind11());
+        let scored = score_with_allowance(&emitted, &target, &[PYBIND11]);
+        assert_eq!(scored.score, ReproScore::Exact);
+        assert!(scored.target_without_allowance.ends_with('\n'));
+    }
+
+    #[test]
+    fn a_target_without_a_trailing_newline_does_not_gain_one() {
+        let scored = score_with_allowance(
+            &emitted_without_pybind11(),
+            &target_with_pybind11(),
+            &[PYBIND11],
+        );
+        assert!(!scored.target_without_allowance.ends_with('\n'));
     }
 
     #[test]

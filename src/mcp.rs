@@ -441,6 +441,7 @@ fn package_bump(arguments: &Value) -> Result<Value, String> {
         hierarchy_fixture: optional_path(arguments, "hierarchy_fixture"),
         overrides: string_map(arguments, "dependencies")?,
         stack_policy,
+        strict_patches: false,
     })
     .map_err(|error| error.to_string())?;
     let written = write_package_bundle(&bundle, &required_path(arguments, "out_dir")?)

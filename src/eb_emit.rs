@@ -423,6 +423,24 @@ fn apply_version_override(source_field: &str, override_val: &str) -> String {
 /// Locate a top-level `key = [ ... ]` assignment and return the byte offsets
 /// `(list_open_end, list_close_start)`: just after the opening `[` and at the
 /// matching closing `]`. Returns `None` when no such assignment exists.
+/// Span of the whole `key = [ ... ]` assignment: from the start of its line
+/// to just past the closing bracket. Callers splicing entire list blocks
+/// (patch adoption) need the assignment, not only the body.
+pub(crate) fn find_list_assignment_span(
+    src: &str,
+    key: &str,
+) -> Result<Option<(usize, usize)>, EmitError> {
+    let re_hdr = regex::Regex::new(&format!(r"(?m)^(\s*{}\s*=\s*\[)", regex::escape(key)))
+        .map_err(|e| EmitError::Rewrite(e.to_string()))?;
+    let Some(m) = re_hdr.find(src) else {
+        return Ok(None);
+    };
+    let Some((_, body_end)) = find_list_span(src, key)? else {
+        return Ok(None);
+    };
+    Ok(Some((m.start(), body_end + 1)))
+}
+
 fn find_list_span(src: &str, key: &str) -> Result<Option<(usize, usize)>, EmitError> {
     let re_hdr = regex::Regex::new(&format!(r"(?m)^(\s*{}\s*=\s*\[)", regex::escape(key)))
         .map_err(|e| EmitError::Rewrite(e.to_string()))?;

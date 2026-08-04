@@ -1072,6 +1072,7 @@ fn bump_request_from_provider(
         hierarchy_fixture: None,
         overrides: HashMap::new(),
         stack_policy: provider_stack_policy(provider, default_stack_policy)?,
+        strict_patches: false,
     })
 }
 

@@ -23,6 +23,7 @@ pub mod package_emit;
 pub mod package_solve;
 pub mod package_sources;
 pub mod package_workflow;
+pub mod patch_evolution;
 pub mod report;
 pub mod repro_report;
 pub mod resolvo_provider;

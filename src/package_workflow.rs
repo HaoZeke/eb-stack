@@ -65,6 +65,9 @@ pub struct BumpPackageRequest {
     pub overrides: HashMap<String, String>,
     /// Policy governing the dependency solve.
     pub stack_policy: StackPolicy,
+    /// Fail the bump when a patch's applicability to the new version cannot
+    /// be decided from tree evidence, instead of carrying it with a flag.
+    pub strict_patches: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -499,7 +502,7 @@ pub fn complete_package_bump(
         .iter()
         .map(|dependency| (dependency.name.clone(), dependency.toolchain.clone()))
         .collect::<HashMap<_, _>>();
-    let result = emit_next_generation_from_path(
+    let mut result = emit_next_generation_from_path(
         &request.source,
         &EmitParams {
             toolchain: request.toolchain.clone(),
@@ -510,6 +513,57 @@ pub fn complete_package_bump(
         },
     )
     .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+
+    // A version bump decides its patch set from tree evidence: a recipe for
+    // the new version under another toolchain is what a maintainer already
+    // ships, so its patch block is adopted verbatim and each patch carries a
+    // recorded decision. Without a sibling, version-pinned patch names are
+    // flagged rather than silently carried.
+    let mut patch_calls: Vec<crate::patch_evolution::PatchCall> = Vec::new();
+    if let Some(new_version) = request.version.as_deref() {
+        let source_recipe = resolve_easyconfig_file(&request.source)
+            .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+        if new_version != source_recipe.version {
+            let sibling = crate::patch_evolution::sibling_paths(
+                &source_recipe.name,
+                new_version,
+                candidates,
+                &request.toolchain,
+            )
+            .into_iter()
+            .find_map(|path| {
+                resolve_easyconfig_file(Path::new(&path)).ok().map(|recipe| {
+                    crate::patch_evolution::SiblingRecipe {
+                        easyconfig_path: path,
+                        toolchain: recipe.toolchain,
+                        patch_names: recipe.patch_names,
+                    }
+                })
+            });
+            let patch_plan = crate::patch_evolution::plan_patch_evolution(
+                &source_recipe.version,
+                new_version,
+                &source_recipe.patch_names,
+                sibling.as_ref(),
+            );
+            if request.strict_patches && !patch_plan.undecided().is_empty() {
+                return Err(PackageWorkflowError::UndecidedPatches(
+                    patch_plan.undecided().join(", "),
+                ));
+            }
+            if let Some(sibling_path) = &patch_plan.sibling {
+                result.text =
+                    crate::patch_evolution::adopt_sibling_patch_block(&result.text, sibling_path)
+                        .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+                // Per-patch evidence supersedes the blanket review warning.
+                result
+                    .warnings
+                    .retain(|w| !w.contains("patches were not modified"));
+            }
+            patch_calls = patch_plan.calls;
+        }
+    }
+
     for (index, warning) in result.warnings.iter().enumerate() {
         plan.residuals.push(Residual {
             id: format!("bump-warning:{index}"),
@@ -517,6 +571,20 @@ pub fn complete_package_bump(
             category: "bump-warning".into(),
             severity: ResidualSeverity::Judgment,
             summary: warning.clone(),
+            evidence: None,
+            provenance: None,
+        });
+    }
+    for (index, call) in patch_calls.iter().enumerate() {
+        plan.residuals.push(Residual {
+            id: format!("patch-decision:{index}"),
+            stage: ResidualStage::Emit,
+            category: "patch-decision".into(),
+            severity: match call.decision {
+                crate::patch_evolution::PatchDecision::Undecided => ResidualSeverity::Judgment,
+                _ => ResidualSeverity::Mechanical,
+            },
+            summary: format!("{} {}: {}", call.decision.as_str(), call.patch, call.evidence),
             evidence: None,
             provenance: None,
         });
@@ -996,6 +1064,10 @@ pub enum PackageWorkflowError {
     /// The recipe declares nothing to download, so there is nothing to build.
     #[error("foreign package plan has no source artifacts")]
     NoSourceArtifacts,
+    /// Strict patch mode: a patch's applicability to the new version could
+    /// not be decided from tree evidence.
+    #[error("undecided patches after version bump: {0}")]
+    UndecidedPatches(String),
     /// The number of positional checksums does not match the artifact count.
     #[error(
         "source checksum override count mismatch: expected {expected} positional SHA-256 values, got {actual}"

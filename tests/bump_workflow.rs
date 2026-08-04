@@ -31,6 +31,7 @@ fn easybuild_bump_produces_sbom_resolvo_lock_and_recipe() {
             pins: Vec::new(),
             exclusions: Vec::new(),
         },
+        strict_patches: false,
     })
     .expect("canonical bump");
     assert_eq!(bundle.plan.origin, PackageOrigin::EasyBuild);
@@ -103,6 +104,7 @@ fn easybuild_bump_does_not_select_newer_system_candidate_for_implicit_dependency
             pins: Vec::new(),
             exclusions: Vec::new(),
         },
+        strict_patches: false,
     })
     .expect("canonical bump");
     let dependency = bundle.locks[0]
@@ -168,6 +170,7 @@ fn easybuild_bump_retargets_explicit_dependency_toolchain_family() {
             pins: Vec::new(),
             exclusions: Vec::new(),
         },
+        strict_patches: false,
     })
     .expect("canonical bump");
     let dependency = bundle.locks[0]
@@ -241,6 +244,7 @@ fn easybuild_bump_makes_cross_generation_stack_selection_explicit() {
             }],
             exclusions: Vec::new(),
         },
+        strict_patches: false,
     })
     .expect("canonical bump");
     assert!(

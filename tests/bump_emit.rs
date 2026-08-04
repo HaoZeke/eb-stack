@@ -41,6 +41,7 @@ fn bump(
             pins: Vec::new(),
             exclusions: Vec::new(),
         },
+        strict_patches: false,
     })
     .expect("canonical bump")
 }

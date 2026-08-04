@@ -170,6 +170,10 @@ struct PackageBumpArgs {
     hierarchy_fixture: Option<PathBuf>,
     #[arg(long)]
     stack_policy: Option<PathBuf>,
+    /// Fail when a patch's fate across the version bump cannot be decided
+    /// from tree evidence, instead of carrying it with a review flag.
+    #[arg(long)]
+    strict_patches: bool,
     #[arg(long)]
     out_dir: PathBuf,
 }
@@ -456,6 +460,7 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
         hierarchy_fixture: args.hierarchy_fixture,
         overrides: parse_dep_overrides(&args.dependencies)?,
         stack_policy,
+        strict_patches: args.strict_patches,
     })?;
     let written = write_package_bundle(&bundle, &args.out_dir)?;
     println!("manifest={}", written.manifest.display());

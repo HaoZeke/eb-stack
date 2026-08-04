@@ -130,6 +130,30 @@ fn assert_emitted_matches_target(
     allowed_additions: &[&str],
     source: &Path,
 ) {
+    assert_emitted_matches_target_into(
+        case,
+        emitted_text,
+        target,
+        allowed_additions,
+        source,
+        score_artifact_dir().as_deref(),
+    );
+}
+
+/// The same comparison, writing its artifact to an explicit directory.
+///
+/// The artifact directory is a parameter rather than something read from
+/// the environment down here, because tests share one process: a case
+/// that set or cleared `EB_REPRO_SCORES` would be changing where every
+/// case running beside it writes.
+fn assert_emitted_matches_target_into(
+    case: &str,
+    emitted_text: &str,
+    target: &Path,
+    allowed_additions: &[&str],
+    source: &Path,
+    artifacts: Option<&Path>,
+) -> ReproCaseScore {
     let target_text = std::fs::read_to_string(target)
         .unwrap_or_else(|e| panic!("read {}: {e}", target.display()));
 
@@ -159,8 +183,8 @@ fn assert_emitted_matches_target(
         residual_lines: scored.residual.len(),
     };
 
-    if let Some(directory) = score_artifact_dir() {
-        write_case_score(&directory, &record).expect("write repro score artifact");
+    if let Some(directory) = artifacts {
+        write_case_score(directory, &record).expect("write repro score artifact");
     }
 
     let ratchet = ReproRatchet::read(&ratchet_path()).expect("read tests/repro_ratchet.json");
@@ -174,6 +198,7 @@ fn assert_emitted_matches_target(
             .collect::<Vec<_>>()
             .join("\n")
     );
+    record
 }
 
 /// GROMACS-2024.4: foss/2023b -> foss/2024a (hand dep map; historical).
@@ -598,26 +623,31 @@ fn the_ratchet_total_matches_the_counts_it_sums() {
 
 #[test]
 fn a_collected_run_writes_artifacts_the_ratchet_check_accepts() {
-    // Drive one case with the artifact directory set, then read the
+    // Drive one case with an explicit artifact directory, then read the
     // artifact back exactly as a scoreboard run would.
     let directory = tempfile::tempdir().expect("tempdir");
-    std::env::set_var("EB_REPRO_SCORES", directory.path());
     let case = "reproduces_scafacos_1_0_4_foss_2023b_to_2024a_auto";
-    assert_reproduces_auto(
-        case,
-        &fixture("scafacos/ScaFaCoS-1.0.4-foss-2023b.eb"),
-        &fixture("scafacos/ScaFaCoS-1.0.4-foss-2024a.eb"),
+    let source = fixture("scafacos/ScaFaCoS-1.0.4-foss-2023b.eb");
+    let target = fixture("scafacos/ScaFaCoS-1.0.4-foss-2024a.eb");
+    let emitted = canonical_bump(
+        &source,
         &foss("2024a"),
         &universe_foss_2024a(),
-        &[],
+        HashMap::new(),
     );
-    std::env::remove_var("EB_REPRO_SCORES");
+    let record = assert_emitted_matches_target_into(
+        case,
+        &emitted,
+        &target,
+        &[],
+        &source,
+        Some(directory.path()),
+    );
 
     let scores = read_case_scores(directory.path()).expect("read artifacts");
-    let written = scores
-        .iter()
-        .find(|score| score.case == case)
-        .unwrap_or_else(|| panic!("no artifact for {case} in {scores:?}"));
+    assert_eq!(scores, vec![record]);
+    let written = &scores[0];
+    assert_eq!(written.case, case);
     assert_eq!(written.miss_count(), 0);
     assert_eq!(written.residual_lines, 0);
     assert!(written.stale_allowance.is_empty());

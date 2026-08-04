@@ -71,6 +71,7 @@ fn canonical_bump(
             pins: Vec::new(),
             exclusions: Vec::new(),
         },
+        strict_patches: false,
     })
 }
 
