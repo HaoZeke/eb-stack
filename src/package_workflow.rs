@@ -541,7 +541,6 @@ pub fn complete_package_bump(
                     })
             });
             let patch_plan = crate::patch_evolution::plan_patch_evolution(
-                &source_recipe.version,
                 new_version,
                 &source_recipe.patch_names,
                 sibling.as_ref(),

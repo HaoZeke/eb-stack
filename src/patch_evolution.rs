@@ -134,12 +134,11 @@ pub fn sibling_paths(
         .collect()
 }
 
-/// Decide the patch set for a bump from `old_version` to `new_version`.
+/// Decide the patch set for a bump to `new_version`.
 ///
 /// `old_patches` come from the source recipe; `sibling` is the best
 /// same-version recipe the caller resolved from the tree, if any.
 pub fn plan_patch_evolution(
-    old_version: &str,
     new_version: &str,
     old_patches: &[String],
     sibling: Option<&SiblingRecipe>,
@@ -184,13 +183,13 @@ pub fn plan_patch_evolution(
     let calls = old_patches
         .iter()
         .map(|patch| {
-            if patch.contains(old_version) {
+            if pins_other_version(patch, new_version) {
                 PatchCall {
                     patch: patch.clone(),
                     decision: PatchDecision::Undecided,
                     evidence: format!(
-                        "no {new_version} sibling in the tree and the name pins {old_version}; \
-                         applicability to {new_version} is a guess"
+                        "no {new_version} sibling in the tree and the name pins another \
+                         version; applicability to {new_version} is a guess"
                     ),
                 }
             } else {
@@ -251,6 +250,30 @@ pub fn adopt_sibling_patch_block(text: &str, sibling_path: &str) -> Result<Strin
     }
 }
 
+/// Whether a patch file name embeds a version-like token other than the
+/// version being bumped to. `OpenMPI-5.0.7_fix_gpfs.patch` pins 5.0.7 even
+/// when the bump is 5.0.8 -> 5.0.10, so matching only the old version would
+/// miss it; any foreign version pin makes applicability a guess.
+fn pins_other_version(patch: &str, new_version: &str) -> bool {
+    let bytes = patch.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+                i += 1;
+            }
+            let token = patch[start..i].trim_end_matches('.');
+            if token.contains('.') && token != new_version {
+                return true;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
 fn find_moduleclass_line(text: &str) -> Option<usize> {
     let mut offset = 0;
     for line in text.split_inclusive('\n') {
@@ -302,7 +325,7 @@ mod tests {
             ("GCC", "14.3.0"),
             &["keep.patch", "brand-new.patch"],
         );
-        let plan = plan_patch_evolution("5.0.9", "5.0.10", &old, Some(&sibling));
+        let plan = plan_patch_evolution("5.0.10", &old, Some(&sibling));
         assert_eq!(plan.sibling.as_deref(), Some("tree/o.eb"));
         let by_name = |p: &str| plan.calls.iter().find(|c| c.patch == p).unwrap().decision;
         assert_eq!(by_name("keep.patch"), PatchDecision::Carry);
@@ -316,7 +339,7 @@ mod tests {
     fn sibling_order_wins_over_source_order() {
         let old = vec!["b.patch".to_string(), "a.patch".to_string()];
         let sibling = sib("tree/x.eb", ("GCC", "14.3.0"), &["a.patch", "b.patch"]);
-        let plan = plan_patch_evolution("1.0", "2.0", &old, Some(&sibling));
+        let plan = plan_patch_evolution("2.0", &old, Some(&sibling));
         assert_eq!(plan.final_patches(), vec!["a.patch", "b.patch"]);
         assert!(!plan.changed());
     }
@@ -340,7 +363,7 @@ mod tests {
             "X-1.0_fix-runpath.patch".to_string(),
             "portable-fix.patch".to_string(),
         ];
-        let plan = plan_patch_evolution("1.0", "2.0", &old, None);
+        let plan = plan_patch_evolution("2.0", &old, None);
         assert!(plan.sibling.is_none());
         assert_eq!(plan.undecided(), vec!["X-1.0_fix-runpath.patch"]);
         // Both stay in the emitted list; undecided is a review flag, not a drop.
@@ -349,6 +372,19 @@ mod tests {
             vec!["X-1.0_fix-runpath.patch", "portable-fix.patch"]
         );
         assert!(!plan.changed());
+    }
+
+    #[test]
+    fn a_pin_on_any_foreign_version_is_undecided() {
+        // The dropped OpenMPI patch pinned 5.0.7 while the bump was
+        // 5.0.8 -> 5.0.10: matching only the source version misses it.
+        let old = vec!["OpenMPI-5.0.7_fix_gpfs_compatibility.patch".to_string()];
+        let plan = plan_patch_evolution("5.0.10", &old, None);
+        assert_eq!(plan.undecided(), vec!["OpenMPI-5.0.7_fix_gpfs_compatibility.patch"]);
+        // A pin on the bump target itself is not foreign.
+        let new = vec!["X-2.0_fix.patch".to_string()];
+        let plan = plan_patch_evolution("2.0", &new, None);
+        assert!(plan.undecided().is_empty());
     }
 
     #[test]
