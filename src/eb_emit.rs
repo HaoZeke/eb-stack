@@ -1354,6 +1354,26 @@ checksums = [
 ]
 ";
 
+    /// The recipe behind the scoreboard's one ERROR row, reduced to the fields
+    /// that drive the rewrite. Bytes taken from
+    /// `easybuild/easyconfigs/k/Kokkos/Kokkos-4.7.01-GCC-14.3.0.eb` at
+    /// easybuild-easyconfigs 7cab6860, the merge-base of PR #25938: annotated
+    /// bare-string checksums, source plus one patch.
+    const KOKKOS_ANNOTATED_BARE_CHECKSUMS: &str = "\
+name = 'Kokkos'
+version = '4.7.01'
+toolchain = {'name': 'GCC', 'version': '14.3.0'}
+homepage = 'https://github.com/kokkos/kokkos'
+sources = [{'download_filename': '%(version)s.tar.gz', 'filename': SOURCE_TAR_GZ}]
+patches = ['Kokkos-4.7.01_fix-missing-check-include-cxx.patch']
+checksums = [
+    # Kokkos-4.7.01.tar.gz
+    'cebf6daeb99c95e3d4116ea0d97c94b6a521c0cff1f5e613f127f6beea960ac7',
+    # Kokkos-4.7.01_fix-missing-check-include-cxx.patch
+    'ef8bb57088970fb765acd00bee6d9a07b52383b5e890feb7679bdff3cb1ad0db',
+]
+";
+
     /// A form no EasyBuild version accepts, to pin the error message.
     const WITH_UNKNOWN_CHECKSUM_FORM: &str = "\
 name = 'OpenMPI'
@@ -1580,6 +1600,45 @@ checksums = [
             // Nothing invented: the old shape stays until a real hash arrives.
             assert!(r.text.contains("990582f206b3ab32"), "{}", r.text);
         }
+    }
+
+    #[test]
+    fn the_kokkos_error_row_recipe_emits_a_file() {
+        // The scoreboard's only ERROR row. Emitting at all is the property under
+        // test: scoring it against the merged target needs a built binary and
+        // the target file, which this test cannot supply.
+        let params = EmitParams {
+            toolchain: Toolchain {
+                name: "GCC".into(),
+                version: "15.2.0".into(),
+            },
+            version: Some("5.1.1".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: Some(NEW_SHA.into()),
+        };
+        let r = emit_next_generation(KOKKOS_ANNOTATED_BARE_CHECKSUMS, &params).expect("emit");
+        assert_eq!(r.filename, "Kokkos-5.1.1-GCC-15.2.0.eb");
+        assert!(r.text.contains(&format!("'{NEW_SHA}'")), "{}", r.text);
+        // The patch hash below the second annotation is not the source's to take.
+        assert!(
+            r.text
+                .contains("'ef8bb57088970fb765acd00bee6d9a07b52383b5e890feb7679bdff3cb1ad0db'"),
+            "{}",
+            r.text
+        );
+        // Annotations are the maintainer's, and survive verbatim.
+        assert!(
+            r.text.contains("    # Kokkos-4.7.01.tar.gz\n"),
+            "{}",
+            r.text
+        );
+        // A version bump still owes a patch-set review.
+        assert!(
+            r.warnings.iter().any(|w| w.contains("patches")),
+            "warnings: {:?}",
+            r.warnings
+        );
     }
 
     #[test]
