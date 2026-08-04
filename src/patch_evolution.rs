@@ -31,6 +31,7 @@ pub enum PatchDecision {
 }
 
 impl PatchDecision {
+    /// Lowercase verb for residual summaries and logs.
     pub fn as_str(&self) -> &'static str {
         match self {
             PatchDecision::Carry => "carry",
@@ -44,8 +45,11 @@ impl PatchDecision {
 /// One patch, its decision, and the evidence the decision rests on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PatchCall {
+    /// Patch file name as the recipe lists it.
     pub patch: String,
+    /// What happens to it across the bump.
     pub decision: PatchDecision,
+    /// The observation the decision rests on, naming the recipe consulted.
     pub evidence: String,
 }
 
@@ -53,14 +57,18 @@ pub struct PatchCall {
 /// as patch evidence. The caller owns the parse so this module stays pure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SiblingRecipe {
+    /// Tree path of the sibling recipe, cited in every decision.
     pub easyconfig_path: String,
+    /// Toolchain the sibling builds against; family match raises its rank.
     pub toolchain: Toolchain,
+    /// Patch files the sibling ships, in its own order.
     pub patch_names: Vec<String>,
 }
 
 /// The full evolution plan for a bump's patch set.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PatchPlan {
+    /// One decision per patch across old set and sibling set.
     pub calls: Vec<PatchCall>,
     /// Path of the same-version sibling recipe the plan adopts, when one
     /// exists in the tree.
@@ -89,6 +97,7 @@ impl PatchPlan {
             .any(|c| matches!(c.decision, PatchDecision::Drop | PatchDecision::Adopt))
     }
 
+    /// Patches whose fate could not be decided from evidence.
     pub fn undecided(&self) -> Vec<&str> {
         self.calls
             .iter()
