@@ -69,6 +69,7 @@ fn canonical_bump(
             pins: Vec::new(),
             exclusions: Vec::new(),
         },
+        strict_patches: false,
     })
     .unwrap_or_else(|error| panic!("canonical bump failed for {}: {error}", source.display()));
     bundle.easyconfigs[0].text.clone()
