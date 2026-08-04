@@ -297,7 +297,11 @@ mod tests {
     #[test]
     fn sibling_drives_drop_carry_and_adopt() {
         let old = vec!["keep.patch".to_string(), "fixed-upstream.patch".to_string()];
-        let sibling = sib("tree/o.eb", ("GCC", "14.3.0"), &["keep.patch", "brand-new.patch"]);
+        let sibling = sib(
+            "tree/o.eb",
+            ("GCC", "14.3.0"),
+            &["keep.patch", "brand-new.patch"],
+        );
         let plan = plan_patch_evolution("5.0.9", "5.0.10", &old, Some(&sibling));
         assert_eq!(plan.sibling.as_deref(), Some("tree/o.eb"));
         let by_name = |p: &str| plan.calls.iter().find(|c| c.patch == p).unwrap().decision;

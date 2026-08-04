@@ -532,13 +532,13 @@ pub fn complete_package_bump(
             )
             .into_iter()
             .find_map(|path| {
-                resolve_easyconfig_file(Path::new(&path)).ok().map(|recipe| {
-                    crate::patch_evolution::SiblingRecipe {
+                resolve_easyconfig_file(Path::new(&path))
+                    .ok()
+                    .map(|recipe| crate::patch_evolution::SiblingRecipe {
                         easyconfig_path: path,
                         toolchain: recipe.toolchain,
                         patch_names: recipe.patch_names,
-                    }
-                })
+                    })
             });
             let patch_plan = crate::patch_evolution::plan_patch_evolution(
                 &source_recipe.version,
@@ -584,7 +584,12 @@ pub fn complete_package_bump(
                 crate::patch_evolution::PatchDecision::Undecided => ResidualSeverity::Judgment,
                 _ => ResidualSeverity::Mechanical,
             },
-            summary: format!("{} {}: {}", call.decision.as_str(), call.patch, call.evidence),
+            summary: format!(
+                "{} {}: {}",
+                call.decision.as_str(),
+                call.patch,
+                call.evidence
+            ),
             evidence: None,
             provenance: None,
         });

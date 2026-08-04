@@ -327,20 +327,30 @@ fn version_bump_adopts_the_same_version_siblings_patch_block() {
         .map(|r| r.summary.as_str())
         .collect();
     assert!(
-        decisions.iter().any(|s| s.starts_with("carry portable-fix.patch")),
+        decisions
+            .iter()
+            .any(|s| s.starts_with("carry portable-fix.patch")),
         "{decisions:?}"
     );
     assert!(
-        decisions.iter().any(|s| s.starts_with("adopt Beta-2.0_new-fix.patch")),
+        decisions
+            .iter()
+            .any(|s| s.starts_with("adopt Beta-2.0_new-fix.patch")),
         "{decisions:?}"
     );
     assert!(
-        decisions.iter().any(|s| s.starts_with("drop Beta-1.0_old-fix.patch")),
+        decisions
+            .iter()
+            .any(|s| s.starts_with("drop Beta-1.0_old-fix.patch")),
         "{decisions:?}"
     );
     // The blanket review warning is superseded by per-patch evidence.
     assert!(
-        !bundle.plan.residuals.iter().any(|r| r.summary.contains("patches were not modified")),
+        !bundle
+            .plan
+            .residuals
+            .iter()
+            .any(|r| r.summary.contains("patches were not modified")),
         "blanket warning still present"
     );
 }
