@@ -380,7 +380,10 @@ mod tests {
         // 5.0.8 -> 5.0.10: matching only the source version misses it.
         let old = vec!["OpenMPI-5.0.7_fix_gpfs_compatibility.patch".to_string()];
         let plan = plan_patch_evolution("5.0.10", &old, None);
-        assert_eq!(plan.undecided(), vec!["OpenMPI-5.0.7_fix_gpfs_compatibility.patch"]);
+        assert_eq!(
+            plan.undecided(),
+            vec!["OpenMPI-5.0.7_fix_gpfs_compatibility.patch"]
+        );
         // A pin on the bump target itself is not foreign.
         let new = vec!["X-2.0_fix.patch".to_string()];
         let plan = plan_patch_evolution("2.0", &new, None);
