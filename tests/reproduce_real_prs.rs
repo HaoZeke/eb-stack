@@ -15,7 +15,11 @@
 //!    target generation's sub-toolchain hierarchy.
 
 use eb_stack::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
-use eb_stack::{plan_package_bump, BumpPackageRequest, Toolchain};
+use eb_stack::{
+    check_case_against_ratchet, check_ratchet, plan_package_bump, read_case_scores,
+    score_with_allowance, write_case_score, BumpPackageRequest, ReproCaseScore, ReproRatchet,
+    Toolchain,
+};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -70,21 +74,37 @@ fn canonical_bump(
     bundle.easyconfigs[0].text.clone()
 }
 
+/// The committed allowance counts every case is checked against.
+fn ratchet_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/repro_ratchet.json")
+}
+
+/// Where score artifacts go, when the run asks for them.
+///
+/// The grind sets `EB_REPRO_SCORES` to collect one JSON per case for the
+/// scoreboard; a plain `cargo test` writes nothing and still checks every
+/// score and the ratchet.
+fn score_artifact_dir() -> Option<PathBuf> {
+    std::env::var("EB_REPRO_SCORES").ok().map(PathBuf::from)
+}
+
 /// Assert that bumping `source` with locked overrides reproduces `target` exactly,
 /// except that `target` may contain each line in `allowed_additions` once,
 /// in the position the maintainer inserted it. Removing those lines from
 /// `target` (in order) must leave text identical to the emitted bump.
 fn assert_reproduces(
+    case: &str,
     source: &Path,
     target: &Path,
     overrides: HashMap<String, String>,
     allowed_additions: &[&str],
 ) {
     let text = canonical_bump(source, &foss("2024a"), &universe_foss_2024a(), overrides);
-    assert_emitted_matches_target(&text, target, allowed_additions, source);
+    assert_emitted_matches_target(case, &text, target, allowed_additions, source);
 }
 
 fn assert_reproduces_auto(
+    case: &str,
     source: &Path,
     target: &Path,
     toolchain: &Toolchain,
@@ -92,10 +112,19 @@ fn assert_reproduces_auto(
     allowed_additions: &[&str],
 ) {
     let text = canonical_bump(source, toolchain, universe, HashMap::new());
-    assert_emitted_matches_target(&text, target, allowed_additions, source);
+    assert_emitted_matches_target(case, &text, target, allowed_additions, source);
 }
 
+/// Compare, score, and hold the case to its committed allowance.
+///
+/// The byte-exact comparison is unchanged. What it gains is a score
+/// record: the allowance is applied by
+/// [`eb_stack::score_with_allowance`], the rest goes to the normalized
+/// ladder, and the resulting count is checked against
+/// `tests/repro_ratchet.json` right here rather than in a later test, so
+/// no ordering between test binaries is assumed.
 fn assert_emitted_matches_target(
+    case: &str,
     emitted_text: &str,
     target: &Path,
     allowed_additions: &[&str],
@@ -104,30 +133,46 @@ fn assert_emitted_matches_target(
     let target_text = std::fs::read_to_string(target)
         .unwrap_or_else(|e| panic!("read {}: {e}", target.display()));
 
-    let mut target_lines: Vec<&str> = target_text.lines().collect();
-    for addition in allowed_additions {
-        let pos = target_lines.iter().position(|l| *l == *addition);
-        match pos {
-            Some(i) => {
-                target_lines.remove(i);
-            }
-            None => panic!(
-                "allowed addition {addition:?} not found in real target {}",
-                target.display()
-            ),
-        }
-    }
-    let target_stripped = target_lines.join("\n");
-    let emitted: Vec<&str> = emitted_text.lines().collect();
-    let emitted_joined = emitted.join("\n");
+    let scored = score_with_allowance(emitted_text, &target_text, allowed_additions);
+    let emitted_joined = emitted_text.lines().collect::<Vec<_>>().join("\n");
 
     assert_eq!(
         emitted_joined.trim_end(),
-        target_stripped.trim_end(),
+        scored.target_without_allowance.trim_end(),
         "mechanical bump of {} did not reproduce {} (modulo {:?})",
         source.display(),
         target.display(),
         allowed_additions
+    );
+
+    let record = ReproCaseScore {
+        case: case.to_string(),
+        pull_request: None,
+        source: source.display().to_string(),
+        target: target.display().to_string(),
+        score: scored.score,
+        allowance: allowed_additions
+            .iter()
+            .map(|line| (*line).to_string())
+            .collect(),
+        stale_allowance: scored.stale.clone(),
+        residual_lines: scored.residual.len(),
+    };
+
+    if let Some(directory) = score_artifact_dir() {
+        write_case_score(&directory, &record).expect("write repro score artifact");
+    }
+
+    let ratchet = ReproRatchet::read(&ratchet_path()).expect("read tests/repro_ratchet.json");
+    let violations = check_case_against_ratchet(&ratchet, &record);
+    assert!(
+        violations.is_empty(),
+        "allowance ratchet for {case}:\n{}",
+        violations
+            .iter()
+            .map(|violation| format!("  {violation}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }
 
@@ -150,6 +195,7 @@ fn reproduces_gromacs_2024_4_foss_2023b_to_2024a() {
         ("mpi4py", "4.0.1"),
     ]);
     assert_reproduces(
+        "reproduces_gromacs_2024_4_foss_2023b_to_2024a",
         &source,
         &target,
         overrides,
@@ -167,6 +213,7 @@ fn reproduces_gromacs_2024_4_foss_2023b_to_2024a_auto() {
     let source = fixture("gromacs/GROMACS-2024.4-foss-2023b.eb");
     let target = fixture("gromacs/GROMACS-2024.4-foss-2024a.eb");
     assert_reproduces_auto(
+        "reproduces_gromacs_2024_4_foss_2023b_to_2024a_auto",
         &source,
         &target,
         &foss("2024a"),
@@ -189,7 +236,7 @@ fn reproduces_scafacos_1_0_4_foss_2023b_to_2024a() {
         ("pkgconf", "2.2.0"),
         ("GSL", "2.8"),
     ]);
-    assert_reproduces(&source, &target, overrides, &[]);
+    assert_reproduces("reproduces_scafacos_1_0_4_foss_2023b_to_2024a", &source, &target, overrides, &[]);
 }
 
 #[test]
@@ -197,6 +244,7 @@ fn reproduces_scafacos_1_0_4_foss_2023b_to_2024a_auto() {
     let source = fixture("scafacos/ScaFaCoS-1.0.4-foss-2023b.eb");
     let target = fixture("scafacos/ScaFaCoS-1.0.4-foss-2024a.eb");
     assert_reproduces_auto(
+        "reproduces_scafacos_1_0_4_foss_2023b_to_2024a_auto",
         &source,
         &target,
         &foss("2024a"),
@@ -220,7 +268,7 @@ fn reproduces_mdtraj_1_10_3_foss_2023b_to_2024a() {
         ("networkx", "3.4.2"),
         ("PyTables", "3.10.2"),
     ]);
-    assert_reproduces(&source, &target, overrides, &[]);
+    assert_reproduces("reproduces_mdtraj_1_10_3_foss_2023b_to_2024a", &source, &target, overrides, &[]);
 }
 
 #[test]
@@ -273,6 +321,7 @@ fn reproduces_fiona_1_10_1_foss_2023b_to_2024a() {
     let source = fixture("fiona/Fiona-1.10.1-foss-2023b.eb");
     let target = fixture("fiona/Fiona-1.10.1-foss-2024a.eb");
     assert_reproduces(
+        "reproduces_fiona_1_10_1_foss_2023b_to_2024a",
         &source,
         &target,
         deps(&[("Python", "3.12.3"), ("GDAL", "3.10.0")]),
@@ -285,6 +334,7 @@ fn reproduces_fiona_1_10_1_foss_2023b_to_2024a_auto() {
     let source = fixture("fiona/Fiona-1.10.1-foss-2023b.eb");
     let target = fixture("fiona/Fiona-1.10.1-foss-2024a.eb");
     assert_reproduces_auto(
+        "reproduces_fiona_1_10_1_foss_2023b_to_2024a_auto",
         &source,
         &target,
         &foss("2024a"),
@@ -301,6 +351,7 @@ fn reproduces_pulp_2_8_0_foss_2023b_to_2024a() {
     let source = fixture("pulp/PuLP-2.8.0-foss-2023b.eb");
     let target = fixture("pulp/PuLP-2.8.0-foss-2024a.eb");
     assert_reproduces(
+        "reproduces_pulp_2_8_0_foss_2023b_to_2024a",
         &source,
         &target,
         deps(&[("Python", "3.12.3"), ("Cbc", "2.10.12")]),
@@ -313,6 +364,7 @@ fn reproduces_pulp_2_8_0_foss_2023b_to_2024a_auto() {
     let source = fixture("pulp/PuLP-2.8.0-foss-2023b.eb");
     let target = fixture("pulp/PuLP-2.8.0-foss-2024a.eb");
     assert_reproduces_auto(
+        "reproduces_pulp_2_8_0_foss_2023b_to_2024a_auto",
         &source,
         &target,
         &foss("2024a"),
@@ -329,6 +381,7 @@ fn reproduces_numba_0_60_0_foss_2023b_to_2024a() {
     let source = fixture("numba/numba-0.60.0-foss-2023b.eb");
     let target = fixture("numba/numba-0.60.0-foss-2024a.eb");
     assert_reproduces(
+        "reproduces_numba_0_60_0_foss_2023b_to_2024a",
         &source,
         &target,
         deps(&[("Python", "3.12.3"), ("SciPy-bundle", "2024.05")]),
@@ -341,6 +394,7 @@ fn reproduces_numba_0_60_0_foss_2023b_to_2024a_auto() {
     let source = fixture("numba/numba-0.60.0-foss-2023b.eb");
     let target = fixture("numba/numba-0.60.0-foss-2024a.eb");
     assert_reproduces_auto(
+        "reproduces_numba_0_60_0_foss_2023b_to_2024a_auto",
         &source,
         &target,
         &foss("2024a"),
@@ -408,14 +462,21 @@ fn cli_auto_bump(source: &Path, out_name: &str) -> String {
 }
 
 /// CLI package bump must match library emit (modulo residual additions).
-fn assert_cli_reproduces(source: &Path, target: &Path, allowed_additions: &[&str], out_name: &str) {
+fn assert_cli_reproduces(
+    case: &str,
+    source: &Path,
+    target: &Path,
+    allowed_additions: &[&str],
+    out_name: &str,
+) {
     let emitted = cli_auto_bump(source, out_name);
-    assert_emitted_matches_target(&emitted, target, allowed_additions, source);
+    assert_emitted_matches_target(case, &emitted, target, allowed_additions, source);
 }
 
 #[test]
 fn cli_reproduces_gromacs_2024_4_foss_2023b_to_2024a() {
     assert_cli_reproduces(
+        "cli_reproduces_gromacs_2024_4_foss_2023b_to_2024a",
         &fixture("gromacs/GROMACS-2024.4-foss-2023b.eb"),
         &fixture("gromacs/GROMACS-2024.4-foss-2024a.eb"),
         &["    ('pybind11', '2.12.0'),"],
@@ -426,6 +487,7 @@ fn cli_reproduces_gromacs_2024_4_foss_2023b_to_2024a() {
 #[test]
 fn cli_reproduces_scafacos_1_0_4_foss_2023b_to_2024a() {
     assert_cli_reproduces(
+        "cli_reproduces_scafacos_1_0_4_foss_2023b_to_2024a",
         &fixture("scafacos/ScaFaCoS-1.0.4-foss-2023b.eb"),
         &fixture("scafacos/ScaFaCoS-1.0.4-foss-2024a.eb"),
         &[],
@@ -436,6 +498,7 @@ fn cli_reproduces_scafacos_1_0_4_foss_2023b_to_2024a() {
 #[test]
 fn cli_reproduces_fiona_1_10_1_foss_2023b_to_2024a() {
     assert_cli_reproduces(
+        "cli_reproduces_fiona_1_10_1_foss_2023b_to_2024a",
         &fixture("fiona/Fiona-1.10.1-foss-2023b.eb"),
         &fixture("fiona/Fiona-1.10.1-foss-2024a.eb"),
         &[],
@@ -446,6 +509,7 @@ fn cli_reproduces_fiona_1_10_1_foss_2023b_to_2024a() {
 #[test]
 fn cli_reproduces_pulp_2_8_0_foss_2023b_to_2024a() {
     assert_cli_reproduces(
+        "cli_reproduces_pulp_2_8_0_foss_2023b_to_2024a",
         &fixture("pulp/PuLP-2.8.0-foss-2023b.eb"),
         &fixture("pulp/PuLP-2.8.0-foss-2024a.eb"),
         &[],
@@ -456,6 +520,7 @@ fn cli_reproduces_pulp_2_8_0_foss_2023b_to_2024a() {
 #[test]
 fn cli_reproduces_numba_0_60_0_foss_2023b_to_2024a() {
     assert_cli_reproduces(
+        "cli_reproduces_numba_0_60_0_foss_2023b_to_2024a",
         &fixture("numba/numba-0.60.0-foss-2023b.eb"),
         &fixture("numba/numba-0.60.0-foss-2024a.eb"),
         &[],
@@ -484,4 +549,70 @@ fn cli_reproduces_mdtraj_required_pins_and_optional_bumps() {
             "CLI MDTraj missing {pin} in:\n{emitted}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The ratchet itself. Every scored case checks its own entry as it runs, so
+// these cover what a single case cannot see: entries for cases that no longer
+// exist, a total that drifted from the counts it sums, and the artifact path
+// the scoreboard reads.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn every_ratchet_entry_names_a_case_that_still_exists() {
+    let harness = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/reproduce_real_prs.rs"),
+    )
+    .expect("read this test file");
+    let ratchet = ReproRatchet::read(&ratchet_path()).expect("read ratchet");
+    for case in ratchet.cases.keys() {
+        assert!(
+            harness.contains(&format!("fn {case}()")),
+            "ratchet entry {case:?} names no case in the suite; a stale entry keeps a number \
+             alive that nothing measures"
+        );
+    }
+}
+
+#[test]
+fn the_ratchet_total_matches_the_counts_it_sums() {
+    let ratchet = ReproRatchet::read(&ratchet_path()).expect("read ratchet");
+    assert_eq!(
+        ratchet.total_violation(),
+        None,
+        "the total is the one number the scoreboard cites; it has to follow the cases"
+    );
+}
+
+#[test]
+fn a_collected_run_writes_artifacts_the_ratchet_check_accepts() {
+    // Drive one case with the artifact directory set, then read the
+    // artifact back exactly as a scoreboard run would.
+    let directory = tempfile::tempdir().expect("tempdir");
+    std::env::set_var("EB_REPRO_SCORES", directory.path());
+    let case = "reproduces_scafacos_1_0_4_foss_2023b_to_2024a_auto";
+    assert_reproduces_auto(
+        case,
+        &fixture("scafacos/ScaFaCoS-1.0.4-foss-2023b.eb"),
+        &fixture("scafacos/ScaFaCoS-1.0.4-foss-2024a.eb"),
+        &foss("2024a"),
+        &universe_foss_2024a(),
+        &[],
+    );
+    std::env::remove_var("EB_REPRO_SCORES");
+
+    let scores = read_case_scores(directory.path()).expect("read artifacts");
+    let written = scores
+        .iter()
+        .find(|score| score.case == case)
+        .unwrap_or_else(|| panic!("no artifact for {case} in {scores:?}"));
+    assert_eq!(written.miss_count(), 0);
+    assert_eq!(written.residual_lines, 0);
+    assert!(written.stale_allowance.is_empty());
+
+    let ratchet = ReproRatchet::read(&ratchet_path()).expect("read ratchet");
+    assert!(
+        check_ratchet(&ratchet, &scores).is_empty(),
+        "a collected run of scored cases must satisfy the committed ratchet"
+    );
 }

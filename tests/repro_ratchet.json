@@ -1,0 +1,22 @@
+{
+  "note": "Allowance counts for the reproduction suite: how many maintainer-added lines each case still cannot reproduce. This file only moves down. A case that forgives more lines than its count fails the suite; so does a case that forgives fewer, until the smaller number lands here. The diff of this file is the record of every allowance change the grind has made.",
+  "cases": {
+    "cli_reproduces_fiona_1_10_1_foss_2023b_to_2024a": 0,
+    "cli_reproduces_gromacs_2024_4_foss_2023b_to_2024a": 1,
+    "cli_reproduces_numba_0_60_0_foss_2023b_to_2024a": 0,
+    "cli_reproduces_pulp_2_8_0_foss_2023b_to_2024a": 0,
+    "cli_reproduces_scafacos_1_0_4_foss_2023b_to_2024a": 0,
+    "reproduces_fiona_1_10_1_foss_2023b_to_2024a": 0,
+    "reproduces_fiona_1_10_1_foss_2023b_to_2024a_auto": 0,
+    "reproduces_gromacs_2024_4_foss_2023b_to_2024a": 1,
+    "reproduces_gromacs_2024_4_foss_2023b_to_2024a_auto": 1,
+    "reproduces_mdtraj_1_10_3_foss_2023b_to_2024a": 0,
+    "reproduces_numba_0_60_0_foss_2023b_to_2024a": 0,
+    "reproduces_numba_0_60_0_foss_2023b_to_2024a_auto": 0,
+    "reproduces_pulp_2_8_0_foss_2023b_to_2024a": 0,
+    "reproduces_pulp_2_8_0_foss_2023b_to_2024a_auto": 0,
+    "reproduces_scafacos_1_0_4_foss_2023b_to_2024a": 0,
+    "reproduces_scafacos_1_0_4_foss_2023b_to_2024a_auto": 0
+  },
+  "total": 3
+}
