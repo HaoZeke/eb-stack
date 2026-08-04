@@ -255,3 +255,145 @@ fn easybuild_bump_makes_cross_generation_stack_selection_explicit() {
         bundle.easyconfigs[0].text
     );
 }
+
+#[test]
+fn version_bump_adopts_the_same_version_siblings_patch_block() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Beta-1.0-GCCcore-14.3.0.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'Beta'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+         toolchain = {'name': 'GCCcore', 'version': '14.3.0'}\n\
+         sources = ['beta-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         patches = ['Beta-1.0_old-fix.patch', 'portable-fix.patch']\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    // The maintainer already ships 2.0 under another toolchain, with an
+    // evolved patch set carrying a level tuple that must survive verbatim.
+    fs::write(
+        robot.join("Beta-2.0-GCCcore-13.3.0.eb"),
+        "easyblock = 'ConfigureMake'\nname = 'Beta'\nversion = '2.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+         toolchain = {'name': 'GCCcore', 'version': '13.3.0'}\n\
+         sources = ['beta-2.0.tar.gz']\n\
+         checksums = ['bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb']\n\
+         patches = [\n    'portable-fix.patch',\n    ('Beta-2.0_new-fix.patch', 1),\n]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("sibling recipe");
+    let toolchain = Toolchain {
+        name: "GCCcore".into(),
+        version: "15.2.0".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: Some("2.0".into()),
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+    })
+    .expect("bump with sibling evidence");
+
+    let text = &bundle.easyconfigs[0].text;
+    assert!(
+        text.contains("('Beta-2.0_new-fix.patch', 1)"),
+        "sibling tuple entry adopted verbatim: {text}"
+    );
+    assert!(
+        !text.contains("Beta-1.0_old-fix.patch"),
+        "dropped patch removed: {text}"
+    );
+
+    let decisions: Vec<&str> = bundle
+        .plan
+        .residuals
+        .iter()
+        .filter(|r| r.category == "patch-decision")
+        .map(|r| r.summary.as_str())
+        .collect();
+    assert!(
+        decisions.iter().any(|s| s.starts_with("carry portable-fix.patch")),
+        "{decisions:?}"
+    );
+    assert!(
+        decisions.iter().any(|s| s.starts_with("adopt Beta-2.0_new-fix.patch")),
+        "{decisions:?}"
+    );
+    assert!(
+        decisions.iter().any(|s| s.starts_with("drop Beta-1.0_old-fix.patch")),
+        "{decisions:?}"
+    );
+    // The blanket review warning is superseded by per-patch evidence.
+    assert!(
+        !bundle.plan.residuals.iter().any(|r| r.summary.contains("patches were not modified")),
+        "blanket warning still present"
+    );
+}
+
+#[test]
+fn strict_patches_fails_on_a_version_pinned_patch_without_sibling_evidence() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Gamma-1.0-GCCcore-14.3.0.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'Gamma'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+         toolchain = {'name': 'GCCcore', 'version': '14.3.0'}\n\
+         sources = ['gamma-1.0.tar.gz']\n\
+         checksums = ['cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc']\n\
+         patches = ['Gamma-1.0_fix.patch']\nmoduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    // The tree knows nothing about 2.0; the pinned patch name is undecidable.
+    fs::write(
+        robot.join("Unrelated-9.9-GCCcore-15.2.0.eb"),
+        "easyblock = 'ConfigureMake'\nname = 'Unrelated'\nversion = '9.9'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Filler'\n\
+         toolchain = {'name': 'GCCcore', 'version': '15.2.0'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'tools'\n",
+    )
+    .expect("filler recipe");
+    let toolchain = Toolchain {
+        name: "GCCcore".into(),
+        version: "15.2.0".into(),
+    };
+    let request = BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: Some("2.0".into()),
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: true,
+    };
+    let error = plan_package_bump(&request).expect_err("undecided patch must fail strict mode");
+    assert!(
+        error.to_string().contains("Gamma-1.0_fix.patch"),
+        "error names the patch: {error}"
+    );
+}
