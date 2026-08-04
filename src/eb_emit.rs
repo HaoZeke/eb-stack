@@ -1432,7 +1432,6 @@ checksums = [
     }
 
     #[test]
-    #[test]
     fn list_span_ignores_brackets_in_comments_and_strings() {
         let src = "patches = [\n    'weird[1].patch',  # see [upstream]\n    \"other]name.patch\",\n]\nmoduleclass = 'lib'\n";
         let (s, e) = find_list_span(src, "patches").unwrap().unwrap();
@@ -1449,6 +1448,7 @@ checksums = [
         assert!(find_list_span(src, "patches").is_err());
     }
 
+    #[test]
     fn version_bump_with_source_checksum_rewrites_source_entry() {
         let params = EmitParams {
             toolchain: nvhpc("25.11-CUDA-12.8.0"),
