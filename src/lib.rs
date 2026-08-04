@@ -24,6 +24,7 @@ pub mod package_solve;
 pub mod package_sources;
 pub mod package_workflow;
 pub mod report;
+pub mod repro_report;
 pub mod resolvo_provider;
 pub mod sbom;
 pub mod select;
@@ -72,6 +73,11 @@ pub use manifest::package_plan_from_foreign;
 pub use miner::{
     compare_reproduction, is_backfill, is_toolchain_meta_recipe, normalize_for_scoring,
     score_reproduction, DiffLine, DiffTag, ReproComparison, ReproScore,
+};
+pub use repro_report::{
+    check_case_against_ratchet, check_ratchet, read_case_scores, render_scoreboard_table,
+    score_with_allowance, write_case_score, RatchetViolation, ReproCaseScore, ReproRatchet,
+    ReproReportError, ScoredReproduction, StaleAllowance,
 };
 pub use package_catalog::{
     resolve_package_catalog_layers, CatalogProviderKind, PackageCatalogError, PackageCatalogLayer,

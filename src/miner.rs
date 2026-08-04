@@ -15,6 +15,7 @@
 
 use crate::eb_parse::ResolvedEasyconfig;
 use crate::version::cmp_version;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
 
@@ -244,7 +245,8 @@ pub fn normalize_for_scoring(text: &str) -> String {
 /// (a toolchain meta-recipe, a backfill, a package with no prior recipe).
 /// Both are decided before this comparison runs, and both are recorded
 /// with their reason rather than dropped.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
 pub enum ReproScore {
     /// Byte-identical to the merged file.
     Exact,
