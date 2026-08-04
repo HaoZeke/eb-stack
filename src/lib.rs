@@ -46,8 +46,9 @@ pub use eb_parse::{
     candidate_matches_dep, check_recipe_deps, easyconfig_basename, easyconfig_letter_dir,
     filter_toolchain, lock_from_candidates, merge_candidates_with_precedence, packaging_gate,
     parse_easyconfig_file, parse_easyconfig_tree, parse_easyconfig_trees, resolve_easyconfig_file,
-    resolve_easyconfig_str, validate_lock_deps, version_field_to_req, MissingDep, ParseTreeResult,
-    RecipeDepCheck, ResolvedDep, ResolvedEasyconfig, ResolvedExt, SkippedEasyconfig,
+    resolve_easyconfig_file_reporting, resolve_easyconfig_str, resolve_easyconfig_str_reporting,
+    validate_lock_deps, version_field_to_req, MissingDep, ParseTreeResult, RecipeDepCheck,
+    ResolvedDep, ResolvedEasyconfig, ResolvedExt, SkippedEasyconfig, SkippedStatement,
 };
 pub use eb_style::{
     format_style, format_style_file, lint_style, FormatStyleResult, StyleError, StyleFinding,

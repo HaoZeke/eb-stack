@@ -238,6 +238,9 @@ struct Parser<'a> {
     src: &'a [u8],
     pos: usize,
     env: HashMap<String, Value>,
+    /// Statements the tolerant loop could not represent. Collected always;
+    /// only `--strict` callers ask for them.
+    skipped: Vec<SkippedStatement>,
 }
 
 impl<'a> Parser<'a> {
@@ -251,6 +254,7 @@ impl<'a> Parser<'a> {
             src: src.as_bytes(),
             pos: 0,
             env,
+            skipped: Vec::new(),
         }
     }
 
@@ -262,6 +266,15 @@ impl<'a> Parser<'a> {
             .count()
             + 1;
         format!("line {line}: {msg}")
+    }
+
+    /// 1-based line number of a byte offset.
+    fn line_of(&self, offset: usize) -> usize {
+        self.src[..offset.min(self.src.len())]
+            .iter()
+            .filter(|&&c| c == b'\n')
+            .count()
+            + 1
     }
 
     fn peek(&self) -> Option<u8> {
@@ -299,11 +312,23 @@ impl<'a> Parser<'a> {
             let start = self.pos;
             match self.parse_assignment() {
                 Ok(()) => {}
-                Err(_) => {
+                Err(message) => {
+                    // Tolerance is the default, but the reason is not thrown
+                    // away: strict callers report what could not be modelled.
                     self.pos = start;
+                    let line = self.line_of(start);
                     if !self.skip_one_statement() {
                         break;
                     }
+                    let text = std::str::from_utf8(&self.src[start..self.pos])
+                        .unwrap_or("<non-utf8 statement>")
+                        .trim()
+                        .to_string();
+                    self.skipped.push(SkippedStatement {
+                        line,
+                        message,
+                        text,
+                    });
                 }
             }
         }
@@ -1142,7 +1167,75 @@ fn value_list_as_slice(val: Option<&Value>) -> Result<&[Value], String> {
 }
 
 /// Resolve easyconfig source text to fully expanded fields (no filesystem path).
+/// One statement the tolerant parser could not model, and why.
+///
+/// The parser skips an unrepresentable statement so a single oddity does not
+/// cost the whole easyconfig. That is the right default, but it means a recipe
+/// can parse "successfully" while a line the author cared about was dropped.
+/// These records are what `--strict` reports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkippedStatement {
+    /// 1-based line the statement starts on.
+    pub line: usize,
+    /// Why it could not be parsed, already carrying its own line prefix.
+    pub message: String,
+    /// The statement text as written, trimmed.
+    pub text: String,
+}
+
+impl SkippedStatement {
+    /// The reason without the `line N: ` prefix the parser already applied,
+    /// so a caller that prints its own position does not repeat it.
+    pub fn reason(&self) -> &str {
+        match self.message.split_once(": ") {
+            Some((head, rest)) if head.starts_with("line ") => rest,
+            _ => self.message.as_str(),
+        }
+    }
+}
+
+impl std::fmt::Display for SkippedStatement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "line {}: {} ({})", self.line, self.text, self.reason())
+    }
+}
+
+/// Resolve easyconfig text, also returning the statements the parser skipped.
+///
+/// [`resolve_easyconfig_str`] is this without the second value; the parse is
+/// identical, so asking for the report costs nothing and changes nothing.
+pub fn resolve_easyconfig_str_reporting(
+    src: &str,
+) -> Result<(ResolvedEasyconfig, Vec<SkippedStatement>), ParseError> {
+    resolve_easyconfig_str_inner(src)
+}
+
+/// As [`resolve_easyconfig_file`], also returning the skipped statements.
+pub fn resolve_easyconfig_file_reporting(
+    path: &Path,
+) -> Result<(ResolvedEasyconfig, Vec<SkippedStatement>), ParseError> {
+    let raw =
+        std::fs::read_to_string(path).map_err(|e| ParseError::Io(path.display().to_string(), e))?;
+    let (mut resolved, skipped) = resolve_easyconfig_str_reporting(&raw).map_err(|e| match e {
+        ParseError::Parse(_, msg) => ParseError::Parse(path.display().to_string(), msg),
+        other => other,
+    })?;
+    resolved.easyconfig_path = path.display().to_string();
+    Ok((resolved, skipped))
+}
+
+/// Resolve easyconfig source text to fully expanded fields (no filesystem path).
+///
+/// Tolerant: a statement the parser cannot model is skipped so the rest of the
+/// recipe still resolves. Use [`resolve_easyconfig_str_reporting`] when you
+/// need to know what was skipped.
 pub fn resolve_easyconfig_str(src: &str) -> Result<ResolvedEasyconfig, ParseError> {
+    resolve_easyconfig_str_inner(src).map(|(resolved, _skipped)| resolved)
+}
+
+fn resolve_easyconfig_str_inner(
+    src: &str,
+) -> Result<(ResolvedEasyconfig, Vec<SkippedStatement>), ParseError> {
     let cleaned = strip_comments(src);
     let mut parser = Parser::new(&cleaned);
     parser
@@ -1234,7 +1327,7 @@ pub fn resolve_easyconfig_str(src: &str) -> Result<ResolvedEasyconfig, ParseErro
     let patch_names = patch_names_field(&parser.env, &templates);
     let checksum_entry_keys = checksum_entry_keys_field(&parser.env, &templates);
 
-    Ok(ResolvedEasyconfig {
+    let resolved = ResolvedEasyconfig {
         name,
         version,
         versionsuffix,
@@ -1252,7 +1345,8 @@ pub fn resolve_easyconfig_str(src: &str) -> Result<ResolvedEasyconfig, ParseErro
         source_urls,
         patch_names,
         checksum_entry_keys,
-    })
+    };
+    Ok((resolved, parser.skipped))
 }
 
 /// Length of a list-valued field after template expansion (0 when absent or
@@ -2342,6 +2436,79 @@ mod tests {
         let err = parser.slice_str(usize::MAX).unwrap_err();
         assert!(err.starts_with("line "), "no line number in {err:?}");
         assert!(err.contains("outside the source"), "{err:?}");
+    }
+
+    /// One recipe, both modes: tolerant still resolves the rest, strict names
+    /// what it lost. This is the pair the --strict flag exists to expose.
+    #[test]
+    fn strict_reports_what_tolerant_silently_skips() {
+        let src = concat!(
+            "name = 'X'\n",
+            "version = '1'\n",
+            "toolchain = SYSTEM\n",
+            "broken = = =\n",
+            "moduleclass = 'lib'\n",
+        );
+
+        // Tolerant: the malformed line costs nothing but itself.
+        let tolerant = resolve_easyconfig_str(src).expect("tolerant parse");
+        assert_eq!(tolerant.name, "X");
+        assert_eq!(tolerant.version, "1");
+        assert_eq!(
+            tolerant.moduleclass.as_deref(),
+            Some("lib"),
+            "a later statement must survive an earlier skip"
+        );
+
+        // Reporting: same resolution, plus the record of what was dropped.
+        let (reported, skipped) = resolve_easyconfig_str_reporting(src).expect("reporting parse");
+        assert_eq!(reported, tolerant, "reporting must not change the parse");
+        assert_eq!(skipped.len(), 1, "{skipped:?}");
+        assert_eq!(skipped[0].line, 4, "{:?}", skipped[0]);
+        assert!(skipped[0].text.starts_with("broken"), "{:?}", skipped[0]);
+        assert!(
+            skipped[0].message.contains("line "),
+            "the message carries its own position: {:?}",
+            skipped[0]
+        );
+        let rendered = skipped[0].to_string();
+        assert!(rendered.contains("broken"), "{rendered}");
+        assert_eq!(
+            rendered.matches("line ").count(),
+            1,
+            "the position is printed once, not repeated from the message: {rendered}"
+        );
+        assert!(
+            rendered.contains(skipped[0].reason()),
+            "the reason survives the de-duplication: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_clean_recipe_has_nothing_to_report() {
+        let src = "name = 'X'\nversion = '1'\ntoolchain = SYSTEM\n";
+        let (_resolved, skipped) = resolve_easyconfig_str_reporting(src).expect("parse");
+        assert!(skipped.is_empty(), "{skipped:?}");
+    }
+
+    #[test]
+    fn a_control_block_is_not_reported_as_a_failure() {
+        // if/for blocks are skipped deliberately, not as errors. Reporting
+        // them would bury the real signal in noise.
+        let src = concat!(
+            "name = 'X'\n",
+            "version = '1'\n",
+            "toolchain = SYSTEM\n",
+            "if True:\n",
+            "    dependencies = [('zlib', '1.3')]\n",
+            "moduleclass = 'lib'\n",
+        );
+        let (resolved, skipped) = resolve_easyconfig_str_reporting(src).expect("parse");
+        assert_eq!(resolved.moduleclass.as_deref(), Some("lib"));
+        assert!(
+            skipped.is_empty(),
+            "a control block is a deliberate skip, not a parse failure: {skipped:?}"
+        );
     }
 
     #[test]

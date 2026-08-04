@@ -172,6 +172,11 @@ enum RecipeCommand {
         /// A git remote, when the seeding recipe built from a checkout.
         #[arg(long, requires = "seeded_from")]
         seeded_git: Option<String>,
+        /// Report every statement the parser could not model, with its line,
+        /// and fail if there are any. The parse itself is unchanged: this
+        /// surfaces what tolerant mode silently skips.
+        #[arg(long)]
+        strict: bool,
     },
     /// Report EasyBuild E501 style findings.
     Lint {
@@ -447,8 +452,26 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             seeded_from,
             seeded_source_url,
             seeded_git,
+            strict,
         } => {
-            let resolved = resolve_easyconfig_file(&recipe).map_err(anyhow::Error::msg)?;
+            let resolved = if strict {
+                let (resolved, skipped) = eb_stack::resolve_easyconfig_file_reporting(&recipe)
+                    .map_err(anyhow::Error::msg)?;
+                for statement in &skipped {
+                    println!("skipped {statement}");
+                }
+                if !skipped.is_empty() {
+                    bail!(
+                        "strict: {} statement(s) could not be parsed; \
+                         the recipe still resolves without them",
+                        skipped.len()
+                    );
+                }
+                println!("strict: every statement parsed");
+                resolved
+            } else {
+                resolve_easyconfig_file(&recipe).map_err(anyhow::Error::msg)?
+            };
             if check_sources {
                 let seed = seeded_from.map(|origin| eb_stack::SeededChecksum {
                     origin,
