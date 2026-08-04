@@ -14,6 +14,7 @@ mod foreign;
 pub mod hierarchy;
 mod manifest;
 pub mod mcp;
+pub mod miner;
 pub mod package;
 pub mod package_catalog;
 pub mod package_closure;
@@ -67,6 +68,7 @@ pub use hierarchy::{
     HierarchyError, ResolveDepOpts, SourceDepSpec, ToolchainHierarchy,
 };
 pub use manifest::package_plan_from_foreign;
+pub use miner::{is_backfill, is_toolchain_meta_recipe};
 pub use package_catalog::{
     resolve_package_catalog_layers, CatalogProviderKind, PackageCatalogError, PackageCatalogLayer,
     PackageSourceCatalog, PackageSourceProvider, PACKAGE_CATALOG_SCHEMA_VERSION,
