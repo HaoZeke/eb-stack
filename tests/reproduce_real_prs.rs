@@ -14,6 +14,7 @@
 //!    resolved by accepting recipes whose toolchain is any member of the
 //!    target generation's sub-toolchain hierarchy.
 
+use eb_stack::miner::{compare_reproduction, ReproScore};
 use eb_stack::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
 use eb_stack::{
     check_case_against_ratchet, check_ratchet, plan_package_bump, read_case_scores,
@@ -438,6 +439,47 @@ fn reproduces_numba_0_60_0_foss_2023b_to_2024a_auto() {
         &foss("2024a"),
         &universe_foss_2024a(),
         &[],
+    );
+}
+
+/// easybuilders/easybuild-easyconfigs PR #26383: numba v0.65.1
+/// (foss/2025b -> foss/2026.1). A harder real shape than the 0.60.0 case
+/// above: `bump` only rewrites toolchain, version, source checksum, and
+/// named top-level dependency versions, but the real merge also (1) adds
+/// a wholly new top-level dependency (`Python-bundle-PyPI`) that was not
+/// in the source at all, (2) bumps a nested `exts_list` entry (llvmlite
+/// 0.45.0 -> 0.47.0, with its own new checksum), and (3) hand-adds a
+/// computed worker-count variable used in the `runtest` command. None of
+/// that is a dependency-version override, so the honest score is
+/// Material, not a bug to chase: this locks in that ceiling rather than
+/// letting it drift unnoticed.
+#[test]
+fn scores_numba_0_62_0_to_0_65_1_as_material() {
+    let source = fixture("numba/numba-0.62.0-foss-2025b.eb");
+    let target = fixture("numba/numba-0.65.1-foss-2026.1.eb");
+    let emitted = canonical_bump(
+        &source,
+        &foss("2026.1"),
+        &universe_foss_2024a(),
+        deps(&[
+            ("CMake", "4.2.1"),
+            ("Python", "3.14.2"),
+            ("SciPy-bundle", "2026.05"),
+            ("Z3", "4.15.4"),
+        ]),
+    );
+    let target_text =
+        std::fs::read_to_string(&target).unwrap_or_else(|e| panic!("read {target:?}: {e}"));
+    let comparison = compare_reproduction(&emitted, &target_text);
+    assert_eq!(
+        comparison.score,
+        ReproScore::Material,
+        "numba PR #26383 should score Material (new top-level dependency, \
+         exts_list version bump, and hand-added test logic are all beyond \
+         bump's scope); got {} instead -- either bump grew a capability \
+         worth documenting, or this reproduction regressed:\n{}",
+        comparison.score.as_str(),
+        comparison.render_raw_diff()
     );
 }
 
