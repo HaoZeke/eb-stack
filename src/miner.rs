@@ -431,7 +431,21 @@ fn raw_line_diff(emitted: &str, target: &str) -> Vec<DiffLine> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eb_parse::resolve_easyconfig_str;
+    use crate::domain::{Candidate, Toolchain};
+    use crate::eb_parse::{existing_versions, resolve_easyconfig_str, ExistingVersionsQuery};
+
+    fn backfill_candidate(name: &str, version: &str, toolchain: &Toolchain) -> Candidate {
+        Candidate {
+            name: name.into(),
+            version: version.into(),
+            toolchain: toolchain.clone(),
+            versionsuffix: None,
+            easyconfig_path: String::new(),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+        }
+    }
 
     /// gompi-2026.1.eb, easybuilders/easybuild-easyconfigs PR #25613,
     /// merge commit f929f1f2ef4c15feb19692f33da59e9e1e072572. Real
@@ -506,7 +520,16 @@ moduleclass = 'mpi'
         // CMake-4.2.1-GCCcore-15.2.0.eb from an earlier PR. A plain string
         // compare of "3.31.11" vs "4.2.1" would (wrongly) rank 4.2.1 lower;
         // cmp_version must not make that mistake.
-        let existing = vec!["4.2.1".to_string()];
+        let generation = Toolchain {
+            name: "GCCcore".into(),
+            version: "15.2.0".into(),
+        };
+        let universe = vec![backfill_candidate("CMake", "4.2.1", &generation)];
+        let existing = existing_versions(&ExistingVersionsQuery {
+            universe: &universe,
+            name: "CMake",
+            generation: &generation,
+        });
         assert!(
             is_backfill("3.31.11", &existing),
             "3.31.11 merging after 4.2.1 already exists at the same generation must be flagged as a backfill"
@@ -519,7 +542,20 @@ moduleclass = 'mpi'
         // GCC-15.2.0, with only 1.88.0 present at the prior generation
         // (GCC-14.3.0) in the merge-base tree, nothing newer already at
         // 15.2.0.
-        let existing: Vec<String> = vec![];
+        let generation = Toolchain {
+            name: "GCC".into(),
+            version: "15.2.0".into(),
+        };
+        let prior_generation = Toolchain {
+            name: "GCC".into(),
+            version: "14.3.0".into(),
+        };
+        let universe = vec![backfill_candidate("Boost", "1.88.0", &prior_generation)];
+        let existing = existing_versions(&ExistingVersionsQuery {
+            universe: &universe,
+            name: "Boost",
+            generation: &generation,
+        });
         assert!(
             !is_backfill("1.90.0", &existing),
             "a version with nothing newer already in the tree at that generation is a clean bump, not a backfill"

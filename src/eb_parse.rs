@@ -2165,6 +2165,82 @@ mod tests {
             .any(|c| c.name == "OpenMPI" && c.version == "4.1.6"));
     }
 
+    fn existing_versions_universe() -> Vec<Candidate> {
+        let gcccore = Toolchain {
+            name: "GCCcore".into(),
+            version: "15.2.0".into(),
+        };
+        let older = Toolchain {
+            name: "GCCcore".into(),
+            version: "14.3.0".into(),
+        };
+        let mk = |name: &str, version: &str, tc: &Toolchain| Candidate {
+            name: name.into(),
+            version: version.into(),
+            toolchain: tc.clone(),
+            versionsuffix: None,
+            easyconfig_path: String::new(),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+        };
+        vec![
+            mk("CMake", "4.2.1", &gcccore),
+            mk("CMake", "3.31.10", &gcccore),
+            mk("CMake", "3.30.0", &older),
+            mk("Boost", "1.88.0", &older),
+        ]
+    }
+
+    #[test]
+    fn existing_versions_returns_every_version_at_the_queried_generation() {
+        let universe = existing_versions_universe();
+        let generation = Toolchain {
+            name: "GCCcore".into(),
+            version: "15.2.0".into(),
+        };
+        let mut got = existing_versions(&ExistingVersionsQuery {
+            universe: &universe,
+            name: "CMake",
+            generation: &generation,
+        });
+        got.sort();
+        assert_eq!(got, vec!["3.31.10".to_string(), "4.2.1".to_string()]);
+    }
+
+    #[test]
+    fn existing_versions_is_empty_for_a_package_not_in_the_universe() {
+        let universe = existing_versions_universe();
+        let generation = Toolchain {
+            name: "GCCcore".into(),
+            version: "15.2.0".into(),
+        };
+        assert!(existing_versions(&ExistingVersionsQuery {
+            universe: &universe,
+            name: "LLVM",
+            generation: &generation,
+        })
+        .is_empty());
+    }
+
+    #[test]
+    fn existing_versions_excludes_other_generations_of_the_same_package() {
+        let universe = existing_versions_universe();
+        let generation = Toolchain {
+            name: "GCCcore".into(),
+            version: "15.2.0".into(),
+        };
+        let got = existing_versions(&ExistingVersionsQuery {
+            universe: &universe,
+            name: "Boost",
+            generation: &generation,
+        });
+        assert!(
+            got.is_empty(),
+            "Boost 1.88.0 sits at GCCcore-14.3.0 and must not answer a GCCcore-15.2.0 query, got {got:?}"
+        );
+    }
+
     #[test]
     fn strip_comments_preserves_hashes_in_strings() {
         let s = "name = 'foo#bar'\n# comment\nversion = '1.0'\n";
