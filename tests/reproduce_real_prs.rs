@@ -457,17 +457,33 @@ fn reproduces_numba_0_60_0_foss_2023b_to_2024a_auto() {
 fn scores_numba_0_62_0_to_0_65_1_as_material() {
     let source = fixture("numba/numba-0.62.0-foss-2025b.eb");
     let target = fixture("numba/numba-0.65.1-foss-2026.1.eb");
-    let emitted = canonical_bump(
-        &source,
-        &foss("2026.1"),
-        &universe_foss_2024a(),
-        deps(&[
+    let toolchain = foss("2026.1");
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source: source.clone(),
+        toolchain: toolchain.clone(),
+        version: Some("0.65.1".into()),
+        source_checksum: Some(
+            "19357146c32fe9ed25059ab915e8465fb13951cf6b0aace3826b76886373ab23".into(),
+        ),
+        easyconfig_roots: vec![universe_foss_2024a()],
+        hierarchy_fixture: None,
+        overrides: deps(&[
             ("CMake", "4.2.1"),
             ("Python", "3.14.2"),
             ("SciPy-bundle", "2026.05"),
             ("Z3", "4.15.4"),
         ]),
-    );
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "reproduction".into(),
+            toolchain: toolchain.clone(),
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+    })
+    .unwrap_or_else(|error| panic!("bump failed for {}: {error}", source.display()));
+    let emitted = bundle.easyconfigs[0].text.clone();
     let target_text =
         std::fs::read_to_string(&target).unwrap_or_else(|e| panic!("read {target:?}: {e}"));
     let comparison = compare_reproduction(&emitted, &target_text);
