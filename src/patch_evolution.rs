@@ -222,23 +222,23 @@ pub fn adopt_sibling_patch_block(text: &str, sibling_path: &str) -> Result<Strin
     let theirs = find_list_assignment_span(&sibling_text, "patches")?;
 
     match (ours, theirs) {
-        (Some((os, oe)), Some((ts, te))) => Ok(format!(
+        (Some((our_start, our_end)), Some((their_start, their_end))) => Ok(format!(
             "{}{}{}",
-            &text[..os],
-            &sibling_text[ts..te],
-            &text[oe..]
+            &text[..our_start],
+            &sibling_text[their_start..their_end],
+            &text[our_end..]
         )),
-        (Some((os, oe)), None) => {
+        (Some((our_start, our_end)), None) => {
             // Sibling ships the new version with no patches at all: the list
             // goes away, along with a trailing newline so no blank hole stays.
-            let mut end = oe;
+            let mut end = our_end;
             if text[end..].starts_with('\n') {
                 end += 1;
             }
-            Ok(format!("{}{}", &text[..os], &text[end..]))
+            Ok(format!("{}{}", &text[..our_start], &text[end..]))
         }
-        (None, Some((ts, te))) => {
-            let block = &sibling_text[ts..te];
+        (None, Some((their_start, their_end))) => {
+            let block = &sibling_text[their_start..their_end];
             if let Some(pos) = find_moduleclass_line(text) {
                 Ok(format!("{}{}\n{}", &text[..pos], block, &text[pos..]))
             } else {
