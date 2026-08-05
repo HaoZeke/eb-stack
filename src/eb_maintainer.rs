@@ -656,6 +656,45 @@ mod tests {
     }
 
     #[test]
+    fn warns_shell_stage_below_the_hard_error_threshold() {
+        // A single preconfigopts assignment staging a cargo build inside a
+        // subshell, with zero `+=` lines: below PRECONFIG_PLUS_EQ_HARD and
+        // PRECONFIG_CHARS_HARD, so this must fire the SHELL_STAGE warning,
+        // not the SHELL_MONSTER hard error.
+        let text =
+            std::fs::read_to_string("fixtures/maintainer_shell_stage/staged_below_threshold.eb")
+                .unwrap();
+        let findings = check_shell_monsters(&text);
+        assert!(
+            findings.iter().any(|f| f.code == "EB_MAINT_SHELL_STAGE"),
+            "{findings:?}"
+        );
+        assert!(
+            !findings.iter().any(|f| f.code == "EB_MAINT_SHELL_MONSTER"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn real_readcon_core_recipe_carries_no_shell_stage_finding() {
+        // Real PR #26480 merged content: the actual cargo cinstall stage
+        // runs through install_cmd/preinstallopts, never preconfigopts, so
+        // it should not trip EB_MAINT_SHELL_STAGE at all (the DO-shape
+        // control for the easybuild-dos-donts skill's DO #3).
+        let text = std::fs::read_to_string(
+            "fixtures/eon_core_rgpot/easyconfigs/r/readcon-core/readcon-core-0.13.1-GCCcore-15.2.0.eb",
+        )
+        .unwrap();
+        let findings = check_shell_monsters(&text);
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.code == "EB_MAINT_SHELL_STAGE" || f.code == "EB_MAINT_SHELL_MONSTER"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
     fn accepts_clean_single_generation() {
         let (recipe, text) = load("fixtures/maintainer_reject_26435/good_single_gen.eb");
         let report = check_maintainer_acceptability(&recipe, &text);

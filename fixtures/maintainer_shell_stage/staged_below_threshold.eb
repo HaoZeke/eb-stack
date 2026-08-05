@@ -1,0 +1,10 @@
+easyblock = 'ConfigureMake'
+name = 'StagedTool'
+version = '1.0.0'
+homepage = 'https://example.invalid/'
+description = "fixture: single cargo cinstall stage, below the shell-monster threshold"
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+sources = ['staged-1.0.0.tar.gz']
+checksums = ['cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc']
+preconfigopts = "(cd %(builddir)s/vendor && cargo cinstall --locked --release --prefix %(builddir)s/vendor-stage) && "
+moduleclass = 'tools'
