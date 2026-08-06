@@ -220,9 +220,14 @@ pub fn derive_hierarchy_from_candidates(
 ) -> Option<ToolchainHierarchy> {
     const COMPOSITES: [&str; 3] = ["gompi", "gfbf", "foss"];
     if NVIDIA_COMPOSITES.contains(&parent.name.as_str()) {
-        // NVHPC-family composite (nvompi, nvofbf): a different chain from the
-        // GCC family, walked in its own function.
-        return derive_nvidia_family_hierarchy(parent, cands);
+        // NVHPC-family composite (NVHPC, nvompi, nvofbf): a different chain
+        // from the GCC family, walked in its own function.
+        //
+        // The fallback covers a pre-5.2.0 `NVHPC` generation, whose defining
+        // recipe pins GCCcore directly and names no compiler level, so it
+        // derives as the compiler-only toolchain it was back then.
+        return derive_nvidia_family_hierarchy(parent, cands)
+            .or_else(|| derive_compiler_toolchain_hierarchy(parent, cands));
     }
     if !COMPOSITES.contains(&parent.name.as_str()) || parent.version.is_empty() {
         // Not a GCC-family composite. A compiler-only toolchain
@@ -281,7 +286,27 @@ pub fn derive_hierarchy_from_candidates(
 /// NVHPC-family composites, lowest rank first, mirroring the GCC family's
 /// `gompi < gfbf < foss`. `nvompi` is NVHPC + OpenMPI; `nvofbf` adds FlexiBLAS,
 /// FFTW and ScaLAPACK on top.
-const NVIDIA_COMPOSITES: [&str; 2] = ["nvompi", "nvofbf"];
+/// Whether `version` names the same release as `spelled`, allowing `spelled` to
+/// carry a versionsuffix the candidate states separately.
+///
+/// `25.3` answers for `25.3-CUDA-12.8.0`, and `25.11` for itself. The separator
+/// requirement is what stops `25.1` from answering for `25.11-CUDA-12.9.1`: a
+/// bare `starts_with` accepts it and then reads that release's GCCcore, which
+/// silently places the whole hierarchy on the wrong compiler generation.
+fn version_prefix_of(version: &str, spelled: &str) -> bool {
+    if version.is_empty() || !spelled.starts_with(version) {
+        return false;
+    }
+    let rest = &spelled[version.len()..];
+    rest.is_empty() || rest.starts_with('-')
+}
+
+/// `NVHPC` is a composite in its own right since EasyBuild 5.2.0:
+/// `NVHPC(NvidiaCompilersToolchain, NVHPCX, NVBLAS, NVScaLAPACK)`, i.e. the
+/// compilers plus the SDK's own MPI and math libraries. A recipe whose
+/// toolchain is `NVHPC-<ver>` therefore has a real hierarchy to derive, and it
+/// is ordered below nvompi and nvofbf, which compose on top of it.
+const NVIDIA_COMPOSITES: [&str; 3] = ["NVHPC", "nvompi", "nvofbf"];
 
 /// Derive an NVHPC-family generation hierarchy (`nvompi-<gen>`, `nvofbf-<gen>`).
 ///
@@ -308,9 +333,37 @@ fn derive_nvidia_family_hierarchy(
     if parent.version.is_empty() {
         return None;
     }
+    // A dependent recipe spells its toolchain with version and versionsuffix
+    // joined (`NVHPC-25.11-CUDA-12.9.1`), while the defining recipe splits them
+    // into version `25.11` plus versionsuffix `-CUDA-12.9.1`. Match either, or
+    // a versionsuffixed parent never finds its own definition.
+    let joined = |c: &Candidate| {
+        format!(
+            "{}{}",
+            c.version,
+            c.versionsuffix.as_deref().unwrap_or_default()
+        )
+    };
+    // The last fallback carries the weight in practice: NVHPC and
+    // nvidia-compilers spell their versionsuffix as a template
+    // (`-CUDA-%(cudaver)s`), which textual parsing cannot expand, so the joined
+    // form reads `25.11-CUDA-%(cudaver)s` and never equals `25.11-CUDA-12.9.1`.
+    // Match on the version prefix instead, requiring the remainder to begin a
+    // versionsuffix so that `25.1` does not answer for `25.11-CUDA-12.9.1`.
+    let suffixed_prefix = |c: &Candidate| version_prefix_of(&c.version, &parent.version);
     let def = cands
         .iter()
-        .find(|c| c.name == parent.name && c.version == parent.version)?;
+        .find(|c| c.name == parent.name && c.version == parent.version)
+        .or_else(|| {
+            cands
+                .iter()
+                .find(|c| c.name == parent.name && joined(c) == parent.version)
+        })
+        .or_else(|| {
+            cands
+                .iter()
+                .find(|c| c.name == parent.name && suffixed_prefix(c))
+        })?;
     // The composite pins its compiler as a whole toolchain string, e.g.
     // ('NVHPC', '25.3-CUDA-12.8.0'): version and versionsuffix already joined,
     // which is precisely the form a dependent recipe's `toolchain` uses.
@@ -341,17 +394,21 @@ fn derive_nvidia_family_hierarchy(
             version: gcccore_ver,
         });
     }
-    // Both spellings of the compiler level are members: recipes in the wild use
-    // `NVHPC` as their toolchain, while `nvidia-compilers` is the framework's
-    // own (OPTIONAL) name for the same level.
+    // Both spellings of the compiler level are members: older recipes in the
+    // wild use `NVHPC` as their toolchain, while `nvidia-compilers` is the
+    // framework's own name for the same level.
     members.push(Toolchain {
         name: "nvidia-compilers".into(),
         version: nvhpc_ver.clone(),
     });
-    members.push(Toolchain {
-        name: "NVHPC".into(),
-        version: nvhpc_ver,
-    });
+    // When NVHPC is itself the parent it is appended last, at its own version,
+    // and must not also appear here at the compiler version.
+    if parent.name != "NVHPC" {
+        members.push(Toolchain {
+            name: "NVHPC".into(),
+            version: nvhpc_ver,
+        });
+    }
     for comp in NVIDIA_COMPOSITES {
         if comp == parent.name {
             break; // parent itself is appended last (highest rank)
@@ -397,7 +454,7 @@ fn nvidia_compilers_gcccore(nvhpc_ver: &str, cands: &[Candidate]) -> Option<Stri
         .or_else(|| {
             cands
                 .iter()
-                .find(|c| is_nvc(c) && !c.version.is_empty() && nvhpc_ver.starts_with(&c.version))
+                .find(|c| is_nvc(c) && version_prefix_of(&c.version, nvhpc_ver))
         })?;
     chosen
         .dependencies
@@ -1257,6 +1314,30 @@ mod tests {
         );
     }
 
+    /// A version prefix only answers at a versionsuffix boundary. Without that
+    /// rule `25.1` matches `25.11-CUDA-12.9.1`, and the hierarchy silently
+    /// takes GCCcore from the wrong release: checking a real NVHPC-25.11 recipe
+    /// put the tree on GCCcore-13.3.0 instead of 14.2.0, which then lost
+    /// cryptography-44.0.2.
+    #[test]
+    fn a_shorter_release_does_not_answer_for_a_longer_one() {
+        assert!(version_prefix_of("25.3", "25.3-CUDA-12.8.0"));
+        assert!(version_prefix_of("25.11", "25.11"));
+        assert!(version_prefix_of("25.11", "25.11-CUDA-12.9.1"));
+        assert!(!version_prefix_of("25.1", "25.11-CUDA-12.9.1"));
+        assert!(!version_prefix_of("25.1", "25.11"));
+        assert!(!version_prefix_of("", "25.11"));
+
+        let mut older = cand("nvidia-compilers", "25.1", "system", "", None);
+        older.dependencies = vec![dep_pin("GCCcore", "13.3.0")];
+        let mut newer = cand("nvidia-compilers", "25.11", "system", "", None);
+        newer.dependencies = vec![dep_pin("GCCcore", "14.2.0")];
+        assert_eq!(
+            nvidia_compilers_gcccore("25.11", &[older, newer]),
+            Some("14.2.0".to_string())
+        );
+    }
+
     /// A CUDA-less nvidia-compilers still answers for a CUDA-suffixed NVHPC pin;
     /// both variants pin the same GCCcore in the real tree.
     #[test]
@@ -1271,6 +1352,11 @@ mod tests {
 
     /// FlexiBLAS-3.4.5-NVHPC-25.3-CUDA-12.8.0.eb writes its toolchain as one
     /// joined string, while NVHPC's own recipe splits it. Both must resolve.
+    ///
+    /// `nvidia-compilers` is a member, not noise: since EasyBuild 5.2.0 NVHPC
+    /// composes the compilers with the SDK's NVHPCX, NVBLAS and NVScaLAPACK, so
+    /// a recipe on NVHPC can legitimately reach a dependency built on the
+    /// compiler-only level below it.
     #[test]
     fn versionsuffixed_compiler_toolchain_resolves_from_joined_spelling() {
         let parent = Toolchain {
@@ -1280,7 +1366,10 @@ mod tests {
         let h = derive_hierarchy_from_candidates(&parent, &nvidia_family_tree())
             .expect("NVHPC-25.3-CUDA-12.8.0 should resolve from the split recipe");
         let names: Vec<&str> = h.members.iter().map(|m| m.name.as_str()).collect();
-        assert_eq!(names, vec!["system", "GCCcore", "NVHPC"]);
+        assert_eq!(
+            names,
+            vec!["system", "GCCcore", "nvidia-compilers", "NVHPC"]
+        );
         assert_eq!(
             h.members
                 .iter()
@@ -1288,6 +1377,12 @@ mod tests {
                 .map(|m| m.version.as_str()),
             Some("14.2.0")
         );
+        // The parent ranks last, at its own version, and appears exactly once.
+        assert_eq!(
+            h.members.last().map(|m| m.version.as_str()),
+            Some(parent.version.as_str())
+        );
+        assert_eq!(h.members.iter().filter(|m| m.name == "NVHPC").count(), 1);
     }
 
     #[test]
