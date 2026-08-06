@@ -314,12 +314,21 @@ fn derive_nvidia_family_hierarchy(
     // The composite pins its compiler as a whole toolchain string, e.g.
     // ('NVHPC', '25.3-CUDA-12.8.0'): version and versionsuffix already joined,
     // which is precisely the form a dependent recipe's `toolchain` uses.
-    let nvhpc_ver = def
-        .dependencies
+    // The compiler level has two spellings. `nvidia-compilers` is the current
+    // one: EasyBuild 5.2.0 replaced NVHPCToolchain with NvidiaCompilersToolchain,
+    // so a composite built against a current framework pins that. `NVHPC` is the
+    // deprecated spelling, still what older generations in the wild carry. Accept
+    // either, preferring the current one, or a correctly-built new generation
+    // reads as an unknown hierarchy.
+    let nvhpc_ver = ["nvidia-compilers", "NVHPC"]
         .iter()
-        .chain(def.builddependencies.iter())
-        .find(|d| d.name == "NVHPC")
-        .and_then(|d| exact_pin_version(&d.version_req))?
+        .find_map(|compiler| {
+            def.dependencies
+                .iter()
+                .chain(def.builddependencies.iter())
+                .find(|d| d.name == *compiler)
+                .and_then(|d| exact_pin_version(&d.version_req))
+        })?
         .to_string();
 
     let mut members = vec![Toolchain {
@@ -1174,6 +1183,38 @@ mod tests {
             ]
         );
         assert_eq!(h.parent, parent);
+    }
+
+    /// EasyBuild 5.2.0 replaced NVHPCToolchain with NvidiaCompilersToolchain, so
+    /// a composite toolchain built against a current framework pins
+    /// `nvidia-compilers` where an older one pinned `NVHPC`. Deriving only from
+    /// the deprecated spelling makes every correctly-built new generation an
+    /// unknown hierarchy, which downgrades its dependency matching to a
+    /// toolchain-blind one.
+    #[test]
+    fn nvofbf_hierarchy_derives_from_the_nvidia_compilers_spelling() {
+        let mut tree = nvidia_family_tree();
+        for tc in tree.iter_mut() {
+            if tc.name == "nvofbf" || tc.name == "nvompi" {
+                // Same generation, built the way EasyBuild 5.2.0 onwards wants:
+                // the composite pins the compiler-only module, not the SDK.
+                for dep in tc.dependencies.iter_mut() {
+                    if dep.name == "NVHPC" {
+                        dep.name = "nvidia-compilers".into();
+                    }
+                }
+            }
+        }
+        let parent = Toolchain {
+            name: "nvofbf".into(),
+            version: "2025.10".into(),
+        };
+        let h = derive_hierarchy_from_candidates(&parent, &tree)
+            .expect("a composite pinning nvidia-compilers must still derive");
+        let names: Vec<&str> = h.members.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"GCCcore"), "got {names:?}");
+        assert!(names.contains(&"nvidia-compilers"), "got {names:?}");
+        assert_eq!(names.last(), Some(&"nvofbf"));
     }
 
     /// GCCcore is the level that lets a recipe on nvofbf reach
