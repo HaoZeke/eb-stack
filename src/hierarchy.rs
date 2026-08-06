@@ -1141,7 +1141,10 @@ mod tests {
         let mut nvompi = cand("nvompi", "2025.10", "system", "", None);
         nvompi.dependencies = vec![dep_pin("NVHPC", "25.3-CUDA-12.8.0")];
         let mut nvhpc = cand("NVHPC", "25.3", "system", "", Some("-CUDA-12.8.0"));
-        nvhpc.dependencies = vec![dep_pin("CUDA", "12.8.0"), dep_pin("nvidia-compilers", "25.3")];
+        nvhpc.dependencies = vec![
+            dep_pin("CUDA", "12.8.0"),
+            dep_pin("nvidia-compilers", "25.3"),
+        ];
         let mut nvc = cand(
             "nvidia-compilers",
             "25.3",
