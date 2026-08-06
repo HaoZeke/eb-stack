@@ -1652,12 +1652,30 @@ pub struct RecipeDepCheck {
     pub missing: Vec<MissingDep>,
     /// Dependencies that were matched.
     pub found: Vec<String>,
+    /// Set when the recipe's toolchain generation could not be resolved, so
+    /// matching ran without a hierarchy to filter by.
+    ///
+    /// Every entry in `found` is then a name-and-version match that ignores
+    /// toolchain, which can pair a recipe with a dependency from an unrelated
+    /// generation (the `EB_MAINT_CROSS_GEN` shape). `missing` staying empty is
+    /// not evidence the recipe resolves in EasyBuild; callers must say so
+    /// rather than report a clean result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unverified_toolchain: Option<String>,
 }
 
 impl RecipeDepCheck {
     /// Whether every dependency was found.
     pub fn ok(&self) -> bool {
         self.missing.is_empty()
+    }
+
+    /// Whether the matches carry toolchain evidence, i.e. a hierarchy was known.
+    ///
+    /// Distinct from [`Self::ok`] on purpose: `ok` answers "was anything left
+    /// unmatched", this answers "is a match worth anything".
+    pub fn toolchain_verified(&self) -> bool {
+        self.unverified_toolchain.is_none()
     }
 }
 
@@ -1810,6 +1828,13 @@ pub fn check_recipe_deps(recipe: &ResolvedEasyconfig, universe: &[Candidate]) ->
         checksum_count: recipe.checksums.len(),
         missing,
         found,
+        unverified_toolchain: hierarchy.is_none().then(|| {
+            format!(
+                "no known or derivable hierarchy for {}; dependency matches ignore \
+                 toolchain and may cross generations",
+                recipe.toolchain.label()
+            )
+        }),
     }
 }
 
@@ -3268,6 +3293,63 @@ builddependencies = [
             check.missing.iter().any(|missing| missing.name == "BuildTool"),
             "an implicit dependency of a non-system recipe cannot select a SYSTEM recipe: {check:?}"
         );
+    }
+
+    #[test]
+    /// A recipe on a toolchain with no derivable hierarchy matches its deps by
+    /// name and version alone, which can pair it with another generation
+    /// entirely. That has to be visible: it is how a Wannier90 at foss-2022a
+    /// got reported as satisfying a dependency of an NVHPC-toolchain recipe.
+    #[test]
+    fn check_recipe_deps_flags_matches_made_without_a_hierarchy() {
+        let mut r = blank_recipe();
+        // No defining recipe for this generation anywhere in the universe.
+        r.toolchain = Toolchain {
+            name: "madeupchain".into(),
+            version: "9999.99".into(),
+        };
+        r.dependencies = vec![ResolvedDep {
+            name: "Wannier90".into(),
+            version: "3.1.0".into(),
+            versionsuffix: None,
+            toolchain: None,
+        }];
+        let universe = vec![Candidate {
+            name: "Wannier90".into(),
+            version: "3.1.0".into(),
+            // Deliberately an unrelated generation.
+            toolchain: Toolchain {
+                name: "foss".into(),
+                version: "2022a".into(),
+            },
+            versionsuffix: None,
+            easyconfig_path: "Wannier90-3.1.0-foss-2022a.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+        }];
+        let check = check_recipe_deps(&r, &universe);
+        // Nothing is "missing", but that verdict carries no toolchain evidence.
+        assert!(check.ok());
+        assert!(!check.toolchain_verified());
+        let note = check
+            .unverified_toolchain
+            .as_deref()
+            .expect("degraded match must be reported");
+        assert!(note.contains("madeupchain"), "got {note}");
+    }
+
+    #[test]
+    fn check_recipe_deps_is_verified_when_hierarchy_is_known() {
+        let mut r = blank_recipe();
+        r.toolchain = Toolchain {
+            name: "foss".into(),
+            version: "2025a".into(),
+        };
+        let check = check_recipe_deps(&r, &[]);
+        // foss-2025a ships as an embedded hierarchy, so matching is filtered.
+        assert!(check.toolchain_verified());
+        assert!(check.unverified_toolchain.is_none());
     }
 
     #[test]

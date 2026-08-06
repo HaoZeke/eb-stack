@@ -629,7 +629,14 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             if !check.ok() {
                 bail!("recipe has {} unresolved dependencies", check.missing.len());
             }
-            println!("recipe resolves");
+            // A clean `missing` list earns the word "resolves" only when the
+            // matches were filtered by a real toolchain hierarchy. Without one
+            // they are name-and-version matches that can span generations, so
+            // say that instead of claiming a resolve the evidence cannot carry.
+            match &check.unverified_toolchain {
+                Some(note) => println!("recipe dependencies found, toolchain unverified: {note}"),
+                None => println!("recipe resolves"),
+            }
             Ok(())
         }
         RecipeCommand::Lint { paths } => {
