@@ -1184,7 +1184,7 @@ pub struct SkippedStatement {
 }
 
 impl SkippedStatement {
-    /// The reason without the `line N: ` prefix the parser already applied,
+    /// The reason with the parser's own ``line N:`` position prefix stripped,
     /// so a caller that prints its own position does not repeat it.
     pub fn reason(&self) -> &str {
         match self.message.split_once(": ") {

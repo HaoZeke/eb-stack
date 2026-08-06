@@ -183,7 +183,7 @@ pub fn score_with_allowance(emitted: &str, target: &str, allowance: &[&str]) -> 
     }
 }
 
-/// Write one case score as `<dir>/<case>.json`, creating `dir`.
+/// Write one case score into `dir` as ``<case>.json``, creating `dir`.
 ///
 /// One file per case rather than one shared file: the harness writes
 /// these from tests that run in parallel, and a per-case path needs no
