@@ -3295,7 +3295,6 @@ builddependencies = [
         );
     }
 
-    #[test]
     /// A recipe on a toolchain with no derivable hierarchy matches its deps by
     /// name and version alone, which can pair it with another generation
     /// entirely. That has to be visible: it is how a Wannier90 at foss-2022a

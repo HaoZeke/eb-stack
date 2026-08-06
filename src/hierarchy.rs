@@ -374,10 +374,7 @@ fn derive_nvidia_family_hierarchy(
 /// `nvidia-compilers-25.3` still answers for `25.3-CUDA-12.8.0` (both pin the
 /// same GCCcore in practice).
 fn nvidia_compilers_gcccore(nvhpc_ver: &str, cands: &[Candidate]) -> Option<String> {
-    let variants: Vec<&Candidate> = cands
-        .iter()
-        .filter(|c| c.name == "nvidia-compilers")
-        .collect();
+    let is_nvc = |c: &Candidate| c.name == "nvidia-compilers";
     let joined = |c: &Candidate| {
         format!(
             "{}{}",
@@ -385,13 +382,13 @@ fn nvidia_compilers_gcccore(nvhpc_ver: &str, cands: &[Candidate]) -> Option<Stri
             c.versionsuffix.as_deref().unwrap_or_default()
         )
     };
-    let chosen = variants
+    let chosen = cands
         .iter()
-        .find(|c| joined(c) == nvhpc_ver)
+        .find(|c| is_nvc(c) && joined(c) == nvhpc_ver)
         .or_else(|| {
-            variants
+            cands
                 .iter()
-                .find(|c| !c.version.is_empty() && nvhpc_ver.starts_with(&c.version))
+                .find(|c| is_nvc(c) && !c.version.is_empty() && nvhpc_ver.starts_with(&c.version))
         })?;
     chosen
         .dependencies
