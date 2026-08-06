@@ -417,6 +417,26 @@ pub fn check_fat_build(text: &str) -> Vec<MaintainerFinding> {
     out
 }
 
+/// Whether two easyconfig paths name the same file on disk.
+///
+/// A recipe is routinely checked against a robot tree that contains it, and the
+/// two spellings then differ (`v/X/x.eb` against a tree walked as `./v/X/x.eb`)
+/// while naming one file. Comparing the strings reports the recipe as a
+/// duplicate of itself. Canonicalization resolves that; paths that do not exist,
+/// as in synthetic candidates, fall back to string equality.
+fn is_same_easyconfig(lhs: &str, rhs: &str) -> bool {
+    if lhs == rhs {
+        return true;
+    }
+    match (
+        std::fs::canonicalize(lhs).ok(),
+        std::fs::canonicalize(rhs).ok(),
+    ) {
+        (Some(l), Some(r)) => l == r,
+        _ => false,
+    }
+}
+
 /// Re-adding an easyconfig the robot tree already ships: hard error (#26480).
 ///
 /// Do/don't rule 8. A PR that rewrites a file `develop` already has at the same
@@ -424,16 +444,15 @@ pub fn check_fat_build(text: &str) -> Vec<MaintainerFinding> {
 /// against a working recipe, and the contributor's own version is usually worse
 /// (different source URL, missing dependencies) because it was written blind.
 ///
-/// `candidates` is the robot tree the recipe will be built against. The recipe
-/// under review is expected to come from a *draft* tree, so a self-match on the
-/// same path is ignored.
+/// `candidates` is the robot tree the recipe will be built against. A candidate
+/// that is the recipe's own file is ignored, whichever way its path is spelled.
 pub fn check_duplicate_upstream(
     recipe: &ResolvedEasyconfig,
     candidates: &[Candidate],
 ) -> Vec<MaintainerFinding> {
     let mut out = Vec::new();
     for candidate in candidates {
-        if candidate.easyconfig_path == recipe.easyconfig_path {
+        if is_same_easyconfig(&candidate.easyconfig_path, &recipe.easyconfig_path) {
             continue;
         }
         if !candidate.name.eq_ignore_ascii_case(&recipe.name)
@@ -843,6 +862,26 @@ mod tests {
         );
         me.easyconfig_path = recipe.easyconfig_path.clone();
         assert!(check_duplicate_upstream(&recipe, &[me]).is_empty());
+
+        // The same file reached by a different spelling is still the same file.
+        // Checking a recipe against a robot tree that contains it is the normal
+        // case, and the tree walk spells its paths from the root it was given,
+        // so `v/X/x.eb` meets `./v/X/x.eb` and the recipe reports itself as an
+        // upstream duplicate.
+        const ON_DISK: &str = "fixtures/maintainer_fat_26480/good_fat.eb";
+        let mut from_file = recipe.clone();
+        from_file.easyconfig_path = ON_DISK.into();
+        let dotted = candidate(
+            &recipe.name,
+            &recipe.version,
+            &recipe.toolchain.name,
+            &recipe.toolchain.version,
+            &format!("./{ON_DISK}"),
+        );
+        assert!(
+            check_duplicate_upstream(&from_file, &[dotted]).is_empty(),
+            "a recipe inside the robot tree it is checked against is not a duplicate of itself"
+        );
 
         // A different version or generation is a legitimate new contribution.
         let others = vec![
