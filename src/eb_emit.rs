@@ -61,11 +61,35 @@ pub struct EmitResult {
 }
 
 /// Derive the conventional EasyBuild easyconfig basename.
-pub fn easyconfig_filename(name: &str, version: &str, toolchain: &Toolchain) -> String {
+///
+/// Shape: `{name}-{version}-{toolchain}-{toolchain_version}{versionsuffix}.eb`.
+/// `versionsuffix` already carries its own leading separator (`-ACC`,
+/// `-CUDA-12.8.0`), so it is appended verbatim; pass `None` when the recipe
+/// declares none. A recipe whose `versionsuffix` still contains an unresolved
+/// `%(...)s` template cannot be named from text alone, so callers pass `None`
+/// and warn instead of emitting a filename with a literal template in it.
+pub fn easyconfig_filename(
+    name: &str,
+    version: &str,
+    toolchain: &Toolchain,
+    versionsuffix: Option<&str>,
+) -> String {
     format!(
-        "{}-{}-{}-{}.eb",
-        name, version, toolchain.name, toolchain.version
+        "{}-{}-{}-{}{}.eb",
+        name,
+        version,
+        toolchain.name,
+        toolchain.version,
+        versionsuffix.unwrap_or("")
     )
+}
+
+/// Whether a raw easyconfig value still holds an EasyBuild `%(key)s` template.
+///
+/// Templated values cannot be resolved by textual rewriting: `-CUDA-%(cudaver)s`
+/// only becomes `-CUDA-12.8.0` once EasyBuild has the CUDA dependency in hand.
+fn has_unresolved_template(value: &str) -> bool {
+    value.contains("%(")
 }
 
 /// Emit next-generation easyconfig text and conventional filename from source text.
@@ -142,7 +166,22 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
         }
     }
 
-    let filename = easyconfig_filename(&name, &app_version, &params.toolchain);
+    // The rewritten text keeps whatever `versionsuffix` the source declared, so
+    // the filename has to carry it too or the emitted basename disagrees with the
+    // recipe it names (and with the name a build list refers to).
+    let versionsuffix = assign_string_raw(&text, "versionsuffix");
+    let filename_suffix = match versionsuffix.as_deref() {
+        Some(suffix) if has_unresolved_template(suffix) => {
+            warnings.push(format!(
+                "versionsuffix {suffix:?} contains an unresolved template, so it is \
+                 omitted from the emitted filename: rename the file to match the \
+                 resolved suffix before building"
+            ));
+            None
+        }
+        other => other,
+    };
+    let filename = easyconfig_filename(&name, &app_version, &params.toolchain, filename_suffix);
     Ok(EmitResult {
         text,
         filename,
@@ -1119,6 +1158,13 @@ mod tests {
         }
     }
 
+    fn nvofbf(ver: &str) -> Toolchain {
+        Toolchain {
+            name: "nvofbf".into(),
+            version: ver.into(),
+        }
+    }
+
     const MINIMAL: &str = "\
 name = 'GROMACS'
 version = '2024.1'
@@ -1262,9 +1308,75 @@ builddependencies = [
     #[test]
     fn filename_helper_matches_fixture_shape() {
         assert_eq!(
-            easyconfig_filename("GROMACS", "2025.0", &foss("2025b")),
+            easyconfig_filename("GROMACS", "2025.0", &foss("2025b"), None),
             "GROMACS-2025.0-foss-2025b.eb"
         );
+    }
+
+    #[test]
+    fn filename_helper_appends_versionsuffix() {
+        assert_eq!(
+            easyconfig_filename("VASP6", "6.6.1", &nvofbf("2025.10"), Some("-ACC")),
+            "VASP6-6.6.1-nvofbf-2025.10-ACC.eb"
+        );
+    }
+
+    /// A recipe carrying `versionsuffix` must be named for it. Emitting
+    /// `VASP6-6.6.1-nvofbf-2025.10.eb` for a recipe whose body says
+    /// `versionsuffix = '-ACC'` gives a basename that does not match the recipe
+    /// it names, and does not match what a build list asks for.
+    #[test]
+    fn emitted_filename_carries_source_versionsuffix() {
+        let src = "name = 'VASP6'\nversion = '6.5.1'\nversionsuffix = '-ACC'\n\
+                   toolchain = {'name': 'nvofbf', 'version': '2025.10'}\n";
+        let params = EmitParams {
+            toolchain: nvofbf("2025.10"),
+            version: Some("6.6.1".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: None,
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert_eq!(r.filename, "VASP6-6.6.1-nvofbf-2025.10-ACC.eb");
+        // The body still declares it, so body and basename agree.
+        assert!(r.text.contains("versionsuffix = '-ACC'"));
+    }
+
+    #[test]
+    fn emitted_filename_omits_templated_versionsuffix_and_warns() {
+        let src = "name = 'NVHPC'\nversion = '25.3'\nversionsuffix = '-CUDA-%(cudaver)s'\n\
+                   toolchain = {'name': 'foss', 'version': '2025b'}\n";
+        let params = EmitParams {
+            toolchain: foss("2025b"),
+            version: None,
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: None,
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        // Never emit a literal %(cudaver)s into a filename.
+        assert_eq!(r.filename, "NVHPC-25.3-foss-2025b.eb");
+        assert!(
+            r.warnings.iter().any(|w| w.contains("unresolved template")),
+            "expected a warning about the templated versionsuffix, got {:?}",
+            r.warnings
+        );
+    }
+
+    #[test]
+    fn emitted_filename_has_no_suffix_when_source_declares_none() {
+        let src = "name = 'Pkg'\nversion = '1.0'\n\
+                   toolchain = {'name': 'foss', 'version': '2025a'}\n";
+        let params = EmitParams {
+            toolchain: foss("2025b"),
+            version: None,
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: None,
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert_eq!(r.filename, "Pkg-1.0-foss-2025b.eb");
+        assert!(r.warnings.iter().all(|w| !w.contains("versionsuffix")));
     }
 
     #[test]

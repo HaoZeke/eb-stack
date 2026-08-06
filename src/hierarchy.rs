@@ -219,6 +219,11 @@ pub fn derive_hierarchy_from_candidates(
     cands: &[Candidate],
 ) -> Option<ToolchainHierarchy> {
     const COMPOSITES: [&str; 3] = ["gompi", "gfbf", "foss"];
+    if NVIDIA_COMPOSITES.contains(&parent.name.as_str()) {
+        // NVHPC-family composite (nvompi, nvofbf): a different chain from the
+        // GCC family, walked in its own function.
+        return derive_nvidia_family_hierarchy(parent, cands);
+    }
     if !COMPOSITES.contains(&parent.name.as_str()) || parent.version.is_empty() {
         // Not a GCC-family composite. A compiler-only toolchain
         // (intel-compilers, nvidia-compilers, rocm-compilers, ...) still has a
@@ -273,6 +278,130 @@ pub fn derive_hierarchy_from_candidates(
     })
 }
 
+/// NVHPC-family composites, lowest rank first, mirroring the GCC family's
+/// `gompi < gfbf < foss`. `nvompi` is NVHPC + OpenMPI; `nvofbf` adds FlexiBLAS,
+/// FFTW and ScaLAPACK on top.
+const NVIDIA_COMPOSITES: [&str; 2] = ["nvompi", "nvofbf"];
+
+/// Derive an NVHPC-family generation hierarchy (`nvompi-<gen>`, `nvofbf-<gen>`).
+///
+/// The chain differs from the GCC family in shape, so it cannot reuse
+/// [`derive_hierarchy_from_candidates`]'s GCC walk. EasyBuild composes it as
+/// `Nvompi.SUBTOOLCHAIN = ['NVHPC', 'nvidia-compilers']` and
+/// `NvidiaCompilersToolchain.SUBTOOLCHAIN = [GCCcore.NAME, SYSTEM_TOOLCHAIN_NAME]`
+/// (framework `easybuild/toolchains/nvompi.py` and `nvidia_compilers.py`), giving
+/// `system < GCCcore < nvidia-compilers < NVHPC < nvompi < nvofbf`.
+///
+/// GCCcore matters here rather than being cosmetic: without that level a recipe
+/// on `nvofbf` cannot see `Szip-2.1.1-GCCcore-<gen>` or
+/// `cryptography-<v>-GCCcore-<gen>`, which are exactly the dependencies real
+/// NVHPC-toolchain recipes reach for, and the solve fails as unsatisfiable.
+///
+/// The walk is three hops through the tree, each pinned by a real recipe:
+/// the composite definition pins `NVHPC`, whose recipe pins `nvidia-compilers`,
+/// whose recipe pins `GCCcore`. Returns `None` when the composite has no
+/// defining recipe in the tree or that recipe pins no NVHPC.
+fn derive_nvidia_family_hierarchy(
+    parent: &Toolchain,
+    cands: &[Candidate],
+) -> Option<ToolchainHierarchy> {
+    if parent.version.is_empty() {
+        return None;
+    }
+    let def = cands
+        .iter()
+        .find(|c| c.name == parent.name && c.version == parent.version)?;
+    // The composite pins its compiler as a whole toolchain string, e.g.
+    // ('NVHPC', '25.3-CUDA-12.8.0'): version and versionsuffix already joined,
+    // which is precisely the form a dependent recipe's `toolchain` uses.
+    let nvhpc_ver = def
+        .dependencies
+        .iter()
+        .chain(def.builddependencies.iter())
+        .find(|d| d.name == "NVHPC")
+        .and_then(|d| exact_pin_version(&d.version_req))?
+        .to_string();
+
+    let mut members = vec![Toolchain {
+        name: "system".into(),
+        version: String::new(),
+    }];
+    if let Some(gcccore_ver) = nvidia_compilers_gcccore(&nvhpc_ver, cands) {
+        members.push(Toolchain {
+            name: "GCCcore".into(),
+            version: gcccore_ver,
+        });
+    }
+    // Both spellings of the compiler level are members: recipes in the wild use
+    // `NVHPC` as their toolchain, while `nvidia-compilers` is the framework's
+    // own (OPTIONAL) name for the same level.
+    members.push(Toolchain {
+        name: "nvidia-compilers".into(),
+        version: nvhpc_ver.clone(),
+    });
+    members.push(Toolchain {
+        name: "NVHPC".into(),
+        version: nvhpc_ver,
+    });
+    for comp in NVIDIA_COMPOSITES {
+        if comp == parent.name {
+            break; // parent itself is appended last (highest rank)
+        }
+        if cands
+            .iter()
+            .any(|c| c.name == comp && c.version == parent.version)
+        {
+            members.push(Toolchain {
+                name: comp.into(),
+                version: parent.version.clone(),
+            });
+        }
+    }
+    members.push(parent.clone());
+    Some(ToolchainHierarchy {
+        parent: parent.clone(),
+        members,
+    })
+}
+
+/// GCCcore generation underneath an NVHPC toolchain string, via the
+/// `nvidia-compilers` recipe that NVHPC pins.
+///
+/// `nvhpc_ver` is a joined toolchain string (`25.3-CUDA-12.8.0`), while the
+/// `nvidia-compilers` recipe splits the same identity into `version` (`25.3`)
+/// plus `versionsuffix` (`-CUDA-12.8.0`). Prefer the variant whose joined form
+/// matches exactly; fall back to a version-prefix match so a CUDA-less
+/// `nvidia-compilers-25.3` still answers for `25.3-CUDA-12.8.0` (both pin the
+/// same GCCcore in practice).
+fn nvidia_compilers_gcccore(nvhpc_ver: &str, cands: &[Candidate]) -> Option<String> {
+    let variants: Vec<&Candidate> = cands
+        .iter()
+        .filter(|c| c.name == "nvidia-compilers")
+        .collect();
+    let joined = |c: &Candidate| {
+        format!(
+            "{}{}",
+            c.version,
+            c.versionsuffix.as_deref().unwrap_or_default()
+        )
+    };
+    let chosen = variants
+        .iter()
+        .find(|c| joined(c) == nvhpc_ver)
+        .or_else(|| {
+            variants
+                .iter()
+                .find(|c| !c.version.is_empty() && nvhpc_ver.starts_with(&c.version))
+        })?;
+    chosen
+        .dependencies
+        .iter()
+        .chain(chosen.builddependencies.iter())
+        .find(|d| d.name == "GCCcore")
+        .and_then(|d| exact_pin_version(&d.version_req))
+        .map(|s| s.to_string())
+}
+
 /// Derive the hierarchy for a compiler-only toolchain (intel-compilers,
 /// nvidia-compilers, rocm-compilers, ...) from the tree.
 ///
@@ -284,6 +413,12 @@ pub fn derive_hierarchy_from_candidates(
 /// hierarchy is `[SYSTEM, GCCcore-<gen>, <toolchain>]`, mirroring how
 /// [`known_hierarchy`] treats a bare `GCCcore` parent. Returns `None` when the
 /// toolchain has no defining recipe in the tree or that recipe pins no GCCcore.
+///
+/// A toolchain used with a versionsuffix is spelled two ways: a dependent
+/// recipe writes one joined string (`NVHPC-25.3-CUDA-12.8.0`), while the
+/// defining recipe splits it into `version` (`25.3`) plus `versionsuffix`
+/// (`-CUDA-12.8.0`). Both spellings resolve here, so a recipe on such a
+/// toolchain is not reported as an unknown generation.
 fn derive_compiler_toolchain_hierarchy(
     parent: &Toolchain,
     cands: &[Candidate],
@@ -293,14 +428,27 @@ fn derive_compiler_toolchain_hierarchy(
     }
     let def = cands
         .iter()
-        .find(|c| c.name == parent.name && c.version == parent.version)?;
+        .find(|c| c.name == parent.name && c.version == parent.version)
+        .or_else(|| {
+            cands.iter().find(|c| {
+                c.name == parent.name
+                    && format!(
+                        "{}{}",
+                        c.version,
+                        c.versionsuffix.as_deref().unwrap_or_default()
+                    ) == parent.version
+            })
+        })?;
     let gcccore_ver = def
         .dependencies
         .iter()
         .chain(def.builddependencies.iter())
         .find(|d| d.name == "GCCcore")
-        .and_then(|d| exact_pin_version(&d.version_req))?
-        .to_string();
+        .and_then(|d| exact_pin_version(&d.version_req))
+        .map(|s| s.to_string())
+        // NVHPC pins CUDA and nvidia-compilers rather than GCCcore itself, so
+        // the GCCcore generation sits one hop further down.
+        .or_else(|| nvidia_compilers_gcccore(&parent.version, cands))?;
     Some(ToolchainHierarchy {
         parent: parent.clone(),
         members: vec![
@@ -977,6 +1125,137 @@ mod tests {
             versionsuffix: None,
             toolchain: None,
         }
+    }
+
+    /// The real nvofbf-2025.10 chain as the trees actually spell it:
+    /// nvofbf pins NVHPC as one joined toolchain string, NVHPC pins
+    /// nvidia-compilers split into version + versionsuffix, and
+    /// nvidia-compilers pins GCCcore.
+    fn nvidia_family_tree() -> Vec<Candidate> {
+        let mut nvofbf = cand("nvofbf", "2025.10", "system", "", None);
+        nvofbf.dependencies = vec![
+            dep_pin("NVHPC", "25.3-CUDA-12.8.0"),
+            dep_pin("OpenMPI", "5.0.7"),
+            dep_pin("FlexiBLAS", "3.4.5"),
+        ];
+        let mut nvompi = cand("nvompi", "2025.10", "system", "", None);
+        nvompi.dependencies = vec![dep_pin("NVHPC", "25.3-CUDA-12.8.0")];
+        let mut nvhpc = cand("NVHPC", "25.3", "system", "", Some("-CUDA-12.8.0"));
+        nvhpc.dependencies = vec![dep_pin("CUDA", "12.8.0"), dep_pin("nvidia-compilers", "25.3")];
+        let mut nvc = cand(
+            "nvidia-compilers",
+            "25.3",
+            "system",
+            "",
+            Some("-CUDA-12.8.0"),
+        );
+        nvc.dependencies = vec![dep_pin("GCCcore", "14.2.0")];
+        vec![nvofbf, nvompi, nvhpc, nvc]
+    }
+
+    #[test]
+    fn nvofbf_hierarchy_derives_from_tree_without_a_fixture() {
+        let parent = Toolchain {
+            name: "nvofbf".into(),
+            version: "2025.10".into(),
+        };
+        let h = derive_hierarchy_from_candidates(&parent, &nvidia_family_tree())
+            .expect("nvofbf-2025.10 should derive from the tree");
+        let names: Vec<&str> = h.members.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "system",
+                "GCCcore",
+                "nvidia-compilers",
+                "NVHPC",
+                "nvompi",
+                "nvofbf"
+            ]
+        );
+        assert_eq!(h.parent, parent);
+    }
+
+    /// GCCcore is the level that lets a recipe on nvofbf reach
+    /// Szip-GCCcore-14.2.0 and cryptography-GCCcore-14.2.0. Without it the
+    /// solve is unsatisfiable, so its exact version is load-bearing.
+    #[test]
+    fn nvofbf_hierarchy_pins_gcccore_through_nvidia_compilers() {
+        let parent = Toolchain {
+            name: "nvofbf".into(),
+            version: "2025.10".into(),
+        };
+        let h = derive_hierarchy_from_candidates(&parent, &nvidia_family_tree()).expect("derive");
+        let gcccore = h
+            .members
+            .iter()
+            .find(|m| m.name == "GCCcore")
+            .expect("GCCcore member");
+        assert_eq!(gcccore.version, "14.2.0");
+        // The compiler level carries the joined toolchain string, which is what a
+        // dependent recipe's own `toolchain` field spells.
+        let nvhpc = h
+            .members
+            .iter()
+            .find(|m| m.name == "NVHPC")
+            .expect("NVHPC member");
+        assert_eq!(nvhpc.version, "25.3-CUDA-12.8.0");
+    }
+
+    #[test]
+    fn nvompi_hierarchy_stops_below_nvofbf() {
+        let parent = Toolchain {
+            name: "nvompi".into(),
+            version: "2025.10".into(),
+        };
+        let h = derive_hierarchy_from_candidates(&parent, &nvidia_family_tree()).expect("derive");
+        let names: Vec<&str> = h.members.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["system", "GCCcore", "nvidia-compilers", "NVHPC", "nvompi"]
+        );
+    }
+
+    /// A CUDA-less nvidia-compilers still answers for a CUDA-suffixed NVHPC pin;
+    /// both variants pin the same GCCcore in the real tree.
+    #[test]
+    fn nvidia_compilers_gcccore_falls_back_to_version_prefix() {
+        let mut nvc = cand("nvidia-compilers", "25.3", "system", "", None);
+        nvc.dependencies = vec![dep_pin("GCCcore", "14.2.0")];
+        assert_eq!(
+            nvidia_compilers_gcccore("25.3-CUDA-12.8.0", &[nvc]),
+            Some("14.2.0".to_string())
+        );
+    }
+
+    /// FlexiBLAS-3.4.5-NVHPC-25.3-CUDA-12.8.0.eb writes its toolchain as one
+    /// joined string, while NVHPC's own recipe splits it. Both must resolve.
+    #[test]
+    fn versionsuffixed_compiler_toolchain_resolves_from_joined_spelling() {
+        let parent = Toolchain {
+            name: "NVHPC".into(),
+            version: "25.3-CUDA-12.8.0".into(),
+        };
+        let h = derive_hierarchy_from_candidates(&parent, &nvidia_family_tree())
+            .expect("NVHPC-25.3-CUDA-12.8.0 should resolve from the split recipe");
+        let names: Vec<&str> = h.members.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, vec!["system", "GCCcore", "NVHPC"]);
+        assert_eq!(
+            h.members
+                .iter()
+                .find(|m| m.name == "GCCcore")
+                .map(|m| m.version.as_str()),
+            Some("14.2.0")
+        );
+    }
+
+    #[test]
+    fn nvofbf_without_a_defining_recipe_does_not_derive() {
+        let parent = Toolchain {
+            name: "nvofbf".into(),
+            version: "2099.99".into(),
+        };
+        assert!(derive_hierarchy_from_candidates(&parent, &nvidia_family_tree()).is_none());
     }
 
     #[test]
