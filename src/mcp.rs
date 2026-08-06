@@ -470,7 +470,12 @@ fn recipe_check(arguments: &Value) -> Result<Value, String> {
         .map(String::as_str)
         .collect::<Vec<_>>();
     let packaging = packaging_gate(&recipe, &option_refs);
-    let resolves = check.ok() && packaging.is_ok();
+    // An empty `missing` list earns the resolves claim only when the matches
+    // behind it were filtered by a real toolchain hierarchy. Without one they
+    // ignore toolchain and can pair the recipe with another generation, which
+    // is the shape the CLI refuses to call a resolve. The claim ladder is the
+    // whole point of this surface, so it does not get to be laxer.
+    let resolves = check.ok() && check.toolchain_verified() && packaging.is_ok();
     let packaging_errors = packaging.err().unwrap_or_default();
     Ok(json!({
         "recipe": recipe.easyconfig_path,
