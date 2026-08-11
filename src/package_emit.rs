@@ -276,6 +276,7 @@ moduleclass = '{moduleclass}'\n",
     crate::eb_style::format_style(&rendered).text
 }
 
+#[derive(Clone, Copy)]
 enum LanguageBundleKind {
     Python,
     R,
