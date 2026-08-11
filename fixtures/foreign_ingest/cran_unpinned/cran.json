@@ -1,0 +1,10 @@
+{
+  "Package": "quartoish",
+  "Version": "0.1.0",
+  "Title": "A package whose imports state no version",
+  "License": "GPL-2",
+  "URL": "https://example.invalid/quartoish",
+  "Depends": ["R (>= 3.5.0)"],
+  "Imports": ["processx", "rmarkdown"],
+  "LinkingTo": []
+}

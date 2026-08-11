@@ -129,6 +129,14 @@ struct PackagePlanArgs {
     /// Positional SHA-256 override; repeat once for every source artifact.
     #[arg(long = "source-checksum", value_name = "SHA256")]
     source_checksums: Vec<String>,
+    /// Repository index giving versions for dependencies that state none.
+    ///
+    /// The format is the one CRAN publishes as `PACKAGES`: stanzas of
+    /// `Field: value` separated by blank lines. A bare dependency name is
+    /// normal in CRAN and on PyPI, and an `exts_list` entry still needs one
+    /// concrete version.
+    #[arg(long = "package-index", value_name = "FILE")]
+    package_index: Option<PathBuf>,
     /// Optional package-source catalog layers for recursive robot-hole closure.
     ///
     /// Explicit catalog entries are ordered overrides. Argument order is layer
@@ -383,6 +391,7 @@ fn run_package(command: PackageCommand) -> Result<()> {
                 toolchain,
                 source_checksums: args.source_checksums,
                 package_layers: load_package_layers(&args.inspect.package_configs)?,
+                package_index: load_package_index(args.package_index.as_deref())?,
                 easyconfig_roots: args.easyconfigs,
                 stack_policy,
             };
@@ -851,6 +860,21 @@ fn run_campaign(command: CampaignCommand) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Read a repository index, when one was given.
+///
+/// Absent, the map is empty and a dependency that states no version stays an
+/// error rather than being installed at a version nobody chose.
+fn load_package_index(
+    path: Option<&std::path::Path>,
+) -> Result<std::collections::BTreeMap<String, eb_stack::ecosystem::IndexEntry>> {
+    let Some(path) = path else {
+        return Ok(Default::default());
+    };
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("read package index {}", path.display()))?;
+    Ok(eb_stack::parse_package_index(&text))
 }
 
 fn load_package_source_roots(args: &PackagePlanArgs) -> Result<PackageSourceRoots> {

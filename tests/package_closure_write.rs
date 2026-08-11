@@ -91,6 +91,7 @@ source_checksums = ["{CHECKSUM_B}"]
         toolchain: toolchain(),
         source_checksums: vec![CHECKSUM.to_string()],
         package_layers: Vec::new(),
+        package_index: Default::default(),
         easyconfig_roots: vec![robot],
         stack_policy: policy(),
     };
@@ -179,6 +180,7 @@ source:
         toolchain: toolchain(),
         source_checksums: vec![CHECKSUM.to_string()],
         package_layers: Vec::new(),
+        package_index: Default::default(),
         easyconfig_roots: vec![robot],
         stack_policy: policy(),
     })
@@ -290,6 +292,7 @@ source:
         toolchain: toolchain(),
         source_checksums: vec![CHECKSUM.to_string()],
         package_layers: Vec::new(),
+        package_index: Default::default(),
         easyconfig_roots: vec![robot],
         stack_policy: policy(),
     })
@@ -336,6 +339,7 @@ requirements:
         toolchain: toolchain(),
         source_checksums: vec![CHECKSUM.to_string()],
         package_layers: Vec::new(),
+        package_index: Default::default(),
         easyconfig_roots: vec![robot],
         stack_policy: policy(),
     })

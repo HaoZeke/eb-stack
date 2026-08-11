@@ -214,6 +214,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
         }],
         residuals,
         overlay_extensions: Vec::new(),
+        package_index: Default::default(),
     }
 }
 

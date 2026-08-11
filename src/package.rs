@@ -992,19 +992,27 @@ pub struct PackagePlan {
     /// Work left for a human, carried rather than dropped.
     pub residuals: Vec<Residual>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    /// PyPI run dependencies the robot does not ship. Emitted as extra
-    /// `exts_list` entries on the leftover `PythonBundle`, not as SAT holes.
+    /// Language run dependencies the robot does not ship. Emitted as extra
+    /// `exts_list` entries on the leftover bundle, not as SAT holes.
     pub overlay_extensions: Vec<OverlayExtension>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    /// Package name to version for the ecosystem, when the caller supplied an
+    /// index. A dependency written as a bare name is normal in CRAN and on
+    /// PyPI, and an `exts_list` entry still needs one concrete version.
+    pub package_index: std::collections::BTreeMap<String, crate::ecosystem::IndexEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 /// One leftover PyPI package installed in the same `PythonBundle` as the root.
 pub struct OverlayExtension {
-    /// PyPI / EasyBuild extension name.
+    /// Extension name, as the ecosystem publishes it.
     pub name: String,
     /// Exact version EasyBuild will download.
     pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Checksum from the repository index, tagged with its algorithm.
+    pub checksum: Option<String>,
 }
 
 impl PackagePlan {

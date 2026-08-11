@@ -89,6 +89,7 @@ fn request(source: PathBuf, robot: PathBuf) -> NewPackageRequest {
         toolchain: toolchain(),
         source_checksums: vec![CHECKSUM.to_string()],
         package_layers: Vec::new(),
+        package_index: Default::default(),
         easyconfig_roots: vec![robot],
         stack_policy: policy(),
     }

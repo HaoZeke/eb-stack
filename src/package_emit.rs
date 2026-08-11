@@ -368,7 +368,11 @@ fn render_exts_list(
 ) -> String {
     let mut items = Vec::new();
     for extension in &plan.overlay_extensions {
-        items.push(render_plain_ext(&extension.name, &extension.version));
+        items.push(render_plain_ext(
+            &extension.name,
+            &extension.version,
+            extension.checksum.as_deref(),
+        ));
     }
     let mut emitted_root = false;
     for source in &materialized.sources {
@@ -378,7 +382,11 @@ fn render_exts_list(
         }
     }
     if !emitted_root {
-        items.push(render_plain_ext(&plan.package.name, &plan.package.version));
+        items.push(render_plain_ext(
+            &plan.package.name,
+            &plan.package.version,
+            None,
+        ));
     }
     render_multiline_list(&items)
 }
@@ -426,6 +434,19 @@ fn render_ext_from_source(
 }
 
 fn overlay_exts_default_options(plan: &PackagePlan, kind: LanguageBundleKind) -> String {
+    // An R bundle needs to know where CRAN keeps sources, current and archived,
+    // and how a release tarball is named. Without it every extension is an
+    // unresolvable download.
+    if matches!(kind, LanguageBundleKind::R) {
+        if plan.overlay_extensions.is_empty() {
+            return String::new();
+        }
+        return "exts_default_options = {\n    'source_urls': [\n        \
+                'https://cran.r-project.org/src/contrib/',\n        \
+                'https://cran.r-project.org/src/contrib/Archive/%(name)s',\n    ],\n    \
+                'sources': ['%(name)s_%(version)s.tar.gz'],\n}\n\n"
+            .to_string();
+    }
     // The prepended PYTHONPATH is what lets one extension import another it was
     // just installed beside. An R bundle installs into the R library path and
     // has no use for it.
@@ -449,8 +470,16 @@ fn mesonpy_preinstallopts() -> &'static str {
     "unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER && export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=\"${CC:-gcc}\" && export CARGO_HOME=%(builddir)s/.cargohome && export PYTHONPATH=%(installdir)s/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH} && "
 }
 
-fn render_plain_ext(name: &str, version: &str) -> String {
-    format!("('{}', '{}')", escape_single(name), escape_single(version))
+fn render_plain_ext(name: &str, version: &str, checksum: Option<&str>) -> String {
+    match checksum {
+        Some(checksum) => format!(
+            "('{}', '{}', {{\n    'checksums': ['{}'],\n}})",
+            escape_single(name),
+            escape_single(version),
+            escape_single(checksum)
+        ),
+        None => format!("('{}', '{}')", escape_single(name), escape_single(version)),
+    }
 }
 
 /// Prefer conventional EasyBuild key order for common toolchainopts.

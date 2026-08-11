@@ -10,6 +10,9 @@
 //! `R` with the version constraint preserved.
 
 use crate::ecosystem::{exact_version, split_name_and_pin};
+
+/// Where CRAN publishes every source release.
+const CRAN_CONTRIB: &str = "https://cran.r-project.org/src/contrib";
 use crate::foreign::{
     ForeignDep, ForeignError, ForeignFormat, ForeignRecipe, ForeignResidual, ForeignSource,
 };
@@ -214,35 +217,35 @@ fn recipe_from_fields(fields: CranFields<'_>) -> Result<ForeignRecipe, ForeignEr
         }
     }
 
-    let source_url = url.as_ref().and_then(|value| {
+    // DESCRIPTION's URL field is the project's home page, which is usually a
+    // repository or a documentation site and is not where the tarball lives.
+    // CRAN publishes every release at one predictable location, so the source
+    // comes from there and URL stays the homepage it is.
+    let homepage = url.as_ref().and_then(|value| {
         value
             .split([',', ' '])
             .map(str::trim)
             .find(|item| item.starts_with("http"))
             .map(ToString::to_string)
     });
-    let sources = source_url
-        .as_ref()
-        .map(|url| {
-            vec![ForeignSource {
-                url: Some(url.clone()),
-                filename: None,
-                sha256: None,
-                git: None,
-                tag: None,
-                commit: None,
-                target_directory: None,
-                condition: ConditionExpr::Always,
-            }]
-        })
-        .unwrap_or_default();
+    let source_url = format!("{CRAN_CONTRIB}/{name}_{version}.tar.gz");
+    let sources = vec![ForeignSource {
+        url: Some(source_url.clone()),
+        filename: Some(format!("{name}_{version}.tar.gz")),
+        sha256: None,
+        git: None,
+        tag: None,
+        commit: None,
+        target_directory: None,
+        condition: ConditionExpr::Always,
+    }];
 
     Ok(ForeignRecipe {
         format: ForeignFormat::Cran,
         name,
         version,
-        homepage: source_url.clone(),
-        source_url,
+        homepage: homepage.or_else(|| Some(CRAN_CONTRIB.to_string())),
+        source_url: Some(source_url),
         source_filename: None,
         sha256: None,
         sources,

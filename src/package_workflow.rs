@@ -41,6 +41,10 @@ pub struct NewPackageRequest {
     pub source_checksums: Vec<String>,
     /// Configuration layers applied over the extracted plan, in order.
     pub package_layers: Vec<PackageConfigLayer>,
+    /// Package name to version, for leftovers whose own metadata states no
+    /// version. A dependency written as a bare name is normal in CRAN and on
+    /// PyPI, and an `exts_list` entry still needs one concrete version.
+    pub package_index: std::collections::BTreeMap<String, crate::ecosystem::IndexEntry>,
     /// Robot trees searched for dependency providers. At least one is
     /// required; an empty list is rejected rather than solved against nothing.
     pub easyconfig_roots: Vec<PathBuf>,
@@ -302,7 +306,7 @@ fn promote_language_overlay_extras(
         if refuses_pip_overlay(&hole.name) {
             continue;
         }
-        let version = overlay_extension_version(plan, &hole.name).ok_or_else(|| {
+        let (version, checksum) = overlay_extension_entry(plan, &hole.name).ok_or_else(|| {
             PackageWorkflowError::OverlayExtraNeedsVersion {
                 name: hole.name.clone(),
                 requirement: hole.version_req.clone(),
@@ -322,6 +326,7 @@ fn promote_language_overlay_extras(
         plan.overlay_extensions.push(OverlayExtension {
             name: hole.name.clone(),
             version: version.clone(),
+            checksum,
         });
         plan.residuals.push(Residual {
             id: format!("pypi-overlay-ext:{}", hole.name),
@@ -410,6 +415,16 @@ fn inject_overlay_build_tools(plan: &mut PackagePlan, candidates: &[crate::domai
             provenance: Vec::new(),
         });
     }
+}
+
+fn overlay_extension_entry(plan: &PackagePlan, name: &str) -> Option<(String, Option<String>)> {
+    if let Some(entry) = plan
+        .package_index
+        .get(&crate::package_sources::package_identity(name))
+    {
+        return Some((entry.version.clone(), entry.checksum.clone()));
+    }
+    overlay_extension_version(plan, name).map(|version| (version, None))
 }
 
 fn overlay_extension_version(plan: &PackagePlan, name: &str) -> Option<String> {
@@ -521,7 +536,8 @@ pub fn plan_new_package(
     if request.easyconfig_roots.is_empty() {
         return Err(PackageWorkflowError::NoEasyconfigRoots);
     }
-    let (plan, sbom) = prepare_new_package_plan(request)?;
+    let (mut plan, sbom) = prepare_new_package_plan(request)?;
+    plan.package_index = request.package_index.clone();
     let roots = request
         .easyconfig_roots
         .iter()
@@ -1033,6 +1049,7 @@ fn package_plan_from_easyconfig(
         }],
         residuals: Vec::new(),
         overlay_extensions: Vec::new(),
+        package_index: Default::default(),
     }
 }
 
@@ -1466,7 +1483,8 @@ pub enum PackageWorkflowError {
     /// A leftover PyPI dependency is not in the robot and has no exact
     /// version, so it cannot become an `exts_list` entry.
     #[error(
-        "{name} is not in the robot and {requirement:?} is not an exact or lower-bounded version; pin it to emit a PythonBundle extension"
+        "{name} is not in the robot, and {requirement:?} names no version to install as an \
+         extension. Give the ecosystem index with --package-index, or pin the dependency"
     )]
     OverlayExtraNeedsVersion {
         /// Missing leftover package.

@@ -284,7 +284,11 @@ pub fn plan_package_closure_with_sources(
     )?;
     let target_hierarchy = hierarchy_for_with_tree(&request.toolchain, None, &tree.candidates).ok();
 
-    let (plan, sbom) = prepare_new_package_plan(request)?;
+    let (mut plan, sbom) = prepare_new_package_plan(request)?;
+    // The index answers "what version is this leftover", so it has to reach the
+    // root plan here too: the closure path builds its own requests and the CLI
+    // goes through this one, not through plan_new_package.
+    plan.package_index = request.package_index.clone();
     let mut state = ClosureState {
         robot: tree.candidates,
         generated: HashMap::new(),
@@ -1087,6 +1091,7 @@ fn foreign_request_from_provider(
         toolchain: provider.toolchain.clone(),
         source_checksums: provider.source_checksums.clone(),
         package_layers,
+        package_index: Default::default(),
         easyconfig_roots: easyconfig_roots.to_vec(),
         stack_policy: provider_stack_policy(provider, default_stack_policy)?,
     })
