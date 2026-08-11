@@ -366,6 +366,7 @@ fn inject_overlay_build_tools(plan: &mut PackagePlan, candidates: &[crate::domai
         "Ninja",
         "pkgconf",
         "Rust",
+        "Eigen",
         "hatchling",
         "Python-bundle-PyPI",
     ] {
