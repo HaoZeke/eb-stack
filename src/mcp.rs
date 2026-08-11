@@ -136,6 +136,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("easybuild_sources", "array"),
                 ("conda_sources", "array"),
                 ("spack_sources", "array"),
+                ("cargo_sources", "array"),
             ],
         ),
         tool_with_optional(
@@ -418,6 +419,9 @@ fn load_package_source_roots(arguments: &Value) -> Result<PackageSourceRoots, St
     }
     for path in string_array(arguments, "spack_sources")? {
         roots.push(SourceRootKind::Spack, PathBuf::from(path));
+    }
+    for path in string_array(arguments, "cargo_sources")? {
+        roots.push(SourceRootKind::Cargo, PathBuf::from(path));
     }
     Ok(roots)
 }

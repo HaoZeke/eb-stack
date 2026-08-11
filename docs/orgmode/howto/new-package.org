@@ -283,8 +283,8 @@ eb-stack package plan \
   --out-dir work/closed-root
 #+end_src
 
-Or pass roots directly with ~--easybuild-source~, ~--conda-source~, and
-~--spack-source~ (repeatable; order is discovery order).
+Or pass roots directly with ~--easybuild-source~, ~--conda-source~,
+~--spack-source~, and ~--cargo-source~ (repeatable; order is discovery order).
 
 Resolution for each hole is robot-first, then:
 

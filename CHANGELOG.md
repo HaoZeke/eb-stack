@@ -28,8 +28,14 @@ All notable changes to this project are documented here.
   A leftover such as `eon-akmc` whose other PyPI deps are not in the
   robot keeps those names in `exts_list` instead of failing SAT.
 - `--format cargo` reads `Cargo.toml` or crates.io JSON. PyO3/maturin
-  crates emit `PythonPackage` with implicit `Rust` and `maturin`;
-  other crates emit `Crate`. Existing robot Rust modules are leaves.
+  crates emit `PythonPackage` with implicit `Rust`, `maturin`, and
+  `binutils`; other crates emit `Crate`. Host Cargo wrappers
+  (`sccache`, `mold`) are unset. Existing robot Rust modules are leaves.
+  `--cargo-source` / `kind = "cargo"` closes a PyPI leftover that is a
+  crate (for example `readcon`) as a companion module; remaining pure
+  PyPI holes stay `exts_list` extras. Overlay extras overwrite
+  `PYTHONPATH` to the install prefix so `pip --no-build-isolation` sees
+  prior extensions.
 - `--format pypi` reads Warehouse-shaped JSON or a `requirements.txt` and
   emits a `PythonBundle` whose `exts_list` is the leftover package, with
   already-provided extras mapped to the parent bundle.

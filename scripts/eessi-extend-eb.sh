@@ -27,5 +27,12 @@ elif [[ $n -gt 1 ]]; then
 fi
 
 export WORKING_DIR=${WORKING_DIR:-/tmp}
+# Host Cargo wrapper env is not in the EESSI module graph.
+unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER RUSTFLAGS CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS CMAKE_C_COMPILER_LAUNCHER CMAKE_CXX_COMPILER_LAUNCHER CMAKE_Fortran_COMPILER_LAUNCHER || true
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="${CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER:-${CC:-gcc}}"
+# foss wrappers can drop the compat-layer ld that collect2 needs.
+if [[ -n ${EESSI_VERSION:-} ]]; then
+  export PATH="/cvmfs/software.eessi.io/versions/${EESSI_VERSION}/compat/linux/x86_64/usr/bin:${PATH}"
+fi
 module load EESSI-extend
 exec eb "$@"

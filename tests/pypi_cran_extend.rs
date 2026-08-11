@@ -1,6 +1,9 @@
 //! PyPI and CRAN ingest, extension provides, and language-bundle emission.
 
-use eb_stack::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
+use eb_stack::package::{PackageOrigin, StackPolicy, STACK_POLICY_SCHEMA_VERSION};
+use eb_stack::package_catalog::resolve_package_catalog_layers;
+use eb_stack::package_closure::plan_package_closure_with_sources;
+use eb_stack::package_sources::{PackageSourceRoots, SourceRootKind};
 use eb_stack::{
     detect_foreign_format, inspect_new_package, parse_foreign_path, plan_new_package,
     ForeignFormat, NewPackageRequest, Toolchain,
@@ -307,8 +310,20 @@ fn plan_cargo_readcon_uses_rust_and_maturin() {
         recipe.text
     );
     assert!(
+        recipe.text.contains("binutils"),
+        "binutils must be a build dependency so cargo can find ld:\n{}",
+        recipe.text
+    );
+    assert!(
         recipe.text.contains("maturin"),
         "maturin must be a build dependency:\n{}",
+        recipe.text
+    );
+    assert!(
+        recipe.text.contains("unset RUSTC_WRAPPER")
+            && recipe.text.contains("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER")
+            && recipe.text.contains("compat/linux"),
+        "cargo leftovers must drop host rustc wrappers and pin the gcc linker:\n{}",
         recipe.text
     );
     assert!(
@@ -356,6 +371,15 @@ fn plan_eon_akmc_overlays_missing_pypi_deps() {
         );
     }
     assert!(
+        recipe.text.contains("exts_default_options")
+            && recipe.text.contains(
+                "PYTHONPATH=%(installdir)s/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH}"
+            )
+            && !recipe.text.contains(r"\$PYTHONPATH"),
+        "overlay extras must prepend the prefix to PYTHONPATH so pip sees prior exts and EESSI modules:\n{}",
+        recipe.text
+    );
+    assert!(
         bundle.locks[0]
             .dependencies
             .iter()
@@ -387,5 +411,75 @@ fn plan_torch_uses_existing_pytorch_module() {
                 && residual.summary.contains("PyTorch")),
         "{:?}",
         bundle.plan.residuals
+    );
+}
+
+#[test]
+fn plan_eon_akmc_closes_readcon_from_cargo_source() {
+    let mut sources = PackageSourceRoots {
+        schema_version: 1,
+        source_roots: Vec::new(),
+    };
+    sources.push(
+        SourceRootKind::Cargo,
+        root().join("fixtures/foreign_ingest/cargo_readcon"),
+    );
+    let request = NewPackageRequest {
+        source: root().join("fixtures/foreign_ingest/pypi_numpy/eon-akmc.json"),
+        format: Some(ForeignFormat::Pypi),
+        toolchain: toolchain(),
+        source_checksums: Vec::new(),
+        package_layers: Vec::new(),
+        easyconfig_roots: vec![
+            numpy_robot(),
+            root().join("fixtures/foreign_ingest/cargo_readcon/robot"),
+        ],
+        stack_policy: stack_policy(),
+    };
+    let catalog = resolve_package_catalog_layers(&[]).expect("empty catalog");
+    let closure = plan_package_closure_with_sources(&request, &catalog, &sources)
+        .expect("cargo leftover becomes a companion");
+    assert_eq!(closure.companions.len(), 1, "{:?}", closure.companions);
+    let companion = &closure.companions[0];
+    assert_eq!(companion.plan.origin, PackageOrigin::Cargo);
+    assert_eq!(companion.plan.package.name, "readcon");
+    assert_eq!(companion.plan.package.version, "0.13.1");
+    let readcon = companion
+        .easyconfigs
+        .iter()
+        .find(|config| config.filename.to_ascii_lowercase().contains("readcon"))
+        .expect("readcon companion recipe");
+    assert!(
+        readcon.text.contains("maturin") && readcon.text.contains("unset RUSTC_WRAPPER"),
+        "{}",
+        readcon.text
+    );
+    let recipe = closure
+        .root
+        .easyconfigs
+        .iter()
+        .find(|config| config.filename.contains("eon-akmc"))
+        .expect("eon-akmc root");
+    assert!(
+        recipe.text.contains("('readcon'") || recipe.text.contains("'readcon'"),
+        "root must depend on the cargo companion:\n{}",
+        recipe.text
+    );
+    assert!(
+        !recipe.text.contains("('readcon', '0.13.0')"),
+        "readcon must not remain a pip overlay extra:\n{}",
+        recipe.text
+    );
+    assert!(
+        recipe.text.contains("('vesin'")
+            && recipe.text.contains("('eon-schema'")
+            && recipe.text.contains("('xxhash'"),
+        "pure leftover deps stay overlay extras:\n{}",
+        recipe.text
+    );
+    assert!(
+        recipe.text.contains("SciPy-bundle"),
+        "numpy still maps to SciPy-bundle:\n{}",
+        recipe.text
     );
 }

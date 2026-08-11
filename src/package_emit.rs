@@ -310,6 +310,11 @@ fn render_language_bundle(
         "lang"
     };
     let exts = render_exts_list(plan, materialized, kind);
+    let default_ext_opts = if plan.overlay_extensions.is_empty() {
+        String::new()
+    } else {
+        "exts_default_options = {\n    'preinstallopts': 'export PYTHONPATH=%(installdir)s/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH} && ',\n}\n\n".to_string()
+    };
     let rendered = format!(
         "{easyblock_line}name = '{name}'\n\
 version = '{version}'\n\
@@ -320,6 +325,7 @@ toolchain = {{'name': '{toolchain_name}', 'version': '{toolchain_version}'}}\n\
 {toolchain_options_line}\n\
 {easyconfig_parameter_lines}\
 {default_class}\
+{default_ext_opts}\
 exts_list = {exts}\n\n\
 builddependencies = {build_dependencies}\n\n\
 dependencies = {runtime_dependencies}\n\n\

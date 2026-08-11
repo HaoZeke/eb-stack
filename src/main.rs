@@ -136,7 +136,7 @@ struct PackagePlanArgs {
     /// source roots are configured.
     #[arg(long = "package-catalog", value_name = "CATALOG.toml")]
     package_catalogs: Vec<PathBuf>,
-    /// Optional package-neutral source-root TOML layers (EasyBuild / conda-forge / Spack).
+    /// Optional package-neutral source-root TOML layers (EasyBuild / conda-forge / Spack / Cargo).
     #[arg(long = "package-sources", value_name = "SOURCES.toml")]
     package_sources: Vec<PathBuf>,
     /// Ordered EasyBuild easyconfig trees used to discover cross-generation recipes.
@@ -148,6 +148,9 @@ struct PackagePlanArgs {
     /// Ordered Spack package trees for foreign discovery.
     #[arg(long = "spack-source", value_name = "DIR")]
     spack_sources: Vec<PathBuf>,
+    /// Ordered Cargo.toml / crates.io trees for PyO3 leftover discovery.
+    #[arg(long = "cargo-source", value_name = "DIR")]
+    cargo_sources: Vec<PathBuf>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -879,6 +882,9 @@ fn load_package_source_roots(args: &PackagePlanArgs) -> Result<PackageSourceRoot
     }
     for path in &args.spack_sources {
         roots.push(SourceRootKind::Spack, path.clone());
+    }
+    for path in &args.cargo_sources {
+        roots.push(SourceRootKind::Cargo, path.clone());
     }
     Ok(roots)
 }

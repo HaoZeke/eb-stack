@@ -181,7 +181,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
                     })
                 })
                 .collect(),
-            easyconfig_parameters: cran_sanity_paths(recipe),
+            easyconfig_parameters: foreign_easyconfig_parameters(recipe),
         },
         profiles: vec![profile],
         outputs: vec![OutputRequest {
@@ -193,18 +193,27 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
     }
 }
 
-fn cran_sanity_paths(recipe: &ForeignRecipe) -> BTreeMap<String, EasyconfigValue> {
-    if recipe.format != ForeignFormat::Cran {
-        return BTreeMap::new();
-    }
-    let mut paths = BTreeMap::new();
-    paths.insert("files".into(), EasyconfigValue::List(Vec::new()));
-    paths.insert(
-        "dirs".into(),
-        EasyconfigValue::List(vec![EasyconfigValue::String(recipe.name.clone())]),
-    );
+fn foreign_easyconfig_parameters(recipe: &ForeignRecipe) -> BTreeMap<String, EasyconfigValue> {
     let mut parameters = BTreeMap::new();
-    parameters.insert("sanity_check_paths".into(), EasyconfigValue::Table(paths));
+    if recipe.format == ForeignFormat::Cran {
+        let mut paths = BTreeMap::new();
+        paths.insert("files".into(), EasyconfigValue::List(Vec::new()));
+        paths.insert(
+            "dirs".into(),
+            EasyconfigValue::List(vec![EasyconfigValue::String(recipe.name.clone())]),
+        );
+        parameters.insert("sanity_check_paths".into(), EasyconfigValue::Table(paths));
+    }
+    if recipe.format == ForeignFormat::Cargo {
+        // Host Cargo wrapper env (sccache) is not in the EESSI module graph.
+        parameters.insert(
+            "preinstallopts".into(),
+            EasyconfigValue::String(
+                "unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER && export CARGO_HOME=%(builddir)s/.cargohome && export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=\"${CC:-gcc}\" && _ebld=/cvmfs/software.eessi.io/versions/${EESSI_VERSION:-2025.06}/compat/linux/x86_64/usr/bin && export PATH=\"$_ebld:$PATH\" && export RUSTFLAGS=\"-C link-arg=-B$_ebld $(printf -- '-L %s ' $(echo ${LIBRARY_PATH:-} | tr ':' ' '))\" && "
+                    .into(),
+            ),
+        );
+    }
     parameters
 }
 

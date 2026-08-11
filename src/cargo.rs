@@ -181,14 +181,24 @@ fn recipe(fields: CrateFields<'_>) -> Result<ForeignRecipe, ForeignError> {
     } else {
         raw_name
     };
-    let mut dependencies = vec![ForeignDep {
-        name: "Rust".into(),
-        pin: None,
-        role: "build".into(),
-        original_spec: Some("Rust (implicit for Cargo leftovers)".into()),
-        condition: ConditionExpr::Always,
-        provenance: Vec::new(),
-    }];
+    let mut dependencies = vec![
+        ForeignDep {
+            name: "Rust".into(),
+            pin: None,
+            role: "build".into(),
+            original_spec: Some("Rust (implicit for Cargo leftovers)".into()),
+            condition: ConditionExpr::Always,
+            provenance: Vec::new(),
+        },
+        ForeignDep {
+            name: "binutils".into(),
+            pin: None,
+            role: "build".into(),
+            original_spec: Some("binutils (ld for cargo build scripts)".into()),
+            condition: ConditionExpr::Always,
+            provenance: Vec::new(),
+        },
+    ];
     if python {
         dependencies.push(ForeignDep {
             name: "Python".into(),

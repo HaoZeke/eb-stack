@@ -2,9 +2,9 @@
 //!
 //! When a package-closure hole has no compatible target-robot candidate and no
 //! explicit catalog override, these roots supply EasyBuild recipes at other
-//! generations (annual-bump path) and unambiguous conda-forge or Spack recipes
-//! (new-package path). Lookup uses package identity normalization and version
-//! requirements only — never package-name control flow.
+//! generations (annual-bump path) and unambiguous conda-forge, Spack, or Cargo
+//! recipes (new-package path). Lookup uses package identity normalization and
+//! version requirements only — never package-name control flow.
 
 use crate::domain::{Candidate, Toolchain};
 use crate::eb_parse::parse_easyconfig_tree;
@@ -15,7 +15,7 @@ use crate::package_config::PackageConfigLayer;
 use crate::package_solve::UnsatisfiedDirectDependency;
 use crate::version::{cmp_version, matches_req};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -35,6 +35,8 @@ pub enum SourceRootKind {
     CondaForge,
     /// Spack package tree (`package.py` files).
     Spack,
+    /// Cargo.toml or crates.io JSON documents for crate / PyO3 leftovers.
+    Cargo,
 }
 
 impl SourceRootKind {
@@ -44,6 +46,7 @@ impl SourceRootKind {
             Self::EasyBuild => "easybuild",
             Self::CondaForge => "conda-forge",
             Self::Spack => "spack",
+            Self::Cargo => "cargo",
         }
     }
 }
@@ -328,6 +331,7 @@ impl PackageSourceIndex {
                 SourceRootKind::EasyBuild => index.index_easybuild(&root.path)?,
                 SourceRootKind::CondaForge => index.index_conda(root)?,
                 SourceRootKind::Spack => index.index_spack(root)?,
+                SourceRootKind::Cargo => index.index_cargo(root)?,
             }
         }
         Ok(index)
@@ -480,6 +484,43 @@ impl PackageSourceIndex {
                     root,
                     path,
                     ForeignFormat::Spack,
+                    &config_layers,
+                    error.to_string(),
+                ),
+            }
+        }
+        Ok(())
+    }
+
+    fn index_cargo(&mut self, root: &SourceRoot) -> Result<(), PackageSourceError> {
+        if !root.path.exists() {
+            return Ok(());
+        }
+        let mut paths = Vec::new();
+        collect_cargo_files(&root.path, &mut paths)
+            .map_err(|error| PackageSourceError::Io(root.path.display().to_string(), error))?;
+        let paths = prefer_cargo_json(paths);
+        let config_layers = load_package_config_layers(&root.package_config)?;
+        for path in paths {
+            match parse_foreign_path(&path, Some(ForeignFormat::Cargo)) {
+                Ok(recipe) => {
+                    let name = provider_name_for_foreign(&recipe.name, &config_layers);
+                    self.foreign.push(DiscoveredCandidate {
+                        name,
+                        version: recipe.version,
+                        path,
+                        kind: SourceRootKind::Cargo,
+                        format: Some(ForeignFormat::Cargo),
+                        toolchain: None,
+                        versionsuffix: None,
+                        package_config: root.package_config.clone(),
+                        source_checksums: foreign_checksums(&recipe.sha256, &recipe.sources),
+                    });
+                }
+                Err(error) => self.record_foreign_parse_failure(
+                    root,
+                    path,
+                    ForeignFormat::Cargo,
                     &config_layers,
                     error.to_string(),
                 ),
@@ -651,6 +692,60 @@ fn foreign_checksums(
             .collect();
     }
     primary.iter().cloned().collect()
+}
+
+fn collect_cargo_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<(), std::io::Error> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => continue,
+            Err(error) => return Err(error),
+        };
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if detect_foreign_format(&path) == Some(ForeignFormat::Cargo) {
+                out.push(path);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Prefer crates.io / `*.cargo.json` over a sibling `Cargo.toml` so one
+/// identity is not indexed twice.
+fn prefer_cargo_json(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut by_dir: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
+    for path in paths {
+        let parent = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        by_dir.entry(parent).or_default().push(path);
+    }
+    let mut chosen = Vec::new();
+    for mut files in by_dir.into_values() {
+        files.sort();
+        let has_json = files.iter().any(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.to_ascii_lowercase().ends_with(".json"))
+        });
+        for path in files {
+            let is_toml = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("Cargo.toml"));
+            if has_json && is_toml {
+                continue;
+            }
+            chosen.push(path);
+        }
+    }
+    chosen
 }
 
 fn collect_named_files(
@@ -1075,6 +1170,33 @@ path = "spack"
         assert_eq!(roots.source_roots[0].path, eb);
         assert_eq!(roots.source_roots[1].kind, SourceRootKind::CondaForge);
         assert_eq!(roots.source_roots[2].kind, SourceRootKind::Spack);
+    }
+
+    #[test]
+    fn index_discovers_one_cargo_crate_when_toml_and_json_share_a_directory() {
+        let cargo = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/foreign_ingest/cargo_readcon");
+        let mut roots = PackageSourceRoots {
+            schema_version: 1,
+            source_roots: Vec::new(),
+        };
+        roots.push(SourceRootKind::Cargo, cargo);
+        let index = PackageSourceIndex::build(&roots).expect("index cargo");
+        assert_eq!(
+            index.foreign_candidates().len(),
+            1,
+            "{:?}",
+            index.foreign_candidates()
+        );
+        let candidate = &index.foreign_candidates()[0];
+        assert_eq!(candidate.name, "readcon");
+        assert_eq!(candidate.version, "0.13.1");
+        assert_eq!(candidate.kind, SourceRootKind::Cargo);
+        assert_eq!(candidate.format, Some(ForeignFormat::Cargo));
+        assert!(
+            !candidate.source_checksums.is_empty(),
+            "crates.io JSON must win over Cargo.toml so the checksum is kept"
+        );
     }
 
     #[test]

@@ -63,10 +63,11 @@ refuses rather than emitting a ~PythonBundle~ wheel overlay.
 
 A leftover that is not in EasyBuild yet (~eon-akmc~) keeps unsatisfied
 PyPI run dependencies in the same ~exts_list~. numpy still maps to
-~SciPy-bundle~. A maturin/PyO3 leftover such as ~readcon~ is planned
-with ~--format cargo~ (implicit ~Rust~ / ~maturin~) and then sits in
-the robot so the Python leftover depends on that module instead of
-pip-building the crate.
+~SciPy-bundle~. A maturin/PyO3 leftover such as ~readcon~ is closed from
+a Cargo source root (~--cargo-source~ / ~kind = "cargo"~) into a
+companion ~PythonPackage~ (implicit ~Rust~ / ~maturin~ / ~binutils~)
+instead of a pip extension. Pass the crate metadata next to the PyPI
+plan; do not ~pip install~ the crate into the overlay.
 
 * Install with the eessi-extend target
 
