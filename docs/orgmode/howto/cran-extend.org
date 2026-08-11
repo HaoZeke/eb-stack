@@ -45,9 +45,16 @@ DESCRIPTION files rarely carry a SHA-256. Pass ~--source-checksum~ for
 the tarball, or use a JSON document that already includes one. Plan
 refuses to emit a buildable bundle without it.
 
-* Verify on EESSI-extend
+* Install with the eessi-extend target
 
-Same as the Python extras workflow: ~skills/eessi-extend/SKILL.md~,
-exactly one ~EESSI_*_INSTALL~ prefix, ~module load EESSI-extend~, ~eb~
-the emitted recipe. Project one-offs can keep using ~R_LIBS_USER~
-instead of a site bundle.
+Same as the Python extras workflow: plan on the host, then
+
+#+begin_src bash
+eb-stack campaign run \
+  --bundle /tmp/jsonlite \
+  --config examples/targets/eessi-extend.toml \
+  --target eessi-extend-user \
+  --state /tmp/jsonlite.campaign.json
+#+end_src
+
+Project one-offs can keep using ~R_LIBS_USER~ instead of a site bundle.
