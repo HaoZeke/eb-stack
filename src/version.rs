@@ -121,10 +121,36 @@ pub fn matches_req(version: &str, req: &str) -> bool {
 }
 
 /// Single clause: one leading operator or bare exact version.
+///
+/// The operators here are the whole constraint language the solver has:
+/// `range_matching` builds a Resolvo version set by asking this function about
+/// every candidate. An operator missing from this list does not degrade to
+/// "unconstrained", it degrades to "matches nothing", because an unrecognised
+/// clause falls through to the bare-exact comparison at the end and no real
+/// version equals a string that starts with punctuation. That is why the
+/// ecosystem-native forms below are handled rather than left to the fallback.
 fn matches_req_single(version: &str, req: &str) -> bool {
     let req = req.trim();
     if req.is_empty() {
         return true;
+    }
+    // PEP 440 compatible release: ~=X.Y is >=X.Y with the last component free.
+    // Checked before `~` so the two-character operator wins.
+    if let Some(rest) = req.strip_prefix("~=") {
+        return matches_compatible_release(version, rest.trim());
+    }
+    if let Some(rest) = req.strip_prefix("!=") {
+        return cmp_version(version, rest.trim()) != Ordering::Equal;
+    }
+    // Cargo caret: ^X.Y.Z allows changes that do not modify the left-most
+    // non-zero component. A bare version in a Cargo manifest means the same.
+    if let Some(rest) = req.strip_prefix('^') {
+        return matches_caret(version, rest.trim());
+    }
+    // Cargo tilde: ~X.Y.Z allows patch-level changes, ~X.Y the same, ~X allows
+    // minor-level changes.
+    if let Some(rest) = req.strip_prefix('~') {
+        return matches_tilde(version, rest.trim());
     }
     if let Some(rest) = req.strip_prefix("==") {
         return cmp_version(version, rest.trim()) == Ordering::Equal;
@@ -149,6 +175,133 @@ fn matches_req_single(version: &str, req: &str) -> bool {
     }
     // bare exact
     cmp_version(version, req) == Ordering::Equal
+}
+
+/// Numeric components of a version, stopping at the first non-numeric run.
+///
+/// `1.2.3rc1` yields `[1, 2, 3]`, which is what the range operators below need:
+/// they bound a release series, and a pre-release suffix does not move the
+/// bound.
+fn numeric_components(version: &str) -> Vec<u64> {
+    let mut components = Vec::new();
+    for field in version.split('.') {
+        let digits: String = field.chars().take_while(char::is_ascii_digit).collect();
+        if digits.is_empty() {
+            break;
+        }
+        match digits.parse::<u64>() {
+            Ok(value) => components.push(value),
+            Err(_) => break,
+        }
+    }
+    components
+}
+
+/// Upper bound of a release series, as `[components…]` with `index` bumped and
+/// everything after it dropped.
+fn series_ceiling(components: &[u64], index: usize) -> String {
+    let mut bound: Vec<u64> = components[..=index].to_vec();
+    bound[index] += 1;
+    bound
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// `~=X.Y.Z` is `>=X.Y.Z, <X.(Y+1)`; `~=X.Y` is `>=X.Y, <(X+1)`.
+fn matches_compatible_release(version: &str, floor: &str) -> bool {
+    if cmp_version(version, floor) == Ordering::Less {
+        return false;
+    }
+    let components = numeric_components(floor);
+    if components.len() < 2 {
+        // `~=X` is not a valid compatible release, so only the floor applies.
+        return true;
+    }
+    let ceiling = series_ceiling(&components, components.len() - 2);
+    cmp_version(version, &ceiling) == Ordering::Less
+}
+
+/// `^X.Y.Z` allows anything up to the next change of the left-most non-zero
+/// component: `^1.2.3` is `<2`, `^0.2.3` is `<0.3`, `^0.0.3` is `<0.0.4`.
+fn matches_caret(version: &str, floor: &str) -> bool {
+    if cmp_version(version, floor) == Ordering::Less {
+        return false;
+    }
+    let components = numeric_components(floor);
+    if components.is_empty() {
+        return true;
+    }
+    let significant = components
+        .iter()
+        .position(|component| *component != 0)
+        .unwrap_or(components.len() - 1);
+    let ceiling = series_ceiling(&components, significant);
+    cmp_version(version, &ceiling) == Ordering::Less
+}
+
+/// `~X.Y.Z` and `~X.Y` allow patch-level changes, `~X` minor-level ones.
+fn matches_tilde(version: &str, floor: &str) -> bool {
+    if cmp_version(version, floor) == Ordering::Less {
+        return false;
+    }
+    let components = numeric_components(floor);
+    if components.is_empty() {
+        return true;
+    }
+    let index = if components.len() >= 2 { 1 } else { 0 };
+    let ceiling = series_ceiling(&components, index);
+    cmp_version(version, &ceiling) == Ordering::Less
+}
+
+#[cfg(test)]
+mod ecosystem_operator_tests {
+    use super::*;
+
+    #[test]
+    fn exclusion_excludes_only_the_named_version() {
+        assert!(matches_req("1.3.0", "!=1.2.0"));
+        assert!(!matches_req("1.2.0", "!=1.2.0"));
+        // The form that made every PyPI dependency carrying one unsatisfiable.
+        assert!(matches_req("2.1.3", ">=1.0,!=2.0.0"));
+        assert!(!matches_req("2.0.0", ">=1.0,!=2.0.0"));
+    }
+
+    #[test]
+    fn compatible_release_bounds_the_series() {
+        assert!(matches_req("1.2.5", "~=1.2.0"));
+        assert!(!matches_req("1.3.0", "~=1.2.0"));
+        assert!(!matches_req("1.1.9", "~=1.2.0"));
+        assert!(matches_req("1.9.0", "~=1.2"));
+        assert!(!matches_req("2.0.0", "~=1.2"));
+    }
+
+    #[test]
+    fn caret_stops_at_the_leftmost_nonzero_component() {
+        assert!(matches_req("1.5.0", "^1.2.0"));
+        assert!(!matches_req("2.0.0", "^1.2.0"));
+        assert!(matches_req("0.2.9", "^0.2.3"));
+        assert!(!matches_req("0.3.0", "^0.2.3"));
+        assert!(matches_req("0.0.3", "^0.0.3"));
+        assert!(!matches_req("0.0.4", "^0.0.3"));
+    }
+
+    #[test]
+    fn tilde_allows_the_last_named_component_to_move() {
+        assert!(matches_req("1.2.9", "~1.2.3"));
+        assert!(!matches_req("1.3.0", "~1.2.3"));
+        assert!(matches_req("1.2.9", "~1.2"));
+        assert!(!matches_req("1.3.0", "~1.2"));
+        assert!(matches_req("1.9.0", "~1"));
+        assert!(!matches_req("2.0.0", "~1"));
+    }
+
+    #[test]
+    fn a_prerelease_suffix_does_not_move_the_bound() {
+        assert!(matches_req("1.2.3rc1", "^1.2.0"));
+        assert!(matches_req("1.2.3", "~=1.2.0"));
+    }
 }
 
 #[cfg(test)]
