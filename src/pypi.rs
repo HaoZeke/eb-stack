@@ -280,10 +280,9 @@ fn pypi_build_system_hints(build_system: Option<&WarehouseBuildSystem>) -> Vec<S
         .requires
         .iter()
         .any(|spec| spec.to_ascii_lowercase().contains("meson"))
+        && !hints.iter().any(|hint| hint == "mesonpy")
     {
-        if !hints.iter().any(|hint| hint == "mesonpy") {
-            hints.extend(["meson".into(), "mesonpy".into()]);
-        }
+        hints.extend(["meson".into(), "mesonpy".into()]);
     }
     hints
 }
