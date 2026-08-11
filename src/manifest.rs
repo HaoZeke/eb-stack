@@ -3,9 +3,9 @@
 use crate::domain::Toolchain;
 use crate::foreign::{guess_easyblock, ForeignFormat, ForeignRecipe, ForeignRuleKind};
 use crate::package::{
-    BuildSpec, DependencyIntent, DependencyRole, OutputRequest, PackageMetadata, PackageOrigin,
-    PackagePlan, PackageRule, PackageRuleKind, PatchArtifact, ProductProfile, Residual,
-    ResidualSeverity, ResidualStage, SourceArtifact, PACKAGE_SCHEMA_VERSION,
+    BuildSpec, DependencyIntent, DependencyRole, EasyconfigValue, OutputRequest, PackageMetadata,
+    PackageOrigin, PackagePlan, PackageRule, PackageRuleKind, PatchArtifact, ProductProfile,
+    Residual, ResidualSeverity, ResidualStage, SourceArtifact, PACKAGE_SCHEMA_VERSION,
 };
 use std::collections::BTreeMap;
 
@@ -151,7 +151,10 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             build_systems: recipe.build_system_hints.clone(),
             source_root: None,
             config_options,
-            moduleclass: None,
+            moduleclass: match recipe.format {
+                ForeignFormat::Pypi | ForeignFormat::Cran => Some("lang".into()),
+                _ => None,
+            },
             patches: recipe
                 .patches
                 .iter()
@@ -175,7 +178,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
                     })
                 })
                 .collect(),
-            easyconfig_parameters: BTreeMap::new(),
+            easyconfig_parameters: cran_sanity_paths(recipe),
         },
         profiles: vec![profile],
         outputs: vec![OutputRequest {
@@ -184,6 +187,21 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
         }],
         residuals,
     }
+}
+
+fn cran_sanity_paths(recipe: &ForeignRecipe) -> BTreeMap<String, EasyconfigValue> {
+    if recipe.format != ForeignFormat::Cran {
+        return BTreeMap::new();
+    }
+    let mut paths = BTreeMap::new();
+    paths.insert("files".into(), EasyconfigValue::List(Vec::new()));
+    paths.insert(
+        "dirs".into(),
+        EasyconfigValue::List(vec![EasyconfigValue::String(recipe.name.clone())]),
+    );
+    let mut parameters = BTreeMap::new();
+    parameters.insert("sanity_check_paths".into(), EasyconfigValue::Table(paths));
+    parameters
 }
 
 fn is_remote_patch(location: &str) -> bool {

@@ -174,6 +174,22 @@ fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
     };
 
     let homepage = nonempty(doc.info.home_page).or_else(|| nonempty(doc.info.project_url));
+    if !dependencies
+        .iter()
+        .any(|dep| dep.name.eq_ignore_ascii_case("python"))
+    {
+        dependencies.insert(
+            0,
+            ForeignDep {
+                name: "Python".into(),
+                pin: None,
+                role: "run".into(),
+                original_spec: Some("Python (implicit for PythonBundle)".into()),
+                condition: ConditionExpr::Always,
+                provenance: Vec::new(),
+            },
+        );
+    }
 
     Ok(ForeignRecipe {
         format: ForeignFormat::Pypi,
@@ -295,18 +311,27 @@ fn parse_requirements_txt(text: &str) -> Result<ForeignRecipe, ForeignError> {
             provenance: None,
         });
     }
-    let dependencies = specs
-        .into_iter()
-        .skip(1)
-        .map(|(dep_name, dep_pin, original)| ForeignDep {
-            name: dep_name,
-            pin: dep_pin,
-            role: "run".into(),
-            original_spec: Some(original),
-            condition: ConditionExpr::Always,
-            provenance: Vec::new(),
-        })
-        .collect();
+    let mut dependencies = vec![ForeignDep {
+        name: "Python".into(),
+        pin: None,
+        role: "run".into(),
+        original_spec: Some("Python (implicit for PythonBundle)".into()),
+        condition: ConditionExpr::Always,
+        provenance: Vec::new(),
+    }];
+    dependencies.extend(
+        specs
+            .into_iter()
+            .skip(1)
+            .map(|(dep_name, dep_pin, original)| ForeignDep {
+                name: dep_name,
+                pin: dep_pin,
+                role: "run".into(),
+                original_spec: Some(original),
+                condition: ConditionExpr::Always,
+                provenance: Vec::new(),
+            }),
+    );
     Ok(ForeignRecipe {
         format: ForeignFormat::Pypi,
         name,
@@ -395,9 +420,9 @@ mod tests {
         .expect("parse");
         assert_eq!(recipe.name, "beautifulsoup4");
         assert_eq!(recipe.version, "4.12.3");
-        assert_eq!(recipe.dependencies.len(), 1);
-        assert_eq!(recipe.dependencies[0].name, "soupsieve");
-        assert_eq!(recipe.dependencies[0].pin.as_deref(), Some(">=1.6.1"));
+        assert_eq!(recipe.dependencies[0].name, "Python");
+        assert_eq!(recipe.dependencies[1].name, "soupsieve");
+        assert_eq!(recipe.dependencies[1].pin.as_deref(), Some(">=1.6.1"));
         assert!(recipe
             .residuals
             .iter()
@@ -413,7 +438,8 @@ mod tests {
         let recipe = parse_pypi_str("beautifulsoup4==4.12.3\nsoupsieve==2.6\n").expect("parse");
         assert_eq!(recipe.name, "beautifulsoup4");
         assert_eq!(recipe.version, "4.12.3");
-        assert_eq!(recipe.dependencies[0].name, "soupsieve");
-        assert_eq!(recipe.dependencies[0].pin.as_deref(), Some("==2.6"));
+        assert_eq!(recipe.dependencies[0].name, "Python");
+        assert_eq!(recipe.dependencies[1].name, "soupsieve");
+        assert_eq!(recipe.dependencies[1].pin.as_deref(), Some("==2.6"));
     }
 }

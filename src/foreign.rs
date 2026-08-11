@@ -434,8 +434,8 @@ pub(crate) fn guess_easyblock(recipe: &ForeignRecipe, warnings: &mut Vec<String>
         return "PythonBundle".into();
     }
     if let Some(hint) = hint(&["r-bundle", "cran"]) {
-        warnings.push(format!("build-system hint {hint} → easyblock Bundle"));
-        return "Bundle".into();
+        warnings.push(format!("build-system hint {hint} → easyblock RPackage"));
+        return "RPackage".into();
     }
     if let Some(hint) = hint(&["meson"]) {
         warnings.push(format!("build-system hint {hint} → easyblock MesonNinja"));

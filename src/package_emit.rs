@@ -223,26 +223,6 @@ fn render_easyconfig(
             moduleclass,
         );
     }
-    if plan.build.easyblock.as_deref() == Some("Bundle")
-        && plan.origin == crate::package::PackageOrigin::Cran
-        || plan.origin == crate::package::PackageOrigin::Cran
-    {
-        return render_language_bundle(
-            plan,
-            lock,
-            materialized,
-            LanguageBundleKind::R,
-            &easyblock_line,
-            homepage,
-            description,
-            &versionsuffix_line,
-            &toolchain_options_line,
-            &easyconfig_parameter_lines,
-            &build_dependencies,
-            &runtime_dependencies,
-            moduleclass,
-        );
-    }
 
     let rendered = format!(
         "{easyblock_line}name = '{name}'\n\
@@ -279,7 +259,6 @@ moduleclass = '{moduleclass}'\n",
 #[derive(Clone, Copy)]
 enum LanguageBundleKind {
     Python,
-    R,
 }
 
 fn render_language_bundle(
@@ -300,30 +279,15 @@ fn render_language_bundle(
     let easyblock_line = if easyblock_line.is_empty() {
         match kind {
             LanguageBundleKind::Python => "easyblock = 'PythonBundle'\n\n".to_string(),
-            LanguageBundleKind::R => "easyblock = 'Bundle'\n\n".to_string(),
         }
     } else {
         easyblock_line.to_string()
     };
-    let default_class = match kind {
-        LanguageBundleKind::Python => String::new(),
-        LanguageBundleKind::R => "exts_defaultclass = 'RPackage'\n".to_string(),
-    };
-    let moduleclass = match kind {
-        LanguageBundleKind::Python => {
-            if plan.build.moduleclass.is_some() {
-                moduleclass
-            } else {
-                "lang"
-            }
-        }
-        LanguageBundleKind::R => {
-            if plan.build.moduleclass.is_some() {
-                moduleclass
-            } else {
-                "lang"
-            }
-        }
+    let default_class = String::new();
+    let moduleclass = if plan.build.moduleclass.is_some() {
+        moduleclass
+    } else {
+        "lang"
     };
     let exts = render_exts_list(plan, materialized, kind);
     let rendered = format!(
@@ -372,7 +336,7 @@ fn render_exts_list(
 fn render_ext_from_source(
     plan: &PackagePlan,
     source: &crate::package::SourceArtifact,
-    kind: LanguageBundleKind,
+    _kind: LanguageBundleKind,
 ) -> Option<String> {
     let filename = source
         .filename
@@ -385,14 +349,7 @@ fn render_ext_from_source(
                     .map(ToString::to_string)
             })
         })
-        .unwrap_or_else(|| match kind {
-            LanguageBundleKind::Python => {
-                format!("{}-{}.tar.gz", plan.package.name, plan.package.version)
-            }
-            LanguageBundleKind::R => {
-                format!("{}_{}.tar.gz", plan.package.name, plan.package.version)
-            }
-        });
+        .unwrap_or_else(|| format!("{}-{}.tar.gz", plan.package.name, plan.package.version));
     let mut options = Vec::new();
     if let Some(url) = &source.url {
         if let Some(base) = url.rsplit_once('/').map(|(base, _)| base) {
