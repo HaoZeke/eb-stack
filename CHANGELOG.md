@@ -55,9 +55,10 @@ All notable changes to this project are documented here.
 - Cargo dependencies keep the requirement the manifest states, and `path` and
   `git` dependencies are reported as judgment residuals: neither can be built
   from a published crate tarball.
-- `package plan --package-index FILE` reads a repository index in the format
-  CRAN publishes as `PACKAGES`, supplying versions and checksums for
-  dependencies that state none of their own. A CRAN source now comes from
+- `package plan --package-index FILE` reads a repository index, either the
+  format CRAN publishes as `PACKAGES` or a pinned requirements file as
+  `pip freeze` writes it, supplying versions and checksums for dependencies
+  that state none of their own. A CRAN source now comes from
   CRAN's contrib location rather than the project home page in `DESCRIPTION`,
   and an R bundle carries `exts_default_options` pointing at the current and
   archived CRAN paths.

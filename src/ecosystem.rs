@@ -72,6 +72,32 @@ pub struct IndexEntry {
 /// dependency states no version of its own.
 pub fn parse_package_index(text: &str) -> std::collections::BTreeMap<String, IndexEntry> {
     let mut index = std::collections::BTreeMap::new();
+    // A pinned requirements file is the same answer in the other ecosystem's
+    // spelling, and `pip freeze` is the artifact people already have. One
+    // `name==version` per line, so it cannot be confused with a control file.
+    if !text.contains("Package:") {
+        for line in text.lines() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            if line.is_empty() {
+                continue;
+            }
+            let (name, pin) = split_name_and_pin(line);
+            let Some(version) = pin.as_deref().and_then(exact_version) else {
+                continue;
+            };
+            if name.is_empty() {
+                continue;
+            }
+            index.insert(
+                crate::package_sources::package_identity(&name),
+                IndexEntry {
+                    version,
+                    checksum: None,
+                },
+            );
+        }
+        return index;
+    }
     for stanza in text.split("\n\n") {
         let mut name = None;
         let mut version = None;
@@ -151,6 +177,23 @@ mod tests {
         assert_eq!(index.len(), 2);
         assert_eq!(entry.checksum.as_deref(), Some("md5:abc123"));
         assert_eq!(index.get("coda").and_then(|e| e.checksum.as_deref()), None);
+    }
+
+    #[test]
+    fn a_pinned_requirements_file_is_also_an_index() {
+        let index = parse_package_index(
+            "# from pip freeze\nsoupsieve==2.5\nbeautifulsoup4==4.12.3\nrequests>=2\n",
+        );
+        assert_eq!(
+            index.get("soupsieve").map(|e| e.version.as_str()),
+            Some("2.5")
+        );
+        assert_eq!(
+            index.get("beautifulsoup4").map(|e| e.version.as_str()),
+            Some("4.12.3")
+        );
+        // A range names no single version, so it supplies nothing.
+        assert!(!index.contains_key("requests"));
     }
 
     #[test]
