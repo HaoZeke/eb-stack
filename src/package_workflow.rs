@@ -290,6 +290,9 @@ fn promote_pypi_overlay_extras(
         if hole.name.eq_ignore_ascii_case("python") || hole.name.eq_ignore_ascii_case("r") {
             continue;
         }
+        if hole.build {
+            continue;
+        }
         if refuses_pip_overlay(&hole.name) {
             continue;
         }
@@ -363,32 +366,15 @@ fn inject_overlay_build_tools(plan: &mut PackagePlan, candidates: &[crate::domai
     if plan.overlay_extensions.is_empty() && !meson {
         return;
     }
-    let names: &[&str] = if meson {
-        &[
-            "CMake",
-            "Meson",
-            "Ninja",
-            "pkgconf",
-            "Rust",
-            "Eigen",
-            "quill",
-            "cbindgen",
-            "cargo-c",
-            "hatchling",
-            "Python-bundle-PyPI",
-        ]
-    } else {
-        &[
-            "CMake",
-            "Meson",
-            "Ninja",
-            "pkgconf",
-            "Rust",
-            "hatchling",
-            "Python-bundle-PyPI",
-        ]
-    };
-    for name in names {
+    for name in [
+        "CMake",
+        "Meson",
+        "Ninja",
+        "pkgconf",
+        "Rust",
+        "hatchling",
+        "Python-bundle-PyPI",
+    ] {
         let already = plan.dependencies.iter().any(|dependency| {
             crate::provides::overlay_package_identity(
                 dependency

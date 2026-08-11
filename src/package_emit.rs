@@ -392,10 +392,7 @@ fn render_ext_from_source(
             "'preinstallopts': '{}'",
             escape_single(mesonpy_preinstallopts())
         ));
-        options.push(
-            "'installopts': '--config-settings=setup-args=-Dwrap_mode=default --config-settings=setup-args=-Dwith_tests=false'"
-                .into(),
-        );
+        options.push("'installopts': '--config-settings=setup-args=-Dwrap_mode=default'".into());
     }
     Some(format!(
         "('{}', '{}', {{\n    {},\n}})",
@@ -420,7 +417,7 @@ fn mesonpy_backend(plan: &PackagePlan) -> bool {
 }
 
 fn mesonpy_preinstallopts() -> &'static str {
-    "unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER && export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=\"${CC:-gcc}\" && export CARGO_HOME=%(builddir)s/.cargohome && export PYTHONPATH=%(installdir)s/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH} && sed -i s/forcefallback/default/ pyproject.toml && "
+    "unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER && export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=\"${CC:-gcc}\" && export CARGO_HOME=%(builddir)s/.cargohome && export PYTHONPATH=%(installdir)s/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH} && "
 }
 
 fn render_plain_ext(name: &str, version: &str) -> String {

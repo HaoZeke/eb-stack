@@ -93,8 +93,10 @@ by a pip extra. Extra site packages that Warehouse omits belong in the
 ingest: a JSON array of Warehouse objects, or later ~requirements.txt~
 lines. Resolvo then takes the robot module when ~--easyconfigs~ provides
 it. Do not hand-edit the emitted recipe for those names. A PEP 518
-~build_system~ object on the Warehouse document is the mesonpy / hatchling
-hint; wrap_mode and the EESSI gcc cargo linker come from that hint. See
+~build_system~ object with ~build-backend = mesonpy~ is the mesonpy hint:
+listed ~requires~ become SAT build deps, and the emitter writes
+~wrap_mode=default~ plus the EESSI gcc cargo linker. Hatchling stays a
+~Python-bundle-PyPI~ module when the robot provides it. See
 [[file:../howto/pypi-extend.org][site Python extras]].
 
 ** ~package bump~

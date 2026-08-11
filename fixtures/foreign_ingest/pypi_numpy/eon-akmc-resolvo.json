@@ -16,7 +16,7 @@
     },
     "build_system": {
       "build-backend": "mesonpy",
-      "requires": ["meson-python", "numpy"]
+      "requires": ["meson-python", "numpy", "quill", "cbindgen", "Eigen"]
     },
     "urls": [
       {

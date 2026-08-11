@@ -464,13 +464,17 @@ fn plan_eon_akmc_resolvo_takes_robot_yaml_quill_cbindgen() {
         recipe.text
     );
     assert!(
-        !extras_block.contains("('hatchling'") && !extras_block.contains("('packaging'"),
+        !extras_block.contains("('hatchling'")
+            && !extras_block.contains("('packaging'")
+            && !extras_block.contains("('meson-python'"),
         "robot-provided build backends stay modules, not pip extras:\n{}",
         recipe.text
     );
     assert!(
-        recipe.text.contains("quill") && recipe.text.contains("cbindgen"),
-        "meson leftovers take Quill and cbindgen from the robot:\n{}",
+        recipe.text.contains("quill")
+            && recipe.text.contains("cbindgen")
+            && recipe.text.contains("Eigen"),
+        "meson leftovers take wrap natives from ingest + robot:\n{}",
         recipe.text
     );
     assert!(
@@ -493,6 +497,28 @@ fn plan_eon_akmc_resolvo_takes_robot_yaml_quill_cbindgen() {
             .flat_map(|lock| lock.dependencies.iter())
             .any(|dep| dep.name == "PyYAML"),
         "Resolvo must lock PyYAML: {:?}",
+        closure.root.locks
+    );
+    assert!(
+        closure
+            .root
+            .locks
+            .iter()
+            .flat_map(|lock| lock.dependencies.iter())
+            .any(|dep| dep.name == "quill")
+            && closure
+                .root
+                .locks
+                .iter()
+                .flat_map(|lock| lock.dependencies.iter())
+                .any(|dep| dep.name == "cbindgen")
+            && closure
+                .root
+                .locks
+                .iter()
+                .flat_map(|lock| lock.dependencies.iter())
+                .any(|dep| dep.name == "Eigen"),
+        "Resolvo must lock wrap natives from ingest: {:?}",
         closure.root.locks
     );
 }
@@ -566,7 +592,9 @@ fn plan_eon_akmc_closes_readcon_from_cargo_source() {
         recipe.text
     );
     assert!(
-        !recipe.text.contains("quill") && !recipe.text.contains("cbindgen"),
+        !recipe.text.contains("quill")
+            && !recipe.text.contains("cbindgen")
+            && !recipe.text.contains("Eigen"),
         "non-meson leftovers must not take meson wrap natives:\n{}",
         recipe.text
     );
