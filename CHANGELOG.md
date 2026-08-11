@@ -6,6 +6,11 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `kind = "eessi"` target runtime: `eessi_container.sh --mode exec` is
+  the install backend for planned PyPI/CRAN overlays. Plan stays on the
+  host. `scripts/eessi-extend-eb.sh` loads `EESSI-extend` and execs `eb`.
+  See `examples/targets/eessi-extend.toml`.
+
 - `exts_list` entries are virtual Resolvo provides of the parent bundle.
   A requirement for `numpy` is satisfied by `SciPy-bundle` (and the same
   for `Python-bundle-PyPI` / `R-bundle-CRAN`) instead of failing as a

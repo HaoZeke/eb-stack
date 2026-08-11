@@ -58,12 +58,23 @@ Asking for ~numpy~ against a policy that locks ~SciPy-bundle~ produces
 an empty delta or a residual: numpy is already provided. Do not overlay
 a pip numpy on EESSI.
 
-* Verify on EESSI-extend
+* Install with the eessi-extend target
 
-Use ~skills/eessi-extend/SKILL.md~. Load exactly one of
-~EESSI_SITE_INSTALL~, ~EESSI_PROJECT_INSTALL~, or ~EESSI_USER_INSTALL~,
-then ~module load EESSI-extend~ and ~eb~ the emitted recipe. That claim
-is ~eessi-verified~, not ~builds~ on a normal host.
+Plan on the host. Install through ~campaign run~ and
+~examples/targets/eessi-extend.toml~ (or a site layer that sets
+~EESSI_SITE_INSTALL=1~):
+
+#+begin_src bash
+eb-stack campaign run \
+  --bundle /tmp/bs4 \
+  --config examples/targets/eessi-extend.toml \
+  --target eessi-extend-user \
+  --state /tmp/bs4.campaign.json
+#+end_src
+
+The runtime is ~eessi_container.sh~, not the host CVMFS client. The
+wrapper ~scripts/eessi-extend-eb.sh~ loads ~EESSI-extend~ and execs
+~eb~. That claim is ~eessi-verified~.
 
 User one-offs stay as ~python -m venv --system-site-packages~ on EESSI
 Python. This workflow is for a shared site or project extra.

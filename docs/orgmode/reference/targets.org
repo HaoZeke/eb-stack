@@ -62,11 +62,22 @@ without allocating a job.
 | ~host~ | none | none |
 | ~podman~ | ~image~ | ~command~, ~args~, ~mounts~, ~workdir~ |
 | ~docker~ | ~image~ | ~command~, ~args~, ~mounts~, ~workdir~ |
+| ~eessi~ | ~storage~ | ~command~ (default ~eessi_container.sh~), ~access~ (default ~ro~), ~extra_bind_paths~, ~resume~ |
 
 Container commands use ~run --rm~, then runtime arguments, volume mounts, the
 working directory, image, and routed workload. Every bundle, robot tree, work
 root, temporary root, install prefix, and source cache referenced by the
 workload must be visible inside the container.
+
+The ~eessi~ runtime is the install backend for site/user/project overlays.
+It launches ~eessi_container.sh --mode exec~, fuse-mounts CVMFS inside the
+image, and does not use the host CVMFS client. Plan ~package plan --format
+pypi|cran~ on the host: the host ~eb-stack~ binary need not run in the
+Debian 12 image. ~scripts/eessi-extend-eb.sh~ sources EESSI, loads
+~EESSI-extend~, and execs ~eb~. See ~examples/targets/eessi-extend.toml~.
+Set exactly one of ~EESSI_USER_INSTALL~, ~EESSI_PROJECT_INSTALL~,
+~EESSI_SITE_INSTALL~, or ~EESSI_CVMFS_INSTALL~ in
+~[targets.easybuild.environment]~.
 
 Compiled modules, build trees, and temporary files belong to one runtime ABI.
 Do not reuse a host or different-image install prefix inside a container.
