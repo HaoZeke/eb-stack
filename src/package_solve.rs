@@ -204,12 +204,16 @@ pub fn solve_package_profile_with_hierarchy(
     });
     let mut universe = original_candidates.clone();
     for candidate in &mut universe {
-        // Existing robot recipes are independently built artifacts. Their
-        // build-only tools are not co-loaded into the generated package's
-        // runtime environment and therefore have separate version scopes.
-        // The synthetic profile candidate below retains its direct build
-        // requirements because those tools are needed to build this output.
+        // Existing robot recipes are already-built modules. Overlay planning
+        // only needs their identity (Python, R, SciPy-bundle, …). Their own
+        // dependency trees — including filter-deps such as binutils — are not
+        // rebuilt and must not make the candidate uninstallable.
+        // The synthetic profile candidate below retains its direct
+        // requirements because those are what the new recipe will declare.
         candidate.builddependencies.clear();
+        if !candidate.is_extension_provide() {
+            candidate.dependencies.clear();
+        }
     }
     scope_cross_generation_pin_closures(&mut universe, stack_policy, &hierarchy);
     universe.push(Candidate {

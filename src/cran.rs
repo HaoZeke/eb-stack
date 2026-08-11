@@ -157,7 +157,14 @@ fn recipe_from_fields(
     note: &str,
 ) -> Result<ForeignRecipe, ForeignError> {
     let mut residuals = Vec::new();
-    let mut dependencies = Vec::new();
+    let mut dependencies = vec![ForeignDep {
+        name: "R".into(),
+        pin: None,
+        role: "run".into(),
+        original_spec: Some("R (implicit for RPackage)".into()),
+        condition: ConditionExpr::Always,
+        provenance: Vec::new(),
+    }];
     for (role, entries) in [("run", depends), ("run", imports), ("build", linking_to)] {
         for entry in entries {
             match parse_r_dep(entry) {
@@ -391,6 +398,7 @@ mod tests {
         let recipe = parse_cran_str("jsonlite==1.8.8\ncurl==5.2.1\n").expect("parse");
         assert_eq!(recipe.name, "jsonlite");
         assert_eq!(recipe.version, "1.8.8");
-        assert_eq!(recipe.dependencies[0].name, "curl");
+        assert_eq!(recipe.dependencies[0].name, "R");
+        assert_eq!(recipe.dependencies[1].name, "curl");
     }
 }

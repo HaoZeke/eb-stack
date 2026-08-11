@@ -3,4 +3,7 @@ version = '3.13.1'
 homepage = 'https://python.org'
 description = "Test Python provider"
 toolchain = {'name': 'foss', 'version': '2026.1'}
+dependencies = [
+    ('binutils', '2.42'),
+]
 moduleclass = 'lang'

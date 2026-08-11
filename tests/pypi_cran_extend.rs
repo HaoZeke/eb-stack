@@ -89,6 +89,11 @@ fn plan_pypi_uses_python_bundle_and_soupsieve_provide() {
         recipe.text
     );
     assert!(
+        recipe.text.contains("('Python'") || recipe.text.contains("('Python',"),
+        "PythonBundle must depend on Python:\n{}",
+        recipe.text
+    );
+    assert!(
         recipe.text.contains("Python-bundle-PyPI"),
         "soupsieve must resolve via Python-bundle-PyPI:\n{}",
         recipe.text
@@ -99,6 +104,11 @@ fn plan_pypi_uses_python_bundle_and_soupsieve_provide() {
         recipe.text
     );
     let lock = &bundle.locks[0];
+    assert!(
+        lock.dependencies.iter().any(|dep| dep.name == "Python"),
+        "Python must be locked even when its easyconfig names binutils: {:?}",
+        lock.dependencies
+    );
     assert!(
         lock.dependencies
             .iter()
@@ -149,5 +159,13 @@ fn plan_cran_emits_r_bundle() {
         recipe.text.contains("('R', '4.4.2')") || recipe.text.contains("'R'"),
         "R must be a dependency:\n{}",
         recipe.text
+    );
+    assert!(
+        bundle.locks[0]
+            .dependencies
+            .iter()
+            .any(|dep| dep.name == "R"),
+        "R must be locked even when its easyconfig names binutils: {:?}",
+        bundle.locks[0].dependencies
     );
 }

@@ -1892,7 +1892,13 @@ pub fn packaging_gate(
         errs.push("missing moduleclass".into());
     }
     if recipe.checksums.is_empty() {
-        errs.push("missing checksums".into());
+        let extension_bundle = matches!(
+            recipe.easyblock.as_deref(),
+            Some("PythonBundle" | "RPackage" | "Bundle")
+        ) && !recipe.exts_list.is_empty();
+        if !extension_bundle {
+            errs.push("missing checksums".into());
+        }
     }
     let opts = recipe.configopts.as_deref().unwrap_or("");
     for need in required_configopts {

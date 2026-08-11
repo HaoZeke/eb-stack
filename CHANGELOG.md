@@ -6,6 +6,11 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- Overlay planning treats existing robot modules as leaves: a `Python`
+  easyconfig that names `binutils` no longer makes `package plan --format
+  pypi` unsatisfiable. `--easyconfigs` is the solve robot only; it does
+  not start package-closure discovery.
+
 - `kind = "eessi"` target runtime: `eessi_container.sh --mode exec` is
   the install backend for planned PyPI/CRAN overlays. Plan stays on the
   host. `scripts/eessi-extend-eb.sh` loads `EESSI-extend` and execs `eb`.
