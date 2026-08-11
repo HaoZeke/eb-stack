@@ -209,18 +209,19 @@ fn render_easyconfig(
     {
         return render_language_bundle(
             plan,
-            lock,
             materialized,
             LanguageBundleKind::Python,
-            &easyblock_line,
-            homepage,
-            description,
-            &versionsuffix_line,
-            &toolchain_options_line,
-            &easyconfig_parameter_lines,
-            &build_dependencies,
-            &runtime_dependencies,
-            moduleclass,
+            BundleFragments {
+                easyblock_line: &easyblock_line,
+                homepage,
+                description,
+                versionsuffix_line: &versionsuffix_line,
+                toolchain_options_line: &toolchain_options_line,
+                easyconfig_parameter_lines: &easyconfig_parameter_lines,
+                build_dependencies: &build_dependencies,
+                runtime_dependencies: &runtime_dependencies,
+                moduleclass,
+            },
         );
     }
 
@@ -261,21 +262,40 @@ enum LanguageBundleKind {
     Python,
 }
 
+/// The rendered fragments a bundle recipe is assembled from.
+///
+/// These are computed once by the caller for every recipe shape, bundle or
+/// not, so they travel as one value rather than as a positional list only the
+/// call order keeps aligned.
+struct BundleFragments<'a> {
+    easyblock_line: &'a str,
+    homepage: &'a str,
+    description: &'a str,
+    versionsuffix_line: &'a str,
+    toolchain_options_line: &'a str,
+    easyconfig_parameter_lines: &'a str,
+    build_dependencies: &'a [String],
+    runtime_dependencies: &'a [String],
+    moduleclass: &'a str,
+}
+
 fn render_language_bundle(
     plan: &PackagePlan,
-    _lock: &ProfileLock,
     materialized: &crate::package::MaterializedProfile,
     kind: LanguageBundleKind,
-    easyblock_line: &str,
-    homepage: &str,
-    description: &str,
-    versionsuffix_line: &str,
-    toolchain_options_line: &str,
-    easyconfig_parameter_lines: &str,
-    build_dependencies: &[String],
-    runtime_dependencies: &[String],
-    moduleclass: &str,
+    fragments: BundleFragments<'_>,
 ) -> String {
+    let BundleFragments {
+        easyblock_line,
+        homepage,
+        description,
+        versionsuffix_line,
+        toolchain_options_line,
+        easyconfig_parameter_lines,
+        build_dependencies,
+        runtime_dependencies,
+        moduleclass,
+    } = fragments;
     let easyblock_line = if easyblock_line.is_empty() {
         match kind {
             LanguageBundleKind::Python => "easyblock = 'PythonBundle'\n\n".to_string(),

@@ -34,7 +34,12 @@ All notable changes to this project are documented here.
   emits a `PythonBundle` whose `exts_list` is the leftover package, with
   already-provided extras mapped to the parent bundle.
 - `--format cran` reads a DESCRIPTION file, CRAN JSON, or a package list
-  and emits a `Bundle` with `exts_defaultclass = 'RPackage'`.
+  and emits one `RPackage` recipe with its CRAN dependencies resolved and
+  base-R packages recorded as residuals. The R equivalent of the Python
+  bundle, a `Bundle` with `exts_defaultclass = 'RPackage'` carrying the
+  leftovers in `exts_list`, is not implemented: extras parsed from a CRAN
+  package list become dependencies rather than extension sources. See
+  `docs/orgmode/howto/cran-extend.org`.
 - Example stack policies `examples/stacks/eessi-python-extras.toml` and
   `examples/stacks/eessi-r-extras.toml` for locking EESSI-shipped
   scientific Python / R providers.

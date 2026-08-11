@@ -135,7 +135,7 @@ fn inspect_cran_description_fixture() {
 }
 
 #[test]
-fn plan_cran_emits_r_bundle() {
+fn plan_cran_emits_a_single_r_package() {
     let request = NewPackageRequest {
         source: root().join("fixtures/foreign_ingest/cran_jsonlite/cran.json"),
         format: Some(ForeignFormat::Cran),

@@ -11,6 +11,7 @@
 //! Markers with `extra ==` are dropped (optional extras). Other environment
 //! markers become residuals. The adapter never invents a SHA-256.
 
+use crate::ecosystem::{exact_version, nonempty, split_name_and_pin};
 use crate::foreign::{
     ForeignDep, ForeignError, ForeignFormat, ForeignRecipe, ForeignResidual, ForeignSource,
 };
@@ -352,41 +353,6 @@ fn parse_requirements_txt(text: &str) -> Result<ForeignRecipe, ForeignError> {
         rules: Vec::new(),
         notes: vec!["parsed from requirements.txt".into()],
         residuals,
-    })
-}
-
-fn split_name_and_pin(spec: &str) -> (String, Option<String>) {
-    let spec = spec.trim();
-    let spec = spec.trim_matches(|c| c == '(' || c == ')');
-    let mut cut = spec.len();
-    for (index, character) in spec.char_indices() {
-        if matches!(character, '<' | '>' | '=' | '!' | '~') {
-            cut = index;
-            break;
-        }
-    }
-    let name = spec[..cut].trim().to_string();
-    let pin = spec[cut..].trim();
-    let pin = if pin.is_empty() {
-        None
-    } else {
-        Some(pin.to_string())
-    };
-    (name, pin)
-}
-
-fn exact_version(pin: &str) -> Option<String> {
-    let pin = pin.trim();
-    pin.strip_prefix("==")
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
-
-fn nonempty(value: Option<String>) -> Option<String> {
-    value.and_then(|text| {
-        let text = text.trim();
-        (!text.is_empty()).then(|| text.to_string())
     })
 }
 

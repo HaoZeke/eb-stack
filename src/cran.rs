@@ -9,6 +9,7 @@
 //! Base-R packages are dropped. `R (>= x)` becomes a dependency on EasyBuild
 //! `R` with the version constraint preserved.
 
+use crate::ecosystem::{exact_version, split_name_and_pin};
 use crate::foreign::{
     ForeignDep, ForeignError, ForeignFormat, ForeignRecipe, ForeignResidual, ForeignSource,
 };
@@ -60,18 +61,18 @@ struct CranJson {
 fn parse_cran_json(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let doc: CranJson = serde_json::from_str(text)
         .map_err(|error| ForeignError::Parse(format!("cran json: {error}")))?;
-    recipe_from_fields(
-        doc.package,
-        doc.version,
-        doc.title,
-        doc.description,
-        doc.license,
-        doc.url,
-        &doc.depends,
-        &doc.imports,
-        &doc.linking_to,
-        "parsed from CRAN JSON",
-    )
+    recipe_from_fields(CranFields {
+        name: doc.package,
+        version: doc.version,
+        title: doc.title,
+        description: doc.description,
+        license: doc.license,
+        url: doc.url,
+        depends: &doc.depends,
+        imports: &doc.imports,
+        linking_to: &doc.linking_to,
+        note: "parsed from CRAN JSON",
+    })
 }
 
 fn parse_description(text: &str) -> Result<ForeignRecipe, ForeignError> {
@@ -84,18 +85,18 @@ fn parse_description(text: &str) -> Result<ForeignRecipe, ForeignError> {
         .get("version")
         .cloned()
         .ok_or_else(|| ForeignError::Parse("DESCRIPTION is missing Version".into()))?;
-    recipe_from_fields(
-        package,
+    recipe_from_fields(CranFields {
+        name: package,
         version,
-        fields.get("title").cloned(),
-        fields.get("description").cloned(),
-        fields.get("license").cloned(),
-        fields.get("url").cloned(),
-        &split_r_list(fields.get("depends").map(String::as_str).unwrap_or("")),
-        &split_r_list(fields.get("imports").map(String::as_str).unwrap_or("")),
-        &split_r_list(fields.get("linkingto").map(String::as_str).unwrap_or("")),
-        "parsed from DESCRIPTION",
-    )
+        title: fields.get("title").cloned(),
+        description: fields.get("description").cloned(),
+        license: fields.get("license").cloned(),
+        url: fields.get("url").cloned(),
+        depends: &split_r_list(fields.get("depends").map(String::as_str).unwrap_or("")),
+        imports: &split_r_list(fields.get("imports").map(String::as_str).unwrap_or("")),
+        linking_to: &split_r_list(fields.get("linkingto").map(String::as_str).unwrap_or("")),
+        note: "parsed from DESCRIPTION",
+    })
 }
 
 fn parse_package_list(text: &str) -> Result<ForeignRecipe, ForeignError> {
@@ -130,32 +131,51 @@ fn parse_package_list(text: &str) -> Result<ForeignRecipe, ForeignError> {
             None => dep_name,
         })
         .collect();
-    recipe_from_fields(
+    recipe_from_fields(CranFields {
         name,
         version,
-        None,
-        None,
-        None,
-        None,
-        &[],
-        &extras,
-        &[],
-        "parsed from CRAN package list",
-    )
+        title: None,
+        description: None,
+        license: None,
+        url: None,
+        depends: &[],
+        imports: &extras,
+        linking_to: &[],
+        note: "parsed from CRAN package list",
+    })
 }
 
-fn recipe_from_fields(
+/// One CRAN package's metadata, however it was written down.
+///
+/// DESCRIPTION, the CRAN JSON index and a bare package list all reduce to
+/// these fields, so they travel together rather than as ten positional
+/// arguments that only the call order keeps aligned.
+struct CranFields<'a> {
     name: String,
     version: String,
     title: Option<String>,
     description: Option<String>,
     license: Option<String>,
     url: Option<String>,
-    depends: &[String],
-    imports: &[String],
-    linking_to: &[String],
-    note: &str,
-) -> Result<ForeignRecipe, ForeignError> {
+    depends: &'a [String],
+    imports: &'a [String],
+    linking_to: &'a [String],
+    note: &'a str,
+}
+
+fn recipe_from_fields(fields: CranFields<'_>) -> Result<ForeignRecipe, ForeignError> {
+    let CranFields {
+        name,
+        version,
+        title,
+        description,
+        license,
+        url,
+        depends,
+        imports,
+        linking_to,
+        note,
+    } = fields;
     let mut residuals = Vec::new();
     let mut dependencies = vec![ForeignDep {
         name: "R".into(),
@@ -333,31 +353,6 @@ fn split_r_list(value: &str) -> Vec<String> {
         .filter(|item| !item.is_empty())
         .map(ToString::to_string)
         .collect()
-}
-
-fn split_name_and_pin(spec: &str) -> (String, Option<String>) {
-    let spec = spec.trim();
-    let mut cut = spec.len();
-    for (index, character) in spec.char_indices() {
-        if matches!(character, '<' | '>' | '=' | '!' | '~') {
-            cut = index;
-            break;
-        }
-    }
-    let name = spec[..cut].trim().to_string();
-    let pin = spec[cut..].trim();
-    if pin.is_empty() {
-        (name, None)
-    } else {
-        (name, Some(pin.to_string()))
-    }
-}
-
-fn exact_version(pin: &str) -> Option<String> {
-    pin.strip_prefix("==")
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
 }
 
 #[cfg(test)]
