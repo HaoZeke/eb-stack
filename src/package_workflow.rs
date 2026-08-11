@@ -919,6 +919,8 @@ fn normalize_provenance_path(origin: &PackageOrigin, provenance: &mut Provenance
         PackageOrigin::CondaForge => "conda-forge",
         PackageOrigin::Spack => "spack",
         PackageOrigin::EasyBuild => "easybuild",
+        PackageOrigin::Pypi => "pypi",
+        PackageOrigin::Cran => "cran",
     };
     provenance.span.path = format!("{origin}/{filename}");
 }

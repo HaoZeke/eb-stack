@@ -104,7 +104,7 @@ fn tool_catalog() -> Vec<Value> {
     vec![
         tool_with_optional(
             "eb_package_inspect",
-            "Parse a conda-forge or Spack recipe into a canonical build manifest and planned CycloneDX SBOM.",
+            "Parse a conda-forge, Spack, PyPI, or CRAN recipe into a canonical build manifest and planned CycloneDX SBOM.",
             &[
                 ("source", "string"),
                 ("toolchain_version", "string"),
@@ -662,6 +662,8 @@ fn foreign_format(arguments: &Value) -> Result<Option<ForeignFormat>, String> {
         "auto" => Ok(None),
         "conda" | "conda-forge" => Ok(Some(ForeignFormat::CondaForge)),
         "spack" => Ok(Some(ForeignFormat::Spack)),
+        "pypi" => Ok(Some(ForeignFormat::Pypi)),
+        "cran" => Ok(Some(ForeignFormat::Cran)),
         value => Err(format!("unsupported foreign format {value}")),
     }
 }

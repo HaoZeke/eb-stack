@@ -4,6 +4,22 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+### Added
+
+- `exts_list` entries are virtual Resolvo provides of the parent bundle.
+  A requirement for `numpy` is satisfied by `SciPy-bundle` (and the same
+  for `Python-bundle-PyPI` / `R-bundle-CRAN`) instead of failing as a
+  missing easyconfig. Profile locks collapse the provide to the parent so
+  emitted recipes depend on the bundle, not on a fake `numpy` module.
+- `--format pypi` reads Warehouse-shaped JSON or a `requirements.txt` and
+  emits a `PythonBundle` whose `exts_list` is the leftover package, with
+  already-provided extras mapped to the parent bundle.
+- `--format cran` reads a DESCRIPTION file, CRAN JSON, or a package list
+  and emits a `Bundle` with `exts_defaultclass = 'RPackage'`.
+- Example stack policies `examples/stacks/eessi-python-extras.toml` and
+  `examples/stacks/eessi-r-extras.toml` for locking EESSI-shipped
+  scientific Python / R providers.
+
 ## 0.3.0 - 2026-07-21
 
 First public release: package plan/bump/campaign CLI, Resolvo locks, CycloneDX

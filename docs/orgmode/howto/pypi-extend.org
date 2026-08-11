@@ -1,0 +1,69 @@
+#+TITLE: Site Python extras on EESSI
+#+OPTIONS: toc:t num:nil
+
+Turn a PyPI package or ~requirements.txt~ into a ~PythonBundle~ easyconfig
+that installs on top of EESSI. Already-shipped scientific Python
+(~numpy~ via ~SciPy-bundle~, ~soupsieve~ via ~Python-bundle-PyPI~) is
+satisfied as an ~exts_list~ provide. The emitted recipe lists the parent
+bundle as a dependency and keeps only the leftover package in ~exts_list~.
+
+Do not ~pip install --target~ and prepend ~PYTHONPATH~. That shadows
+toolchain-built extensions and has no claim on the EESSI compat layer.
+
+* Inputs
+
+1. Warehouse-shaped JSON (~info~ + ~urls~) or a ~requirements.txt~;
+2. the EESSI robot tree (or a fixture that mirrors its provides);
+3. a stack policy that *locks* ~Python~, ~SciPy-bundle~, and
+   ~Python-bundle-PyPI~ to the versions that EESSI version actually
+   ships. See ~examples/stacks/eessi-python-extras.toml~.
+
+Inspect does not need a robot. Plan does.
+
+* Inspect
+
+#+begin_src bash
+eb-stack package inspect \
+  --source fixtures/foreign_ingest/pypi_bs4/pypi.json \
+  --format pypi \
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  --out-dir /tmp/bs4-inspect
+#+end_src
+
+~package.plan.json~ has ~origin = pypi~ and ~easyblock = PythonBundle~.
+Optional extras (~extra ==~) become residuals and are not solved.
+
+A ~requirements.txt~ is also accepted. The first spec is the root
+package; later specs are additional run dependencies.
+
+* Plan
+
+#+begin_src bash
+eb-stack package plan \
+  --source fixtures/foreign_ingest/pypi_bs4/pypi.json \
+  --format pypi \
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  --easyconfigs /cvmfs/software.eessi.io/versions/2025.06/software/linux/x86_64/amd/zen4/software/EasyBuild/5.3.0/easybuild/easyconfigs \
+  --stack-policy examples/stacks/eessi-python-extras.toml \
+  --out-dir /tmp/bs4
+#+end_src
+
+The lock collapses ~soupsieve~ (when the EESSI ~Python-bundle-PyPI~
+provides it) to that bundle. The emitted recipe is a ~PythonBundle~
+whose ~exts_list~ contains ~beautifulsoup4~ only.
+
+Asking for ~numpy~ against a policy that locks ~SciPy-bundle~ produces
+an empty delta or a residual: numpy is already provided. Do not overlay
+a pip numpy on EESSI.
+
+* Verify on EESSI-extend
+
+Use ~skills/eessi-extend/SKILL.md~. Load exactly one of
+~EESSI_SITE_INSTALL~, ~EESSI_PROJECT_INSTALL~, or ~EESSI_USER_INSTALL~,
+then ~module load EESSI-extend~ and ~eb~ the emitted recipe. That claim
+is ~eessi-verified~, not ~builds~ on a normal host.
+
+User one-offs stay as ~python -m venv --system-site-packages~ on EESSI
+Python. This workflow is for a shared site or project extra.

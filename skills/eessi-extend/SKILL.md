@@ -236,6 +236,18 @@ software layer, however green it is locally.
 7. Do not bootstrap a whole toolchain generation into a user prefix to force a
    too-new recipe onto an older EESSI; report the generation gap instead.
 
+## Site Python / R extras
+
+Generate the overlay recipe with `eb-stack` rather than `pip install --target`
+or a shared `R_LIBS` dump:
+
+- Python: `docs/orgmode/howto/pypi-extend.org` (`--format pypi`)
+- R: `docs/orgmode/howto/cran-extend.org` (`--format cran`)
+
+`exts_list` on `SciPy-bundle` / `Python-bundle-PyPI` / `R-bundle-CRAN` is a
+Resolvo provide. Do not reinstall numpy or a CRAN package the stack already
+ships. Then test the emitted `.eb` with `EESSI-extend` as above.
+
 ## Related
 
 - `skills/upstream-pr/SKILL.md` — EasyBuild easyconfigs contribution (separate track)

@@ -1,0 +1,23 @@
+{
+  "info": {
+    "name": "beautifulsoup4",
+    "version": "4.12.3",
+    "home_page": "https://www.crummy.com/software/BeautifulSoup/",
+    "summary": "Screen-scraping library",
+    "license": "MIT",
+    "requires_dist": [
+      "soupsieve>=1.6.1",
+      "lxml ; extra == 'lxml'"
+    ]
+  },
+  "urls": [
+    {
+      "packagetype": "sdist",
+      "url": "https://files.pythonhosted.org/packages/source/b/beautifulsoup4/beautifulsoup4-4.12.3.tar.gz",
+      "filename": "beautifulsoup4-4.12.3.tar.gz",
+      "digests": {
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    }
+  ]
+}

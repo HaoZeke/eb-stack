@@ -280,6 +280,10 @@ pub enum PackageOrigin {
     Spack,
     /// An EasyBuild easyconfig.
     EasyBuild,
+    /// Offline PyPI metadata or a requirements.txt.
+    Pypi,
+    /// A CRAN DESCRIPTION file or package list.
+    Cran,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1304,5 +1308,7 @@ fn origin_name(origin: &PackageOrigin) -> &'static str {
         PackageOrigin::CondaForge => "conda-forge",
         PackageOrigin::Spack => "spack",
         PackageOrigin::EasyBuild => "easybuild",
+        PackageOrigin::Pypi => "pypi",
+        PackageOrigin::Cran => "cran",
     }
 }
