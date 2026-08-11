@@ -3,6 +3,7 @@
 
 pub mod artifact_class;
 pub mod campaign;
+pub mod cargo;
 pub mod cran;
 pub mod domain;
 mod eb_emit;

@@ -503,6 +503,7 @@ impl PackageSourceIndex {
             ForeignFormat::Spack => format!("Spack package parse: {error}"),
             ForeignFormat::Pypi => format!("PyPI metadata parse: {error}"),
             ForeignFormat::Cran => format!("CRAN metadata parse: {error}"),
+            ForeignFormat::Cargo => format!("Cargo metadata parse: {error}"),
         };
         self.parse_failures.push(SourceParseFailure {
             name,
@@ -577,7 +578,8 @@ fn infer_package_name_from_path(path: &Path, root: &Path, format: ForeignFormat)
         ForeignFormat::CondaForge
         | ForeignFormat::Spack
         | ForeignFormat::Pypi
-        | ForeignFormat::Cran => parent,
+        | ForeignFormat::Cran
+        | ForeignFormat::Cargo => parent,
     };
     let package_dir = if package_dir == root {
         root.file_name()?.to_str()?

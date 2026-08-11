@@ -1,0 +1,17 @@
+{
+  "crate": {
+    "id": "readcon",
+    "name": "readcon",
+    "max_version": "0.13.1",
+    "max_stable_version": "0.13.1",
+    "description": "CON file reader",
+    "repository": "https://github.com/lode-org/readcon-core"
+  },
+  "versions": [
+    {
+      "num": "0.13.1",
+      "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "features": { "pyo3": [] }
+    }
+  ]
+}

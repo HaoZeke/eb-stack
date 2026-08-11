@@ -130,6 +130,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             ForeignFormat::Spack => PackageOrigin::Spack,
             ForeignFormat::Pypi => PackageOrigin::Pypi,
             ForeignFormat::Cran => PackageOrigin::Cran,
+            ForeignFormat::Cargo => PackageOrigin::Cargo,
         },
         package: PackageMetadata {
             name: recipe.name.clone(),
@@ -152,7 +153,9 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             source_root: None,
             config_options,
             moduleclass: match recipe.format {
-                ForeignFormat::Pypi | ForeignFormat::Cran => Some("lang".into()),
+                ForeignFormat::Pypi | ForeignFormat::Cran | ForeignFormat::Cargo => {
+                    Some("lang".into())
+                }
                 _ => None,
             },
             patches: recipe

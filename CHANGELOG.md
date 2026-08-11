@@ -27,6 +27,9 @@ All notable changes to this project are documented here.
   Warehouse `requires_dist: null` (live numpy JSON) parses as no extras.
   A leftover such as `eon-akmc` whose other PyPI deps are not in the
   robot keeps those names in `exts_list` instead of failing SAT.
+- `--format cargo` reads `Cargo.toml` or crates.io JSON. PyO3/maturin
+  crates emit `PythonPackage` with implicit `Rust` and `maturin`;
+  other crates emit `Crate`. Existing robot Rust modules are leaves.
 - `--format pypi` reads Warehouse-shaped JSON or a `requirements.txt` and
   emits a `PythonBundle` whose `exts_list` is the leftover package, with
   already-provided extras mapped to the parent bundle.

@@ -284,6 +284,8 @@ pub enum PackageOrigin {
     Pypi,
     /// A CRAN DESCRIPTION file or package list.
     Cran,
+    /// A Cargo.toml or crates.io JSON document.
+    Cargo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1324,5 +1326,6 @@ fn origin_name(origin: &PackageOrigin) -> &'static str {
         PackageOrigin::EasyBuild => "easybuild",
         PackageOrigin::Pypi => "pypi",
         PackageOrigin::Cran => "cran",
+        PackageOrigin::Cargo => "cargo",
     }
 }

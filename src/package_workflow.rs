@@ -218,7 +218,10 @@ pub fn complete_package_bundle_with_hierarchy(
     stack_policy: &StackPolicy,
     hierarchy_fixture: Option<&Path>,
 ) -> Result<PackageBundle, PackageWorkflowError> {
-    if matches!(plan.origin, PackageOrigin::Pypi | PackageOrigin::Cran) {
+    if matches!(
+        plan.origin,
+        PackageOrigin::Pypi | PackageOrigin::Cran | PackageOrigin::Cargo
+    ) {
         if let Some(provider) = already_provided_language_root(&plan, candidates, hierarchy_fixture)
         {
             return Ok(already_provided_bundle(plan, sbom, provider));
@@ -233,6 +236,7 @@ pub fn complete_package_bundle_with_hierarchy(
     let mut plan = plan;
     if plan.origin == PackageOrigin::Pypi {
         promote_pypi_overlay_extras(&mut plan, candidates, stack_policy, hierarchy_fixture)?;
+        inject_overlay_build_tools(&mut plan, candidates);
     }
     let mut locks = Vec::new();
     for output in &plan.outputs {
@@ -321,6 +325,41 @@ fn promote_pypi_overlay_extras(
         });
     }
     Ok(())
+}
+
+fn inject_overlay_build_tools(plan: &mut PackagePlan, candidates: &[crate::domain::Candidate]) {
+    if plan.overlay_extensions.is_empty() {
+        return;
+    }
+    for name in ["CMake", "Meson", "Ninja", "pkgconf", "Rust"] {
+        let already = plan.dependencies.iter().any(|dependency| {
+            crate::provides::overlay_package_identity(
+                dependency
+                    .eb_name
+                    .as_deref()
+                    .unwrap_or(dependency.name.as_str()),
+            ) == crate::provides::overlay_package_identity(name)
+        });
+        let available = candidates.iter().any(|candidate| {
+            crate::provides::overlay_package_identity(&candidate.name)
+                == crate::provides::overlay_package_identity(name)
+        });
+        if already || !available {
+            continue;
+        }
+        plan.dependencies.push(DependencyIntent {
+            id: format!("dep:overlay-build:{name}"),
+            name: name.to_string(),
+            eb_name: None,
+            constraint: None,
+            toolchain: None,
+            roles: vec![DependencyRole::Build],
+            condition: ConditionExpr::Always,
+            virtual_capability: None,
+            solver_excluded: false,
+            provenance: Vec::new(),
+        });
+    }
 }
 
 fn overlay_extension_version(plan: &PackagePlan, name: &str) -> Option<String> {
@@ -1121,6 +1160,7 @@ fn normalize_provenance_path(origin: &PackageOrigin, provenance: &mut Provenance
         PackageOrigin::EasyBuild => "easybuild",
         PackageOrigin::Pypi => "pypi",
         PackageOrigin::Cran => "cran",
+        PackageOrigin::Cargo => "cargo",
     };
     provenance.span.path = format!("{origin}/{filename}");
 }

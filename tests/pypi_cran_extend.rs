@@ -46,6 +46,10 @@ fn detect_pypi_and_cran_paths() {
         detect_foreign_format(Path::new("jsonlite.cran.txt")),
         Some(ForeignFormat::Cran)
     );
+    assert_eq!(
+        detect_foreign_format(Path::new("Cargo.toml")),
+        Some(ForeignFormat::Cargo)
+    );
 }
 
 #[test]
@@ -261,6 +265,51 @@ fn plan_torch_without_pytorch_module_refuses_pip_overlay() {
     assert!(
         message.contains("torch") && message.contains("pip-overlay"),
         "{message}"
+    );
+}
+
+#[test]
+fn plan_cargo_readcon_uses_rust_and_maturin() {
+    let request = NewPackageRequest {
+        source: root().join("fixtures/foreign_ingest/cargo_readcon/crates.json"),
+        format: Some(ForeignFormat::Cargo),
+        toolchain: toolchain(),
+        source_checksums: Vec::new(),
+        package_layers: Vec::new(),
+        easyconfig_roots: vec![root().join("fixtures/foreign_ingest/cargo_readcon/robot")],
+        stack_policy: stack_policy(),
+    };
+    let bundle = plan_new_package(&request).expect("plan cargo readcon");
+    assert_eq!(bundle.plan.origin, eb_stack::package::PackageOrigin::Cargo);
+    let recipe = bundle
+        .easyconfigs
+        .iter()
+        .find(|config| config.filename.to_ascii_lowercase().contains("readcon"))
+        .expect("emitted readcon");
+    assert!(
+        recipe.text.contains("easyblock = 'PythonPackage'")
+            || recipe.text.contains("('Rust'")
+            || recipe.text.contains("'Rust'"),
+        "{}",
+        recipe.text
+    );
+    assert!(
+        recipe.text.contains("('Rust'") || recipe.text.contains("'Rust'"),
+        "Rust must be a build dependency:\n{}",
+        recipe.text
+    );
+    assert!(
+        recipe.text.contains("maturin"),
+        "maturin must be a build dependency:\n{}",
+        recipe.text
+    );
+    assert!(
+        bundle.locks[0]
+            .dependencies
+            .iter()
+            .any(|dep| dep.name == "Rust"),
+        "{:?}",
+        bundle.locks[0].dependencies
     );
 }
 

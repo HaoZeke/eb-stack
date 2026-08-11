@@ -65,6 +65,8 @@ pub enum ForeignFormat {
     Pypi,
     /// A CRAN DESCRIPTION file or package list.
     Cran,
+    /// A Cargo.toml or crates.io JSON document.
+    Cargo,
 }
 
 impl ForeignFormat {
@@ -75,6 +77,7 @@ impl ForeignFormat {
             Self::Spack => "spack",
             Self::Pypi => "pypi",
             Self::Cran => "cran",
+            Self::Cargo => "cargo",
         }
     }
 }
@@ -300,6 +303,13 @@ pub fn detect_foreign_format(path: &Path) -> Option<ForeignFormat> {
     {
         return Some(ForeignFormat::Cran);
     }
+    if name == "cargo.toml"
+        || name.ends_with(".cargo.json")
+        || name == "crates.json"
+        || name.ends_with(".crates.json")
+    {
+        return Some(ForeignFormat::Cargo);
+    }
     None
 }
 
@@ -310,6 +320,7 @@ pub fn parse_foreign_str(format: ForeignFormat, text: &str) -> Result<ForeignRec
         ForeignFormat::Spack => parse_spack_package(text),
         ForeignFormat::Pypi => crate::pypi::parse_pypi_str(text),
         ForeignFormat::Cran => crate::cran::parse_cran_str(text),
+        ForeignFormat::Cargo => crate::cargo::parse_cargo_str(text),
     }
 }
 
@@ -429,6 +440,10 @@ pub(crate) fn guess_easyblock(recipe: &ForeignRecipe, warnings: &mut Vec<String>
             needles.iter().any(|needle| lower.contains(needle))
         })
     };
+    if let Some(hint) = hint(&["crate"]) {
+        warnings.push(format!("build-system hint {hint} → easyblock Crate"));
+        return "Crate".into();
+    }
     if let Some(hint) = hint(&["python-bundle"]) {
         warnings.push(format!("build-system hint {hint} → easyblock PythonBundle"));
         return "PythonBundle".into();
@@ -2252,6 +2267,10 @@ about:
         assert_eq!(
             detect_foreign_format(Path::new("DESCRIPTION")),
             Some(ForeignFormat::Cran)
+        );
+        assert_eq!(
+            detect_foreign_format(Path::new("Cargo.toml")),
+            Some(ForeignFormat::Cargo)
         );
         assert_eq!(detect_foreign_format(Path::new("foo.eb")), None);
     }

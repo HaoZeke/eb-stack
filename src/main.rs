@@ -881,7 +881,8 @@ fn parse_format(value: &str) -> Result<Option<ForeignFormat>> {
         "spack" => Ok(Some(ForeignFormat::Spack)),
         "pypi" => Ok(Some(ForeignFormat::Pypi)),
         "cran" => Ok(Some(ForeignFormat::Cran)),
-        _ => bail!("--format must be auto, conda-forge, spack, pypi, or cran"),
+        "cargo" | "crates" | "crates.io" => Ok(Some(ForeignFormat::Cargo)),
+        _ => bail!("--format must be auto, conda-forge, spack, pypi, cran, or cargo"),
     }
 }
 

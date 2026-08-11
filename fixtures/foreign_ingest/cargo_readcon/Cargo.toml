@@ -1,0 +1,9 @@
+[package]
+name = "readcon-core"
+version = "0.13.1"
+description = "CON file reader"
+license = "MIT"
+repository = "https://github.com/lode-org/readcon-core"
+
+[dependencies]
+pyo3 = "0.22"
