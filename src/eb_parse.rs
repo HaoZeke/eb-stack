@@ -241,6 +241,10 @@ struct Parser<'a> {
     /// Statements the tolerant loop could not represent. Collected always;
     /// only `--strict` callers ask for them.
     skipped: Vec<SkippedStatement>,
+    /// Open bracket nesting, `[`, `(` and `{`. Python joins adjacent string
+    /// literals across lines only inside brackets, and this is what tells the
+    /// two cases apart.
+    depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -255,6 +259,7 @@ impl<'a> Parser<'a> {
             pos: 0,
             env,
             skipped: Vec::new(),
+            depth: 0,
         }
     }
 
@@ -310,6 +315,9 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let start = self.pos;
+            // A statement that failed mid-bracket leaves the counter raised;
+            // each statement starts at the outermost level by definition.
+            self.depth = 0;
             match self.parse_assignment() {
                 Ok(()) => {}
                 Err(message) => {
@@ -575,8 +583,28 @@ impl<'a> Parser<'a> {
         let mut left = self.parse_primary()?;
         // String / value binary ops used in real easyconfigs: `+` concat, `%` format.
         loop {
+            let before_ws = self.pos;
             self.skip_ws();
+            let crossed_line = self.src[before_ws..self.pos].contains(&b'\n');
             match self.peek() {
+                // Adjacent string literals are one string in Python, which is how
+                // easyconfigs keep a long command under the line limit. Inside
+                // brackets they may span lines; outside them Python needs the
+                // literals on one logical line, and joining across a newline
+                // there would swallow the next statement.
+                Some(b'\'') | Some(b'"')
+                    if matches!(left, Value::Str(_)) && (self.depth > 0 || !crossed_line) =>
+                {
+                    let right = self.parse_primary()?;
+                    left = match (left, right) {
+                        (Value::Str(a), Value::Str(b)) => Value::Str(a + &b),
+                        (a, b) => {
+                            return Err(
+                                self.err(format!("unsupported implicit concat: {a:?} {b:?}"))
+                            );
+                        }
+                    };
+                }
                 Some(b'+') => {
                     self.pos += 1;
                     let right = self.parse_primary()?;
@@ -757,6 +785,7 @@ impl<'a> Parser<'a> {
         if self.bump() != Some(b'[') {
             return Err(self.err("expected '['"));
         }
+        self.depth += 1;
         let mut items = Vec::new();
         loop {
             self.skip_ws();
@@ -782,6 +811,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+        self.depth -= 1;
         Ok(Value::List(items))
     }
 
@@ -790,9 +820,11 @@ impl<'a> Parser<'a> {
         if self.bump() != Some(b'(') {
             return Err(self.err("expected '('"));
         }
+        self.depth += 1;
         self.skip_ws();
         if self.peek() == Some(b')') {
             self.pos += 1;
+            self.depth -= 1;
             return Ok(Value::Tuple(vec![]));
         }
         let first = self.parse_expr()?;
@@ -801,6 +833,7 @@ impl<'a> Parser<'a> {
             // Single parenthesized expr — treat as bare value (Python group), not 1-tuple,
             // unless a trailing comma was present (handled below).
             self.pos += 1;
+            self.depth -= 1;
             return Ok(first);
         }
         if self.peek() != Some(b',') {
@@ -832,6 +865,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+        self.depth -= 1;
         Ok(Value::Tuple(items))
     }
 
@@ -840,6 +874,7 @@ impl<'a> Parser<'a> {
         if self.bump() != Some(b'{') {
             return Err(self.err("expected '{'"));
         }
+        self.depth += 1;
         let mut items = Vec::new();
         loop {
             self.skip_ws();
@@ -872,6 +907,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+        self.depth -= 1;
         Ok(Value::Dict(items))
     }
 }
@@ -1184,8 +1220,8 @@ pub struct SkippedStatement {
 }
 
 impl SkippedStatement {
-    /// The reason without the `line N: ` prefix the parser already applied,
-    /// so a caller that prints its own position does not repeat it.
+    /// The reason without the leading `line N:` prefix the parser already
+    /// applied, so a caller that prints its own position does not repeat it.
     pub fn reason(&self) -> &str {
         match self.message.split_once(": ") {
             Some((head, rest)) if head.starts_with("line ") => rest,
@@ -3501,5 +3537,56 @@ toolchain = {'name': 'GCCcore', 'version': '14.3.0'}
             generation: &gen,
         });
         assert!(absent.is_empty());
+    }
+
+    /// Two adjacent string literals are one string in Python, and easyconfigs
+    /// lean on it to keep a long command under the line limit. Strict callers
+    /// used to see the whole statement skipped.
+    #[test]
+    fn adjacent_string_literals_in_a_list_are_one_element() {
+        let src = r#"name = 'VASP6'
+version = '6.6.1'
+toolchain = {'name': 'foss', 'version': '2025b'}
+postinstallcmds = [
+    'mkdir -p %(installdir)s/bin',
+    'install -m 0755 %(builddir)s/hpc-utils/request_license_key.py '
+    '%(installdir)s/bin/request_license_key',
+]
+"#;
+        let (resolved, skipped) = resolve_easyconfig_str_reporting(src).expect("parse");
+        assert!(skipped.is_empty(), "skipped: {skipped:?}");
+        assert_eq!(resolved.name, "VASP6");
+
+        // On one line and outside brackets it is still one string, and
+        // `configopts` is modelled, so the joined value itself is observable
+        // rather than only the absence of a skip.
+        let with_configopts = format!("{src}configopts = '--with-a ' '--with-b'\n");
+        let (resolved, skipped) =
+            resolve_easyconfig_str_reporting(&with_configopts).expect("parse");
+        assert!(skipped.is_empty(), "skipped: {skipped:?}");
+        assert_eq!(
+            resolved.configopts.as_deref(),
+            Some("--with-a --with-b"),
+            "adjacent literals must join into one value"
+        );
+    }
+
+    /// Outside brackets Python needs the literals on one logical line, so a
+    /// string opening the next statement must not be joined onto this one.
+    #[test]
+    fn a_string_on_the_next_line_is_not_joined_outside_brackets() {
+        let src = r#"name = 'Demo'
+version = '1.0'
+toolchain = {'name': 'foss', 'version': '2025b'}
+configopts = '--with-a'
+homepage = 'https://example.invalid'
+"#;
+        let resolved = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(resolved.configopts.as_deref(), Some("--with-a"));
+        assert_eq!(
+            resolved.homepage.as_deref(),
+            Some("https://example.invalid"),
+            "the following assignment must survive intact"
+        );
     }
 }
