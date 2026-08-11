@@ -1113,7 +1113,7 @@ fn provider_from_foreign(
 /// A name reduced to lowercase alphanumerics, for matching across
 /// ecosystems that punctuate differently.
 ///
-/// `readcon-core` and `ReadCon_Core` become the same identity.
+/// `some-crate` and `Some_Crate` become the same identity.
 pub fn package_identity(name: &str) -> String {
     name.chars()
         .filter(|character| character.is_ascii_alphanumeric())

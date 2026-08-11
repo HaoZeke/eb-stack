@@ -59,30 +59,26 @@ eb-stack campaign run \
 
 Project one-offs can keep using ~R_LIBS_USER~ instead of a site bundle.
 
-* Known gap: there is no R bundle yet
+* When this emits a Bundle
 
-This path emits one ~RPackage~ recipe. The Python side collapses
-already-provided extras into the parent bundle and keeps the leftovers in
-~exts_list~; the R side does not, because extras parsed from a CRAN package
-list become dependencies rather than extension sources, and nothing routes
-them into the emitted recipe.
-
-The target shape is the one upstream uses for ~R-bundle-CRAN~:
+A CRAN package whose imports the robot already carries emits one ~RPackage~
+recipe. One whose imports it does not carry emits a ~Bundle~ with
+~exts_defaultclass = 'RPackage'~ and the leftovers in ~exts_list~, the same
+shape upstream uses for ~R-bundle-CRAN~:
 
 #+begin_src python
 easyblock = 'Bundle'
 exts_defaultclass = 'RPackage'
 exts_list = [
-    ('jsonlite', '1.8.9'),
+    ('processx', '3.8.4', {...}),
 ]
 #+end_src
 
-Closing it needs three things: extras from a package list materialized as
-extension sources rather than dependencies, an ~R~ variant of the language
-bundle kind that emits ~Bundle~ plus ~exts_defaultclass~, and the dispatch in
-~package_emit~ extended past ~PythonBundle~ and the ~pypi~ origin. The provides
-mechanism already handles the R half of the collapse: an ~R-bundle-CRAN~ in the
-robot tree satisfies a requirement for one of its ~exts_list~ entries today.
+The choice is made from the plan rather than by a flag: leftovers exist or they
+do not. Both shapes are pinned by tests,
+~plan_cran_emits_a_single_r_package~ and
+~plan_cran_with_leftovers_emits_an_r_bundle~.
 
-Until then, a single R package is what this path produces, and the test
-~plan_cran_emits_a_single_r_package~ pins it.
+An already-provided import collapses to its provider instead of becoming an
+extension, through the same mechanism the Python side uses: an ~R-bundle-CRAN~
+in the robot tree satisfies a requirement for one of its ~exts_list~ entries.

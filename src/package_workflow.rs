@@ -234,8 +234,14 @@ pub fn complete_package_bundle_with_hierarchy(
         }
     }
     let mut plan = plan;
+    // Both language overlays leave the same kind of hole: a package the robot
+    // does not carry, which becomes an extension of the emitted bundle rather
+    // than an unsatisfiable solve. The build-tool injection below is specific
+    // to Python build backends.
+    if matches!(plan.origin, PackageOrigin::Pypi | PackageOrigin::Cran) {
+        promote_language_overlay_extras(&mut plan, candidates, stack_policy, hierarchy_fixture)?;
+    }
     if plan.origin == PackageOrigin::Pypi {
-        promote_pypi_overlay_extras(&mut plan, candidates, stack_policy, hierarchy_fixture)?;
         inject_overlay_build_tools(&mut plan, candidates);
     }
     if plan.origin == PackageOrigin::Cargo {
@@ -266,7 +272,7 @@ pub fn complete_package_bundle_with_hierarchy(
     })
 }
 
-fn promote_pypi_overlay_extras(
+fn promote_language_overlay_extras(
     plan: &mut PackagePlan,
     candidates: &[crate::domain::Candidate],
     stack_policy: &StackPolicy,
@@ -435,23 +441,19 @@ fn overlay_extension_version(plan: &PackagePlan, name: &str) -> Option<String> {
     exact.or(fallback)
 }
 
+/// The concrete version an extension entry gets from a constraint.
+///
+/// Same parse the solver uses, so what a requirement selects and what it emits
+/// cannot disagree. An exact pin gives its version; anything with a floor
+/// gives the floor, which is the version the foreign metadata named.
 fn version_from_constraint(constraint: Option<&str>) -> Option<String> {
     let constraint = constraint
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
-    if let Some(exact) = constraint.strip_prefix("==") {
-        let exact = exact.trim();
-        return (!exact.is_empty()).then(|| exact.to_string());
-    }
-    for prefix in [">=", "~=", ">"] {
-        if let Some(rest) = constraint.strip_prefix(prefix) {
-            let token = rest.split([',', ' ']).map(str::trim).find(|part| {
-                !part.is_empty() && part.starts_with(|ch: char| ch.is_ascii_digit())
-            })?;
-            return Some(token.to_string());
-        }
-    }
-    None
+    crate::version::parse_requirement(constraint)
+        .ok()?
+        .lower_bound()
+        .map(ToString::to_string)
 }
 
 fn already_provided_language_root<'a>(
@@ -1451,7 +1453,9 @@ pub enum PackageWorkflowError {
     /// The foreign root is a compiled scientific package the robot does
     /// not ship. A `PythonBundle` pip overlay is the wrong install.
     #[error(
-        "{name} {version} is a compiled scientific package; the robot does not provide it via SciPy-bundle or PyTorch. Do not pip-overlay it with PythonBundle"
+        "{name} {version} is a compiled scientific package that the stack builds against its own \
+         compiler, BLAS and MPI, and the robot has no module or bundle providing it here. A pip \
+         wheel would shadow that; do not overlay it with PythonBundle"
     )]
     RefusePipOverlay {
         /// Package that must come from the scientific stack.

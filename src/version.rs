@@ -100,81 +100,200 @@ pub fn cmp_version(a: &str, b: &str) -> Ordering {
     Ordering::Equal
 }
 
+/// One comparison in a requirement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequirementOp {
+    /// `==X` or a bare `X`.
+    Exact,
+    /// `!=X`.
+    NotEqual,
+    /// `>=X`.
+    AtLeast,
+    /// `>X`.
+    Above,
+    /// `<=X`.
+    AtMost,
+    /// `<X`.
+    Below,
+    /// `~=X`, PEP 440 compatible release.
+    Compatible,
+    /// `^X`, Cargo caret.
+    Caret,
+    /// `~X`, Cargo tilde.
+    Tilde,
+}
+
+impl RequirementOp {
+    /// Whether this operator puts a floor under the version.
+    ///
+    /// The emitted-extension path needs a concrete version, and for every
+    /// operator that bounds from below the floor is the version named.
+    fn is_lower_bound(self) -> bool {
+        matches!(
+            self,
+            Self::Exact
+                | Self::AtLeast
+                | Self::Above
+                | Self::Compatible
+                | Self::Caret
+                | Self::Tilde
+        )
+    }
+}
+
+/// One parsed clause: an operator and the version it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequirementClause {
+    /// The comparison.
+    pub op: RequirementOp,
+    /// The version on the right-hand side.
+    pub version: String,
+}
+
+/// A parsed requirement: a conjunction of clauses.
+///
+/// This is the single interpretation of a constraint string. The solver asks
+/// it what a candidate satisfies and the emitter asks it for a version, so the
+/// two cannot drift apart the way two hand-rolled readers of the same syntax
+/// did.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Requirement {
+    /// Every clause, all of which must hold.
+    pub clauses: Vec<RequirementClause>,
+}
+
+/// A clause no operator in the language covers.
+///
+/// Returned rather than silently answering "matches nothing", which is what an
+/// unknown operator used to do: it fell through to a bare-exact comparison
+/// against a string starting with punctuation, so the version set came back
+/// empty and the dependency looked unsatisfiable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsupportedRequirement {
+    /// The clause that could not be parsed.
+    pub clause: String,
+    /// Why, in one line.
+    pub reason: String,
+}
+
+impl std::fmt::Display for UnsupportedRequirement {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: {}", self.clause, self.reason)
+    }
+}
+
+impl std::error::Error for UnsupportedRequirement {}
+
+/// Parse a requirement, or say which clause is not expressible.
+pub fn parse_requirement(req: &str) -> Result<Requirement, UnsupportedRequirement> {
+    let mut clauses = Vec::new();
+    for clause in req.split(',').map(str::trim).filter(|c| !c.is_empty()) {
+        clauses.push(parse_clause(clause)?);
+    }
+    Ok(Requirement { clauses })
+}
+
+fn parse_clause(clause: &str) -> Result<RequirementClause, UnsupportedRequirement> {
+    // Two-character operators first, so `~=` is never read as `~`.
+    for (prefix, op) in [
+        ("~=", RequirementOp::Compatible),
+        ("!=", RequirementOp::NotEqual),
+        ("==", RequirementOp::Exact),
+        (">=", RequirementOp::AtLeast),
+        ("<=", RequirementOp::AtMost),
+        ("^", RequirementOp::Caret),
+        ("~", RequirementOp::Tilde),
+        (">", RequirementOp::Above),
+        ("<", RequirementOp::Below),
+    ] {
+        if let Some(rest) = clause.strip_prefix(prefix) {
+            let version = rest.trim().to_string();
+            if version.is_empty() {
+                return Err(UnsupportedRequirement {
+                    clause: clause.to_string(),
+                    reason: format!("{prefix} without a version"),
+                });
+            }
+            return Ok(RequirementClause { op, version });
+        }
+    }
+    if clause.starts_with(|character: char| character.is_ascii_digit()) {
+        return Ok(RequirementClause {
+            op: RequirementOp::Exact,
+            version: clause.to_string(),
+        });
+    }
+    Err(UnsupportedRequirement {
+        clause: clause.to_string(),
+        reason: "no operator this language covers, and not a bare version".into(),
+    })
+}
+
+impl Requirement {
+    /// Whether a version satisfies every clause.
+    pub fn matches(&self, version: &str) -> bool {
+        self.clauses
+            .iter()
+            .all(|clause| clause_matches(version, clause))
+    }
+
+    /// The exact version this requirement names, when it names one.
+    pub fn exact(&self) -> Option<&str> {
+        self.clauses
+            .iter()
+            .find(|clause| clause.op == RequirementOp::Exact)
+            .map(|clause| clause.version.as_str())
+    }
+
+    /// The lowest version this requirement admits, when it has a floor.
+    ///
+    /// An extension entry needs one concrete version, and for a lower-bounded
+    /// requirement the floor is the honest choice: it is the version the
+    /// foreign metadata actually named.
+    pub fn lower_bound(&self) -> Option<&str> {
+        self.exact().or_else(|| {
+            self.clauses
+                .iter()
+                .find(|clause| clause.op.is_lower_bound())
+                .map(|clause| clause.version.as_str())
+        })
+    }
+}
+
+fn clause_matches(version: &str, clause: &RequirementClause) -> bool {
+    let right = clause.version.as_str();
+    match clause.op {
+        RequirementOp::Exact => cmp_version(version, right) == Ordering::Equal,
+        RequirementOp::NotEqual => cmp_version(version, right) != Ordering::Equal,
+        RequirementOp::AtLeast => matches!(
+            cmp_version(version, right),
+            Ordering::Equal | Ordering::Greater
+        ),
+        RequirementOp::Above => cmp_version(version, right) == Ordering::Greater,
+        RequirementOp::AtMost => matches!(
+            cmp_version(version, right),
+            Ordering::Equal | Ordering::Less
+        ),
+        RequirementOp::Below => cmp_version(version, right) == Ordering::Less,
+        RequirementOp::Compatible => matches_compatible_release(version, right),
+        RequirementOp::Caret => matches_caret(version, right),
+        RequirementOp::Tilde => matches_tilde(version, right),
+    }
+}
+
 /// Version requirements accept exact equality, ordered comparisons, bare exact
 /// versions, and comma-separated conjunctions of those clauses.
 ///
 /// A compound requirement matches only if **every** non-empty clause matches.
 pub fn matches_req(version: &str, req: &str) -> bool {
-    let req = req.trim();
-    if req.is_empty() {
-        return true;
+    // A clause the language cannot express excludes nothing rather than
+    // everything. Ingestion turns the same parse failure into a visible
+    // residual, so the constraint is reported rather than quietly enforced as
+    // an empty version set.
+    match parse_requirement(req) {
+        Ok(requirement) => requirement.matches(version),
+        Err(_) => true,
     }
-    // Compound AND ranges: split on commas, require every clause.
-    if req.contains(',') {
-        return req
-            .split(',')
-            .map(str::trim)
-            .filter(|c| !c.is_empty())
-            .all(|clause| matches_req_single(version, clause));
-    }
-    matches_req_single(version, req)
-}
-
-/// Single clause: one leading operator or bare exact version.
-///
-/// The operators here are the whole constraint language the solver has:
-/// `range_matching` builds a Resolvo version set by asking this function about
-/// every candidate. An operator missing from this list does not degrade to
-/// "unconstrained", it degrades to "matches nothing", because an unrecognised
-/// clause falls through to the bare-exact comparison at the end and no real
-/// version equals a string that starts with punctuation. That is why the
-/// ecosystem-native forms below are handled rather than left to the fallback.
-fn matches_req_single(version: &str, req: &str) -> bool {
-    let req = req.trim();
-    if req.is_empty() {
-        return true;
-    }
-    // PEP 440 compatible release: ~=X.Y is >=X.Y with the last component free.
-    // Checked before `~` so the two-character operator wins.
-    if let Some(rest) = req.strip_prefix("~=") {
-        return matches_compatible_release(version, rest.trim());
-    }
-    if let Some(rest) = req.strip_prefix("!=") {
-        return cmp_version(version, rest.trim()) != Ordering::Equal;
-    }
-    // Cargo caret: ^X.Y.Z allows changes that do not modify the left-most
-    // non-zero component. A bare version in a Cargo manifest means the same.
-    if let Some(rest) = req.strip_prefix('^') {
-        return matches_caret(version, rest.trim());
-    }
-    // Cargo tilde: ~X.Y.Z allows patch-level changes, ~X.Y the same, ~X allows
-    // minor-level changes.
-    if let Some(rest) = req.strip_prefix('~') {
-        return matches_tilde(version, rest.trim());
-    }
-    if let Some(rest) = req.strip_prefix("==") {
-        return cmp_version(version, rest.trim()) == Ordering::Equal;
-    }
-    if let Some(rest) = req.strip_prefix(">=") {
-        return matches!(
-            cmp_version(version, rest.trim()),
-            Ordering::Equal | Ordering::Greater
-        );
-    }
-    if let Some(rest) = req.strip_prefix(">") {
-        return cmp_version(version, rest.trim()) == Ordering::Greater;
-    }
-    if let Some(rest) = req.strip_prefix("<=") {
-        return matches!(
-            cmp_version(version, rest.trim()),
-            Ordering::Equal | Ordering::Less
-        );
-    }
-    if let Some(rest) = req.strip_prefix('<') {
-        return cmp_version(version, rest.trim()) == Ordering::Less;
-    }
-    // bare exact
-    cmp_version(version, req) == Ordering::Equal
 }
 
 /// Numeric components of a version, stopping at the first non-numeric run.

@@ -16,7 +16,12 @@ fn production_rust_has_no_package_identity_branches() {
             .split_once("#[cfg(test)]")
             .map_or(source.as_str(), |(production, _)| production);
         let production = production.to_ascii_lowercase();
-        for package in ["eon", "qmcpack", "lammps", "gromacs"] {
+        // Names that were once branched on in production code and now live in
+        // data/overlay-policy.toml. Keeping them here is what stops the next
+        // one being added back as a match arm.
+        for package in [
+            "eon", "qmcpack", "lammps", "gromacs", "numpy", "scipy", "pytorch", "readcon",
+        ] {
             assert!(
                 !production.contains(package),
                 "{} contains package-specific production text for {package}",

@@ -1,0 +1,10 @@
+{
+  "Package": "quarto",
+  "Version": "1.5.0",
+  "Title": "R Interface to Quarto Markdown Publishing System",
+  "License": "GPL-2",
+  "URL": "https://cran.r-project.org/src/contrib/quarto_1.5.0.tar.gz",
+  "Depends": ["R (>= 3.5.0)"],
+  "Imports": ["processx (== 3.8.4)", "rmarkdown (== 2.27)"],
+  "LinkingTo": []
+}

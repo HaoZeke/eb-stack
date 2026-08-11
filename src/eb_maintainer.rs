@@ -252,7 +252,7 @@ pub fn check_shell_monsters(text: &str) -> Vec<MaintainerFinding> {
             "EB_MAINT_SHELL_STAGE",
             "preconfigopts stages another package build (cargo/subshell); prefer a standalone easyconfig companion",
             Some(
-                "readcon-core became its own GCCcore recipe instead of inline cargo cinstall"
+                "a staged crate became its own GCCcore recipe instead of an inline cargo cinstall"
                     .into(),
             ),
         ));
@@ -572,7 +572,7 @@ fn recipe_toolchain_version_from_text(text: &str) -> Option<String> {
 }
 
 fn high_level_dep_pins_from_text(text: &str) -> Vec<(String, String)> {
-    // ('PyTorch', '2.9.1', '', ('foss', '2024a')),
+    // The shape being matched: ('Name', '1.2.3', '', ('foss', '2024a')),
     let mut out = Vec::new();
     let re = regex_lite_high_level_pin();
     for cap in re.captures_iter(text) {

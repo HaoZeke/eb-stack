@@ -274,7 +274,7 @@ fn plan_torch_without_pytorch_module_refuses_pip_overlay() {
     let error = plan_new_package(&request).expect_err("torch must refuse pip overlay");
     let message = error.to_string();
     assert!(
-        message.contains("torch") && message.contains("pip-overlay"),
+        message.contains("torch") && message.contains("PythonBundle"),
         "{message}"
     );
 }
@@ -598,4 +598,42 @@ fn plan_eon_akmc_closes_readcon_from_cargo_source() {
         "non-meson leftovers must not take meson wrap natives:\n{}",
         recipe.text
     );
+}
+
+/// A CRAN package whose imports the robot does not carry has to become a
+/// Bundle: the leftovers are already in the plan, and the single-RPackage
+/// rendering has nowhere to put them, so they used to be dropped in silence.
+#[test]
+fn plan_cran_with_leftovers_emits_an_r_bundle() {
+    let request = NewPackageRequest {
+        source: root().join("fixtures/foreign_ingest/cran_bundle/cran.json"),
+        format: Some(ForeignFormat::Cran),
+        toolchain: toolchain(),
+        source_checksums: vec![
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".into(),
+        ],
+        package_layers: Vec::new(),
+        easyconfig_roots: vec![root().join("fixtures/foreign_ingest/cran_bundle/robot")],
+        stack_policy: stack_policy(),
+    };
+    let bundle = plan_new_package(&request).expect("plan cran bundle");
+    let recipe = &bundle.easyconfigs[0];
+    assert!(
+        recipe.text.contains("easyblock = 'Bundle'"),
+        "{}",
+        recipe.text
+    );
+    assert!(
+        recipe.text.contains("exts_defaultclass = 'RPackage'"),
+        "{}",
+        recipe.text
+    );
+    for extension in ["processx", "rmarkdown"] {
+        assert!(
+            recipe.text.contains(extension),
+            "expected {extension} in exts_list:\n{}",
+            recipe.text
+        );
+    }
+    assert!(recipe.text.contains("'R'"), "{}", recipe.text);
 }

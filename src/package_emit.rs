@@ -204,13 +204,25 @@ fn render_easyconfig(
         .collect::<Vec<_>>();
     let moduleclass = plan.build.moduleclass.as_deref().unwrap_or("lib");
 
-    if plan.build.easyblock.as_deref() == Some("PythonBundle")
+    // A CRAN plan with leftovers has to become a Bundle: the extensions are in
+    // the plan either way, and the single-RPackage rendering has nowhere to put
+    // them, so they would be dropped silently.
+    let language_bundle = if plan.build.easyblock.as_deref() == Some("PythonBundle")
         || plan.origin == crate::package::PackageOrigin::Pypi
     {
+        Some(LanguageBundleKind::Python)
+    } else if plan.origin == crate::package::PackageOrigin::Cran
+        && !plan.overlay_extensions.is_empty()
+    {
+        Some(LanguageBundleKind::R)
+    } else {
+        None
+    };
+    if let Some(kind) = language_bundle {
         return render_language_bundle(
             plan,
             materialized,
-            LanguageBundleKind::Python,
+            kind,
             BundleFragments {
                 easyblock_line: &easyblock_line,
                 homepage,
@@ -260,6 +272,9 @@ moduleclass = '{moduleclass}'\n",
 #[derive(Clone, Copy)]
 enum LanguageBundleKind {
     Python,
+    /// An R bundle: `Bundle` with `exts_defaultclass = 'RPackage'`, which is
+    /// how upstream writes a set of CRAN packages installed together.
+    R,
 }
 
 /// The rendered fragments a bundle recipe is assembled from.
@@ -296,14 +311,22 @@ fn render_language_bundle(
         runtime_dependencies,
         moduleclass,
     } = fragments;
-    let easyblock_line = if easyblock_line.is_empty() {
-        match kind {
-            LanguageBundleKind::Python => "easyblock = 'PythonBundle'\n\n".to_string(),
+    let easyblock_line = match kind {
+        // The plan carries RPackage, which is the single-package shape. A
+        // bundle of R packages is a different easyblock by construction, so the
+        // kind decides here rather than the plan.
+        LanguageBundleKind::R => "easyblock = 'Bundle'\n\n".to_string(),
+        LanguageBundleKind::Python if easyblock_line.is_empty() => {
+            "easyblock = 'PythonBundle'\n\n".to_string()
         }
-    } else {
-        easyblock_line.to_string()
+        LanguageBundleKind::Python => easyblock_line.to_string(),
     };
-    let default_class = String::new();
+    // An R bundle installs its exts_list entries as RPackage; a PythonBundle
+    // knows its own extension class, so it needs no line here.
+    let default_class = match kind {
+        LanguageBundleKind::Python => String::new(),
+        LanguageBundleKind::R => "exts_defaultclass = 'RPackage'\n\n".to_string(),
+    };
     let moduleclass = if plan.build.moduleclass.is_some() {
         moduleclass
     } else {

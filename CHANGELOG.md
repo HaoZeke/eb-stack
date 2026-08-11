@@ -44,13 +44,20 @@ All notable changes to this project are documented here.
 - `--format pypi` reads Warehouse-shaped JSON or a `requirements.txt` and
   emits a `PythonBundle` whose `exts_list` is the leftover package, with
   already-provided extras mapped to the parent bundle.
-- `--format cran` reads a DESCRIPTION file, CRAN JSON, or a package list
-  and emits one `RPackage` recipe with its CRAN dependencies resolved and
-  base-R packages recorded as residuals. The R equivalent of the Python
-  bundle, a `Bundle` with `exts_defaultclass = 'RPackage'` carrying the
-  leftovers in `exts_list`, is not implemented: extras parsed from a CRAN
-  package list become dependencies rather than extension sources. See
-  `docs/orgmode/howto/cran-extend.org`.
+- `--format cran` reads a DESCRIPTION file, CRAN JSON, or a package list and
+  emits one `RPackage` recipe when the robot carries its imports, or a
+  `Bundle` with `exts_defaultclass = 'RPackage'` carrying the leftovers in
+  `exts_list` when it does not. Base-R packages are recorded as residuals.
+- Requirement parsing is one implementation shared by the solver and the
+  emitter, covering `==`, `!=`, `>=`, `>`, `<=`, `<`, `~=` (PEP 440) and `^`
+  and `~` (Cargo). A clause the language cannot express becomes an
+  `unparsed-constraint` residual instead of an empty version set.
+- Cargo dependencies keep the requirement the manifest states, and `path` and
+  `git` dependencies are reported as judgment residuals: neither can be built
+  from a published crate tarball.
+- Package identity, the pip-overlay refusal list, PyO3 marker crates and the
+  crate-to-module renames live in `data/overlay-policy.toml` rather than in
+  match arms.
 - Example stack policies `examples/stacks/eessi-python-extras.toml` and
   `examples/stacks/eessi-r-extras.toml` for locking EESSI-shipped
   scientific Python / R providers.

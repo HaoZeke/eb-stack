@@ -193,7 +193,7 @@ fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
                     original,
                     ..
                 } => {
-                    if name.eq_ignore_ascii_case("numpy") || name.eq_ignore_ascii_case("python") {
+                    if crate::provides::ignored_build_requirement(&name) {
                         continue;
                     }
                     dependencies.push(ForeignDep {

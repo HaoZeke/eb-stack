@@ -1,8 +1,9 @@
 //! Virtual candidates generated from EasyBuild `exts_list` entries.
 //!
-//! A bundle such as `SciPy-bundle` lists `numpy` in `exts_list`. The solver
-//! must treat that as a provide: a requirement for `numpy==2.3.1` is satisfied
-//! by selecting the parent bundle, not by inventing a standalone `numpy`
+//! A scientific-Python bundle lists its array library in `exts_list`. The
+//! solver must treat that as a provide: a requirement for that library at a
+//! given version is satisfied by selecting the parent bundle, rather than by
+//! inventing a standalone module for it
 //! easyconfig. The same rule applies to `Python-bundle-PyPI` and
 //! `R-bundle-CRAN`.
 //!
@@ -87,14 +88,96 @@ pub fn expand_extension_provides(candidates: &[Candidate]) -> Vec<Candidate> {
     out
 }
 
+/// Overlay policy: which foreign names share an identity, and which packages
+/// an overlay must never pip-install.
+///
+/// Loaded from `data/overlay-policy.toml` rather than written as match arms,
+/// because both are packaging decisions about named packages and the driver
+/// contract keeps those out of production code.
+#[derive(Debug, Default, serde::Deserialize)]
+struct OverlayPolicy {
+    #[serde(default)]
+    aliases: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    refuse_overlay: RefuseOverlay,
+    #[serde(default)]
+    python_modules: PythonModules,
+    #[serde(default)]
+    build_requires: BuildRequires,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct BuildRequires {
+    #[serde(default)]
+    ignore: Vec<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct PythonModules {
+    #[serde(default, rename = "crate")]
+    crates: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    marker_crates: Vec<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct RefuseOverlay {
+    #[serde(default)]
+    names: Vec<String>,
+}
+
+fn overlay_policy() -> &'static OverlayPolicy {
+    static POLICY: std::sync::OnceLock<OverlayPolicy> = std::sync::OnceLock::new();
+    POLICY.get_or_init(|| {
+        toml::from_str(include_str!("../data/overlay-policy.toml"))
+            .expect("data/overlay-policy.toml ships with the crate and must parse")
+    })
+}
+
+/// Whether depending on this crate means the crate builds a Python extension.
+pub fn is_python_marker_crate(name: &str) -> bool {
+    let identity = crate::package_sources::package_identity(name);
+    overlay_policy()
+        .python_modules
+        .marker_crates
+        .iter()
+        .any(|marker| crate::package_sources::package_identity(marker) == identity)
+}
+
+/// Whether a stated build requirement should stay out of the emitted recipe.
+///
+/// A Python project names the language and its array library among its build
+/// requirements; neither is an EasyBuild build dependency of an overlay, since
+/// the stack supplies both.
+pub fn ignored_build_requirement(name: &str) -> bool {
+    let identity = crate::package_sources::package_identity(name);
+    overlay_policy()
+        .build_requires
+        .ignore
+        .iter()
+        .any(|ignored| crate::package_sources::package_identity(ignored) == identity)
+}
+
+/// The Python module a PyO3 crate imports as, when it differs from the crate
+/// name.
+pub fn python_module_for_crate(crate_name: &str) -> Option<String> {
+    overlay_policy()
+        .python_modules
+        .crates
+        .iter()
+        .find(|(known, _)| known.eq_ignore_ascii_case(crate_name))
+        .map(|(_, module)| module.clone())
+}
+
 /// Identity used when matching a PyPI/CRAN name to a robot module or
-/// `exts_list` provide. `torch` and `PyTorch` are the same package.
+/// `exts_list` provide, so a package known by two names collapses to one.
 pub fn overlay_package_identity(name: &str) -> String {
     let identity = crate::package_sources::package_identity(name);
-    match identity.as_str() {
-        "torch" => "pytorch".into(),
-        other => other.to_string(),
-    }
+    overlay_policy()
+        .aliases
+        .get(&identity)
+        .cloned()
+        .unwrap_or(identity)
 }
 
 /// True when `--format pypi` must not emit a `PythonBundle` overlay.
@@ -102,15 +185,17 @@ pub fn overlay_package_identity(name: &str) -> String {
 /// These are toolchain-built extensions. A pip wheel on top of EESSI
 /// (or any EasyBuild scientific Python) is the wrong install.
 pub fn refuses_pip_overlay(name: &str) -> bool {
-    matches!(
-        overlay_package_identity(name).as_str(),
-        "numpy" | "scipy" | "pytorch"
-    )
+    let identity = overlay_package_identity(name);
+    overlay_policy()
+        .refuse_overlay
+        .names
+        .iter()
+        .any(|refused| crate::package_sources::package_identity(refused) == identity)
 }
 
 /// Bundle or first-class module in `candidates` that already ships `name`.
 ///
-/// Prefers an `exts_list` parent (`SciPy-bundle` for `numpy`) over a
+/// Prefers an `exts_list` parent (the bundle that ships the package) over a
 /// same-named first-class recipe.
 pub fn existing_language_provider<'a>(
     name: &str,

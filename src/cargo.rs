@@ -49,7 +49,7 @@ fn parse_cargo_toml(text: &str) -> Result<ForeignRecipe, ForeignError> {
         source_filename: None,
         sha256: None,
         python,
-        crate_deps: cargo_dep_names(&value),
+        crate_deps: cargo_deps(&value),
         note: "parsed from Cargo.toml",
     })
 }
@@ -150,7 +150,7 @@ struct CrateFields<'a> {
     source_filename: Option<String>,
     sha256: Option<String>,
     python: bool,
-    crate_deps: Vec<String>,
+    crate_deps: Vec<CargoDep>,
     note: &'a str,
 }
 
@@ -169,15 +169,22 @@ fn recipe(fields: CrateFields<'_>) -> Result<ForeignRecipe, ForeignError> {
         note,
     } = fields;
     let mut residuals = Vec::new();
-    let name = if python && raw_name.eq_ignore_ascii_case("readcon-core") {
+    // A PyO3 crate publishes under a crate name and imports under a module
+    // name, and the mapping is a packaging decision rather than something the
+    // manifest states, so it comes from policy data instead of a name branch
+    // here.
+    let module_name = python
+        .then(|| crate::provides::python_module_for_crate(&raw_name))
+        .flatten();
+    let name = if let Some(module_name) = module_name {
         residuals.push(ForeignResidual {
             category: "cargo-python-name".into(),
             severity: ResidualSeverity::Judgment,
-            summary: "PyO3 crate readcon-core is the Python module readcon".into(),
+            summary: format!("PyO3 crate {raw_name} is the Python module {module_name}"),
             evidence: Some(raw_name.clone()),
             provenance: None,
         });
-        "readcon".into()
+        module_name
     } else {
         raw_name
     };
@@ -217,12 +224,48 @@ fn recipe(fields: CrateFields<'_>) -> Result<ForeignRecipe, ForeignError> {
             provenance: Vec::new(),
         });
     }
+    // Crate dependencies are linked out of the crate graph rather than loaded
+    // as modules, so they are recorded rather than solved. What they say still
+    // matters to a reviewer: the requirement, and whether the crate can build
+    // from its published tarball at all.
     for dep in crate_deps {
+        let requirement = dep
+            .req
+            .as_deref()
+            .map_or_else(|| "unconstrained".to_string(), |req| format!("`{req}`"));
+        let (category, severity, summary) = match dep.kind {
+            CargoDepKind::Registry => (
+                "cargo-dep",
+                ResidualSeverity::Mechanical,
+                format!(
+                    "Cargo dependency {} {requirement} stays inside the crate graph",
+                    dep.name
+                ),
+            ),
+            CargoDepKind::Path => (
+                "cargo-path-dep",
+                ResidualSeverity::Judgment,
+                format!(
+                    "Cargo dependency {} is a path dependency {requirement}: it is not in the \
+                     published crate, so the released tarball cannot build on its own",
+                    dep.name
+                ),
+            ),
+            CargoDepKind::Git => (
+                "cargo-git-dep",
+                ResidualSeverity::Judgment,
+                format!(
+                    "Cargo dependency {} is a git dependency {requirement}: the build would \
+                     fetch it, which an offline build cannot do",
+                    dep.name
+                ),
+            ),
+        };
         residuals.push(ForeignResidual {
-            category: "cargo-dep".into(),
-            severity: ResidualSeverity::Mechanical,
-            summary: format!("Cargo dependency {dep} stays inside the crate graph"),
-            evidence: Some(dep),
+            category: category.into(),
+            severity,
+            summary,
+            evidence: Some(dep.name),
             provenance: None,
         });
     }
@@ -280,17 +323,93 @@ fn is_python_crate(value: &toml::Value) -> bool {
     }
     cargo_dep_names(value)
         .iter()
-        .any(|name| matches!(name.as_str(), "pyo3" | "maturin" | "pyo3-ffi" | "numpy"))
+        .any(|name| crate::provides::is_python_marker_crate(name))
+}
+
+/// Where a Cargo dependency comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CargoDepKind {
+    /// A crates.io release, resolvable from the published tarball.
+    Registry,
+    /// A sibling directory. Not in the published crate, so the tarball cannot
+    /// build on its own.
+    Path,
+    /// A git revision, which the build would have to fetch.
+    Git,
+}
+
+/// One Cargo dependency, with the requirement the manifest states.
+#[derive(Debug, Clone)]
+struct CargoDep {
+    name: String,
+    /// The requirement, translated into the shared grammar.
+    req: Option<String>,
+    kind: CargoDepKind,
+}
+
+/// Cargo's bare version string is a caret requirement.
+///
+/// `serde = "1.0"` means `^1.0`, not `==1.0`. An explicit operator is already
+/// in the shared grammar and passes through.
+fn cargo_version_req(spec: &str) -> Option<String> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return None;
+    }
+    if spec.starts_with(['=', '>', '<', '^', '~']) {
+        return Some(spec.to_string());
+    }
+    if spec.starts_with(|character: char| character.is_ascii_digit()) {
+        return Some(format!("^{spec}"));
+    }
+    // `*` and anything else stated loosely constrains nothing.
+    None
+}
+
+fn cargo_deps(value: &toml::Value) -> Vec<CargoDep> {
+    let mut deps = Vec::new();
+    for table in ["dependencies", "build-dependencies", "dev-dependencies"] {
+        let Some(map) = value.get(table).and_then(toml::Value::as_table) else {
+            continue;
+        };
+        for (name, spec) in map {
+            let dep = match spec {
+                toml::Value::String(version) => CargoDep {
+                    name: name.clone(),
+                    req: cargo_version_req(version),
+                    kind: CargoDepKind::Registry,
+                },
+                toml::Value::Table(entry) => {
+                    let kind = if entry.contains_key("path") {
+                        CargoDepKind::Path
+                    } else if entry.contains_key("git") {
+                        CargoDepKind::Git
+                    } else {
+                        CargoDepKind::Registry
+                    };
+                    CargoDep {
+                        name: name.clone(),
+                        req: entry
+                            .get("version")
+                            .and_then(toml::Value::as_str)
+                            .and_then(cargo_version_req),
+                        kind,
+                    }
+                }
+                _ => CargoDep {
+                    name: name.clone(),
+                    req: None,
+                    kind: CargoDepKind::Registry,
+                },
+            };
+            deps.push(dep);
+        }
+    }
+    deps
 }
 
 fn cargo_dep_names(value: &toml::Value) -> Vec<String> {
-    let mut names = Vec::new();
-    for table in ["dependencies", "build-dependencies", "dev-dependencies"] {
-        if let Some(map) = value.get(table).and_then(toml::Value::as_table) {
-            names.extend(map.keys().cloned());
-        }
-    }
-    names
+    cargo_deps(value).into_iter().map(|dep| dep.name).collect()
 }
 
 fn toml_string(value: &toml::Value, key: &str) -> Option<String> {
