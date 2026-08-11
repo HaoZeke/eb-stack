@@ -53,7 +53,8 @@ fn inspect_pypi_warehouse_fixture() {
     let path = root().join("fixtures/foreign_ingest/pypi_bs4/pypi.json");
     let recipe = parse_foreign_path(&path, Some(ForeignFormat::Pypi)).expect("parse");
     assert_eq!(recipe.name, "beautifulsoup4");
-    assert_eq!(recipe.dependencies[0].name, "soupsieve");
+    assert_eq!(recipe.dependencies[0].name, "Python");
+    assert_eq!(recipe.dependencies[1].name, "soupsieve");
     let (plan, _) =
         inspect_new_package(&path, Some(ForeignFormat::Pypi), &toolchain(), &[]).expect("inspect");
     assert_eq!(plan.origin, eb_stack::package::PackageOrigin::Pypi);
@@ -116,7 +117,7 @@ fn inspect_cran_description_fixture() {
     let (plan, _) =
         inspect_new_package(&path, Some(ForeignFormat::Cran), &toolchain(), &[]).expect("inspect");
     assert_eq!(plan.origin, eb_stack::package::PackageOrigin::Cran);
-    assert_eq!(plan.build.easyblock.as_deref(), Some("Bundle"));
+    assert_eq!(plan.build.easyblock.as_deref(), Some("RPackage"));
 }
 
 #[test]
@@ -135,12 +136,12 @@ fn plan_cran_emits_r_bundle() {
     let bundle = plan_new_package(&request).expect("plan cran");
     let recipe = &bundle.easyconfigs[0];
     assert!(
-        recipe.text.contains("easyblock = 'Bundle'"),
+        recipe.text.contains("easyblock = 'RPackage'"),
         "{}",
         recipe.text
     );
     assert!(
-        recipe.text.contains("exts_defaultclass = 'RPackage'"),
+        recipe.text.contains("sanity_check_paths"),
         "{}",
         recipe.text
     );
