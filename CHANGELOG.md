@@ -33,9 +33,9 @@ All notable changes to this project are documented here.
   (`sccache`, `mold`) are unset. Existing robot Rust modules are leaves.
   `--cargo-source` / `kind = "cargo"` closes a PyPI leftover that is a
   crate (for example `readcon`) as a companion module; remaining pure
-  PyPI holes stay `exts_list` extras. Overlay extras overwrite
-  `PYTHONPATH` to the install prefix so `pip --no-build-isolation` sees
-  prior extensions.
+  PyPI holes stay `exts_list` extras. Overlay extras prepend the
+  install prefix to `PYTHONPATH` so `pip --no-build-isolation` sees
+  prior extensions and the loaded EESSI modules.
 - `--format pypi` reads Warehouse-shaped JSON or a `requirements.txt` and
   emits a `PythonBundle` whose `exts_list` is the leftover package, with
   already-provided extras mapped to the parent bundle.
