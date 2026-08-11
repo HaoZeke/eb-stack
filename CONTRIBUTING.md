@@ -67,10 +67,13 @@ Do not hand-edit generated `docs/source/**/*.rst` or `docs/source/crates/`.
 ## Packaging campaigns
 
 Follow `AGENTS.md`, `skills/annual-bump/SKILL.md` (generation rebuild), and
-`skills/new-package/SKILL.md` (conda-forge/Spack → new EasyBuild recipe). Keep
-site hostnames, paths, credentials, scheduler sizing, and private module names
-in the site target layer. The public files contain reusable package intent and
-target topology.
+`skills/new-package/SKILL.md` (conda-forge/Spack → new EasyBuild recipe). Run
+`skills/verify-recipe/SKILL.md` over what they emit before a build or a push,
+and `skills/tool-repair/SKILL.md` when the emitted file needed a hand
+correction: a manual fix that does not come back as a regression test is a
+defect this tool reproduces on the next run. Keep site hostnames, paths,
+credentials, scheduler sizing, and private module names in the site target
+layer. The public files contain reusable package intent and target topology.
 
 ## Releasing
 
