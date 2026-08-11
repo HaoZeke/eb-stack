@@ -1,0 +1,26 @@
+{
+  "info": {
+    "name": "eon-akmc",
+    "version": "3.1.0",
+    "home_page": "https://eondocs.org/",
+    "summary": "eOn kinetic Monte Carlo / AKMC",
+    "license": "BSD",
+    "requires_dist": [
+      "numpy>=1.26.4",
+      "readcon>=0.13.0",
+      "vesin>=0.6.0",
+      "eon-schema>=0.2.0",
+      "xxhash>=3.4.0"
+    ]
+  },
+  "urls": [
+    {
+      "packagetype": "sdist",
+      "url": "https://files.pythonhosted.org/packages/eon/eon_akmc-3.1.0.tar.gz",
+      "filename": "eon_akmc-3.1.0.tar.gz",
+      "digests": {
+        "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      }
+    }
+  ]
+}

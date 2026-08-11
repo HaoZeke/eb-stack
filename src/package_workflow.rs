@@ -10,13 +10,15 @@ use crate::hierarchy::{filter_candidates_in_hierarchy, hierarchy_for_with_tree};
 use crate::manifest::package_plan_from_foreign;
 use crate::package::{
     package_plan_to_cyclonedx, BuildSpec, ConditionExpr, DependencyIntent, DependencyRole,
-    OutputRequest, PackageMetadata, PackageOrigin, PackagePlan, PatchArtifact, ProductProfile,
-    ProfileLock, Provenance, Residual, ResidualSeverity, ResidualStage, SourceArtifact, StackPin,
-    StackPinMode, StackPolicy, PACKAGE_SCHEMA_VERSION,
+    OutputRequest, OverlayExtension, PackageMetadata, PackageOrigin, PackagePlan, PatchArtifact,
+    ProductProfile, ProfileLock, Provenance, Residual, ResidualSeverity, ResidualStage,
+    SourceArtifact, StackPin, StackPinMode, StackPolicy, PACKAGE_SCHEMA_VERSION,
 };
 use crate::package_config::{apply_package_layers, PackageConfigLayer};
 use crate::package_emit::{emit_profile_easyconfigs, EmittedEasyconfig};
-use crate::package_solve::solve_package_profile_with_hierarchy;
+use crate::package_solve::{
+    solve_package_profile_with_hierarchy, unsatisfied_direct_dependencies_with_hierarchy,
+};
 use crate::package_sources::map_source_toolchain_to_target;
 use crate::provides::{existing_language_provider, refuses_pip_overlay};
 use serde_json::Value;
@@ -228,6 +230,10 @@ pub fn complete_package_bundle_with_hierarchy(
             });
         }
     }
+    let mut plan = plan;
+    if plan.origin == PackageOrigin::Pypi {
+        promote_pypi_overlay_extras(&mut plan, candidates, stack_policy, hierarchy_fixture)?;
+    }
     let mut locks = Vec::new();
     for output in &plan.outputs {
         locks.push(
@@ -251,6 +257,101 @@ pub fn complete_package_bundle_with_hierarchy(
         locks,
         easyconfigs,
     })
+}
+
+fn promote_pypi_overlay_extras(
+    plan: &mut PackagePlan,
+    candidates: &[crate::domain::Candidate],
+    stack_policy: &StackPolicy,
+    hierarchy_fixture: Option<&Path>,
+) -> Result<(), PackageWorkflowError> {
+    let profile = plan
+        .outputs
+        .first()
+        .map(|output| output.profile.as_str())
+        .unwrap_or("default");
+    let holes = unsatisfied_direct_dependencies_with_hierarchy(
+        plan,
+        profile,
+        &Default::default(),
+        candidates,
+        stack_policy,
+        hierarchy_fixture,
+    )
+    .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?;
+    for hole in holes {
+        if hole.name.eq_ignore_ascii_case("python") || hole.name.eq_ignore_ascii_case("r") {
+            continue;
+        }
+        if refuses_pip_overlay(&hole.name) {
+            continue;
+        }
+        let version = overlay_extension_version(plan, &hole.name).ok_or_else(|| {
+            PackageWorkflowError::OverlayExtraNeedsVersion {
+                name: hole.name.clone(),
+                requirement: hole.version_req.clone(),
+            }
+        })?;
+        for dependency in &mut plan.dependencies {
+            let identity = dependency
+                .eb_name
+                .as_deref()
+                .unwrap_or(dependency.name.as_str());
+            if crate::provides::overlay_package_identity(identity)
+                == crate::provides::overlay_package_identity(&hole.name)
+            {
+                dependency.solver_excluded = true;
+            }
+        }
+        plan.overlay_extensions.push(OverlayExtension {
+            name: hole.name.clone(),
+            version: version.clone(),
+        });
+        plan.residuals.push(Residual {
+            id: format!("pypi-overlay-ext:{}", hole.name),
+            stage: ResidualStage::Resolve,
+            category: "pypi-overlay-ext".into(),
+            severity: ResidualSeverity::Judgment,
+            summary: format!(
+                "{} {} is not in the robot; emit it as a PythonBundle extension",
+                hole.name, version
+            ),
+            evidence: Some(hole.version_req),
+            provenance: None,
+        });
+    }
+    Ok(())
+}
+
+fn overlay_extension_version(plan: &PackagePlan, name: &str) -> Option<String> {
+    let dependency = plan.dependencies.iter().find(|dependency| {
+        let identity = dependency
+            .eb_name
+            .as_deref()
+            .unwrap_or(dependency.name.as_str());
+        crate::provides::overlay_package_identity(identity)
+            == crate::provides::overlay_package_identity(name)
+    })?;
+    version_from_constraint(dependency.constraint.as_deref())
+}
+
+fn version_from_constraint(constraint: Option<&str>) -> Option<String> {
+    let constraint = constraint
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    if let Some(exact) = constraint.strip_prefix("==") {
+        let exact = exact.trim();
+        return (!exact.is_empty()).then(|| exact.to_string());
+    }
+    for prefix in [">=", "~=", ">"] {
+        if let Some(rest) = constraint.strip_prefix(prefix) {
+            let token = rest.split([',', ' ']).map(str::trim).find(|part| {
+                !part.is_empty() && part.starts_with(|ch: char| ch.is_ascii_digit())
+            })?;
+            return Some(token.to_string());
+        }
+    }
+    None
 }
 
 fn already_provided_language_root<'a>(
@@ -829,6 +930,7 @@ fn package_plan_from_easyconfig(
             stack: toolchain.label(),
         }],
         residuals: Vec::new(),
+        overlay_extensions: Vec::new(),
     }
 }
 
@@ -1255,6 +1357,17 @@ pub enum PackageWorkflowError {
         name: String,
         /// Version the foreign source asked for.
         version: String,
+    },
+    /// A leftover PyPI dependency is not in the robot and has no exact
+    /// version, so it cannot become an `exts_list` entry.
+    #[error(
+        "{name} is not in the robot and {requirement:?} is not an exact or lower-bounded version; pin it to emit a PythonBundle extension"
+    )]
+    OverlayExtraNeedsVersion {
+        /// Missing leftover package.
+        name: String,
+        /// Constraint that could not be lowered to a version.
+        requirement: String,
     },
     /// The easyconfig could not be rendered.
     #[error("EasyBuild recipe emission: {0}")]

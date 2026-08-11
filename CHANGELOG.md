@@ -25,6 +25,8 @@ All notable changes to this project are documented here.
   that already ships them is an empty delta. Without that provider the
   plan refuses a pip overlay instead of emitting a `PythonBundle`.
   Warehouse `requires_dist: null` (live numpy JSON) parses as no extras.
+  A leftover such as `eon-akmc` whose other PyPI deps are not in the
+  robot keeps those names in `exts_list` instead of failing SAT.
 - `--format pypi` reads Warehouse-shaped JSON or a `requirements.txt` and
   emits a `PythonBundle` whose `exts_list` is the leftover package, with
   already-provided extras mapped to the parent bundle.

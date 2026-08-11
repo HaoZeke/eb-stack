@@ -265,6 +265,50 @@ fn plan_torch_without_pytorch_module_refuses_pip_overlay() {
 }
 
 #[test]
+fn plan_eon_akmc_overlays_missing_pypi_deps() {
+    let request = NewPackageRequest {
+        source: root().join("fixtures/foreign_ingest/pypi_numpy/eon-akmc.json"),
+        format: Some(ForeignFormat::Pypi),
+        toolchain: toolchain(),
+        source_checksums: Vec::new(),
+        package_layers: Vec::new(),
+        easyconfig_roots: vec![numpy_robot()],
+        stack_policy: stack_policy(),
+    };
+    let bundle = plan_new_package(&request).expect("plan eon-akmc");
+    let recipe = bundle
+        .easyconfigs
+        .iter()
+        .find(|config| config.filename.contains("eon-akmc"))
+        .expect("emitted leftover");
+    assert!(
+        recipe.text.contains("SciPy-bundle"),
+        "numpy must resolve via SciPy-bundle:\n{}",
+        recipe.text
+    );
+    assert!(
+        !recipe.text.contains("('numpy'"),
+        "numpy must not be re-emitted:\n{}",
+        recipe.text
+    );
+    for ext in ["readcon", "vesin", "eon-schema", "xxhash", "eon-akmc"] {
+        assert!(
+            recipe.text.contains(&format!("('{ext}'")),
+            "expected {ext} in exts_list:\n{}",
+            recipe.text
+        );
+    }
+    assert!(
+        bundle.locks[0]
+            .dependencies
+            .iter()
+            .any(|dep| dep.name == "SciPy-bundle"),
+        "{:?}",
+        bundle.locks[0].dependencies
+    );
+}
+
+#[test]
 fn plan_torch_uses_existing_pytorch_module() {
     let request = NewPackageRequest {
         source: root().join("fixtures/foreign_ingest/pypi_numpy/torch.json"),

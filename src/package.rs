@@ -989,6 +989,20 @@ pub struct PackagePlan {
     #[serde(default)]
     /// Work left for a human, carried rather than dropped.
     pub residuals: Vec<Residual>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// PyPI run dependencies the robot does not ship. Emitted as extra
+    /// `exts_list` entries on the leftover `PythonBundle`, not as SAT holes.
+    pub overlay_extensions: Vec<OverlayExtension>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// One leftover PyPI package installed in the same `PythonBundle` as the root.
+pub struct OverlayExtension {
+    /// PyPI / EasyBuild extension name.
+    pub name: String,
+    /// Exact version EasyBuild will download.
+    pub version: String,
 }
 
 impl PackagePlan {

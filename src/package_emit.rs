@@ -322,12 +322,17 @@ fn render_exts_list(
     kind: LanguageBundleKind,
 ) -> String {
     let mut items = Vec::new();
+    for extension in &plan.overlay_extensions {
+        items.push(render_plain_ext(&extension.name, &extension.version));
+    }
+    let mut emitted_root = false;
     for source in &materialized.sources {
         if let Some(item) = render_ext_from_source(plan, source, kind) {
             items.push(item);
+            emitted_root = true;
         }
     }
-    if items.is_empty() {
+    if !emitted_root {
         items.push(render_plain_ext(&plan.package.name, &plan.package.version));
     }
     render_multiline_list(&items)

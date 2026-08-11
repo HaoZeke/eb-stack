@@ -61,6 +61,11 @@ emitted: a recipe that *depends* on numpy lists ~SciPy-bundle~, not a
 pip numpy. If the robot has no ~SciPy-bundle~ / ~PyTorch~, the plan
 refuses rather than emitting a ~PythonBundle~ wheel overlay.
 
+A leftover that is not in EasyBuild yet (~eon-akmc~) keeps unsatisfied
+PyPI run dependencies in the same ~exts_list~ (~readcon~, ~vesin~,
+~eon-schema~, ~xxhash~). numpy still maps to ~SciPy-bundle~. The range
+floor becomes the extension version when the Warehouse pin is not exact.
+
 * Install with the eessi-extend target
 
 Plan on the host. Install through ~campaign run~ and

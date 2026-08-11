@@ -186,6 +186,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             stack: toolchain.label(),
         }],
         residuals,
+        overlay_extensions: Vec::new(),
     }
 }
 
