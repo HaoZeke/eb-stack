@@ -92,6 +92,77 @@ fn has_unresolved_template(value: &str) -> bool {
     value.contains("%(")
 }
 
+/// Resolve the templates a filename can be built from, using the recipe itself.
+///
+/// Only `%(cudaver)s` is resolvable this way, and only because EasyBuild derives
+/// it from the CUDA dependency the recipe declares. Anything else is left in
+/// place for the caller to warn about.
+fn resolve_filename_templates(suffix: &str, text: &str) -> String {
+    if !suffix.contains("%(cudaver)s") {
+        return suffix.to_string();
+    }
+    match dependency_version(text, "CUDA") {
+        Some(cudaver) => suffix.replace("%(cudaver)s", &cudaver),
+        None => suffix.to_string(),
+    }
+}
+
+/// The version of a named dependency, from a `('Name', 'version', ...)` tuple.
+fn dependency_version(text: &str, name: &str) -> Option<String> {
+    let pattern = format!(
+        r#"\(\s*['"]{}['"]\s*,\s*['"]([^'"]+)['"]"#,
+        regex::escape(name)
+    );
+    let re = regex::Regex::new(&pattern).ok()?;
+    re.captures(text)
+        .map(|caps| caps.get(1).expect("version group").as_str().to_string())
+}
+
+struct RepeatedArtifactRewrite {
+    text: String,
+    count: usize,
+}
+
+/// Rename every further `{'<name>-<old>.<ext>': '<sha256>'}` entry in the recipe.
+///
+/// The top-level `checksums` entry is rewritten by `rewrite_source_checksum`,
+/// which renames its key to the new version, so it no longer matches here. What
+/// is left is the copies: an `exts_list` extension whose `source_tmpl` is the
+/// main tarball keeps its own checksum entry, and that entry is what turns a
+/// version bump into a build-time checksum failure.
+fn rewrite_repeated_artifact_checksums(
+    src: &str,
+    old_version: &str,
+    new_version: &str,
+    new_checksum: Option<&str>,
+) -> Result<RepeatedArtifactRewrite, EmitError> {
+    let mut text = src.to_string();
+    let mut count = 0usize;
+    for quote in ['\'', '"'] {
+        let pattern = format!(
+            r#"{q}(?P<key>[^{q}]*{ver}[^{q}]*\.(?:tar\.gz|tgz|tar\.xz|tar\.bz2|tar|zip)){q}(?P<sep>\s*:\s*){q}(?P<hash>[0-9a-fA-F]{{64}}){q}"#,
+            q = regex::escape(&quote.to_string()),
+            ver = regex::escape(old_version),
+        );
+        let re = regex::Regex::new(&pattern).map_err(|e| EmitError::Rewrite(e.to_string()))?;
+        let mut replaced = 0usize;
+        let out = re.replace_all(&text, |caps: &regex::Captures| {
+            replaced += 1;
+            let key =
+                caps.name("key")
+                    .expect("key group")
+                    .as_str()
+                    .replacen(old_version, new_version, 1);
+            let hash = new_checksum.unwrap_or_else(|| caps.name("hash").expect("hash").as_str());
+            let sep = caps.name("sep").expect("sep group").as_str();
+            format!("{quote}{key}{quote}{sep}{quote}{hash}{quote}")
+        });
+        text = out.into_owned();
+        count += replaced;
+    }
+    Ok(RepeatedArtifactRewrite { text, count })
+}
+
 /// Emit next-generation easyconfig text and conventional filename from source text.
 pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitResult, EmitError> {
     let name = assign_string_raw(source, "name").ok_or(EmitError::MissingName)?;
@@ -157,6 +228,27 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
                      set --source-checksum <SHA256> or run `eb --inject-checksums` before building"
                 ));
             }
+            // An extension that unpacks the same tarball as the main source
+            // carries its own copy of the entry, and `checksums` above is only
+            // the top-level list. Left alone, the emitted recipe names the new
+            // artifact through source_tmpl and checks the old one's hash, which
+            // surfaces only when the extension is built.
+            let repeated = rewrite_repeated_artifact_checksums(
+                &text,
+                old_v,
+                &app_version,
+                params.source_checksum.as_deref(),
+            )?;
+            text = repeated.text;
+            if repeated.count > 0 && params.source_checksum.is_none() {
+                warnings.push(format!(
+                    "{} further checksum entr{} for the {old_v} artifact (in exts_list or a \
+                     second source) had the key renamed with the value left unchanged; \
+                     set --source-checksum <SHA256> or run `eb --inject-checksums`",
+                    repeated.count,
+                    if repeated.count == 1 { "y" } else { "ies" }
+                ));
+            }
         }
         if list_is_nonempty(&text, "patches") {
             warnings.push(format!(
@@ -170,7 +262,13 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
     // the filename has to carry it too or the emitted basename disagrees with the
     // recipe it names (and with the name a build list refers to).
     let versionsuffix = assign_string_raw(&text, "versionsuffix");
-    let filename_suffix = match versionsuffix.as_deref() {
+    // `%(cudaver)s` resolves from the CUDA dependency the recipe itself declares,
+    // the same way EasyBuild resolves it, so a CUDA recipe still gets its
+    // `-CUDA-<ver>` basename instead of colliding with its CPU sibling.
+    let resolved_suffix = versionsuffix
+        .as_deref()
+        .map(|suffix| resolve_filename_templates(suffix, &text));
+    let filename_suffix = match resolved_suffix.as_deref() {
         Some(suffix) if has_unresolved_template(suffix) => {
             warnings.push(format!(
                 "versionsuffix {suffix:?} contains an unresolved template, so it is \
@@ -1585,6 +1683,94 @@ checksums = [
         // patch set still needs human review after a version bump.
         assert_eq!(r.warnings.len(), 1, "warnings: {:?}", r.warnings);
         assert!(r.warnings[0].contains("patches"), "{:?}", r.warnings);
+    }
+
+    const GPU_WITH_EXTENSION: &str = r#"name = 'GROMACS'
+version = '2026.2'
+versionsuffix = '-CUDA-%(cudaver)s'
+
+toolchain = {'name': 'foss', 'version': '2025b'}
+
+sources = [SOURCELOWER_TAR_GZ]
+checksums = [
+    {'gromacs-2026.2.tar.gz': 'd27e4455e8246177952366798631a0dad9f2e1f567400a6cb854a168dcc050dd'},
+]
+
+dependencies = [
+    ('CUDA', '12.9.1', '', SYSTEM),
+    ('Python', '3.13.5'),
+]
+
+_gmxapi_source_version = version
+
+exts_list = [
+    ('gmxapi', '0.5.0a1', {
+        'source_tmpl': 'gromacs-%s.tar.gz' % _gmxapi_source_version,
+        'checksums': [
+            {'gromacs-2026.2.tar.gz': 'd27e4455e8246177952366798631a0dad9f2e1f567400a6cb854a168dcc050dd'},
+        ],
+    }),
+]
+"#;
+
+    #[test]
+    fn version_bump_rewrites_the_extension_copy_of_the_source_checksum() {
+        let params = EmitParams {
+            toolchain: foss("2025b"),
+            version: Some("2026.3".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: Some(
+                "1094b7bbc6a3960223827114626657110b40096cdf9598a727935fc84ebf8aa0".into(),
+            ),
+        };
+        let r = emit_next_generation(GPU_WITH_EXTENSION, &params).expect("emit");
+        // Both the top-level entry and the extension's copy name the new
+        // tarball and carry the new hash; neither mentions the old version.
+        assert_eq!(
+            r.text.matches("gromacs-2026.3.tar.gz").count(),
+            2,
+            "{}",
+            r.text
+        );
+        assert!(!r.text.contains("gromacs-2026.2.tar.gz"), "{}", r.text);
+        assert!(!r.text.contains("d27e4455"), "{}", r.text);
+        assert_eq!(
+            r.text
+                .matches("1094b7bbc6a3960223827114626657110b40096cdf9598a727935fc84ebf8aa0")
+                .count(),
+            2,
+            "{}",
+            r.text
+        );
+    }
+
+    #[test]
+    fn cuda_versionsuffix_resolves_into_the_emitted_filename() {
+        let params = EmitParams {
+            toolchain: foss("2025b"),
+            version: Some("2026.3".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: Some(
+                "1094b7bbc6a3960223827114626657110b40096cdf9598a727935fc84ebf8aa0".into(),
+            ),
+        };
+        let r = emit_next_generation(GPU_WITH_EXTENSION, &params).expect("emit");
+        // The CPU sibling of this recipe emits GROMACS-2026.3-foss-2025b.eb, so
+        // resolving the suffix is what keeps the two from colliding.
+        assert_eq!(r.filename, "GROMACS-2026.3-foss-2025b-CUDA-12.9.1.eb");
+        assert!(
+            !r.warnings.iter().any(|w| w.contains("versionsuffix")),
+            "{:?}",
+            r.warnings
+        );
+        // The recipe text keeps the template, which is what EasyBuild reads.
+        assert!(
+            r.text.contains("versionsuffix = '-CUDA-%(cudaver)s'"),
+            "{}",
+            r.text
+        );
     }
 
     #[test]
