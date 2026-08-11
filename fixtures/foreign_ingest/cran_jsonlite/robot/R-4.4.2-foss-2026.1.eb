@@ -1,0 +1,6 @@
+name = 'R'
+version = '4.4.2'
+homepage = 'https://www.r-project.org'
+description = "Test R provider"
+toolchain = {'name': 'foss', 'version': '2026.1'}
+moduleclass = 'lang'

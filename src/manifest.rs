@@ -128,6 +128,8 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
         origin: match recipe.format {
             ForeignFormat::CondaForge => PackageOrigin::CondaForge,
             ForeignFormat::Spack => PackageOrigin::Spack,
+            ForeignFormat::Pypi => PackageOrigin::Pypi,
+            ForeignFormat::Cran => PackageOrigin::Cran,
         },
         package: PackageMetadata {
             name: recipe.name.clone(),

@@ -130,6 +130,13 @@ have independent build contexts and are not forced into the generated
 package's co-loaded runtime closure. Direct build requirements of the generated
 profile remain solver requirements and are emitted as build dependencies.
 
+~exts_list~ entries become virtual candidates (~easyconfig_path~ contains
+~#ext:~) that depend on the parent bundle. A requirement for ~numpy~ is
+therefore satisfied by selecting ~SciPy-bundle~. Profile locks collapse the
+provide to the parent so emission never writes a standalone ~numpy~
+dependency tuple. The expansion is idempotent and runs inside Resolvo
+admission, so ~unsatisfied_direct_dependencies~ sees the same universe.
+
 * Deterministic EasyBuild emission
 
 New-package emission renders package metadata, all sources and checksums,

@@ -1,0 +1,53 @@
+#+TITLE: Site R extras on EESSI
+#+OPTIONS: toc:t num:nil
+
+Turn a CRAN DESCRIPTION, CRAN JSON object, or package list into a
+~Bundle~ easyconfig with ~exts_defaultclass = 'RPackage'~. Base-R
+packages (~methods~, ~utils~, …) are dropped. ~R (>= x)~ becomes a
+dependency on the EasyBuild ~R~ module. Packages already listed in
+~R-bundle-CRAN~ ~exts_list~ are satisfied as provides.
+
+* Inputs
+
+1. a DESCRIPTION file, ~cran.json~, or a one-spec-per-line package list;
+2. the EESSI robot tree;
+3. a stack policy that locks ~R~ and ~R-bundle-CRAN~ to the versions
+   that EESSI version ships. See ~examples/stacks/eessi-r-extras.toml~.
+
+* Inspect
+
+#+begin_src bash
+eb-stack package inspect \
+  --source fixtures/foreign_ingest/cran_jsonlite/DESCRIPTION \
+  --format cran \
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  --out-dir /tmp/jsonlite-inspect
+#+end_src
+
+~package.plan.json~ has ~origin = cran~ and ~easyblock = Bundle~.
+
+* Plan
+
+#+begin_src bash
+eb-stack package plan \
+  --source fixtures/foreign_ingest/cran_jsonlite/cran.json \
+  --format cran \
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  --easyconfigs /cvmfs/software.eessi.io/versions/2025.06/software/linux/x86_64/amd/zen4/software/EasyBuild/5.3.0/easybuild/easyconfigs \
+  --stack-policy examples/stacks/eessi-r-extras.toml \
+  --source-checksum <sha256-of-the-tarball> \
+  --out-dir /tmp/jsonlite
+#+end_src
+
+DESCRIPTION files rarely carry a SHA-256. Pass ~--source-checksum~ for
+the tarball, or use a JSON document that already includes one. Plan
+refuses to emit a buildable bundle without it.
+
+* Verify on EESSI-extend
+
+Same as the Python extras workflow: ~skills/eessi-extend/SKILL.md~,
+exactly one ~EESSI_*_INSTALL~ prefix, ~module load EESSI-extend~, ~eb~
+the emitted recipe. Project one-offs can keep using ~R_LIBS_USER~
+instead of a site bundle.

@@ -1,0 +1,12 @@
+name = 'Python-bundle-PyPI'
+version = '2025.04'
+homepage = 'https://example.invalid/python-bundle-pypi'
+description = "Test bundle providing soupsieve"
+toolchain = {'name': 'foss', 'version': '2026.1'}
+dependencies = [
+    ('Python', '3.13.1'),
+]
+exts_list = [
+    ('soupsieve', '2.6'),
+]
+moduleclass = 'lang'

@@ -880,7 +880,9 @@ fn parse_format(value: &str) -> Result<Option<ForeignFormat>> {
         "auto" => Ok(None),
         "conda-forge" | "conda" => Ok(Some(ForeignFormat::CondaForge)),
         "spack" => Ok(Some(ForeignFormat::Spack)),
-        _ => bail!("--format must be auto, conda-forge, or spack"),
+        "pypi" => Ok(Some(ForeignFormat::Pypi)),
+        "cran" => Ok(Some(ForeignFormat::Cran)),
+        _ => bail!("--format must be auto, conda-forge, spack, pypi, or cran"),
     }
 }
 

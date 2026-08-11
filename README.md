@@ -7,7 +7,7 @@
 
 **Turn foreign and EasyBuild recipes into resolved, build-evaluated package bundles.**
 
-`eb-stack` parses conda-forge, Spack, and EasyBuild recipes into one canonical package plan. It emits a planned CycloneDX SBOM, solves each product profile with Resolvo, writes one conventional `.eb` file per installable variant, and drives the recipes through a persisted remote build campaign.
+`eb-stack` parses conda-forge, Spack, PyPI, CRAN, and EasyBuild recipes into one canonical package plan. It emits a planned CycloneDX SBOM, solves each product profile with Resolvo, writes one conventional `.eb` file per installable variant, and drives the recipes through a persisted remote build campaign.
 
 [![CI](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_test.yml/badge.svg)](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_test.yml)
 [![Docs](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_docs.yml/badge.svg)](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_docs.yml)

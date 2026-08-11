@@ -1,0 +1,6 @@
+name = 'Python'
+version = '3.13.1'
+homepage = 'https://python.org'
+description = "Test Python provider"
+toolchain = {'name': 'foss', 'version': '2026.1'}
+moduleclass = 'lang'
