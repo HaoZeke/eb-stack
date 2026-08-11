@@ -300,10 +300,7 @@ fn match_robot_name(foreign_name: &str, candidates: &[Candidate]) -> String {
 }
 
 fn normalize_package_identity(name: &str) -> String {
-    name.chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
+    crate::provides::overlay_package_identity(name)
 }
 
 fn admit_stack_pin_closures(

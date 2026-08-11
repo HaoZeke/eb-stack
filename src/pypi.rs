@@ -73,7 +73,7 @@ struct WarehouseInfo {
     #[serde(default)]
     license: Option<String>,
     #[serde(default)]
-    requires_dist: Vec<String>,
+    requires_dist: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -106,7 +106,7 @@ fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
         .map_err(|error| ForeignError::Parse(format!("pypi warehouse: {error}")))?;
     let mut residuals = Vec::new();
     let mut dependencies = Vec::new();
-    for (index, spec) in doc.info.requires_dist.iter().enumerate() {
+    for (index, spec) in doc.info.requires_dist.iter().flatten().enumerate() {
         match parse_pep508(spec) {
             Pep508::SkipExtra { spec } => residuals.push(ForeignResidual {
                 category: "pypi-extra".into(),
@@ -431,6 +431,30 @@ mod tests {
             recipe.sha256.as_deref(),
             Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         );
+    }
+
+    #[test]
+    fn warehouse_json_accepts_null_requires_dist() {
+        let recipe = parse_pypi_str(
+            r#"{
+              "info": {
+                "name": "numpy",
+                "version": "2.5.2",
+                "summary": "array library",
+                "requires_dist": null
+              },
+              "urls": [{
+                "packagetype": "sdist",
+                "url": "https://files.pythonhosted.org/packages/numpy/numpy-2.5.2.tar.gz",
+                "filename": "numpy-2.5.2.tar.gz",
+                "digests": {"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+              }]
+            }"#,
+        )
+        .expect("parse");
+        assert_eq!(recipe.name, "numpy");
+        assert_eq!(recipe.dependencies.len(), 1);
+        assert_eq!(recipe.dependencies[0].name, "Python");
     }
 
     #[test]

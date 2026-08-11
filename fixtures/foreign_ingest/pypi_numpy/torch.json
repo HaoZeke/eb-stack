@@ -1,0 +1,20 @@
+{
+  "info": {
+    "name": "torch",
+    "version": "2.13.0",
+    "home_page": "https://pytorch.org",
+    "summary": "Tensors and dynamic neural networks",
+    "license": "BSD",
+    "requires_dist": ["filelock"]
+  },
+  "urls": [
+    {
+      "packagetype": "sdist",
+      "url": "https://files.pythonhosted.org/packages/torch/torch-2.13.0.tar.gz",
+      "filename": "torch-2.13.0.tar.gz",
+      "digests": {
+        "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      }
+    }
+  ]
+}

@@ -21,6 +21,10 @@ All notable changes to this project are documented here.
   for `Python-bundle-PyPI` / `R-bundle-CRAN`) instead of failing as a
   missing easyconfig. Profile locks collapse the provide to the parent so
   emitted recipes depend on the bundle, not on a fake `numpy` module.
+  Planning `numpy` / `scipy` / `torch` as a PyPI root against a robot
+  that already ships them is an empty delta. Without that provider the
+  plan refuses a pip overlay instead of emitting a `PythonBundle`.
+  Warehouse `requires_dist: null` (live numpy JSON) parses as no extras.
 - `--format pypi` reads Warehouse-shaped JSON or a `requirements.txt` and
   emits a `PythonBundle` whose `exts_list` is the leftover package, with
   already-provided extras mapped to the parent bundle.

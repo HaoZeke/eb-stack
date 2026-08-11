@@ -87,6 +87,49 @@ pub fn expand_extension_provides(candidates: &[Candidate]) -> Vec<Candidate> {
     out
 }
 
+/// Identity used when matching a PyPI/CRAN name to a robot module or
+/// `exts_list` provide. `torch` and `PyTorch` are the same package.
+pub fn overlay_package_identity(name: &str) -> String {
+    let identity = crate::package_sources::package_identity(name);
+    match identity.as_str() {
+        "torch" => "pytorch".into(),
+        other => other.to_string(),
+    }
+}
+
+/// True when `--format pypi` must not emit a `PythonBundle` overlay.
+///
+/// These are toolchain-built extensions. A pip wheel on top of EESSI
+/// (or any EasyBuild scientific Python) is the wrong install.
+pub fn refuses_pip_overlay(name: &str) -> bool {
+    matches!(
+        overlay_package_identity(name).as_str(),
+        "numpy" | "scipy" | "pytorch"
+    )
+}
+
+/// Bundle or first-class module in `candidates` that already ships `name`.
+///
+/// Prefers an `exts_list` parent (`SciPy-bundle` for `numpy`) over a
+/// same-named first-class recipe.
+pub fn existing_language_provider<'a>(
+    name: &str,
+    candidates: &'a [Candidate],
+) -> Option<&'a Candidate> {
+    let identity = overlay_package_identity(name);
+    if let Some(parent) = candidates.iter().find(|candidate| {
+        !candidate.is_extension_provide()
+            && candidate.exts_list.iter().any(|ext| {
+                overlay_package_identity(&ext.name) == identity && !ext.version.is_empty()
+            })
+    }) {
+        return Some(parent);
+    }
+    candidates.iter().find(|candidate| {
+        !candidate.is_extension_provide() && overlay_package_identity(&candidate.name) == identity
+    })
+}
+
 /// Collapse a selected extension provide to its parent bundle candidate.
 pub fn resolve_extension_provider<'a>(
     selected: &'a Candidate,
@@ -216,5 +259,36 @@ mod tests {
         let parent = resolve_extension_provider(numpy, &expanded);
         assert_eq!(parent.name, "SciPy-bundle");
         assert!(!parent.is_extension_provide());
+    }
+
+    #[test]
+    fn torch_and_pytorch_share_overlay_identity() {
+        assert_eq!(overlay_package_identity("torch"), "pytorch");
+        assert_eq!(overlay_package_identity("PyTorch"), "pytorch");
+        assert_eq!(overlay_package_identity("numpy"), "numpy");
+        assert!(refuses_pip_overlay("numpy"));
+        assert!(refuses_pip_overlay("SciPy"));
+        assert!(refuses_pip_overlay("torch"));
+        assert!(!refuses_pip_overlay("beautifulsoup4"));
+    }
+
+    #[test]
+    fn existing_provider_prefers_bundle_over_name_match() {
+        let universe = vec![bundle()];
+        let provider = existing_language_provider("numpy", &universe).expect("bundle");
+        assert_eq!(provider.name, "SciPy-bundle");
+        assert!(existing_language_provider("torch", &universe).is_none());
+    }
+
+    #[test]
+    fn existing_provider_finds_first_class_pytorch() {
+        let mut pytorch = bundle();
+        pytorch.name = "PyTorch".into();
+        pytorch.version = "2.9.1".into();
+        pytorch.exts_list.clear();
+        pytorch.easyconfig_path = "PyTorch-2.9.1-foss-2026.1.eb".into();
+        let universe = [pytorch];
+        let provider = existing_language_provider("torch", &universe).expect("module");
+        assert_eq!(provider.name, "PyTorch");
     }
 }

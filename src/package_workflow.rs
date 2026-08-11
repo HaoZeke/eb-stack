@@ -6,6 +6,7 @@ use crate::eb_parse::{
     easyconfig_letter_dir, parse_easyconfig_trees, resolve_easyconfig_file, ResolvedDep,
 };
 use crate::foreign::{parse_foreign_path, ForeignFormat};
+use crate::hierarchy::{filter_candidates_in_hierarchy, hierarchy_for_with_tree};
 use crate::manifest::package_plan_from_foreign;
 use crate::package::{
     package_plan_to_cyclonedx, BuildSpec, ConditionExpr, DependencyIntent, DependencyRole,
@@ -17,6 +18,7 @@ use crate::package_config::{apply_package_layers, PackageConfigLayer};
 use crate::package_emit::{emit_profile_easyconfigs, EmittedEasyconfig};
 use crate::package_solve::solve_package_profile_with_hierarchy;
 use crate::package_sources::map_source_toolchain_to_target;
+use crate::provides::{existing_language_provider, refuses_pip_overlay};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -214,6 +216,18 @@ pub fn complete_package_bundle_with_hierarchy(
     stack_policy: &StackPolicy,
     hierarchy_fixture: Option<&Path>,
 ) -> Result<PackageBundle, PackageWorkflowError> {
+    if matches!(plan.origin, PackageOrigin::Pypi | PackageOrigin::Cran) {
+        if let Some(provider) = already_provided_language_root(&plan, candidates, hierarchy_fixture)
+        {
+            return Ok(already_provided_bundle(plan, sbom, provider));
+        }
+        if refuses_pip_overlay(&plan.package.name) {
+            return Err(PackageWorkflowError::RefusePipOverlay {
+                name: plan.package.name.clone(),
+                version: plan.package.version.clone(),
+            });
+        }
+    }
     let mut locks = Vec::new();
     for output in &plan.outputs {
         locks.push(
@@ -237,6 +251,60 @@ pub fn complete_package_bundle_with_hierarchy(
         locks,
         easyconfigs,
     })
+}
+
+fn already_provided_language_root<'a>(
+    plan: &PackagePlan,
+    candidates: &'a [crate::domain::Candidate],
+    hierarchy_fixture: Option<&Path>,
+) -> Option<&'a crate::domain::Candidate> {
+    let admitted =
+        match hierarchy_for_with_tree(&plan.build.toolchain, hierarchy_fixture, candidates) {
+            Ok(hierarchy) => filter_candidates_in_hierarchy(candidates, &hierarchy),
+            Err(_) => return existing_language_provider(&plan.package.name, candidates),
+        };
+    let provider_path = existing_language_provider(&plan.package.name, &admitted)
+        .map(|provider| provider.easyconfig_path.clone())?;
+    candidates
+        .iter()
+        .find(|candidate| candidate.easyconfig_path == provider_path)
+}
+
+fn already_provided_bundle(
+    mut plan: PackagePlan,
+    sbom: Value,
+    provider: &crate::domain::Candidate,
+) -> PackageBundle {
+    let provided_ext = provider.exts_list.iter().find(|ext| {
+        crate::provides::overlay_package_identity(&ext.name)
+            == crate::provides::overlay_package_identity(&plan.package.name)
+    });
+    let provided_version = provided_ext
+        .map(|ext| ext.version.as_str())
+        .unwrap_or(provider.version.as_str());
+    plan.residuals.push(Residual {
+        id: "already-provided".into(),
+        stage: ResidualStage::Resolve,
+        category: "already-provided".into(),
+        severity: ResidualSeverity::Judgment,
+        summary: format!(
+            "{} {} is already provided by {} {} ({} {}); do not emit a pip overlay",
+            plan.package.name,
+            plan.package.version,
+            provider.name,
+            provider.version,
+            plan.package.name,
+            provided_version
+        ),
+        evidence: Some(provider.easyconfig_path.clone()),
+        provenance: None,
+    });
+    PackageBundle {
+        plan,
+        sbom,
+        locks: Vec::new(),
+        easyconfigs: Vec::new(),
+    }
 }
 
 /// The whole new-package path: ingest, layer, solve, emit.
@@ -1177,6 +1245,17 @@ pub enum PackageWorkflowError {
     /// No dependency selection satisfies a profile.
     #[error("package profile solve: {0}")]
     Solve(String),
+    /// The foreign root is a compiled scientific package the robot does
+    /// not ship. A `PythonBundle` pip overlay is the wrong install.
+    #[error(
+        "{name} {version} is a compiled scientific package; the robot does not provide it via SciPy-bundle or PyTorch. Do not pip-overlay it with PythonBundle"
+    )]
+    RefusePipOverlay {
+        /// Package that must come from the scientific stack.
+        name: String,
+        /// Version the foreign source asked for.
+        version: String,
+    },
     /// The easyconfig could not be rendered.
     #[error("EasyBuild recipe emission: {0}")]
     Emit(String),

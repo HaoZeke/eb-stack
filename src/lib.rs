@@ -108,7 +108,8 @@ pub use package_workflow::{
     PackageBundle, PackageWorkflowError, WrittenPackageBundle,
 };
 pub use provides::{
-    expand_extension_provides, extension_parent_path, path_is_extension_provide,
+    existing_language_provider, expand_extension_provides, extension_parent_path,
+    overlay_package_identity, path_is_extension_provide, refuses_pip_overlay,
     resolve_extension_provider, EXT_PROVIDE_MARKER,
 };
 pub use report::{

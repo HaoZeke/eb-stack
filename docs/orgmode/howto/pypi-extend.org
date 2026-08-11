@@ -54,9 +54,12 @@ The lock collapses ~soupsieve~ (when the EESSI ~Python-bundle-PyPI~
 provides it) to that bundle. The emitted recipe is a ~PythonBundle~
 whose ~exts_list~ contains ~beautifulsoup4~ only.
 
-Asking for ~numpy~ against a policy that locks ~SciPy-bundle~ produces
-an empty delta or a residual: numpy is already provided. Do not overlay
-a pip numpy on EESSI.
+Asking for ~numpy~ (or ~scipy~, or ~torch~ / ~PyTorch~) against a robot
+that already ships the provider produces an empty delta and an
+~already-provided~ residual. The leftover package is the only thing
+emitted: a recipe that *depends* on numpy lists ~SciPy-bundle~, not a
+pip numpy. If the robot has no ~SciPy-bundle~ / ~PyTorch~, the plan
+refuses rather than emitting a ~PythonBundle~ wheel overlay.
 
 * Install with the eessi-extend target
 

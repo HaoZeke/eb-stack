@@ -169,3 +169,122 @@ fn plan_cran_emits_r_bundle() {
         bundle.locks[0].dependencies
     );
 }
+
+fn numpy_robot() -> PathBuf {
+    root().join("fixtures/foreign_ingest/pypi_numpy/robot")
+}
+
+#[test]
+fn plan_numpy_is_already_provided_by_scipy_bundle() {
+    let request = NewPackageRequest {
+        source: root().join("fixtures/foreign_ingest/pypi_numpy/numpy.json"),
+        format: Some(ForeignFormat::Pypi),
+        toolchain: toolchain(),
+        source_checksums: Vec::new(),
+        package_layers: Vec::new(),
+        easyconfig_roots: vec![numpy_robot()],
+        stack_policy: stack_policy(),
+    };
+    let bundle = plan_new_package(&request).expect("plan numpy");
+    assert!(
+        bundle.easyconfigs.is_empty(),
+        "numpy must not emit a pip PythonBundle: {:?}",
+        bundle
+            .easyconfigs
+            .iter()
+            .map(|config| &config.filename)
+            .collect::<Vec<_>>()
+    );
+    assert!(bundle.locks.is_empty());
+    assert!(
+        bundle
+            .plan
+            .residuals
+            .iter()
+            .any(|residual| residual.category == "already-provided"
+                && residual.summary.contains("SciPy-bundle")),
+        "{:?}",
+        bundle.plan.residuals
+    );
+}
+
+#[test]
+fn plan_leftover_depends_on_scipy_bundle_for_numpy() {
+    let request = NewPackageRequest {
+        source: root().join("fixtures/foreign_ingest/pypi_numpy/leftover.json"),
+        format: Some(ForeignFormat::Pypi),
+        toolchain: toolchain(),
+        source_checksums: Vec::new(),
+        package_layers: Vec::new(),
+        easyconfig_roots: vec![numpy_robot()],
+        stack_policy: stack_policy(),
+    };
+    let bundle = plan_new_package(&request).expect("plan leftover");
+    let recipe = bundle
+        .easyconfigs
+        .iter()
+        .find(|config| config.filename.contains("leftover"))
+        .expect("emitted leftover");
+    assert!(
+        recipe.text.contains("SciPy-bundle"),
+        "numpy must resolve via SciPy-bundle:\n{}",
+        recipe.text
+    );
+    assert!(
+        !recipe.text.contains("('numpy'"),
+        "numpy must not be re-emitted as an extension:\n{}",
+        recipe.text
+    );
+    assert!(
+        bundle.locks[0]
+            .dependencies
+            .iter()
+            .any(|dep| dep.name == "SciPy-bundle"),
+        "{:?}",
+        bundle.locks[0].dependencies
+    );
+}
+
+#[test]
+fn plan_torch_without_pytorch_module_refuses_pip_overlay() {
+    let request = NewPackageRequest {
+        source: root().join("fixtures/foreign_ingest/pypi_numpy/torch.json"),
+        format: Some(ForeignFormat::Pypi),
+        toolchain: toolchain(),
+        source_checksums: Vec::new(),
+        package_layers: Vec::new(),
+        easyconfig_roots: vec![numpy_robot()],
+        stack_policy: stack_policy(),
+    };
+    let error = plan_new_package(&request).expect_err("torch must refuse pip overlay");
+    let message = error.to_string();
+    assert!(
+        message.contains("torch") && message.contains("pip-overlay"),
+        "{message}"
+    );
+}
+
+#[test]
+fn plan_torch_uses_existing_pytorch_module() {
+    let request = NewPackageRequest {
+        source: root().join("fixtures/foreign_ingest/pypi_numpy/torch.json"),
+        format: Some(ForeignFormat::Pypi),
+        toolchain: toolchain(),
+        source_checksums: Vec::new(),
+        package_layers: Vec::new(),
+        easyconfig_roots: vec![root().join("fixtures/foreign_ingest/pypi_numpy/robot-pytorch")],
+        stack_policy: stack_policy(),
+    };
+    let bundle = plan_new_package(&request).expect("plan torch");
+    assert!(bundle.easyconfigs.is_empty(), "{:?}", bundle.easyconfigs);
+    assert!(
+        bundle
+            .plan
+            .residuals
+            .iter()
+            .any(|residual| residual.category == "already-provided"
+                && residual.summary.contains("PyTorch")),
+        "{:?}",
+        bundle.plan.residuals
+    );
+}
