@@ -280,6 +280,12 @@ pub enum PackageOrigin {
     Spack,
     /// An EasyBuild easyconfig.
     EasyBuild,
+    /// Offline PyPI metadata or a requirements.txt.
+    Pypi,
+    /// A CRAN DESCRIPTION file or package list.
+    Cran,
+    /// A Cargo.toml or crates.io JSON document.
+    Cargo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -985,6 +991,20 @@ pub struct PackagePlan {
     #[serde(default)]
     /// Work left for a human, carried rather than dropped.
     pub residuals: Vec<Residual>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// PyPI run dependencies the robot does not ship. Emitted as extra
+    /// `exts_list` entries on the leftover `PythonBundle`, not as SAT holes.
+    pub overlay_extensions: Vec<OverlayExtension>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// One leftover PyPI package installed in the same `PythonBundle` as the root.
+pub struct OverlayExtension {
+    /// PyPI / EasyBuild extension name.
+    pub name: String,
+    /// Exact version EasyBuild will download.
+    pub version: String,
 }
 
 impl PackagePlan {
@@ -1304,5 +1324,8 @@ fn origin_name(origin: &PackageOrigin) -> &'static str {
         PackageOrigin::CondaForge => "conda-forge",
         PackageOrigin::Spack => "spack",
         PackageOrigin::EasyBuild => "easybuild",
+        PackageOrigin::Pypi => "pypi",
+        PackageOrigin::Cran => "cran",
+        PackageOrigin::Cargo => "cargo",
     }
 }

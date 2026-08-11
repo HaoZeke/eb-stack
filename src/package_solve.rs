@@ -9,6 +9,7 @@ use crate::package::{
     materialize_profile, DependencyRole, LockedDependency, PackageOrigin, PackagePlan,
     ProfileEnvironment, ProfileLock, StackPolicy, PROFILE_LOCK_SCHEMA_VERSION,
 };
+use crate::provides::{expand_extension_provides, resolve_extension_provider};
 use crate::resolvo_provider::solve_curated_with_stack_policy;
 use crate::version::matches_req;
 use std::collections::{BTreeMap, HashSet, VecDeque};
@@ -77,6 +78,7 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
         .map_err(|error| ProfileSolveError::Resolve(error.to_string()))?;
     let mut admitted = filter_candidates_in_hierarchy(candidates, &hierarchy);
     admit_stack_pin_closures(candidates, &mut admitted, stack_policy);
+    admitted = expand_extension_provides(&admitted);
 
     let mut holes = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -195,18 +197,30 @@ pub fn solve_package_profile_with_hierarchy(
         .map_err(|error| ProfileSolveError::Resolve(error.to_string()))?;
     let mut original_candidates = filter_candidates_in_hierarchy(candidates, &hierarchy);
     admit_stack_pin_closures(candidates, &mut original_candidates, stack_policy);
+    original_candidates = expand_extension_provides(&original_candidates);
     original_candidates.retain(|candidate| {
         !(implicit_easybuild_dependencies.contains(&candidate.name)
             && is_system_toolchain(&candidate.toolchain))
     });
     let mut universe = original_candidates.clone();
     for candidate in &mut universe {
-        // Existing robot recipes are independently built artifacts. Their
-        // build-only tools are not co-loaded into the generated package's
-        // runtime environment and therefore have separate version scopes.
-        // The synthetic profile candidate below retains its direct build
-        // requirements because those tools are needed to build this output.
+        // Existing robot recipes are already-built modules. Overlay planning
+        // only needs their identity (Python, R, SciPy-bundle, …). Their own
+        // dependency trees — including filter-deps such as binutils — are not
+        // rebuilt and must not make the candidate uninstallable.
+        // The synthetic profile candidate below retains its direct
+        // requirements because those are what the new recipe will declare.
         candidate.builddependencies.clear();
+        if !candidate.is_extension_provide() {
+            // Everything the root does not itself ask for goes: those are the
+            // module's own already-satisfied internals. What the root asks for
+            // stays, because two requirements on one package are a real
+            // conflict and dropping the module's side would let an
+            // unsatisfiable solve pass as a plan.
+            candidate
+                .dependencies
+                .retain(|dependency| direct_roles.contains_key(&dependency.name));
+        }
     }
     scope_cross_generation_pin_closures(&mut universe, stack_policy, &hierarchy);
     universe.push(Candidate {
@@ -233,6 +247,7 @@ pub fn solve_package_profile_with_hierarchy(
         .map_err(ProfileSolveError::Resolve)?;
 
     let mut dependencies = Vec::new();
+    let mut seen_providers = HashSet::new();
     for (name, build) in direct_roles {
         let selected = result
             .selected
@@ -243,12 +258,20 @@ pub fn solve_package_profile_with_hierarchy(
             .iter()
             .find(|candidate| candidate.easyconfig_path == selected.easyconfig_path)
             .unwrap_or(selected);
+        let provider = resolve_extension_provider(selected, &result.selected);
+        let provider = original_candidates
+            .iter()
+            .find(|candidate| candidate.easyconfig_path == provider.easyconfig_path)
+            .unwrap_or(provider);
+        if !seen_providers.insert(provider.name.clone()) {
+            continue;
+        }
         dependencies.push(LockedDependency {
-            name,
-            version: selected.version.clone(),
-            versionsuffix: selected.versionsuffix.clone(),
-            toolchain: selected.toolchain.clone(),
-            easyconfig_path: selected.easyconfig_path.clone(),
+            name: provider.name.clone(),
+            version: provider.version.clone(),
+            versionsuffix: provider.versionsuffix.clone(),
+            toolchain: provider.toolchain.clone(),
+            easyconfig_path: provider.easyconfig_path.clone(),
             build,
         });
     }
@@ -284,10 +307,7 @@ fn match_robot_name(foreign_name: &str, candidates: &[Candidate]) -> String {
 }
 
 fn normalize_package_identity(name: &str) -> String {
-    name.chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
+    crate::provides::overlay_package_identity(name)
 }
 
 fn admit_stack_pin_closures(

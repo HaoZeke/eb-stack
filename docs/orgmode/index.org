@@ -38,6 +38,10 @@
 
    *New package from conda-forge/Spack?* → :doc:`howto/new-package`
 
+   *Site Python extras on EESSI?* → :doc:`howto/pypi-extend`
+
+   *Site R extras on EESSI?* → :doc:`howto/cran-extend`
+
    *Existing recipe bump?* → :doc:`howto/bump-recipe`
 
    *CLI surface?* → :doc:`reference/cli`
@@ -101,6 +105,8 @@
 
    howto/run-annual-bump
    howto/new-package
+   howto/pypi-extend
+   howto/cran-extend
    howto/repair-campaign
    howto/solve-lock
    howto/emit-reports

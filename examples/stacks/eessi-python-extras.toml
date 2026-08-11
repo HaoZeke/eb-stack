@@ -1,0 +1,20 @@
+schema_version = 1
+name = "eessi-python-extras"
+
+[toolchain]
+name = "foss"
+version = "2026.1"
+
+# Lock scientific Python providers to the versions the target EESSI tree
+# actually ships. Preferred pins may fall back; locked pins may not.
+# Fill versions from `module --terse avail SciPy-bundle Python-bundle-PyPI`.
+
+# [[pins]]
+# name = "SciPy-bundle"
+# version_requirement = "==2025.06"
+# mode = "locked"
+#
+# [[pins]]
+# name = "Python-bundle-PyPI"
+# version_requirement = "==2025.04"
+# mode = "locked"

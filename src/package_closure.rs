@@ -1,7 +1,7 @@
 //! Recursive package-closure planner and aggregate bundle writer.
 //!
 //! Closes a root foreign package plan over robot candidates, optional catalog
-//! overrides, and ordered local source roots (EasyBuild / conda-forge / Spack).
+//! overrides, and ordered local source roots (EasyBuild / conda-forge / Spack / Cargo).
 //! Compatible robot candidates win. Holes resolve robot-first, then catalog
 //! overrides, then EasyBuild cross-generation bump, then an unambiguous foreign
 //! recipe. Package names never appear as control flow.
@@ -13,7 +13,7 @@
 use crate::domain::{Candidate, Toolchain};
 use crate::eb_parse::{resolve_easyconfig_file, resolve_easyconfig_str};
 use crate::hierarchy::{hierarchy_for_with_tree, ToolchainHierarchy};
-use crate::package::{OutputRequest, PackagePlan, ProfileEnvironment, StackPolicy};
+use crate::package::{OutputRequest, PackageOrigin, PackagePlan, ProfileEnvironment, StackPolicy};
 use crate::package_catalog::{
     CatalogProviderKind, PackageCatalogError, PackageSourceCatalog, PackageSourceProvider,
 };
@@ -664,17 +664,46 @@ impl ClosureState<'_> {
                 return Ok(());
             }
             let generated_before = self.generated.len();
+            let mut deferred = 0usize;
             for hole in &holes {
-                self.ensure_companion_for_hole(plan, profile, stack_policy, hole, path)?;
+                if self.hole_has_closable_source(hole)? {
+                    self.ensure_companion_for_hole(plan, profile, stack_policy, hole, path)?;
+                } else if plan.origin == PackageOrigin::Pypi {
+                    deferred += 1;
+                } else {
+                    self.ensure_companion_for_hole(plan, profile, stack_policy, hole, path)?;
+                }
             }
-            if self.generated.len() == generated_before {
-                let hole = &holes[0];
-                return Err(PackageClosureError::GeneratedCandidateNotAdmitted {
-                    name: hole.name.clone(),
-                    required: hole.version_req.clone(),
-                    profile: profile.to_string(),
-                });
+            if self.generated.len() != generated_before {
+                continue;
             }
+            if deferred == holes.len() && plan.origin == PackageOrigin::Pypi {
+                return Ok(());
+            }
+            let hole = &holes[0];
+            return Err(PackageClosureError::GeneratedCandidateNotAdmitted {
+                name: hole.name.clone(),
+                required: hole.version_req.clone(),
+                profile: profile.to_string(),
+            });
+        }
+    }
+
+    fn hole_has_closable_source(
+        &self,
+        hole: &UnsatisfiedDirectDependency,
+    ) -> Result<bool, PackageClosureError> {
+        match resolve_provider_candidates_for_hole(
+            self.catalog,
+            &self.source_index,
+            hole,
+            &self.target_toolchain,
+            self.target_hierarchy.as_ref(),
+        ) {
+            Ok(providers) => Ok(!providers.is_empty()),
+            Err(PackageClosureError::MissingProvider { .. })
+            | Err(PackageClosureError::MissingSource { .. }) => Ok(false),
+            Err(error) => Err(error),
         }
     }
 

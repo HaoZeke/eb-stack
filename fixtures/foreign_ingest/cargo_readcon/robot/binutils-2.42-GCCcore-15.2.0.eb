@@ -1,0 +1,6 @@
+name = 'binutils'
+version = '2.42'
+homepage = 'https://www.gnu.org/software/binutils/'
+description = "Test binutils provider"
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+moduleclass = 'tools'

@@ -1,0 +1,20 @@
+{
+  "info": {
+    "name": "numpy",
+    "version": "2.5.2",
+    "home_page": "https://numpy.org",
+    "summary": "Array library",
+    "license": "BSD",
+    "requires_dist": null
+  },
+  "urls": [
+    {
+      "packagetype": "sdist",
+      "url": "https://files.pythonhosted.org/packages/numpy/numpy-2.5.2.tar.gz",
+      "filename": "numpy-2.5.2.tar.gz",
+      "digests": {
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    }
+  ]
+}

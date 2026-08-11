@@ -140,6 +140,26 @@ pub enum TargetRuntime {
         /// Working directory inside the container.
         workdir: Option<String>,
     },
+    /// EESSI apptainer via `eessi_container.sh` (CVMFS fuse in the image).
+    ///
+    /// Plan on the host; this runtime is the install backend. The host
+    /// EasyBuild binary need not run inside the Debian 12 image.
+    Eessi {
+        #[serde(default = "default_eessi_command")]
+        /// Path to `eessi_container.sh`.
+        command: String,
+        /// Host directory used as `--storage` (image cache and tmp).
+        storage: String,
+        #[serde(default = "default_eessi_access")]
+        /// `ro` or `rw` CVMFS access.
+        access: String,
+        #[serde(default)]
+        /// Extra binds in `src:dest:mode` form, joined as `--extra-bind-paths`.
+        extra_bind_paths: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Resume an existing `--storage` session directory.
+        resume: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -461,6 +481,34 @@ impl BuildTarget {
                 tokens.extend(command);
                 tokens
             }
+            TargetRuntime::Eessi {
+                command: runtime,
+                storage,
+                access,
+                extra_bind_paths,
+                resume,
+            } => {
+                let mut tokens = vec![
+                    runtime.clone(),
+                    "--mode".into(),
+                    "exec".into(),
+                    "--access".into(),
+                    access.clone(),
+                    "--storage".into(),
+                    storage.clone(),
+                ];
+                if let Some(resume) = resume {
+                    tokens.push("--resume".into());
+                    tokens.push(resume.clone());
+                }
+                if !extra_bind_paths.is_empty() {
+                    tokens.push("--extra-bind-paths".into());
+                    tokens.push(extra_bind_paths.join(","));
+                }
+                tokens.push("--".into());
+                tokens.extend(command);
+                tokens
+            }
         }
     }
 
@@ -561,6 +609,7 @@ pub fn doctor_target(target: &BuildTarget) -> Result<TargetDoctorReport, TargetE
         TargetRuntime::Podman { command, .. } | TargetRuntime::Docker { command, .. } => {
             vec![command.clone(), "--version".into()]
         }
+        TargetRuntime::Eessi { command, .. } => vec![command.clone(), "--help".into()],
     };
     let runtime = target.route_tokens(runtime_program, true);
     let easybuild = target.route_tokens(
@@ -639,6 +688,14 @@ fn default_podman_command() -> String {
 
 fn default_docker_command() -> String {
     "docker".into()
+}
+
+fn default_eessi_command() -> String {
+    "eessi_container.sh".into()
+}
+
+fn default_eessi_access() -> String {
+    "ro".into()
 }
 
 #[derive(Debug, Error)]

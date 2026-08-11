@@ -204,6 +204,27 @@ fn render_easyconfig(
         .collect::<Vec<_>>();
     let moduleclass = plan.build.moduleclass.as_deref().unwrap_or("lib");
 
+    if plan.build.easyblock.as_deref() == Some("PythonBundle")
+        || plan.origin == crate::package::PackageOrigin::Pypi
+    {
+        return render_language_bundle(
+            plan,
+            materialized,
+            LanguageBundleKind::Python,
+            BundleFragments {
+                easyblock_line: &easyblock_line,
+                homepage,
+                description,
+                versionsuffix_line: &versionsuffix_line,
+                toolchain_options_line: &toolchain_options_line,
+                easyconfig_parameter_lines: &easyconfig_parameter_lines,
+                build_dependencies: &build_dependencies,
+                runtime_dependencies: &runtime_dependencies,
+                moduleclass,
+            },
+        );
+    }
+
     let rendered = format!(
         "{easyblock_line}name = '{name}'\n\
 version = '{version}'\n\
@@ -234,6 +255,152 @@ moduleclass = '{moduleclass}'\n",
         runtime_dependencies = render_list(&runtime_dependencies),
     );
     crate::eb_style::format_style(&rendered).text
+}
+
+#[derive(Clone, Copy)]
+enum LanguageBundleKind {
+    Python,
+}
+
+/// The rendered fragments a bundle recipe is assembled from.
+///
+/// These are computed once by the caller for every recipe shape, bundle or
+/// not, so they travel as one value rather than as a positional list only the
+/// call order keeps aligned.
+struct BundleFragments<'a> {
+    easyblock_line: &'a str,
+    homepage: &'a str,
+    description: &'a str,
+    versionsuffix_line: &'a str,
+    toolchain_options_line: &'a str,
+    easyconfig_parameter_lines: &'a str,
+    build_dependencies: &'a [String],
+    runtime_dependencies: &'a [String],
+    moduleclass: &'a str,
+}
+
+fn render_language_bundle(
+    plan: &PackagePlan,
+    materialized: &crate::package::MaterializedProfile,
+    kind: LanguageBundleKind,
+    fragments: BundleFragments<'_>,
+) -> String {
+    let BundleFragments {
+        easyblock_line,
+        homepage,
+        description,
+        versionsuffix_line,
+        toolchain_options_line,
+        easyconfig_parameter_lines,
+        build_dependencies,
+        runtime_dependencies,
+        moduleclass,
+    } = fragments;
+    let easyblock_line = if easyblock_line.is_empty() {
+        match kind {
+            LanguageBundleKind::Python => "easyblock = 'PythonBundle'\n\n".to_string(),
+        }
+    } else {
+        easyblock_line.to_string()
+    };
+    let default_class = String::new();
+    let moduleclass = if plan.build.moduleclass.is_some() {
+        moduleclass
+    } else {
+        "lang"
+    };
+    let exts = render_exts_list(plan, materialized, kind);
+    let default_ext_opts = if plan.overlay_extensions.is_empty() {
+        String::new()
+    } else {
+        "exts_default_options = {\n    'preinstallopts': 'export PYTHONPATH=%(installdir)s/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH} && ',\n}\n\n".to_string()
+    };
+    let rendered = format!(
+        "{easyblock_line}name = '{name}'\n\
+version = '{version}'\n\
+{versionsuffix_line}\n\
+homepage = '{homepage}'\n\
+description = \"\"\"{description}\"\"\"\n\n\
+toolchain = {{'name': '{toolchain_name}', 'version': '{toolchain_version}'}}\n\
+{toolchain_options_line}\n\
+{easyconfig_parameter_lines}\
+{default_class}\
+{default_ext_opts}\
+exts_list = {exts}\n\n\
+builddependencies = {build_dependencies}\n\n\
+dependencies = {runtime_dependencies}\n\n\
+moduleclass = '{moduleclass}'\n",
+        name = escape_single(&plan.package.name),
+        version = escape_single(&plan.package.version),
+        homepage = escape_single(homepage),
+        description = description.replace("\"\"\"", "\\\"\\\"\\\""),
+        toolchain_name = escape_single(&plan.build.toolchain.name),
+        toolchain_version = escape_single(&plan.build.toolchain.version),
+        build_dependencies = render_list(build_dependencies),
+        runtime_dependencies = render_list(runtime_dependencies),
+    );
+    crate::eb_style::format_style(&rendered).text
+}
+
+fn render_exts_list(
+    plan: &PackagePlan,
+    materialized: &crate::package::MaterializedProfile,
+    kind: LanguageBundleKind,
+) -> String {
+    let mut items = Vec::new();
+    for extension in &plan.overlay_extensions {
+        items.push(render_plain_ext(&extension.name, &extension.version));
+    }
+    let mut emitted_root = false;
+    for source in &materialized.sources {
+        if let Some(item) = render_ext_from_source(plan, source, kind) {
+            items.push(item);
+            emitted_root = true;
+        }
+    }
+    if !emitted_root {
+        items.push(render_plain_ext(&plan.package.name, &plan.package.version));
+    }
+    render_multiline_list(&items)
+}
+
+fn render_ext_from_source(
+    plan: &PackagePlan,
+    source: &crate::package::SourceArtifact,
+    _kind: LanguageBundleKind,
+) -> Option<String> {
+    let filename = source
+        .filename
+        .clone()
+        .or_else(|| {
+            source.url.as_ref().and_then(|url| {
+                url.rsplit('/')
+                    .next()
+                    .filter(|name| !name.is_empty())
+                    .map(ToString::to_string)
+            })
+        })
+        .unwrap_or_else(|| format!("{}-{}.tar.gz", plan.package.name, plan.package.version));
+    let mut options = Vec::new();
+    if let Some(url) = &source.url {
+        if let Some(base) = url.rsplit_once('/').map(|(base, _)| base) {
+            options.push(format!("'source_urls': ['{}']", escape_single(base)));
+        }
+    }
+    options.push(format!("'sources': ['{}']", escape_single(&filename)));
+    if let Some(sha256) = &source.sha256 {
+        options.push(format!("'checksums': ['{}']", escape_single(sha256)));
+    }
+    Some(format!(
+        "('{}', '{}', {{\n    {},\n}})",
+        escape_single(&plan.package.name),
+        escape_single(&plan.package.version),
+        options.join(",\n    ")
+    ))
+}
+
+fn render_plain_ext(name: &str, version: &str) -> String {
+    format!("('{}', '{}')", escape_single(name), escape_single(version))
 }
 
 /// Prefer conventional EasyBuild key order for common toolchainopts.

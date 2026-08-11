@@ -104,7 +104,7 @@ fn tool_catalog() -> Vec<Value> {
     vec![
         tool_with_optional(
             "eb_package_inspect",
-            "Parse a conda-forge or Spack recipe into a canonical build manifest and planned CycloneDX SBOM.",
+            "Parse a conda-forge, Spack, PyPI, or CRAN recipe into a canonical build manifest and planned CycloneDX SBOM.",
             &[
                 ("source", "string"),
                 ("toolchain_version", "string"),
@@ -136,6 +136,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("easybuild_sources", "array"),
                 ("conda_sources", "array"),
                 ("spack_sources", "array"),
+                ("cargo_sources", "array"),
             ],
         ),
         tool_with_optional(
@@ -399,6 +400,9 @@ fn load_package_source_roots(arguments: &Value) -> Result<PackageSourceRoots, St
         schema_version: 1,
         source_roots: Vec::new(),
     };
+    // Same contract as the CLI: the solve robot is also a discovery root, so a
+    // dependency present there only at another generation becomes a companion
+    // bump instead of an unsatisfiable solve.
     for path in string_array(arguments, "easyconfigs")? {
         roots.push(SourceRootKind::EasyBuild, PathBuf::from(path));
     }
@@ -415,6 +419,9 @@ fn load_package_source_roots(arguments: &Value) -> Result<PackageSourceRoots, St
     }
     for path in string_array(arguments, "spack_sources")? {
         roots.push(SourceRootKind::Spack, PathBuf::from(path));
+    }
+    for path in string_array(arguments, "cargo_sources")? {
+        roots.push(SourceRootKind::Cargo, PathBuf::from(path));
     }
     Ok(roots)
 }
@@ -662,6 +669,9 @@ fn foreign_format(arguments: &Value) -> Result<Option<ForeignFormat>, String> {
         "auto" => Ok(None),
         "conda" | "conda-forge" => Ok(Some(ForeignFormat::CondaForge)),
         "spack" => Ok(Some(ForeignFormat::Spack)),
+        "pypi" => Ok(Some(ForeignFormat::Pypi)),
+        "cran" => Ok(Some(ForeignFormat::Cran)),
+        "cargo" | "crates" | "crates.io" => Ok(Some(ForeignFormat::Cargo)),
         value => Err(format!("unsupported foreign format {value}")),
     }
 }

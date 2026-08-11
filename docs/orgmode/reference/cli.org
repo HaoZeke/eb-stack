@@ -8,7 +8,7 @@ written by package commands are deterministic bundle artifacts.
 
 | Command | Purpose |
 |-
-| ~package inspect~ | Parse conda-forge or Spack into a manifest and planned SBOM |
+| ~package inspect~ | Parse conda-forge, Spack, PyPI, or CRAN into a manifest and planned SBOM |
 | ~package plan~ | Materialize profiles, solve with Resolvo, and emit recipes |
 | ~package bump~ | Retarget an EasyBuild recipe and write the same canonical bundle |
 | ~recipe check~ | Validate metadata and robot dependency availability |
@@ -26,7 +26,7 @@ written by package commands are deterministic bundle artifacts.
 #+begin_src bash
 eb-stack package inspect \
   --source PATH \
-  --format auto|conda-forge|spack \
+  --format auto|conda-forge|spack|pypi|cran \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
   [--package-config PACKAGE.toml]... \
@@ -41,7 +41,7 @@ profiles or emit recipes, so it establishes no claim-ladder rung.
 #+begin_src bash
 eb-stack package plan \
   --source PATH \
-  --format conda-forge|spack \
+  --format conda-forge|spack|pypi|cran \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
   [--package-config PACKAGE.toml]... \
@@ -54,6 +54,7 @@ eb-stack package plan \
   [--easybuild-source DIR]... \
   [--conda-source DIR]... \
   [--spack-source DIR]... \
+  [--cargo-source DIR]... \
   --out-dir BUNDLE
 #+end_src
 
@@ -75,8 +76,8 @@ the count, shape, or completeness is invalid.
 When a direct dependency has no compatible robot candidate, optional closure
 inputs close the hole without inventing versions:
 
-- ~--package-sources~ layers ordered EasyBuild / conda-forge / Spack roots;
-- ~--easybuild-source~, ~--conda-source~, and ~--spack-source~ push roots
+- ~--package-sources~ layers ordered EasyBuild / conda-forge / Spack / Cargo roots;
+- ~--easybuild-source~, ~--conda-source~, ~--spack-source~, and ~--cargo-source~ push roots
   without a TOML file (order is discovery order);
 - ~--package-catalog~ layers explicit foreign or ~easybuild-bump~ providers as
   ordered overrides.

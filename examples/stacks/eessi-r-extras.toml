@@ -1,0 +1,19 @@
+schema_version = 1
+name = "eessi-r-extras"
+
+[toolchain]
+name = "foss"
+version = "2026.1"
+
+# Lock R and CRAN bundles to the versions the target EESSI tree ships.
+# Fill versions from `module --terse avail R R-bundle-CRAN`.
+
+# [[pins]]
+# name = "R"
+# version_requirement = "==4.4.2"
+# mode = "locked"
+#
+# [[pins]]
+# name = "R-bundle-CRAN"
+# version_requirement = "==2025.06"
+# mode = "locked"

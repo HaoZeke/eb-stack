@@ -1,0 +1,10 @@
+{
+  "Package": "jsonlite",
+  "Version": "1.8.8",
+  "Title": "A Simple and Robust JSON Parser and Generator for R",
+  "License": "MIT",
+  "URL": "https://cran.r-project.org/src/contrib/jsonlite_1.8.8.tar.gz",
+  "Depends": ["R (>= 3.1.0)"],
+  "Imports": [],
+  "LinkingTo": []
+}

@@ -859,7 +859,9 @@ fn classify_target_command_failure(target: &BuildTarget, error: &TargetError) ->
     }
     if matches!(
         &target.runtime,
-        TargetRuntime::Podman { command, .. } | TargetRuntime::Docker { command, .. }
+        TargetRuntime::Podman { command, .. }
+            | TargetRuntime::Docker { command, .. }
+            | TargetRuntime::Eessi { command, .. }
             if command == program
     ) {
         return BuildFindingClass::Runtime;

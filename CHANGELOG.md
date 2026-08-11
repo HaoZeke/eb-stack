@@ -4,6 +4,52 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+### Added
+
+- Overlay planning treats existing robot modules as leaves: a `Python`
+  easyconfig that names `binutils` no longer makes `package plan --format
+  pypi` unsatisfiable. `--easyconfigs` is the solve robot only; it does
+  not start package-closure discovery.
+
+- `kind = "eessi"` target runtime: `eessi_container.sh --mode exec` is
+  the install backend for planned PyPI/CRAN overlays. Plan stays on the
+  host. `scripts/eessi-extend-eb.sh` loads `EESSI-extend` and execs `eb`.
+  See `examples/targets/eessi-extend.toml`.
+
+- `exts_list` entries are virtual Resolvo provides of the parent bundle.
+  A requirement for `numpy` is satisfied by `SciPy-bundle` (and the same
+  for `Python-bundle-PyPI` / `R-bundle-CRAN`) instead of failing as a
+  missing easyconfig. Profile locks collapse the provide to the parent so
+  emitted recipes depend on the bundle, not on a fake `numpy` module.
+  Planning `numpy` / `scipy` / `torch` as a PyPI root against a robot
+  that already ships them is an empty delta. Without that provider the
+  plan refuses a pip overlay instead of emitting a `PythonBundle`.
+  Warehouse `requires_dist: null` (live numpy JSON) parses as no extras.
+  A leftover such as `eon-akmc` whose other PyPI deps are not in the
+  robot keeps those names in `exts_list` instead of failing SAT.
+- `--format cargo` reads `Cargo.toml` or crates.io JSON. PyO3/maturin
+  crates emit `PythonPackage` with implicit `Rust`, `maturin`, and
+  `binutils`; other crates emit `Crate`. Host Cargo wrappers
+  (`sccache`, `mold`) are unset. Existing robot Rust modules are leaves.
+  `--cargo-source` / `kind = "cargo"` closes a PyPI leftover that is a
+  crate (for example `readcon`) as a companion module; remaining pure
+  PyPI holes stay `exts_list` extras. Overlay extras prepend the
+  install prefix to `PYTHONPATH` so `pip --no-build-isolation` sees
+  prior extensions and the loaded EESSI modules.
+- `--format pypi` reads Warehouse-shaped JSON or a `requirements.txt` and
+  emits a `PythonBundle` whose `exts_list` is the leftover package, with
+  already-provided extras mapped to the parent bundle.
+- `--format cran` reads a DESCRIPTION file, CRAN JSON, or a package list
+  and emits one `RPackage` recipe with its CRAN dependencies resolved and
+  base-R packages recorded as residuals. The R equivalent of the Python
+  bundle, a `Bundle` with `exts_defaultclass = 'RPackage'` carrying the
+  leftovers in `exts_list`, is not implemented: extras parsed from a CRAN
+  package list become dependencies rather than extension sources. See
+  `docs/orgmode/howto/cran-extend.org`.
+- Example stack policies `examples/stacks/eessi-python-extras.toml` and
+  `examples/stacks/eessi-r-extras.toml` for locking EESSI-shipped
+  scientific Python / R providers.
+
 ## 0.3.0 - 2026-07-21
 
 First public release: package plan/bump/campaign CLI, Resolvo locks, CycloneDX

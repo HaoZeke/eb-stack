@@ -1,0 +1,43 @@
+schema_version = 1
+
+# Install a planned overlay through EESSI-extend inside eessi_container.sh.
+# Plan on the host (`package plan --format pypi|cran`). This target is the
+# install backend: the host eb-stack binary does not need to run in Debian 12.
+#
+# Set exactly one prefix before campaign run, via environment here:
+#   EESSI_USER_INSTALL (default below)
+#   EESSI_PROJECT_INSTALL
+#   EESSI_SITE_INSTALL=1  plus EESSI_SITE_SOFTWARE_PREFIX in the site layer
+#
+# Bind the planned bundle and this install prefix into the container.
+
+[[targets]]
+name = "eessi-extend-user"
+
+[targets.transport]
+kind = "local"
+
+[targets.executor]
+kind = "direct"
+
+[targets.runtime]
+kind = "eessi"
+command = "eessi_container.sh"
+storage = "/tmp/eb-stack-eessi/storage"
+access = "ro"
+extra_bind_paths = [
+  "scripts/eessi-extend-eb.sh:/usr/local/bin/eessi-extend-eb.sh:ro",
+  "/tmp/eb-stack-eessi:/tmp/eb-stack-eessi:rw",
+]
+
+[targets.easybuild]
+command = "/usr/local/bin/eessi-extend-eb.sh"
+robot_paths = []
+work_root = "/tmp/eb-stack-eessi/work"
+tmp_root = "/tmp/eb-stack-eessi/tmp"
+
+[targets.easybuild.environment]
+EESSI_VERSION = "2025.06"
+EESSI_USER_INSTALL = "/tmp/eb-stack-eessi/install"
+WORKING_DIR = "/tmp"
+EASYBUILD_SOURCEPATH = "/tmp/eb-stack-eessi/sources"

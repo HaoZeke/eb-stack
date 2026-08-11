@@ -1,0 +1,10 @@
+name = 'SciPy-bundle'
+version = '2025.06'
+homepage = 'https://example.invalid/scipy-bundle'
+description = "Test bundle that provides numpy and scipy via exts_list"
+toolchain = {'name': 'foss', 'version': '2026.1'}
+exts_list = [
+    ('numpy', '2.3.1'),
+    ('scipy', '1.15.3'),
+]
+moduleclass = 'lib'

@@ -236,6 +236,25 @@ software layer, however green it is locally.
 7. Do not bootstrap a whole toolchain generation into a user prefix to force a
    too-new recipe onto an older EESSI; report the generation gap instead.
 
+## Site Python / R extras
+
+Generate the overlay with `eb-stack package plan --format pypi|cran`, then
+install it through the `eessi` target runtime (not a one-off shell):
+
+```sh
+eb-stack campaign run \
+  --bundle /tmp/site-extra \
+  --config examples/targets/eessi-extend.toml \
+  --target eessi-extend-user \
+  --state /tmp/site-extra.campaign.json
+```
+
+`kind = "eessi"` launches `eessi_container.sh`. `scripts/eessi-extend-eb.sh`
+loads `EESSI-extend` and execs `eb`. Site installs set `EESSI_SITE_INSTALL=1`
+in the target environment layer. `exts_list` on `SciPy-bundle` /
+`Python-bundle-PyPI` / `R-bundle-CRAN` is a Resolvo provide: do not
+reinstall numpy or a CRAN package the stack already ships.
+
 ## Related
 
 - `skills/upstream-pr/SKILL.md` — EasyBuild easyconfigs contribution (separate track)

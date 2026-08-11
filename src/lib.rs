@@ -3,6 +3,8 @@
 
 pub mod artifact_class;
 pub mod campaign;
+pub mod cargo;
+pub mod cran;
 pub mod domain;
 mod eb_emit;
 pub mod eb_maintainer;
@@ -10,6 +12,7 @@ pub mod eb_parse;
 pub mod eb_style;
 /// EasyBuild's built-in `%(...)s` template constants and their expansions.
 pub mod eb_template_constants;
+mod ecosystem;
 mod foreign;
 pub mod hierarchy;
 mod manifest;
@@ -24,6 +27,8 @@ pub mod package_solve;
 pub mod package_sources;
 pub mod package_workflow;
 pub mod patch_evolution;
+pub mod provides;
+pub mod pypi;
 pub mod report;
 pub mod repro_report;
 pub mod resolvo_provider;
@@ -103,6 +108,11 @@ pub use package_workflow::{
     prepare_package_bump, relative_posix, stack_policy_with_bump_overrides, validate_path_segment,
     write_package_bundle, write_package_bundle_into, BumpPackageRequest, NewPackageRequest,
     PackageBundle, PackageWorkflowError, WrittenPackageBundle,
+};
+pub use provides::{
+    existing_language_provider, expand_extension_provides, extension_parent_path,
+    overlay_package_identity, path_is_extension_provide, refuses_pip_overlay,
+    resolve_extension_provider, EXT_PROVIDE_MARKER,
 };
 pub use report::{
     classify_stack_diff, format_build_list, format_stack_diff_markdown, ordered_build_paths,

@@ -6,17 +6,21 @@ use crate::eb_parse::{
     easyconfig_letter_dir, parse_easyconfig_trees, resolve_easyconfig_file, ResolvedDep,
 };
 use crate::foreign::{parse_foreign_path, ForeignFormat};
+use crate::hierarchy::{filter_candidates_in_hierarchy, hierarchy_for_with_tree};
 use crate::manifest::package_plan_from_foreign;
 use crate::package::{
     package_plan_to_cyclonedx, BuildSpec, ConditionExpr, DependencyIntent, DependencyRole,
-    OutputRequest, PackageMetadata, PackageOrigin, PackagePlan, PatchArtifact, ProductProfile,
-    ProfileLock, Provenance, Residual, ResidualSeverity, ResidualStage, SourceArtifact, StackPin,
-    StackPinMode, StackPolicy, PACKAGE_SCHEMA_VERSION,
+    OutputRequest, OverlayExtension, PackageMetadata, PackageOrigin, PackagePlan, PatchArtifact,
+    ProductProfile, ProfileLock, Provenance, Residual, ResidualSeverity, ResidualStage,
+    SourceArtifact, StackPin, StackPinMode, StackPolicy, PACKAGE_SCHEMA_VERSION,
 };
 use crate::package_config::{apply_package_layers, PackageConfigLayer};
 use crate::package_emit::{emit_profile_easyconfigs, EmittedEasyconfig};
-use crate::package_solve::solve_package_profile_with_hierarchy;
+use crate::package_solve::{
+    solve_package_profile_with_hierarchy, unsatisfied_direct_dependencies_with_hierarchy,
+};
 use crate::package_sources::map_source_toolchain_to_target;
+use crate::provides::{existing_language_provider, refuses_pip_overlay};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -214,6 +218,30 @@ pub fn complete_package_bundle_with_hierarchy(
     stack_policy: &StackPolicy,
     hierarchy_fixture: Option<&Path>,
 ) -> Result<PackageBundle, PackageWorkflowError> {
+    if matches!(
+        plan.origin,
+        PackageOrigin::Pypi | PackageOrigin::Cran | PackageOrigin::Cargo
+    ) {
+        if let Some(provider) = already_provided_language_root(&plan, candidates, hierarchy_fixture)
+        {
+            return Ok(already_provided_bundle(plan, sbom, provider));
+        }
+        if refuses_pip_overlay(&plan.package.name) {
+            return Err(PackageWorkflowError::RefusePipOverlay {
+                name: plan.package.name.clone(),
+                version: plan.package.version.clone(),
+            });
+        }
+    }
+    let mut plan = plan;
+    if plan.origin == PackageOrigin::Pypi {
+        promote_pypi_overlay_extras(&mut plan, candidates, stack_policy, hierarchy_fixture)?;
+        inject_overlay_build_tools(&mut plan, candidates);
+        inject_overlay_backend_runtimes(&mut plan, candidates);
+    }
+    if plan.origin == PackageOrigin::Cargo {
+        pin_binutils_to_gcccore(&mut plan, candidates, hierarchy_fixture);
+    }
     let mut locks = Vec::new();
     for output in &plan.outputs {
         locks.push(
@@ -237,6 +265,285 @@ pub fn complete_package_bundle_with_hierarchy(
         locks,
         easyconfigs,
     })
+}
+
+fn promote_pypi_overlay_extras(
+    plan: &mut PackagePlan,
+    candidates: &[crate::domain::Candidate],
+    stack_policy: &StackPolicy,
+    hierarchy_fixture: Option<&Path>,
+) -> Result<(), PackageWorkflowError> {
+    let profile = plan
+        .outputs
+        .first()
+        .map(|output| output.profile.as_str())
+        .unwrap_or("default");
+    let holes = unsatisfied_direct_dependencies_with_hierarchy(
+        plan,
+        profile,
+        &Default::default(),
+        candidates,
+        stack_policy,
+        hierarchy_fixture,
+    )
+    .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?;
+    for hole in holes {
+        if hole.name.eq_ignore_ascii_case("python") || hole.name.eq_ignore_ascii_case("r") {
+            continue;
+        }
+        if refuses_pip_overlay(&hole.name) {
+            continue;
+        }
+        let version = overlay_extension_version(plan, &hole.name).ok_or_else(|| {
+            PackageWorkflowError::OverlayExtraNeedsVersion {
+                name: hole.name.clone(),
+                requirement: hole.version_req.clone(),
+            }
+        })?;
+        for dependency in &mut plan.dependencies {
+            let identity = dependency
+                .eb_name
+                .as_deref()
+                .unwrap_or(dependency.name.as_str());
+            if crate::provides::overlay_package_identity(identity)
+                == crate::provides::overlay_package_identity(&hole.name)
+            {
+                dependency.solver_excluded = true;
+            }
+        }
+        plan.overlay_extensions.push(OverlayExtension {
+            name: hole.name.clone(),
+            version: version.clone(),
+        });
+        plan.residuals.push(Residual {
+            id: format!("pypi-overlay-ext:{}", hole.name),
+            stage: ResidualStage::Resolve,
+            category: "pypi-overlay-ext".into(),
+            severity: ResidualSeverity::Judgment,
+            summary: format!(
+                "{} {} is not in the robot; emit it as a PythonBundle extension",
+                hole.name, version
+            ),
+            evidence: Some(hole.version_req),
+            provenance: None,
+        });
+    }
+    Ok(())
+}
+
+fn pin_binutils_to_gcccore(
+    plan: &mut PackagePlan,
+    candidates: &[crate::domain::Candidate],
+    hierarchy_fixture: Option<&Path>,
+) {
+    let Ok(hierarchy) =
+        hierarchy_for_with_tree(&plan.build.toolchain, hierarchy_fixture, candidates)
+    else {
+        return;
+    };
+    let Some(gcccore) = hierarchy
+        .members
+        .iter()
+        .find(|toolchain| toolchain.name.eq_ignore_ascii_case("GCCcore"))
+        .cloned()
+    else {
+        return;
+    };
+    for dependency in &mut plan.dependencies {
+        if dependency.name.eq_ignore_ascii_case("binutils") {
+            dependency.toolchain = Some(gcccore.clone());
+        }
+    }
+}
+
+fn inject_overlay_build_tools(plan: &mut PackagePlan, candidates: &[crate::domain::Candidate]) {
+    if plan.overlay_extensions.is_empty() {
+        return;
+    }
+    for name in [
+        "CMake",
+        "Meson",
+        "Ninja",
+        "pkgconf",
+        "Rust",
+        "Eigen",
+        "hatchling",
+        "Python-bundle-PyPI",
+    ] {
+        let already = plan.dependencies.iter().any(|dependency| {
+            crate::provides::overlay_package_identity(
+                dependency
+                    .eb_name
+                    .as_deref()
+                    .unwrap_or(dependency.name.as_str()),
+            ) == crate::provides::overlay_package_identity(name)
+        });
+        let available = crate::provides::existing_language_provider(name, candidates).is_some()
+            || candidates.iter().any(|candidate| {
+                crate::provides::overlay_package_identity(&candidate.name)
+                    == crate::provides::overlay_package_identity(name)
+            });
+        if already || !available {
+            continue;
+        }
+        plan.dependencies.push(DependencyIntent {
+            id: format!("dep:overlay-build:{name}"),
+            name: name.to_string(),
+            eb_name: None,
+            constraint: None,
+            toolchain: None,
+            roles: vec![DependencyRole::Build],
+            condition: ConditionExpr::Always,
+            virtual_capability: None,
+            solver_excluded: false,
+            provenance: Vec::new(),
+        });
+    }
+}
+
+/// Install meson-python / hatchling import deps into the overlay prefix.
+///
+/// `pip --no-build-isolation` imports those backends from PYTHONPATH. EESSI
+/// `Python-bundle-PyPI` may ship them as provides, but the hook does not see
+/// the bundle unless the wheel is also in the overlay prefix.
+fn inject_overlay_backend_runtimes(
+    plan: &mut PackagePlan,
+    candidates: &[crate::domain::Candidate],
+) {
+    if plan.overlay_extensions.is_empty() {
+        return;
+    }
+    for name in ["packaging", "pyproject-metadata"] {
+        if plan.overlay_extensions.iter().any(|ext| {
+            crate::provides::overlay_package_identity(&ext.name)
+                == crate::provides::overlay_package_identity(name)
+        }) {
+            continue;
+        }
+        let Some(version) = provided_ext_version(name, candidates) else {
+            continue;
+        };
+        plan.overlay_extensions.insert(
+            0,
+            OverlayExtension {
+                name: name.to_string(),
+                version,
+            },
+        );
+    }
+}
+
+fn provided_ext_version(name: &str, candidates: &[crate::domain::Candidate]) -> Option<String> {
+    let identity = crate::provides::overlay_package_identity(name);
+    let provider = crate::provides::existing_language_provider(name, candidates)?;
+    provider
+        .exts_list
+        .iter()
+        .find(|ext| crate::provides::overlay_package_identity(&ext.name) == identity)
+        .filter(|ext| !ext.version.is_empty())
+        .map(|ext| ext.version.clone())
+}
+
+fn overlay_extension_version(plan: &PackagePlan, name: &str) -> Option<String> {
+    let mut exact = None;
+    let mut fallback = None;
+    for dependency in &plan.dependencies {
+        let identity = dependency
+            .eb_name
+            .as_deref()
+            .unwrap_or(dependency.name.as_str());
+        if crate::provides::overlay_package_identity(identity)
+            != crate::provides::overlay_package_identity(name)
+        {
+            continue;
+        }
+        let Some(version) = version_from_constraint(dependency.constraint.as_deref()) else {
+            continue;
+        };
+        if dependency
+            .constraint
+            .as_deref()
+            .is_some_and(|constraint| constraint.trim().starts_with("=="))
+        {
+            exact = Some(version);
+        } else {
+            fallback = Some(version);
+        }
+    }
+    exact.or(fallback)
+}
+
+fn version_from_constraint(constraint: Option<&str>) -> Option<String> {
+    let constraint = constraint
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    if let Some(exact) = constraint.strip_prefix("==") {
+        let exact = exact.trim();
+        return (!exact.is_empty()).then(|| exact.to_string());
+    }
+    for prefix in [">=", "~=", ">"] {
+        if let Some(rest) = constraint.strip_prefix(prefix) {
+            let token = rest.split([',', ' ']).map(str::trim).find(|part| {
+                !part.is_empty() && part.starts_with(|ch: char| ch.is_ascii_digit())
+            })?;
+            return Some(token.to_string());
+        }
+    }
+    None
+}
+
+fn already_provided_language_root<'a>(
+    plan: &PackagePlan,
+    candidates: &'a [crate::domain::Candidate],
+    hierarchy_fixture: Option<&Path>,
+) -> Option<&'a crate::domain::Candidate> {
+    let admitted =
+        match hierarchy_for_with_tree(&plan.build.toolchain, hierarchy_fixture, candidates) {
+            Ok(hierarchy) => filter_candidates_in_hierarchy(candidates, &hierarchy),
+            Err(_) => return existing_language_provider(&plan.package.name, candidates),
+        };
+    let provider_path = existing_language_provider(&plan.package.name, &admitted)
+        .map(|provider| provider.easyconfig_path.clone())?;
+    candidates
+        .iter()
+        .find(|candidate| candidate.easyconfig_path == provider_path)
+}
+
+fn already_provided_bundle(
+    mut plan: PackagePlan,
+    sbom: Value,
+    provider: &crate::domain::Candidate,
+) -> PackageBundle {
+    let provided_ext = provider.exts_list.iter().find(|ext| {
+        crate::provides::overlay_package_identity(&ext.name)
+            == crate::provides::overlay_package_identity(&plan.package.name)
+    });
+    let provided_version = provided_ext
+        .map(|ext| ext.version.as_str())
+        .unwrap_or(provider.version.as_str());
+    plan.residuals.push(Residual {
+        id: "already-provided".into(),
+        stage: ResidualStage::Resolve,
+        category: "already-provided".into(),
+        severity: ResidualSeverity::Judgment,
+        summary: format!(
+            "{} {} is already provided by {} {} ({} {}); do not emit a pip overlay",
+            plan.package.name,
+            plan.package.version,
+            provider.name,
+            provider.version,
+            plan.package.name,
+            provided_version
+        ),
+        evidence: Some(provider.easyconfig_path.clone()),
+        provenance: None,
+    });
+    PackageBundle {
+        plan,
+        sbom,
+        locks: Vec::new(),
+        easyconfigs: Vec::new(),
+    }
 }
 
 /// The whole new-package path: ingest, layer, solve, emit.
@@ -761,6 +1068,7 @@ fn package_plan_from_easyconfig(
             stack: toolchain.label(),
         }],
         residuals: Vec::new(),
+        overlay_extensions: Vec::new(),
     }
 }
 
@@ -949,6 +1257,9 @@ fn normalize_provenance_path(origin: &PackageOrigin, provenance: &mut Provenance
         PackageOrigin::CondaForge => "conda-forge",
         PackageOrigin::Spack => "spack",
         PackageOrigin::EasyBuild => "easybuild",
+        PackageOrigin::Pypi => "pypi",
+        PackageOrigin::Cran => "cran",
+        PackageOrigin::Cargo => "cargo",
     };
     provenance.span.path = format!("{origin}/{filename}");
 }
@@ -1175,6 +1486,28 @@ pub enum PackageWorkflowError {
     /// No dependency selection satisfies a profile.
     #[error("package profile solve: {0}")]
     Solve(String),
+    /// The foreign root is a compiled scientific package the robot does
+    /// not ship. A `PythonBundle` pip overlay is the wrong install.
+    #[error(
+        "{name} {version} is a compiled scientific package; the robot does not provide it via SciPy-bundle or PyTorch. Do not pip-overlay it with PythonBundle"
+    )]
+    RefusePipOverlay {
+        /// Package that must come from the scientific stack.
+        name: String,
+        /// Version the foreign source asked for.
+        version: String,
+    },
+    /// A leftover PyPI dependency is not in the robot and has no exact
+    /// version, so it cannot become an `exts_list` entry.
+    #[error(
+        "{name} is not in the robot and {requirement:?} is not an exact or lower-bounded version; pin it to emit a PythonBundle extension"
+    )]
+    OverlayExtraNeedsVersion {
+        /// Missing leftover package.
+        name: String,
+        /// Constraint that could not be lowered to a version.
+        requirement: String,
+    },
     /// The easyconfig could not be rendered.
     #[error("EasyBuild recipe emission: {0}")]
     Emit(String),

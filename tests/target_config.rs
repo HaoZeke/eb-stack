@@ -196,6 +196,38 @@ fn public_target_examples_form_a_complete_layered_target() {
 }
 
 #[test]
+fn public_eessi_extend_target_routes_through_eessi_container() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let layer = TargetConfigLayer::from_path(&root.join("examples/targets/eessi-extend.toml"))
+        .expect("eessi-extend target");
+    let targets = resolve_target_layers(&[layer]).expect("resolve eessi-extend");
+    assert_eq!(targets.len(), 1);
+    let target = &targets[0];
+    assert_eq!(target.name, "eessi-extend-user");
+    assert!(matches!(target.runtime, TargetRuntime::Eessi { .. }));
+    assert_eq!(
+        target.easybuild.command,
+        "/usr/local/bin/eessi-extend-eb.sh"
+    );
+    assert_eq!(
+        target
+            .easybuild
+            .environment
+            .get("EESSI_USER_INSTALL")
+            .map(String::as_str),
+        Some("/tmp/eb-stack-eessi/install")
+    );
+    let command = target.build_command("/tmp/eb-stack-eessi/work/bundles/art/art.eb");
+    assert_eq!(command.program, "eessi_container.sh");
+    let joined = command.args.join(" ");
+    assert!(joined.contains("--mode exec"), "{joined}");
+    assert!(joined.contains("--access ro"), "{joined}");
+    assert!(joined.contains("eessi-extend-eb.sh"), "{joined}");
+    assert!(joined.contains("EESSI_USER_INSTALL="), "{joined}");
+    assert!(joined.contains("art.eb"), "{joined}");
+}
+
+#[test]
 fn public_local_podman_target_is_complete_and_abi_isolated() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let layer = TargetConfigLayer::from_path(&root.join("examples/targets/local-podman.toml"))
