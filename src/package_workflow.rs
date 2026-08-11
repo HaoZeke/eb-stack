@@ -663,6 +663,7 @@ fn package_plan_from_easyconfig(
             });
         }
     }
+    let retarget = is_generation_retarget(&recipe.toolchain, toolchain);
     let mut dependencies = Vec::new();
     dependencies.extend(
         recipe
@@ -670,7 +671,13 @@ fn package_plan_from_easyconfig(
             .iter()
             .enumerate()
             .map(|(index, dependency)| {
-                dependency_from_easyconfig(dependency, DependencyRole::Run, index, toolchain)
+                dependency_from_easyconfig(
+                    dependency,
+                    DependencyRole::Run,
+                    index,
+                    toolchain,
+                    retarget,
+                )
             }),
     );
     let runtime_count = dependencies.len();
@@ -685,6 +692,7 @@ fn package_plan_from_easyconfig(
                     DependencyRole::Build,
                     runtime_count + index,
                     toolchain,
+                    retarget,
                 )
             }),
     );
@@ -756,11 +764,30 @@ fn package_plan_from_easyconfig(
     }
 }
 
+/// Whether the plan moves the recipe onto a different toolchain generation.
+///
+/// This decides what a dependency version in the source recipe means. Within
+/// one generation it is the version the recipe was built and tested against,
+/// so a version bump should not regress below it. Across generations it is
+/// only what that generation happened to ship: EasyBuild pins dependencies
+/// exactly and has no notion of a minimum, so carrying the pin over as a floor
+/// invents a requirement the package never stated, and a move onto an older
+/// generation then fails on a floor no released version there can satisfy.
+///
+/// Unconstrained is the fallback, not the ideal. A real lower bound belongs in
+/// the foreign manifest, where a Spack `depends_on` range or a conda-forge
+/// version constraint states what the package actually needs; when the plan
+/// carries one, that constraint is the one to keep.
+fn is_generation_retarget(source: &Toolchain, target: &Toolchain) -> bool {
+    !source.name.eq_ignore_ascii_case(&target.name) || source.version != target.version
+}
+
 fn dependency_from_easyconfig(
     dependency: &ResolvedDep,
     role: DependencyRole,
     index: usize,
     target_toolchain: &Toolchain,
+    retarget: bool,
 ) -> DependencyIntent {
     let external = dependency
         .toolchain
@@ -770,7 +797,10 @@ fn dependency_from_easyconfig(
         id: format!("easybuild:{index}:{}", dependency.name),
         name: dependency.name.clone(),
         eb_name: Some(dependency.name.clone()),
-        constraint: Some(format!(">={}", dependency.version)),
+        // Unconstrained across a retarget: hierarchy filtering keeps the
+        // candidate set to the target generation and prefer_newer picks within
+        // it, which is the version that generation ships.
+        constraint: (!retarget).then(|| format!(">={}", dependency.version)),
         toolchain: dependency.toolchain.as_ref().map(|source_toolchain| {
             map_source_toolchain_to_target(Some(source_toolchain), target_toolchain, None)
         }),

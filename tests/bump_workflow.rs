@@ -407,3 +407,128 @@ fn strict_patches_fails_on_a_version_pinned_patch_without_sibling_evidence() {
         "error names the patch: {error}"
     );
 }
+
+/// Moving a recipe onto an older generation must not carry the newer
+/// generation's dependency pins over as floors. QMCPACK 4.3.0 at foss/2026.1
+/// pins Boost 1.90.0 because that is what 2026.1 ships; retargeting it onto
+/// foss/2025a, where the newest Boost is 1.88.0, used to fail the solve with
+/// "unresolved dependency Boost >=1.90.0" even though QMCPACK itself asks for
+/// 1.70.0.
+#[test]
+fn easybuild_bump_onto_an_older_generation_drops_the_source_generation_pins() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Alpha-1.0-foss-2026.1.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'Alpha'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+         toolchain = {'name': 'foss', 'version': '2026.1'}\n\
+         sources = ['alpha-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [('RuntimeLib', '1.90.0')]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    fs::write(
+        robot.join("RuntimeLib-1.88.0-foss-2025a.eb"),
+        "easyblock = 'ConfigureMake'\nname = 'RuntimeLib'\nversion = '1.88.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Older generation candidate'\n\
+         toolchain = {'name': 'foss', 'version': '2025a'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'lib'\n",
+    )
+    .expect("older generation candidate");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2025a".into(),
+    };
+
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: None,
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+    })
+    .expect("retarget onto the older generation");
+    let dependency = bundle.locks[0]
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "RuntimeLib")
+        .expect("RuntimeLib lock");
+    assert_eq!(dependency.version, "1.88.0");
+    assert_eq!(dependency.toolchain.version, "2025a");
+}
+
+/// The floor still applies when the generation does not move: a plain version
+/// bump within one generation must not silently regress a dependency.
+#[test]
+fn easybuild_bump_within_one_generation_keeps_the_dependency_floor() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Alpha-1.0-foss-2025a.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'Alpha'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+         toolchain = {'name': 'foss', 'version': '2025a'}\n\
+         sources = ['alpha-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [('RuntimeLib', '2.0')]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    for version in ["1.0", "2.0"] {
+        fs::write(
+            robot.join(format!("RuntimeLib-{version}-foss-2025a.eb")),
+            format!(
+                "easyblock = 'ConfigureMake'\nname = 'RuntimeLib'\nversion = '{version}'\n\
+                 homepage = 'https://example.invalid/'\ndescription = 'Candidate'\n\
+                 toolchain = {{'name': 'foss', 'version': '2025a'}}\n\
+                 sources = []\nchecksums = []\nmoduleclass = 'lib'\n"
+            ),
+        )
+        .expect("candidate");
+    }
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2025a".into(),
+    };
+
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: Some("1.1".into()),
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+    })
+    .expect("same generation bump");
+    let dependency = bundle.locks[0]
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "RuntimeLib")
+        .expect("RuntimeLib lock");
+    assert_eq!(dependency.version, "2.0");
+}

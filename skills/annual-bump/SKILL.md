@@ -25,6 +25,14 @@ recipe with a foreign archive of a different artifact identity.
 
 The source recipe provides dependency floors. The target robot trees provide candidates. Resolvo chooses one hierarchy-compatible closure. Do not bypass this by manually copying target dependency versions into a standalone output file.
 
+Those floors hold only within one generation. A dependency version in an easyconfig is an exact pin for the generation the recipe was written against, and EasyBuild has no notion of a minimum, so a pin carried across generations states a requirement the package never made. `package bump` keeps the floors for a version bump inside one generation and drops them when the toolchain moves, leaving hierarchy filtering and `prefer_newer` to pick what the target generation ships. Without that, a move onto an older generation fails on a floor no released version there can satisfy.
+
+Dropping the floor is the fallback, not the answer. The real lower bound lives in the foreign manifest, and that is where to get it when the retarget matters:
+
+- run `package inspect --format spack` or `--format conda` on the upstream Spack `package.py` or conda-forge recipe for the same package, and read the `constraint` fields in `package.plan.json`; they keep the `when` conditions and the source line each bound came from;
+- failing that, read the bound out of the project's own build system (`find_package(Foo x.y REQUIRED)`, a `pyproject.toml` requirement) and record it in package policy as a `[[dependencies.requirements]]` entry with a `constraint`, which is a real package constraint rather than a site preference;
+- say in the PR or campaign note which of the two the bound came from. "The older generation ships an older version" is not evidence that the older version is enough.
+
 ## Run a toolchain bump
 
 ```sh
