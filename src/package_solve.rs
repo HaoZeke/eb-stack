@@ -9,6 +9,7 @@ use crate::package::{
     materialize_profile, DependencyRole, LockedDependency, PackageOrigin, PackagePlan,
     ProfileEnvironment, ProfileLock, StackPolicy, PROFILE_LOCK_SCHEMA_VERSION,
 };
+use crate::provides::{expand_extension_provides, resolve_extension_provider};
 use crate::resolvo_provider::solve_curated_with_stack_policy;
 use crate::version::matches_req;
 use std::collections::{BTreeMap, HashSet, VecDeque};
@@ -77,6 +78,7 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
         .map_err(|error| ProfileSolveError::Resolve(error.to_string()))?;
     let mut admitted = filter_candidates_in_hierarchy(candidates, &hierarchy);
     admit_stack_pin_closures(candidates, &mut admitted, stack_policy);
+    admitted = expand_extension_provides(&admitted);
 
     let mut holes = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -195,6 +197,7 @@ pub fn solve_package_profile_with_hierarchy(
         .map_err(|error| ProfileSolveError::Resolve(error.to_string()))?;
     let mut original_candidates = filter_candidates_in_hierarchy(candidates, &hierarchy);
     admit_stack_pin_closures(candidates, &mut original_candidates, stack_policy);
+    original_candidates = expand_extension_provides(&original_candidates);
     original_candidates.retain(|candidate| {
         !(implicit_easybuild_dependencies.contains(&candidate.name)
             && is_system_toolchain(&candidate.toolchain))
@@ -233,6 +236,7 @@ pub fn solve_package_profile_with_hierarchy(
         .map_err(ProfileSolveError::Resolve)?;
 
     let mut dependencies = Vec::new();
+    let mut seen_providers = HashSet::new();
     for (name, build) in direct_roles {
         let selected = result
             .selected
@@ -243,12 +247,20 @@ pub fn solve_package_profile_with_hierarchy(
             .iter()
             .find(|candidate| candidate.easyconfig_path == selected.easyconfig_path)
             .unwrap_or(selected);
+        let provider = resolve_extension_provider(selected, &result.selected);
+        let provider = original_candidates
+            .iter()
+            .find(|candidate| candidate.easyconfig_path == provider.easyconfig_path)
+            .unwrap_or(provider);
+        if !seen_providers.insert(provider.name.clone()) {
+            continue;
+        }
         dependencies.push(LockedDependency {
-            name,
-            version: selected.version.clone(),
-            versionsuffix: selected.versionsuffix.clone(),
-            toolchain: selected.toolchain.clone(),
-            easyconfig_path: selected.easyconfig_path.clone(),
+            name: provider.name.clone(),
+            version: provider.version.clone(),
+            versionsuffix: provider.versionsuffix.clone(),
+            toolchain: provider.toolchain.clone(),
+            easyconfig_path: provider.easyconfig_path.clone(),
             build,
         });
     }

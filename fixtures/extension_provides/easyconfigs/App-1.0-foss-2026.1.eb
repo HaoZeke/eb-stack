@@ -1,0 +1,9 @@
+name = 'App'
+version = '1.0'
+homepage = 'https://example.invalid/app'
+description = "Depends on numpy, which only exists as a SciPy-bundle extension"
+toolchain = {'name': 'foss', 'version': '2026.1'}
+dependencies = [
+    ('numpy', '2.3.1'),
+]
+moduleclass = 'tools'

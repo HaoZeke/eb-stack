@@ -81,7 +81,7 @@ impl EbProvider {
             validate_stack_policy(policy, stack)?;
         }
 
-        let candidates: Vec<Candidate> = candidates_in
+        let filtered: Vec<Candidate> = candidates_in
             .iter()
             .filter(|c| {
                 (curated_toolchains
@@ -94,6 +94,7 @@ impl EbProvider {
             })
             .cloned()
             .collect();
+        let candidates = crate::provides::expand_extension_provides(&filtered);
 
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, c) in candidates.iter().enumerate() {
