@@ -363,19 +363,32 @@ fn inject_overlay_build_tools(plan: &mut PackagePlan, candidates: &[crate::domai
     if plan.overlay_extensions.is_empty() && !meson {
         return;
     }
-    for name in [
-        "CMake",
-        "Meson",
-        "Ninja",
-        "pkgconf",
-        "Rust",
-        "Eigen",
-        "quill",
-        "cbindgen",
-        "cargo-c",
-        "hatchling",
-        "Python-bundle-PyPI",
-    ] {
+    let names: &[&str] = if meson {
+        &[
+            "CMake",
+            "Meson",
+            "Ninja",
+            "pkgconf",
+            "Rust",
+            "Eigen",
+            "quill",
+            "cbindgen",
+            "cargo-c",
+            "hatchling",
+            "Python-bundle-PyPI",
+        ]
+    } else {
+        &[
+            "CMake",
+            "Meson",
+            "Ninja",
+            "pkgconf",
+            "Rust",
+            "hatchling",
+            "Python-bundle-PyPI",
+        ]
+    };
+    for name in names {
         let already = plan.dependencies.iter().any(|dependency| {
             crate::provides::overlay_package_identity(
                 dependency

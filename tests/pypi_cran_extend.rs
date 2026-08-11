@@ -565,4 +565,9 @@ fn plan_eon_akmc_closes_readcon_from_cargo_source() {
         "numpy still maps to SciPy-bundle:\n{}",
         recipe.text
     );
+    assert!(
+        !recipe.text.contains("quill") && !recipe.text.contains("cbindgen"),
+        "non-meson leftovers must not take meson wrap natives:\n{}",
+        recipe.text
+    );
 }
