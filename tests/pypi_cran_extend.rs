@@ -172,6 +172,14 @@ fn plan_cran_emits_a_single_r_package() {
         "R must be locked even when its easyconfig names binutils: {:?}",
         bundle.locks[0].dependencies
     );
+    // Pins the current shape rather than the intended one: CRAN emits a single
+    // RPackage, not the Bundle with exts_defaultclass = 'RPackage' the R side
+    // of the bundle story needs. Flip this assertion when that lands.
+    assert!(
+        !recipe.text.contains("exts_list"),
+        "CRAN does not emit an exts_list yet:\n{}",
+        recipe.text
+    );
 }
 
 fn numpy_robot() -> PathBuf {

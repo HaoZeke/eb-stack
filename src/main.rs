@@ -855,8 +855,17 @@ fn load_package_source_roots(args: &PackagePlanArgs) -> Result<PackageSourceRoot
         schema_version: 1,
         source_roots: Vec::new(),
     };
-    // `--easyconfigs` is the solve robot, not a closure discovery root.
-    // Closure discovery uses `--package-sources` / `--easybuild-source`.
+    // `--easyconfigs` is both the solve robot and a closure discovery root.
+    // A dependency that exists there only at another generation is a hole the
+    // closure planner fills with a companion bump, which is what
+    // package_plan_reuses_robot_roots_for_cross_generation_bumps pins. Dropping
+    // it turns that case into an unsatisfiable solve instead. Separating the
+    // two roles is defensible, but it is a contract change: retire the test and
+    // say so in the CLI reference in the same commit, or overlay planning
+    // silently loses cross-generation companions.
+    for path in &args.easyconfigs {
+        roots.push(SourceRootKind::EasyBuild, path.clone());
+    }
     for path in &args.package_sources {
         let layer = PackageSourceRoots::from_path(path)
             .with_context(|| format!("load package sources {}", path.display()))?;

@@ -212,7 +212,14 @@ pub fn solve_package_profile_with_hierarchy(
         // requirements because those are what the new recipe will declare.
         candidate.builddependencies.clear();
         if !candidate.is_extension_provide() {
-            candidate.dependencies.clear();
+            // Everything the root does not itself ask for goes: those are the
+            // module's own already-satisfied internals. What the root asks for
+            // stays, because two requirements on one package are a real
+            // conflict and dropping the module's side would let an
+            // unsatisfiable solve pass as a plan.
+            candidate
+                .dependencies
+                .retain(|dependency| direct_roles.contains_key(&dependency.name));
         }
     }
     scope_cross_generation_pin_closures(&mut universe, stack_policy, &hierarchy);

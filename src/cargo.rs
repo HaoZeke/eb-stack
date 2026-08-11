@@ -5,6 +5,7 @@
 //! (`PythonPackage` when it binds Python via PyO3/maturin, otherwise
 //! `Crate`). The adapter never invents a SHA-256.
 
+use crate::ecosystem::nonempty;
 use crate::foreign::{
     ForeignDep, ForeignError, ForeignFormat, ForeignRecipe, ForeignResidual, ForeignSource,
 };
@@ -38,19 +39,19 @@ fn parse_cargo_toml(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let summary = toml_string(package, "description");
     let license = toml_string(package, "license");
     let python = is_python_crate(&value);
-    recipe(
-        name,
+    recipe(CrateFields {
+        raw_name: name,
         version,
         homepage,
         summary,
         license,
-        None,
-        None,
-        None,
+        source_url: None,
+        source_filename: None,
+        sha256: None,
         python,
-        cargo_dep_names(&value),
-        "parsed from Cargo.toml",
-    )
+        crate_deps: cargo_dep_names(&value),
+        note: "parsed from Cargo.toml",
+    })
 }
 
 fn parse_crates_io_json(text: &str) -> Result<ForeignRecipe, ForeignError> {
@@ -80,19 +81,19 @@ fn parse_crates_io_json(text: &str) -> Result<ForeignRecipe, ForeignError> {
             .keys()
             .any(|feature| feature.contains("pyo3") || feature.contains("python"))
     });
-    recipe(
-        doc.krate.name,
-        version.num.clone(),
-        nonempty(doc.krate.homepage).or_else(|| nonempty(doc.krate.repository)),
-        nonempty(doc.krate.description),
-        None,
-        Some(url),
-        Some(filename),
-        nonempty(version.checksum.clone()),
+    recipe(CrateFields {
+        raw_name: doc.krate.name,
+        version: version.num.clone(),
+        homepage: nonempty(doc.krate.homepage).or_else(|| nonempty(doc.krate.repository)),
+        summary: nonempty(doc.krate.description),
+        license: None,
+        source_url: Some(url),
+        source_filename: Some(filename),
+        sha256: nonempty(version.checksum.clone()),
         python,
-        Vec::new(),
-        "parsed from crates.io JSON",
-    )
+        crate_deps: Vec::new(),
+        note: "parsed from crates.io JSON",
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,7 +135,12 @@ struct CratesIoVersion {
     features: BTreeMap<String, Vec<String>>,
 }
 
-fn recipe(
+/// One crate's metadata, from Cargo.toml or from the crates.io index.
+///
+/// The two inputs describe the same thing with different fields present, so
+/// they meet here rather than in an eleven-argument call whose order is the
+/// only thing keeping the strings apart.
+struct CrateFields<'a> {
     raw_name: String,
     version: String,
     homepage: Option<String>,
@@ -145,8 +151,23 @@ fn recipe(
     sha256: Option<String>,
     python: bool,
     crate_deps: Vec<String>,
-    note: &str,
-) -> Result<ForeignRecipe, ForeignError> {
+    note: &'a str,
+}
+
+fn recipe(fields: CrateFields<'_>) -> Result<ForeignRecipe, ForeignError> {
+    let CrateFields {
+        raw_name,
+        version,
+        homepage,
+        summary,
+        license,
+        source_url,
+        source_filename,
+        sha256,
+        python,
+        crate_deps,
+        note,
+    } = fields;
     let mut residuals = Vec::new();
     let name = if python && raw_name.eq_ignore_ascii_case("readcon-core") {
         residuals.push(ForeignResidual {
@@ -267,13 +288,6 @@ fn toml_string(value: &toml::Value, key: &str) -> Option<String> {
         .get(key)
         .and_then(toml::Value::as_str)
         .map(ToString::to_string)
-}
-
-fn nonempty(value: Option<String>) -> Option<String> {
-    value.and_then(|text| {
-        let text = text.trim();
-        (!text.is_empty()).then(|| text.to_string())
-    })
 }
 
 #[cfg(test)]
