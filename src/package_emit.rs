@@ -224,6 +224,24 @@ fn render_easyconfig(
             },
         );
     }
+    if plan.origin == crate::package::PackageOrigin::Cran {
+        return render_language_bundle(
+            plan,
+            materialized,
+            LanguageBundleKind::R,
+            BundleFragments {
+                easyblock_line: &easyblock_line,
+                homepage,
+                description,
+                versionsuffix_line: &versionsuffix_line,
+                toolchain_options_line: &toolchain_options_line,
+                easyconfig_parameter_lines: &easyconfig_parameter_lines,
+                build_dependencies: &build_dependencies,
+                runtime_dependencies: &runtime_dependencies,
+                moduleclass,
+            },
+        );
+    }
 
     let rendered = format!(
         "{easyblock_line}name = '{name}'\n\
@@ -260,6 +278,7 @@ moduleclass = '{moduleclass}'\n",
 #[derive(Clone, Copy)]
 enum LanguageBundleKind {
     Python,
+    R,
 }
 
 /// The rendered fragments a bundle recipe is assembled from.
@@ -296,21 +315,24 @@ fn render_language_bundle(
         runtime_dependencies,
         moduleclass,
     } = fragments;
-    let easyblock_line = if easyblock_line.is_empty() {
-        match kind {
-            LanguageBundleKind::Python => "easyblock = 'PythonBundle'\n\n".to_string(),
+    let easyblock_line = match kind {
+        LanguageBundleKind::R => "easyblock = 'Bundle'\n\n".to_string(),
+        LanguageBundleKind::Python if easyblock_line.is_empty() => {
+            "easyblock = 'PythonBundle'\n\n".to_string()
         }
-    } else {
-        easyblock_line.to_string()
+        LanguageBundleKind::Python => easyblock_line.to_string(),
     };
-    let default_class = String::new();
+    let default_class = match kind {
+        LanguageBundleKind::Python => String::new(),
+        LanguageBundleKind::R => "exts_defaultclass = 'RPackage'\n\n".to_string(),
+    };
     let moduleclass = if plan.build.moduleclass.is_some() {
         moduleclass
     } else {
         "lang"
     };
     let exts = render_exts_list(plan, materialized, kind);
-    let default_ext_opts = overlay_exts_default_options(plan);
+    let default_ext_opts = overlay_exts_default_options(plan, kind);
     let rendered = format!(
         "{easyblock_line}name = '{name}'\n\
 version = '{version}'\n\
@@ -402,7 +424,10 @@ fn render_ext_from_source(
     ))
 }
 
-fn overlay_exts_default_options(plan: &PackagePlan) -> String {
+fn overlay_exts_default_options(plan: &PackagePlan, kind: LanguageBundleKind) -> String {
+    if matches!(kind, LanguageBundleKind::R) {
+        return String::new();
+    }
     if plan.overlay_extensions.is_empty() && !mesonpy_backend(plan) {
         return String::new();
     }

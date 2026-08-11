@@ -15,6 +15,7 @@ pub mod eb_template_constants;
 mod ecosystem;
 mod foreign;
 pub mod hierarchy;
+pub mod luarocks;
 mod manifest;
 pub mod mcp;
 pub mod miner;
@@ -29,11 +30,14 @@ pub mod package_workflow;
 pub mod patch_evolution;
 pub mod provides;
 pub mod pypi;
+pub mod raku;
+pub mod registry;
 pub mod report;
 pub mod repro_report;
 pub mod resolvo_provider;
 pub mod sbom;
 pub mod select;
+pub mod source_tree;
 mod spack_syntax;
 pub mod target;
 pub mod version;
@@ -113,6 +117,10 @@ pub use provides::{
     existing_language_provider, expand_extension_provides, extension_parent_path,
     overlay_package_identity, path_is_extension_provide, refuses_pip_overlay,
     resolve_extension_provider, EXT_PROVIDE_MARKER,
+};
+pub use registry::{
+    is_registry_name, materialize_pypi, materialize_registry_name, MapClient, MaterializedIngest,
+    RegistryClient, RegistryError, UreqClient,
 };
 pub use report::{
     classify_stack_diff, format_build_list, format_stack_diff_markdown, ordered_build_paths,

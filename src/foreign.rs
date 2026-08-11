@@ -67,6 +67,10 @@ pub enum ForeignFormat {
     Cran,
     /// A Cargo.toml or crates.io JSON document.
     Cargo,
+    /// A LuaRocks `*.rockspec`.
+    Luarocks,
+    /// A Raku `META6.json`.
+    Raku,
 }
 
 impl ForeignFormat {
@@ -78,6 +82,8 @@ impl ForeignFormat {
             Self::Pypi => "pypi",
             Self::Cran => "cran",
             Self::Cargo => "cargo",
+            Self::Luarocks => "luarocks",
+            Self::Raku => "raku",
         }
     }
 }
@@ -310,6 +316,12 @@ pub fn detect_foreign_format(path: &Path) -> Option<ForeignFormat> {
     {
         return Some(ForeignFormat::Cargo);
     }
+    if name.ends_with(".rockspec") {
+        return Some(ForeignFormat::Luarocks);
+    }
+    if name == "meta6.json" {
+        return Some(ForeignFormat::Raku);
+    }
     None
 }
 
@@ -321,6 +333,8 @@ pub fn parse_foreign_str(format: ForeignFormat, text: &str) -> Result<ForeignRec
         ForeignFormat::Pypi => crate::pypi::parse_pypi_str(text),
         ForeignFormat::Cran => crate::cran::parse_cran_str(text),
         ForeignFormat::Cargo => crate::cargo::parse_cargo_str(text),
+        ForeignFormat::Luarocks => crate::luarocks::parse_luarocks_str(text),
+        ForeignFormat::Raku => crate::raku::parse_raku_str(text),
     }
 }
 
@@ -2271,6 +2285,14 @@ about:
         assert_eq!(
             detect_foreign_format(Path::new("Cargo.toml")),
             Some(ForeignFormat::Cargo)
+        );
+        assert_eq!(
+            detect_foreign_format(Path::new("lfs-1.8.0-1.rockspec")),
+            Some(ForeignFormat::Luarocks)
+        );
+        assert_eq!(
+            detect_foreign_format(Path::new("META6.json")),
+            Some(ForeignFormat::Raku)
         );
         assert_eq!(detect_foreign_format(Path::new("foo.eb")), None);
     }

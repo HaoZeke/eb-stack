@@ -49,12 +49,17 @@ All notable changes to this project are documented here.
   emits a `PythonBundle` whose `exts_list` is the leftover package, with
   already-provided extras mapped to the parent bundle.
 - `--format cran` reads a DESCRIPTION file, CRAN JSON, or a package list
-  and emits one `RPackage` recipe with its CRAN dependencies resolved and
-  base-R packages recorded as residuals. The R equivalent of the Python
-  bundle, a `Bundle` with `exts_defaultclass = 'RPackage'` carrying the
-  leftovers in `exts_list`, is not implemented: extras parsed from a CRAN
-  package list become dependencies rather than extension sources. See
+  and emits a `Bundle` with `exts_defaultclass = 'RPackage'` whose
+  `exts_list` is the leftover. Base-R packages are residuals. See
   `docs/orgmode/howto/cran-extend.org`.
+- Name-mode ingest (`--source eon-akmc` with `--format pypi`) fetches
+  Warehouse / CRAN / crates.io once and writes `ingest/<format>/`. SAT
+  and tests only read that dump. A neighbouring sdist tree overlays
+  `pyproject.toml` and `subprojects/*.wrap` as build deps; undeclared
+  Python imports are residuals, not silent SAT edges.
+- `--format luarocks` reads a `*.rockspec`. `--format raku` reads
+  `META6.json`. Both lower to `ForeignRecipe` and the same Resolvo
+  path. They are not new solvers.
 - Example stack policies `examples/stacks/eessi-python-extras.toml` and
   `examples/stacks/eessi-r-extras.toml` for locking EESSI-shipped
   scientific Python / R providers.

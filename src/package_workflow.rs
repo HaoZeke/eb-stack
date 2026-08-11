@@ -115,8 +115,11 @@ pub fn inspect_new_package(
     toolchain: &Toolchain,
     package_layers: &[PackageConfigLayer],
 ) -> Result<(PackagePlan, Value), PackageWorkflowError> {
-    let recipe = parse_foreign_path(source, format)
+    let mut recipe = parse_foreign_path(source, format)
         .map_err(|error| PackageWorkflowError::Foreign(error.to_string()))?;
+    if recipe.format == ForeignFormat::Pypi {
+        crate::source_tree::enrich_from_source_tree(&mut recipe, source);
+    }
     let mut plan = package_plan_from_foreign(&recipe, toolchain);
     materialize_foreign_local_patches(&mut plan, source)?;
     if !package_layers.is_empty() {
@@ -234,8 +237,10 @@ pub fn complete_package_bundle_with_hierarchy(
         }
     }
     let mut plan = plan;
-    if plan.origin == PackageOrigin::Pypi {
+    if plan.origin == PackageOrigin::Pypi || plan.origin == PackageOrigin::Cran {
         promote_pypi_overlay_extras(&mut plan, candidates, stack_policy, hierarchy_fixture)?;
+    }
+    if plan.origin == PackageOrigin::Pypi {
         inject_overlay_build_tools(&mut plan, candidates);
     }
     if plan.origin == PackageOrigin::Cargo {
@@ -1222,6 +1227,8 @@ fn normalize_provenance_path(origin: &PackageOrigin, provenance: &mut Provenance
         PackageOrigin::Pypi => "pypi",
         PackageOrigin::Cran => "cran",
         PackageOrigin::Cargo => "cargo",
+        PackageOrigin::Luarocks => "luarocks",
+        PackageOrigin::Raku => "raku",
     };
     provenance.span.path = format!("{origin}/{filename}");
 }

@@ -286,6 +286,10 @@ pub enum PackageOrigin {
     Cran,
     /// A Cargo.toml or crates.io JSON document.
     Cargo,
+    /// A LuaRocks rockspec.
+    Luarocks,
+    /// A Raku META6.json.
+    Raku,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1327,5 +1331,7 @@ fn origin_name(origin: &PackageOrigin) -> &'static str {
         PackageOrigin::Pypi => "pypi",
         PackageOrigin::Cran => "cran",
         PackageOrigin::Cargo => "cargo",
+        PackageOrigin::Luarocks => "luarocks",
+        PackageOrigin::Raku => "raku",
     }
 }

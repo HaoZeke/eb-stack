@@ -672,6 +672,8 @@ fn foreign_format(arguments: &Value) -> Result<Option<ForeignFormat>, String> {
         "pypi" => Ok(Some(ForeignFormat::Pypi)),
         "cran" => Ok(Some(ForeignFormat::Cran)),
         "cargo" | "crates" | "crates.io" => Ok(Some(ForeignFormat::Cargo)),
+        "luarocks" | "lua" => Ok(Some(ForeignFormat::Luarocks)),
+        "raku" | "perl6" => Ok(Some(ForeignFormat::Raku)),
         value => Err(format!("unsupported foreign format {value}")),
     }
 }

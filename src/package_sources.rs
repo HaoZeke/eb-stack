@@ -545,6 +545,8 @@ impl PackageSourceIndex {
             ForeignFormat::Pypi => format!("PyPI metadata parse: {error}"),
             ForeignFormat::Cran => format!("CRAN metadata parse: {error}"),
             ForeignFormat::Cargo => format!("Cargo metadata parse: {error}"),
+            ForeignFormat::Luarocks => format!("LuaRocks rockspec parse: {error}"),
+            ForeignFormat::Raku => format!("Raku META6 parse: {error}"),
         };
         self.parse_failures.push(SourceParseFailure {
             name,
@@ -620,7 +622,9 @@ fn infer_package_name_from_path(path: &Path, root: &Path, format: ForeignFormat)
         | ForeignFormat::Spack
         | ForeignFormat::Pypi
         | ForeignFormat::Cran
-        | ForeignFormat::Cargo => parent,
+        | ForeignFormat::Cargo
+        | ForeignFormat::Luarocks
+        | ForeignFormat::Raku => parent,
     };
     let package_dir = if package_dir == root {
         root.file_name()?.to_str()?

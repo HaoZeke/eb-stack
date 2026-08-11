@@ -131,6 +131,8 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             ForeignFormat::Pypi => PackageOrigin::Pypi,
             ForeignFormat::Cran => PackageOrigin::Cran,
             ForeignFormat::Cargo => PackageOrigin::Cargo,
+            ForeignFormat::Luarocks => PackageOrigin::Luarocks,
+            ForeignFormat::Raku => PackageOrigin::Raku,
         },
         package: PackageMetadata {
             name: recipe.name.clone(),

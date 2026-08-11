@@ -72,10 +72,13 @@ plan; do not ~pip install~ the crate into the overlay.
 Resolvo picks every robot-provided name. Extra site packages that Warehouse
 omits (measured ~PyYAML~ for ~import eon~) go in the ingest as a second
 Warehouse object in a JSON array, or as a later ~requirements.txt~ line.
-Meson wrap natives (~quill~, ~cbindgen~, ~Eigen~) go in
-~build_system.requires~ (or a package-config build requirement). Do not
+A registry name (~--source eon-akmc~) fetches Warehouse once and writes
+~ingest/pypi/<name>-<version>.json~. Replan from that dump; SAT does not
+hit the network. Meson wrap natives come from ~subprojects/*.wrap~ in
+the sdist tree next to the dump (or from ~build_system.requires~). Do not
 edit the emitted ~.eb~ to add those names: put the modules in
-~--easyconfigs~ and let the lock select them. A PEP 518 ~build_system~
+~--easyconfigs~ and let the lock select them. An undeclared ~import~ is
+a residual, not a silent SAT edge. A PEP 518 ~build_system~
 block with ~build-backend = mesonpy~ adds the listed build requirements
 and emits ~wrap_mode=default~ plus the same cargo-on-EESSI isolation
 prelude used by Cargo leftovers: drop host rustc wrappers, set

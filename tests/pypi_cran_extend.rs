@@ -5,8 +5,8 @@ use eb_stack::package_catalog::resolve_package_catalog_layers;
 use eb_stack::package_closure::plan_package_closure_with_sources;
 use eb_stack::package_sources::{PackageSourceRoots, SourceRootKind};
 use eb_stack::{
-    detect_foreign_format, inspect_new_package, parse_foreign_path, plan_new_package,
-    ForeignFormat, NewPackageRequest, Toolchain,
+    detect_foreign_format, inspect_new_package, materialize_pypi, parse_foreign_path,
+    plan_new_package, ForeignFormat, MapClient, NewPackageRequest, Toolchain,
 };
 use std::path::{Path, PathBuf};
 
@@ -53,6 +53,39 @@ fn detect_pypi_and_cran_paths() {
         detect_foreign_format(Path::new("Cargo.toml")),
         Some(ForeignFormat::Cargo)
     );
+    assert_eq!(
+        detect_foreign_format(Path::new("lfs.rockspec")),
+        Some(ForeignFormat::Luarocks)
+    );
+    assert_eq!(
+        detect_foreign_format(Path::new("META6.json")),
+        Some(ForeignFormat::Raku)
+    );
+}
+
+#[test]
+fn name_mode_fetch_writes_a_dump_replay_parses() {
+    let mut client = MapClient::default();
+    client.pages.insert(
+        "https://pypi.org/pypi/demo/json".into(),
+        br#"{
+          "info": {
+            "name": "demo",
+            "version": "1.0.0",
+            "requires_dist": ["soupsieve>=1.6"]
+          },
+          "urls": []
+        }"#
+        .to_vec(),
+    );
+    let tmp = tempfile::tempdir().expect("temp");
+    let ingest = materialize_pypi("demo", &client, "https://pypi.org", tmp.path()).expect("fetch");
+    let recipe = parse_foreign_path(&ingest.dump, Some(ForeignFormat::Pypi)).expect("replay");
+    assert_eq!(recipe.name, "demo");
+    assert!(recipe
+        .dependencies
+        .iter()
+        .any(|dep| dep.name == "soupsieve"));
 }
 
 #[test]
@@ -153,7 +186,8 @@ fn plan_cran_emits_a_single_r_package() {
     let bundle = plan_new_package(&request).expect("plan cran");
     let recipe = &bundle.easyconfigs[0];
     assert!(
-        recipe.text.contains("easyblock = 'RPackage'"),
+        recipe.text.contains("easyblock = 'Bundle'")
+            && recipe.text.contains("exts_defaultclass = 'RPackage'"),
         "{}",
         recipe.text
     );
@@ -175,12 +209,9 @@ fn plan_cran_emits_a_single_r_package() {
         "R must be locked even when its easyconfig names binutils: {:?}",
         bundle.locks[0].dependencies
     );
-    // Pins the current shape rather than the intended one: CRAN emits a single
-    // RPackage, not the Bundle with exts_defaultclass = 'RPackage' the R side
-    // of the bundle story needs. Flip this assertion when that lands.
     assert!(
-        !recipe.text.contains("exts_list"),
-        "CRAN does not emit an exts_list yet:\n{}",
+        recipe.text.contains("exts_list") && recipe.text.contains("jsonlite"),
+        "CRAN leftover is a Bundle exts_list:\n{}",
         recipe.text
     );
 }
