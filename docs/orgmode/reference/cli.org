@@ -8,7 +8,7 @@ written by package commands are deterministic bundle artifacts.
 
 | Command | Purpose |
 |-
-| ~package inspect~ | Parse conda-forge, Spack, PyPI, or CRAN into a manifest and planned SBOM |
+| ~package inspect~ | Parse conda-forge, Spack, PyPI, CRAN, or Cargo into a manifest and planned SBOM |
 | ~package plan~ | Materialize profiles, solve with Resolvo, and emit recipes |
 | ~package bump~ | Retarget an EasyBuild recipe and write the same canonical bundle |
 | ~recipe check~ | Validate metadata and robot dependency availability |
@@ -26,7 +26,7 @@ written by package commands are deterministic bundle artifacts.
 #+begin_src bash
 eb-stack package inspect \
   --source PATH \
-  --format auto|conda-forge|spack|pypi|cran \
+  --format auto|conda-forge|spack|pypi|cran|cargo \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
   [--package-config PACKAGE.toml]... \
@@ -41,7 +41,7 @@ profiles or emit recipes, so it establishes no claim-ladder rung.
 #+begin_src bash
 eb-stack package plan \
   --source PATH \
-  --format conda-forge|spack|pypi|cran \
+  --format conda-forge|spack|pypi|cran|cargo \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
   [--package-config PACKAGE.toml]... \
@@ -86,6 +86,18 @@ Robot candidates win over catalog entries. A closed plan writes companion
 packages under ~packages/~, a shared ~easyconfigs/~ overlay, topological
 ~build-order.json~, and ~closure.sbom.cdx.json~. See
 [[file:package-bundles.org][package bundles]] and the new-package how-to.
+
+~--format cargo~ reads ~Cargo.toml~ or crates.io JSON. A PyPI leftover
+whose run dependency is a PyO3 crate is closed by ~--cargo-source~, not
+by a pip extra. Extra site packages that Warehouse omits belong in the
+ingest: a JSON array of Warehouse objects, or later ~requirements.txt~
+lines. Resolvo then takes the robot module when ~--easyconfigs~ provides
+it. Do not hand-edit the emitted recipe for those names. A PEP 518
+~build_system~ object with ~build-backend = mesonpy~ is the mesonpy hint:
+listed ~requires~ become SAT build deps, and the emitter writes
+~wrap_mode=default~ plus the EESSI gcc cargo linker. Hatchling stays a
+~Python-bundle-PyPI~ module when the robot provides it. See
+[[file:../howto/pypi-extend.org][site Python extras]].
 
 ** ~package bump~
 

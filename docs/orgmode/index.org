@@ -221,7 +221,9 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     claim ladder, and the CI-known bumps).
   - [[file:howto/new-package.org][Author a new package from conda-forge or Spack]] --
     canonical plan + profiles + Resolvo + campaign.
-  - How-to guides: [[file:howto/solve-lock.org][solve a stack lock]],
+  - How-to guides: [[file:howto/pypi-extend.org][site Python extras]],
+    [[file:howto/cran-extend.org][site R extras]],
+    [[file:howto/solve-lock.org][solve a stack lock]],
     [[file:howto/repair-campaign.org][repair a failed campaign]],
     [[file:howto/emit-reports.org][emit a build list and stack diff]],
     [[file:howto/bump-recipe.org][bump a recipe]],

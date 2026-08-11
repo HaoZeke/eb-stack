@@ -237,7 +237,6 @@ pub fn complete_package_bundle_with_hierarchy(
     if plan.origin == PackageOrigin::Pypi {
         promote_pypi_overlay_extras(&mut plan, candidates, stack_policy, hierarchy_fixture)?;
         inject_overlay_build_tools(&mut plan, candidates);
-        inject_overlay_backend_runtimes(&mut plan, candidates);
     }
     if plan.origin == PackageOrigin::Cargo {
         pin_binutils_to_gcccore(&mut plan, candidates, hierarchy_fixture);
@@ -289,6 +288,9 @@ fn promote_pypi_overlay_extras(
     .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?;
     for hole in holes {
         if hole.name.eq_ignore_ascii_case("python") || hole.name.eq_ignore_ascii_case("r") {
+            continue;
+        }
+        if hole.build {
             continue;
         }
         if refuses_pip_overlay(&hole.name) {
@@ -357,7 +359,11 @@ fn pin_binutils_to_gcccore(
 }
 
 fn inject_overlay_build_tools(plan: &mut PackagePlan, candidates: &[crate::domain::Candidate]) {
-    if plan.overlay_extensions.is_empty() {
+    let meson = plan.build.build_systems.iter().any(|hint| {
+        let hint = hint.to_ascii_lowercase();
+        hint.contains("meson")
+    });
+    if plan.overlay_extensions.is_empty() && !meson {
         return;
     }
     for name in [
@@ -366,7 +372,6 @@ fn inject_overlay_build_tools(plan: &mut PackagePlan, candidates: &[crate::domai
         "Ninja",
         "pkgconf",
         "Rust",
-        "Eigen",
         "hatchling",
         "Python-bundle-PyPI",
     ] {
@@ -399,49 +404,6 @@ fn inject_overlay_build_tools(plan: &mut PackagePlan, candidates: &[crate::domai
             provenance: Vec::new(),
         });
     }
-}
-
-/// Install meson-python / hatchling import deps into the overlay prefix.
-///
-/// `pip --no-build-isolation` imports those backends from PYTHONPATH. EESSI
-/// `Python-bundle-PyPI` may ship them as provides, but the hook does not see
-/// the bundle unless the wheel is also in the overlay prefix.
-fn inject_overlay_backend_runtimes(
-    plan: &mut PackagePlan,
-    candidates: &[crate::domain::Candidate],
-) {
-    if plan.overlay_extensions.is_empty() {
-        return;
-    }
-    for name in ["packaging", "pyproject-metadata"] {
-        if plan.overlay_extensions.iter().any(|ext| {
-            crate::provides::overlay_package_identity(&ext.name)
-                == crate::provides::overlay_package_identity(name)
-        }) {
-            continue;
-        }
-        let Some(version) = provided_ext_version(name, candidates) else {
-            continue;
-        };
-        plan.overlay_extensions.insert(
-            0,
-            OverlayExtension {
-                name: name.to_string(),
-                version,
-            },
-        );
-    }
-}
-
-fn provided_ext_version(name: &str, candidates: &[crate::domain::Candidate]) -> Option<String> {
-    let identity = crate::provides::overlay_package_identity(name);
-    let provider = crate::provides::existing_language_provider(name, candidates)?;
-    provider
-        .exts_list
-        .iter()
-        .find(|ext| crate::provides::overlay_package_identity(&ext.name) == identity)
-        .filter(|ext| !ext.version.is_empty())
-        .map(|ext| ext.version.clone())
 }
 
 fn overlay_extension_version(plan: &PackagePlan, name: &str) -> Option<String> {

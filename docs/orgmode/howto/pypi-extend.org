@@ -69,6 +69,18 @@ companion ~PythonPackage~ (implicit ~Rust~ / ~maturin~ / ~binutils~)
 instead of a pip extension. Pass the crate metadata next to the PyPI
 plan; do not ~pip install~ the crate into the overlay.
 
+Resolvo picks every robot-provided name. Extra site packages that Warehouse
+omits (measured ~PyYAML~ for ~import eon~) go in the ingest as a second
+Warehouse object in a JSON array, or as a later ~requirements.txt~ line.
+Meson wrap natives (~quill~, ~cbindgen~, ~Eigen~) go in
+~build_system.requires~ (or a package-config build requirement). Do not
+edit the emitted ~.eb~ to add those names: put the modules in
+~--easyconfigs~ and let the lock select them. A PEP 518 ~build_system~
+block with ~build-backend = mesonpy~ adds the listed build requirements
+and emits ~wrap_mode=default~ plus the EESSI gcc cargo linker so meson
+wraps do not inherit host ~clang~. Hatchling and ~meson-python~ already
+on ~Python-bundle-PyPI~ stay modules; they are not pip extras.
+
 * Install with the eessi-extend target
 
 Plan on the host. Install through ~campaign run~ and

@@ -96,10 +96,20 @@ struct WarehouseDigests {
 }
 
 #[derive(Debug, Deserialize)]
+struct WarehouseBuildSystem {
+    #[serde(default, rename = "build-backend")]
+    build_backend: Option<String>,
+    #[serde(default)]
+    requires: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct WarehouseDocument {
     info: WarehouseInfo,
     #[serde(default)]
     urls: Vec<WarehouseUrl>,
+    #[serde(default)]
+    build_system: Option<WarehouseBuildSystem>,
 }
 
 fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
@@ -174,6 +184,32 @@ fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
         Vec::new()
     };
 
+    if let Some(build_system) = &doc.build_system {
+        for spec in &build_system.requires {
+            match parse_pep508(spec) {
+                Pep508::Requirement {
+                    name,
+                    pin,
+                    original,
+                    ..
+                } => {
+                    if name.eq_ignore_ascii_case("numpy") || name.eq_ignore_ascii_case("python") {
+                        continue;
+                    }
+                    dependencies.push(ForeignDep {
+                        name,
+                        pin,
+                        role: "build".into(),
+                        original_spec: Some(original),
+                        condition: ConditionExpr::Always,
+                        provenance: Vec::new(),
+                    });
+                }
+                Pep508::SkipExtra { .. } | Pep508::Invalid { .. } => {}
+            }
+        }
+    }
+
     let homepage = nonempty(doc.info.home_page).or_else(|| nonempty(doc.info.project_url));
     if !dependencies
         .iter()
@@ -205,7 +241,7 @@ fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
         description: None,
         license: doc.info.license,
         dependencies,
-        build_system_hints: vec!["python-bundle".into(), "pip".into()],
+        build_system_hints: pypi_build_system_hints(doc.build_system.as_ref()),
         configopts: None,
         patches: Vec::new(),
         variants: Vec::new(),
@@ -229,6 +265,27 @@ enum Pep508 {
         spec: String,
         reason: String,
     },
+}
+
+fn pypi_build_system_hints(build_system: Option<&WarehouseBuildSystem>) -> Vec<String> {
+    let mut hints = vec!["python-bundle".into(), "pip".into()];
+    let Some(build_system) = build_system else {
+        return hints;
+    };
+    let backend = build_system.build_backend.as_deref().unwrap_or("");
+    if backend.contains("meson") {
+        hints.extend(["meson".into(), "mesonpy".into()]);
+    }
+    if build_system
+        .requires
+        .iter()
+        .any(|spec| spec.to_ascii_lowercase().contains("meson"))
+    {
+        if !hints.iter().any(|hint| hint == "mesonpy") {
+            hints.extend(["meson".into(), "mesonpy".into()]);
+        }
+    }
+    hints
 }
 
 fn parse_pep508(spec: &str) -> Pep508 {
@@ -431,5 +488,81 @@ mod tests {
         assert_eq!(recipe.dependencies[0].name, "Python");
         assert_eq!(recipe.dependencies[1].name, "soupsieve");
         assert_eq!(recipe.dependencies[1].pin.as_deref(), Some("==2.6"));
+    }
+
+    #[test]
+    fn warehouse_array_extra_is_a_run_dep() {
+        let recipe = parse_pypi_str(
+            r#"[
+              {
+                "info": {
+                  "name": "eon-akmc",
+                  "version": "3.1.0",
+                  "requires_dist": ["numpy>=1.26.4"]
+                },
+                "urls": []
+              },
+              {
+                "info": {
+                  "name": "PyYAML",
+                  "version": "6.0.2",
+                  "requires_dist": []
+                },
+                "urls": []
+              }
+            ]"#,
+        )
+        .expect("parse");
+        assert_eq!(recipe.name, "eon-akmc");
+        assert!(
+            recipe.dependencies.iter().any(|dep| dep.name == "PyYAML"
+                && dep.pin.as_deref() == Some("==6.0.2")
+                && dep.role == "run"),
+            "{:?}",
+            recipe.dependencies
+        );
+    }
+
+    #[test]
+    fn warehouse_build_system_adds_mesonpy_hint_and_build_dep() {
+        let recipe = parse_pypi_str(
+            r#"{
+              "info": {
+                "name": "eon-akmc",
+                "version": "3.1.0",
+                "requires_dist": []
+              },
+              "build_system": {
+                "build-backend": "mesonpy",
+                "requires": ["meson-python", "numpy"]
+              },
+              "urls": []
+            }"#,
+        )
+        .expect("parse");
+        assert!(
+            recipe
+                .build_system_hints
+                .iter()
+                .any(|hint| hint == "mesonpy"),
+            "{:?}",
+            recipe.build_system_hints
+        );
+        assert!(
+            recipe
+                .dependencies
+                .iter()
+                .any(|dep| dep.name == "meson-python" && dep.role == "build"),
+            "{:?}",
+            recipe.dependencies
+        );
+        assert!(
+            !recipe
+                .dependencies
+                .iter()
+                .any(|dep| dep.name.eq_ignore_ascii_case("numpy") && dep.role == "build"),
+            "numpy stays a robot provide, not a build extra: {:?}",
+            recipe.dependencies
+        );
     }
 }

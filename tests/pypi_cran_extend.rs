@@ -321,7 +321,9 @@ fn plan_cargo_readcon_uses_rust_and_maturin() {
     );
     assert!(
         recipe.text.contains("unset RUSTC_WRAPPER")
-            && recipe.text.contains("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER")
+            && recipe
+                .text
+                .contains("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER")
             && recipe.text.contains("compat/linux"),
         "cargo leftovers must drop host rustc wrappers and pin the gcc linker:\n{}",
         recipe.text
@@ -415,6 +417,113 @@ fn plan_torch_uses_existing_pytorch_module() {
 }
 
 #[test]
+fn plan_eon_akmc_resolvo_takes_robot_yaml_quill_cbindgen() {
+    let mut sources = PackageSourceRoots {
+        schema_version: 1,
+        source_roots: Vec::new(),
+    };
+    sources.push(
+        SourceRootKind::Cargo,
+        root().join("fixtures/foreign_ingest/cargo_readcon"),
+    );
+    let request = NewPackageRequest {
+        source: root().join("fixtures/foreign_ingest/pypi_numpy/eon-akmc-resolvo.json"),
+        format: Some(ForeignFormat::Pypi),
+        toolchain: toolchain(),
+        source_checksums: Vec::new(),
+        package_layers: Vec::new(),
+        easyconfig_roots: vec![
+            numpy_robot(),
+            root().join("fixtures/foreign_ingest/cargo_readcon/robot"),
+        ],
+        stack_policy: stack_policy(),
+    };
+    let catalog = resolve_package_catalog_layers(&[]).expect("empty catalog");
+    let closure = plan_package_closure_with_sources(&request, &catalog, &sources)
+        .expect("resolvo must close cargo + robot provides");
+    let recipe = closure
+        .root
+        .easyconfigs
+        .iter()
+        .find(|config| config.filename.contains("eon-akmc"))
+        .expect("eon-akmc root");
+    assert!(
+        recipe.text.contains("PyYAML"),
+        "PyYAML must resolve as a robot module:\n{}",
+        recipe.text
+    );
+    let extras_block = recipe
+        .text
+        .split("exts_list")
+        .nth(1)
+        .and_then(|text| text.split("builddependencies").next())
+        .unwrap_or("");
+    assert!(
+        !extras_block.contains("('PyYAML'"),
+        "PyYAML must not sit in exts_list:\n{}",
+        recipe.text
+    );
+    assert!(
+        !extras_block.contains("('hatchling'")
+            && !extras_block.contains("('packaging'")
+            && !extras_block.contains("('meson-python'"),
+        "robot-provided build backends stay modules, not pip extras:\n{}",
+        recipe.text
+    );
+    assert!(
+        recipe.text.contains("quill")
+            && recipe.text.contains("cbindgen")
+            && recipe.text.contains("Eigen"),
+        "meson leftovers take wrap natives from ingest + robot:\n{}",
+        recipe.text
+    );
+    assert!(
+        recipe.text.contains("wrap_mode=default"),
+        "mesonpy backend must emit wrap_mode=default, not a hand-edited recipe:\n{}",
+        recipe.text
+    );
+    assert!(
+        recipe
+            .text
+            .contains("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"),
+        "meson wraps need the EESSI gcc cargo linker:\n{}",
+        recipe.text
+    );
+    assert!(
+        closure
+            .root
+            .locks
+            .iter()
+            .flat_map(|lock| lock.dependencies.iter())
+            .any(|dep| dep.name == "PyYAML"),
+        "Resolvo must lock PyYAML: {:?}",
+        closure.root.locks
+    );
+    assert!(
+        closure
+            .root
+            .locks
+            .iter()
+            .flat_map(|lock| lock.dependencies.iter())
+            .any(|dep| dep.name == "quill")
+            && closure
+                .root
+                .locks
+                .iter()
+                .flat_map(|lock| lock.dependencies.iter())
+                .any(|dep| dep.name == "cbindgen")
+            && closure
+                .root
+                .locks
+                .iter()
+                .flat_map(|lock| lock.dependencies.iter())
+                .any(|dep| dep.name == "Eigen"),
+        "Resolvo must lock wrap natives from ingest: {:?}",
+        closure.root.locks
+    );
+}
+
+#[test]
 fn plan_eon_akmc_closes_readcon_from_cargo_source() {
     let mut sources = PackageSourceRoots {
         schema_version: 1,
@@ -480,6 +589,13 @@ fn plan_eon_akmc_closes_readcon_from_cargo_source() {
     assert!(
         recipe.text.contains("SciPy-bundle"),
         "numpy still maps to SciPy-bundle:\n{}",
+        recipe.text
+    );
+    assert!(
+        !recipe.text.contains("quill")
+            && !recipe.text.contains("cbindgen")
+            && !recipe.text.contains("Eigen"),
+        "non-meson leftovers must not take meson wrap natives:\n{}",
         recipe.text
     );
 }
