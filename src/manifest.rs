@@ -208,10 +208,7 @@ fn foreign_easyconfig_parameters(recipe: &ForeignRecipe) -> BTreeMap<String, Eas
         // Host Cargo wrapper env (sccache) is not in the EESSI module graph.
         parameters.insert(
             "preinstallopts".into(),
-            EasyconfigValue::String(
-                "unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER && export CARGO_HOME=%(builddir)s/.cargohome && export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=\"${CC:-gcc}\" && _ebld=/cvmfs/software.eessi.io/versions/${EESSI_VERSION:-2025.06}/compat/linux/x86_64/usr/bin && export PATH=\"$_ebld:$PATH\" && export RUSTFLAGS=\"-C link-arg=-B$_ebld $(printf -- '-L %s ' $(echo ${LIBRARY_PATH:-} | tr ':' ' '))\" && "
-                    .into(),
-            ),
+            EasyconfigValue::String(crate::cargo::eessi_cargo_host_isolation().into()),
         );
     }
     parameters

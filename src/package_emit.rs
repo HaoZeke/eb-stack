@@ -390,7 +390,7 @@ fn render_ext_from_source(
     if mesonpy_backend(plan) {
         options.push(format!(
             "'preinstallopts': '{}'",
-            escape_single(mesonpy_preinstallopts())
+            escape_single(&mesonpy_preinstallopts())
         ));
         options.push("'installopts': '--config-settings=setup-args=-Dwrap_mode=default'".into());
     }
@@ -416,8 +416,11 @@ fn mesonpy_backend(plan: &PackagePlan) -> bool {
     })
 }
 
-fn mesonpy_preinstallopts() -> &'static str {
-    "unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER && export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=\"${CC:-gcc}\" && export CARGO_HOME=%(builddir)s/.cargohome && export PYTHONPATH=%(installdir)s/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH} && "
+fn mesonpy_preinstallopts() -> String {
+    format!(
+        "{}export PYTHONPATH=%(installdir)s/lib/python%(pyshortver)s/site-packages${{PYTHONPATH:+:$PYTHONPATH}} && ",
+        crate::cargo::eessi_cargo_host_isolation()
+    )
 }
 
 fn render_plain_ext(name: &str, version: &str) -> String {

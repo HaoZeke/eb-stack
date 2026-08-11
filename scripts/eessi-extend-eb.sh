@@ -27,12 +27,22 @@ elif [[ $n -gt 1 ]]; then
 fi
 
 export WORKING_DIR=${WORKING_DIR:-/tmp}
-# Host Cargo wrapper env is not in the EESSI module graph.
-unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER RUSTFLAGS CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER CMAKE_C_COMPILER_LAUNCHER CMAKE_CXX_COMPILER_LAUNCHER CMAKE_Fortran_COMPILER_LAUNCHER || true
-export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="${CC:-gcc}"
+# Host Cargo/CMake wrappers are not in the EESSI module graph. Same
+# contract as cargo::eessi_cargo_host_isolation (triple and compat arch
+# from the build host). CMAKE launchers stay here: they are not cargo.
+unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER RUSTFLAGS CARGO_ENCODED_RUSTFLAGS \
+  CMAKE_C_COMPILER_LAUNCHER CMAKE_CXX_COMPILER_LAUNCHER CMAKE_Fortran_COMPILER_LAUNCHER || true
+eval "$(env | awk -F= '/^CARGO_TARGET_[A-Z0-9_]*_(LINKER|RUSTFLAGS)=/{print "unset "$1}')"
+export LINKER=${CC:-gcc}
+_triple=$(rustc -vV 2>/dev/null | awk '/^host:/{print $2}')
+_triple_env=$(printf %s "${_triple:-}" | tr '[:lower:]-' '[:upper:]_')
+if [[ -n ${_triple_env} ]]; then
+  eval "export CARGO_TARGET_${_triple_env}_LINKER=\${CC:-gcc}"
+fi
 # foss wrappers can drop the compat-layer ld that collect2 needs.
+_arch=$(uname -m)
 if [[ -n ${EESSI_VERSION:-} ]]; then
-  export PATH="/cvmfs/software.eessi.io/versions/${EESSI_VERSION}/compat/linux/x86_64/usr/bin:${PATH}"
+  export PATH="/cvmfs/software.eessi.io/versions/${EESSI_VERSION}/compat/linux/${_arch}/usr/bin:${PATH}"
 fi
 module load EESSI-extend
 exec eb "$@"

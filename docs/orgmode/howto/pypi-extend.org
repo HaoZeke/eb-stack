@@ -77,9 +77,13 @@ Meson wrap natives (~quill~, ~cbindgen~, ~Eigen~) go in
 edit the emitted ~.eb~ to add those names: put the modules in
 ~--easyconfigs~ and let the lock select them. A PEP 518 ~build_system~
 block with ~build-backend = mesonpy~ adds the listed build requirements
-and emits ~wrap_mode=default~ plus the EESSI gcc cargo linker so meson
-wraps do not inherit host ~clang~. Hatchling and ~meson-python~ already
-on ~Python-bundle-PyPI~ stay modules; they are not pip extras.
+and emits ~wrap_mode=default~ plus the same cargo-on-EESSI isolation
+prelude used by Cargo leftovers: drop host rustc wrappers, set
+~LINKER=${CC:-gcc}~, put the EESSI compat ~ld~ on ~PATH~, and point
+~RUSTFLAGS -B~ at that ~ld~. The cargo target triple and compat arch
+come from the build host (~rustc -vV~, ~uname -m~), not from a
+plan-time x86_64 literal. Hatchling and ~meson-python~ already on
+~Python-bundle-PyPI~ stay modules; they are not pip extras.
 
 * Install with the eessi-extend target
 

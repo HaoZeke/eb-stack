@@ -189,6 +189,18 @@ fn numpy_robot() -> PathBuf {
     root().join("fixtures/foreign_ingest/pypi_numpy/robot")
 }
 
+fn assert_eessi_cargo_isolation(text: &str) {
+    assert!(
+        text.contains("unset RUSTC_WRAPPER")
+            && text.contains("uname -m")
+            && text.contains("compat/linux/${_arch}/usr/bin")
+            && text.contains("link-arg=-B")
+            && text.contains("LINKER=${CC:-gcc}")
+            && !text.contains("X86_64"),
+        "cargo on EESSI must share one host-derived isolation prelude:\n{text}"
+    );
+}
+
 #[test]
 fn plan_numpy_is_already_provided_by_scipy_bundle() {
     let request = NewPackageRequest {
@@ -319,15 +331,7 @@ fn plan_cargo_readcon_uses_rust_and_maturin() {
         "maturin must be a build dependency:\n{}",
         recipe.text
     );
-    assert!(
-        recipe.text.contains("unset RUSTC_WRAPPER")
-            && recipe
-                .text
-                .contains("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER")
-            && recipe.text.contains("compat/linux"),
-        "cargo leftovers must drop host rustc wrappers and pin the gcc linker:\n{}",
-        recipe.text
-    );
+    assert_eessi_cargo_isolation(&recipe.text);
     assert!(
         bundle.locks[0]
             .dependencies
@@ -482,11 +486,10 @@ fn plan_eon_akmc_resolvo_takes_robot_yaml_quill_cbindgen() {
         "mesonpy backend must emit wrap_mode=default, not a hand-edited recipe:\n{}",
         recipe.text
     );
+    assert_eessi_cargo_isolation(&recipe.text);
     assert!(
-        recipe
-            .text
-            .contains("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"),
-        "meson wraps need the EESSI gcc cargo linker:\n{}",
+        recipe.text.contains("PYTHONPATH"),
+        "mesonpy leftovers still prepend the overlay prefix:\n{}",
         recipe.text
     );
     assert!(

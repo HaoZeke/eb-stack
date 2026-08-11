@@ -40,7 +40,11 @@ All notable changes to this project are documented here.
   meson wrap natives named in that ingest become SAT requirements;
   Resolvo takes `quill` / `cbindgen` / `Eigen` / `PyYAML` from the
   robot when those modules exist. Do not hand-edit the emitted recipe
-  for those names.
+  for those names. Cargo leftovers and mesonpy wraps share one
+  cargo-on-EESSI isolation prelude (`cargo::eessi_cargo_host_isolation`):
+  host rustc wrappers and `RUSTFLAGS` are unset, `LINKER` is EESSI gcc,
+  and the compat `ld` comes from `uname -m`, not a plan-time x86_64
+  literal.
 - `--format pypi` reads Warehouse-shaped JSON or a `requirements.txt` and
   emits a `PythonBundle` whose `exts_list` is the leftover package, with
   already-provided extras mapped to the parent bundle.

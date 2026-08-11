@@ -14,6 +14,30 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+/// Shell prelude that isolates host Cargo/rustc when EasyBuild runs cargo
+/// inside EESSI-extend.
+///
+/// Host `sccache`, `clang`, and `mold` are not in the EESSI module graph.
+/// foss wrappers can drop the compat `ld` that `collect2` needs. The cargo
+/// target triple and compat arch come from the build host (`rustc -vV`,
+/// `uname -m`), not from a plan-time x86_64 literal. Cargo leftovers and
+/// mesonpy wraps that invoke cargo both emit this string.
+pub fn eessi_cargo_host_isolation() -> &'static str {
+    concat!(
+        "unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER RUSTFLAGS CARGO_ENCODED_RUSTFLAGS && ",
+        r#"eval $(env | awk -F= '/^CARGO_TARGET_[A-Z0-9_]*_(LINKER|RUSTFLAGS)=/{print "unset "$1}') && "#,
+        "export CARGO_HOME=%(builddir)s/.cargohome && ",
+        "export LINKER=${CC:-gcc} && ",
+        r#"_triple=$(rustc -vV 2>/dev/null | awk "/^host:/{print \$2}") && "#,
+        r#"_triple_env=$(printf %s "$_triple" | tr "[:lower:]-" "[:upper:]_") && "#,
+        r#"if [ -n "$_triple_env" ]; then eval export CARGO_TARGET_${_triple_env}_LINKER=${CC:-gcc}; fi && "#,
+        r#"_arch=$(uname -m) && "#,
+        r#"_ebld=/cvmfs/software.eessi.io/versions/${EESSI_VERSION:-2025.06}/compat/linux/${_arch}/usr/bin && "#,
+        r#"export PATH="$_ebld:$PATH" && "#,
+        r#"export RUSTFLAGS="-C link-arg=-B$_ebld $(printf -- '-L %s ' $(echo ${LIBRARY_PATH:-} | tr ':' ' '))" && "#,
+    )
+}
+
 /// Parse a Cargo.toml document or a crates.io API JSON document.
 pub fn parse_cargo_str(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let trimmed = text.trim();
@@ -357,5 +381,19 @@ pyo3 = "0.22"
             Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         );
         assert!(!recipe.dependencies.iter().any(|dep| dep.name == "Python"));
+    }
+
+    #[test]
+    fn eessi_cargo_isolation_is_host_derived_not_x86_64() {
+        let prelude = eessi_cargo_host_isolation();
+        assert!(prelude.contains("unset RUSTC_WRAPPER"));
+        assert!(prelude.contains("uname -m"));
+        assert!(prelude.contains("compat/linux/${_arch}/usr/bin"));
+        assert!(prelude.contains("link-arg=-B"));
+        assert!(prelude.contains("LINKER=${CC:-gcc}"));
+        assert!(
+            !prelude.contains("X86_64"),
+            "triple and compat arch are runtime, not a plan-time x86_64 literal:\n{prelude}"
+        );
     }
 }
