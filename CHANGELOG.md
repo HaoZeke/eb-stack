@@ -35,7 +35,10 @@ All notable changes to this project are documented here.
   crate (for example `readcon`) as a companion module; remaining pure
   PyPI holes stay `exts_list` extras. Overlay extras prepend the
   install prefix to `PYTHONPATH` so `pip --no-build-isolation` sees
-  prior extensions and the loaded EESSI modules.
+  prior extensions and the loaded EESSI modules. Mesonpy ingest reads
+  an optional PEP 518 `build_system` object. Resolvo then takes
+  `quill` / `cbindgen` / `Eigen` / `PyYAML` from the robot when those
+  modules exist. Do not hand-edit the emitted recipe for those names.
 - `--format pypi` reads Warehouse-shaped JSON or a `requirements.txt` and
   emits a `PythonBundle` whose `exts_list` is the leftover package, with
   already-provided extras mapped to the parent bundle.

@@ -310,11 +310,7 @@ fn render_language_bundle(
         "lang"
     };
     let exts = render_exts_list(plan, materialized, kind);
-    let default_ext_opts = if plan.overlay_extensions.is_empty() {
-        String::new()
-    } else {
-        "exts_default_options = {\n    'preinstallopts': 'export PYTHONPATH=%(installdir)s/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH} && ',\n}\n\n".to_string()
-    };
+    let default_ext_opts = overlay_exts_default_options(plan);
     let rendered = format!(
         "{easyblock_line}name = '{name}'\n\
 version = '{version}'\n\
@@ -391,12 +387,40 @@ fn render_ext_from_source(
     if let Some(sha256) = &source.sha256 {
         options.push(format!("'checksums': ['{}']", escape_single(sha256)));
     }
+    if mesonpy_backend(plan) {
+        options.push(format!(
+            "'preinstallopts': '{}'",
+            escape_single(mesonpy_preinstallopts())
+        ));
+        options.push(
+            "'installopts': '--config-settings=setup-args=-Dwrap_mode=default --config-settings=setup-args=-Dwith_tests=false'"
+                .into(),
+        );
+    }
     Some(format!(
         "('{}', '{}', {{\n    {},\n}})",
         escape_single(&plan.package.name),
         escape_single(&plan.package.version),
         options.join(",\n    ")
     ))
+}
+
+fn overlay_exts_default_options(plan: &PackagePlan) -> String {
+    if plan.overlay_extensions.is_empty() && !mesonpy_backend(plan) {
+        return String::new();
+    }
+    "exts_default_options = {\n    'preinstallopts': 'export PYTHONPATH=%(installdir)s/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH} && ',\n}\n\n".to_string()
+}
+
+fn mesonpy_backend(plan: &PackagePlan) -> bool {
+    plan.build.build_systems.iter().any(|hint| {
+        let hint = hint.to_ascii_lowercase();
+        hint.contains("mesonpy") || hint == "meson"
+    })
+}
+
+fn mesonpy_preinstallopts() -> &'static str {
+    "unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER && export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=\"${CC:-gcc}\" && export CARGO_HOME=%(builddir)s/.cargohome && export PYTHONPATH=%(installdir)s/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH} && sed -i s/forcefallback/default/ pyproject.toml && "
 }
 
 fn render_plain_ext(name: &str, version: &str) -> String {

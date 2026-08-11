@@ -1,0 +1,11 @@
+name = 'Python-bundle-PyPI'
+version = '2025.07'
+homepage = 'https://example.invalid/python-bundle-pypi'
+description = "Test bundle that provides hatchling and meson-python"
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+exts_list = [
+    ('hatchling', '1.27.0'),
+    ('meson-python', '0.18.0'),
+    ('packaging', '25.0'),
+]
+moduleclass = 'lang'
