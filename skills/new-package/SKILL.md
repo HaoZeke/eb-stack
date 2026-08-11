@@ -391,3 +391,10 @@ Report each rung independently:
 An inspect bundle establishes none of these. A planned bundle establishes only `resolves`. A campaign with no verification commands may establish `builds` but not `binary-verified`.
 
 Do not open, edit, or merge a public issue or PR. Prepare the recipe set, evidence, and paste-ready text for the human-owned contribution surface.
+
+## Related
+
+- `skills/verify-recipe/SKILL.md` — prove each emitted recipe before the campaign spends a build
+- `skills/tool-repair/SKILL.md` — when generation is wrong rather than the recipe
+- `skills/upstream-pr/SKILL.md` — the shape maintainers accept
+- `skills/site-consume/SKILL.md` — building it at a site while the PR is open

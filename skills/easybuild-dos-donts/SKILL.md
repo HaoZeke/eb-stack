@@ -106,6 +106,8 @@ eb --from-pr <N> --robot --upload-test-report --github-user="$GH_USER"
 ## Related
 
 - `skills/upstream-pr/SKILL.md` — full contribution sequence
+- `skills/verify-recipe/SKILL.md` — proving a recipe's claims against the real source
+- `skills/site-consume/SKILL.md` — building an upstream recipe at a site without forking it
 - `skills/eessi-extend/SKILL.md` — EESSI-extend testing and software-layer PRs (separate track)
 - `fixtures/maintainer_reject_26435/` — frozen reject surfaces (hard errors)
 - `fixtures/maintainer_fat_26480/` — frozen fat-build review surfaces (warnings)

@@ -343,9 +343,27 @@ eb-stack stack solve \
 
 ## Skills
 
+Two produce recipes, two gate them, three carry them somewhere, one repairs the generator.
+
+Produce:
+
 - [New package](skills/new-package/SKILL.md): conda-forge/Spack → profiles → bundle → Hermes/OMP campaign.
 - [Annual bump](skills/annual-bump/SKILL.md): EasyBuild recipe → SBOM + Resolvo bump bundle → campaign.
+
+Gate, before anything is built or pushed:
+
+- [Verify recipe](skills/verify-recipe/SKILL.md): prove the checksum, the patches, the extension versions, the configure options and the dependency bounds against the real source, without spending a build.
+- [EasyBuild dos and don'ts](skills/easybuild-dos-donts/SKILL.md): recipe-shape rules and the pre-PR checklist behind `recipe check`.
+
+Carry:
+
 - [Upstream PR](skills/upstream-pr/SKILL.md): recipe set → maintainer-acceptable easybuild-easyconfigs PR, distilled from real merged and rejected PRs.
+- [Site consume](skills/site-consume/SKILL.md): build an upstream recipe at a site through `--from-pr` / `--from-commit` instead of forking it into the site's repository.
+- [EESSI extend](skills/eessi-extend/SKILL.md): test inside the EESSI compatibility layer and contribute to the software-layer easystacks.
+
+Repair:
+
+- [Tool repair](skills/tool-repair/SKILL.md): a hand correction to emitted output is a bug report; fix eb-stack, regression-test it on the remote builder, regenerate, and diff byte-for-byte.
 
 The public issue and PR surface belongs to the human operator. The skills produce recipe sets and evidence; they do not open or mutate upstream issues or PRs.
 

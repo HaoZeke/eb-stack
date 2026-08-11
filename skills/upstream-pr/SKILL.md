@@ -375,3 +375,9 @@ layer supplies a different sysroot.
 - eOn #26480: `Software/eOn/easybuild-pr-26480-core-rgpot-2.17.2-campaign.org`
 - QMCPACK #26437: `Software/eb-stack/easybuild-pr-26437-qmcpack-test-report-campaign.org`
 - Host ladder: `Software/eb-stack/easybuild-test-report-host-lessons-2026-07-18.org`
+
+## Related
+
+- `skills/verify-recipe/SKILL.md` — the pre-build evidence a reviewer asks for
+- `skills/site-consume/SKILL.md` — building the PR at a site through `--from-pr` before it merges
+- `skills/easybuild-dos-donts/SKILL.md` — the short form of the rules here

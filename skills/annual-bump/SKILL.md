@@ -47,6 +47,38 @@ eb-stack package bump \
 
 `--easyconfigs` is repeatable. Put the upstream tree first and a site overlay after it.
 
+## When the target generation cannot build anything
+
+Before bumping onto a generation, know whether that generation still works. A
+composite toolchain can be installed, loadable, and completely unbuildable.
+
+The symptom is a failure in the *prepare* step, seconds in, before anything is
+unpacked, naming two lists that differ by one element:
+
+```text
+List of toolchain dependency modules and toolchain definition do not match
+(found [<what the toolchain module depends on>] vs expected {<what the class wants>})
+```
+
+The framework builds the expected set from the toolchain class hierarchy and
+compares it against the *direct* dependencies of the toolchain module, matching
+on module name. So a framework release that splits or renames an element, or a
+toolchain module that was written before such a split, breaks every package on
+that generation at once. Three properties make it unfixable from a consumer
+recipe: only direct dependencies count, the compiler element cannot be treated
+as optional, and matching ignores versions and suffixes. No easyconfig
+parameter reaches the check.
+
+Diagnose it by reading the two lists rather than the package: the difference is
+the element, and the fix is a toolchain module that carries it. That usually
+means moving onto a generation that already does, not rebuilding a family
+upstream has deprecated. Check the module class as a quick tell of which shape
+a given module is (a compiler-only module and a full composite of the same name
+are different things across such a split).
+
+This is not a bump failure and the recipe under it is usually fine. Say so, or
+the next person re-debugs the package.
+
 ## Stack pins and fallback
 
 Express EESSI or site-stack preferences in the stack policy, not in post-processing:
@@ -155,3 +187,10 @@ Report independently:
 A successful `package bump` establishes only `resolves`. Never claim `builds` from recipe parsing, a dry run, or solver output.
 
 Keep one reviewable recipe set per contribution. Do not open or mutate public issues or PRs; return paste-ready material to the human owner.
+
+## Related
+
+- `skills/verify-recipe/SKILL.md` — prove the emitted recipe before building it
+- `skills/tool-repair/SKILL.md` — when the emitted recipe needed a hand correction
+- `skills/site-consume/SKILL.md` — getting the result built at a site
+- `skills/upstream-pr/SKILL.md` — getting it merged upstream

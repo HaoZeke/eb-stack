@@ -6,9 +6,16 @@ Use the matching public skill and execute it through the requested claim rung:
 |---|---|
 | conda-forge or Spack → new EasyBuild package | `skills/new-package/SKILL.md` |
 | existing `.eb` → new toolchain/application version | `skills/annual-bump/SKILL.md` |
+| prove an emitted or edited recipe before building it | `skills/verify-recipe/SKILL.md` |
 | upstream easybuild-easyconfigs PR / test report | `skills/upstream-pr/SKILL.md` |
 | EasyBuild do/don't (incl. #26435 class) | `skills/easybuild-dos-donts/SKILL.md` |
+| build an upstream recipe at a site without forking it | `skills/site-consume/SKILL.md` |
 | EESSI-extend test / EESSI software-layer PR | `skills/eessi-extend/SKILL.md` |
+| generated output needed a hand correction | `skills/tool-repair/SKILL.md` |
+
+Two of those are gates rather than tasks and cut across the rest:
+`verify-recipe` before any build or push, `tool-repair` whenever an emitted
+file had to be corrected by hand.
 
 ## Canonical procedure
 
