@@ -668,7 +668,7 @@ impl ClosureState<'_> {
             for hole in &holes {
                 if self.hole_has_closable_source(hole)? {
                     self.ensure_companion_for_hole(plan, profile, stack_policy, hole, path)?;
-                } else if plan.origin == PackageOrigin::Pypi {
+                } else if defers_holes_to_overlay_extensions(&plan.origin) {
                     deferred += 1;
                 } else {
                     self.ensure_companion_for_hole(plan, profile, stack_policy, hole, path)?;
@@ -677,7 +677,7 @@ impl ClosureState<'_> {
             if self.generated.len() != generated_before {
                 continue;
             }
-            if deferred == holes.len() && plan.origin == PackageOrigin::Pypi {
+            if deferred == holes.len() && defers_holes_to_overlay_extensions(&plan.origin) {
                 return Ok(());
             }
             let hole = &holes[0];
@@ -881,6 +881,17 @@ impl ClosureState<'_> {
                 ))
             })
     }
+}
+
+/// Whether a hole with no source of its own is a bundle extension rather than
+/// a missing companion.
+///
+/// The language overlays install leftovers as `exts_list` entries of the
+/// emitted bundle, so a package with no recipe anywhere is expected there. The
+/// crate graph is different: a Cargo leftover becomes its own module, so it
+/// still needs a source.
+fn defers_holes_to_overlay_extensions(origin: &PackageOrigin) -> bool {
+    matches!(origin, PackageOrigin::Pypi | PackageOrigin::Cran)
 }
 
 fn prepare_companion_from_provider(

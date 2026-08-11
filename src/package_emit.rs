@@ -333,7 +333,7 @@ fn render_language_bundle(
         "lang"
     };
     let exts = render_exts_list(plan, materialized, kind);
-    let default_ext_opts = overlay_exts_default_options(plan);
+    let default_ext_opts = overlay_exts_default_options(plan, kind);
     let rendered = format!(
         "{easyblock_line}name = '{name}'\n\
 version = '{version}'\n\
@@ -425,7 +425,13 @@ fn render_ext_from_source(
     ))
 }
 
-fn overlay_exts_default_options(plan: &PackagePlan) -> String {
+fn overlay_exts_default_options(plan: &PackagePlan, kind: LanguageBundleKind) -> String {
+    // The prepended PYTHONPATH is what lets one extension import another it was
+    // just installed beside. An R bundle installs into the R library path and
+    // has no use for it.
+    if !matches!(kind, LanguageBundleKind::Python) {
+        return String::new();
+    }
     if plan.overlay_extensions.is_empty() && !mesonpy_backend(plan) {
         return String::new();
     }
