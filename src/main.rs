@@ -204,6 +204,11 @@ enum RecipeCommand {
         /// The source URL that seeded checksum was computed over.
         #[arg(long, requires = "seeded_from")]
         seeded_source_url: Option<String>,
+        /// An unpacked source tree for the commit the recipe pins. The version
+        /// its build system declares is compared against the recipe version,
+        /// which is the one question a checksum cannot answer.
+        #[arg(long, requires = "verify_sources")]
+        source_tree: Option<PathBuf>,
         /// A git remote, when the seeding recipe built from a checkout.
         #[arg(long, requires = "seeded_from")]
         seeded_git: Option<String>,
@@ -531,6 +536,7 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             seeded_from,
             seeded_source_url,
             seeded_git,
+            source_tree,
             strict,
         } => {
             let resolved = if strict {
@@ -558,7 +564,17 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
                     git: seeded_git,
                     sha256: resolved.checksums.first().cloned(),
                 });
-                let findings = eb_stack::verify_sources(&resolved.source_urls, seed.as_ref());
+                let mut findings = eb_stack::verify_sources(&resolved.source_urls, seed.as_ref());
+                if let Some(tree) = source_tree.as_deref() {
+                    let declared = eb_stack::declared_version(tree);
+                    if let Some(found) = declared.as_ref() {
+                        println!("declared_version={} from={}", found.value, found.source);
+                    }
+                    findings.extend(eb_stack::verify_declared_version(
+                        &resolved.version,
+                        declared.as_ref(),
+                    ));
+                }
                 for url in &resolved.source_urls {
                     println!("source_class={} url={url}", eb_stack::classify_url(url));
                 }

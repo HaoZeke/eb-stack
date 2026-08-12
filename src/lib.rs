@@ -43,8 +43,8 @@ pub mod target;
 pub mod version;
 
 pub use artifact_class::{
-    classify_foreign, classify_url, verify_sources, ArtifactClass, FindingLevel, SeededChecksum,
-    SourceFinding,
+    classify_foreign, classify_url, declared_version, verify_declared_version, verify_sources,
+    ArtifactClass, DeclaredVersion, FindingLevel, SeededChecksum, SourceFinding,
 };
 pub use domain::*;
 pub use eb_maintainer::{

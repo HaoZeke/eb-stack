@@ -13,6 +13,7 @@
 //! what turns that into a build-time error instead of a silent one.
 
 use std::fmt;
+use std::path::Path;
 
 /// The kind of artifact a source URL resolves to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -212,6 +213,122 @@ pub struct SeededChecksum {
     pub git: Option<String>,
     /// The value copied across, quoted back in a mismatch message.
     pub sha256: Option<String>,
+}
+
+/// Reads a declared version out of one build system's file, given its text.
+type VersionReader = fn(&str) -> Option<String>;
+
+/// The version an upstream build system declares for itself.
+///
+/// A recipe pinned to a commit takes its version from whoever writes the
+/// easyconfig, and the obvious choice, the last release tag, is often wrong:
+/// projects bump the in-tree version as soon as a release branches, so a
+/// snapshot taken after a tag declares something else. The module then claims a
+/// version its own binary does not report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclaredVersion {
+    /// The version string as the build system writes it.
+    pub value: String,
+    /// The file and construct it came from, for the message.
+    pub source: String,
+}
+
+/// Read the version an upstream source tree declares, if any build system in it
+/// says so plainly.
+///
+/// Only unambiguous, single-line declarations are read. A version assembled
+/// from variables is left alone rather than guessed at, because a wrong answer
+/// here would rename a module.
+pub fn declared_version(source_tree: &Path) -> Option<DeclaredVersion> {
+    let readers: &[(&str, VersionReader)] = &[
+        ("CMakeLists.txt", cmake_project_version),
+        ("Cargo.toml", toml_package_version),
+        ("pyproject.toml", toml_package_version),
+        ("meson.build", meson_project_version),
+        ("configure.ac", autoconf_init_version),
+    ];
+    for (name, read) in readers {
+        let path = source_tree.join(name);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Some(value) = read(&text) {
+            return Some(DeclaredVersion {
+                value,
+                source: (*name).to_string(),
+            });
+        }
+    }
+    None
+}
+
+/// `project(name VERSION 4.3.9 LANGUAGES C CXX)`, across lines.
+fn cmake_project_version(text: &str) -> Option<String> {
+    let re = regex::Regex::new(r"(?is)\bproject\s*\((.*?)\)").ok()?;
+    let caps = re.captures(text)?;
+    let body = caps.get(1)?.as_str();
+    let ver = regex::Regex::new(r"(?i)\bVERSION\s+([0-9][0-9A-Za-z.\-+]*)").ok()?;
+    Some(ver.captures(body)?.get(1)?.as_str().to_string())
+}
+
+/// `version = "1.2.3"` in the first table that declares one.
+fn toml_package_version(text: &str) -> Option<String> {
+    let re = regex::Regex::new(r#"(?m)^\s*version\s*=\s*"([^"]+)""#).ok()?;
+    Some(re.captures(text)?.get(1)?.as_str().to_string())
+}
+
+/// `project('name', 'c', version : '1.2.3')`.
+fn meson_project_version(text: &str) -> Option<String> {
+    let re = regex::Regex::new(r"(?is)\bproject\s*\(.*?version\s*:\s*'([^']+)'").ok()?;
+    Some(re.captures(text)?.get(1)?.as_str().to_string())
+}
+
+/// `AC_INIT([name], [1.2.3], ...)`.
+fn autoconf_init_version(text: &str) -> Option<String> {
+    let re = regex::Regex::new(r"(?is)AC_INIT\s*\(\s*\[[^\]]*\]\s*,\s*\[([^\]]+)\]").ok()?;
+    Some(re.captures(text)?.get(1)?.as_str().trim().to_string())
+}
+
+/// The part of an easyconfig version that names a release, with any snapshot
+/// marker removed: `4.3.9-20260811` and `4.3.9-dev_20260811` both give `4.3.9`.
+fn release_part(recipe_version: &str) -> &str {
+    let re = regex::Regex::new(r"^(.*?)[-_.](?:dev_?)?(?:20\d{6}|[0-9a-f]{7,40})$").ok();
+    match re.and_then(|r| {
+        r.captures(recipe_version)
+            .and_then(|c| c.get(1))
+            .map(|m| m.start()..m.end())
+    }) {
+        Some(range) => &recipe_version[range],
+        None => recipe_version,
+    }
+}
+
+/// Compare the version a recipe carries against the one its source declares.
+///
+/// This answers a question only a source tree can: a recipe pinned to a commit
+/// is free to call itself anything, and naming it after the last tag is the
+/// mistake that reads as correct.
+pub fn verify_declared_version(
+    recipe_version: &str,
+    declared: Option<&DeclaredVersion>,
+) -> Vec<SourceFinding> {
+    let mut findings = Vec::new();
+    let Some(declared) = declared else {
+        findings.push(SourceFinding::warning(
+            "no build system in the source tree declares a version, so the recipe version              is unverified against what the code reports"
+                .into(),
+        ));
+        return findings;
+    };
+    let release = release_part(recipe_version);
+    if release != declared.value {
+        findings.push(SourceFinding::warning(format!(
+            "recipe version {recipe_version} names release {release}, while {} declares {}; \
+             a module built from this source reports {} to whoever runs it",
+            declared.source, declared.value, declared.value
+        )));
+    }
+    findings
 }
 
 /// Verify a recipe's source URLs against a checksum seeded from elsewhere.
@@ -490,5 +607,110 @@ mod tests {
         let findings = verify_sources(&["".into()], None);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].level, FindingLevel::Warning);
+    }
+}
+
+#[cfg(test)]
+mod declared_version_tests {
+    use super::*;
+
+    fn tree(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, body) in files {
+            std::fs::write(dir.path().join(name), body).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn reads_a_cmake_project_version_across_lines() {
+        let dir = tree(&[(
+            "CMakeLists.txt",
+            "cmake_minimum_required(VERSION 3.21)\nproject(\n  example\n  VERSION 4.3.9\n  LANGUAGES C CXX)\n",
+        )]);
+        let found = declared_version(dir.path()).unwrap();
+        assert_eq!(found.value, "4.3.9");
+        assert_eq!(found.source, "CMakeLists.txt");
+    }
+
+    #[test]
+    fn reads_cargo_pyproject_meson_and_autoconf() {
+        for (name, body, want) in [
+            (
+                "Cargo.toml",
+                "[package]\nname = \"x\"\nversion = \"0.13.1\"\n",
+                "0.13.1",
+            ),
+            (
+                "pyproject.toml",
+                "[project]\nname = \"x\"\nversion = \"2.1.0\"\n",
+                "2.1.0",
+            ),
+            (
+                "meson.build",
+                "project('x', 'c', version : '1.4.2')\n",
+                "1.4.2",
+            ),
+            (
+                "configure.ac",
+                "AC_INIT([x], [3.0.1], [bugs@example])\n",
+                "3.0.1",
+            ),
+        ] {
+            let dir = tree(&[(name, body)]);
+            let found = declared_version(dir.path()).unwrap_or_else(|| panic!("{name}"));
+            assert_eq!(found.value, want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_tree_that_declares_nothing_is_reported_as_unverified() {
+        let dir = tree(&[("README.md", "nothing here\n")]);
+        assert!(declared_version(dir.path()).is_none());
+        let findings = verify_declared_version("1.0.0", None);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].level, FindingLevel::Warning);
+    }
+
+    /// The real case: a snapshot named after the last release tag while the
+    /// source had already moved on.
+    #[test]
+    fn flags_a_snapshot_named_after_the_wrong_release() {
+        let declared = DeclaredVersion {
+            value: "4.3.9".into(),
+            source: "CMakeLists.txt".into(),
+        };
+        let findings = verify_declared_version("4.3.0-20260811", Some(&declared));
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(findings[0].message.contains("4.3.9"), "{findings:?}");
+    }
+
+    #[test]
+    fn a_snapshot_named_after_what_the_source_declares_is_quiet() {
+        let declared = DeclaredVersion {
+            value: "4.3.9".into(),
+            source: "CMakeLists.txt".into(),
+        };
+        for version in [
+            "4.3.9-20260811",
+            "4.3.9-dev_20260811",
+            "4.3.9-b9eb286",
+            "4.3.9",
+        ] {
+            assert!(
+                verify_declared_version(version, Some(&declared)).is_empty(),
+                "{version}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_release_build_is_checked_the_same_way() {
+        let declared = DeclaredVersion {
+            value: "4.3.0".into(),
+            source: "CMakeLists.txt".into(),
+        };
+        assert!(verify_declared_version("4.3.0", Some(&declared)).is_empty());
+        assert_eq!(verify_declared_version("4.2.0", Some(&declared)).len(), 1);
     }
 }
