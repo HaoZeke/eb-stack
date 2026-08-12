@@ -235,6 +235,7 @@ pub fn solve_package_profile_with_hierarchy(
         exts_list: Vec::new(),
     });
     let policy = Policy {
+        prefer_installed: false,
         toolchain: plan.build.toolchain.clone(),
         roots: vec![synthetic_name.clone()],
         root_priority: None,

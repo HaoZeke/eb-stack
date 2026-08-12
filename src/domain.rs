@@ -127,6 +127,18 @@ pub struct Policy {
     /// reordering `roots` in the policy JSON.
     #[serde(default)]
     pub root_priority: Option<Vec<String>>,
+    /// Keep what the baseline already installed when nothing requires moving.
+    ///
+    /// The default objective is newest-wins, which is right for planning a new
+    /// generation and wrong for maintaining one: on a site where a rebuild
+    /// costs hours of a GPU partition, a solve that moves a package nobody
+    /// asked to move spends that time for nothing. With this set, a package
+    /// present in the baseline lock is preferred at the version it already
+    /// has, unless a pin, an exclusion or a require_upgrade says otherwise.
+    /// Those all remain hard constraints; this only decides between candidates
+    /// that were all valid anyway.
+    #[serde(default)]
+    pub prefer_installed: bool,
     /// Version constraints applied on top of what the candidates allow.
     #[serde(default)]
     pub pins: Vec<Pin>,

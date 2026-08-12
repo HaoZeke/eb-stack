@@ -45,6 +45,12 @@ pub struct EbProvider {
 }
 
 impl EbProvider {
+    /// Whether this exact candidate is the one a preference named.
+    fn is_favored(&self, name: NameId, rank: u32) -> bool {
+        let package_name = self.pool.resolve_package_name(name).to_string();
+        self.favored_ranks.get(&package_name) == Some(&rank)
+    }
+
     /// Build a provider from a candidate set and a policy.
     pub fn from_universe(
         candidates_in: &[Candidate],
@@ -265,6 +271,46 @@ impl EbProvider {
             }
         }
 
+        // Prefer what the baseline already installed, when the policy asks for
+        // it. This runs after every hard constraint is known, so it can only
+        // choose between candidates that were all valid anyway: a pin, an
+        // exclusion or a require_upgrade on the same package wins, and a
+        // baseline version that is no longer a candidate is simply not found.
+        //
+        // Without this the objective is newest-wins for every package at once,
+        // which plans a new generation well and maintains one badly: a package
+        // nobody asked to move still moves, and on this site that is hours of a
+        // GPU partition spent on a rebuild no one wanted.
+        if policy.prefer_installed {
+            if let Some(base) = baseline {
+                for installed in &base.packages {
+                    let name = &installed.name;
+                    if favored_ranks.contains_key(name)
+                        || locked_ranks.contains_key(name)
+                        || pin_ranks.contains_key(name)
+                        || min_rank_exclusive.contains_key(name)
+                    {
+                        continue;
+                    }
+                    let Some(ranked) = ranks.get(name) else {
+                        continue;
+                    };
+                    let installed_rank = ranked.iter().find_map(|(rank, idx)| {
+                        (candidates[*idx].version == installed.version).then_some(*rank)
+                    });
+                    if let Some(rank) = installed_rank {
+                        if excluded_ranks
+                            .get(name)
+                            .is_some_and(|excluded| excluded.contains_key(&rank))
+                        {
+                            continue;
+                        }
+                        favored_ranks.insert(name.clone(), rank);
+                    }
+                }
+            }
+        }
+
         Ok(Self {
             pool,
             candidates,
@@ -462,10 +508,17 @@ impl DependencyProvider for EbProvider {
     }
 
     async fn sort_candidates(&self, _solver: &SolverCache<Self>, solvables: &mut [SolvableId]) {
+        // A favored candidate goes first, then rank order. Resolvo treats
+        // `Candidates::favored` as a hint and asks the provider for the order
+        // it should try, so a preference that is not expressed here is a
+        // preference the solver never sees: it takes the first candidate that
+        // works, which under plain rank order is always the newest.
         solvables.sort_by(|a, b| {
-            let ra = self.pool.resolve_solvable(*a).record;
-            let rb = self.pool.resolve_solvable(*b).record;
-            rb.cmp(&ra) // higher rank first = prefer newer
+            let sa = self.pool.resolve_solvable(*a);
+            let sb = self.pool.resolve_solvable(*b);
+            let fa = self.is_favored(sa.name, sa.record);
+            let fb = self.is_favored(sb.name, sb.record);
+            fb.cmp(&fa).then_with(|| sb.record.cmp(&sa.record))
         });
     }
 
@@ -757,7 +810,12 @@ fn solve_feasibility(
 
 /// Candidate versions for a package name under the policy toolchain, newest first.
 /// Order is deterministic (sorted by [`cmp_version`]), independent of HashMap iteration.
-fn versions_newest_first(candidates: &[Candidate], policy: &Policy, name: &str) -> Vec<String> {
+fn versions_in_trial_order(
+    candidates: &[Candidate],
+    policy: &Policy,
+    name: &str,
+    baseline: Option<&StackLock>,
+) -> Vec<String> {
     let mut versions: Vec<String> = candidates
         .iter()
         .filter(|c| {
@@ -776,6 +834,19 @@ fn versions_newest_first(candidates: &[Candidate], policy: &Policy, name: &str) 
     // Honour existing policy pins for this package when listing trial versions.
     if let Some(pin) = policy.pins.iter().find(|p| p.name == name) {
         versions.retain(|v| matches_req(v, &pin.version_req));
+    }
+    // With prefer_installed the root is tried at the version already installed
+    // before anything newer. The trial loop takes the first version that is
+    // jointly feasible, so a require_upgrade or a pin that rules it out simply
+    // fails this trial and the next version is tried: hard constraints keep
+    // winning, and the preference only decides between feasible outcomes.
+    if policy.prefer_installed {
+        if let Some(installed) = baseline.and_then(|lock| lock.package(name)) {
+            if let Some(at) = versions.iter().position(|v| *v == installed.version) {
+                let preferred = versions.remove(at);
+                versions.insert(0, preferred);
+            }
+        }
     }
     versions
 }
@@ -816,7 +887,7 @@ pub fn solve_with_resolvo(
     let mut chosen_root_versions: Vec<(String, String)> = Vec::new();
 
     for root in &priority {
-        let versions = versions_newest_first(candidates, policy, root);
+        let versions = versions_in_trial_order(candidates, policy, root, baseline);
         if versions.is_empty() {
             return Err(format!("no candidates for root package {root}"));
         }
@@ -893,6 +964,7 @@ mod tests {
 
     fn policy(roots: Vec<&str>, require_upgrade: Vec<RequireUpgrade>) -> Policy {
         Policy {
+            prefer_installed: false,
             toolchain: tc(),
             roots: roots.into_iter().map(str::to_string).collect(),
             root_priority: None,

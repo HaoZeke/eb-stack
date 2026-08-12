@@ -95,6 +95,7 @@ fn standalone_numpy_recipe_still_competes_with_provide() {
     assert!(numpy_idents.contains(&false));
 
     let policy = Policy {
+        prefer_installed: false,
         toolchain: toolchain(),
         roots: vec!["App".into()],
         root_priority: None,
@@ -120,6 +121,7 @@ fn standalone_numpy_recipe_still_competes_with_provide() {
 #[test]
 fn missing_provide_still_unsat_when_no_bundle() {
     let policy = Policy {
+        prefer_installed: false,
         toolchain: toolchain(),
         roots: vec!["App".into()],
         root_priority: None,

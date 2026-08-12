@@ -44,6 +44,7 @@ fn universe(app_dependencies: Vec<DepReq>) -> Vec<Candidate> {
 
 fn policy() -> Policy {
     Policy {
+        prefer_installed: false,
         toolchain: toolchain(),
         roots: vec!["App".into()],
         root_priority: None,

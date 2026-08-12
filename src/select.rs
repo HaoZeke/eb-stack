@@ -186,6 +186,7 @@ pub fn resolvo_resolve_dep_versions(
         candidates: universe_cands,
     };
     let policy = Policy {
+        prefer_installed: false,
         toolchain: toolchain.clone(),
         roots: vec![synthetic.clone()],
         root_priority: None,
@@ -378,6 +379,7 @@ mod tests {
             candidates: vec![root, leaf],
         };
         let policy = Policy {
+            prefer_installed: false,
             toolchain: tc,
             roots: vec!["App".into()],
             root_priority: None,
@@ -426,6 +428,7 @@ mod tests {
             candidates: vec![root],
         };
         let policy = Policy {
+            prefer_installed: false,
             toolchain: tc,
             roots: vec!["App".into()],
             root_priority: None,
@@ -464,6 +467,7 @@ mod tests {
             "FFTW must not be a runtime dep on the fixture"
         );
         let policy = Policy {
+            prefer_installed: false,
             toolchain: universe.toolchain.clone(),
             roots: vec!["BuildDepRoot".into()],
             root_priority: None,
@@ -641,5 +645,105 @@ mod tests {
             single.effective_root_priority(),
             vec!["GROMACS".to_string()]
         );
+    }
+}
+
+#[cfg(test)]
+mod prefer_installed_tests {
+    use super::*;
+    use crate::domain::*;
+
+    /// Two versions of one package, nothing else, so the only question the
+    /// solver answers is which of them to take.
+    fn universe_with(versions: &[&str]) -> (Universe, StackLock) {
+        let toolchain = Toolchain {
+            name: "foss".into(),
+            version: "2025a".into(),
+        };
+        let candidates: Vec<Candidate> = versions
+            .iter()
+            .map(|version| Candidate {
+                name: "Alpha".into(),
+                version: (*version).to_string(),
+                toolchain: toolchain.clone(),
+                versionsuffix: None,
+                dependencies: Vec::new(),
+                builddependencies: Vec::new(),
+                easyconfig_path: format!("a/Alpha/Alpha-{version}-foss-2025a.eb"),
+                exts_list: Vec::new(),
+            })
+            .collect();
+        let universe = Universe {
+            toolchain: toolchain.clone(),
+            generation_label: Some("foss-2025a".into()),
+            candidates: candidates.clone(),
+        };
+        let installed = StackLock {
+            schema_version: 1,
+            toolchain,
+            generation_label: Some("installed".into()),
+            packages: vec![LockPackage {
+                name: "Alpha".into(),
+                version: versions[0].to_string(),
+                toolchain: universe.toolchain.clone(),
+                versionsuffix: None,
+                easyconfig_path: candidates[0].easyconfig_path.clone(),
+            }],
+            solver: SolverMeta {
+                engine: "eb_parse".into(),
+                engine_version: "0".into(),
+                timestamp: "2026-08-12T00:00:00Z".into(),
+            },
+        };
+        (universe, installed)
+    }
+
+    fn policy(prefer_installed: bool) -> Policy {
+        Policy {
+            prefer_installed,
+            toolchain: Toolchain {
+                name: "foss".into(),
+                version: "2025a".into(),
+            },
+            roots: vec!["Alpha".into()],
+            root_priority: None,
+            pins: Vec::new(),
+            forbid: Vec::new(),
+            objective: "prefer_newer".into(),
+            require_upgrade: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_default_objective_still_takes_the_newest() {
+        let (universe, installed) = universe_with(&["1.0", "2.0"]);
+        let lock = select_stack(&universe, &policy(false), Some(&installed)).expect("solve");
+        assert_eq!(lock.package("Alpha").unwrap().version, "2.0");
+    }
+
+    /// The point of the flag: a package nobody asked to move does not move,
+    /// because on this site moving it costs a rebuild.
+    #[test]
+    fn prefer_installed_keeps_what_is_already_there() {
+        let (universe, installed) = universe_with(&["1.0", "2.0"]);
+        let lock = select_stack(&universe, &policy(true), Some(&installed)).expect("solve");
+        assert_eq!(lock.package("Alpha").unwrap().version, "1.0");
+    }
+
+    #[test]
+    fn with_no_baseline_the_flag_changes_nothing() {
+        let (universe, _) = universe_with(&["1.0", "2.0"]);
+        let lock = select_stack(&universe, &policy(true), None).expect("solve");
+        assert_eq!(lock.package("Alpha").unwrap().version, "2.0");
+    }
+
+    /// A version that is no longer a candidate cannot be preferred, and the
+    /// solve must still succeed rather than hold out for it.
+    #[test]
+    fn an_installed_version_that_is_gone_falls_back_to_the_newest() {
+        let (universe, mut installed) = universe_with(&["1.0", "2.0"]);
+        installed.packages[0].version = "0.9".into();
+        let lock = select_stack(&universe, &policy(true), Some(&installed)).expect("solve");
+        assert_eq!(lock.package("Alpha").unwrap().version, "2.0");
     }
 }

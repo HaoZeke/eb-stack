@@ -601,6 +601,7 @@ mod tests {
             candidates: vec![app, lib, tool],
         };
         let policy = Policy {
+            prefer_installed: false,
             toolchain: tc,
             roots: vec!["App".into()],
             root_priority: None,
