@@ -737,6 +737,16 @@ mod prefer_installed_tests {
         assert_eq!(lock.package("Alpha").unwrap().version, "2.0");
     }
 
+    /// Same version, different build. A versionsuffix makes a different
+    /// module, so preferring it would keep nothing that is actually installed.
+    #[test]
+    fn a_variant_that_differs_only_by_versionsuffix_is_not_what_is_installed() {
+        let (universe, mut installed) = universe_with(&["1.0", "2.0"]);
+        installed.packages[0].versionsuffix = Some("-CUDA-12.8.0".into());
+        let lock = select_stack(&universe, &policy(true), Some(&installed)).expect("solve");
+        assert_eq!(lock.package("Alpha").unwrap().version, "2.0");
+    }
+
     /// A version that is no longer a candidate cannot be preferred, and the
     /// solve must still succeed rather than hold out for it.
     #[test]

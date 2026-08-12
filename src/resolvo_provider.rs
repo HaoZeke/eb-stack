@@ -45,12 +45,6 @@ pub struct EbProvider {
 }
 
 impl EbProvider {
-    /// Whether this exact candidate is the one a preference named.
-    fn is_favored(&self, name: NameId, rank: u32) -> bool {
-        let package_name = self.pool.resolve_package_name(name).to_string();
-        self.favored_ranks.get(&package_name) == Some(&rank)
-    }
-
     /// Build a provider from a candidate set and a policy.
     pub fn from_universe(
         candidates_in: &[Candidate],
@@ -295,8 +289,15 @@ impl EbProvider {
                     let Some(ranked) = ranks.get(name) else {
                         continue;
                     };
+                    // Same version is not the same build: a variant differing
+                    // only in versionsuffix is a different module, and
+                    // preferring it would keep nothing that is installed.
                     let installed_rank = ranked.iter().find_map(|(rank, idx)| {
-                        (candidates[*idx].version == installed.version).then_some(*rank)
+                        let candidate = &candidates[*idx];
+                        (candidate.version == installed.version
+                            && candidate.versionsuffix == installed.versionsuffix
+                            && candidate.toolchain == installed.toolchain)
+                            .then_some(*rank)
                     });
                     if let Some(rank) = installed_rank {
                         if excluded_ranks
@@ -513,12 +514,21 @@ impl DependencyProvider for EbProvider {
         // it should try, so a preference that is not expressed here is a
         // preference the solver never sees: it takes the first candidate that
         // works, which under plain rank order is always the newest.
+        // Every solvable in one call shares a package, so the favored rank is
+        // looked up once rather than once per comparison.
+        let favored = solvables
+            .first()
+            .map(|solvable| self.pool.resolve_solvable(*solvable).name)
+            .and_then(|name| {
+                let package_name = self.pool.resolve_package_name(name).to_string();
+                self.favored_ranks.get(&package_name).copied()
+            });
         solvables.sort_by(|a, b| {
-            let sa = self.pool.resolve_solvable(*a);
-            let sb = self.pool.resolve_solvable(*b);
-            let fa = self.is_favored(sa.name, sa.record);
-            let fb = self.is_favored(sb.name, sb.record);
-            fb.cmp(&fa).then_with(|| sb.record.cmp(&sa.record))
+            let ra = self.pool.resolve_solvable(*a).record;
+            let rb = self.pool.resolve_solvable(*b).record;
+            let fa = favored == Some(ra);
+            let fb = favored == Some(rb);
+            fb.cmp(&fa).then_with(|| rb.cmp(&ra))
         });
     }
 
@@ -842,9 +852,21 @@ fn versions_in_trial_order(
     // winning, and the preference only decides between feasible outcomes.
     if policy.prefer_installed {
         if let Some(installed) = baseline.and_then(|lock| lock.package(name)) {
-            if let Some(at) = versions.iter().position(|v| *v == installed.version) {
-                let preferred = versions.remove(at);
-                versions.insert(0, preferred);
+            // The installed entry has to name a build that still exists, and
+            // same version is not same build: a candidate differing only in
+            // versionsuffix is a different module, so promoting its version
+            // would keep nothing that is installed.
+            let installed_exists = candidates.iter().any(|candidate| {
+                candidate.name == name
+                    && candidate.version == installed.version
+                    && candidate.versionsuffix == installed.versionsuffix
+                    && candidate.toolchain == installed.toolchain
+            });
+            if installed_exists {
+                if let Some(at) = versions.iter().position(|v| *v == installed.version) {
+                    let preferred = versions.remove(at);
+                    versions.insert(0, preferred);
+                }
             }
         }
     }
