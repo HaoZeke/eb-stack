@@ -111,6 +111,30 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             provenance: residual.provenance.clone(),
         })
         .collect::<Vec<_>>();
+    // A constraint the requirement language cannot express is reported here
+    // rather than handed to the solver, where it would build an empty version
+    // set and make the dependency look unsatisfiable.
+    for dependency in &recipe.dependencies {
+        let Some(constraint) =
+            canonical_version_constraint(recipe.format, dependency.pin.as_deref())
+        else {
+            continue;
+        };
+        if let Err(unsupported) = crate::version::parse_requirement(&constraint) {
+            residuals.push(Residual {
+                id: format!("constraint:unparsed:{}", dependency.name),
+                stage: ResidualStage::Normalize,
+                category: "unparsed-constraint".into(),
+                severity: ResidualSeverity::Judgment,
+                summary: format!(
+                    "{} requirement {constraint:?} is not expressible, so it does not constrain                      the solve: {unsupported}",
+                    dependency.name
+                ),
+                evidence: dependency.original_spec.clone(),
+                provenance: dependency.provenance.first().cloned(),
+            });
+        }
+    }
     if recipe.sources.iter().any(|source| source.sha256.is_none()) {
         residuals.push(Residual {
             id: "source:missing-sha256".into(),
@@ -192,6 +216,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
         }],
         residuals,
         overlay_extensions: Vec::new(),
+        package_index: Default::default(),
     }
 }
 

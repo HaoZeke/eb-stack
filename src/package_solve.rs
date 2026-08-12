@@ -205,7 +205,7 @@ pub fn solve_package_profile_with_hierarchy(
     let mut universe = original_candidates.clone();
     for candidate in &mut universe {
         // Existing robot recipes are already-built modules. Overlay planning
-        // only needs their identity (Python, R, SciPy-bundle, …). Their own
+        // only needs their identity (a language runtime, a bundle, …). Their own
         // dependency trees — including filter-deps such as binutils — are not
         // rebuilt and must not make the candidate uninstallable.
         // The synthetic profile candidate below retains its direct

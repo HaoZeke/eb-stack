@@ -107,6 +107,7 @@ fn run_package(
         toolchain: toolchain(),
         source_checksums,
         package_layers: vec![package],
+        package_index: Default::default(),
         easyconfig_roots: vec![robot],
         stack_policy: policy(),
     })

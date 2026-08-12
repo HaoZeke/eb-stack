@@ -284,7 +284,11 @@ pub fn plan_package_closure_with_sources(
     )?;
     let target_hierarchy = hierarchy_for_with_tree(&request.toolchain, None, &tree.candidates).ok();
 
-    let (plan, sbom) = prepare_new_package_plan(request)?;
+    let (mut plan, sbom) = prepare_new_package_plan(request)?;
+    // The index answers "what version is this leftover", so it has to reach the
+    // root plan here too: the closure path builds its own requests and the CLI
+    // goes through this one, not through plan_new_package.
+    plan.package_index = request.package_index.clone();
     let mut state = ClosureState {
         robot: tree.candidates,
         generated: HashMap::new(),
@@ -668,7 +672,7 @@ impl ClosureState<'_> {
             for hole in &holes {
                 if self.hole_has_closable_source(hole)? {
                     self.ensure_companion_for_hole(plan, profile, stack_policy, hole, path)?;
-                } else if plan.origin == PackageOrigin::Pypi {
+                } else if defers_holes_to_overlay_extensions(&plan.origin) {
                     deferred += 1;
                 } else {
                     self.ensure_companion_for_hole(plan, profile, stack_policy, hole, path)?;
@@ -677,7 +681,7 @@ impl ClosureState<'_> {
             if self.generated.len() != generated_before {
                 continue;
             }
-            if deferred == holes.len() && plan.origin == PackageOrigin::Pypi {
+            if deferred == holes.len() && defers_holes_to_overlay_extensions(&plan.origin) {
                 return Ok(());
             }
             let hole = &holes[0];
@@ -883,6 +887,17 @@ impl ClosureState<'_> {
     }
 }
 
+/// Whether a hole with no source of its own is a bundle extension rather than
+/// a missing companion.
+///
+/// The language overlays install leftovers as `exts_list` entries of the
+/// emitted bundle, so a package with no recipe anywhere is expected there. The
+/// crate graph is different: a Cargo leftover becomes its own module, so it
+/// still needs a source.
+fn defers_holes_to_overlay_extensions(origin: &PackageOrigin) -> bool {
+    matches!(origin, PackageOrigin::Pypi | PackageOrigin::Cran)
+}
+
 fn prepare_companion_from_provider(
     provider: &PackageSourceProvider,
     easyconfig_roots: &[PathBuf],
@@ -1076,6 +1091,7 @@ fn foreign_request_from_provider(
         toolchain: provider.toolchain.clone(),
         source_checksums: provider.source_checksums.clone(),
         package_layers,
+        package_index: Default::default(),
         easyconfig_roots: easyconfig_roots.to_vec(),
         stack_policy: provider_stack_policy(provider, default_stack_policy)?,
     })

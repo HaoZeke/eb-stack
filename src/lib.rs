@@ -12,7 +12,8 @@ pub mod eb_parse;
 pub mod eb_style;
 /// EasyBuild's built-in `%(...)s` template constants and their expansions.
 pub mod eb_template_constants;
-mod ecosystem;
+pub mod ecosystem;
+pub use crate::ecosystem::parse_package_index;
 mod foreign;
 pub mod hierarchy;
 pub mod luarocks;

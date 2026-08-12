@@ -54,6 +54,76 @@ pub(crate) fn nonempty(value: Option<String>) -> Option<String> {
     })
 }
 
+/// One package as a repository index describes it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct IndexEntry {
+    /// Version the index publishes.
+    pub version: String,
+    /// Checksum the index publishes, already tagged with its algorithm so it
+    /// can go straight into an easyconfig (`md5:...`).
+    pub checksum: Option<String>,
+}
+
+/// Parse a repository index into package name to version.
+///
+/// The format is the one CRAN publishes as `PACKAGES` and Debian calls a
+/// control file: stanzas of `Field: value` separated by blank lines. It is the
+/// artifact a site already has offline, which is what an overlay needs when a
+/// dependency states no version of its own.
+pub fn parse_package_index(text: &str) -> std::collections::BTreeMap<String, IndexEntry> {
+    let mut index = std::collections::BTreeMap::new();
+    // A pinned requirements file is the same answer in the other ecosystem's
+    // spelling, and `pip freeze` is the artifact people already have. One
+    // `name==version` per line, so it cannot be confused with a control file.
+    if !text.contains("Package:") {
+        for line in text.lines() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            if line.is_empty() {
+                continue;
+            }
+            let (name, pin) = split_name_and_pin(line);
+            let Some(version) = pin.as_deref().and_then(exact_version) else {
+                continue;
+            };
+            if name.is_empty() {
+                continue;
+            }
+            index.insert(
+                crate::package_sources::package_identity(&name),
+                IndexEntry {
+                    version,
+                    checksum: None,
+                },
+            );
+        }
+        return index;
+    }
+    for stanza in text.split("\n\n") {
+        let mut name = None;
+        let mut version = None;
+        let mut checksum = None;
+        for line in stanza.lines() {
+            if let Some(rest) = line.strip_prefix("Package:") {
+                name = Some(rest.trim().to_string());
+            } else if let Some(rest) = line.strip_prefix("Version:") {
+                version = Some(rest.trim().to_string());
+            } else if let Some(rest) = line.strip_prefix("MD5sum:") {
+                let digest = rest.trim();
+                if !digest.is_empty() {
+                    checksum = Some(format!("md5:{digest}"));
+                }
+            }
+        }
+        if let (Some(name), Some(version)) = (name, version) {
+            index.insert(
+                crate::package_sources::package_identity(&name),
+                IndexEntry { version, checksum },
+            );
+        }
+    }
+    index
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,6 +161,39 @@ mod tests {
         assert_eq!(exact_version("  ==  2.1.3 "), Some("2.1.3".into()));
         assert_eq!(exact_version(">=2.1.3"), None);
         assert_eq!(exact_version("=="), None);
+    }
+
+    #[test]
+    fn an_index_maps_every_stanza() {
+        let index = parse_package_index(
+            "Package: matrixStats\nVersion: 1.4.1\nMD5sum: abc123\n\nPackage: coda\nVersion: 0.19-4\n",
+        );
+        let entry = index.get("matrixstats").expect("matrixstats");
+        assert_eq!(entry.version, "1.4.1");
+        assert_eq!(
+            index.get("coda").map(|e| e.version.as_str()),
+            Some("0.19-4")
+        );
+        assert_eq!(index.len(), 2);
+        assert_eq!(entry.checksum.as_deref(), Some("md5:abc123"));
+        assert_eq!(index.get("coda").and_then(|e| e.checksum.as_deref()), None);
+    }
+
+    #[test]
+    fn a_pinned_requirements_file_is_also_an_index() {
+        let index = parse_package_index(
+            "# from pip freeze\nsoupsieve==2.5\nbeautifulsoup4==4.12.3\nrequests>=2\n",
+        );
+        assert_eq!(
+            index.get("soupsieve").map(|e| e.version.as_str()),
+            Some("2.5")
+        );
+        assert_eq!(
+            index.get("beautifulsoup4").map(|e| e.version.as_str()),
+            Some("4.12.3")
+        );
+        // A range names no single version, so it supplies nothing.
+        assert!(!index.contains_key("requests"));
     }
 
     #[test]

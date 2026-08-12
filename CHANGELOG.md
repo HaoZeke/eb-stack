@@ -48,10 +48,27 @@ All notable changes to this project are documented here.
 - `--format pypi` reads Warehouse-shaped JSON or a `requirements.txt` and
   emits a `PythonBundle` whose `exts_list` is the leftover package, with
   already-provided extras mapped to the parent bundle.
-- `--format cran` reads a DESCRIPTION file, CRAN JSON, or a package list
-  and emits a `Bundle` with `exts_defaultclass = 'RPackage'` whose
-  `exts_list` is the leftover. Base-R packages are residuals. See
-  `docs/orgmode/howto/cran-extend.org`.
+- `--format cran` reads a DESCRIPTION file, CRAN JSON, or a package list and
+  emits one `RPackage` recipe when the robot carries its imports, or a
+  `Bundle` with `exts_defaultclass = 'RPackage'` carrying the leftovers in
+  `exts_list` when it does not. Base-R packages are recorded as residuals.
+- Requirement parsing is one implementation shared by the solver and the
+  emitter, covering `==`, `!=`, `>=`, `>`, `<=`, `<`, `~=` (PEP 440) and `^`
+  and `~` (Cargo). A clause the language cannot express becomes an
+  `unparsed-constraint` residual instead of an empty version set.
+- Cargo dependencies keep the requirement the manifest states, and `path` and
+  `git` dependencies are reported as judgment residuals: neither can be built
+  from a published crate tarball.
+- `package plan --package-index FILE` reads a repository index, either the
+  format CRAN publishes as `PACKAGES` or a pinned requirements file as
+  `pip freeze` writes it, supplying versions and checksums for dependencies
+  that state none of their own. A CRAN source now comes from
+  CRAN's contrib location rather than the project home page in `DESCRIPTION`,
+  and an R bundle carries `exts_default_options` pointing at the current and
+  archived CRAN paths.
+- Package identity, the pip-overlay refusal list, PyO3 marker crates and the
+  crate-to-module renames live in `data/overlay-policy.toml` rather than in
+  match arms.
 - Name-mode ingest (`--source eon-akmc` with `--format pypi`) fetches
   Warehouse / CRAN / crates.io once and writes `ingest/<format>/`. SAT
   and tests only read that dump. A neighbouring sdist tree overlays

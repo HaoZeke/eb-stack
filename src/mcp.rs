@@ -331,6 +331,7 @@ fn package_plan(arguments: &Value) -> Result<Value, String> {
         toolchain: toolchain(arguments)?,
         source_checksums: string_array(arguments, "source_checksums")?,
         package_layers: package_layers(arguments)?,
+        package_index: Default::default(),
         easyconfig_roots: path_array(arguments, "easyconfigs")?,
         stack_policy,
     };

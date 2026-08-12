@@ -1,0 +1,33 @@
+# Overlay policy for the language-ecosystem adapters.
+#
+# Package identity and "do not pip-install this" are packaging decisions, not
+# parser rules, so they live here as data rather than as match arms in the
+# parsers. The driver contract forbids package-name branches in production
+# code, and a table is also the thing a site can extend without a rebuild.
+
+# Foreign name -> the identity it shares with an EasyBuild module. Comparison
+# is done on the identity, so both sides of a pair collapse to one name.
+[aliases]
+torch = "pytorch"
+
+# Packages an overlay must never pip-install on top of an EasyBuild stack.
+# These are toolchain-built extensions: a wheel would shadow the module and
+# lose the compiler, BLAS and MPI the stack was built with.
+[refuse_overlay]
+names = ["numpy", "scipy", "pytorch"]
+
+# PyO3 crates whose published crate name differs from the module they import
+# as. Only pairs that actually differ belong here.
+[python_modules.crate]
+readcon-core = "readcon"
+
+# Build requirements a Python project states that must not become EasyBuild
+# build dependencies of an overlay: the language itself, and packages the stack
+# already provides as toolchain-built extensions.
+[build_requires]
+ignore = ["python", "numpy"]
+
+# Crates whose presence in a Cargo manifest means the crate builds a Python
+# extension module rather than a plain Rust binary or library.
+[python_modules]
+marker_crates = ["pyo3", "pyo3-ffi", "maturin", "numpy"]

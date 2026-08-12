@@ -109,6 +109,7 @@ fn plan_pypi_uses_python_bundle_and_soupsieve_provide() {
         toolchain: toolchain(),
         source_checksums: Vec::new(),
         package_layers: Vec::new(),
+        package_index: Default::default(),
         easyconfig_roots: vec![root().join("fixtures/foreign_ingest/pypi_bs4/robot")],
         stack_policy: stack_policy(),
     };
@@ -180,6 +181,7 @@ fn plan_cran_emits_a_single_r_package() {
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
         ],
         package_layers: Vec::new(),
+        package_index: Default::default(),
         easyconfig_roots: vec![root().join("fixtures/foreign_ingest/cran_jsonlite/robot")],
         stack_policy: stack_policy(),
     };
@@ -240,6 +242,7 @@ fn plan_numpy_is_already_provided_by_scipy_bundle() {
         toolchain: toolchain(),
         source_checksums: Vec::new(),
         package_layers: Vec::new(),
+        package_index: Default::default(),
         easyconfig_roots: vec![numpy_robot()],
         stack_policy: stack_policy(),
     };
@@ -274,6 +277,7 @@ fn plan_leftover_depends_on_scipy_bundle_for_numpy() {
         toolchain: toolchain(),
         source_checksums: Vec::new(),
         package_layers: Vec::new(),
+        package_index: Default::default(),
         easyconfig_roots: vec![numpy_robot()],
         stack_policy: stack_policy(),
     };
@@ -311,13 +315,14 @@ fn plan_torch_without_pytorch_module_refuses_pip_overlay() {
         toolchain: toolchain(),
         source_checksums: Vec::new(),
         package_layers: Vec::new(),
+        package_index: Default::default(),
         easyconfig_roots: vec![numpy_robot()],
         stack_policy: stack_policy(),
     };
     let error = plan_new_package(&request).expect_err("torch must refuse pip overlay");
     let message = error.to_string();
     assert!(
-        message.contains("torch") && message.contains("pip-overlay"),
+        message.contains("torch") && message.contains("PythonBundle"),
         "{message}"
     );
 }
@@ -330,6 +335,7 @@ fn plan_cargo_readcon_uses_rust_and_maturin() {
         toolchain: toolchain(),
         source_checksums: Vec::new(),
         package_layers: Vec::new(),
+        package_index: Default::default(),
         easyconfig_roots: vec![root().join("fixtures/foreign_ingest/cargo_readcon/robot")],
         stack_policy: stack_policy(),
     };
@@ -381,6 +387,7 @@ fn plan_eon_akmc_overlays_missing_pypi_deps() {
         toolchain: toolchain(),
         source_checksums: Vec::new(),
         package_layers: Vec::new(),
+        package_index: Default::default(),
         easyconfig_roots: vec![numpy_robot()],
         stack_policy: stack_policy(),
     };
@@ -434,6 +441,7 @@ fn plan_torch_uses_existing_pytorch_module() {
         toolchain: toolchain(),
         source_checksums: Vec::new(),
         package_layers: Vec::new(),
+        package_index: Default::default(),
         easyconfig_roots: vec![root().join("fixtures/foreign_ingest/pypi_numpy/robot-pytorch")],
         stack_policy: stack_policy(),
     };
@@ -467,6 +475,7 @@ fn plan_eon_akmc_resolvo_takes_robot_yaml_quill_cbindgen() {
         toolchain: toolchain(),
         source_checksums: Vec::new(),
         package_layers: Vec::new(),
+        package_index: Default::default(),
         easyconfig_roots: vec![
             numpy_robot(),
             root().join("fixtures/foreign_ingest/cargo_readcon/robot"),
@@ -573,6 +582,7 @@ fn plan_eon_akmc_closes_readcon_from_cargo_source() {
         toolchain: toolchain(),
         source_checksums: Vec::new(),
         package_layers: Vec::new(),
+        package_index: Default::default(),
         easyconfig_roots: vec![
             numpy_robot(),
             root().join("fixtures/foreign_ingest/cargo_readcon/robot"),
@@ -630,6 +640,85 @@ fn plan_eon_akmc_closes_readcon_from_cargo_source() {
             && !recipe.text.contains("cbindgen")
             && !recipe.text.contains("Eigen"),
         "non-meson leftovers must not take meson wrap natives:\n{}",
+        recipe.text
+    );
+}
+
+/// A CRAN package whose imports the robot does not carry has to become a
+/// Bundle: the leftovers are already in the plan, and the single-RPackage
+/// rendering has nowhere to put them, so they used to be dropped in silence.
+#[test]
+fn plan_cran_with_leftovers_emits_an_r_bundle() {
+    let request = NewPackageRequest {
+        source: root().join("fixtures/foreign_ingest/cran_bundle/cran.json"),
+        format: Some(ForeignFormat::Cran),
+        toolchain: toolchain(),
+        source_checksums: vec![
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".into(),
+        ],
+        package_layers: Vec::new(),
+        package_index: Default::default(),
+        easyconfig_roots: vec![root().join("fixtures/foreign_ingest/cran_bundle/robot")],
+        stack_policy: stack_policy(),
+    };
+    let bundle = plan_new_package(&request).expect("plan cran bundle");
+    let recipe = &bundle.easyconfigs[0];
+    assert!(
+        recipe.text.contains("easyblock = 'Bundle'"),
+        "{}",
+        recipe.text
+    );
+    assert!(
+        recipe.text.contains("exts_defaultclass = 'RPackage'"),
+        "{}",
+        recipe.text
+    );
+    for extension in ["processx", "rmarkdown"] {
+        assert!(
+            recipe.text.contains(extension),
+            "expected {extension} in exts_list:\n{}",
+            recipe.text
+        );
+    }
+    assert!(recipe.text.contains("'R'"), "{}", recipe.text);
+}
+
+/// A dependency written as a bare name is normal in CRAN, and an exts_list
+/// entry still needs one concrete version. The repository index supplies it,
+/// with the checksum the index publishes.
+#[test]
+fn plan_cran_takes_unpinned_versions_from_the_package_index() {
+    let index = eb_stack::parse_package_index(
+        "Package: processx\nVersion: 3.8.4\nMD5sum: 1111111111111111111111111111abcd\n\n\
+         Package: rmarkdown\nVersion: 2.27\nMD5sum: 2222222222222222222222222222abcd\n",
+    );
+    let request = NewPackageRequest {
+        source: root().join("fixtures/foreign_ingest/cran_unpinned/cran.json"),
+        format: Some(ForeignFormat::Cran),
+        toolchain: toolchain(),
+        source_checksums: vec![
+            "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".into(),
+        ],
+        package_layers: Vec::new(),
+        package_index: index,
+        easyconfig_roots: vec![root().join("fixtures/foreign_ingest/cran_bundle/robot")],
+        stack_policy: stack_policy(),
+    };
+    let bundle = plan_new_package(&request).expect("plan with an index");
+    let recipe = &bundle.easyconfigs[0];
+    assert!(
+        recipe.text.contains("('processx', '3.8.4'"),
+        "the index supplies the version:\n{}",
+        recipe.text
+    );
+    assert!(
+        recipe.text.contains("md5:1111111111111111111111111111abcd"),
+        "and the checksum it publishes:\n{}",
+        recipe.text
+    );
+    assert!(
+        recipe.text.contains("cran.r-project.org/src/contrib"),
+        "an R bundle needs somewhere to download from:\n{}",
         recipe.text
     );
 }

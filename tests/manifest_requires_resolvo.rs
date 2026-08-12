@@ -55,6 +55,7 @@ dependencies = [('zlib', '1.2')]
         toolchain: toolchain.clone(),
         source_checksums: Vec::new(),
         package_layers: Vec::new(),
+        package_index: Default::default(),
         easyconfig_roots: vec![robot],
         stack_policy: StackPolicy {
             schema_version: STACK_POLICY_SCHEMA_VERSION,

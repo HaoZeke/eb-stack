@@ -59,9 +59,62 @@ eb-stack campaign run \
 
 Project one-offs can keep using ~R_LIBS_USER~ instead of a site bundle.
 
-* Leftover emit
+* Dependencies that state no version
 
-A leftover CRAN package emits a ~Bundle~ with ~exts_defaultclass =
-'RPackage'~. Already-provided extras collapse to ~R-bundle-CRAN~. The
-leftover itself is the ~exts_list~ entry. ~plan_cran_emits_a_single_r_package~
-pins that shape.
+A CRAN package routinely imports another by bare name, with no version at all.
+Nothing is wrong with that, but an ~exts_list~ entry needs one concrete
+version, so planning stops with
+
+#+begin_example
+matrixStats is not in the robot, and ">=0" names no version to install as an
+extension. Give the ecosystem index with --package-index, or pin the dependency
+#+end_example
+
+Give it the index CRAN publishes:
+
+#+begin_src bash
+curl -sSLO https://cran.r-project.org/src/contrib/PACKAGES
+
+eb-stack package plan \
+  --source brms/DESCRIPTION \
+  --format cran \
+  --toolchain-name foss --toolchain-version 2025b \
+  --easyconfigs "$EBROOTEASYBUILD/easybuild/easyconfigs" \
+  --stack-policy examples/stacks/eessi-r-extras.toml \
+  --package-index PACKAGES \
+  --source-checksum <sha256 of the package tarball> \
+  --out-dir /tmp/brms
+#+end_src
+
+The index is a control file: stanzas of ~Field: value~ separated by blank
+lines. Versions for unpinned leftovers come from it, and so do their checksums,
+since CRAN publishes an ~MD5sum~ per package and EasyBuild accepts a tagged
+~md5:~ value. It is a file, not a network call, so a plan stays reproducible
+and works offline against a copy taken at a known time.
+
+Without an index the error above is the right outcome: installing whatever
+version happens to be current, unrecorded, is worse than stopping.
+
+* When this emits a Bundle
+
+A CRAN package whose imports the robot already carries emits one ~RPackage~
+recipe. One whose imports it does not carry emits a ~Bundle~ with
+~exts_defaultclass = 'RPackage'~ and the leftovers in ~exts_list~, the same
+shape upstream uses for ~R-bundle-CRAN~:
+
+#+begin_src python
+easyblock = 'Bundle'
+exts_defaultclass = 'RPackage'
+exts_list = [
+    ('processx', '3.8.4', {...}),
+]
+#+end_src
+
+The choice is made from the plan rather than by a flag: leftovers exist or they
+do not. Both shapes are pinned by tests,
+~plan_cran_emits_a_single_r_package~ and
+~plan_cran_with_leftovers_emits_an_r_bundle~.
+
+An already-provided import collapses to its provider instead of becoming an
+extension, through the same mechanism the Python side uses: an ~R-bundle-CRAN~
+in the robot tree satisfies a requirement for one of its ~exts_list~ entries.

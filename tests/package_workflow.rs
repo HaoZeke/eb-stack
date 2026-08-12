@@ -78,6 +78,7 @@ config_options = ["-Dwith_cli=true"]
         toolchain: toolchain(),
         source_checksums: Vec::new(),
         package_layers: vec![profile.clone()],
+        package_index: Default::default(),
         easyconfig_roots: vec![robot.clone()],
         stack_policy: stack_policy.clone(),
     })
@@ -108,6 +109,7 @@ config_options = ["-Dwith_cli=true"]
         toolchain: toolchain(),
         source_checksums: vec![checksum.into()],
         package_layers: vec![patch_without_checksum],
+        package_index: Default::default(),
         easyconfig_roots: vec![robot.clone()],
         stack_policy: stack_policy.clone(),
     })
@@ -145,6 +147,7 @@ config_options = ["-Dwith_cli=true"]
         toolchain: toolchain(),
         source_checksums: vec![checksum.into()],
         package_layers: vec![profile_with_patch],
+        package_index: Default::default(),
         easyconfig_roots: vec![robot],
         stack_policy,
     })
@@ -266,6 +269,7 @@ class Orbit(Package):
         toolchain: toolchain(),
         source_checksums: Vec::new(),
         package_layers: Vec::new(),
+        package_index: Default::default(),
         easyconfig_roots: vec![robot],
         stack_policy: StackPolicy {
             schema_version: STACK_POLICY_SCHEMA_VERSION,

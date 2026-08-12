@@ -193,7 +193,7 @@ fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
                     original,
                     ..
                 } => {
-                    if name.eq_ignore_ascii_case("numpy") || name.eq_ignore_ascii_case("python") {
+                    if crate::provides::ignored_build_requirement(&name) {
                         continue;
                     }
                     dependencies.push(ForeignDep {
@@ -280,10 +280,9 @@ fn pypi_build_system_hints(build_system: Option<&WarehouseBuildSystem>) -> Vec<S
         .requires
         .iter()
         .any(|spec| spec.to_ascii_lowercase().contains("meson"))
+        && !hints.iter().any(|hint| hint == "mesonpy")
     {
-        if !hints.iter().any(|hint| hint == "mesonpy") {
-            hints.extend(["meson".into(), "mesonpy".into()]);
-        }
+        hints.extend(["meson".into(), "mesonpy".into()]);
     }
     hints
 }

@@ -88,6 +88,23 @@ come from the build host (~rustc -vV~, ~uname -m~), not from a
 plan-time x86_64 literal. Hatchling and ~meson-python~ already on
 ~Python-bundle-PyPI~ stay modules; they are not pip extras.
 
+* Dependencies that state no version
+
+A Python project routinely requires another package with no version. An
+~exts_list~ entry still needs one, so planning stops and asks for an index.
+On this side the index is a pinned requirements file, which is what
+~pip freeze~ writes:
+
+#+begin_src bash
+pip freeze > constraints.txt
+eb-stack package plan ... --package-index constraints.txt
+#+end_src
+
+One ~name==version~ per line; comments and blank lines are ignored, and a line
+that names a range rather than a version supplies nothing, since a range is not
+a version. The same flag takes a CRAN ~PACKAGES~ file for the R side; the
+format is detected from the content.
+
 * Install with the eessi-extend target
 
 Plan on the host. Install through ~campaign run~ and

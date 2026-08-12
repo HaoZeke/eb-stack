@@ -204,13 +204,25 @@ fn render_easyconfig(
         .collect::<Vec<_>>();
     let moduleclass = plan.build.moduleclass.as_deref().unwrap_or("lib");
 
-    if plan.build.easyblock.as_deref() == Some("PythonBundle")
+    // A CRAN plan with leftovers has to become a Bundle: the extensions are in
+    // the plan either way, and the single-RPackage rendering has nowhere to put
+    // them, so they would be dropped silently.
+    let language_bundle = if plan.build.easyblock.as_deref() == Some("PythonBundle")
         || plan.origin == crate::package::PackageOrigin::Pypi
     {
+        Some(LanguageBundleKind::Python)
+    } else if plan.origin == crate::package::PackageOrigin::Cran
+        && !plan.overlay_extensions.is_empty()
+    {
+        Some(LanguageBundleKind::R)
+    } else {
+        None
+    };
+    if let Some(kind) = language_bundle {
         return render_language_bundle(
             plan,
             materialized,
-            LanguageBundleKind::Python,
+            kind,
             BundleFragments {
                 easyblock_line: &easyblock_line,
                 homepage,
@@ -278,6 +290,8 @@ moduleclass = '{moduleclass}'\n",
 #[derive(Clone, Copy)]
 enum LanguageBundleKind {
     Python,
+    /// An R bundle: `Bundle` with `exts_defaultclass = 'RPackage'`, which is
+    /// how upstream writes a set of CRAN packages installed together.
     R,
 }
 
@@ -316,12 +330,17 @@ fn render_language_bundle(
         moduleclass,
     } = fragments;
     let easyblock_line = match kind {
+        // The plan carries RPackage, which is the single-package shape. A
+        // bundle of R packages is a different easyblock by construction, so the
+        // kind decides here rather than the plan.
         LanguageBundleKind::R => "easyblock = 'Bundle'\n\n".to_string(),
         LanguageBundleKind::Python if easyblock_line.is_empty() => {
             "easyblock = 'PythonBundle'\n\n".to_string()
         }
         LanguageBundleKind::Python => easyblock_line.to_string(),
     };
+    // An R bundle installs its exts_list entries as RPackage; a PythonBundle
+    // knows its own extension class, so it needs no line here.
     let default_class = match kind {
         LanguageBundleKind::Python => String::new(),
         LanguageBundleKind::R => "exts_defaultclass = 'RPackage'\n\n".to_string(),
@@ -367,7 +386,11 @@ fn render_exts_list(
 ) -> String {
     let mut items = Vec::new();
     for extension in &plan.overlay_extensions {
-        items.push(render_plain_ext(&extension.name, &extension.version));
+        items.push(render_plain_ext(
+            &extension.name,
+            &extension.version,
+            extension.checksum.as_deref(),
+        ));
     }
     let mut emitted_root = false;
     for source in &materialized.sources {
@@ -377,7 +400,11 @@ fn render_exts_list(
         }
     }
     if !emitted_root {
-        items.push(render_plain_ext(&plan.package.name, &plan.package.version));
+        items.push(render_plain_ext(
+            &plan.package.name,
+            &plan.package.version,
+            None,
+        ));
     }
     render_multiline_list(&items)
 }
@@ -425,7 +452,23 @@ fn render_ext_from_source(
 }
 
 fn overlay_exts_default_options(plan: &PackagePlan, kind: LanguageBundleKind) -> String {
+    // An R bundle needs to know where CRAN keeps sources, current and archived,
+    // and how a release tarball is named. Without it every extension is an
+    // unresolvable download.
     if matches!(kind, LanguageBundleKind::R) {
+        if plan.overlay_extensions.is_empty() {
+            return String::new();
+        }
+        return "exts_default_options = {\n    'source_urls': [\n        \
+                'https://cran.r-project.org/src/contrib/',\n        \
+                'https://cran.r-project.org/src/contrib/Archive/%(name)s',\n    ],\n    \
+                'sources': ['%(name)s_%(version)s.tar.gz'],\n}\n\n"
+            .to_string();
+    }
+    // The prepended PYTHONPATH is what lets one extension import another it was
+    // just installed beside. An R bundle installs into the R library path and
+    // has no use for it.
+    if !matches!(kind, LanguageBundleKind::Python) {
         return String::new();
     }
     if plan.overlay_extensions.is_empty() && !mesonpy_backend(plan) {
@@ -448,8 +491,16 @@ fn mesonpy_preinstallopts() -> String {
     )
 }
 
-fn render_plain_ext(name: &str, version: &str) -> String {
-    format!("('{}', '{}')", escape_single(name), escape_single(version))
+fn render_plain_ext(name: &str, version: &str, checksum: Option<&str>) -> String {
+    match checksum {
+        Some(checksum) => format!(
+            "('{}', '{}', {{\n    'checksums': ['{}'],\n}})",
+            escape_single(name),
+            escape_single(version),
+            escape_single(checksum)
+        ),
+        None => format!("('{}', '{}')", escape_single(name), escape_single(version)),
+    }
 }
 
 /// Prefer conventional EasyBuild key order for common toolchainopts.

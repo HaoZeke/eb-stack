@@ -109,6 +109,7 @@ fn qmcpack_plan() -> PackagePlan {
             provenance: Some(provenance(214, "def cmake_args(self):")),
         }],
         overlay_extensions: Vec::new(),
+        package_index: Default::default(),
     }
 }
 

@@ -77,6 +77,7 @@ fn request(source: PathBuf, robot: PathBuf) -> NewPackageRequest {
         toolchain: toolchain(),
         source_checksums: Vec::new(),
         package_layers: Vec::new(),
+        package_index: Default::default(),
         easyconfig_roots: vec![robot],
         stack_policy: policy(),
     }
