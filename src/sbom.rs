@@ -6,8 +6,14 @@
 //! declared dependency edges — not a post-build compliance scan.
 
 use crate::domain::{StackLock, Universe};
+use cyclonedx_bom::models::bom::BomReference;
 use cyclonedx_bom::models::component::{Classification, Component, Components};
+use cyclonedx_bom::models::composition::{AggregateType, Composition, Compositions};
 use cyclonedx_bom::models::dependency::{Dependencies, Dependency};
+use cyclonedx_bom::models::external_reference::{
+    ExternalReference, ExternalReferenceType, ExternalReferences, Uri as ExternalUri,
+};
+use cyclonedx_bom::models::hash::{Hash, HashAlgorithm, HashValue, Hashes};
 use cyclonedx_bom::models::lifecycle::{Lifecycle, Lifecycles, Phase};
 use cyclonedx_bom::models::metadata::Metadata;
 use cyclonedx_bom::models::property::{Properties, Property};
@@ -20,6 +26,59 @@ use std::str::FromStr;
 
 fn bom_ref(name: &str, version: &str, toolchain_label: &str) -> String {
     format!("pkg:generic/{name}@{version}?toolchain={toolchain_label}")
+}
+
+/// What an easyconfig states about the artifact one component builds from.
+///
+/// A lock records a selection, not an artifact. These are the fields that make
+/// the difference between an inventory and a document someone can verify:
+/// which bytes were expected, and where they were fetched from.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ArtifactFacts {
+    /// Checksums the easyconfig states, in the order it states them. Only
+    /// 64-character hex values are emitted as SHA-256; anything else is
+    /// carried as a property rather than asserted as a hash of the wrong kind.
+    pub checksums: Vec<String>,
+    /// Source URLs the easyconfig downloads from.
+    pub source_urls: Vec<String>,
+    /// Patch filenames applied on top of the source.
+    pub patches: Vec<String>,
+}
+
+/// Everything a caller can tell the SBOM builder beyond the lock itself.
+///
+/// Grouped into one struct so the builder keeps a single entry point as more
+/// of the spec is filled in, rather than growing another positional argument
+/// per field.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SbomFacts<'a> {
+    /// Runtime edges, name to names, which become the `dependencies` graph.
+    pub runtime_dep_map: Option<&'a HashMap<String, Vec<String>>>,
+    /// Build edges, kept as a property because CycloneDX `dependencies` does
+    /// not distinguish build from runtime in 1.5.
+    pub build_dep_map: Option<&'a HashMap<String, Vec<String>>>,
+    /// Per-package artifact facts, keyed by package name.
+    pub artifacts: Option<&'a HashMap<String, ArtifactFacts>>,
+    /// Requirements the plan could not resolve. Their presence is what makes
+    /// the document's `compositions` say `incomplete` rather than `complete`.
+    pub unresolved: Option<&'a [String]>,
+}
+
+/// A SHA-256 as the spec wants it, or nothing.
+///
+/// EasyBuild checksums are usually SHA-256 but the parameter also carries
+/// `('md5', ...)` tuples, dict-per-source forms and, historically, bare MD5.
+/// Guessing the algorithm from a string of the wrong length would put a false
+/// assertion in a document whose only purpose is to be trusted.
+fn sha256_hash(value: &str) -> Option<Hash> {
+    let candidate = value.trim();
+    if candidate.len() != 64 || !candidate.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(Hash {
+        alg: HashAlgorithm::SHA_256,
+        content: HashValue(candidate.to_ascii_lowercase()),
+    })
 }
 
 /// Build a CycloneDX JSON document from a lock only (no dependency map).
@@ -59,6 +118,29 @@ pub fn lock_to_bom(
     runtime_dep_map: Option<&HashMap<String, Vec<String>>>,
     build_dep_map: Option<&HashMap<String, Vec<String>>>,
 ) -> Bom {
+    lock_to_bom_with_facts(
+        lock,
+        SbomFacts {
+            runtime_dep_map,
+            build_dep_map,
+            ..SbomFacts::default()
+        },
+    )
+}
+
+/// Build the BOM from a lock plus whatever else the caller knows.
+///
+/// Everything beyond the lock is optional, and what is absent is left absent
+/// rather than guessed: a component with no stated checksum carries no
+/// `hashes`, and a plan with nothing unresolved is the only one that claims
+/// `complete`.
+pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
+    let SbomFacts {
+        runtime_dep_map,
+        build_dep_map,
+        artifacts,
+        unresolved,
+    } = facts;
     let toolchain_label = lock.toolchain.label();
     let mut package_refs: HashMap<String, String> = HashMap::new();
     let mut components: Vec<Component> = Vec::new();
@@ -93,6 +175,47 @@ pub fn lock_to_bom(
         let purl_str = r.clone();
         let mut component = Component::new(Classification::Library, &p.name, &p.version, Some(r));
         component.purl = Purl::from_str(&purl_str).ok();
+
+        if let Some(facts) = artifacts.and_then(|m| m.get(&p.name)) {
+            let hashes: Vec<Hash> = facts
+                .checksums
+                .iter()
+                .filter_map(|c| sha256_hash(c))
+                .collect();
+            if !hashes.is_empty() {
+                component.hashes = Some(Hashes(hashes));
+            }
+            // A checksum the spec cannot express as a hash is still evidence,
+            // and dropping it silently would hide that the recipe states one.
+            for stated in &facts.checksums {
+                if sha256_hash(stated).is_none() && !stated.trim().is_empty() {
+                    props.push(Property::new("easybuild:checksum_unmapped", stated));
+                }
+            }
+            let refs: Vec<ExternalReference> = facts
+                .source_urls
+                .iter()
+                .filter_map(|url| {
+                    Uri::try_from(url.clone())
+                        .ok()
+                        .map(|uri| ExternalReference {
+                            external_reference_type: ExternalReferenceType::Distribution,
+                            url: ExternalUri::Url(uri),
+                            comment: Some("source_urls entry of the easyconfig".to_string()),
+                            hashes: None,
+                        })
+                })
+                .collect();
+            if !refs.is_empty() {
+                component.external_references = Some(ExternalReferences(refs));
+            }
+            // Patches are named, not carried: CycloneDX pedigree wants the diff
+            // itself, and an easyconfig states only a filename in its own tree.
+            for patch in &facts.patches {
+                props.push(Property::new("easybuild:patch", patch));
+            }
+        }
+
         component.properties = Some(Properties(props));
         components.push(component);
     }
@@ -120,11 +243,12 @@ pub fn lock_to_bom(
         .generation_label
         .clone()
         .unwrap_or_else(|| toolchain_label.clone());
+    let stack_ref = format!("pkg:generic/{stack_name}@{stack_ver}");
     let mut meta_component = Component::new(
         Classification::Application,
         &stack_name,
         &stack_ver,
-        Some(format!("pkg:generic/{stack_name}@{stack_ver}")),
+        Some(stack_ref.clone()),
     );
     meta_component.description = Some(NormalizedString::new(
         "Planned EasyBuild stack inventory from eb-stack lock (pre-install; not a post-build compliance scan)",
@@ -156,7 +280,9 @@ pub fn lock_to_bom(
         services: None,
         external_references: None,
         dependencies: Some(Dependencies(deps)),
-        compositions: None,
+        compositions: Some(Compositions(vec![compositions_statement(
+            &stack_ref, unresolved,
+        )])),
         properties: None,
         vulnerabilities: None,
         signature: None,
@@ -164,6 +290,68 @@ pub fn lock_to_bom(
         formulation: None,
         spec_version: SpecVersion::V1_5,
     }
+}
+
+/// State whether this document accounts for everything the plan needed.
+///
+/// A planned SBOM is worth as much as its completeness claim, and CycloneDX
+/// gives that claim a field rather than leaving it to prose. A plan that left
+/// requirements unresolved describes an `incomplete` composition, and each
+/// unresolved requirement is named as a property so the gap is readable
+/// without going back to the residuals report.
+fn compositions_statement(stack_ref: &str, unresolved: Option<&[String]>) -> Composition {
+    let missing = unresolved.unwrap_or(&[]);
+    Composition {
+        bom_ref: None,
+        aggregate: if missing.is_empty() {
+            AggregateType::Complete
+        } else {
+            AggregateType::Incomplete
+        },
+        assemblies: Some(vec![BomReference::new(stack_ref)]),
+        dependencies: None,
+        vulnerabilities: None,
+        signature: None,
+    }
+}
+
+/// Read the easyconfigs a lock names, for the facts only they carry.
+///
+/// This is the one place the module touches the filesystem, and it earns it: a
+/// lock records which easyconfig was selected, and the checksums and source
+/// URLs that make the document verifiable live in that file rather than in the
+/// lock. A path that cannot be read or parsed contributes nothing rather than
+/// failing the document, since an SBOM missing one component's hashes is worth
+/// more than no SBOM, and the count of what was read is reported to the caller.
+pub fn artifact_facts_for_lock(lock: &StackLock) -> HashMap<String, ArtifactFacts> {
+    let mut out = HashMap::new();
+    for package in &lock.packages {
+        if package.easyconfig_path.is_empty() {
+            continue;
+        }
+        let Ok(resolved) = crate::eb_parse::resolve_easyconfig_file(std::path::Path::new(
+            &package.easyconfig_path,
+        )) else {
+            continue;
+        };
+        if resolved.checksums.is_empty() && resolved.source_urls.is_empty() {
+            continue;
+        }
+        out.insert(
+            package.name.clone(),
+            ArtifactFacts {
+                checksums: resolved.checksums.clone(),
+                source_urls: resolved.source_urls.clone(),
+                patches: Vec::new(),
+            },
+        );
+    }
+    out
+}
+
+/// JSON document from a lock plus caller-supplied facts.
+pub fn lock_to_cyclonedx_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Value {
+    bom_to_json_value(lock_to_bom_with_facts(lock, facts))
 }
 
 fn bom_to_json_value(bom: Bom) -> Value {
@@ -471,5 +659,160 @@ mod tests {
                 c.name
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod artifact_facts_tests {
+    use super::*;
+    use crate::domain::*;
+
+    fn one_package_lock() -> StackLock {
+        StackLock {
+            schema_version: 1,
+            toolchain: Toolchain {
+                name: "foss".into(),
+                version: "2025a".into(),
+            },
+            generation_label: Some("2025a".into()),
+            packages: vec![LockPackage {
+                name: "Example".into(),
+                version: "1.2.3".into(),
+                toolchain: Toolchain {
+                    name: "foss".into(),
+                    version: "2025a".into(),
+                },
+                versionsuffix: None,
+                easyconfig_path: "e/Example/Example-1.2.3-foss-2025a.eb".into(),
+            }],
+            solver: SolverMeta {
+                engine: "resolvo".into(),
+                engine_version: "0.0.0".into(),
+                timestamp: "2026-08-12T00:00:00Z".into(),
+            },
+        }
+    }
+
+    fn facts_map(facts: ArtifactFacts) -> HashMap<String, ArtifactFacts> {
+        HashMap::from([("Example".to_string(), facts)])
+    }
+
+    fn component(sbom: &Value) -> Value {
+        sbom.get("components").unwrap().as_array().unwrap()[0].clone()
+    }
+
+    #[test]
+    fn a_stated_sha256_becomes_a_hash_the_spec_can_verify() {
+        let sha = "e".repeat(64);
+        let map = facts_map(ArtifactFacts {
+            checksums: vec![sha.clone()],
+            ..Default::default()
+        });
+        let bom = lock_to_bom_with_facts(
+            &one_package_lock(),
+            SbomFacts {
+                artifacts: Some(&map),
+                ..SbomFacts::default()
+            },
+        );
+        let c = component(&bom_to_json_value(bom));
+        let hashes = c.get("hashes").unwrap().as_array().unwrap();
+        assert_eq!(hashes[0]["alg"], "SHA-256");
+        assert_eq!(hashes[0]["content"], sha);
+    }
+
+    /// EasyBuild also carries md5 values and dict-per-source forms. Calling one
+    /// of those SHA-256 would put a false assertion in the document.
+    #[test]
+    fn a_checksum_of_another_kind_is_recorded_but_not_asserted_as_sha256() {
+        let map = facts_map(ArtifactFacts {
+            checksums: vec!["d41d8cd98f00b204e9800998ecf8427e".into()],
+            ..Default::default()
+        });
+        let bom = lock_to_bom_with_facts(
+            &one_package_lock(),
+            SbomFacts {
+                artifacts: Some(&map),
+                ..SbomFacts::default()
+            },
+        );
+        let c = component(&bom_to_json_value(bom));
+        assert!(c.get("hashes").is_none(), "{c}");
+        let props = c.get("properties").unwrap().as_array().unwrap().clone();
+        assert!(
+            props
+                .iter()
+                .any(|p| p["name"] == "easybuild:checksum_unmapped"),
+            "{props:?}"
+        );
+    }
+
+    #[test]
+    fn source_urls_become_distribution_references_and_patches_are_named() {
+        let map = facts_map(ArtifactFacts {
+            checksums: vec![],
+            source_urls: vec!["https://example.org/src/Example-1.2.3.tar.gz".into()],
+            patches: vec!["Example-1.2.3_fix-build.patch".into()],
+        });
+        let bom = lock_to_bom_with_facts(
+            &one_package_lock(),
+            SbomFacts {
+                artifacts: Some(&map),
+                ..SbomFacts::default()
+            },
+        );
+        let c = component(&bom_to_json_value(bom));
+        let refs = c.get("externalReferences").unwrap().as_array().unwrap();
+        assert_eq!(refs[0]["type"], "distribution");
+        assert_eq!(
+            refs[0]["url"],
+            "https://example.org/src/Example-1.2.3.tar.gz"
+        );
+        let props = c.get("properties").unwrap().as_array().unwrap();
+        assert!(
+            props
+                .iter()
+                .any(|p| p["name"] == "easybuild:patch"
+                    && p["value"] == "Example-1.2.3_fix-build.patch"),
+            "{props:?}"
+        );
+    }
+
+    #[test]
+    fn a_plan_that_resolved_everything_says_complete() {
+        let bom = lock_to_bom_with_facts(&one_package_lock(), SbomFacts::default());
+        let json = bom_to_json_value(bom);
+        let comps = json.get("compositions").unwrap().as_array().unwrap();
+        assert_eq!(comps[0]["aggregate"], "complete");
+    }
+
+    /// The claim that matters: a plan with residuals must not describe itself
+    /// as a complete inventory.
+    #[test]
+    fn a_plan_with_residuals_says_incomplete() {
+        let missing = ["libfoo >= 2".to_string()];
+        let bom = lock_to_bom_with_facts(
+            &one_package_lock(),
+            SbomFacts {
+                unresolved: Some(&missing),
+                ..SbomFacts::default()
+            },
+        );
+        let json = bom_to_json_value(bom);
+        let comps = json.get("compositions").unwrap().as_array().unwrap();
+        assert_eq!(comps[0]["aggregate"], "incomplete");
+        let assemblies = comps[0]["assemblies"].as_array().unwrap();
+        assert!(
+            assemblies[0].as_str().unwrap().contains("easybuild-stack"),
+            "{assemblies:?}"
+        );
+    }
+
+    #[test]
+    fn a_lock_with_no_facts_carries_no_hashes_or_references() {
+        let bom = lock_to_bom_with_facts(&one_package_lock(), SbomFacts::default());
+        let c = component(&bom_to_json_value(bom));
+        assert!(c.get("hashes").is_none(), "{c}");
+        assert!(c.get("externalReferences").is_none(), "{c}");
     }
 }

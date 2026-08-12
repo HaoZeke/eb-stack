@@ -77,10 +77,10 @@ fn overlay_pyproject(recipe: &mut ForeignRecipe, path: &Path) {
             .next()
             .unwrap_or(spec)
             .trim();
-        if name.is_empty()
-            || name.eq_ignore_ascii_case("numpy")
-            || name.eq_ignore_ascii_case("python")
-        {
+        // The interpreter and the array package are the build backend's own
+        // floor rather than a dependency this recipe states, and which names
+        // those are is policy: data/overlay-policy.toml holds the list.
+        if name.is_empty() || crate::provides::ignored_build_requirement(name) {
             continue;
         }
         push_dep(recipe, name, "build", spec);
@@ -152,10 +152,7 @@ fn python_imports(text: &str) -> Vec<String> {
     for line in text.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("import ") {
-            if let Some(name) = rest
-                .split(|ch: char| ch == ' ' || ch == '.' || ch == ',')
-                .next()
-            {
+            if let Some(name) = rest.split([' ', '.', ',']).next() {
                 push_import(&mut names, name);
             }
         }

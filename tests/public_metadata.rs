@@ -4,6 +4,36 @@ fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// Whether `text` names `package` as an identifier or literal rather than as
+/// part of a longer word.
+///
+/// A raw substring test cannot tell `"eon"` in a match arm from the middle of
+/// "someone", and the second kind of hit teaches people to write around the
+/// guard instead of fixing what it found. Boundaries keep every real case:
+/// package identity appears in code inside quotes, or beside `.`, `-` and `,`,
+/// all of which are boundaries.
+fn names_package_identity(text: &str, package: &str) -> bool {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    text.match_indices(package).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + package.len()..].chars().next();
+        !before.is_some_and(is_word) && !after.is_some_and(is_word)
+    })
+}
+
+#[test]
+fn the_guard_reads_identifiers_and_not_prose() {
+    assert!(names_package_identity(r#"name == "eon""#, "eon"));
+    assert!(names_package_identity("matches!(pkg, \"eon-akmc\")", "eon"));
+    assert!(names_package_identity("- eon, gromacs", "gromacs"));
+    assert!(!names_package_identity(
+        "a document someone can verify",
+        "eon"
+    ));
+    assert!(!names_package_identity("the eons since", "eon"));
+    assert!(!names_package_identity("scipy_bundle_name", "scipy"));
+}
+
 #[test]
 fn production_rust_has_no_package_identity_branches() {
     for entry in std::fs::read_dir(repo().join("src")).expect("read source directory") {
@@ -23,7 +53,7 @@ fn production_rust_has_no_package_identity_branches() {
             "eon", "qmcpack", "lammps", "gromacs", "numpy", "scipy", "pytorch", "readcon",
         ] {
             assert!(
-                !production.contains(package),
+                !names_package_identity(&production, package),
                 "{} contains package-specific production text for {package}",
                 path.display()
             );

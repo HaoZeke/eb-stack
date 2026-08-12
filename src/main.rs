@@ -13,7 +13,7 @@ use eb_stack::target::{doctor_target, resolve_target_layers, BuildTarget, Target
 use eb_stack::{
     check_duplicate_upstream, check_maintainer_acceptability, check_maintainer_acceptability_text,
     check_recipe_deps, format_style, format_style_file, inspect_new_package, is_registry_name,
-    lint_style, load_json_file, lock_to_cyclonedx, materialize_registry_name, packaging_gate,
+    lint_style, load_json_file, materialize_registry_name, packaging_gate,
     parse_easyconfig_trees, plan_new_package, plan_package_bump, plan_package_closure_with_sources,
     resolve_easyconfig_file, resolve_package_catalog_layers,
     solve_from_easyconfigs_with_baseline_version_and_extras, write_json_pretty,
@@ -782,9 +782,24 @@ fn run_stack(command: StackCommand) -> Result<()> {
         }
         StackCommand::Sbom { lock, out } => {
             let lock: StackLock = load_json_file(&lock)?;
-            let sbom = lock_to_cyclonedx(&lock);
+            // The checksums and source URLs live in the easyconfigs the lock
+            // names, so read them: without those a component cannot be verified
+            // against the bytes it was planned from.
+            let artifacts = eb_stack::artifact_facts_for_lock(&lock);
+            let sbom = eb_stack::lock_to_cyclonedx_with_facts(
+                &lock,
+                eb_stack::SbomFacts {
+                    artifacts: Some(&artifacts),
+                    ..eb_stack::SbomFacts::default()
+                },
+            );
             write_json_pretty(&out, &sbom)?;
-            println!("sbom={}", out.display());
+            println!(
+                "sbom={} components={} with_artifact_facts={}",
+                out.display(),
+                lock.packages.len(),
+                artifacts.len()
+            );
             Ok(())
         }
     }

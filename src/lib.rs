@@ -134,8 +134,10 @@ pub use repro_report::{
 };
 pub use resolvo_provider::solve_with_stack_policy;
 pub use sbom::{
-    build_dep_map_from_universe, dep_map_from_universe, lock_to_bom, lock_to_cyclonedx,
-    lock_to_cyclonedx_with_deps, lock_to_cyclonedx_with_runtime_and_build,
+    artifact_facts_for_lock, build_dep_map_from_universe, dep_map_from_universe, lock_to_bom,
+    lock_to_bom_with_facts, lock_to_cyclonedx, lock_to_cyclonedx_with_deps,
+    lock_to_cyclonedx_with_facts, lock_to_cyclonedx_with_runtime_and_build, ArtifactFacts,
+    SbomFacts,
 };
 pub use select::{resolvo_resolve_dep_versions, select_stack, SelectError};
 
