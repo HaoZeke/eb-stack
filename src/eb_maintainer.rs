@@ -437,6 +437,163 @@ fn is_same_easyconfig(lhs: &str, rhs: &str) -> bool {
     }
 }
 
+/// Compiler commands EasyBuild never wraps for RPATH under a GCC toolchain.
+///
+/// `Toolchain.compilers()` returns the toolchain's own `COMPILER_CC` and
+/// `COMPILER_CXX`, so `prepare_rpath_wrappers` wraps `gcc`, `g++`, `gfortran`
+/// and the linkers and nothing else.
+const UNWRAPPED_COMPILERS: &[&str] = &["clang", "clang++", "icx", "icpx", "nvc", "nvc++", "flang"];
+
+/// A build that drives an unwrapped compiler and never asks for `DT_RPATH`.
+///
+/// Two mechanisms meet here, and each on its own produces an install that fails
+/// the RPATH sanity check with the same message.
+///
+/// EasyBuild injects RPATH through wrapper scripts around the toolchain's own
+/// compiler commands, so a build driven by clang meets no wrapper and links
+/// with whatever the recipe passes. `CMakeMake` does not compensate: it sets
+/// `CMAKE_SKIP_RPATH` only for CMake older than 3.5.
+///
+/// Passing `-Wl,-rpath,...` alone is still not enough. `ld` and `lld` default
+/// to `--enable-new-dtags` and write `DT_RUNPATH`, while `sanity_check_rpath`
+/// greps `readelf -d` output for the literal `(RPATH)`, which `DT_RUNPATH` does
+/// not satisfy. `rpath_args.py` inserts `--disable-new-dtags` ahead of
+/// everything else for exactly this reason, and a recipe that goes around the
+/// wrappers has to carry that flag itself.
+pub fn check_unwrapped_compiler_rpath(text: &str) -> Vec<MaintainerFinding> {
+    let mut out = Vec::new();
+    let driver = regex::Regex::new(
+        r#"(?:CMAKE_(?:C|CXX|Fortran)_COMPILER|OMPI_(?:CC|CXX|FC)|MPICH_(?:CC|CXX)|\bCC|\bCXX)\s*=\s*["']?([A-Za-z+_.-]+)"#,
+    )
+    .expect("static regex");
+
+    let driven_by = driver
+        .captures_iter(text)
+        .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
+        .find(|cmd| {
+            let base = cmd.rsplit('/').next().unwrap_or(cmd);
+            UNWRAPPED_COMPILERS.contains(&base)
+        });
+
+    let Some(compiler) = driven_by else {
+        return out;
+    };
+    if text.contains("--disable-new-dtags") {
+        return out;
+    }
+    if text.contains("check_readelf_rpath") {
+        // The recipe already states that its binaries carry no RPATH. That is a
+        // separate judgement, and HPCToolkit and Dakota both make it.
+        return out;
+    }
+
+    out.push(MaintainerFinding::error(
+        "EB_MAINT_UNWRAPPED_COMPILER_RPATH",
+        format!(
+            "the build is driven by {compiler}, which EasyBuild does not wrap for RPATH, and nothing passes -Wl,--disable-new-dtags"
+        ),
+        Some(
+            "entries land in DT_RUNPATH and sanity_check_rpath greps readelf output for the literal (RPATH); pass -Wl,--disable-new-dtags -Wl,-rpath,$EBROOT*/lib through $LDFLAGS as AUGUSTUS and VCF2Dis do"
+                .into(),
+        ),
+    ));
+    out
+}
+
+/// A GPU architecture list written into the recipe by hand.
+///
+/// EasyBuild passes the build host's compute capabilities to the build system,
+/// from `--cuda-compute-capabilities` or the `cuda_compute_capabilities`
+/// easyconfig parameter, and a site sets a different value per architecture. A
+/// literal list in `configopts` therefore agrees with at most one build host,
+/// and a build system that cross-checks its own architecture option against
+/// `CMAKE_CUDA_ARCHITECTURES` raises `FATAL_ERROR` when the two disagree, which
+/// ends the configure step in about a second.
+///
+/// A `%(cuda_*)s` template is the same value EasyBuild would pass, so it is
+/// exempt.
+pub fn check_hardcoded_gpu_arch(text: &str) -> Vec<MaintainerFinding> {
+    let mut out = Vec::new();
+    let literal = regex::Regex::new(
+        r#"(?i)-D\s*[A-Z0-9_]*(?:CUDA_ARCHITECTURES|GPU_ARCHS|CUDA_TARGET_SM|CUDA_ARCH)[A-Z0-9_]*\s*=\s*["']?([^"'\s]+)"#,
+    )
+    .expect("static regex");
+
+    for caps in literal.captures_iter(text) {
+        let value = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+        if value.contains("%(cuda") {
+            continue;
+        }
+        if !value.chars().any(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        out.push(MaintainerFinding::warning(
+            "EB_MAINT_HARDCODED_GPU_ARCH",
+            format!(
+                "the GPU architecture list is written into the recipe as {value}, so it matches at most one build host"
+            ),
+            Some(
+                "let EasyBuild supply it through cuda_compute_capabilities, or interpolate a %(cuda_*)s template; a literal list disagrees with CMAKE_CUDA_ARCHITECTURES wherever the host list differs"
+                    .into(),
+            ),
+        ));
+        break;
+    }
+    out
+}
+
+/// A git source archived as `.tar.gz`.
+///
+/// `get_source_tarball_from_git` picks the compression from the extension of
+/// the name the recipe asks for, and treats `.tar.xz` as both its default and
+/// its reproducible format. Asking for `.tar.gz` is off that path. A git source
+/// also carries no checksum, so EasyBuild cannot tell a good cached archive
+/// from a bad one and will reuse whatever sits under that name.
+pub fn check_git_source_archive(text: &str) -> Vec<MaintainerFinding> {
+    let mut out = Vec::new();
+    if !text.contains("git_config") {
+        return out;
+    }
+    let gz = regex::Regex::new(r#"'filename'\s*:\s*(SOURCE(?:LOWER)?_TAR_GZ|["'][^"']*\.tar\.gz)"#)
+        .expect("static regex");
+    if let Some(caps) = gz.captures(text) {
+        out.push(MaintainerFinding::warning(
+            "EB_MAINT_GIT_SOURCE_ARCHIVE",
+            "a git_config source is named .tar.gz, off the format EasyBuild archives git checkouts in",
+            Some(format!(
+                "{} names the archive; .tar.xz is the default and the reproducible one, and a fresh name also keeps a bad cached archive from being reused, since a git source has no checksum to catch it",
+                caps.get(1).map(|m| m.as_str()).unwrap_or(".tar.gz")
+            )),
+        ));
+    }
+    out
+}
+
+/// Build-tree diagnostics copied into the install prefix.
+///
+/// Every EasyBuild install already carries `$EBROOT/easybuild` with the full
+/// build log, the test report, the easyconfig as built and a reprod directory,
+/// all readable by anyone who can read the module. Copying a log out of the
+/// build tree duplicates that.
+pub fn check_install_log_copy(text: &str) -> Vec<MaintainerFinding> {
+    let mut out = Vec::new();
+    let copy = regex::Regex::new(
+        r#"(?m)^\s*["'](?:cp|install|mv)\s[^"']*(?:\.log|Testing/|LastTest|CMakeCache|config\.log)[^"']*%\(installdir\)s"#,
+    )
+    .expect("static regex");
+    if copy.is_match(text) {
+        out.push(MaintainerFinding::warning(
+            "EB_MAINT_INSTALL_LOG_COPY",
+            "postinstallcmds copies a build log or test artifact into the install prefix",
+            Some(
+                "EasyBuild installs its own log, test report, easyconfig and reprod directory under $EBROOT/easybuild, and the command output is in that log"
+                    .into(),
+            ),
+        ));
+    }
+    out
+}
+
 /// Re-adding an easyconfig the robot tree already ships: hard error (#26480).
 ///
 /// Do/don't rule 8. A PR that rewrites a file `develop` already has at the same
@@ -499,7 +656,19 @@ pub fn check_maintainer_acceptability(
     findings.extend(check_dep_toolchain_pins(recipe));
     findings.extend(check_shell_monsters(source_text));
     findings.extend(check_fat_build(source_text));
+    findings.extend(check_build_failure_modes(source_text));
     MaintainerReport { findings }
+}
+
+/// Checks distilled from builds that failed on a site pipeline rather than from
+/// a review. Each one names a mechanism that produces a build the recipe reads
+/// as correct.
+pub fn check_build_failure_modes(source_text: &str) -> Vec<MaintainerFinding> {
+    let mut out = check_unwrapped_compiler_rpath(source_text);
+    out.extend(check_hardcoded_gpu_arch(source_text));
+    out.extend(check_git_source_archive(source_text));
+    out.extend(check_install_log_copy(source_text));
+    out
 }
 
 /// Text-only path (lint without full resolve): shell monsters + rough cross-gen
@@ -507,6 +676,7 @@ pub fn check_maintainer_acceptability(
 pub fn check_maintainer_acceptability_text(source_text: &str) -> MaintainerReport {
     let mut findings = check_shell_monsters(source_text);
     findings.extend(check_fat_build(source_text));
+    findings.extend(check_build_failure_modes(source_text));
     // Lightweight cross-gen when resolve is unavailable: look for foss/gfbf/gompi
     // version tokens that differ from the recipe toolchain version.
     if let Some(recipe_ver) = recipe_toolchain_version_from_text(source_text) {
@@ -941,5 +1111,153 @@ mod tests {
             report
         );
         assert!(!report.ok_for_upstream());
+    }
+}
+
+#[cfg(test)]
+mod build_failure_tests {
+    use super::*;
+
+    /// The shape that failed the RPATH sanity check on a site pipeline: clang
+    /// named as the CMake compiler, rpath directories on the link line, and no
+    /// --disable-new-dtags, so every entry landed in DT_RUNPATH.
+    const CLANG_RUNPATH: &str = r#"
+easyblock = 'CMakeNinja'
+name = 'ExampleOffloadApp'
+version = '1.2.3-20260811'
+toolchain = {'name': 'foss', 'version': '2025a'}
+_rpath = ' '.join(['-Wl,-rpath,' + d for d in ['$EBROOTLLVM/lib']])
+_use_clang = 'OMPI_CC=clang OMPI_CXX=clang++ LDFLAGS="$LDFLAGS ' + _rpath + '" '
+configopts = '-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++'
+preconfigopts = _use_clang
+"#;
+
+    #[test]
+    fn flags_a_clang_build_with_no_disable_new_dtags() {
+        let findings = check_unwrapped_compiler_rpath(CLANG_RUNPATH);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].code, "EB_MAINT_UNWRAPPED_COMPILER_RPATH");
+        assert!(findings[0].is_error());
+        assert!(findings[0].message.contains("clang"), "{findings:?}");
+    }
+
+    #[test]
+    fn accepts_the_same_build_once_it_asks_for_dt_rpath() {
+        let fixed = CLANG_RUNPATH.replace(
+            "['-Wl,-rpath,' + d for d in",
+            "['-Wl,--disable-new-dtags'] + ['-Wl,-rpath,' + d for d in",
+        );
+        assert!(check_unwrapped_compiler_rpath(&fixed).is_empty());
+    }
+
+    #[test]
+    fn leaves_a_gcc_build_alone() {
+        let gcc = "toolchain = {'name': 'foss', 'version': '2025a'}\nconfigopts = '-DAPP_MPI=ON'\n";
+        assert!(check_unwrapped_compiler_rpath(gcc).is_empty());
+    }
+
+    #[test]
+    fn a_recipe_that_states_its_binaries_carry_no_rpath_is_its_own_answer() {
+        let stated = format!("{CLANG_RUNPATH}\ncheck_readelf_rpath = False\n");
+        assert!(check_unwrapped_compiler_rpath(&stated).is_empty());
+    }
+
+    /// CMake aborted in one second on the H100 partition because the recipe
+    /// named sm_80;sm_90 while EasyBuild passed the host's 9.0.
+    #[test]
+    fn flags_a_hardcoded_gpu_architecture_list() {
+        let text = r#"configopts = '-DAPP_GPU="openmp;cuda" -DAPP_GPU_ARCHS="sm_80;sm_90" '"#;
+        let findings = check_hardcoded_gpu_arch(text);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].code, "EB_MAINT_HARDCODED_GPU_ARCH");
+        assert!(findings[0].message.contains("sm_80"), "{findings:?}");
+    }
+
+    #[test]
+    fn a_cuda_template_is_the_value_easybuild_would_pass() {
+        let text = r#"configopts = '-DGMX_CUDA_TARGET_SM="%(cuda_cc_space_sep)s" '"#;
+        assert!(check_hardcoded_gpu_arch(text).is_empty());
+    }
+
+    #[test]
+    fn naming_no_architecture_is_the_fix() {
+        let text = r#"configopts = '-DAPP_GPU="openmp;cuda" '"#;
+        assert!(check_hardcoded_gpu_arch(text).is_empty());
+    }
+
+    /// tar exited 2 on the extract step for a git source asked for as .tar.gz.
+    #[test]
+    fn flags_a_git_source_archived_as_gz() {
+        let text = r#"
+sources = [{
+    'filename': SOURCE_TAR_GZ,
+    'git_config': {'url': 'https://github.com/example', 'repo_name': 'example', 'commit': _commit},
+}]
+"#;
+        let findings = check_git_source_archive(text);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].code, "EB_MAINT_GIT_SOURCE_ARCHIVE");
+    }
+
+    #[test]
+    fn xz_is_the_format_easybuild_archives_a_checkout_in() {
+        let text = r#"
+sources = [{
+    'filename': SOURCE_TAR_XZ,
+    'git_config': {'url': 'https://github.com/example', 'repo_name': 'example', 'commit': _commit},
+}]
+"#;
+        assert!(check_git_source_archive(text).is_empty());
+    }
+
+    #[test]
+    fn a_release_tarball_named_gz_is_not_a_git_source() {
+        let text = "sources = [SOURCE_TAR_GZ]\n";
+        assert!(check_git_source_archive(text).is_empty());
+    }
+
+    #[test]
+    fn flags_a_build_log_copied_into_the_install() {
+        let text = r#"
+postinstallcmds = [
+    "mkdir -p %(installdir)s/share/ctest",
+    "cp -a %(builddir)s/easybuild_obj/Testing/Temporary/LastTestsFailed.log %(installdir)s/share/ctest/ || true",
+]
+"#;
+        let findings = check_install_log_copy(text);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].code, "EB_MAINT_INSTALL_LOG_COPY");
+    }
+
+    #[test]
+    fn copying_something_the_software_needs_is_not_a_log() {
+        let text = r#"
+postinstallcmds = ["cp -a %(builddir)s/src/plugins %(installdir)s/lib/"]
+"#;
+        assert!(check_install_log_copy(text).is_empty());
+    }
+
+    #[test]
+    fn the_composite_reports_every_mechanism_at_once() {
+        let text = format!(
+            "{CLANG_RUNPATH}\nconfigopts += '-DAPP_GPU_ARCHS=\"sm_80;sm_90\"'\n\
+             sources = [{{'filename': SOURCE_TAR_GZ, 'git_config': {{'commit': _c}}}}]\n"
+        );
+        let codes: Vec<_> = check_build_failure_modes(&text)
+            .into_iter()
+            .map(|f| f.code)
+            .collect();
+        assert!(
+            codes.contains(&"EB_MAINT_UNWRAPPED_COMPILER_RPATH".to_string()),
+            "{codes:?}"
+        );
+        assert!(
+            codes.contains(&"EB_MAINT_HARDCODED_GPU_ARCH".to_string()),
+            "{codes:?}"
+        );
+        assert!(
+            codes.contains(&"EB_MAINT_GIT_SOURCE_ARCHIVE".to_string()),
+            "{codes:?}"
+        );
     }
 }
