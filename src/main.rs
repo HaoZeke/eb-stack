@@ -13,8 +13,8 @@ use eb_stack::target::{doctor_target, resolve_target_layers, BuildTarget, Target
 use eb_stack::{
     check_duplicate_upstream, check_maintainer_acceptability, check_maintainer_acceptability_text,
     check_recipe_deps, format_style, format_style_file, inspect_new_package, is_registry_name,
-    lint_style, load_json_file, materialize_registry_name, packaging_gate,
-    parse_easyconfig_trees, plan_new_package, plan_package_bump, plan_package_closure_with_sources,
+    lint_style, load_json_file, materialize_registry_name, packaging_gate, parse_easyconfig_trees,
+    plan_new_package, plan_package_bump, plan_package_closure_with_sources,
     resolve_easyconfig_file, resolve_package_catalog_layers,
     solve_from_easyconfigs_with_baseline_version_and_extras, write_json_pretty,
     write_package_bundle, write_package_closure, BumpPackageRequest, ForeignFormat,
@@ -269,6 +269,19 @@ enum StackCommand {
         lock: PathBuf,
         #[arg(long, default_value = "stack.cdx.json")]
         out: PathBuf,
+    },
+    /// Write the lock as an EasyBuild easystack, the format `eb --easystack`
+    /// consumes and EESSI's software layer is built from.
+    Easystack {
+        #[arg(long)]
+        lock: PathBuf,
+        #[arg(long, default_value = "stack.yml")]
+        out: PathBuf,
+        /// Per-easyconfig `eb` option, as `<file.eb>:<option>=<value>`, with
+        /// the option spelled as on the command line without its dashes:
+        /// `--option CUDA-12.8.0.eb:accept-eula-for=CUDA`. Repeatable.
+        #[arg(long = "option")]
+        options: Vec<String>,
     },
 }
 
@@ -776,6 +789,32 @@ fn run_stack(command: StackCommand) -> Result<()> {
             println!(
                 "lock={} packages={}",
                 lock_out.display(),
+                lock.packages.len()
+            );
+            Ok(())
+        }
+        StackCommand::Easystack { lock, out, options } => {
+            let lock: StackLock = load_json_file(&lock)?;
+            let mut parsed = eb_stack::EasystackOptions::new();
+            for spec in &options {
+                let (file, rest) = spec.split_once(':').ok_or_else(|| {
+                    anyhow::anyhow!("--option wants <file.eb>:<option>=<value>, got {spec}")
+                })?;
+                let (key, value) = rest.split_once('=').ok_or_else(|| {
+                    anyhow::anyhow!("--option wants <file.eb>:<option>=<value>, got {spec}")
+                })?;
+                parsed
+                    .entry(file.to_string())
+                    .or_default()
+                    .insert(key.to_string(), value.to_string());
+            }
+            let yaml = eb_stack::lock_to_easystack(&lock, &parsed);
+            std::fs::write(&out, &yaml)?;
+            let entries = yaml.lines().filter(|l| l.starts_with("- ")).count();
+            println!(
+                "easystack={} entries={} of={}",
+                out.display(),
+                entries,
                 lock.packages.len()
             );
             Ok(())

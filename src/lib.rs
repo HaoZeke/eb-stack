@@ -6,6 +6,7 @@ pub mod campaign;
 pub mod cargo;
 pub mod cran;
 pub mod domain;
+pub mod easystack;
 mod eb_emit;
 pub mod eb_maintainer;
 pub mod eb_parse;
@@ -48,6 +49,7 @@ pub use artifact_class::{
     ArtifactClass, DeclaredVersion, FindingLevel, SeededChecksum, SourceFinding,
 };
 pub use domain::*;
+pub use easystack::{lock_to_easystack, EasystackOptions};
 pub use eb_maintainer::{
     check_cross_generation_pins, check_dep_toolchain_pins, check_duplicate_upstream,
     check_fat_build, check_maintainer_acceptability, check_maintainer_acceptability_text,
