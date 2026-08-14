@@ -18,6 +18,7 @@ pub mod ecosystem;
 pub use crate::ecosystem::parse_package_index;
 mod foreign;
 pub mod hierarchy;
+pub mod input_hash;
 pub mod luarocks;
 mod manifest;
 pub mod mcp;
@@ -85,6 +86,7 @@ pub use hierarchy::{
     resolve_dep_versions_in_hierarchy, resolve_dep_versions_in_hierarchy_strict, toolchains_match,
     HierarchyError, ResolveDepOpts, SourceDepSpec, ToolchainHierarchy,
 };
+pub use input_hash::{changed, input_hashes, InputHash};
 pub use manifest::package_plan_from_foreign;
 pub use miner::{
     compare_reproduction, is_backfill, is_toolchain_meta_recipe, normalize_for_scoring,

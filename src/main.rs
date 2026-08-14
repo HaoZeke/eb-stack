@@ -291,6 +291,11 @@ enum StackCommand {
         /// Also write the order as an easystack for `eb --easystack`.
         #[arg(long)]
         easystack_out: Option<PathBuf>,
+        /// Write one input hash per module: a digest over the easyconfig's own
+        /// bytes and the hashes of everything it needs. Two plans with the same
+        /// hashes are the same plan, and a changed hash is a rebuild.
+        #[arg(long)]
+        hashes_out: Option<PathBuf>,
     },
     /// Write the lock as an EasyBuild easystack, the format `eb --easystack`
     /// consumes and EESSI's software layer is built from.
@@ -821,6 +826,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
             out,
             oldest,
             easystack_out,
+            hashes_out,
         } => {
             let trees: Vec<&Path> = easyconfigs.iter().map(PathBuf::as_path).collect();
             let parsed =
@@ -850,6 +856,31 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     ),
                 )?;
                 println!("easystack={}", path.display());
+            }
+            if let Some(path) = hashes_out.as_deref() {
+                let graph = eb_stack::build_order::build_graph(&parsed.candidates, &roots, choice)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                let sequence: Vec<eb_stack::ModuleKey> =
+                    order.iter().map(eb_stack::ModuleKey::of).collect();
+                let recipe_paths: std::collections::BTreeMap<eb_stack::ModuleKey, String> = order
+                    .iter()
+                    .map(|c| (eb_stack::ModuleKey::of(c), c.easyconfig_path.clone()))
+                    .collect();
+                let hashes = eb_stack::input_hashes(&graph, &sequence, &recipe_paths);
+                let incomplete = hashes.values().filter(|h| !h.complete).count();
+                let mut text = String::new();
+                for key in &sequence {
+                    if let Some(h) = hashes.get(key) {
+                        text.push_str(&format!("{}  {}\n", h.hash, key));
+                    }
+                }
+                std::fs::write(path, text)?;
+                println!(
+                    "hashes={} modules={} incomplete={}",
+                    path.display(),
+                    hashes.len(),
+                    incomplete
+                );
             }
             println!("order={} builds={}", out.display(), order.len());
             Ok(())
