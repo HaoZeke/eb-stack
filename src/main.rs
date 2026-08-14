@@ -248,8 +248,18 @@ enum StackCommand {
     Solve {
         #[arg(long, required = true)]
         easyconfigs: Vec<PathBuf>,
-        #[arg(long)]
-        policy: PathBuf,
+        /// Policy file. Omit it and pass --toolchain and --root instead, which
+        /// is the same thing without a file to author first.
+        #[arg(long, conflicts_with_all = ["toolchain", "roots"])]
+        policy: Option<PathBuf>,
+        /// Target toolchain as `name/version`, e.g. `foss/2026.1`. Used with
+        /// --root in place of a policy file.
+        #[arg(long, requires = "roots")]
+        toolchain: Option<String>,
+        /// Application the stack exists to provide. Repeatable. Used with
+        /// --toolchain in place of a policy file.
+        #[arg(long = "root", requires = "toolchain")]
+        roots: Vec<String>,
         #[arg(long)]
         baseline_easyconfigs: Option<PathBuf>,
         #[arg(long)]
@@ -790,6 +800,8 @@ fn run_stack(command: StackCommand) -> Result<()> {
         StackCommand::Solve {
             easyconfigs,
             policy,
+            toolchain,
+            roots,
             baseline_easyconfigs,
             baseline_toolchain_version,
             lock_out,
@@ -797,6 +809,32 @@ fn run_stack(command: StackCommand) -> Result<()> {
             build_list_out,
             stack_diff_out,
         } => {
+            // A policy is a file when there is one to reuse, and a pair of
+            // flags when there is not. Writing JSON by hand to answer two
+            // questions is a step nobody should need for the common case.
+            let written_policy;
+            let policy = match policy {
+                Some(path) => path,
+                None => {
+                    let (name, version) = toolchain
+                        .as_deref()
+                        .and_then(|t| t.split_once('/'))
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "--toolchain wants name/version, for example foss/2026.1"
+                            )
+                        })?;
+                    let policy = serde_json::json!({
+                        "toolchain": {"name": name, "version": version},
+                        "roots": roots,
+                        "objective": "prefer_newer",
+                    });
+                    written_policy = std::env::temp_dir()
+                        .join(format!("eb-stack-policy-{}-{}.json", name, version));
+                    std::fs::write(&written_policy, serde_json::to_vec_pretty(&policy)?)?;
+                    written_policy
+                }
+            };
             let baseline = baseline_easyconfigs
                 .as_deref()
                 .or_else(|| easyconfigs.first().map(PathBuf::as_path));

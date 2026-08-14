@@ -78,6 +78,26 @@ fn package_key(name: &str, tc: &crate::domain::Toolchain, multi_level: &HashSet<
     }
 }
 
+/// The interned keys for a package name.
+///
+/// Policy speaks in names: a pin, an exclusion and a root all say `CMake`. The
+/// pool speaks in keys, which are qualified by toolchain for any name the
+/// generation carries at several levels. Everything that reads policy has to
+/// cross that gap, and a lookup by plain name silently finds nothing.
+fn keys_for_name<T>(by_key: &HashMap<String, T>, name: &str) -> Vec<String> {
+    if by_key.contains_key(name) {
+        return vec![name.to_string()];
+    }
+    let prefix = format!("{name}@");
+    let mut keys: Vec<String> = by_key
+        .keys()
+        .filter(|key| key.starts_with(&prefix))
+        .cloned()
+        .collect();
+    keys.sort();
+    keys
+}
+
 impl EbProvider {
     /// Which resolvo package names can satisfy one dependency of one recipe.
     ///
@@ -248,21 +268,35 @@ impl EbProvider {
 
         let mut pin_ranks: HashMap<String, Vec<u32>> = HashMap::new();
         for pin in &policy.pins {
-            let Some(ranked) = ranks.get(&pin.name) else {
+            // Ranks are per key, so a pin on a package carried at several
+            // levels has to be applied to each of them separately: rank 2 of
+            // one key is a different build from rank 2 of another.
+            let pin_keys = keys_for_name(&ranks, &pin.name);
+            if pin_keys.is_empty() {
                 return Err(format!("pin references unknown package {}", pin.name));
-            };
-            let allowed: Vec<u32> = ranked
-                .iter()
-                .filter(|(_, idx)| matches_req(&candidates[*idx].version, &pin.version_req))
-                .map(|(r, _)| *r)
-                .collect();
-            if allowed.is_empty() {
+            }
+            let mut matched_anywhere = false;
+            for key in &pin_keys {
+                let Some(ranked) = ranks.get(key) else {
+                    continue;
+                };
+                let allowed: Vec<u32> = ranked
+                    .iter()
+                    .filter(|(_, idx)| matches_req(&candidates[*idx].version, &pin.version_req))
+                    .map(|(r, _)| *r)
+                    .collect();
+                if allowed.is_empty() {
+                    continue;
+                }
+                matched_anywhere = true;
+                pin_ranks.insert(key.clone(), allowed);
+            }
+            if !matched_anywhere {
                 return Err(format!(
                     "pin {} {} matches no candidates",
                     pin.name, pin.version_req
                 ));
             }
-            pin_ranks.insert(pin.name.clone(), allowed);
         }
 
         let mut min_rank_exclusive: HashMap<String, u32> = HashMap::new();
@@ -281,7 +315,8 @@ impl EbProvider {
                 .ok_or_else(|| {
                     format!("require_upgrade {} needs baseline package version", ru.name)
                 })?;
-            let Some(ranked) = ranks.get(&ru.name) else {
+            let upgrade_keys = keys_for_name(&ranks, &ru.name);
+            let Some(ranked) = upgrade_keys.first().and_then(|key| ranks.get(key)) else {
                 return Err(format!("require_upgrade unknown package {}", ru.name));
             };
             let mut max_non_upgrade: Option<u32> = None;
@@ -306,7 +341,7 @@ impl EbProvider {
         }
 
         for root in &policy.roots {
-            if !ranks.contains_key(root) {
+            if keys_for_name(&ranks, root).is_empty() {
                 return Err(format!("no candidates for root package {root}"));
             }
         }
@@ -523,21 +558,39 @@ impl EbProvider {
         roots
             .iter()
             .filter_map(|name| {
-                let name_id = *self.name_ids.get(name)?;
-                let ranked = self.ranks.get(name)?;
-                let mut range = Ranges::empty();
-                for (rank, _) in ranked {
-                    if self.allowed_rank(name, *rank) {
-                        range = range.union(&Ranges::singleton(*rank));
+                // A root is a name; the pool holds keys. A package carried at
+                // several levels has one key per level, and asking for the
+                // root means any of them satisfies it, so the requirement is
+                // their union.
+                let mut sets = Vec::new();
+                for key in keys_for_name(&self.ranks, name) {
+                    let Some(&name_id) = self.name_ids.get(&key) else {
+                        continue;
+                    };
+                    let Some(ranked) = self.ranks.get(&key) else {
+                        continue;
+                    };
+                    let mut range = Ranges::empty();
+                    for (rank, _) in ranked {
+                        if self.allowed_rank(&key, *rank) {
+                            range = range.union(&Ranges::singleton(*rank));
+                        }
+                    }
+                    if range != Ranges::empty() {
+                        sets.push(self.pool.intern_version_set(name_id, range));
                     }
                 }
-                if range == Ranges::empty() {
-                    return None;
-                }
-                let vs = self.pool.intern_version_set(name_id, range);
+                let (first, rest) = sets.split_first()?;
+                let requirement: resolvo::Requirement = if rest.is_empty() {
+                    (*first).into()
+                } else {
+                    self.pool
+                        .intern_version_set_union(*first, rest.iter().copied())
+                        .into()
+                };
                 Some(resolvo::ConditionalRequirement {
                     condition: None,
-                    requirement: vs.into(),
+                    requirement,
                 })
             })
             .collect()
@@ -801,9 +854,18 @@ fn matching_ranks(
     toolchain: Option<&crate::domain::Toolchain>,
     versionsuffix: Option<&str>,
 ) -> Result<Vec<u32>, String> {
-    let ranked = ranks
-        .get(name)
-        .ok_or_else(|| format!("stack policy references unknown package {name}"))?;
+    // Policy says a name; the pool holds keys, qualified by toolchain for any
+    // name carried at several levels. A pin on such a package means every
+    // build of it, so all of its keys are searched.
+    let keys = keys_for_name(ranks, name);
+    if keys.is_empty() {
+        return Err(format!("stack policy references unknown package {name}"));
+    }
+    let ranked: Vec<(u32, usize)> = keys
+        .iter()
+        .filter_map(|key| ranks.get(key))
+        .flat_map(|ranked| ranked.iter().copied())
+        .collect();
     Ok(ranked
         .iter()
         .filter(|(_, index)| {
