@@ -108,14 +108,30 @@ pub type BuildGraph = DiGraph<ModuleKey, Edge>;
 /// Why an order could not be produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OrderError {
-    /// A named root matches no candidate in the tree.
-    UnknownRoot(String),
+    /// No package of that name is in the tree.
+    UnknownRoot {
+        /// What was asked for.
+        requested: String,
+        /// Names close enough to be worth offering.
+        suggestions: Vec<String>,
+    },
+    /// The package exists; that version of it does not.
+    NoSuchVersion {
+        /// The package name, which was found.
+        name: String,
+        /// The requirement that matched nothing.
+        requirement: String,
+        /// What the tree does carry, newest first.
+        available: Vec<String>,
+    },
     /// A requirement matches nothing, with the module that stated it.
     Unsatisfied {
         /// The module whose dependency could not be met.
         from: ModuleKey,
         /// The dependency as the recipe wrote it.
         requirement: String,
+        /// Versions of that package the tree carries.
+        available: Vec<String>,
     },
     /// The graph has a cycle. Every module in the strongly connected
     /// component is named, not just the edge that happened to close it, since
@@ -126,12 +142,36 @@ pub enum OrderError {
 impl std::fmt::Display for OrderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnknownRoot(name) => write!(f, "no candidate named {name}"),
-            Self::Unsatisfied { from, requirement } => {
-                write!(
-                    f,
-                    "{from} requires {requirement}, which no candidate satisfies"
-                )
+            Self::UnknownRoot {
+                requested,
+                suggestions,
+            } => {
+                write!(f, "no package named {requested} in this tree")?;
+                if !suggestions.is_empty() {
+                    write!(f, ". Did you mean {}?", suggestions.join(", "))?;
+                }
+                Ok(())
+            }
+            Self::NoSuchVersion {
+                name,
+                requirement,
+                available,
+            } => write!(
+                f,
+                "{name} has no version matching {requirement}. This tree carries {}",
+                summarize(available)
+            ),
+            Self::Unsatisfied {
+                from,
+                requirement,
+                available,
+            } => {
+                write!(f, "{from} requires {requirement}, which nothing satisfies")?;
+                if available.is_empty() {
+                    write!(f, ". No package of that name is in this tree")
+                } else {
+                    write!(f, ". This tree carries {}", summarize(available))
+                }
             }
             Self::Cycle(component) => {
                 let names: Vec<String> = component.iter().map(ToString::to_string).collect();
@@ -142,6 +182,80 @@ impl std::fmt::Display for OrderError {
 }
 
 impl std::error::Error for OrderError {}
+
+/// A short, readable list: enough to act on, not a wall of versions.
+fn summarize(items: &[String]) -> String {
+    const SHOWN: usize = 6;
+    if items.len() <= SHOWN {
+        return items.join(", ");
+    }
+    format!(
+        "{}, and {} more",
+        items[..SHOWN].join(", "),
+        items.len() - SHOWN
+    )
+}
+
+/// Names worth offering when the one asked for is not there.
+///
+/// Case first, because a wrong capital is the commonest miss in a tree whose
+/// names capitalise inconsistently, some shouted, some lowercase, some mixed.
+/// Then a prefix, then a single-character typo.
+fn near_names(requested: &str, candidates: &[Candidate]) -> Vec<String> {
+    let wanted = requested.to_ascii_lowercase();
+    let mut names: Vec<&str> = candidates.iter().map(|c| c.name.as_str()).collect();
+    names.sort_unstable();
+    names.dedup();
+
+    let mut out: Vec<String> = Vec::new();
+    for name in names {
+        let lower = name.to_ascii_lowercase();
+        if lower == wanted
+            || lower.starts_with(&wanted)
+            || wanted.starts_with(&lower)
+            || within_one_edit(&lower, &wanted)
+        {
+            out.push(name.to_string());
+        }
+        if out.len() == 5 {
+            break;
+        }
+    }
+    out
+}
+
+/// Whether two names differ by at most one insertion, deletion or substitution.
+fn within_one_edit(a: &str, b: &str) -> bool {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    if a.len().abs_diff(b.len()) > 1 {
+        return false;
+    }
+    let (long, short) = if a.len() >= b.len() {
+        (&a, &b)
+    } else {
+        (&b, &a)
+    };
+    let mut skipped = false;
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < long.len() && j < short.len() {
+        if long[i] == short[j] {
+            i += 1;
+            j += 1;
+            continue;
+        }
+        if skipped {
+            return false;
+        }
+        skipped = true;
+        if long.len() == short.len() {
+            i += 1;
+            j += 1;
+        } else {
+            i += 1;
+        }
+    }
+    true
+}
 
 /// Which candidate to take when a requirement admits several.
 ///
@@ -229,6 +343,11 @@ fn choose<'a>(admissible: &[&'a Candidate], choice: Choice) -> Option<&'a Candid
 /// Nodes are whole modules and edges run from a dependency to what needs it.
 /// The graph is returned even when it has a cycle, because naming the cycle is
 /// more useful than refusing to hand it over.
+// The error carries what someone needs to fix the failure: the versions that
+// exist, the names that were nearly right. That makes it a large Err variant on
+// a path that returns at most once per run, which is a trade worth taking:
+// boxing it would save a few bytes and cost every caller a dereference.
+#[allow(clippy::result_large_err)]
 pub fn build_graph(
     candidates: &[Candidate],
     roots: &[String],
@@ -260,8 +379,33 @@ pub fn build_graph(
                 c.name == name && (version_req.is_empty() || matches_req(&c.version, &version_req))
             })
             .collect();
-        let start =
-            choose(&admissible, choice).ok_or_else(|| OrderError::UnknownRoot(root.clone()))?;
+        let start = match choose(&admissible, choice) {
+            Some(picked) => picked,
+            None => {
+                let mut of_that_name: Vec<String> = candidates
+                    .iter()
+                    .filter(|c| c.name == name)
+                    .map(|c| c.version.clone())
+                    .collect();
+                of_that_name.sort_by(|a, b| cmp_version(b, a));
+                of_that_name.dedup();
+                // A package that exists but not at that version is a different
+                // mistake from one that does not exist, and saying which is the
+                // difference between a one-line fix and a search.
+                return Err(if of_that_name.is_empty() {
+                    OrderError::UnknownRoot {
+                        requested: name.to_string(),
+                        suggestions: near_names(name, candidates),
+                    }
+                } else {
+                    OrderError::NoSuchVersion {
+                        name: name.to_string(),
+                        requirement: version_req.clone(),
+                        available: of_that_name,
+                    }
+                });
+            }
+        };
         let key = ModuleKey::of(start);
         node_for(&mut graph, &mut index, &key);
         queue.push(key);
@@ -323,11 +467,19 @@ pub fn build_graph(
                 admissible.retain(|c| distance(c, candidate, candidates) == best);
             }
             let Some(picked) = choose(&admissible, choice) else {
+                let mut available: Vec<String> = candidates
+                    .iter()
+                    .filter(|c| c.name == dep.name)
+                    .map(|c| format!("{}-{}", c.version, ModuleKey::of(c).toolchain))
+                    .collect();
+                available.sort();
+                available.dedup();
                 return Err(OrderError::Unsatisfied {
                     from: key.clone(),
                     requirement: format!("{} {}", dep.name, dep.version_req)
                         .trim()
                         .to_string(),
+                    available,
                 });
             };
             let dep_key = ModuleKey::of(picked);
@@ -344,6 +496,11 @@ pub fn build_graph(
 /// Roots are package names, optionally `name==version`. Every dependency the
 /// reachable recipes state is included, build-time and runtime alike, since
 /// both have to exist before the build starts.
+// The error carries what someone needs to fix the failure: the versions that
+// exist, the names that were nearly right. That makes it a large Err variant on
+// a path that returns at most once per run, which is a trade worth taking:
+// boxing it would save a few bytes and cost every caller a dereference.
+#[allow(clippy::result_large_err)]
 pub fn build_order(
     candidates: &[Candidate],
     roots: &[String],
@@ -566,6 +723,66 @@ mod tests {
         }
     }
 
+    /// A failure that only says no is a failure someone has to investigate by
+    /// hand. These three say what to do next.
+    #[test]
+    fn a_misspelled_root_is_offered_the_name_it_missed() {
+        let all = vec![candidate("GROMACS", "2026.3", tc("foss", "2026.1"), vec![])];
+        let err = build_order(&all, &["GROMAC".into()], Choice::Newest).unwrap_err();
+        let shown = err.to_string();
+        assert!(shown.contains("GROMACS"), "{shown}");
+        assert!(shown.contains("Did you mean"), "{shown}");
+    }
+
+    #[test]
+    fn a_wrong_capital_is_still_found() {
+        let all = vec![candidate("pkgconf", "2.5.1", tc("foss", "2026.1"), vec![])];
+        let err = build_order(&all, &["PkgConf".into()], Choice::Newest).unwrap_err();
+        assert!(err.to_string().contains("pkgconf"), "{err}");
+    }
+
+    /// The package is there; the version is not. Saying so is the difference
+    /// between a one-line fix and a search.
+    #[test]
+    fn a_version_that_does_not_exist_lists_the_ones_that_do() {
+        let all = vec![
+            candidate("GROMACS", "2026.3", tc("foss", "2026.1"), vec![]),
+            candidate("GROMACS", "2025.0", tc("foss", "2026.1"), vec![]),
+        ];
+        let err = build_order(&all, &["GROMACS==99.0".into()], Choice::Newest).unwrap_err();
+        let shown = err.to_string();
+        assert!(shown.contains("no version matching"), "{shown}");
+        assert!(shown.contains("2026.3"), "{shown}");
+        assert!(shown.contains("2025.0"), "{shown}");
+        assert!(!shown.contains("no package named"), "{shown}");
+    }
+
+    #[test]
+    fn an_unsatisfiable_dependency_lists_what_the_tree_has() {
+        let all = vec![
+            candidate(
+                "App",
+                "1.0",
+                tc("foss", "2026.1"),
+                vec![dep("Lib", ">=9", None)],
+            ),
+            candidate("Lib", "2.0", tc("foss", "2026.1"), vec![]),
+        ];
+        let err = build_order(&all, &["App".into()], Choice::Newest).unwrap_err();
+        let shown = err.to_string();
+        assert!(shown.contains("Lib >=9"), "{shown}");
+        assert!(shown.contains("2.0-foss-2026.1"), "{shown}");
+    }
+
+    #[test]
+    fn a_long_list_of_versions_is_summarized_rather_than_dumped() {
+        let all: Vec<Candidate> = (1..=12)
+            .map(|n| candidate("Many", &format!("{n}.0"), tc("foss", "2026.1"), vec![]))
+            .collect();
+        let err = build_order(&all, &["Many==99".into()], Choice::Newest).unwrap_err();
+        assert!(err.to_string().contains("and 6 more"), "{err}");
+    }
+
     #[test]
     fn an_unsatisfiable_requirement_names_who_asked() {
         let all = vec![candidate(
@@ -576,7 +793,9 @@ mod tests {
         )];
         let err = build_order(&all, &["App".into()], Choice::Newest).unwrap_err();
         match err {
-            OrderError::Unsatisfied { from, requirement } => {
+            OrderError::Unsatisfied {
+                from, requirement, ..
+            } => {
                 assert_eq!(from.name, "App");
                 assert!(requirement.contains("Missing"), "{requirement}");
             }
