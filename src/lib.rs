@@ -2,6 +2,7 @@
 #![warn(missing_docs)]
 
 pub mod artifact_class;
+pub mod build_order;
 pub mod campaign;
 pub mod cargo;
 pub mod cran;
@@ -48,6 +49,7 @@ pub use artifact_class::{
     classify_foreign, classify_url, declared_version, verify_declared_version, verify_sources,
     ArtifactClass, DeclaredVersion, FindingLevel, SeededChecksum, SourceFinding,
 };
+pub use build_order::{build_order, format_order, Choice, ModuleKey, OrderError};
 pub use domain::*;
 pub use easystack::{lock_to_easystack, EasystackOptions};
 pub use eb_maintainer::{

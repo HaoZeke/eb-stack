@@ -270,6 +270,28 @@ enum StackCommand {
         #[arg(long, default_value = "stack.cdx.json")]
         out: PathBuf,
     },
+    /// Order the builds a set of roots needs, as a graph rather than a stack.
+    ///
+    /// Unlike `solve`, this does not pick one version per package: it takes
+    /// what the recipes pin and sequences them, so a generation that carries
+    /// two builds of one name gets both, in an order that respects every
+    /// dependency.
+    Order {
+        #[arg(long, required = true)]
+        easyconfigs: Vec<PathBuf>,
+        /// Package to build, optionally pinned as `name==version`. Repeatable.
+        #[arg(long = "root", required = true)]
+        roots: Vec<String>,
+        #[arg(long, default_value = "build-order.txt")]
+        out: PathBuf,
+        /// Take the oldest admissible version of an unpinned requirement
+        /// instead of the newest, for reproducing what an older tree built.
+        #[arg(long)]
+        oldest: bool,
+        /// Also write the order as an easystack for `eb --easystack`.
+        #[arg(long)]
+        easystack_out: Option<PathBuf>,
+    },
     /// Write the lock as an EasyBuild easystack, the format `eb --easystack`
     /// consumes and EESSI's software layer is built from.
     Easystack {
@@ -791,6 +813,45 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 lock_out.display(),
                 lock.packages.len()
             );
+            Ok(())
+        }
+        StackCommand::Order {
+            easyconfigs,
+            roots,
+            out,
+            oldest,
+            easystack_out,
+        } => {
+            let trees: Vec<&Path> = easyconfigs.iter().map(PathBuf::as_path).collect();
+            let parsed =
+                eb_stack::parse_easyconfig_trees(&trees).map_err(|e| anyhow::anyhow!(e))?;
+            let choice = if oldest {
+                eb_stack::Choice::Oldest
+            } else {
+                eb_stack::Choice::Newest
+            };
+            let order = eb_stack::build_order(&parsed.candidates, &roots, choice)
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            std::fs::write(&out, eb_stack::format_order(&order))?;
+            let multi = eb_stack::build_order::multi_build_names(&order);
+            for (name, builds) in &multi {
+                println!("multiple builds of {name}: {}", builds.join(", "));
+            }
+            if let Some(path) = easystack_out.as_deref() {
+                // Straight from the ordered list: a lock is sorted by name so
+                // two locks diff cleanly, and writing that out would discard
+                // the sequence this command exists to produce.
+                let paths: Vec<&str> = order.iter().map(|c| c.easyconfig_path.as_str()).collect();
+                std::fs::write(
+                    path,
+                    eb_stack::easystack::easystack_from_paths(
+                        &paths,
+                        &eb_stack::EasystackOptions::new(),
+                    ),
+                )?;
+                println!("easystack={}", path.display());
+            }
+            println!("order={} builds={}", out.display(), order.len());
             Ok(())
         }
         StackCommand::Easystack { lock, out, options } => {

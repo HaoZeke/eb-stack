@@ -44,9 +44,24 @@ fn easyconfig_filename(easyconfig_path: &str) -> Option<String> {
 /// EasyBuild cannot be asked to build a file that was never on disk, and a
 /// silently wrong filename would fail deep in a pipeline rather than here.
 pub fn lock_to_easystack(lock: &StackLock, options: &EasystackOptions) -> String {
+    let paths: Vec<&str> = lock
+        .packages
+        .iter()
+        .map(|p| p.easyconfig_path.as_str())
+        .collect();
+    easystack_from_paths(&paths, options)
+}
+
+/// Render an easystack from easyconfig paths in the order they are given.
+///
+/// A lock is sorted by name so two locks diff cleanly, which is the wrong
+/// order for a build. A sequence from [`crate::build_order`] is already the
+/// order to build in, and writing it out sorted would throw away the only
+/// thing it knows that a lock does not.
+pub fn easystack_from_paths(paths: &[&str], options: &EasystackOptions) -> String {
     let mut entries: Vec<Value> = Vec::new();
-    for package in &lock.packages {
-        let Some(filename) = easyconfig_filename(&package.easyconfig_path) else {
+    for path in paths {
+        let Some(filename) = easyconfig_filename(path) else {
             continue;
         };
         match options.get(&filename) {
