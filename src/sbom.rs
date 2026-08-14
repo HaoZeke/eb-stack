@@ -13,6 +13,14 @@ use cyclonedx_bom::models::dependency::{Dependencies, Dependency};
 use cyclonedx_bom::models::external_reference::{
     ExternalReference, ExternalReferenceType, ExternalReferences, Uri as ExternalUri,
 };
+use cyclonedx_bom::models::formulation::workflow::input::{Input, RequiredInputField};
+use cyclonedx_bom::models::formulation::workflow::output::{
+    Output, RequiredOutputField, Type as OutputType,
+};
+use cyclonedx_bom::models::formulation::workflow::resource_reference::ResourceReference;
+use cyclonedx_bom::models::formulation::workflow::step::{Command, Step};
+use cyclonedx_bom::models::formulation::workflow::{Task, TaskType, Workflow};
+use cyclonedx_bom::models::formulation::Formula;
 use cyclonedx_bom::models::hash::{Hash, HashAlgorithm, HashValue, Hashes};
 use cyclonedx_bom::models::lifecycle::{Lifecycle, Lifecycles, Phase};
 use cyclonedx_bom::models::metadata::Metadata;
@@ -62,6 +70,11 @@ pub struct SbomFacts<'a> {
     /// Requirements the plan could not resolve. Their presence is what makes
     /// the document's `compositions` say `incomplete` rather than `complete`.
     pub unresolved: Option<&'a [String]>,
+    /// Input hash per package name, from [`crate::input_hash`]. Used as the
+    /// `uid` of the task that builds it, which is what CycloneDX means by a
+    /// unique identifier for a resource instance: two plans producing the same
+    /// hash describe the same build.
+    pub input_hashes: Option<&'a HashMap<String, String>>,
 }
 
 /// A SHA-256 as the spec wants it, or nothing.
@@ -140,6 +153,7 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
         build_dep_map,
         artifacts,
         unresolved,
+        input_hashes,
     } = facts;
     let toolchain_label = lock.toolchain.label();
     let mut package_refs: HashMap<String, String> = HashMap::new();
@@ -280,6 +294,14 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
         services: None,
         external_references: None,
         dependencies: Some(Dependencies(deps)),
+        formulation: Some(vec![build_formula(
+            &stack_ref,
+            lock,
+            &package_refs,
+            runtime_dep_map,
+            build_dep_map,
+            input_hashes,
+        )]),
         compositions: Some(Compositions(vec![compositions_statement(
             &stack_ref, unresolved,
         )])),
@@ -287,8 +309,148 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
         vulnerabilities: None,
         signature: None,
         annotations: None,
-        formulation: None,
         spec_version: SpecVersion::V1_5,
+    }
+}
+
+/// How this stack is built, as CycloneDX formulation.
+///
+/// The document already says what a stack contains. This says how it is made,
+/// and it is the only place two things eb-stack knows can live: the build
+/// order, because the top-level `dependencies` array is a runtime relation and
+/// validated against component references, and the identity of each build,
+/// which is the input hash.
+///
+/// One workflow for the stack, one task per module, and `taskDependencies` for
+/// the edges. Nothing is timed and no trigger is claimed: the lifecycle is
+/// pre-build, nothing has run, and a fabricated timestamp would be the one
+/// untrue thing in the document.
+fn build_formula(
+    stack_ref: &str,
+    lock: &StackLock,
+    package_refs: &HashMap<String, String>,
+    runtime_dep_map: Option<&HashMap<String, Vec<String>>>,
+    build_dep_map: Option<&HashMap<String, Vec<String>>>,
+    input_hashes: Option<&HashMap<String, String>>,
+) -> Formula {
+    let task_ref = |package_ref: &str| format!("{package_ref}#task");
+    let mut tasks: Vec<Task> = Vec::new();
+    let mut task_edges: Vec<Dependency> = Vec::new();
+
+    for package in &lock.packages {
+        let Some(package_ref) = package_refs.get(&package.name) else {
+            continue;
+        };
+        let uid = input_hashes
+            .and_then(|m| m.get(&package.name).cloned())
+            .unwrap_or_else(|| package_ref.clone());
+
+        let mut inputs: Vec<Input> = Vec::new();
+        let mut edges: Vec<String> = Vec::new();
+        for map in [runtime_dep_map, build_dep_map].into_iter().flatten() {
+            for dep_name in map.get(&package.name).into_iter().flatten() {
+                if let Some(dep_ref) = package_refs.get(dep_name) {
+                    // A task consumes the component its dependency produced,
+                    // which is what ties the how back to the what.
+                    inputs.push(Input {
+                        required: RequiredInputField::Resource(ResourceReference::Ref(
+                            dep_ref.clone(),
+                        )),
+                        source: None,
+                        target: None,
+                        properties: None,
+                    });
+                    edges.push(task_ref(dep_ref));
+                }
+            }
+        }
+        edges.sort();
+        edges.dedup();
+
+        tasks.push(Task {
+            bom_ref: BomReference::new(task_ref(package_ref)),
+            uid,
+            name: Some(format!("{}/{}", package.name, package.version)),
+            description: Some(format!(
+                "EasyBuild install from {}",
+                package.easyconfig_path
+            )),
+            resource_references: None,
+            task_types: vec![TaskType::Build],
+            trigger: None,
+            // One invocation. EasyBuild runs configure, build, install and the
+            // sanity check inside it, and splitting them here would claim a
+            // decomposition the plan does not control.
+            steps: Some(vec![Step {
+                name: Some("easybuild".into()),
+                description: None,
+                commands: Some(vec![Command {
+                    // Not a Property: those normalize whitespace, and a command
+                    // is worth keeping verbatim.
+                    executed: Some(format!("eb {} --robot", package.easyconfig_path)),
+                    properties: None,
+                }]),
+                properties: None,
+            }]),
+            inputs: if inputs.is_empty() {
+                None
+            } else {
+                Some(inputs)
+            },
+            outputs: Some(vec![Output {
+                required: RequiredOutputField::Resource(ResourceReference::Ref(
+                    package_ref.clone(),
+                )),
+                r#type: Some(OutputType::Artifact),
+                source: None,
+                target: None,
+                properties: None,
+            }]),
+            time_start: None,
+            time_end: None,
+            workspaces: None,
+            runtime_topology: None,
+            properties: Some(Properties(vec![Property::new(
+                "easybuild:easyconfig_path",
+                &package.easyconfig_path,
+            )])),
+        });
+
+        task_edges.push(Dependency {
+            dependency_ref: task_ref(package_ref),
+            dependencies: edges,
+        });
+    }
+
+    Formula {
+        bom_ref: Some(BomReference::new(format!("{stack_ref}#formula"))),
+        components: None,
+        services: None,
+        workflows: Some(vec![Workflow {
+            bom_ref: BomReference::new(format!("{stack_ref}#workflow")),
+            uid: lock
+                .generation_label
+                .clone()
+                .unwrap_or_else(|| lock.toolchain.label()),
+            name: Some(format!("{stack_ref} build")),
+            description: Some("EasyBuild module builds in dependency order".into()),
+            resource_references: None,
+            tasks: Some(tasks),
+            // The build order. Deliberately not the top-level dependencies
+            // array, which describes a runtime relation between components.
+            task_dependencies: Some(task_edges),
+            task_types: vec![TaskType::Build],
+            trigger: None,
+            steps: None,
+            inputs: None,
+            outputs: None,
+            time_start: None,
+            time_end: None,
+            workspaces: None,
+            runtime_topology: None,
+            properties: None,
+        }]),
+        properties: None,
     }
 }
 
@@ -815,5 +977,126 @@ mod artifact_facts_tests {
         let c = component(&bom_to_json_value(bom));
         assert!(c.get("hashes").is_none(), "{c}");
         assert!(c.get("externalReferences").is_none(), "{c}");
+    }
+}
+
+#[cfg(test)]
+mod formulation_tests {
+    use super::*;
+    use crate::domain::*;
+
+    fn lock() -> StackLock {
+        let toolchain = Toolchain {
+            name: "foss".into(),
+            version: "2026.1".into(),
+        };
+        StackLock {
+            schema_version: 1,
+            toolchain: toolchain.clone(),
+            generation_label: Some("2026.1".into()),
+            packages: vec![
+                LockPackage {
+                    name: "App".into(),
+                    version: "1.0".into(),
+                    toolchain: toolchain.clone(),
+                    versionsuffix: None,
+                    easyconfig_path: "a/App/App-1.0-foss-2026.1.eb".into(),
+                },
+                LockPackage {
+                    name: "Lib".into(),
+                    version: "2.0".into(),
+                    toolchain,
+                    versionsuffix: None,
+                    easyconfig_path: "l/Lib/Lib-2.0-foss-2026.1.eb".into(),
+                },
+            ],
+            solver: SolverMeta {
+                engine: "resolvo".into(),
+                engine_version: "0".into(),
+                timestamp: "2026-08-14T00:00:00Z".into(),
+            },
+        }
+    }
+
+    fn document() -> Value {
+        let deps = HashMap::from([("App".to_string(), vec!["Lib".to_string()])]);
+        let hashes = HashMap::from([
+            ("App".to_string(), "aaaa".to_string()),
+            ("Lib".to_string(), "bbbb".to_string()),
+        ]);
+        lock_to_cyclonedx_with_facts(
+            &lock(),
+            SbomFacts {
+                runtime_dep_map: Some(&deps),
+                input_hashes: Some(&hashes),
+                ..SbomFacts::default()
+            },
+        )
+    }
+
+    #[test]
+    fn the_build_order_has_a_home_in_formulation() {
+        let json = document();
+        let workflow = &json["formulation"][0]["workflows"][0];
+        let tasks = workflow["tasks"].as_array().expect("tasks");
+        assert_eq!(tasks.len(), 2, "{workflow}");
+        let edges = workflow["taskDependencies"].as_array().expect("edges");
+        // The task that builds App waits on the task that builds Lib.
+        let app_edge = edges
+            .iter()
+            .find(|e| e["ref"].as_str().unwrap_or("").contains("App"))
+            .expect("an edge for App");
+        assert!(
+            app_edge["dependsOn"][0]
+                .as_str()
+                .unwrap_or("")
+                .contains("Lib"),
+            "{app_edge}"
+        );
+    }
+
+    /// The identity of a build, which a version number cannot express.
+    #[test]
+    fn a_task_is_identified_by_its_input_hash() {
+        let json = document();
+        let tasks = json["formulation"][0]["workflows"][0]["tasks"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let app = tasks
+            .iter()
+            .find(|t| t["name"].as_str() == Some("App/1.0"))
+            .expect("the App task");
+        assert_eq!(app["uid"], "aaaa");
+        assert_eq!(app["taskTypes"][0], "build");
+        assert!(
+            app["steps"][0]["commands"][0]["executed"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("eb a/App/App-1.0"),
+            "{app}"
+        );
+    }
+
+    /// Task references belong to the workflow alone. The top-level graph is a
+    /// runtime relation between components and is validated against component
+    /// references, so a task reference there fails an external validator even
+    /// though the crate's own validate() would not notice.
+    #[test]
+    fn task_references_stay_out_of_the_component_graph() {
+        let json = document();
+        let component_graph = serde_json::to_string(&json["dependencies"]).unwrap();
+        assert!(!component_graph.contains("#task"), "{component_graph}");
+        let compositions = serde_json::to_string(&json["compositions"]).unwrap();
+        assert!(!compositions.contains("#task"), "{compositions}");
+    }
+
+    #[test]
+    fn nothing_is_timed_because_nothing_has_run() {
+        let json = document();
+        let workflow = &json["formulation"][0]["workflows"][0];
+        assert!(workflow.get("timeStart").is_none(), "{workflow}");
+        assert!(workflow.get("timeEnd").is_none(), "{workflow}");
+        assert_eq!(json["metadata"]["lifecycles"][0]["phase"], "pre-build");
     }
 }
