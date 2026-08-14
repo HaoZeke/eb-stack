@@ -148,3 +148,80 @@ fn a_root_that_lives_at_the_subtoolchain_is_found() {
         .expect("CMake at GCCcore is in the generation of a GCC policy");
     assert_eq!(lock.package("CMake").unwrap().version, "4.2.1");
 }
+
+/// The conflict a whole-generation solve hits: a generation carries the same
+/// package at two levels, and both are wanted.
+///
+/// EasyBuild installs Perl at GCCcore and Perl at SYSTEM side by side as
+/// different modules, and recipes pin whichever they were built against. A
+/// solver that keys a package by name alone makes those one variable, so the
+/// stack is unsatisfiable by construction rather than by any real conflict.
+/// Co-installability is the property being modelled: Vouillon and Di Cosmo
+/// state it for Debian in doi:10.1145/2522920.2522927, and it is why Spack
+/// keys by whole spec rather than name, doi:10.1109/sc41404.2022.00040.
+fn two_level_tree(root: &Path) {
+    // The bootstrap Perl, at SYSTEM, which zlib pins explicitly.
+    write(
+        root,
+        "p/Perl/Perl-5.38.0.eb",
+        "easyblock = 'ConfigureMake'\nname = 'Perl'\nversion = '5.38.0'\n\
+         homepage = 'https://example.invalid/'\n\
+         description = \"fixture: the bootstrap Perl at SYSTEM\"\n\
+         toolchain = SYSTEM\nmoduleclass = 'lang'\n",
+    );
+    // The generation's Perl, one level up.
+    write(
+        root,
+        "p/Perl/Perl-5.42.0-GCCcore-15.2.0.eb",
+        "easyblock = 'ConfigureMake'\nname = 'Perl'\nversion = '5.42.0'\n\
+         homepage = 'https://example.invalid/'\n\
+         description = \"fixture: the generation Perl at GCCcore\"\n\
+         toolchain = {'name': 'GCCcore', 'version': '15.2.0'}\nmoduleclass = 'lang'\n",
+    );
+    write(
+        root,
+        "z/zlib/zlib-2.3.2-GCCcore-15.2.0.eb",
+        "easyblock = 'ConfigureMake'\nname = 'zlib'\nversion = '2.3.2'\n\
+         homepage = 'https://example.invalid/'\n\
+         description = \"fixture: pins the bootstrap Perl by toolchain\"\n\
+         toolchain = {'name': 'GCCcore', 'version': '15.2.0'}\n\
+         builddependencies = [('Perl', '5.38.0', '', SYSTEM)]\nmoduleclass = 'lib'\n",
+    );
+    write(
+        root,
+        "o/OpenMPI/OpenMPI-5.0.10-GCC-15.2.0.eb",
+        "easyblock = 'ConfigureMake'\nname = 'OpenMPI'\nversion = '5.0.10'\n\
+         homepage = 'https://example.invalid/'\n\
+         description = \"fixture: wants the generation Perl and zlib\"\n\
+         toolchain = {'name': 'GCC', 'version': '15.2.0'}\n\
+         builddependencies = [('Perl', '5.42.0')]\n\
+         dependencies = [('zlib', '2.3.2')]\nmoduleclass = 'mpi'\n",
+    );
+}
+
+#[test]
+fn one_package_at_two_toolchain_levels_is_two_packages() {
+    let dir = tempfile::tempdir().unwrap();
+    two_level_tree(dir.path());
+    let policy_path = dir.path().join("policy.json");
+    fs::write(
+        &policy_path,
+        r#"{"toolchain": {"name": "GCC", "version": "15.2.0"},
+            "roots": ["OpenMPI"], "objective": "prefer_newer"}"#,
+    )
+    .unwrap();
+    let lock_out = dir.path().join("gen.lock.json");
+    let lock = eb_stack::solve_from_easyconfigs(&[dir.path()], &policy_path, None, &lock_out, None)
+        .expect("both Perls are installable side by side");
+
+    // Both levels are selected, because both are required by something.
+    let perls: Vec<String> = lock
+        .packages
+        .iter()
+        .filter(|p| p.name == "Perl")
+        .map(|p| format!("{}@{}", p.version, p.toolchain.name))
+        .collect();
+    assert!(perls.contains(&"5.38.0@system".to_string()), "{perls:?}");
+    assert!(perls.contains(&"5.42.0@GCCcore".to_string()), "{perls:?}");
+    assert!(lock.package("OpenMPI").is_some(), "{lock:?}");
+}

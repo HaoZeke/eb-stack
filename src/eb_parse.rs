@@ -2121,11 +2121,13 @@ pub fn lock_from_candidates(
 /// build, so this is worth checking before one is trusted.
 pub fn validate_lock_deps(lock: &StackLock, cands: &[Candidate]) -> Result<(), String> {
     use std::collections::HashMap as Map;
-    let by_name: Map<&str, &str> = lock
-        .packages
-        .iter()
-        .map(|p| (p.name.as_str(), p.version.as_str()))
-        .collect();
+    // A generation carries some packages at more than one toolchain level, and
+    // they are different modules: keying by name alone would let the second
+    // overwrite the first and then report the survivor as the wrong version.
+    let mut by_name: Map<&str, Vec<&LockPackage>> = Map::new();
+    for p in &lock.packages {
+        by_name.entry(p.name.as_str()).or_default().push(p);
+    }
     for p in &lock.packages {
         let Some(c) = cands.iter().find(|c| {
             c.name == p.name
@@ -2140,16 +2142,56 @@ pub fn validate_lock_deps(lock: &StackLock, cands: &[Candidate]) -> Result<(), S
             ("builddep", c.builddependencies.as_slice()),
         ] {
             for d in deps {
-                let Some(v) = by_name.get(d.name.as_str()) else {
+                let Some(locked) = by_name.get(d.name.as_str()) else {
                     return Err(format!(
                         "{}={} missing co-selected {role} {}",
                         p.name, p.version, d.name
                     ));
                 };
-                if !matches_req(v, &d.version_req) {
+                // A dependency that names a toolchain means that build of the
+                // package and no other; one that names none is satisfied by
+                // whichever level the stack carries.
+                let eligible: Vec<&&LockPackage> = locked
+                    .iter()
+                    .filter(|candidate| match d.toolchain.as_ref() {
+                        Some(want) => {
+                            crate::hierarchy::toolchains_match(&candidate.toolchain, want)
+                        }
+                        None => true,
+                    })
+                    .collect();
+                if eligible.is_empty() {
+                    return Err(format!(
+                        "{}={} requires {role} {} at {}, which the stack does not carry",
+                        p.name,
+                        p.version,
+                        d.name,
+                        d.toolchain
+                            .as_ref()
+                            .map(|t| format!("{}-{}", t.name, t.version))
+                            .unwrap_or_else(|| "any toolchain".into())
+                    ));
+                }
+                if !eligible
+                    .iter()
+                    .any(|candidate| matches_req(&candidate.version, &d.version_req))
+                {
+                    let seen: Vec<String> = eligible
+                        .iter()
+                        .map(|c| {
+                            format!(
+                                "{} at {}-{}",
+                                c.version, c.toolchain.name, c.toolchain.version
+                            )
+                        })
+                        .collect();
                     return Err(format!(
                         "{}={} requires {role} {} {} but co-selected {}",
-                        p.name, p.version, d.name, d.version_req, v
+                        p.name,
+                        p.version,
+                        d.name,
+                        d.version_req,
+                        seen.join(", ")
                     ));
                 }
             }

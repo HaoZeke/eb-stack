@@ -16,7 +16,7 @@ use resolvo::{
     HintDependenciesAvailable, Interner, KnownDependencies, NameId, SolvableId, SolverCache,
     StringId, VersionSetId, VersionSetUnionId,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Display;
 use std::sync::Mutex;
 use version_ranges::Ranges;
@@ -31,6 +31,15 @@ pub struct EbProvider {
     name_ids: HashMap<String, NameId>,
     /// package name -> sorted (rank ascending, candidate_idx)
     ranks: HashMap<String, Vec<(u32, usize)>>,
+    /// Names a generation carries at more than one toolchain level, whose
+    /// resolvo package name is qualified so the levels are separate variables.
+    multi_level: HashSet<String>,
+    /// Every qualified key interned for a package name, so a dependency can
+    /// fall back to them when the levels below the recipe hold nothing.
+    keys_by_name: HashMap<String, Vec<String>>,
+    /// The policy generation, lowest level first, for deciding which levels a
+    /// recipe may take an unpinned dependency from.
+    hierarchy_members: Vec<crate::domain::Toolchain>,
     /// pin: name -> allowed ranks
     pin_ranks: HashMap<String, Vec<u32>>,
     /// require_upgrade: name -> rank must be > this
@@ -44,7 +53,76 @@ pub struct EbProvider {
     interned: Mutex<HashMap<(NameId, u32), SolvableId>>,
 }
 
+/// How a toolchain is written inside a qualified package key.
+///
+/// SYSTEM is normalized, since an easyconfig writes it as name and version
+/// both "system" while a hierarchy carries an empty version.
+fn toolchain_label(tc: &crate::domain::Toolchain) -> String {
+    if crate::hierarchy::is_system_toolchain(tc) {
+        "system".to_string()
+    } else {
+        format!("{}-{}", tc.name, tc.version)
+    }
+}
+
+/// The resolvo package name for a candidate.
+///
+/// Plain for the ordinary case, qualified by toolchain for the names that a
+/// generation legitimately carries at more than one level. Qualifying only
+/// those keeps every existing message, lock and pin reading as it did.
+fn package_key(name: &str, tc: &crate::domain::Toolchain, multi_level: &HashSet<String>) -> String {
+    if multi_level.contains(name) {
+        format!("{name}@{}", toolchain_label(tc))
+    } else {
+        name.to_string()
+    }
+}
+
 impl EbProvider {
+    /// Which resolvo package names can satisfy one dependency of one recipe.
+    ///
+    /// A plain name for a package the generation carries once. For a package
+    /// carried at several levels: the level the dependency pins, or, when it
+    /// pins none, every level at or below the recipe's own, which is the range
+    /// EasyBuild's minimal-toolchain search may pick from.
+    fn dependency_keys(&self, recipe: &Candidate, dep: &crate::domain::DepReq) -> Vec<String> {
+        if !self.multi_level.contains(&dep.name) {
+            return vec![dep.name.clone()];
+        }
+        if let Some(tc) = dep.toolchain.as_ref() {
+            return vec![format!("{}@{}", dep.name, toolchain_label(tc))];
+        }
+        let recipe_at = self
+            .hierarchy_members
+            .iter()
+            .position(|m| crate::hierarchy::toolchains_match(m, &recipe.toolchain));
+        // The hierarchy is ordered lowest level first, so a recipe may take a
+        // dependency from its own level and anything under it, never above.
+        let admissible: Vec<&crate::domain::Toolchain> = match recipe_at {
+            Some(at) => self.hierarchy_members[..=at].iter().collect(),
+            None => self.hierarchy_members.iter().collect(),
+        };
+        let mut keys: Vec<String> = admissible
+            .into_iter()
+            .map(|tc| format!("{}@{}", dep.name, toolchain_label(tc)))
+            .filter(|key| self.name_ids.contains_key(key))
+            .collect();
+        let own = format!("{}@{}", dep.name, toolchain_label(&recipe.toolchain));
+        if self.name_ids.contains_key(&own) && !keys.contains(&own) {
+            keys.push(own);
+        }
+        if keys.is_empty() {
+            // Nothing at or below this recipe carries the package. A stack
+            // policy can admit a closure from another generation on purpose,
+            // and refusing it here would turn a deliberate cross-generation
+            // pin into an unresolved dependency.
+            if let Some(all) = self.keys_by_name.get(&dep.name) {
+                return all.clone();
+            }
+        }
+        keys
+    }
+
     /// Build a provider from a candidate set and a policy.
     pub fn from_universe(
         candidates_in: &[Candidate],
@@ -109,9 +187,38 @@ impl EbProvider {
             .collect();
         let candidates = crate::provides::expand_extension_provides(&filtered);
 
+        // A generation carries some packages at more than one level, and they
+        // are different modules: EasyBuild installs Perl at GCCcore and Perl at
+        // SYSTEM side by side, and a recipe pins whichever it was built
+        // against. Resolvo decides one solvable per package name, so those two
+        // have to be two names or the stack is unsatisfiable by construction.
+        // Co-installability is the property being modelled here; Vouillon and
+        // Di Cosmo state it for Debian in doi:10.1145/2522920.2522927, and it
+        // is why Spack keys a package by its whole spec rather than its name,
+        // doi:10.1109/sc41404.2022.00040.
+        //
+        // Only names that genuinely appear at several levels are qualified.
+        // Everything else keeps its plain name, so the common case reads the
+        // same in every message and lock the tool has ever written.
+        let mut levels_of: HashMap<String, BTreeSet<String>> = HashMap::new();
+        for c in candidates.iter() {
+            levels_of
+                .entry(c.name.clone())
+                .or_default()
+                .insert(toolchain_label(&c.toolchain));
+        }
+        let multi_level: HashSet<String> = levels_of
+            .iter()
+            .filter(|(_, levels)| levels.len() > 1)
+            .map(|(name, _)| name.clone())
+            .collect();
+
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, c) in candidates.iter().enumerate() {
-            by_name.entry(c.name.clone()).or_default().push(i);
+            by_name
+                .entry(package_key(&c.name, &c.toolchain, &multi_level))
+                .or_default()
+                .push(i);
         }
         // Sort by (version, versionsuffix) so same version with different
         // suffixes get distinct, deterministic ranks rather than colliding.
@@ -325,7 +432,19 @@ impl EbProvider {
             }
         }
 
+        let mut keys_by_name: HashMap<String, Vec<String>> = HashMap::new();
+        for c in candidates.iter() {
+            let key = package_key(&c.name, &c.toolchain, &multi_level);
+            let entry = keys_by_name.entry(c.name.clone()).or_default();
+            if !entry.contains(&key) {
+                entry.push(key);
+            }
+        }
+
         Ok(Self {
+            multi_level,
+            keys_by_name,
+            hierarchy_members,
             pool,
             candidates,
             name_ids,
@@ -584,27 +703,74 @@ impl DependencyProvider for EbProvider {
         // Runtime and build-time deps are co-selection requirements the same way;
         // role distinction lives on Candidate for outputs, not in resolvo edges.
         for d in c.dependencies.iter().chain(c.builddependencies.iter()) {
-            let Some(&dep_name_id) = self.name_ids.get(&d.name) else {
+            let keys = self.dependency_keys(c, d);
+            if keys.is_empty() {
                 let reason = self
                     .pool
                     .intern_string(format!("missing dependency package {}", d.name));
                 return Dependencies::Unknown(reason);
-            };
-            let range = self.range_matching(
-                &d.name,
-                &d.version_req,
-                d.toolchain.as_ref(),
-                d.versionsuffix.as_deref(),
-            );
-            if range == Ranges::empty() {
+            }
+            // One key is the ordinary case. Several means the dependency named
+            // no toolchain and the generation carries the package at more than
+            // one level, so any of them satisfies it and the requirement is
+            // their union, which is how EasyBuild's minimal-toolchain search
+            // behaves: it takes whichever level is available, not a fixed one.
+            let mut sets = Vec::new();
+            for key in &keys {
+                let Some(&dep_name_id) = self.name_ids.get(key) else {
+                    continue;
+                };
+                let range = self.range_matching(
+                    key,
+                    &d.version_req,
+                    d.toolchain.as_ref(),
+                    d.versionsuffix.as_deref(),
+                );
+                if range == Ranges::empty() {
+                    continue;
+                }
+                sets.push(self.pool.intern_version_set(dep_name_id, range));
+            }
+            if sets.is_empty() {
+                // No level at or below this recipe carries a matching version.
+                // A stack policy can admit a closure from another generation on
+                // purpose, so widen to every level the universe holds for this
+                // name before calling the dependency unresolved.
+                if let Some(all) = self.keys_by_name.get(&d.name) {
+                    for key in all {
+                        if keys.contains(key) {
+                            continue;
+                        }
+                        let Some(&dep_name_id) = self.name_ids.get(key) else {
+                            continue;
+                        };
+                        let range = self.range_matching(
+                            key,
+                            &d.version_req,
+                            d.toolchain.as_ref(),
+                            d.versionsuffix.as_deref(),
+                        );
+                        if range != Ranges::empty() {
+                            sets.push(self.pool.intern_version_set(dep_name_id, range));
+                        }
+                    }
+                }
+            }
+            let Some((first, rest)) = sets.split_first() else {
                 let reason = self.pool.intern_string(format!(
                     "unresolved dependency {} {} from {}={}",
                     d.name, d.version_req, c.name, c.version
                 ));
                 return Dependencies::Unknown(reason);
+            };
+            if rest.is_empty() {
+                known.requirements.push((*first).into());
+            } else {
+                let union = self
+                    .pool
+                    .intern_version_set_union(*first, rest.iter().copied());
+                known.requirements.push(union.into());
             }
-            let vs = self.pool.intern_version_set(dep_name_id, range);
-            known.requirements.push(vs.into());
         }
         Dependencies::Known(known)
     }
