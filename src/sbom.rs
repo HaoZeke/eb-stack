@@ -28,7 +28,7 @@ use cyclonedx_bom::models::property::{Properties, Property};
 use cyclonedx_bom::models::tool::{Tool, Tools};
 use cyclonedx_bom::prelude::*;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
 use std::str::FromStr;
 
@@ -75,6 +75,12 @@ pub struct SbomFacts<'a> {
     /// unique identifier for a resource instance: two plans producing the same
     /// hash describe the same build.
     pub input_hashes: Option<&'a HashMap<String, String>>,
+    /// The build environment the plan targets: optimisation flags, compute
+    /// capabilities, the EasyBuild version. A build is reproducible only
+    /// against a stated environment, since the same recipe compiled with
+    /// different flags is a different binary, and an SBOM that omits it
+    /// describes something nobody can reproduce (doi:10.1109/ms.2021.3073045).
+    pub build_environment: Option<&'a BTreeMap<String, String>>,
 }
 
 /// A SHA-256 as the spec wants it, or nothing.
@@ -154,6 +160,7 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
         artifacts,
         unresolved,
         input_hashes,
+        build_environment,
     } = facts;
     let toolchain_label = lock.toolchain.label();
     let mut package_refs: HashMap<String, String> = HashMap::new();
@@ -301,6 +308,7 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
             runtime_dep_map,
             build_dep_map,
             input_hashes,
+            build_environment,
         )]),
         compositions: Some(Compositions(vec![compositions_statement(
             &stack_ref, unresolved,
@@ -332,6 +340,7 @@ fn build_formula(
     runtime_dep_map: Option<&HashMap<String, Vec<String>>>,
     build_dep_map: Option<&HashMap<String, Vec<String>>>,
     input_hashes: Option<&HashMap<String, String>>,
+    build_environment: Option<&BTreeMap<String, String>>,
 ) -> Formula {
     let task_ref = |package_ref: &str| format!("{package_ref}#task");
     let mut tasks: Vec<Task> = Vec::new();
@@ -450,7 +459,15 @@ fn build_formula(
             runtime_topology: None,
             properties: None,
         }]),
-        properties: None,
+        // The environment every task in this workflow is built against, stated
+        // once rather than repeated per task.
+        properties: build_environment.map(|env| {
+            Properties(
+                env.iter()
+                    .map(|(name, value)| Property::new(name, value))
+                    .collect(),
+            )
+        }),
     }
 }
 
@@ -1098,5 +1115,101 @@ mod formulation_tests {
         assert!(workflow.get("timeStart").is_none(), "{workflow}");
         assert!(workflow.get("timeEnd").is_none(), "{workflow}");
         assert_eq!(json["metadata"]["lifecycles"][0]["phase"], "pre-build");
+    }
+}
+
+#[cfg(test)]
+mod build_environment_tests {
+    use super::*;
+    use crate::domain::*;
+
+    /// The same recipe compiled with different flags is a different binary, so
+    /// an SBOM that omits the environment describes something nobody can
+    /// reproduce.
+    #[test]
+    fn the_environment_a_stack_is_built_against_is_recorded_once() {
+        let toolchain = Toolchain {
+            name: "foss".into(),
+            version: "2026.1".into(),
+        };
+        let lock = StackLock {
+            schema_version: 1,
+            toolchain: toolchain.clone(),
+            generation_label: Some("2026.1".into()),
+            packages: vec![LockPackage {
+                name: "App".into(),
+                version: "1.0".into(),
+                toolchain,
+                versionsuffix: None,
+                easyconfig_path: "a/App/App-1.0-foss-2026.1.eb".into(),
+            }],
+            solver: SolverMeta {
+                engine: "resolvo".into(),
+                engine_version: "0".into(),
+                timestamp: "2026-08-14T00:00:00Z".into(),
+            },
+        };
+        let env = BTreeMap::from([
+            (
+                "easybuild:optarch".to_string(),
+                "GCC:-O3 -march=znver4".to_string(),
+            ),
+            (
+                "easybuild:cuda_compute_capabilities".to_string(),
+                "9.0".to_string(),
+            ),
+        ]);
+        let json = lock_to_cyclonedx_with_facts(
+            &lock,
+            SbomFacts {
+                build_environment: Some(&env),
+                ..SbomFacts::default()
+            },
+        );
+        let props = json["formulation"][0]["properties"]
+            .as_array()
+            .expect("props");
+        let optarch = props
+            .iter()
+            .find(|p| p["name"] == "easybuild:optarch")
+            .expect("the optimisation flags");
+        assert_eq!(optarch["value"], "GCC:-O3 -march=znver4");
+        assert!(
+            props
+                .iter()
+                .any(|p| p["name"] == "easybuild:cuda_compute_capabilities"),
+            "{props:?}"
+        );
+    }
+
+    #[test]
+    fn an_unstated_environment_is_left_absent_rather_than_invented() {
+        let toolchain = Toolchain {
+            name: "foss".into(),
+            version: "2026.1".into(),
+        };
+        let lock = StackLock {
+            schema_version: 1,
+            toolchain: toolchain.clone(),
+            generation_label: None,
+            packages: vec![LockPackage {
+                name: "App".into(),
+                version: "1.0".into(),
+                toolchain,
+                versionsuffix: None,
+                easyconfig_path: "a/App/App-1.0.eb".into(),
+            }],
+            solver: SolverMeta {
+                engine: "resolvo".into(),
+                engine_version: "0".into(),
+                timestamp: "2026-08-14T00:00:00Z".into(),
+            },
+        };
+        let json = lock_to_cyclonedx_with_facts(&lock, SbomFacts::default());
+        assert!(
+            json["formulation"][0].get("properties").is_none(),
+            "{}",
+            json["formulation"][0]
+        );
     }
 }
