@@ -81,12 +81,25 @@ impl EbProvider {
             validate_stack_policy(policy, stack)?;
         }
 
+        // A recipe's dependencies do not all live at its own toolchain: an app
+        // at GCC takes CMake from GCCcore and licence bits from SYSTEM, which
+        // is EasyBuild's minimal-toolchain search. Admitting only the policy
+        // toolchain here drops those candidates before they are ever interned,
+        // so the solver reports a missing *package* rather than an
+        // unsatisfiable constraint, and the caller cannot tell the difference.
+        let hierarchy_members =
+            crate::hierarchy::hierarchy_for_with_tree(&policy.toolchain, None, candidates_in)
+                .map(|h| h.members)
+                .unwrap_or_default();
+        let in_generation = |c: &Candidate| {
+            let same =
+                |t: &crate::domain::Toolchain| crate::hierarchy::toolchains_match(&c.toolchain, t);
+            same(&policy.toolchain) || hierarchy_members.iter().any(same)
+        };
         let filtered: Vec<Candidate> = candidates_in
             .iter()
             .filter(|c| {
-                (curated_toolchains
-                    || c.toolchain.name == policy.toolchain.name
-                        && c.toolchain.version == policy.toolchain.version)
+                (curated_toolchains || in_generation(c))
                     && !policy
                         .forbid
                         .iter()
@@ -820,6 +833,27 @@ fn solve_feasibility(
 
 /// Candidate versions for a package name under the policy toolchain, newest first.
 /// Order is deterministic (sorted by [`cmp_version`]), independent of HashMap iteration.
+/// Whether a candidate's toolchain is the policy toolchain or a level below it.
+///
+/// The hierarchy is derived from the tree when no fixture knows the
+/// generation, so a brand-new one needs no new fixture.
+fn in_generation(
+    candidate_tc: &crate::domain::Toolchain,
+    policy_tc: &crate::domain::Toolchain,
+    candidates: &[Candidate],
+) -> bool {
+    if crate::hierarchy::toolchains_match(candidate_tc, policy_tc) {
+        return true;
+    }
+    crate::hierarchy::hierarchy_for_with_tree(policy_tc, None, candidates)
+        .map(|h| {
+            h.members
+                .iter()
+                .any(|m| crate::hierarchy::toolchains_match(candidate_tc, m))
+        })
+        .unwrap_or(false)
+}
+
 fn versions_in_trial_order(
     candidates: &[Candidate],
     policy: &Policy,
@@ -829,9 +863,12 @@ fn versions_in_trial_order(
     let mut versions: Vec<String> = candidates
         .iter()
         .filter(|c| {
+            // A root is not always at the policy toolchain: CMake and Python
+            // sit at GCCcore in a GCC generation, and asking for one by name
+            // must find it where it legitimately lives rather than report that
+            // the package does not exist.
             c.name == name
-                && c.toolchain.name == policy.toolchain.name
-                && c.toolchain.version == policy.toolchain.version
+                && in_generation(&c.toolchain, &policy.toolchain, candidates)
                 && !policy
                     .forbid
                     .iter()

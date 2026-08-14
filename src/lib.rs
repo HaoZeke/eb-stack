@@ -58,12 +58,12 @@ pub use eb_maintainer::{
 pub use eb_parse::candidate_matches_dep_for_recipe;
 pub use eb_parse::{
     candidate_matches_dep, check_recipe_deps, easyconfig_basename, easyconfig_letter_dir,
-    existing_versions, filter_toolchain, lock_from_candidates, merge_candidates_with_precedence,
-    packaging_gate, parse_easyconfig_file, parse_easyconfig_tree, parse_easyconfig_trees,
-    resolve_easyconfig_file, resolve_easyconfig_file_reporting, resolve_easyconfig_str,
-    resolve_easyconfig_str_reporting, validate_lock_deps, version_field_to_req,
-    ExistingVersionsQuery, MissingDep, ParseTreeResult, RecipeDepCheck, ResolvedDep,
-    ResolvedEasyconfig, ResolvedExt, SkippedEasyconfig, SkippedStatement,
+    existing_versions, filter_toolchain, filter_toolchain_hierarchy, lock_from_candidates,
+    merge_candidates_with_precedence, packaging_gate, parse_easyconfig_file, parse_easyconfig_tree,
+    parse_easyconfig_trees, resolve_easyconfig_file, resolve_easyconfig_file_reporting,
+    resolve_easyconfig_str, resolve_easyconfig_str_reporting, validate_lock_deps,
+    version_field_to_req, ExistingVersionsQuery, MissingDep, ParseTreeResult, RecipeDepCheck,
+    ResolvedDep, ResolvedEasyconfig, ResolvedExt, SkippedEasyconfig, SkippedStatement,
 };
 pub use eb_style::{
     format_style, format_style_file, lint_style, FormatStyleResult, StyleError, StyleFinding,
@@ -431,7 +431,15 @@ pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
         }
     }
     let all = tree.candidates;
-    let universe_cands = filter_toolchain(&all, &policy.toolchain);
+    // The universe has to carry the subtoolchains as well as the policy
+    // toolchain, or a member's own build dependencies read as missing
+    // packages. The hierarchy comes from the tree when no fixture knows the
+    // generation, which is what a brand-new one needs.
+    let hierarchy_members =
+        crate::hierarchy::hierarchy_for_with_tree(&policy.toolchain, None, &all)
+            .map(|h| h.members)
+            .unwrap_or_default();
+    let universe_cands = filter_toolchain_hierarchy(&all, &policy.toolchain, &hierarchy_members);
     if universe_cands.is_empty() {
         let roots_disp = easyconfigs_roots
             .iter()

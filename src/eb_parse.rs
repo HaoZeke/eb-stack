@@ -1993,6 +1993,42 @@ pub fn parse_easyconfig_trees(roots: &[&Path]) -> Result<ParseTreeResult, ParseE
 }
 
 /// Candidates built against exactly this toolchain.
+/// Keep the policy toolchain and everything below it in its hierarchy.
+///
+/// A stack is not built at one toolchain. A recipe at `GCC-15.2.0` takes its
+/// CMake from `GCCcore-15.2.0` and its licence file from SYSTEM, exactly as
+/// EasyBuild's minimal-toolchain search does, so a universe filtered to the
+/// policy toolchain alone cannot satisfy the dependencies of its own members
+/// and reports them as missing packages.
+///
+/// `members` is the hierarchy for the policy toolchain, lowest first. Passing
+/// an empty slice reduces this to [`filter_toolchain`].
+pub fn filter_toolchain_hierarchy(
+    cands: &[Candidate],
+    tc: &Toolchain,
+    members: &[Toolchain],
+) -> Vec<Candidate> {
+    cands
+        .iter()
+        .filter(|c| {
+            // toolchains_match normalizes SYSTEM, which an easyconfig writes
+            // as name and version both "system" while a hierarchy carries it
+            // with an empty version. Comparing the fields directly drops every
+            // SYSTEM candidate, and the explicit SYSTEM pins that bootstrap a
+            // generation (binutils under zlib, for one) then read as missing.
+            let same =
+                |t: &crate::domain::Toolchain| crate::hierarchy::toolchains_match(&c.toolchain, t);
+            same(tc) || members.iter().any(same)
+        })
+        .cloned()
+        .collect()
+}
+
+/// Keep only candidates built at exactly this toolchain.
+///
+/// The narrow form, for callers that mean one level and nothing under it.
+/// A solve wants [`filter_toolchain_hierarchy`] instead, since a recipe's own
+/// build dependencies routinely sit one level down.
 pub fn filter_toolchain(cands: &[Candidate], tc: &Toolchain) -> Vec<Candidate> {
     cands
         .iter()
@@ -3594,5 +3630,84 @@ homepage = 'https://example.invalid'
             Some("https://example.invalid"),
             "the following assignment must survive intact"
         );
+    }
+}
+
+#[cfg(test)]
+mod hierarchy_universe_tests {
+    use super::*;
+    use crate::hierarchy::known_hierarchy;
+
+    fn candidate(name: &str, version: &str, tc_name: &str, tc_version: &str) -> Candidate {
+        Candidate {
+            name: name.into(),
+            version: version.into(),
+            toolchain: Toolchain {
+                name: tc_name.into(),
+                version: tc_version.into(),
+            },
+            versionsuffix: None,
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            easyconfig_path: format!("x/{name}/{name}-{version}.eb"),
+            exts_list: Vec::new(),
+        }
+    }
+
+    /// The case a site hits on a new generation: a recipe at GCC takes its
+    /// CMake from GCCcore, and a universe filtered to GCC alone reports its
+    /// own build dependency as a missing package.
+    #[test]
+    fn the_universe_admits_the_subtoolchain_a_recipe_builds_against() {
+        let gcc = Toolchain {
+            name: "GCC".into(),
+            version: "15.2.0".into(),
+        };
+        let all = vec![
+            candidate("FlexiBLAS", "3.5.0", "GCC", "15.2.0"),
+            candidate("CMake", "4.2.1", "GCCcore", "15.2.0"),
+            candidate("zlib", "2.3.2", "system", ""),
+            // another generation entirely, which must stay out
+            candidate("CMake", "3.31.3", "GCCcore", "14.2.0"),
+        ];
+        let members = known_hierarchy(&gcc)
+            .expect("GCC hierarchy is known")
+            .members;
+        let kept = filter_toolchain_hierarchy(&all, &gcc, &members);
+        let names: Vec<String> = kept
+            .iter()
+            .map(|c| format!("{}-{}-{}", c.name, c.version, c.toolchain.name))
+            .collect();
+        assert!(
+            names.contains(&"CMake-4.2.1-GCCcore".to_string()),
+            "{names:?}"
+        );
+        assert!(
+            names.contains(&"FlexiBLAS-3.5.0-GCC".to_string()),
+            "{names:?}"
+        );
+        assert!(
+            names.contains(&"zlib-2.3.2-system".to_string()),
+            "{names:?}"
+        );
+        assert!(
+            !names.contains(&"CMake-3.31.3-GCCcore".to_string()),
+            "a different generation leaked in: {names:?}"
+        );
+    }
+
+    #[test]
+    fn with_no_hierarchy_it_is_the_old_filter() {
+        let gcc = Toolchain {
+            name: "GCC".into(),
+            version: "15.2.0".into(),
+        };
+        let all = vec![
+            candidate("FlexiBLAS", "3.5.0", "GCC", "15.2.0"),
+            candidate("CMake", "4.2.1", "GCCcore", "15.2.0"),
+        ];
+        let kept = filter_toolchain_hierarchy(&all, &gcc, &[]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].name, "FlexiBLAS");
     }
 }
