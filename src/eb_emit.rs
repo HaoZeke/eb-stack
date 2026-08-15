@@ -1324,6 +1324,7 @@ builddependencies = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: None,
+                    hierarchy: Vec::new(),
         };
         let r = emit_next_generation(MINIMAL, &params).expect("emit");
         assert_eq!(r.filename, "GROMACS-2024.1-foss-2025b.eb");
@@ -1361,6 +1362,7 @@ builddependencies = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: None,
+                    hierarchy: Vec::new(),
         };
         let r = emit_next_generation(MINIMAL, &params).expect("emit");
         assert_eq!(r.filename, "GROMACS-2025.0-foss-2025b.eb");
@@ -1383,6 +1385,7 @@ builddependencies = [
             dep_versions: deps,
             dep_toolchains: HashMap::new(),
             source_checksum: None,
+                    hierarchy: Vec::new(),
         };
         let r = emit_next_generation(MINIMAL, &params).expect("emit");
         assert_eq!(r.filename, "GROMACS-2025.0-foss-2025b.eb");
@@ -1404,6 +1407,7 @@ builddependencies = [
             dep_versions: deps,
             dep_toolchains: HashMap::new(),
             source_checksum: None,
+                    hierarchy: Vec::new(),
         };
         let r = emit_next_generation(WITH_BUILDDEPS, &params).expect("emit");
         assert_eq!(r.filename, "Demo-1.0-foss-2025b.eb");
@@ -1424,6 +1428,7 @@ builddependencies = [
             dep_versions: deps,
             dep_toolchains: HashMap::new(),
             source_checksum: None,
+                    hierarchy: Vec::new(),
         };
         let r = emit_next_generation(WITH_BUILDDEPS, &params).expect("emit");
         assert!(r.text.contains("('OpenMPI', '==5.0.3')"));
@@ -1459,6 +1464,7 @@ builddependencies = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: None,
+                    hierarchy: Vec::new(),
         };
         let r = emit_next_generation(src, &params).expect("emit");
         assert_eq!(r.filename, "VASP6-6.6.1-nvofbf-2025.10-ACC.eb");
@@ -1476,6 +1482,7 @@ builddependencies = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: None,
+                    hierarchy: Vec::new(),
         };
         let r = emit_next_generation(src, &params).expect("emit");
         // Never emit a literal %(cudaver)s into a filename.
@@ -1497,6 +1504,7 @@ builddependencies = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: None,
+                    hierarchy: Vec::new(),
         };
         let r = emit_next_generation(src, &params).expect("emit");
         assert_eq!(r.filename, "Pkg-1.0-foss-2025b.eb");
@@ -1512,6 +1520,7 @@ builddependencies = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: None,
+                    hierarchy: Vec::new(),
         };
         let r = emit_next_generation(src, &params).expect("emit");
         assert_eq!(r.filename, "Pkg-2.0-foss-2025b.eb");
@@ -1694,6 +1703,7 @@ checksums = [
             source_checksum: Some(
                 "119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd".into(),
             ),
+                    hierarchy: Vec::new(),
         };
         let r = emit_next_generation(WITH_CHECKSUMS, &params).expect("emit");
         assert_eq!(r.filename, "OpenMPI-5.0.7-NVHPC-25.11-CUDA-12.8.0.eb");
@@ -1749,6 +1759,7 @@ exts_list = [
             source_checksum: Some(
                 "1094b7bbc6a3960223827114626657110b40096cdf9598a727935fc84ebf8aa0".into(),
             ),
+                    hierarchy: Vec::new(),
         };
         let r = emit_next_generation(GPU_WITH_EXTENSION, &params).expect("emit");
         // Both the top-level entry and the extension's copy name the new
@@ -1781,6 +1792,7 @@ exts_list = [
             source_checksum: Some(
                 "1094b7bbc6a3960223827114626657110b40096cdf9598a727935fc84ebf8aa0".into(),
             ),
+                    hierarchy: Vec::new(),
         };
         let r = emit_next_generation(GPU_WITH_EXTENSION, &params).expect("emit");
         // The CPU sibling of this recipe emits GROMACS-2026.3-foss-2025b.eb, so
@@ -1809,6 +1821,7 @@ exts_list = [
             source_checksum: Some(
                 "119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd".into(),
             ),
+                    hierarchy: Vec::new(),
         };
         let r = emit_next_generation(WITH_COMMENTED_CHECKSUMS, &params).expect("emit");
         assert!(r.text.contains(
@@ -1842,6 +1855,7 @@ exts_list = [
             source_checksum: Some(
                 "119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd".into(),
             ),
+                    hierarchy: Vec::new(),
         };
         let r = emit_next_generation(WITH_COMMENTED_BARE_CHECKSUM, &params).expect("emit");
         assert!(
@@ -1865,6 +1879,7 @@ exts_list = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: Some(NEW_SHA.into()),
+            hierarchy: Vec::new(),
         }
     }
 
@@ -1964,6 +1979,7 @@ exts_list = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: None,
+                    hierarchy: Vec::new(),
         };
         for fixture in [
             WITH_TYPED_TUPLE_CHECKSUM,
@@ -1995,6 +2011,7 @@ exts_list = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: Some(NEW_SHA.into()),
+                    hierarchy: Vec::new(),
         };
         let r = emit_next_generation(KOKKOS_ANNOTATED_BARE_CHECKSUMS, &params).expect("emit");
         assert_eq!(r.filename, "Kokkos-5.1.1-GCC-15.2.0.eb");
@@ -2055,6 +2072,7 @@ exts_list = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: None,
+                    hierarchy: Vec::new(),
         };
         let r = emit_next_generation(WITH_CHECKSUMS, &params).expect("emit");
         // Key renamed to the new version, but checksum value stays stale.
@@ -2074,6 +2092,7 @@ exts_list = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: None,
+                    hierarchy: Vec::new(),
         };
         let r = emit_next_generation(WITH_CHECKSUMS, &params).expect("emit");
         assert!(r.text.contains(
