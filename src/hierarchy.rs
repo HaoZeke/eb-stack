@@ -331,8 +331,15 @@ pub fn derive_hierarchy_from_candidates(
         // derivable hierarchy: its own defining recipe pins the GCCcore
         // generation it is built on, so companion recipes on this toolchain
         // resolve their dependencies at [SYSTEM, GCCcore-<gen>, <toolchain>].
-        return derive_compiler_toolchain_hierarchy(parent, cands)
-            .or_else(|| derive_hierarchy_by_walking(parent, cands));
+        // A composite outside the GCC family reaches its MPI and math levels
+        // through its own definition: `intel` is built of intel-compilers,
+        // impi and imkl, and reading it as a compiler-only toolchain stops at
+        // GCCcore, so nothing at the MPI level can be found. The walk answers
+        // for both shapes; a compiler-only toolchain simply has one level
+        // under it.
+        return derive_hierarchy_by_walking(parent, cands)
+            .filter(|derived| derived.members.len() > 2)
+            .or_else(|| derive_compiler_toolchain_hierarchy(parent, cands));
     }
     // The parent generation's own toolchain-definition recipe.
     let def = cands

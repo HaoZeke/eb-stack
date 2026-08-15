@@ -2136,6 +2136,15 @@ fn checksum_strings_from_value(v: &Value) -> Vec<String> {
             .iter()
             .filter_map(|(_, val)| val.expect_str("checksum").ok())
             .collect(),
+        // A tuple of hashes is one artifact with alternatives, not several
+        // artifacts: OpenMolcas lists two acceptable hashes for its tarball
+        // and its patch's checksum comes after. Dropping the entry moved every
+        // position after it, so the patch read as having no checksum at all.
+        Value::Tuple(items) | Value::List(items) => items
+            .iter()
+            .find_map(|item| item.expect_str("checksum").ok())
+            .into_iter()
+            .collect(),
         _ => Vec::new(),
     }
 }
