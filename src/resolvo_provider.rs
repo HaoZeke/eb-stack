@@ -587,7 +587,16 @@ impl EbProvider {
         let mut range = Ranges::empty();
         for (rank, idx) in ranked {
             let c = &self.candidates[*idx];
-            if !matches_req(&c.version, version_req) {
+            // A dependency may name the version with the versionsuffix run
+            // onto it, because that is what the module is called: a toolchain
+            // asks for NVHPC 25.3-CUDA-12.8.0, and what provides it is version
+            // 25.3 with versionsuffix -CUDA-12.8.0.
+            let with_suffix = format!(
+                "{}{}",
+                c.version,
+                c.versionsuffix.as_deref().unwrap_or("")
+            );
+            if !matches_req(&c.version, version_req) && !matches_req(&with_suffix, version_req) {
                 continue;
             }
             if toolchain.is_some_and(|want| !crate::hierarchy::toolchains_match(&c.toolchain, want))

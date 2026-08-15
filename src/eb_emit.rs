@@ -364,6 +364,20 @@ fn rewrite_string_assign(src: &str, key: &str, new_val: &str) -> Result<String, 
 
 /// Rewrite `toolchain = {'name': ..., 'version': ...}` (single- or multi-line).
 fn rewrite_toolchain(src: &str, tc: &Toolchain) -> Result<String, EmitError> {
+    // The system toolchain is written several ways and they all mean the same
+    // module: `SYSTEM`, `{'name': 'system', 'version': ''}`, and the older
+    // `{'name': 'dummy', 'version': ''}`. A recipe already at that toolchain
+    // is not retargeted by rewriting how it spells it.
+    if crate::hierarchy::is_system_toolchain(tc) {
+        if let Some(stated) = crate::eb_parse::resolve_easyconfig_str(src)
+            .ok()
+            .map(|recipe| recipe.toolchain)
+        {
+            if crate::hierarchy::is_system_toolchain(&stated) {
+                return Ok(src.to_string());
+            }
+        }
+    }
     // Locate the toolchain assignment span (from "toolchain" through matching '}').
     let lines: Vec<&str> = src.lines().collect();
     let mut start_line = None;
@@ -1150,11 +1164,18 @@ fn rewrite_dependency_tuple(
 
     let mut edits = Vec::new();
     if let Some(version) = version_override {
-        edits.push((
-            top[1].start,
-            top[1].end,
-            apply_version_override(&tuple[top[1].start..top[1].end], version),
-        ));
+        let stated = &tuple[top[1].start..top[1].end];
+        // A version written as a template stays a template. `('Tkinter',
+        // '%(pyver)s')` says "whatever Python this recipe uses", and replacing
+        // it with the number that resolves to today makes the recipe wrong at
+        // the next Python bump while looking unchanged.
+        if !has_unresolved_template(stated) {
+            edits.push((
+                top[1].start,
+                top[1].end,
+                apply_version_override(stated, version),
+            ));
+        }
     }
     if let Some(toolchain) = toolchain_override {
         let nested = tokens

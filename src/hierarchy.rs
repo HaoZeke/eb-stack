@@ -219,6 +219,72 @@ pub fn known_hierarchy(parent: &Toolchain) -> Option<ToolchainHierarchy> {
 /// composites are included only when their definition recipe is in the tree.
 /// GCCcore is assumed version-paired with GCC (true for all modern
 /// generations, 2020a+). Non-GCC-family parents return `None`.
+/// A hierarchy read off the tree, for a toolchain no family rule covers.
+///
+/// A toolchain is defined by a recipe, and that recipe's dependencies say what
+/// it is made of: `iimpi` names `intel-compilers` and `impi`, and
+/// `intel-compilers` names the `GCCcore` it was built on. Any dependency that
+/// other recipes in the tree use *as* a toolchain is a subtoolchain, so the
+/// chain can be walked without knowing the family: an unfamiliar composite
+/// stops being unplannable, which for a site is the difference between a
+/// generation it can bump and one it cannot.
+fn derive_hierarchy_by_walking(
+    parent: &Toolchain,
+    cands: &[Candidate],
+) -> Option<ToolchainHierarchy> {
+    let used_as_toolchain: std::collections::HashSet<&str> = cands
+        .iter()
+        .map(|candidate| candidate.toolchain.name.as_str())
+        .collect();
+    let mut members: Vec<Toolchain> = vec![Toolchain {
+        name: "system".into(),
+        version: String::new(),
+    }];
+    let mut pending = vec![parent.clone()];
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Breadth-first from the parent down; each level found is inserted before
+    // the toolchain that named it, so the result stays lowest-first.
+    while let Some(current) = pending.pop() {
+        if !seen.insert(format!("{}-{}", current.name, current.version)) {
+            continue;
+        }
+        let Some(definition) = cands
+            .iter()
+            .find(|c| c.name == current.name && c.version == current.version)
+        else {
+            continue;
+        };
+        for dependency in definition
+            .dependencies
+            .iter()
+            .chain(definition.builddependencies.iter())
+        {
+            if !used_as_toolchain.contains(dependency.name.as_str()) {
+                continue;
+            }
+            let Some(version) = exact_pin_version(&dependency.version_req) else {
+                continue;
+            };
+            let found = Toolchain {
+                name: dependency.name.clone(),
+                version: version.to_string(),
+            };
+            if !members.iter().any(|m| toolchains_match(m, &found)) {
+                members.push(found.clone());
+            }
+            pending.push(found);
+        }
+    }
+    if members.len() < 2 {
+        return None;
+    }
+    members.push(parent.clone());
+    Some(ToolchainHierarchy {
+        parent: parent.clone(),
+        members,
+    })
+}
+
 pub fn derive_hierarchy_from_candidates(
     parent: &Toolchain,
     cands: &[Candidate],
@@ -232,7 +298,8 @@ pub fn derive_hierarchy_from_candidates(
         // recipe pins GCCcore directly and names no compiler level, so it
         // derives as the compiler-only toolchain it was back then.
         return derive_nvidia_family_hierarchy(parent, cands)
-            .or_else(|| derive_compiler_toolchain_hierarchy(parent, cands));
+            .or_else(|| derive_compiler_toolchain_hierarchy(parent, cands))
+            .or_else(|| derive_hierarchy_by_walking(parent, cands));
     }
     if !COMPOSITES.contains(&parent.name.as_str()) || parent.version.is_empty() {
         // Not a GCC-family composite. A compiler-only toolchain
@@ -240,19 +307,25 @@ pub fn derive_hierarchy_from_candidates(
         // derivable hierarchy: its own defining recipe pins the GCCcore
         // generation it is built on, so companion recipes on this toolchain
         // resolve their dependencies at [SYSTEM, GCCcore-<gen>, <toolchain>].
-        return derive_compiler_toolchain_hierarchy(parent, cands);
+        return derive_compiler_toolchain_hierarchy(parent, cands)
+            .or_else(|| derive_hierarchy_by_walking(parent, cands));
     }
     // The parent generation's own toolchain-definition recipe.
     let def = cands
         .iter()
         .find(|c| c.name == parent.name && c.version == parent.version)?;
-    let gcc_ver = def
+    let Some(gcc_ver) = def
         .dependencies
         .iter()
         .chain(def.builddependencies.iter())
         .find(|d| d.name == "GCC")
-        .and_then(|d| exact_pin_version(&d.version_req))?
-        .to_string();
+        .and_then(|d| exact_pin_version(&d.version_req))
+        .map(str::to_string)
+    else {
+        // A composite that reaches GCC through another composite rather than
+        // naming it: foss lists gompi, not GCC.
+        return derive_hierarchy_by_walking(parent, cands);
+    };
     let mut members = vec![
         Toolchain {
             name: "system".into(),
