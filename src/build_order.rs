@@ -270,6 +270,24 @@ pub enum Choice {
     Oldest,
 }
 
+/// The part of a module name after the `/`: version, then the toolchain unless
+/// it is the system one, then the versionsuffix.
+fn module_version(candidate: &Candidate) -> String {
+    let toolchain = if crate::hierarchy::is_system_toolchain(&candidate.toolchain) {
+        String::new()
+    } else {
+        format!(
+            "-{}-{}",
+            candidate.toolchain.name, candidate.toolchain.version
+        )
+    };
+    format!(
+        "{}{toolchain}{}",
+        candidate.version,
+        candidate.versionsuffix.as_deref().unwrap_or("")
+    )
+}
+
 /// Whether a candidate satisfies one stated dependency.
 ///
 /// The rules are EasyBuild's: a version requirement, an optional toolchain that
@@ -278,8 +296,35 @@ fn satisfies(candidate: &Candidate, dep: &DepReq) -> bool {
     if candidate.name != dep.name {
         return false;
     }
-    if !dep.version_req.is_empty() && !matches_req(&candidate.version, &dep.version_req) {
-        return false;
+    // A dependency names a module, and a module name puts the toolchain where
+    // a reader of the tuple would not expect it: intel-2016b asks for binutils
+    // 2.26 with versionsuffix -GCCcore-5.4.0, and what provides it is binutils
+    // 2.26 built at GCCcore-5.4.0 carrying no versionsuffix at all. Comparing
+    // whole module names accepts that without loosening anything, because it
+    // is string equality rather than a relaxed match.
+    if let Some(pinned) = dep.version_req.strip_prefix("==") {
+        let wanted = format!("{pinned}{}", dep.versionsuffix.as_deref().unwrap_or(""));
+        if module_version(candidate) == wanted {
+            return true;
+        }
+    }
+    if !dep.version_req.is_empty() {
+        // A dependency may name the version alone, or the version with the
+        // versionsuffix run onto it, because that is what the module ends up
+        // called: foss-2019a asks for GCC 8.2.0-2.31.1, and the recipe that
+        // provides it is version 8.2.0 with versionsuffix -2.31.1. Both
+        // spellings have to match or every recipe using the second one reads
+        // as unsatisfiable.
+        let with_suffix = format!(
+            "{}{}",
+            candidate.version,
+            candidate.versionsuffix.as_deref().unwrap_or("")
+        );
+        if !matches_req(&candidate.version, &dep.version_req)
+            && !matches_req(&with_suffix, &dep.version_req)
+        {
+            return false;
+        }
     }
     if let Some(want) = dep.toolchain.as_ref() {
         if !crate::hierarchy::toolchains_match(&candidate.toolchain, want) {
