@@ -1149,6 +1149,26 @@ fn value_to_dep(val: &Value) -> Result<ResolvedDep, String> {
     })
 }
 
+/// Whether the source assigns `field` at the top level.
+///
+/// Column zero and an `=` that is not `==`, which is what a top-level
+/// easyconfig assignment looks like. Augmented assignment counts: a recipe
+/// that appends to a dependency list still has one.
+fn assigns_at_top_level(src: &str, field: &str) -> bool {
+    src.lines().any(|line| {
+        let Some(rest) = line.strip_prefix(field) else {
+            return false;
+        };
+        let rest = rest.trim_start();
+        match rest.as_bytes() {
+            [b'=', b'=', ..] => false,
+            [b'=', ..] => true,
+            [b'+', b'=', ..] => true,
+            _ => false,
+        }
+    })
+}
+
 fn parse_dep_filename(s: &str) -> Option<ResolvedDep> {
     // name-version-toolchain.eb — best-effort for legacy list entries.
     let s = s.strip_suffix(".eb")?;
@@ -1333,6 +1353,24 @@ fn resolve_easyconfig_str_inner(
         .env
         .get("exts_list")
         .map(|v| apply_templates_value(v, &templates));
+
+    // A statement the parser cannot represent is skipped, which is right for
+    // an oddity in a field nobody plans with. It is wrong for a dependency
+    // list: the field then reads as absent, absent reads as none, and the
+    // result is a build order that silently omits what a recipe needs. A
+    // recipe that assigns one of these and whose value did not survive parsing
+    // cannot be planned with, so it is refused here rather than half-read.
+    for field in ["dependencies", "builddependencies"] {
+        if assigns_at_top_level(src, field) && !parser.env.contains_key(field) {
+            return Err(ParseError::Parse(
+                "<string>".into(),
+                format!(
+                    "{field} is assigned but could not be read, so planning with this \
+                     recipe would silently omit what it needs"
+                ),
+            ));
+        }
+    }
 
     let dependencies = value_list_as_slice(deps_val.as_ref())
         .map_err(|e| ParseError::Parse("<string>".into(), e))?
