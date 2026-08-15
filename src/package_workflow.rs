@@ -1253,7 +1253,13 @@ fn package_plan_from_easyconfig(
                 .filter(|source| source.is_file());
             PatchArtifact {
                 filename: filename.clone(),
-                sha256: recipe.checksums.get(source_count + index).cloned(),
+                // By name when the recipe states it that way, because one
+                // entry carrying several hashes moves every position after it.
+                sha256: recipe
+                    .checksums_by_filename
+                    .get(filename)
+                    .cloned()
+                    .or_else(|| recipe.checksums.get(source_count + index).cloned()),
                 url: None,
                 source: resolved_source
                     .as_deref()

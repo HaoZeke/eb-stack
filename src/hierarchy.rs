@@ -285,6 +285,12 @@ fn derive_hierarchy_by_walking(
     })
 }
 
+/// The hierarchy for a toolchain, read from the tree that defines it.
+///
+/// Each family knows its own shape: the GCC composites reach GCCcore through
+/// their GCC pin, the NVIDIA ones walk their own chain, and a compiler-only
+/// toolchain states the GCCcore it was built on. Anything else is walked
+/// generically.
 pub fn derive_hierarchy_from_candidates(
     parent: &Toolchain,
     cands: &[Candidate],

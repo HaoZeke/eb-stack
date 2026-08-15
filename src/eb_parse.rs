@@ -10,7 +10,7 @@ use crate::domain::{Candidate, DepReq, ExtEntry, LockPackage, SolverMeta, StackL
 use crate::eb_template_constants::EB_TEMPLATE_CONSTANTS;
 use crate::version::matches_req;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use thiserror::Error;
 
@@ -108,6 +108,11 @@ pub struct ResolvedEasyconfig {
     /// values, so a multi-arch dict entry stays one entry.
     #[serde(default)]
     pub checksum_entry_keys: Vec<Vec<String>>,
+    /// Checksums the recipe states by filename, for the entries written as
+    /// `{'name': 'sha…'}`. Position says nothing once one entry carries
+    /// several hashes.
+    #[serde(default)]
+    pub checksums_by_filename: BTreeMap<String, String>,
 }
 
 impl ResolvedEasyconfig {
@@ -679,35 +684,36 @@ impl<'a> Parser<'a> {
                 break;
             }
             self.pos += 1;
-            let start = self.parse_opt_index()?;
+            let start = self.parse_subscript_arg()?;
             self.skip_ws();
             let is_slice = self.peek() == Some(b':');
             let stop = if is_slice {
                 self.pos += 1;
-                self.parse_opt_index()?
+                self.parse_subscript_arg()?
             } else {
                 None
             };
             self.skip_ws();
             if self.peek() != Some(b']') {
-                return Err(self.err("subscript is not a plain index or slice"));
+                return Err(self.err("subscript is not an index, a key or a slice"));
             }
             self.pos += 1;
-            val = subscript(&val, start, stop, is_slice).map_err(|e| self.err(e))?;
+            val = subscript(&val, start.as_ref(), stop.as_ref(), is_slice)
+                .map_err(|e| self.err(e))?;
         }
         Ok(val)
     }
 
-    /// An optional integer inside a subscript; `None` for an omitted bound.
-    fn parse_opt_index(&mut self) -> Result<Option<i64>, String> {
+    /// One subscript argument, or `None` for an omitted slice bound.
+    ///
+    /// An index, a slice bound, or a dict key: `local_archs[ARCH]` names the
+    /// architecture's entry, and a recipe uses that to pick one tarball.
+    fn parse_subscript_arg(&mut self) -> Result<Option<Value>, String> {
         self.skip_ws();
-        match self.peek() {
-            Some(b'-') | Some(b'0'..=b'9') => match self.parse_number()? {
-                Value::Int(i) => Ok(Some(i)),
-                other => Err(self.err(format!("subscript bound is not an integer: {other:?}"))),
-            },
-            _ => Ok(None),
+        if matches!(self.peek(), Some(b']') | Some(b':')) {
+            return Ok(None);
         }
+        Ok(Some(self.parse_expr()?))
     }
 
     fn parse_expr(&mut self) -> Result<Value, String> {
@@ -869,6 +875,24 @@ impl<'a> Parser<'a> {
         Err(self.err("unterminated string"))
     }
 
+    /// Evaluate a fragment of source in this parser's own environment.
+    ///
+    /// Used for the inside of an f-string field, which is an expression like
+    /// any other and deserves the same reader rather than a second, weaker
+    /// one.
+    fn eval_fragment(&self, fragment: &str) -> Result<Value, String> {
+        let mut sub = Parser {
+            src: fragment.as_bytes(),
+            pos: 0,
+            env: self.env.clone(),
+            skipped: Vec::new(),
+            // A fragment sits inside braces, so the bracket-sensitive rules
+            // behave as if nested, which is what it is.
+            depth: self.depth + 1,
+        };
+        sub.parse_expr()
+    }
+
     /// Whether what follows is an f-string rather than a name beginning with f.
     fn starts_fstring(&self) -> bool {
         let mut at = self.pos;
@@ -912,16 +936,20 @@ impl<'a> Parser<'a> {
                 return Err(self.err("unterminated { in f-string"));
             };
             let expr = tail[1..end].trim();
-            if expr.contains([':', '!', '(', '[', '.', '+']) {
-                return Err(self.err(format!("f-string field {expr} is not a plain name")));
+            // A conversion or a format spec would change the text, and
+            // guessing at one would put a wrong value in a field.
+            if expr.contains('!') || expr.contains(':') {
+                return Err(self.err(format!("f-string field {expr} carries a format spec")));
             }
-            match self.env.get(expr) {
-                Some(Value::Str(s)) => out.push_str(s),
-                Some(Value::Int(i)) => out.push_str(&i.to_string()),
-                Some(other) => {
+            // Anything else is an ordinary expression, and the parser already
+            // reads those: `{local_archs[ARCH]}` is a subscript, which a
+            // recipe uses to name one architecture's tarball.
+            match self.eval_fragment(expr)? {
+                Value::Str(s) => out.push_str(&s),
+                Value::Int(i) => out.push_str(&i.to_string()),
+                other => {
                     return Err(self.err(format!("f-string field {expr} is {other:?}")));
                 }
-                None => return Err(self.err(format!("f-string field {expr} is not defined"))),
             }
             rest = &tail[end + 1..];
         }
@@ -1199,10 +1227,33 @@ fn string_method(receiver: &Value, name: &str, args: &[Value]) -> Result<Value, 
 /// a dependency where skipping the recipe is at least visible.
 fn subscript(
     val: &Value,
-    start: Option<i64>,
-    stop: Option<i64>,
+    start: Option<&Value>,
+    stop: Option<&Value>,
     is_slice: bool,
 ) -> Result<Value, String> {
+    fn as_index(value: Option<&Value>) -> Result<Option<i64>, String> {
+        match value {
+            None => Ok(None),
+            Some(Value::Int(i)) => Ok(Some(*i)),
+            Some(other) => Err(format!("subscript bound is not an integer: {other:?}")),
+        }
+    }
+    // A dict is subscripted by key, and only by key.
+    if let Value::Dict(entries) = val {
+        if is_slice {
+            return Err("a mapping cannot be sliced".into());
+        }
+        let Some(Value::Str(key)) = start else {
+            return Err(format!("mapping key is not a string: {start:?}"));
+        };
+        return entries
+            .iter()
+            .find(|(candidate, _)| candidate == key)
+            .map(|(_, value)| value.clone())
+            .ok_or_else(|| format!("mapping has no key {key}"));
+    }
+    let start = as_index(start)?;
+    let stop = as_index(stop)?;
     fn bound(i: i64, len: usize) -> usize {
         if i < 0 {
             (len as i64 + i).max(0) as usize
@@ -1866,6 +1917,7 @@ fn resolve_easyconfig_str_inner(
     let source_urls = env_string_list(&parser.env, "source_urls", &templates);
     let patch_names = patch_names_field(&parser.env, &templates);
     let checksum_entry_keys = checksum_entry_keys_field(&parser.env, &templates);
+    let checksums_by_filename = checksums_by_filename_field(&parser.env, &templates);
 
     let resolved = ResolvedEasyconfig {
         name,
@@ -1885,6 +1937,7 @@ fn resolve_easyconfig_str_inner(
         source_urls,
         patch_names,
         checksum_entry_keys,
+        checksums_by_filename,
     };
     Ok((resolved, parser.skipped))
 }
@@ -2042,6 +2095,40 @@ fn opt_str_list_field(
 
 /// EasyBuild checksums may be plain strings or one-key dicts
 /// `{'file.tar.gz': 'sha256…'}`. Packaging gates need the sha256 tokens.
+/// Checksums a recipe states by filename rather than by position.
+///
+/// EasyBuild lets a checksum entry be `{'file.tar.gz': 'sha…'}`, and a site
+/// uses that to give one entry several architectures' hashes. Positional
+/// indexing then goes wrong for everything after it, so a patch listed last
+/// reads as having no checksum at all. Keyed entries are recorded by name so
+/// the position never has to be guessed.
+fn checksums_by_filename_field(
+    env: &HashMap<String, Value>,
+    templates: &HashMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let Some(v) = env.get("checksums") else {
+        return out;
+    };
+    let v = apply_templates_value(v, templates);
+    let Ok(items) = value_list_as_slice(Some(&v)) else {
+        return out;
+    };
+    for item in items {
+        let Value::Dict(entries) = item else {
+            continue;
+        };
+        for (filename, value) in entries {
+            // A tuple of hashes means any of them is acceptable; the first
+            // answers the question "does this artifact have a checksum".
+            if let Some(checksum) = checksum_strings_from_value(value).first() {
+                out.insert(filename.clone(), checksum.clone());
+            }
+        }
+    }
+    out
+}
+
 fn checksum_strings_from_value(v: &Value) -> Vec<String> {
     match v {
         Value::Str(s) => vec![s.clone()],
@@ -3300,6 +3387,7 @@ mod tests {
             source_urls: Vec::new(),
             patch_names: vec![],
             checksum_entry_keys: vec![],
+            checksums_by_filename: Default::default(),
         };
         let c = resolved.to_candidate();
         let cuda = c.dependencies.iter().find(|d| d.name == "CudaLib").unwrap();
@@ -3866,6 +3954,7 @@ builddependencies = [
             source_urls: Vec::new(),
             patch_names: vec![],
             checksum_entry_keys: vec![],
+            checksums_by_filename: Default::default(),
         }
     }
 
