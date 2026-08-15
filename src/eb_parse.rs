@@ -1678,13 +1678,16 @@ fn resolve_easyconfig_str_inner(
     // result is a build order that silently omits what a recipe needs. A
     // recipe that assigns one of these and whose value did not survive parsing
     // cannot be planned with, so it is refused here rather than half-read.
-    for field in ["dependencies", "builddependencies"] {
+    // `versionsuffix` belongs to the same rule: it is part of the module name,
+    // so a suffix that was assigned and not read gives the recipe a different
+    // identity than the one it will install under.
+    for field in ["dependencies", "builddependencies", "versionsuffix"] {
         if assigns_at_top_level(src, field) && !parser.env.contains_key(field) {
             return Err(ParseError::Parse(
                 "<string>".into(),
                 format!(
                     "{field} is assigned but could not be read, so planning with this \
-                     recipe would silently omit what it needs"
+                     recipe would get its identity or its dependencies wrong"
                 ),
             ));
         }
@@ -2823,6 +2826,65 @@ mod tests {
                    toolchain = SYSTEM\n";
         let parsed = resolve_easyconfig_str(src).expect("parse");
         assert_eq!(parsed.version, "11.0.27");
+    }
+
+    #[test]
+    fn a_slice_and_an_index_are_read() {
+        let src = "name = 'protobuf-python'\nversion = '6.31.1'\n\
+                   patchlevels = ['1', '2']\n\
+                   toolchain = {'name': 'GCCcore', 'version': '14.3.0'}\n\
+                   versionsuffix = '-%s' % patchlevels[0]\n\
+                   dependencies = [('protobuf', version[2:])]\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.dependencies[0].version, "31.1");
+        assert_eq!(parsed.versionsuffix.as_deref(), Some("-1"));
+    }
+
+    #[test]
+    fn an_index_outside_the_value_is_refused_rather_than_clamped() {
+        let src = "name = 'X'\nversion = '1'\nlevels = ['a']\n\
+                   toolchain = SYSTEM\nversionsuffix = '-%s' % levels[3]\n";
+        assert!(resolve_easyconfig_str(src).is_err());
+    }
+
+    #[test]
+    fn a_dependency_list_written_with_braces_is_a_set_not_a_dict() {
+        let src = "name = 'EZC3D'\nversion = '1.6.0'\n\
+                   toolchain = {'name': 'gfbf', 'version': '2024a'}\n\
+                   dependencies = {\n    ('Python', '3.12.3'),\n    ('SciPy-bundle', '2024.05'),\n}\n";
+        let parsed = resolve_easyconfig_str(src).expect("a set of tuples is a dependency list");
+        let names: Vec<&str> = parsed
+            .dependencies
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["Python", "SciPy-bundle"]);
+    }
+
+    #[test]
+    fn a_dependency_list_can_be_two_lists_added() {
+        let src = "name = 'PennyLane'\nversion = '0.37.0'\n\
+                   toolchain = {'name': 'foss', 'version': '2023a'}\n\
+                   local_extra = [('pybind11', '2.11.1')]\n\
+                   builddependencies = [('CMake', '3.26.3')] + local_extra\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        let names: Vec<&str> = parsed
+            .builddependencies
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["CMake", "pybind11"]);
+    }
+
+    #[test]
+    fn arch_is_defined_as_a_bare_name() {
+        let src = "name = 'IJulia'\nversion = '1.29.0'\ntoolchain = SYSTEM\n\
+                   dependencies = [('Julia', '1.11.6', '-linux-%s' % ARCH, SYSTEM)]\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(
+            parsed.dependencies[0].versionsuffix.as_deref(),
+            Some(format!("-linux-{}", std::env::consts::ARCH).as_str())
+        );
     }
 
     #[test]
