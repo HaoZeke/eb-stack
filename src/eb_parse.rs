@@ -203,25 +203,59 @@ fn system_toolchain_value() -> Value {
 // --- comment strip (line-oriented, quote-aware) -----------------------------------
 
 /// Strip full-line and trailing `#` comments outside quotes (best-effort).
+///
+/// Quote state carries across lines, because a `description` is triple-quoted
+/// and routinely runs to several. Doxygen's names C# in one, and treating that
+/// `#` as a comment removes the closing `"""` along with the rest of the line,
+/// so the toolchain assignment below it lands inside a string that never ends
+/// and the recipe reads as having no toolchain at all.
 fn strip_comments(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
+    let mut triple: Option<u8> = None;
     for line in src.lines() {
+        let opened_before = triple.is_some();
+        let b = line.as_bytes();
         let mut in_s = false;
         let mut in_d = false;
         let mut cut = line.len();
-        let b = line.as_bytes();
         let mut i = 0usize;
         while i < b.len() {
-            let c = b[i] as char;
-            if c == '\'' && !in_d {
-                in_s = !in_s;
-            } else if c == '"' && !in_s {
-                in_d = !in_d;
-            } else if c == '#' && !in_s && !in_d {
-                cut = i;
-                break;
+            let c = b[i];
+            let tripled = (c == b'"' || c == b'\'')
+                && b.get(i + 1) == Some(&c)
+                && b.get(i + 2) == Some(&c);
+            match triple {
+                Some(quote) => {
+                    if tripled && c == quote {
+                        triple = None;
+                        i += 3;
+                        continue;
+                    }
+                }
+                None => {
+                    if tripled && !in_s && !in_d {
+                        triple = Some(c);
+                        i += 3;
+                        continue;
+                    }
+                    if c == b'\'' && !in_d {
+                        in_s = !in_s;
+                    } else if c == b'"' && !in_s {
+                        in_d = !in_d;
+                    } else if c == b'#' && !in_s && !in_d {
+                        cut = i;
+                        break;
+                    }
+                }
             }
             i += 1;
+        }
+        // Inside a multi-line string the line is content, so it is kept as it
+        // stands, blank or not.
+        if opened_before {
+            out.push_str(line);
+            out.push('\n');
+            continue;
         }
         let piece = line[..cut].trim_end();
         if !piece.is_empty() {
@@ -671,6 +705,7 @@ impl<'a> Parser<'a> {
             return Err(self.err("expected expression, got EOF"));
         };
         match c {
+            b'f' | b'F' if self.starts_fstring() => self.parse_fstring(),
             b'\'' | b'"' => self.parse_string(),
             b'[' => self.parse_list(),
             b'(' => self.parse_tuple_or_group(),
@@ -726,6 +761,66 @@ impl<'a> Parser<'a> {
             }
         }
         Err(self.err("unterminated string"))
+    }
+
+    /// Whether what follows is an f-string rather than a name beginning with f.
+    fn starts_fstring(&self) -> bool {
+        let mut at = self.pos;
+        // Accept fr'' and rf'' as well, which a recipe writes for a path.
+        while matches!(self.src.get(at), Some(b'f' | b'F' | b'r' | b'R')) && at < self.pos + 2 {
+            at += 1;
+        }
+        at > self.pos && matches!(self.src.get(at), Some(b'\'' | b'"'))
+    }
+
+    /// An f-string, with `{name}` filled from what the file has defined.
+    ///
+    /// 221 recipes use one and 47 put it in a field that decides identity or
+    /// dependencies, so a parser that stops at the `f` reads those as having
+    /// no version at all. Only a bare name is substituted: a format spec or a
+    /// conversion is an error rather than a guess, because a silently
+    /// mis-rendered version is worse than a recipe that is skipped.
+    fn parse_fstring(&mut self) -> Result<Value, String> {
+        while matches!(self.peek(), Some(b'f' | b'F' | b'r' | b'R')) {
+            self.pos += 1;
+        }
+        let Value::Str(raw) = self.parse_string()? else {
+            return Err(self.err("f-string body is not a string"));
+        };
+        let mut out = String::new();
+        let mut rest = raw.as_str();
+        while let Some(at) = rest.find(['{', '}']) {
+            let (before, tail) = rest.split_at(at);
+            out.push_str(before);
+            let opener = &tail[..1];
+            let doubled = tail.get(1..2) == Some(opener);
+            if doubled {
+                out.push_str(opener);
+                rest = &tail[2..];
+                continue;
+            }
+            if opener == "}" {
+                return Err(self.err("unmatched } in f-string"));
+            }
+            let Some(end) = tail.find('}') else {
+                return Err(self.err("unterminated { in f-string"));
+            };
+            let expr = tail[1..end].trim();
+            if expr.contains([':', '!', '(', '[', '.', '+']) {
+                return Err(self.err(format!("f-string field {expr} is not a plain name")));
+            }
+            match self.env.get(expr) {
+                Some(Value::Str(s)) => out.push_str(s),
+                Some(Value::Int(i)) => out.push_str(&i.to_string()),
+                Some(other) => {
+                    return Err(self.err(format!("f-string field {expr} is {other:?}")));
+                }
+                None => return Err(self.err(format!("f-string field {expr} is not defined"))),
+            }
+            rest = &tail[end + 1..];
+        }
+        out.push_str(rest);
+        Ok(Value::Str(out))
     }
 
     fn parse_number(&mut self) -> Result<Value, String> {
@@ -947,21 +1042,33 @@ fn count_percent_conversions(fmt: &str) -> usize {
 /// Minimal Python-style `%s` / `%d` formatting used in easyconfigs. Replaces
 /// the leftmost conversion so tuple args substitute in positional order.
 fn python_percent_format_one(fmt: &str, arg: &str) -> String {
-    let idx = match (fmt.find("%s"), fmt.find("%d")) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
-        (None, None) => None,
-    };
-    if let Some(idx) = idx {
-        let mut out = String::with_capacity(fmt.len() + arg.len());
-        out.push_str(&fmt[..idx]);
-        out.push_str(arg);
-        out.push_str(&fmt[idx + 2..]);
-        return out;
+    // `%%` is an escaped percent, and collapsing it is not optional: a recipe
+    // writes `'-Python-%%(pyver)s-Qt-%s' % local_qtver` precisely so that the
+    // EasyBuild template survives this formatting step. Leaving the pair
+    // doubled produces a suffix no template expansion will ever match.
+    let mut out = String::with_capacity(fmt.len() + arg.len());
+    let mut rest = fmt;
+    let mut filled = false;
+    while let Some(at) = rest.find('%') {
+        out.push_str(&rest[..at]);
+        match rest[at..].as_bytes().get(1) {
+            Some(b'%') => {
+                out.push('%');
+                rest = &rest[at + 2..];
+            }
+            Some(b's' | b'd') if !filled => {
+                out.push_str(arg);
+                filled = true;
+                rest = &rest[at + 2..];
+            }
+            _ => {
+                out.push('%');
+                rest = &rest[at + 1..];
+            }
+        }
     }
-    // No conversion: return format string unchanged (caller may use templates later).
-    fmt.to_string()
+    out.push_str(rest);
+    out
 }
 
 // --- template resolution ---------------------------------------------------------
@@ -1018,9 +1125,20 @@ fn build_templates(
     tv.insert("versionsuffix".into(), versionsuffix.to_string());
     tv.insert("toolchain_name".into(), tc.name.clone());
     tv.insert("toolchain_version".into(), tc.version.clone());
-    // pyshortver is used in sanity paths; approximate from version major.minor when possible.
+    // `%(arch)s` is the machine's own architecture, and a recipe uses it in a
+    // versionsuffix: LDC 0.17.6 is carried as `-x86_64` and asked for as
+    // `-%(arch)s`, so leaving it unexpanded makes one unreachable from the
+    // other.
+    tv.insert("arch".into(), std::env::consts::ARCH.to_string());
+    // Python's own recipe defines the py* templates from its version, which is
+    // right only for Python itself. Everything else gets them from the Python
+    // it depends on, and a recipe with no Python dependency has no business
+    // resolving `%(pyshortver)s` to its own major.minor.
     let parts: Vec<&str> = version.split('.').collect();
-    if parts.len() >= 2 {
+    if name == "Python" && parts.len() >= 2 {
+        tv.insert("pyver".into(), version.to_string());
+        tv.insert("pymajver".into(), parts[0].to_string());
+        tv.insert("pyminver".into(), parts[1].to_string());
         tv.insert("pyshortver".into(), format!("{}.{}", parts[0], parts[1]));
     }
     tv
@@ -1028,6 +1146,54 @@ fn build_templates(
 
 /// `%(key)s`, compiled once. The pattern is a literal, so a failure here would
 /// be a build-time defect rather than anything a recipe can cause.
+/// Dependency names that define version templates, and the prefix each uses.
+///
+/// A recipe writes `versionsuffix = '-Python-%(pyver)s'` and
+/// `('Tkinter', '%(pyver)s')`, and the value comes from the Python it depends
+/// on rather than from anything the recipe states directly. The tree uses
+/// 1456 `%(pyshortver)s`, 656 `%(cudaver)s`, 209 `%(rver)s`, 176
+/// `%(javaver)s` and 117 `%(perlver)s`; leaving them unexpanded puts a literal
+/// `%(pyver)s` in a module name and turns every such dependency into one that
+/// nothing satisfies.
+const DEP_VERSION_TEMPLATES: &[(&str, &str)] = &[
+    ("Python", "py"),
+    ("CUDA", "cuda"),
+    ("CUDAcore", "cuda"),
+    ("R", "r"),
+    ("Java", "java"),
+    ("Perl", "perl"),
+];
+
+/// The `%(<prefix>ver)s` family, taken from what a recipe depends on.
+fn dependency_version_templates(deps: &[&[ResolvedDep]]) -> HashMap<String, String> {
+    let mut tv = HashMap::new();
+    for dep in deps.iter().flat_map(|list| list.iter()) {
+        let Some((_, prefix)) = DEP_VERSION_TEMPLATES
+            .iter()
+            .find(|(name, _)| *name == dep.name)
+        else {
+            continue;
+        };
+        // A version constraint is not a version: `>=3.11` names no single
+        // number to substitute, and guessing one would be worse than leaving
+        // the template visible.
+        if dep.version.is_empty() || !dep.version.starts_with(|c: char| c.is_ascii_digit()) {
+            continue;
+        }
+        let parts: Vec<&str> = dep.version.split('.').collect();
+        tv.insert(format!("{prefix}ver"), dep.version.clone());
+        tv.insert(format!("{prefix}majver"), parts[0].to_string());
+        if parts.len() > 1 {
+            tv.insert(format!("{prefix}minver"), parts[1].to_string());
+            tv.insert(
+                format!("{prefix}shortver"),
+                format!("{}.{}", parts[0], parts[1]),
+            );
+        }
+    }
+    tv
+}
+
 fn template_pattern() -> &'static regex::Regex {
     static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     PATTERN.get_or_init(|| {
@@ -1110,6 +1276,14 @@ fn value_to_toolchain(val: &Value, ctx: &str) -> Result<Toolchain, String> {
         Value::Tuple(xs) | Value::List(xs) if xs.len() >= 2 => Ok(Toolchain {
             name: xs[0].expect_str("toolchain tuple name")?,
             version: xs[1].expect_str("toolchain tuple version")?,
+        }),
+        // ('gettext', '0.19.8.1', '', True) asks for the dependency at the
+        // system toolchain, which is how that was written before the SYSTEM
+        // constant existed. A robot path holds recipes older than the
+        // constant, and refusing the boolean drops each one entirely.
+        Value::Bool(true) => Ok(Toolchain {
+            name: "system".into(),
+            version: "system".into(),
         }),
         other => Err(format!("{ctx}: unsupported toolchain value {other:?}")),
     }
@@ -1349,11 +1523,6 @@ fn resolve_easyconfig_str_inner(
         .env
         .get("builddependencies")
         .map(|v| apply_templates_value(v, &templates));
-    let exts_val = parser
-        .env
-        .get("exts_list")
-        .map(|v| apply_templates_value(v, &templates));
-
     // A statement the parser cannot represent is skipped, which is right for
     // an oddity in a field nobody plans with. It is wrong for a dependency
     // list: the field then reads as absent, absent reads as none, and the
@@ -1384,6 +1553,35 @@ fn resolve_easyconfig_str_inner(
         .map(value_to_dep)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| ParseError::Parse("<string>".into(), e))?;
+    // What a recipe depends on defines templates the recipe itself uses, so
+    // the dependency list has to be read before those can be resolved. Only a
+    // second pass, and only when the dependencies define something.
+    let dep_tv = dependency_version_templates(&[&dependencies, &builddependencies]);
+    let (templates, versionsuffix, dependencies, builddependencies) = if dep_tv.is_empty() {
+        (templates, versionsuffix, dependencies, builddependencies)
+    } else {
+        let mut templates = templates;
+        templates.extend(dep_tv);
+        let versionsuffix = versionsuffix.map(|s| apply_templates_str(&s, &templates));
+        let redo = |val: Option<&Value>| -> Result<Vec<ResolvedDep>, ParseError> {
+            let applied = val.map(|v| apply_templates_value(v, &templates));
+            value_list_as_slice(applied.as_ref())
+                .map_err(|e| ParseError::Parse("<string>".into(), e))?
+                .iter()
+                .map(value_to_dep)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| ParseError::Parse("<string>".into(), e))
+        };
+        let dependencies = redo(parser.env.get("dependencies"))?;
+        let builddependencies = redo(parser.env.get("builddependencies"))?;
+        (templates, versionsuffix, dependencies, builddependencies)
+    };
+
+    // Extensions carry `%(pyver)s` too, so they use the final template set.
+    let exts_val = parser
+        .env
+        .get("exts_list")
+        .map(|v| apply_templates_value(v, &templates));
     let exts_list = value_list_as_slice(exts_val.as_ref())
         .map_err(|e| ParseError::Parse("<string>".into(), e))?
         .iter()
@@ -2430,6 +2628,65 @@ mod tests {
         let t = strip_comments(s);
         assert!(t.contains("foo#bar"));
         assert!(!t.contains("comment"));
+    }
+
+    #[test]
+    fn a_hash_inside_a_multiline_description_is_not_a_comment() {
+        let src = "name = 'Doxygen'\nversion = '1.8.11'\n\
+                   description = \"\"\"documents C, Java,\n C#, and Fortran\"\"\"\n\
+                   toolchain = {'name': 'foss', 'version': '2016b'}\n";
+        let parsed = resolve_easyconfig_str(src).expect("C# must not end the string");
+        assert_eq!(parsed.toolchain.name, "foss");
+    }
+
+    #[test]
+    fn a_dependency_defines_the_version_templates_a_recipe_uses() {
+        let src = "name = 'dammit'\nversion = '0.3.2'\n\
+                   toolchain = {'name': 'intel', 'version': '2017a'}\n\
+                   versionsuffix = '-Python-%(pyver)s'\n\
+                   dependencies = [('Python', '2.7.13'), ('matplotlib', '2.0.2', '-Python-%(pyver)s-Qt-4.8.7')]\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.versionsuffix.as_deref(), Some("-Python-2.7.13"));
+        assert_eq!(
+            parsed.dependencies[1].versionsuffix.as_deref(),
+            Some("-Python-2.7.13-Qt-4.8.7")
+        );
+    }
+
+    #[test]
+    fn percent_formatting_collapses_a_doubled_percent() {
+        let src = "name = 'matplotlib'\nversion = '2.0.2'\n\
+                   toolchain = {'name': 'intel', 'version': '2017a'}\n\
+                   local_qtver = '4.8.7'\n\
+                   versionsuffix = '-Python-%%(pyver)s-Qt-%s' % local_qtver\n\
+                   dependencies = [('Python', '2.7.13')]\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(
+            parsed.versionsuffix.as_deref(),
+            Some("-Python-2.7.13-Qt-4.8.7")
+        );
+    }
+
+    #[test]
+    fn an_fstring_version_is_read() {
+        let src = "name = 'Java'\n_java_version = '11'\n_patch_version = '27'\n\
+                   version = f'{_java_version}.0.{_patch_version}'\n\
+                   toolchain = SYSTEM\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.version, "11.0.27");
+    }
+
+    #[test]
+    fn a_true_dependency_toolchain_means_the_system_one() {
+        let src = "name = 'XZ'\nversion = '5.2.4'\n\
+                   toolchain = {'name': 'GCCcore', 'version': '8.2.0'}\n\
+                   builddependencies = [('gettext', '0.19.8.1', '', True)]\n";
+        let parsed = resolve_easyconfig_str(src).expect("True is the old spelling of SYSTEM");
+        let tc = parsed.builddependencies[0]
+            .toolchain
+            .as_ref()
+            .expect("a toolchain");
+        assert_eq!(tc.name, "system");
     }
 
     #[test]
