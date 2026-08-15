@@ -675,6 +675,14 @@ fn render_sources(
 
     if let [(source, url)] = resolved.as_slice() {
         if source.target_directory.is_none() {
+            if let Some(sources) = try_render_pypi_primary(package_name, package_version, source, url)
+            {
+                return SourceBlock {
+                    prelude: String::new(),
+                    sources,
+                    checksums: checksum_lines,
+                };
+            }
             if let Some(block) =
                 try_render_github_primary(package_name, package_version, source, url)
             {
@@ -696,6 +704,39 @@ fn render_sources(
         sources: format!("sources = {}", render_multiline_list(&sources)),
         checksums: checksum_lines,
     }
+}
+
+/// Conventional EasyBuild form for a package downloaded from PyPI.
+///
+/// A `PythonPackage` already knows where PyPI is, and the sdist is named after
+/// the package, so upstream writes `sources = [SOURCE_TAR_GZ]` and nothing
+/// else: tqdm 4.67.1 carries exactly that line. Spelling out the hashed
+/// Warehouse path instead pins a URL that PyPI is free to change and reads
+/// nothing like the recipe beside it.
+fn try_render_pypi_primary(
+    package_name: &str,
+    package_version: &str,
+    source: &crate::package::SourceArtifact,
+    url: &str,
+) -> Option<String> {
+    if !url.contains("files.pythonhosted.org") && !url.contains("pypi.io") {
+        return None;
+    }
+    let filename = source.filename.as_deref()?;
+    let namelower = package_name.to_ascii_lowercase();
+    for (extension, upper, lower) in [
+        (".tar.gz", "SOURCE_TAR_GZ", "SOURCELOWER_TAR_GZ"),
+        (".zip", "SOURCE_ZIP", "SOURCELOWER_ZIP"),
+        (".tar.bz2", "SOURCE_TAR_BZ2", "SOURCELOWER_TAR_BZ2"),
+    ] {
+        if filename == format!("{package_name}-{package_version}{extension}") {
+            return Some(format!("sources = [{upper}]"));
+        }
+        if filename == format!("{namelower}-{package_version}{extension}") {
+            return Some(format!("sources = [{lower}]"));
+        }
+    }
+    None
 }
 
 /// Conventional EasyBuild form for a single primary GitHub tag archive.
