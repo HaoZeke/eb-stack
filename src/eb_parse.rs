@@ -613,6 +613,46 @@ impl<'a> Parser<'a> {
             .map_err(|e| self.err(format!("span {start}..{end} is not valid UTF-8: {e}")))
     }
 
+    /// One `.method(args)` call on a value already parsed.
+    ///
+    /// Only the string methods recipes use to derive one field from another:
+    /// `zmqversion.split('.')[0]` and `'.'.join(parts)`, plus case and
+    /// replacement. Anything else is an error, because a method whose result
+    /// is guessed would put a wrong version in a field.
+    fn parse_method_call(&mut self, receiver: Value) -> Result<Value, String> {
+        let name = self.parse_ident()?;
+        self.skip_ws();
+        if self.bump() != Some(b'(') {
+            return Err(self.err(format!("method {name} is not called")));
+        }
+        self.depth += 1;
+        let mut args = Vec::new();
+        loop {
+            self.skip_ws();
+            if self.peek() == Some(b')') {
+                self.pos += 1;
+                break;
+            }
+            args.push(self.parse_expr()?);
+            self.skip_ws();
+            match self.peek() {
+                Some(b',') => self.pos += 1,
+                Some(b')') => {
+                    self.pos += 1;
+                    break;
+                }
+                other => {
+                    return Err(self.err(format!(
+                        "expected ',' or ')' in a method call, got {:?}",
+                        other.map(|c| c as char)
+                    )));
+                }
+            }
+        }
+        self.depth -= 1;
+        string_method(&receiver, &name, &args).map_err(|e| self.err(e))
+    }
+
     /// A primary and any `[...]` subscripts applied to it.
     ///
     /// `('protobuf', version[2:])` and `'%s.%s' % (local_ver, patchlevels[0])`
@@ -624,6 +664,13 @@ impl<'a> Parser<'a> {
             let before_ws = self.pos;
             self.skip_ws();
             let crossed_line = self.src[before_ws..self.pos].contains(&b'\n');
+            // A method call chains the same way a subscript does:
+            // `zmqversion.split('.')[0]` is both.
+            if self.peek() == Some(b'.') && !(crossed_line && self.depth == 0) {
+                self.pos += 1;
+                val = self.parse_method_call(val)?;
+                continue;
+            }
             // Outside brackets a `[` on the next line opens a new statement,
             // not a subscript of this one.
             if self.peek() != Some(b'[') || (crossed_line && self.depth == 0) {
@@ -1110,6 +1157,40 @@ fn unescape_python_str(s: &str) -> String {
     s.to_string()
 }
 
+/// The string methods a recipe uses to derive one field from another.
+fn string_method(receiver: &Value, name: &str, args: &[Value]) -> Result<Value, String> {
+    let text = || receiver.clone().expect_str("method receiver");
+    match (name, args) {
+        ("split", [Value::Str(sep)]) => Ok(Value::List(
+            text()?
+                .split(sep.as_str())
+                .map(|p| Value::Str(p.to_string()))
+                .collect(),
+        )),
+        ("split", []) => Ok(Value::List(
+            text()?
+                .split_whitespace()
+                .map(|p| Value::Str(p.to_string()))
+                .collect(),
+        )),
+        ("join", [Value::List(parts) | Value::Tuple(parts)]) => {
+            let sep = text()?;
+            let mut out = Vec::with_capacity(parts.len());
+            for part in parts {
+                out.push(part.clone().expect_str("join operand")?);
+            }
+            Ok(Value::Str(out.join(&sep)))
+        }
+        ("replace", [Value::Str(from), Value::Str(to)]) => {
+            Ok(Value::Str(text()?.replace(from.as_str(), to)))
+        }
+        ("lower", []) => Ok(Value::Str(text()?.to_lowercase())),
+        ("upper", []) => Ok(Value::Str(text()?.to_uppercase())),
+        ("strip", []) => Ok(Value::Str(text()?.trim().to_string())),
+        _ => Err(format!("unsupported method .{name}() with {} args", args.len())),
+    }
+}
+
 /// Python's `x[i]` and `x[a:b]` over a string or a sequence.
 ///
 /// An index outside the value is an error rather than a clamp: the recipe
@@ -1438,6 +1519,37 @@ fn value_to_toolchain(val: &Value, ctx: &str) -> Result<Toolchain, String> {
     }
 }
 
+/// The version an arch-specific dependency has on this machine.
+///
+/// EasyBuild lets a dependency name one version per architecture, which is how
+/// the `Java/1.8` wrapper points at a different JDK on x86_64, POWER and
+/// AArch64. Nine recipes upstream use it, and each one that cannot be read
+/// takes its whole recipe with it.
+fn arch_specific_version(entries: &[(String, Value)]) -> Result<String, String> {
+    let host = match std::env::consts::ARCH {
+        "x86_64" => "x86_64",
+        "aarch64" => "AArch64",
+        "powerpc64" | "powerpc64le" => "POWER",
+        other => other,
+    };
+    let mut fallback = None;
+    for (key, value) in entries {
+        let Some(arch) = key.strip_prefix("arch=") else {
+            return Err(format!("dependency version dict has a non-arch key {key}"));
+        };
+        if arch == host {
+            return value.expect_str("dep.version");
+        }
+        if arch == "*" {
+            fallback = Some(value);
+        }
+    }
+    match fallback {
+        Some(value) => value.expect_str("dep.version"),
+        None => Err(format!("no dependency version for {host}")),
+    }
+}
+
 fn value_to_dep(val: &Value) -> Result<ResolvedDep, String> {
     // Filename form: 'OpenMPI-4.1.6-foss-2025b.eb'
     if let Value::Str(s) = val {
@@ -1454,7 +1566,10 @@ fn value_to_dep(val: &Value) -> Result<ResolvedDep, String> {
         return Err(format!("dependency tuple too short: {items:?}"));
     }
     let name = items[0].expect_str("dep.name")?;
-    let version = items[1].expect_str("dep.version")?;
+    let version = match &items[1] {
+        Value::Dict(entries) => arch_specific_version(entries)?,
+        other => other.expect_str("dep.version")?,
+    };
     let mut versionsuffix = None;
     let mut toolchain = None;
     if items.len() >= 3 {
@@ -2885,6 +3000,47 @@ mod tests {
             parsed.dependencies[0].versionsuffix.as_deref(),
             Some(format!("-linux-{}", std::env::consts::ARCH).as_str())
         );
+    }
+
+    #[test]
+    fn a_versionsuffix_built_with_string_methods_is_read() {
+        let src = "name = 'PyZMQ'\nversion = '2.2.0.1'\n\
+                   toolchain = {'name': 'goolf', 'version': '1.4.10'}\n\
+                   zmqversion = '3.2.2'\npythonversion = '2.7.3'\n\
+                   versionsuffix = '-Python-%s-%s' % (pythonversion, 'zmq%s' % zmqversion.split('.')[0])\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(
+            parsed.versionsuffix.as_deref(),
+            Some("-Python-2.7.3-zmq3")
+        );
+    }
+
+    #[test]
+    fn join_and_replace_read_the_way_python_does() {
+        let src = "name = 'X'\nversion = '3.11.2'\ntoolchain = SYSTEM\n\
+                   versionsuffix = '-' + '.'.join(version.split('.')[:2]) + '-' + version.replace('.', '_')\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.versionsuffix.as_deref(), Some("-3.11-3_11_2"));
+    }
+
+    #[test]
+    fn an_unsupported_method_is_refused_rather_than_guessed() {
+        let src = "name = 'X'\nversion = '1.0'\ntoolchain = SYSTEM\n\
+                   versionsuffix = '-%s' % version.center(9)\n";
+        assert!(resolve_easyconfig_str(src).is_err());
+    }
+
+    #[test]
+    fn an_arch_specific_dependency_version_resolves_for_this_machine() {
+        let src = "name = 'Java'\nversion = '1.8'\ntoolchain = SYSTEM\n\
+                   dependencies = [('Java', {'arch=x86_64': '%(version)s.0_311',\n\
+                   'arch=POWER': '%(version)s_191-b26-OpenJDK'})]\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        let want = match std::env::consts::ARCH {
+            "x86_64" => "1.8.0_311",
+            _ => "1.8_191-b26-OpenJDK",
+        };
+        assert_eq!(parsed.dependencies[0].version, want);
     }
 
     #[test]
