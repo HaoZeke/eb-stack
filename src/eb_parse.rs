@@ -613,8 +613,57 @@ impl<'a> Parser<'a> {
             .map_err(|e| self.err(format!("span {start}..{end} is not valid UTF-8: {e}")))
     }
 
+    /// A primary and any `[...]` subscripts applied to it.
+    ///
+    /// `('protobuf', version[2:])` and `'%s.%s' % (local_ver, patchlevels[0])`
+    /// are how recipes derive one field from another, and a parser that stops
+    /// at the bracket loses the whole dependency list.
+    fn parse_postfix(&mut self) -> Result<Value, String> {
+        let mut val = self.parse_primary()?;
+        loop {
+            let before_ws = self.pos;
+            self.skip_ws();
+            let crossed_line = self.src[before_ws..self.pos].contains(&b'\n');
+            // Outside brackets a `[` on the next line opens a new statement,
+            // not a subscript of this one.
+            if self.peek() != Some(b'[') || (crossed_line && self.depth == 0) {
+                self.pos = before_ws;
+                break;
+            }
+            self.pos += 1;
+            let start = self.parse_opt_index()?;
+            self.skip_ws();
+            let is_slice = self.peek() == Some(b':');
+            let stop = if is_slice {
+                self.pos += 1;
+                self.parse_opt_index()?
+            } else {
+                None
+            };
+            self.skip_ws();
+            if self.peek() != Some(b']') {
+                return Err(self.err("subscript is not a plain index or slice"));
+            }
+            self.pos += 1;
+            val = subscript(&val, start, stop, is_slice).map_err(|e| self.err(e))?;
+        }
+        Ok(val)
+    }
+
+    /// An optional integer inside a subscript; `None` for an omitted bound.
+    fn parse_opt_index(&mut self) -> Result<Option<i64>, String> {
+        self.skip_ws();
+        match self.peek() {
+            Some(b'-') | Some(b'0'..=b'9') => match self.parse_number()? {
+                Value::Int(i) => Ok(Some(i)),
+                other => Err(self.err(format!("subscript bound is not an integer: {other:?}"))),
+            },
+            _ => Ok(None),
+        }
+    }
+
     fn parse_expr(&mut self) -> Result<Value, String> {
-        let mut left = self.parse_primary()?;
+        let mut left = self.parse_postfix()?;
         // String / value binary ops used in real easyconfigs: `+` concat, `%` format.
         loop {
             let before_ws = self.pos;
@@ -629,7 +678,7 @@ impl<'a> Parser<'a> {
                 Some(b'\'') | Some(b'"')
                     if matches!(left, Value::Str(_)) && (self.depth > 0 || !crossed_line) =>
                 {
-                    let right = self.parse_primary()?;
+                    let right = self.parse_postfix()?;
                     left = match (left, right) {
                         (Value::Str(a), Value::Str(b)) => Value::Str(a + &b),
                         (a, b) => {
@@ -641,11 +690,20 @@ impl<'a> Parser<'a> {
                 }
                 Some(b'+') => {
                     self.pos += 1;
-                    let right = self.parse_primary()?;
+                    let right = self.parse_postfix()?;
                     left = match (left, right) {
                         (Value::Str(a), Value::Str(b)) => Value::Str(a + &b),
                         (Value::Str(a), Value::Int(b)) => Value::Str(format!("{a}{b}")),
                         (Value::Int(a), Value::Str(b)) => Value::Str(format!("{a}{b}")),
+                        // `builddependencies = [...] + local_extra_backends`
+                        // is how a recipe adds an optional block, and dropping
+                        // it would leave the list half-read.
+                        (Value::List(a), Value::List(b)) => {
+                            Value::List(a.into_iter().chain(b).collect())
+                        }
+                        (Value::Tuple(a), Value::Tuple(b)) => {
+                            Value::Tuple(a.into_iter().chain(b).collect())
+                        }
                         (a, b) => {
                             return Err(self.err(format!("unsupported + operands: {a:?} + {b:?}")));
                         }
@@ -653,7 +711,7 @@ impl<'a> Parser<'a> {
                 }
                 Some(b'%') => {
                     self.pos += 1;
-                    let right = self.parse_primary()?;
+                    let right = self.parse_postfix()?;
                     left = match (left, right) {
                         (Value::Str(fmt), Value::Str(arg)) => {
                             Value::Str(python_percent_format_one(&fmt, &arg))
@@ -865,6 +923,9 @@ impl<'a> Parser<'a> {
             "False" => Ok(Value::Bool(false)),
             "None" => Ok(Value::None),
             "SYSTEM" => Ok(system_toolchain_value()),
+            // The machine's architecture, which a recipe uses bare as well as
+            // through `%(arch)s`: IJulia asks for Julia at `-linux-%s' % ARCH`.
+            "ARCH" => Ok(Value::Str(std::env::consts::ARCH.to_string())),
             other => {
                 if let Some(v) = self.env.get(other) {
                     Ok(v.clone())
@@ -971,6 +1032,7 @@ impl<'a> Parser<'a> {
         }
         self.depth += 1;
         let mut items = Vec::new();
+        let mut set_items = Vec::new();
         loop {
             self.skip_ws();
             if self.peek() == Some(b'}') {
@@ -978,6 +1040,36 @@ impl<'a> Parser<'a> {
                 break;
             }
             let key_val = self.parse_expr()?;
+            // Braces around comma-separated tuples make a set, and a handful
+            // of recipes write their dependency list that way. EasyBuild
+            // iterates it and builds, so reading it as a list is what the
+            // recipe means; refusing the brace loses the dependencies.
+            {
+                let mut probe = self.pos;
+                while matches!(self.src.get(probe), Some(c) if c.is_ascii_whitespace()) {
+                    probe += 1;
+                }
+                if self.src.get(probe) != Some(&b':') {
+                    set_items.push(key_val);
+                    self.pos = probe;
+                    match self.peek() {
+                        Some(b',') => {
+                            self.pos += 1;
+                            continue;
+                        }
+                        Some(b'}') => {
+                            self.pos += 1;
+                            break;
+                        }
+                        other => {
+                            return Err(self.err(format!(
+                                "expected ',' or '}}' in set, got {:?}",
+                                other.map(|c| c as char)
+                            )));
+                        }
+                    }
+                }
+            }
             let key = key_val.expect_str("dict key").map_err(|e| self.err(e))?;
             self.skip_ws();
             if self.bump() != Some(b':') {
@@ -1003,6 +1095,12 @@ impl<'a> Parser<'a> {
             }
         }
         self.depth -= 1;
+        if items.is_empty() && !set_items.is_empty() {
+            return Ok(Value::List(set_items));
+        }
+        if !set_items.is_empty() {
+            return Err(self.err("braces mix set entries with dict entries"));
+        }
         Ok(Value::Dict(items))
     }
 }
@@ -1010,6 +1108,57 @@ impl<'a> Parser<'a> {
 fn unescape_python_str(s: &str) -> String {
     // Triple-quoted bodies are stored raw except common escapes if present.
     s.to_string()
+}
+
+/// Python's `x[i]` and `x[a:b]` over a string or a sequence.
+///
+/// An index outside the value is an error rather than a clamp: the recipe
+/// meant a particular element, and inventing one would put a wrong version in
+/// a dependency where skipping the recipe is at least visible.
+fn subscript(
+    val: &Value,
+    start: Option<i64>,
+    stop: Option<i64>,
+    is_slice: bool,
+) -> Result<Value, String> {
+    fn bound(i: i64, len: usize) -> usize {
+        if i < 0 {
+            (len as i64 + i).max(0) as usize
+        } else {
+            (i as usize).min(len)
+        }
+    }
+    fn exact(i: i64, len: usize) -> Result<usize, String> {
+        let at = if i < 0 { len as i64 + i } else { i };
+        if at < 0 || at as usize >= len {
+            return Err(format!("index {i} is outside a value of length {len}"));
+        }
+        Ok(at as usize)
+    }
+    match val {
+        Value::Str(s) => {
+            let chars: Vec<char> = s.chars().collect();
+            if is_slice {
+                let a = start.map_or(0, |i| bound(i, chars.len()));
+                let b = stop.map_or(chars.len(), |i| bound(i, chars.len()));
+                Ok(Value::Str(chars[a.min(b)..b].iter().collect()))
+            } else {
+                let i = start.ok_or_else(|| "subscript has no index".to_string())?;
+                Ok(Value::Str(chars[exact(i, chars.len())?].to_string()))
+            }
+        }
+        Value::List(xs) | Value::Tuple(xs) => {
+            if is_slice {
+                let a = start.map_or(0, |i| bound(i, xs.len()));
+                let b = stop.map_or(xs.len(), |i| bound(i, xs.len()));
+                Ok(Value::List(xs[a.min(b)..b].to_vec()))
+            } else {
+                let i = start.ok_or_else(|| "subscript has no index".to_string())?;
+                Ok(xs[exact(i, xs.len())?].clone())
+            }
+        }
+        other => Err(format!("cannot subscript {other:?}")),
+    }
 }
 
 /// Count `%s` / `%d` conversions, skipping `%%` escapes. Used to reject a
