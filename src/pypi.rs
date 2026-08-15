@@ -75,6 +75,9 @@ struct WarehouseInfo {
     license: Option<String>,
     #[serde(default)]
     requires_dist: Option<Vec<String>>,
+    /// Trove classifiers, which say what the package is for.
+    #[serde(default)]
+    classifiers: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -238,6 +241,7 @@ fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
         sha256,
         sources,
         summary: doc.info.summary,
+        classifiers: doc.info.classifiers,
         description: None,
         license: doc.info.license,
         dependencies,
@@ -409,6 +413,7 @@ fn parse_requirements_txt(text: &str) -> Result<ForeignRecipe, ForeignError> {
         rules: Vec::new(),
         notes: vec!["parsed from requirements.txt".into()],
         residuals,
+        classifiers: Vec::new(),
     })
 }
 

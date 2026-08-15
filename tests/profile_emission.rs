@@ -349,7 +349,8 @@ fn patch_artifacts_emit_names_and_positional_checksums_after_sources() {
     let emitted = emit_profile_easyconfigs(&plan, &[lock]).expect("emit patch artifact");
     let text = &emitted[0].text;
 
-    assert!(text.contains("patches = [\n    'Orbit-2.0-portability.patch',\n]"));
+    // A single patch fits on a line, and that is how upstream writes one.
+    assert!(text.contains("patches = ['Orbit-2.0-portability.patch']"), "{text}");
     let source_checksum = text
         .find("1e67f91eaa9c6325746438164e1ea371ffb7a662e6acb0a15faae90e0867f4fa")
         .expect("source checksum");
@@ -385,8 +386,10 @@ class Orbit(Package):
     let emitted = emit_profile_easyconfigs(&plan, &[lock]).expect("emit remote patch");
     let text = &emitted[0].text;
 
-    assert!(text
-        .contains("patches = [\n    'https://example.invalid/commits/fix.patch?full_index=1',\n]"));
+    assert!(
+        text.contains("patches = ['https://example.invalid/commits/fix.patch?full_index=1']"),
+        "{text}"
+    );
     let source_checksum = text
         .find("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         .expect("source checksum");

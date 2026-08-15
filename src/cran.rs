@@ -260,6 +260,7 @@ fn recipe_from_fields(fields: CranFields<'_>) -> Result<ForeignRecipe, ForeignEr
         rules: Vec::new(),
         notes: vec![note.into()],
         residuals,
+        classifiers: Vec::new(),
     })
 }
 

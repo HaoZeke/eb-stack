@@ -333,6 +333,7 @@ fn recipe(fields: CrateFields<'_>) -> Result<ForeignRecipe, ForeignError> {
         rules: Vec::new(),
         notes: vec![note.into()],
         residuals,
+        classifiers: Vec::new(),
     })
 }
 

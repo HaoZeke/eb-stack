@@ -69,6 +69,7 @@ pub fn parse_luarocks_str(text: &str) -> Result<ForeignRecipe, ForeignError> {
         rules: Vec::new(),
         notes: vec!["parsed from a rockspec".into()],
         residuals: Vec::new(),
+        classifiers: Vec::new(),
     })
 }
 

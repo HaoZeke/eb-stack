@@ -265,6 +265,10 @@ pub struct ForeignRecipe {
     /// Typed work that remains after syntax normalization.
     #[serde(default)]
     pub residuals: Vec<ForeignResidual>,
+    /// What the upstream ecosystem says the package is for: PyPI Trove
+    /// classifiers today. This is what a moduleclass is derived from.
+    #[serde(default)]
+    pub classifiers: Vec<String>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -445,6 +449,54 @@ fn extract_spack_config_flags(text: &str) -> Option<String> {
     let mut seen = std::collections::HashSet::new();
     flags.retain(|f| seen.insert(f.clone()));
     Some(flags.join(" "))
+}
+
+/// The EasyBuild moduleclass an upstream classifier implies.
+///
+/// A moduleclass says what a module is for, and upstream reserves `lang` for
+/// language runtimes: of 588 sampled PythonPackage recipes, 145 are `tools`,
+/// 118 `lib`, 106 `bio`, and only 16 `lang`. PyPI states the same thing in its
+/// Trove classifiers, so the recipe can say what the package says about
+/// itself rather than carrying one blanket answer.
+pub(crate) fn moduleclass_from_classifiers(classifiers: &[String]) -> Option<String> {
+    // Most specific first: a bioinformatics library is `bio`, not `lib`.
+    const BY_TOPIC: &[(&str, &str)] = &[
+        ("scientific/engineering :: bio-informatics", "bio"),
+        ("scientific/engineering :: medical science apps", "bio"),
+        ("scientific/engineering :: chemistry", "chem"),
+        ("scientific/engineering :: physics", "phys"),
+        ("scientific/engineering :: astronomy", "phys"),
+        ("scientific/engineering :: mathematics", "math"),
+        ("scientific/engineering :: visualization", "vis"),
+        ("scientific/engineering :: image", "vis"),
+        ("scientific/engineering :: artificial intelligence", "ai"),
+        ("scientific/engineering :: information analysis", "data"),
+        ("scientific/engineering :: gis", "geo"),
+        ("scientific/engineering :: atmospheric science", "geo"),
+        ("database", "data"),
+        ("software development :: libraries", "lib"),
+        ("software development :: testing", "devel"),
+        ("software development :: build tools", "devel"),
+        ("software development :: version control", "devel"),
+        ("software development", "devel"),
+        ("system :: distributed computing", "tools"),
+        ("system", "tools"),
+        ("utilities", "tools"),
+        ("text processing", "tools"),
+        ("terminals", "tools"),
+        ("internet", "tools"),
+    ];
+    let lowered: Vec<String> = classifiers
+        .iter()
+        .map(|c| c.to_ascii_lowercase())
+        .filter(|c| c.starts_with("topic ::"))
+        .collect();
+    for (needle, class) in BY_TOPIC {
+        if lowered.iter().any(|c| c.contains(needle)) {
+            return Some((*class).to_string());
+        }
+    }
+    None
 }
 
 pub(crate) fn guess_easyblock(recipe: &ForeignRecipe, warnings: &mut Vec<String>) -> String {
@@ -711,6 +763,7 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
         rules: Vec::new(),
         notes,
         residuals,
+        classifiers: Vec::new(),
     })
 }
 
@@ -1536,6 +1589,7 @@ fn parse_spack_package(text: &str) -> Result<ForeignRecipe, ForeignError> {
         rules,
         notes,
         residuals,
+        classifiers: Vec::new(),
     })
 }
 
@@ -2087,6 +2141,27 @@ fn spack_docstring(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::moduleclass_from_classifiers;
+
+    #[test]
+    fn a_classifier_says_what_the_module_is_for() {
+        let bio = vec!["Topic :: Scientific/Engineering :: Bio-Informatics".to_string()];
+        assert_eq!(moduleclass_from_classifiers(&bio).as_deref(), Some("bio"));
+        let tools = vec![
+            "Environment :: Console".to_string(),
+            "Topic :: Utilities".to_string(),
+        ];
+        assert_eq!(moduleclass_from_classifiers(&tools).as_deref(), Some("tools"));
+        // Bio-informatics beats the library topic it also carries: upstream
+        // classes such a package as bio, not lib.
+        let both = vec![
+            "Topic :: Software Development :: Libraries".to_string(),
+            "Topic :: Scientific/Engineering :: Bio-Informatics".to_string(),
+        ];
+        assert_eq!(moduleclass_from_classifiers(&both).as_deref(), Some("bio"));
+        assert_eq!(moduleclass_from_classifiers(&[]), None);
+    }
+
     use super::*;
 
     const CONDA_ZLIB: &str = r#"

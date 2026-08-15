@@ -280,29 +280,27 @@ fn render_easyconfig(
 version = '{version}'\n\
 {versionsuffix_line}\n\
 homepage = '{homepage}'\n\
-description = \"\"\"{description}\"\"\"\n\n\
+{description_line}\n\
 toolchain = {{'name': '{toolchain_name}', 'version': '{toolchain_version}'}}\n\
 {toolchain_options_line}\n\
 {source_prelude}\
 {source_lines}\n\
-{checksum_lines}\n\
+{checksum_lines}\n\n\
 {patch_line}\
 {config_line}\
 {easyconfig_parameter_lines}\
-{build_dependencies}\
-{runtime_dependencies}\
+{dependency_block}\
 moduleclass = '{moduleclass}'\n",
         name = escape_single(&plan.package.name),
         version = escape_single(&plan.package.version),
         homepage = escape_single(homepage),
-        description = description.replace("\"\"\"", "\\\"\\\"\\\""),
+        description_line = render_description(description),
         toolchain_name = escape_single(&plan.build.toolchain.name),
         toolchain_version = escape_single(&plan.build.toolchain.version),
         source_prelude = source_block.prelude,
         source_lines = source_block.sources,
         checksum_lines = source_block.checksums,
-        build_dependencies = render_dependency_field("builddependencies", &build_dependencies),
-        runtime_dependencies = render_dependency_field("dependencies", &runtime_dependencies),
+        dependency_block = render_dependency_block(&build_dependencies, &runtime_dependencies),
     );
     crate::eb_style::format_style(&rendered).text
 }
@@ -365,6 +363,10 @@ fn render_language_bundle(
         LanguageBundleKind::Python => String::new(),
         LanguageBundleKind::R => "exts_defaultclass = 'RPackage'\n\n".to_string(),
     };
+    // A bundle of language packages is still classed by what it is for, and
+    // the plan carries that. Only a plan that states nothing falls back, and
+    // `lang` is right there: a bundle with no stated class is a language
+    // environment.
     let moduleclass = if plan.build.moduleclass.is_some() {
         moduleclass
     } else {
@@ -938,6 +940,41 @@ fn dependency_requires_explicit_toolchain(
     }
 }
 
+/// The description field, quoted the way upstream quotes it.
+///
+/// A one-line description takes one pair of quotes: tqdm's recipe reads
+/// `description = "A fast, extensible progress bar for Python and CLI"`.
+/// Triple quotes are for the descriptions that run to several lines, and
+/// using them everywhere makes a generated recipe read as machine output
+/// beside a hand-written one.
+fn render_description(description: &str) -> String {
+    let trimmed = description.trim();
+    if !trimmed.contains('\n') && !trimmed.contains('"') && trimmed.len() <= 100 {
+        return format!("description = \"{trimmed}\"\n");
+    }
+    format!(
+        "description = \"\"\"{}\"\"\"\n",
+        trimmed.replace("\"\"\"", "\\\"\\\"\\\"")
+    )
+}
+
+/// The two dependency fields as upstream lays them out: adjacent, with one
+/// blank line after them and none between.
+fn render_dependency_block(build: &[String], runtime: &[String]) -> String {
+    let mut lines = String::new();
+    for (field, values) in [("builddependencies", build), ("dependencies", runtime)] {
+        if values.is_empty() {
+            continue;
+        }
+        lines.push_str(&format!("{field} = {}\n", render_list(values)));
+    }
+    if lines.is_empty() {
+        return lines;
+    }
+    lines.push('\n');
+    lines
+}
+
 /// One dependency field, or nothing when the recipe has no such dependency.
 ///
 /// `builddependencies = []` says the same thing as leaving the field out and
@@ -949,9 +986,19 @@ fn render_dependency_field(field: &str, values: &[String]) -> String {
     format!("{field} = {}\n\n", render_list(values))
 }
 
+/// EasyBuild's line limit, which is what decides whether a list is written on
+/// one line or several. Upstream writes `builddependencies = [('binutils',
+/// '2.42')]` inline and breaks only what does not fit.
+const LINE_LIMIT: usize = 100;
+
 fn render_list(values: &[String]) -> String {
     if values.is_empty() {
         return "[]".into();
+    }
+    let inline = format!("[{}]", values.join(", "));
+    // The field name and ` = ` sit in front of this, so leave room for them.
+    if !inline.contains('\n') && inline.len() + 24 <= LINE_LIMIT {
+        return inline;
     }
     format!("[\n    {},\n]", values.join(",\n    "))
 }
@@ -959,6 +1006,9 @@ fn render_list(values: &[String]) -> String {
 fn render_multiline_list(values: &[String]) -> String {
     if values.is_empty() {
         return "[]".into();
+    }
+    if values.len() == 1 && !values[0].contains('\n') && values[0].len() + 24 <= LINE_LIMIT {
+        return format!("[{}]", values[0]);
     }
     let entries = values
         .iter()
@@ -984,5 +1034,71 @@ fn python_bool(value: bool) -> &'static str {
         "True"
     } else {
         "False"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_one_line_description_takes_one_pair_of_quotes() {
+        // tqdm's recipe reads exactly this way, and a generated recipe that
+        // triple-quotes a single line reads as machine output beside it.
+        assert_eq!(
+            render_description("A fast, extensible progress bar for Python and CLI"),
+            "description = \"A fast, extensible progress bar for Python and CLI\"\n"
+        );
+        assert!(render_description("two\nlines").starts_with("description = \"\"\""));
+        assert!(render_description("has \" quote").starts_with("description = \"\"\""));
+    }
+
+    #[test]
+    fn a_short_list_is_written_on_one_line() {
+        assert_eq!(
+            render_list(&["('binutils', '2.42')".into()]),
+            "[('binutils', '2.42')]"
+        );
+        let long: Vec<String> = (0..8).map(|i| format!("('package{i}', '1.2.3')")).collect();
+        assert!(render_list(&long).contains('\n'));
+    }
+
+    #[test]
+    fn an_absent_dependency_field_is_not_written() {
+        assert_eq!(render_dependency_block(&[], &[]), "");
+        assert_eq!(
+            render_dependency_block(
+                &["('binutils', '2.42')".into()],
+                &["('Python', '3.13.1')".into()]
+            ),
+            "builddependencies = [('binutils', '2.42')]\ndependencies = [('Python', '3.13.1')]\n\n"
+        );
+    }
+
+    #[test]
+    fn a_pypi_sdist_renders_as_the_source_constant() {
+        let source = crate::package::SourceArtifact {
+            filename: Some("tqdm-4.67.1.tar.gz".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            try_render_pypi_primary(
+                "tqdm",
+                "4.67.1",
+                &source,
+                "https://files.pythonhosted.org/packages/aa/bb/tqdm-4.67.1.tar.gz"
+            ),
+            Some("sources = [SOURCE_TAR_GZ]".into())
+        );
+        // A source somewhere else keeps its URL: only PyPI has the default.
+        assert_eq!(
+            try_render_pypi_primary(
+                "tqdm",
+                "4.67.1",
+                &source,
+                "https://example.org/tqdm-4.67.1.tar.gz"
+            ),
+            None
+        );
     }
 }

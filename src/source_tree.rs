@@ -246,6 +246,7 @@ mod tests {
             rules: Vec::new(),
             notes: Vec::new(),
             residuals: Vec::new(),
+            classifiers: Vec::new(),
         }
     }
 

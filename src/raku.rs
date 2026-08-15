@@ -66,6 +66,7 @@ pub fn parse_raku_str(text: &str) -> Result<ForeignRecipe, ForeignError> {
         rules: Vec::new(),
         notes: vec!["parsed from META6.json".into()],
         residuals: Vec::new(),
+        classifiers: Vec::new(),
     })
 }
 

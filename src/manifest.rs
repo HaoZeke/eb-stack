@@ -178,10 +178,15 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             build_systems: recipe.build_system_hints.clone(),
             source_root: None,
             config_options,
+            // What the package says it is for, when it says: PyPI states it
+            // in Trove classifiers. `lang` is for language runtimes, and
+            // upstream uses it for 16 of 588 sampled PythonPackage recipes,
+            // so it is a poor blanket answer; `lib` is the fallback.
             moduleclass: match recipe.format {
-                ForeignFormat::Pypi | ForeignFormat::Cran | ForeignFormat::Cargo => {
-                    Some("lang".into())
-                }
+                ForeignFormat::Pypi | ForeignFormat::Cran | ForeignFormat::Cargo => Some(
+                    crate::foreign::moduleclass_from_classifiers(&recipe.classifiers)
+                        .unwrap_or_else(|| "lib".into()),
+                ),
                 _ => None,
             },
             patches: recipe

@@ -285,6 +285,10 @@ class Orbit(Package):
         .expect("write remote-patch bundle");
     assert!(written.patches.is_empty());
     let easyconfig = std::fs::read_to_string(&written.easyconfigs[0]).expect("easyconfig");
-    assert!(easyconfig
-        .contains("patches = [\n    'https://example.invalid/commits/fix.patch?full_index=1',\n]"));
+    // One patch that fits on a line is written on a line, which is how
+    // upstream writes a single patch.
+    assert!(
+        easyconfig.contains("patches = ['https://example.invalid/commits/fix.patch?full_index=1']"),
+        "{easyconfig}"
+    );
 }

@@ -254,6 +254,7 @@ pub fn complete_package_bundle_with_hierarchy(
     if plan.origin == PackageOrigin::Cargo {
         pin_binutils_to_gcccore(&mut plan, candidates, hierarchy_fixture);
     }
+    add_gcccore_binutils(&mut plan);
     let mut locks = Vec::new();
     for output in &plan.outputs {
         locks.push(
@@ -345,6 +346,40 @@ fn promote_language_overlay_extras(
         });
     }
     Ok(())
+}
+
+/// The `binutils` a GCCcore-level recipe builds against.
+///
+/// EasyBuild's GCCcore level exists so that a package can be built once for a
+/// whole compiler generation, and every recipe there carries
+/// `builddependencies = [('binutils', ...)]`: tqdm at GCCcore-14.2.0 names
+/// binutils 2.42, as does every one of its neighbours. A generated recipe
+/// without it is not the recipe a maintainer would accept.
+fn add_gcccore_binutils(plan: &mut PackagePlan) {
+    if !plan.build.toolchain.name.eq_ignore_ascii_case("GCCcore") {
+        return;
+    }
+    if plan
+        .dependencies
+        .iter()
+        .any(|dependency| dependency.name.eq_ignore_ascii_case("binutils"))
+    {
+        return;
+    }
+    plan.dependencies.push(DependencyIntent {
+        id: format!("toolchain:{}:binutils", plan.build.toolchain.name),
+        name: "binutils".into(),
+        eb_name: Some("binutils".into()),
+        // The version is the generation's own, which the solve picks from the
+        // candidates at this level.
+        constraint: None,
+        toolchain: Some(plan.build.toolchain.clone()),
+        roles: vec![DependencyRole::Build],
+        condition: ConditionExpr::Always,
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: Vec::new(),
+    });
 }
 
 fn pin_binutils_to_gcccore(
