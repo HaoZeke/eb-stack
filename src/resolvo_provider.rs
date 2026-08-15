@@ -34,6 +34,9 @@ pub struct EbProvider {
     /// Names a generation carries at more than one toolchain level, whose
     /// resolvo package name is qualified so the levels are separate variables.
     multi_level: HashSet<String>,
+    /// Names the system level carries at several versions; each is its own
+    /// package, because a system dependency pins one build exactly.
+    system_multi: HashSet<String>,
     /// Every qualified key interned for a package name, so a dependency can
     /// fall back to them when the levels below the recipe hold nothing.
     keys_by_name: HashMap<String, Vec<String>>,
@@ -70,7 +73,22 @@ fn toolchain_label(tc: &crate::domain::Toolchain) -> String {
 /// Plain for the ordinary case, qualified by toolchain for the names that a
 /// generation legitimately carries at more than one level. Qualifying only
 /// those keeps every existing message, lock and pin reading as it did.
-fn package_key(name: &str, tc: &crate::domain::Toolchain, multi_level: &HashSet<String>) -> String {
+fn package_key(
+    name: &str,
+    tc: &crate::domain::Toolchain,
+    version: &str,
+    multi_level: &HashSet<String>,
+    system_multi: &HashSet<String>,
+) -> String {
+    // The system level is the bootstrap layer, and a generation genuinely
+    // carries two builds of one name there: binutils 2.40 builds the GCCcore
+    // that builds binutils 2.42, and zlib does the same. Nothing chooses
+    // between them, because every dependency on a system module names its
+    // version exactly. Keying them by name alone asks the solver to pick one
+    // and makes the generation unsatisfiable by construction.
+    if system_multi.contains(name) && crate::hierarchy::is_system_toolchain(tc) {
+        return format!("{name}@system=={version}");
+    }
     if multi_level.contains(name) {
         format!("{name}@{}", toolchain_label(tc))
     } else {
@@ -106,6 +124,45 @@ impl EbProvider {
     /// pins none, every level at or below the recipe's own, which is the range
     /// EasyBuild's minimal-toolchain search may pick from.
     fn dependency_keys(&self, recipe: &Candidate, dep: &crate::domain::DepReq) -> Vec<String> {
+        // A system-level bootstrap package is asked for by exact version, so
+        // the dependency names one build and no other. Without an exact
+        // version any of them will do, and the union says so.
+        if self.system_multi.contains(&dep.name) {
+            let system_at = |version: &str| format!("{}@system=={version}", dep.name);
+            let wants_system = dep
+                .toolchain
+                .as_ref()
+                .is_some_and(crate::hierarchy::is_system_toolchain)
+                || crate::hierarchy::is_system_toolchain(&recipe.toolchain);
+            if let Some(pinned) = dep.version_req.strip_prefix("==") {
+                let key = system_at(pinned);
+                if self.name_ids.contains_key(&key) {
+                    return vec![key];
+                }
+            }
+            let mut keys: Vec<String> = self
+                .name_ids
+                .keys()
+                .filter(|key| key.starts_with(&format!("{}@system==", dep.name)))
+                .cloned()
+                .collect();
+            keys.sort();
+            if !wants_system && self.multi_level.contains(&dep.name) {
+                // The name also lives inside the generation, and a recipe
+                // there may take either.
+                if let Some(tc) = dep.toolchain.as_ref() {
+                    keys.push(format!("{}@{}", dep.name, toolchain_label(tc)));
+                } else {
+                    let own = format!("{}@{}", dep.name, toolchain_label(&recipe.toolchain));
+                    if self.name_ids.contains_key(&own) {
+                        keys.push(own);
+                    }
+                }
+            }
+            if !keys.is_empty() {
+                return keys;
+            }
+        }
         if !self.multi_level.contains(&dep.name) {
             return vec![dep.name.clone()];
         }
@@ -233,10 +290,27 @@ impl EbProvider {
             .map(|(name, _)| name.clone())
             .collect();
 
+        // Names the system level carries at more than one version. These are
+        // the bootstrap pairs, and each version is its own package.
+        let mut system_versions: HashMap<String, BTreeSet<String>> = HashMap::new();
+        for c in candidates.iter() {
+            if crate::hierarchy::is_system_toolchain(&c.toolchain) {
+                system_versions
+                    .entry(c.name.clone())
+                    .or_default()
+                    .insert(c.version.clone());
+            }
+        }
+        let system_multi: HashSet<String> = system_versions
+            .iter()
+            .filter(|(_, versions)| versions.len() > 1)
+            .map(|(name, _)| name.clone())
+            .collect();
+
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, c) in candidates.iter().enumerate() {
             by_name
-                .entry(package_key(&c.name, &c.toolchain, &multi_level))
+                .entry(package_key(&c.name, &c.toolchain, &c.version, &multi_level, &system_multi))
                 .or_default()
                 .push(i);
         }
@@ -469,7 +543,7 @@ impl EbProvider {
 
         let mut keys_by_name: HashMap<String, Vec<String>> = HashMap::new();
         for c in candidates.iter() {
-            let key = package_key(&c.name, &c.toolchain, &multi_level);
+            let key = package_key(&c.name, &c.toolchain, &c.version, &multi_level, &system_multi);
             let entry = keys_by_name.entry(c.name.clone()).or_default();
             if !entry.contains(&key) {
                 entry.push(key);
@@ -478,6 +552,7 @@ impl EbProvider {
 
         Ok(Self {
             multi_level,
+            system_multi,
             keys_by_name,
             hierarchy_members,
             pool,
@@ -1449,6 +1524,54 @@ mod tests {
         assert_eq!(p.require_upgrade.len(), 1);
         assert_eq!(p.require_upgrade[0].name, "GROMACS");
         assert!(p.require_upgrade[0].relative_to_baseline);
+    }
+
+    #[test]
+    fn a_generation_can_carry_both_halves_of_a_bootstrap_pair() {
+        // binutils 2.40 at system builds the toolchain that builds binutils
+        // 2.42, and EasyBuild installs both. Keyed by name alone the two are
+        // one variable and the stack cannot be solved at all.
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let at_system = |name: &str, version: &str, deps: Vec<DepReq>| Candidate {
+            name: name.into(),
+            version: version.into(),
+            toolchain: system.clone(),
+            versionsuffix: None,
+            easyconfig_path: format!("{name}-{version}.eb"),
+            dependencies: deps,
+            builddependencies: vec![],
+            exts_list: vec![],
+        };
+        let need = |name: &str, version: &str| DepReq {
+            name: name.into(),
+            version_req: format!("=={version}"),
+            versionsuffix: None,
+            toolchain: Some(system.clone()),
+        };
+        let candidates = vec![
+            at_system("binutils", "2.40", vec![]),
+            at_system("binutils", "2.42", vec![need("Perl", "5.38.0")]),
+            at_system("Perl", "5.38.0", vec![need("binutils", "2.40")]),
+            cand(
+                "App",
+                "1.0",
+                None,
+                "App-1.0.eb",
+                vec![need("binutils", "2.42")],
+            ),
+        ];
+        let selected = solve_with_resolvo(&candidates, &policy(vec!["App"], vec![]), None)
+            .expect("both binutils builds coexist");
+        let mut binutils: Vec<&str> = selected
+            .iter()
+            .filter(|c| c.name == "binutils")
+            .map(|c| c.version.as_str())
+            .collect();
+        binutils.sort();
+        assert_eq!(binutils, vec!["2.40", "2.42"]);
     }
 
     #[test]
