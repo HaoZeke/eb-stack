@@ -83,6 +83,12 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `stack solve` against the upstream tree no longer reports a foss generation
+  as unsatisfiable. A name the system level carries at several versions is one
+  package per version, because that level is the bootstrap layer and every
+  dependency on it pins a version exactly: binutils 2.40 builds the GCCcore
+  that builds binutils 2.42, and EasyBuild installs both. `foss-2025a` locks
+  63 packages.
 - Every easyconfig upstream ships now parses: 0 skipped of some 20,600,
   down from 91. The forms that were being lost, each of which dropped a
   whole recipe rather than one field: `version[2:]` and `patchlevels[0]`,
