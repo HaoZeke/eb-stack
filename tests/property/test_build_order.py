@@ -156,14 +156,18 @@ def test_every_declared_dependency_of_the_root_is_in_the_order(
             present.setdefault(recipe.name, set()).add(recipe.version)
 
     name, _, version = root.partition("==")
-    root_recipes = [
-        r for r in by_module.values() if r.name == name and r.version == version
-    ]
-    if not root_recipes:
-        return
-    # Any build of the root will do: the order chose one of them.
+    # The recipe the order actually built, found by its path rather than by
+    # name and version: LST-AI 1.1.0 has a CUDA build and a plain one, and
+    # asking whether the plain build's dependencies are present is a different
+    # question from asking it of the CUDA build's.
     chosen = next(
-        (r for r in root_recipes if r.name in present and r.version in present[r.name]),
+        (
+            by_module[path]
+            for path in lines
+            if (r := by_module.get(path)) is not None
+            and r.name == name
+            and r.version == version
+        ),
         None,
     )
     if chosen is None:

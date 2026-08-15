@@ -83,6 +83,18 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- Every easyconfig upstream ships now parses: 0 skipped of some 20,600,
+  down from 91. The forms that were being lost, each of which dropped a
+  whole recipe rather than one field: `version[2:]` and `patchlevels[0]`,
+  a dependency list written with braces (a set, which EasyBuild iterates
+  and builds), `[...] + local_extra`, a bare `ARCH`, an arch-specific
+  dependency version (`{'arch=x86_64': ...}`, nine recipes and the `Java`
+  wrappers), and the string methods `split` / `join` / `replace` / `lower`
+  / `upper` / `strip`.
+- A `versionsuffix` that was assigned and could not be read is refused, on
+  the rule already covering dependency lists: the suffix is part of the
+  module name, so reading it as absent gives the recipe an identity it will
+  not install under.
 - Recipes are read the way a robot path actually writes them: a `#` inside
   a multi-line `description` is no longer a comment (Doxygen names C#, and
   the closing `"""` was going with it), f-string versions are read, `%%`
@@ -101,7 +113,9 @@ All notable changes to this project are documented here.
 ### Added
 
 - `tests/property` backtests the ordering properties against one commit per
-  year of easybuild-easyconfigs, materialised with `git archive`.
+  year of easybuild-easyconfigs, materialised with `git archive`. Sampled
+  roots that order successfully across 26 commits from 2014 to 2026:
+  312/312.
 
 ## 0.3.0 - 2026-07-21
 
