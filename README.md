@@ -214,6 +214,8 @@ eb-stack package plan \
   --toolchain-version 2026.1 \
   --package-config examples/packages/common.toml \
   --package-config examples/packages/eon.toml \
+  --package-catalog examples/package-catalog/eon.toml \
+  --package-sources examples/package-sources/eon-companions.toml \
   --easyconfigs /path/to/easybuild-easyconfigs/easybuild/easyconfigs \
   --easyconfigs fixtures/eon_foss_2026_1/easyconfigs \
   --stack-policy examples/stacks/eon-foss-2026.1.toml \
