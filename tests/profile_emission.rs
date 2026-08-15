@@ -119,6 +119,7 @@ fn hdf5_candidate(version: &str) -> Candidate {
         dependencies: Vec::new(),
         builddependencies: Vec::new(),
         exts_list: Vec::new(),
+        moduleclass: None,
     }
 }
 
@@ -658,6 +659,7 @@ fn profile_solver_matches_unmapped_foreign_names_to_robot_candidates() {
         dependencies: Vec::new(),
         builddependencies: Vec::new(),
         exts_list: Vec::new(),
+        moduleclass: None,
     };
     let stack = StackPolicy {
         schema_version: STACK_POLICY_SCHEMA_VERSION,
@@ -695,6 +697,7 @@ fn foreign_build_roles_create_easybuild_builddependencies() {
         dependencies: Vec::new(),
         builddependencies: Vec::new(),
         exts_list: Vec::new(),
+        moduleclass: None,
     };
     let stack = StackPolicy {
         schema_version: STACK_POLICY_SCHEMA_VERSION,
@@ -770,6 +773,7 @@ fn stack_pin_admits_a_cross_generation_runtime_closure() {
         dependencies,
         builddependencies: Vec::new(),
         exts_list: Vec::new(),
+        moduleclass: None,
     };
     let python_312 = DepReq {
         name: "Python".into(),
@@ -872,6 +876,7 @@ fn profile_solve_scopes_build_dependencies_of_existing_recipes() {
         dependencies,
         builddependencies,
         exts_list: Vec::new(),
+        moduleclass: None,
     };
     let requirement = |name: &str, version: &str| DepReq {
         name: name.into(),

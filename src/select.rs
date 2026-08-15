@@ -178,6 +178,7 @@ pub fn resolvo_resolve_dep_versions(
         dependencies: dep_reqs,
         builddependencies: Vec::new(),
         exts_list: Vec::new(),
+        moduleclass: None,
     });
 
     let universe = Universe {
@@ -357,6 +358,7 @@ mod tests {
             dependencies: vec![],
             builddependencies: vec![],
             exts_list: vec![],
+            moduleclass: None,
         };
         let root = Candidate {
             name: "App".into(),
@@ -372,6 +374,7 @@ mod tests {
                 toolchain: None,
             }],
             exts_list: vec![],
+            moduleclass: None,
         };
         let universe = Universe {
             toolchain: tc.clone(),
@@ -421,6 +424,7 @@ mod tests {
                 toolchain: None,
             }],
             exts_list: vec![],
+            moduleclass: None,
         };
         let universe = Universe {
             toolchain: tc.clone(),
@@ -671,6 +675,7 @@ mod prefer_installed_tests {
                 builddependencies: Vec::new(),
                 easyconfig_path: format!("a/Alpha/Alpha-{version}-foss-2025a.eb"),
                 exts_list: Vec::new(),
+                moduleclass: None,
             })
             .collect();
         let universe = Universe {

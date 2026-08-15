@@ -684,6 +684,7 @@ mod tests {
             builddependencies: Vec::new(),
             easyconfig_path: format!("x/{name}/{name}-{version}.eb"),
             exts_list: Vec::new(),
+            moduleclass: None,
         }
     }
 

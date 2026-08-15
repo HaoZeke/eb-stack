@@ -1182,6 +1182,7 @@ mod tests {
             dependencies: vec![],
             builddependencies: vec![],
             exts_list: vec![],
+            moduleclass: None,
         }
     }
 

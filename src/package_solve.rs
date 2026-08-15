@@ -233,6 +233,7 @@ pub fn solve_package_profile_with_hierarchy(
         dependencies: runtime_dependencies,
         builddependencies: build_dependencies,
         exts_list: Vec::new(),
+        moduleclass: None,
     });
     let policy = Policy {
         prefer_installed: false,

@@ -186,6 +186,7 @@ mod tests {
                 builddependencies: Vec::new(),
                 easyconfig_path: lib.to_string_lossy().into_owned(),
                 exts_list: Vec::new(),
+                moduleclass: None,
             },
             Candidate {
                 name: "App".into(),
@@ -201,6 +202,7 @@ mod tests {
                 builddependencies: Vec::new(),
                 easyconfig_path: app.to_string_lossy().into_owned(),
                 exts_list: Vec::new(),
+                moduleclass: None,
             },
         ]
     }

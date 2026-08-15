@@ -1269,6 +1269,7 @@ class Leaflib(Package):
             dependencies: Vec::new(),
             builddependencies: Vec::new(),
             exts_list: Vec::new(),
+            moduleclass: None,
         };
         let mut roots = PackageSourceRoots {
             schema_version: 1,

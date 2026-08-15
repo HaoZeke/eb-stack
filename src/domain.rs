@@ -76,6 +76,12 @@ pub struct Candidate {
     /// Bundled extensions (`exts_list`) resolved from the easyconfig.
     #[serde(default)]
     pub exts_list: Vec<ExtEntry>,
+    /// What the recipe says the module is for. Carried so a regenerated or
+    /// retargeted recipe can keep the class the tree already gives a package,
+    /// which upstream metadata cannot tell you: archspec and cppy state no
+    /// topic at all and upstream classes both as `tools`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moduleclass: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

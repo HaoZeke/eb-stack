@@ -29,6 +29,7 @@ fn candidate(name: &str, version: &str, dependencies: Vec<DepReq>) -> Candidate 
         dependencies,
         builddependencies: Vec::new(),
         exts_list: Vec::new(),
+        moduleclass: None,
     }
 }
 

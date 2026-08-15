@@ -133,6 +133,7 @@ impl ResolvedEasyconfig {
                     version: e.version.clone(),
                 })
                 .collect(),
+            moduleclass: self.moduleclass.clone(),
         }
     }
 }
@@ -2831,6 +2832,7 @@ mod tests {
             dependencies: vec![],
             builddependencies: vec![],
             exts_list: vec![],
+            moduleclass: None,
         };
         vec![
             mk("CMake", "4.2.1", &gcccore),
@@ -3130,6 +3132,7 @@ mod tests {
                 toolchain: None,
             }],
             exts_list: vec![],
+            moduleclass: None,
         };
         let tool = Candidate {
             name: "Tool".into(),
@@ -3140,6 +3143,7 @@ mod tests {
             dependencies: vec![],
             builddependencies: vec![],
             exts_list: vec![],
+            moduleclass: None,
         };
         let lock_ok = lock_from_candidates(&[root.clone(), tool.clone()], None, "test");
         assert!(validate_lock_deps(&lock_ok, &[root.clone(), tool.clone()]).is_ok());
@@ -3770,6 +3774,7 @@ builddependencies = [
                 dependencies: vec![],
                 builddependencies: vec![],
                 exts_list: vec![],
+                moduleclass: None,
             },
             Candidate {
                 name: "Keep".into(),
@@ -3780,6 +3785,7 @@ builddependencies = [
                 dependencies: vec![],
                 builddependencies: vec![],
                 exts_list: vec![],
+                moduleclass: None,
             },
         ];
         let overlay = vec![Candidate {
@@ -3791,6 +3797,7 @@ builddependencies = [
             dependencies: vec![],
             builddependencies: vec![],
             exts_list: vec![],
+            moduleclass: None,
         }];
         let merged = merge_candidates_with_precedence(&[upstream, overlay]);
         assert_eq!(merged.len(), 2);
@@ -3819,6 +3826,7 @@ builddependencies = [
             dependencies: Vec::new(),
             builddependencies: Vec::new(),
             exts_list: Vec::new(),
+            moduleclass: None,
         };
         let merged = merge_candidates_with_precedence(&[vec![
             candidate(None, "PyTorch-2.9.1-foss-2024a.eb"),
@@ -3908,6 +3916,7 @@ builddependencies = [
             dependencies: vec![],
             builddependencies: vec![],
             exts_list: vec![],
+            moduleclass: None,
         };
         let wrong_tc = Candidate {
             toolchain: Toolchain {
@@ -3958,6 +3967,7 @@ builddependencies = [
             dependencies: vec![],
             builddependencies: vec![],
             exts_list: vec![],
+            moduleclass: None,
         };
         let xtb = Candidate {
             name: "xtb".into(),
@@ -3971,6 +3981,7 @@ builddependencies = [
             dependencies: vec![],
             builddependencies: vec![],
             exts_list: vec![],
+            moduleclass: None,
         };
         // Minimal foss-2026.1 tree so hierarchy derives with GCCcore-15.2.0.
         let mut foss_def = Candidate {
@@ -3985,6 +3996,7 @@ builddependencies = [
             dependencies: vec![],
             builddependencies: vec![],
             exts_list: vec![],
+            moduleclass: None,
         };
         foss_def.dependencies = vec![
             crate::DepReq {
@@ -4068,6 +4080,7 @@ builddependencies = [
             dependencies: vec![],
             builddependencies: vec![],
             exts_list: vec![],
+            moduleclass: None,
         };
 
         let check = check_recipe_deps(&recipe, &[system_only]);
@@ -4108,6 +4121,7 @@ builddependencies = [
             dependencies: vec![],
             builddependencies: vec![],
             exts_list: vec![],
+            moduleclass: None,
         }];
         let check = check_recipe_deps(&r, &universe);
         // Nothing is "missing", but that verdict carries no toolchain evidence.
@@ -4160,6 +4174,7 @@ builddependencies = [
             dependencies: vec![],
             builddependencies: vec![],
             exts_list: vec![],
+            moduleclass: None,
         }];
         let check = check_recipe_deps(&r, &universe);
         assert!(!check.ok());
@@ -4256,6 +4271,7 @@ toolchain = {'name': 'GCCcore', 'version': '14.3.0'}
             dependencies: Vec::new(),
             builddependencies: Vec::new(),
             exts_list: Vec::new(),
+            moduleclass: None,
         };
         let universe = vec![
             cand("CMake", "3.31.11", tc("GCCcore", "15.2.0")),
@@ -4355,6 +4371,7 @@ mod hierarchy_universe_tests {
             builddependencies: Vec::new(),
             easyconfig_path: format!("x/{name}/{name}-{version}.eb"),
             exts_list: Vec::new(),
+            moduleclass: None,
         }
     }
 

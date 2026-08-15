@@ -254,6 +254,8 @@ pub fn complete_package_bundle_with_hierarchy(
     if plan.origin == PackageOrigin::Cargo {
         pin_binutils_to_gcccore(&mut plan, candidates, hierarchy_fixture);
     }
+    adopt_moduleclass_from_tree(&mut plan, candidates);
+    note_inferred_moduleclass(&mut plan);
     add_gcccore_binutils(&mut plan);
     add_build_backend_dependency(&mut plan, candidates);
     drop_unavailable_build_requirements(&mut plan, candidates);
@@ -455,6 +457,77 @@ fn add_build_backend_dependency(plan: &mut PackagePlan, candidates: &[crate::dom
         virtual_capability: None,
         solver_excluded: false,
         provenance: Vec::new(),
+    });
+}
+
+/// The moduleclass the tree already gives this package.
+///
+/// A moduleclass says what a module is for, and upstream's answer for a
+/// package often is not derivable from its metadata: archspec and cppy state
+/// no Trove topic at all, and upstream classes both as `tools`. When the robot
+/// path already carries the package at some version, the answer is right
+/// there, and taking it keeps a regenerated recipe consistent with the tree it
+/// will live in.
+fn adopt_moduleclass_from_tree(plan: &mut PackagePlan, candidates: &[crate::domain::Candidate]) {
+    let identity = crate::provides::overlay_package_identity(&plan.package.name);
+    let Some(existing) = candidates
+        .iter()
+        .filter(|candidate| {
+            crate::provides::overlay_package_identity(&candidate.name) == identity
+                && candidate.moduleclass.is_some()
+        })
+        .max_by(|left, right| crate::version::cmp_version(&left.version, &right.version))
+        .and_then(|candidate| candidate.moduleclass.clone())
+    else {
+        return;
+    };
+    if plan.build.moduleclass.as_deref() == Some(existing.as_str()) {
+        return;
+    }
+    plan.residuals.push(Residual {
+        id: "moduleclass:from-tree".into(),
+        stage: ResidualStage::Resolve,
+        category: "moduleclass".into(),
+        severity: ResidualSeverity::Mechanical,
+        summary: format!(
+            "moduleclass {existing} taken from the recipe this tree already carries for {}",
+            plan.package.name
+        ),
+        evidence: None,
+        provenance: None,
+    });
+    plan.build.moduleclass = Some(existing);
+    plan.residuals.retain(|residual| residual.id != "moduleclass:inferred");
+}
+
+/// Say plainly that a moduleclass was inferred rather than known.
+///
+/// Upstream's class for a package is a judgement: `einops` is classed `math`
+/// and `fonttools` `devel`, and neither follows from the Trove classifiers.
+/// Where the tree cannot answer, the class comes from those classifiers, and
+/// a maintainer should be told which of the two happened.
+fn note_inferred_moduleclass(plan: &mut PackagePlan) {
+    if plan
+        .residuals
+        .iter()
+        .any(|residual| residual.id == "moduleclass:from-tree")
+    {
+        return;
+    }
+    let Some(moduleclass) = plan.build.moduleclass.clone() else {
+        return;
+    };
+    plan.residuals.push(Residual {
+        id: "moduleclass:inferred".into(),
+        stage: ResidualStage::Resolve,
+        category: "moduleclass".into(),
+        severity: ResidualSeverity::Judgment,
+        summary: format!(
+            "moduleclass {moduleclass} is inferred from the package's own classifiers;              this tree carries no other recipe for {} to take it from",
+            plan.package.name
+        ),
+        evidence: None,
+        provenance: None,
     });
 }
 

@@ -314,6 +314,7 @@ mod tests {
             dependencies: Vec::new(),
             builddependencies: Vec::new(),
             exts_list: Vec::new(),
+            moduleclass: None,
         }
     }
 

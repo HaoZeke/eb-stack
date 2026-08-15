@@ -167,7 +167,14 @@ def main() -> int:
                 if provided:
                     print(f"{want['name']}-{want['version']}: the tree provides it already")
                     continue
-                tail = (proc.stdout + proc.stderr).strip().splitlines()[-1:] or ["no output"]
+                output = proc.stdout + proc.stderr
+                if "pypi.org/pypi" in output and "404" in output or "registry fetch" in output:
+                    # EasyBuild's name for a package is not always its PyPI
+                    # project name: `flatbuffers-python` is `flatbuffers` on
+                    # PyPI. That is a mapping this harness has no answer for.
+                    print(f"{want['name']}-{want['version']}: not under that name on PyPI")
+                    continue
+                tail = output.strip().splitlines()[-1:] or ["no output"]
                 print(f"{want['name']}-{want['version']}: no recipe emitted: {tail[0][:110]}")
                 continue
             got = _read(emitted)

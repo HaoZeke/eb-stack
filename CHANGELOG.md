@@ -81,8 +81,38 @@ All notable changes to this project are documented here.
   `examples/stacks/eessi-r-extras.toml` for locking EESSI-shipped
   scientific Python / R providers.
 
+### Added
+
+- `package plan` generates a recipe with the structure upstream writes.
+  Pointed at a PyPI package at `GCCcore-14.2.0`, the emitted file is
+  byte-identical in shape to upstream's own recipes: `PythonPackage` rather
+  than a one-entry bundle, `sources = [SOURCE_TAR_GZ]`, a `binutils` build
+  dependency, short lists inline, one-line descriptions in single quotes,
+  and no empty dependency fields.
+- `--source name==version` fetches one PyPI release rather than whatever is
+  newest, so regenerating an existing recipe describes the same release and
+  the same command gives the same answer tomorrow.
+- `tests/generation/backtest.py` regenerates upstream's own
+  `PythonPackage` recipes, each with its own recipe hidden from the robot
+  path and its version pinned, and diffs field by field. Over the
+  GCCcore-14.2.0 corpus: easyblock 10/10, toolchain 10/10, dependencies
+  10/10, builddependencies 10/10, sources 10/10, moduleclass 5/10.
+- A `moduleclass` is taken from the recipe the tree already carries for a
+  package when there is one, and otherwise inferred from the package's Trove
+  classifiers. Which of the two happened is recorded as a residual, because
+  upstream's own class is a judgement: `einops` is `math` and `fonttools`
+  `devel`, and neither follows from the metadata.
+
 ### Fixed
 
+- A `pyproject.toml` was never parsed: `text.parse::<toml::Value>()` reads a
+  TOML value rather than a document, so every build requirement a project
+  states was dropped in silence, and an sdist's own top directory hid the
+  file from the lookup as well. With the data flowing, `setuptools`, `pip`
+  and `wheel` are recognised as coming with the Python module, a backend and
+  its module are one name (`poetry-core` is built by `poetry`), and a build
+  requirement the tree carries no module for is dropped with a residual
+  rather than kept as a dependency nothing can satisfy.
 - `stack solve` against the upstream tree no longer reports a foss generation
   as unsatisfiable. A name the system level carries at several versions is one
   package per version, because that level is the bootstrap layer and every

@@ -495,6 +495,7 @@ roles = ["run"]
         dependencies: Vec::new(),
         builddependencies: Vec::new(),
         exts_list: Vec::new(),
+        moduleclass: None,
     };
     let stack_policy = StackPolicy {
         schema_version: STACK_POLICY_SCHEMA_VERSION,

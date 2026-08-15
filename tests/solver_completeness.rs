@@ -77,6 +77,7 @@ fn universe_for(case_ab: usize, case_bg: usize) -> Universe {
                 builddependencies: Vec::new(),
                 easyconfig_path: format!("x/{name}/{name}-{version}-foss-2025a.eb"),
                 exts_list: Vec::new(),
+                moduleclass: None,
             });
         }
     }

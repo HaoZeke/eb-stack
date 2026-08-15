@@ -1321,6 +1321,7 @@ mod tests {
             dependencies: deps,
             builddependencies: vec![],
             exts_list: vec![],
+            moduleclass: None,
         }
     }
 
@@ -1544,6 +1545,7 @@ mod tests {
             dependencies: deps,
             builddependencies: vec![],
             exts_list: vec![],
+            moduleclass: None,
         };
         let need = |name: &str, version: &str| DepReq {
             name: name.into(),

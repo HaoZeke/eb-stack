@@ -285,6 +285,7 @@ fn provide_from_parent(parent: &Candidate, ext: &ExtEntry) -> Option<Candidate> 
         }],
         builddependencies: Vec::new(),
         exts_list: Vec::new(),
+        moduleclass: parent.moduleclass.clone(),
     })
 }
 
@@ -319,6 +320,7 @@ mod tests {
                     version: "1.15.3".into(),
                 },
             ],
+            moduleclass: None,
         }
     }
 

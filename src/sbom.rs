@@ -753,6 +753,7 @@ mod tests {
                 toolchain: None,
             }],
             exts_list: vec![],
+            moduleclass: None,
         };
         let lib = Candidate {
             name: "Lib".into(),
@@ -763,6 +764,7 @@ mod tests {
             dependencies: vec![],
             builddependencies: vec![],
             exts_list: vec![],
+            moduleclass: None,
         };
         let tool = Candidate {
             name: "Tool".into(),
@@ -773,6 +775,7 @@ mod tests {
             dependencies: vec![],
             builddependencies: vec![],
             exts_list: vec![],
+            moduleclass: None,
         };
         let universe = Universe {
             toolchain: tc.clone(),
