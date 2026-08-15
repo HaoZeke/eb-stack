@@ -1000,9 +1000,36 @@ pub fn complete_package_bump(
         request.hierarchy_fixture.as_deref(),
     )
     .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?;
+    let source_recipe = resolve_easyconfig_file(&request.source)
+        .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+    // What the recipe states for each dependency, so a selection that agrees
+    // with it changes nothing. A dependency may name the module rather than
+    // the version: `('OpenMPI', '5.0.3-GCC-13.3.0')` says exactly what the
+    // solve picked, and rewriting it into a four-element tuple is churn.
+    let stated_versions: HashMap<&str, &str> = source_recipe
+        .dependencies
+        .iter()
+        .chain(source_recipe.builddependencies.iter())
+        .map(|dependency| (dependency.name.as_str(), dependency.version.as_str()))
+        .collect();
+    let names_the_selected_module = |dependency: &crate::package::LockedDependency| {
+        let suffix = dependency.versionsuffix.as_deref().unwrap_or("");
+        let module_version = if crate::hierarchy::is_system_toolchain(&dependency.toolchain) {
+            format!("{}{suffix}", dependency.version)
+        } else {
+            format!(
+                "{}-{}-{}{suffix}",
+                dependency.version, dependency.toolchain.name, dependency.toolchain.version
+            )
+        };
+        stated_versions
+            .get(dependency.name.as_str())
+            .is_some_and(|stated| *stated == module_version)
+    };
     let dependency_versions = lock
         .dependencies
         .iter()
+        .filter(|dependency| !names_the_selected_module(dependency))
         .map(|dependency| (dependency.name.clone(), dependency.version.clone()))
         .collect::<HashMap<_, _>>();
     // Only the selections that differ from what the recipe already states. A
@@ -1012,8 +1039,6 @@ pub fn complete_package_bump(
     // to be when the selection is the toolchain already named: a bump that
     // changes nothing should leave the line alone rather than refuse the
     // recipe.
-    let source_recipe = resolve_easyconfig_file(&request.source)
-        .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     let stated: HashMap<&str, &Toolchain> = source_recipe
         .dependencies
         .iter()
@@ -1028,6 +1053,7 @@ pub fn complete_package_bump(
     let dependency_toolchains = lock
         .dependencies
         .iter()
+        .filter(|dependency| !names_the_selected_module(dependency))
         .filter(|dependency| {
             stated
                 .get(dependency.name.as_str())

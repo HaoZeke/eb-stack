@@ -355,9 +355,6 @@ fn admit_named_dependency_toolchains(
         .iter()
         .filter_map(|dependency| dependency.toolchain.as_ref())
         .collect();
-    if wanted.is_empty() {
-        return;
-    }
     let known: HashSet<String> = admitted
         .iter()
         .map(|candidate| candidate.easyconfig_path.clone())
@@ -370,6 +367,39 @@ fn admit_named_dependency_toolchains(
             .iter()
             .any(|want| toolchains_match(&candidate.toolchain, want))
         {
+            admitted.push(candidate.clone());
+            continue;
+        }
+        // A dependency may name the module instead of the version, with the
+        // toolchain inside the string: a system-level application asks for
+        // `('OpenMPI', '5.0.3-GCC-13.3.0')`. That names one build as exactly
+        // as a toolchain element does, so it admits the same way.
+        if dependencies.iter().any(|dependency| {
+            let name = dependency
+                .eb_name
+                .as_deref()
+                .unwrap_or(dependency.name.as_str());
+            if name != candidate.name {
+                return false;
+            }
+            let Some(constraint) = dependency.constraint.as_deref() else {
+                return false;
+            };
+            let suffix = candidate.versionsuffix.as_deref().unwrap_or("");
+            let module_version = if is_system_toolchain(&candidate.toolchain) {
+                format!("{}{suffix}", candidate.version)
+            } else {
+                format!(
+                    "{}-{}-{}{suffix}",
+                    candidate.version, candidate.toolchain.name, candidate.toolchain.version
+                )
+            };
+            // Only an exact pin, and only when it spells the module out:
+            // `==5.0.3-GCC-13.3.0` names one build. A range must not reach
+            // outside the hierarchy, which is what the hierarchy is for.
+            module_version != candidate.version
+                && constraint.strip_prefix("==") == Some(module_version.as_str())
+        }) {
             admitted.push(candidate.clone());
         }
     }

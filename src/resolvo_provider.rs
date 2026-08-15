@@ -587,16 +587,25 @@ impl EbProvider {
         let mut range = Ranges::empty();
         for (rank, idx) in ranked {
             let c = &self.candidates[*idx];
-            // A dependency may name the version with the versionsuffix run
-            // onto it, because that is what the module is called: a toolchain
-            // asks for NVHPC 25.3-CUDA-12.8.0, and what provides it is version
-            // 25.3 with versionsuffix -CUDA-12.8.0.
-            let with_suffix = format!(
-                "{}{}",
-                c.version,
-                c.versionsuffix.as_deref().unwrap_or("")
-            );
-            if !matches_req(&c.version, version_req) && !matches_req(&with_suffix, version_req) {
+            // A dependency may name the module rather than the version,
+            // because that is what a user types: a toolchain asks for NVHPC
+            // 25.3-CUDA-12.8.0, and a system-level recipe asks for OpenMPI
+            // 5.0.3-GCC-13.3.0. Both spell out what EasyBuild would install
+            // the module as, so all three forms are compared.
+            let suffix = c.versionsuffix.as_deref().unwrap_or("");
+            let with_suffix = format!("{}{suffix}", c.version);
+            let with_toolchain = if crate::hierarchy::is_system_toolchain(&c.toolchain) {
+                with_suffix.clone()
+            } else {
+                format!(
+                    "{}-{}-{}{suffix}",
+                    c.version, c.toolchain.name, c.toolchain.version
+                )
+            };
+            if !matches_req(&c.version, version_req)
+                && !matches_req(&with_suffix, version_req)
+                && !matches_req(&with_toolchain, version_req)
+            {
                 continue;
             }
             if toolchain.is_some_and(|want| !crate::hierarchy::toolchains_match(&c.toolchain, want))
