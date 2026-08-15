@@ -63,6 +63,12 @@ pub enum HierarchyError {
     #[error("no known hierarchy for toolchain {0}-{1}")]
     /// A toolchain named in the hierarchy is not defined.
     UnknownToolchain(String, String),
+    #[error(
+        "no easyconfig defines toolchain {0}-{1} in the trees given, so its hierarchy \
+         cannot be read; add the tree that carries {0}-{1}.eb"
+    )]
+    /// The toolchain's own defining recipe is absent from every tree given.
+    UndefinedToolchain(String, String),
     #[error("dependency {0} not found in universe under hierarchy of {1}-{2}{3}")]
     /// A dependency could not be placed anywhere in the hierarchy.
     MissingDep(String, String, String, String),
@@ -647,7 +653,22 @@ pub fn hierarchy_for_with_tree(
         Ok(h) => Ok(h),
         Err(HierarchyError::UnknownToolchain(..)) if fixture_path.is_none() => {
             derive_hierarchy_from_candidates(parent, cands).ok_or_else(|| {
-                HierarchyError::UnknownToolchain(parent.name.clone(), parent.version.clone())
+                // A hierarchy is derived from the recipe that defines the
+                // toolchain, so when there is no such recipe in the trees the
+                // answer is not "unknown" but "you did not give me the
+                // generation": upstream drops old toolchain definitions, and a
+                // site keeping a recipe on one has to keep its definition too.
+                let defined = cands
+                    .iter()
+                    .any(|candidate| candidate.name == parent.name);
+                if defined {
+                    HierarchyError::UnknownToolchain(parent.name.clone(), parent.version.clone())
+                } else {
+                    HierarchyError::UndefinedToolchain(
+                        parent.name.clone(),
+                        parent.version.clone(),
+                    )
+                }
             })
         }
         Err(e) => Err(e),
