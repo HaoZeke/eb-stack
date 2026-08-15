@@ -1051,7 +1051,7 @@ fn python_percent_format_one(fmt: &str, arg: &str) -> String {
     let mut filled = false;
     while let Some(at) = rest.find('%') {
         out.push_str(&rest[..at]);
-        match rest[at..].as_bytes().get(1) {
+        match rest.as_bytes().get(at + 1) {
             Some(b'%') => {
                 out.push('%');
                 rest = &rest[at + 2..];
