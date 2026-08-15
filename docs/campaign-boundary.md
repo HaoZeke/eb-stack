@@ -65,4 +65,4 @@
 
 ---
 
-*This document was generated automatically from the source code and committed as part of the `ebstack-0wmp` issue.*
+*This document is generated from the source code.*

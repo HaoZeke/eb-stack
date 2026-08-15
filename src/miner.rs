@@ -1,6 +1,4 @@
-//! Ring-corpus miner helpers for the reproduction grind (surf-notes
-//! `orchestration/2026-08-03-ebstack-reproduction-grind.md`, tracker issues
-//! `ebstack-l8e9`/`ebstack-y5yq`).
+//! Ring-corpus miner helpers for the reproduction grind.
 //!
 //! A mechanical miner that turns a merged upstream PR into a `bump`
 //! reproduction fixture pair has to reject two real shapes found while
