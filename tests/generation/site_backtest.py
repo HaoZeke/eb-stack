@@ -12,7 +12,9 @@ it. Nothing about the list is stored here.
 
     EB_STACK_BIN     the binary under test
     EB_BUILDLIST     a file naming easyconfigs to regenerate
-    EB_EASYCONFIGS   easyconfig trees to search, colon-separated, site first
+    EB_EASYCONFIGS   easyconfig trees, colon-separated, in ascending
+                     precedence: upstream first, the site's own overlay last,
+                     which is the order the tool merges them in
     EB_SITE_LIMIT    how many to try (default: all)
 
 Three outcomes per recipe, and only the first is success: identical, differs
@@ -64,10 +66,14 @@ def _corpus(build_list: pathlib.Path) -> list[str]:
 
 
 def _locate(name: str, trees: list[pathlib.Path]) -> pathlib.Path | None:
-    """The first tree that carries this recipe, site trees first."""
+    """The recipe as the highest-precedence tree carries it.
+
+    Trees are given in the order the tool merges them, lowest precedence
+    first, so the last one that has the file is the one that would be built.
+    """
     letter = name[0].lower()
     package = name.split("-")[0]
-    for tree in trees:
+    for tree in reversed(trees):
         direct = tree / letter / package / name
         if direct.is_file():
             return direct

@@ -204,6 +204,17 @@ pub fn solve_package_profile_with_hierarchy(
         &materialized.dependencies,
     );
     original_candidates = expand_extension_provides(&original_candidates);
+    // A recipe does not compete with itself. A bundle's own `exts_list` holds
+    // packages it installs, and expanding those into provides puts them beside
+    // the modules the same recipe depends on: a CUDA wheel bundle carries
+    // `nvidia-nccl-cu12` as an extension and depends on the `NCCL` module, and
+    // reading its own extension as a second NCCL makes the recipe conflict
+    // with itself.
+    let own = plan.package.name.clone();
+    original_candidates.retain(|candidate| {
+        !candidate.is_extension_provide()
+            || candidate.extension_parent_name().is_none_or(|parent| parent != own)
+    });
     // A dependency written without a toolchain means "at my own level", so
     // for a recipe inside a generation the system-level build of that name is
     // the bootstrap one and must not stand in for it. A recipe that is itself
