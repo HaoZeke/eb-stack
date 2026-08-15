@@ -173,7 +173,14 @@ fn rewrite_repeated_artifact_checksums(
 /// Emit next-generation easyconfig text and conventional filename from source text.
 pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitResult, EmitError> {
     let name = assign_string_raw(source, "name").ok_or(EmitError::MissingName)?;
-    let source_version = assign_string_raw(source, "version");
+    // A version may be computed rather than written as a literal: `Java`
+    // builds one from its patch and build numbers. The text has no string to
+    // read, so fall back to what parsing the recipe resolved it to.
+    let source_version = assign_string_raw(source, "version").or_else(|| {
+        crate::eb_parse::resolve_easyconfig_str(source)
+            .ok()
+            .map(|recipe| recipe.version)
+    });
     let app_version = match &params.version {
         Some(v) => v.clone(),
         None => source_version.clone().ok_or(EmitError::MissingVersion)?,
