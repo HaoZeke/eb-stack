@@ -207,8 +207,28 @@ fn render_easyconfig(
     // A CRAN plan with leftovers has to become a Bundle: the extensions are in
     // the plan either way, and the single-RPackage rendering has nowhere to put
     // them, so they would be dropped silently.
-    let language_bundle = if plan.build.easyblock.as_deref() == Some("PythonBundle")
-        || plan.origin == crate::package::PackageOrigin::Pypi
+    // A bundle is for a set of extensions installed together. One PyPI
+    // package installed on its own is a PythonPackage with its own sources,
+    // which is what upstream writes for every such recipe: tqdm 4.67.1 is
+    // `PythonPackage` with `sources = [SOURCE_TAR_GZ]`, not a PythonBundle
+    // carrying one ext.
+    // The PyPI ingest hints `python-bundle` for everything it reads, because
+    // at ingest time nothing knows yet whether the package brings extensions
+    // along. Here it is known.
+    let single_python_package = plan.origin == crate::package::PackageOrigin::Pypi
+        && plan.overlay_extensions.len() <= 1
+        && matches!(
+            plan.build.easyblock.as_deref(),
+            None | Some("PythonBundle") | Some("PythonPackage")
+        );
+    let easyblock_line = if single_python_package {
+        "easyblock = 'PythonPackage'\n\n".to_string()
+    } else {
+        easyblock_line
+    };
+    let language_bundle = if !single_python_package
+        && (plan.build.easyblock.as_deref() == Some("PythonBundle")
+            || plan.origin == crate::package::PackageOrigin::Pypi)
     {
         Some(LanguageBundleKind::Python)
     } else if plan.origin == crate::package::PackageOrigin::Cran
@@ -269,8 +289,8 @@ toolchain = {{'name': '{toolchain_name}', 'version': '{toolchain_version}'}}\n\
 {patch_line}\
 {config_line}\
 {easyconfig_parameter_lines}\
-builddependencies = {build_dependencies}\n\n\
-dependencies = {runtime_dependencies}\n\n\
+{build_dependencies}\
+{runtime_dependencies}\
 moduleclass = '{moduleclass}'\n",
         name = escape_single(&plan.package.name),
         version = escape_single(&plan.package.version),
@@ -281,8 +301,8 @@ moduleclass = '{moduleclass}'\n",
         source_prelude = source_block.prelude,
         source_lines = source_block.sources,
         checksum_lines = source_block.checksums,
-        build_dependencies = render_list(&build_dependencies),
-        runtime_dependencies = render_list(&runtime_dependencies),
+        build_dependencies = render_dependency_field("builddependencies", &build_dependencies),
+        runtime_dependencies = render_dependency_field("dependencies", &runtime_dependencies),
     );
     crate::eb_style::format_style(&rendered).text
 }
@@ -364,8 +384,8 @@ toolchain = {{'name': '{toolchain_name}', 'version': '{toolchain_version}'}}\n\
 {default_class}\
 {default_ext_opts}\
 exts_list = {exts}\n\n\
-builddependencies = {build_dependencies}\n\n\
-dependencies = {runtime_dependencies}\n\n\
+{build_dependencies}\
+{runtime_dependencies}\
 moduleclass = '{moduleclass}'\n",
         name = escape_single(&plan.package.name),
         version = escape_single(&plan.package.version),
@@ -373,8 +393,8 @@ moduleclass = '{moduleclass}'\n",
         description = description.replace("\"\"\"", "\\\"\\\"\\\""),
         toolchain_name = escape_single(&plan.build.toolchain.name),
         toolchain_version = escape_single(&plan.build.toolchain.version),
-        build_dependencies = render_list(build_dependencies),
-        runtime_dependencies = render_list(runtime_dependencies),
+        build_dependencies = render_dependency_field("builddependencies", build_dependencies),
+        runtime_dependencies = render_dependency_field("dependencies", runtime_dependencies),
     );
     crate::eb_style::format_style(&rendered).text
 }
@@ -875,6 +895,17 @@ fn dependency_requires_explicit_toolchain(
         // Unknown parent: keep the full identity rather than guessing.
         Err(_) => true,
     }
+}
+
+/// One dependency field, or nothing when the recipe has no such dependency.
+///
+/// `builddependencies = []` says the same thing as leaving the field out and
+/// no upstream recipe writes it, so a generated recipe should not either.
+fn render_dependency_field(field: &str, values: &[String]) -> String {
+    if values.is_empty() {
+        return String::new();
+    }
+    format!("{field} = {}\n\n", render_list(values))
 }
 
 fn render_list(values: &[String]) -> String {

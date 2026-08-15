@@ -102,7 +102,7 @@ fn inspect_pypi_warehouse_fixture() {
 }
 
 #[test]
-fn plan_pypi_uses_python_bundle_and_soupsieve_provide() {
+fn plan_pypi_emits_one_package_and_takes_soupsieve_from_the_robot() {
     let request = NewPackageRequest {
         source: root().join("fixtures/foreign_ingest/pypi_bs4/pypi.json"),
         format: Some(ForeignFormat::Pypi),
@@ -119,14 +119,22 @@ fn plan_pypi_uses_python_bundle_and_soupsieve_provide() {
         .iter()
         .find(|config| config.filename.contains("beautifulsoup4"))
         .expect("emitted recipe");
+    // One PyPI package installed on its own is a PythonPackage upstream: of
+    // 400 sampled PythonBundle recipes in the tree, 3 carry a single
+    // extension. A bundle is for a set installed together.
     assert!(
-        recipe.text.contains("easyblock = 'PythonBundle'"),
+        recipe.text.contains("easyblock = 'PythonPackage'"),
         "{}",
         recipe.text
     );
     assert!(
-        recipe.text.contains("exts_list"),
-        "expected exts_list in {}",
+        !recipe.text.contains("exts_list"),
+        "one package needs no exts_list:\n{}",
+        recipe.text
+    );
+    assert!(
+        recipe.text.contains("checksums = ["),
+        "the package's own source must be carried:\n{}",
         recipe.text
     );
     assert!(
