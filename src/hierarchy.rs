@@ -265,6 +265,18 @@ fn derive_hierarchy_by_walking(
             .iter()
             .chain(definition.builddependencies.iter())
         {
+            // A level may appear only as another dependency's toolchain:
+            // `intel` names `imkl-FFTW` at `('iimpi', version)` and never
+            // names iimpi itself, so reading dependency names alone leaves the
+            // MPI level out of the generation's own hierarchy.
+            let named = dependency.toolchain.as_ref().filter(|toolchain| {
+                !is_system_toolchain(toolchain)
+                    && !members.iter().any(|m| toolchains_match(m, toolchain))
+            });
+            if let Some(toolchain) = named {
+                members.push((*toolchain).clone());
+                pending.push((*toolchain).clone());
+            }
             if !used_as_toolchain.contains(dependency.name.as_str()) {
                 continue;
             }
@@ -658,9 +670,9 @@ pub fn hierarchy_for_with_tree(
                 // answer is not "unknown" but "you did not give me the
                 // generation": upstream drops old toolchain definitions, and a
                 // site keeping a recipe on one has to keep its definition too.
-                let defined = cands
-                    .iter()
-                    .any(|candidate| candidate.name == parent.name);
+                let defined = cands.iter().any(|candidate| {
+                    candidate.name == parent.name && candidate.version == parent.version
+                });
                 if defined {
                     HierarchyError::UnknownToolchain(parent.name.clone(), parent.version.clone())
                 } else {
