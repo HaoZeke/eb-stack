@@ -1005,9 +1005,36 @@ pub fn complete_package_bump(
         .iter()
         .map(|dependency| (dependency.name.clone(), dependency.version.clone()))
         .collect::<HashMap<_, _>>();
+    // Only the selections that differ from what the recipe already states. A
+    // dependency may name its toolchain through a local variable, as
+    // `('binutils', '2.42', '', ('GCCcore', local_gccver))` does, and that
+    // expression cannot be rewritten by editing tokens. It also does not need
+    // to be when the selection is the toolchain already named: a bump that
+    // changes nothing should leave the line alone rather than refuse the
+    // recipe.
+    let source_recipe = resolve_easyconfig_file(&request.source)
+        .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+    let stated: HashMap<&str, &Toolchain> = source_recipe
+        .dependencies
+        .iter()
+        .chain(source_recipe.builddependencies.iter())
+        .filter_map(|dependency| {
+            dependency
+                .toolchain
+                .as_ref()
+                .map(|toolchain| (dependency.name.as_str(), toolchain))
+        })
+        .collect();
     let dependency_toolchains = lock
         .dependencies
         .iter()
+        .filter(|dependency| {
+            stated
+                .get(dependency.name.as_str())
+                .is_none_or(|already| {
+                    !crate::hierarchy::toolchains_match(already, &dependency.toolchain)
+                })
+        })
         .map(|dependency| (dependency.name.clone(), dependency.toolchain.clone()))
         .collect::<HashMap<_, _>>();
     let mut result = emit_next_generation_from_path(
@@ -1017,6 +1044,16 @@ pub fn complete_package_bump(
             version: request.version.clone(),
             dep_versions: dependency_versions,
             dep_toolchains: dependency_toolchains,
+            // What the solve itself derived, so the emitter can tell an
+            // ordinary dependency inside the generation from one that really
+            // does need its toolchain spelled out.
+            hierarchy: crate::hierarchy::hierarchy_for_with_tree(
+                &request.toolchain,
+                request.hierarchy_fixture.as_deref(),
+                candidates,
+            )
+            .map(|hierarchy| hierarchy.members)
+            .unwrap_or_default(),
             source_checksum: request.source_checksum.clone(),
         },
     )
@@ -1309,8 +1346,12 @@ fn dependency_from_easyconfig(
         eb_name: Some(dependency.name.clone()),
         // Unconstrained across a retarget: hierarchy filtering keeps the
         // candidate set to the target generation and prefer_newer picks within
-        // it, which is the version that generation ships.
-        constraint: (!retarget).then(|| format!(">={}", dependency.version)),
+        // it, which is the version that generation ships. Within one
+        // generation there is nothing to pick: the recipe already names the
+        // version it was built and tested against, and moving pybind11's
+        // Catch2 from 2.13.10 to 3.8.1 because a newer one exists is a change
+        // nobody asked for.
+        constraint: (!retarget).then(|| format!("=={}", dependency.version)),
         toolchain: dependency.toolchain.as_ref().map(|source_toolchain| {
             map_source_toolchain_to_target(Some(source_toolchain), target_toolchain, None)
         }),

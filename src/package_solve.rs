@@ -78,6 +78,7 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
         .map_err(|error| ProfileSolveError::Resolve(error.to_string()))?;
     let mut admitted = filter_candidates_in_hierarchy(candidates, &hierarchy);
     admit_stack_pin_closures(candidates, &mut admitted, stack_policy);
+    admit_named_dependency_toolchains(candidates, &mut admitted, &materialized.dependencies);
     admitted = expand_extension_provides(&admitted);
 
     let mut holes = Vec::new();
@@ -197,10 +198,24 @@ pub fn solve_package_profile_with_hierarchy(
         .map_err(|error| ProfileSolveError::Resolve(error.to_string()))?;
     let mut original_candidates = filter_candidates_in_hierarchy(candidates, &hierarchy);
     admit_stack_pin_closures(candidates, &mut original_candidates, stack_policy);
+    admit_named_dependency_toolchains(
+        candidates,
+        &mut original_candidates,
+        &materialized.dependencies,
+    );
     original_candidates = expand_extension_provides(&original_candidates);
+    // A dependency written without a toolchain means "at my own level", so
+    // for a recipe inside a generation the system-level build of that name is
+    // the bootstrap one and must not stand in for it. A recipe that is itself
+    // at the system toolchain has no other level to take it from: GCCcore
+    // 14.2.0 is built at SYSTEM and needs the SYSTEM M4, and dropping those
+    // candidates leaves the compilers unbuildable, which is most of what a
+    // site builds first.
+    let target_is_system = is_system_toolchain(&plan.build.toolchain);
     original_candidates.retain(|candidate| {
-        !(implicit_easybuild_dependencies.contains(&candidate.name)
-            && is_system_toolchain(&candidate.toolchain))
+        target_is_system
+            || !(implicit_easybuild_dependencies.contains(&candidate.name)
+                && is_system_toolchain(&candidate.toolchain))
     });
     let mut universe = original_candidates.clone();
     for candidate in &mut universe {
@@ -310,6 +325,43 @@ fn match_robot_name(foreign_name: &str, candidates: &[Candidate]) -> String {
 
 fn normalize_package_identity(name: &str) -> String {
     crate::provides::overlay_package_identity(name)
+}
+
+/// Admit candidates at a toolchain a dependency names outright.
+///
+/// A dependency tuple may state its own toolchain, and that is the one case
+/// where EasyBuild looks outside the recipe's hierarchy:
+/// `intel-compilers` is built at SYSTEM and asks for
+/// `('binutils', '2.42', '', ('GCCcore', '14.2.0'))`. A universe filtered to
+/// the recipe's own hierarchy cannot contain it, and the compilers of a whole
+/// generation then read as unbuildable.
+fn admit_named_dependency_toolchains(
+    all: &[crate::domain::Candidate],
+    admitted: &mut Vec<crate::domain::Candidate>,
+    dependencies: &[crate::package::DependencyIntent],
+) {
+    let wanted: Vec<&crate::domain::Toolchain> = dependencies
+        .iter()
+        .filter_map(|dependency| dependency.toolchain.as_ref())
+        .collect();
+    if wanted.is_empty() {
+        return;
+    }
+    let known: HashSet<String> = admitted
+        .iter()
+        .map(|candidate| candidate.easyconfig_path.clone())
+        .collect();
+    for candidate in all {
+        if known.contains(&candidate.easyconfig_path) {
+            continue;
+        }
+        if wanted
+            .iter()
+            .any(|want| toolchains_match(&candidate.toolchain, want))
+        {
+            admitted.push(candidate.clone());
+        }
+    }
 }
 
 fn admit_stack_pin_closures(

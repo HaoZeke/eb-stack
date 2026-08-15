@@ -554,6 +554,16 @@ pub fn hierarchy_for_with_tree(
     fixture_path: Option<&Path>,
     cands: &[Candidate],
 ) -> Result<ToolchainHierarchy, HierarchyError> {
+    // The system toolchain is the bottom of every hierarchy and has nothing
+    // under it, so it is its own. Without this a site cannot plan the recipes
+    // that sit there at all, and those are the compilers: GCCcore,
+    // intel-compilers and nvidia-compilers are all built at SYSTEM.
+    if is_system_toolchain(parent) {
+        return Ok(ToolchainHierarchy {
+            parent: parent.clone(),
+            members: vec![parent.clone()],
+        });
+    }
     match hierarchy_for(parent, fixture_path) {
         Ok(h) => Ok(h),
         Err(HierarchyError::UnknownToolchain(..)) if fixture_path.is_none() => {

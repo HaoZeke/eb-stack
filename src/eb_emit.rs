@@ -41,6 +41,13 @@ pub struct EmitParams {
     /// Explicit tuples are retargeted, and selections outside the output
     /// hierarchy are made explicit in otherwise implicit tuples.
     pub dep_toolchains: HashMap<String, Toolchain>,
+    /// The target toolchain's hierarchy, lowest level first, as the caller
+    /// derived it from the tree. A dependency at a level inside this needs no
+    /// explicit toolchain, because EasyBuild's own search finds it: `Cython`
+    /// at GCCcore is an ordinary dependency of a gompi recipe and upstream
+    /// writes it bare. Empty means "not known", and the old naming rule
+    /// applies.
+    pub hierarchy: Vec<Toolchain>,
     /// New sha256 for the source tarball, used only when `version` changes.
     /// When `None` and the version changes, the source checksum entry's key
     /// is still renamed to the new versioned tarball name, but the checksum
@@ -198,6 +205,7 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
             &params.dep_versions,
             &params.dep_toolchains,
             &params.toolchain,
+            &params.hierarchy,
         )?;
         text = rewrite_dep_list_selections(
             &text,
@@ -205,6 +213,7 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
             &params.dep_versions,
             &params.dep_toolchains,
             &params.toolchain,
+            &params.hierarchy,
         )?;
     }
 
@@ -639,6 +648,7 @@ fn rewrite_dep_list_selections(
     version_overrides: &HashMap<String, String>,
     toolchain_overrides: &HashMap<String, Toolchain>,
     target_toolchain: &Toolchain,
+    hierarchy: &[Toolchain],
 ) -> Result<String, EmitError> {
     let Some((list_open_end, list_close_start)) = find_list_span(src, key)? else {
         // No such list — nothing to rewrite (not an error).
@@ -650,6 +660,7 @@ fn rewrite_dep_list_selections(
         version_overrides,
         toolchain_overrides,
         target_toolchain,
+        hierarchy,
     )?;
     let mut out = String::with_capacity(src.len() + 32);
     out.push_str(&src[..list_open_end]);
@@ -1040,6 +1051,7 @@ fn rewrite_dep_tuples_in_body(
     version_overrides: &HashMap<String, String>,
     toolchain_overrides: &HashMap<String, Toolchain>,
     target_toolchain: &Toolchain,
+    hierarchy: &[Toolchain],
 ) -> Result<String, EmitError> {
     let mut rewritten = body.to_string();
     for (start, end) in dependency_tuple_spans(body)?.into_iter().rev() {
@@ -1049,6 +1061,7 @@ fn rewrite_dep_tuples_in_body(
             version_overrides,
             toolchain_overrides,
             target_toolchain,
+            hierarchy,
         )?;
         if replacement != tuple {
             rewritten.replace_range(start..end, &replacement);
@@ -1118,6 +1131,7 @@ fn rewrite_dependency_tuple(
     version_overrides: &HashMap<String, String>,
     toolchain_overrides: &HashMap<String, Toolchain>,
     target_toolchain: &Toolchain,
+    hierarchy: &[Toolchain],
 ) -> Result<String, EmitError> {
     let (tokens, outer_commas) = dependency_tuple_tokens(tuple)?;
     let top = tokens
@@ -1150,7 +1164,7 @@ fn rewrite_dependency_tuple(
         if nested.len() >= 2 {
             edits.push((nested[0].start, nested[0].end, toolchain.name.clone()));
             edits.push((nested[1].start, nested[1].end, toolchain.version.clone()));
-        } else if dependency_toolchain_must_be_explicit(toolchain, target_toolchain) {
+        } else if dependency_toolchain_must_be_explicit(toolchain, target_toolchain, hierarchy) {
             if outer_commas >= 3 {
                 return Err(EmitError::Rewrite(format!(
                     "dependency {name} has an unsupported explicit toolchain expression"
@@ -1232,7 +1246,19 @@ fn dependency_tuple_tokens(tuple: &str) -> Result<(Vec<QuotedToken>, usize), Emi
     Ok((tokens, outer_commas))
 }
 
-fn dependency_toolchain_must_be_explicit(selected: &Toolchain, target: &Toolchain) -> bool {
+fn dependency_toolchain_must_be_explicit(
+    selected: &Toolchain,
+    target: &Toolchain,
+    hierarchy: &[Toolchain],
+) -> bool {
+    // What the caller derived from the tree beats any naming rule: a level
+    // inside the target's own hierarchy needs no explicit toolchain.
+    if hierarchy
+        .iter()
+        .any(|member| crate::hierarchy::toolchains_match(selected, member))
+    {
+        return false;
+    }
     if crate::hierarchy::is_system_toolchain(target) {
         return !crate::hierarchy::is_system_toolchain(selected);
     }
