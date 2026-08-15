@@ -144,6 +144,21 @@ fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
                         provenance: None,
                     });
                 }
+                // The EasyBuild Python module installs setuptools, pip and
+                // wheel itself, so a project that requires one already has it.
+                // Emitting a dependency instead sends the solver looking for
+                // whatever ships the name, and cppy 1.3.1 ended up depending
+                // on ReFrame, which merely carries setuptools as an extension.
+                if crate::provides::shipped_with_python(&name) {
+                    residuals.push(ForeignResidual {
+                        category: "pypi-requirement".into(),
+                        severity: ResidualSeverity::Mechanical,
+                        summary: format!("{name} comes with the Python module, so it is not a dependency"),
+                        evidence: Some(original),
+                        provenance: None,
+                    });
+                    continue;
+                }
                 dependencies.push(ForeignDep {
                     name,
                     pin,

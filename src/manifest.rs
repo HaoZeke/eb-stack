@@ -181,11 +181,14 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             // What the package says it is for, when it says: PyPI states it
             // in Trove classifiers. `lang` is for language runtimes, and
             // upstream uses it for 16 of 588 sampled PythonPackage recipes,
-            // so it is a poor blanket answer; `lib` is the fallback.
+            // so it is a poor blanket answer. A package that states no topic
+            // at all falls back to `tools`, which is both upstream's most
+            // common class for these recipes (145 of 588) and what it chose
+            // for archspec and cppy, neither of which states a topic.
             moduleclass: match recipe.format {
                 ForeignFormat::Pypi | ForeignFormat::Cran | ForeignFormat::Cargo => Some(
                     crate::foreign::moduleclass_from_classifiers(&recipe.classifiers)
-                        .unwrap_or_else(|| "lib".into()),
+                        .unwrap_or_else(|| "tools".into()),
                 ),
                 _ => None,
             },

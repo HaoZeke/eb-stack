@@ -79,6 +79,7 @@ pub enum RegistryError {
 
 /// True when `--source` is a registry name, not a dump file.
 pub fn is_registry_name(source: &Path) -> bool {
+    // `tqdm==4.67.1` is a name with a version, not a path.
     !source.exists()
         && source
             .components()
@@ -86,9 +87,31 @@ pub fn is_registry_name(source: &Path) -> bool {
         && source.components().count() == 1
 }
 
-/// Warehouse JSON URL for `name`.
+/// A registry name, and the version it pins when it pins one.
+///
+/// `tqdm==4.67.1` asks for the release a site actually carries rather than
+/// whatever is newest today, which is what regenerating an existing recipe
+/// needs, and what makes the same command produce the same recipe tomorrow.
+pub fn split_name_and_version(source: &str) -> (&str, Option<&str>) {
+    for separator in ["==", "@"] {
+        if let Some((name, version)) = source.split_once(separator) {
+            let version = version.trim();
+            if !name.is_empty() && !version.is_empty() {
+                return (name, Some(version));
+            }
+        }
+    }
+    (source, None)
+}
+
+/// Warehouse JSON URL for `name`, at `version` when one is pinned.
 pub fn pypi_json_url(base: &str, name: &str) -> String {
     format!("{}/pypi/{name}/json", base.trim_end_matches('/'))
+}
+
+/// Warehouse JSON URL for one release.
+pub fn pypi_release_json_url(base: &str, name: &str, version: &str) -> String {
+    format!("{}/pypi/{name}/{version}/json", base.trim_end_matches('/'))
 }
 
 /// Write Warehouse JSON (and sdist, when listed) under `ingest_root/pypi/`.
@@ -98,7 +121,11 @@ pub fn materialize_pypi(
     warehouse_base: &str,
     ingest_root: &Path,
 ) -> Result<MaterializedIngest, RegistryError> {
-    let url = pypi_json_url(warehouse_base, name);
+    let (name, pinned) = split_name_and_version(name);
+    let url = match pinned {
+        Some(version) => pypi_release_json_url(warehouse_base, name, version),
+        None => pypi_json_url(warehouse_base, name),
+    };
     let bytes = client.get(&url)?;
     let value: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|error| RegistryError::Parse(format!("warehouse json: {error}")))?;

@@ -39,14 +39,51 @@ fn find_source_tree(
     candidates.push(parent.join(&identity));
     candidates.push(parent.join(name));
     candidates.push(parent.join(format!("{}-{version}", name.replace('-', "_"))));
-    candidates.into_iter().find(|path| path.is_dir())
+    candidates
+        .into_iter()
+        .find(|path| path.is_dir())
+        .map(|path| descend_into_sdist_root(&path))
+}
+
+/// The directory an sdist actually keeps its `pyproject.toml` in.
+///
+/// A PyPI sdist unpacks to one directory named after the release, so a tree
+/// extracted into `ingest/pypi/archspec-0.2.5/` holds
+/// `archspec-0.2.5/pyproject.toml` inside it. Reading the outer directory
+/// finds no build system at all, and the recipe then states no build
+/// dependency: archspec is built with poetry-core and upstream's recipe says
+/// so.
+fn descend_into_sdist_root(tree: &Path) -> std::path::PathBuf {
+    if tree.join("pyproject.toml").is_file() || tree.join("setup.py").is_file() {
+        return tree.to_path_buf();
+    }
+    let Ok(entries) = std::fs::read_dir(tree) else {
+        return tree.to_path_buf();
+    };
+    let mut directories = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir());
+    let Some(only) = directories.next() else {
+        return tree.to_path_buf();
+    };
+    if directories.next().is_some() {
+        return tree.to_path_buf();
+    }
+    if only.join("pyproject.toml").is_file() || only.join("setup.py").is_file() {
+        return only;
+    }
+    tree.to_path_buf()
 }
 
 fn overlay_pyproject(recipe: &mut ForeignRecipe, path: &Path) {
     let Ok(text) = std::fs::read_to_string(path) else {
         return;
     };
-    let Ok(value) = text.parse::<toml::Value>() else {
+    // `parse::<toml::Value>()` reads a TOML *value*, not a document, so a
+    // pyproject.toml fails at its first table header and every build
+    // requirement a project states was being dropped in silence.
+    let Ok(value) = toml::from_str::<toml::Value>(&text) else {
         return;
     };
     let Some(build) = value.get("build-system") else {
@@ -62,6 +99,12 @@ fn overlay_pyproject(recipe: &mut ForeignRecipe, path: &Path) {
     }
     if backend.contains("hatchling") {
         push_hint(recipe, "hatchling");
+    }
+    // The backend itself, so the plan can make it a build dependency: a
+    // project built with poetry-core needs the `poetry` module at build time,
+    // and upstream's archspec recipe names it.
+    if !backend.is_empty() {
+        push_hint(recipe, &format!("backend:{backend}"));
     }
     let Some(requires) = build.get("requires").and_then(|value| value.as_array()) else {
         return;
@@ -83,7 +126,18 @@ fn overlay_pyproject(recipe: &mut ForeignRecipe, path: &Path) {
         if name.is_empty() || crate::provides::ignored_build_requirement(name) {
             continue;
         }
-        push_dep(recipe, name, "build", spec);
+        // The Python module installs setuptools, pip and wheel itself, so
+        // naming one as a build dependency sends the solver looking for
+        // whatever ships it. Upstream's coverage and cppy recipes name
+        // neither, and both declare setuptools as their backend.
+        if crate::provides::shipped_with_python(name) {
+            continue;
+        }
+        // A backend and the module that carries it are one name to a recipe:
+        // `poetry-core` is built by `poetry`, and emitting both asks for the
+        // same thing twice.
+        let name = crate::provides::aliased_module_name(name);
+        push_dep(recipe, &name, "build", spec);
     }
 }
 
@@ -291,6 +345,144 @@ mod tests {
         );
         assert!(
             !recipe.dependencies.iter().any(|dep| dep.name == "yaml"),
+            "{:?}",
+            recipe.dependencies
+        );
+    }
+}
+
+#[cfg(test)]
+mod sdist_layout_tests {
+    use super::*;
+
+    #[test]
+    fn a_pyproject_inside_the_sdist_root_is_found() {
+        let temp = tempfile::tempdir().expect("temp");
+        let ingest = temp.path().join("pypi");
+        let outer = ingest.join("archspec-0.2.5");
+        let inner = outer.join("archspec-0.2.5");
+        std::fs::create_dir_all(&inner).expect("dirs");
+        std::fs::write(
+            inner.join("pyproject.toml"),
+            "[build-system]\nrequires = [\"poetry-core>=1.0.0\"]\nbuild-backend = \"poetry.core.masonry.api\"\n",
+        )
+        .expect("write");
+        let dump = ingest.join("archspec-0.2.5.json");
+        std::fs::write(&dump, "{}").expect("dump");
+        let found = find_source_tree(&dump, &ingest, "archspec", "0.2.5");
+        assert_eq!(found.as_deref(), Some(inner.as_path()));
+    }
+}
+
+#[cfg(test)]
+mod sdist_overlay_tests {
+    use super::*;
+    use crate::foreign::ForeignFormat;
+
+    #[test]
+    fn overlay_pyproject_reads_a_poetry_backend() {
+        let temp = tempfile::tempdir().expect("temp");
+        let path = temp.path().join("pyproject.toml");
+        std::fs::write(
+            &path,
+            "[build-system]\nrequires = [\"poetry-core>=1.0.0\"]\nbuild-backend = \"poetry.core.masonry.api\"\n",
+        )
+        .expect("write");
+        let mut recipe = ForeignRecipe {
+            format: ForeignFormat::Pypi,
+            name: "archspec".into(),
+            version: "0.2.5".into(),
+            homepage: None,
+            source_url: None,
+            source_filename: None,
+            sha256: None,
+            sources: Vec::new(),
+            summary: None,
+            description: None,
+            license: None,
+            dependencies: Vec::new(),
+            build_system_hints: Vec::new(),
+            configopts: None,
+            patches: Vec::new(),
+            variants: Vec::new(),
+            rules: Vec::new(),
+            notes: Vec::new(),
+            residuals: Vec::new(),
+            classifiers: Vec::new(),
+        };
+        let text = std::fs::read_to_string(&path).expect("read back");
+        let parsed = toml::from_str::<toml::Value>(&text);
+        assert!(parsed.is_ok(), "parse: {parsed:?}");
+        let value = parsed.expect("parsed");
+        assert!(
+            value.get("build-system").is_some(),
+            "no build-system table in {value:?}"
+        );
+        overlay_pyproject(&mut recipe, &path);
+        assert!(
+            recipe.build_system_hints.iter().any(|hint| hint.starts_with("backend:")),
+            "hints {:?} deps {:?}",
+            recipe.build_system_hints,
+            recipe.dependencies
+        );
+    }
+
+    #[test]
+    fn a_poetry_backend_becomes_a_hint() {
+        let temp = tempfile::tempdir().expect("temp");
+        let ingest = temp.path().join("pypi");
+        let inner = ingest.join("archspec-0.2.5").join("archspec-0.2.5");
+        std::fs::create_dir_all(&inner).expect("dirs");
+        std::fs::write(
+            inner.join("pyproject.toml"),
+            "[build-system]\nrequires = [\"poetry-core>=1.0.0\"]\nbuild-backend = \"poetry.core.masonry.api\"\n",
+        )
+        .expect("write");
+        let dump = ingest.join("archspec-0.2.5.json");
+        std::fs::write(&dump, "{}").expect("dump");
+        let mut recipe = ForeignRecipe {
+            format: ForeignFormat::Pypi,
+            name: "archspec".into(),
+            version: "0.2.5".into(),
+            homepage: None,
+            source_url: None,
+            source_filename: None,
+            sha256: None,
+            sources: Vec::new(),
+            summary: None,
+            description: None,
+            license: None,
+            dependencies: Vec::new(),
+            build_system_hints: vec!["python-bundle".into(), "pip".into()],
+            configopts: None,
+            patches: Vec::new(),
+            variants: Vec::new(),
+            rules: Vec::new(),
+            notes: Vec::new(),
+            residuals: Vec::new(),
+            classifiers: Vec::new(),
+        };
+        let found = find_source_tree(&dump, &ingest, "archspec", "0.2.5");
+        assert!(
+            found
+                .as_deref()
+                .is_some_and(|path| path.join("pyproject.toml").is_file()),
+            "resolved tree: {found:?}"
+        );
+        enrich_from_source_tree(&mut recipe, &dump);
+        assert!(
+            recipe
+                .build_system_hints
+                .iter()
+                .any(|hint| hint.starts_with("backend:")),
+            "{:?}",
+            recipe.build_system_hints
+        );
+        assert!(
+            recipe
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.name.contains("poetry")),
             "{:?}",
             recipe.dependencies
         );

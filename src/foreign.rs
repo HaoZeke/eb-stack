@@ -474,8 +474,14 @@ pub(crate) fn moduleclass_from_classifiers(classifiers: &[String]) -> Option<Str
         ("scientific/engineering :: gis", "geo"),
         ("scientific/engineering :: atmospheric science", "geo"),
         ("database", "data"),
+        ("software development :: compilers", "lang"),
+        ("software development :: interpreters", "lang"),
+        ("software development :: code generators", "lang"),
         ("software development :: libraries", "lib"),
-        ("software development :: testing", "devel"),
+        // Upstream classes a test or coverage tool as `tools`: it is
+        // something a user runs, not something a program links against.
+        ("software development :: testing", "tools"),
+        ("software development :: quality assurance", "tools"),
         ("software development :: build tools", "devel"),
         ("software development :: version control", "devel"),
         ("software development", "devel"),

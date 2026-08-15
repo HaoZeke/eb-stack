@@ -9,6 +9,11 @@
 # is done on the identity, so both sides of a pair collapse to one name.
 [aliases]
 torch = "pytorch"
+# A build backend and the module that provides it: EasyBuild carries `poetry`,
+# and a project states `poetry-core`, which is the same thing to a recipe.
+poetrycore = "poetry"
+flitcore = "flit"
+hatchvcs = "hatchling"
 
 # Packages an overlay must never pip-install on top of an EasyBuild stack.
 # These are toolchain-built extensions: a wheel would shadow the module and
@@ -31,3 +36,10 @@ ignore = ["python", "numpy"]
 # extension module rather than a plain Rust binary or library.
 [python_modules]
 marker_crates = ["pyo3", "pyo3-ffi", "maturin", "numpy"]
+
+# Packages the EasyBuild `Python` module installs as its own extensions. A
+# project that requires one of these already has it from its Python
+# dependency, and emitting a separate dependency sends the solver looking for
+# any module that ships the name.
+[python_provides]
+names = ["setuptools", "pip", "wheel"]

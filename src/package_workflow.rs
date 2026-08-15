@@ -255,6 +255,8 @@ pub fn complete_package_bundle_with_hierarchy(
         pin_binutils_to_gcccore(&mut plan, candidates, hierarchy_fixture);
     }
     add_gcccore_binutils(&mut plan);
+    add_build_backend_dependency(&mut plan, candidates);
+    drop_unavailable_build_requirements(&mut plan, candidates);
     let mut locks = Vec::new();
     for output in &plan.outputs {
         locks.push(
@@ -346,6 +348,114 @@ fn promote_language_overlay_extras(
         });
     }
     Ok(())
+}
+
+/// Build requirements the tree cannot provide, dropped with a residual.
+///
+/// A `pyproject.toml` states what pip would install to build the package, and
+/// a site's robot path carries only some of those as modules: `setuptools-scm`
+/// is an ordinary build requirement and no upstream GCCcore recipe names it.
+/// Keeping one the tree does not carry turns a buildable recipe into an
+/// unsatisfiable solve, and dropping it in silence would hide a real
+/// difference, so it leaves a residual behind.
+fn drop_unavailable_build_requirements(
+    plan: &mut PackagePlan,
+    candidates: &[crate::domain::Candidate],
+) {
+    let mut dropped = Vec::new();
+    plan.dependencies.retain(|dependency| {
+        if !dependency.roles.contains(&DependencyRole::Build) {
+            return true;
+        }
+        let name = dependency
+            .eb_name
+            .as_deref()
+            .unwrap_or(dependency.name.as_str());
+        let available = crate::provides::existing_language_provider(name, candidates).is_some()
+            || candidates.iter().any(|candidate| {
+                crate::provides::overlay_package_identity(&candidate.name)
+                    == crate::provides::overlay_package_identity(name)
+            });
+        if !available {
+            dropped.push(dependency.name.clone());
+        }
+        available
+    });
+    for name in dropped {
+        plan.residuals.push(Residual {
+            id: format!("build-requirement:{name}"),
+            stage: ResidualStage::Resolve,
+            category: "build-requirement".into(),
+            severity: ResidualSeverity::Judgment,
+            summary: format!(
+                "{name} is a stated build requirement and this tree carries no module for it,                  so the recipe does not name it"
+            ),
+            evidence: None,
+            provenance: None,
+        });
+    }
+}
+
+/// The module that provides the build backend a project declares.
+///
+/// A PEP 517 backend has to be installed to build the package, so upstream
+/// names it: archspec declares `poetry.core.masonry.api` and its recipe
+/// carries `('poetry', '2.1.2')` beside binutils. `setuptools` is the
+/// exception, because the Python module already ships it.
+fn add_build_backend_dependency(plan: &mut PackagePlan, candidates: &[crate::domain::Candidate]) {
+    const BACKEND_MODULES: &[(&str, &str)] = &[
+        ("poetry", "poetry"),
+        ("hatchling", "hatchling"),
+        ("flit", "flit"),
+        ("maturin", "maturin"),
+        ("scikit_build_core", "scikit-build-core"),
+        ("mesonpy", "meson-python"),
+        ("pdm", "pdm"),
+    ];
+    let Some(backend) = plan
+        .build
+        .build_systems
+        .iter()
+        .find_map(|hint| hint.strip_prefix("backend:"))
+        .map(str::to_ascii_lowercase)
+    else {
+        return;
+    };
+    let Some((_, module)) = BACKEND_MODULES
+        .iter()
+        .find(|(needle, _)| backend.contains(needle))
+    else {
+        return;
+    };
+    let already = plan.dependencies.iter().any(|dependency| {
+        crate::provides::overlay_package_identity(
+            dependency
+                .eb_name
+                .as_deref()
+                .unwrap_or(dependency.name.as_str()),
+        ) == crate::provides::overlay_package_identity(module)
+    });
+    // Only what the tree can actually provide: naming a module the site does
+    // not carry turns a buildable recipe into an unsatisfiable one.
+    let available = candidates.iter().any(|candidate| {
+        crate::provides::overlay_package_identity(&candidate.name)
+            == crate::provides::overlay_package_identity(module)
+    });
+    if already || !available {
+        return;
+    }
+    plan.dependencies.push(DependencyIntent {
+        id: format!("build-backend:{module}"),
+        name: module.to_string(),
+        eb_name: Some(module.to_string()),
+        constraint: None,
+        toolchain: None,
+        roles: vec![DependencyRole::Build],
+        condition: ConditionExpr::Always,
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: Vec::new(),
+    });
 }
 
 /// The `binutils` a GCCcore-level recipe builds against.

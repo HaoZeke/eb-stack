@@ -104,6 +104,14 @@ struct OverlayPolicy {
     python_modules: PythonModules,
     #[serde(default)]
     build_requires: BuildRequires,
+    #[serde(default)]
+    python_provides: PythonProvides,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct PythonProvides {
+    #[serde(default)]
+    names: Vec<String>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -158,6 +166,22 @@ pub fn ignored_build_requirement(name: &str) -> bool {
         .any(|ignored| crate::package_sources::package_identity(ignored) == identity)
 }
 
+/// Whether the EasyBuild `Python` module already ships this package.
+///
+/// EasyBuild builds `setuptools`, `pip` and `wheel` into Python itself, so a
+/// project that states one as a requirement already has it once it depends on
+/// Python. Emitting a dependency instead sends the solver looking for anything
+/// that ships the name, and what it finds can be an unrelated application that
+/// happens to carry it as an extension.
+pub fn shipped_with_python(name: &str) -> bool {
+    let identity = crate::package_sources::package_identity(name);
+    overlay_policy()
+        .python_provides
+        .names
+        .iter()
+        .any(|shipped| crate::package_sources::package_identity(shipped) == identity)
+}
+
 /// The Python module a PyO3 crate imports as, when it differs from the crate
 /// name.
 pub fn python_module_for_crate(crate_name: &str) -> Option<String> {
@@ -178,6 +202,20 @@ pub fn overlay_package_identity(name: &str) -> String {
         .get(&identity)
         .cloned()
         .unwrap_or(identity)
+}
+
+/// The module name an alias maps a foreign name to, or the name unchanged.
+///
+/// [`overlay_package_identity`] answers "are these the same package", which is
+/// a normalised key and not something to write into a recipe: the identity of
+/// `poetry-core` is `poetrycore`, and no module is called that.
+pub fn aliased_module_name(name: &str) -> String {
+    let identity = crate::package_sources::package_identity(name);
+    overlay_policy()
+        .aliases
+        .get(&identity)
+        .cloned()
+        .unwrap_or_else(|| name.to_string())
 }
 
 /// True when `--format pypi` must not emit a `PythonBundle` overlay.
