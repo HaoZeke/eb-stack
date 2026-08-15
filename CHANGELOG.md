@@ -81,6 +81,28 @@ All notable changes to this project are documented here.
   `examples/stacks/eessi-r-extras.toml` for locking EESSI-shipped
   scientific Python / R providers.
 
+### Fixed
+
+- Recipes are read the way a robot path actually writes them: a `#` inside
+  a multi-line `description` is no longer a comment (Doxygen names C#, and
+  the closing `"""` was going with it), f-string versions are read, `%%`
+  collapses when a recipe formats a template through `%`, `%(pyver)s` and
+  its CUDA / R / Java / Perl siblings come from the dependency rather than
+  from the recipe's own version, and `('gettext', '0.19.8.1', '', True)`
+  means the system toolchain. Skipped easyconfigs across upstream fall from
+  91 to 43 of some 20,600.
+- The system toolchain is recognised under its former name, `dummy`, which
+  1374 recipes in a 2019 tree still use.
+- A dependency that names a module rather than a bare version resolves:
+  GCC `8.2.0-2.31.1` for version 8.2.0 with versionsuffix `-2.31.1`, and
+  binutils 2.26 with versionsuffix `-GCCcore-5.4.0` for the build at
+  GCCcore-5.4.0.
+
+### Added
+
+- `tests/property` backtests the ordering properties against one commit per
+  year of easybuild-easyconfigs, materialised with `git archive`.
+
 ## 0.3.0 - 2026-07-21
 
 First public release: package plan/bump/campaign CLI, Resolvo locks, CycloneDX
