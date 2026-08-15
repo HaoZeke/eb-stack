@@ -80,14 +80,11 @@ All notable changes to this project are documented here.
 - Example stack policies `examples/stacks/eessi-python-extras.toml` and
   `examples/stacks/eessi-r-extras.toml` for locking EESSI-shipped
   scientific Python / R providers.
-
-### Added
-
 - `package plan` generates a recipe with the structure upstream writes.
   Pointed at a PyPI package at `GCCcore-14.2.0`, the emitted file is
   byte-identical in shape to upstream's own recipes: `PythonPackage` rather
   than a one-entry bundle, `sources = [SOURCE_TAR_GZ]`, a `binutils` build
-  dependency, short lists inline, one-line descriptions in single quotes,
+  dependency, short lists inline, a one-line description in one pair of quotes,
   and no empty dependency fields.
 - `--source name==version` fetches one PyPI release rather than whatever is
   newest, so regenerating an existing recipe describes the same release and
