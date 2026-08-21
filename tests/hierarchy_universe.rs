@@ -225,3 +225,65 @@ fn one_package_at_two_toolchain_levels_is_two_packages() {
     assert!(perls.contains(&"5.42.0@GCCcore".to_string()), "{perls:?}");
     assert!(lock.package("OpenMPI").is_some(), "{lock:?}");
 }
+
+/// The question the solver cannot answer, and this can.
+///
+/// resolvo sees one universe. When a candidate is dropped for a missing
+/// dependency it says so, but "missing" covers two very different situations:
+/// nothing in the tree provides it, or the tree provides it at a level this
+/// solve was not given. Those need opposite fixes, and they print identically
+/// (prefix-dev/resolvo#202, #9). Comparing the searched set against the whole
+/// parsed tree separates them without reading the solver's prose.
+#[test]
+fn a_dependency_outside_the_searched_levels_says_where_it_lives() {
+    let dir = tempfile::tempdir().unwrap();
+    tree(dir.path());
+    let all = eb_stack::parse_easyconfig_tree(dir.path())
+        .expect("fixture tree parses")
+        .candidates;
+
+    // The universe the bug produced: filtered to the policy toolchain alone, so
+    // CMake at GCCcore was never loaded.
+    let universe: Vec<_> = all
+        .iter()
+        .filter(|c| c.toolchain.name == "GCC")
+        .cloned()
+        .collect();
+    assert!(!universe.is_empty(), "fixture gave no GCC-level candidate");
+
+    let rows = eb_stack::hierarchy::unsatisfiable_deps(&universe, &all);
+    assert_eq!(rows.len(), 1, "expected exactly CMake: {rows:?}");
+    let row = &rows[0];
+    assert!(row.starts_with("CMake"), "{row}");
+    assert!(row.contains("FlexiBLAS 3.5.0"), "who needs it: {row}");
+    assert!(
+        row.contains("GCCcore-15.2.0"),
+        "where it actually lives: {row}"
+    );
+
+    let report = eb_stack::hierarchy::unsatisfiable_deps_report(&universe, &all);
+    assert!(report.contains("CMake"), "{report}");
+    assert!(
+        report.contains("SAT solver cannot tell you"),
+        "the report should say why it exists: {report}"
+    );
+}
+
+/// The other half, so a green result is not just the function returning nothing.
+#[test]
+fn a_universe_that_covers_its_own_dependencies_reports_none() {
+    let dir = tempfile::tempdir().unwrap();
+    tree(dir.path());
+    let all = eb_stack::parse_easyconfig_tree(dir.path())
+        .expect("fixture tree parses")
+        .candidates;
+
+    assert!(
+        eb_stack::hierarchy::unsatisfiable_deps(&all, &all).is_empty(),
+        "the whole tree satisfies itself"
+    );
+    assert!(
+        eb_stack::hierarchy::unsatisfiable_deps_report(&all, &all).is_empty(),
+        "an empty diagnosis must add nothing to the error"
+    );
+}

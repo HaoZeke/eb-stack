@@ -490,8 +490,15 @@ pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
         None
     };
 
-    let lock =
-        select_stack(&universe, &policy, baseline.as_ref()).map_err(|e| anyhow::anyhow!(e))?;
+    // The solver searched `universe`, the hierarchy-filtered set. `all` is the
+    // whole parsed tree, and the difference between them is what it could not
+    // see: a dependency absent from the searched levels reads the same to it as
+    // one absent from every tree. Only on the failure path, so a solve that
+    // succeeds pays nothing for it.
+    let lock = select_stack(&universe, &policy, baseline.as_ref()).map_err(|e| {
+        let hint = crate::hierarchy::unsatisfiable_deps_report(&universe.candidates, &all);
+        anyhow::anyhow!("{e}{hint}")
+    })?;
     validate_lock_deps(&lock, &universe.candidates).map_err(|e| anyhow::anyhow!(e))?;
     write_lock_sbom_and_extras(
         &lock,
