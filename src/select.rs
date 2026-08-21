@@ -12,6 +12,86 @@ use crate::hierarchy::{
 };
 use crate::resolvo_provider::solve_with_resolvo;
 use crate::version::matches_req;
+
+/// The policy's own constraints, and what each one leaves standing.
+///
+/// A solver reports that a package could not be selected. It cannot report
+/// whether the tree made that impossible or whether the policy did, because a
+/// pin reaches it as a constraint like any other and it has no way to know one
+/// was hand-written. Those need opposite fixes: widen the pin, or go author a
+/// recipe. Read as an explanation the failure is non-contrastive in Miller's
+/// sense (doi:10.1016/j.artint.2018.07.007), naming what happened and not the
+/// alternative that did not.
+///
+/// A pin admitting nothing is the usual cause and is stated first. Only on the
+/// failure path, so a solve that succeeds pays nothing for it.
+pub fn policy_constraints_report(policy: &Policy, candidates: &[Candidate]) -> String {
+    let count_named = |name: &str| candidates.iter().filter(|c| c.name == name).count();
+
+    let mut rows: Vec<(u8, String)> = Vec::new();
+    for pin in &policy.pins {
+        let total = count_named(&pin.name);
+        if total == 0 {
+            rows.push((
+                0,
+                format!(
+                    "pin {} {} names a package with no candidate at all",
+                    pin.name, pin.version_req
+                ),
+            ));
+            continue;
+        }
+        let admitted = candidates
+            .iter()
+            .filter(|c| c.name == pin.name && matches_req(&c.version, &pin.version_req))
+            .count();
+        // Rank 0 for the pins that cannot be satisfied: those are the answer
+        // when there is one, and burying them under the satisfiable ones is how
+        // a report becomes something nobody reads.
+        let rank = if admitted == 0 { 0 } else { 2 };
+        rows.push((
+            rank,
+            format!(
+                "pin {} {} admits {} of {} candidate(s)",
+                pin.name, pin.version_req, admitted, total
+            ),
+        ));
+    }
+    for name in &policy.forbid {
+        let total = count_named(name);
+        if total > 0 {
+            rows.push((1, format!("forbid {name} removes {total} candidate(s)")));
+        }
+    }
+    for req in &policy.require_upgrade {
+        rows.push((
+            1,
+            format!(
+                "require_upgrade {}{}",
+                req.name,
+                if req.relative_to_baseline {
+                    " must beat the baseline version"
+                } else {
+                    " (absolute, which construction refuses)"
+                }
+            ),
+        ));
+    }
+
+    if rows.is_empty() {
+        return String::new();
+    }
+    rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    let mut out = String::from(
+        "\n\npolicy constraints in force, which the solver cannot tell apart\nfrom what the tree makes impossible:\n",
+    );
+    for (_, row) in &rows {
+        out.push_str("  - ");
+        out.push_str(row);
+        out.push('\n');
+    }
+    out
+}
 use std::collections::HashMap;
 use thiserror::Error;
 

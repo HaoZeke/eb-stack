@@ -497,7 +497,11 @@ pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
     // succeeds pays nothing for it.
     let lock = select_stack(&universe, &policy, baseline.as_ref()).map_err(|e| {
         let hint = crate::hierarchy::unsatisfiable_deps_report(&universe.candidates, &all);
-        anyhow::anyhow!("{e}{hint}")
+        // Two different questions the solver cannot answer: what the searched
+        // levels do not provide, and which of the constraints were written by
+        // hand rather than read off the tree.
+        let constraints = crate::select::policy_constraints_report(&policy, &universe.candidates);
+        anyhow::anyhow!("{e}{hint}{constraints}")
     })?;
     validate_lock_deps(&lock, &universe.candidates).map_err(|e| anyhow::anyhow!(e))?;
     write_lock_sbom_and_extras(

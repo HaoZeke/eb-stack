@@ -287,3 +287,63 @@ fn a_universe_that_covers_its_own_dependencies_reports_none() {
         "an empty diagnosis must add nothing to the error"
     );
 }
+
+/// A pin that admits nothing and a tree that provides nothing print the same
+/// way from a solver, and need opposite fixes: widen the pin, or go author a
+/// recipe. Naming the hand-written constraints separates them.
+#[test]
+fn a_pin_that_admits_nothing_is_named_ahead_of_the_pins_that_are_fine() {
+    use eb_stack::domain::{Pin, Policy, Toolchain};
+
+    let dir = tempfile::tempdir().unwrap();
+    tree(dir.path());
+    let all = eb_stack::parse_easyconfig_tree(dir.path())
+        .expect("fixture tree parses")
+        .candidates;
+
+    let policy = Policy {
+        toolchain: Toolchain {
+            name: "GCC".into(),
+            version: "15.2.0".into(),
+        },
+        roots: vec!["FlexiBLAS".into()],
+        root_priority: None,
+        prefer_installed: false,
+        pins: vec![
+            Pin {
+                name: "CMake".into(),
+                version_req: "==9.9.9".into(),
+            },
+            Pin {
+                name: "FlexiBLAS".into(),
+                version_req: "==3.5.0".into(),
+            },
+        ],
+        forbid: vec![],
+        objective: "prefer_newer".into(),
+        criteria: Vec::new(),
+        require_upgrade: vec![],
+    };
+
+    let report = eb_stack::select::policy_constraints_report(&policy, &all);
+    assert!(!report.is_empty(), "constraints in force must be reported");
+
+    let impossible = report.find("CMake").expect("the unsatisfiable pin: {report}");
+    let satisfiable = report.find("FlexiBLAS").expect("the other pin: {report}");
+    assert!(
+        impossible < satisfiable,
+        "a pin admitting nothing is the answer and belongs first:\n{report}"
+    );
+    assert!(
+        report.contains("admits 0 of 1"),
+        "say how much room the pin leaves: {report}"
+    );
+
+    // And with no constraints at all it adds nothing, so a failure elsewhere is
+    // not padded with a section that says nothing.
+    let bare = Policy {
+        pins: vec![],
+        ..policy
+    };
+    assert!(eb_stack::select::policy_constraints_report(&bare, &all).is_empty());
+}
