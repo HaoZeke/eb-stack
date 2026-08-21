@@ -347,3 +347,81 @@ fn a_pin_that_admits_nothing_is_named_ahead_of_the_pins_that_are_fine() {
     };
     assert!(eb_stack::select::policy_constraints_report(&bare, &all).is_empty());
 }
+
+/// Identity became (name, toolchain level) in the provider and in the lock.
+/// ebstack-fqh7 names two things that read those keys and so move with it: the
+/// build list ordering and the SBOM dependency graph. Nothing asserted either,
+/// and a build list that emits one Perl for two modules is a generation that
+/// cannot be built from its own plan.
+#[test]
+fn the_build_list_and_the_sbom_carry_both_levels_separately() {
+    use std::fs;
+
+    let dir = tempfile::tempdir().unwrap();
+    two_level_tree(dir.path());
+    let policy_path = dir.path().join("policy.json");
+    fs::write(
+        &policy_path,
+        r#"{"toolchain": {"name": "GCC", "version": "15.2.0"},
+            "roots": ["OpenMPI"], "objective": "prefer_newer"}"#,
+    )
+    .unwrap();
+    let lock_out = dir.path().join("gen.lock.json");
+    let build_list = dir.path().join("build-list.txt");
+    let lock = eb_stack::solve_from_easyconfigs_with_extras(
+        &[dir.path()],
+        &policy_path,
+        None,
+        &lock_out,
+        None,
+        eb_stack::SolveExtraOut {
+            build_list_out: Some(&build_list),
+            stack_diff_out: None,
+        },
+    )
+    .expect("both Perls are installable side by side");
+
+    // The build list names a file per module, so two Perls are two lines.
+    let listing = fs::read_to_string(&build_list).unwrap();
+    assert!(
+        listing.contains("Perl-5.38.0.eb"),
+        "the bootstrap Perl is missing from the build list:\n{listing}"
+    );
+    assert!(
+        listing.contains("Perl-5.42.0-GCCcore-15.2.0.eb"),
+        "the generation Perl is missing from the build list:\n{listing}"
+    );
+
+    // And in an order that can actually be built: zlib build-depends on the
+    // SYSTEM Perl, OpenMPI on the GCCcore one and on zlib.
+    let at = |needle: &str| listing.find(needle).unwrap_or_else(|| panic!("{needle} absent:\n{listing}"));
+    assert!(
+        at("Perl-5.38.0.eb") < at("zlib-2.3.2-GCCcore-15.2.0.eb"),
+        "a build dependency has to come first:\n{listing}"
+    );
+    assert!(
+        at("Perl-5.42.0-GCCcore-15.2.0.eb") < at("OpenMPI-5.0.10-GCC-15.2.0.eb"),
+        "a build dependency has to come first:\n{listing}"
+    );
+    assert!(
+        at("zlib-2.3.2-GCCcore-15.2.0.eb") < at("OpenMPI-5.0.10-GCC-15.2.0.eb"),
+        "a runtime dependency has to come first:\n{listing}"
+    );
+
+    // The SBOM has to distinguish them too, or the graph says one component was
+    // used at two versions rather than two components existing.
+    let bom = eb_stack::lock_to_cyclonedx(&lock);
+    let doc = serde_json::to_string(&bom).unwrap();
+    assert!(doc.contains("5.38.0"), "bootstrap Perl absent from the SBOM");
+    assert!(doc.contains("5.42.0"), "generation Perl absent from the SBOM");
+    let perl_components = bom["components"]
+        .as_array()
+        .expect("components is an array")
+        .iter()
+        .filter(|c| c["name"] == "Perl")
+        .count();
+    assert_eq!(
+        perl_components, 2,
+        "two modules must be two components, got {perl_components}: {doc}"
+    );
+}

@@ -35,36 +35,62 @@ pub fn ordered_packages<'a>(
     lock: &'a StackLock,
     dep_map: &HashMap<String, Vec<String>>,
 ) -> Vec<&'a LockPackage> {
-    let by_name: BTreeMap<&str, &LockPackage> =
-        lock.packages.iter().map(|p| (p.name.as_str(), p)).collect();
-    let selected: BTreeSet<&str> = by_name.keys().copied().collect();
+    // Nodes are modules, not names. A generation legitimately carries one name
+    // at two toolchain levels, Perl at SYSTEM for the bootstrap and Perl at
+    // GCCcore for the generation, and EasyBuild installs both. Keying the sort
+    // by name alone collapsed them into one node, so the build list emitted one
+    // easyconfig for two modules and a plan could not build its own generation.
+    fn module_key(p: &LockPackage) -> String {
+        format!(
+            "{}@{}{}",
+            p.name,
+            p.toolchain.label(),
+            p.versionsuffix.clone().unwrap_or_default()
+        )
+    }
 
-    // Kahn: edge dep -> pkg means dep must be installed before pkg.
-    // in_degree[pkg] = number of co-selected deps still outstanding.
+    let by_key: BTreeMap<String, &LockPackage> = lock
+        .packages
+        .iter()
+        .map(|p| (module_key(p), p))
+        .collect();
+    let selected: BTreeSet<String> = by_key.keys().cloned().collect();
+    // dep_map speaks in names, because a recipe names a dependency without
+    // saying which level answers it. A name therefore constrains every selected
+    // module carrying it. That is conservative where a generation holds two:
+    // the dependent waits for both rather than for the one it will link. It
+    // never orders a package before something it needs, and it never drops one,
+    // which is what keying by name did.
+    let keys_for_name: BTreeMap<&str, Vec<String>> =
+        lock.packages.iter().fold(BTreeMap::new(), |mut acc, p| {
+            acc.entry(p.name.as_str()).or_default().push(module_key(p));
+            acc
+        });
+
     let mut in_degree: BTreeMap<&str, usize> = BTreeMap::new();
     let mut dependents: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for name in &selected {
-        in_degree.insert(*name, 0);
-        dependents.entry(*name).or_default();
+    for key in &selected {
+        in_degree.insert(key.as_str(), 0);
+        dependents.entry(key.as_str()).or_default();
     }
-    for name in &selected {
-        let deps = dep_map
-            .get(*name)
-            .into_iter()
-            .flatten()
-            .map(|d| d.as_str())
-            .filter(|d| selected.contains(d) && *d != *name);
+    for key in &selected {
+        let package = by_key[key];
         let mut co_deps: BTreeSet<&str> = BTreeSet::new();
-        for d in deps {
-            co_deps.insert(d);
+        for dep_name in dep_map.get(&package.name).into_iter().flatten() {
+            for dep_key in keys_for_name.get(dep_name.as_str()).into_iter().flatten() {
+                if dep_key != key && selected.contains(dep_key) {
+                    let interned = selected.get(dep_key).expect("just checked").as_str();
+                    co_deps.insert(interned);
+                }
+            }
         }
-        in_degree.insert(*name, co_deps.len());
+        let interned_key = selected.get(key).expect("iterating selected").as_str();
+        in_degree.insert(interned_key, co_deps.len());
         for d in co_deps {
-            dependents.entry(d).or_default().push(*name);
+            dependents.entry(d).or_default().push(interned_key);
         }
     }
 
-    // Stable ready queue: BTreeSet by name.
     let mut ready: BTreeSet<&str> = in_degree
         .iter()
         .filter(|(_, &deg)| deg == 0)
@@ -76,7 +102,6 @@ pub fn ordered_packages<'a>(
         ready.remove(n);
         order.push(n);
         if let Some(children) = dependents.get(n) {
-            // Process children in name order for determinism when multiple become ready.
             let mut kids: Vec<&str> = children.clone();
             kids.sort_unstable();
             for child in kids {
@@ -90,19 +115,19 @@ pub fn ordered_packages<'a>(
         }
     }
 
-    // Cycles or missing nodes: append remaining names in sorted order so we
-    // still emit every co-selected package once.
+    // Cycles or missing nodes: append the rest in sorted order so every
+    // co-selected module is still emitted exactly once.
     if order.len() < selected.len() {
-        for n in &selected {
-            if !order.contains(n) {
-                order.push(*n);
+        for key in &selected {
+            if !order.contains(&key.as_str()) {
+                order.push(key.as_str());
             }
         }
     }
 
     order
         .into_iter()
-        .filter_map(|n| by_name.get(n).copied())
+        .filter_map(|key| by_key.get(key).copied())
         .collect()
 }
 
