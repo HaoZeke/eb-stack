@@ -2711,6 +2711,7 @@ pub fn lock_from_candidates(
             engine: engine.into(),
             engine_version: env!("CARGO_PKG_VERSION").into(),
             timestamp: ts,
+            criteria: Vec::new(),
         },
     }
 }

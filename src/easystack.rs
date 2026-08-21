@@ -142,6 +142,7 @@ mod tests {
                 engine: "resolvo".into(),
                 engine_version: "0.0.0".into(),
                 timestamp: "2026-08-12T00:00:00Z".into(),
+                criteria: Vec::new(),
             },
         }
     }

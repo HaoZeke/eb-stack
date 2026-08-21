@@ -78,6 +78,7 @@ fn lock() -> StackLock {
             engine: "resolvo".into(),
             engine_version: "0.3.0".into(),
             timestamp: "2026-08-14T00:00:00Z".into(),
+            criteria: Vec::new(),
         },
     }
 }

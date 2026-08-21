@@ -53,6 +53,10 @@ pub struct EbProvider {
     locked_ranks: HashMap<String, u32>,
     /// Candidates rejected by target or build evidence, with the retained reason.
     excluded_ranks: HashMap<String, HashMap<u32, String>>,
+    /// Optimisation criteria in precedence order, from the policy. Held here so
+    /// the order `sort_candidates` applies and the order the lock records come
+    /// from one place and cannot drift apart.
+    criteria: Vec<crate::domain::Criterion>,
     interned: Mutex<HashMap<(NameId, u32), SolvableId>>,
 }
 
@@ -564,6 +568,7 @@ impl EbProvider {
             favored_ranks,
             locked_ranks,
             excluded_ranks,
+            criteria: policy.criteria(),
             interned: Mutex::new(HashMap::new()),
         })
     }
@@ -801,12 +806,32 @@ impl DependencyProvider for EbProvider {
                 let package_name = self.pool.resolve_package_name(name).to_string();
                 self.favored_ranks.get(&package_name).copied()
             });
+        // The criteria are applied in order and the first that decides wins,
+        // which is what makes them lexicographic rather than a weighting. The
+        // list comes from the policy and is recorded in the lock, so the order
+        // a reader is told about is the order that ran.
+        //
+        // -notuptodate always breaks the final tie: with no criterion left, two
+        // candidates would compare equal and the sort would keep whatever order
+        // the pool happened to hold, which is not a decision anyone stated.
         solvables.sort_by(|a, b| {
             let ra = self.pool.resolve_solvable(*a).record;
             let rb = self.pool.resolve_solvable(*b).record;
-            let fa = favored == Some(ra);
-            let fb = favored == Some(rb);
-            fb.cmp(&fa).then_with(|| rb.cmp(&ra))
+            let mut ordering = std::cmp::Ordering::Equal;
+            for criterion in &self.criteria {
+                ordering = match criterion {
+                    crate::domain::Criterion::MinimiseChanged => {
+                        let fa = favored == Some(ra);
+                        let fb = favored == Some(rb);
+                        fb.cmp(&fa)
+                    }
+                    crate::domain::Criterion::MinimiseNotUptodate => rb.cmp(&ra),
+                };
+                if ordering != std::cmp::Ordering::Equal {
+                    break;
+                }
+            }
+            ordering.then_with(|| rb.cmp(&ra))
         });
     }
 
@@ -1353,6 +1378,7 @@ mod tests {
             forbid: vec![],
             objective: "prefer_newer".into(),
             require_upgrade,
+        criteria: Vec::new(),
         }
     }
 
@@ -1376,6 +1402,7 @@ mod tests {
                 engine: "test".into(),
                 engine_version: "test".into(),
                 timestamp: "STABLE".into(),
+                criteria: Vec::new(),
             },
         }
     }

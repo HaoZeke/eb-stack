@@ -339,6 +339,7 @@ mod tests {
                 engine: "test".into(),
                 engine_version: "test".into(),
                 timestamp: "STABLE".into(),
+                criteria: Vec::new(),
             },
         }
     }

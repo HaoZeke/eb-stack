@@ -276,7 +276,7 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
     ));
 
     let mut metadata = Metadata::new().unwrap_or_default();
-    // Prefer lock solver timestamp when parseable as ISO-8601.
+    // Prefer lock solver timestamp when parseable as ISO 8601.
     if let Ok(dt) = DateTime::try_from(lock.solver.timestamp.clone()) {
         metadata.timestamp = Some(dt);
     }
@@ -791,6 +791,7 @@ mod tests {
             forbid: vec![],
             objective: "prefer_newer".into(),
             require_upgrade: vec![],
+            criteria: Vec::new(),
         };
         let lock = select_stack(&universe, &policy, None).unwrap();
         let runtime = dep_map_from_universe(&lock, &universe);
@@ -872,6 +873,7 @@ mod artifact_facts_tests {
                 engine: "resolvo".into(),
                 engine_version: "0.0.0".into(),
                 timestamp: "2026-08-12T00:00:00Z".into(),
+                criteria: Vec::new(),
             },
         }
     }
@@ -1034,6 +1036,7 @@ mod formulation_tests {
                 engine: "resolvo".into(),
                 engine_version: "0".into(),
                 timestamp: "2026-08-14T00:00:00Z".into(),
+                criteria: Vec::new(),
             },
         }
     }
@@ -1150,6 +1153,7 @@ mod build_environment_tests {
                 engine: "resolvo".into(),
                 engine_version: "0".into(),
                 timestamp: "2026-08-14T00:00:00Z".into(),
+                criteria: Vec::new(),
             },
         };
         let env = BTreeMap::from([
@@ -1206,6 +1210,7 @@ mod build_environment_tests {
                 engine: "resolvo".into(),
                 engine_version: "0".into(),
                 timestamp: "2026-08-14T00:00:00Z".into(),
+                criteria: Vec::new(),
             },
         };
         let json = lock_to_cyclonedx_with_facts(&lock, SbomFacts::default());

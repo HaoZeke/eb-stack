@@ -113,6 +113,7 @@ fn policy() -> Policy {
         forbid: Vec::new(),
         objective: "prefer_newer".into(),
         require_upgrade: Vec::new(),
+    criteria: Vec::new(),
     }
 }
 

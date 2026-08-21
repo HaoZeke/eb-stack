@@ -71,6 +71,11 @@ pub fn select_stack(
             engine: "resolvo_cdcl_sat".into(),
             engine_version: format!("resolvo+eb_stack-{}", env!("CARGO_PKG_VERSION")),
             timestamp: ts,
+            criteria: policy
+                .criteria()
+                .into_iter()
+                .map(|c| c.as_str().to_string())
+                .collect(),
         },
     })
 }
@@ -195,6 +200,7 @@ pub fn resolvo_resolve_dep_versions(
         forbid: Vec::new(),
         objective: "prefer_newer".into(),
         require_upgrade: Vec::new(),
+        criteria: Vec::new(),
     };
 
     let lock = select_stack(&universe, &policy, None).map_err(|e| e.to_string())?;
@@ -390,6 +396,7 @@ mod tests {
             forbid: vec![],
             objective: "prefer_newer".into(),
             require_upgrade: vec![],
+            criteria: Vec::new(),
         };
         let lock = select_stack(&universe, &policy, None).expect("solve via builddependencies");
         assert!(
@@ -440,6 +447,7 @@ mod tests {
             forbid: vec![],
             objective: "prefer_newer".into(),
             require_upgrade: vec![],
+            criteria: Vec::new(),
         };
         let err = select_stack(&universe, &policy, None).unwrap_err();
         let msg = err.to_string();
@@ -479,6 +487,7 @@ mod tests {
             forbid: vec![],
             objective: "prefer_newer".into(),
             require_upgrade: vec![],
+            criteria: Vec::new(),
         };
         let lock = select_stack(&universe, &policy, None).expect("BuildDepRoot solve");
         assert!(
@@ -698,6 +707,7 @@ mod prefer_installed_tests {
                 engine: "eb_parse".into(),
                 engine_version: "0".into(),
                 timestamp: "2026-08-12T00:00:00Z".into(),
+                criteria: Vec::new(),
             },
         };
         (universe, installed)
@@ -715,6 +725,7 @@ mod prefer_installed_tests {
             pins: Vec::new(),
             forbid: Vec::new(),
             objective: "prefer_newer".into(),
+            criteria: Vec::new(),
             require_upgrade: Vec::new(),
         }
     }
