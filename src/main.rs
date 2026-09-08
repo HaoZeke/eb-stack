@@ -192,6 +192,24 @@ struct PackageBumpArgs {
 
 #[derive(Subcommand, Debug)]
 enum RecipeCommand {
+    /// Print the easyblock class name EasyBuild derives for a software name.
+    ///
+    /// An easyconfig that names no `easyblock` is claiming a software-specific
+    /// one exists, because there is no default: EasyBuild derives this name,
+    /// tries to import it, and stops when it cannot. So this answers whether a
+    /// recipe is relying on something that has to be there.
+    Easyblock {
+        /// Software name, spelled as the easyconfig's `name`.
+        ///
+        /// Hyphen-leading values are allowed: a software name is not a flag,
+        /// and the encoding exists precisely because names carry punctuation.
+        #[arg(required_unless_present = "charmap", allow_hyphen_values = true)]
+        name: Option<String>,
+        /// Emit the encoding table as JSON instead, for consumers that apply
+        /// the substitution themselves rather than shelling out per name.
+        #[arg(long)]
+        charmap: bool,
+    },
     /// Resolve a recipe and verify package metadata plus robot dependencies.
     Check {
         #[arg(long)]
@@ -586,6 +604,30 @@ fn run_repro(command: ReproCommand) -> Result<()> {
 
 fn run_recipe(command: RecipeCommand) -> Result<()> {
     match command {
+        RecipeCommand::Easyblock { name, charmap } => {
+            use eb_stack::eb_easyblock::{
+                encode_class_name, EASYBLOCK_CLASS_PREFIX, STRING_ENCODING_CHARMAP,
+            };
+            if charmap {
+                let entries: Vec<_> = STRING_ENCODING_CHARMAP
+                    .iter()
+                    .map(|(from, to)| {
+                        serde_json::json!({ "from": from.to_string(), "to": to })
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "prefix": EASYBLOCK_CLASS_PREFIX,
+                        "charmap": entries,
+                    }))?
+                );
+            } else {
+                let name = name.context("a software name, or --charmap")?;
+                println!("{}", encode_class_name(&name));
+            }
+            Ok(())
+        }
         RecipeCommand::Check {
             recipe,
             easyconfigs,
