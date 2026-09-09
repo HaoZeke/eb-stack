@@ -210,6 +210,33 @@ enum RecipeCommand {
         #[arg(long)]
         charmap: bool,
     },
+    /// Emit the template constants and the derived-key rules as JSON.
+    ///
+    /// A consumer that cannot run the parser still resolves `%(version)s` and
+    /// friends by applying these rules, which is why the rule vocabulary is
+    /// closed. Without a name and version this prints the spec; with them it
+    /// prints the resolved values, which is what a cross-check compares
+    /// against.
+    Templates {
+        /// Software name, as the easyconfig spells `name`.
+        #[arg(long, allow_hyphen_values = true)]
+        name: Option<String>,
+        /// Version, as the easyconfig spells `version`.
+        #[arg(long)]
+        version: Option<String>,
+        /// Emit the spec rather than resolved values.
+        #[arg(long)]
+        export: bool,
+    },
+    /// Emit the known toolchain hierarchies as JSON, parent and members.
+    ///
+    /// `members` keeps the framework's order, most minimal subtoolchain first,
+    /// so a consumer reads it rather than sorting it.
+    Hierarchy {
+        /// Emit the whole table.
+        #[arg(long)]
+        export: bool,
+    },
     /// Resolve a recipe and verify package metadata plus robot dependencies.
     Check {
         #[arg(long)]
@@ -626,6 +653,93 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
                 let name = name.context("a software name, or --charmap")?;
                 println!("{}", encode_class_name(&name));
             }
+            Ok(())
+        }
+        RecipeCommand::Templates {
+            name,
+            version,
+            export,
+        } => {
+            use eb_stack::eb_engine_export::{template_spec, TEMPLATE_RULES};
+            if export {
+                println!("{}", serde_json::to_string_pretty(&template_spec())?);
+                return Ok(());
+            }
+            let name = name.context("--name, or --export")?;
+            let version = version.context("--version, or --export")?;
+            // Resolved here by the same rules the spec publishes, so a
+            // cross-check comparing a consumer against this output is
+            // comparing against the rules and not against a second list.
+            let parts: Vec<&str> = version.split('.').collect();
+            let mut out = serde_json::Map::new();
+            for (key, rule) in TEMPLATE_RULES {
+                let mut only_if: Option<&str> = None;
+                let mut produced: Option<String> = None;
+                for clause in rule.split(';') {
+                    let (head, arg) = match clause.split_once(':') {
+                        Some((h, a)) => (h, Some(a)),
+                        None => (clause, None),
+                    };
+                    match head {
+                        "only_if_name" => only_if = arg,
+                        "field" => {
+                            produced = match arg {
+                                Some("name") => Some(name.clone()),
+                                Some("version") => Some(version.clone()),
+                                Some("versionsuffix") => Some(String::new()),
+                                Some("toolchain_name") => Some("system".to_string()),
+                                Some("toolchain_version") => Some(String::new()),
+                                _ => None,
+                            }
+                        }
+                        "lower" => produced = Some(name.to_ascii_lowercase()),
+                        "first_char" => produced = name.chars().next().map(|c| c.to_string()),
+                        "first_char_lower" => {
+                            produced = name
+                                .chars()
+                                .next()
+                                .map(|c| c.to_ascii_lowercase().to_string())
+                        }
+                        "part" => {
+                            let i: usize = arg.unwrap_or("0").parse().unwrap_or(0);
+                            produced = parts
+                                .get(i)
+                                .filter(|p| !p.is_empty())
+                                .map(|p| (*p).to_string());
+                        }
+                        "join" => {
+                            let span = arg.unwrap_or("0-0");
+                            let (a, b) = span.split_once('-').unwrap_or(("0", "0"));
+                            let a: usize = a.parse().unwrap_or(0);
+                            let b: usize = b.parse().unwrap_or(0);
+                            produced = if parts.len() > b {
+                                Some(parts[a..=b].join("."))
+                            } else {
+                                None
+                            };
+                        }
+                        "host_arch" => produced = Some(std::env::consts::ARCH.to_string()),
+                        _ => {}
+                    }
+                }
+                if let Some(gate) = only_if {
+                    if name != gate {
+                        continue;
+                    }
+                }
+                if let Some(value) = produced {
+                    out.insert((*key).to_string(), serde_json::Value::String(value));
+                }
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::Value::Object(out))?
+            );
+            Ok(())
+        }
+        RecipeCommand::Hierarchy { export: _ } => {
+            use eb_stack::eb_engine_export::hierarchy_table;
+            println!("{}", serde_json::to_string_pretty(&hierarchy_table())?);
             Ok(())
         }
         RecipeCommand::Check {

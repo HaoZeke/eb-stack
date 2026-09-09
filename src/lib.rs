@@ -9,6 +9,7 @@ pub mod cran;
 pub mod domain;
 pub mod easystack;
 pub mod eb_easyblock;
+pub mod eb_engine_export;
 mod eb_emit;
 pub mod eb_maintainer;
 pub mod eb_parse;
