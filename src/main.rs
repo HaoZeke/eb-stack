@@ -294,7 +294,6 @@ enum StackCommand {
         #[arg(long, default_value = "stack.cdx.json")]
         out: PathBuf,
     },
-<<<<<<< HEAD
     /// Order the builds a set of roots needs, as a graph rather than a stack.
     ///
     /// Unlike `solve`, this does not pick one version per package: it takes
