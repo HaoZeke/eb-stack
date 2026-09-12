@@ -26,8 +26,12 @@ config_options = [
 
 # Tag 1.3.2. The recursive git_config archive is a different artifact class
 # than a GitHub tag tarball; do not copy a Spack or conda-forge checksum.
+# PR 26851 follow-up: binary name is derived from these, not a literal dhsw path.
 [build.easyconfig_parameters]
 local_commit_id = "20334d02af9c539a9cf7cc4cd03c3e2622104aea"
+local_host_arch = "hsw"
+local_order = 6
+local_equations = "elastic"
 
 [[profiles]]
 name = "default"

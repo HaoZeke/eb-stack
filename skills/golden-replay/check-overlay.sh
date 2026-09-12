@@ -58,7 +58,11 @@ if [[ -f $seissol ]]; then
   need "$seissol" "Eigen"
   need "$seissol" "PSpaMM"
   need "$seissol" "numactl"
-  need "$seissol" "HOST_ARCH=hsw"
+  if ! rg -q --fixed-strings "local_host_arch = 'hsw'" "$seissol" \
+    && ! rg -q --fixed-strings "HOST_ARCH=hsw" "$seissol"; then
+    printf 'missing in %s: local_host_arch or HOST_ARCH=hsw\n' "$seissol" >&2
+    fail=1
+  fi
 fi
 
 exit "$fail"
