@@ -3,10 +3,10 @@ name: eb-stack-golden-replay
 description: Regenerate the SeisSol 1.3.2 foss-2025a overlay unattended. Use after the package-bump packset pin, or to check that a tool-repair still emits the overlay.
 ---
 
-# Replay the SeisSol golden
+# Compose the SeisSol overlay
 
 Do not hand-edit a `.eb` file. Fix the emitter or the package TOML instead.
-See `skills/tool-repair/SKILL.md`.
+See `skills/tool-repair/SKILL.md`. Do not write a helper script.
 
 First commands, before any `package bump`:
 
@@ -22,7 +22,7 @@ Then `eb-stack package bump` the parent. Each `companion=` line is a full
 `eval` `re_run=`. Stop only when the parent exits 0. Do not write a
 helper script and stop.
 
-## What the script emits
+## What compose must emit
 
 Site generation is `foss-2025a`. ASAGI stays at 1.0. easi becomes 1.7.0.
 PSpaMM becomes 0.3.1 on `gfbf-2025a`. SeisSol becomes 1.3.2.

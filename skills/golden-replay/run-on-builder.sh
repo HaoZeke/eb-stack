@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Run argv as the current checkout's eb-stack on the configured builder.
-# With no argv, run replay.sh. Paths in argv are evaluated on the builder.
+# Paths in argv are evaluated on the builder. There is no default script.
 set -euo pipefail
 
-here=$(cd "$(dirname "$0")" && pwd)
 if [[ $# -eq 0 ]]; then
-  exec "$here/replay.sh"
+  printf 'usage: run-on-builder.sh package bump|plan|inspect ...\n' >&2
+  exit 2
 fi
 
 builder=${EB_STACK_BUILDER:-rg.terra}
