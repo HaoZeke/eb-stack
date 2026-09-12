@@ -36,6 +36,10 @@ pub struct PackageConfigLayer {
     /// Profile definitions, matched to existing profiles by name.
     #[serde(default)]
     pub profiles: Vec<ProfilePatch>,
+    /// SHA-256 digests for source artifacts, in source order. A version bump
+    /// without `--source-checksum` takes the first entry as the inject digest.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_checksums: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -338,6 +342,11 @@ impl PackageConfigLayer {
         for profile in &self.profiles {
             validate_easyconfig_parameter_names(&profile.easyconfig_parameters)?;
         }
+        for checksum in &self.source_checksums {
+            if checksum.len() != 64 || !checksum.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(PackageConfigError::InvalidSourceChecksum(checksum.clone()));
+            }
+        }
         if let Some(dependencies) = &self.dependencies {
             for requirement in &dependencies.requirements {
                 if requirement.name.trim().is_empty() {
@@ -456,6 +465,16 @@ pub fn apply_package_layers(
             }
             for (requirement_index, requirement) in dependencies.requirements.iter().enumerate() {
                 ensure_dependency_requirement(plan, requirement, layer_index, requirement_index);
+            }
+        }
+        if let Some(checksum) = layer.source_checksums.first() {
+            if let Some(source) = plan.sources.first_mut() {
+                source.sha256 = Some(checksum.clone());
+            } else {
+                plan.sources.push(crate::package::SourceArtifact {
+                    sha256: Some(checksum.clone()),
+                    ..crate::package::SourceArtifact::default()
+                });
             }
         }
         for patch in &layer.profiles {
@@ -693,6 +712,9 @@ pub enum PackageConfigError {
     /// basename only.
     #[error("patch filename must not contain a directory: {0:?}")]
     InvalidPatchFilename(String),
+    /// A `source_checksums` entry is not a SHA-256 hex digest.
+    #[error("source checksum must be exactly 64 hexadecimal characters, got {0:?}")]
+    InvalidSourceChecksum(String),
     /// A profile inherits from one that does not exist in the plan.
     #[error("profile {profile} inherits missing profile {parent}")]
     MissingParent {

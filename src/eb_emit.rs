@@ -2362,6 +2362,7 @@ checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']
             version: Some("1.3.2".into()),
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
+            hierarchy: Vec::new(),
             source_checksum: None,
         };
         let r = emit_next_generation(src, &params).expect("emit");

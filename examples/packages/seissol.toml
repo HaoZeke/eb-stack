@@ -1,5 +1,12 @@
 schema_version = 1
 
+# Recursive git_config archive for tag 1.3.2 / commit 20334d02 (PR 26851).
+# Different artifact class than a GitHub tag tarball; do not copy a Spack
+# or conda-forge checksum. package bump applies this inject digest.
+source_checksums = [
+  "a0dd4f33d7d72c4a5eb6f01f0a96bc410af20c95a496e5cf1532ee8a20561612",
+]
+
 [package]
 name = "SeisSol"
 version = "1.3.2"
@@ -24,8 +31,6 @@ config_options = [
   "-DGRAPH_PARTITIONING_LIBS=parmetis",
 ]
 
-# Tag 1.3.2. The recursive git_config archive is a different artifact class
-# than a GitHub tag tarball; do not copy a Spack or conda-forge checksum.
 # PR 26851 follow-up: binary name is derived from these, not a literal dhsw path.
 [build.easyconfig_parameters]
 local_commit_id = "20334d02af9c539a9cf7cc4cd03c3e2622104aea"

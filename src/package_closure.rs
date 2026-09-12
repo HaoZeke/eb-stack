@@ -1119,6 +1119,7 @@ fn bump_request_from_provider(
         stack_policy: provider_stack_policy(provider, default_stack_policy)?,
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
 }
 

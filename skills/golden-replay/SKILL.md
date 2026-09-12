@@ -8,27 +8,19 @@ description: Regenerate the SeisSol 1.3.2 foss-2025a overlay unattended. Use aft
 Do not hand-edit a `.eb` file. Fix the emitter or the package TOML instead.
 See `skills/tool-repair/SKILL.md`.
 
-Pin the packset on the laptop. Then run the one-shot script.
+First commands, before any `package bump`:
 
 ```sh
 PACKSET_URL=http://127.0.0.1:8761
 PACKSET_WORKSPACE=git:github.com/HaoZeke/eb-stack
 packset pin
-skills/golden-replay/replay.sh
+ljos search bump
 ```
 
-`packset pin` must say `set=package-bump`. The next command is `replay.sh`.
-Do not locate the binary. Do not write a plan.
-
-`replay.sh` calls `run-on-builder.sh` for each bump and plan. Then it
-runs `check-overlay.sh`. Exit 0 is the gate.
-
-```sh
-skills/golden-replay/run-on-builder.sh
-```
-
-That wrapper with no argv runs `replay.sh`. Pass an out-dir only when
-the default `work/seissol-1.3.2` must change.
+Then `eb-stack package bump` the parent. Each `companion=` line is a full
+`eb-stack package …` command: `eval` the text after `companion=`. Then
+`eval` `re_run=`. Stop only when the parent exits 0. Do not write a
+helper script and stop.
 
 ## What the script emits
 

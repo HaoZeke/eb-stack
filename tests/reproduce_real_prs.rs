@@ -71,6 +71,7 @@ fn canonical_bump(
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .unwrap_or_else(|error| panic!("canonical bump failed for {}: {error}", source.display()));
     bundle.easyconfigs[0].text.clone()

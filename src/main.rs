@@ -170,8 +170,9 @@ struct PackagePlanArgs {
 struct PackageBumpArgs {
     #[arg(long)]
     source: PathBuf,
+    /// Toolchain family. Omit to keep the source recipe's name (`gfbf`, `foss`).
     #[arg(long)]
-    toolchain_name: String,
+    toolchain_name: Option<String>,
     #[arg(long)]
     toolchain_version: String,
     #[arg(long)]
@@ -192,6 +193,10 @@ struct PackageBumpArgs {
     strict_patches: bool,
     #[arg(long = "package-config")]
     package_configs: Vec<PathBuf>,
+    /// Spack `package.py` or conda-forge recipe. Inspected for deps the
+    /// source `.eb` never declared.
+    #[arg(long = "foreign")]
+    foreign_sources: Vec<PathBuf>,
     /// Name stamped into `# updated by: NAME (eb-stack VERSION)`.
     /// Defaults to `EB_STACK_CONTRIBUTOR`, then `git config user.name`.
     #[arg(long)]
@@ -544,7 +549,24 @@ fn apply_contributor(name: Option<&str>) {
 
 fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
     apply_contributor(args.contributor.as_deref());
-    let toolchain = toolchain(&args.toolchain_name, &args.toolchain_version);
+    let source_recipe = resolve_easyconfig_file(&args.source).map_err(anyhow::Error::msg)?;
+    let toolchain_name = args
+        .toolchain_name
+        .clone()
+        .unwrap_or_else(|| source_recipe.toolchain.name.clone());
+    if args.toolchain_name.as_deref().is_some_and(|name| {
+        !name.eq_ignore_ascii_case(&source_recipe.toolchain.name)
+    }) {
+        println!(
+            "warning=--toolchain-name {toolchain_name} differs from source {}",
+            source_recipe.toolchain.name
+        );
+    }
+    let toolchain = toolchain(&toolchain_name, &args.toolchain_version);
+    println!(
+        "toolchain={}-{}",
+        toolchain.name, toolchain.version
+    );
     let stack_policy = if let Some(path) = args.stack_policy.as_deref() {
         load_stack_policy(path)?
     } else {
@@ -558,7 +580,6 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
     let out_dir = args.out_dir.clone();
     let easyconfigs = args.easyconfigs.clone();
     let package_configs = args.package_configs.clone();
-    let toolchain_name = args.toolchain_name.clone();
     let toolchain_version = args.toolchain_version.clone();
     let version = args.version.clone();
     let source_checksum = args.source_checksum.clone();
@@ -573,6 +594,7 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
         stack_policy,
         strict_patches: args.strict_patches,
         package_layers: load_package_layers(&args.package_configs)?,
+        foreign_sources: args.foreign_sources,
     })?;
     let written = write_package_bundle(&bundle, &args.out_dir)?;
     println!("manifest={}", written.manifest.display());
@@ -583,10 +605,7 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
     for path in written.easyconfigs {
         println!("easyconfig={}", path.display());
     }
-    println!(
-        "generation_target={}-{}",
-        args.toolchain_name, args.toolchain_version
-    );
+    println!("generation_target={toolchain_name}-{toolchain_version}");
     let mut blocking = false;
     for residual in &bundle.plan.residuals {
         println!("residual={} {}", residual.category, residual.summary);
@@ -607,51 +626,20 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
             let name = words.next().unwrap_or_default();
             let req = words.next().unwrap_or_default();
             let pin = req.trim_start_matches('=').trim_start_matches('=');
-            if let Some(source) = eb_stack::find_named_easyconfig(&easyconfigs, name) {
-                let mut line = format!(
-                    "companion={name} action=bump --source {} --toolchain-name {toolchain_name} --toolchain-version {toolchain_version}",
-                    source.display()
-                );
-                if !pin.is_empty() && pin.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-                    line.push_str(&format!(" --version {pin}"));
-                }
-                line.push_str(&format!(
-                    " --easyconfigs {robot} --out-dir {}",
-                    out_dir.display()
-                ));
-                println!("{line}");
-            } else if let Some(config) =
-                eb_stack::find_sibling_package_config(&package_configs, name)
-            {
-                let mut line = format!(
-                    "companion={name} action=plan --package-config {}",
-                    config.display()
-                );
-                if let Some(foreign) = eb_stack::find_foreign_package_py(&easyconfigs, name) {
-                    line.push_str(&format!(" --source {}", foreign.display()));
-                }
-                line.push_str(&format!(
-                    " --toolchain-name {toolchain_name} --toolchain-version {toolchain_version}"
-                ));
-                if let Some(policy) = package_configs.first().and_then(|config| {
-                    config.parent().map(|dir| {
-                        dir.join("..")
-                            .join("stacks")
-                            .join(format!("{toolchain_name}-{toolchain_version}.toml"))
-                    })
-                }) {
-                    if policy.is_file() {
-                        line.push_str(&format!(" --stack-policy {}", policy.display()));
-                    }
-                }
-                line.push_str(&format!(
-                    " --easyconfigs {robot} --out-dir {}",
-                    out_dir.display()
-                ));
-                println!("{line}");
-            } else {
-                println!("companion={name} action=unknown");
-            }
+            let pin = if pin.is_empty() { None } else { Some(pin) };
+            println!(
+                "companion={}",
+                eb_stack::companion_argv(
+                    name,
+                    pin,
+                    &easyconfigs,
+                    &package_configs,
+                    &toolchain_name,
+                    &toolchain_version,
+                    &robot,
+                    &out_dir,
+                )
+            );
         }
         print!("re_run=eb-stack package bump --source {} --toolchain-name {toolchain_name} --toolchain-version {toolchain_version}", source.display());
         if let Some(ver) = &version {
@@ -668,7 +656,7 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
         }
         println!(" --out-dir {}", out_dir.display());
         println!("done_when=exit 0");
-        println!("next=run each companion= line, then the re_run= line");
+        println!("next=eval each companion= line as a shell command, then eval re_run=");
         anyhow::bail!(
             "unresolved on this generation; run each companion= line, then re_run="
         );

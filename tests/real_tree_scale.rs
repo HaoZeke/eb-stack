@@ -73,6 +73,7 @@ fn canonical_bump(
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
 }
 

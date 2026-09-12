@@ -1,5 +1,6 @@
 use eb_stack::package::{
-    PackageOrigin, StackPin, StackPinMode, StackPolicy, STACK_POLICY_SCHEMA_VERSION,
+    PackageOrigin, ResidualSeverity, StackPin, StackPinMode, StackPolicy,
+    STACK_POLICY_SCHEMA_VERSION,
 };
 use eb_stack::package_config::PackageConfigLayer;
 use eb_stack::{
@@ -36,6 +37,7 @@ fn easybuild_bump_produces_sbom_resolvo_lock_and_recipe() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("canonical bump");
     assert_eq!(bundle.plan.origin, PackageOrigin::EasyBuild);
@@ -110,6 +112,7 @@ fn easybuild_bump_does_not_select_newer_system_candidate_for_implicit_dependency
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("canonical bump");
     let dependency = bundle.locks[0]
@@ -177,6 +180,7 @@ fn easybuild_bump_retargets_explicit_dependency_toolchain_family() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("canonical bump");
     let dependency = bundle.locks[0]
@@ -252,6 +256,7 @@ fn easybuild_bump_makes_cross_generation_stack_selection_explicit() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("canonical bump");
     assert!(
@@ -314,6 +319,7 @@ fn version_bump_adopts_the_same_version_siblings_patch_block() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("bump with sibling evidence");
 
@@ -409,6 +415,7 @@ fn strict_patches_fails_on_a_version_pinned_patch_without_sibling_evidence() {
         },
         strict_patches: true,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     };
     let error = plan_package_bump(&request).expect_err("undecided patch must fail strict mode");
     assert!(
@@ -470,6 +477,7 @@ fn easybuild_bump_onto_an_older_generation_drops_the_source_generation_pins() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("retarget onto the older generation");
     let dependency = bundle.locks[0]
@@ -534,6 +542,7 @@ fn easybuild_bump_within_one_generation_keeps_the_dependency_floor() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("same generation bump");
     let dependency = bundle.locks[0]
@@ -590,6 +599,7 @@ fn version_bump_drops_a_direct_dep_with_no_candidate() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("version bump with a vanished dep");
     let text = &bundle.easyconfigs[0].text;
@@ -606,9 +616,10 @@ fn version_bump_drops_a_direct_dep_with_no_candidate() {
             .plan
             .residuals
             .iter()
-            .any(|residual| residual.category == "version-bump-dropped-dep"
+            .any(|residual| residual.category == "unresolved-generation-dep"
+                && residual.severity == ResidualSeverity::Blocking
                 && residual.summary.contains("VanishedLib")),
-        "missing dropped-dep residual: {:?}",
+        "missing unresolved-generation-dep residual: {:?}",
         bundle.plan.residuals
     );
 }
@@ -665,6 +676,7 @@ fn package_config_exclude_drops_dep_on_toolchain_only_bump() {
         },
         strict_patches: false,
         package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+        foreign_sources: Vec::new(),
     })
     .expect("toolchain bump with excluded dep");
     let text = &bundle.easyconfigs[0].text;
@@ -733,6 +745,7 @@ fn package_config_upserts_modulename_and_commit_on_version_bump() {
         },
         strict_patches: false,
         package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+        foreign_sources: Vec::new(),
     })
     .expect("version bump with package extras");
     let text = &bundle.easyconfigs[0].text;
@@ -747,6 +760,156 @@ fn package_config_upserts_modulename_and_commit_on_version_bump() {
     assert!(
         text.contains("checksums = ['']") || text.contains("checksums = [\"\"]"),
         "stale checksum must be cleared:\n{text}"
+    );
+}
+
+#[test]
+fn version_bump_applies_package_config_source_checksum() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("SynthPy-0.1-foss-2023a.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'PythonPackage'\nname = 'SynthPy'\nversion = '0.1'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic python'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['synthpy-0.1.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [\n    ('Python', '3.11.3'),\n]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    fs::write(
+        robot.join("Python-3.13.1-GCCcore-14.2.0.eb"),
+        "easyblock = 'Python'\nname = 'Python'\nversion = '3.13.1'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Python'\n\
+         toolchain = {'name': 'GCCcore', 'version': '14.2.0'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'lang'\n",
+    )
+    .expect("python candidate");
+    let digest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let config_path = temp.path().join("synthpy.toml");
+    fs::write(
+        &config_path,
+        format!("schema_version = 1\nsource_checksums = [\"{digest}\"]\n"),
+    )
+    .expect("package config");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2025a".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: Some("0.3.1".into()),
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+        foreign_sources: Vec::new(),
+    })
+    .expect("version bump with inject digest");
+    let text = &bundle.easyconfigs[0].text;
+    assert!(
+        text.contains(&format!("checksums = ['{digest}']"))
+            || text.contains(&format!("checksums = [\"{digest}\"]")),
+        "package-config inject digest missing:\n{text}"
+    );
+}
+
+#[test]
+fn bump_inspects_a_spack_recipe_for_deps_the_easyconfig_never_declared() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Gromacsish-1.0-foss-2023a.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'CMakeMake'\nname = 'Gromacsish'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['gromacsish-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [\n    ('Python', '3.11.3'),\n]\n\
+         moduleclass = 'chem'\n",
+    )
+    .expect("source recipe");
+    fs::write(
+        robot.join("Python-3.13.1-GCCcore-14.2.0.eb"),
+        "easyblock = 'Python'\nname = 'Python'\nversion = '3.13.1'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Python'\n\
+         toolchain = {'name': 'GCCcore', 'version': '14.2.0'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'lang'\n",
+    )
+    .expect("python candidate");
+    fs::write(
+        robot.join("pybind11-2.12.0-GCCcore-14.2.0.eb"),
+        "easyblock = 'PythonPackage'\nname = 'pybind11'\nversion = '2.12.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'pybind11'\n\
+         toolchain = {'name': 'GCCcore', 'version': '14.2.0'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'lib'\n",
+    )
+    .expect("pybind11 candidate");
+    let foreign = temp.path().join("package.py");
+    fs::write(
+        &foreign,
+        "from spack.package import *\n\n\
+         class Gromacsish(CMakePackage):\n\
+         \thomepage = 'https://example.invalid/'\n\
+         \turl = 'https://example.invalid/gromacsish-1.0.tar.gz'\n\
+         \tversion('1.0', sha256='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')\n\
+         \tdepends_on('python')\n\
+         \tdepends_on('py-pybind11')\n",
+    )
+    .expect("spack recipe");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2025a".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: None,
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: Vec::new(),
+        foreign_sources: vec![foreign],
+    })
+    .expect("bump with package inspect");
+    let text = &bundle.easyconfigs[0].text;
+    assert!(
+        text.contains("('pybind11'"),
+        "inspect of the Spack recipe must add pybind11:\n{text}"
+    );
+    assert!(
+        bundle
+            .plan
+            .residuals
+            .iter()
+            .any(|residual| residual.category == "foreign-inspect-added-dep"
+                && residual.summary.contains("pybind11")),
+        "missing inspect residual: {:?}",
+        bundle.plan.residuals
     );
 }
 
@@ -792,6 +955,7 @@ fn toolchain_only_bump_copies_a_sibling_patch_file() {
         },
         strict_patches: false,
         package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
     })
     .expect("toolchain bump");
     let out = temp.path().join("out");
@@ -861,6 +1025,7 @@ fn package_config_merge_keeps_the_source_patch_file() {
         },
         strict_patches: false,
         package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+        foreign_sources: Vec::new(),
     })
     .expect("toolchain bump with merged patch");
     let out = temp.path().join("out");

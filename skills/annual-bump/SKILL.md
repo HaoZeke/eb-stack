@@ -5,6 +5,23 @@ description: Retarget an existing EasyBuild easyconfig to a new toolchain or app
 
 # Bump an EasyBuild package
 
+First commands, before any `package bump`:
+
+```sh
+PACKSET_URL=http://127.0.0.1:8761
+PACKSET_WORKSPACE=git:github.com/HaoZeke/eb-stack
+packset pin
+ljos search bump
+```
+
+The first `eb-stack package bump` is the parent. Copy its flags.
+Exit 1 with `residual=` means continue. Each `companion=` line is a full
+`eb-stack package …` command: run it as printed (`eval` the text after
+`companion=`). Then run the `re_run=` line the same way.
+Stop only when that parent command exits 0. A child exit 0 is not done.
+Do not pass `--allow-unresolved` to skip a required companion.
+Do not write a helper script and stop; run the commands.
+
 Use this skill only when an EasyBuild recipe already exists. Use `skills/new-package/SKILL.md` for conda-forge or Spack imports.
 
 When a **new-package** plan hits a robot hole for software that already has an
@@ -25,6 +42,11 @@ Robot trees and `--out-dir` live on that builder. Do not `test -d` those
 paths on this machine. The pinned packset `package-bump` states the same
 contract (`ljos search bump`).
 
+`package bump --easyconfigs <robot>` parses every `*.eb` in that tree before
+it prints `companion=` / `re_run=`. A full upstream robot is thousands of
+files and can take many minutes. Do not wrap the parent command in a 300s
+tool timeout; wait for the process to exit. A timeout is not `exit 0`.
+
 ## Mechanical contract
 
 `package bump` parses the source EasyBuild recipe into the same canonical model used by new packages, retargets its toolchain or application version, solves its dependencies with Resolvo, and writes a bundle containing:
@@ -40,7 +62,7 @@ Those floors hold only within one generation. A dependency version in an easycon
 
 Dropping the floor is the fallback, not the answer. The real lower bound lives in the foreign manifest, and that is where to get it when the retarget matters:
 
-- run `package inspect --format spack` or `--format conda` on the upstream Spack `package.py` or conda-forge recipe for the same package, and read the `constraint` fields in `package.plan.json`; they keep the `when` conditions and the source line each bound came from;
+- pass that same file to `package bump --foreign` (or `package inspect --format pypi|spack|conda` first). Bump already uses the inspect ingest; a dep the old `.eb` never declared still enters the plan when PyPI, Spack, or conda-forge names it;
 - failing that, read the bound out of the project's own build system (`find_package(Foo x.y REQUIRED)`, a `pyproject.toml` requirement) and record it in package policy as a `[[dependencies.requirements]]` entry with a `constraint`, which is a real package constraint rather than a site preference;
 - say in the PR or campaign note which of the two the bound came from. "The older generation ships an older version" is not evidence that the older version is enough.
 
@@ -49,12 +71,15 @@ Dropping the floor is the fallback, not the answer. The real lower bound lives i
 ```sh
 eb-stack package bump \
   --source GROMACS-2024.4-foss-2023b.eb \
-  --toolchain-name foss \
   --toolchain-version 2024a \
   --easyconfigs /path/to/easybuild-easyconfigs/easybuild/easyconfigs \
   --stack-policy stacks/site.toml \
   --out-dir work/gromacs-2024a
 ```
+
+Omit `--toolchain-name` to keep the source family (`foss`, `gfbf`).
+Pass it when the retarget really changes family. A mismatch prints
+`warning=` and still uses the name you passed.
 
 `--easyconfigs` is repeatable. Put the upstream tree first and a site overlay after it.
 
@@ -66,18 +91,22 @@ version bump cleared the old git identity, CMake `config_options`, extra
 version dropped. See `examples/packages/seissol.toml` and
 `skills/golden-replay/SKILL.md`.
 
-A version bump without `--source-checksum` clears the old digest to `''` and
-clears `local_commit_id` / a literal `git_config` commit hash. That is
-required: the previous tarball's hash is not a claim about the new artifact.
-Fill the digest with `eb --inject-checksums` on the EasyBuild host. Do not
-copy a conda-forge or Spack checksum onto a different artifact class
-(`skills/verify-recipe/SKILL.md`).
+A version bump without `--source-checksum` and without
+`source_checksums` in `--package-config` clears the old digest to `''`
+and clears `local_commit_id` / a literal `git_config` commit hash. That
+is required: the previous tarball's hash is not a claim about the new
+artifact. Put the inject digest in `source_checksums` on the package
+config once `eb --inject-checksums` has measured it. `--source-checksum`
+on the command line still wins. Do not copy a conda-forge or Spack
+checksum onto a different artifact class (`skills/verify-recipe/SKILL.md`).
 
-A dependency with no candidate on the target generation after a version bump
-is dropped from the emitted recipe and recorded as a
-`version-bump-dropped-dep` residual. The same drop happens for names listed
-in `exclude_from_solve`. Lock selections that the source file never declared
-are inserted.
+A dependency the source recipe still declares, with no candidate on the
+target generation, is a blocking `unresolved-generation-dep`. The parent
+exits 1 and prints `companion=` / `re_run=`. Do not pass
+`--allow-unresolved` to skip it. Names listed in `exclude_from_solve` are
+the Judgment drop (`version-bump-dropped-dep`); that flag is only for a
+dep the new version actually stopped needing. Lock selections that the
+source file never declared are inserted.
 
 ## When the target generation cannot build anything
 
@@ -145,7 +174,6 @@ Use repeatable `--dep NAME=VERSION` only for a package-specific hard override. I
 ```sh
 eb-stack package bump \
   --source GROMACS-2024.4-foss-2023b.eb \
-  --toolchain-name foss \
   --toolchain-version 2024a \
   --version 2025.0 \
   --source-checksum SHA256 \
@@ -222,8 +250,8 @@ Keep one reviewable recipe set per contribution. Do not open or mutate public is
 
 ## Related
 
-- `skills/verify-recipe/SKILL.md` — prove the emitted recipe before building it
-- `skills/tool-repair/SKILL.md` — when the emitted recipe needed a hand correction
-- `skills/site-consume/SKILL.md` — getting the result built at a site
-- `skills/upstream-pr/SKILL.md` — getting it merged upstream
-- `skills/golden-replay/SKILL.md` — SeisSol overlay from bump + package.toml only
+- `skills/verify-recipe/SKILL.md` -- prove the emitted recipe before building it
+- `skills/tool-repair/SKILL.md` -- when the emitted recipe needed a hand correction
+- `skills/site-consume/SKILL.md` -- getting the result built at a site
+- `skills/upstream-pr/SKILL.md` -- getting it merged upstream
+- `skills/golden-replay/SKILL.md` -- SeisSol overlay from bump + package.toml only

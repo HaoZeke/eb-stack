@@ -80,6 +80,9 @@ pub struct BumpPackageRequest {
     /// parsed, so a version bump can drop vanished deps or add CMake extras
     /// the old file never declared.
     pub package_layers: Vec<PackageConfigLayer>,
+    /// Spack `package.py` or conda-forge recipe. Inspected so a dep the
+    /// old `.eb` never declared (GROMACS `pybind11`) still enters the plan.
+    pub foreign_sources: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -277,6 +280,7 @@ pub fn complete_package_bundle_with_hierarchy(
             .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?,
         );
     }
+    refresh_checksum_residuals(&mut plan);
     require_source_checksums(&plan)?;
     let easyconfigs = emit_profile_easyconfigs(&plan, &locks)
         .map_err(|error| PackageWorkflowError::Emit(error.to_string()))?;
@@ -795,17 +799,10 @@ fn require_source_checksums(plan: &PackagePlan) -> Result<(), PackageWorkflowErr
     if plan.sources.is_empty() && plan.origin != PackageOrigin::EasyBuild {
         return Err(PackageWorkflowError::NoSourceArtifacts);
     }
-    let missing = plan
-        .sources
-        .iter()
-        .enumerate()
-        .filter_map(|(index, source)| source.sha256.is_none().then_some(index))
-        .collect::<Vec<_>>();
-    if !missing.is_empty() {
-        return Err(PackageWorkflowError::MissingSourceChecksums(missing));
-    }
     for (index, source) in plan.sources.iter().enumerate() {
-        validate_source_checksum(index, source.sha256.as_deref().unwrap_or_default())?;
+        if let Some(checksum) = source.sha256.as_deref() {
+            validate_source_checksum(index, checksum)?;
+        }
     }
     let missing_patches = plan
         .build
@@ -953,10 +950,11 @@ pub fn prepare_package_bump(
         &resolved,
         &request.toolchain,
         request.version.as_deref(),
-        request.source_checksum.as_deref(),
+        resolved_bump_source_checksum(request),
     );
     apply_package_layers(&mut plan, &request.package_layers)
         .map_err(|error| PackageWorkflowError::Config(error.to_string()))?;
+    merge_foreign_inspect_deps(&mut plan, request)?;
     refresh_checksum_residuals(&mut plan);
     let sbom = package_plan_to_cyclonedx(&plan)
         .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
@@ -1004,7 +1002,8 @@ pub fn complete_package_bump(
         .as_deref()
         .is_some_and(|version| version != source_recipe.version);
     let mut dropped_dep_names = Vec::new();
-    if version_changed {
+    let generation_retarget = is_generation_retarget(&source_recipe.toolchain, &request.toolchain);
+    if version_changed || generation_retarget {
         let holes = unsatisfied_direct_dependencies_with_hierarchy(
             &plan,
             "default",
@@ -1015,6 +1014,13 @@ pub fn complete_package_bump(
         )
         .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?;
         for (index, hole) in holes.into_iter().enumerate() {
+            let already_excluded = plan.dependencies.iter().any(|dependency| {
+                let identity = dependency
+                    .eb_name
+                    .as_deref()
+                    .unwrap_or(dependency.name.as_str());
+                identity.eq_ignore_ascii_case(&hole.name) && dependency.solver_excluded
+            });
             for dependency in &mut plan.dependencies {
                 let identity = dependency
                     .eb_name
@@ -1025,19 +1031,34 @@ pub fn complete_package_bump(
                 }
             }
             dropped_dep_names.push(hole.name.clone());
-            plan.residuals.push(Residual {
-                id: format!("version-bump-dropped-dep:{index}"),
-                stage: ResidualStage::Resolve,
-                category: "version-bump-dropped-dep".into(),
-                severity: ResidualSeverity::Judgment,
-                summary: format!(
-                    "{} {} has no candidate on this generation after the version bump; \
-                     dropped from the emitted recipe",
-                    hole.name, hole.version_req
-                ),
-                evidence: None,
-                provenance: None,
-            });
+            if already_excluded {
+                plan.residuals.push(Residual {
+                    id: format!("version-bump-dropped-dep:{index}"),
+                    stage: ResidualStage::Resolve,
+                    category: "version-bump-dropped-dep".into(),
+                    severity: ResidualSeverity::Judgment,
+                    summary: format!(
+                        "{} {} has no candidate on this generation after the version bump; \
+                         dropped from the emitted recipe",
+                        hole.name, hole.version_req
+                    ),
+                    evidence: None,
+                    provenance: None,
+                });
+            } else {
+                plan.residuals.push(Residual {
+                    id: format!("unresolved-generation-dep:{index}"),
+                    stage: ResidualStage::Resolve,
+                    category: "unresolved-generation-dep".into(),
+                    severity: ResidualSeverity::Blocking,
+                    summary: format!(
+                        "{} {} has no candidate on this generation",
+                        hole.name, hole.version_req
+                    ),
+                    evidence: None,
+                    provenance: None,
+                });
+            }
         }
     }
     let lock = solve_package_profile_with_hierarchy(
@@ -1129,7 +1150,7 @@ pub fn complete_package_bump(
             )
             .map(|hierarchy| hierarchy.members)
             .unwrap_or_default(),
-            source_checksum: request.source_checksum.clone(),
+            source_checksum: resolved_bump_source_checksum(request).map(str::to_string),
         },
     )
     .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
@@ -1315,6 +1336,106 @@ pub fn plan_package_bump(
         .map_err(|error| PackageWorkflowError::Robot(error.to_string()))?;
     let stack_policy = stack_policy_with_bump_overrides(&request.stack_policy, &request.overrides);
     complete_package_bump(request, plan, &tree.candidates, &stack_policy)
+}
+
+fn merge_foreign_inspect_deps(
+    plan: &mut PackagePlan,
+    request: &BumpPackageRequest,
+) -> Result<(), PackageWorkflowError> {
+    let mut sources = request.foreign_sources.clone();
+    if sources.is_empty() {
+        if let Some(found) =
+            crate::companion_suggest::find_foreign_package_py(&request.easyconfig_roots, &plan.package.name)
+        {
+            sources.push(found);
+        }
+    }
+    for foreign in sources {
+        let (foreign_plan, _) = inspect_new_package(&foreign, None, &request.toolchain, &[])?;
+        for (index, dependency) in foreign_plan.dependencies.into_iter().enumerate() {
+            let Some(eb_name) = easybuild_name_from_foreign(&dependency.name) else {
+                continue;
+            };
+            if plan.dependencies.iter().any(|existing| {
+                let existing_name = existing
+                    .eb_name
+                    .as_deref()
+                    .unwrap_or(existing.name.as_str());
+                existing_name.eq_ignore_ascii_case(&eb_name)
+                    || existing.name.eq_ignore_ascii_case(&dependency.name)
+            }) {
+                continue;
+            }
+            let foreign_name = dependency.name.clone();
+            plan.dependencies.push(DependencyIntent {
+                id: format!("foreign-inspect:{index}:{eb_name}"),
+                name: eb_name.clone(),
+                eb_name: Some(eb_name.clone()),
+                constraint: dependency.constraint,
+                toolchain: None,
+                roles: dependency.roles,
+                condition: dependency.condition,
+                virtual_capability: None,
+                solver_excluded: false,
+                provenance: dependency.provenance,
+            });
+            plan.residuals.push(Residual {
+                id: format!("foreign-inspect-added-dep:{eb_name}"),
+                stage: ResidualStage::Resolve,
+                category: "foreign-inspect-added-dep".into(),
+                severity: ResidualSeverity::Mechanical,
+                summary: format!(
+                    "{eb_name} came from package inspect of {}",
+                    foreign.display()
+                ),
+                evidence: Some(foreign_name),
+                provenance: None,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn easybuild_name_from_foreign(name: &str) -> Option<String> {
+    let lower = name.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "mpi" | "openmpi"
+            | "mpich"
+            | "gcc"
+            | "llvm"
+            | "cuda"
+            | "hip"
+            | "fftw"
+            | "fftw3"
+            | "blas"
+            | "lapack"
+            | "openblas"
+            | "mkl"
+            | "zlib"
+            | "hwloc"
+    ) {
+        return None;
+    }
+    let stripped = lower.strip_prefix("py-").unwrap_or(lower.as_str());
+    Some(match stripped {
+        "python" => "Python".into(),
+        "cmake" => "CMake".into(),
+        "pybind11" => "pybind11".into(),
+        "mpi4py" => "mpi4py".into(),
+        "networkx" => "networkx".into(),
+        other => other.to_string(),
+    })
+}
+
+fn resolved_bump_source_checksum(request: &BumpPackageRequest) -> Option<&str> {
+    request.source_checksum.as_deref().or_else(|| {
+        request
+            .package_layers
+            .iter()
+            .rev()
+            .find_map(|layer| layer.source_checksums.first().map(String::as_str))
+    })
 }
 
 fn package_plan_from_easyconfig(

@@ -1,7 +1,7 @@
 //! EasyBuild stack lock: parse `.eb` files, resolvo SAT co-select, planned SBOM.
 #![warn(missing_docs)]
 
-mod attribution;
+mod companion_suggest;
 pub mod artifact_class;
 pub mod build_order;
 pub mod campaign;
@@ -103,6 +103,10 @@ pub use package_closure::{
     ClosurePlanDocument, PackageClosure, PackageClosureError, WrittenPackageClosure,
     CLOSURE_BUNDLE_SCHEMA_VERSION,
 };
+pub use companion_suggest::{
+    companion_argv, find_foreign_package_py, find_named_easyconfig, find_sibling_package_config,
+    with_outdir_overlay,
+};
 pub use package_emit::{emit_profile_easyconfigs, EmittedEasyconfig, PackageEmitError};
 pub use package_solve::{
     solve_package_profile, solve_package_profile_with_hierarchy, unsatisfied_direct_dependencies,
@@ -118,7 +122,6 @@ pub use package_workflow::{
     complete_package_bump, complete_package_bundle, complete_package_bundle_with_hierarchy,
     inspect_new_package, plan_new_package, plan_package_bump, prepare_new_package_plan,
     prepare_package_bump, relative_posix, stack_policy_with_bump_overrides, validate_path_segment,
-    find_foreign_package_py, find_named_easyconfig, find_sibling_package_config, with_outdir_overlay,
     write_package_bundle,
     write_package_bundle_into, BumpPackageRequest,
     NewPackageRequest, PackageBundle, PackageWorkflowError, WrittenPackageBundle,
