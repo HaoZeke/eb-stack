@@ -1,0 +1,40 @@
+schema_version = 1
+
+[package]
+name = "easi"
+version = "1.7.0"
+homepage = "https://github.com/SeisSol/easi/"
+description = """easi is a library for the Easy Initialization of models
+ in three (or less or more) dimensional domains.
+"""
+
+[build]
+easyblock = "CMakeMake"
+build_systems = ["CMake"]
+moduleclass = "geo"
+config_options = [
+  "-DASAGI=ON",
+  "-DLUA=ON",
+  "-DEASICUBE=ON",
+  "-DTESTING=ON",
+]
+
+[dependencies]
+exclude_from_solve = ["ImpalaJIT"]
+
+[[dependencies.requirements]]
+name = "ASAGI"
+constraint = "==1.0"
+
+[[dependencies.requirements]]
+name = "HDF5"
+
+[[dependencies.requirements]]
+name = "Lua"
+constraint = ">=5.4,<5.5"
+
+[[dependencies.requirements]]
+name = "netCDF"
+
+[[dependencies.requirements]]
+name = "yaml-cpp"

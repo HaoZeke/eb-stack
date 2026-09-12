@@ -76,6 +76,10 @@ pub struct BumpPackageRequest {
     /// Fail the bump when a patch's applicability to the new version cannot
     /// be decided from tree evidence, instead of carrying it with a flag.
     pub strict_patches: bool,
+    /// Optional package-config layers applied after the source recipe is
+    /// parsed, so a version bump can drop vanished deps or add CMake extras
+    /// the old file never declared.
+    pub package_layers: Vec<PackageConfigLayer>,
 }
 
 #[derive(Debug, Clone)]
@@ -951,6 +955,8 @@ pub fn prepare_package_bump(
         request.version.as_deref(),
         request.source_checksum.as_deref(),
     );
+    apply_package_layers(&mut plan, &request.package_layers)
+        .map_err(|error| PackageWorkflowError::Config(error.to_string()))?;
     refresh_checksum_residuals(&mut plan);
     let sbom = package_plan_to_cyclonedx(&plan)
         .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
@@ -991,6 +997,49 @@ pub fn complete_package_bump(
     candidates: &[crate::domain::Candidate],
     stack_policy: &StackPolicy,
 ) -> Result<PackageBundle, PackageWorkflowError> {
+    let source_recipe = resolve_easyconfig_file(&request.source)
+        .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+    let version_changed = request
+        .version
+        .as_deref()
+        .is_some_and(|version| version != source_recipe.version);
+    let mut dropped_dep_names = Vec::new();
+    if version_changed {
+        let holes = unsatisfied_direct_dependencies_with_hierarchy(
+            &plan,
+            "default",
+            &Default::default(),
+            candidates,
+            stack_policy,
+            request.hierarchy_fixture.as_deref(),
+        )
+        .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?;
+        for (index, hole) in holes.into_iter().enumerate() {
+            for dependency in &mut plan.dependencies {
+                let identity = dependency
+                    .eb_name
+                    .as_deref()
+                    .unwrap_or(dependency.name.as_str());
+                if identity.eq_ignore_ascii_case(&hole.name) {
+                    dependency.solver_excluded = true;
+                }
+            }
+            dropped_dep_names.push(hole.name.clone());
+            plan.residuals.push(Residual {
+                id: format!("version-bump-dropped-dep:{index}"),
+                stage: ResidualStage::Resolve,
+                category: "version-bump-dropped-dep".into(),
+                severity: ResidualSeverity::Judgment,
+                summary: format!(
+                    "{} {} has no candidate on this generation after the version bump; \
+                     dropped from the emitted recipe",
+                    hole.name, hole.version_req
+                ),
+                evidence: None,
+                provenance: None,
+            });
+        }
+    }
     let lock = solve_package_profile_with_hierarchy(
         &plan,
         "default",
@@ -1084,6 +1133,74 @@ pub fn complete_package_bump(
         },
     )
     .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+
+    let mut drop_names = dropped_dep_names;
+    for dependency in &plan.dependencies {
+        if !dependency.solver_excluded {
+            continue;
+        }
+        let name = dependency
+            .eb_name
+            .as_deref()
+            .unwrap_or(dependency.name.as_str());
+        if !drop_names
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(name))
+        {
+            drop_names.push(name.to_string());
+        }
+    }
+    if !drop_names.is_empty() {
+        result.text = crate::eb_emit::remove_named_dependencies(&result.text, &drop_names)
+            .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+    }
+    for dependency in lock
+        .dependencies
+        .iter()
+        .filter(|dependency| !dependency.build)
+    {
+        result.text = crate::eb_emit::insert_runtime_dependency(
+            &result.text,
+            &dependency.name,
+            &dependency.version,
+        )
+        .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+    }
+    for (name, value) in &plan.build.easyconfig_parameters {
+        let rhs = crate::package_emit::render_easyconfig_value(value, 0);
+        result.text = crate::eb_emit::upsert_raw_assignment(&result.text, name, &rhs)
+            .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+    }
+    if let Some(config_options) = request.package_layers.iter().rev().find_map(|layer| {
+        layer
+            .build
+            .as_ref()
+            .and_then(|build| build.config_options.clone())
+    }) {
+        let joined = config_options.join(" ");
+        let rhs = crate::package_emit::render_easyconfig_value(
+            &crate::package::EasyconfigValue::String(joined),
+            0,
+        );
+        result.text = crate::eb_emit::upsert_raw_assignment(&result.text, "configopts", &rhs)
+            .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+    }
+    if let Some(profile) = plan.profiles.iter().find(|profile| profile.default) {
+        if !profile.toolchain_options.is_empty() {
+            let table = profile
+                .toolchain_options
+                .iter()
+                .map(|(name, value)| (name.clone(), crate::package::EasyconfigValue::Bool(*value)))
+                .collect();
+            let rhs = crate::package_emit::render_easyconfig_value(
+                &crate::package::EasyconfigValue::Table(table),
+                0,
+            );
+            result.text =
+                crate::eb_emit::upsert_raw_assignment(&result.text, "toolchainopts", &rhs)
+                    .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+        }
+    }
 
     // A version bump decides its patch set from tree evidence: a recipe for
     // the new version under another toolchain is what a maintainer already

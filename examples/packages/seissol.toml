@@ -1,0 +1,81 @@
+schema_version = 1
+
+[package]
+name = "SeisSol"
+version = "1.3.2"
+homepage = "https://www.seissol.org"
+description = """SeisSol is a software package for simulating wave propagation and dynamic rupture based on
+ the arbitrary high-order accurate derivative discontinuous Galerkin method (ADER-DG)."""
+
+[build]
+easyblock = "CMakeMake"
+build_systems = ["CMake"]
+moduleclass = "geo"
+config_options = [
+  "-DCMAKE_BUILD_TYPE=Release",
+  "-DASAGI=ON",
+  "-DNETCDF=ON",
+  "-DTESTING=ON",
+  "-DORDER=6",
+  "-DHOST_ARCH=hsw",
+  "-DEQUATIONS=elastic",
+  "-DPRECISION=double",
+  "-DGEMM_TOOLS_LIST=LIBXSMM,PSpaMM",
+  "-DGRAPH_PARTITIONING_LIBS=parmetis",
+]
+
+# Tag 1.3.2. The recursive git_config archive is a different artifact class
+# than a GitHub tag tarball; do not copy a Spack or conda-forge checksum.
+[build.easyconfig_parameters]
+local_commit_id = "20334d02af9c539a9cf7cc4cd03c3e2622104aea"
+
+[[profiles]]
+name = "default"
+default = true
+
+[profiles.toolchain_options]
+usempi = true
+openmp = true
+
+[[dependencies.requirements]]
+name = "ASAGI"
+constraint = "==1.0"
+
+[[dependencies.requirements]]
+name = "Eigen"
+constraint = ">=3.4,<5"
+
+[[dependencies.requirements]]
+name = "HDF5"
+
+[[dependencies.requirements]]
+name = "PSpaMM"
+constraint = "==0.3.1"
+
+[[dependencies.requirements]]
+name = "ParMETIS"
+
+[[dependencies.requirements]]
+name = "Python"
+
+[[dependencies.requirements]]
+name = "SciPy-bundle"
+
+[[dependencies.requirements]]
+name = "easi"
+constraint = "==1.7.0"
+
+[[dependencies.requirements]]
+name = "libxsmm"
+
+[[dependencies.requirements]]
+name = "lxml"
+
+[[dependencies.requirements]]
+name = "netCDF"
+
+[[dependencies.requirements]]
+name = "numactl"
+
+[[dependencies.requirements]]
+name = "yaml-cpp"

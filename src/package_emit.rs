@@ -585,7 +585,7 @@ fn render_string_concat(name: &str, fragments: &[String]) -> String {
     rendered
 }
 
-fn render_easyconfig_value(value: &EasyconfigValue, indentation: usize) -> String {
+pub(crate) fn render_easyconfig_value(value: &EasyconfigValue, indentation: usize) -> String {
     match value {
         EasyconfigValue::Bool(value) => python_bool(*value).into(),
         EasyconfigValue::Integer(value) => value.to_string(),

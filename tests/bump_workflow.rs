@@ -1,7 +1,10 @@
 use eb_stack::package::{
     PackageOrigin, StackPin, StackPinMode, StackPolicy, STACK_POLICY_SCHEMA_VERSION,
 };
-use eb_stack::{plan_package_bump, resolve_easyconfig_str, BumpPackageRequest, Toolchain};
+use eb_stack::package_config::PackageConfigLayer;
+use eb_stack::{
+    plan_package_bump, resolve_easyconfig_str, write_package_bundle, BumpPackageRequest, Toolchain,
+};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -32,6 +35,7 @@ fn easybuild_bump_produces_sbom_resolvo_lock_and_recipe() {
             exclusions: Vec::new(),
         },
         strict_patches: false,
+        package_layers: Vec::new(),
     })
     .expect("canonical bump");
     assert_eq!(bundle.plan.origin, PackageOrigin::EasyBuild);
@@ -105,6 +109,7 @@ fn easybuild_bump_does_not_select_newer_system_candidate_for_implicit_dependency
             exclusions: Vec::new(),
         },
         strict_patches: false,
+        package_layers: Vec::new(),
     })
     .expect("canonical bump");
     let dependency = bundle.locks[0]
@@ -171,6 +176,7 @@ fn easybuild_bump_retargets_explicit_dependency_toolchain_family() {
             exclusions: Vec::new(),
         },
         strict_patches: false,
+        package_layers: Vec::new(),
     })
     .expect("canonical bump");
     let dependency = bundle.locks[0]
@@ -245,6 +251,7 @@ fn easybuild_bump_makes_cross_generation_stack_selection_explicit() {
             exclusions: Vec::new(),
         },
         strict_patches: false,
+        package_layers: Vec::new(),
     })
     .expect("canonical bump");
     assert!(
@@ -306,6 +313,7 @@ fn version_bump_adopts_the_same_version_siblings_patch_block() {
             exclusions: Vec::new(),
         },
         strict_patches: false,
+        package_layers: Vec::new(),
     })
     .expect("bump with sibling evidence");
 
@@ -400,6 +408,7 @@ fn strict_patches_fails_on_a_version_pinned_patch_without_sibling_evidence() {
             exclusions: Vec::new(),
         },
         strict_patches: true,
+        package_layers: Vec::new(),
     };
     let error = plan_package_bump(&request).expect_err("undecided patch must fail strict mode");
     assert!(
@@ -460,6 +469,7 @@ fn easybuild_bump_onto_an_older_generation_drops_the_source_generation_pins() {
             exclusions: Vec::new(),
         },
         strict_patches: false,
+        package_layers: Vec::new(),
     })
     .expect("retarget onto the older generation");
     let dependency = bundle.locks[0]
@@ -523,6 +533,7 @@ fn easybuild_bump_within_one_generation_keeps_the_dependency_floor() {
             exclusions: Vec::new(),
         },
         strict_patches: false,
+        package_layers: Vec::new(),
     })
     .expect("same generation bump");
     let dependency = bundle.locks[0]
@@ -531,4 +542,335 @@ fn easybuild_bump_within_one_generation_keeps_the_dependency_floor() {
         .find(|dependency| dependency.name == "RuntimeLib")
         .expect("RuntimeLib lock");
     assert_eq!(dependency.version, "2.0");
+}
+
+#[test]
+fn version_bump_drops_a_direct_dep_with_no_candidate() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Gamma-1.0-foss-2023a.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'CMakeMake'\nname = 'Gamma'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['gamma-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [\n    ('KeptLib', '1.0'),\n    ('VanishedLib', '20211028'),\n]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    fs::write(
+        robot.join("KeptLib-1.0-foss-2025a.eb"),
+        "easyblock = 'ConfigureMake'\nname = 'KeptLib'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Kept'\n\
+         toolchain = {'name': 'foss', 'version': '2025a'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'lib'\n",
+    )
+    .expect("kept candidate");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2025a".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: Some("1.7.0".into()),
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: Vec::new(),
+    })
+    .expect("version bump with a vanished dep");
+    let text = &bundle.easyconfigs[0].text;
+    assert!(
+        !text.contains("VanishedLib"),
+        "vanished dep still emitted:\n{text}"
+    );
+    assert!(
+        text.contains("('KeptLib', '1.0')"),
+        "kept dep missing:\n{text}"
+    );
+    assert!(
+        bundle
+            .plan
+            .residuals
+            .iter()
+            .any(|residual| residual.category == "version-bump-dropped-dep"
+                && residual.summary.contains("VanishedLib")),
+        "missing dropped-dep residual: {:?}",
+        bundle.plan.residuals
+    );
+}
+
+#[test]
+fn package_config_exclude_drops_dep_on_toolchain_only_bump() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Delta-1.0-foss-2023a.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'CMakeMake'\nname = 'Delta'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['delta-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [\n    ('KeptLib', '1.0'),\n    ('VanishedLib', '20211028'),\n]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    fs::write(
+        robot.join("KeptLib-1.0-foss-2025a.eb"),
+        "easyblock = 'ConfigureMake'\nname = 'KeptLib'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Kept'\n\
+         toolchain = {'name': 'foss', 'version': '2025a'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'lib'\n",
+    )
+    .expect("kept candidate");
+    let config_path = temp.path().join("delta.toml");
+    fs::write(
+        &config_path,
+        "schema_version = 1\n\n[dependencies]\nexclude_from_solve = [\"VanishedLib\"]\n",
+    )
+    .expect("package config");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2025a".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: None,
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+    })
+    .expect("toolchain bump with excluded dep");
+    let text = &bundle.easyconfigs[0].text;
+    assert!(
+        !text.contains("VanishedLib"),
+        "excluded dep still emitted:\n{text}"
+    );
+    assert!(
+        text.contains("('KeptLib', '1.0')"),
+        "kept dep missing:\n{text}"
+    );
+}
+
+#[test]
+fn package_config_upserts_modulename_and_commit_on_version_bump() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("SynthPy-0.1-foss-2023a.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'PythonPackage'\nname = 'SynthPy'\n\
+         local_commit_id = 'deadbeef'\nversion = '0.1'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic python'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = [{'git_config': {'commit': local_commit_id}}]\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [\n    ('Python', '3.11.3'),\n]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    fs::write(
+        robot.join("Python-3.13.1-GCCcore-14.2.0.eb"),
+        "easyblock = 'Python'\nname = 'Python'\nversion = '3.13.1'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Python'\n\
+         toolchain = {'name': 'GCCcore', 'version': '14.2.0'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'lang'\n",
+    )
+    .expect("python candidate");
+    let config_path = temp.path().join("synthpy.toml");
+    fs::write(
+        &config_path,
+        "schema_version = 1\n\n[build.easyconfig_parameters]\n\
+         local_commit_id = \"cafebabe0123\"\n\
+         options = { modulename = \"synth\" }\n",
+    )
+    .expect("package config");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2025a".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: Some("0.3.1".into()),
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+    })
+    .expect("version bump with package extras");
+    let text = &bundle.easyconfigs[0].text;
+    assert!(
+        text.contains("local_commit_id = 'cafebabe0123'"),
+        "commit not restored from package config:\n{text}"
+    );
+    assert!(
+        text.contains("'modulename': 'synth'"),
+        "modulename missing:\n{text}"
+    );
+    assert!(
+        text.contains("checksums = ['']") || text.contains("checksums = [\"\"]"),
+        "stale checksum must be cleared:\n{text}"
+    );
+}
+
+#[test]
+fn toolchain_only_bump_copies_a_sibling_patch_file() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let src_dir = temp.path().join("src");
+    fs::create_dir_all(&src_dir).expect("source directory");
+    let source = src_dir.join("Epsilon-1.0-foss-2023a.eb");
+    let patch = src_dir.join("Epsilon-1.0_fix.patch");
+    fs::write(&patch, "--- a/x\n+++ b/x\n").expect("patch file");
+    fs::write(
+        &source,
+        "easyblock = 'CMakeMake'\nname = 'Epsilon'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['epsilon-1.0.tar.gz']\n\
+         patches = ['Epsilon-1.0_fix.patch']\n\
+         checksums = [\n    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',\n    '922dd52a81ff1c3d456cb861de7ad959496295c809971e848d414d3cdfe3fb23',\n]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2025a".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: None,
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: Vec::new(),
+    })
+    .expect("toolchain bump");
+    let out = temp.path().join("out");
+    let written = write_package_bundle(&bundle, &out).expect("write bundle");
+    assert!(
+        written
+            .patches
+            .iter()
+            .any(|path| path.ends_with("Epsilon-1.0_fix.patch")),
+        "patch not copied: {:?}",
+        written.patches
+    );
+    assert!(
+        bundle.easyconfigs[0].text.contains("Epsilon-1.0_fix.patch"),
+        "patch list dropped:\n{}",
+        bundle.easyconfigs[0].text
+    );
+}
+
+#[test]
+fn package_config_merge_keeps_the_source_patch_file() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let src_dir = temp.path().join("src");
+    fs::create_dir_all(&src_dir).expect("source directory");
+    let source = src_dir.join("Zeta-1.0-foss-2023a.eb");
+    let patch = src_dir.join("Zeta-1.0_fix.patch");
+    fs::write(&patch, "--- a/x\n+++ b/x\n").expect("patch file");
+    fs::write(
+        &source,
+        "easyblock = 'CMakeMake'\nname = 'Zeta'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['zeta-1.0.tar.gz']\n\
+         patches = ['Zeta-1.0_fix.patch']\n\
+         checksums = [\n    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',\n    '922dd52a81ff1c3d456cb861de7ad959496295c809971e848d414d3cdfe3fb23',\n]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    let config_path = temp.path().join("zeta.toml");
+    fs::write(
+        &config_path,
+        "schema_version = 1\n\n[build]\npatches_mode = \"merge\"\n\n\
+         [[build.patches]]\nfilename = \"Zeta-1.0_fix.patch\"\n\
+         sha256 = \"922dd52a81ff1c3d456cb861de7ad959496295c809971e848d414d3cdfe3fb23\"\n",
+    )
+    .expect("package config");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2025a".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: None,
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+    })
+    .expect("toolchain bump with merged patch");
+    let out = temp.path().join("out");
+    let written = write_package_bundle(&bundle, &out).expect("write bundle");
+    assert!(
+        written
+            .patches
+            .iter()
+            .any(|path| path.ends_with("Zeta-1.0_fix.patch")),
+        "merged patch lost its source file: {:?}",
+        written.patches
+    );
 }

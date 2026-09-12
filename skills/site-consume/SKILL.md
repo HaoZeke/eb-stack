@@ -38,6 +38,11 @@ choosing it over a local one.
 
 ## Pick a generation the site has actually built out
 
+The site default is the generation to bump onto, not the newest generation
+`eb-stack` examples or easyconfigs develop happen to name. Snellius
+production is `foss-2025a` (`module load 2025`). `foss-2026.1` is
+newest-on-develop and is the wrong target there.
+
 A recipe resolving is not the same as a site being able to build it cheaply.
 Before choosing the target generation, count what is missing:
 

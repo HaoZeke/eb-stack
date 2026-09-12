@@ -186,6 +186,8 @@ struct PackageBumpArgs {
     /// from tree evidence, instead of carrying it with a review flag.
     #[arg(long)]
     strict_patches: bool,
+    #[arg(long = "package-config")]
+    package_configs: Vec<PathBuf>,
     #[arg(long)]
     out_dir: PathBuf,
 }
@@ -529,6 +531,7 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
         overrides: parse_dep_overrides(&args.dependencies)?,
         stack_policy,
         strict_patches: args.strict_patches,
+        package_layers: load_package_layers(&args.package_configs)?,
     })?;
     let written = write_package_bundle(&bundle, &args.out_dir)?;
     println!("manifest={}", written.manifest.display());

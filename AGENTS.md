@@ -12,6 +12,7 @@ Use the matching public skill and execute it through the requested claim rung:
 | build an upstream recipe at a site without forking it | `skills/site-consume/SKILL.md` |
 | EESSI-extend test / EESSI software-layer PR | `skills/eessi-extend/SKILL.md` |
 | generated output needed a hand correction | `skills/tool-repair/SKILL.md` |
+| regenerate the SeisSol golden overlay | `skills/golden-replay/SKILL.md` |
 
 Two of those are gates rather than tasks and cut across the rest:
 `verify-recipe` before any build or push, `tool-repair` whenever an emitted

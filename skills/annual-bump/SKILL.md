@@ -14,6 +14,17 @@ and `skills/new-package/SKILL.md`). The closure planner runs this same prepare
 → Resolvo → emit pipeline for that companion; do not replace the existing
 recipe with a foreign archive of a different artifact identity.
 
+## Which binary
+
+`eb-stack package --help` must list `inspect`, `plan`, and `bump`. A binary
+whose top-level help lists `solve`, `bump`, and `check-recipe` is stale.
+Use the current checkout on the configured builder. Do not use a stale
+`eb-stack` on PATH unless that check passes.
+
+Robot trees and `--out-dir` live on that builder. Do not `test -d` those
+paths on this machine. The pinned packset `package-bump` states the same
+contract (`ljos search bump`).
+
 ## Mechanical contract
 
 `package bump` parses the source EasyBuild recipe into the same canonical model used by new packages, retargets its toolchain or application version, solves its dependencies with Resolvo, and writes a bundle containing:
@@ -46,6 +57,27 @@ eb-stack package bump \
 ```
 
 `--easyconfigs` is repeatable. Put the upstream tree first and a site overlay after it.
+
+`--package-config` is repeatable and applies after the source recipe is parsed.
+Use it for extras the old file never declared: a Python `options.modulename`
+when the import path is not the package name, a `local_commit_id` after a
+version bump cleared the old git identity, CMake `config_options`, extra
+`[[dependencies.requirements]]`, and `exclude_from_solve` for a dep the new
+version dropped. See `examples/packages/seissol.toml` and
+`skills/golden-replay/SKILL.md`.
+
+A version bump without `--source-checksum` clears the old digest to `''` and
+clears `local_commit_id` / a literal `git_config` commit hash. That is
+required: the previous tarball's hash is not a claim about the new artifact.
+Fill the digest with `eb --inject-checksums` on the EasyBuild host. Do not
+copy a conda-forge or Spack checksum onto a different artifact class
+(`skills/verify-recipe/SKILL.md`).
+
+A dependency with no candidate on the target generation after a version bump
+is dropped from the emitted recipe and recorded as a
+`version-bump-dropped-dep` residual. The same drop happens for names listed
+in `exclude_from_solve`. Lock selections that the source file never declared
+are inserted.
 
 ## When the target generation cannot build anything
 
@@ -194,3 +226,4 @@ Keep one reviewable recipe set per contribution. Do not open or mutate public is
 - `skills/tool-repair/SKILL.md` — when the emitted recipe needed a hand correction
 - `skills/site-consume/SKILL.md` — getting the result built at a site
 - `skills/upstream-pr/SKILL.md` — getting it merged upstream
+- `skills/golden-replay/SKILL.md` — SeisSol overlay from bump + package.toml only

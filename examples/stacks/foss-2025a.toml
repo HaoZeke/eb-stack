@@ -1,0 +1,6 @@
+schema_version = 1
+name = "foss-2025a-defaults"
+
+[toolchain]
+name = "foss"
+version = "2025a"
