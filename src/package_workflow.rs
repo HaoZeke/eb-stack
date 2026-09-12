@@ -8,7 +8,7 @@ use crate::eb_parse::{
 use crate::foreign::{parse_foreign_path, ForeignFormat};
 use crate::hierarchy::{
     count_generation_dep_versions, filter_candidates_in_hierarchy, hierarchy_for_with_tree,
-    is_system_toolchain, pick_consensus_version,
+    is_system_toolchain,
 };
 use crate::manifest::package_plan_from_foreign;
 use crate::package::{
@@ -1627,23 +1627,28 @@ fn apply_system_dep_consensus(
             continue;
         }
         let counts = count_generation_dep_versions(&dependency.name, candidates, &hierarchy);
-        if counts.is_empty() {
+        let total: usize = counts.values().sum();
+        if total == 0 {
             continue;
         }
-        let mut eligible = candidates
+        let Some((version, count)) = counts
             .iter()
-            .filter(|candidate| {
-                candidate.name == dependency.name && is_system_toolchain(&candidate.toolchain)
+            .max_by(|(left, left_count), (right, right_count)| {
+                left_count
+                    .cmp(right_count)
+                    .then_with(|| crate::version::cmp_version(left, right))
             })
-            .map(|candidate| candidate.version.clone())
-            .collect::<Vec<_>>();
-        eligible.sort();
-        eligible.dedup();
-        let Some(version) = pick_consensus_version(&counts, &eligible) else {
+        else {
             continue;
         };
-        if version != dependency.version {
-            dependency_versions.insert(dependency.name.clone(), version);
+        // 80 percent clear majority. Weak plurality is not enough to move a
+        // SYSTEM pin; newest-used would jump Java 11 to whatever the tree
+        // happens to ship.
+        if *count * 5 < total * 4 {
+            continue;
+        }
+        if version != &dependency.version {
+            dependency_versions.insert(dependency.name.clone(), version.clone());
         }
     }
 }
