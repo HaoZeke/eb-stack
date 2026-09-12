@@ -14,7 +14,10 @@ packset pin
 ljos search bump
 ```
 
-The first `eb-stack package bump` is the parent. Copy its flags.
+The first `eb-stack package bump` is the parent when the family stays
+the same. Use `package mutate --toolchain-name …` only to change
+family (`foss` ↔ `gfbf`). Copy the parent flags. Omit
+`--toolchain-name` on bump so the source family is kept.
 Exit 1 with `residual=` means continue. Each `companion=` line is a full
 `eb-stack package …` command: run it as printed (`eval` the text after
 `companion=`). Then run the `re_run=` line the same way.

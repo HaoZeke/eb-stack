@@ -2,12 +2,13 @@
 
 use crate::domain::{Candidate, DepReq, Policy};
 use crate::hierarchy::{
-    filter_candidates_in_hierarchy, hierarchy_for_with_tree, is_system_toolchain, toolchains_match,
-    ToolchainHierarchy,
+    count_generation_dep_versions, filter_candidates_in_hierarchy, hierarchy_for_with_tree,
+    is_system_toolchain, pick_consensus_version, toolchains_match, ToolchainHierarchy,
 };
 use crate::package::{
     materialize_profile, DependencyRole, LockedDependency, PackageOrigin, PackagePlan,
-    ProfileEnvironment, ProfileLock, StackPolicy, PROFILE_LOCK_SCHEMA_VERSION,
+    ProfileEnvironment, ProfileLock, StackPin, StackPinMode, StackPolicy,
+    PROFILE_LOCK_SCHEMA_VERSION,
 };
 use crate::provides::{expand_extension_provides, resolve_extension_provider};
 use crate::resolvo_provider::solve_curated_with_stack_policy;
@@ -261,6 +262,14 @@ pub fn solve_package_profile_with_hierarchy(
         exts_list: Vec::new(),
         moduleclass: None,
     });
+    let mut stack_policy = stack_policy.clone();
+    apply_generation_consensus_pins(
+        &mut stack_policy,
+        &direct_roles,
+        candidates,
+        &original_candidates,
+        &hierarchy,
+    );
     let policy = Policy {
         prefer_installed: false,
         toolchain: plan.build.toolchain.clone(),
@@ -271,7 +280,7 @@ pub fn solve_package_profile_with_hierarchy(
         objective: "prefer_newer".into(),
         require_upgrade: Vec::new(),
     };
-    let result = solve_curated_with_stack_policy(&universe, &policy, None, stack_policy)
+    let result = solve_curated_with_stack_policy(&universe, &policy, None, &stack_policy)
         .map_err(ProfileSolveError::Resolve)?;
 
     let mut dependencies = Vec::new();
@@ -579,6 +588,43 @@ fn normalize_requirement(constraint: Option<&str>) -> String {
         };
     }
     format!("=={constraint}")
+}
+
+fn apply_generation_consensus_pins(
+    stack_policy: &mut StackPolicy,
+    direct_roles: &BTreeMap<String, bool>,
+    all_candidates: &[Candidate],
+    admitted: &[Candidate],
+    hierarchy: &ToolchainHierarchy,
+) {
+    for name in direct_roles.keys() {
+        if stack_policy
+            .pins
+            .iter()
+            .any(|pin| pin.name.eq_ignore_ascii_case(name))
+        {
+            continue;
+        }
+        let counts = count_generation_dep_versions(name, all_candidates, hierarchy);
+        let mut eligible = admitted
+            .iter()
+            .filter(|candidate| candidate.name == *name)
+            .map(|candidate| candidate.version.clone())
+            .collect::<Vec<_>>();
+        eligible.sort();
+        eligible.dedup();
+        let Some(version) = pick_consensus_version(&counts, &eligible) else {
+            continue;
+        };
+        stack_policy.pins.push(StackPin {
+            name: name.clone(),
+            version_requirement: format!("=={version}"),
+            toolchain: None,
+            versionsuffix: None,
+            mode: StackPinMode::Preferred,
+            source: Some("generation-consensus".into()),
+        });
+    }
 }
 
 #[cfg(test)]

@@ -6,7 +6,10 @@ use crate::eb_parse::{
     easyconfig_letter_dir, parse_easyconfig_trees, resolve_easyconfig_file, ResolvedDep,
 };
 use crate::foreign::{parse_foreign_path, ForeignFormat};
-use crate::hierarchy::{filter_candidates_in_hierarchy, hierarchy_for_with_tree};
+use crate::hierarchy::{
+    count_generation_dep_versions, filter_candidates_in_hierarchy, hierarchy_for_with_tree,
+    is_system_toolchain, pick_consensus_version,
+};
 use crate::manifest::package_plan_from_foreign;
 use crate::package::{
     package_plan_to_cyclonedx, BuildSpec, ConditionExpr, DependencyIntent, DependencyRole,
@@ -1096,12 +1099,19 @@ pub fn complete_package_bump(
             .get(dependency.name.as_str())
             .is_some_and(|stated| *stated == module_version)
     };
-    let dependency_versions = lock
+    let mut dependency_versions = lock
         .dependencies
         .iter()
         .filter(|dependency| !names_the_selected_module(dependency))
         .map(|dependency| (dependency.name.clone(), dependency.version.clone()))
         .collect::<HashMap<_, _>>();
+    apply_system_dep_consensus(
+        &mut dependency_versions,
+        &source_recipe,
+        candidates,
+        &request.toolchain,
+        request.hierarchy_fixture.as_deref(),
+    );
     // Only the selections that differ from what the recipe already states. A
     // dependency may name its toolchain through a local variable, as
     // `('binutils', '2.42', '', ('GCCcore', local_gccver))` does, and that
@@ -1595,6 +1605,49 @@ fn package_plan_from_easyconfig(
 /// the foreign manifest, where a Spack `depends_on` range or a conda-forge
 /// version constraint states what the package actually needs; when the plan
 /// carries one, that constraint is the one to keep.
+fn apply_system_dep_consensus(
+    dependency_versions: &mut HashMap<String, String>,
+    source_recipe: &crate::eb_parse::ResolvedEasyconfig,
+    candidates: &[crate::domain::Candidate],
+    toolchain: &Toolchain,
+    hierarchy_fixture: Option<&Path>,
+) {
+    let Ok(hierarchy) = hierarchy_for_with_tree(toolchain, hierarchy_fixture, candidates) else {
+        return;
+    };
+    for dependency in source_recipe
+        .dependencies
+        .iter()
+        .chain(source_recipe.builddependencies.iter())
+    {
+        let Some(dep_toolchain) = dependency.toolchain.as_ref() else {
+            continue;
+        };
+        if !is_system_toolchain(dep_toolchain) {
+            continue;
+        }
+        let counts = count_generation_dep_versions(&dependency.name, candidates, &hierarchy);
+        if counts.is_empty() {
+            continue;
+        }
+        let mut eligible = candidates
+            .iter()
+            .filter(|candidate| {
+                candidate.name == dependency.name && is_system_toolchain(&candidate.toolchain)
+            })
+            .map(|candidate| candidate.version.clone())
+            .collect::<Vec<_>>();
+        eligible.sort();
+        eligible.dedup();
+        let Some(version) = pick_consensus_version(&counts, &eligible) else {
+            continue;
+        };
+        if version != dependency.version {
+            dependency_versions.insert(dependency.name.clone(), version);
+        }
+    }
+}
+
 fn is_generation_retarget(source: &Toolchain, target: &Toolchain) -> bool {
     !source.name.eq_ignore_ascii_case(&target.name) || source.version != target.version
 }
