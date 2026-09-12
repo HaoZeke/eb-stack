@@ -18,9 +18,12 @@ packset pin            # must say set=package-bump
 ljos search bump
 ```
 
-Then `skills/annual-bump/SKILL.md` for which `eb-stack` binary. Robot trees
-live on the configured builder. Discover them there. Do not `test -d` those
-paths on this machine.
+Then `skills/annual-bump/SKILL.md` for which `eb-stack` binary. packset stays
+on the laptop. Discover `ROBOT` once on the builder, then run the bumps.
+Do not keep re-pinning. Do not `test -d` those paths on this machine.
+
+Invoke the builder CLI as `ssh <builder> -- <checkout>/target/debug/eb-stack package bump ...`.
+`--out-dir` is the bundle root. The tool writes `easyconfigs/` under it.
 
 ## Inputs (this overlay)
 
@@ -28,8 +31,9 @@ Site generation is `foss-2025a`. Confirm on the builder before changing it.
 
 On the configured builder:
 
-- Robot: a tree that contains `SeisSol-1.1.4-foss-2023a.eb`
-  (`rg --files "$ROBOT" | rg 'SeisSol-1\\.1\\.4'`).
+- Robot: a tree that contains `SeisSol-1.1.4-foss-2023a.eb`.
+  One known tree on `rg.terra` is
+  `/home/rgoswami/Git/tmp/eon-pr26480-check/easybuild/easyconfigs`.
 - Spack tree if PSpaMM has no `.eb`:
   `rg --files ~ | rg 'py_pspamm/package.py'`.
 - Package layers in this repo: `examples/packages/{asagi,easi,pspamm,seissol}.toml`.
