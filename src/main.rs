@@ -12,9 +12,10 @@ use eb_stack::package_sources::{PackageSourceRoots, SourceRootKind};
 use eb_stack::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use eb_stack::{
     check_duplicate_upstream, check_maintainer_acceptability, check_maintainer_acceptability_text,
-    check_recipe_deps, format_style, format_style_file, inspect_new_package, is_registry_name,
-    lint_style, load_json_file, materialize_registry_name, packaging_gate, parse_easyconfig_trees,
-    plan_new_package, plan_package_bump, plan_package_closure_with_sources,
+    check_recipe_deps, cyclonedx_to_dot, format_style, format_style_file, inspect_new_package,
+    is_registry_name, lint_style, load_json_file, lock_to_cyclonedx, materialize_registry_name,
+    packaging_gate, parse_easyconfig_trees, plan_new_package, plan_package_bump,
+    plan_package_closure_with_sources,
     resolve_easyconfig_file, resolve_package_catalog_layers,
     solve_from_easyconfigs_with_baseline_version_and_extras, write_json_pretty,
     write_package_bundle, write_package_closure, BumpPackageRequest, ForeignFormat,
@@ -145,6 +146,9 @@ struct PackagePlanArgs {
     /// source roots are configured.
     #[arg(long = "package-catalog", value_name = "CATALOG.toml")]
     package_catalogs: Vec<PathBuf>,
+    /// Name stamped into `# contributed by: NAME (eb-stack VERSION)`.
+    #[arg(long)]
+    contributor: Option<String>,
     /// Optional package-neutral source-root TOML layers (EasyBuild / conda-forge / Spack / Cargo).
     #[arg(long = "package-sources", value_name = "SOURCES.toml")]
     package_sources: Vec<PathBuf>,
@@ -188,6 +192,14 @@ struct PackageBumpArgs {
     strict_patches: bool,
     #[arg(long = "package-config")]
     package_configs: Vec<PathBuf>,
+    /// Name stamped into `# updated by: NAME (eb-stack VERSION)`.
+    /// Defaults to `EB_STACK_CONTRIBUTOR`, then `git config user.name`.
+    #[arg(long)]
+    contributor: Option<String>,
+    /// Exit 0 even when a still-required dep has no candidate on the
+    /// target generation (default: fail so companions get bumped first).
+    #[arg(long)]
+    allow_unresolved: bool,
     #[arg(long)]
     out_dir: PathBuf,
 }
@@ -282,6 +294,7 @@ enum StackCommand {
         #[arg(long, default_value = "stack.cdx.json")]
         out: PathBuf,
     },
+<<<<<<< HEAD
     /// Order the builds a set of roots needs, as a graph rather than a stack.
     ///
     /// Unlike `solve`, this does not pick one version per package: it takes
@@ -321,6 +334,13 @@ enum StackCommand {
         /// `--option CUDA-12.8.0.eb:accept-eula-for=CUDA`. Repeatable.
         #[arg(long = "option")]
         options: Vec<String>,
+    },
+    /// Draw a Graphviz graph from a CycloneDX SBOM.
+    Graph {
+        #[arg(long)]
+        sbom: PathBuf,
+        #[arg(long, default_value = "stack.dot")]
+        out: PathBuf,
     },
 }
 
@@ -432,6 +452,7 @@ fn run_package(command: PackageCommand) -> Result<()> {
             Ok(())
         }
         PackageCommand::Plan(args) => {
+            apply_contributor(args.contributor.as_deref());
             let toolchain = toolchain(
                 &args.inspect.toolchain_name,
                 &args.inspect.toolchain_version,
@@ -514,19 +535,40 @@ fn run_package(command: PackageCommand) -> Result<()> {
     }
 }
 
+fn apply_contributor(name: Option<&str>) {
+    if let Some(name) = name {
+        if !name.trim().is_empty() {
+            std::env::set_var("EB_STACK_CONTRIBUTOR", name);
+        }
+    }
+}
+
 fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
+    apply_contributor(args.contributor.as_deref());
     let toolchain = toolchain(&args.toolchain_name, &args.toolchain_version);
     let stack_policy = if let Some(path) = args.stack_policy.as_deref() {
         load_stack_policy(path)?
     } else {
         unconstrained_stack_policy(&toolchain)
     };
+    let overlay = args.out_dir.join("easyconfigs");
+    if overlay.is_dir() {
+        println!("overlay={}", overlay.display());
+    }
+    let source = args.source.clone();
+    let out_dir = args.out_dir.clone();
+    let easyconfigs = args.easyconfigs.clone();
+    let package_configs = args.package_configs.clone();
+    let toolchain_name = args.toolchain_name.clone();
+    let toolchain_version = args.toolchain_version.clone();
+    let version = args.version.clone();
+    let source_checksum = args.source_checksum.clone();
     let bundle = plan_package_bump(&BumpPackageRequest {
         source: args.source,
         toolchain,
         version: args.version,
         source_checksum: args.source_checksum,
-        easyconfig_roots: args.easyconfigs,
+        easyconfig_roots: eb_stack::with_outdir_overlay(easyconfigs.clone(), &out_dir),
         hierarchy_fixture: args.hierarchy_fixture,
         overrides: parse_dep_overrides(&args.dependencies)?,
         stack_policy,
@@ -542,6 +584,97 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
     for path in written.easyconfigs {
         println!("easyconfig={}", path.display());
     }
+    println!(
+        "generation_target={}-{}",
+        args.toolchain_name, args.toolchain_version
+    );
+    let mut blocking = false;
+    for residual in &bundle.plan.residuals {
+        println!("residual={} {}", residual.category, residual.summary);
+        if residual.severity == eb_stack::package::ResidualSeverity::Blocking {
+            blocking = true;
+        }
+    }
+    if blocking && !args.allow_unresolved {
+        let robot = easyconfigs
+            .first()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
+        for residual in &bundle.plan.residuals {
+            if residual.category != "unresolved-generation-dep" {
+                continue;
+            }
+            let mut words = residual.summary.split_whitespace();
+            let name = words.next().unwrap_or_default();
+            let req = words.next().unwrap_or_default();
+            let pin = req.trim_start_matches('=').trim_start_matches('=');
+            if let Some(source) = eb_stack::find_named_easyconfig(&easyconfigs, name) {
+                let mut line = format!(
+                    "companion={name} action=bump --source {} --toolchain-name {toolchain_name} --toolchain-version {toolchain_version}",
+                    source.display()
+                );
+                if !pin.is_empty() && pin.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                    line.push_str(&format!(" --version {pin}"));
+                }
+                line.push_str(&format!(
+                    " --easyconfigs {robot} --out-dir {}",
+                    out_dir.display()
+                ));
+                println!("{line}");
+            } else if let Some(config) =
+                eb_stack::find_sibling_package_config(&package_configs, name)
+            {
+                let mut line = format!(
+                    "companion={name} action=plan --package-config {}",
+                    config.display()
+                );
+                if let Some(foreign) = eb_stack::find_foreign_package_py(&easyconfigs, name) {
+                    line.push_str(&format!(" --source {}", foreign.display()));
+                }
+                line.push_str(&format!(
+                    " --toolchain-name {toolchain_name} --toolchain-version {toolchain_version}"
+                ));
+                if let Some(policy) = package_configs.first().and_then(|config| {
+                    config.parent().map(|dir| {
+                        dir.join("..")
+                            .join("stacks")
+                            .join(format!("{toolchain_name}-{toolchain_version}.toml"))
+                    })
+                }) {
+                    if policy.is_file() {
+                        line.push_str(&format!(" --stack-policy {}", policy.display()));
+                    }
+                }
+                line.push_str(&format!(
+                    " --easyconfigs {robot} --out-dir {}",
+                    out_dir.display()
+                ));
+                println!("{line}");
+            } else {
+                println!("companion={name} action=unknown");
+            }
+        }
+        print!("re_run=eb-stack package bump --source {} --toolchain-name {toolchain_name} --toolchain-version {toolchain_version}", source.display());
+        if let Some(ver) = &version {
+            print!(" --version {ver}");
+        }
+        if let Some(sum) = &source_checksum {
+            print!(" --source-checksum {sum}");
+        }
+        for config in &package_configs {
+            print!(" --package-config {}", config.display());
+        }
+        if !robot.is_empty() {
+            print!(" --easyconfigs {robot}");
+        }
+        println!(" --out-dir {}", out_dir.display());
+        println!("done_when=exit 0");
+        println!("next=run each companion= line, then the re_run= line");
+        anyhow::bail!(
+            "unresolved on this generation; run each companion= line, then re_run="
+        );
+    }
+    println!("done_when=exit 0");
     Ok(())
 }
 
@@ -972,6 +1105,12 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 lock.packages.len(),
                 artifacts.len()
             );
+            Ok(())
+        }
+        StackCommand::Graph { sbom, out } => {
+            let bom: serde_json::Value = load_json_file(&sbom)?;
+            std::fs::write(&out, cyclonedx_to_dot(&bom))?;
+            println!("dot={}", out.display());
             Ok(())
         }
     }

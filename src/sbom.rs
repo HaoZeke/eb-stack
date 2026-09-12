@@ -276,7 +276,7 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
     ));
 
     let mut metadata = Metadata::new().unwrap_or_default();
-    // Prefer lock solver timestamp when parseable as ISO-8601.
+    // Prefer lock solver timestamp when parseable as RFC 3339.
     if let Ok(dt) = DateTime::try_from(lock.solver.timestamp.clone()) {
         metadata.timestamp = Some(dt);
     }
@@ -558,6 +558,75 @@ pub fn build_dep_map_from_universe(
     universe: &Universe,
 ) -> HashMap<String, Vec<String>> {
     dep_names_map_from_universe(lock, universe, true)
+}
+
+/// Graphviz for a CycloneDX document. Runtime `dependsOn` edges are solid.
+pub fn cyclonedx_to_dot(bom: &Value) -> String {
+    fn ident(s: &str) -> String {
+        s.chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect()
+    }
+    fn short_ref(r: &str) -> (String, String) {
+        let rest = r.split("pkg:generic/").nth(1).unwrap_or(r);
+        let namever = rest.split('?').next().unwrap_or(rest);
+        if let Some((n, v)) = namever.rsplit_once('@') {
+            (n.to_string(), v.to_string())
+        } else {
+            (namever.to_string(), String::new())
+        }
+    }
+    let mut out = String::from(
+        "digraph sbom {\n\
+         graph [rankdir=LR, bgcolor=\"transparent\", pad=\"0.25\"];\n\
+         node [shape=box, style=\"rounded,filled\", fillcolor=\"#f7f6f3\", color=\"#1a1917\"];\n\
+         edge [color=\"#1a1917\"];\n",
+    );
+    if let Some(comps) = bom.get("components").and_then(|c| c.as_array()) {
+        for c in comps {
+            let r = c
+                .get("bom-ref")
+                .or_else(|| c.get("bomRef"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if r.is_empty() {
+                continue;
+            }
+            let name = c
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| short_ref(r).0);
+            let ver = c
+                .get("version")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| short_ref(r).1);
+            out.push_str(&format!(
+                "  {} [label=\"{}\\n{}\"];\n",
+                ident(r),
+                name,
+                ver
+            ));
+        }
+    }
+    if let Some(deps) = bom.get("dependencies").and_then(|d| d.as_array()) {
+        for d in deps {
+            let src = match d.get("ref").and_then(|v| v.as_str()) {
+                Some(s) => s,
+                None => continue,
+            };
+            if let Some(ons) = d.get("dependsOn").and_then(|v| v.as_array()) {
+                for dst in ons {
+                    if let Some(t) = dst.as_str() {
+                        out.push_str(&format!("  {} -> {};\n", ident(src), ident(t)));
+                    }
+                }
+            }
+        }
+    }
+    out.push_str("}\n");
+    out
 }
 
 fn dep_names_map_from_universe(
