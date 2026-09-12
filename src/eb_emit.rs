@@ -43,8 +43,9 @@ pub struct EmitParams {
     pub dep_toolchains: HashMap<String, Toolchain>,
     /// New sha256 for the source tarball, used only when `version` changes.
     /// When `None` and the version changes, the source checksum entry's key
-    /// is still renamed to the new versioned tarball name, but the checksum
-    /// value is left stale and a warning is added to [`EmitResult::warnings`].
+    /// is still renamed to the new versioned tarball name, and a stale hash
+    /// value is cleared so the old archive's digest cannot be shipped as if
+    /// it named the new tarball. A warning tells the caller to inject.
     pub source_checksum: Option<String>,
 }
 
@@ -153,7 +154,7 @@ fn rewrite_repeated_artifact_checksums(
                     .expect("key group")
                     .as_str()
                     .replacen(old_version, new_version, 1);
-            let hash = new_checksum.unwrap_or_else(|| caps.name("hash").expect("hash").as_str());
+            let hash = new_checksum.unwrap_or("");
             let sep = caps.name("sep").expect("sep group").as_str();
             format!("{quote}{key}{quote}{sep}{quote}{hash}{quote}")
         });
@@ -223,8 +224,7 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
             }
             if rewrite.stale {
                 warnings.push(format!(
-                    "source checksum is stale after version bump {old_v} -> {app_version}: \
-                     the tarball key was renamed but the checksum value was left unchanged; \
+                    "source checksum cleared after version bump {old_v} -> {app_version}: \
                      set --source-checksum <SHA256> or run `eb --inject-checksums` before building"
                 ));
             }
@@ -243,7 +243,7 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
             if repeated.count > 0 && params.source_checksum.is_none() {
                 warnings.push(format!(
                     "{} further checksum entr{} for the {old_v} artifact (in exts_list or a \
-                     second source) had the key renamed with the value left unchanged; \
+                     second source) had the key renamed and a stale digest cleared; \
                      set --source-checksum <SHA256> or run `eb --inject-checksums`",
                     repeated.count,
                     if repeated.count == 1 { "y" } else { "ies" }
@@ -256,6 +256,9 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
                  review patch applicability -- a version bump commonly needs a different patch set"
             ));
         }
+        let git = rewrite_git_identity(&text, &app_version)?;
+        text = git.text;
+        warnings.extend(git.warnings);
     }
 
     // The rewritten text keeps whatever `versionsuffix` the source declared, so
@@ -285,6 +288,210 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
         filename,
         warnings,
     })
+}
+
+struct GitRewrite {
+    text: String,
+    warnings: Vec<String>,
+}
+
+/// Clear git identity that named the previous version.
+///
+/// A version bump cannot keep the old commit hash: that hash is the previous
+/// tarball. The new tag or commit is not invented here.
+fn rewrite_git_identity(src: &str, new_version: &str) -> Result<GitRewrite, EmitError> {
+    let mut text = src.to_string();
+    let mut warnings = Vec::new();
+    if assign_string_raw(&text, "local_commit_id").is_some() {
+        text = rewrite_string_assign(&text, "local_commit_id", "")?;
+        warnings.push(format!(
+            "local_commit_id cleared after version bump to {new_version}: \
+             set the new tag or commit, or run `eb --inject-checksums` on a git_config source"
+        ));
+    }
+    let re = regex::Regex::new(r#"(?P<key>['"]commit['"])\s*:\s*['"][0-9a-fA-F]{7,40}['"]"#)
+        .map_err(|e| EmitError::Rewrite(e.to_string()))?;
+    if re.is_match(&text) {
+        text = re.replace_all(&text, "$key: ''").into_owned();
+        warnings.push(format!(
+            "git_config commit hash cleared after version bump to {new_version}: \
+             set tag v{new_version} or the new commit"
+        ));
+    }
+    Ok(GitRewrite { text, warnings })
+}
+
+/// Drop dependency tuples whose names are in `names` (case-insensitive).
+pub fn remove_named_dependencies(src: &str, names: &[String]) -> Result<String, EmitError> {
+    let mut text = src.to_string();
+    for name in names {
+        let pattern = format!(
+            r#"(?m)^[ \t]*\(['"]{n}['"]\s*,[^\n]*\n"#,
+            n = regex::escape(name)
+        );
+        let re = regex::Regex::new(&pattern).map_err(|e| EmitError::Rewrite(e.to_string()))?;
+        text = re.replace_all(&text, "").into_owned();
+    }
+    Ok(text)
+}
+
+/// Insert a runtime dependency tuple if that name is not already declared.
+pub fn insert_runtime_dependency(
+    src: &str,
+    name: &str,
+    version: &str,
+) -> Result<String, EmitError> {
+    let already = src.contains(&format!("('{name}'")) || src.contains(&format!("(\"{name}\""));
+    if already {
+        return Ok(src.to_string());
+    }
+    let line = format!("    ('{name}', '{version}'),\n");
+    if let Some((_open, close)) = find_list_span(src, "dependencies")? {
+        let mut out = String::with_capacity(src.len() + line.len());
+        out.push_str(&src[..close]);
+        out.push_str(&line);
+        out.push_str(&src[close..]);
+        return Ok(out);
+    }
+    if let Some(at) = src.find("\nmoduleclass") {
+        let mut out = String::with_capacity(src.len() + line.len() + 32);
+        out.push_str(&src[..at]);
+        out.push_str("\n\ndependencies = [\n");
+        out.push_str(&line);
+        out.push_str("]\n");
+        out.push_str(&src[at..]);
+        return Ok(out);
+    }
+    let mut out = src.to_string();
+    out.push_str("\n\ndependencies = [\n");
+    out.push_str(&line);
+    out.push_str("]\n");
+    Ok(out)
+}
+
+/// Replace `key = ...` with `key = {rhs}`, or insert the assignment before
+/// `moduleclass` when the source never declared it.
+pub fn upsert_raw_assignment(src: &str, key: &str, rhs: &str) -> Result<String, EmitError> {
+    if let Some((start, end)) = find_assignment_span(src, key)? {
+        let head = &src[start..end];
+        let eq = head
+            .find('=')
+            .ok_or_else(|| EmitError::Rewrite(format!("no '=' in {key} assignment")))?;
+        let mut prefix_end = start + eq + 1;
+        while prefix_end < end && matches!(src.as_bytes()[prefix_end], b' ' | b'\t') {
+            prefix_end += 1;
+        }
+        let mut out = String::with_capacity(src.len() + rhs.len());
+        out.push_str(&src[..prefix_end]);
+        out.push_str(rhs);
+        out.push_str(&src[end..]);
+        return Ok(out);
+    }
+    let line = format!("{key} = {rhs}\n");
+    if let Some(at) = src.find("\nmoduleclass") {
+        let mut out = String::with_capacity(src.len() + line.len() + 2);
+        out.push_str(&src[..at]);
+        out.push_str("\n\n");
+        out.push_str(&line);
+        out.push_str(&src[at..]);
+        return Ok(out);
+    }
+    let mut out = src.to_string();
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&line);
+    Ok(out)
+}
+
+fn find_assignment_span(src: &str, key: &str) -> Result<Option<(usize, usize)>, EmitError> {
+    let re = regex::Regex::new(&format!(r"(?m)^[ \t]*{}[ \t]*=[ \t]*", regex::escape(key)))
+        .map_err(|e| EmitError::Rewrite(e.to_string()))?;
+    let Some(header) = re.find(src) else {
+        return Ok(None);
+    };
+    let value_start = header.end();
+    let end = scan_python_value(src.as_bytes(), value_start)?;
+    Ok(Some((header.start(), end)))
+}
+
+fn scan_python_value(bytes: &[u8], start: usize) -> Result<usize, EmitError> {
+    if start >= bytes.len() {
+        return Err(EmitError::Rewrite("empty assignment value".into()));
+    }
+    match bytes[start] {
+        b'\'' | b'"' => scan_quoted(bytes, start),
+        opener @ (b'{' | b'[' | b'(') => {
+            let closer = match opener {
+                b'{' => b'}',
+                b'[' => b']',
+                _ => b')',
+            };
+            scan_balanced(bytes, start, opener, closer)
+        }
+        _ => {
+            let mut i = start;
+            while i < bytes.len() && bytes[i] != b'\n' && bytes[i] != b'#' {
+                i += 1;
+            }
+            while i > start && matches!(bytes[i - 1], b' ' | b'\t') {
+                i -= 1;
+            }
+            Ok(i)
+        }
+    }
+}
+
+fn scan_quoted(bytes: &[u8], start: usize) -> Result<usize, EmitError> {
+    let quote = bytes[start];
+    let mut i = start + 1;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' {
+            i += 2;
+            continue;
+        }
+        if bytes[i] == quote {
+            return Ok(i + 1);
+        }
+        i += 1;
+    }
+    Err(EmitError::Rewrite("unclosed quoted assignment".into()))
+}
+
+fn scan_balanced(bytes: &[u8], start: usize, opener: u8, closer: u8) -> Result<usize, EmitError> {
+    let mut depth = 1i32;
+    let mut i = start + 1;
+    let mut in_string: Option<u8> = None;
+    let mut in_comment = false;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if in_comment {
+            if c == b'\n' {
+                in_comment = false;
+            }
+        } else if let Some(quote) = in_string {
+            if c == b'\\' {
+                i += 1;
+            } else if c == quote {
+                in_string = None;
+            }
+        } else {
+            match c {
+                b'\'' | b'"' => in_string = Some(c),
+                b'#' => in_comment = true,
+                o if o == opener => depth += 1,
+                o if o == closer => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Ok(i + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    Err(EmitError::Rewrite("unclosed assignment value".into()))
 }
 
 /// Read a source file and emit the next-generation recipe.
@@ -852,9 +1059,15 @@ fn rewrite_checksum_value(
                 note: None,
             },
             None => ValueRewrite {
-                text: expr.to_string(),
+                // Keep the quotes so the list stays valid Python. An empty
+                // digest is not a 64-hex claim about the previous tarball.
+                text: rebuild(format!("{first}{first}")),
                 stale: true,
-                note: None,
+                note: Some(
+                    "source checksum cleared after version bump; \
+                     set --source-checksum <SHA256> or run `eb --inject-checksums`"
+                        .into(),
+                ),
             },
         });
     }
@@ -882,16 +1095,28 @@ fn rewrite_checksum_value(
                     }
                 }
                 None => ValueRewrite {
-                    text: expr.to_string(),
+                    text: rebuild({
+                        let (vstart, vend, vquote) = tokens[1];
+                        let mut body = String::with_capacity(trimmed.len());
+                        body.push_str(&trimmed[..vstart]);
+                        body.push(vquote);
+                        body.push(vquote);
+                        body.push_str(&trimmed[vend..]);
+                        body
+                    }),
                     stale: true,
-                    note: None,
+                    note: Some(
+                        "source checksum cleared after version bump; \
+                         set --source-checksum <SHA256> or run `eb --inject-checksums`"
+                            .into(),
+                    ),
                 },
             });
         }
 
         // Alternatives (tuple) or an all-must-match list. After a version bump
-        // every one of them is wrong, so collapse to the single new value and
-        // say so; without a new value, leave the shape alone and report stale.
+        // every one of them is the previous artifact. Collapse to the new
+        // hash, or to an empty digest so the old bytes cannot ship.
         return Ok(match new_checksum {
             Some(sha) => {
                 let kind = if first == '(' {
@@ -910,9 +1135,13 @@ fn rewrite_checksum_value(
                 }
             }
             None => ValueRewrite {
-                text: expr.to_string(),
+                text: rebuild("''".into()),
                 stale: true,
-                note: None,
+                note: Some(
+                    "source checksum cleared after version bump; \
+                     set --source-checksum <SHA256> or run `eb --inject-checksums`"
+                        .into(),
+                ),
             },
         });
     }
@@ -1931,7 +2160,7 @@ exts_list = [
     }
 
     #[test]
-    fn a_shape_without_a_new_checksum_is_left_alone_and_reported_stale() {
+    fn a_shape_without_a_new_checksum_clears_the_digest_and_warns() {
         let params = EmitParams {
             toolchain: nvhpc("25.11-CUDA-12.8.0"),
             version: Some("5.0.7".into()),
@@ -1946,12 +2175,15 @@ exts_list = [
         ] {
             let r = emit_next_generation(fixture, &params).expect("emit");
             assert!(
-                r.warnings.iter().any(|w| w.contains("stale")),
+                r.warnings.iter().any(|w| w.contains("checksum")),
                 "warnings: {:?}",
                 r.warnings
             );
-            // Nothing invented: the old shape stays until a real hash arrives.
-            assert!(r.text.contains("990582f206b3ab32"), "{}", r.text);
+            assert!(
+                !r.text.contains("990582f206b3ab32"),
+                "stale digest must not ship: {}",
+                r.text
+            );
         }
     }
 
@@ -2022,7 +2254,7 @@ exts_list = [
     }
 
     #[test]
-    fn version_bump_without_source_checksum_renames_key_and_warns() {
+    fn version_bump_without_source_checksum_renames_key_and_clears_hash() {
         let params = EmitParams {
             toolchain: nvhpc("25.11-CUDA-12.8.0"),
             version: Some("5.0.7".into()),
@@ -2031,13 +2263,83 @@ exts_list = [
             source_checksum: None,
         };
         let r = emit_next_generation(WITH_CHECKSUMS, &params).expect("emit");
-        // Key renamed to the new version, but checksum value stays stale.
-        assert!(r.text.contains(
-            "{'openmpi-5.0.7.tar.bz2': '990582f206b3ab32e938aa31bbf07c639368e4405dca196fabe7f0f76eeda90b'}"
-        ));
-        assert_eq!(r.warnings.len(), 2, "warnings: {:?}", r.warnings);
+        assert!(
+            r.text.contains("{'openmpi-5.0.7.tar.bz2': ''}"),
+            "stale digest must not ship: {}",
+            r.text
+        );
+        assert!(!r
+            .text
+            .contains("990582f206b3ab32e938aa31bbf07c639368e4405dca196fabe7f0f76eeda90b"));
         assert!(r.warnings.iter().any(|w| w.contains("checksum")));
         assert!(r.warnings.iter().any(|w| w.contains("patches")));
+    }
+
+    #[test]
+    fn version_bump_clears_git_commit_identity() {
+        let src = "\
+name = 'App'
+version = '1.0.0'
+toolchain = {'name': 'foss', 'version': '2023a'}
+local_commit_id = '6d30175'
+sources = [{'git_config': {'commit': local_commit_id}}]
+checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']
+";
+        let params = EmitParams {
+            toolchain: nvhpc("25.11-CUDA-12.8.0"),
+            version: Some("1.3.2".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: None,
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert!(r.text.contains("local_commit_id = ''"), "got:\n{}", r.text);
+        assert!(
+            r.text.contains("checksums = ['']") || r.text.contains("checksums = [\"\"]"),
+            "got:\n{}",
+            r.text
+        );
+        assert!(r.warnings.iter().any(|w| w.contains("local_commit_id")));
+    }
+
+    #[test]
+    fn remove_named_dependencies_drops_matching_tuples() {
+        let src = "\
+dependencies = [
+    ('Python', '3.11.3'),
+    ('ImpalaJIT', '20211028'),
+    ('Lua', '5.4.4'),
+]
+";
+        let out = remove_named_dependencies(src, &["ImpalaJIT".into()]).expect("remove");
+        assert!(!out.contains("ImpalaJIT"), "got:\n{out}");
+        assert!(out.contains("('Python', '3.11.3')"));
+        assert!(out.contains("('Lua', '5.4.4')"));
+    }
+
+    #[test]
+    fn upsert_raw_assignment_replaces_or_inserts() {
+        let src = "\
+name = 'App'
+version = '1.0'
+local_commit_id = ''
+moduleclass = 'tools'
+";
+        let replaced = upsert_raw_assignment(src, "local_commit_id", "'abc123'").expect("replace");
+        assert!(
+            replaced.contains("local_commit_id = 'abc123'"),
+            "got:\n{replaced}"
+        );
+        let inserted =
+            upsert_raw_assignment(src, "options", "{'modulename': 'synth'}").expect("insert");
+        assert!(
+            inserted.contains("options = {'modulename': 'synth'}"),
+            "got:\n{inserted}"
+        );
+        assert!(
+            inserted.find("options =").expect("options")
+                < inserted.find("moduleclass").expect("moduleclass")
+        );
     }
 
     #[test]

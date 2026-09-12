@@ -415,7 +415,15 @@ pub fn apply_package_layers(
                                 .iter_mut()
                                 .find(|existing| existing.filename == patch.filename)
                             {
+                                let resolved_source = existing.resolved_source.clone();
+                                let source = existing.source.clone();
                                 *existing = patch.clone();
+                                if existing.resolved_source.is_none() {
+                                    existing.resolved_source = resolved_source;
+                                }
+                                if existing.source.is_none() {
+                                    existing.source = source;
+                                }
                             } else {
                                 plan.build.patches.push(patch.clone());
                             }

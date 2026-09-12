@@ -72,6 +72,7 @@ fn canonical_bump(
             exclusions: Vec::new(),
         },
         strict_patches: false,
+        package_layers: Vec::new(),
     })
 }
 

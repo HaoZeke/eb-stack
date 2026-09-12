@@ -1,0 +1,21 @@
+schema_version = 1
+
+[package]
+name = "PSpaMM"
+version = "0.3.1"
+homepage = "https://github.com/SeisSol/PSpaMM"
+description = "Code generator for sparse matrix multiplications used by SeisSol."
+
+[build]
+easyblock = "PythonPackage"
+moduleclass = "tools"
+
+# Import path is pypspamm, not the EasyBuild default derived from the name.
+[build.easyconfig_parameters]
+options = { modulename = "pypspamm" }
+
+[[dependencies.requirements]]
+name = "Python"
+
+[[dependencies.requirements]]
+name = "SciPy-bundle"

@@ -155,6 +155,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("dependencies", "object"),
                 ("hierarchy_fixture", "string"),
                 ("stack_policy", "string"),
+                ("package_configs", "array"),
             ],
         ),
         tool_with_optional(
@@ -449,6 +450,7 @@ fn package_bump(arguments: &Value) -> Result<Value, String> {
         overrides: string_map(arguments, "dependencies")?,
         stack_policy,
         strict_patches: false,
+        package_layers: package_layers(arguments)?,
     })
     .map_err(|error| error.to_string())?;
     let written = write_package_bundle(&bundle, &required_path(arguments, "out_dir")?)

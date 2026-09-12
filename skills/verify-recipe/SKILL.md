@@ -28,7 +28,11 @@ sha256sum /tmp/pkg.tar.gz          # must equal the checksums entry
 A seeded checksum from conda-forge or Spack is a different artifact class than
 an EasyBuild release-asset source often enough that `recipe check
 --verify-sources` exists for it. That flag classifies the URL; this step proves
-the bytes.
+the bytes. A `git_config` recursive archive is another class: the hash
+`eb --inject-checksums` writes is not the GitHub tag tarball Spack hashed.
+
+A version bump that left `checksums = ['']` is unfinished, not a recipe that
+kept the old digest. Inject, then recompute.
 
 **Also check every nested copy.** An `exts_list` entry whose `source_tmpl`
 resolves to the main tarball carries its own `checksums`, and a version bump

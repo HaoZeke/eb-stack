@@ -398,3 +398,4 @@ Do not open, edit, or merge a public issue or PR. Prepare the recipe set, eviden
 - `skills/tool-repair/SKILL.md` — when generation is wrong rather than the recipe
 - `skills/upstream-pr/SKILL.md` — the shape maintainers accept
 - `skills/site-consume/SKILL.md` — building it at a site while the PR is open
+- `skills/golden-replay/SKILL.md` — SeisSol overlay from bump + package.toml only

@@ -48,6 +48,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "dependencies",
         "hierarchy_fixture",
         "stack_policy",
+        "package_configs",
     ] {
         assert!(
             package_bump["inputSchema"]["properties"]

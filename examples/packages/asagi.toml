@@ -1,0 +1,24 @@
+schema_version = 1
+
+[package]
+name = "ASAGI"
+version = "1.0"
+homepage = "https://github.com/TUM-I5/ASAGI"
+description = " a pArallel Server for Adaptive GeoInformation.\n"
+
+[build]
+easyblock = "CMakeMake"
+build_systems = ["CMake"]
+moduleclass = "geo"
+patches_mode = "merge"
+config_options = ["-DSHARED_LIB=yes"]
+
+[[build.patches]]
+filename = "ASAGI-1.0_fix-level.h.patch"
+sha256 = "da8c1c8cef1a84f4e8fe37c51ba7ecf654d528853636ae3bc4fcce35fd025e23"
+
+[[dependencies.requirements]]
+name = "netCDF"
+
+[[dependencies.requirements]]
+name = "numactl"
