@@ -828,6 +828,81 @@ fn version_bump_applies_package_config_source_checksum() {
 }
 
 #[test]
+fn package_config_locals_derive_binary_and_interpolated_configopts() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("SeisSol-1.1.4-foss-2023a.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'CMakeMake'\nname = 'SeisSol'\nversion = '1.1.4'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['seissol-1.1.4.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         configopts = '-DORDER=4 -DHOST_ARCH=hsw -DEQUATIONS=elastic'\n\
+         sanity_check_paths = {'files': ['bin/SeisSol_Release_dhsw_6_elastic'], 'dirs': []}\n\
+         sanity_check_commands = ['SeisSol_Release_dhsw_6_elastic --help |grep help']\n\
+         moduleclass = 'geo'\n",
+    )
+    .expect("source recipe");
+    let config_path = temp.path().join("seissol.toml");
+    fs::write(
+        &config_path,
+        "schema_version = 1\n\n[build]\n\
+         config_options = [\n\
+         \"-DCMAKE_BUILD_TYPE=Release\",\n\
+         \"-DORDER=6\",\n\
+         \"-DHOST_ARCH=hsw\",\n\
+         \"-DEQUATIONS=elastic\",\n\
+         \"-DPRECISION=double\",\n\
+         ]\n\
+         [build.easyconfig_parameters]\n\
+         local_host_arch = \"hsw\"\n\
+         local_order = 6\n\
+         local_equations = \"elastic\"\n",
+    )
+    .expect("package config");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2025a".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: Some("1.3.2".into()),
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+        foreign_sources: Vec::new(),
+    })
+    .expect("derived locals");
+    let text = &bundle.easyconfigs[0].text;
+    assert!(
+        text.contains("local_binary = 'SeisSol_Release_d%s_%s_%s' % (local_host_arch, local_order, local_equations)"),
+        "local_binary missing:\n{text}"
+    );
+    assert!(
+        text.contains("% (local_order, local_host_arch, local_equations)"),
+        "configopts not interpolated:\n{text}"
+    );
+    assert!(
+        text.contains("-DORDER=%s"),
+        "ORDER not parameterized:\n{text}"
+    );
+}
+
+#[test]
 fn bump_inspects_a_spack_recipe_for_deps_the_easyconfig_never_declared() {
     let temp = tempfile::tempdir().expect("tempdir");
     let source = temp.path().join("Gromacsish-1.0-foss-2023a.eb");

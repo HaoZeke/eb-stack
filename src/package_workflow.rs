@@ -1216,6 +1216,8 @@ pub fn complete_package_bump(
         result.text = crate::eb_emit::upsert_raw_assignment(&result.text, "configopts", &rhs)
             .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     }
+    result.text = apply_derived_cmake_locals(&result.text, &plan)
+        .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     if let Some(profile) = plan.profiles.iter().find(|profile| profile.default) {
         if !profile.toolchain_options.is_empty() {
             let table = profile
@@ -1605,6 +1607,115 @@ fn package_plan_from_easyconfig(
 /// the foreign manifest, where a Spack `depends_on` range or a conda-forge
 /// version constraint states what the package actually needs; when the plan
 /// carries one, that constraint is the one to keep.
+fn easyconfig_scalar(value: &crate::package::EasyconfigValue) -> Option<String> {
+    match value {
+        crate::package::EasyconfigValue::String(text) => Some(text.clone()),
+        crate::package::EasyconfigValue::Integer(number) => Some(number.to_string()),
+        _ => None,
+    }
+}
+
+fn apply_derived_cmake_locals(
+    text: &str,
+    plan: &PackagePlan,
+) -> Result<String, crate::eb_emit::EmitError> {
+    let host = plan
+        .build
+        .easyconfig_parameters
+        .get("local_host_arch")
+        .and_then(easyconfig_scalar);
+    let order = plan
+        .build
+        .easyconfig_parameters
+        .get("local_order")
+        .and_then(easyconfig_scalar);
+    let equations = plan
+        .build
+        .easyconfig_parameters
+        .get("local_equations")
+        .and_then(easyconfig_scalar);
+    let (Some(host), Some(order), Some(equations)) = (host, order, equations) else {
+        return Ok(text.to_string());
+    };
+    let build_type = plan
+        .build
+        .config_options
+        .iter()
+        .find_map(|flag| flag.strip_prefix("-DCMAKE_BUILD_TYPE="))
+        .unwrap_or("Release");
+    let precision_letter = plan
+        .build
+        .config_options
+        .iter()
+        .find_map(|flag| match flag.strip_prefix("-DPRECISION=") {
+            Some("double") => Some('d'),
+            Some("single") => Some('s'),
+            _ => None,
+        })
+        .unwrap_or('d');
+    let literal_binary = format!(
+        "{}_{}_{}{}_{}_{}",
+        plan.package.name, build_type, precision_letter, host, order, equations
+    );
+    let binary_rhs = format!(
+        "'{}_{}_{}%s_%s_%s' % (local_host_arch, local_order, local_equations)",
+        plan.package.name, build_type, precision_letter
+    );
+    let mut text = crate::eb_emit::upsert_raw_assignment(text, "local_binary", &binary_rhs)?;
+    if let Some(joined) = plan.build.config_options.first().map(|_| {
+        plan.build
+            .config_options
+            .iter()
+            .map(|flag| {
+                if let Some(rest) = flag.strip_prefix("-DORDER=") {
+                    return if rest == order.as_str() {
+                        "-DORDER=%s".into()
+                    } else {
+                        flag.clone()
+                    };
+                }
+                if let Some(rest) = flag.strip_prefix("-DHOST_ARCH=") {
+                    return if rest == host.as_str() {
+                        "-DHOST_ARCH=%s".into()
+                    } else {
+                        flag.clone()
+                    };
+                }
+                if let Some(rest) = flag.strip_prefix("-DEQUATIONS=") {
+                    return if rest == equations.as_str() {
+                        "-DEQUATIONS=%s".into()
+                    } else {
+                        flag.clone()
+                    };
+                }
+                flag.clone()
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }) {
+        if joined.contains("%s") {
+            let rhs = format!("'{joined}' % (local_order, local_host_arch, local_equations)");
+            text = crate::eb_emit::upsert_raw_assignment(&text, "configopts", &rhs)?;
+        }
+    }
+    text = text.replace(
+        &format!("'bin/{literal_binary}'"),
+        "'bin/%s' % local_binary",
+    );
+    let command_open = format!("'{literal_binary}");
+    if let Some(start) = text.find(&command_open) {
+        if let Some(rel_end) = text[start + 1..].find('\'') {
+            let end = start + 1 + rel_end + 1;
+            let inner = &text[start + 1..end - 1];
+            if let Some(rest) = inner.strip_prefix(&literal_binary) {
+                let replacement = format!("'%s{rest}' % local_binary");
+                text.replace_range(start..end, &replacement);
+            }
+        }
+    }
+    Ok(text)
+}
+
 fn apply_system_dep_consensus(
     dependency_versions: &mut HashMap<String, String>,
     source_recipe: &crate::eb_parse::ResolvedEasyconfig,
