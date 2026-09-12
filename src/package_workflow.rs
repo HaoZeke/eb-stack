@@ -78,6 +78,86 @@ pub struct BumpPackageRequest {
     pub package_layers: Vec<PackageConfigLayer>,
 }
 
+/// If `--out-dir/easyconfigs` already exists, search it as a robot root.
+/// A companion bumped into the same out-dir is then visible on the next
+/// parent bump without a second `--easyconfigs` flag.
+pub fn with_outdir_overlay(mut roots: Vec<PathBuf>, out_dir: &Path) -> Vec<PathBuf> {
+    let overlay = out_dir.join("easyconfigs");
+    if overlay.is_dir() && !roots.iter().any(|root| root == &overlay) {
+        roots.push(overlay);
+    }
+    roots
+}
+
+/// Newest `{name}-*.eb` under a robot root (`a/ASAGI/ASAGI-1.0-….eb`).
+pub fn find_named_easyconfig(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
+    let letter = name.chars().next()?.to_ascii_lowercase();
+    for root in roots {
+        let dir = root.join(letter.to_string()).join(name);
+        if let Some(found) = newest_named_eb(&dir, name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn newest_named_eb(dir: &Path, name: &str) -> Option<PathBuf> {
+    let prefix = format!("{name}-");
+    let mut hits: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().is_some_and(|ext| ext == "eb")
+                && path
+                    .file_name()
+                    .and_then(|file| file.to_str())
+                    .is_some_and(|file| file.starts_with(&prefix))
+        })
+        .collect();
+    hits.sort();
+    hits.pop()
+}
+
+/// `{name}.toml` next to a `--package-config` the parent bump already used.
+pub fn find_sibling_package_config(configs: &[PathBuf], name: &str) -> Option<PathBuf> {
+    let slug = name.to_ascii_lowercase();
+    for config in configs {
+        let dir = config.parent()?;
+        let candidate = dir.join(format!("{slug}.toml"));
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// `package.py` next to a robot copy (`../spack/py_{name}/package.py`).
+pub fn find_foreign_package_py(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
+    let slug = name.to_ascii_lowercase();
+    let rels = [
+        format!("py_{slug}/package.py"),
+        format!("{slug}/package.py"),
+        format!("spack/py_{slug}/package.py"),
+        format!("spack/{slug}/package.py"),
+    ];
+    for root in roots {
+        for rel in &rels {
+            let direct = root.join(rel);
+            if direct.is_file() {
+                return Some(direct);
+            }
+            if let Some(parent) = root.parent() {
+                let beside = parent.join(rel);
+                if beside.is_file() {
+                    return Some(beside);
+                }
+            }
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone)]
 /// A planned package, in memory and not yet written anywhere.
 ///
@@ -769,8 +849,21 @@ pub fn complete_package_bump(
         .version
         .as_deref()
         .is_some_and(|version| version != source_recipe.version);
+    let generation_changed = source_recipe.toolchain.name != request.toolchain.name
+        || source_recipe.toolchain.version != request.toolchain.version;
     let mut dropped_dep_names = Vec::new();
-    if version_changed {
+    if version_changed || generation_changed {
+        let already_excluded: Vec<String> = plan
+            .dependencies
+            .iter()
+            .filter(|dependency| dependency.solver_excluded)
+            .map(|dependency| {
+                dependency
+                    .eb_name
+                    .clone()
+                    .unwrap_or_else(|| dependency.name.clone())
+            })
+            .collect();
         let holes = unsatisfied_direct_dependencies_with_hierarchy(
             &plan,
             "default",
@@ -791,19 +884,42 @@ pub fn complete_package_bump(
                 }
             }
             dropped_dep_names.push(hole.name.clone());
-            plan.residuals.push(Residual {
-                id: format!("version-bump-dropped-dep:{index}"),
-                stage: ResidualStage::Resolve,
-                category: "version-bump-dropped-dep".into(),
-                severity: ResidualSeverity::Judgment,
-                summary: format!(
-                    "{} {} has no candidate on this generation after the version bump; \
-                     dropped from the emitted recipe",
-                    hole.name, hole.version_req
-                ),
-                evidence: None,
-                provenance: None,
-            });
+            let intended = already_excluded
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(&hole.name));
+            let generation = format!(
+                "{}-{}",
+                request.toolchain.name, request.toolchain.version
+            );
+            if intended {
+                plan.residuals.push(Residual {
+                    id: format!("version-bump-dropped-dep:{index}"),
+                    stage: ResidualStage::Resolve,
+                    category: "version-bump-dropped-dep".into(),
+                    severity: ResidualSeverity::Judgment,
+                    summary: format!(
+                        "{} {} is excluded and has no candidate on {generation}; \
+                         dropped from the emitted recipe",
+                        hole.name, hole.version_req
+                    ),
+                    evidence: None,
+                    provenance: None,
+                });
+            } else {
+                plan.residuals.push(Residual {
+                    id: format!("unresolved-generation-dep:{index}"),
+                    stage: ResidualStage::Resolve,
+                    category: "unresolved-generation-dep".into(),
+                    severity: ResidualSeverity::Blocking,
+                    summary: format!(
+                        "{} {} has no candidate on {generation}; \
+                         bump that recipe into this --out-dir and re-run this bump",
+                        hole.name, hole.version_req
+                    ),
+                    evidence: None,
+                    provenance: None,
+                });
+            }
         }
     }
     let lock = solve_package_profile_with_hierarchy(

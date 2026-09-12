@@ -96,6 +96,10 @@ pub fn emit_profile_easyconfigs(
             }
         }
 
+        let text = crate::attribution::ensure(
+            &render_easyconfig(plan, lock, &materialized),
+            crate::attribution::AttributionKind::Contributed,
+        );
         emitted.push(EmittedEasyconfig {
             profile: output.profile.clone(),
             filename: easyconfig_basename(
@@ -105,7 +109,7 @@ pub fn emit_profile_easyconfigs(
                 (!materialized.versionsuffix.is_empty())
                     .then_some(materialized.versionsuffix.as_str()),
             ),
-            text: render_easyconfig(plan, lock, &materialized),
+            text,
         });
     }
     Ok(emitted)

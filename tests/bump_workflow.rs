@@ -3,7 +3,8 @@ use eb_stack::package::{
 };
 use eb_stack::package_config::PackageConfigLayer;
 use eb_stack::{
-    plan_package_bump, resolve_easyconfig_str, write_package_bundle, BumpPackageRequest, Toolchain,
+    find_named_easyconfig, find_sibling_package_config, plan_package_bump, resolve_easyconfig_str,
+    with_outdir_overlay, write_package_bundle, BumpPackageRequest, Toolchain,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -606,7 +607,7 @@ fn version_bump_drops_a_direct_dep_with_no_candidate() {
             .plan
             .residuals
             .iter()
-            .any(|residual| residual.category == "version-bump-dropped-dep"
+            .any(|residual| residual.category == "unresolved-generation-dep"
                 && residual.summary.contains("VanishedLib")),
         "missing dropped-dep residual: {:?}",
         bundle.plan.residuals
@@ -675,6 +676,16 @@ fn package_config_exclude_drops_dep_on_toolchain_only_bump() {
     assert!(
         text.contains("('KeptLib', '1.0')"),
         "kept dep missing:\n{text}"
+    );
+    assert!(
+        !bundle
+            .plan
+            .residuals
+            .iter()
+            .any(|residual| residual.category == "unresolved-generation-dep"
+                && residual.summary.contains("VanishedLib")),
+        "excluded drop must not be blocking: {:?}",
+        bundle.plan.residuals
     );
 }
 
@@ -873,4 +884,131 @@ fn package_config_merge_keeps_the_source_patch_file() {
         "merged patch lost its source file: {:?}",
         written.patches
     );
+}
+
+#[test]
+fn second_bump_sees_companions_already_in_outdir() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Gamma-1.0-foss-2023a.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'CMakeMake'\nname = 'Gamma'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['gamma-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [\n    ('KeptLib', '1.0'),\n    ('VanishedLib', '1.0'),\n]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    fs::write(
+        robot.join("KeptLib-1.0-foss-2025a.eb"),
+        "easyblock = 'ConfigureMake'\nname = 'KeptLib'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Kept'\n\
+         toolchain = {'name': 'foss', 'version': '2025a'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'lib'\n",
+    )
+    .expect("kept candidate");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2025a".into(),
+    };
+    let first = plan_package_bump(&BumpPackageRequest {
+        source: source.clone(),
+        toolchain: toolchain.clone(),
+        version: Some("1.7.0".into()),
+        source_checksum: None,
+        easyconfig_roots: vec![robot.clone()],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain: toolchain.clone(),
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: Vec::new(),
+    })
+    .expect("first bump");
+    assert!(
+        first
+            .plan
+            .residuals
+            .iter()
+            .any(|residual| residual.category == "unresolved-generation-dep"
+                && residual.summary.contains("VanishedLib")),
+        "expected unresolved VanishedLib: {:?}",
+        first.plan.residuals
+    );
+    let out = temp.path().join("out");
+    write_package_bundle(&first, &out).expect("write first");
+    let companion_dir = out.join("easyconfigs/v/VanishedLib");
+    fs::create_dir_all(&companion_dir).expect("companion dir");
+    fs::write(
+        companion_dir.join("VanishedLib-1.0-foss-2025a.eb"),
+        "easyblock = 'ConfigureMake'\nname = 'VanishedLib'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Now present'\n\
+         toolchain = {'name': 'foss', 'version': '2025a'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'lib'\n",
+    )
+    .expect("companion recipe");
+    let roots = with_outdir_overlay(vec![robot], &out);
+    let second = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: Some("1.7.0".into()),
+        source_checksum: None,
+        easyconfig_roots: roots,
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: Vec::new(),
+    })
+    .expect("second bump");
+    assert!(
+        !second
+            .plan
+            .residuals
+            .iter()
+            .any(|residual| residual.category == "unresolved-generation-dep"
+                && residual.summary.contains("VanishedLib")),
+        "overlay companion still unresolved: {:?}",
+        second.plan.residuals
+    );
+    assert!(
+        second.easyconfigs[0].text.contains("VanishedLib"),
+        "companion not restored:\n{}",
+        second.easyconfigs[0].text
+    );
+}
+
+#[test]
+fn finds_robot_easyconfig_and_sibling_package_toml() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let robot = temp.path().join("robot");
+    let named = robot.join("k/KeptLib");
+    fs::create_dir_all(&named).expect("named dir");
+    let recipe = named.join("KeptLib-1.0-foss-2023a.eb");
+    fs::write(&recipe, "name = 'KeptLib'\n").expect("recipe");
+    let found = find_named_easyconfig(&[robot], "KeptLib").expect("find");
+    assert_eq!(found, recipe);
+    let cfg_dir = temp.path().join("cfg");
+    fs::create_dir_all(&cfg_dir).expect("cfg");
+    let sibling = cfg_dir.join("keptlib.toml");
+    fs::write(&sibling, "schema_version = 1\n").expect("toml");
+    let parent = cfg_dir.join("app.toml");
+    fs::write(&parent, "schema_version = 1\n").expect("parent");
+    let config = find_sibling_package_config(&[parent], "KeptLib").expect("sibling");
+    assert_eq!(config, sibling);
 }

@@ -283,6 +283,7 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
         other => other,
     };
     let filename = easyconfig_filename(&name, &app_version, &params.toolchain, filename_suffix);
+    text = crate::attribution::ensure(&text, crate::attribution::AttributionKind::Updated);
     Ok(EmitResult {
         text,
         filename,

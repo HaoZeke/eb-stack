@@ -14,12 +14,56 @@ and `skills/new-package/SKILL.md`). The closure planner runs this same prepare
 → Resolvo → emit pipeline for that companion; do not replace the existing
 recipe with a foreign archive of a different artifact identity.
 
+`--contributor NAME` stamps `# updated by: NAME (eb-stack VERSION)` on
+the emitted recipe. With no flag, eb-stack uses `EB_STACK_CONTRIBUTOR`
+or `git config user.name`. Existing `Authors::` lines stay.
+
+Before any `package bump`, recall the packset from the laptop terminal:
+
+```sh
+PACKSET_URL=http://127.0.0.1:8761
+PACKSET_WORKSPACE=git:github.com/HaoZeke/eb-stack
+packset pin
+ljos search bump
+```
+
+Name the first `package bump` the parent.
+Copy its flags exactly.
+Exit 1 with `residual=` means continue.
+Run each `companion=` line from stdout, then the `re_run=` line.
+Bump NAME into the same `--out-dir`.
+If no `.eb` exists, run `package plan`.
+Re-run the parent with the same flags.
+Do not add `--allow-unresolved` on the parent.
+Stop only when that parent exits 0.
+A child exit 0 is not done.
+
+The command is `eb-stack package bump`. It is not `stack solve`.
+
+```sh
+eb-stack package bump \
+  --source SeisSol-1.1.4-foss-2023a.eb \
+  --toolchain-name foss \
+  --toolchain-version 2025a \
+  --version 1.3.2 \
+  --package-config examples/packages/seissol.toml \
+  --easyconfigs "$ROBOT" \
+  --out-dir "$OUT"
+```
+
+Pass `--version` when the application version changes. A toolchain-only
+bump without `--version` keeps the old version.
+
+`--allow-unresolved` is a real flag. Use it only for `exclude_from_solve`.
+
 ## Which binary
 
 `eb-stack package --help` must list `inspect`, `plan`, and `bump`. A binary
 whose top-level help lists `solve`, `bump`, and `check-recipe` is stale.
 Use the current checkout on the configured builder. Do not use a stale
-`eb-stack` on PATH unless that check passes.
+`eb-stack` on PATH unless that check passes. Never `cargo` or `rustc` to
+produce that CLI. The job is package bump and EasyBuild docs, not a
+Rust build.
 
 Robot trees and `--out-dir` live on that builder. Do not `test -d` those
 paths on this machine. The pinned packset `package-bump` states the same
@@ -73,11 +117,11 @@ Fill the digest with `eb --inject-checksums` on the EasyBuild host. Do not
 copy a conda-forge or Spack checksum onto a different artifact class
 (`skills/verify-recipe/SKILL.md`).
 
-A dependency with no candidate on the target generation after a version bump
-is dropped from the emitted recipe and recorded as a
-`version-bump-dropped-dep` residual. The same drop happens for names listed
-in `exclude_from_solve`. Lock selections that the source file never declared
-are inserted.
+A still-required dep with no candidate on the target generation is a
+blocking `unresolved-generation-dep` residual. The CLI prints
+`residual=` and exits 1. A name in `exclude_from_solve` is a judgment
+drop and does not fail the bump. Lock selections that the source file
+never declared are inserted.
 
 ## When the target generation cannot build anything
 
@@ -222,8 +266,8 @@ Keep one reviewable recipe set per contribution. Do not open or mutate public is
 
 ## Related
 
-- `skills/verify-recipe/SKILL.md` — prove the emitted recipe before building it
-- `skills/tool-repair/SKILL.md` — when the emitted recipe needed a hand correction
-- `skills/site-consume/SKILL.md` — getting the result built at a site
-- `skills/upstream-pr/SKILL.md` — getting it merged upstream
-- `skills/golden-replay/SKILL.md` — SeisSol overlay from bump + package.toml only
+- `skills/verify-recipe/SKILL.md` -- prove the emitted recipe before building it
+- `skills/tool-repair/SKILL.md` -- when the emitted recipe needed a hand correction
+- `skills/site-consume/SKILL.md` -- getting the result built at a site
+- `skills/upstream-pr/SKILL.md` -- getting it merged upstream
+- `skills/golden-replay/SKILL.md` -- SeisSol overlay from bump + package.toml only
