@@ -132,7 +132,6 @@ The source manual lives in `docs/orgmode/`; the documentation workflow exports R
 ```sh
 eb-stack package bump \
   --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
-  --toolchain-name foss \
   --toolchain-version 2024a \
   --easyconfigs tests/repro_fixtures/universe_foss_2024a \
   --out-dir /tmp/gromacs-2024a
@@ -337,7 +336,7 @@ eb-stack stack solve \
 
 `eb-stack mcp` exposes the same version-one workflows over stdio:
 
-- `eb_package_inspect`, `eb_package_plan`, `eb_package_bump`;
+- `eb_package_inspect`, `eb_package_plan`, `eb_package_bump`, `eb_package_mutate`;
 - `eb_recipe_check`, `eb_recipe_format`, `eb_stack_solve`;
 - `eb_target_list`, `eb_target_doctor`;
 - `eb_campaign_run`, `eb_campaign_status`;

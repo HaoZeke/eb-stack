@@ -20,6 +20,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_package_inspect",
         "eb_package_plan",
         "eb_package_bump",
+        "eb_package_mutate",
         "eb_recipe_check",
         "eb_recipe_lint",
         "eb_recipe_format",
@@ -34,7 +35,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 14, "unexpected MCP tools: {names:?}");
+    assert_eq!(names.len(), 15, "unexpected MCP tools: {names:?}");
 
     let package_bump = response["result"]["tools"]
         .as_array()

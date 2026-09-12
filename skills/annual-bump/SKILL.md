@@ -33,7 +33,7 @@ recipe with a foreign archive of a different artifact identity.
 
 ## Which binary
 
-`eb-stack package --help` must list `inspect`, `plan`, and `bump`. A binary
+`eb-stack package --help` must list `inspect`, `plan`, `bump`, and `mutate`. A binary
 whose top-level help lists `solve`, `bump`, and `check-recipe` is stale.
 Use the current checkout on the configured builder. Do not use a stale
 `eb-stack` on PATH unless that check passes.
@@ -78,8 +78,8 @@ eb-stack package bump \
 ```
 
 Omit `--toolchain-name` to keep the source family (`foss`, `gfbf`).
-Pass it when the retarget really changes family. A mismatch prints
-`warning=` and still uses the name you passed.
+Pass the same family if you want it explicit. A different family is
+`package mutate --toolchain-name …`, not bump.
 
 `--easyconfigs` is repeatable. Put the upstream tree first and a site overlay after it.
 

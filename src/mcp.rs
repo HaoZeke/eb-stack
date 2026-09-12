@@ -141,7 +141,27 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_package_bump",
-            "Retarget an EasyBuild recipe and emit its canonical SBOM, Resolvo lock, and recipe bundle.",
+            "Same-family generation or version retarget of an EasyBuild recipe.",
+            &[
+                ("source", "string"),
+                ("toolchain_version", "string"),
+                ("easyconfigs", "array"),
+                ("out_dir", "string"),
+            ],
+            &[
+                ("toolchain_name", "string"),
+                ("version", "string"),
+                ("source_checksum", "string"),
+                ("dependencies", "object"),
+                ("hierarchy_fixture", "string"),
+                ("stack_policy", "string"),
+                ("package_configs", "array"),
+                ("foreign", "array"),
+            ],
+        ),
+        tool_with_optional(
+            "eb_package_mutate",
+            "Change toolchain family or other declared identity on an EasyBuild recipe.",
             &[
                 ("source", "string"),
                 ("toolchain_name", "string"),
@@ -156,6 +176,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("hierarchy_fixture", "string"),
                 ("stack_policy", "string"),
                 ("package_configs", "array"),
+                ("foreign", "array"),
             ],
         ),
         tool_with_optional(
@@ -282,6 +303,7 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_package_inspect" => package_inspect(arguments),
         "eb_package_plan" => package_plan(arguments),
         "eb_package_bump" => package_bump(arguments),
+        "eb_package_mutate" => package_mutate(arguments),
         "eb_recipe_check" => recipe_check(arguments),
         "eb_recipe_lint" => recipe_lint(arguments),
         "eb_recipe_format" => recipe_format(arguments),
@@ -428,8 +450,39 @@ fn load_package_source_roots(arguments: &Value) -> Result<PackageSourceRoots, St
     Ok(roots)
 }
 
+fn package_mutate(arguments: &Value) -> Result<Value, String> {
+    if optional_string(arguments, "toolchain_name").is_none() {
+        return Err("eb_package_mutate requires toolchain_name".into());
+    }
+    package_retarget(arguments, true)
+}
+
 fn package_bump(arguments: &Value) -> Result<Value, String> {
-    let target = toolchain(arguments)?;
+    package_retarget(arguments, false)
+}
+
+fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
+    let source = required_path(arguments, "source")?;
+    let recipe = resolve_easyconfig_file(&source).map_err(|error| error.to_string())?;
+    let requested = optional_string(arguments, "toolchain_name");
+    let family = match (mutate, requested.as_deref()) {
+        (false, None) => recipe.toolchain.name.clone(),
+        (false, Some(name)) if name.eq_ignore_ascii_case(&recipe.toolchain.name) => {
+            name.to_string()
+        }
+        (false, Some(name)) => {
+            return Err(format!(
+                "source toolchain is {}; use eb_package_mutate with toolchain_name {name}",
+                recipe.toolchain.name
+            ));
+        }
+        (true, None) => return Err("eb_package_mutate requires toolchain_name".into()),
+        (true, Some(name)) => name.to_string(),
+    };
+    let target = Toolchain {
+        name: family,
+        version: required_string(arguments, "toolchain_version")?,
+    };
     let stack_policy = if let Some(path) = optional_path(arguments, "stack_policy") {
         load_stack_policy(&path)?
     } else {

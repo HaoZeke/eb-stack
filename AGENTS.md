@@ -20,7 +20,7 @@ file had to be corrected by hand.
 
 ## Canonical procedure
 
-1. Run `eb-stack package inspect|plan|bump`; do not use removed flat commands.
+1. Run `eb-stack package inspect|plan|bump|mutate`; do not use removed flat commands.
 2. Treat `package.plan.json` as the canonical build manifest, `package.sbom.cdx.json` as the planned SBOM, and `locks/*.lock.json` as Resolvo evidence.
 3. Emit one `.eb` file per product profile. Keep the default profile unsuffixed and follow neighboring GROMACS/LAMMPS conventions.
 4. Run `eb-stack recipe format|lint|check` on emitted recipes.
@@ -44,7 +44,7 @@ file had to be corrected by hand.
 ## Version-one CLI
 
 ```text
-package  inspect | plan | bump
+package  inspect | plan | bump | mutate
 recipe   check | lint | format
 stack    solve | sbom
 target   list | doctor

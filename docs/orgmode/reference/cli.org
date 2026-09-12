@@ -10,7 +10,8 @@ written by package commands are deterministic bundle artifacts.
 |-
 | ~package inspect~ | Parse conda-forge, Spack, PyPI, CRAN, Cargo, LuaRocks, or Raku into a manifest and planned SBOM |
 | ~package plan~ | Materialize profiles, solve with Resolvo, and emit recipes |
-| ~package bump~ | Retarget an EasyBuild recipe and write the same canonical bundle |
+| ~package bump~ | Same-family generation or version retarget |
+| ~package mutate~ | Change toolchain family (foss ↔ gfbf) or other declared identity |
 | ~recipe check~ | Validate metadata and robot dependency availability |
 | ~recipe lint~ / ~recipe format~ | Report or mechanically repair EasyBuild E501 findings |
 | ~stack solve~ / ~stack sbom~ | Solve a multi-root stack or emit SBOM from a lock |
@@ -102,10 +103,12 @@ it. See [[file:../howto/pypi-extend.org][site Python extras]].
 
 ** ~package bump~
 
+Same-family retarget. Omit ~--toolchain-name~ to keep ~foss~ / ~gfbf~ from
+the source recipe. Passing a different family is an error; use ~package mutate~.
+
 #+begin_src bash
 eb-stack package bump \
   --source RECIPE.eb \
-  --toolchain-name foss \
   --toolchain-version 2024a \
   [--version VERSION] \
   [--source-checksum SHA256] \
@@ -122,6 +125,19 @@ as a new package. ~--dep~ becomes a locked Resolvo override. Without
 ~--stack-policy~, the solver uses an unconstrained policy for the requested
 toolchain. A changed package version without ~--source-checksum~ produces a
 visible residual because source bytes cannot be inferred safely.
+
+** ~package mutate~
+
+Requires ~--toolchain-name~. Use this when the family actually changes.
+
+#+begin_src bash
+eb-stack package mutate \
+  --source RECIPE.eb \
+  --toolchain-name gfbf \
+  --toolchain-version 2024a \
+  --easyconfigs UPSTREAM \
+  --out-dir BUNDLE
+#+end_src
 
 * Bundle layout
 

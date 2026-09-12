@@ -100,8 +100,10 @@ enum PackageCommand {
     Inspect(PackageInspectArgs),
     /// Resolve every declared profile and emit a canonical artifact bundle.
     Plan(PackagePlanArgs),
-    /// Retarget an existing EasyBuild recipe using hierarchy + Resolvo selection.
+    /// Same-family generation or application-version retarget.
     Bump(PackageBumpArgs),
+    /// Change toolchain family (foss ↔ gfbf) or other declared identity.
+    Mutate(PackageBumpArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -535,7 +537,23 @@ fn run_package(command: PackageCommand) -> Result<()> {
             }
             Ok(())
         }
-        PackageCommand::Bump(args) => run_package_bump(args),
+        PackageCommand::Bump(args) => run_package_bump(args, BumpMode::Bump),
+        PackageCommand::Mutate(args) => run_package_bump(args, BumpMode::Mutate),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BumpMode {
+    Bump,
+    Mutate,
+}
+
+impl BumpMode {
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Bump => "bump",
+            Self::Mutate => "mutate",
+        }
     }
 }
 
@@ -547,21 +565,25 @@ fn apply_contributor(name: Option<&str>) {
     }
 }
 
-fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
+fn run_package_bump(args: PackageBumpArgs, mode: BumpMode) -> Result<()> {
     apply_contributor(args.contributor.as_deref());
     let source_recipe = resolve_easyconfig_file(&args.source).map_err(anyhow::Error::msg)?;
-    let toolchain_name = args
-        .toolchain_name
-        .clone()
-        .unwrap_or_else(|| source_recipe.toolchain.name.clone());
-    if args.toolchain_name.as_deref().is_some_and(|name| {
-        !name.eq_ignore_ascii_case(&source_recipe.toolchain.name)
-    }) {
-        println!(
-            "warning=--toolchain-name {toolchain_name} differs from source {}",
-            source_recipe.toolchain.name
-        );
-    }
+    let source_family = source_recipe.toolchain.name.as_str();
+    let toolchain_name = match (mode, args.toolchain_name.as_deref()) {
+        (BumpMode::Bump, None) => source_family.to_string(),
+        (BumpMode::Bump, Some(name)) if name.eq_ignore_ascii_case(source_family) => {
+            name.to_string()
+        }
+        (BumpMode::Bump, Some(name)) => bail!(
+            "source toolchain is {source_family}; package bump keeps the family. \
+             Use `eb-stack package mutate --toolchain-name {name}` to change it"
+        ),
+        (BumpMode::Mutate, None) => {
+            bail!("package mutate requires --toolchain-name")
+        }
+        (BumpMode::Mutate, Some(name)) => name.to_string(),
+    };
+    println!("mode={}", mode.verb());
     let toolchain = toolchain(&toolchain_name, &args.toolchain_version);
     println!(
         "toolchain={}-{}",
@@ -641,7 +663,11 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
                 )
             );
         }
-        print!("re_run=eb-stack package bump --source {} --toolchain-name {toolchain_name} --toolchain-version {toolchain_version}", source.display());
+        print!(
+            "re_run=eb-stack package {} --source {} --toolchain-name {toolchain_name} --toolchain-version {toolchain_version}",
+            mode.verb(),
+            source.display()
+        );
         if let Some(ver) = &version {
             print!(" --version {ver}");
         }

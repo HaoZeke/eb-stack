@@ -378,3 +378,102 @@ fn package_bump_cli_writes_an_sbom_resolvo_bundle() {
         .join("easyconfigs/g/GROMACS/GROMACS-2024.4-foss-2024a.eb")
         .is_file());
 }
+
+#[test]
+fn package_bump_refuses_a_family_change() {
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let source = root.join("tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb");
+    let robot = root.join("tests/repro_fixtures/universe_foss_2024a");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let result = Command::new(binary)
+        .args([
+            "package",
+            "bump",
+            "--source",
+            source.to_str().unwrap(),
+            "--toolchain-name",
+            "gfbf",
+            "--toolchain-version",
+            "2024a",
+            "--easyconfigs",
+            robot.to_str().unwrap(),
+            "--out-dir",
+            temp.path().to_str().unwrap(),
+        ])
+        .output()
+        .expect("package bump family change");
+    assert!(!result.status.success());
+    let err = format!(
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        err.contains("package mutate"),
+        "expected mutate hint, got {err}"
+    );
+}
+
+#[test]
+fn package_mutate_accepts_a_family_change() {
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let robot = temp.path().join("robot");
+    std::fs::create_dir_all(&robot).expect("robot");
+    std::fs::write(
+        robot.join("gfbf-2024a.eb"),
+        "name = 'gfbf'\nversion = '2024a'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'stub'\n\
+         toolchain = {'name': 'system', 'version': 'system'}\n",
+    )
+    .expect("gfbf toolchain stub");
+    let hierarchy = temp.path().join("gfbf-2024a.json");
+    std::fs::write(
+        &hierarchy,
+        r#"{"parent":{"name":"gfbf","version":"2024a"},"members":[{"name":"system","version":"system"},{"name":"gfbf","version":"2024a"}]}"#,
+    )
+    .expect("hierarchy fixture");
+    let source = temp.path().join("Epsilon-1.0-foss-2023a.eb");
+    std::fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'Epsilon'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['epsilon-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    let output = temp.path().join("bundle");
+    let result = Command::new(binary)
+        .args([
+            "package",
+            "mutate",
+            "--source",
+            source.to_str().unwrap(),
+            "--toolchain-name",
+            "gfbf",
+            "--toolchain-version",
+            "2024a",
+            "--easyconfigs",
+            robot.to_str().unwrap(),
+            "--hierarchy-fixture",
+            hierarchy.to_str().unwrap(),
+            "--out-dir",
+            output.to_str().unwrap(),
+        ])
+        .output()
+        .expect("package mutate");
+    assert!(
+        result.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(stdout.contains("mode=mutate"), "{stdout}");
+    assert!(output
+        .join("easyconfigs/e/Epsilon/Epsilon-1.0-gfbf-2024a.eb")
+        .is_file());
+}
