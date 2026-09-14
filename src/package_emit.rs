@@ -10,7 +10,7 @@
 
 use crate::domain::Toolchain;
 use crate::eb_parse::easyconfig_basename;
-use crate::hierarchy::{hierarchy_for, hierarchy_member_rank};
+use crate::hierarchy::{hierarchy_for, hierarchy_member_rank, is_system_toolchain};
 use crate::package::{
     is_easyconfig_parameter_name, materialize_profile, EasyconfigValue, PackagePlan,
     ProfileEnvironment, ProfileLock,
@@ -667,17 +667,28 @@ fn render_sources(
         })
         .collect::<Vec<_>>();
 
-    let checksums = source_artifacts
+    let checksums = resolved
         .iter()
-        .filter_map(|source| source.sha256.as_ref())
-        .chain(patches.iter().filter_map(|patch| patch.sha256.as_ref()))
-        .map(|checksum| format!("'{}'", escape_single(checksum)))
+        .map(|(source, _)| {
+            source
+                .sha256
+                .as_deref()
+                .map(|checksum| format!("'{}'", escape_single(checksum)))
+                .unwrap_or_else(|| "''".into())
+        })
+        .chain(
+            patches
+                .iter()
+                .filter_map(|patch| patch.sha256.as_ref())
+                .map(|checksum| format!("'{}'", escape_single(checksum))),
+        )
         .collect::<Vec<_>>();
     let checksum_lines = format!("checksums = {}", render_multiline_list(&checksums));
 
     if let [(source, url)] = resolved.as_slice() {
         if source.target_directory.is_none() {
-            if let Some(sources) = try_render_pypi_primary(package_name, package_version, source, url)
+            if let Some(sources) =
+                try_render_pypi_primary(package_name, package_version, source, url)
             {
                 return SourceBlock {
                     prelude: String::new(),
@@ -933,6 +944,11 @@ fn dependency_requires_explicit_toolchain(
     if dependency.toolchain == *package_toolchain {
         return false;
     }
+    // SYSTEM is a hierarchy member, but EasyBuild still needs the fourth
+    // tuple so the dep is not resolved as a generation compiler library.
+    if is_system_toolchain(&dependency.toolchain) {
+        return true;
+    }
     match hierarchy_for(package_toolchain, None) {
         Ok(hierarchy) => hierarchy_member_rank(&hierarchy, &dependency.toolchain).is_none(),
         // Unknown parent: keep the full identity rather than guessing.
@@ -1072,6 +1088,54 @@ mod tests {
                 &["('Python', '3.13.1')".into()]
             ),
             "builddependencies = [('binutils', '2.42')]\ndependencies = [('Python', '3.13.1')]\n\n"
+        );
+    }
+
+    #[test]
+    fn system_lock_dep_keeps_the_fourth_tuple() {
+        let dep = crate::package::LockedDependency {
+            name: "Java".into(),
+            version: "11".into(),
+            versionsuffix: None,
+            toolchain: Toolchain {
+                name: "system".into(),
+                version: "system".into(),
+            },
+            easyconfig_path: "Java-11.eb".into(),
+            build: false,
+        };
+        let foss = Toolchain {
+            name: "foss".into(),
+            version: "2024a".into(),
+        };
+        let rendered = render_dependency(&dep, &foss);
+        assert!(
+            rendered.contains("system"),
+            "SYSTEM must stay explicit: {rendered}"
+        );
+    }
+
+    #[test]
+    fn checksums_keep_source_positions_when_a_sha256_is_missing() {
+        let sources = vec![
+            crate::package::SourceArtifact {
+                url: Some("https://example.invalid/a.tar.gz".into()),
+                sha256: None,
+                ..Default::default()
+            },
+            crate::package::SourceArtifact {
+                url: Some("https://example.invalid/b.tar.gz".into()),
+                sha256: Some(
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                ),
+                ..Default::default()
+            },
+        ];
+        let block = render_sources("Pkg", "1.0", &sources, &[], None);
+        assert!(
+            block.checksums.contains("''") && block.checksums.contains("bbbbbbbb"),
+            "missing first sha256 must keep its slot:\n{}",
+            block.checksums
         );
     }
 

@@ -724,7 +724,8 @@ fn already_provided_language_root<'a>(
     let admitted =
         match hierarchy_for_with_tree(&plan.build.toolchain, hierarchy_fixture, candidates) {
             Ok(hierarchy) => filter_candidates_in_hierarchy(candidates, &hierarchy),
-            Err(_) => return existing_language_provider(&plan.package.name, candidates),
+            // Unknown hierarchy is not "provided on this generation".
+            Err(_) => return None,
         };
     let provider_path = existing_language_provider(&plan.package.name, &admitted)
         .map(|provider| provider.easyconfig_path.clone())?;
