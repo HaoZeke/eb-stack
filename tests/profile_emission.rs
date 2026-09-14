@@ -1142,3 +1142,146 @@ fn versionsuffix_pin_is_a_hole_when_only_a_plain_candidate_exists() {
         "a CUDA suffix must not be satisfied by a plain module: {holes:?}"
     );
 }
+
+#[test]
+fn a_system_recipe_does_not_treat_system_modules_as_holes() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &system_toolchain());
+    plan.origin = eb_stack::package::PackageOrigin::EasyBuild;
+    plan.profiles = vec![ProductProfile {
+        name: "default".into(),
+        default: true,
+        versionsuffix: Vec::new(),
+        platform: None,
+        architecture: None,
+        features: Default::default(),
+        parameters: Default::default(),
+        toolchain_options: Default::default(),
+        config_options: Vec::new(),
+        easyconfig_parameters: Default::default(),
+        verification_commands: Vec::new(),
+    }];
+    plan.dependencies = vec![DependencyIntent {
+        id: "dep:M4".into(),
+        name: "M4".into(),
+        eb_name: None,
+        constraint: Some("==1.4.19".into()),
+        toolchain: None,
+        versionsuffix: None,
+        roles: vec![DependencyRole::Build],
+        condition: ConditionExpr::Always,
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: Vec::new(),
+    }];
+    let m4 = Candidate {
+        name: "M4".into(),
+        version: "1.4.19".into(),
+        toolchain: system_toolchain(),
+        versionsuffix: None,
+        easyconfig_path: "M4-1.4.19.eb".into(),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+        moduleclass: None,
+    };
+    let stack = StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "test".into(),
+        toolchain: system_toolchain(),
+        pins: Vec::new(),
+        exclusions: Vec::new(),
+    };
+    let holes = unsatisfied_direct_dependencies(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &[m4],
+        &stack,
+    )
+    .expect("hole check");
+    assert!(
+        holes.is_empty(),
+        "a SYSTEM recipe must accept SYSTEM modules: {holes:?}"
+    );
+}
+
+#[test]
+fn a_later_same_name_pin_is_still_a_hole() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.origin = eb_stack::package::PackageOrigin::EasyBuild;
+    plan.profiles = vec![ProductProfile {
+        name: "default".into(),
+        default: true,
+        versionsuffix: Vec::new(),
+        platform: None,
+        architecture: None,
+        features: Default::default(),
+        parameters: Default::default(),
+        toolchain_options: Default::default(),
+        config_options: Vec::new(),
+        easyconfig_parameters: Default::default(),
+        verification_commands: Vec::new(),
+    }];
+    plan.dependencies = vec![
+        DependencyIntent {
+            id: "dep:Python-run".into(),
+            name: "Python".into(),
+            eb_name: None,
+            constraint: None,
+            toolchain: None,
+            versionsuffix: None,
+            roles: vec![DependencyRole::Run],
+            condition: ConditionExpr::Always,
+            virtual_capability: None,
+            solver_excluded: false,
+            provenance: Vec::new(),
+        },
+        DependencyIntent {
+            id: "dep:Python-pin".into(),
+            name: "Python".into(),
+            eb_name: None,
+            constraint: Some("==9.9.9".into()),
+            toolchain: None,
+            versionsuffix: None,
+            roles: vec![DependencyRole::Build],
+            condition: ConditionExpr::Always,
+            virtual_capability: None,
+            solver_excluded: false,
+            provenance: Vec::new(),
+        },
+    ];
+    let python = Candidate {
+        name: "Python".into(),
+        version: "3.12.3".into(),
+        toolchain: toolchain(),
+        versionsuffix: None,
+        easyconfig_path: "Python-3.12.3-foss-2026.1.eb".into(),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+        moduleclass: None,
+    };
+    let stack = StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "test".into(),
+        toolchain: toolchain(),
+        pins: Vec::new(),
+        exclusions: Vec::new(),
+    };
+    let holes = unsatisfied_direct_dependencies(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &[python],
+        &stack,
+    )
+    .expect("hole check");
+    assert!(
+        holes
+            .iter()
+            .any(|hole| hole.name == "Python" && hole.version_req == "==9.9.9"),
+        "the later exact pin must remain a hole: {holes:?}"
+    );
+}

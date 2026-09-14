@@ -98,10 +98,14 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
                 .roles
                 .iter()
                 .all(|role| matches!(role, DependencyRole::Build | DependencyRole::Test));
-        if !seen.insert(name.clone()) {
+        let version_req = normalize_requirement(dependency.constraint.as_deref());
+        if !seen.insert(format!(
+            "{}|{version_req}|{}",
+            name,
+            dependency.versionsuffix.as_deref().unwrap_or("")
+        )) {
             continue;
         }
-        let version_req = normalize_requirement(dependency.constraint.as_deref());
         let has_compatible = admitted.iter().any(|candidate| {
             package_identities_match(&candidate.name, &name)
                 && candidate_matches_version_req(
@@ -115,7 +119,8 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
                     .is_none_or(|toolchain| toolchains_match(&candidate.toolchain, toolchain))
                 && !(plan.origin == PackageOrigin::EasyBuild
                     && dependency.toolchain.is_none()
-                    && is_system_toolchain(&candidate.toolchain))
+                    && is_system_toolchain(&candidate.toolchain)
+                    && !is_system_toolchain(&plan.build.toolchain))
         });
         if !has_compatible {
             holes.push(UnsatisfiedDirectDependency {
@@ -622,7 +627,10 @@ fn normalize_requirement(constraint: Option<&str>) -> String {
     let Some(constraint) = constraint.map(str::trim).filter(|value| !value.is_empty()) else {
         return ">=0".into();
     };
-    if matches!(constraint.chars().next(), Some('<' | '>' | '=' | '!' | '~')) {
+    if matches!(
+        constraint.chars().next(),
+        Some('<' | '>' | '=' | '!' | '~' | '^')
+    ) {
         return constraint.to_string();
     }
     if let Some((minimum, maximum)) = constraint.split_once(':') {
@@ -693,6 +701,7 @@ mod tests {
         assert_eq!(normalize_requirement(Some("1.8:2.0")), ">=1.8,<=2.0");
         assert_eq!(normalize_requirement(Some("1.14.2")), "==1.14.2");
         assert_eq!(normalize_requirement(Some(">=1.14")), ">=1.14");
+        assert_eq!(normalize_requirement(Some("^1.2.3")), "^1.2.3");
     }
 
     fn cand(name: &str, ver: &str, tc_name: &str, tc_ver: &str) -> Candidate {
