@@ -54,8 +54,7 @@ impl Candidate {
 /// Existing first-class recipes with the same name remain; Resolvo chooses.
 /// Entries with an empty name or version are skipped. Candidates that are
 /// already provides are not expanded again.
-pub fn expand_extension_provides(candidates: &[Candidate]) -> Vec<Candidate> {
-    let mut out = candidates.to_vec();
+pub fn expand_extension_provides(mut candidates: Vec<Candidate>) -> Vec<Candidate> {
     let mut seen: HashSet<(String, String, String)> = candidates
         .iter()
         .filter(|candidate| candidate.is_extension_provide())
@@ -68,7 +67,8 @@ pub fn expand_extension_provides(candidates: &[Candidate]) -> Vec<Candidate> {
         })
         .collect();
 
-    for parent in candidates {
+    let mut extra = Vec::new();
+    for parent in &candidates {
         if parent.is_extension_provide() {
             continue;
         }
@@ -80,12 +80,13 @@ pub fn expand_extension_provides(candidates: &[Candidate]) -> Vec<Candidate> {
                     parent.easyconfig_path.clone(),
                 );
                 if seen.insert(key) {
-                    out.push(child);
+                    extra.push(child);
                 }
             }
         }
     }
-    out
+    candidates.extend(extra);
+    candidates
 }
 
 /// Overlay policy: which foreign names share an identity, and which packages
@@ -344,7 +345,7 @@ mod tests {
 
     #[test]
     fn expand_creates_one_provide_per_ext() {
-        let expanded = expand_extension_provides(&[bundle()]);
+        let expanded = expand_extension_provides(vec![bundle()]);
         assert_eq!(expanded.len(), 3);
         let numpy = expanded
             .iter()
@@ -358,8 +359,8 @@ mod tests {
 
     #[test]
     fn expand_is_idempotent() {
-        let once = expand_extension_provides(&[bundle()]);
-        let twice = expand_extension_provides(&once);
+        let once = expand_extension_provides(vec![bundle()]);
+        let twice = expand_extension_provides(once.clone());
         assert_eq!(once.len(), twice.len());
         let numpy_count = twice
             .iter()
@@ -379,7 +380,7 @@ mod tests {
             name: "blankver".into(),
             version: String::new(),
         });
-        let expanded = expand_extension_provides(&[parent]);
+        let expanded = expand_extension_provides(vec![parent]);
         assert!(expanded
             .iter()
             .all(|candidate| candidate.name != "blankver"));
@@ -394,7 +395,7 @@ mod tests {
 
     #[test]
     fn resolve_extension_provider_returns_parent() {
-        let expanded = expand_extension_provides(&[bundle()]);
+        let expanded = expand_extension_provides(vec![bundle()]);
         let numpy = expanded
             .iter()
             .find(|candidate| candidate.name == "numpy")

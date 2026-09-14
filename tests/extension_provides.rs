@@ -85,7 +85,7 @@ fn standalone_numpy_recipe_still_competes_with_provide() {
         .expect("parse")
         .candidates;
     universe.push(candidate("numpy", "2.3.1", Vec::new()));
-    let expanded = expand_extension_provides(&universe);
+    let expanded = expand_extension_provides(universe.clone());
     let numpy_idents: Vec<_> = expanded
         .iter()
         .filter(|candidate| candidate.name == "numpy")

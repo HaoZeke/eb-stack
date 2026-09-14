@@ -265,7 +265,7 @@ impl EbProvider {
             })
             .cloned()
             .collect();
-        let candidates = crate::provides::expand_extension_provides(&filtered);
+        let candidates = crate::provides::expand_extension_provides(filtered);
 
         // A generation carries some packages at more than one level, and they
         // are different modules: EasyBuild installs Perl at GCCcore and Perl at

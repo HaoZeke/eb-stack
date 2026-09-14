@@ -81,7 +81,7 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
     let mut admitted = filter_candidates_in_hierarchy(candidates, &hierarchy);
     admit_stack_pin_closures(candidates, &mut admitted, stack_policy);
     admit_named_dependency_toolchains(candidates, &mut admitted, &materialized.dependencies);
-    admitted = expand_extension_provides(&admitted);
+    admitted = expand_extension_provides(admitted);
 
     let mut holes = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -237,7 +237,7 @@ pub fn solve_package_profile_with_hierarchy(
         &mut original_candidates,
         &materialized.dependencies,
     );
-    original_candidates = expand_extension_provides(&original_candidates);
+    original_candidates = expand_extension_provides(original_candidates);
     // A recipe does not compete with itself. A bundle's own `exts_list` holds
     // packages it installs, and expanding those into provides puts them beside
     // the modules the same recipe depends on: a CUDA wheel bundle carries

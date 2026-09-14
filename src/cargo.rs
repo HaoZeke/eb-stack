@@ -82,16 +82,16 @@ fn parse_cargo_toml(text: &str) -> Result<ForeignRecipe, ForeignError> {
 }
 
 fn parse_crates_io_json(text: &str) -> Result<ForeignRecipe, ForeignError> {
+    if let Ok(doc) = serde_json::from_str::<CratesIoDocument>(text) {
+        if !doc.versions.is_empty() {
+            let version = pick_crates_io_version(&doc)
+                .ok_or_else(|| ForeignError::Parse("crates.io json has no versions".into()))?;
+            return crates_io_recipe(&doc.krate, version);
+        }
+    }
     let value: Value = serde_json::from_str(text)
         .map_err(|error| ForeignError::Parse(format!("crates.io json: {error}")))?;
-    if value.get("version").is_some() && value.get("versions").is_none() {
-        return parse_crates_io_version_document(&value);
-    }
-    let doc: CratesIoDocument = serde_json::from_value(value)
-        .map_err(|error| ForeignError::Parse(format!("crates.io json: {error}")))?;
-    let version = pick_crates_io_version(&doc)
-        .ok_or_else(|| ForeignError::Parse("crates.io json has no versions".into()))?;
-    crates_io_recipe(&doc.krate, version)
+    parse_crates_io_version_document(&value)
 }
 
 fn parse_crates_io_version_document(value: &Value) -> Result<ForeignRecipe, ForeignError> {
