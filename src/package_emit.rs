@@ -282,7 +282,7 @@ fn render_easyconfig(
     let mesonpy_lines = if mesonpy_backend(plan) {
         format!(
             "preinstallopts = '{}'\ninstallopts = '--config-settings=setup-args=-Dwrap_mode=default'\n",
-            escape_single(&mesonpy_preinstallopts())
+            escape_single(&mesonpy_preinstallopts(plan))
         )
     } else {
         String::new()
@@ -486,7 +486,7 @@ fn render_ext_from_source(
     if mesonpy_backend(plan) {
         options.push(format!(
             "'preinstallopts': '{}'",
-            escape_single(&mesonpy_preinstallopts())
+            escape_single(&mesonpy_preinstallopts(plan))
         ));
         options.push("'installopts': '--config-settings=setup-args=-Dwrap_mode=default'".into());
     }
@@ -531,11 +531,33 @@ fn mesonpy_backend(plan: &PackagePlan) -> bool {
     })
 }
 
-fn mesonpy_preinstallopts() -> String {
-    format!(
-        "{}export PYTHONPATH=%(installdir)s/lib/python%(pyshortver)s/site-packages${{PYTHONPATH:+:$PYTHONPATH}} && ",
-        crate::cargo::eessi_cargo_host_isolation()
-    )
+fn needs_cargo_host_isolation(plan: &PackagePlan) -> bool {
+    if matches!(plan.origin, crate::package::PackageOrigin::Cargo) {
+        return true;
+    }
+    if plan.build.build_systems.iter().any(|hint| {
+        let hint = hint.to_ascii_lowercase();
+        hint.contains("cargo") || hint.contains("maturin") || hint.contains("rust")
+    }) {
+        return true;
+    }
+    plan.dependencies.iter().any(|dependency| {
+        let name = dependency
+            .eb_name
+            .as_deref()
+            .unwrap_or(dependency.name.as_str())
+            .to_ascii_lowercase();
+        name == "rust" || name == "cargo" || name == "maturin"
+    })
+}
+
+fn mesonpy_preinstallopts(plan: &PackagePlan) -> String {
+    let pythonpath = "export PYTHONPATH=%(installdir)s/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH} && ";
+    if needs_cargo_host_isolation(plan) {
+        format!("{}{pythonpath}", crate::cargo::eessi_cargo_host_isolation())
+    } else {
+        pythonpath.to_string()
+    }
 }
 
 fn render_plain_ext(name: &str, version: &str, checksum: Option<&str>) -> String {
@@ -1300,6 +1322,11 @@ mod tests {
             emitted[0].text.contains("wrap_mode=default")
                 && emitted[0].text.contains("preinstallopts"),
             "standalone mesonpy must keep wrap_mode and preinstallopts:\n{}",
+            emitted[0].text
+        );
+        assert!(
+            !emitted[0].text.contains("unset RUSTC_WRAPPER"),
+            "a mesonpy package with no Rust must not inherit cargo host isolation:\n{}",
             emitted[0].text
         );
     }

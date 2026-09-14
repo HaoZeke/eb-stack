@@ -151,6 +151,12 @@ fn overlay_meson_wraps(recipe: &mut ForeignRecipe, subprojects: &Path) {
             continue;
         };
         push_hint(recipe, "meson");
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let lower = text.to_ascii_lowercase();
+            if lower.contains("cargo") || lower.contains("rustc") {
+                push_hint(recipe, "cargo");
+            }
+        }
         push_dep(recipe, stem, "build", &format!("meson.wrap:{stem}"));
     }
 }
