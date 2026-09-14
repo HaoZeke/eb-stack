@@ -244,6 +244,51 @@ source:
 }
 
 #[test]
+fn a_declared_patch_missing_beside_the_recipe_is_a_residual() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let recipe_dir = temp.path().join("recipe");
+    std::fs::create_dir_all(&recipe_dir).expect("recipe directory");
+    let source = recipe_dir.join("meta.yaml");
+    std::fs::write(
+        &source,
+        r#"package:
+  name: patch-fixture
+  version: "1.0"
+source:
+  url: https://example.invalid/patch-fixture-1.0.tar.gz
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  patches:
+    - patches/fix.patch
+"#,
+    )
+    .expect("write recipe");
+    let cwd_decoy = std::env::current_dir()
+        .expect("cwd")
+        .join("patches/fix.patch");
+    assert!(
+        !cwd_decoy.is_file(),
+        "this test must not hash a CWD decoy at {}",
+        cwd_decoy.display()
+    );
+
+    let (plan, _) =
+        inspect_new_package(&source, Some(ForeignFormat::CondaForge), &toolchain(), &[])
+            .expect("inspect recipe with a missing local patch");
+
+    assert!(
+        plan.residuals
+            .iter()
+            .any(|residual| residual.id == "patch:missing-source"),
+        "{:?}",
+        plan.residuals
+    );
+    let artifact = plan.build.patches.first().expect("patch artifact");
+    assert!(artifact.resolved_source.is_none(), "{artifact:?}");
+    assert!(artifact.source.is_none(), "{artifact:?}");
+    assert!(artifact.sha256.is_none(), "{artifact:?}");
+}
+
+#[test]
 fn non_utf8_local_patch_is_copied_into_the_bundle() {
     let temp = tempfile::tempdir().expect("tempdir");
     let recipe_dir = temp.path().join("recipe");

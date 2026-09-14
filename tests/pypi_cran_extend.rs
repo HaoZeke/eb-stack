@@ -691,6 +691,14 @@ fn plan_cran_with_leftovers_emits_an_r_bundle() {
         );
     }
     assert!(recipe.text.contains("'R'"), "{}", recipe.text);
+    assert!(
+        bundle.plan.residuals.iter().any(|residual| {
+            residual.summary.contains("R bundle extension")
+                && !residual.summary.contains("PythonBundle")
+        }),
+        "CRAN leftovers must not be described as PythonBundle: {:?}",
+        bundle.plan.residuals
+    );
 }
 
 /// A dependency written as a bare name is normal in CRAN, and an exts_list

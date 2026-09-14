@@ -164,6 +164,10 @@ fn materialize_foreign_local_patches(
             recipe_directory.join(&declared_source)
         };
         if !resolved_source.is_file() {
+            // A declared relative path that is not beside the recipe is
+            // missing. Leaving the relative name would make inspect look
+            // clean and later hash whatever sits at that path in CWD.
+            patch.source = None;
             continue;
         }
         let bytes = std::fs::read(&resolved_source)
@@ -236,20 +240,17 @@ pub fn complete_package_bundle_with_hierarchy(
     stack_policy: &StackPolicy,
     hierarchy_fixture: Option<&Path>,
 ) -> Result<PackageBundle, PackageWorkflowError> {
-    if matches!(
-        plan.origin,
-        PackageOrigin::Pypi | PackageOrigin::Cran | PackageOrigin::Cargo
-    ) {
+    if matches!(plan.origin, PackageOrigin::Pypi | PackageOrigin::Cran) {
         if let Some(provider) = already_provided_language_root(&plan, candidates, hierarchy_fixture)
         {
             return Ok(already_provided_bundle(plan, sbom, provider));
         }
-        if refuses_pip_overlay(&plan.package.name) {
-            return Err(PackageWorkflowError::RefusePipOverlay {
-                name: plan.package.name.clone(),
-                version: plan.package.version.clone(),
-            });
-        }
+    }
+    if plan.origin == PackageOrigin::Pypi && refuses_pip_overlay(&plan.package.name) {
+        return Err(PackageWorkflowError::RefusePipOverlay {
+            name: plan.package.name.clone(),
+            version: plan.package.version.clone(),
+        });
     }
     let mut plan = plan;
     // Both language overlays leave the same kind of hole: a package the robot
@@ -350,15 +351,29 @@ fn promote_language_overlay_extras(
             version: version.clone(),
             checksum,
         });
+        let (category, summary) = if plan.origin == PackageOrigin::Cran {
+            (
+                "cran-overlay-ext",
+                format!(
+                    "{} {} is not in the robot; emit it as an R bundle extension",
+                    hole.name, version
+                ),
+            )
+        } else {
+            (
+                "pypi-overlay-ext",
+                format!(
+                    "{} {} is not in the robot; emit it as a PythonBundle extension",
+                    hole.name, version
+                ),
+            )
+        };
         plan.residuals.push(Residual {
-            id: format!("pypi-overlay-ext:{}", hole.name),
+            id: format!("{category}:{}", hole.name),
             stage: ResidualStage::Resolve,
-            category: "pypi-overlay-ext".into(),
+            category: category.into(),
             severity: ResidualSeverity::Judgment,
-            summary: format!(
-                "{} {} is not in the robot; emit it as a PythonBundle extension",
-                hole.name, version
-            ),
+            summary,
             evidence: Some(hole.version_req),
             provenance: None,
         });
@@ -951,7 +966,6 @@ fn validate_patch_source(patch: &PatchArtifact) -> Result<PathBuf, PackageWorkfl
     let source = patch
         .resolved_source
         .clone()
-        .or_else(|| patch.source.as_deref().map(PathBuf::from))
         .ok_or_else(|| PackageWorkflowError::MissingPatchSource(patch.filename.clone()))?;
     let bytes = std::fs::read(&source)
         .map_err(|error| PackageWorkflowError::PatchIo(source.clone(), error))?;
