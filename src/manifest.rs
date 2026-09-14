@@ -37,6 +37,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             eb_name: None,
             constraint: canonical_version_constraint(recipe.format, dependency.pin.as_deref()),
             toolchain: None,
+            versionsuffix: None,
             roles: dependency_roles(&dependency.role),
             condition: dependency.condition.clone(),
             virtual_capability: foreign_virtual_capability(&dependency.name),

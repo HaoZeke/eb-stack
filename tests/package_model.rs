@@ -56,6 +56,7 @@ fn qmcpack_plan() -> PackagePlan {
             eb_name: Some("HDF5".into()),
             constraint: Some(">=1.14".into()),
             toolchain: None,
+            versionsuffix: None,
             roles: vec![DependencyRole::Run],
             condition: ConditionExpr::Predicate(ConditionPredicate::Feature {
                 name: "mpi".into(),

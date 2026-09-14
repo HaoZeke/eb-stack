@@ -690,6 +690,9 @@ pub struct DependencyIntent {
     /// `None` keeps minimal-toolchain selection within the output hierarchy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toolchain: Option<Toolchain>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Versionsuffix the source recipe required, when it named one.
+    pub versionsuffix: Option<String>,
     #[serde(default)]
     /// When it is needed. Empty means the recipe never said.
     pub roles: Vec<DependencyRole>,

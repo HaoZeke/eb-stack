@@ -351,14 +351,31 @@ pub fn remove_named_dependencies(src: &str, names: &[String]) -> Result<String, 
     Ok(text)
 }
 
+/// True when `src` already declares a dependency tuple whose name is exactly
+/// `name`. A prefix such as `NetCDF` must not match `NetCDF-Fortran`.
+fn names_dependency_tuple(src: &str, name: &str) -> bool {
+    for quote in ['\'', '"'] {
+        let needle = format!("({quote}{name}{quote}");
+        let mut rest = src;
+        while let Some(idx) = rest.find(&needle) {
+            let after = &rest[idx + needle.len()..];
+            let next = after.chars().find(|c| !c.is_whitespace());
+            if matches!(next, Some(',') | Some(')')) {
+                return true;
+            }
+            rest = &rest[idx + 1..];
+        }
+    }
+    false
+}
+
 /// Insert a runtime dependency tuple if that name is not already declared.
 pub fn insert_runtime_dependency(
     src: &str,
     name: &str,
     version: &str,
 ) -> Result<String, EmitError> {
-    let already = src.contains(&format!("('{name}'")) || src.contains(&format!("(\"{name}\""));
-    if already {
+    if names_dependency_tuple(src, name) {
         return Ok(src.to_string());
     }
     let line = format!("    ('{name}', '{version}'),\n");
@@ -1581,7 +1598,7 @@ builddependencies = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: None,
-                    hierarchy: Vec::new(),
+            hierarchy: Vec::new(),
         };
         let r = emit_next_generation(MINIMAL, &params).expect("emit");
         assert_eq!(r.filename, "GROMACS-2024.1-foss-2025b.eb");
@@ -1619,7 +1636,7 @@ builddependencies = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: None,
-                    hierarchy: Vec::new(),
+            hierarchy: Vec::new(),
         };
         let r = emit_next_generation(MINIMAL, &params).expect("emit");
         assert_eq!(r.filename, "GROMACS-2025.0-foss-2025b.eb");
@@ -1642,7 +1659,7 @@ builddependencies = [
             dep_versions: deps,
             dep_toolchains: HashMap::new(),
             source_checksum: None,
-                    hierarchy: Vec::new(),
+            hierarchy: Vec::new(),
         };
         let r = emit_next_generation(MINIMAL, &params).expect("emit");
         assert_eq!(r.filename, "GROMACS-2025.0-foss-2025b.eb");
@@ -1664,7 +1681,7 @@ builddependencies = [
             dep_versions: deps,
             dep_toolchains: HashMap::new(),
             source_checksum: None,
-                    hierarchy: Vec::new(),
+            hierarchy: Vec::new(),
         };
         let r = emit_next_generation(WITH_BUILDDEPS, &params).expect("emit");
         assert_eq!(r.filename, "Demo-1.0-foss-2025b.eb");
@@ -1685,7 +1702,7 @@ builddependencies = [
             dep_versions: deps,
             dep_toolchains: HashMap::new(),
             source_checksum: None,
-                    hierarchy: Vec::new(),
+            hierarchy: Vec::new(),
         };
         let r = emit_next_generation(WITH_BUILDDEPS, &params).expect("emit");
         assert!(r.text.contains("('OpenMPI', '==5.0.3')"));
@@ -1721,7 +1738,7 @@ builddependencies = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: None,
-                    hierarchy: Vec::new(),
+            hierarchy: Vec::new(),
         };
         let r = emit_next_generation(src, &params).expect("emit");
         assert_eq!(r.filename, "VASP6-6.6.1-nvofbf-2025.10-ACC.eb");
@@ -1739,7 +1756,7 @@ builddependencies = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: None,
-                    hierarchy: Vec::new(),
+            hierarchy: Vec::new(),
         };
         let r = emit_next_generation(src, &params).expect("emit");
         // Never emit a literal %(cudaver)s into a filename.
@@ -1761,7 +1778,7 @@ builddependencies = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: None,
-                    hierarchy: Vec::new(),
+            hierarchy: Vec::new(),
         };
         let r = emit_next_generation(src, &params).expect("emit");
         assert_eq!(r.filename, "Pkg-1.0-foss-2025b.eb");
@@ -1777,7 +1794,7 @@ builddependencies = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: None,
-                    hierarchy: Vec::new(),
+            hierarchy: Vec::new(),
         };
         let r = emit_next_generation(src, &params).expect("emit");
         assert_eq!(r.filename, "Pkg-2.0-foss-2025b.eb");
@@ -1960,7 +1977,7 @@ checksums = [
             source_checksum: Some(
                 "119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd".into(),
             ),
-                    hierarchy: Vec::new(),
+            hierarchy: Vec::new(),
         };
         let r = emit_next_generation(WITH_CHECKSUMS, &params).expect("emit");
         assert_eq!(r.filename, "OpenMPI-5.0.7-NVHPC-25.11-CUDA-12.8.0.eb");
@@ -2016,7 +2033,7 @@ exts_list = [
             source_checksum: Some(
                 "1094b7bbc6a3960223827114626657110b40096cdf9598a727935fc84ebf8aa0".into(),
             ),
-                    hierarchy: Vec::new(),
+            hierarchy: Vec::new(),
         };
         let r = emit_next_generation(GPU_WITH_EXTENSION, &params).expect("emit");
         // Both the top-level entry and the extension's copy name the new
@@ -2049,7 +2066,7 @@ exts_list = [
             source_checksum: Some(
                 "1094b7bbc6a3960223827114626657110b40096cdf9598a727935fc84ebf8aa0".into(),
             ),
-                    hierarchy: Vec::new(),
+            hierarchy: Vec::new(),
         };
         let r = emit_next_generation(GPU_WITH_EXTENSION, &params).expect("emit");
         // The CPU sibling of this recipe emits GROMACS-2026.3-foss-2025b.eb, so
@@ -2078,7 +2095,7 @@ exts_list = [
             source_checksum: Some(
                 "119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd".into(),
             ),
-                    hierarchy: Vec::new(),
+            hierarchy: Vec::new(),
         };
         let r = emit_next_generation(WITH_COMMENTED_CHECKSUMS, &params).expect("emit");
         assert!(r.text.contains(
@@ -2112,7 +2129,7 @@ exts_list = [
             source_checksum: Some(
                 "119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd".into(),
             ),
-                    hierarchy: Vec::new(),
+            hierarchy: Vec::new(),
         };
         let r = emit_next_generation(WITH_COMMENTED_BARE_CHECKSUM, &params).expect("emit");
         assert!(
@@ -2236,7 +2253,7 @@ exts_list = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: None,
-                    hierarchy: Vec::new(),
+            hierarchy: Vec::new(),
         };
         for fixture in [
             WITH_TYPED_TUPLE_CHECKSUM,
@@ -2271,7 +2288,7 @@ exts_list = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: Some(NEW_SHA.into()),
-                    hierarchy: Vec::new(),
+            hierarchy: Vec::new(),
         };
         let r = emit_next_generation(KOKKOS_ANNOTATED_BARE_CHECKSUMS, &params).expect("emit");
         assert_eq!(r.filename, "Kokkos-5.1.1-GCC-15.2.0.eb");
@@ -2332,7 +2349,7 @@ exts_list = [
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: None,
-                    hierarchy: Vec::new(),
+            hierarchy: Vec::new(),
         };
         let r = emit_next_generation(WITH_CHECKSUMS, &params).expect("emit");
         assert!(
@@ -2373,6 +2390,27 @@ checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']
             r.text
         );
         assert!(r.warnings.iter().any(|w| w.contains("local_commit_id")));
+    }
+
+    #[test]
+    fn insert_runtime_dependency_does_not_treat_netcdf_fortran_as_netcdf() {
+        let src = "\
+dependencies = [
+    ('NetCDF-Fortran', '4.6.1'),
+]
+";
+        let out = insert_runtime_dependency(src, "NetCDF", "4.9.2").expect("insert");
+        assert!(
+            out.contains("('NetCDF', '4.9.2')"),
+            "NetCDF must still be inserted beside NetCDF-Fortran:\n{out}"
+        );
+        assert!(out.contains("('NetCDF-Fortran', '4.6.1')"));
+        let again = insert_runtime_dependency(&out, "NetCDF", "4.9.2").expect("idempotent");
+        assert_eq!(
+            again.matches("('NetCDF',").count(),
+            1,
+            "second insert must not duplicate:\n{again}"
+        );
     }
 
     #[test]
@@ -2423,7 +2461,7 @@ moduleclass = 'tools'
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
             source_checksum: None,
-                    hierarchy: Vec::new(),
+            hierarchy: Vec::new(),
         };
         let r = emit_next_generation(WITH_CHECKSUMS, &params).expect("emit");
         assert!(r.text.contains(

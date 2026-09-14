@@ -84,7 +84,7 @@ pub struct BumpPackageRequest {
     /// the old file never declared.
     pub package_layers: Vec<PackageConfigLayer>,
     /// Spack `package.py` or conda-forge recipe. Inspected so a dep the
-    /// old `.eb` never declared (GROMACS `pybind11`) still enters the plan.
+    /// old `.eb` never declared (a companion such as pybind11) still enters the plan.
     pub foreign_sources: Vec<PathBuf>,
 }
 
@@ -463,6 +463,7 @@ fn add_build_backend_dependency(plan: &mut PackagePlan, candidates: &[crate::dom
         eb_name: Some(module.to_string()),
         constraint: None,
         toolchain: None,
+        versionsuffix: None,
         roles: vec![DependencyRole::Build],
         condition: ConditionExpr::Always,
         virtual_capability: None,
@@ -508,7 +509,8 @@ fn adopt_moduleclass_from_tree(plan: &mut PackagePlan, candidates: &[crate::doma
         provenance: None,
     });
     plan.build.moduleclass = Some(existing);
-    plan.residuals.retain(|residual| residual.id != "moduleclass:inferred");
+    plan.residuals
+        .retain(|residual| residual.id != "moduleclass:inferred");
 }
 
 /// Say plainly that a moduleclass was inferred rather than known.
@@ -568,6 +570,7 @@ fn add_gcccore_binutils(plan: &mut PackagePlan) {
         // candidates at this level.
         constraint: None,
         toolchain: Some(plan.build.toolchain.clone()),
+        versionsuffix: None,
         roles: vec![DependencyRole::Build],
         condition: ConditionExpr::Always,
         virtual_capability: None,
@@ -640,6 +643,7 @@ fn inject_overlay_build_tools(plan: &mut PackagePlan, candidates: &[crate::domai
             eb_name: None,
             constraint: None,
             toolchain: None,
+            versionsuffix: None,
             roles: vec![DependencyRole::Build],
             condition: ConditionExpr::Always,
             virtual_capability: None,
@@ -801,6 +805,21 @@ fn apply_source_checksums(
 fn require_source_checksums(plan: &PackagePlan) -> Result<(), PackageWorkflowError> {
     if plan.sources.is_empty() && plan.origin != PackageOrigin::EasyBuild {
         return Err(PackageWorkflowError::NoSourceArtifacts);
+    }
+    // EasyBuild version bumps may clear a stale digest and ship an empty
+    // checksum with a residual. A foreign plan has no prior recipe to rewrite,
+    // so a missing sha256 would download unverified bytes.
+    if plan.origin != PackageOrigin::EasyBuild {
+        let missing: Vec<usize> = plan
+            .sources
+            .iter()
+            .enumerate()
+            .filter(|(_, source)| source.sha256.is_none())
+            .map(|(index, _)| index)
+            .collect();
+        if !missing.is_empty() {
+            return Err(PackageWorkflowError::MissingSourceChecksums(missing));
+        }
     }
     for (index, source) in plan.sources.iter().enumerate() {
         if let Some(checksum) = source.sha256.as_deref() {
@@ -1135,11 +1154,9 @@ pub fn complete_package_bump(
         .iter()
         .filter(|dependency| !names_the_selected_module(dependency))
         .filter(|dependency| {
-            stated
-                .get(dependency.name.as_str())
-                .is_none_or(|already| {
-                    !crate::hierarchy::toolchains_match(already, &dependency.toolchain)
-                })
+            stated.get(dependency.name.as_str()).is_none_or(|already| {
+                !crate::hierarchy::toolchains_match(already, &dependency.toolchain)
+            })
         })
         .map(|dependency| (dependency.name.clone(), dependency.toolchain.clone()))
         .collect::<HashMap<_, _>>();
@@ -1356,9 +1373,10 @@ fn merge_foreign_inspect_deps(
 ) -> Result<(), PackageWorkflowError> {
     let mut sources = request.foreign_sources.clone();
     if sources.is_empty() {
-        if let Some(found) =
-            crate::companion_suggest::find_foreign_package_py(&request.easyconfig_roots, &plan.package.name)
-        {
+        if let Some(found) = crate::companion_suggest::find_foreign_package_py(
+            &request.easyconfig_roots,
+            &plan.package.name,
+        ) {
             sources.push(found);
         }
     }
@@ -1385,6 +1403,7 @@ fn merge_foreign_inspect_deps(
                 eb_name: Some(eb_name.clone()),
                 constraint: dependency.constraint,
                 toolchain: None,
+                versionsuffix: None,
                 roles: dependency.roles,
                 condition: dependency.condition,
                 virtual_capability: None,
@@ -1412,7 +1431,8 @@ fn easybuild_name_from_foreign(name: &str) -> Option<String> {
     let lower = name.to_ascii_lowercase();
     if matches!(
         lower.as_str(),
-        "mpi" | "openmpi"
+        "mpi"
+            | "openmpi"
             | "mpich"
             | "gcc"
             | "llvm"
@@ -1457,6 +1477,7 @@ fn package_plan_from_easyconfig(
     source_checksum: Option<&str>,
 ) -> PackagePlan {
     let version = version.unwrap_or(&recipe.version).to_string();
+    let version_changed = version != recipe.version;
     let source_count = if recipe.sources_count > 0 {
         recipe.sources_count
     } else {
@@ -1470,7 +1491,7 @@ fn package_plan_from_easyconfig(
         .iter()
         .take(source_count)
         .map(|checksum| SourceArtifact {
-            sha256: Some(checksum.clone()),
+            sha256: (!version_changed).then(|| checksum.clone()),
             ..SourceArtifact::default()
         })
         .collect::<Vec<_>>();
@@ -1742,13 +1763,14 @@ fn apply_system_dep_consensus(
         if total == 0 {
             continue;
         }
-        let Some((version, count)) = counts
-            .iter()
-            .max_by(|(left, left_count), (right, right_count)| {
-                left_count
-                    .cmp(right_count)
-                    .then_with(|| crate::version::cmp_version(left, right))
-            })
+        let Some((version, count)) =
+            counts
+                .iter()
+                .max_by(|(left, left_count), (right, right_count)| {
+                    left_count
+                        .cmp(right_count)
+                        .then_with(|| crate::version::cmp_version(left, right))
+                })
         else {
             continue;
         };
@@ -1794,6 +1816,7 @@ fn dependency_from_easyconfig(
         toolchain: dependency.toolchain.as_ref().map(|source_toolchain| {
             map_source_toolchain_to_target(Some(source_toolchain), target_toolchain, None)
         }),
+        versionsuffix: dependency.versionsuffix.clone(),
         roles: vec![role],
         condition: ConditionExpr::Always,
         virtual_capability: external.then(|| format!("external:system:{}", dependency.name)),

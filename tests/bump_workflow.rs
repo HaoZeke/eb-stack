@@ -761,6 +761,25 @@ fn package_config_upserts_modulename_and_commit_on_version_bump() {
         text.contains("checksums = ['']") || text.contains("checksums = [\"\"]"),
         "stale checksum must be cleared:\n{text}"
     );
+    assert!(
+        bundle
+            .plan
+            .sources
+            .iter()
+            .all(|source| source.sha256.is_none()),
+        "plan must not keep the 0.1 sha256 after a version bump: {:?}",
+        bundle
+            .plan
+            .sources
+            .iter()
+            .map(|source| source.sha256.as_deref())
+            .collect::<Vec<_>>()
+    );
+    let sbom = serde_json::to_string(&bundle.sbom).expect("sbom json");
+    assert!(
+        !sbom.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        "SBOM must not publish the previous tarball digest:\n{sbom}"
+    );
 }
 
 #[test]

@@ -3,7 +3,8 @@
 use crate::domain::{Candidate, DepReq, Policy};
 use crate::hierarchy::{
     count_generation_dep_versions, filter_candidates_in_hierarchy, hierarchy_for_with_tree,
-    is_system_toolchain, pick_consensus_version, toolchains_match, ToolchainHierarchy,
+    is_system_toolchain, pick_consensus_version, prefer_non_system_candidates, toolchains_match,
+    ToolchainHierarchy,
 };
 use crate::package::{
     materialize_profile, DependencyRole, LockedDependency, PackageOrigin, PackagePlan,
@@ -185,7 +186,7 @@ pub fn solve_package_profile_with_hierarchy(
         let requirement = DepReq {
             name: name.clone(),
             version_req: normalize_requirement(dependency.constraint.as_deref()),
-            versionsuffix: None,
+            versionsuffix: dependency.versionsuffix.clone(),
             toolchain: dependency.toolchain.clone(),
         };
         if build_only {
@@ -214,7 +215,9 @@ pub fn solve_package_profile_with_hierarchy(
     let own = plan.package.name.clone();
     original_candidates.retain(|candidate| {
         !candidate.is_extension_provide()
-            || candidate.extension_parent_name().is_none_or(|parent| parent != own)
+            || candidate
+                .extension_parent_name()
+                .is_none_or(|parent| parent != own)
     });
     // A dependency written without a toolchain means "at my own level", so
     // for a recipe inside a generation the system-level build of that name is
@@ -606,9 +609,13 @@ fn apply_generation_consensus_pins(
             continue;
         }
         let counts = count_generation_dep_versions(name, all_candidates, hierarchy);
-        let mut eligible = admitted
+        let admitted_for_name: Vec<&crate::domain::Candidate> = admitted
             .iter()
-            .filter(|candidate| candidate.name == *name)
+            .filter(|candidate| candidate.name.eq_ignore_ascii_case(name))
+            .collect();
+        let preferred = prefer_non_system_candidates(&admitted_for_name);
+        let mut eligible = preferred
+            .iter()
             .map(|candidate| candidate.version.clone())
             .collect::<Vec<_>>();
         eligible.sort();
@@ -629,7 +636,11 @@ fn apply_generation_consensus_pins(
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_requirement;
+    use super::{apply_generation_consensus_pins, normalize_requirement};
+    use crate::domain::{Candidate, Toolchain};
+    use crate::hierarchy::ToolchainHierarchy;
+    use crate::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
+    use std::collections::BTreeMap;
 
     #[test]
     fn normalizes_foreign_version_syntax_for_resolvo() {
@@ -639,5 +650,69 @@ mod tests {
         assert_eq!(normalize_requirement(Some("1.8:2.0")), ">=1.8,<=2.0");
         assert_eq!(normalize_requirement(Some("1.14.2")), "==1.14.2");
         assert_eq!(normalize_requirement(Some(">=1.14")), ">=1.14");
+    }
+
+    fn cand(name: &str, ver: &str, tc_name: &str, tc_ver: &str) -> Candidate {
+        Candidate {
+            name: name.into(),
+            version: ver.into(),
+            toolchain: Toolchain {
+                name: tc_name.into(),
+                version: tc_ver.into(),
+            },
+            versionsuffix: None,
+            easyconfig_path: format!("{name}-{ver}-{tc_name}-{tc_ver}.eb"),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+            moduleclass: None,
+        }
+    }
+
+    #[test]
+    fn generation_consensus_prefers_gcccore_over_newer_system() {
+        let gcc = cand("CMake", "3.29.3", "GCCcore", "13.3.0");
+        let sys = cand("CMake", "3.31.8", "system", "system");
+        let mut policy = StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain: Toolchain {
+                name: "foss".into(),
+                version: "2024a".into(),
+            },
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        };
+        let mut roles = BTreeMap::new();
+        roles.insert("CMake".into(), true);
+        let hierarchy = ToolchainHierarchy {
+            parent: Toolchain {
+                name: "foss".into(),
+                version: "2024a".into(),
+            },
+            members: vec![
+                Toolchain {
+                    name: "system".into(),
+                    version: "system".into(),
+                },
+                Toolchain {
+                    name: "GCCcore".into(),
+                    version: "13.3.0".into(),
+                },
+            ],
+        };
+        apply_generation_consensus_pins(
+            &mut policy,
+            &roles,
+            &[gcc.clone(), sys.clone()],
+            &[gcc, sys],
+            &hierarchy,
+        );
+        let pin = policy
+            .pins
+            .iter()
+            .find(|pin| pin.name == "CMake")
+            .expect("CMake pin");
+        assert_eq!(pin.version_requirement, "==3.29.3");
     }
 }

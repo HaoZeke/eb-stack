@@ -615,6 +615,7 @@ fn ensure_dependency_requirement(
         eb_name: Some(requirement.name.clone()),
         constraint: requirement.constraint.clone(),
         toolchain: None,
+        versionsuffix: None,
         roles: requirement.roles.clone(),
         condition,
         virtual_capability: None,
