@@ -32,9 +32,6 @@ fn find_source_tree(
     let mut candidates = Vec::new();
     if let Some(stem) = dump.file_stem().and_then(|stem| stem.to_str()) {
         candidates.push(parent.join(stem));
-        if stem != identity {
-            return candidates.into_iter().find(|path| path.is_dir());
-        }
     }
     candidates.push(parent.join(&identity));
     candidates.push(parent.join(name));
@@ -160,13 +157,22 @@ fn overlay_meson_wraps(recipe: &mut ForeignRecipe, subprojects: &Path) {
 
 fn scan_python_imports(recipe: &mut ForeignRecipe, tree: &Path) {
     let mut stack = vec![tree.to_path_buf()];
+    let mut visited = std::collections::HashSet::new();
     while let Some(dir) = stack.pop() {
+        let identity = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+        if !visited.insert(identity) {
+            continue;
+        }
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
+            let is_dir = entry
+                .file_type()
+                .map(|kind| kind.is_dir())
+                .unwrap_or_else(|_| path.is_dir());
+            if is_dir {
                 if path.file_name().and_then(|name| name.to_str()) == Some("subprojects") {
                     continue;
                 }
@@ -212,6 +218,9 @@ fn python_imports(text: &str) -> Vec<String> {
         }
         if let Some(rest) = trimmed.strip_prefix("from ") {
             if let Some(name) = rest.split_whitespace().next() {
+                if name == "__future__" {
+                    continue;
+                }
                 if let Some(root) = name.split('.').next() {
                     push_import(&mut names, root);
                 }
@@ -325,6 +334,23 @@ mod tests {
     }
 
     #[test]
+    fn a_dump_stem_that_is_not_the_identity_still_finds_the_tree() {
+        let root = tempfile::tempdir().expect("temp");
+        let tree = root.path().join("demo-1.0.0");
+        std::fs::create_dir_all(tree.join("subprojects")).expect("dirs");
+        std::fs::write(tree.join("subprojects/quill.wrap"), "[wrap-file]\n").expect("wrap");
+        let dump = root.path().join("demo.json");
+        std::fs::write(&dump, "{}").expect("dump");
+        let mut recipe = empty_recipe();
+        enrich_from_source_tree(&mut recipe, &dump);
+        assert!(
+            recipe.dependencies.iter().any(|dep| dep.name == "quill"),
+            "{:?}",
+            recipe.dependencies
+        );
+    }
+
+    #[test]
     fn undeclared_import_is_a_residual_not_a_dep() {
         let root = tempfile::tempdir().expect("temp");
         let tree = root.path().join("demo-1.0.0");
@@ -420,7 +446,10 @@ mod sdist_overlay_tests {
         );
         overlay_pyproject(&mut recipe, &path);
         assert!(
-            recipe.build_system_hints.iter().any(|hint| hint.starts_with("backend:")),
+            recipe
+                .build_system_hints
+                .iter()
+                .any(|hint| hint.starts_with("backend:")),
             "hints {:?} deps {:?}",
             recipe.build_system_hints,
             recipe.dependencies
