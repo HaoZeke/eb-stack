@@ -6,7 +6,7 @@ use crate::package::{
     VerificationCommand,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use thiserror::Error;
 
@@ -161,30 +161,37 @@ pub enum DependencyAlias {
     /// same meaning.
     Direct(String),
     /// Control how a component constraint applies to a containing provider.
-    Provider {
-        /// EasyBuild package that provides the foreign dependency.
-        provider: String,
-        /// Whether the foreign version constraint carries over.
-        #[serde(default)]
-        constraint: AliasConstraint,
-    },
+    Provider(ProviderAlias),
+}
+
+/// Table form of [`DependencyAlias`]. Unknown keys are rejected so a typo
+/// such as `constraints` cannot silently keep the pin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderAlias {
+    /// EasyBuild package that provides the foreign dependency.
+    pub provider: String,
+    /// Whether the foreign version constraint carries over.
+    #[serde(default)]
+    pub constraint: AliasConstraint,
 }
 
 impl DependencyAlias {
     /// The EasyBuild package this alias resolves to, either spelling.
     pub fn provider(&self) -> &str {
         match self {
-            Self::Direct(provider) | Self::Provider { provider, .. } => provider,
+            Self::Direct(provider) => provider,
+            Self::Provider(alias) => &alias.provider,
         }
     }
 
     fn drops_constraint(&self) -> bool {
         matches!(
             self,
-            Self::Provider {
+            Self::Provider(ProviderAlias {
                 constraint: AliasConstraint::Drop,
                 ..
-            }
+            })
         )
     }
 }
@@ -426,12 +433,26 @@ pub fn apply_package_layers(
                             {
                                 let resolved_source = existing.resolved_source.clone();
                                 let source = existing.source.clone();
+                                let url = existing.url.clone();
+                                let condition = existing.condition.clone();
+                                let sha256 = existing.sha256.clone();
                                 *existing = patch.clone();
                                 if existing.resolved_source.is_none() {
                                     existing.resolved_source = resolved_source;
                                 }
                                 if existing.source.is_none() {
                                     existing.source = source;
+                                }
+                                if existing.url.is_none() {
+                                    existing.url = url;
+                                }
+                                if existing.sha256.is_none() {
+                                    existing.sha256 = sha256;
+                                }
+                                if existing.condition == crate::package::ConditionExpr::Always
+                                    && condition != crate::package::ConditionExpr::Always
+                                {
+                                    existing.condition = condition;
                                 }
                             } else {
                                 plan.build.patches.push(patch.clone());
@@ -468,74 +489,7 @@ pub fn apply_package_layers(
             }
         }
         apply_layer_source_checksums(plan, &layer.source_checksums)?;
-        for patch in &layer.profiles {
-            let existing_index = plan
-                .profiles
-                .iter()
-                .position(|profile| profile.name == patch.name);
-            let mut profile = match (existing_index, patch.inherits.as_deref()) {
-                (Some(index), _) => plan.profiles[index].clone(),
-                (None, Some(parent)) => {
-                    let mut inherited = plan
-                        .profiles
-                        .iter()
-                        .find(|profile| profile.name == parent)
-                        .cloned()
-                        .ok_or_else(|| PackageConfigError::MissingParent {
-                            profile: patch.name.clone(),
-                            parent: parent.to_string(),
-                        })?;
-                    inherited.name = patch.name.clone();
-                    inherited.default = false;
-                    inherited
-                }
-                (None, None) => ProductProfile {
-                    name: patch.name.clone(),
-                    default: false,
-                    versionsuffix: Vec::new(),
-                    platform: None,
-                    architecture: None,
-                    features: BTreeMap::new(),
-                    parameters: BTreeMap::new(),
-                    toolchain_options: BTreeMap::new(),
-                    config_options: Vec::new(),
-                    easyconfig_parameters: BTreeMap::new(),
-                    verification_commands: Vec::new(),
-                },
-            };
-
-            if let Some(default) = patch.default {
-                profile.default = default;
-            }
-            if let Some(versionsuffix) = &patch.versionsuffix {
-                profile.versionsuffix = versionsuffix.clone();
-            }
-            if let Some(platform) = &patch.platform {
-                profile.platform = Some(platform.clone());
-            }
-            if let Some(architecture) = &patch.architecture {
-                profile.architecture = Some(architecture.clone());
-            }
-            profile.features.extend(patch.features.clone());
-            profile.parameters.extend(patch.parameters.clone());
-            profile
-                .toolchain_options
-                .extend(patch.toolchain_options.clone());
-            if let Some(config_options) = &patch.config_options {
-                profile.config_options = config_options.clone();
-            }
-            profile
-                .easyconfig_parameters
-                .extend(patch.easyconfig_parameters.clone());
-            if let Some(verification_commands) = &patch.verification_commands {
-                profile.verification_commands = verification_commands.clone();
-            }
-
-            match existing_index {
-                Some(index) => plan.profiles[index] = profile,
-                None => plan.profiles.push(profile),
-            }
-        }
+        apply_profile_patches(plan, &layer.profiles)?;
     }
 
     let default_count = plan
@@ -565,6 +519,113 @@ fn validate_easyconfig_parameter_names(
         if !is_easyconfig_parameter_name(name) {
             return Err(PackageConfigError::InvalidEasyconfigParameter(name.clone()));
         }
+    }
+    Ok(())
+}
+
+fn apply_profile_patches(
+    plan: &mut PackagePlan,
+    patches: &[ProfilePatch],
+) -> Result<(), PackageConfigError> {
+    let mut remaining: BTreeSet<&str> = patches.iter().map(|patch| patch.name.as_str()).collect();
+    let mut leftover: Vec<&ProfilePatch> = patches.iter().collect();
+    while !leftover.is_empty() {
+        let (ready, rest): (Vec<&ProfilePatch>, Vec<&ProfilePatch>) =
+            leftover.into_iter().partition(|patch| {
+                patch
+                    .inherits
+                    .as_deref()
+                    .is_none_or(|parent| !remaining.contains(parent) || parent == patch.name)
+            });
+        let batch = if ready.is_empty() {
+            let Some((first, rest)) = rest.split_first() else {
+                break;
+            };
+            leftover = rest.to_vec();
+            vec![*first]
+        } else {
+            leftover = rest;
+            ready
+        };
+        for patch in batch {
+            apply_one_profile_patch(plan, patch)?;
+            remaining.remove(patch.name.as_str());
+        }
+    }
+    Ok(())
+}
+
+fn apply_one_profile_patch(
+    plan: &mut PackagePlan,
+    patch: &ProfilePatch,
+) -> Result<(), PackageConfigError> {
+    let existing_index = plan
+        .profiles
+        .iter()
+        .position(|profile| profile.name == patch.name);
+    let mut profile = match patch.inherits.as_deref() {
+        Some(parent) => {
+            let mut inherited = plan
+                .profiles
+                .iter()
+                .find(|profile| profile.name == parent)
+                .cloned()
+                .ok_or_else(|| PackageConfigError::MissingParent {
+                    profile: patch.name.clone(),
+                    parent: parent.to_string(),
+                })?;
+            inherited.name = patch.name.clone();
+            inherited.default = false;
+            inherited
+        }
+        None => match existing_index {
+            Some(index) => plan.profiles[index].clone(),
+            None => ProductProfile {
+                name: patch.name.clone(),
+                default: false,
+                versionsuffix: Vec::new(),
+                platform: None,
+                architecture: None,
+                features: BTreeMap::new(),
+                parameters: BTreeMap::new(),
+                toolchain_options: BTreeMap::new(),
+                config_options: Vec::new(),
+                easyconfig_parameters: BTreeMap::new(),
+                verification_commands: Vec::new(),
+            },
+        },
+    };
+
+    if let Some(default) = patch.default {
+        profile.default = default;
+    }
+    if let Some(versionsuffix) = &patch.versionsuffix {
+        profile.versionsuffix = versionsuffix.clone();
+    }
+    if let Some(platform) = &patch.platform {
+        profile.platform = Some(platform.clone());
+    }
+    if let Some(architecture) = &patch.architecture {
+        profile.architecture = Some(architecture.clone());
+    }
+    profile.features.extend(patch.features.clone());
+    profile.parameters.extend(patch.parameters.clone());
+    profile
+        .toolchain_options
+        .extend(patch.toolchain_options.clone());
+    if let Some(config_options) = &patch.config_options {
+        profile.config_options = config_options.clone();
+    }
+    profile
+        .easyconfig_parameters
+        .extend(patch.easyconfig_parameters.clone());
+    if let Some(verification_commands) = &patch.verification_commands {
+        profile.verification_commands = verification_commands.clone();
+    }
+
+    match existing_index {
+        Some(index) => plan.profiles[index] = profile,
+        None => plan.profiles.push(profile),
     }
     Ok(())
 }
@@ -611,7 +672,13 @@ fn ensure_dependency_requirement(
         package_identity(effective_name) == identity && dependency.condition == condition
     });
     if let Some(dependency) = existing {
-        dependency.eb_name = Some(requirement.name.clone());
+        if dependency
+            .eb_name
+            .as_deref()
+            .is_none_or(|name| name.is_empty())
+        {
+            dependency.eb_name = Some(requirement.name.clone());
+        }
         if let Some(constraint) = &requirement.constraint {
             dependency.constraint = Some(constraint.clone());
         }

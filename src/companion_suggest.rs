@@ -1,7 +1,8 @@
 //! Copy-paste companion argv for a failed generation bump.
 
+use crate::package_config::PackageConfigLayer;
 use crate::target::shell_quote;
-use crate::version::cmp_version;
+use crate::version::{cmp_version, parse_requirement, RequirementOp};
 use std::path::{Path, PathBuf};
 
 /// If `--out-dir/easyconfigs` exists, search it first as a robot root.
@@ -119,10 +120,8 @@ pub fn companion_argv(
             shell_quote(toolchain_name),
             shell_quote(toolchain_version)
         );
-        if let Some(pin) = version_pin
-            .filter(|pin| !pin.is_empty() && pin.chars().next().is_some_and(|c| c.is_ascii_digit()))
-        {
-            line.push_str(&format!(" --version {}", shell_quote(pin)));
+        if let Some(pin) = companion_version_arg(version_pin) {
+            line.push_str(&format!(" --version {}", shell_quote(&pin)));
         }
         if let Some(config) = find_sibling_package_config(package_configs, name) {
             line.push_str(&format!(
@@ -179,13 +178,12 @@ fn plan_toolchain_and_policy(
     let dir = package_config
         .parent()
         .map(|parent| parent.join("..").join("stacks"));
-    if package_config_names_python_package(package_config) {
-        if let Some(dir) = &dir {
+    if package_config_is_python_family(package_config) {
+        let policy = dir.as_ref().and_then(|dir| {
             let gfbf = dir.join(format!("gfbf-{toolchain_version}.toml"));
-            if gfbf.is_file() {
-                return ("gfbf".into(), Some(gfbf));
-            }
-        }
+            gfbf.is_file().then_some(gfbf)
+        });
+        return ("gfbf".into(), policy);
     }
     let policy = dir.and_then(|dir| {
         let policy = dir.join(format!("{toolchain_name}-{toolchain_version}.toml"));
@@ -194,10 +192,54 @@ fn plan_toolchain_and_policy(
     (toolchain_name.to_string(), policy)
 }
 
-fn package_config_names_python_package(config: &Path) -> bool {
-    std::fs::read_to_string(config)
+fn package_config_is_python_family(config: &Path) -> bool {
+    PackageConfigLayer::from_path(config)
         .ok()
-        .is_some_and(|text| text.contains("PythonPackage"))
+        .and_then(|layer| layer.build)
+        .and_then(|build| build.easyblock)
+        .is_some_and(|easyblock| {
+            matches!(
+                easyblock.as_str(),
+                "PythonPackage" | "PythonBundle" | "PythonPackageBundle"
+            )
+        })
+}
+
+fn companion_version_arg(pin: Option<&str>) -> Option<String> {
+    let pin = pin.map(str::trim).filter(|value| !value.is_empty())?;
+    if let Ok(requirement) = parse_requirement(pin) {
+        return version_from_requirement(&requirement);
+    }
+    let stripped = pin.trim_start_matches(['=', 'v', 'V']);
+    stripped
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_digit())
+        .then(|| stripped.to_string())
+}
+
+fn version_from_requirement(requirement: &crate::version::Requirement) -> Option<String> {
+    let mut lower = None;
+    for clause in &requirement.clauses {
+        match clause.op {
+            RequirementOp::Exact
+            | RequirementOp::AtLeast
+            | RequirementOp::Above
+            | RequirementOp::Compatible
+            | RequirementOp::Caret
+            | RequirementOp::Tilde => {
+                if clause.version == "0" || clause.version == "0.0.0" {
+                    continue;
+                }
+                lower = Some(clause.version.clone());
+                if matches!(clause.op, RequirementOp::Exact) {
+                    break;
+                }
+            }
+            RequirementOp::NotEqual | RequirementOp::AtMost | RequirementOp::Below => {}
+        }
+    }
+    lower
 }
 
 #[cfg(test)]
@@ -415,6 +457,83 @@ mod tests {
         assert!(
             argv.contains(&overlay_source.display().to_string()),
             "overlay recipe must win, got {argv}"
+        );
+    }
+
+    #[test]
+    fn plan_companion_retargets_python_bundle_to_gfbf_without_a_policy_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path().join("robot");
+        let pkg = temp.path().join("packages");
+        let stacks = temp.path().join("stacks");
+        let out = temp.path().join("out");
+        fs::create_dir_all(&robot).expect("robot");
+        fs::create_dir_all(&pkg).expect("pkg");
+        fs::create_dir_all(&stacks).expect("stacks");
+        fs::write(
+            pkg.join("demo.toml"),
+            "schema_version = 1\n\n[build]\neasyblock = \"PythonBundle\"\n",
+        )
+        .expect("bundle toml");
+        fs::write(stacks.join("foss-2026.1.toml"), "schema_version = 1\n").expect("foss");
+        let argv = companion_argv(
+            "Demo",
+            Some(">=1.2.3"),
+            &[robot.clone()],
+            &[pkg.join("demo.toml")],
+            "foss",
+            "2026.1",
+            robot.to_str().expect("utf8"),
+            &out,
+        );
+        assert!(
+            argv.contains("--toolchain-name gfbf"),
+            "PythonBundle must retarget to gfbf even without gfbf-2026.1.toml, got {argv}"
+        );
+        assert!(
+            !argv.contains("--stack-policy "),
+            "missing gfbf policy is omitted, not a foss fallback: {argv}"
+        );
+    }
+
+    #[test]
+    fn companion_argv_emits_the_lower_bound_of_a_requirement_pin() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path().join("robot");
+        let out = temp.path().join("out");
+        fs::create_dir_all(robot.join("a").join("ASAGI")).expect("asagi dir");
+        fs::write(
+            robot
+                .join("a")
+                .join("ASAGI")
+                .join("ASAGI-1.0-foss-2023a.eb"),
+            "name = 'ASAGI'\n",
+        )
+        .expect("recipe");
+        let argv = companion_argv(
+            "ASAGI",
+            Some(">=1.2.3"),
+            &[robot.clone()],
+            &[],
+            "foss",
+            "2025a",
+            robot.to_str().expect("utf8"),
+            &out,
+        );
+        assert!(argv.contains("--version 1.2.3"), "{argv}");
+        let unconstrained = companion_argv(
+            "ASAGI",
+            Some(">=0"),
+            &[robot.clone()],
+            &[],
+            "foss",
+            "2025a",
+            robot.to_str().expect("utf8"),
+            &out,
+        );
+        assert!(
+            !unconstrained.contains("--version "),
+            ">=0 stays unpinned: {unconstrained}"
         );
     }
 }

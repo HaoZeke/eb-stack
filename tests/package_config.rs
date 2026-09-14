@@ -1,7 +1,7 @@
 use eb_stack::package::{
     materialize_profile, package_plan_to_cyclonedx, ConditionExpr, ConditionPredicate,
-    DependencyRole, EasyconfigValue, PatchArtifact, ProfileEnvironment, StackPolicy,
-    STACK_POLICY_SCHEMA_VERSION,
+    DependencyIntent, DependencyRole, EasyconfigValue, PatchArtifact, ProfileEnvironment,
+    StackPolicy, STACK_POLICY_SCHEMA_VERSION,
 };
 use eb_stack::package_config::{apply_package_layers, DependencyAlias, PackageConfigLayer};
 use eb_stack::{
@@ -250,9 +250,12 @@ sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     plan.build.patches = vec![PatchArtifact {
         filename: "foreign-recipe.patch".into(),
         sha256: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
-        url: None,
+        url: Some("https://example.invalid/foreign-recipe.patch".into()),
         source: Some("foreign-recipe.patch".into()),
-        condition: ConditionExpr::Always,
+        condition: ConditionExpr::Predicate(ConditionPredicate::Feature {
+            name: "cuda".into(),
+            enabled: true,
+        }),
         resolved_source: None,
     }];
 
@@ -269,6 +272,17 @@ sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     assert_eq!(
         plan.build.patches[0].sha256.as_deref(),
         Some("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+    );
+    assert_eq!(
+        plan.build.patches[0].url.as_deref(),
+        Some("https://example.invalid/foreign-recipe.patch")
+    );
+    assert_eq!(
+        plan.build.patches[0].condition,
+        ConditionExpr::Predicate(ConditionPredicate::Feature {
+            name: "cuda".into(),
+            enabled: true,
+        })
     );
 }
 
@@ -361,6 +375,94 @@ py-setuptools = { provider = "Python", constraint = "drop" }
     let dependency = &plan.dependencies[0];
     assert_eq!(dependency.eb_name.as_deref(), Some("Python"));
     assert!(dependency.constraint.is_none());
+}
+
+#[test]
+fn provider_alias_rejects_unknown_table_keys() {
+    let error = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[dependencies.aliases]
+py-numpy = { provider = "SciPy-bundle", constraints = "drop" }
+"#,
+    )
+    .expect_err("unknown alias key");
+    assert!(
+        error.to_string().contains("constraints") || error.to_string().contains("unknown"),
+        "{error}"
+    );
+}
+
+#[test]
+fn requirement_keeps_an_existing_provider_alias() {
+    let config = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[dependencies.requirements]]
+name = "hdf5"
+roles = ["run"]
+"#,
+    )
+    .expect("requirement");
+    let mut plan = qmcpack_plan();
+    plan.dependencies.push(DependencyIntent {
+        id: "seed-hdf5".into(),
+        name: "hdf5".into(),
+        eb_name: Some("HDF5".into()),
+        constraint: None,
+        toolchain: None,
+        versionsuffix: None,
+        roles: vec![DependencyRole::Run],
+        condition: ConditionExpr::Always,
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: Vec::new(),
+    });
+    apply_package_layers(&mut plan, &[config]).expect("apply");
+    let hdf5 = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.id == "seed-hdf5")
+        .expect("seeded hdf5");
+    assert_eq!(
+        hdf5.eb_name.as_deref(),
+        Some("HDF5"),
+        "requirement must not undo the alias"
+    );
+}
+
+#[test]
+fn inherits_applies_after_the_parent_patch_in_the_same_layer() {
+    let config = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[profiles]]
+name = "complex"
+inherits = "default"
+versionsuffix = ["-complex"]
+
+[[profiles]]
+name = "default"
+default = true
+config_options = ["-DQMC_COMPLEX=OFF"]
+"#,
+    )
+    .expect("child listed first");
+    let mut plan = qmcpack_plan();
+    apply_package_layers(&mut plan, &[config]).expect("apply");
+    let complex = plan
+        .profiles
+        .iter()
+        .find(|profile| profile.name == "complex")
+        .expect("complex");
+    assert_eq!(
+        complex.config_options,
+        vec!["-DQMC_COMPLEX=OFF".to_string()],
+        "child must inherit the same-layer parent update"
+    );
 }
 
 #[test]

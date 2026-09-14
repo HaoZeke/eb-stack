@@ -25,6 +25,9 @@ pub enum SelectError {
     /// The requested set has no simultaneously satisfiable solution.
     #[error("unsatisfiable stack: {0}")]
     Unsat(String),
+    /// The solver returned a diagnostic; the text is already complete.
+    #[error("{0}")]
+    Solver(String),
 }
 
 /// Select a stack using **resolvo** (CDCL SAT) over EasyBuild-derived candidates.
@@ -33,16 +36,8 @@ pub fn select_stack(
     policy: &Policy,
     baseline: Option<&StackLock>,
 ) -> Result<StackLock, SelectError> {
-    let selected = solve_with_resolvo(&universe.candidates, policy, baseline).map_err(|e| {
-        let el = e.to_lowercase();
-        if el.contains("unsatisfiable") || el.contains("unsat") {
-            SelectError::Unsat(e)
-        } else if el.contains("no candidates") || el.contains("unknown package") {
-            SelectError::MissingPackage(e)
-        } else {
-            SelectError::Unsat(e)
-        }
-    })?;
+    let selected =
+        solve_with_resolvo(&universe.candidates, policy, baseline).map_err(SelectError::Solver)?;
 
     let mut packages_out: Vec<LockPackage> = selected
         .into_iter()
@@ -81,10 +76,9 @@ pub fn select_stack(
 /// Builds a synthetic root candidate whose dependencies are the foreign or
 /// source-recipe deps that exist under the generation hierarchy, solves with
 /// [`select_stack`], and returns name→version for co-selected deps plus a
-/// human note (engine id). Hierarchy members (GCCcore, gfbf, …) are rewritten
-/// to the policy toolchain label so [`crate::resolvo_provider::EbProvider`]
-/// keeps them — membership is already enforced by
-/// [`filter_candidates_in_hierarchy`].
+/// human note (engine id). Hierarchy membership is already enforced by
+/// [`filter_candidates_in_hierarchy`]; candidate toolchains stay as they
+/// were so SAT identity keeps GCCcore vs foss of the same name distinct.
 ///
 /// When `preferred_pins` is set (typically hierarchy consensus), those packages
 /// are **exact pins** in the policy: resolvo joint-checks feasibility under
@@ -111,9 +105,6 @@ pub fn resolvo_resolve_dep_versions(
     // Drop SYSTEM installs when a non-SYSTEM hierarchy member of the same name
     // exists (mirrors hierarchy::prefer_non_system_candidates).
     universe_cands = drop_system_when_non_system_exists(universe_cands);
-    for c in &mut universe_cands {
-        c.toolchain = toolchain.clone();
-    }
 
     let mut dep_reqs: Vec<DepReq> = Vec::new();
     let mut resolvable: Vec<String> = Vec::new();
@@ -898,6 +889,15 @@ mod lock_identity_and_bump_pin_tests {
             resolvo_resolve_dep_versions(&specs, &cands, &hierarchy(), &foss(), "App", "1.0", None)
                 .expect_err("required miss");
         assert!(err.contains("Missing"), "{err}");
+    }
+
+    #[test]
+    fn solver_errors_are_not_reprefixed() {
+        let err = SelectError::Solver("unsatisfiable stack (resolvo SAT): GROMACS 2025.0".into());
+        let text = err.to_string();
+        assert_eq!(text.matches("unsatisfiable stack").count(), 1, "{text}");
+        let missing = SelectError::MissingPackage("GROMACS".into());
+        assert_eq!(missing.to_string(), "no candidates for package GROMACS");
     }
 
     #[test]

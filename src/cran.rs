@@ -258,7 +258,7 @@ fn recipe_from_fields(fields: CranFields<'_>) -> Result<ForeignRecipe, ForeignEr
     } = fields;
     let mut residuals = Vec::new();
     let mut dependencies = Vec::new();
-    for (role, entries) in [("run", depends), ("run", imports), ("build", linking_to)] {
+    for (role, entries) in [("run", depends), ("run", imports), ("run", linking_to)] {
         for entry in entries {
             match parse_r_dep(entry) {
                 RDep::SkipBase { name } => residuals.push(ForeignResidual {
@@ -308,13 +308,10 @@ fn recipe_from_fields(fields: CranFields<'_>) -> Result<ForeignRecipe, ForeignEr
     // The current CRAN release lives at contrib/; older ones live under
     // Archive/{name}/. The emitter lists both source_urls so EasyBuild can
     // try each. URL stays the homepage it is.
-    let homepage = url.as_ref().and_then(|value| {
-        value
-            .split([',', ' '])
-            .map(str::trim)
-            .find(|item| item.starts_with("http"))
-            .map(ToString::to_string)
-    });
+    let homepage = url
+        .as_ref()
+        .and_then(|value| first_http_url(value))
+        .or_else(|| Some(format!("https://cran.r-project.org/package={name}")));
     let source_url = format!("{CRAN_CONTRIB}/{name}_{version}.tar.gz");
     let sources = vec![ForeignSource {
         url: Some(source_url.clone()),
@@ -331,7 +328,7 @@ fn recipe_from_fields(fields: CranFields<'_>) -> Result<ForeignRecipe, ForeignEr
         format: ForeignFormat::Cran,
         name,
         version,
-        homepage: homepage.or_else(|| Some(CRAN_CONTRIB.to_string())),
+        homepage,
         source_url: Some(source_url),
         source_filename: None,
         sha256: None,
@@ -405,6 +402,14 @@ fn is_base_r(name: &str) -> bool {
             | "translations"
             | "utils"
     )
+}
+
+fn first_http_url(value: &str) -> Option<String> {
+    value
+        .split(|character: char| character == ',' || character.is_whitespace())
+        .map(str::trim)
+        .find(|item| item.starts_with("http"))
+        .map(ToString::to_string)
 }
 
 fn debian_package_stanza_count(text: &str) -> usize {
@@ -576,6 +581,39 @@ mod tests {
         assert_eq!(recipe.version, "1.8.8");
         assert_eq!(recipe.dependencies[0].name, "R");
         assert_eq!(recipe.dependencies[1].name, "curl");
+        assert_eq!(
+            recipe.homepage.as_deref(),
+            Some("https://cran.r-project.org/package=jsonlite")
+        );
+    }
+
+    #[test]
+    fn homepage_splits_on_newlines_and_does_not_use_contrib() {
+        let recipe = parse_cran_str(
+            "{\n  \"Package\": \"jsonlite\",\n  \"Version\": \"1.8.8\",\n  \
+             \"URL\": \"https://jeroen.r-universe.dev/jsonlite\\nhttps://arxiv.org/abs/1403.2805\"\n}",
+        )
+        .expect("parse");
+        assert_eq!(
+            recipe.homepage.as_deref(),
+            Some("https://jeroen.r-universe.dev/jsonlite")
+        );
+    }
+
+    #[test]
+    fn linking_to_is_a_run_dependency() {
+        let recipe = parse_cran_str(
+            "Package: demo\n\
+             Version: 1.0\n\
+             LinkingTo: BH\n",
+        )
+        .expect("parse");
+        let bh = recipe
+            .dependencies
+            .iter()
+            .find(|dep| dep.name == "BH")
+            .expect("BH");
+        assert_eq!(bh.role, "run");
     }
 
     #[test]
