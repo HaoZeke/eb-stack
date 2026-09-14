@@ -1506,6 +1506,9 @@ fn template_pattern() -> &'static regex::Regex {
 }
 
 fn apply_templates_str(s: &str, templates: &HashMap<String, String>) -> String {
+    if !s.contains("%(") {
+        return s.to_string();
+    }
     // EasyBuild uses %(key)s substitution; iterate for rare nested cases.
     let re = template_pattern();
     let mut cur = s.to_string();
@@ -1693,7 +1696,7 @@ fn value_to_dep(val: &Value) -> Result<Option<ResolvedDep>, String> {
 /// that appends to a dependency list still has one.
 fn assigns_at_top_level(src: &str, field: &str) -> bool {
     src.lines().any(|line| {
-        let Some(rest) = line.strip_prefix(field) else {
+        let Some(rest) = line.trim_start().strip_prefix(field) else {
             return false;
         };
         let rest = rest.trim_start();
@@ -3647,11 +3650,10 @@ mod tests {
             "    dependencies = [('zlib', '1.3')]\n",
             "moduleclass = 'lib'\n",
         );
-        let (resolved, skipped) = resolve_easyconfig_str_reporting(src).expect("parse");
-        assert_eq!(resolved.moduleclass.as_deref(), Some("lib"));
+        let err = resolve_easyconfig_str(src).expect_err("indented deps are still assigned");
         assert!(
-            skipped.is_empty(),
-            "a control block is a deliberate skip, not a parse failure: {skipped:?}"
+            err.to_string().contains("dependencies"),
+            "assigned-but-unread deps must fail closed: {err}"
         );
     }
 

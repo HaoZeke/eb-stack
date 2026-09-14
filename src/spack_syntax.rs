@@ -19,9 +19,10 @@ const DIRECTIVES: &[&str] = &[
 pub(crate) enum StaticValue {
     None,
     Bool(bool),
+    Int(i64),
     String(String),
     Sequence(Vec<StaticValue>),
-    Mapping(Vec<(String, StaticValue)>),
+    Mapping(Vec<(StaticValue, StaticValue)>),
 }
 
 impl StaticValue {
@@ -29,6 +30,7 @@ impl StaticValue {
         match self {
             Self::String(value) => Some(value.clone()),
             Self::Bool(value) => Some(value.to_string()),
+            Self::Int(value) => Some(value.to_string()),
             Self::None | Self::Sequence(_) | Self::Mapping(_) => None,
         }
     }
@@ -40,10 +42,11 @@ impl StaticValue {
         }
     }
 
-    pub(crate) fn mapping_value(&self, key: &str) -> Option<&StaticValue> {
+    pub(crate) fn mapping_value(&self, key: &StaticValue) -> Option<&StaticValue> {
         match self {
             Self::Mapping(entries) => entries
                 .iter()
+                .rev()
                 .find(|(candidate, _)| candidate == key)
                 .map(|(_, value)| value),
             _ => None,
@@ -140,6 +143,7 @@ struct StaticEvaluator<'a> {
     dynamic_patches: Vec<StaticDynamicPatch>,
     residuals: Vec<String>,
     scoped_when: Vec<StaticScopedCondition>,
+    expansion_budget: usize,
 }
 
 impl<'a> StaticEvaluator<'a> {
@@ -152,6 +156,7 @@ impl<'a> StaticEvaluator<'a> {
             dynamic_patches: Vec::new(),
             residuals: Vec::new(),
             scoped_when: Vec::new(),
+            expansion_budget: 1024,
         }
     }
 
@@ -296,10 +301,10 @@ impl<'a> StaticEvaluator<'a> {
             );
             return;
         };
-        if values.len() > 1024 {
+        if values.len() > self.expansion_budget {
             self.residual(
                 statement.iter.as_ref(),
-                "static for-loop exceeds 1024 values",
+                "static for-loop exceeds remaining expansion budget",
             );
             return;
         }
@@ -308,6 +313,14 @@ impl<'a> StaticEvaluator<'a> {
             return;
         }
         for value in values {
+            if self.expansion_budget == 0 {
+                self.residual(
+                    statement.iter.as_ref(),
+                    "static for-loop expansion budget exhausted",
+                );
+                return;
+            }
+            self.expansion_budget -= 1;
             if self.bind_target(&statement.target, value) {
                 self.walk_statements(&statement.body);
             } else {
@@ -464,7 +477,14 @@ impl<'a> StaticEvaluator<'a> {
                 Constant::None => Some(StaticValue::None),
                 Constant::Bool(value) => Some(StaticValue::Bool(*value)),
                 Constant::Str(value) => Some(StaticValue::String(value.clone())),
-                Constant::Int(value) => Some(StaticValue::String(value.to_string())),
+                Constant::Int(value) => {
+                    let text = value.to_string();
+                    Some(
+                        text.parse::<i64>()
+                            .map(StaticValue::Int)
+                            .unwrap_or(StaticValue::String(text)),
+                    )
+                }
                 _ => None,
             },
             ast::Expr::Name(name) => self.environment.get(name.id.as_str()).cloned(),
@@ -514,7 +534,7 @@ impl<'a> StaticEvaluator<'a> {
             .iter()
             .zip(&dictionary.values)
             .map(|(key, value)| {
-                let key = self.evaluate(key.as_ref()?)?.as_string()?;
+                let key = self.evaluate(key.as_ref()?)?;
                 Some((key, self.evaluate(value)?))
             })
             .collect::<Option<Vec<_>>>()
@@ -529,7 +549,7 @@ impl<'a> StaticEvaluator<'a> {
                     let StaticValue::Mapping(_) = &receiver else {
                         return None;
                     };
-                    let key = self.evaluate(call.args.first()?)?.as_string()?;
+                    let key = self.evaluate(call.args.first()?)?;
                     if let Some(value) = receiver.mapping_value(&key).cloned() {
                         return Some(value);
                     }
@@ -542,19 +562,14 @@ impl<'a> StaticEvaluator<'a> {
                     StaticValue::Mapping(entries) => Some(StaticValue::Sequence(
                         entries
                             .into_iter()
-                            .map(|(key, value)| {
-                                StaticValue::Sequence(vec![StaticValue::String(key), value])
-                            })
+                            .map(|(key, value)| StaticValue::Sequence(vec![key, value]))
                             .collect(),
                     )),
                     _ => None,
                 },
                 "keys" if call.args.is_empty() => match receiver {
                     StaticValue::Mapping(entries) => Some(StaticValue::Sequence(
-                        entries
-                            .into_iter()
-                            .map(|(key, _)| StaticValue::String(key))
-                            .collect(),
+                        entries.into_iter().map(|(key, _)| key).collect(),
                     )),
                     _ => None,
                 },
@@ -627,16 +642,16 @@ impl<'a> StaticEvaluator<'a> {
 
     fn evaluate_subscript(&self, subscript: &ast::ExprSubscript) -> Option<StaticValue> {
         let container = self.evaluate(&subscript.value)?;
-        let key = self.evaluate(&subscript.slice)?.as_string()?;
+        let key = self.evaluate(&subscript.slice)?;
         match container {
             StaticValue::Mapping(entries) => entries
                 .into_iter()
+                .rev()
                 .find(|(candidate, _)| candidate == &key)
                 .map(|(_, value)| value),
-            StaticValue::Sequence(values) => key
-                .parse::<usize>()
-                .ok()
-                .and_then(|index| values.get(index).cloned()),
+            StaticValue::Sequence(values) => {
+                sequence_index(&key).and_then(|index| values.get(index).cloned())
+            }
             _ => None,
         }
     }
@@ -745,12 +760,7 @@ fn bind_sequence(
 fn iteration_values(value: StaticValue) -> Option<Vec<StaticValue>> {
     match value {
         StaticValue::Sequence(values) => Some(values),
-        StaticValue::Mapping(entries) => Some(
-            entries
-                .into_iter()
-                .map(|(key, _)| StaticValue::String(key))
-                .collect(),
-        ),
+        StaticValue::Mapping(entries) => Some(entries.into_iter().map(|(key, _)| key).collect()),
         _ => None,
     }
 }
@@ -766,9 +776,7 @@ fn expression_name(expression: &ast::Expr) -> Option<String> {
 fn contains_value(container: &StaticValue, needle: &StaticValue) -> bool {
     match container {
         StaticValue::Sequence(values) => values.contains(needle),
-        StaticValue::Mapping(entries) => needle
-            .as_string()
-            .is_some_and(|needle| entries.iter().any(|(key, _)| key == &needle)),
+        StaticValue::Mapping(entries) => entries.iter().any(|(key, _)| key == needle),
         StaticValue::String(value) => needle
             .as_string()
             .is_some_and(|needle| value.contains(&needle)),
@@ -939,11 +947,33 @@ class Pkg(Package):
             syntax.residuals
         );
     }
+
+    #[test]
+    fn an_int_is_not_equal_to_its_string() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    level = "1"
+    if level == 1:
+        depends_on("foo")
+"#,
+        )
+        .expect("parse");
+        assert!(
+            syntax
+                .calls
+                .iter()
+                .all(|call| call.arg_string(0).as_deref() != Some("foo")),
+            "1 == \"1\" must stay false: {:?}",
+            syntax.calls
+        );
+    }
 }
 
 fn is_truthy(value: &StaticValue) -> Option<bool> {
     match value {
         StaticValue::Bool(value) => Some(*value),
+        StaticValue::Int(value) => Some(*value != 0),
         StaticValue::None => Some(false),
         StaticValue::String(value) => Some(!value.is_empty()),
         StaticValue::Sequence(value) => Some(!value.is_empty()),
@@ -973,6 +1003,14 @@ fn text_mentions_directive(text: &str) -> bool {
             false
         })
     })
+}
+
+fn sequence_index(key: &StaticValue) -> Option<usize> {
+    match key {
+        StaticValue::Int(value) if *value >= 0 => Some(*value as usize),
+        StaticValue::String(value) => value.parse().ok(),
+        _ => None,
+    }
 }
 
 fn leftover_format_placeholder(value: &str) -> bool {

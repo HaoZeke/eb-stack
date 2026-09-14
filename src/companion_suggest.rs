@@ -1,6 +1,8 @@
 //! Copy-paste companion argv for a failed generation bump.
 
+use crate::domain::Toolchain;
 use crate::package_config::PackageConfigLayer;
+use crate::package_sources::map_source_toolchain_to_target;
 use crate::target::shell_quote;
 use crate::version::{cmp_version, parse_requirement, RequirementOp};
 use std::path::{Path, PathBuf};
@@ -45,6 +47,29 @@ fn newest_named_eb(dir: &Path, name: &str) -> Option<PathBuf> {
                 &easyconfig_version_key(right, &prefix),
             )
         })
+}
+
+fn toolchain_from_easyconfig_path(path: &Path) -> Option<Toolchain> {
+    let file = path.file_name()?.to_str()?.strip_suffix(".eb")?;
+    let parts: Vec<&str> = file.split('-').collect();
+    let mut toolchain_at = None;
+    for index in 1..parts.len().saturating_sub(1) {
+        if parts[index]
+            .chars()
+            .all(|character| character.is_ascii_alphabetic())
+            && parts[index + 1]
+                .chars()
+                .next()
+                .is_some_and(|character| character.is_ascii_digit())
+        {
+            toolchain_at = Some(index);
+        }
+    }
+    let toolchain_at = toolchain_at?;
+    Some(Toolchain {
+        name: parts[toolchain_at].to_string(),
+        version: parts[toolchain_at + 1].to_string(),
+    })
 }
 
 fn easyconfig_version_key(path: &Path, prefix: &str) -> String {
@@ -114,11 +139,20 @@ pub fn companion_argv(
     let roots = with_outdir_overlay(roots.to_vec(), out_dir);
     let roots = roots.as_slice();
     if let Some(source) = find_named_easyconfig(roots, name) {
+        let parent = Toolchain {
+            name: toolchain_name.to_string(),
+            version: toolchain_version.to_string(),
+        };
+        let mapped = map_source_toolchain_to_target(
+            toolchain_from_easyconfig_path(&source).as_ref(),
+            &parent,
+            None,
+        );
         let mut line = format!(
             "eb-stack package bump --source {} --toolchain-name {} --toolchain-version {}",
             shell_quote(&source.display().to_string()),
-            shell_quote(toolchain_name),
-            shell_quote(toolchain_version)
+            shell_quote(&mapped.name),
+            shell_quote(&mapped.version)
         );
         if let Some(pin) = companion_version_arg(version_pin) {
             line.push_str(&format!(" --version {}", shell_quote(&pin)));
@@ -137,35 +171,21 @@ pub fn companion_argv(
         return line;
     }
     if let Some(config) = find_sibling_package_config(package_configs, name) {
-        let mut line = format!(
-            "eb-stack package plan --package-config {}",
-            shell_quote(&config.display().to_string())
-        );
-        if let Some(foreign) = find_foreign_package_py(roots, name) {
-            line.push_str(&format!(
-                " --source {}",
-                shell_quote(&foreign.display().to_string())
-            ));
+        if let (Some(foreign), (plan_tc, Some(policy))) = (
+            find_foreign_package_py(roots, name),
+            plan_toolchain_and_policy(&config, toolchain_name, toolchain_version),
+        ) {
+            return format!(
+                "eb-stack package plan --package-config {} --source {} --toolchain-name {} --toolchain-version {} --stack-policy {} --easyconfigs {} --out-dir {}",
+                shell_quote(&config.display().to_string()),
+                shell_quote(&foreign.display().to_string()),
+                shell_quote(&plan_tc),
+                shell_quote(toolchain_version),
+                shell_quote(&policy.display().to_string()),
+                shell_quote(robot),
+                shell_quote(&out_dir.display().to_string())
+            );
         }
-        let (plan_tc, policy) =
-            plan_toolchain_and_policy(&config, toolchain_name, toolchain_version);
-        line.push_str(&format!(
-            " --toolchain-name {} --toolchain-version {}",
-            shell_quote(&plan_tc),
-            shell_quote(toolchain_version)
-        ));
-        if let Some(policy) = policy {
-            line.push_str(&format!(
-                " --stack-policy {}",
-                shell_quote(&policy.display().to_string())
-            ));
-        }
-        line.push_str(&format!(
-            " --easyconfigs {} --out-dir {}",
-            shell_quote(robot),
-            shell_quote(&out_dir.display().to_string())
-        ));
-        return line;
     }
     format!("eb-stack package bump # {name}: no source or package-config")
 }
@@ -470,12 +490,19 @@ mod tests {
         fs::create_dir_all(&robot).expect("robot");
         fs::create_dir_all(&pkg).expect("pkg");
         fs::create_dir_all(&stacks).expect("stacks");
+        fs::create_dir_all(robot.join("demo")).expect("demo src");
+        fs::write(
+            robot.join("demo").join("package.py"),
+            "class Demo:\n    pass\n",
+        )
+        .expect("package.py");
         fs::write(
             pkg.join("demo.toml"),
             "schema_version = 1\n\n[build]\neasyblock = \"PythonBundle\"\n",
         )
         .expect("bundle toml");
         fs::write(stacks.join("foss-2026.1.toml"), "schema_version = 1\n").expect("foss");
+        fs::write(stacks.join("gfbf-2026.1.toml"), "schema_version = 1\n").expect("gfbf");
         let argv = companion_argv(
             "Demo",
             Some(">=1.2.3"),
@@ -488,11 +515,15 @@ mod tests {
         );
         assert!(
             argv.contains("--toolchain-name gfbf"),
-            "PythonBundle must retarget to gfbf even without gfbf-2026.1.toml, got {argv}"
+            "PythonBundle must retarget to gfbf, got {argv}"
         );
         assert!(
-            !argv.contains("--stack-policy "),
-            "missing gfbf policy is omitted, not a foss fallback: {argv}"
+            argv.contains("--stack-policy "),
+            "plan companion must carry the required stack policy: {argv}"
+        );
+        assert!(
+            argv.contains("--source "),
+            "plan companion must carry the required source: {argv}"
         );
     }
 
@@ -534,6 +565,68 @@ mod tests {
         assert!(
             !unconstrained.contains("--version "),
             ">=0 stays unpinned: {unconstrained}"
+        );
+    }
+
+    #[test]
+    fn plan_companion_without_source_is_a_stub() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path().join("robot");
+        let pkg = temp.path().join("packages");
+        let stacks = temp.path().join("stacks");
+        let out = temp.path().join("out");
+        fs::create_dir_all(&robot).expect("robot");
+        fs::create_dir_all(&pkg).expect("pkg");
+        fs::create_dir_all(&stacks).expect("stacks");
+        fs::write(pkg.join("demo.toml"), "schema_version = 1\n").expect("toml");
+        fs::write(stacks.join("foss-2025a.toml"), "schema_version = 1\n").expect("foss");
+        let argv = companion_argv(
+            "Demo",
+            None,
+            &[robot.clone()],
+            &[pkg.join("demo.toml")],
+            "foss",
+            "2025a",
+            robot.to_str().expect("utf8"),
+            &out,
+        );
+        assert!(
+            argv.starts_with("eb-stack package bump #"),
+            "toml-only plan is not eval-able without --source: {argv}"
+        );
+    }
+
+    #[test]
+    fn bump_companion_maps_a_gcccore_recipe_to_the_generation_member() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path().join("robot");
+        let out = temp.path().join("out");
+        fs::create_dir_all(robot.join("c").join("CMake")).expect("cmake dir");
+        fs::write(
+            robot
+                .join("c")
+                .join("CMake")
+                .join("CMake-3.26.3-GCCcore-12.3.0.eb"),
+            "name = 'CMake'\n",
+        )
+        .expect("recipe");
+        let argv = companion_argv(
+            "CMake",
+            Some("3.26.3"),
+            &[robot.clone()],
+            &[],
+            "foss",
+            "2025a",
+            robot.to_str().expect("utf8"),
+            &out,
+        );
+        assert!(
+            argv.contains("--toolchain-name GCCcore"),
+            "CMake companion must bump the GCCcore member, got {argv}"
+        );
+        assert!(
+            !argv.contains("--toolchain-name foss"),
+            "parent foss must not be stamped on a GCCcore recipe: {argv}"
         );
     }
 }
