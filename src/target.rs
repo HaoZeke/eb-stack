@@ -319,7 +319,7 @@ pub fn resolve_target_layers(
         .into_iter()
         .map(|name| {
             let target = targets.remove(&name).expect("ordered target exists");
-            Ok(BuildTarget {
+            let built = BuildTarget {
                 name: name.clone(),
                 transport: target
                     .transport
@@ -332,10 +332,36 @@ pub fn resolve_target_layers(
                     .ok_or_else(|| TargetError::MissingLayer(name.clone(), "runtime"))?,
                 easybuild: target
                     .easybuild
-                    .ok_or(TargetError::MissingLayer(name, "easybuild"))?,
-            })
+                    .ok_or(TargetError::MissingLayer(name.clone(), "easybuild"))?,
+            };
+            validate_resolved_target(&built)?;
+            Ok(built)
         })
         .collect()
+}
+
+fn validate_resolved_target(target: &BuildTarget) -> Result<(), TargetError> {
+    if let TargetTransport::Ssh { host, command, .. } = &target.transport {
+        if host.trim().is_empty() {
+            return Err(TargetError::EmptyHost(target.name.clone()));
+        }
+        if command.trim().is_empty() {
+            return Err(TargetError::EmptyField(target.name.clone(), "ssh command"));
+        }
+    }
+    if target.easybuild.command.trim().is_empty() {
+        return Err(TargetError::EmptyField(
+            target.name.clone(),
+            "easybuild command",
+        ));
+    }
+    if target.easybuild.work_root.trim().is_empty() {
+        return Err(TargetError::EmptyField(target.name.clone(), "work_root"));
+    }
+    if target.easybuild.tmp_root.trim().is_empty() {
+        return Err(TargetError::EmptyField(target.name.clone(), "tmp_root"));
+    }
+    Ok(())
 }
 
 impl BuildTarget {
@@ -715,6 +741,12 @@ pub enum TargetError {
     #[error("target name cannot be empty")]
     /// A target has no name, so no layer could merge onto it.
     EmptyName,
+    #[error("target {0} SSH host cannot be empty")]
+    /// An SSH transport has no host.
+    EmptyHost(String),
+    #[error("target {0} {1} cannot be empty")]
+    /// A required string field is empty.
+    EmptyField(String, &'static str),
     #[error("target {0} has no {1} layer")]
     /// A target left a layer undefined that has no default.
     MissingLayer(String, &'static str),

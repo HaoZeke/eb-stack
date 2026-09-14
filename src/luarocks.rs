@@ -19,9 +19,12 @@ pub fn parse_luarocks_str(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let url = lua_nested_string(text, "source", "url");
     let sha256 = lua_nested_string(text, "source", "hash")
         .or_else(|| lua_nested_string(text, "source", "sha256"));
+    let tag = lua_nested_string(text, "source", "tag");
+    let source_file = lua_nested_string(text, "source", "file");
     let homepage = lua_nested_string(text, "description", "homepage")
         .or_else(|| lua_nested_string(text, "description", "url"));
     let summary = lua_nested_string(text, "description", "summary");
+    let license = lua_nested_string(text, "description", "license");
     let mut lua_pin = None;
     let mut dependencies = Vec::new();
     for spec in lua_string_list(text, "dependencies") {
@@ -37,6 +40,19 @@ pub fn parse_luarocks_str(text: &str) -> Result<ForeignRecipe, ForeignError> {
             name: dep_name.to_string(),
             pin,
             role: "run".into(),
+            original_spec: Some(spec),
+            condition: ConditionExpr::Always,
+            provenance: Vec::new(),
+        });
+    }
+    for spec in lua_string_list(text, "build_dependencies") {
+        let mut parts = spec.split_whitespace();
+        let dep_name = parts.next().unwrap_or(&spec);
+        let pin = parts.collect::<Vec<_>>().join(" ");
+        dependencies.push(ForeignDep {
+            name: dep_name.to_string(),
+            pin: (!pin.is_empty()).then_some(pin),
+            role: "build".into(),
             original_spec: Some(spec),
             condition: ConditionExpr::Always,
             provenance: Vec::new(),
@@ -58,14 +74,16 @@ pub fn parse_luarocks_str(text: &str) -> Result<ForeignRecipe, ForeignError> {
         .map(|url| {
             vec![ForeignSource {
                 url: Some(url.clone()),
-                filename: url
-                    .split(['?', '#'])
-                    .next()
-                    .unwrap_or(url)
-                    .rsplit('/')
-                    .next()
-                    .map(ToString::to_string),
+                filename: source_file.clone().or_else(|| {
+                    url.split(['?', '#'])
+                        .next()
+                        .unwrap_or(url)
+                        .rsplit('/')
+                        .next()
+                        .map(ToString::to_string)
+                }),
                 sha256: sha256.clone(),
+                tag: tag.clone(),
                 ..ForeignSource::default()
             }]
         })
@@ -88,7 +106,7 @@ pub fn parse_luarocks_str(text: &str) -> Result<ForeignRecipe, ForeignError> {
         sources,
         summary,
         description: None,
-        license: None,
+        license,
         dependencies,
         build_system_hints: vec!["luarocks".into()],
         configopts: None,
@@ -123,19 +141,61 @@ fn lua_string(text: &str, key: &str) -> Option<String> {
 }
 
 fn lua_nested_string(text: &str, table: &str, key: &str) -> Option<String> {
-    let mut in_table = false;
+    let body = lua_table_body(text, table)?;
+    for line in body.lines() {
+        let trimmed = line.trim().trim_end_matches(',');
+        for needle in [format!("{key} ="), format!("{key}=")] {
+            if let Some(idx) = trimmed.find(&needle) {
+                return unquote(trimmed[idx + needle.len()..].trim());
+            }
+        }
+    }
+    None
+}
+
+fn lua_table_body(text: &str, table: &str) -> Option<String> {
+    let prefix = format!("{table} =");
+    let mut waiting = false;
+    let mut collecting = false;
+    let mut depth = 0i32;
+    let mut body = String::new();
     for line in text.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with(&format!("{table} =")) && trimmed.contains('{') {
-            in_table = true;
+        if !collecting {
+            if let Some(rest) = trimmed.strip_prefix(&prefix) {
+                if let Some(idx) = rest.find('{') {
+                    collecting = true;
+                    depth = 1;
+                    body.push_str(&rest[idx + 1..]);
+                    body.push('\n');
+                    depth += rest[idx + 1..].chars().filter(|c| *c == '{').count() as i32;
+                    depth -= rest[idx + 1..].chars().filter(|c| *c == '}').count() as i32;
+                    if depth <= 0 {
+                        return Some(body);
+                    }
+                } else {
+                    waiting = true;
+                }
+            } else if waiting && trimmed.starts_with('{') {
+                collecting = true;
+                waiting = false;
+                depth = 1;
+                body.push_str(&trimmed[1..]);
+                body.push('\n');
+                depth += trimmed[1..].chars().filter(|c| *c == '{').count() as i32;
+                depth -= trimmed[1..].chars().filter(|c| *c == '}').count() as i32;
+                if depth <= 0 {
+                    return Some(body);
+                }
+            }
+            continue;
         }
-        if in_table {
-            if let Some(rest) = trimmed.strip_prefix(&format!("{key} =")) {
-                return unquote(rest.trim().trim_end_matches(','));
-            }
-            if trimmed == "}" {
-                return None;
-            }
+        depth += trimmed.chars().filter(|c| *c == '{').count() as i32;
+        depth -= trimmed.chars().filter(|c| *c == '}').count() as i32;
+        body.push_str(trimmed);
+        body.push('\n');
+        if depth <= 0 {
+            return Some(body);
         }
     }
     None
@@ -169,9 +229,17 @@ fn lua_string_list(text: &str, key: &str) -> Vec<String> {
 
 fn collect_quoted(text: &str, items: &mut Vec<String>) {
     let mut rest = text;
-    while let Some(idx) = rest.find('"') {
+    loop {
+        let double = rest.find('"');
+        let single = rest.find('\'');
+        let (idx, quote) = match (double, single) {
+            (Some(d), Some(s)) if s < d => (s, '\''),
+            (Some(d), _) => (d, '"'),
+            (None, Some(s)) => (s, '\''),
+            (None, None) => break,
+        };
         rest = &rest[idx + 1..];
-        if let Some(end) = rest.find('"') {
+        if let Some(end) = rest.find(quote) {
             items.push(rest[..end].to_string());
             rest = &rest[end + 1..];
         } else {
@@ -182,17 +250,15 @@ fn collect_quoted(text: &str, items: &mut Vec<String>) {
 
 fn unquote(text: &str) -> Option<String> {
     let text = text.trim().trim_end_matches(',').trim();
-    if let Some(inner) = text
-        .strip_prefix('"')
-        .and_then(|text| text.strip_suffix('"'))
-    {
-        return Some(inner.to_string());
+    if let Some(inner) = text.strip_prefix('"') {
+        if let Some(end) = inner.find('"') {
+            return Some(inner[..end].to_string());
+        }
     }
-    if let Some(inner) = text
-        .strip_prefix('\'')
-        .and_then(|text| text.strip_suffix('\''))
-    {
-        return Some(inner.to_string());
+    if let Some(inner) = text.strip_prefix('\'') {
+        if let Some(end) = inner.find('\'') {
+            return Some(inner[..end].to_string());
+        }
     }
     None
 }
@@ -227,5 +293,30 @@ dependencies = {
             .expect("Lua");
         assert_eq!(lua.pin.as_deref(), Some(">= 5.1"));
         assert_eq!(recipe.format, ForeignFormat::Luarocks);
+    }
+
+    #[test]
+    fn one_line_source_table_and_single_quoted_deps() {
+        let recipe = parse_luarocks_str(
+            r#"
+package = 'lfs'
+version = '1.8.0-1'
+source = { url = "https://example.invalid/lfs-1.8.0.tar.gz", hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+dependencies = {
+  'lua >= 5.1',
+  'bit32'
+}
+"#,
+        )
+        .expect("parse");
+        assert_eq!(
+            recipe.source_url.as_deref(),
+            Some("https://example.invalid/lfs-1.8.0.tar.gz")
+        );
+        assert!(recipe.dependencies.iter().any(|dep| dep.name == "bit32"));
+        assert_eq!(
+            recipe.sha256.as_deref(),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
     }
 }

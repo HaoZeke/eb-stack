@@ -294,6 +294,11 @@ impl<'src, 'env> Parser<'src, 'env> {
         for (name, value) in EB_TEMPLATE_CONSTANTS {
             env.insert((*name).to_string(), Value::Str((*value).to_string()));
         }
+        for (alias, primary) in crate::eb_template_constants::EB_TEMPLATE_CONSTANT_ALIASES {
+            if let Some(value) = env.get(*primary).cloned() {
+                env.insert((*alias).to_string(), value);
+            }
+        }
         Self {
             src: src.as_bytes(),
             pos: 0,

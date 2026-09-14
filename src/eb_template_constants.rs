@@ -60,7 +60,7 @@ pub const EB_TEMPLATE_CONSTANTS: &[(&str, &str)] = &[
         "R_SOURCE",
         "https://cran.r-project.org/src/base/R-%(version_major)s",
     ),
-    ("SHLIB_EXT", "so"),
+    ("SHLIB_EXT", SHLIB_EXT),
     (
         "SOURCEFORGE_SOURCE",
         "https://download.sourceforge.net/%(namelower)s",
@@ -149,5 +149,29 @@ pub const EB_TEMPLATE_CONSTANTS: &[(&str, &str)] = &[
         "https://xorg.freedesktop.org/archive/individual/xcb/",
     ),
 ];
+
+#[cfg(target_os = "macos")]
+const SHLIB_EXT: &str = "dylib";
+#[cfg(target_os = "windows")]
+const SHLIB_EXT: &str = "dll";
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const SHLIB_EXT: &str = "so";
+
+/// EasyBuild ALTERNATIVE_EASYCONFIG_TEMPLATE_CONSTANTS (same values as the primaries).
+pub const EB_TEMPLATE_CONSTANT_ALIASES: &[(&str, &str)] = &[
+    ("APACHE_URL", "APACHE_SOURCE"),
+    ("GITHUB_URL", "GITHUB_SOURCE"),
+    ("GITHUB_URL_LOWER", "GITHUB_LOWER_SOURCE"),
+    ("GITHUB_LOWER_URL", "GITHUB_LOWER_SOURCE"),
+    ("GNU_URL", "GNU_SOURCE"),
+    ("PYPI_URL", "PYPI_SOURCE"),
+    ("PYPI_LOWER_URL", "PYPI_LOWER_SOURCE"),
+    ("SOURCEFORGE_URL", "SOURCEFORGE_SOURCE"),
+    ("SOURCE_LOWER_TAR_GZ", "SOURCELOWER_TAR_GZ"),
+    ("SOURCE_LOWER_TAR_XZ", "SOURCELOWER_TAR_XZ"),
+    ("SOURCE_LOWER_TAR_BZ2", "SOURCELOWER_TAR_BZ2"),
+    ("SOURCE_LOWER_ZIP", "SOURCELOWER_ZIP"),
+];
+
 /// How many template constants the table carries, for a coverage assertion.
 pub const EB_TEMPLATE_CONSTANTS_COUNT: usize = 78;
