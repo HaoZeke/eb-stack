@@ -58,14 +58,26 @@ fn bom_ref_for(package: &LockPackage) -> String {
     reference
 }
 
-fn resolve_named_ref<'a>(
+fn resolve_named_refs(
     name: &str,
-    unique_name_refs: &'a HashMap<String, String>,
-    package_refs: &'a HashMap<String, String>,
-) -> Option<&'a String> {
-    unique_name_refs
+    unique_name_refs: &HashMap<String, String>,
+    package_refs: &HashMap<String, String>,
+) -> Vec<String> {
+    if let Some(reference) = unique_name_refs
         .get(name)
         .or_else(|| package_refs.get(name))
+    {
+        return vec![reference.clone()];
+    }
+    let prefix = format!("{name}@");
+    let mut refs: Vec<String> = package_refs
+        .iter()
+        .filter(|(key, _)| *key == name || key.starts_with(&prefix))
+        .map(|(_, reference)| reference.clone())
+        .collect();
+    refs.sort();
+    refs.dedup();
+    refs
 }
 
 /// What an easyconfig states about the artifact one component builds from.
@@ -230,9 +242,7 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
                 if !bdeps.is_empty() {
                     let joined = bdeps
                         .iter()
-                        .filter_map(|n| {
-                            resolve_named_ref(n, &unique_name_refs, &package_refs).cloned()
-                        })
+                        .flat_map(|n| resolve_named_refs(n, &unique_name_refs, &package_refs))
                         .collect::<Vec<_>>()
                         .join(",");
                     if !joined.is_empty() {
@@ -304,9 +314,7 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
                 .or_else(|| map.get(&lock_package_key(p)))
                 .into_iter()
                 .flatten()
-                .filter_map(|dep_name| {
-                    resolve_named_ref(dep_name, &unique_name_refs, &package_refs).cloned()
-                })
+                .flat_map(|dep_name| resolve_named_refs(dep_name, &unique_name_refs, &package_refs))
                 .collect()
         } else {
             Vec::new()
@@ -433,7 +441,7 @@ fn build_formula(
                 .into_iter()
                 .flatten()
             {
-                if let Some(dep_ref) = resolve_named_ref(dep_name, unique_name_refs, package_refs) {
+                for dep_ref in resolve_named_refs(dep_name, unique_name_refs, package_refs) {
                     // A task consumes the component its dependency produced,
                     // which is what ties the how back to the what.
                     inputs.push(Input {
@@ -444,7 +452,7 @@ fn build_formula(
                         target: None,
                         properties: None,
                     });
-                    edges.push(task_ref(dep_ref));
+                    edges.push(task_ref(&dep_ref));
                 }
             }
         }
@@ -1183,6 +1191,73 @@ mod tests {
         let gcc_key = lock_package_key(&lock.packages[1]);
         assert_eq!(runtime.get(&system_key).unwrap(), &vec!["zlib".to_string()]);
         assert_eq!(runtime.get(&gcc_key).unwrap(), &vec!["OpenSSL".to_string()]);
+    }
+
+    #[test]
+    fn a_dep_on_a_duplicated_name_keeps_every_matching_ref() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let gcc = Toolchain {
+            name: "GCCcore".into(),
+            version: "15.2.0".into(),
+        };
+        let lock = StackLock {
+            schema_version: 1,
+            toolchain: gcc.clone(),
+            generation_label: None,
+            packages: vec![
+                LockPackage {
+                    name: "App".into(),
+                    version: "1.0".into(),
+                    toolchain: gcc.clone(),
+                    versionsuffix: None,
+                    easyconfig_path: "App.eb".into(),
+                },
+                LockPackage {
+                    name: "Perl".into(),
+                    version: "5.38.0".into(),
+                    toolchain: system,
+                    versionsuffix: None,
+                    easyconfig_path: "Perl-system.eb".into(),
+                },
+                LockPackage {
+                    name: "Perl".into(),
+                    version: "5.42.0".into(),
+                    toolchain: gcc,
+                    versionsuffix: None,
+                    easyconfig_path: "Perl-gcc.eb".into(),
+                },
+            ],
+            solver: SolverMeta {
+                engine: "resolvo".into(),
+                engine_version: "0".into(),
+                timestamp: "2026-08-12T00:00:00Z".into(),
+            },
+        };
+        let runtime = HashMap::from([("App".to_string(), vec!["Perl".to_string()])]);
+        let sbom = lock_to_cyclonedx_with_runtime_and_build(&lock, Some(&runtime), None);
+        let app = sbom["dependencies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|edge| edge["ref"].as_str().unwrap_or("").contains("App@"))
+            .expect("App edge");
+        let depends = app["dependsOn"].as_array().expect("dependsOn");
+        assert_eq!(depends.len(), 2, "{app}");
+        assert!(
+            depends
+                .iter()
+                .any(|r| r.as_str().unwrap_or("").contains("5.38.0")),
+            "{depends:?}"
+        );
+        assert!(
+            depends
+                .iter()
+                .any(|r| r.as_str().unwrap_or("").contains("5.42.0")),
+            "{depends:?}"
+        );
     }
 
     #[test]

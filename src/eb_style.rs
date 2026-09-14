@@ -345,6 +345,7 @@ struct StringAssignment<'a> {
     key: &'a str,
     op: &'a str, // "=" or "+="
     quote: char,
+    triple: bool,
     content: &'a str,
 }
 
@@ -352,6 +353,7 @@ struct AssignmentStringList<'a> {
     indent: &'a str,
     key: &'a str,
     op: &'a str,
+    closer: char,
     items: Vec<(char, &'a str)>,
 }
 
@@ -373,7 +375,15 @@ fn parse_assignment_string_list(line: &str) -> Option<AssignmentStringList<'_>> 
         return None;
     }
     let after = rest[eq + op.len()..].trim();
-    let inner = after.strip_prefix('[')?.strip_suffix(']')?.trim();
+    let (inner, closer) =
+        if let Some(inner) = after.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            (inner, ']')
+        } else if let Some(inner) = after.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
+            (inner, ')')
+        } else {
+            return None;
+        };
+    let inner = inner.trim();
     if inner.is_empty() {
         return None;
     }
@@ -400,12 +410,14 @@ fn parse_assignment_string_list(line: &str) -> Option<AssignmentStringList<'_>> 
         indent,
         key,
         op,
+        closer,
         items,
     })
 }
 
 fn format_assignment_string_list(list: &AssignmentStringList<'_>) -> Vec<String> {
-    let mut lines = vec![format!("{}{} {} [", list.indent, list.key, list.op)];
+    let opener = if list.closer == ')' { '(' } else { '[' };
+    let mut lines = vec![format!("{}{} {} {opener}", list.indent, list.key, list.op)];
     let item_indent = format!("{}    ", list.indent);
     for (quote, item) in &list.items {
         lines.extend(format_list_string_item(&ListStringItem {
@@ -415,7 +427,7 @@ fn format_assignment_string_list(list: &AssignmentStringList<'_>) -> Vec<String>
             trailing_comma: true,
         }));
     }
-    lines.push(format!("{}]", list.indent));
+    lines.push(format!("{}{}", list.indent, list.closer));
     lines
 }
 
@@ -445,23 +457,27 @@ fn parse_string_assignment(line: &str) -> Option<StringAssignment<'_>> {
     } else {
         ("=", after_key.strip_prefix('=')?.trim_start())
     };
+    let triple = after_op.starts_with("'''") || after_op.starts_with("\"\"\"");
     let quote = after_op.chars().next()?;
     if quote != '\'' && quote != '"' {
         return None;
     }
-    let inner = &after_op[quote.len_utf8()..];
-    // content must end with same quote; no unescaped internal same-quote for simplicity
-    // (easyconfigs rarely escape quotes in these assignments)
-    if !inner.ends_with(quote) {
-        return None;
-    }
-    let content = &inner[..inner.len() - quote.len_utf8()];
-    // Reject if content has unescaped newline already (shouldn't on one physical line)
+    let (content, skip_inner_quotes) = if triple {
+        let delim = if quote == '"' { "\"\"\"" } else { "'''" };
+        let inner = after_op.strip_prefix(delim)?;
+        let content = inner.strip_suffix(delim)?;
+        (content, true)
+    } else {
+        let inner = &after_op[quote.len_utf8()..];
+        if !inner.ends_with(quote) {
+            return None;
+        }
+        (&inner[..inner.len() - quote.len_utf8()], false)
+    };
     if content.contains('\n') {
         return None;
     }
-    // If the quote appears unescaped inside content, bail (ambiguous)
-    if contains_unescaped_delimiter(content, quote) {
+    if !skip_inner_quotes && contains_unescaped_delimiter(content, quote) {
         return None;
     }
     Some(StringAssignment {
@@ -469,6 +485,7 @@ fn parse_string_assignment(line: &str) -> Option<StringAssignment<'_>> {
         key,
         op,
         quote,
+        triple,
         content,
     })
 }
@@ -489,6 +506,9 @@ fn contains_unescaped_delimiter(content: &str, delimiter: char) -> bool {
 }
 
 fn format_string_assignment(asg: &StringAssignment<'_>) -> Vec<String> {
+    if asg.triple {
+        return format_triple_quoted_assignment(asg);
+    }
     // Use `=` then `+=` lines — EasyBuild-common and already handled by the
     // restricted parser (adjacent parenthesized string literals are not).
     //   key = 'chunk1 '
@@ -520,6 +540,19 @@ fn format_string_assignment(asg: &StringAssignment<'_>) -> Vec<String> {
     if lines.iter().any(|l| l.chars().count() > EB_MAX_LINE) {
         return format_string_assignment_hard(asg);
     }
+    lines
+}
+
+fn format_triple_quoted_assignment(asg: &StringAssignment<'_>) -> Vec<String> {
+    let delim = if asg.quote == '"' { "\"\"\"" } else { "'''" };
+    let width = EB_MAX_LINE
+        .saturating_sub(asg.indent.chars().count())
+        .max(16);
+    let mut lines = vec![format!("{}{} {} {delim}", asg.indent, asg.key, asg.op)];
+    for chunk in wrap_words(asg.content.trim(), width) {
+        lines.push(format!("{}{chunk}", asg.indent));
+    }
+    lines.push(format!("{}{delim}", asg.indent));
     lines
 }
 
@@ -851,6 +884,44 @@ mod tests {
 
         assert!(result.remaining.is_empty(), "{:?}", result.remaining);
         assert!(result.text.contains("source_urls += ["));
+        assert!(result
+            .text
+            .lines()
+            .all(|line| line.chars().count() <= EB_MAX_LINE));
+    }
+
+    #[test]
+    fn format_assignment_string_list_wraps_tuples() {
+        let url = format!(
+            "https://example.invalid/releases/{}/",
+            "0123456789abcdef".repeat(7)
+        );
+        let source = format!("source_urls = ('{url}',)\n");
+        assert!(source.lines().next().unwrap().chars().count() > EB_MAX_LINE);
+        assert!(line_is_mechanically_fixable(source.trim_end()));
+
+        let result = format_style(&source);
+
+        assert!(result.remaining.is_empty(), "{:?}", result.remaining);
+        assert!(result.text.contains("source_urls = ("));
+        assert!(result.text.lines().last() == Some(")"));
+        assert!(result
+            .text
+            .lines()
+            .all(|line| line.chars().count() <= EB_MAX_LINE));
+    }
+
+    #[test]
+    fn format_triple_quoted_description_wraps() {
+        let body = "word ".repeat(40);
+        let source = format!("description = \"\"\"{body}\"\"\"\n");
+        assert!(source.lines().next().unwrap().chars().count() > EB_MAX_LINE);
+        assert!(line_is_mechanically_fixable(source.trim_end()));
+
+        let result = format_style(&source);
+
+        assert!(result.remaining.is_empty(), "{:?}", result.remaining);
+        assert!(result.text.contains("description = \"\"\""));
         assert!(result
             .text
             .lines()

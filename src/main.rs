@@ -667,36 +667,54 @@ fn run_package_bump(args: PackageBumpArgs, mode: BumpMode) -> Result<()> {
         print!(
             "re_run=eb-stack package {} --source {} --toolchain-name {toolchain_name} --toolchain-version {toolchain_version}",
             mode.verb(),
-            source.display()
+            eb_stack::target::shell_quote(&source.display().to_string())
         );
         if let Some(ver) = &version {
-            print!(" --version {ver}");
+            print!(" --version {}", eb_stack::target::shell_quote(ver));
         }
         if let Some(sum) = &source_checksum {
-            print!(" --source-checksum {sum}");
+            print!(" --source-checksum {}", eb_stack::target::shell_quote(sum));
         }
         for config in &package_configs {
-            print!(" --package-config {}", config.display());
+            print!(
+                " --package-config {}",
+                eb_stack::target::shell_quote(&config.display().to_string())
+            );
         }
         for robot_path in &easyconfigs {
-            print!(" --easyconfigs {}", robot_path.display());
+            print!(
+                " --easyconfigs {}",
+                eb_stack::target::shell_quote(&robot_path.display().to_string())
+            );
         }
         if let Some(path) = &stack_policy_flag {
-            print!(" --stack-policy {}", path.display());
+            print!(
+                " --stack-policy {}",
+                eb_stack::target::shell_quote(&path.display().to_string())
+            );
         }
         if let Some(path) = &hierarchy_flag {
-            print!(" --hierarchy-fixture {}", path.display());
+            print!(
+                " --hierarchy-fixture {}",
+                eb_stack::target::shell_quote(&path.display().to_string())
+            );
         }
         for path in &foreign_flags {
-            print!(" --foreign {}", path.display());
+            print!(
+                " --foreign {}",
+                eb_stack::target::shell_quote(&path.display().to_string())
+            );
         }
         for dep in &dep_flags {
-            print!(" --dep {dep}");
+            print!(" --dep {}", eb_stack::target::shell_quote(dep));
         }
         if strict_patches {
             print!(" --strict-patches");
         }
-        println!(" --out-dir {}", out_dir.display());
+        println!(
+            " --out-dir {}",
+            eb_stack::target::shell_quote(&out_dir.display().to_string())
+        );
         println!("done_when=exit 0");
         println!("next=eval each companion= line as a shell command, then eval re_run=");
         anyhow::bail!("unresolved on this generation; run each companion= line, then re_run=");

@@ -726,7 +726,7 @@ fn shell_join(tokens: &[String]) -> String {
 }
 
 /// Quote a token so `eval` of companion argv keeps spaces and metacharacters.
-pub(crate) fn shell_quote(token: &str) -> String {
+pub fn shell_quote(token: &str) -> String {
     if !token.is_empty()
         && token
             .chars()
