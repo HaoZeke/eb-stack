@@ -279,6 +279,14 @@ fn render_easyconfig(
         );
     }
 
+    let mesonpy_lines = if mesonpy_backend(plan) {
+        format!(
+            "preinstallopts = '{}'\ninstallopts = '--config-settings=setup-args=-Dwrap_mode=default'\n",
+            escape_single(&mesonpy_preinstallopts())
+        )
+    } else {
+        String::new()
+    };
     let rendered = format!(
         "{easyblock_line}name = '{name}'\n\
 version = '{version}'\n\
@@ -292,6 +300,7 @@ toolchain = {{'name': '{toolchain_name}', 'version': '{toolchain_version}'}}\n\
 {checksum_lines}\n\n\
 {patch_line}\
 {config_line}\
+{mesonpy_lines}\
 {easyconfig_parameter_lines}\
 {dependency_block}\
 moduleclass = '{moduleclass}'\n",
@@ -1203,6 +1212,89 @@ mod tests {
             exact.sources.contains("SOURCELOWER_TAR_GZ"),
             "v1.0 must use SOURCELOWER:\n{}",
             exact.sources
+        );
+    }
+
+    #[test]
+    fn standalone_mesonpy_pythonpackage_emits_wrap_mode() {
+        let toolchain = crate::domain::Toolchain {
+            name: "foss".into(),
+            version: "2026.1".into(),
+        };
+        let plan = crate::package::PackagePlan {
+            schema_version: crate::package::PACKAGE_SCHEMA_VERSION,
+            origin: crate::package::PackageOrigin::Pypi,
+            package: crate::package::PackageMetadata {
+                name: "demo".into(),
+                version: "1.0".into(),
+                upstream_version: None,
+                homepage: None,
+                description: None,
+                license: None,
+            },
+            sources: vec![crate::package::SourceArtifact {
+                url: Some("https://example.invalid/demo-1.0.tar.gz".into()),
+                sha256: Some(
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                ),
+                ..Default::default()
+            }],
+            dependencies: Vec::new(),
+            rules: Vec::new(),
+            build: crate::package::BuildSpec {
+                toolchain: toolchain.clone(),
+                easyblock: Some("PythonBundle".into()),
+                build_systems: vec!["mesonpy".into()],
+                source_root: None,
+                config_options: Vec::new(),
+                moduleclass: Some("lang".into()),
+                patches: Vec::new(),
+                easyconfig_parameters: Default::default(),
+            },
+            profiles: vec![crate::package::ProductProfile {
+                name: "default".into(),
+                default: true,
+                versionsuffix: Vec::new(),
+                platform: None,
+                architecture: None,
+                features: Default::default(),
+                parameters: Default::default(),
+                toolchain_options: Default::default(),
+                config_options: Vec::new(),
+                easyconfig_parameters: Default::default(),
+                verification_commands: Vec::new(),
+            }],
+            outputs: vec![crate::package::OutputRequest {
+                profile: "default".into(),
+                stack: "foss-2026.1".into(),
+            }],
+            residuals: Vec::new(),
+            overlay_extensions: Vec::new(),
+            package_index: Default::default(),
+        };
+        let lock = crate::package::ProfileLock {
+            schema_version: crate::package::PROFILE_LOCK_SCHEMA_VERSION,
+            package: "demo".into(),
+            version: "1.0".into(),
+            profile: "default".into(),
+            toolchain,
+            versionsuffix: String::new(),
+            dependencies: Vec::new(),
+            pin_outcomes: Vec::new(),
+            exclusions: Vec::new(),
+            solver: "resolvo".into(),
+        };
+        let emitted = emit_profile_easyconfigs(&plan, &[lock]).expect("emit");
+        assert!(
+            emitted[0].text.contains("easyblock = 'PythonPackage'"),
+            "zero leftovers must stay a PythonPackage:\n{}",
+            emitted[0].text
+        );
+        assert!(
+            emitted[0].text.contains("wrap_mode=default")
+                && emitted[0].text.contains("preinstallopts"),
+            "standalone mesonpy must keep wrap_mode and preinstallopts:\n{}",
+            emitted[0].text
         );
     }
 

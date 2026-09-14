@@ -1913,7 +1913,12 @@ pub fn write_package_bundle_into(
         for recipe in &bundle.easyconfigs {
             validate_path_segment(&recipe.filename, "easyconfig filename")?;
             let path = recipe_directory.join(&recipe.filename);
-            claim_overlay_path(recipe_bundle_root, &path, &recipe.text, claimed_paths)?;
+            claim_overlay_path(
+                recipe_bundle_root,
+                &path,
+                recipe.text.as_bytes(),
+                claimed_paths,
+            )?;
             std::fs::write(&path, &recipe.text)
                 .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
             easyconfigs.push(path);
@@ -1931,10 +1936,10 @@ pub fn write_package_bundle_into(
             validate_path_segment(&patch.filename, "patch filename")?;
             let source = validate_patch_source(patch)?;
             let path = recipe_directory.join(&patch.filename);
-            let content = std::fs::read_to_string(&source)
+            let content = std::fs::read(&source)
                 .map_err(|error| PackageWorkflowError::PatchIo(source.clone(), error))?;
             claim_overlay_path(recipe_bundle_root, &path, &content, claimed_paths)?;
-            std::fs::copy(&source, &path)
+            std::fs::write(&path, &content)
                 .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
             patches.push(path);
         }
@@ -2074,7 +2079,7 @@ pub fn validate_path_segment(segment: &str, kind: &str) -> Result<(), PackageWor
 fn claim_overlay_path(
     recipe_bundle_root: &Path,
     absolute: &Path,
-    content: &str,
+    content: &[u8],
     claimed_paths: &mut BTreeMap<String, String>,
 ) -> Result<(), PackageWorkflowError> {
     let relative = absolute.strip_prefix(recipe_bundle_root).map_err(|_| {
@@ -2084,8 +2089,9 @@ fn claim_overlay_path(
         }
     })?;
     let key = relative_posix(relative);
+    let digest = sha256_hex(content);
     if let Some(previous) = claimed_paths.get(&key) {
-        if previous != content {
+        if previous != &digest {
             return Err(PackageWorkflowError::OverlayCollision {
                 path: key,
                 reason: "destination already claimed with different content".into(),
@@ -2096,7 +2102,7 @@ fn claim_overlay_path(
             reason: "destination already claimed".into(),
         });
     }
-    claimed_paths.insert(key, content.to_string());
+    claimed_paths.insert(key, digest);
     Ok(())
 }
 

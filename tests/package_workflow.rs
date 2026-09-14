@@ -244,6 +244,68 @@ source:
 }
 
 #[test]
+fn non_utf8_local_patch_is_copied_into_the_bundle() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let recipe_dir = temp.path().join("recipe");
+    let patch = recipe_dir.join("patches/fix.patch");
+    std::fs::create_dir_all(patch.parent().expect("patch parent")).expect("patch directory");
+    let patch_bytes: &[u8] = b"binary\xffpatch\n";
+    std::fs::write(&patch, patch_bytes).expect("write patch");
+    let patch_checksum =
+        Sha256::digest(patch_bytes)
+            .iter()
+            .fold(String::new(), |mut output, byte| {
+                write!(&mut output, "{byte:02x}").expect("format digest");
+                output
+            });
+    let source = recipe_dir.join("meta.yaml");
+    std::fs::write(
+        &source,
+        format!(
+            r#"package:
+  name: patch-fixture
+  version: "1.0"
+source:
+  url: https://example.invalid/patch-fixture-1.0.tar.gz
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  patches:
+    - patches/fix.patch
+"#
+        ),
+    )
+    .expect("write recipe");
+    let robot = temp.path().join("robot");
+    std::fs::create_dir(&robot).expect("robot directory");
+    let bundle = plan_new_package(&NewPackageRequest {
+        source,
+        format: Some(ForeignFormat::CondaForge),
+        toolchain: toolchain(),
+        source_checksums: Vec::new(),
+        package_layers: Vec::new(),
+        package_index: Default::default(),
+        easyconfig_roots: vec![robot],
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "test".into(),
+            toolchain: toolchain(),
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+    })
+    .expect("plan binary patch");
+    assert_eq!(
+        bundle.plan.build.patches[0].sha256.as_deref(),
+        Some(patch_checksum.as_str())
+    );
+    let written = write_package_bundle(&bundle, &temp.path().join("bundle")).expect("write bundle");
+    assert_eq!(written.patches.len(), 1);
+    assert_eq!(
+        std::fs::read(&written.patches[0]).expect("read overlay patch"),
+        patch_bytes
+    );
+}
+
+#[test]
 fn remote_spack_patches_need_no_local_bundle_asset() {
     let temp = tempfile::tempdir().expect("tempdir");
     let source = temp.path().join("package.py");
