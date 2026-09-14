@@ -1,8 +1,8 @@
 use eb_stack::package::{
     package_plan_to_cyclonedx, BuildSpec, ConditionContext, ConditionExpr, ConditionPredicate,
-    Confidence, DependencyIntent, DependencyRole, OutputRequest, PackageMetadata, PackageOrigin,
-    PackagePlan, ProductProfile, Provenance, Residual, ResidualSeverity, ResidualStage,
-    SourceArtifact, SourceSpan, PACKAGE_SCHEMA_VERSION,
+    Confidence, DependencyIntent, DependencyRole, OutputRequest, OverlayExtension, PackageMetadata,
+    PackageOrigin, PackagePlan, ProductProfile, Provenance, Residual, ResidualSeverity,
+    ResidualStage, SourceArtifact, SourceSpan, PACKAGE_SCHEMA_VERSION,
 };
 use eb_stack::Toolchain;
 use serde_json::Value;
@@ -301,4 +301,22 @@ fn only_a_64_hex_checksum_is_asserted_as_sha256() {
         distribution_hashes.contains(&"cd".repeat(32).as_str()),
         "{references:?}"
     );
+}
+
+#[test]
+fn overlay_extensions_appear_as_versioned_components() {
+    let mut plan = qmcpack_plan();
+    plan.overlay_extensions = vec![OverlayExtension {
+        name: "soupsieve".into(),
+        version: "2.5".into(),
+        checksum: Some("ab".repeat(32)),
+    }];
+    let sbom = package_plan_to_cyclonedx(&plan).expect("typed CycloneDX SBOM");
+    let components = sbom["components"].as_array().expect("components");
+    let leftover = components
+        .iter()
+        .find(|component| component["name"] == "soupsieve")
+        .expect("overlay extension component");
+    assert_eq!(leftover["version"], "2.5");
+    assert_eq!(leftover["hashes"][0]["content"], "ab".repeat(32));
 }

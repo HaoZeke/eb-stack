@@ -1260,6 +1260,32 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
         ]));
         components.push(component);
     }
+    for extension in &plan.overlay_extensions {
+        let reference = component_ref(&extension.name, &extension.version);
+        if !dependency_refs.contains(&reference) {
+            dependency_refs.push(reference.clone());
+        }
+        if !seen_component_refs.insert(reference.clone()) {
+            continue;
+        }
+        let mut component = Component::new(
+            Classification::Library,
+            &extension.name,
+            &extension.version,
+            Some(reference),
+        );
+        let mut properties = vec![Property::new("eb-stack:overlay-extension", "true")];
+        if let Some(checksum) = extension.checksum.as_deref() {
+            let digest = checksum.strip_prefix("sha256:").unwrap_or(checksum);
+            if let Some(hash) = sha256_hash(digest) {
+                component.hashes = Some(Hashes(vec![hash]));
+            } else {
+                properties.push(Property::new("eb-stack:checksum", checksum));
+            }
+        }
+        component.properties = Some(Properties(properties));
+        components.push(component);
+    }
 
     let mut dependencies = vec![Dependency {
         dependency_ref: root_ref,
