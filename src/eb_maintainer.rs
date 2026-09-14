@@ -386,11 +386,7 @@ pub fn check_fat_build(text: &str) -> Vec<MaintainerFinding> {
         }
     }
 
-    let has_runtest = text.lines().any(|l| {
-        let t = l.trim_start();
-        (t.starts_with("runtest") && !t.starts_with("runtest = False"))
-            || t.starts_with("runtests = True")
-    });
+    let has_runtest = text.lines().any(|line| runtest_is_enabled(line));
     if let Some(flag) = TESTS_OFF_FLAGS
         .iter()
         .find(|f| configopts_blob.contains(**f))
@@ -542,6 +538,18 @@ pub fn check_hardcoded_gpu_arch(text: &str) -> Vec<MaintainerFinding> {
     out
 }
 
+fn runtest_is_enabled(line: &str) -> bool {
+    let line = line.trim_start();
+    let Some(rest) = line
+        .strip_prefix("runtests")
+        .or_else(|| line.strip_prefix("runtest"))
+    else {
+        return false;
+    };
+    let rest = rest.trim_start_matches([' ', '\t', '=']);
+    !matches!(rest, "False" | "false" | "0" | "None")
+}
+
 /// A git source archived as `.tar.gz`.
 ///
 /// `get_source_tarball_from_git` picks the compression from the extension of
@@ -554,8 +562,10 @@ pub fn check_git_source_archive(text: &str) -> Vec<MaintainerFinding> {
     if !text.contains("git_config") {
         return out;
     }
-    let gz = regex::Regex::new(r#"'filename'\s*:\s*(SOURCE(?:LOWER)?_TAR_GZ|["'][^"']*\.tar\.gz)"#)
-        .expect("static regex");
+    let gz = regex::Regex::new(
+        r#"(?i)['\"]?filename['\"]?\s*[:=]\s*(SOURCE(?:LOWER)?_TAR_GZ|['\"][^'\"]*\.tar\.gz['\"])"#,
+    )
+    .expect("static regex");
     if let Some(caps) = gz.captures(text) {
         out.push(MaintainerFinding::warning(
             "EB_MAINT_GIT_SOURCE_ARCHIVE",

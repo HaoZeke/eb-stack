@@ -78,6 +78,8 @@ struct WarehouseInfo {
     /// Trove classifiers, which say what the package is for.
     #[serde(default)]
     classifiers: Vec<String>,
+    #[serde(default)]
+    requires_python: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -135,15 +137,20 @@ fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
                 marker,
                 original,
             } => {
-                if let Some(marker) = marker {
+                let condition = if let Some(marker) = marker {
                     residuals.push(ForeignResidual {
                         category: "pypi-marker".into(),
                         severity: ResidualSeverity::Judgment,
-                        summary: format!("kept {name} with environment marker {marker}"),
+                        summary: format!(
+                            "{name} is gated by environment marker {marker} and does not constrain every profile"
+                        ),
                         evidence: Some(original.clone()),
                         provenance: None,
                     });
-                }
+                    ConditionExpr::Opaque { source: marker }
+                } else {
+                    ConditionExpr::Always
+                };
                 // The EasyBuild Python module installs setuptools, pip and
                 // wheel itself, so a project that requires one already has it.
                 // Emitting a dependency instead sends the solver looking for
@@ -153,7 +160,9 @@ fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
                     residuals.push(ForeignResidual {
                         category: "pypi-requirement".into(),
                         severity: ResidualSeverity::Mechanical,
-                        summary: format!("{name} comes with the Python module, so it is not a dependency"),
+                        summary: format!(
+                            "{name} comes with the Python module, so it is not a dependency"
+                        ),
                         evidence: Some(original),
                         provenance: None,
                     });
@@ -164,7 +173,7 @@ fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
                     pin,
                     role: "run".into(),
                     original_spec: Some(original),
-                    condition: ConditionExpr::Always,
+                    condition,
                     provenance: Vec::new(),
                 });
             }
@@ -176,6 +185,15 @@ fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
                 provenance: None,
             }),
         }
+    }
+    if let Some(requires_python) = nonempty(doc.info.requires_python.clone()) {
+        residuals.push(ForeignResidual {
+            category: "pypi-requires-python".into(),
+            severity: ResidualSeverity::Judgment,
+            summary: format!("requires_python {requires_python} is not encoded as a Python pin"),
+            evidence: Some(requires_python),
+            provenance: None,
+        });
     }
 
     let sdist = doc.urls.iter().find(|url| {
@@ -306,6 +324,19 @@ fn pypi_build_system_hints(build_system: Option<&WarehouseBuildSystem>) -> Vec<S
     hints
 }
 
+fn strip_inline_comment(line: &str) -> &str {
+    let mut in_quote = None;
+    for (index, character) in line.char_indices() {
+        match (character, in_quote) {
+            ('#', None) => return line[..index].trim_end(),
+            ('\'' | '"', None) => in_quote = Some(character),
+            (quote, Some(open)) if quote == open => in_quote = None,
+            _ => {}
+        }
+    }
+    line
+}
+
 fn parse_pep508(spec: &str) -> Pep508 {
     let original = spec.trim().to_string();
     if original.is_empty() {
@@ -325,6 +356,12 @@ fn parse_pep508(spec: &str) -> Pep508 {
         return Pep508::SkipExtra { spec: original };
     }
     let req = req.split_once('[').map(|(name, _)| name).unwrap_or(req);
+    if req.contains('@') {
+        return Pep508::Invalid {
+            spec: original,
+            reason: "direct URL/VCS reference is not a named pin".into(),
+        };
+    }
     let (name, pin) = split_name_and_pin(req);
     if name.is_empty() {
         return Pep508::Invalid {
@@ -341,10 +378,21 @@ fn parse_pep508(spec: &str) -> Pep508 {
 }
 
 fn parse_requirements_txt(text: &str) -> Result<ForeignRecipe, ForeignError> {
+    let mut residuals = Vec::new();
     let mut specs = Vec::new();
     for (index, line) in text.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with('-') {
+        let line = strip_inline_comment(line.trim());
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('-') {
+            residuals.push(ForeignResidual {
+                category: "pypi-requirement".into(),
+                severity: ResidualSeverity::Judgment,
+                summary: format!("requirements.txt:{index}: option {line} is not a package spec"),
+                evidence: Some(line.to_string()),
+                provenance: None,
+            });
             continue;
         }
         match parse_pep508(line) {
@@ -377,7 +425,6 @@ fn parse_requirements_txt(text: &str) -> Result<ForeignRecipe, ForeignError> {
         .as_deref()
         .and_then(exact_version)
         .unwrap_or_else(|| "0.0.0".to_string());
-    let mut residuals = Vec::new();
     if pin.as_deref().and_then(exact_version).is_none() {
         residuals.push(ForeignResidual {
             category: "pypi-version".into(),
@@ -507,6 +554,45 @@ mod tests {
         assert_eq!(recipe.dependencies[0].name, "Python");
         assert_eq!(recipe.dependencies[1].name, "soupsieve");
         assert_eq!(recipe.dependencies[1].pin.as_deref(), Some("==2.6"));
+    }
+
+    #[test]
+    fn requirements_txt_strips_inline_comments() {
+        let recipe = parse_pypi_str("beautifulsoup4==4.12.3  # latest\n").expect("parse");
+        assert_eq!(recipe.version, "4.12.3");
+    }
+
+    #[test]
+    fn a_direct_url_requirement_is_not_a_package_name() {
+        let err = parse_pypi_str("pkg @ https://example.invalid/pkg-1.0.tar.gz\n")
+            .expect_err("direct ref");
+        assert!(err.to_string().contains("direct URL"), "{err}");
+    }
+
+    #[test]
+    fn a_platform_marker_is_opaque_not_always() {
+        let recipe = parse_pypi_str(
+            r#"{
+              "info": {
+                "name": "demo",
+                "version": "1.0",
+                "requires_dist": ["pywin32>=1.0; sys_platform == 'win32'"],
+                "requires_python": ">=3.9"
+              },
+              "urls": []
+            }"#,
+        )
+        .expect("parse");
+        let pywin = recipe
+            .dependencies
+            .iter()
+            .find(|dep| dep.name == "pywin32")
+            .expect("pywin32");
+        assert!(matches!(pywin.condition, ConditionExpr::Opaque { .. }));
+        assert!(recipe
+            .residuals
+            .iter()
+            .any(|residual| residual.category == "pypi-requires-python"));
     }
 
     #[test]

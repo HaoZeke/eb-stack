@@ -41,7 +41,10 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             roles: dependency_roles(&dependency.role),
             condition: dependency.condition.clone(),
             virtual_capability: foreign_virtual_capability(&dependency.name),
-            solver_excluded: false,
+            solver_excluded: matches!(
+                dependency.condition,
+                crate::package::ConditionExpr::Opaque { .. }
+            ),
             provenance: dependency.provenance.clone(),
         })
         .collect();
@@ -142,7 +145,23 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             }
         }
     }
-    if recipe.sources.iter().any(|source| source.sha256.is_none()) {
+    if easyblock == "ConfigureMake" && easyblock_notes.is_empty() {
+        residuals.push(Residual {
+            id: "easyblock:default".into(),
+            stage: ResidualStage::Normalize,
+            category: "easyblock".into(),
+            severity: ResidualSeverity::Judgment,
+            summary: "no build-system hint; defaulted to ConfigureMake".into(),
+            evidence: None,
+            provenance: None,
+        });
+    }
+    if recipe.sources.iter().any(|source| {
+        source.sha256.is_none()
+            && source.git.is_none()
+            && source.commit.is_none()
+            && source.tag.is_none()
+    }) {
         residuals.push(Residual {
             id: "source:missing-sha256".into(),
             stage: ResidualStage::Normalize,
@@ -208,12 +227,30 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
                         return None;
                     }
                     let remote = is_remote_patch(&patch.location);
+                    let filename = if remote {
+                        match remote_patch_filename(&patch.location) {
+                            Some(filename) => filename,
+                            None => {
+                                residuals.push(Residual {
+                                    id: format!("patch:unnamed:{}", patch.location),
+                                    stage: ResidualStage::Normalize,
+                                    category: "patch".into(),
+                                    severity: ResidualSeverity::Judgment,
+                                    summary: format!(
+                                        "remote patch {} has no filename, so it is not in the plan",
+                                        patch.location
+                                    ),
+                                    evidence: Some(patch.location.clone()),
+                                    provenance: None,
+                                });
+                                return None;
+                            }
+                        }
+                    } else {
+                        patch.location.clone()
+                    };
                     Some(PatchArtifact {
-                        filename: if remote {
-                            remote_patch_filename(&patch.location)?
-                        } else {
-                            patch.location.clone()
-                        },
+                        filename,
                         sha256: patch.sha256.clone(),
                         url: remote.then(|| patch.location.clone()),
                         source: None,
