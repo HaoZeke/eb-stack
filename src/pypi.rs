@@ -30,35 +30,32 @@ pub fn parse_pypi_str(text: &str) -> Result<ForeignRecipe, ForeignError> {
 }
 
 fn parse_pypi_json(text: &str) -> Result<ForeignRecipe, ForeignError> {
-    let value: Value = serde_json::from_str(text)
-        .map_err(|error| ForeignError::Parse(format!("pypi json: {error}")))?;
-    match value {
-        Value::Array(entries) => {
-            let mut recipes = entries
-                .iter()
-                .map(recipe_from_warehouse)
-                .collect::<Result<Vec<_>, _>>()?;
-            if recipes.is_empty() {
-                return Err(ForeignError::Parse("pypi json array is empty".into()));
-            }
-            let mut root = recipes.remove(0);
-            for extra in recipes {
-                root.dependencies.push(ForeignDep {
-                    name: extra.name,
-                    pin: Some(format!("=={}", extra.version)),
-                    role: "run".into(),
-                    original_spec: None,
-                    condition: ConditionExpr::Always,
-                    provenance: Vec::new(),
-                });
-            }
-            Ok(root)
+    if text.trim_start().starts_with('[') {
+        let entries: Vec<Value> = serde_json::from_str(text)
+            .map_err(|error| ForeignError::Parse(format!("pypi json: {error}")))?;
+        let mut recipes = entries
+            .iter()
+            .map(recipe_from_warehouse)
+            .collect::<Result<Vec<_>, _>>()?;
+        if recipes.is_empty() {
+            return Err(ForeignError::Parse("pypi json array is empty".into()));
         }
-        Value::Object(_) => recipe_from_warehouse(&value),
-        _ => Err(ForeignError::Parse(
-            "pypi json must be an object or an array of objects".into(),
-        )),
+        let mut root = recipes.remove(0);
+        for extra in recipes {
+            root.dependencies.push(ForeignDep {
+                name: extra.name,
+                pin: Some(format!("=={}", extra.version)),
+                role: "run".into(),
+                original_spec: None,
+                condition: ConditionExpr::Always,
+                provenance: Vec::new(),
+            });
+        }
+        return Ok(root);
     }
+    let doc: WarehouseDocument = serde_json::from_str(text)
+        .map_err(|error| ForeignError::Parse(format!("pypi warehouse: {error}")))?;
+    recipe_from_document(doc)
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,6 +117,10 @@ struct WarehouseDocument {
 fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
     let doc: WarehouseDocument = serde_json::from_value(value.clone())
         .map_err(|error| ForeignError::Parse(format!("pypi warehouse: {error}")))?;
+    recipe_from_document(doc)
+}
+
+fn recipe_from_document(doc: WarehouseDocument) -> Result<ForeignRecipe, ForeignError> {
     let mut residuals = Vec::new();
     let mut dependencies = Vec::new();
     for (index, spec) in doc.info.requires_dist.iter().flatten().enumerate() {

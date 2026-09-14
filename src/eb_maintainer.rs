@@ -458,10 +458,13 @@ const UNWRAPPED_COMPILERS: &[&str] = &["clang", "clang++", "icx", "icpx", "nvc",
 /// wrappers has to carry that flag itself.
 pub fn check_unwrapped_compiler_rpath(text: &str) -> Vec<MaintainerFinding> {
     let mut out = Vec::new();
-    let driver = regex::Regex::new(
-        r#"(?:CMAKE_(?:C|CXX|Fortran)_COMPILER|OMPI_(?:CC|CXX|FC)|MPICH_(?:CC|CXX)|\bCC|\bCXX)\s*=\s*["']?([A-Za-z+_.-]+)"#,
-    )
-    .expect("static regex");
+    static DRIVER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let driver = DRIVER.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?:CMAKE_(?:C|CXX|Fortran)_COMPILER|OMPI_(?:CC|CXX|FC)|MPICH_(?:CC|CXX)|\bCC|\bCXX)\s*=\s*["']?([A-Za-z+_.-]+)"#,
+        )
+        .expect("static regex")
+    });
 
     let driven_by = driver
         .captures_iter(text)
@@ -510,10 +513,13 @@ pub fn check_unwrapped_compiler_rpath(text: &str) -> Vec<MaintainerFinding> {
 /// exempt.
 pub fn check_hardcoded_gpu_arch(text: &str) -> Vec<MaintainerFinding> {
     let mut out = Vec::new();
-    let literal = regex::Regex::new(
-        r#"(?i)-D\s*[A-Z0-9_]*(?:CUDA_ARCHITECTURES|GPU_ARCHS|CUDA_TARGET_SM|CUDA_ARCH)[A-Z0-9_]*\s*=\s*["']?([^"'\s]+)"#,
-    )
-    .expect("static regex");
+    static LITERAL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let literal = LITERAL.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?i)-D\s*[A-Z0-9_]*(?:CUDA_ARCHITECTURES|GPU_ARCHS|CUDA_TARGET_SM|CUDA_ARCH)[A-Z0-9_]*\s*=\s*["']?([^"'\s]+)"#,
+        )
+        .expect("static regex")
+    });
 
     for caps in literal.captures_iter(text) {
         let value = caps.get(1).map(|m| m.as_str()).unwrap_or("");
@@ -562,10 +568,13 @@ pub fn check_git_source_archive(text: &str) -> Vec<MaintainerFinding> {
     if !text.contains("git_config") {
         return out;
     }
-    let gz = regex::Regex::new(
-        r#"(?i)['\"]?filename['\"]?\s*[:=]\s*(SOURCE(?:LOWER)?_TAR_GZ|['\"][^'\"]*\.tar\.gz['\"])"#,
-    )
-    .expect("static regex");
+    static GZ: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let gz = GZ.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?i)['\"]?filename['\"]?\s*[:=]\s*(SOURCE(?:LOWER)?_TAR_GZ|['\"][^'\"]*\.tar\.gz['\"])"#,
+        )
+        .expect("static regex")
+    });
     if let Some(caps) = gz.captures(text) {
         out.push(MaintainerFinding::warning(
             "EB_MAINT_GIT_SOURCE_ARCHIVE",
@@ -587,10 +596,13 @@ pub fn check_git_source_archive(text: &str) -> Vec<MaintainerFinding> {
 /// build tree duplicates that.
 pub fn check_install_log_copy(text: &str) -> Vec<MaintainerFinding> {
     let mut out = Vec::new();
-    let copy = regex::Regex::new(
-        r#"(?m)^\s*["'](?:cp|install|mv)\s[^"']*(?:\.log|Testing/|LastTest|CMakeCache|config\.log)[^"']*%\(installdir\)s"#,
-    )
-    .expect("static regex");
+    static COPY: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let copy = COPY.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?m)^\s*["'](?:cp|install|mv)\s[^"']*(?:\.log|Testing/|LastTest|CMakeCache|config\.log)[^"']*%\(installdir\)s"#,
+        )
+        .expect("static regex")
+    });
     if copy.is_match(text) {
         out.push(MaintainerFinding::warning(
             "EB_MAINT_INSTALL_LOG_COPY",
@@ -619,9 +631,6 @@ pub fn check_duplicate_upstream(
 ) -> Vec<MaintainerFinding> {
     let mut out = Vec::new();
     for candidate in candidates {
-        if is_same_easyconfig(&candidate.easyconfig_path, &recipe.easyconfig_path) {
-            continue;
-        }
         if !candidate.name.eq_ignore_ascii_case(&recipe.name)
             || candidate.version != recipe.version
             || !crate::hierarchy::toolchains_match(&candidate.toolchain, &recipe.toolchain)
@@ -631,6 +640,9 @@ pub fn check_duplicate_upstream(
         let lhs = candidate.versionsuffix.as_deref().unwrap_or("");
         let rhs = recipe.versionsuffix.as_deref().unwrap_or("");
         if lhs != rhs {
+            continue;
+        }
+        if is_same_easyconfig(&candidate.easyconfig_path, &recipe.easyconfig_path) {
             continue;
         }
         out.push(MaintainerFinding::error(
@@ -767,12 +779,14 @@ fn high_level_dep_pins_from_text(text: &str) -> Vec<(String, String)> {
     out
 }
 
-fn regex_lite_high_level_pin() -> regex::Regex {
-    // Avoid pulling a second regex crate; project already depends on `regex`.
-    regex::Regex::new(
-        r#"\(\s*'([^']+)'\s*,\s*'[^']*'\s*,\s*'[^']*'\s*,\s*\(\s*'(foss|gfbf|gompi|gompic|intel|iomkl|iimpi)'\s*,\s*'([^']+)'\s*\)"#,
-    )
-    .expect("high-level pin regex")
+fn regex_lite_high_level_pin() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(
+            r#"\(\s*'([^']+)'\s*,\s*'[^']*'\s*,\s*'[^']*'\s*,\s*\(\s*'(fosscuda|fossxl|intel-compilers|foss|gfbf|gompic|gompi|golfc|iimpi|iimkl|iomkl|intel|nvompi|nvhpc)'\s*,\s*'([^']+)'\s*\)"#,
+        )
+        .expect("high-level pin regex")
+    })
 }
 
 #[cfg(test)]
