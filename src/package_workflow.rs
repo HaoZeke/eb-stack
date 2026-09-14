@@ -260,17 +260,21 @@ pub fn complete_package_bundle_with_hierarchy(
     if matches!(plan.origin, PackageOrigin::Pypi | PackageOrigin::Cran) {
         promote_language_overlay_extras(&mut plan, candidates, stack_policy, hierarchy_fixture)?;
     }
+    // Availability is generation-scoped: the later solve admits only
+    // hierarchy members, so a CMake that exists only on foss-2023a must
+    // not look available to a foss-2026.1 plan.
+    let available = candidates_available_for_plan(&plan, candidates, hierarchy_fixture);
     if plan.origin == PackageOrigin::Pypi {
-        inject_overlay_build_tools(&mut plan, candidates);
+        inject_overlay_build_tools(&mut plan, &available);
     }
     if plan.origin == PackageOrigin::Cargo {
         pin_binutils_to_gcccore(&mut plan, candidates, hierarchy_fixture);
     }
-    adopt_moduleclass_from_tree(&mut plan, candidates);
+    adopt_moduleclass_from_tree(&mut plan, &available);
     note_inferred_moduleclass(&mut plan);
     add_gcccore_binutils(&mut plan);
-    add_build_backend_dependency(&mut plan, candidates);
-    drop_unavailable_build_requirements(&mut plan, candidates);
+    add_build_backend_dependency(&mut plan, &available);
+    drop_unavailable_build_requirements(&mut plan, &available);
     let mut locks = Vec::new();
     for output in &plan.outputs {
         locks.push(
@@ -402,6 +406,17 @@ fn promote_language_overlay_extras(
 /// Keeping one the tree does not carry turns a buildable recipe into an
 /// unsatisfiable solve, and dropping it in silence would hide a real
 /// difference, so it leaves a residual behind.
+fn candidates_available_for_plan(
+    plan: &PackagePlan,
+    candidates: &[crate::domain::Candidate],
+    hierarchy_fixture: Option<&Path>,
+) -> Vec<crate::domain::Candidate> {
+    match hierarchy_for_with_tree(&plan.build.toolchain, hierarchy_fixture, candidates) {
+        Ok(hierarchy) => filter_candidates_in_hierarchy(candidates, &hierarchy),
+        Err(_) => Vec::new(),
+    }
+}
+
 fn drop_unavailable_build_requirements(
     plan: &mut PackagePlan,
     candidates: &[crate::domain::Candidate],
@@ -486,12 +501,14 @@ fn add_build_backend_dependency(plan: &mut PackagePlan, candidates: &[crate::dom
                 .unwrap_or(dependency.name.as_str()),
         ) == crate::provides::overlay_package_identity(module)
     });
-    // Only what the tree can actually provide: naming a module the site does
-    // not carry turns a buildable recipe into an unsatisfiable one.
-    let available = candidates.iter().any(|candidate| {
-        crate::provides::overlay_package_identity(&candidate.name)
-            == crate::provides::overlay_package_identity(module)
-    });
+    // Only what this generation can actually provide: a backend shipped
+    // only as a bundle extension still counts, and a first-class recipe
+    // on another generation does not.
+    let available = existing_language_provider(module, candidates).is_some()
+        || candidates.iter().any(|candidate| {
+            crate::provides::overlay_package_identity(&candidate.name)
+                == crate::provides::overlay_package_identity(module)
+        });
     if already || !available {
         return;
     }

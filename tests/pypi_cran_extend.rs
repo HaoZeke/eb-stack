@@ -7,8 +7,8 @@ use eb_stack::package_config::PackageConfigLayer;
 use eb_stack::package_sources::{PackageSourceRoots, SourceRootKind};
 use eb_stack::{
     complete_package_bundle, detect_foreign_format, inspect_new_package, materialize_pypi,
-    parse_easyconfig_trees, parse_foreign_path, plan_new_package, prepare_new_package_plan,
-    ForeignFormat, MapClient, NewPackageRequest, Toolchain,
+    overlay_package_identity, parse_easyconfig_trees, parse_foreign_path, plan_new_package,
+    prepare_new_package_plan, ForeignFormat, MapClient, NewPackageRequest, Toolchain,
 };
 use std::path::{Path, PathBuf};
 
@@ -839,5 +839,179 @@ config_options = ["--with-bundle-flag"]
         recipe.text.contains("configopts") && recipe.text.contains("--with-bundle-flag"),
         "bundle must keep plan configopts:\n{}",
         recipe.text
+    );
+}
+
+fn write_pypi_robot(dir: &Path, bundle_exts: &str, extra_easyconfigs: &[(&str, &str)]) {
+    std::fs::create_dir_all(dir).expect("robot directory");
+    std::fs::write(
+        dir.join("Python-3.13.1-foss-2026.1.eb"),
+        r#"name = 'Python'
+version = '3.13.1'
+homepage = 'https://python.org'
+description = "Test Python provider"
+toolchain = {'name': 'foss', 'version': '2026.1'}
+moduleclass = 'lang'
+"#,
+    )
+    .expect("write Python");
+    std::fs::write(
+        dir.join("Python-bundle-PyPI-2025.04-foss-2026.1.eb"),
+        format!(
+            r#"name = 'Python-bundle-PyPI'
+version = '2025.04'
+homepage = 'https://example.invalid/python-bundle-pypi'
+description = "Test bundle"
+toolchain = {{'name': 'foss', 'version': '2026.1'}}
+dependencies = [
+    ('Python', '3.13.1'),
+]
+exts_list = [
+{bundle_exts}
+]
+moduleclass = 'lang'
+"#
+        ),
+    )
+    .expect("write bundle");
+    for (filename, body) in extra_easyconfigs {
+        std::fs::write(dir.join(filename), body).expect("write extra easyconfig");
+    }
+}
+
+fn pypi_dump_with_requires(dir: &Path, requires: &[&str]) -> PathBuf {
+    let path = dir.join("pypi.json");
+    let requires_json = requires
+        .iter()
+        .map(|spec| format!("      \"{spec}\""))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{
+  "info": {{
+    "name": "demo",
+    "version": "1.0.0",
+    "home_page": "https://example.invalid/demo",
+    "summary": "availability fixture",
+    "license": "MIT",
+    "requires_dist": [
+{requires_json}
+    ]
+  }},
+  "urls": [
+    {{
+      "packagetype": "sdist",
+      "url": "https://example.invalid/demo-1.0.0.tar.gz",
+      "filename": "demo-1.0.0.tar.gz",
+      "digests": {{
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }}
+    }}
+  ]
+}}
+"#
+        ),
+    )
+    .expect("write pypi dump");
+    path
+}
+
+/// A PEP 517 backend shipped only as a bundle extension on the target
+/// generation is still the module the recipe must name.
+#[test]
+fn hatchling_ext_on_target_generation_is_named_as_backend() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let robot = temp.path().join("robot");
+    write_pypi_robot(
+        &robot,
+        "    ('soupsieve', '2.6'),\n    ('hatchling', '1.27.0'),",
+        &[],
+    );
+    let source = pypi_dump_with_requires(temp.path(), &["soupsieve>=1.6"]);
+    let request = NewPackageRequest {
+        source,
+        format: Some(ForeignFormat::Pypi),
+        toolchain: toolchain(),
+        source_checksums: Vec::new(),
+        package_layers: Vec::new(),
+        package_index: Default::default(),
+        easyconfig_roots: vec![robot],
+        stack_policy: stack_policy(),
+    };
+    let (mut plan, sbom) = prepare_new_package_plan(&request).expect("prepare");
+    plan.build
+        .build_systems
+        .push("backend:hatchling.build".into());
+    let tree = parse_easyconfig_trees(&[request.easyconfig_roots[0].as_path()]).expect("robot");
+    let bundle = complete_package_bundle(plan, sbom, &tree.candidates, &request.stack_policy)
+        .expect("complete with hatchling ext");
+    assert!(
+        bundle.plan.dependencies.iter().any(|dependency| {
+            overlay_package_identity(
+                dependency
+                    .eb_name
+                    .as_deref()
+                    .unwrap_or(dependency.name.as_str()),
+            ) == overlay_package_identity("hatchling")
+        }),
+        "hatchling must be named when the bundle already ships it:\n{:#?}",
+        bundle.plan.dependencies
+    );
+}
+
+/// CMake that exists only on an older foss generation is not a build tool
+/// this generation can inject.
+#[test]
+fn cmake_only_on_older_generation_is_not_injected() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let robot = temp.path().join("robot");
+    write_pypi_robot(
+        &robot,
+        "    ('soupsieve', '2.6'),",
+        &[(
+            "CMake-3.26.3-foss-2023a.eb",
+            r#"name = 'CMake'
+version = '3.26.3'
+homepage = 'https://cmake.org'
+description = "Older generation CMake"
+toolchain = {'name': 'foss', 'version': '2023a'}
+moduleclass = 'tools'
+"#,
+        )],
+    );
+    let source = pypi_dump_with_requires(temp.path(), &["soupsieve>=1.6", "orphanpkg==1.2.3"]);
+    let request = NewPackageRequest {
+        source,
+        format: Some(ForeignFormat::Pypi),
+        toolchain: toolchain(),
+        source_checksums: Vec::new(),
+        package_layers: Vec::new(),
+        package_index: Default::default(),
+        easyconfig_roots: vec![robot],
+        stack_policy: stack_policy(),
+    };
+    let bundle = plan_new_package(&request).expect("foreign-generation CMake must not be injected");
+    assert!(
+        bundle
+            .plan
+            .overlay_extensions
+            .iter()
+            .any(|extension| extension.name == "orphanpkg"),
+        "leftover must become an overlay so build-tool injection runs:\n{:#?}",
+        bundle.plan.overlay_extensions
+    );
+    assert!(
+        bundle.plan.dependencies.iter().all(|dependency| {
+            overlay_package_identity(
+                dependency
+                    .eb_name
+                    .as_deref()
+                    .unwrap_or(dependency.name.as_str()),
+            ) != overlay_package_identity("CMake")
+        }),
+        "CMake from foss-2023a must not be injected into foss-2026.1:\n{:#?}",
+        bundle.plan.dependencies
     );
 }
