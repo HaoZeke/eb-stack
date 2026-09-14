@@ -305,7 +305,12 @@ fn satisfies(candidate: &Candidate, dep: &DepReq) -> bool {
     if let Some(pinned) = dep.version_req.strip_prefix("==") {
         let wanted = format!("{pinned}{}", dep.versionsuffix.as_deref().unwrap_or(""));
         if module_version(candidate) == wanted {
-            return true;
+            // Module identity already includes suffix. A toolchain pin still
+            // has to hold: returning here used to skip it.
+            return dep
+                .toolchain
+                .as_ref()
+                .is_none_or(|want| crate::hierarchy::toolchains_match(&candidate.toolchain, want));
         }
     }
     if !dep.version_req.is_empty() {
@@ -331,10 +336,10 @@ fn satisfies(candidate: &Candidate, dep: &DepReq) -> bool {
             return false;
         }
     }
-    match dep.versionsuffix.as_deref() {
-        Some(suffix) => candidate.versionsuffix.as_deref().unwrap_or("") == suffix,
-        None => true,
-    }
+    // A 2-tuple leaves versionsuffix None, which is "no suffix", not "any
+    // suffix". Treating None as any would let Newest pick a -bare/-CUDA
+    // build for ('Python', '3.11.3').
+    dep.versionsuffix.as_deref().unwrap_or("") == candidate.versionsuffix.as_deref().unwrap_or("")
 }
 
 /// How far a candidate sits from the recipe that needs it.
@@ -746,9 +751,34 @@ mod tests {
             "{seq:?}"
         );
         assert!(seq.iter().any(|s| s == "Perl-5.38.0-system"), "{seq:?}");
-
         let multi = multi_build_names(&order);
         assert_eq!(multi.get("Perl").map(Vec::len), Some(2), "{multi:?}");
+    }
+
+    #[test]
+    fn an_unsuffixed_pin_does_not_take_a_newer_suffixed_build() {
+        let mut bare = candidate("Python", "3.12.0", tc("foss", "2026.1"), vec![]);
+        bare.versionsuffix = Some("-bare".into());
+        let all = vec![
+            candidate(
+                "App",
+                "1.0",
+                tc("foss", "2026.1"),
+                vec![dep("Python", "==3.11.3", None)],
+            ),
+            candidate("Python", "3.11.3", tc("foss", "2026.1"), vec![]),
+            bare,
+        ];
+        let order = build_order(&all, &["App".into()], Choice::Newest).expect("order");
+        let seq = names(&order);
+        assert!(
+            seq.iter().any(|s| s == "Python-3.11.3-foss-2026.1"),
+            "{seq:?}"
+        );
+        assert!(
+            !seq.iter().any(|s| s.contains("-bare")),
+            "unsuffixed pin must not pick -bare: {seq:?}"
+        );
     }
 
     #[test]

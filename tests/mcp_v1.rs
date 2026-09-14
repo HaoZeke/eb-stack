@@ -63,6 +63,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "hierarchy_fixture",
         "stack_policy",
         "package_configs",
+        "strict_patches",
     ] {
         assert!(
             package_bump["inputSchema"]["properties"]
@@ -487,5 +488,33 @@ fn mcp_stack_sbom_rejects_an_unknown_lock_schema() {
     assert!(
         text.contains("schema"),
         "unknown schema must be rejected: {response}"
+    );
+}
+
+#[test]
+fn mcp_bump_rejects_an_empty_dependency_pin() {
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_package_bump",
+            "arguments": {
+                "source": "/tmp/missing.eb",
+                "toolchain_version": "2026.1",
+                "easyconfigs": ["/tmp/robot"],
+                "out_dir": "/tmp/out",
+                "dependencies": {"OpenMPI": ""}
+            }
+        }
+    }))
+    .expect("bump response");
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        text.contains("non-empty"),
+        "empty pin must be rejected: {response}"
     );
 }

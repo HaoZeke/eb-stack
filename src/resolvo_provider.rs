@@ -310,7 +310,13 @@ impl EbProvider {
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, c) in candidates.iter().enumerate() {
             by_name
-                .entry(package_key(&c.name, &c.toolchain, &c.version, &multi_level, &system_multi))
+                .entry(package_key(
+                    &c.name,
+                    &c.toolchain,
+                    &c.version,
+                    &multi_level,
+                    &system_multi,
+                ))
                 .or_default()
                 .push(i);
         }
@@ -524,7 +530,8 @@ impl EbProvider {
                     let installed_rank = ranked.iter().find_map(|(rank, idx)| {
                         let candidate = &candidates[*idx];
                         (candidate.version == installed.version
-                            && candidate.versionsuffix == installed.versionsuffix
+                            && candidate.versionsuffix.as_deref().unwrap_or("")
+                                == installed.versionsuffix.as_deref().unwrap_or("")
                             && candidate.toolchain == installed.toolchain)
                             .then_some(*rank)
                     });
@@ -543,7 +550,13 @@ impl EbProvider {
 
         let mut keys_by_name: HashMap<String, Vec<String>> = HashMap::new();
         for c in candidates.iter() {
-            let key = package_key(&c.name, &c.toolchain, &c.version, &multi_level, &system_multi);
+            let key = package_key(
+                &c.name,
+                &c.toolchain,
+                &c.version,
+                &multi_level,
+                &system_multi,
+            );
             let entry = keys_by_name.entry(c.name.clone()).or_default();
             if !entry.contains(&key) {
                 entry.push(key);
@@ -1126,7 +1139,7 @@ fn solve_feasibility(
 ) -> Result<Vec<Candidate>, String> {
     let provider = EbProvider::from_universe(candidates, policy, baseline)?;
     let requirements = provider.root_requirements(&policy.roots);
-    if requirements.is_empty() {
+    if requirements.len() != policy.roots.len() {
         return Err("unsatisfiable stack: no valid root version sets (pins/upgrade)".into());
     }
     // Default runtime is NowOrNeverRuntime (sync async).
@@ -1217,7 +1230,8 @@ fn versions_in_trial_order(
             let installed_exists = candidates.iter().any(|candidate| {
                 candidate.name == name
                     && candidate.version == installed.version
-                    && candidate.versionsuffix == installed.versionsuffix
+                    && candidate.versionsuffix.as_deref().unwrap_or("")
+                        == installed.versionsuffix.as_deref().unwrap_or("")
                     && candidate.toolchain == installed.toolchain
             });
             if installed_exists {

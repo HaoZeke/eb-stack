@@ -753,6 +753,15 @@ mod prefer_installed_tests {
         assert_eq!(lock.package("Alpha").unwrap().version, "2.0");
     }
 
+    #[test]
+    fn an_empty_versionsuffix_is_the_same_as_none_when_preferring_installed() {
+        let (mut universe, mut installed) = universe_with(&["1.0", "2.0"]);
+        universe.candidates[0].versionsuffix = Some(String::new());
+        installed.packages[0].versionsuffix = None;
+        let lock = select_stack(&universe, &policy(true), Some(&installed)).expect("solve");
+        assert_eq!(lock.package("Alpha").unwrap().version, "1.0");
+    }
+
     /// A version that is no longer a candidate cannot be preferred, and the
     /// solve must still succeed rather than hold out for it.
     #[test]

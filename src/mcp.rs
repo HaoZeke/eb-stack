@@ -22,9 +22,9 @@ use crate::package_workflow::{
 };
 use crate::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use crate::{
-    load_json_file, lock_to_cyclonedx, parse_package_index,
+    artifact_facts_for_lock, load_json_file, lock_to_cyclonedx_with_facts, parse_package_index,
     solve_from_easyconfigs_with_baseline_version_and_extras, with_outdir_overlay,
-    write_json_pretty, SolveExtraOut, StackLock,
+    write_json_pretty, SbomFacts, SolveExtraOut, StackLock,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -163,6 +163,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("stack_policy", "string"),
                 ("package_configs", "array"),
                 ("foreign", "array"),
+                ("strict_patches", "boolean"),
             ],
         ),
         tool_with_optional(
@@ -183,6 +184,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("stack_policy", "string"),
                 ("package_configs", "array"),
                 ("foreign", "array"),
+                ("strict_patches", "boolean"),
             ],
         ),
         tool_with_optional(
@@ -468,6 +470,7 @@ fn package_bump(arguments: &Value) -> Result<Value, String> {
 }
 
 fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
+    let overrides = dep_overrides(arguments)?;
     let source = required_path(arguments, "source")?;
     let recipe = resolve_easyconfig_file(&source).map_err(|error| error.to_string())?;
     let requested = optional_string(arguments, "toolchain_name");
@@ -509,9 +512,9 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
         source_checksum: optional_string(arguments, "source_checksum"),
         easyconfig_roots: with_outdir_overlay(easyconfigs, &output),
         hierarchy_fixture: optional_path(arguments, "hierarchy_fixture"),
-        overrides: string_map(arguments, "dependencies")?,
+        overrides,
         stack_policy,
-        strict_patches: false,
+        strict_patches: optional_bool(arguments, "strict_patches")?.unwrap_or(false),
         package_layers: package_layers(arguments)?,
         foreign_sources: string_array(arguments, "foreign")?
             .into_iter()
@@ -611,7 +614,8 @@ fn stack_solve(arguments: &Value) -> Result<Value, String> {
     let root_refs = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
     let policy = required_path(arguments, "policy")?;
     let lock_out = required_path(arguments, "lock_out")?;
-    let baseline = optional_path(arguments, "baseline_easyconfigs");
+    let baseline =
+        optional_path(arguments, "baseline_easyconfigs").or_else(|| roots.first().cloned());
     let lock = solve_from_easyconfigs_with_baseline_version_and_extras(
         &root_refs,
         &policy,
@@ -638,7 +642,14 @@ fn stack_sbom(arguments: &Value) -> Result<Value, String> {
     let out = optional_path(arguments, "out").unwrap_or_else(|| PathBuf::from("stack.cdx.json"));
     let lock: StackLock = load_json_file(&lock_path).map_err(|error| error.to_string())?;
     lock.validate_schema()?;
-    let sbom = lock_to_cyclonedx(&lock);
+    let artifacts = artifact_facts_for_lock(&lock);
+    let sbom = lock_to_cyclonedx_with_facts(
+        &lock,
+        SbomFacts {
+            artifacts: Some(&artifacts),
+            ..SbomFacts::default()
+        },
+    );
     write_json_pretty(&out, &sbom).map_err(|error| error.to_string())?;
     let components = sbom
         .get("components")
@@ -797,6 +808,30 @@ fn required_path(arguments: &Value, name: &str) -> Result<PathBuf, String> {
 
 fn optional_path(arguments: &Value, name: &str) -> Option<PathBuf> {
     optional_string(arguments, name).map(PathBuf::from)
+}
+
+fn optional_bool(arguments: &Value, name: &str) -> Result<Option<bool>, String> {
+    match arguments.get(name) {
+        None => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(format!("argument {name} must be a boolean")),
+    }
+}
+
+fn dep_overrides(arguments: &Value) -> Result<HashMap<String, String>, String> {
+    let raw = string_map(arguments, "dependencies")?;
+    let mut dependencies = HashMap::new();
+    for (name, version) in raw {
+        let name = name.trim();
+        let version = version.trim();
+        if name.is_empty() || version.is_empty() {
+            return Err(format!(
+                "dependencies expects non-empty NAME=VERSION, got {name:?}={version:?}"
+            ));
+        }
+        dependencies.insert(name.to_string(), version.to_string());
+    }
+    Ok(dependencies)
 }
 
 fn path_array(arguments: &Value, name: &str) -> Result<Vec<PathBuf>, String> {
