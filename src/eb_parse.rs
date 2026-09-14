@@ -227,9 +227,8 @@ fn strip_comments(src: &str) -> String {
         let mut i = 0usize;
         while i < b.len() {
             let c = b[i];
-            let tripled = (c == b'"' || c == b'\'')
-                && b.get(i + 1) == Some(&c)
-                && b.get(i + 2) == Some(&c);
+            let tripled =
+                (c == b'"' || c == b'\'') && b.get(i + 1) == Some(&c) && b.get(i + 2) == Some(&c);
             match triple {
                 Some(quote) => {
                     if tripled && c == quote {
@@ -563,7 +562,7 @@ impl<'a> Parser<'a> {
                     a.extend(b);
                     self.env.insert(name, Value::List(a));
                 }
-                (Some(Value::Tuple(mut a)), Value::Tuple(b)) => {
+                (Some(Value::Tuple(mut a)), Value::Tuple(b) | Value::List(b)) => {
                     a.extend(b);
                     self.env.insert(name, Value::Tuple(a));
                 }
@@ -1216,7 +1215,10 @@ fn string_method(receiver: &Value, name: &str, args: &[Value]) -> Result<Value, 
         ("lower", []) => Ok(Value::Str(text()?.to_lowercase())),
         ("upper", []) => Ok(Value::Str(text()?.to_uppercase())),
         ("strip", []) => Ok(Value::Str(text()?.trim().to_string())),
-        _ => Err(format!("unsupported method .{name}() with {} args", args.len())),
+        _ => Err(format!(
+            "unsupported method .{name}() with {} args",
+            args.len()
+        )),
     }
 }
 
@@ -1577,7 +1579,7 @@ fn value_to_toolchain(val: &Value, ctx: &str) -> Result<Toolchain, String> {
 /// the `Java/1.8` wrapper points at a different JDK on x86_64, POWER and
 /// AArch64. Nine recipes upstream use it, and each one that cannot be read
 /// takes its whole recipe with it.
-fn arch_specific_version(entries: &[(String, Value)]) -> Result<String, String> {
+fn arch_specific_version(entries: &[(String, Value)]) -> Result<Option<String>, String> {
     let host = match std::env::consts::ARCH {
         "x86_64" => "x86_64",
         "aarch64" => "AArch64",
@@ -1590,23 +1592,40 @@ fn arch_specific_version(entries: &[(String, Value)]) -> Result<String, String> 
             return Err(format!("dependency version dict has a non-arch key {key}"));
         };
         if arch == host {
-            return value.expect_str("dep.version");
+            return arch_dep_version(value);
         }
         if arch == "*" {
             fallback = Some(value);
         }
     }
     match fallback {
-        Some(value) => value.expect_str("dep.version"),
+        Some(value) => arch_dep_version(value),
         None => Err(format!("no dependency version for {host}")),
     }
 }
 
-fn value_to_dep(val: &Value) -> Result<ResolvedDep, String> {
+fn arch_dep_version(value: &Value) -> Result<Option<String>, String> {
+    match value {
+        Value::Bool(false) | Value::None => Ok(None),
+        other => Ok(Some(other.expect_str("dep.version")?)),
+    }
+}
+
+fn collect_deps(values: &[Value]) -> Result<Vec<ResolvedDep>, String> {
+    let mut deps = Vec::new();
+    for value in values {
+        if let Some(dep) = value_to_dep(value)? {
+            deps.push(dep);
+        }
+    }
+    Ok(deps)
+}
+
+fn value_to_dep(val: &Value) -> Result<Option<ResolvedDep>, String> {
     // Filename form: 'OpenMPI-4.1.6-foss-2025b.eb'
     if let Value::Str(s) = val {
         if let Some(dep) = parse_dep_filename(s) {
-            return Ok(dep);
+            return Ok(Some(dep));
         }
         return Err(format!("unsupported string dependency entry: {s}"));
     }
@@ -1619,7 +1638,10 @@ fn value_to_dep(val: &Value) -> Result<ResolvedDep, String> {
     }
     let name = items[0].expect_str("dep.name")?;
     let version = match &items[1] {
-        Value::Dict(entries) => arch_specific_version(entries)?,
+        Value::Dict(entries) => match arch_specific_version(entries)? {
+            Some(version) => version,
+            None => return Ok(None),
+        },
         other => other.expect_str("dep.version")?,
     };
     let mut versionsuffix = None;
@@ -1631,12 +1653,12 @@ fn value_to_dep(val: &Value) -> Result<ResolvedDep, String> {
     if items.len() >= 4 {
         toolchain = Some(value_to_toolchain(&items[3], "dep.toolchain")?);
     }
-    Ok(ResolvedDep {
+    Ok(Some(ResolvedDep {
         name,
         version,
         versionsuffix,
         toolchain,
-    })
+    }))
 }
 
 /// Whether the source assigns `field` at the top level.
@@ -1660,27 +1682,61 @@ fn assigns_at_top_level(src: &str, field: &str) -> bool {
 }
 
 fn parse_dep_filename(s: &str) -> Option<ResolvedDep> {
-    // name-version-toolchain.eb — best-effort for legacy list entries.
+    // Name-version-Toolchain-tcver[versionsuffix].eb
     let s = s.strip_suffix(".eb")?;
     let parts: Vec<&str> = s.split('-').collect();
-    if parts.len() < 3 {
+    if parts.len() < 4 {
         return None;
     }
-    // Heuristic: last two segments often toolchain name + version (foss-2025b).
-    let tc_ver = parts[parts.len() - 1];
-    let tc_name = parts[parts.len() - 2];
-    let name = parts[0];
-    let version = parts[1..parts.len() - 2].join("-");
-    if version.is_empty() {
+    let mut toolchain_at = None;
+    for index in 1..parts.len() - 1 {
+        if looks_like_toolchain_name(parts[index])
+            && parts[index + 1]
+                .chars()
+                .next()
+                .is_some_and(|character| character.is_ascii_digit())
+        {
+            toolchain_at = Some(index);
+        }
+    }
+    let toolchain_at = toolchain_at?;
+    let head = &parts[..toolchain_at];
+    let version_at = head.iter().position(|part| {
+        part.chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_digit())
+    })?;
+    if version_at == 0 {
         return None;
     }
-    let _ = (tc_name, tc_ver);
+    let name = head[..version_at].join("-");
+    let version = head[version_at..].join("-");
+    if name.is_empty() || version.is_empty() {
+        return None;
+    }
+    let toolchain = Toolchain {
+        name: parts[toolchain_at].to_string(),
+        version: parts[toolchain_at + 1].to_string(),
+    };
+    let suffix = parts[toolchain_at + 2..].join("-");
+    let versionsuffix = if suffix.is_empty() {
+        None
+    } else {
+        Some(format!("-{suffix}"))
+    };
     Some(ResolvedDep {
-        name: name.to_string(),
+        name,
         version,
-        versionsuffix: None,
-        toolchain: None,
+        versionsuffix,
+        toolchain: Some(toolchain),
     })
+}
+
+fn looks_like_toolchain_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|character| character.is_ascii_alphabetic())
 }
 
 fn value_to_ext(val: &Value) -> Result<ResolvedExt, String> {
@@ -1860,18 +1916,16 @@ fn resolve_easyconfig_str_inner(
         }
     }
 
-    let dependencies = value_list_as_slice(deps_val.as_ref())
-        .map_err(|e| ParseError::Parse("<string>".into(), e))?
-        .iter()
-        .map(value_to_dep)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| ParseError::Parse("<string>".into(), e))?;
-    let builddependencies = value_list_as_slice(build_val.as_ref())
-        .map_err(|e| ParseError::Parse("<string>".into(), e))?
-        .iter()
-        .map(value_to_dep)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| ParseError::Parse("<string>".into(), e))?;
+    let dependencies = collect_deps(
+        value_list_as_slice(deps_val.as_ref())
+            .map_err(|e| ParseError::Parse("<string>".into(), e))?,
+    )
+    .map_err(|e| ParseError::Parse("<string>".into(), e))?;
+    let builddependencies = collect_deps(
+        value_list_as_slice(build_val.as_ref())
+            .map_err(|e| ParseError::Parse("<string>".into(), e))?,
+    )
+    .map_err(|e| ParseError::Parse("<string>".into(), e))?;
     // What a recipe depends on defines templates the recipe itself uses, so
     // the dependency list has to be read before those can be resolved. Only a
     // second pass, and only when the dependencies define something.
@@ -1884,12 +1938,11 @@ fn resolve_easyconfig_str_inner(
         let versionsuffix = versionsuffix.map(|s| apply_templates_str(&s, &templates));
         let redo = |val: Option<&Value>| -> Result<Vec<ResolvedDep>, ParseError> {
             let applied = val.map(|v| apply_templates_value(v, &templates));
-            value_list_as_slice(applied.as_ref())
-                .map_err(|e| ParseError::Parse("<string>".into(), e))?
-                .iter()
-                .map(value_to_dep)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| ParseError::Parse("<string>".into(), e))
+            collect_deps(
+                value_list_as_slice(applied.as_ref())
+                    .map_err(|e| ParseError::Parse("<string>".into(), e))?,
+            )
+            .map_err(|e| ParseError::Parse("<string>".into(), e))
         };
         let dependencies = redo(parser.env.get("dependencies"))?;
         let builddependencies = redo(parser.env.get("builddependencies"))?;
@@ -2734,6 +2787,8 @@ pub fn validate_lock_deps(lock: &StackLock, cands: &[Candidate]) -> Result<(), S
                 && c.version == p.version
                 && c.toolchain.name == p.toolchain.name
                 && c.toolchain.version == p.toolchain.version
+                && c.versionsuffix.as_deref().unwrap_or("")
+                    == p.versionsuffix.as_deref().unwrap_or("")
         }) else {
             continue;
         };
@@ -2753,11 +2808,20 @@ pub fn validate_lock_deps(lock: &StackLock, cands: &[Candidate]) -> Result<(), S
                 // whichever level the stack carries.
                 let eligible: Vec<&&LockPackage> = locked
                     .iter()
-                    .filter(|candidate| match d.toolchain.as_ref() {
-                        Some(want) => {
-                            crate::hierarchy::toolchains_match(&candidate.toolchain, want)
-                        }
-                        None => true,
+                    .filter(|candidate| {
+                        let toolchain_ok = match d.toolchain.as_ref() {
+                            Some(want) => {
+                                crate::hierarchy::toolchains_match(&candidate.toolchain, want)
+                            }
+                            None => true,
+                        };
+                        let suffix_ok = match d.versionsuffix.as_deref() {
+                            Some(want) if !want.is_empty() => {
+                                candidate.versionsuffix.as_deref().unwrap_or("") == want
+                            }
+                            _ => candidate.versionsuffix.as_deref().unwrap_or("").is_empty(),
+                        };
+                        toolchain_ok && suffix_ok
                     })
                     .collect();
                 if eligible.is_empty() {
@@ -3107,10 +3171,7 @@ mod tests {
                    zmqversion = '3.2.2'\npythonversion = '2.7.3'\n\
                    versionsuffix = '-Python-%s-%s' % (pythonversion, 'zmq%s' % zmqversion.split('.')[0])\n";
         let parsed = resolve_easyconfig_str(src).expect("parse");
-        assert_eq!(
-            parsed.versionsuffix.as_deref(),
-            Some("-Python-2.7.3-zmq3")
-        );
+        assert_eq!(parsed.versionsuffix.as_deref(), Some("-Python-2.7.3-zmq3"));
     }
 
     #[test]
@@ -4448,6 +4509,51 @@ homepage = 'https://example.invalid'
             Some("https://example.invalid"),
             "the following assignment must survive intact"
         );
+    }
+
+    #[test]
+    fn filename_dependency_keeps_hyphenated_name_and_toolchain() {
+        let src = "name = 'App'\nversion = '1.0'\n\
+                   toolchain = {'name': 'foss', 'version': '2024a'}\n\
+                   dependencies = ['SciPy-bundle-2024.05-foss-2024a.eb']\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.dependencies[0].name, "SciPy-bundle");
+        assert_eq!(parsed.dependencies[0].version, "2024.05");
+        assert_eq!(
+            parsed.dependencies[0]
+                .toolchain
+                .as_ref()
+                .map(|toolchain| toolchain.label()),
+            Some("foss-2024a".into())
+        );
+    }
+
+    #[test]
+    fn arch_false_omits_the_dependency_instead_of_failing() {
+        let src = "name = 'App'\nversion = '1.0'\n\
+                   toolchain = {'name': 'foss', 'version': '2024a'}\n\
+                   dependencies = [('imkl', {'arch=*': False}, '', SYSTEM)]\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert!(
+            parsed.dependencies.is_empty(),
+            "False/None is skip, not a parse failure: {:?}",
+            parsed.dependencies
+        );
+    }
+
+    #[test]
+    fn tuple_plus_equals_list_appends() {
+        let src = "name = 'App'\nversion = '1.0'\n\
+                   toolchain = {'name': 'foss', 'version': '2024a'}\n\
+                   dependencies = (('Foo', '1.0'),)\n\
+                   dependencies += [('Bar', '2.0')]\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        let names: Vec<_> = parsed
+            .dependencies
+            .iter()
+            .map(|dep| dep.name.as_str())
+            .collect();
+        assert_eq!(names, ["Foo", "Bar"]);
     }
 }
 

@@ -272,12 +272,30 @@ impl PackageSourceCatalog {
             .filter(|provider| match version {
                 Some(requested) => match provider.version.as_deref() {
                     Some(provided) => provided == requested,
-                    // Unversioned providers may fill an exact version request when unique.
                     None => true,
                 },
                 None => true,
             })
             .collect();
+
+        if let Some(requested) = version {
+            let exact: Vec<&PackageSourceProvider> = matches
+                .iter()
+                .copied()
+                .filter(|provider| provider.version.as_deref() == Some(requested))
+                .collect();
+            match exact.as_slice() {
+                [provider] => return Ok(*provider),
+                [] => {}
+                many => {
+                    return Err(PackageCatalogError::AmbiguousProvider {
+                        name: name.to_string(),
+                        version: version_suffix(version),
+                        count: many.len(),
+                    });
+                }
+            }
+        }
 
         match matches.as_slice() {
             [provider] => Ok(*provider),
@@ -353,13 +371,24 @@ pub fn resolve_package_catalog_layers(
                     if patch.profile.is_none() {
                         entry.profile = None;
                     }
+                    if patch.source_checksums.is_empty() {
+                        entry.source_checksums.clear();
+                    }
                 }
             }
             if patch.version.is_some() {
                 entry.version = patch.version.clone();
             }
             if let Some(source) = &patch.source {
+                if source.trim().is_empty() {
+                    return Err(PackageCatalogError::MissingSource {
+                        name: patch.name.clone(),
+                    });
+                }
                 entry.source = Some(resolve_path(layer.base_directory.as_deref(), source));
+                if patch.source_checksums.is_empty() {
+                    entry.source_checksums.clear();
+                }
             }
             if patch.format.is_some() {
                 entry.format = patch.format;
@@ -381,8 +410,12 @@ pub fn resolve_package_catalog_layers(
                 entry.toolchain = Some(toolchain.clone());
             }
             if let Some(stack_policy) = &patch.stack_policy {
-                entry.stack_policy =
-                    Some(resolve_path(layer.base_directory.as_deref(), stack_policy));
+                if stack_policy.trim().is_empty() {
+                    entry.stack_policy = None;
+                } else {
+                    entry.stack_policy =
+                        Some(resolve_path(layer.base_directory.as_deref(), stack_policy));
+                }
             }
         }
     }
@@ -447,7 +480,7 @@ impl MergedEntry {
         }
 
         Ok(PackageSourceProvider {
-            name: self.name,
+            name: self.name.trim().to_string(),
             provider,
             version: self.version.filter(|value| !value.trim().is_empty()),
             source,
@@ -455,7 +488,10 @@ impl MergedEntry {
             package_config: self.package_config,
             source_checksums: self.source_checksums,
             profile,
-            toolchain,
+            toolchain: Toolchain {
+                name: toolchain.name.trim().to_string(),
+                version: toolchain.version.trim().to_string(),
+            },
             stack_policy: self.stack_policy,
         })
     }

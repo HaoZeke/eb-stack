@@ -712,3 +712,47 @@ toolchain = { name = "foss", version = "2026.1" }
     .expect_err("unknown kind");
     assert!(matches!(err, PackageCatalogError::Toml(_)));
 }
+
+#[test]
+fn lookup_prefers_an_exact_version_over_an_unversioned_sibling() {
+    let catalog = resolve_package_catalog_layers(&[PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+source = "Lib.py"
+toolchain = { name = "foss", version = "2026.1" }
+
+[[packages]]
+name = "Lib"
+version = "1.0"
+source = "Lib-1.0.py"
+toolchain = { name = "foss", version = "2026.1" }
+"#,
+    )
+    .expect("catalog")])
+    .expect("resolve");
+    let provider = catalog.lookup("Lib", Some("1.0")).expect("exact");
+    assert_eq!(provider.version.as_deref(), Some("1.0"));
+}
+
+#[test]
+fn empty_source_path_is_missing_source() {
+    let err = resolve_package_catalog_layers(&[PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+source = "   "
+toolchain = { name = "foss", version = "2026.1" }
+"#,
+    )
+    .expect("catalog")])
+    .expect_err("empty source");
+    assert!(
+        matches!(err, PackageCatalogError::MissingSource { .. }),
+        "{err:?}"
+    );
+}

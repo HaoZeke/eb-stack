@@ -164,6 +164,7 @@ impl<'a> StaticEvaluator<'a> {
     fn walk_statement(&mut self, statement: &ast::Stmt) {
         match statement {
             ast::Stmt::Assign(assignment) => self.walk_assignment(assignment),
+            ast::Stmt::AugAssign(assignment) => self.walk_aug_assignment(assignment),
             ast::Stmt::AnnAssign(assignment) => {
                 if let Some(value) = assignment.value.as_deref() {
                     self.assign_expression(&assignment.target, value);
@@ -191,6 +192,52 @@ impl<'a> StaticEvaluator<'a> {
             }
             _ => {}
         }
+    }
+
+    fn walk_aug_assignment(&mut self, assignment: &ast::StmtAugAssign) {
+        let Some(left) = self.evaluate(&assignment.target) else {
+            return;
+        };
+        let Some(right) = self.evaluate(&assignment.value) else {
+            return;
+        };
+        let combined = match assignment.op {
+            ast::Operator::Add => match (left, right) {
+                (StaticValue::String(mut left), StaticValue::String(right)) => {
+                    left.push_str(&right);
+                    Some(StaticValue::String(left))
+                }
+                (StaticValue::Sequence(mut left), StaticValue::Sequence(right)) => {
+                    left.extend(right);
+                    Some(StaticValue::Sequence(left))
+                }
+                _ => None,
+            },
+            ast::Operator::Mod => self.evaluate_mod(left, right),
+            _ => None,
+        };
+        if let Some(value) = combined {
+            self.bind_target(&assignment.target, value.clone());
+            if let ast::Expr::Name(name) = assignment.target.as_ref() {
+                self.attributes.insert(name.id.to_string(), value);
+            }
+        }
+    }
+
+    fn evaluate_mod(&self, left: StaticValue, right: StaticValue) -> Option<StaticValue> {
+        let template = left.as_string()?;
+        let values = match right {
+            StaticValue::Sequence(values) => values,
+            value => vec![value],
+        };
+        let mut rendered = template;
+        for value in values {
+            rendered = replace_first(&rendered, "%s", &value.as_string()?)?;
+        }
+        if leftover_format_placeholder(&rendered) {
+            return None;
+        }
+        Some(StaticValue::String(rendered))
     }
 
     fn walk_assignment(&mut self, assignment: &ast::StmtAssign) {
@@ -487,9 +534,22 @@ impl<'a> StaticEvaluator<'a> {
                 },
                 "format" => {
                     let mut template = receiver.as_string()?;
-                    for argument in &call.args {
+                    for (index, argument) in call.args.iter().enumerate() {
                         let value = self.evaluate(argument)?.as_string()?;
-                        template = replace_first(&template, "{}", &value)?;
+                        let numbered = format!("{{{index}}}");
+                        template = replace_first(&template, "{}", &value)
+                            .or_else(|| replace_first(&template, &numbered, &value))?;
+                    }
+                    for keyword in &call.keywords {
+                        let Some(name) = keyword.arg.as_ref() else {
+                            continue;
+                        };
+                        let value = self.evaluate(&keyword.value)?.as_string()?;
+                        let named = format!("{{{name}}}");
+                        template = replace_first(&template, &named, &value)?;
+                    }
+                    if leftover_format_placeholder(&template) {
+                        return None;
                     }
                     Some(StaticValue::String(template))
                 }
@@ -526,18 +586,7 @@ impl<'a> StaticEvaluator<'a> {
                 }
                 _ => None,
             },
-            ast::Operator::Mod => {
-                let template = left.as_string()?;
-                let values = match right {
-                    StaticValue::Sequence(values) => values,
-                    value => vec![value],
-                };
-                let mut rendered = template;
-                for value in values {
-                    rendered = replace_first(&rendered, "%s", &value.as_string()?)?;
-                }
-                Some(StaticValue::String(rendered))
-            }
+            ast::Operator::Mod => self.evaluate_mod(left, right),
             _ => None,
         }
     }
@@ -691,6 +740,80 @@ fn contains_value(container: &StaticValue, needle: &StaticValue) -> bool {
             .is_some_and(|needle| value.contains(&needle)),
         _ => false,
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_numbered_and_named_fields() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    ver = "1.2"
+    version("1.2", url="https://example.invalid/{0}.tar.gz".format(ver))
+    version("1.3", url="https://example.invalid/{name}.tar.gz".format(name=ver))
+"#,
+        )
+        .expect("parse");
+        let urls: Vec<_> = syntax
+            .calls
+            .iter()
+            .filter_map(|call| call.kw_string("url"))
+            .collect();
+        assert_eq!(
+            urls,
+            [
+                "https://example.invalid/1.2.tar.gz",
+                "https://example.invalid/1.2.tar.gz"
+            ]
+        );
+    }
+
+    #[test]
+    fn leftover_format_is_not_a_fact() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    version("1.2", url="https://example.invalid/{0}-{1}.tar.gz".format("only"))
+"#,
+        )
+        .expect("parse");
+        assert!(
+            syntax
+                .residuals
+                .iter()
+                .any(|residual| residual.contains("dynamic version")),
+            "leftover placeholder must residual, not become a source URL: {:?}",
+            syntax.residuals
+        );
+    }
+
+    #[test]
+    fn augassign_extends_a_static_version_list() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    versions = ["1.0"]
+    versions += ["2.0"]
+    for v in versions:
+        version(v, sha256="aaa")
+"#,
+        )
+        .expect("parse");
+        let versions: Vec<_> = syntax
+            .calls
+            .iter()
+            .filter(|call| call.name == "version")
+            .filter_map(|call| call.arg_string(0))
+            .collect();
+        assert_eq!(versions, ["1.0", "2.0"]);
+    }
+}
+
+fn leftover_format_placeholder(value: &str) -> bool {
+    value.contains("{") || value.contains("%s") || value.contains("%d")
 }
 
 fn replace_first(input: &str, pattern: &str, replacement: &str) -> Option<String> {

@@ -147,18 +147,22 @@ pub fn score_with_allowance(emitted: &str, target: &str, allowance: &[&str]) -> 
     let mut stale = Vec::new();
 
     for entry in allowance {
-        match target_lines.iter().position(|line| line == entry) {
-            Some(index) => {
-                target_lines.remove(index);
-                if emitted_lines.contains(entry) {
-                    stale.push(StaleAllowance::AlreadyEmitted {
-                        line: (*entry).to_string(),
-                    });
-                }
-            }
-            None => stale.push(StaleAllowance::AbsentFromTarget {
+        let emitted_count = emitted_lines.iter().filter(|line| *line == entry).count();
+        let target_count = target_lines.iter().filter(|line| *line == entry).count();
+        if target_count == 0 {
+            stale.push(StaleAllowance::AbsentFromTarget {
                 line: (*entry).to_string(),
-            }),
+            });
+            continue;
+        }
+        if emitted_count >= target_count {
+            stale.push(StaleAllowance::AlreadyEmitted {
+                line: (*entry).to_string(),
+            });
+            continue;
+        }
+        if let Some(index) = target_lines.iter().position(|line| line == entry) {
+            target_lines.remove(index);
         }
     }
 
@@ -536,6 +540,24 @@ mod tests {
             vec![StaleAllowance::AbsentFromTarget {
                 line: PYBIND11.to_string()
             }]
+        );
+    }
+
+    #[test]
+    fn already_emitted_does_not_strip_a_line_the_emit_still_needs() {
+        let emitted = "keep\nkeep\n";
+        let target = "keep\nkeep\n";
+        let scored = score_with_allowance(emitted, target, &["keep"]);
+        assert_eq!(
+            scored.stale,
+            vec![StaleAllowance::AlreadyEmitted {
+                line: "keep".into()
+            }]
+        );
+        assert_eq!(
+            scored.score,
+            ReproScore::Exact,
+            "a leftover allowance must not delete a line the emit still carries"
         );
     }
 
