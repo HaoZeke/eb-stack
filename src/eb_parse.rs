@@ -2075,7 +2075,10 @@ fn env_list_len(
 ) -> usize {
     env.get(key)
         .map(|v| apply_templates_value(v, templates))
-        .and_then(|v| value_list_as_slice(Some(&v)).ok().map(|l| l.len()))
+        .and_then(|v| match &v {
+            Value::Str(value) if !value.is_empty() => Some(1),
+            other => value_list_as_slice(Some(other)).ok().map(|list| list.len()),
+        })
         .unwrap_or(0)
 }
 
@@ -2326,13 +2329,22 @@ impl ParseTreeResult {
 pub fn parse_easyconfig_tree(root: &Path) -> Result<ParseTreeResult, ParseError> {
     let mut out = ParseTreeResult::default();
     let mut stack = vec![root.to_path_buf()];
+    let mut visited = std::collections::HashSet::new();
     while let Some(dir) = stack.pop() {
+        let identity = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+        if !visited.insert(identity) {
+            continue;
+        }
         let rd =
             std::fs::read_dir(&dir).map_err(|e| ParseError::Io(dir.display().to_string(), e))?;
         for ent in rd {
             let ent = ent.map_err(|e| ParseError::Io(dir.display().to_string(), e))?;
             let p = ent.path();
-            if p.is_dir() {
+            let is_dir = ent
+                .file_type()
+                .map(|kind| kind.is_dir())
+                .unwrap_or_else(|_| p.is_dir());
+            if is_dir {
                 stack.push(p);
             } else if p.extension().and_then(|s| s.to_str()) == Some("eb") {
                 match parse_easyconfig_file(&p) {
@@ -4663,6 +4675,15 @@ homepage = 'https://example.invalid'
             easyconfig_basename("zlib", "1.2", &kept[0].toolchain, None),
             "zlib-1.2.eb"
         );
+    }
+
+    #[test]
+    fn a_string_sources_field_counts_as_one_source() {
+        let src = "name = 'App'\nversion = '1.0'\n\
+                   toolchain = {'name': 'foss', 'version': '2024a'}\n\
+                   sources = 'App-1.0.tar.gz'\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.sources_count, 1);
     }
 }
 

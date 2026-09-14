@@ -221,6 +221,8 @@ impl<'a> StaticEvaluator<'a> {
             if let ast::Expr::Name(name) = assignment.target.as_ref() {
                 self.attributes.insert(name.id.to_string(), value);
             }
+        } else {
+            self.unbind_target(&assignment.target);
         }
     }
 
@@ -242,6 +244,9 @@ impl<'a> StaticEvaluator<'a> {
 
     fn walk_assignment(&mut self, assignment: &ast::StmtAssign) {
         let Some(value) = self.evaluate(&assignment.value) else {
+            for target in &assignment.targets {
+                self.unbind_target(target);
+            }
             return;
         };
         for target in &assignment.targets {
@@ -258,6 +263,15 @@ impl<'a> StaticEvaluator<'a> {
             if let ast::Expr::Name(name) = target {
                 self.attributes.insert(name.id.to_string(), value);
             }
+        } else {
+            self.unbind_target(target);
+        }
+    }
+
+    fn unbind_target(&mut self, target: &ast::Expr) {
+        if let ast::Expr::Name(name) = target {
+            self.environment.remove(name.id.as_str());
+            self.attributes.remove(name.id.as_str());
         }
     }
 
@@ -307,6 +321,10 @@ impl<'a> StaticEvaluator<'a> {
     }
 
     fn walk_with(&mut self, statement: &ast::StmtWith) {
+        let mentions = statement
+            .body
+            .iter()
+            .any(|body| self.statement_mentions_directive(body));
         let mut conditions = Vec::new();
         for item in &statement.items {
             let condition = match &item.context_expr {
@@ -321,22 +339,26 @@ impl<'a> StaticEvaluator<'a> {
                         Some(condition) => StaticScopedCondition::Spec(condition),
                         None => {
                             let source = self.source_fragment(&call.args[0]);
-                            self.residual(
-                                &item.context_expr,
-                                &format!(
-                                    "dynamic scoped when({source}) contains package directives"
-                                ),
-                            );
+                            if mentions {
+                                self.residual(
+                                    &item.context_expr,
+                                    &format!(
+                                        "dynamic scoped when({source}) contains package directives"
+                                    ),
+                                );
+                            }
                             StaticScopedCondition::Opaque(source)
                         }
                     }
                 }
                 _ => {
                     let source = self.source_fragment(&item.context_expr);
-                    self.residual(
-                        &item.context_expr,
-                        "unsupported context contains package directives",
-                    );
+                    if mentions {
+                        self.residual(
+                            &item.context_expr,
+                            "unsupported context contains package directives",
+                        );
+                    }
                     StaticScopedCondition::Opaque(source)
                 }
             };
@@ -681,11 +703,7 @@ impl<'a> StaticEvaluator<'a> {
         let range = statement.range();
         self.source
             .get(text_offset(range.start())..text_offset(range.end()))
-            .is_some_and(|text| {
-                DIRECTIVES
-                    .iter()
-                    .any(|directive| text.contains(&format!("{directive}(")))
-            })
+            .is_some_and(text_mentions_directive)
     }
 
     fn residual(&mut self, node: &impl Ranged, summary: &str) {
@@ -864,6 +882,63 @@ class Pkg(Package):
             syntax.residuals
         );
     }
+
+    #[test]
+    fn url_for_version_is_not_a_version_directive() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    if runtime:
+        def url_for_version(self, version):
+            return "https://example.invalid"
+"#,
+        )
+        .expect("parse");
+        assert!(
+            syntax.residuals.is_empty(),
+            "url_for_version must not look like version(: {:?}",
+            syntax.residuals
+        );
+    }
+
+    #[test]
+    fn a_failed_rebind_forgets_the_previous_value() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    ver = "1.0"
+    ver = discover_revision()
+    version(ver, sha256="aaa")
+"#,
+        )
+        .expect("parse");
+        assert!(
+            syntax
+                .residuals
+                .iter()
+                .any(|residual| residual.contains("dynamic version")),
+            "stale ver must not become version(1.0): calls={:?} residuals={:?}",
+            syntax.calls,
+            syntax.residuals
+        );
+    }
+
+    #[test]
+    fn a_directive_free_with_does_not_residual() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    with open("notes.txt") as handle:
+        homepage = "https://example.invalid"
+"#,
+        )
+        .expect("parse");
+        assert!(
+            syntax.residuals.is_empty(),
+            "directive-free with must stay quiet: {:?}",
+            syntax.residuals
+        );
+    }
 }
 
 fn is_truthy(value: &StaticValue) -> Option<bool> {
@@ -874,6 +949,30 @@ fn is_truthy(value: &StaticValue) -> Option<bool> {
         StaticValue::Sequence(value) => Some(!value.is_empty()),
         StaticValue::Mapping(value) => Some(!value.is_empty()),
     }
+}
+
+fn text_mentions_directive(text: &str) -> bool {
+    text.lines().any(|line| {
+        let line = line.trim_start();
+        if line.starts_with('#') {
+            return false;
+        }
+        DIRECTIVES.iter().any(|directive| {
+            let needle = format!("{directive}(");
+            let mut from = 0;
+            while let Some(index) = line[from..].find(&needle) {
+                let at = from + index;
+                let before = line[..at].chars().next_back();
+                if before
+                    .is_none_or(|character| !character.is_ascii_alphanumeric() && character != '_')
+                {
+                    return true;
+                }
+                from = at + 1;
+            }
+            false
+        })
+    })
 }
 
 fn leftover_format_placeholder(value: &str) -> bool {

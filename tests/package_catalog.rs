@@ -738,6 +738,25 @@ toolchain = { name = "foss", version = "2026.1" }
 }
 
 #[test]
+fn lookup_trims_stored_and_requested_versions() {
+    let catalog = resolve_package_catalog_layers(&[PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+version = "1.0 "
+source = "Lib.py"
+toolchain = { name = "foss", version = "2026.1" }
+"#,
+    )
+    .expect("catalog")])
+    .expect("resolve");
+    let provider = catalog.lookup("Lib", Some("1.0")).expect("trimmed");
+    assert_eq!(provider.version.as_deref(), Some("1.0"));
+}
+
+#[test]
 fn empty_source_path_is_missing_source() {
     let err = resolve_package_catalog_layers(&[PackageCatalogLayer::from_toml_str(
         r#"

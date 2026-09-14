@@ -271,7 +271,7 @@ impl PackageSourceCatalog {
             .filter(|provider| package_identity(&provider.name) == identity)
             .filter(|provider| match version {
                 Some(requested) => match provider.version.as_deref() {
-                    Some(provided) => provided == requested,
+                    Some(provided) => provided.trim() == requested.trim(),
                     None => true,
                 },
                 None => true,
@@ -376,8 +376,13 @@ pub fn resolve_package_catalog_layers(
                     }
                 }
             }
-            if patch.version.is_some() {
-                entry.version = patch.version.clone();
+            if let Some(version) = &patch.version {
+                let version = version.trim();
+                entry.version = if version.is_empty() {
+                    None
+                } else {
+                    Some(version.to_string())
+                };
             }
             if let Some(source) = &patch.source {
                 if source.trim().is_empty() {
