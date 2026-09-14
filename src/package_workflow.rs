@@ -305,20 +305,33 @@ fn promote_language_overlay_extras(
     stack_policy: &StackPolicy,
     hierarchy_fixture: Option<&Path>,
 ) -> Result<(), PackageWorkflowError> {
-    let profile = plan
+    let mut profiles: Vec<String> = plan
         .outputs
-        .first()
-        .map(|output| output.profile.as_str())
-        .unwrap_or("default");
-    let holes = unsatisfied_direct_dependencies_with_hierarchy(
-        plan,
-        profile,
-        &Default::default(),
-        candidates,
-        stack_policy,
-        hierarchy_fixture,
-    )
-    .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?;
+        .iter()
+        .map(|output| output.profile.clone())
+        .collect();
+    if profiles.is_empty() {
+        profiles.push("default".into());
+    }
+    let mut holes = Vec::new();
+    let mut seen_holes = std::collections::HashSet::new();
+    for profile in &profiles {
+        let found = unsatisfied_direct_dependencies_with_hierarchy(
+            plan,
+            profile,
+            &Default::default(),
+            candidates,
+            stack_policy,
+            hierarchy_fixture,
+        )
+        .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?;
+        for hole in found {
+            let key = format!("{}|{}|{}", hole.name, hole.version_req, hole.build);
+            if seen_holes.insert(key) {
+                holes.push(hole);
+            }
+        }
+    }
     for hole in holes {
         if hole.name.eq_ignore_ascii_case("python") || hole.name.eq_ignore_ascii_case("r") {
             continue;
@@ -1737,67 +1750,82 @@ fn apply_derived_cmake_locals(
             _ => None,
         })
         .unwrap_or('d');
-    let literal_binary = format!(
-        "{}_{}_{}{}_{}_{}",
-        plan.package.name, build_type, precision_letter, host, order, equations
-    );
     let binary_rhs = format!(
         "'{}_{}_{}%s_%s_%s' % (local_host_arch, local_order, local_equations)",
         plan.package.name, build_type, precision_letter
     );
     let mut text = crate::eb_emit::upsert_raw_assignment(text, "local_binary", &binary_rhs)?;
-    if let Some(joined) = plan.build.config_options.first().map(|_| {
-        plan.build
-            .config_options
-            .iter()
-            .map(|flag| {
-                if let Some(rest) = flag.strip_prefix("-DORDER=") {
-                    return if rest == order.as_str() {
-                        "-DORDER=%s".into()
-                    } else {
-                        flag.clone()
-                    };
+    let mut placeholders = Vec::new();
+    let joined = plan
+        .build
+        .config_options
+        .iter()
+        .map(|flag| {
+            if let Some(rest) = flag.strip_prefix("-DORDER=") {
+                if rest == order.as_str() {
+                    placeholders.push("local_order");
+                    return "-DORDER=%s".into();
                 }
-                if let Some(rest) = flag.strip_prefix("-DHOST_ARCH=") {
-                    return if rest == host.as_str() {
-                        "-DHOST_ARCH=%s".into()
-                    } else {
-                        flag.clone()
-                    };
+            }
+            if let Some(rest) = flag.strip_prefix("-DHOST_ARCH=") {
+                if rest == host.as_str() {
+                    placeholders.push("local_host_arch");
+                    return "-DHOST_ARCH=%s".into();
                 }
-                if let Some(rest) = flag.strip_prefix("-DEQUATIONS=") {
-                    return if rest == equations.as_str() {
-                        "-DEQUATIONS=%s".into()
-                    } else {
-                        flag.clone()
-                    };
+            }
+            if let Some(rest) = flag.strip_prefix("-DEQUATIONS=") {
+                if rest == equations.as_str() {
+                    placeholders.push("local_equations");
+                    return "-DEQUATIONS=%s".into();
                 }
-                flag.clone()
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
-    }) {
-        if joined.contains("%s") {
-            let rhs = format!("'{joined}' % (local_order, local_host_arch, local_equations)");
-            text = crate::eb_emit::upsert_raw_assignment(&text, "configopts", &rhs)?;
-        }
+            }
+            flag.clone()
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if joined.contains("%s") && !placeholders.is_empty() {
+        let rhs = format!("'{joined}' % ({})", placeholders.join(", "));
+        text = crate::eb_emit::upsert_raw_assignment(&text, "configopts", &rhs)?;
     }
-    text = text.replace(
-        &format!("'bin/{literal_binary}'"),
+    let binary_prefix = format!("{}_{}_{}", plan.package.name, build_type, precision_letter);
+    text = replace_quoted_binary_prefix(
+        &text,
+        &format!("bin/{binary_prefix}"),
         "'bin/%s' % local_binary",
     );
-    let command_open = format!("'{literal_binary}");
-    if let Some(start) = text.find(&command_open) {
+    text = replace_quoted_command_prefix(&text, &binary_prefix);
+    Ok(text)
+}
+
+fn replace_quoted_binary_prefix(text: &str, prefix: &str, replacement: &str) -> String {
+    let needle = format!("'{prefix}");
+    let mut text = text.to_string();
+    while let Some(start) = text.find(&needle) {
+        let Some(rel_end) = text[start + 1..].find('\'') else {
+            break;
+        };
+        let end = start + 1 + rel_end + 1;
+        text.replace_range(start..end, replacement);
+    }
+    text
+}
+
+fn replace_quoted_command_prefix(text: &str, prefix: &str) -> String {
+    let needle = format!("'{prefix}");
+    let mut text = text.to_string();
+    if let Some(start) = text.find(&needle) {
         if let Some(rel_end) = text[start + 1..].find('\'') {
             let end = start + 1 + rel_end + 1;
             let inner = &text[start + 1..end - 1];
-            if let Some(rest) = inner.strip_prefix(&literal_binary) {
+            if let Some(after) = inner.strip_prefix(prefix) {
+                let skip = after.find(char::is_whitespace).unwrap_or(after.len());
+                let rest = &after[skip..];
                 let replacement = format!("'%s{rest}' % local_binary");
                 text.replace_range(start..end, &replacement);
             }
         }
     }
-    Ok(text)
+    text
 }
 
 fn apply_system_dep_consensus(

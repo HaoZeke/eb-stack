@@ -937,8 +937,8 @@ fn package_config_locals_derive_binary_and_interpolated_configopts() {
          sources = ['seissol-1.1.4.tar.gz']\n\
          checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
          configopts = '-DORDER=4 -DHOST_ARCH=hsw -DEQUATIONS=elastic'\n\
-         sanity_check_paths = {'files': ['bin/SeisSol_Release_dhsw_6_elastic'], 'dirs': []}\n\
-         sanity_check_commands = ['SeisSol_Release_dhsw_6_elastic --help |grep help']\n\
+         sanity_check_paths = {'files': ['bin/SeisSol_Release_dhsw_4_elastic'], 'dirs': []}\n\
+         sanity_check_commands = ['SeisSol_Release_dhsw_4_elastic --help |grep help']\n\
          moduleclass = 'geo'\n",
     )
     .expect("source recipe");
@@ -948,8 +948,8 @@ fn package_config_locals_derive_binary_and_interpolated_configopts() {
         "schema_version = 1\n\n[build]\n\
          config_options = [\n\
          \"-DCMAKE_BUILD_TYPE=Release\",\n\
-         \"-DORDER=6\",\n\
          \"-DHOST_ARCH=hsw\",\n\
+         \"-DORDER=6\",\n\
          \"-DEQUATIONS=elastic\",\n\
          \"-DPRECISION=double\",\n\
          ]\n\
@@ -989,12 +989,20 @@ fn package_config_locals_derive_binary_and_interpolated_configopts() {
         "local_binary missing:\n{text}"
     );
     assert!(
-        text.contains("% (local_order, local_host_arch, local_equations)"),
-        "configopts not interpolated:\n{text}"
+        text.contains("% (local_host_arch, local_order, local_equations)"),
+        "configopts placeholders must follow flag order:\n{text}"
     );
     assert!(
         text.contains("-DORDER=%s"),
         "ORDER not parameterized:\n{text}"
+    );
+    assert!(
+        text.contains("'bin/%s' % local_binary"),
+        "old binary path must be rewritten:\n{text}"
+    );
+    assert!(
+        !text.contains("SeisSol_Release_dhsw_4_elastic"),
+        "source-generation binary name leaked:\n{text}"
     );
 }
 
