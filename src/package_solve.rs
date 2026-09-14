@@ -104,7 +104,11 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
         let version_req = normalize_requirement(dependency.constraint.as_deref());
         let has_compatible = admitted.iter().any(|candidate| {
             package_identities_match(&candidate.name, &name)
-                && matches_req(&candidate.version, &version_req)
+                && candidate_matches_version_req(
+                    candidate,
+                    &version_req,
+                    dependency.versionsuffix.as_deref(),
+                )
                 && dependency
                     .toolchain
                     .as_ref()
@@ -126,6 +130,34 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
 
 fn package_identities_match(left: &str, right: &str) -> bool {
     normalize_package_identity(left) == normalize_package_identity(right)
+}
+
+/// Same three spellings Resolvo accepts: version, version+suffix, and the
+/// EasyBuild module identity (`5.0.3-GCC-13.3.0`). A hole check that only
+/// reads `candidate.version` reports a companion for a pin the solve locks.
+fn candidate_matches_version_req(
+    candidate: &Candidate,
+    version_req: &str,
+    versionsuffix: Option<&str>,
+) -> bool {
+    let suffix = candidate.versionsuffix.as_deref().unwrap_or("");
+    if let Some(want) = versionsuffix {
+        if suffix != want {
+            return false;
+        }
+    }
+    let with_suffix = format!("{}{suffix}", candidate.version);
+    let with_toolchain = if is_system_toolchain(&candidate.toolchain) {
+        with_suffix.clone()
+    } else {
+        format!(
+            "{}-{}-{}{suffix}",
+            candidate.version, candidate.toolchain.name, candidate.toolchain.version
+        )
+    };
+    matches_req(&candidate.version, version_req)
+        || matches_req(&with_suffix, version_req)
+        || matches_req(&with_toolchain, version_req)
 }
 
 /// Select dependencies for one profile against a candidate set.

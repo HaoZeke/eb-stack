@@ -7,8 +7,8 @@ use eb_stack::package::{
 };
 use eb_stack::{
     emit_profile_easyconfigs, lint_style, package_plan_from_foreign, parse_foreign_path,
-    parse_foreign_str, resolve_easyconfig_str, solve_package_profile, Candidate, DepReq,
-    ForeignFormat, Toolchain,
+    parse_foreign_str, resolve_easyconfig_str, solve_package_profile,
+    unsatisfied_direct_dependencies, Candidate, DepReq, ForeignFormat, Toolchain,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -1000,5 +1000,145 @@ fn collapsed_extension_provider_stays_runtime_when_any_role_is() {
         !provider.build,
         "a runtime extra must keep the bundle off the build-only list: {:?}",
         lock.dependencies
+    );
+}
+
+fn system_toolchain() -> Toolchain {
+    Toolchain {
+        name: "system".into(),
+        version: "system".into(),
+    }
+}
+
+/// `('OpenMPI', '5.0.3-GCC-13.3.0')` is a module pin. The hole check has to
+/// accept the same spelling Resolvo does, or closure invents a companion for
+/// a candidate the solve then locks.
+#[test]
+fn module_version_pin_is_not_a_hole_and_locks() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &system_toolchain());
+    plan.origin = eb_stack::package::PackageOrigin::EasyBuild;
+    plan.profiles = vec![ProductProfile {
+        name: "default".into(),
+        default: true,
+        versionsuffix: Vec::new(),
+        platform: None,
+        architecture: None,
+        features: Default::default(),
+        parameters: Default::default(),
+        toolchain_options: Default::default(),
+        config_options: Vec::new(),
+        easyconfig_parameters: Default::default(),
+        verification_commands: Vec::new(),
+    }];
+    plan.dependencies = vec![DependencyIntent {
+        id: "dep:OpenMPI".into(),
+        name: "OpenMPI".into(),
+        eb_name: None,
+        constraint: Some("==5.0.3-GCC-13.3.0".into()),
+        toolchain: None,
+        versionsuffix: None,
+        roles: vec![DependencyRole::Run],
+        condition: ConditionExpr::Always,
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: Vec::new(),
+    }];
+    let openmpi = Candidate {
+        name: "OpenMPI".into(),
+        version: "5.0.3".into(),
+        toolchain: Toolchain {
+            name: "GCC".into(),
+            version: "13.3.0".into(),
+        },
+        versionsuffix: None,
+        easyconfig_path: "OpenMPI-5.0.3-GCC-13.3.0.eb".into(),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+        moduleclass: None,
+    };
+    let stack = StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "test".into(),
+        toolchain: system_toolchain(),
+        pins: Vec::new(),
+        exclusions: Vec::new(),
+    };
+    let holes = unsatisfied_direct_dependencies(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &[openmpi.clone()],
+        &stack,
+    )
+    .expect("hole check");
+    assert!(
+        holes.is_empty(),
+        "module pin must match the admitted GCC build: {holes:?}"
+    );
+    let lock = solve_package_profile(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &[openmpi],
+        &stack,
+    )
+    .expect("solve module pin");
+    assert!(lock
+        .dependencies
+        .iter()
+        .any(|dependency| dependency.name == "OpenMPI"
+            && dependency.version == "5.0.3"
+            && dependency.toolchain.name == "GCC"));
+}
+
+#[test]
+fn versionsuffix_pin_is_a_hole_when_only_a_plain_candidate_exists() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.profiles = qmcpack_profiles();
+    plan.dependencies = vec![DependencyIntent {
+        id: "dep:OpenMPI".into(),
+        name: "OpenMPI".into(),
+        eb_name: None,
+        constraint: Some("==5.0.3".into()),
+        toolchain: None,
+        versionsuffix: Some("-CUDA-12.6.0".into()),
+        roles: vec![DependencyRole::Run],
+        condition: ConditionExpr::Always,
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: Vec::new(),
+    }];
+    let plain = Candidate {
+        name: "OpenMPI".into(),
+        version: "5.0.3".into(),
+        toolchain: toolchain(),
+        versionsuffix: None,
+        easyconfig_path: "OpenMPI-5.0.3-foss-2026.1.eb".into(),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+        moduleclass: None,
+    };
+    let stack = StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "test".into(),
+        toolchain: toolchain(),
+        pins: Vec::new(),
+        exclusions: Vec::new(),
+    };
+    let holes = unsatisfied_direct_dependencies(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &[plain],
+        &stack,
+    )
+    .expect("hole check");
+    assert!(
+        holes.iter().any(|hole| hole.name == "OpenMPI"),
+        "a CUDA suffix must not be satisfied by a plain module: {holes:?}"
     );
 }
