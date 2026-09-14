@@ -602,12 +602,7 @@ pub fn cyclonedx_to_dot(bom: &Value) -> String {
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
                 .unwrap_or_else(|| short_ref(r).1);
-            out.push_str(&format!(
-                "  {} [label=\"{}\\n{}\"];\n",
-                ident(r),
-                name,
-                ver
-            ));
+            out.push_str(&format!("  {} [label=\"{}\\n{}\"];\n", ident(r), name, ver));
         }
     }
     if let Some(deps) = bom.get("dependencies").and_then(|d| d.as_array()) {
@@ -641,6 +636,8 @@ fn dep_names_map_from_universe(
                 && c.version == p.version
                 && c.toolchain.name == p.toolchain.name
                 && c.toolchain.version == p.toolchain.version
+                && c.versionsuffix.as_deref().unwrap_or("")
+                    == p.versionsuffix.as_deref().unwrap_or("")
         }) {
             let names: Vec<String> = if build_time {
                 c.builddependencies.iter().map(|d| d.name.clone()).collect()
