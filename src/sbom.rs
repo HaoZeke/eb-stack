@@ -700,29 +700,52 @@ pub fn cyclonedx_to_dot(bom: &Value) -> String {
     out
 }
 
+fn candidate_identity(candidate: &crate::domain::Candidate) -> String {
+    format!(
+        "{}@{}+{}{}",
+        candidate.name,
+        candidate.version,
+        candidate.toolchain.label(),
+        candidate.versionsuffix.as_deref().unwrap_or("")
+    )
+}
+
 fn dep_names_map_from_universe(
     lock: &StackLock,
     universe: &Universe,
     build_time: bool,
 ) -> HashMap<String, Vec<String>> {
+    let mut by_identity = HashMap::new();
+    for candidate in &universe.candidates {
+        by_identity.insert(candidate_identity(candidate), candidate);
+    }
+    let mut name_counts: HashMap<String, u32> = HashMap::new();
+    for package in &lock.packages {
+        *name_counts.entry(package.name.clone()).or_insert(0) += 1;
+    }
     let mut map = HashMap::new();
-    for p in &lock.packages {
-        if let Some(c) = universe.candidates.iter().find(|c| {
-            c.name == p.name
-                && c.version == p.version
-                && c.toolchain.name == p.toolchain.name
-                && c.toolchain.version == p.toolchain.version
-                && c.versionsuffix.as_deref().unwrap_or("")
-                    == p.versionsuffix.as_deref().unwrap_or("")
-        }) {
-            let names: Vec<String> = if build_time {
-                c.builddependencies.iter().map(|d| d.name.clone()).collect()
-            } else {
-                c.dependencies.iter().map(|d| d.name.clone()).collect()
-            };
-            map.insert(p.name.clone(), names);
-        } else {
-            map.insert(p.name.clone(), Vec::new());
+    for package in &lock.packages {
+        let names: Vec<String> = by_identity
+            .get(&lock_package_key(package))
+            .map(|candidate| {
+                if build_time {
+                    candidate
+                        .builddependencies
+                        .iter()
+                        .map(|dependency| dependency.name.clone())
+                        .collect()
+                } else {
+                    candidate
+                        .dependencies
+                        .iter()
+                        .map(|dependency| dependency.name.clone())
+                        .collect()
+                }
+            })
+            .unwrap_or_default();
+        map.insert(lock_package_key(package), names.clone());
+        if name_counts.get(&package.name) == Some(&1) {
+            map.insert(package.name.clone(), names);
         }
     }
     map
@@ -1078,6 +1101,87 @@ mod tests {
         assert_ne!(refs[0], refs[1], "{refs:?}");
         assert!(refs.iter().any(|r| r.contains("5.38.0")), "{refs:?}");
         assert!(refs.iter().any(|r| r.contains("5.42.0")), "{refs:?}");
+    }
+
+    #[test]
+    fn two_packages_with_the_same_name_keep_distinct_dep_lists() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let gcc = Toolchain {
+            name: "GCCcore".into(),
+            version: "15.2.0".into(),
+        };
+        let perl_system = Candidate {
+            name: "Perl".into(),
+            version: "5.38.0".into(),
+            toolchain: system.clone(),
+            versionsuffix: None,
+            easyconfig_path: "Perl-system.eb".into(),
+            dependencies: vec![DepReq {
+                name: "zlib".into(),
+                version_req: "==1.3.1".into(),
+                versionsuffix: None,
+                toolchain: None,
+            }],
+            builddependencies: vec![],
+            exts_list: vec![],
+            moduleclass: None,
+        };
+        let perl_gcc = Candidate {
+            name: "Perl".into(),
+            version: "5.42.0".into(),
+            toolchain: gcc.clone(),
+            versionsuffix: None,
+            easyconfig_path: "Perl-gcc.eb".into(),
+            dependencies: vec![DepReq {
+                name: "OpenSSL".into(),
+                version_req: "==3.5.0".into(),
+                versionsuffix: None,
+                toolchain: None,
+            }],
+            builddependencies: vec![],
+            exts_list: vec![],
+            moduleclass: None,
+        };
+        let universe = Universe {
+            toolchain: gcc.clone(),
+            generation_label: None,
+            candidates: vec![perl_system.clone(), perl_gcc.clone()],
+        };
+        let lock = StackLock {
+            schema_version: 1,
+            toolchain: gcc.clone(),
+            generation_label: None,
+            packages: vec![
+                LockPackage {
+                    name: "Perl".into(),
+                    version: "5.38.0".into(),
+                    toolchain: system,
+                    versionsuffix: None,
+                    easyconfig_path: "Perl-system.eb".into(),
+                },
+                LockPackage {
+                    name: "Perl".into(),
+                    version: "5.42.0".into(),
+                    toolchain: gcc,
+                    versionsuffix: None,
+                    easyconfig_path: "Perl-gcc.eb".into(),
+                },
+            ],
+            solver: SolverMeta {
+                engine: "resolvo".into(),
+                engine_version: "0".into(),
+                timestamp: "2026-08-12T00:00:00Z".into(),
+            },
+        };
+        let runtime = dep_map_from_universe(&lock, &universe);
+        assert!(!runtime.contains_key("Perl"), "{runtime:?}");
+        let system_key = lock_package_key(&lock.packages[0]);
+        let gcc_key = lock_package_key(&lock.packages[1]);
+        assert_eq!(runtime.get(&system_key).unwrap(), &vec!["zlib".to_string()]);
+        assert_eq!(runtime.get(&gcc_key).unwrap(), &vec!["OpenSSL".to_string()]);
     }
 
     #[test]
