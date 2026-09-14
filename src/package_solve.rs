@@ -286,7 +286,7 @@ pub fn solve_package_profile_with_hierarchy(
     let result = solve_curated_with_stack_policy(&universe, &policy, None, &stack_policy)
         .map_err(ProfileSolveError::Resolve)?;
 
-    let mut dependencies = Vec::new();
+    let mut dependencies: Vec<LockedDependency> = Vec::new();
     let mut seen_providers = HashSet::new();
     for (name, build) in direct_roles {
         let selected = result
@@ -304,6 +304,17 @@ pub fn solve_package_profile_with_hierarchy(
             .find(|candidate| candidate.easyconfig_path == provider.easyconfig_path)
             .unwrap_or(provider);
         if !seen_providers.insert(provider.name.clone()) {
+            // BTreeMap order is not role order. A build-only extra that
+            // sorts first would otherwise lock the parent as build-only and
+            // drop a later runtime extra that collapsed to the same bundle.
+            if !build {
+                if let Some(existing) = dependencies
+                    .iter_mut()
+                    .find(|dependency| dependency.name == provider.name)
+                {
+                    existing.build = false;
+                }
+            }
             continue;
         }
         dependencies.push(LockedDependency {

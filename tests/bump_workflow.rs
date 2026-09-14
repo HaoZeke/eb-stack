@@ -846,6 +846,83 @@ fn version_bump_applies_package_config_source_checksum() {
     );
 }
 
+/// CLI `--source-checksum` and a layer `source_checksums` must not write two
+/// different digests. The CLI value is the later word; plan, SBOM, and recipe
+/// have to carry that same digest.
+#[test]
+fn bump_cli_source_checksum_agrees_with_plan_and_sbom_when_a_layer_also_sets_one() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("SynthPy-0.1-foss-2023a.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'PythonPackage'\nname = 'SynthPy'\nversion = '0.1'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic python'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['synthpy-0.1.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [\n    ('Python', '3.11.3'),\n]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    fs::write(
+        robot.join("Python-3.13.1-GCCcore-14.2.0.eb"),
+        "easyblock = 'Python'\nname = 'Python'\nversion = '3.13.1'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Python'\n\
+         toolchain = {'name': 'GCCcore', 'version': '14.2.0'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'lang'\n",
+    )
+    .expect("python candidate");
+    let cli = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let layer = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let config_path = temp.path().join("synthpy.toml");
+    fs::write(
+        &config_path,
+        format!("schema_version = 1\nsource_checksums = [\"{layer}\"]\n"),
+    )
+    .expect("package config");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2025a".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: Some("0.3.1".into()),
+        source_checksum: Some(cli.into()),
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+        foreign_sources: Vec::new(),
+    })
+    .expect("bump with CLI and layer checksums");
+    assert_eq!(bundle.plan.sources[0].sha256.as_deref(), Some(cli));
+    assert_eq!(
+        bundle.sbom["metadata"]["component"]["hashes"][0]["content"],
+        cli
+    );
+    let text = &bundle.easyconfigs[0].text;
+    assert!(
+        text.contains(&format!("checksums = ['{cli}']"))
+            || text.contains(&format!("checksums = [\"{cli}\"]")),
+        "emitted recipe must use the CLI digest, not the layer:\n{text}"
+    );
+    assert!(
+        !text.contains(layer),
+        "layer digest leaked into the recipe:\n{text}"
+    );
+}
+
 #[test]
 fn package_config_locals_derive_binary_and_interpolated_configopts() {
     let temp = tempfile::tempdir().expect("tempdir");

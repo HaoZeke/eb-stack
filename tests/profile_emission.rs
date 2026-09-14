@@ -1,7 +1,9 @@
+use eb_stack::domain::ExtEntry;
 use eb_stack::package::{
-    materialize_profile, ConditionExpr, EasyconfigValue, LockedDependency, OutputRequest,
-    PatchArtifact, ProductProfile, ProfileEnvironment, ProfileLock, StackPin, StackPinMode,
-    StackPolicy, PROFILE_LOCK_SCHEMA_VERSION, STACK_POLICY_SCHEMA_VERSION,
+    materialize_profile, ConditionExpr, DependencyIntent, DependencyRole, EasyconfigValue,
+    LockedDependency, OutputRequest, PatchArtifact, ProductProfile, ProfileEnvironment,
+    ProfileLock, StackPin, StackPinMode, StackPolicy, PROFILE_LOCK_SCHEMA_VERSION,
+    STACK_POLICY_SCHEMA_VERSION,
 };
 use eb_stack::{
     emit_profile_easyconfigs, lint_style, package_plan_from_foreign, parse_foreign_path,
@@ -351,7 +353,10 @@ fn patch_artifacts_emit_names_and_positional_checksums_after_sources() {
     let text = &emitted[0].text;
 
     // A single patch fits on a line, and that is how upstream writes one.
-    assert!(text.contains("patches = ['Orbit-2.0-portability.patch']"), "{text}");
+    assert!(
+        text.contains("patches = ['Orbit-2.0-portability.patch']"),
+        "{text}"
+    );
     let source_checksum = text
         .find("1e67f91eaa9c6325746438164e1ea371ffb7a662e6acb0a15faae90e0867f4fa")
         .expect("source checksum");
@@ -925,4 +930,75 @@ fn profile_solve_scopes_build_dependencies_of_existing_recipes() {
         .dependencies
         .iter()
         .any(|dependency| dependency.name == "git"));
+}
+
+/// `aaa` sorts before `zzz`. If both collapse to one bundle and the first
+/// role is build-only, the lock must still be runtime because `zzz` is.
+#[test]
+fn collapsed_extension_provider_stays_runtime_when_any_role_is() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.profiles = qmcpack_profiles();
+    let intent = |name: &str, role: DependencyRole| DependencyIntent {
+        id: format!("dep:{name}"),
+        name: name.into(),
+        eb_name: None,
+        constraint: None,
+        toolchain: None,
+        versionsuffix: None,
+        roles: vec![role],
+        condition: ConditionExpr::Always,
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: Vec::new(),
+    };
+    plan.dependencies = vec![
+        intent("aaa", DependencyRole::Build),
+        intent("zzz", DependencyRole::Run),
+    ];
+    let bundle = Candidate {
+        name: "LangBundle".into(),
+        version: "1.0".into(),
+        toolchain: toolchain(),
+        versionsuffix: None,
+        easyconfig_path: "LangBundle-1.0-foss-2026.1.eb".into(),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: vec![
+            ExtEntry {
+                name: "aaa".into(),
+                version: "1.0".into(),
+            },
+            ExtEntry {
+                name: "zzz".into(),
+                version: "1.0".into(),
+            },
+        ],
+        moduleclass: None,
+    };
+    let stack = StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "test".into(),
+        toolchain: toolchain(),
+        pins: Vec::new(),
+        exclusions: Vec::new(),
+    };
+    let lock = solve_package_profile(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &[bundle],
+        &stack,
+    )
+    .expect("collapse extras onto the parent bundle");
+    let provider = lock
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "LangBundle")
+        .expect("parent bundle locked");
+    assert!(
+        !provider.build,
+        "a runtime extra must keep the bundle off the build-only list: {:?}",
+        lock.dependencies
+    );
 }

@@ -986,6 +986,19 @@ pub fn prepare_package_bump(
     );
     apply_package_layers(&mut plan, &request.package_layers)
         .map_err(|error| PackageWorkflowError::Config(error.to_string()))?;
+    // Layers write source_checksums onto the plan. A CLI digest is the later
+    // word and must win here too, or the plan/SBOM and the emitted recipe
+    // disagree: emit rereads resolved_bump_source_checksum (CLI first).
+    if let Some(checksum) = request.source_checksum.as_deref() {
+        if let Some(source) = plan.sources.first_mut() {
+            source.sha256 = Some(checksum.to_string());
+        } else {
+            plan.sources.push(SourceArtifact {
+                sha256: Some(checksum.to_string()),
+                ..SourceArtifact::default()
+            });
+        }
+    }
     merge_foreign_inspect_deps(&mut plan, request)?;
     refresh_checksum_residuals(&mut plan);
     let sbom = package_plan_to_cyclonedx(&plan)
