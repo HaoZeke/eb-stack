@@ -287,6 +287,8 @@ pub fn complete_package_bundle_with_hierarchy(
     require_source_checksums(&plan)?;
     let easyconfigs = emit_profile_easyconfigs(&plan, &locks)
         .map_err(|error| PackageWorkflowError::Emit(error.to_string()))?;
+    let sbom = package_plan_to_cyclonedx(&plan)
+        .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
     Ok(PackageBundle {
         plan,
         sbom,
@@ -377,7 +379,14 @@ fn drop_unavailable_build_requirements(
 ) {
     let mut dropped = Vec::new();
     plan.dependencies.retain(|dependency| {
-        if !dependency.roles.contains(&DependencyRole::Build) {
+        // A dep that is also runtime or host must stay. Dropping it because
+        // the tree has no build module would omit a required run tuple.
+        let build_only = !dependency.roles.is_empty()
+            && dependency
+                .roles
+                .iter()
+                .all(|role| matches!(role, DependencyRole::Build | DependencyRole::Test));
+        if !build_only {
             return true;
         }
         let name = dependency
@@ -1092,8 +1101,6 @@ pub fn complete_package_bump(
         request.hierarchy_fixture.as_deref(),
     )
     .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?;
-    let source_recipe = resolve_easyconfig_file(&request.source)
-        .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     // What the recipe states for each dependency, so a selection that agrees
     // with it changes nothing. A dependency may name the module rather than
     // the version: `('OpenMPI', '5.0.3-GCC-13.3.0')` says exactly what the
@@ -1259,8 +1266,6 @@ pub fn complete_package_bump(
     // flagged rather than silently carried.
     let mut patch_calls: Vec<crate::patch_evolution::PatchCall> = Vec::new();
     if let Some(new_version) = request.version.as_deref() {
-        let source_recipe = resolve_easyconfig_file(&request.source)
-            .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
         if new_version != source_recipe.version {
             let sibling = crate::patch_evolution::sibling_paths(
                 &source_recipe.name,
