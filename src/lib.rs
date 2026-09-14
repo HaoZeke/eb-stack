@@ -324,7 +324,18 @@ fn write_lock_sbom_and_extras(
     }
 
     if let Some(path) = extra.build_list_out {
-        let text = format_build_list(lock, &dep_map);
+        let mut combined = dep_map.clone();
+        for (key, names) in &build_map {
+            combined
+                .entry(key.clone())
+                .or_default()
+                .extend(names.clone());
+        }
+        for names in combined.values_mut() {
+            names.sort();
+            names.dedup();
+        }
+        let text = format_build_list(lock, &combined);
         write_text(path, &text)?;
     }
     if let Some(path) = extra.stack_diff_out {

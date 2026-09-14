@@ -455,19 +455,26 @@ fn admit_named_dependency_toolchains(
                 return false;
             };
             let suffix = candidate.versionsuffix.as_deref().unwrap_or("");
-            let module_version = if is_system_toolchain(&candidate.toolchain) {
-                format!("{}{suffix}", candidate.version)
+            let want_suffix = dependency.versionsuffix.as_deref().unwrap_or("");
+            if suffix != want_suffix {
+                return false;
+            }
+            let module_without_suffix = if is_system_toolchain(&candidate.toolchain) {
+                candidate.version.clone()
             } else {
                 format!(
-                    "{}-{}-{}{suffix}",
+                    "{}-{}-{}",
                     candidate.version, candidate.toolchain.name, candidate.toolchain.version
                 )
             };
+            let module_version = format!("{module_without_suffix}{suffix}");
+            let pinned = constraint.strip_prefix("==").unwrap_or(constraint);
             // Only an exact pin, and only when it spells the module out:
-            // `==5.0.3-GCC-13.3.0` names one build. A range must not reach
-            // outside the hierarchy, which is what the hierarchy is for.
-            module_version != candidate.version
-                && constraint.strip_prefix("==") == Some(module_version.as_str())
+            // `==5.0.3-GCC-13.3.0` names one build. The CUDA tag lives in
+            // versionsuffix, so it is not required in the constraint.
+            // A range must not reach outside the hierarchy.
+            module_without_suffix != candidate.version
+                && (pinned == module_without_suffix || pinned == module_version)
         }) {
             admitted.push(candidate.clone());
         }
@@ -629,7 +636,7 @@ fn dependency_candidate_matches(
     }
     parent_hierarchy
         .map(|hierarchy| hierarchy.contains(&candidate.toolchain))
-        .unwrap_or(true)
+        .unwrap_or(false)
 }
 
 fn normalize_requirement(constraint: Option<&str>) -> String {
@@ -692,9 +699,13 @@ fn apply_generation_consensus_pins(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_generation_consensus_pins, match_robot_name, normalize_requirement};
+    use super::{
+        admit_named_dependency_toolchains, apply_generation_consensus_pins, match_robot_name,
+        normalize_requirement,
+    };
     use crate::domain::{Candidate, Toolchain};
     use crate::hierarchy::ToolchainHierarchy;
+    use crate::package::{ConditionExpr, DependencyIntent, DependencyRole};
     use crate::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
     use std::collections::BTreeMap;
 
@@ -765,6 +776,32 @@ mod tests {
             "{:?}",
             policy.pins
         );
+    }
+
+    #[test]
+    fn module_form_admission_keeps_the_cuda_suffix_on_the_constraint() {
+        let cuda = Candidate {
+            versionsuffix: Some("-CUDA-12.6.0".into()),
+            ..cand("OpenMPI", "5.0.3", "GCC", "13.3.0")
+        };
+        let plain = cand("OpenMPI", "5.0.3", "GCC", "13.3.0");
+        let dep = DependencyIntent {
+            id: "dep:OpenMPI".into(),
+            name: "OpenMPI".into(),
+            eb_name: None,
+            constraint: Some("==5.0.3-GCC-13.3.0".into()),
+            toolchain: None,
+            versionsuffix: Some("-CUDA-12.6.0".into()),
+            roles: vec![DependencyRole::Run],
+            condition: ConditionExpr::Always,
+            virtual_capability: None,
+            solver_excluded: false,
+            provenance: Vec::new(),
+        };
+        let mut admitted = Vec::new();
+        admit_named_dependency_toolchains(&[cuda.clone(), plain], &mut admitted, &[dep]);
+        assert_eq!(admitted.len(), 1, "{admitted:?}");
+        assert_eq!(admitted[0].versionsuffix.as_deref(), Some("-CUDA-12.6.0"));
     }
 
     fn cand(name: &str, ver: &str, tc_name: &str, tc_ver: &str) -> Candidate {

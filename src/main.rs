@@ -629,14 +629,20 @@ fn run_package_bump(args: PackageBumpArgs, mode: BumpMode) -> Result<()> {
         println!("easyconfig={}", path.display());
     }
     println!("generation_target={toolchain_name}-{toolchain_version}");
-    let mut blocking = false;
+    let mut generation_holes = false;
+    let mut other_blocking = false;
     for residual in &bundle.plan.residuals {
         println!("residual={} {}", residual.category, residual.summary);
-        if residual.severity == eb_stack::package::ResidualSeverity::Blocking {
-            blocking = true;
+        if residual.category == "unresolved-generation-dep" {
+            generation_holes = true;
+        } else if residual.severity == eb_stack::package::ResidualSeverity::Blocking {
+            other_blocking = true;
         }
     }
-    if blocking && !args.allow_unresolved {
+    if other_blocking {
+        anyhow::bail!("blocking residuals remain; fix those before --allow-unresolved applies");
+    }
+    if generation_holes && !args.allow_unresolved {
         let robot = easyconfigs
             .first()
             .map(|path| path.display().to_string())

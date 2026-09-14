@@ -683,15 +683,25 @@ pub fn doctor_target(target: &BuildTarget) -> Result<TargetDoctorReport, TargetE
         target.runtime_tokens(vec![target.easybuild.command.clone(), "--version".into()]),
         true,
     );
-    let checks = [
+    let mut planned = vec![
         ("transport", transport),
         ("executor", executor),
         ("runtime", runtime),
         ("easybuild", easybuild),
-    ]
-    .into_iter()
-    .map(|(layer, command)| run_doctor_check(layer, command))
-    .collect::<Result<Vec<_>, _>>()?;
+    ];
+    if let TargetTransport::Ssh { sync_command, .. } = &target.transport {
+        planned.push((
+            "sync",
+            CommandPlan {
+                program: sync_command.clone(),
+                args: vec!["--version".into()],
+            },
+        ));
+    }
+    let checks = planned
+        .into_iter()
+        .map(|(layer, command)| run_doctor_check(layer, command))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(TargetDoctorReport {
         target: target.name.clone(),
         checks,
