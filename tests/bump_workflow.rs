@@ -1031,6 +1031,14 @@ fn bump_inspects_a_spack_recipe_for_deps_the_easyconfig_never_declared() {
          sources = []\nchecksums = []\nmoduleclass = 'lib'\n",
     )
     .expect("pybind11 candidate");
+    fs::write(
+        robot.join("CMake-3.31.0-GCCcore-14.2.0.eb"),
+        "easyblock = 'CMakeMake'\nname = 'CMake'\nversion = '3.31.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'CMake'\n\
+         toolchain = {'name': 'GCCcore', 'version': '14.2.0'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'tools'\n",
+    )
+    .expect("cmake candidate");
     let foreign = temp.path().join("package.py");
     fs::write(
         &foreign,
@@ -1040,7 +1048,8 @@ fn bump_inspects_a_spack_recipe_for_deps_the_easyconfig_never_declared() {
          \turl = 'https://example.invalid/gromacsish-1.0.tar.gz'\n\
          \tversion('1.0', sha256='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')\n\
          \tdepends_on('python')\n\
-         \tdepends_on('py-pybind11')\n",
+         \tdepends_on('py-pybind11')\n\
+         \tdepends_on('cmake', type='build')\n",
     )
     .expect("spack recipe");
     let toolchain = Toolchain {
@@ -1071,6 +1080,10 @@ fn bump_inspects_a_spack_recipe_for_deps_the_easyconfig_never_declared() {
     assert!(
         text.contains("('pybind11'"),
         "inspect of the Spack recipe must add pybind11:\n{text}"
+    );
+    assert!(
+        text.contains("builddependencies") && text.contains("('CMake'"),
+        "inspect of a Spack type=build dep must emit builddependencies:\n{text}"
     );
     assert!(
         bundle

@@ -375,30 +375,55 @@ pub fn insert_runtime_dependency(
     name: &str,
     version: &str,
 ) -> Result<String, EmitError> {
+    insert_named_dependency_list(src, "dependencies", name, version)
+}
+
+/// Insert a build-only dependency tuple if that name is not already declared.
+pub fn insert_build_dependency(src: &str, name: &str, version: &str) -> Result<String, EmitError> {
+    insert_named_dependency_list(src, "builddependencies", name, version)
+}
+
+fn insert_named_dependency_list(
+    src: &str,
+    list_key: &str,
+    name: &str,
+    version: &str,
+) -> Result<String, EmitError> {
     if names_dependency_tuple(src, name) {
         return Ok(src.to_string());
     }
     let line = format!("    ('{name}', '{version}'),\n");
-    if let Some((_open, close)) = find_list_span(src, "dependencies")? {
+    if let Some((_open, close)) = find_list_span(src, list_key)? {
         let mut out = String::with_capacity(src.len() + line.len());
         out.push_str(&src[..close]);
         out.push_str(&line);
         out.push_str(&src[close..]);
         return Ok(out);
     }
-    if let Some(at) = src.find("\nmoduleclass") {
-        let mut out = String::with_capacity(src.len() + line.len() + 32);
+    let insert_at = if list_key == "builddependencies" {
+        if src.starts_with("dependencies") {
+            Some(0)
+        } else {
+            src.find("\ndependencies")
+        }
+    } else {
+        None
+    }
+    .or_else(|| src.find("\nmoduleclass"));
+    if let Some(at) = insert_at {
+        let block = if at == 0 {
+            format!("{list_key} = [\n{line}]\n\n")
+        } else {
+            format!("\n\n{list_key} = [\n{line}]\n")
+        };
+        let mut out = String::with_capacity(src.len() + block.len());
         out.push_str(&src[..at]);
-        out.push_str("\n\ndependencies = [\n");
-        out.push_str(&line);
-        out.push_str("]\n");
+        out.push_str(&block);
         out.push_str(&src[at..]);
         return Ok(out);
     }
     let mut out = src.to_string();
-    out.push_str("\n\ndependencies = [\n");
-    out.push_str(&line);
-    out.push_str("]\n");
+    out.push_str(&format!("\n\n{list_key} = [\n{line}]\n"));
     Ok(out)
 }
 
@@ -2414,6 +2439,29 @@ dependencies = [
             1,
             "second insert must not duplicate:\n{again}"
         );
+    }
+
+    #[test]
+    fn insert_build_dependency_creates_the_build_list() {
+        let src = "\
+dependencies = [
+    ('Python', '3.13.1'),
+]
+moduleclass = 'tools'
+";
+        let out = insert_build_dependency(src, "CMake", "3.31.0").expect("insert");
+        assert!(
+            out.contains("builddependencies = [") && out.contains("('CMake', '3.31.0')"),
+            "{out}"
+        );
+        let cmake_at = out.find("('CMake'").expect("cmake");
+        let python_at = out.find("('Python'").expect("python");
+        assert!(
+            cmake_at < python_at,
+            "build list should precede runtime:\n{out}"
+        );
+        let again = insert_build_dependency(&out, "CMake", "3.31.0").expect("idempotent");
+        assert_eq!(again.matches("('CMake',").count(), 1, "{again}");
     }
 
     #[test]

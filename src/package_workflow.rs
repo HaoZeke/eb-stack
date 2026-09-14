@@ -1262,16 +1262,20 @@ pub fn complete_package_bump(
         result.text = crate::eb_emit::remove_named_dependencies(&result.text, &drop_names)
             .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     }
-    for dependency in lock
-        .dependencies
-        .iter()
-        .filter(|dependency| !dependency.build)
-    {
-        result.text = crate::eb_emit::insert_runtime_dependency(
-            &result.text,
-            &dependency.name,
-            &dependency.version,
-        )
+    for dependency in lock.dependencies.iter() {
+        result.text = if dependency.build {
+            crate::eb_emit::insert_build_dependency(
+                &result.text,
+                &dependency.name,
+                &dependency.version,
+            )
+        } else {
+            crate::eb_emit::insert_runtime_dependency(
+                &result.text,
+                &dependency.name,
+                &dependency.version,
+            )
+        }
         .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     }
     for (name, value) in &plan.build.easyconfig_parameters {
