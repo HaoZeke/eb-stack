@@ -82,6 +82,7 @@ pub fn parse_package_index(text: &str) -> std::collections::BTreeMap<String, Ind
                 continue;
             }
             let (name, pin) = split_name_and_pin(line);
+            let name = name.split('[').next().unwrap_or(&name).trim().to_string();
             let Some(version) = pin.as_deref().and_then(exact_version) else {
                 continue;
             };

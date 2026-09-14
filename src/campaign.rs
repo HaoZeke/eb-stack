@@ -1065,13 +1065,22 @@ fn discover_files(root: &Path, extension: &str) -> Result<Vec<PathBuf>, Campaign
     }
     let mut files = Vec::new();
     let mut directories = vec![root.to_path_buf()];
+    let mut visited = std::collections::HashSet::new();
     while let Some(directory) = directories.pop() {
+        let identity = std::fs::canonicalize(&directory).unwrap_or_else(|_| directory.clone());
+        if !visited.insert(identity) {
+            continue;
+        }
         for entry in std::fs::read_dir(&directory)
             .map_err(|error| CampaignError::Io(directory.clone(), error))?
         {
             let entry = entry.map_err(|error| CampaignError::Io(directory.clone(), error))?;
             let path = entry.path();
-            if path.is_dir() {
+            let is_dir = entry
+                .file_type()
+                .map(|kind| kind.is_dir())
+                .unwrap_or_else(|_| path.is_dir());
+            if is_dir {
                 directories.push(path);
             } else if path.extension().and_then(|value| value.to_str()) == Some(extension) {
                 files.push(path);
