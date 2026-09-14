@@ -699,24 +699,9 @@ fn foreign_checksums(
 }
 
 fn collect_cargo_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<(), std::io::Error> {
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => continue,
-            Err(error) => return Err(error),
-        };
-        for entry in entries {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if detect_foreign_format(&path) == Some(ForeignFormat::Cargo) {
-                out.push(path);
-            }
-        }
-    }
-    Ok(())
+    walk_source_files(root, out, |path| {
+        detect_foreign_format(path) == Some(ForeignFormat::Cargo)
+    })
 }
 
 /// Prefer crates.io / `*.cargo.json` over a sibling `Cargo.toml` so one
@@ -757,8 +742,28 @@ fn collect_named_files(
     names: &[&str],
     out: &mut Vec<PathBuf>,
 ) -> Result<(), std::io::Error> {
+    walk_source_files(root, out, |path| {
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|name| {
+                let lower = name.to_ascii_lowercase();
+                names.iter().any(|wanted| *wanted == lower)
+            })
+    })
+}
+
+fn walk_source_files(
+    root: &Path,
+    out: &mut Vec<PathBuf>,
+    mut keep: impl FnMut(&Path) -> bool,
+) -> Result<(), std::io::Error> {
     let mut stack = vec![root.to_path_buf()];
+    let mut visited = HashSet::new();
     while let Some(dir) = stack.pop() {
+        let identity = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+        if !visited.insert(identity) {
+            continue;
+        }
         let entries = match std::fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => continue,
@@ -767,13 +772,14 @@ fn collect_named_files(
         for entry in entries {
             let entry = entry?;
             let path = entry.path();
-            if path.is_dir() {
+            let is_dir = entry
+                .file_type()
+                .map(|kind| kind.is_dir())
+                .unwrap_or_else(|_| path.is_dir());
+            if is_dir {
                 stack.push(path);
-            } else if let Some(name) = path.file_name().and_then(|value| value.to_str()) {
-                let lower = name.to_ascii_lowercase();
-                if names.iter().any(|wanted| *wanted == lower) {
-                    out.push(path);
-                }
+            } else if keep(&path) {
+                out.push(path);
             }
         }
     }
@@ -914,7 +920,7 @@ pub fn discover_provider_candidates_for_hole(
         })
         .cloned()
         .collect::<Vec<_>>();
-    if !parse_failures.is_empty() {
+    if foreign_matches.is_empty() && !parse_failures.is_empty() {
         return Err(ProviderDiscoveryError::SourceParseFailure {
             name: hole.name.clone(),
             version_req: format!(" ({})", hole.version_req),

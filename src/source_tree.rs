@@ -173,7 +173,7 @@ fn scan_python_imports(recipe: &mut ForeignRecipe, tree: &Path) {
                 .map(|kind| kind.is_dir())
                 .unwrap_or_else(|_| path.is_dir());
             if is_dir {
-                if path.file_name().and_then(|name| name.to_str()) == Some("subprojects") {
+                if skip_import_dir(path.file_name().and_then(|name| name.to_str())) {
                     continue;
                 }
                 stack.push(path);
@@ -230,9 +230,84 @@ fn python_imports(text: &str) -> Vec<String> {
     names
 }
 
+fn skip_import_dir(name: Option<&str>) -> bool {
+    matches!(
+        name.unwrap_or(""),
+        "subprojects"
+            | "tests"
+            | "test"
+            | "testdata"
+            | "docs"
+            | "doc"
+            | "examples"
+            | ".venv"
+            | "venv"
+            | ".tox"
+            | ".git"
+            | "__pycache__"
+    )
+}
+
+fn is_stdlib_import(name: &str) -> bool {
+    matches!(
+        name,
+        "abc"
+            | "argparse"
+            | "array"
+            | "asyncio"
+            | "base64"
+            | "collections"
+            | "contextlib"
+            | "copy"
+            | "csv"
+            | "dataclasses"
+            | "datetime"
+            | "decimal"
+            | "enum"
+            | "functools"
+            | "glob"
+            | "hashlib"
+            | "html"
+            | "http"
+            | "importlib"
+            | "inspect"
+            | "io"
+            | "itertools"
+            | "json"
+            | "logging"
+            | "math"
+            | "os"
+            | "pathlib"
+            | "pickle"
+            | "pprint"
+            | "re"
+            | "shutil"
+            | "signal"
+            | "socket"
+            | "sqlite3"
+            | "ssl"
+            | "string"
+            | "struct"
+            | "subprocess"
+            | "sys"
+            | "tempfile"
+            | "textwrap"
+            | "threading"
+            | "time"
+            | "traceback"
+            | "types"
+            | "typing"
+            | "unittest"
+            | "urllib"
+            | "warnings"
+            | "weakref"
+            | "xml"
+    )
+}
+
 fn push_import(names: &mut Vec<String>, name: &str) {
     let name = name.trim();
-    if name.is_empty() || name.starts_with('.') {
+    if name.is_empty() || name.starts_with('.') || is_stdlib_import(name) {
         return;
     }
     if !names.iter().any(|existing| existing == name) {

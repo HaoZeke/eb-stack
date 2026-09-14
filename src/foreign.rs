@@ -935,9 +935,11 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>, Vec<ForeignResidu
     let control_count = control_re.find_iter(&out).count();
     out = control_re.replace_all(&out, "").to_string();
     if control_count > 0 {
-        notes.push(format!(
-            "removed {control_count} unevaluated Jinja control statement(s); branch contents preserved"
-        ));
+        let summary = format!(
+            "removed {control_count} unevaluated Jinja control statement(s); both branch bodies remain Always"
+        );
+        notes.push(summary.clone());
+        residuals.push(foreign_residual("template-evaluation", summary));
     }
 
     let pure_macro_requirement_re =
@@ -1287,8 +1289,55 @@ fn parse_conda_selector(selector: &str) -> ConditionExpr {
             right: right.trim().into(),
         });
     }
-    ConditionExpr::Predicate(ConditionPredicate::Platform {
-        name: selector.into(),
+    if let Some(condition) = parse_conda_python_selector(selector) {
+        return condition;
+    }
+    if matches!(
+        selector,
+        "linux" | "osx" | "win" | "unix" | "aarch64" | "x86_64" | "arm64" | "ppc64le"
+    ) {
+        return ConditionExpr::Predicate(ConditionPredicate::Platform {
+            name: selector.into(),
+        });
+    }
+    ConditionExpr::Opaque {
+        source: selector.into(),
+    }
+}
+
+fn parse_conda_python_selector(selector: &str) -> Option<ConditionExpr> {
+    let selector = selector.trim();
+    if selector == "py2k" {
+        return Some(ConditionExpr::Opaque {
+            source: "py2k".into(),
+        });
+    }
+    if selector == "py3k" {
+        return Some(ConditionExpr::Opaque {
+            source: "py3k".into(),
+        });
+    }
+    let rest = selector.strip_prefix("py")?;
+    let (operator, digits) = if let Some(rest) = rest.strip_prefix(">=") {
+        (">=", rest)
+    } else if let Some(rest) = rest.strip_prefix("<=") {
+        ("<=", rest)
+    } else if let Some(rest) = rest.strip_prefix('>') {
+        (">", rest)
+    } else if let Some(rest) = rest.strip_prefix('<') {
+        ("<", rest)
+    } else if let Some(rest) = rest.strip_prefix("==") {
+        ("==", rest)
+    } else if rest.chars().all(|character| character.is_ascii_digit()) {
+        ("==", rest)
+    } else {
+        return None;
+    };
+    if digits.is_empty() || !digits.chars().all(|character| character.is_ascii_digit()) {
+        return None;
+    }
+    Some(ConditionExpr::Opaque {
+        source: format!("py{operator}{digits}"),
     })
 }
 
