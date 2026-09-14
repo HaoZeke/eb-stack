@@ -229,6 +229,25 @@ fn canonical_plan_writes_typed_cyclonedx_components() {
 }
 
 #[test]
+fn an_ssh_github_remote_uses_the_https_archive() {
+    let mut plan = qmcpack_plan();
+    plan.sources[0].git = Some("git@github.com:QMCPACK/qmcpack.git".into());
+    plan.sources[0].url = None;
+    let sbom = package_plan_to_cyclonedx(&plan).expect("typed CycloneDX SBOM");
+    let references = sbom["metadata"]["component"]["externalReferences"]
+        .as_array()
+        .expect("source references");
+    let distribution = references
+        .iter()
+        .find(|reference| reference["type"] == "distribution")
+        .expect("distribution reference");
+    assert_eq!(
+        distribution["url"],
+        "https://github.com/QMCPACK/qmcpack/archive/refs/tags/v4.3.0.tar.gz"
+    );
+}
+
+#[test]
 fn a_gitlab_remote_does_not_invent_a_github_archive() {
     let mut plan = qmcpack_plan();
     plan.sources[0].git = Some("https://gitlab.com/org/pkg.git".into());

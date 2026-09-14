@@ -263,3 +263,33 @@ fn public_local_podman_target_is_complete_and_abi_isolated() {
         Some("/tmp/eb-stack/sources")
     );
 }
+
+#[test]
+fn empty_runtime_image_is_rejected() {
+    let layer = TargetConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[targets]]
+name = "broken-podman"
+
+[targets.transport]
+kind = "local"
+
+[targets.executor]
+kind = "direct"
+
+[targets.runtime]
+kind = "podman"
+image = ""
+
+[targets.easybuild]
+command = "eb"
+work_root = "/work"
+tmp_root = "/tmp"
+"#,
+    )
+    .expect("layer");
+    let error = resolve_target_layers(&[layer]).expect_err("empty image");
+    assert!(error.to_string().contains("runtime image"), "{error}");
+}

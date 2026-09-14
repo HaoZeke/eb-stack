@@ -361,6 +361,53 @@ fn validate_resolved_target(target: &BuildTarget) -> Result<(), TargetError> {
     if target.easybuild.tmp_root.trim().is_empty() {
         return Err(TargetError::EmptyField(target.name.clone(), "tmp_root"));
     }
+    if let TargetTransport::Ssh { sync_command, .. } = &target.transport {
+        if sync_command.trim().is_empty() {
+            return Err(TargetError::EmptyField(target.name.clone(), "sync_command"));
+        }
+    }
+    match &target.runtime {
+        TargetRuntime::Podman { image, command, .. }
+        | TargetRuntime::Docker { image, command, .. } => {
+            if image.trim().is_empty() {
+                return Err(TargetError::EmptyField(
+                    target.name.clone(),
+                    "runtime image",
+                ));
+            }
+            if command.trim().is_empty() {
+                return Err(TargetError::EmptyField(
+                    target.name.clone(),
+                    "runtime command",
+                ));
+            }
+        }
+        TargetRuntime::Eessi {
+            storage, command, ..
+        } => {
+            if storage.trim().is_empty() {
+                return Err(TargetError::EmptyField(
+                    target.name.clone(),
+                    "eessi storage",
+                ));
+            }
+            if command.trim().is_empty() {
+                return Err(TargetError::EmptyField(
+                    target.name.clone(),
+                    "eessi command",
+                ));
+            }
+        }
+        TargetRuntime::Host => {}
+    }
+    if let TargetExecutor::Slurm { command, .. } = &target.executor {
+        if command.trim().is_empty() {
+            return Err(TargetError::EmptyField(
+                target.name.clone(),
+                "slurm command",
+            ));
+        }
+    }
     Ok(())
 }
 

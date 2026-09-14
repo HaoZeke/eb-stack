@@ -253,6 +253,7 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
                 .checksums
                 .iter()
                 .filter_map(|c| sha256_hash(c))
+                .take(1)
                 .collect();
             if !hashes.is_empty() {
                 component.hashes = Some(Hashes(hashes));

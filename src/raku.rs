@@ -135,21 +135,8 @@ impl Meta6DepSpec {
 }
 
 fn dep(spec: &str, role: &str) -> ForeignDep {
-    let (name_part, ver_part) = spec.split_once(":ver").unwrap_or((spec, ""));
-    let name = name_part
-        .split([' ', '<', '>'])
-        .next()
-        .unwrap_or(name_part)
-        .trim_end_matches(':')
-        .to_string();
-    let pin = ver_part
-        .trim()
-        .trim_start_matches('<')
-        .split('>')
-        .next()
-        .map(str::trim)
-        .filter(|pin| !pin.is_empty())
-        .map(ToString::to_string);
+    let pin = raku_adverb(spec, "ver");
+    let name = raku_module_name(spec);
     ForeignDep {
         name,
         pin,
@@ -158,6 +145,38 @@ fn dep(spec: &str, role: &str) -> ForeignDep {
         condition: ConditionExpr::Always,
         provenance: Vec::new(),
     }
+}
+
+fn raku_adverb(spec: &str, key: &str) -> Option<String> {
+    let angled = format!(":{key}<");
+    let paren = format!(":{key}(");
+    let rest = spec
+        .split_once(&angled)
+        .or_else(|| spec.split_once(&paren))?
+        .1;
+    rest.split(['>', ')'])
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn raku_module_name(spec: &str) -> String {
+    let cut = ["ver", "auth", "api", "from"]
+        .into_iter()
+        .filter_map(|key| {
+            spec.find(&format!(":{key}<"))
+                .or_else(|| spec.find(&format!(":{key}(")))
+        })
+        .min()
+        .unwrap_or(spec.len());
+    spec[..cut]
+        .split([' ', '<', '>'])
+        .next()
+        .unwrap_or(&spec[..cut])
+        .trim()
+        .trim_end_matches(':')
+        .to_string()
 }
 
 #[cfg(test)]
@@ -203,6 +222,42 @@ mod tests {
             .find(|dep| dep.name == "JSON::Fast")
             .expect("JSON::Fast");
         assert_eq!(dep.pin.as_deref(), Some("0.10+"));
+    }
+
+    #[test]
+    fn meta6_auth_and_api_adverbs_are_not_the_name() {
+        let recipe = parse_raku_str(
+            r#"{
+              "name": "Demo",
+              "version": "0.1.0",
+              "depends": [
+                "URI:auth<cpan:TIMOTIMO>:ver<0.3.0+>",
+                "JSON::Fast:auth<cpan:TIMOTIMO>",
+                "Foo:api<1>:ver<0.1>",
+                "libfoo:from<native>"
+              ]
+            }"#,
+        )
+        .expect("parse");
+        let names: Vec<&str> = recipe
+            .dependencies
+            .iter()
+            .map(|dep| dep.name.as_str())
+            .collect();
+        assert!(names.contains(&"URI"), "{names:?}");
+        assert!(names.contains(&"JSON::Fast"), "{names:?}");
+        assert!(names.contains(&"Foo"), "{names:?}");
+        assert!(names.contains(&"libfoo"), "{names:?}");
+        assert!(
+            !names.iter().any(|name| name.contains(":auth")),
+            "{names:?}"
+        );
+        let uri = recipe
+            .dependencies
+            .iter()
+            .find(|dep| dep.name == "URI")
+            .expect("URI");
+        assert_eq!(uri.pin.as_deref(), Some("0.3.0+"));
     }
 
     #[test]

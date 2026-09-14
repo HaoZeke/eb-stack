@@ -106,7 +106,7 @@ pub fn parse_package_index(text: &str) -> std::collections::BTreeMap<String, Ind
         }
         return index;
     }
-    for stanza in text.split("\n\n") {
+    for stanza in text.replace("\r\n", "\n").split("\n\n") {
         let mut name = None;
         let mut version = None;
         let mut checksum = None;
@@ -192,6 +192,22 @@ mod tests {
         );
         assert_eq!(index.len(), 2);
         assert_eq!(entry.checksum.as_deref(), Some("md5:abc123"));
+    }
+
+    #[test]
+    fn a_crlf_control_file_keeps_every_stanza() {
+        let index = parse_package_index(
+            "Package: matrixStats\r\nVersion: 1.4.1\r\n\r\nPackage: coda\r\nVersion: 0.19-4\r\n",
+        );
+        assert_eq!(index.len(), 2, "{index:?}");
+        assert_eq!(
+            index.get("matrixstats").map(|e| e.version.as_str()),
+            Some("1.4.1")
+        );
+        assert_eq!(
+            index.get("coda").map(|e| e.version.as_str()),
+            Some("0.19-4")
+        );
         assert_eq!(index.get("coda").and_then(|e| e.checksum.as_deref()), None);
     }
 

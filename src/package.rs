@@ -1353,10 +1353,7 @@ fn source_archive_url(source: &SourceArtifact) -> Option<String> {
         return Some(url);
     }
     let git = source.git.as_deref()?;
-    if !git_remote_is_github(git) {
-        return None;
-    }
-    let base = git.trim_end_matches(".git");
+    let base = github_https_repo(git)?;
     if let Some(tag) = source.tag.as_deref() {
         Some(format!("{base}/archive/refs/tags/{tag}.tar.gz"))
     } else {
@@ -1365,6 +1362,37 @@ fn source_archive_url(source: &SourceArtifact) -> Option<String> {
             .as_deref()
             .map(|commit| format!("{base}/archive/{commit}.tar.gz"))
     }
+}
+
+/// HTTPS repo root for a github.com remote, or nothing.
+///
+/// scp-style and ssh/git URLs are accepted as remotes, but the archive
+/// GitHub serves is only at https://github.com/{owner}/{repo}/archive/...
+fn github_https_repo(git: &str) -> Option<String> {
+    if !git_remote_is_github(git) {
+        return None;
+    }
+    let trimmed = git.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let offset = if lower.starts_with("git@github.com:") {
+        "git@github.com:".len()
+    } else if let Some(idx) = lower.find("github.com/") {
+        idx + "github.com/".len()
+    } else if let Some(idx) = lower.find("github.com:") {
+        idx + "github.com:".len()
+    } else {
+        return None;
+    };
+    let path = &trimmed[offset..];
+    let path = if path.to_ascii_lowercase().ends_with(".git") {
+        &path[..path.len() - 4]
+    } else {
+        path
+    };
+    let mut parts = path.split('/').filter(|part| !part.is_empty());
+    let owner = parts.next()?;
+    let repo = parts.next()?;
+    Some(format!("https://github.com/{owner}/{repo}"))
 }
 
 /// GitHub's `/archive/refs/tags/` URL is only defined for github.com remotes.
