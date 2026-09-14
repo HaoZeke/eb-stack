@@ -382,6 +382,7 @@ impl BuildTarget {
 
         let mut sync = Command::new(sync_command);
         sync.arg("-az");
+        sync.arg("--delete");
         let remote_shell = match port {
             Some(port) => format!("{command} -p {port}"),
             None => command.clone(),
