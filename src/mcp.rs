@@ -24,8 +24,9 @@ use crate::package_workflow::{
 use crate::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use crate::{
     artifact_facts_for_lock, companion_argv, load_json_file, lock_to_cyclonedx_with_facts,
-    parse_package_index, solve_from_easyconfigs_with_baseline_version_and_extras,
-    with_outdir_overlay, write_json_pretty, SbomFacts, SolveExtraOut, StackLock,
+    parse_package_index, resolve_ingest_source,
+    solve_from_easyconfigs_with_baseline_version_and_extras, with_outdir_overlay,
+    write_json_pretty, SbomFacts, SolveExtraOut, StackLock,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -329,13 +330,13 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
 }
 
 fn package_inspect(arguments: &Value) -> Result<Value, String> {
-    let source = required_path(arguments, "source")?;
+    let output = required_path(arguments, "out_dir")?;
+    let format = foreign_format(arguments)?;
+    let source = resolve_ingest_source(&required_path(arguments, "source")?, format, &output)?;
     let toolchain = toolchain(arguments)?;
     let configs = package_layers(arguments)?;
-    let (plan, sbom) =
-        inspect_new_package(&source, foreign_format(arguments)?, &toolchain, &configs)
-            .map_err(|error| error.to_string())?;
-    let output = required_path(arguments, "out_dir")?;
+    let (plan, sbom) = inspect_new_package(&source, format, &toolchain, &configs)
+        .map_err(|error| error.to_string())?;
     let written = write_package_bundle(
         &PackageBundle {
             plan: plan.clone(),
@@ -357,9 +358,12 @@ fn package_inspect(arguments: &Value) -> Result<Value, String> {
 
 fn package_plan(arguments: &Value) -> Result<Value, String> {
     let stack_policy = load_stack_policy(&required_path(arguments, "stack_policy")?)?;
+    let output = required_path(arguments, "out_dir")?;
+    let format = foreign_format(arguments)?;
+    let source = resolve_ingest_source(&required_path(arguments, "source")?, format, &output)?;
     let request = NewPackageRequest {
-        source: required_path(arguments, "source")?,
-        format: foreign_format(arguments)?,
+        source,
+        format,
         toolchain: toolchain(arguments)?,
         source_checksums: string_array(arguments, "source_checksums")?,
         package_layers: package_layers(arguments)?,
@@ -367,7 +371,6 @@ fn package_plan(arguments: &Value) -> Result<Value, String> {
         easyconfig_roots: path_array(arguments, "easyconfigs")?,
         stack_policy,
     };
-    let output = required_path(arguments, "out_dir")?;
     let catalog_paths = string_array(arguments, "package_catalogs")?
         .into_iter()
         .map(PathBuf::from)

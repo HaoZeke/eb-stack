@@ -13,13 +13,12 @@ use eb_stack::target::{doctor_target, resolve_target_layers, BuildTarget, Target
 use eb_stack::{
     check_duplicate_upstream, check_maintainer_acceptability, check_maintainer_acceptability_text,
     check_recipe_deps, cyclonedx_to_dot, format_style, format_style_file, inspect_new_package,
-    is_registry_name, lint_style, load_json_file, lock_to_cyclonedx, materialize_registry_name,
-    packaging_gate, parse_easyconfig_trees, plan_new_package, plan_package_bump,
-    plan_package_closure_with_sources, resolve_easyconfig_file, resolve_package_catalog_layers,
+    lint_style, load_json_file, lock_to_cyclonedx, packaging_gate, parse_easyconfig_trees,
+    plan_new_package, plan_package_bump, plan_package_closure_with_sources,
+    resolve_easyconfig_file, resolve_ingest_source, resolve_package_catalog_layers,
     solve_from_easyconfigs_with_baseline_version_and_extras, write_json_pretty,
     write_package_bundle, write_package_closure, BumpPackageRequest, ForeignFormat,
     NewPackageRequest, PackageBundle, PackageCatalogLayer, SolveExtraOut, StackLock, Toolchain,
-    UreqClient,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -441,7 +440,8 @@ fn run_package(command: PackageCommand) -> Result<()> {
             let toolchain = toolchain(&args.toolchain_name, &args.toolchain_version);
             let layers = load_package_layers(&args.package_configs)?;
             let format = parse_format(&args.format)?;
-            let source = resolve_ingest_source(&args.source, format, &args.out_dir)?;
+            let source = resolve_ingest_source(&args.source, format, &args.out_dir)
+                .map_err(|error| anyhow::anyhow!(error))?;
             let (plan, sbom) = inspect_new_package(&source, format, &toolchain, &layers)?;
             let written = write_package_bundle(
                 &PackageBundle {
@@ -467,8 +467,8 @@ fn run_package(command: PackageCommand) -> Result<()> {
             let use_closure =
                 !args.package_catalogs.is_empty() || !source_roots.source_roots.is_empty();
             let format = parse_format(&args.inspect.format)?;
-            let source =
-                resolve_ingest_source(&args.inspect.source, format, &args.inspect.out_dir)?;
+            let source = resolve_ingest_source(&args.inspect.source, format, &args.inspect.out_dir)
+                .map_err(|error| anyhow::anyhow!(error))?;
             let request = NewPackageRequest {
                 source,
                 format,
@@ -1265,32 +1265,6 @@ fn load_package_source_roots(args: &PackagePlanArgs) -> Result<PackageSourceRoot
         roots.push(SourceRootKind::Cargo, path.clone());
     }
     Ok(roots)
-}
-
-fn resolve_ingest_source(
-    source: &Path,
-    format: Option<ForeignFormat>,
-    out_dir: &Path,
-) -> Result<PathBuf> {
-    if source.is_file() {
-        return Ok(source.to_path_buf());
-    }
-    if !is_registry_name(source) {
-        bail!(
-            "source {} is not a file or a registry name",
-            source.display()
-        );
-    }
-    let format = format.ok_or_else(|| {
-        anyhow::anyhow!("--format pypi|cran|cargo is required when --source is a registry name")
-    })?;
-    let name = source
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| anyhow::anyhow!("invalid registry name {}", source.display()))?;
-    let ingest = materialize_registry_name(name, format, &UreqClient, &out_dir.join("ingest"))
-        .with_context(|| format!("fetch {name} as {}", format.as_str()))?;
-    Ok(ingest.dump)
 }
 
 fn parse_format(value: &str) -> Result<Option<ForeignFormat>> {

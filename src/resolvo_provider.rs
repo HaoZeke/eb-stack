@@ -54,6 +54,8 @@ pub struct EbProvider {
     /// Candidates rejected by target or build evidence, with the retained reason.
     excluded_ranks: HashMap<String, HashMap<u32, String>>,
     interned: Mutex<HashMap<(NameId, u32), SolvableId>>,
+    /// True when a stack policy asked to admit another generation on purpose.
+    widen_cross_generation: bool,
 }
 
 /// How a toolchain is written inside a qualified package key.
@@ -191,11 +193,9 @@ impl EbProvider {
         if self.name_ids.contains_key(&own) && !keys.contains(&own) {
             keys.push(own);
         }
-        if keys.is_empty() {
-            // Nothing at or below this recipe carries the package. A stack
-            // policy can admit a closure from another generation on purpose,
-            // and refusing it here would turn a deliberate cross-generation
-            // pin into an unresolved dependency.
+        if keys.is_empty() && self.widen_cross_generation {
+            // A stack policy can admit a closure from another generation on
+            // purpose. Ordinary solves stay at or below the recipe.
             if let Some(all) = self.keys_by_name.get(&dep.name) {
                 return all.clone();
             }
@@ -581,6 +581,7 @@ impl EbProvider {
             locked_ranks,
             excluded_ranks,
             interned: Mutex::new(HashMap::new()),
+            widen_cross_generation: stack_policy.is_some(),
         })
     }
 
@@ -893,11 +894,9 @@ impl DependencyProvider for EbProvider {
                 }
                 sets.push(self.pool.intern_version_set(dep_name_id, range));
             }
-            if sets.is_empty() {
-                // No level at or below this recipe carries a matching version.
+            if sets.is_empty() && self.widen_cross_generation {
                 // A stack policy can admit a closure from another generation on
-                // purpose, so widen to every level the universe holds for this
-                // name before calling the dependency unresolved.
+                // purpose. Ordinary solves stay at or below the recipe.
                 if let Some(all) = self.keys_by_name.get(&d.name) {
                     for key in all {
                         if keys.contains(key) {

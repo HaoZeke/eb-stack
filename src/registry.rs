@@ -260,6 +260,36 @@ pub fn materialize_cargo(
     })
 }
 
+/// Resolve a source path or a registry name into a dump on disk.
+///
+/// A file is used as-is. A bare PyPI/CRAN/cargo name is fetched under
+/// `out_dir/ingest`, the same way the CLI inspect/plan path does.
+pub fn resolve_ingest_source(
+    source: &Path,
+    format: Option<ForeignFormat>,
+    out_dir: &Path,
+) -> Result<PathBuf, String> {
+    if source.is_file() {
+        return Ok(source.to_path_buf());
+    }
+    if !is_registry_name(source) {
+        return Err(format!(
+            "source {} is not a file or a registry name",
+            source.display()
+        ));
+    }
+    let format = format.ok_or_else(|| {
+        "format pypi|cran|cargo is required when source is a registry name".to_string()
+    })?;
+    let name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("invalid registry name {}", source.display()))?;
+    let ingest = materialize_registry_name(name, format, &UreqClient, &out_dir.join("ingest"))
+        .map_err(|error| format!("fetch {name} as {}: {error}", format.as_str()))?;
+    Ok(ingest.dump)
+}
+
 /// Fetch a registry name into `ingest_root` and return the dump path.
 pub fn materialize_registry_name(
     name: &str,
@@ -308,5 +338,21 @@ mod tests {
     fn registry_name_is_a_single_missing_component() {
         assert!(is_registry_name(Path::new("eon-akmc")));
         assert!(!is_registry_name(Path::new("fixtures/pypi.json")));
+    }
+
+    #[test]
+    fn resolve_ingest_source_keeps_an_existing_file() {
+        let temp = tempfile::tempdir().expect("temp");
+        let dump = temp.path().join("dump.json");
+        std::fs::write(&dump, "{}").expect("write");
+        let resolved = resolve_ingest_source(&dump, None, temp.path()).expect("resolve");
+        assert_eq!(resolved, dump);
+    }
+
+    #[test]
+    fn resolve_ingest_source_requires_format_for_a_registry_name() {
+        let temp = tempfile::tempdir().expect("temp");
+        let err = resolve_ingest_source(Path::new("numpy"), None, temp.path()).unwrap_err();
+        assert!(err.contains("format"), "{err}");
     }
 }

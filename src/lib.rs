@@ -132,8 +132,8 @@ pub use provides::{
     resolve_extension_provider, EXT_PROVIDE_MARKER,
 };
 pub use registry::{
-    is_registry_name, materialize_pypi, materialize_registry_name, MapClient, MaterializedIngest,
-    RegistryClient, RegistryError, UreqClient,
+    is_registry_name, materialize_pypi, materialize_registry_name, resolve_ingest_source, MapClient,
+    MaterializedIngest, RegistryClient, RegistryError, UreqClient,
 };
 pub use report::{
     classify_stack_diff, format_build_list, format_stack_diff_markdown, ordered_build_paths,
