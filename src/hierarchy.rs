@@ -872,6 +872,17 @@ pub fn count_generation_dep_versions(
     cands: &[Candidate],
     hierarchy: &ToolchainHierarchy,
 ) -> HashMap<String, usize> {
+    count_generation_dep_versions_for_suffix(name, cands, hierarchy, None)
+}
+
+/// Like [`count_generation_dep_versions`], optionally restricted to one
+/// versionsuffix. `None` counts every variant; `Some("")` is unsuffixed.
+pub fn count_generation_dep_versions_for_suffix(
+    name: &str,
+    cands: &[Candidate],
+    hierarchy: &ToolchainHierarchy,
+    suffix: Option<&str>,
+) -> HashMap<String, usize> {
     let mut counts: HashMap<String, usize> = HashMap::new();
     for consumer in cands {
         if hierarchy_member_rank(hierarchy, &consumer.toolchain).is_none() {
@@ -896,6 +907,12 @@ pub fn count_generation_dep_versions(
         {
             if dep.name != name {
                 continue;
+            }
+            if let Some(want) = suffix {
+                let got = dep.versionsuffix.as_deref().unwrap_or("");
+                if got != want {
+                    continue;
+                }
             }
             let Some(ver) = exact_pin_version(&dep.version_req) else {
                 continue;
@@ -1030,7 +1047,8 @@ pub fn resolve_dep_version_in_hierarchy_opts(
             v.dedup();
             v
         };
-        let counts = count_generation_dep_versions(name, cands, hierarchy);
+        let counts =
+            count_generation_dep_versions_for_suffix(name, cands, hierarchy, Some(want_suffix));
         if let Some(picked) = pick_consensus_version(&counts, &versions) {
             return Some(picked);
         }
@@ -2250,6 +2268,47 @@ mod tests {
         assert!(
             !counts.contains_key("3.31.8"),
             "SYSTEM GCCcore-15.2.0 must not count for foss-2024a: {counts:?}"
+        );
+    }
+
+    #[test]
+    fn unsuffixed_consensus_ignores_serial_hdf5_pins() {
+        let h = known_hierarchy(&foss("2024a")).unwrap();
+        let mut cands = vec![
+            cand("HDF5", "1.14.3", "foss", "2024a", None),
+            cand("HDF5", "1.16.0", "foss", "2024a", None),
+        ];
+        for index in 0..15 {
+            let mut consumer = consumer_pinning(
+                &format!("Serial{index}"),
+                "1.0",
+                "foss",
+                "2024a",
+                "HDF5",
+                "1.14.3",
+            );
+            consumer.builddependencies[0].versionsuffix = Some("-serial".into());
+            cands.push(consumer);
+        }
+        for index in 0..3 {
+            cands.push(consumer_pinning(
+                &format!("Mpi{index}"),
+                "1.0",
+                "foss",
+                "2024a",
+                "HDF5",
+                "1.16.0",
+            ));
+        }
+        let opts = ResolveDepOpts {
+            floor_version: None,
+            versionsuffix: None,
+            use_consensus: true,
+        };
+        assert_eq!(
+            resolve_dep_version_in_hierarchy_opts("HDF5", &cands, &h, &opts).as_deref(),
+            Some("1.16.0"),
+            "serial 1.14.3 pins must not modal-win unsuffixed HDF5"
         );
     }
 

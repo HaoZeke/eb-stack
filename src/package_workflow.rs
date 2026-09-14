@@ -7,8 +7,8 @@ use crate::eb_parse::{
 };
 use crate::foreign::{parse_foreign_path, ForeignFormat};
 use crate::hierarchy::{
-    count_generation_dep_versions, filter_candidates_in_hierarchy, hierarchy_for_with_tree,
-    is_system_toolchain,
+    count_generation_dep_versions_for_suffix, filter_candidates_in_hierarchy,
+    hierarchy_for_with_tree, is_system_toolchain,
 };
 use crate::manifest::package_plan_from_foreign;
 use crate::package::{
@@ -1870,7 +1870,12 @@ fn apply_system_dep_consensus(
         if !is_system_toolchain(dep_toolchain) {
             continue;
         }
-        let counts = count_generation_dep_versions(&dependency.name, candidates, &hierarchy);
+        let counts = count_generation_dep_versions_for_suffix(
+            &dependency.name,
+            candidates,
+            &hierarchy,
+            Some(dependency.versionsuffix.as_deref().unwrap_or("")),
+        );
         let total: usize = counts.values().sum();
         if total == 0 {
             continue;

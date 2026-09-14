@@ -2,9 +2,9 @@
 
 use crate::domain::{Candidate, DepReq, Policy};
 use crate::hierarchy::{
-    count_generation_dep_versions, filter_candidates_in_hierarchy, hierarchy_for_with_tree,
-    is_system_toolchain, pick_consensus_version, prefer_non_system_candidates, toolchains_match,
-    ToolchainHierarchy,
+    count_generation_dep_versions_for_suffix, filter_candidates_in_hierarchy,
+    hierarchy_for_with_tree, is_system_toolchain, pick_consensus_version,
+    prefer_non_system_candidates, toolchains_match, ToolchainHierarchy,
 };
 use crate::package::{
     materialize_profile, DependencyRole, LockedDependency, PackageOrigin, PackagePlan,
@@ -674,7 +674,8 @@ fn apply_generation_consensus_pins(
         if stack_policy.pins.iter().any(|pin| pin.name == *name) {
             continue;
         }
-        let counts = count_generation_dep_versions(name, all_candidates, hierarchy);
+        let counts =
+            count_generation_dep_versions_for_suffix(name, all_candidates, hierarchy, Some(""));
         let admitted_for_name: Vec<&crate::domain::Candidate> = admitted
             .iter()
             .filter(|candidate| candidate.name.eq_ignore_ascii_case(name))
