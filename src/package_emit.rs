@@ -216,7 +216,7 @@ fn render_easyconfig(
     // at ingest time nothing knows yet whether the package brings extensions
     // along. Here it is known.
     let single_python_package = plan.origin == crate::package::PackageOrigin::Pypi
-        && plan.overlay_extensions.len() <= 1
+        && plan.overlay_extensions.is_empty()
         && matches!(
             plan.build.easyblock.as_deref(),
             None | Some("PythonBundle") | Some("PythonPackage")
@@ -1327,6 +1327,92 @@ mod tests {
         assert!(
             !emitted[0].text.contains("unset RUSTC_WRAPPER"),
             "a mesonpy package with no Rust must not inherit cargo host isolation:\n{}",
+            emitted[0].text
+        );
+    }
+
+    #[test]
+    fn a_single_pypi_leftover_stays_on_the_bundle() {
+        let toolchain = crate::domain::Toolchain {
+            name: "foss".into(),
+            version: "2026.1".into(),
+        };
+        let plan = crate::package::PackagePlan {
+            schema_version: crate::package::PACKAGE_SCHEMA_VERSION,
+            origin: crate::package::PackageOrigin::Pypi,
+            package: crate::package::PackageMetadata {
+                name: "demo".into(),
+                version: "1.0".into(),
+                upstream_version: None,
+                homepage: None,
+                description: None,
+                license: None,
+            },
+            sources: vec![crate::package::SourceArtifact {
+                url: Some("https://example.invalid/demo-1.0.tar.gz".into()),
+                sha256: Some(
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                ),
+                ..Default::default()
+            }],
+            dependencies: Vec::new(),
+            rules: Vec::new(),
+            build: crate::package::BuildSpec {
+                toolchain: toolchain.clone(),
+                easyblock: Some("PythonBundle".into()),
+                build_systems: vec!["pypi".into()],
+                source_root: None,
+                config_options: Vec::new(),
+                moduleclass: Some("lang".into()),
+                patches: Vec::new(),
+                easyconfig_parameters: Default::default(),
+            },
+            profiles: vec![crate::package::ProductProfile {
+                name: "default".into(),
+                default: true,
+                versionsuffix: Vec::new(),
+                platform: None,
+                architecture: None,
+                features: Default::default(),
+                parameters: Default::default(),
+                toolchain_options: Default::default(),
+                config_options: Vec::new(),
+                easyconfig_parameters: Default::default(),
+                verification_commands: Vec::new(),
+            }],
+            outputs: vec![crate::package::OutputRequest {
+                profile: "default".into(),
+                stack: "foss-2026.1".into(),
+            }],
+            residuals: Vec::new(),
+            overlay_extensions: vec![crate::package::OverlayExtension {
+                name: "soupsieve".into(),
+                version: "2.5".into(),
+                checksum: None,
+            }],
+            package_index: Default::default(),
+        };
+        let lock = crate::package::ProfileLock {
+            schema_version: crate::package::PROFILE_LOCK_SCHEMA_VERSION,
+            package: "demo".into(),
+            version: "1.0".into(),
+            profile: "default".into(),
+            toolchain,
+            versionsuffix: String::new(),
+            dependencies: Vec::new(),
+            pin_outcomes: Vec::new(),
+            exclusions: Vec::new(),
+            solver: "resolvo".into(),
+        };
+        let emitted = emit_profile_easyconfigs(&plan, &[lock]).expect("emit");
+        assert!(
+            emitted[0].text.contains("easyblock = 'PythonBundle'"),
+            "one leftover must stay a bundle:\n{}",
+            emitted[0].text
+        );
+        assert!(
+            emitted[0].text.contains("('soupsieve', '2.5')"),
+            "the leftover must appear in exts_list:\n{}",
             emitted[0].text
         );
     }
