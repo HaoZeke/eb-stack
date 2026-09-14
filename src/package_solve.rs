@@ -420,10 +420,6 @@ fn admit_named_dependency_toolchains(
     admitted: &mut Vec<crate::domain::Candidate>,
     dependencies: &[crate::package::DependencyIntent],
 ) {
-    let wanted: Vec<&crate::domain::Toolchain> = dependencies
-        .iter()
-        .filter_map(|dependency| dependency.toolchain.as_ref())
-        .collect();
     let known: HashSet<String> = admitted
         .iter()
         .map(|candidate| candidate.easyconfig_path.clone())
@@ -432,10 +428,17 @@ fn admit_named_dependency_toolchains(
         if known.contains(&candidate.easyconfig_path) {
             continue;
         }
-        if wanted
-            .iter()
-            .any(|want| toolchains_match(&candidate.toolchain, want))
-        {
+        if dependencies.iter().any(|dependency| {
+            let name = dependency
+                .eb_name
+                .as_deref()
+                .unwrap_or(dependency.name.as_str());
+            name == candidate.name
+                && dependency
+                    .toolchain
+                    .as_ref()
+                    .is_some_and(|want| toolchains_match(&candidate.toolchain, want))
+        }) {
             admitted.push(candidate.clone());
             continue;
         }
@@ -802,6 +805,32 @@ mod tests {
         admit_named_dependency_toolchains(&[cuda.clone(), plain], &mut admitted, &[dep]);
         assert_eq!(admitted.len(), 1, "{admitted:?}");
         assert_eq!(admitted[0].versionsuffix.as_deref(), Some("-CUDA-12.6.0"));
+    }
+
+    #[test]
+    fn named_toolchain_admission_is_only_the_named_package() {
+        let binutils = cand("binutils", "2.42", "GCCcore", "14.2.0");
+        let m4 = cand("M4", "1.4.19", "GCCcore", "14.2.0");
+        let dep = DependencyIntent {
+            id: "dep:binutils".into(),
+            name: "binutils".into(),
+            eb_name: None,
+            constraint: Some("==2.42".into()),
+            toolchain: Some(Toolchain {
+                name: "GCCcore".into(),
+                version: "14.2.0".into(),
+            }),
+            versionsuffix: None,
+            roles: vec![DependencyRole::Build],
+            condition: ConditionExpr::Always,
+            virtual_capability: None,
+            solver_excluded: false,
+            provenance: Vec::new(),
+        };
+        let mut admitted = Vec::new();
+        admit_named_dependency_toolchains(&[binutils.clone(), m4], &mut admitted, &[dep]);
+        assert_eq!(admitted.len(), 1, "{admitted:?}");
+        assert_eq!(admitted[0].name, "binutils");
     }
 
     fn cand(name: &str, ver: &str, tc_name: &str, tc_ver: &str) -> Candidate {

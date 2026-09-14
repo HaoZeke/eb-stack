@@ -371,16 +371,19 @@ pub fn derive_hierarchy_from_candidates(
             version: gcc_ver,
         },
     ];
-    for comp in COMPOSITES {
-        if comp == parent.name {
-            break; // parent itself is appended last (highest rank)
-        }
+    // EasyBuild: gfbf and gompi both sit on GCC. foss composes gfbf then
+    // gompi. Inserting every earlier COMPOSITES name made gfbf contain gompi.
+    let extras: &[&str] = match parent.name.as_str() {
+        "foss" => &["gfbf", "gompi"],
+        _ => &[],
+    };
+    for comp in extras {
         let defined = cands
             .iter()
-            .any(|c| c.name == comp && c.version == parent.version);
+            .any(|c| c.name == *comp && c.version == parent.version);
         if defined {
             members.push(Toolchain {
-                name: comp.into(),
+                name: (*comp).into(),
                 version: parent.version.clone(),
             });
         }
@@ -1596,8 +1599,8 @@ mod tests {
                 "system",
                 "GCCcore-15.2.0",
                 "GCC-15.2.0",
-                "gompi-2099a",
                 "gfbf-2099a",
+                "gompi-2099a",
                 "foss-2099a",
             ]
         );
@@ -1625,6 +1628,30 @@ mod tests {
             version: "2026a".into(),
         };
         assert!(derive_hierarchy_from_candidates(&intel, &cands).is_none());
+    }
+
+    #[test]
+    fn derived_gfbf_does_not_contain_gompi() {
+        let parent = Toolchain {
+            name: "gfbf".into(),
+            version: "2099a".into(),
+        };
+        let mut gfbf_def = cand("gfbf", "2099a", "system", "", None);
+        gfbf_def.dependencies = vec![dep_pin("GCC", "15.2.0")];
+        let cands = vec![
+            gfbf_def,
+            cand("gompi", "2099a", "system", "", None),
+            cand("mpi4py", "4.0.1", "gompi", "2099a", None),
+        ];
+        let h = derive_hierarchy_from_candidates(&parent, &cands).expect("derived");
+        assert_eq!(
+            h.member_labels(),
+            vec!["system", "GCCcore-15.2.0", "GCC-15.2.0", "gfbf-2099a"]
+        );
+        assert!(!h
+            .member_labels()
+            .iter()
+            .any(|label| label.starts_with("gompi")));
     }
 
     #[test]
