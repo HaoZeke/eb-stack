@@ -1272,7 +1272,7 @@ pub fn solve_with_resolvo(
     policy: &Policy,
     baseline: Option<&StackLock>,
 ) -> Result<Vec<Candidate>, String> {
-    let priority = policy.effective_root_priority();
+    let priority = policy.effective_root_priority()?;
     if priority.is_empty() {
         return Err("unsatisfiable stack: policy has no roots".into());
     }

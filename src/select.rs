@@ -582,7 +582,7 @@ mod tests {
         ] {
             let policy = load_two_root_policy(policy_name);
             assert_eq!(
-                policy.effective_root_priority(),
+                policy.effective_root_priority().expect("priority"),
                 vec!["GROMACS".to_string(), "LAMMPS".to_string()],
                 "{policy_name}"
             );
@@ -617,7 +617,7 @@ mod tests {
         ] {
             let policy = load_two_root_policy(policy_name);
             assert_eq!(
-                policy.effective_root_priority(),
+                policy.effective_root_priority().expect("priority"),
                 vec!["LAMMPS".to_string(), "GROMACS".to_string()],
                 "{policy_name}"
             );
@@ -649,7 +649,7 @@ mod tests {
         let g_first = load_two_root_policy("default_priority_gromacs_listed_first.json");
         assert!(g_first.root_priority.is_none());
         assert_eq!(
-            g_first.effective_root_priority(),
+            g_first.effective_root_priority().expect("priority"),
             vec!["GROMACS".to_string(), "LAMMPS".to_string()]
         );
         let lock_g = select_stack(&universe, &g_first, None).expect("default gromacs-first");
@@ -659,7 +659,7 @@ mod tests {
         let l_first = load_two_root_policy("default_priority_lammps_listed_first.json");
         assert!(l_first.root_priority.is_none());
         assert_eq!(
-            l_first.effective_root_priority(),
+            l_first.effective_root_priority().expect("priority"),
             vec!["LAMMPS".to_string(), "GROMACS".to_string()]
         );
         let lock_l = select_stack(&universe, &l_first, None).expect("default lammps-first");
@@ -699,7 +699,7 @@ mod tests {
         let single = load_policy("prefer_newer.json");
         assert!(single.root_priority.is_none());
         assert_eq!(
-            single.effective_root_priority(),
+            single.effective_root_priority().expect("priority"),
             vec!["GROMACS".to_string()]
         );
     }

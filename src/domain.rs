@@ -188,19 +188,26 @@ impl Policy {
     /// Effective root priority: explicit `root_priority` when non-empty,
     /// otherwise `roots` order. Any root missing from the priority list is
     /// appended in `roots` order so every application root is optimized.
-    pub fn effective_root_priority(&self) -> Vec<String> {
+    pub fn effective_root_priority(&self) -> Result<Vec<String>, String> {
         let mut order: Vec<String> = match &self.root_priority {
             Some(p) if !p.is_empty() => p.clone(),
             _ => self.roots.clone(),
         };
-        // Only roots participate in the objective.
-        order.retain(|r| self.roots.iter().any(|root| root == r));
+        let mut seen = std::collections::BTreeSet::new();
+        for name in &order {
+            if !self.roots.iter().any(|root| root == name) {
+                return Err(format!("root_priority references unknown root {name}"));
+            }
+            if !seen.insert(name) {
+                return Err(format!("root_priority lists {name} more than once"));
+            }
+        }
         for r in &self.roots {
             if !order.iter().any(|x| x == r) {
                 order.push(r.clone());
             }
         }
-        order
+        Ok(order)
     }
 }
 
@@ -349,5 +356,45 @@ mod tests {
         assert!(lock(Vec::new(), STACK_LOCK_SCHEMA_VERSION)
             .validate_schema()
             .is_ok());
+    }
+
+    fn policy(roots: &[&str], priority: Option<&[&str]>) -> Policy {
+        Policy {
+            toolchain: Toolchain {
+                name: "foss".into(),
+                version: "2026.1".into(),
+            },
+            roots: roots.iter().map(|name| (*name).to_string()).collect(),
+            root_priority: priority
+                .map(|names| names.iter().map(|name| (*name).to_string()).collect()),
+            prefer_installed: false,
+            pins: Vec::new(),
+            forbid: Vec::new(),
+            objective: default_objective(),
+            require_upgrade: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn unknown_root_priority_name_is_an_error() {
+        let policy = policy(&["GROMACS", "LAMMPS"], Some(&["Gromacs", "LAMMPS"]));
+        let error = policy.effective_root_priority().expect_err("typo");
+        assert!(
+            error.contains("Gromacs"),
+            "unknown priority name must be reported: {error}"
+        );
+    }
+
+    #[test]
+    fn duplicate_root_priority_name_is_an_error() {
+        let policy = policy(
+            &["LAMMPS", "GROMACS"],
+            Some(&["LAMMPS", "GROMACS", "LAMMPS"]),
+        );
+        let error = policy.effective_root_priority().expect_err("duplicate");
+        assert!(
+            error.contains("LAMMPS"),
+            "duplicate priority name must be reported: {error}"
+        );
     }
 }
