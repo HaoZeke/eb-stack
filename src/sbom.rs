@@ -32,7 +32,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
 use std::str::FromStr;
 
-fn lock_package_key(package: &LockPackage) -> String {
+pub(crate) fn lock_package_key(package: &LockPackage) -> String {
     format!(
         "{}@{}+{}{}",
         package.name,

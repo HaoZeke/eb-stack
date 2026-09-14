@@ -54,7 +54,10 @@ pub fn ordered_packages<'a>(
         let key = package_row_key(package);
         dependents.entry(key.clone()).or_default();
         let mut deg = 0usize;
-        if let Some(deps) = dep_map.get(&package.name) {
+        if let Some(deps) = dep_map
+            .get(&package.name)
+            .or_else(|| dep_map.get(&crate::sbom::lock_package_key(package)))
+        {
             for dep_name in deps {
                 if let Some(dep_pkgs) = by_name.get(dep_name.as_str()) {
                     for dep_pkg in dep_pkgs {
