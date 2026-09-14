@@ -614,11 +614,7 @@ pub fn check_duplicate_upstream(
         }
         if !candidate.name.eq_ignore_ascii_case(&recipe.name)
             || candidate.version != recipe.version
-            || !candidate
-                .toolchain
-                .name
-                .eq_ignore_ascii_case(&recipe.toolchain.name)
-            || candidate.toolchain.version != recipe.toolchain.version
+            || !crate::hierarchy::toolchains_match(&candidate.toolchain, &recipe.toolchain)
         {
             continue;
         }

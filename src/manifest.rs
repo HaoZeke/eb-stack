@@ -27,7 +27,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
         })
         .collect();
 
-    let dependencies = recipe
+    let mut dependencies: Vec<DependencyIntent> = recipe
         .dependencies
         .iter()
         .enumerate()
@@ -128,12 +128,18 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
                 category: "unparsed-constraint".into(),
                 severity: ResidualSeverity::Judgment,
                 summary: format!(
-                    "{} requirement {constraint:?} is not expressible, so it does not constrain                      the solve: {unsupported}",
+                    "{} requirement {constraint:?} is not expressible, so it does not constrain the solve: {unsupported}",
                     dependency.name
                 ),
                 evidence: dependency.original_spec.clone(),
                 provenance: dependency.provenance.first().cloned(),
             });
+            if let Some(intent) = dependencies.iter_mut().find(|intent| {
+                intent.name == dependency.name
+                    && intent.constraint.as_deref() == Some(constraint.as_str())
+            }) {
+                intent.constraint = None;
+            }
         }
     }
     if recipe.sources.iter().any(|source| source.sha256.is_none()) {

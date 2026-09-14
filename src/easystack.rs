@@ -29,7 +29,10 @@ pub type EasystackOptions = BTreeMap<String, BTreeMap<String, String>>;
 /// easystack names files, and EasyBuild finds them through the robot path, so
 /// only the basename belongs here.
 fn easyconfig_filename(easyconfig_path: &str) -> Option<String> {
-    let name = easyconfig_path.rsplit('/').next()?.trim();
+    let name = std::path::Path::new(easyconfig_path)
+        .file_name()
+        .and_then(|name| name.to_str())?
+        .trim();
     if name.is_empty() || !name.ends_with(".eb") {
         return None;
     }
@@ -157,6 +160,13 @@ mod tests {
             yaml,
             "easyconfigs:\n- Alpha-1.0-foss-2025a.eb\n- Beta-2.0-foss-2025a.eb\n"
         );
+    }
+
+    #[test]
+    fn a_windows_path_still_emits_the_basename() {
+        let lock = lock_with(&[r"C:\robot\a\Alpha\Alpha-1.0-foss-2025a.eb"]);
+        let yaml = lock_to_easystack(&lock, &EasystackOptions::new());
+        assert!(yaml.contains("Alpha-1.0-foss-2025a.eb"), "{yaml}");
     }
 
     #[test]
