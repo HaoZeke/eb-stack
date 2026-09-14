@@ -509,6 +509,15 @@ fn derive_nvidia_family_hierarchy(
     // Match on the version prefix instead, requiring the remainder to begin a
     // versionsuffix so that `25.1` does not answer for `25.11-CUDA-12.9.1`.
     let suffixed_prefix = |c: &Candidate| version_prefix_of(&c.version, &parent.version);
+    let pins_parent_compiler = |c: &Candidate| {
+        c.dependencies
+            .iter()
+            .chain(c.builddependencies.iter())
+            .any(|dep| {
+                matches!(dep.name.as_str(), "nvidia-compilers" | "NVHPC")
+                    && exact_pin_version(&dep.version_req) == Some(parent.version.as_str())
+            })
+    };
     let def = cands
         .iter()
         .find(|c| c.name == parent.name && c.version == parent.version)
@@ -518,9 +527,17 @@ fn derive_nvidia_family_hierarchy(
                 .find(|c| c.name == parent.name && joined(c) == parent.version)
         })
         .or_else(|| {
-            cands
+            let prefixed: Vec<&Candidate> = cands
                 .iter()
-                .find(|c| c.name == parent.name && suffixed_prefix(c))
+                .filter(|c| c.name == parent.name && suffixed_prefix(c))
+                .collect();
+            match prefixed.as_slice() {
+                [only] => Some(*only),
+                many => many
+                    .iter()
+                    .copied()
+                    .find(|candidate| pins_parent_compiler(candidate)),
+            }
         })?;
     // The composite pins its compiler as a whole toolchain string, e.g.
     // ('NVHPC', '25.3-CUDA-12.8.0'): version and versionsuffix already joined,
@@ -610,9 +627,17 @@ fn nvidia_compilers_gcccore(nvhpc_ver: &str, cands: &[Candidate]) -> Option<Stri
         .iter()
         .find(|c| is_nvc(c) && joined(c) == nvhpc_ver)
         .or_else(|| {
-            cands
+            let prefixed: Vec<&Candidate> = cands
                 .iter()
-                .find(|c| is_nvc(c) && version_prefix_of(&c.version, nvhpc_ver))
+                .filter(|c| is_nvc(c) && version_prefix_of(&c.version, nvhpc_ver))
+                .collect();
+            match prefixed.as_slice() {
+                [only] => Some(*only),
+                many => many
+                    .iter()
+                    .copied()
+                    .find(|candidate| joined(candidate) == nvhpc_ver),
+            }
         })?;
     chosen
         .dependencies
@@ -1576,6 +1601,47 @@ mod tests {
             Some(parent.version.as_str())
         );
         assert_eq!(h.members.iter().filter(|m| m.name == "NVHPC").count(), 1);
+    }
+
+    #[test]
+    fn nvidia_prefix_fallback_does_not_take_the_other_cuda_variant() {
+        let parent = Toolchain {
+            name: "NVHPC".into(),
+            version: "25.3-CUDA-12.9.1".into(),
+        };
+        let mut first = cand("NVHPC", "25.3", "system", "", Some("-CUDA-%(cudaver)s"));
+        first.easyconfig_path = "NVHPC-25.3-CUDA-12.8.0.eb".into();
+        first.dependencies = vec![dep_pin("nvidia-compilers", "25.3-CUDA-12.8.0")];
+        let mut second = cand("NVHPC", "25.3", "system", "", Some("-CUDA-%(cudaver)s"));
+        second.easyconfig_path = "NVHPC-25.3-CUDA-12.9.1.eb".into();
+        second.dependencies = vec![dep_pin("nvidia-compilers", "25.3-CUDA-12.9.1")];
+        let mut nvc_old = cand(
+            "nvidia-compilers",
+            "25.3",
+            "system",
+            "",
+            Some("-CUDA-12.8.0"),
+        );
+        nvc_old.dependencies = vec![dep_pin("GCCcore", "13.3.0")];
+        let mut nvc_new = cand(
+            "nvidia-compilers",
+            "25.3",
+            "system",
+            "",
+            Some("-CUDA-12.9.1"),
+        );
+        nvc_new.dependencies = vec![dep_pin("GCCcore", "14.2.0")];
+        let h = derive_hierarchy_from_candidates(&parent, &[first, second, nvc_old, nvc_new])
+            .expect("12.9.1 parent must not take the first 12.8.0 definition");
+        assert_eq!(
+            h.members
+                .iter()
+                .find(|member| member.name == "GCCcore")
+                .map(|member| member.version.as_str()),
+            Some("14.2.0"),
+            "{:?}",
+            h.member_labels()
+        );
     }
 
     #[test]
