@@ -817,6 +817,10 @@ impl<'a> Parser<'a> {
         };
         match c {
             b'f' | b'F' if self.starts_fstring() => self.parse_fstring(),
+            b'r' | b'R' if self.starts_raw_string() => {
+                self.pos += 1;
+                self.parse_string()
+            }
             b'\'' | b'"' => self.parse_string(),
             b'[' => self.parse_list(),
             b'(' => self.parse_tuple_or_group(),
@@ -868,7 +872,18 @@ impl<'a> Parser<'a> {
                     other => other as char,
                 });
             } else {
-                out.push(c as char);
+                let start = self.pos - 1;
+                let width = utf8_char_width(c);
+                if start + width > self.src.len() {
+                    return Err(self.err("invalid UTF-8 in string"));
+                }
+                let ch = std::str::from_utf8(&self.src[start..start + width])
+                    .map_err(|e| self.err(e.to_string()))?
+                    .chars()
+                    .next()
+                    .ok_or_else(|| self.err("invalid UTF-8 in string"))?;
+                self.pos = start + width;
+                out.push(ch);
             }
         }
         Err(self.err("unterminated string"))
@@ -890,6 +905,11 @@ impl<'a> Parser<'a> {
             depth: self.depth + 1,
         };
         sub.parse_expr()
+    }
+
+    fn starts_raw_string(&self) -> bool {
+        matches!(self.src.get(self.pos), Some(b'r' | b'R'))
+            && matches!(self.src.get(self.pos + 1), Some(b'\'' | b'"'))
     }
 
     /// Whether what follows is an f-string rather than a name beginning with f.
@@ -937,7 +957,7 @@ impl<'a> Parser<'a> {
             let expr = tail[1..end].trim();
             // A conversion or a format spec would change the text, and
             // guessing at one would put a wrong value in a field.
-            if expr.contains('!') || expr.contains(':') {
+            if fstring_field_has_format_spec(expr) {
                 return Err(self.err(format!("f-string field {expr} carries a format spec")));
             }
             // Anything else is an ordinary expression, and the parser already
@@ -1531,7 +1551,12 @@ fn apply_templates_value(val: &Value, templates: &HashMap<String, String>) -> Va
         Value::Dict(items) => Value::Dict(
             items
                 .iter()
-                .map(|(k, v)| (k.clone(), apply_templates_value(v, templates)))
+                .map(|(k, v)| {
+                    (
+                        apply_templates_str(k, templates),
+                        apply_templates_value(v, templates),
+                    )
+                })
                 .collect(),
         ),
         other => other.clone(),
@@ -1679,6 +1704,31 @@ fn assigns_at_top_level(src: &str, field: &str) -> bool {
             _ => false,
         }
     })
+}
+
+fn utf8_char_width(first: u8) -> usize {
+    if first < 0x80 {
+        1
+    } else if first < 0xe0 {
+        2
+    } else if first < 0xf0 {
+        3
+    } else {
+        4
+    }
+}
+
+fn fstring_field_has_format_spec(expr: &str) -> bool {
+    let mut depth = 0u32;
+    for character in expr.chars() {
+        match character {
+            '[' | '(' => depth = depth.saturating_add(1),
+            ']' | ')' => depth = depth.saturating_sub(1),
+            ':' | '!' if depth == 0 => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 fn parse_dep_filename(s: &str) -> Option<ResolvedDep> {
@@ -2590,7 +2640,7 @@ pub fn easyconfig_basename(
 }
 
 fn is_system_toolchain(tc: &Toolchain) -> bool {
-    tc.name.eq_ignore_ascii_case("system")
+    crate::hierarchy::is_system_toolchain(tc)
 }
 
 fn candidate_identity_key(c: &Candidate) -> (String, String, String, String) {
@@ -2685,7 +2735,7 @@ pub fn filter_toolchain_hierarchy(
 pub fn filter_toolchain(cands: &[Candidate], tc: &Toolchain) -> Vec<Candidate> {
     cands
         .iter()
-        .filter(|c| c.toolchain.name == tc.name && c.toolchain.version == tc.version)
+        .filter(|c| crate::hierarchy::toolchains_match(&c.toolchain, tc))
         .cloned()
         .collect()
 }
@@ -2718,8 +2768,7 @@ pub fn existing_versions(query: &ExistingVersionsQuery<'_>) -> Vec<String> {
         .iter()
         .filter(|c| {
             c.name == query.name
-                && c.toolchain.name == query.generation.name
-                && c.toolchain.version == query.generation.version
+                && crate::hierarchy::toolchains_match(&c.toolchain, query.generation)
         })
         .map(|c| c.version.clone())
         .collect();
@@ -4554,6 +4603,66 @@ homepage = 'https://example.invalid'
             .map(|dep| dep.name.as_str())
             .collect();
         assert_eq!(names, ["Foo", "Bar"]);
+    }
+
+    #[test]
+    fn a_single_quoted_string_keeps_utf8_characters() {
+        let src = "name = 'App'\nversion = '1.0'\n\
+                   toolchain = {'name': 'foss', 'version': '2024a'}\n\
+                   homepage = 'https://example.invalid/café'\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(
+            parsed.homepage.as_deref(),
+            Some("https://example.invalid/café")
+        );
+    }
+
+    #[test]
+    fn a_raw_string_is_not_an_unknown_name() {
+        let src = "name = 'App'\nversion = '1.0'\n\
+                   toolchain = {'name': 'foss', 'version': '2024a'}\n\
+                   configopts = r'--prefix=/opt/app'\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.configopts.as_deref(), Some("--prefix=/opt/app"));
+    }
+
+    #[test]
+    fn an_fstring_slice_is_an_expression_not_a_format_spec() {
+        let src = "name = 'App'\nversion = '1.23'\n\
+                   toolchain = {'name': 'foss', 'version': '2024a'}\n\
+                   versionsuffix = f'-{version[:2]}'\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.versionsuffix.as_deref(), Some("-1."));
+    }
+
+    #[test]
+    fn filter_toolchain_treats_dummy_as_system() {
+        let dummy = Candidate {
+            name: "zlib".into(),
+            version: "1.2".into(),
+            toolchain: Toolchain {
+                name: "dummy".into(),
+                version: String::new(),
+            },
+            versionsuffix: None,
+            easyconfig_path: "zlib-1.2.eb".into(),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+            moduleclass: None,
+        };
+        let kept = filter_toolchain(
+            &[dummy],
+            &Toolchain {
+                name: "system".into(),
+                version: "system".into(),
+            },
+        );
+        assert_eq!(kept.len(), 1);
+        assert_eq!(
+            easyconfig_basename("zlib", "1.2", &kept[0].toolchain, None),
+            "zlib-1.2.eb"
+        );
     }
 }
 

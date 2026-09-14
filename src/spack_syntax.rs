@@ -351,7 +351,7 @@ impl<'a> StaticEvaluator<'a> {
     fn walk_if(&mut self, statement: &ast::StmtIf) {
         match self
             .evaluate(&statement.test)
-            .and_then(|value| value.as_bool())
+            .and_then(|value| is_truthy(&value))
         {
             Some(true) => self.walk_statements(&statement.body),
             Some(false) => self.walk_statements(&statement.orelse),
@@ -467,7 +467,7 @@ impl<'a> StaticEvaluator<'a> {
             ast::Expr::IfExp(conditional) => {
                 match self
                     .evaluate(&conditional.test)
-                    .and_then(|value| value.as_bool())
+                    .and_then(|value| is_truthy(&value))
                 {
                     Some(true) => self.evaluate(&conditional.body),
                     Some(false) => self.evaluate(&conditional.orelse),
@@ -504,13 +504,17 @@ impl<'a> StaticEvaluator<'a> {
             let receiver = self.evaluate(&attribute.value)?;
             return match attribute.attr.as_str() {
                 "get" => {
+                    let StaticValue::Mapping(_) = &receiver else {
+                        return None;
+                    };
                     let key = self.evaluate(call.args.first()?)?.as_string()?;
-                    let default = call
-                        .args
-                        .get(1)
-                        .and_then(|value| self.evaluate(value))
-                        .unwrap_or(StaticValue::None);
-                    Some(receiver.mapping_value(&key).cloned().unwrap_or(default))
+                    if let Some(value) = receiver.mapping_value(&key).cloned() {
+                        return Some(value);
+                    }
+                    match call.args.get(1) {
+                        None => Some(StaticValue::None),
+                        Some(default) => self.evaluate(default),
+                    }
                 }
                 "items" if call.args.is_empty() => match receiver {
                     StaticValue::Mapping(entries) => Some(StaticValue::Sequence(
@@ -616,15 +620,27 @@ impl<'a> StaticEvaluator<'a> {
     }
 
     fn evaluate_bool_op(&self, boolean: &ast::ExprBoolOp) -> Option<StaticValue> {
-        let values = boolean
-            .values
-            .iter()
-            .map(|value| self.evaluate(value)?.as_bool())
-            .collect::<Option<Vec<_>>>()?;
-        Some(StaticValue::Bool(match boolean.op {
-            ast::BoolOp::And => values.into_iter().all(|value| value),
-            ast::BoolOp::Or => values.into_iter().any(|value| value),
-        }))
+        match boolean.op {
+            ast::BoolOp::And => {
+                let mut last = StaticValue::Bool(true);
+                for value in &boolean.values {
+                    last = self.evaluate(value)?;
+                    if !is_truthy(&last)? {
+                        return Some(StaticValue::Bool(false));
+                    }
+                }
+                Some(last)
+            }
+            ast::BoolOp::Or => {
+                for value in &boolean.values {
+                    let evaluated = self.evaluate(value)?;
+                    if is_truthy(&evaluated)? {
+                        return Some(evaluated);
+                    }
+                }
+                Some(StaticValue::Bool(false))
+            }
+        }
     }
 
     fn evaluate_comparison(&self, comparison: &ast::ExprCompare) -> Option<StaticValue> {
@@ -809,6 +825,54 @@ class Pkg(Package):
             .filter_map(|call| call.arg_string(0))
             .collect();
         assert_eq!(versions, ["1.0", "2.0"]);
+    }
+
+    #[test]
+    fn bool_or_short_circuits_past_a_dynamic_operand() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    if True or discover():
+        depends_on("backend")
+"#,
+        )
+        .expect("parse");
+        assert!(
+            syntax.calls.iter().any(|call| call.name == "depends_on"
+                && call.arg_string(0).as_deref() == Some("backend")),
+            "static True or dynamic must keep the body: {:?}",
+            syntax.residuals
+        );
+    }
+
+    #[test]
+    fn dict_get_with_a_dynamic_default_is_not_none() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    options = {}
+    variant("feature", when=options.get("when", discover_when()))
+"#,
+        )
+        .expect("parse");
+        assert!(
+            syntax
+                .residuals
+                .iter()
+                .any(|residual| residual.contains("dynamic variant")),
+            "failed default must residual, not become Always: {:?}",
+            syntax.residuals
+        );
+    }
+}
+
+fn is_truthy(value: &StaticValue) -> Option<bool> {
+    match value {
+        StaticValue::Bool(value) => Some(*value),
+        StaticValue::None => Some(false),
+        StaticValue::String(value) => Some(!value.is_empty()),
+        StaticValue::Sequence(value) => Some(!value.is_empty()),
+        StaticValue::Mapping(value) => Some(!value.is_empty()),
     }
 }
 
