@@ -524,6 +524,18 @@ pub(crate) fn guess_easyblock(recipe: &ForeignRecipe, warnings: &mut Vec<String>
         warnings.push(format!("build-system hint {hint} → easyblock RPackage"));
         return "RPackage".into();
     }
+    if let Some(hint) = hint(&["mesonpy"]) {
+        warnings.push(format!(
+            "build-system hint {hint} → easyblock PythonPackage"
+        ));
+        return "PythonPackage".into();
+    }
+    if let Some(hint) = hint(&["python", "pip"]) {
+        warnings.push(format!(
+            "build-system hint {hint} → easyblock PythonPackage"
+        ));
+        return "PythonPackage".into();
+    }
     if let Some(hint) = hint(&["meson"]) {
         warnings.push(format!("build-system hint {hint} → easyblock MesonNinja"));
         return "MesonNinja".into();
@@ -531,12 +543,6 @@ pub(crate) fn guess_easyblock(recipe: &ForeignRecipe, warnings: &mut Vec<String>
     if let Some(hint) = hint(&["cmake"]) {
         warnings.push(format!("build-system hint {hint} → easyblock CMakeNinja"));
         return "CMakeNinja".into();
-    }
-    if let Some(hint) = hint(&["python", "pip"]) {
-        warnings.push(format!(
-            "build-system hint {hint} → easyblock PythonPackage"
-        ));
-        return "PythonPackage".into();
     }
     if hint(&["autotools", "autoreconf"]).is_some() {
         return "ConfigureMake".into();
@@ -2157,7 +2163,10 @@ mod tests {
             "Environment :: Console".to_string(),
             "Topic :: Utilities".to_string(),
         ];
-        assert_eq!(moduleclass_from_classifiers(&tools).as_deref(), Some("tools"));
+        assert_eq!(
+            moduleclass_from_classifiers(&tools).as_deref(),
+            Some("tools")
+        );
         // Bio-informatics beats the library topic it also carries: upstream
         // classes such a package as bio, not lib.
         let both = vec![
@@ -2376,5 +2385,33 @@ about:
             Some(ForeignFormat::Raku)
         );
         assert_eq!(detect_foreign_format(Path::new("foo.eb")), None);
+    }
+
+    #[test]
+    fn mesonpy_is_a_python_package_not_mesonninja() {
+        let recipe = ForeignRecipe {
+            format: ForeignFormat::Pypi,
+            name: "demo".into(),
+            version: "1.0".into(),
+            homepage: None,
+            source_url: None,
+            source_filename: None,
+            sha256: None,
+            sources: Vec::new(),
+            summary: None,
+            description: None,
+            license: None,
+            dependencies: Vec::new(),
+            build_system_hints: vec!["mesonpy".into(), "python".into()],
+            configopts: None,
+            patches: Vec::new(),
+            variants: Vec::new(),
+            rules: Vec::new(),
+            notes: Vec::new(),
+            residuals: Vec::new(),
+            classifiers: Vec::new(),
+        };
+        let mut notes = Vec::new();
+        assert_eq!(guess_easyblock(&recipe, &mut notes), "PythonPackage");
     }
 }
