@@ -307,7 +307,7 @@ fn format_list_string_item(item: &ListStringItem<'_>) -> Vec<String> {
         // fall back: smaller budget hard-split
         let budget = EB_MAX_LINE
             .saturating_sub(indent.chars().count())
-            .saturating_sub(6)
+            .saturating_sub(if item.trailing_comma { 8 } else { 6 })
             .max(8);
         let mut rest = item.content;
         let mut out = Vec::new();
@@ -351,6 +351,7 @@ struct StringAssignment<'a> {
 struct AssignmentStringList<'a> {
     indent: &'a str,
     key: &'a str,
+    op: &'a str,
     items: Vec<(char, &'a str)>,
 }
 
@@ -358,7 +359,11 @@ fn parse_assignment_string_list(line: &str) -> Option<AssignmentStringList<'_>> 
     let indent_len = line.len() - line.trim_start().len();
     let indent = &line[..indent_len];
     let rest = line[indent_len..].trim_end();
-    let eq = rest.find('=')?;
+    let (eq, op) = if let Some(index) = rest.find("+=") {
+        (index, "+=")
+    } else {
+        (rest.find('=')?, "=")
+    };
     let key = rest[..eq].trim();
     if key.is_empty()
         || !key
@@ -367,7 +372,7 @@ fn parse_assignment_string_list(line: &str) -> Option<AssignmentStringList<'_>> 
     {
         return None;
     }
-    let after = rest[eq + 1..].trim();
+    let after = rest[eq + op.len()..].trim();
     let inner = after.strip_prefix('[')?.strip_suffix(']')?.trim();
     if inner.is_empty() {
         return None;
@@ -391,11 +396,16 @@ fn parse_assignment_string_list(line: &str) -> Option<AssignmentStringList<'_>> 
             rest = rest[1..].trim_start();
         }
     }
-    (!items.is_empty()).then_some(AssignmentStringList { indent, key, items })
+    (!items.is_empty()).then_some(AssignmentStringList {
+        indent,
+        key,
+        op,
+        items,
+    })
 }
 
 fn format_assignment_string_list(list: &AssignmentStringList<'_>) -> Vec<String> {
-    let mut lines = vec![format!("{}{} = [", list.indent, list.key)];
+    let mut lines = vec![format!("{}{} {} [", list.indent, list.key, list.op)];
     let item_indent = format!("{}    ", list.indent);
     for (quote, item) in &list.items {
         lines.extend(format_list_string_item(&ListStringItem {
@@ -821,6 +831,26 @@ mod tests {
         assert!(result.text.contains("source_urls = ["));
         assert!(result.text.contains(" + "));
         assert!(result.text.lines().last() == Some("]"));
+        assert!(result
+            .text
+            .lines()
+            .all(|line| line.chars().count() <= EB_MAX_LINE));
+    }
+
+    #[test]
+    fn format_assignment_string_list_wraps_plus_equals() {
+        let url = format!(
+            "https://example.invalid/releases/{}/",
+            "0123456789abcdef".repeat(7)
+        );
+        let source = format!("source_urls += ['{url}']\n");
+        assert!(source.lines().next().unwrap().chars().count() > EB_MAX_LINE);
+        assert!(line_is_mechanically_fixable(source.trim_end()));
+
+        let result = format_style(&source);
+
+        assert!(result.remaining.is_empty(), "{:?}", result.remaining);
+        assert!(result.text.contains("source_urls += ["));
         assert!(result
             .text
             .lines()

@@ -267,6 +267,17 @@ fn only_a_64_hex_checksum_is_asserted_as_sha256() {
         condition: ConditionExpr::Always,
         provenance: Vec::new(),
     });
+    plan.sources.push(SourceArtifact {
+        url: Some("https://example.invalid/other.tar.gz".into()),
+        filename: None,
+        sha256: Some("cd".repeat(32)),
+        git: None,
+        tag: None,
+        commit: None,
+        target_directory: None,
+        condition: ConditionExpr::Always,
+        provenance: Vec::new(),
+    });
     let sbom = package_plan_to_cyclonedx(&plan).expect("typed CycloneDX SBOM");
     let hashes = sbom["metadata"]["component"]["hashes"]
         .as_array()
@@ -274,4 +285,20 @@ fn only_a_64_hex_checksum_is_asserted_as_sha256() {
     assert_eq!(hashes.len(), 1, "{hashes:?}");
     assert_eq!(hashes[0]["alg"], "SHA-256");
     assert_eq!(hashes[0]["content"], "ab".repeat(32));
+    let references = sbom["metadata"]["component"]["externalReferences"]
+        .as_array()
+        .expect("source references");
+    let distribution_hashes: Vec<&str> = references
+        .iter()
+        .filter(|reference| reference["type"] == "distribution")
+        .filter_map(|reference| reference["hashes"][0]["content"].as_str())
+        .collect();
+    assert!(
+        distribution_hashes.contains(&"ab".repeat(32).as_str()),
+        "{references:?}"
+    );
+    assert!(
+        distribution_hashes.contains(&"cd".repeat(32).as_str()),
+        "{references:?}"
+    );
 }

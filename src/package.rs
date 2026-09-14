@@ -1154,12 +1154,14 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
         .description
         .as_deref()
         .map(NormalizedString::new);
-    let root_hashes: Vec<Hash> = plan
+    // Component hashes are algorithms for one artifact. Each source keeps
+    // its digest on the distribution reference; piling every tarball onto
+    // the root makes a verifier reject a valid file.
+    root.hashes = plan
         .sources
         .iter()
-        .filter_map(|source| source.sha256.as_deref().and_then(sha256_hash))
-        .collect();
-    root.hashes = (!root_hashes.is_empty()).then_some(Hashes(root_hashes));
+        .find_map(|source| source.sha256.as_deref().and_then(sha256_hash))
+        .map(|hash| Hashes(vec![hash]));
     let mut source_references = Vec::new();
     let mut seen_references = BTreeSet::new();
     for source in &plan.sources {

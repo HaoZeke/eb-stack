@@ -43,7 +43,8 @@ pub(crate) fn exact_version(pin: &str) -> Option<String> {
     }
     let version = pin.strip_prefix("==")?.trim();
     // A PEP 508 marker tail is a condition, not part of the version.
-    if version.is_empty() || version.contains(';') {
+    if version.is_empty() || version.contains(';') || version.contains(',') || version.contains('*')
+    {
         return None;
     }
     Some(version.to_string())
@@ -226,6 +227,8 @@ mod tests {
     fn arbitrary_equality_and_marker_tails_are_not_versions() {
         assert_eq!(exact_version("===1.0"), None);
         assert_eq!(exact_version("==1.0; python_version>=\"3.8\""), None);
+        assert_eq!(exact_version("==1.0.*"), None);
+        assert_eq!(exact_version("==1.0,!=2.0"), None);
         assert_eq!(exact_version("==1.0"), Some("1.0".into()));
     }
 
