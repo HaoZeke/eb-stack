@@ -438,7 +438,7 @@ fn foreign_residual(category: &str, summary: impl Into<String>) -> ForeignResidu
 
 fn extract_spack_config_flags(text: &str) -> Option<String> {
     // Line must start with whitespace then a quote (not f") so f-strings are skipped.
-    let lit = Regex::new(r#"(?m)^[ \t]+[\"'](-D[A-Za-z0-9_./+=-]+)[\"']"#).ok()?;
+    let lit = static_regex!(r#"(?m)^[ \t]+[\"'](-D[A-Za-z0-9_./+=-]+)[\"']"#);
     let mut flags: Vec<String> = lit
         .captures_iter(text)
         .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
@@ -1894,8 +1894,7 @@ fn materialize_spack_url_for_version(
         .map(|(date, update)| (date, format!("_update{update}")))
         .unwrap_or((version, String::new()));
     let date = NaiveDate::parse_from_str(date, "%Y%m%d").ok()?;
-    let stable_block = Regex::new(r"(?s)stable_versions\s*=\s*\{(.*?)\}")
-        .ok()?
+    let stable_block = static_regex!(r"(?s)stable_versions\s*=\s*\{(.*?)\}")
         .captures(text)?
         .get(1)?
         .as_str()
@@ -2193,7 +2192,7 @@ fn split_spack_spec(spec: &str) -> (String, Option<String>) {
 }
 
 fn spack_docstring(text: &str) -> Option<String> {
-    let re = Regex::new(r#"(?s)class\s+\w+\s*\([^)]*\)\s*:\s*(?:r)?\"\"\"(.+?)\"\"\""#).ok()?;
+    let re = static_regex!(r#"(?s)class\s+\w+\s*\([^)]*\)\s*:\s*(?:r)?\"\"\"(.+?)\"\"\""#);
     re.captures(text).and_then(|c| {
         c.get(1)
             .map(|m| m.as_str().split_whitespace().collect::<Vec<_>>().join(" "))
