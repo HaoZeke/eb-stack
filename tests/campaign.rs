@@ -91,6 +91,14 @@ fn failure_classifier_preserves_the_build_error_domain() {
             "patching file src/lib.rs\nHunk #1 FAILED at 42",
             BuildFindingClass::Patch,
         ),
+        (
+            "fatal error: hdf5.h: No such file or directory\nmodule env: PATH=/usr/bin",
+            BuildFindingClass::DependencyMissing,
+        ),
+        (
+            "env: rustc: No such file or directory",
+            BuildFindingClass::Runtime,
+        ),
     ];
     for (log, expected) in cases {
         assert_eq!(
@@ -732,6 +740,51 @@ fn failed_profile_verification_preserves_the_build_claim_and_finding() {
     assert!(state.findings[0]
         .evidence
         .contains("module=QMCPACK/4.3.0-complex-foss-2026.1"));
+}
+
+#[test]
+fn system_verification_loads_the_unsuffixed_module() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipes = bundle.join("easyconfigs/q/QMCPACK");
+    std::fs::create_dir_all(&recipes).expect("recipes");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{
+          "package":{"name":"QMCPACK","version":"4.3.0"},
+          "build":{"toolchain":{"name":"system","version":"system"}},
+          "profiles":[{
+            "name":"default",
+            "default":true,
+            "versionsuffix":[],
+            "verification_commands":[{"program":"false","args":[]}]
+          }]
+        }"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .expect("lock");
+    write_valid_recipe(&recipes.join("QMCPACK.eb"), "QMCPACK", "4.3.0");
+
+    let state = run_campaign(&CampaignRequest {
+        bundle,
+        target: target("true"),
+        state_path: temp.path().join("campaign.json"),
+    })
+    .expect("campaign");
+    assert_eq!(state.status, CampaignStatus::Failed);
+    assert!(state.findings[0].evidence.contains("module=QMCPACK/4.3.0"));
+    assert!(
+        !state.findings[0]
+            .evidence
+            .contains("module=QMCPACK/4.3.0-system-system"),
+        "{}",
+        state.findings[0].evidence
+    );
 }
 
 #[test]

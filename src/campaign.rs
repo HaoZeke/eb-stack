@@ -718,13 +718,15 @@ pub fn classify_build_failure(
     exit_code: Option<i32>,
 ) -> BuildFindingClass {
     let text = format!("{stage}\n{stdout}\n{stderr}").to_ascii_lowercase();
-    let missing_executable = text.contains("no such file or directory")
+    let missing_executable = (text.contains("no such file or directory")
         && (text.contains("could not execute process")
             || text.contains("never executed")
             || text.contains("command not found")
             || text.contains("executable file not found")
-            || text.contains("env:")
-            || exit_code == Some(127));
+            || exit_code == Some(127)))
+        || text
+            .lines()
+            .any(|line| line.contains("no such file or directory") && line.contains("env:"));
     let checksum_failure = text.lines().any(|line| {
         line.contains("checksum mismatch")
             || line.contains("checksums do not match")
@@ -909,10 +911,17 @@ fn module_name(
                 "manifest with verification commands has no build.toolchain.version".into(),
             )
         })?;
-    Ok(format!(
-        "{package}/{version}{}-{toolchain_name}-{toolchain_version}",
-        profile.versionsuffix.join("")
-    ))
+    if toolchain_name.eq_ignore_ascii_case("system") {
+        Ok(format!(
+            "{package}/{version}{}",
+            profile.versionsuffix.join("")
+        ))
+    } else {
+        Ok(format!(
+            "{package}/{version}{}-{toolchain_name}-{toolchain_version}",
+            profile.versionsuffix.join("")
+        ))
+    }
 }
 
 fn expand_verification_token(

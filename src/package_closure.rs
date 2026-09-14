@@ -295,6 +295,7 @@ pub fn plan_package_closure_with_sources(
         target_hierarchy,
         easyconfig_roots: request.easyconfig_roots.clone(),
         default_stack_policy: request.stack_policy.clone(),
+        package_index: request.package_index.clone(),
     };
 
     let root_path = vec![plan.package.name.clone()];
@@ -600,6 +601,7 @@ struct ClosureState<'a> {
     target_hierarchy: Option<ToolchainHierarchy>,
     easyconfig_roots: Vec<PathBuf>,
     default_stack_policy: StackPolicy,
+    package_index: BTreeMap<String, crate::ecosystem::IndexEntry>,
 }
 
 impl ClosureState<'_> {
@@ -773,6 +775,7 @@ impl ClosureState<'_> {
             &provider,
             &self.easyconfig_roots,
             &self.default_stack_policy,
+            &self.package_index,
         )?;
 
         let mut child_path = path.to_vec();
@@ -898,11 +901,16 @@ fn prepare_companion_from_provider(
     provider: &PackageSourceProvider,
     easyconfig_roots: &[PathBuf],
     default_stack_policy: &StackPolicy,
+    package_index: &BTreeMap<String, crate::ecosystem::IndexEntry>,
 ) -> Result<(PreparedCompanion, StackPolicy), PackageClosureError> {
     match provider.provider {
         CatalogProviderKind::Foreign => {
-            let companion_request =
-                foreign_request_from_provider(provider, easyconfig_roots, default_stack_policy)?;
+            let companion_request = foreign_request_from_provider(
+                provider,
+                easyconfig_roots,
+                default_stack_policy,
+                package_index,
+            )?;
             let (mut companion_plan, companion_sbom) =
                 prepare_new_package_plan(&companion_request)?;
             companion_plan.package.name.clone_from(&provider.name);
@@ -1073,6 +1081,7 @@ fn foreign_request_from_provider(
     provider: &PackageSourceProvider,
     easyconfig_roots: &[PathBuf],
     default_stack_policy: &StackPolicy,
+    package_index: &BTreeMap<String, crate::ecosystem::IndexEntry>,
 ) -> Result<NewPackageRequest, PackageClosureError> {
     let mut package_layers = Vec::new();
     for path in &provider.package_config {
@@ -1087,7 +1096,7 @@ fn foreign_request_from_provider(
         toolchain: provider.toolchain.clone(),
         source_checksums: provider.source_checksums.clone(),
         package_layers,
-        package_index: Default::default(),
+        package_index: package_index.clone(),
         easyconfig_roots: easyconfig_roots.to_vec(),
         stack_policy: provider_stack_policy(provider, default_stack_policy)?,
     })
@@ -1222,5 +1231,47 @@ mod tests {
             package_identity("Capn-Proto"),
             package_identity("capnproto")
         );
+    }
+
+    #[test]
+    fn foreign_companions_keep_the_root_package_index() {
+        let provider = PackageSourceProvider {
+            name: "jsonlite".into(),
+            provider: CatalogProviderKind::Foreign,
+            version: Some("1.8.0".into()),
+            source: PathBuf::from("jsonlite"),
+            format: None,
+            package_config: Vec::new(),
+            source_checksums: Vec::new(),
+            profile: "default".into(),
+            toolchain: Toolchain {
+                name: "foss".into(),
+                version: "2026.1".into(),
+            },
+            stack_policy: None,
+        };
+        let policy = StackPolicy {
+            schema_version: crate::package::STACK_POLICY_SCHEMA_VERSION,
+            name: "test".into(),
+            toolchain: provider.toolchain.clone(),
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        };
+        let mut index = BTreeMap::new();
+        index.insert(
+            "jsonlite".into(),
+            crate::ecosystem::IndexEntry {
+                version: "1.8.0".into(),
+                checksum: Some("md5:abc".into()),
+            },
+        );
+        let request = foreign_request_from_provider(
+            &provider,
+            &[PathBuf::from("easyconfigs")],
+            &policy,
+            &index,
+        )
+        .expect("request");
+        assert_eq!(request.package_index, index);
     }
 }

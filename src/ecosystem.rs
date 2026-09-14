@@ -36,11 +36,17 @@ pub(crate) fn split_name_and_pin(spec: &str) -> (String, Option<String>) {
 /// Anything else, including `>=` and a range, is a bound rather than a version
 /// and cannot become an EasyBuild dependency version on its own.
 pub(crate) fn exact_version(pin: &str) -> Option<String> {
-    pin.trim()
-        .strip_prefix("==")
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
+    let pin = pin.trim();
+    // PEP 440 arbitrary equality is not an EasyBuild version.
+    if pin.starts_with("===") {
+        return None;
+    }
+    let version = pin.strip_prefix("==")?.trim();
+    // A PEP 508 marker tail is a condition, not part of the version.
+    if version.is_empty() || version.contains(';') {
+        return None;
+    }
+    Some(version.to_string())
 }
 
 /// `Some(trimmed)` when a metadata field carries anything but whitespace.
@@ -75,7 +81,7 @@ pub fn parse_package_index(text: &str) -> std::collections::BTreeMap<String, Ind
     // A pinned requirements file is the same answer in the other ecosystem's
     // spelling, and `pip freeze` is the artifact people already have. One
     // `name==version` per line, so it cannot be confused with a control file.
-    if !text.contains("Package:") {
+    if !looks_like_control_file(text) {
         for line in text.lines() {
             let line = line.split('#').next().unwrap_or("").trim();
             if line.is_empty() {
@@ -123,6 +129,14 @@ pub fn parse_package_index(text: &str) -> std::collections::BTreeMap<String, Ind
         }
     }
     index
+}
+
+/// A Debian/CRAN control file starts a stanza with `Package:` at column 0.
+///
+/// An unanchored substring match treats a pip-freeze comment that happens to
+/// mention the word as a control file, then drops every `name==version` pin.
+fn looks_like_control_file(text: &str) -> bool {
+    text.lines().any(|line| line.starts_with("Package:"))
 }
 
 #[cfg(test)]
@@ -195,6 +209,24 @@ mod tests {
         );
         // A range names no single version, so it supplies nothing.
         assert!(!index.contains_key("requests"));
+    }
+
+    #[test]
+    fn a_comment_mentioning_package_does_not_empty_a_freeze_file() {
+        let index = parse_package_index(
+            "# from pip freeze; see Package: in the control file docs\nsoupsieve==2.5\n",
+        );
+        assert_eq!(
+            index.get("soupsieve").map(|e| e.version.as_str()),
+            Some("2.5")
+        );
+    }
+
+    #[test]
+    fn arbitrary_equality_and_marker_tails_are_not_versions() {
+        assert_eq!(exact_version("===1.0"), None);
+        assert_eq!(exact_version("==1.0; python_version>=\"3.8\""), None);
+        assert_eq!(exact_version("==1.0"), Some("1.0".into()));
     }
 
     #[test]

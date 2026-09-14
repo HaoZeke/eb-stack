@@ -5,7 +5,7 @@
 //! JSON 1.5 with serial numbers, tool metadata, lifecycle phase, and
 //! declared dependency edges — not a post-build compliance scan.
 
-use crate::domain::{StackLock, Universe};
+use crate::domain::{LockPackage, StackLock, Universe};
 use cyclonedx_bom::models::bom::BomReference;
 use cyclonedx_bom::models::component::{Classification, Component, Components};
 use cyclonedx_bom::models::composition::{AggregateType, Composition, Compositions};
@@ -32,8 +32,40 @@ use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
 use std::str::FromStr;
 
-fn bom_ref(name: &str, version: &str, toolchain_label: &str) -> String {
-    format!("pkg:generic/{name}@{version}?toolchain={toolchain_label}")
+fn lock_package_key(package: &LockPackage) -> String {
+    format!(
+        "{}@{}+{}{}",
+        package.name,
+        package.version,
+        package.toolchain.label(),
+        package.versionsuffix.as_deref().unwrap_or("")
+    )
+}
+
+fn bom_ref_for(package: &LockPackage) -> String {
+    let mut reference = format!(
+        "pkg:generic/{}@{}?toolchain={}",
+        package.name,
+        package.version,
+        package.toolchain.label()
+    );
+    if let Some(suffix) = package.versionsuffix.as_deref() {
+        if !suffix.is_empty() {
+            reference.push_str("&versionsuffix=");
+            reference.push_str(suffix);
+        }
+    }
+    reference
+}
+
+fn resolve_named_ref<'a>(
+    name: &str,
+    unique_name_refs: &'a HashMap<String, String>,
+    package_refs: &'a HashMap<String, String>,
+) -> Option<&'a String> {
+    unique_name_refs
+        .get(name)
+        .or_else(|| package_refs.get(name))
 }
 
 /// What an easyconfig states about the artifact one component builds from.
@@ -164,11 +196,24 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
     } = facts;
     let toolchain_label = lock.toolchain.label();
     let mut package_refs: HashMap<String, String> = HashMap::new();
+    let mut name_counts: HashMap<String, u32> = HashMap::new();
+    for package in &lock.packages {
+        *name_counts.entry(package.name.clone()).or_insert(0) += 1;
+        package_refs.insert(lock_package_key(package), bom_ref_for(package));
+    }
+    let mut unique_name_refs: HashMap<String, String> = HashMap::new();
+    for package in &lock.packages {
+        if name_counts.get(&package.name) == Some(&1) {
+            unique_name_refs.insert(package.name.clone(), bom_ref_for(package));
+        }
+    }
     let mut components: Vec<Component> = Vec::new();
 
     for p in &lock.packages {
-        let r = bom_ref(&p.name, &p.version, &toolchain_label);
-        package_refs.insert(p.name.clone(), r.clone());
+        let r = package_refs
+            .get(&lock_package_key(p))
+            .cloned()
+            .expect("identity inserted before the component walk");
 
         let mut props = vec![
             Property::new("easybuild:toolchain", &toolchain_label),
@@ -181,14 +226,18 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
             }
         }
         if let Some(bmap) = build_dep_map {
-            if let Some(bdeps) = bmap.get(&p.name) {
+            if let Some(bdeps) = bmap.get(&p.name).or_else(|| bmap.get(&lock_package_key(p))) {
                 if !bdeps.is_empty() {
                     let joined = bdeps
                         .iter()
-                        .filter_map(|n| package_refs.get(n).cloned().or_else(|| Some(n.clone())))
+                        .filter_map(|n| {
+                            resolve_named_ref(n, &unique_name_refs, &package_refs).cloned()
+                        })
                         .collect::<Vec<_>>()
                         .join(",");
-                    props.push(Property::new("eb_stack:buildDependsOn", &joined));
+                    if !joined.is_empty() {
+                        props.push(Property::new("eb_stack:buildDependsOn", &joined));
+                    }
                 }
             }
         }
@@ -197,7 +246,9 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
         let mut component = Component::new(Classification::Library, &p.name, &p.version, Some(r));
         component.purl = Purl::from_str(&purl_str).ok();
 
-        if let Some(facts) = artifacts.and_then(|m| m.get(&p.name)) {
+        if let Some(facts) =
+            artifacts.and_then(|m| m.get(&lock_package_key(p)).or_else(|| m.get(&p.name)))
+        {
             let hashes: Vec<Hash> = facts
                 .checksums
                 .iter()
@@ -243,12 +294,18 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
 
     let mut deps: Vec<Dependency> = Vec::new();
     for p in &lock.packages {
-        let r = package_refs.get(&p.name).cloned().unwrap();
+        let r = package_refs
+            .get(&lock_package_key(p))
+            .cloned()
+            .expect("identity inserted before the dependency walk");
         let depends_on: Vec<String> = if let Some(map) = runtime_dep_map {
             map.get(&p.name)
+                .or_else(|| map.get(&lock_package_key(p)))
                 .into_iter()
                 .flatten()
-                .filter_map(|dep_name| package_refs.get(dep_name).cloned())
+                .filter_map(|dep_name| {
+                    resolve_named_ref(dep_name, &unique_name_refs, &package_refs).cloned()
+                })
                 .collect()
         } else {
             Vec::new()
@@ -286,11 +343,17 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
         &lock.solver.engine_version,
     )]));
     metadata.component = Some(meta_component);
-    metadata.properties = Some(Properties(vec![
+    let mut metadata_properties = vec![
         Property::new("eb_stack:document_kind", "planned-sbom-from-lock"),
         Property::new("eb_stack:solver_engine", &lock.solver.engine),
         Property::new("eb_stack:toolchain", &toolchain_label),
-    ]));
+    ];
+    if let Some(missing) = unresolved {
+        for requirement in missing {
+            metadata_properties.push(Property::new("eb_stack:unresolved", requirement));
+        }
+    }
+    metadata.properties = Some(Properties(metadata_properties));
     metadata.lifecycles = Some(Lifecycles(vec![Lifecycle::Phase(Phase::PreBuild)]));
 
     Bom {
@@ -305,6 +368,7 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
             &stack_ref,
             lock,
             &package_refs,
+            &unique_name_refs,
             runtime_dep_map,
             build_dep_map,
             input_hashes,
@@ -337,6 +401,7 @@ fn build_formula(
     stack_ref: &str,
     lock: &StackLock,
     package_refs: &HashMap<String, String>,
+    unique_name_refs: &HashMap<String, String>,
     runtime_dep_map: Option<&HashMap<String, Vec<String>>>,
     build_dep_map: Option<&HashMap<String, Vec<String>>>,
     input_hashes: Option<&HashMap<String, String>>,
@@ -347,18 +412,27 @@ fn build_formula(
     let mut task_edges: Vec<Dependency> = Vec::new();
 
     for package in &lock.packages {
-        let Some(package_ref) = package_refs.get(&package.name) else {
+        let Some(package_ref) = package_refs.get(&lock_package_key(package)) else {
             continue;
         };
         let uid = input_hashes
-            .and_then(|m| m.get(&package.name).cloned())
+            .and_then(|m| {
+                m.get(&lock_package_key(package))
+                    .or_else(|| m.get(&package.name))
+                    .cloned()
+            })
             .unwrap_or_else(|| package_ref.clone());
 
         let mut inputs: Vec<Input> = Vec::new();
         let mut edges: Vec<String> = Vec::new();
         for map in [runtime_dep_map, build_dep_map].into_iter().flatten() {
-            for dep_name in map.get(&package.name).into_iter().flatten() {
-                if let Some(dep_ref) = package_refs.get(dep_name) {
+            for dep_name in map
+                .get(&package.name)
+                .or_else(|| map.get(&lock_package_key(package)))
+                .into_iter()
+                .flatten()
+            {
+                if let Some(dep_ref) = resolve_named_ref(dep_name, unique_name_refs, package_refs) {
                     // A task consumes the component its dependency produced,
                     // which is what ties the how back to the what.
                     inputs.push(Input {
@@ -513,17 +587,19 @@ pub fn artifact_facts_for_lock(lock: &StackLock) -> HashMap<String, ArtifactFact
         )) else {
             continue;
         };
-        if resolved.checksums.is_empty() && resolved.source_urls.is_empty() {
+        if resolved.checksums.is_empty()
+            && resolved.source_urls.is_empty()
+            && resolved.patch_names.is_empty()
+        {
             continue;
         }
-        out.insert(
-            package.name.clone(),
-            ArtifactFacts {
-                checksums: resolved.checksums.clone(),
-                source_urls: resolved.source_urls.clone(),
-                patches: Vec::new(),
-            },
-        );
+        let facts = ArtifactFacts {
+            checksums: resolved.checksums.clone(),
+            source_urls: resolved.source_urls.clone(),
+            patches: resolved.patch_names.clone(),
+        };
+        out.insert(lock_package_key(package), facts.clone());
+        out.insert(package.name.clone(), facts);
     }
     out
 }
@@ -892,10 +968,116 @@ mod tests {
         assert!(
             props.iter().any(|p| {
                 p["name"].as_str() == Some("eb_stack:buildDependsOn")
-                    && p["value"].as_str().unwrap_or("").contains("Tool")
+                    && p["value"]
+                        .as_str()
+                        .unwrap_or("")
+                        .contains("pkg:generic/Tool@")
             }),
             "buildDependsOn property missing: {props:?}"
         );
+    }
+
+    #[test]
+    fn build_depends_on_resolves_a_later_lock_row() {
+        let toolchain = Toolchain {
+            name: "foss".into(),
+            version: "2025b".into(),
+        };
+        let lock = StackLock {
+            schema_version: 1,
+            toolchain: toolchain.clone(),
+            generation_label: None,
+            packages: vec![
+                LockPackage {
+                    name: "App".into(),
+                    version: "1.0".into(),
+                    toolchain: toolchain.clone(),
+                    versionsuffix: None,
+                    easyconfig_path: "App.eb".into(),
+                },
+                LockPackage {
+                    name: "Tool".into(),
+                    version: "1.0".into(),
+                    toolchain,
+                    versionsuffix: None,
+                    easyconfig_path: "Tool.eb".into(),
+                },
+            ],
+            solver: SolverMeta {
+                engine: "resolvo".into(),
+                engine_version: "0".into(),
+                timestamp: "2026-08-12T00:00:00Z".into(),
+            },
+        };
+        let build = HashMap::from([("App".to_string(), vec!["Tool".to_string()])]);
+        let sbom = lock_to_cyclonedx_with_runtime_and_build(&lock, None, Some(&build));
+        let app = sbom["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "App")
+            .unwrap();
+        let props = app["properties"].as_array().unwrap();
+        let value = props
+            .iter()
+            .find(|p| p["name"] == "eb_stack:buildDependsOn")
+            .and_then(|p| p["value"].as_str())
+            .expect("buildDependsOn");
+        assert!(
+            value.contains("pkg:generic/Tool@1.0?toolchain=foss-2025b"),
+            "{value}"
+        );
+        assert_ne!(value, "Tool");
+    }
+
+    #[test]
+    fn two_packages_with_the_same_name_keep_distinct_bom_refs() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let gcc = Toolchain {
+            name: "GCCcore".into(),
+            version: "15.2.0".into(),
+        };
+        let lock = StackLock {
+            schema_version: 1,
+            toolchain: gcc.clone(),
+            generation_label: None,
+            packages: vec![
+                LockPackage {
+                    name: "Perl".into(),
+                    version: "5.38.0".into(),
+                    toolchain: system,
+                    versionsuffix: None,
+                    easyconfig_path: "Perl-system.eb".into(),
+                },
+                LockPackage {
+                    name: "Perl".into(),
+                    version: "5.42.0".into(),
+                    toolchain: gcc,
+                    versionsuffix: None,
+                    easyconfig_path: "Perl-gcc.eb".into(),
+                },
+            ],
+            solver: SolverMeta {
+                engine: "resolvo".into(),
+                engine_version: "0".into(),
+                timestamp: "2026-08-12T00:00:00Z".into(),
+            },
+        };
+        let sbom = lock_to_cyclonedx(&lock);
+        let refs: Vec<&str> = sbom["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| c["name"] == "Perl")
+            .filter_map(|c| c["bom-ref"].as_str())
+            .collect();
+        assert_eq!(refs.len(), 2, "{sbom}");
+        assert_ne!(refs[0], refs[1], "{refs:?}");
+        assert!(refs.iter().any(|r| r.contains("5.38.0")), "{refs:?}");
+        assert!(refs.iter().any(|r| r.contains("5.42.0")), "{refs:?}");
     }
 
     #[test]
@@ -1054,6 +1236,13 @@ mod artifact_facts_tests {
         assert!(
             assemblies[0].as_str().unwrap().contains("easybuild-stack"),
             "{assemblies:?}"
+        );
+        let props = json["metadata"]["properties"].as_array().unwrap();
+        assert!(
+            props.iter().any(|property| {
+                property["name"] == "eb_stack:unresolved" && property["value"] == "libfoo >= 2"
+            }),
+            "{props:?}"
         );
     }
 
