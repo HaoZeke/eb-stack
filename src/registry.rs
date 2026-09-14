@@ -42,11 +42,18 @@ impl RegistryClient for UreqClient {
             .set("User-Agent", "eb-stack/0.3.0 (registry-ingest)")
             .call()
             .map_err(|error| RegistryError::Fetch(format!("{url}: {error}")))?;
+        const MAX_BODY: u64 = 32 * 1024 * 1024;
         let mut body = Vec::new();
         response
             .into_reader()
+            .take(MAX_BODY + 1)
             .read_to_end(&mut body)
             .map_err(|error| RegistryError::Fetch(format!("{url}: {error}")))?;
+        if body.len() as u64 > MAX_BODY {
+            return Err(RegistryError::Fetch(format!(
+                "{url}: body exceeds {MAX_BODY} bytes"
+            )));
+        }
         Ok(body)
     }
 }
@@ -139,7 +146,7 @@ pub fn materialize_pypi(
         .ok_or_else(|| RegistryError::Parse("warehouse json missing info.version".into()))?;
     let dir = ingest_root.join("pypi");
     std::fs::create_dir_all(&dir).map_err(|error| RegistryError::Io(dir.clone(), error))?;
-    let dump = dir.join(format!("{pkg}-{version}.json"));
+    let dump = dir.join(format!("{}.json", sanitize_ingest_name(pkg, version)));
     std::fs::write(&dump, &bytes).map_err(|error| RegistryError::Io(dump.clone(), error))?;
     let source_tree = materialize_pypi_sdist(&value, client, &dir, pkg, version)?;
     Ok(MaterializedIngest { dump, source_tree })
@@ -160,7 +167,7 @@ fn materialize_pypi_sdist(
             .and_then(|value| value.as_str())
             .is_some_and(|kind| kind.eq_ignore_ascii_case("sdist"))
     });
-    let Some(sdist) = sdist.or_else(|| urls.first()) else {
+    let Some(sdist) = sdist else {
         return Ok(None);
     };
     let Some(url) = sdist.get("url").and_then(|value| value.as_str()) else {
@@ -174,17 +181,42 @@ fn materialize_pypi_sdist(
         Err(RegistryError::Missing(_)) => return Ok(None),
         Err(error) => return Err(error),
     };
+    if let Some(expected) = sdist
+        .pointer("/digests/sha256")
+        .and_then(|value| value.as_str())
+    {
+        let got = sha256_hex(&bytes);
+        if !got.eq_ignore_ascii_case(expected) {
+            return Err(RegistryError::Parse(format!(
+                "sdist sha256 {got} != warehouse {expected}"
+            )));
+        }
+    }
     let filename = sdist
         .get("filename")
         .and_then(|value| value.as_str())
         .unwrap_or("sdist.tar.gz");
     let archive = dir.join(filename);
     std::fs::write(&archive, &bytes).map_err(|error| RegistryError::Io(archive.clone(), error))?;
-    let tree = dir.join(format!("{pkg}-{version}"));
-    if unpack_sdist(&bytes, &tree).is_ok() {
-        return Ok(Some(tree));
-    }
-    Ok(None)
+    let tree = dir.join(sanitize_ingest_name(pkg, version));
+    unpack_sdist(&bytes, &tree)?;
+    Ok(Some(tree))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn sanitize_ingest_name(pkg: &str, version: &str) -> String {
+    format!("{pkg}-{version}")
+        .chars()
+        .map(|character| match character {
+            '/' | '\\' | ':' => '_',
+            other => other,
+        })
+        .collect()
 }
 
 fn unpack_sdist(bytes: &[u8], dest: &Path) -> Result<(), RegistryError> {
@@ -206,7 +238,11 @@ pub fn materialize_cran(
     crandb_base: &str,
     ingest_root: &Path,
 ) -> Result<MaterializedIngest, RegistryError> {
-    let url = format!("{}/{name}", crandb_base.trim_end_matches('/'));
+    let (name, pinned) = split_name_and_version(name);
+    let url = match pinned {
+        Some(version) => format!("{}/{name}/{version}", crandb_base.trim_end_matches('/')),
+        None => format!("{}/{name}", crandb_base.trim_end_matches('/')),
+    };
     let bytes = client.get(&url)?;
     let value: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|error| RegistryError::Parse(format!("cran json: {error}")))?;
@@ -222,7 +258,7 @@ pub fn materialize_cran(
         .ok_or_else(|| RegistryError::Parse("cran json missing Version".into()))?;
     let dir = ingest_root.join("cran");
     std::fs::create_dir_all(&dir).map_err(|error| RegistryError::Io(dir.clone(), error))?;
-    let dump = dir.join(format!("{pkg}-{version}.json"));
+    let dump = dir.join(format!("{}.json", sanitize_ingest_name(pkg, version)));
     std::fs::write(&dump, &bytes).map_err(|error| RegistryError::Io(dump.clone(), error))?;
     Ok(MaterializedIngest {
         dump,
@@ -237,7 +273,14 @@ pub fn materialize_cargo(
     crates_base: &str,
     ingest_root: &Path,
 ) -> Result<MaterializedIngest, RegistryError> {
-    let url = format!("{}/api/v1/crates/{name}", crates_base.trim_end_matches('/'));
+    let (name, pinned) = split_name_and_version(name);
+    let url = match pinned {
+        Some(version) => format!(
+            "{}/api/v1/crates/{name}/{version}",
+            crates_base.trim_end_matches('/')
+        ),
+        None => format!("{}/api/v1/crates/{name}", crates_base.trim_end_matches('/')),
+    };
     let bytes = client.get(&url)?;
     let value: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|error| RegistryError::Parse(format!("crates.io json: {error}")))?;
@@ -245,14 +288,23 @@ pub fn materialize_cargo(
         .pointer("/crate/name")
         .and_then(|value| value.as_str())
         .unwrap_or(name);
-    let version = value
-        .pointer("/crate/max_stable_version")
-        .or_else(|| value.pointer("/crate/max_version"))
-        .and_then(|value| value.as_str())
+    let version = pinned
+        .or_else(|| {
+            value
+                .pointer("/crate/max_stable_version")
+                .filter(|value| !value.is_null())
+                .and_then(|value| value.as_str())
+        })
+        .or_else(|| {
+            value
+                .pointer("/crate/max_version")
+                .filter(|value| !value.is_null())
+                .and_then(|value| value.as_str())
+        })
         .ok_or_else(|| RegistryError::Parse("crates.io json missing version".into()))?;
     let dir = ingest_root.join("cargo");
     std::fs::create_dir_all(&dir).map_err(|error| RegistryError::Io(dir.clone(), error))?;
-    let dump = dir.join(format!("{pkg}-{version}.json"));
+    let dump = dir.join(format!("{}.json", sanitize_ingest_name(pkg, version)));
     std::fs::write(&dump, &bytes).map_err(|error| RegistryError::Io(dump.clone(), error))?;
     Ok(MaterializedIngest {
         dump,

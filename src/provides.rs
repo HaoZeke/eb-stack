@@ -59,12 +59,12 @@ pub fn expand_extension_provides(candidates: &[Candidate]) -> Vec<Candidate> {
     let mut seen: HashSet<(String, String, String)> = candidates
         .iter()
         .filter(|candidate| candidate.is_extension_provide())
-        .filter_map(|candidate| {
-            Some((
+        .map(|candidate| {
+            (
                 candidate.name.clone(),
                 candidate.version.clone(),
-                candidate.extension_parent_path()?.to_string(),
-            ))
+                candidate.extension_parent_path().unwrap_or("").to_string(),
+            )
         })
         .collect();
 
@@ -189,7 +189,10 @@ pub fn python_module_for_crate(crate_name: &str) -> Option<String> {
         .python_modules
         .crates
         .iter()
-        .find(|(known, _)| known.eq_ignore_ascii_case(crate_name))
+        .find(|(known, _)| {
+            crate::package_sources::package_identity(known)
+                == crate::package_sources::package_identity(crate_name)
+        })
         .map(|(_, module)| module.clone())
 }
 
@@ -228,7 +231,7 @@ pub fn refuses_pip_overlay(name: &str) -> bool {
         .refuse_overlay
         .names
         .iter()
-        .any(|refused| crate::package_sources::package_identity(refused) == identity)
+        .any(|refused| overlay_package_identity(refused) == identity)
 }
 
 /// Bundle or first-class module in `candidates` that already ships `name`.
@@ -261,9 +264,14 @@ pub fn resolve_extension_provider<'a>(
     let Some(parent_name) = selected.extension_parent_name() else {
         return selected;
     };
+    let parent_path = selected.extension_parent_path();
     selected_set
         .iter()
-        .find(|candidate| candidate.name == parent_name && !candidate.is_extension_provide())
+        .find(|candidate| {
+            !candidate.is_extension_provide()
+                && (parent_path.is_some_and(|path| candidate.easyconfig_path == path)
+                    || (parent_path.is_none() && candidate.name == parent_name))
+        })
         .unwrap_or(selected)
 }
 
@@ -272,11 +280,15 @@ fn provide_from_parent(parent: &Candidate, ext: &ExtEntry) -> Option<Candidate> 
         return None;
     }
     Some(Candidate {
-        name: ext.name.clone(),
+        name: aliased_module_name(&ext.name),
         version: ext.version.clone(),
         toolchain: parent.toolchain.clone(),
         versionsuffix: parent.versionsuffix.clone(),
-        easyconfig_path: format!("{}{EXT_PROVIDE_MARKER}{}", parent.easyconfig_path, ext.name),
+        easyconfig_path: format!(
+            "{}{EXT_PROVIDE_MARKER}{}",
+            parent.easyconfig_path,
+            aliased_module_name(&ext.name)
+        ),
         dependencies: vec![DepReq {
             name: parent.name.clone(),
             version_req: format!("=={}", parent.version),

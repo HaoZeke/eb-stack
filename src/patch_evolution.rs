@@ -115,17 +115,24 @@ pub fn sibling_paths(
     new_version: &str,
     candidates: &[Candidate],
     target_toolchain: &Toolchain,
+    versionsuffix: Option<&str>,
 ) -> Vec<String> {
+    let want_suffix = versionsuffix.unwrap_or("");
     let mut siblings: Vec<&Candidate> = candidates
         .iter()
-        .filter(|c| c.name == name && c.version == new_version && !c.easyconfig_path.is_empty())
+        .filter(|c| {
+            c.name == name
+                && c.version == new_version
+                && !c.easyconfig_path.is_empty()
+                && c.versionsuffix.as_deref().unwrap_or("") == want_suffix
+        })
         .collect();
     siblings.sort_by(|a, b| {
         let a_same = a.toolchain.name == target_toolchain.name;
         let b_same = b.toolchain.name == target_toolchain.name;
         b_same
             .cmp(&a_same)
-            .then_with(|| b.toolchain.version.cmp(&a.toolchain.version))
+            .then_with(|| crate::version::cmp_version(&b.toolchain.version, &a.toolchain.version))
             .then_with(|| a.easyconfig_path.cmp(&b.easyconfig_path))
     });
     siblings
@@ -221,13 +228,13 @@ pub fn adopt_sibling_patch_block(text: &str, sibling_path: &str) -> Result<Strin
     let ours = find_list_assignment_span(text, "patches")?;
     let theirs = find_list_assignment_span(&sibling_text, "patches")?;
 
-    match (ours, theirs) {
-        (Some((our_start, our_end)), Some((their_start, their_end))) => Ok(format!(
+    let spliced = match (ours, theirs) {
+        (Some((our_start, our_end)), Some((their_start, their_end))) => format!(
             "{}{}{}",
             &text[..our_start],
             &sibling_text[their_start..their_end],
             &text[our_end..]
-        )),
+        ),
         (Some((our_start, our_end)), None) => {
             // Sibling ships the new version with no patches at all: the list
             // goes away, along with a trailing newline so no blank hole stays.
@@ -235,18 +242,33 @@ pub fn adopt_sibling_patch_block(text: &str, sibling_path: &str) -> Result<Strin
             if text[end..].starts_with('\n') {
                 end += 1;
             }
-            Ok(format!("{}{}", &text[..our_start], &text[end..]))
+            format!("{}{}", &text[..our_start], &text[end..])
         }
         (None, Some((their_start, their_end))) => {
             let block = &sibling_text[their_start..their_end];
             if let Some(pos) = find_moduleclass_line(text) {
-                Ok(format!("{}{}\n{}", &text[..pos], block, &text[pos..]))
+                format!("{}{}\n{}", &text[..pos], block, &text[pos..])
             } else {
                 let sep = if text.ends_with('\n') { "" } else { "\n" };
-                Ok(format!("{text}{sep}{block}\n"))
+                format!("{text}{sep}{block}\n")
             }
         }
-        (None, None) => Ok(text.to_string()),
+        (None, None) => text.to_string(),
+    };
+    adopt_sibling_checksum_block(&spliced, &sibling_text)
+}
+
+fn adopt_sibling_checksum_block(text: &str, sibling_text: &str) -> Result<String, EmitError> {
+    let ours = find_list_assignment_span(text, "checksums")?;
+    let theirs = find_list_assignment_span(sibling_text, "checksums")?;
+    match (ours, theirs) {
+        (Some((our_start, our_end)), Some((their_start, their_end))) => Ok(format!(
+            "{}{}{}",
+            &text[..our_start],
+            &sibling_text[their_start..their_end],
+            &text[our_end..]
+        )),
+        _ => Ok(text.to_string()),
     }
 }
 
@@ -264,7 +286,10 @@ fn pins_other_version(patch: &str, new_version: &str) -> bool {
                 i += 1;
             }
             let token = patch[start..i].trim_end_matches('.');
-            if token.contains('.') && token != new_version {
+            if token != new_version
+                && (token.contains('.')
+                    || token.chars().all(|character| character.is_ascii_digit()))
+            {
                 return true;
             }
         } else {
@@ -354,8 +379,30 @@ mod tests {
             candidate("X", "1.0", ("GCC", "15.2.0"), "tree/old.eb"),
             candidate("Y", "2.0", ("GCC", "15.2.0"), "tree/other.eb"),
         ];
-        let ranked = sibling_paths("X", "2.0", &cands, &tc("GCC", "16.1.0"));
+        let ranked = sibling_paths("X", "2.0", &cands, &tc("GCC", "16.1.0"), None);
         assert_eq!(ranked, vec!["tree/g15.eb", "tree/g14.eb", "tree/i.eb"]);
+    }
+
+    #[test]
+    fn sibling_ranking_uses_numeric_toolchain_versions() {
+        let cands = vec![
+            candidate("X", "2.0", ("GCC", "9.3.0"), "tree/g9.eb"),
+            candidate("X", "2.0", ("GCC", "13.2.0"), "tree/g13.eb"),
+        ];
+        let ranked = sibling_paths("X", "2.0", &cands, &tc("GCC", "16.1.0"), None);
+        assert_eq!(ranked, vec!["tree/g13.eb", "tree/g9.eb"]);
+    }
+
+    #[test]
+    fn sibling_paths_keep_the_unsuffixed_identity() {
+        let mut cuda = candidate("X", "2.0", ("GCC", "13.2.0"), "tree/cuda.eb");
+        cuda.versionsuffix = Some("-CUDA-12.8.0".into());
+        let cands = vec![
+            candidate("X", "2.0", ("GCC", "13.2.0"), "tree/cpu.eb"),
+            cuda,
+        ];
+        let ranked = sibling_paths("X", "2.0", &cands, &tc("GCC", "13.2.0"), None);
+        assert_eq!(ranked, vec!["tree/cpu.eb"]);
     }
 
     #[test]
@@ -373,6 +420,12 @@ mod tests {
             vec!["X-1.0_fix-runpath.patch", "portable-fix.patch"]
         );
         assert!(!plan.changed());
+    }
+
+    #[test]
+    fn an_undotted_version_pin_is_undecided() {
+        let plan = plan_patch_evolution("2.0", &["X-1_fix.patch".into()], None);
+        assert_eq!(plan.undecided(), vec!["X-1_fix.patch"]);
     }
 
     #[test]

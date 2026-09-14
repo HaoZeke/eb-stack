@@ -1311,6 +1311,7 @@ pub fn complete_package_bump(
                 new_version,
                 candidates,
                 &request.toolchain,
+                source_recipe.versionsuffix.as_deref(),
             )
             .into_iter()
             .find_map(|path| {
