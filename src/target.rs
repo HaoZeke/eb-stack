@@ -631,14 +631,7 @@ impl CommandPlan {
 pub fn doctor_target(target: &BuildTarget) -> Result<TargetDoctorReport, TargetError> {
     let transport = target.route_tokens(vec!["true".into()], false);
     let executor = target.route_tokens(vec!["true".into()], true);
-    let runtime_program = match &target.runtime {
-        TargetRuntime::Host => vec!["true".into()],
-        TargetRuntime::Podman { command, .. } | TargetRuntime::Docker { command, .. } => {
-            vec![command.clone(), "--version".into()]
-        }
-        TargetRuntime::Eessi { command, .. } => vec![command.clone(), "--help".into()],
-    };
-    let runtime = target.route_tokens(runtime_program, true);
+    let runtime = target.route_tokens(target.runtime_tokens(vec!["true".into()]), true);
     let easybuild = target.route_tokens(
         target.runtime_tokens(vec![target.easybuild.command.clone(), "--version".into()]),
         true,

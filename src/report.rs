@@ -35,52 +35,57 @@ pub fn ordered_packages<'a>(
     lock: &'a StackLock,
     dep_map: &HashMap<String, Vec<String>>,
 ) -> Vec<&'a LockPackage> {
-    let by_name: BTreeMap<&str, &LockPackage> =
-        lock.packages.iter().map(|p| (p.name.as_str(), p)).collect();
-    let selected: BTreeSet<&str> = by_name.keys().copied().collect();
-
-    // Kahn: edge dep -> pkg means dep must be installed before pkg.
-    // in_degree[pkg] = number of co-selected deps still outstanding.
-    let mut in_degree: BTreeMap<&str, usize> = BTreeMap::new();
-    let mut dependents: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for name in &selected {
-        in_degree.insert(*name, 0);
-        dependents.entry(*name).or_default();
+    let mut by_name: BTreeMap<&str, Vec<&LockPackage>> = BTreeMap::new();
+    for package in &lock.packages {
+        by_name
+            .entry(package.name.as_str())
+            .or_default()
+            .push(package);
     }
-    for name in &selected {
-        let deps = dep_map
-            .get(*name)
-            .into_iter()
-            .flatten()
-            .map(|d| d.as_str())
-            .filter(|d| selected.contains(d) && *d != *name);
-        let mut co_deps: BTreeSet<&str> = BTreeSet::new();
-        for d in deps {
-            co_deps.insert(d);
-        }
-        in_degree.insert(*name, co_deps.len());
-        for d in co_deps {
-            dependents.entry(d).or_default().push(*name);
-        }
-    }
-
-    // Stable ready queue: BTreeSet by name.
-    let mut ready: BTreeSet<&str> = in_degree
+    let by_key: BTreeMap<String, &LockPackage> = lock
+        .packages
         .iter()
-        .filter(|(_, &deg)| deg == 0)
-        .map(|(&n, _)| n)
+        .map(|package| (package_row_key(package), package))
         .collect();
 
-    let mut order: Vec<&str> = Vec::with_capacity(selected.len());
-    while let Some(n) = ready.iter().next().copied() {
-        ready.remove(n);
-        order.push(n);
-        if let Some(children) = dependents.get(n) {
-            // Process children in name order for determinism when multiple become ready.
-            let mut kids: Vec<&str> = children.clone();
-            kids.sort_unstable();
+    let mut in_degree: BTreeMap<String, usize> = BTreeMap::new();
+    let mut dependents: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for package in &lock.packages {
+        let key = package_row_key(package);
+        dependents.entry(key.clone()).or_default();
+        let mut deg = 0usize;
+        if let Some(deps) = dep_map.get(&package.name) {
+            for dep_name in deps {
+                if let Some(dep_pkgs) = by_name.get(dep_name.as_str()) {
+                    for dep_pkg in dep_pkgs {
+                        if package_row_key(dep_pkg) != key {
+                            dependents
+                                .entry(package_row_key(dep_pkg))
+                                .or_default()
+                                .push(key.clone());
+                            deg += 1;
+                        }
+                    }
+                }
+            }
+        }
+        in_degree.insert(key, deg);
+    }
+
+    let mut ready: BTreeSet<String> = in_degree
+        .iter()
+        .filter(|(_, deg)| **deg == 0)
+        .map(|(key, _)| key.clone())
+        .collect();
+    let mut order: Vec<String> = Vec::with_capacity(by_key.len());
+    while let Some(key) = ready.iter().next().cloned() {
+        ready.remove(&key);
+        order.push(key.clone());
+        if let Some(children) = dependents.get(&key) {
+            let mut kids = children.clone();
+            kids.sort();
             for child in kids {
-                if let Some(deg) = in_degree.get_mut(child) {
+                if let Some(deg) = in_degree.get_mut(&child) {
                     *deg = deg.saturating_sub(1);
                     if *deg == 0 {
                         ready.insert(child);
@@ -89,21 +94,28 @@ pub fn ordered_packages<'a>(
             }
         }
     }
-
-    // Cycles or missing nodes: append remaining names in sorted order so we
-    // still emit every co-selected package once.
-    if order.len() < selected.len() {
-        for n in &selected {
-            if !order.contains(n) {
-                order.push(*n);
+    if order.len() < by_key.len() {
+        for key in by_key.keys() {
+            if !order.contains(key) {
+                order.push(key.clone());
             }
         }
     }
 
     order
         .into_iter()
-        .filter_map(|n| by_name.get(n).copied())
+        .filter_map(|key| by_key.get(&key).copied())
         .collect()
+}
+
+fn package_row_key(package: &LockPackage) -> String {
+    format!(
+        "{}|{}|{}|{}",
+        package.name,
+        package.toolchain.name,
+        package.toolchain.version,
+        package.versionsuffix.as_deref().unwrap_or("")
+    )
 }
 
 /// Classification of one logical package between baseline and solved locks.
@@ -154,63 +166,86 @@ pub struct PackageChange {
 ///
 /// Result is sorted by package name for stable markdown.
 pub fn classify_stack_diff(baseline: &StackLock, solved: &StackLock) -> Vec<PackageChange> {
-    let base_by: BTreeMap<&str, &LockPackage> = baseline
-        .packages
-        .iter()
-        .map(|p| (p.name.as_str(), p))
-        .collect();
-    let sol_by: BTreeMap<&str, &LockPackage> = solved
-        .packages
-        .iter()
-        .map(|p| (p.name.as_str(), p))
-        .collect();
-
+    let mut base_by: BTreeMap<&str, Vec<&LockPackage>> = BTreeMap::new();
+    for package in &baseline.packages {
+        base_by
+            .entry(package.name.as_str())
+            .or_default()
+            .push(package);
+    }
+    let mut sol_by: BTreeMap<&str, Vec<&LockPackage>> = BTreeMap::new();
+    for package in &solved.packages {
+        sol_by
+            .entry(package.name.as_str())
+            .or_default()
+            .push(package);
+    }
     let mut names: BTreeSet<&str> = BTreeSet::new();
     names.extend(base_by.keys().copied());
     names.extend(sol_by.keys().copied());
 
-    names
-        .into_iter()
-        .map(|name| {
-            let b = base_by.get(name).copied();
-            let s = sol_by.get(name).copied();
-            match (b, s) {
-                (None, Some(s)) => PackageChange {
-                    name: name.to_string(),
-                    kind: PackageChangeKind::Added,
-                    baseline_version: None,
-                    solved_version: Some(s.version.clone()),
-                    baseline_easyconfig_path: None,
-                    solved_easyconfig_path: Some(s.easyconfig_path.clone()),
-                },
-                (Some(b), None) => PackageChange {
-                    name: name.to_string(),
-                    kind: PackageChangeKind::Removed,
-                    baseline_version: Some(b.version.clone()),
-                    solved_version: None,
-                    baseline_easyconfig_path: Some(b.easyconfig_path.clone()),
-                    solved_easyconfig_path: None,
-                },
-                (Some(b), Some(s)) if b.version == s.version => PackageChange {
-                    name: name.to_string(),
-                    kind: PackageChangeKind::Unchanged,
-                    baseline_version: Some(b.version.clone()),
-                    solved_version: Some(s.version.clone()),
-                    baseline_easyconfig_path: Some(b.easyconfig_path.clone()),
-                    solved_easyconfig_path: Some(s.easyconfig_path.clone()),
-                },
-                (Some(b), Some(s)) => PackageChange {
-                    name: name.to_string(),
-                    kind: PackageChangeKind::VersionBumped,
-                    baseline_version: Some(b.version.clone()),
-                    solved_version: Some(s.version.clone()),
-                    baseline_easyconfig_path: Some(b.easyconfig_path.clone()),
-                    solved_easyconfig_path: Some(s.easyconfig_path.clone()),
-                },
-                (None, None) => unreachable!("name always from one side"),
-            }
-        })
-        .collect()
+    let mut changes = Vec::new();
+    for name in names {
+        let base = base_by.get(name).cloned().unwrap_or_default();
+        let sol = sol_by.get(name).cloned().unwrap_or_default();
+        if base.len() <= 1 && sol.len() <= 1 {
+            changes.push(diff_pair(name, base.first().copied(), sol.first().copied()));
+            continue;
+        }
+        let mut base_id: BTreeMap<String, &LockPackage> = base
+            .iter()
+            .map(|package| (package_row_key(package), *package))
+            .collect();
+        let mut sol_id: BTreeMap<String, &LockPackage> = sol
+            .iter()
+            .map(|package| (package_row_key(package), *package))
+            .collect();
+        let mut keys: BTreeSet<String> = BTreeSet::new();
+        keys.extend(base_id.keys().cloned());
+        keys.extend(sol_id.keys().cloned());
+        for key in keys {
+            changes.push(diff_pair(name, base_id.remove(&key), sol_id.remove(&key)));
+        }
+    }
+    changes
+}
+
+fn diff_pair(name: &str, b: Option<&LockPackage>, s: Option<&LockPackage>) -> PackageChange {
+    match (b, s) {
+        (None, Some(s)) => PackageChange {
+            name: name.to_string(),
+            kind: PackageChangeKind::Added,
+            baseline_version: None,
+            solved_version: Some(s.version.clone()),
+            baseline_easyconfig_path: None,
+            solved_easyconfig_path: Some(s.easyconfig_path.clone()),
+        },
+        (Some(b), None) => PackageChange {
+            name: name.to_string(),
+            kind: PackageChangeKind::Removed,
+            baseline_version: Some(b.version.clone()),
+            solved_version: None,
+            baseline_easyconfig_path: Some(b.easyconfig_path.clone()),
+            solved_easyconfig_path: None,
+        },
+        (Some(b), Some(s)) if b.version == s.version => PackageChange {
+            name: name.to_string(),
+            kind: PackageChangeKind::Unchanged,
+            baseline_version: Some(b.version.clone()),
+            solved_version: Some(s.version.clone()),
+            baseline_easyconfig_path: Some(b.easyconfig_path.clone()),
+            solved_easyconfig_path: Some(s.easyconfig_path.clone()),
+        },
+        (Some(b), Some(s)) => PackageChange {
+            name: name.to_string(),
+            kind: PackageChangeKind::VersionBumped,
+            baseline_version: Some(b.version.clone()),
+            solved_version: Some(s.version.clone()),
+            baseline_easyconfig_path: Some(b.easyconfig_path.clone()),
+            solved_easyconfig_path: Some(s.easyconfig_path.clone()),
+        },
+        (None, None) => unreachable!("name always from one side"),
+    }
 }
 
 /// Human-reviewable markdown comparing baseline lock to solved lock.

@@ -117,27 +117,31 @@ pub fn classify_url(url: &str) -> ArtifactClass {
         .unwrap_or(&lower);
     let (host, path) = host_and_path.split_once('/').unwrap_or((host_and_path, ""));
 
-    if host.contains("github.com") || host.contains("codeload.github.com") {
+    if host_matches(host, "github.com") || host_matches(host, "codeload.github.com") {
         if path.contains("/releases/download/") {
             return ArtifactClass::GitHubReleaseAsset;
         }
         // `/archive`, `/archive/refs/tags/...`, `/tar.gz/...` are all the
         // generated-tree tarball.
-        if path.contains("/archive") || path.contains("/tar.gz/") || path.contains("/zip/") {
+        if path_has_segment(path, "archive") || path.contains("/tar.gz/") || path.contains("/zip/")
+        {
             return ArtifactClass::GitHubTagArchive;
         }
         return ArtifactClass::Other;
     }
 
-    if host.contains("pythonhosted.org")
-        || host.contains("pypi.python.org")
-        || host.contains("pypi.io")
-        || host.contains("pypi.org")
+    if host_matches(host, "pythonhosted.org")
+        || host_matches(host, "pypi.python.org")
+        || host_matches(host, "pypi.io")
+        || host_matches(host, "pypi.org")
     {
+        if path.ends_with(".whl") || path.contains("-py2-") || path.contains("-py3-") {
+            return ArtifactClass::Other;
+        }
         return ArtifactClass::PyPiSdist;
     }
 
-    if host.contains("sourceforge.net") || host.ends_with(".sf.net") {
+    if host_matches(host, "sourceforge.net") || host.ends_with(".sf.net") {
         return ArtifactClass::SourceForge;
     }
 
@@ -271,16 +275,62 @@ fn cmake_project_version(text: &str) -> Option<String> {
     Some(ver.captures(body)?.get(1)?.as_str().to_string())
 }
 
-/// `version = "1.2.3"` in the first table that declares one.
+fn host_matches(host: &str, name: &str) -> bool {
+    host == name || host.ends_with(&format!(".{name}"))
+}
+
+fn path_has_segment(path: &str, segment: &str) -> bool {
+    path.split('/').any(|part| part == segment)
+}
+
+/// `version = "1.2.3"` in `[package]` or `[project]`, not the first hit in the file.
 fn toml_package_version(text: &str) -> Option<String> {
-    let re = regex::Regex::new(r#"(?m)^\s*version\s*=\s*"([^"]+)""#).ok()?;
-    Some(re.captures(text)?.get(1)?.as_str().to_string())
+    let mut section = "";
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            section = trimmed;
+            continue;
+        }
+        if !(section == "[package]" || section == "[project]" || section == "[workspace.package]") {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("version") {
+            let rest = rest.trim_start();
+            if let Some(rest) = rest.strip_prefix('=') {
+                let rest = rest.trim().trim_matches('"').trim_matches('\'');
+                if !rest.is_empty() {
+                    return Some(rest.to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// `project('name', 'c', version : '1.2.3')`.
 fn meson_project_version(text: &str) -> Option<String> {
-    let re = regex::Regex::new(r"(?is)\bproject\s*\(.*?version\s*:\s*'([^']+)'").ok()?;
-    Some(re.captures(text)?.get(1)?.as_str().to_string())
+    let lower = text.to_ascii_lowercase();
+    let start = lower.find("project(")?;
+    let rest = &text[start + "project(".len()..];
+    let mut search = rest;
+    while let Some(idx) = search.to_ascii_lowercase().find("version") {
+        let before = search[..idx].trim_end();
+        if before.to_ascii_lowercase().ends_with("meson_") {
+            search = &search[idx + "version".len()..];
+            continue;
+        }
+        let after = search[idx + "version".len()..].trim_start();
+        let Some(after) = after.strip_prefix(':') else {
+            search = &search[idx + "version".len()..];
+            continue;
+        };
+        let after = after.trim_start();
+        let quote = after.chars().next().filter(|c| *c == '\'' || *c == '"')?;
+        let inner = after.get(1..)?.find(quote)?;
+        return Some(after[1..1 + inner].to_string());
+    }
+    None
 }
 
 /// `AC_INIT([name], [1.2.3], ...)`.

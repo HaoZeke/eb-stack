@@ -3,6 +3,7 @@
 use crate::foreign::{ForeignDep, ForeignError, ForeignFormat, ForeignRecipe, ForeignSource};
 use crate::package::ConditionExpr;
 use serde::Deserialize;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Deserialize)]
 struct Meta6 {
@@ -17,9 +18,31 @@ struct Meta6 {
     #[serde(default, alias = "source-url")]
     source_url_kebab: Option<String>,
     #[serde(default)]
-    depends: Vec<String>,
+    depends: Meta6Depends,
     #[serde(default, rename = "build-depends")]
-    build_depends: Vec<String>,
+    build_depends: Meta6Depends,
+    #[serde(default, rename = "test-depends")]
+    test_depends: Meta6Depends,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(untagged)]
+enum Meta6Depends {
+    #[default]
+    Missing,
+    List(Vec<Meta6DepSpec>),
+    Table(BTreeMap<String, Vec<Meta6DepSpec>>),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum Meta6DepSpec {
+    String(String),
+    Object {
+        name: String,
+        #[serde(default)]
+        version: Option<String>,
+    },
 }
 
 /// Parse a META6.json body.
@@ -28,11 +51,14 @@ pub fn parse_raku_str(text: &str) -> Result<ForeignRecipe, ForeignError> {
         .map_err(|error| ForeignError::Parse(format!("META6.json: {error}")))?;
     let url = doc.source_url.clone().or(doc.source_url_kebab.clone());
     let mut dependencies = Vec::new();
-    for spec in &doc.depends {
-        dependencies.push(dep(spec, "run"));
-    }
-    for spec in &doc.build_depends {
-        dependencies.push(dep(spec, "build"));
+    for (spec, role) in doc
+        .depends
+        .into_pairs("run")
+        .into_iter()
+        .chain(doc.build_depends.into_pairs("build"))
+        .chain(doc.test_depends.into_pairs("test"))
+    {
+        dependencies.push(dep(&spec, role));
     }
     let sources = url
         .as_ref()
@@ -70,15 +96,63 @@ pub fn parse_raku_str(text: &str) -> Result<ForeignRecipe, ForeignError> {
     })
 }
 
+impl Meta6Depends {
+    fn into_pairs(self, default_role: &'static str) -> Vec<(String, &'static str)> {
+        match self {
+            Self::Missing => Vec::new(),
+            Self::List(specs) => specs
+                .into_iter()
+                .map(|spec| (spec.into_string(), default_role))
+                .collect(),
+            Self::Table(table) => {
+                let mut out = Vec::new();
+                for (key, specs) in table {
+                    let role = match key.as_str() {
+                        "build" => "build",
+                        "test" => "test",
+                        _ => "run",
+                    };
+                    for spec in specs {
+                        out.push((spec.into_string(), role));
+                    }
+                }
+                out
+            }
+        }
+    }
+}
+
+impl Meta6DepSpec {
+    fn into_string(self) -> String {
+        match self {
+            Self::String(spec) => spec,
+            Self::Object { name, version } => match version {
+                Some(version) => format!("{name}:ver<{version}>"),
+                None => name,
+            },
+        }
+    }
+}
+
 fn dep(spec: &str, role: &str) -> ForeignDep {
-    let name = spec
+    let (name_part, ver_part) = spec.split_once(":ver").unwrap_or((spec, ""));
+    let name = name_part
         .split([' ', '<', '>'])
         .next()
-        .unwrap_or(spec)
+        .unwrap_or(name_part)
+        .trim_end_matches(':')
         .to_string();
+    let pin = ver_part
+        .trim()
+        .trim_start_matches('<')
+        .split('>')
+        .next()
+        .map(str::trim)
+        .filter(|pin| !pin.is_empty())
+        .map(ToString::to_string);
     ForeignDep {
         name,
-        pin: None,
+        pin,
         role: role.into(),
         original_spec: Some(spec.to_string()),
         condition: ConditionExpr::Always,
@@ -105,11 +179,54 @@ mod tests {
         assert!(recipe
             .dependencies
             .iter()
-            .any(|dep| dep.name == "JSON::Fast" && dep.role == "run"));
+            .any(|dep| dep.name == "JSON::Fast" && dep.role == "run" && dep.pin.is_none()));
         assert!(recipe
             .dependencies
             .iter()
             .any(|dep| dep.name == "App::Prove6" && dep.role == "build"));
         assert_eq!(recipe.format, ForeignFormat::Raku);
+    }
+
+    #[test]
+    fn meta6_ver_adverb_is_a_pin_not_the_name() {
+        let recipe = parse_raku_str(
+            r#"{
+              "name": "Demo",
+              "version": "0.1.0",
+              "depends": ["JSON::Fast:ver<0.10+>"]
+            }"#,
+        )
+        .expect("parse");
+        let dep = recipe
+            .dependencies
+            .iter()
+            .find(|dep| dep.name == "JSON::Fast")
+            .expect("JSON::Fast");
+        assert_eq!(dep.pin.as_deref(), Some("0.10+"));
+    }
+
+    #[test]
+    fn meta6_hash_depends_and_test_depends_parse() {
+        let recipe = parse_raku_str(
+            r#"{
+              "name": "Demo",
+              "version": "0.1.0",
+              "depends": { "runtime": ["JSON::Fast"], "build": ["App::Mi6"] },
+              "test-depends": ["Test::META"]
+            }"#,
+        )
+        .expect("parse");
+        assert!(recipe
+            .dependencies
+            .iter()
+            .any(|dep| dep.name == "JSON::Fast" && dep.role == "run"));
+        assert!(recipe
+            .dependencies
+            .iter()
+            .any(|dep| dep.name == "App::Mi6" && dep.role == "build"));
+        assert!(recipe
+            .dependencies
+            .iter()
+            .any(|dep| dep.name == "Test::META" && dep.role == "test"));
     }
 }
