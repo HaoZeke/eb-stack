@@ -250,6 +250,8 @@ fn render_easyconfig(
                 versionsuffix_line: &versionsuffix_line,
                 toolchain_options_line: &toolchain_options_line,
                 easyconfig_parameter_lines: &easyconfig_parameter_lines,
+                patch_line: &patch_line,
+                config_line: &config_line,
                 build_dependencies: &build_dependencies,
                 runtime_dependencies: &runtime_dependencies,
                 moduleclass,
@@ -268,6 +270,8 @@ fn render_easyconfig(
                 versionsuffix_line: &versionsuffix_line,
                 toolchain_options_line: &toolchain_options_line,
                 easyconfig_parameter_lines: &easyconfig_parameter_lines,
+                patch_line: &patch_line,
+                config_line: &config_line,
                 build_dependencies: &build_dependencies,
                 runtime_dependencies: &runtime_dependencies,
                 moduleclass,
@@ -325,6 +329,8 @@ struct BundleFragments<'a> {
     versionsuffix_line: &'a str,
     toolchain_options_line: &'a str,
     easyconfig_parameter_lines: &'a str,
+    patch_line: &'a str,
+    config_line: &'a str,
     build_dependencies: &'a [String],
     runtime_dependencies: &'a [String],
     moduleclass: &'a str,
@@ -343,6 +349,8 @@ fn render_language_bundle(
         versionsuffix_line,
         toolchain_options_line,
         easyconfig_parameter_lines,
+        patch_line,
+        config_line,
         build_dependencies,
         runtime_dependencies,
         moduleclass,
@@ -385,6 +393,8 @@ toolchain = {{'name': '{toolchain_name}', 'version': '{toolchain_version}'}}\n\
 {easyconfig_parameter_lines}\
 {default_class}\
 {default_ext_opts}\
+{patch_line}\
+{config_line}\
 exts_list = {exts}\n\n\
 {build_dependencies}\
 {runtime_dependencies}\
@@ -649,27 +659,41 @@ fn render_sources(
     patches: &[crate::package::PatchArtifact],
     source_root: Option<&str>,
 ) -> SourceBlock {
+    let mut git_entries: Vec<(&crate::package::SourceArtifact, String)> = Vec::new();
     let resolved = source_artifacts
         .iter()
         .filter_map(|source| {
+            // A checkout (commit set, or git with no download URL) is a
+            // git_config dict. A GitHub tag without a commit can stay an archive.
+            if source.git.is_some() && (source.commit.is_some() || source.url.is_none()) {
+                if let Some(entry) = render_git_config(source, package_name, package_version) {
+                    git_entries.push((source, entry));
+                    return None;
+                }
+            }
             let url = source
                 .url
                 .clone()
                 .or_else(|| match (&source.git, &source.tag) {
-                    (Some(git), Some(tag)) if git.contains("github.com") => Some(format!(
-                        "{}/archive/refs/tags/{tag}.tar.gz",
-                        git.trim_end_matches(".git")
-                    )),
-                    (Some(git), _) => Some(git.clone()),
+                    (Some(git), Some(tag))
+                        if git.contains("github.com") && source.commit.is_none() =>
+                    {
+                        Some(format!(
+                            "{}/archive/refs/tags/{tag}.tar.gz",
+                            git.trim_end_matches(".git")
+                        ))
+                    }
                     _ => None,
                 })?;
             Some((source, url))
         })
         .collect::<Vec<_>>();
 
-    let checksums = resolved
+    let checksums = git_entries
         .iter()
-        .map(|(source, _)| {
+        .map(|(source, _)| *source)
+        .chain(resolved.iter().map(|(source, _)| *source))
+        .map(|source| {
             source
                 .sha256
                 .as_deref()
@@ -708,15 +732,49 @@ fn render_sources(
         }
     }
 
-    let sources = resolved
-        .iter()
-        .map(|(source, url)| render_source(source, url, source_root))
-        .collect::<Vec<_>>();
+    let mut sources: Vec<String> = git_entries.into_iter().map(|(_, entry)| entry).collect();
+    sources.extend(
+        resolved
+            .iter()
+            .map(|(source, url)| render_source(source, url, source_root)),
+    );
     SourceBlock {
         prelude: String::new(),
         sources: format!("sources = {}", render_multiline_list(&sources)),
         checksums: checksum_lines,
     }
+}
+
+fn render_git_config(
+    source: &crate::package::SourceArtifact,
+    package_name: &str,
+    package_version: &str,
+) -> Option<String> {
+    let git = source.git.as_deref()?;
+    let trimmed = git.trim_end_matches('/').trim_end_matches(".git");
+    let (url, repo_name) = trimmed.rsplit_once('/')?;
+    if repo_name.is_empty() {
+        return None;
+    }
+    let filename = source
+        .filename
+        .clone()
+        .unwrap_or_else(|| format!("{package_name}-{package_version}.tar.gz"));
+    let mut git_fields = vec![
+        format!("        'url': '{}',", escape_single(url)),
+        format!("        'repo_name': '{}',", escape_single(repo_name)),
+    ];
+    if let Some(tag) = source.tag.as_deref() {
+        git_fields.push(format!("        'tag': '{}',", escape_single(tag)));
+    }
+    if let Some(commit) = source.commit.as_deref() {
+        git_fields.push(format!("        'commit': '{}',", escape_single(commit)));
+    }
+    Some(format!(
+        "{{\n    'filename': '{}',\n    'git_config': {{\n{}\n    }},\n}}",
+        escape_single(&filename),
+        git_fields.join("\n")
+    ))
 }
 
 /// Conventional EasyBuild form for a package downloaded from PyPI.
@@ -769,13 +827,14 @@ fn try_render_github_primary(
     } else {
         format!("{tag}.tar.gz")
     };
-    let filename_expr = if uses_source_lower && tag.ends_with(package_version) {
-        "SOURCELOWER_TAR_GZ".to_string()
-    } else if let Some(filename) = source.filename.as_deref() {
-        format!("'{}'", escape_single(filename))
-    } else {
-        format!("'{repo}-{package_version}.tar.gz'")
-    };
+    let filename_expr =
+        if uses_source_lower && (tag == package_version || tag == format!("v{package_version}")) {
+            "SOURCELOWER_TAR_GZ".to_string()
+        } else if let Some(filename) = source.filename.as_deref() {
+            format!("'{}'", escape_single(filename))
+        } else {
+            format!("'{repo}-{package_version}.tar.gz'")
+        };
 
     let prelude = format!(
         "github_account = '{}'\nsource_urls = [GITHUB_SOURCE]\n",
@@ -1088,6 +1147,62 @@ mod tests {
                 &["('Python', '3.13.1')".into()]
             ),
             "builddependencies = [('binutils', '2.42')]\ndependencies = [('Python', '3.13.1')]\n\n"
+        );
+    }
+
+    #[test]
+    fn git_checkout_emits_git_config_with_tag_and_commit() {
+        let source = crate::package::SourceArtifact {
+            git: Some("https://github.com/org/pkg.git".into()),
+            tag: Some("v1.2.3".into()),
+            commit: Some("abc123def".into()),
+            ..Default::default()
+        };
+        let block = render_sources("Pkg", "1.2.3", &[source], &[], None);
+        assert!(
+            block.sources.contains("'git_config'")
+                && block.sources.contains("'commit': 'abc123def'")
+                && block.sources.contains("'tag': 'v1.2.3'")
+                && block.sources.contains("'repo_name': 'pkg'"),
+            "checkout must emit git_config:\n{}",
+            block.sources
+        );
+        assert!(
+            !block.sources.contains("archive/refs/tags"),
+            "commit must not collapse to a tag archive:\n{}",
+            block.sources
+        );
+    }
+
+    #[test]
+    fn github_sourcelower_requires_an_exact_version_tag() {
+        let source = crate::package::SourceArtifact {
+            filename: Some("pkg-1.0.tar.gz".into()),
+            ..Default::default()
+        };
+        let unanchored = try_render_github_primary(
+            "pkg",
+            "1.0",
+            &source,
+            "https://github.com/org/pkg/archive/refs/tags/not-1.0.tar.gz",
+        )
+        .expect("parse");
+        assert!(
+            !unanchored.sources.contains("SOURCELOWER_TAR_GZ"),
+            "tag not-1.0 must not use SOURCELOWER:\n{}",
+            unanchored.sources
+        );
+        let exact = try_render_github_primary(
+            "pkg",
+            "1.0",
+            &source,
+            "https://github.com/org/pkg/archive/refs/tags/v1.0.tar.gz",
+        )
+        .expect("parse");
+        assert!(
+            exact.sources.contains("SOURCELOWER_TAR_GZ"),
+            "v1.0 must use SOURCELOWER:\n{}",
+            exact.sources
         );
     }
 

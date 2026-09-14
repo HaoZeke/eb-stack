@@ -3,10 +3,12 @@
 use eb_stack::package::{PackageOrigin, StackPolicy, STACK_POLICY_SCHEMA_VERSION};
 use eb_stack::package_catalog::resolve_package_catalog_layers;
 use eb_stack::package_closure::plan_package_closure_with_sources;
+use eb_stack::package_config::PackageConfigLayer;
 use eb_stack::package_sources::{PackageSourceRoots, SourceRootKind};
 use eb_stack::{
-    detect_foreign_format, inspect_new_package, materialize_pypi, parse_foreign_path,
-    plan_new_package, ForeignFormat, MapClient, NewPackageRequest, Toolchain,
+    complete_package_bundle, detect_foreign_format, inspect_new_package, materialize_pypi,
+    parse_easyconfig_trees, parse_foreign_path, plan_new_package, prepare_new_package_plan,
+    ForeignFormat, MapClient, NewPackageRequest, Toolchain,
 };
 use std::path::{Path, PathBuf};
 
@@ -727,6 +729,100 @@ fn plan_cran_takes_unpinned_versions_from_the_package_index() {
     assert!(
         recipe.text.contains("cran.r-project.org/src/contrib"),
         "an R bundle needs somewhere to download from:\n{}",
+        recipe.text
+    );
+}
+
+/// `prepare_new_package_plan` is the documented split before
+/// `complete_package_bundle`. The index has to be on the plan it returns,
+/// because those two callers do not copy it again.
+#[test]
+fn prepare_new_package_plan_keeps_the_request_package_index() {
+    let index = eb_stack::parse_package_index(
+        "Package: processx\nVersion: 3.8.4\nMD5sum: 1111111111111111111111111111abcd\n\n\
+         Package: rmarkdown\nVersion: 2.27\nMD5sum: 2222222222222222222222222222abcd\n",
+    );
+    let request = NewPackageRequest {
+        source: root().join("fixtures/foreign_ingest/cran_unpinned/cran.json"),
+        format: Some(ForeignFormat::Cran),
+        toolchain: toolchain(),
+        source_checksums: vec![
+            "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".into(),
+        ],
+        package_layers: Vec::new(),
+        package_index: index,
+        easyconfig_roots: vec![root().join("fixtures/foreign_ingest/cran_bundle/robot")],
+        stack_policy: stack_policy(),
+    };
+    let (plan, sbom) = prepare_new_package_plan(&request).expect("prepare");
+    assert_eq!(
+        plan.package_index, request.package_index,
+        "prepare must copy the request index onto the plan"
+    );
+    let roots = request
+        .easyconfig_roots
+        .iter()
+        .map(PathBuf::as_path)
+        .collect::<Vec<_>>();
+    let tree = parse_easyconfig_trees(&roots).expect("robot");
+    let bundle = complete_package_bundle(plan, sbom, &tree.candidates, &request.stack_policy)
+        .expect("complete from prepare without a second index copy");
+    let recipe = &bundle.easyconfigs[0];
+    assert!(
+        recipe.text.contains("('processx', '3.8.4'"),
+        "the index on the prepared plan supplies the leftover version:\n{}",
+        recipe.text
+    );
+}
+
+/// A language-bundle recipe is a different template from ConfigureMake.
+/// Patches and configopts still have to land on it, or a CRAN/PyPI leftover
+/// that carries either silently ships without them.
+#[test]
+fn language_bundle_emit_keeps_patches_and_configopts() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let patch = temp.path().join("jsonlite-fix.patch");
+    std::fs::write(&patch, "bundle patch\n").expect("write patch");
+    let layer = PackageConfigLayer::from_toml_str(&format!(
+        r#"
+schema_version = 1
+[[build.patches]]
+filename = "jsonlite-fix.patch"
+sha256 = "1b3cb9a974469894efcbb136177166fc6921db16b00683369582e0fe9a7165e9"
+source = "{patch}"
+[[profiles]]
+name = "default"
+default = true
+config_options = ["--with-bundle-flag"]
+"#,
+        patch = patch.display(),
+    ))
+    .expect("layer");
+    let request = NewPackageRequest {
+        source: root().join("fixtures/foreign_ingest/cran_unpinned/cran.json"),
+        format: Some(ForeignFormat::Cran),
+        toolchain: toolchain(),
+        source_checksums: vec![
+            "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".into(),
+        ],
+        package_layers: vec![layer],
+        package_index: eb_stack::parse_package_index(
+            "Package: processx\nVersion: 3.8.4\nMD5sum: 1111111111111111111111111111abcd\n\n\
+             Package: rmarkdown\nVersion: 2.27\nMD5sum: 2222222222222222222222222222abcd\n",
+        ),
+        easyconfig_roots: vec![root().join("fixtures/foreign_ingest/cran_bundle/robot")],
+        stack_policy: stack_policy(),
+    };
+    let bundle = plan_new_package(&request).expect("plan language bundle");
+    let recipe = &bundle.easyconfigs[0];
+    assert!(
+        recipe.text.contains("patches") && recipe.text.contains("jsonlite-fix.patch"),
+        "bundle must keep the plan patch:\n{}",
+        recipe.text
+    );
+    assert!(
+        recipe.text.contains("configopts") && recipe.text.contains("--with-bundle-flag"),
+        "bundle must keep plan configopts:\n{}",
         recipe.text
     );
 }

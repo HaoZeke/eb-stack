@@ -213,6 +213,7 @@ pub fn prepare_new_package_plan(
         sbom = package_plan_to_cyclonedx(&plan)
             .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
     }
+    plan.package_index = request.package_index.clone();
     Ok((plan, sbom))
 }
 
@@ -782,8 +783,7 @@ pub fn plan_new_package(
     if request.easyconfig_roots.is_empty() {
         return Err(PackageWorkflowError::NoEasyconfigRoots);
     }
-    let (mut plan, sbom) = prepare_new_package_plan(request)?;
-    plan.package_index = request.package_index.clone();
+    let (plan, sbom) = prepare_new_package_plan(request)?;
     let roots = request
         .easyconfig_roots
         .iter()
@@ -1106,10 +1106,14 @@ pub fn complete_package_bump(
     // with it changes nothing. A dependency may name the module rather than
     // the version: `('OpenMPI', '5.0.3-GCC-13.3.0')` says exactly what the
     // solve picked, and rewriting it into a four-element tuple is churn.
-    let stated_versions: HashMap<&str, &str> = source_recipe
+    let stated_run: HashMap<&str, &str> = source_recipe
         .dependencies
         .iter()
-        .chain(source_recipe.builddependencies.iter())
+        .map(|dependency| (dependency.name.as_str(), dependency.version.as_str()))
+        .collect();
+    let stated_build: HashMap<&str, &str> = source_recipe
+        .builddependencies
+        .iter()
         .map(|dependency| (dependency.name.as_str(), dependency.version.as_str()))
         .collect();
     let names_the_selected_module = |dependency: &crate::package::LockedDependency| {
@@ -1122,9 +1126,16 @@ pub fn complete_package_bump(
                 dependency.version, dependency.toolchain.name, dependency.toolchain.version
             )
         };
-        stated_versions
+        // One lock row can stand for both lists. Skip the rewrite only when
+        // every stated occurrence already names this module; otherwise a
+        // matching build pin would leave a disagreeing runtime line in place.
+        let run_matches = stated_run
             .get(dependency.name.as_str())
-            .is_some_and(|stated| *stated == module_version)
+            .is_none_or(|stated| *stated == module_version);
+        let build_matches = stated_build
+            .get(dependency.name.as_str())
+            .is_none_or(|stated| *stated == module_version);
+        run_matches && build_matches
     };
     let mut dependency_versions = lock
         .dependencies
@@ -1146,10 +1157,19 @@ pub fn complete_package_bump(
     // to be when the selection is the toolchain already named: a bump that
     // changes nothing should leave the line alone rather than refuse the
     // recipe.
-    let stated: HashMap<&str, &Toolchain> = source_recipe
+    let stated_run_tc: HashMap<&str, &Toolchain> = source_recipe
         .dependencies
         .iter()
-        .chain(source_recipe.builddependencies.iter())
+        .filter_map(|dependency| {
+            dependency
+                .toolchain
+                .as_ref()
+                .map(|toolchain| (dependency.name.as_str(), toolchain))
+        })
+        .collect();
+    let stated_build_tc: HashMap<&str, &Toolchain> = source_recipe
+        .builddependencies
+        .iter()
         .filter_map(|dependency| {
             dependency
                 .toolchain
@@ -1162,7 +1182,12 @@ pub fn complete_package_bump(
         .iter()
         .filter(|dependency| !names_the_selected_module(dependency))
         .filter(|dependency| {
-            stated.get(dependency.name.as_str()).is_none_or(|already| {
+            let stated = if dependency.build {
+                stated_build_tc.get(dependency.name.as_str())
+            } else {
+                stated_run_tc.get(dependency.name.as_str())
+            };
+            stated.is_none_or(|already| {
                 !crate::hierarchy::toolchains_match(already, &dependency.toolchain)
             })
         })
