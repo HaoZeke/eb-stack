@@ -172,11 +172,25 @@ mod tests {
     fn tree(dir: &Path, lib_body: &str) -> Vec<Candidate> {
         fs::create_dir_all(dir.join("l/Lib")).unwrap();
         fs::create_dir_all(dir.join("a/App")).unwrap();
+        fs::create_dir_all(dir.join("f/foss")).unwrap();
         let lib = dir.join("l/Lib/Lib-1.0-foss-2026.1.eb");
         let app = dir.join("a/App/App-2.0-foss-2026.1.eb");
+        let foss = dir.join("f/foss/foss-2026.1.eb");
         fs::write(&lib, lib_body).unwrap();
         fs::write(&app, "name = 'App'\n").unwrap();
+        fs::write(&foss, "name = 'foss'\nversion = '2026.1'\n").unwrap();
         vec![
+            Candidate {
+                name: "foss".into(),
+                version: "2026.1".into(),
+                toolchain: tc("system", "system"),
+                versionsuffix: None,
+                dependencies: Vec::new(),
+                builddependencies: Vec::new(),
+                easyconfig_path: foss.to_string_lossy().into_owned(),
+                exts_list: Vec::new(),
+                moduleclass: None,
+            },
             Candidate {
                 name: "Lib".into(),
                 version: "1.0".into(),

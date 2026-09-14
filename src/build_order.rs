@@ -529,14 +529,50 @@ pub fn build_graph(
         // ordered ahead of the OpenMPI its toolchain is made of, which reads
         // as a valid order and is not one.
         if !crate::hierarchy::is_system_toolchain(&candidate.toolchain) {
-            if let Some(tc) = candidates.iter().find(|c| {
-                c.name == candidate.toolchain.name && c.version == candidate.toolchain.version
-            }) {
-                let tc_key = ModuleKey::of(tc);
-                if tc_key != key {
-                    let node = node_for(&mut graph, &mut index, &tc_key);
-                    graph.add_edge(node, dependent, Edge::Toolchain);
-                    queue.push(tc_key);
+            // EasyBuild's toolchain line is the unsuffixed module. A CUDA
+            // GCC-12.3.0 sitting first in parse order is not GCC-12.3.0.
+            let mut admissible: Vec<&Candidate> = candidates
+                .iter()
+                .filter(|c| {
+                    c.name == candidate.toolchain.name
+                        && c.version == candidate.toolchain.version
+                        && c.versionsuffix.as_deref().unwrap_or("").is_empty()
+                })
+                .collect();
+            let system_defs: Vec<&Candidate> = admissible
+                .iter()
+                .copied()
+                .filter(|c| crate::hierarchy::is_system_toolchain(&c.toolchain))
+                .collect();
+            if !system_defs.is_empty() {
+                admissible = system_defs;
+            }
+            admissible.sort_by_key(|c| ModuleKey::of(c));
+            match choose(&admissible, choice) {
+                Some(tc) => {
+                    let tc_key = ModuleKey::of(tc);
+                    if tc_key != key {
+                        let node = node_for(&mut graph, &mut index, &tc_key);
+                        graph.add_edge(node, dependent, Edge::Toolchain);
+                        queue.push(tc_key);
+                    }
+                }
+                None => {
+                    let mut available: Vec<String> = candidates
+                        .iter()
+                        .filter(|c| c.name == candidate.toolchain.name)
+                        .map(|c| format!("{}-{}", c.version, ModuleKey::of(c)))
+                        .collect();
+                    available.sort();
+                    available.dedup();
+                    return Err(OrderError::Unsatisfied {
+                        from: key.clone(),
+                        requirement: format!(
+                            "{} {}",
+                            candidate.toolchain.name, candidate.toolchain.version
+                        ),
+                        available,
+                    });
                 }
             }
         }
@@ -751,6 +787,29 @@ mod tests {
         order.iter().map(|c| ModuleKey::of(c).to_string()).collect()
     }
 
+    fn tree(candidates: &[Candidate]) -> Vec<Candidate> {
+        let mut extra = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for candidate in candidates {
+            if crate::hierarchy::is_system_toolchain(&candidate.toolchain) {
+                continue;
+            }
+            if seen.insert((
+                candidate.toolchain.name.clone(),
+                candidate.toolchain.version.clone(),
+            )) {
+                extra.push(self::candidate(
+                    &candidate.toolchain.name,
+                    &candidate.toolchain.version,
+                    tc("system", "system"),
+                    vec![],
+                ));
+            }
+        }
+        extra.extend(candidates.iter().cloned());
+        extra
+    }
+
     #[test]
     fn dependencies_come_before_what_needs_them() {
         let all = vec![
@@ -768,7 +827,7 @@ mod tests {
             ),
             candidate("Base", "0.9", tc("GCCcore", "15.2.0"), vec![]),
         ];
-        let order = build_order(&all, &["App".into()], Choice::Newest).expect("order");
+        let order = build_order(&tree(&all), &["App".into()], Choice::Newest).expect("order");
         let seq = names(&order);
         let at = |n: &str| seq.iter().position(|s| s.starts_with(n)).unwrap();
         assert!(at("Base") < at("Lib"), "{seq:?}");
@@ -798,7 +857,7 @@ mod tests {
             candidate("Perl", "5.42.0", tc("GCCcore", "15.2.0"), vec![]),
             candidate("Perl", "5.38.0", tc("system", "system"), vec![]),
         ];
-        let order = build_order(&all, &["App".into()], Choice::Newest).expect("order");
+        let order = build_order(&tree(&all), &["App".into()], Choice::Newest).expect("order");
         let seq = names(&order);
         assert!(
             seq.iter().any(|s| s == "Perl-5.42.0-GCCcore-15.2.0"),
@@ -823,7 +882,7 @@ mod tests {
             candidate("Python", "3.11.3", tc("foss", "2026.1"), vec![]),
             bare,
         ];
-        let order = build_order(&all, &["App".into()], Choice::Newest).expect("order");
+        let order = build_order(&tree(&all), &["App".into()], Choice::Newest).expect("order");
         let seq = names(&order);
         assert!(
             seq.iter().any(|s| s == "Python-3.11.3-foss-2026.1"),
@@ -859,7 +918,7 @@ mod tests {
             ),
             candidate("Python", "3.11.3", tc("system", "system"), vec![]),
         ];
-        let err = build_order(&all, &["App".into()], Choice::Newest).unwrap_err();
+        let err = build_order(&tree(&all), &["App".into()], Choice::Newest).unwrap_err();
         assert!(
             matches!(err, OrderError::Unsatisfied { .. }),
             "implicit pin must not take SYSTEM: {err}"
@@ -877,7 +936,7 @@ mod tests {
             ),
             candidate("Python", "3.11.3", tc("system", "system"), vec![]),
         ];
-        let order = build_order(&all, &["App".into()], Choice::Newest).expect("order");
+        let order = build_order(&tree(&all), &["App".into()], Choice::Newest).expect("order");
         assert!(
             names(&order).iter().any(|s| s == "Python-3.11.3-system"),
             "{:?}",
@@ -901,7 +960,7 @@ mod tests {
             ),
             bundle,
         ];
-        let order = build_order(&all, &["App".into()], Choice::Newest).expect("order");
+        let order = build_order(&tree(&all), &["App".into()], Choice::Newest).expect("order");
         let seq = names(&order);
         assert!(seq.iter().any(|s| s.starts_with("SciPy-bundle")), "{seq:?}");
         assert!(
@@ -927,7 +986,7 @@ mod tests {
             candidate("A", "1.0", tc("foss", "2026.1"), vec![dep("B", "", None)]),
             candidate("B", "1.0", tc("foss", "2026.1"), vec![dep("A", "", None)]),
         ];
-        let err = build_order(&all, &["A".into()], Choice::Newest).unwrap_err();
+        let err = build_order(&tree(&all), &["A".into()], Choice::Newest).unwrap_err();
         match err {
             OrderError::Cycle(component) => {
                 let shown: Vec<String> = component.iter().map(ToString::to_string).collect();
@@ -944,7 +1003,7 @@ mod tests {
     #[test]
     fn a_misspelled_root_is_offered_the_name_it_missed() {
         let all = vec![candidate("GROMACS", "2026.3", tc("foss", "2026.1"), vec![])];
-        let err = build_order(&all, &["GROMAC".into()], Choice::Newest).unwrap_err();
+        let err = build_order(&tree(&all), &["GROMAC".into()], Choice::Newest).unwrap_err();
         let shown = err.to_string();
         assert!(shown.contains("GROMACS"), "{shown}");
         assert!(shown.contains("Did you mean"), "{shown}");
@@ -953,7 +1012,7 @@ mod tests {
     #[test]
     fn a_wrong_capital_is_still_found() {
         let all = vec![candidate("pkgconf", "2.5.1", tc("foss", "2026.1"), vec![])];
-        let err = build_order(&all, &["PkgConf".into()], Choice::Newest).unwrap_err();
+        let err = build_order(&tree(&all), &["PkgConf".into()], Choice::Newest).unwrap_err();
         assert!(err.to_string().contains("pkgconf"), "{err}");
     }
 
@@ -965,7 +1024,7 @@ mod tests {
             candidate("GROMACS", "2026.3", tc("foss", "2026.1"), vec![]),
             candidate("GROMACS", "2025.0", tc("foss", "2026.1"), vec![]),
         ];
-        let err = build_order(&all, &["GROMACS==99.0".into()], Choice::Newest).unwrap_err();
+        let err = build_order(&tree(&all), &["GROMACS==99.0".into()], Choice::Newest).unwrap_err();
         let shown = err.to_string();
         assert!(shown.contains("no version matching"), "{shown}");
         assert!(shown.contains("2026.3"), "{shown}");
@@ -984,7 +1043,7 @@ mod tests {
             ),
             candidate("Lib", "2.0", tc("foss", "2026.1"), vec![]),
         ];
-        let err = build_order(&all, &["App".into()], Choice::Newest).unwrap_err();
+        let err = build_order(&tree(&all), &["App".into()], Choice::Newest).unwrap_err();
         let shown = err.to_string();
         assert!(shown.contains("Lib >=9"), "{shown}");
         assert!(shown.contains("2.0-foss-2026.1"), "{shown}");
@@ -995,7 +1054,7 @@ mod tests {
         let all: Vec<Candidate> = (1..=12)
             .map(|n| candidate("Many", &format!("{n}.0"), tc("foss", "2026.1"), vec![]))
             .collect();
-        let err = build_order(&all, &["Many==99".into()], Choice::Newest).unwrap_err();
+        let err = build_order(&tree(&all), &["Many==99".into()], Choice::Newest).unwrap_err();
         assert!(err.to_string().contains("and 6 more"), "{err}");
     }
 
@@ -1007,7 +1066,7 @@ mod tests {
             tc("foss", "2026.1"),
             vec![dep("Missing", ">=9", None)],
         )];
-        let err = build_order(&all, &["App".into()], Choice::Newest).unwrap_err();
+        let err = build_order(&tree(&all), &["App".into()], Choice::Newest).unwrap_err();
         match err {
             OrderError::Unsatisfied {
                 from, requirement, ..
@@ -1031,13 +1090,13 @@ mod tests {
             candidate("Lib", "2.0", tc("foss", "2026.1"), vec![]),
             candidate("Lib", "2.1", tc("foss", "2026.1"), vec![]),
         ];
-        let first = names(&build_order(&all, &["App".into()], Choice::Newest).unwrap());
+        let first = names(&build_order(&tree(&all), &["App".into()], Choice::Newest).unwrap());
         all.reverse();
-        let second = names(&build_order(&all, &["App".into()], Choice::Newest).unwrap());
+        let second = names(&build_order(&tree(&all), &["App".into()], Choice::Newest).unwrap());
         assert_eq!(first, second);
         // Newest wins by default; oldest is available for reproducing a tree.
         assert!(first.iter().any(|s| s.starts_with("Lib-2.1")), "{first:?}");
-        let oldest = names(&build_order(&all, &["App".into()], Choice::Oldest).unwrap());
+        let oldest = names(&build_order(&tree(&all), &["App".into()], Choice::Oldest).unwrap());
         assert!(
             oldest.iter().any(|s| s.starts_with("Lib-2.0")),
             "{oldest:?}"
@@ -1050,7 +1109,54 @@ mod tests {
             candidate("Lib", "2.0", tc("foss", "2026.1"), vec![]),
             candidate("Lib", "2.1", tc("foss", "2026.1"), vec![]),
         ];
-        let order = build_order(&all, &["Lib==2.0".into()], Choice::Newest).unwrap();
-        assert_eq!(names(&order), vec!["Lib-2.0-foss-2026.1".to_string()]);
+        let order = build_order(&tree(&all), &["Lib==2.0".into()], Choice::Newest).unwrap();
+        assert_eq!(
+            names(&order),
+            vec![
+                "foss-2026.1-system".to_string(),
+                "Lib-2.0-foss-2026.1".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn toolchain_edge_prefers_the_unsuffixed_module() {
+        let mut cuda = candidate("GCC", "12.3.0", tc("system", "system"), vec![]);
+        cuda.versionsuffix = Some("-CUDA-12.8.0".into());
+        let plain = candidate("GCC", "12.3.0", tc("system", "system"), vec![]);
+        let app = candidate("App", "1.0", tc("GCC", "12.3.0"), vec![]);
+        for all in [
+            vec![cuda.clone(), plain.clone(), app.clone()],
+            vec![app.clone(), plain.clone(), cuda.clone()],
+        ] {
+            let order = build_order(&tree(&all), &["App".into()], Choice::Newest).expect("order");
+            let seq = names(&order);
+            assert!(
+                seq.iter().any(|name| name == "GCC-12.3.0-system"),
+                "unsuffixed GCC must be the toolchain predecessor: {seq:?}"
+            );
+            assert!(
+                !seq.iter().any(|name| name.contains("-CUDA-")),
+                "CUDA GCC must not win the toolchain line: {seq:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_toolchain_definition_is_unsatisfied() {
+        let all = vec![candidate("App", "1.0", tc("foss", "2026.1"), vec![])];
+        let err = build_order(&all, &["App".into()], Choice::Newest).unwrap_err();
+        match err {
+            OrderError::Unsatisfied {
+                from, requirement, ..
+            } => {
+                assert_eq!(from.name, "App");
+                assert!(
+                    requirement.contains("foss"),
+                    "missing toolchain must be named: {requirement}"
+                );
+            }
+            other => panic!("expected Unsatisfied, got {other}"),
+        }
     }
 }
