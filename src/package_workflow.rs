@@ -290,7 +290,7 @@ pub fn complete_package_bundle_with_hierarchy(
         );
     }
     refresh_checksum_residuals(&mut plan);
-    require_source_checksums(&plan)?;
+    require_source_checksums(&plan, true)?;
     let easyconfigs = emit_profile_easyconfigs(&plan, &locks)
         .map_err(|error| PackageWorkflowError::Emit(error.to_string()))?;
     let sbom = package_plan_to_cyclonedx(&plan)
@@ -857,7 +857,10 @@ fn apply_source_checksums(
     Ok(())
 }
 
-fn require_source_checksums(plan: &PackagePlan) -> Result<(), PackageWorkflowError> {
+fn require_source_checksums(
+    plan: &PackagePlan,
+    hash_local_patches: bool,
+) -> Result<(), PackageWorkflowError> {
     if plan.sources.is_empty() && plan.origin != PackageOrigin::EasyBuild {
         return Err(PackageWorkflowError::NoSourceArtifacts);
     }
@@ -893,7 +896,8 @@ fn require_source_checksums(plan: &PackagePlan) -> Result<(), PackageWorkflowErr
     }
     for patch in &plan.build.patches {
         validate_patch_checksum(patch)?;
-        if patch.url.is_none()
+        if hash_local_patches
+            && patch.url.is_none()
             && (plan.origin != PackageOrigin::EasyBuild
                 || patch.resolved_source.is_some()
                 || patch.source.is_some())
@@ -1955,7 +1959,7 @@ pub fn write_package_bundle_into(
 ) -> Result<WrittenPackageBundle, PackageWorkflowError> {
     let inspection_only = bundle.locks.is_empty() && bundle.easyconfigs.is_empty();
     if !inspection_only {
-        require_source_checksums(&bundle.plan)?;
+        require_source_checksums(&bundle.plan, false)?;
     }
     std::fs::create_dir_all(artifact_directory)
         .map_err(|error| PackageWorkflowError::Io(artifact_directory.to_path_buf(), error))?;
@@ -2011,10 +2015,22 @@ pub fn write_package_bundle_into(
                 continue;
             }
             validate_path_segment(&patch.filename, "patch filename")?;
-            let source = validate_patch_source(patch)?;
+            let source = patch
+                .resolved_source
+                .clone()
+                .ok_or_else(|| PackageWorkflowError::MissingPatchSource(patch.filename.clone()))?;
             let path = recipe_directory.join(&patch.filename);
             let content = std::fs::read(&source)
                 .map_err(|error| PackageWorkflowError::PatchIo(source.clone(), error))?;
+            let actual = sha256_hex(&content);
+            let expected = patch.sha256.as_deref().unwrap_or_default();
+            if actual != expected {
+                return Err(PackageWorkflowError::PatchChecksumMismatch {
+                    filename: patch.filename.clone(),
+                    expected: expected.to_string(),
+                    actual,
+                });
+            }
             claim_overlay_path(recipe_bundle_root, &path, &content, claimed_paths)?;
             std::fs::write(&path, &content)
                 .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
