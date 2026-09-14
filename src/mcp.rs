@@ -5,6 +5,7 @@ use crate::campaign::{
     FindingResolution,
 };
 use crate::domain::Toolchain;
+use crate::eb_maintainer::{check_duplicate_upstream, check_maintainer_acceptability};
 use crate::eb_parse::{
     check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,
 };
@@ -554,8 +555,9 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
 }
 
 fn recipe_check(arguments: &Value) -> Result<Value, String> {
-    let recipe = resolve_easyconfig_file(&required_path(arguments, "recipe")?)
-        .map_err(|error| error.to_string())?;
+    let path = required_path(arguments, "recipe")?;
+    let recipe = resolve_easyconfig_file(&path).map_err(|error| error.to_string())?;
+    let source_text = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
     let roots = path_array(arguments, "easyconfigs")?;
     let root_refs = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
     let tree = parse_easyconfig_trees(&root_refs).map_err(|error| error.to_string())?;
@@ -566,18 +568,31 @@ fn recipe_check(arguments: &Value) -> Result<Value, String> {
         .map(String::as_str)
         .collect::<Vec<_>>();
     let packaging = packaging_gate(&recipe, &option_refs);
-    // An empty `missing` list earns the resolves claim only when the matches
-    // behind it were filtered by a real toolchain hierarchy. Without one they
-    // ignore toolchain and can pair the recipe with another generation, which
-    // is the shape the CLI refuses to call a resolve. The claim ladder is the
-    // whole point of this surface, so it does not get to be laxer.
-    let resolves = check.ok() && check.toolchain_verified() && packaging.is_ok();
+    let maintainer = check_maintainer_acceptability(&recipe, &source_text);
+    let maintainer_errors: Vec<_> = maintainer
+        .findings
+        .iter()
+        .filter(|finding| finding.is_error())
+        .cloned()
+        .collect();
+    let duplicates = check_duplicate_upstream(&recipe, &tree.candidates);
+    let duplicate_error = duplicates.iter().any(|finding| finding.is_error());
+    // The claim ladder is the point of this surface. It does not get to be
+    // laxer than the CLI: maintainer #26435-class errors and a duplicate
+    // upstream recipe refuse resolves the same way they bail the CLI.
+    let resolves = check.ok()
+        && check.toolchain_verified()
+        && packaging.is_ok()
+        && maintainer_errors.is_empty()
+        && !duplicate_error;
     let packaging_errors = packaging.err().unwrap_or_default();
     Ok(json!({
         "recipe": recipe.easyconfig_path,
         "resolves": resolves,
         "dependency_check": check,
         "packaging_errors": packaging_errors,
+        "maintainer_errors": maintainer_errors,
+        "duplicate_upstream": duplicates,
         "claims": {"resolves": resolves, "builds": false, "binary_verified": false}
     }))
 }

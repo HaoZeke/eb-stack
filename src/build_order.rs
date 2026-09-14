@@ -634,9 +634,10 @@ pub fn multi_build_names(order: &[Candidate]) -> BTreeMap<String, Vec<String>> {
     let mut seen: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for c in order {
         let key = ModuleKey::of(c);
-        seen.entry(c.name.clone())
-            .or_default()
-            .push(format!("{}-{}", key.version, key.toolchain));
+        seen.entry(c.name.clone()).or_default().push(format!(
+            "{}-{}{}",
+            key.version, key.toolchain, key.versionsuffix
+        ));
     }
     seen.retain(|_, builds| {
         builds.sort();
@@ -778,6 +779,19 @@ mod tests {
         assert!(
             !seq.iter().any(|s| s.contains("-bare")),
             "unsuffixed pin must not pick -bare: {seq:?}"
+        );
+    }
+
+    #[test]
+    fn multi_build_names_keeps_a_cuda_variant() {
+        let mut cuda = candidate("App", "1.0", tc("foss", "2026.1"), vec![]);
+        cuda.versionsuffix = Some("-CUDA-12.8.0".into());
+        let all = vec![candidate("App", "1.0", tc("foss", "2026.1"), vec![]), cuda];
+        let multi = multi_build_names(&all);
+        assert_eq!(
+            multi.get("App").map(Vec::len),
+            Some(2),
+            "CUDA and plain must stay distinct: {multi:?}"
         );
     }
 
