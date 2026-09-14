@@ -12,8 +12,7 @@ use crate::hierarchy::{
     filter_candidates_in_hierarchy, is_system_toolchain, SourceDepSpec, ToolchainHierarchy,
 };
 use crate::resolvo_provider::solve_with_resolvo;
-use crate::version::matches_req;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -106,8 +105,15 @@ pub fn resolvo_resolve_dep_versions(
     // exists (mirrors hierarchy::prefer_non_system_candidates).
     universe_cands = drop_system_when_non_system_exists(universe_cands);
 
+    let mut by_name: HashMap<&str, Vec<&Candidate>> = HashMap::new();
+    for candidate in &universe_cands {
+        by_name
+            .entry(candidate.name.as_str())
+            .or_default()
+            .push(candidate);
+    }
     let mut dep_reqs: Vec<DepReq> = Vec::new();
-    let mut resolvable: Vec<String> = Vec::new();
+    let mut resolvable: HashSet<String> = HashSet::new();
     let mut pins: Vec<crate::domain::Pin> = Vec::new();
     for s in specs {
         if s.system_toolchain {
@@ -116,7 +122,7 @@ pub fn resolvo_resolve_dep_versions(
         if s.versionsuffix.as_deref().is_some_and(|vs| !vs.is_empty()) {
             continue;
         }
-        if !universe_cands.iter().any(|c| c.name == s.name) {
+        let Some(named) = by_name.get(s.name.as_str()) else {
             if s.optional {
                 continue;
             }
@@ -124,7 +130,7 @@ pub fn resolvo_resolve_dep_versions(
                 "no hierarchy candidate for required dep {}",
                 s.name
             ));
-        }
+        };
 
         let (version_req, pin_exact) =
             if let Some(pref) = preferred_pins.and_then(|m| m.get(&s.name)) {
@@ -137,9 +143,11 @@ pub fn resolvo_resolve_dep_versions(
                 (format!(">={}", s.version), None)
             };
 
-        let any_match = universe_cands.iter().any(|c| {
-            c.name == s.name
-                && matches_req(&c.version, &version_req)
+        let parsed = crate::version::parse_requirement(&version_req).ok();
+        let any_match = named.iter().any(|c| {
+            parsed
+                .as_ref()
+                .is_some_and(|requirement| requirement.matches(&c.version))
                 && c.versionsuffix.as_deref().unwrap_or("").is_empty()
         });
         if !any_match {
@@ -165,7 +173,7 @@ pub fn resolvo_resolve_dep_versions(
             versionsuffix: Some(String::new()),
             toolchain: None,
         });
-        resolvable.push(s.name.clone());
+        resolvable.insert(s.name.clone());
     }
     if dep_reqs.is_empty() {
         return Err("no resolvable deps with hierarchy candidates matching floors".into());
@@ -211,7 +219,7 @@ pub fn resolvo_resolve_dep_versions(
         if p.name == synthetic {
             continue;
         }
-        if resolvable.iter().any(|n| n == &p.name) {
+        if resolvable.contains(&p.name) {
             if p.versionsuffix.as_deref().is_some_and(|vs| !vs.is_empty()) {
                 return Err(format!(
                     "selected {} {}{} but the spec asked for the unsuffixed module",

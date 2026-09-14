@@ -2018,12 +2018,16 @@ fn resolve_easyconfig_str_inner(
     let configopts = opt_str_field(&parser.env, "configopts", &templates);
     let moduleclass = opt_str_field(&parser.env, "moduleclass", &templates);
     let homepage = opt_str_field(&parser.env, "homepage", &templates);
-    let checksums = opt_str_list_field(&parser.env, "checksums", &templates);
+    let checksums_applied = parser
+        .env
+        .get("checksums")
+        .map(|value| apply_templates_value(value, &templates));
+    let checksums = checksum_strings_from_applied(checksums_applied.as_ref());
     let sources_count = env_list_len(&parser.env, "sources", &templates);
     let source_urls = env_string_list(&parser.env, "source_urls", &templates);
     let patch_names = patch_names_field(&parser.env, &templates);
-    let checksum_entry_keys = checksum_entry_keys_field(&parser.env, &templates);
-    let checksums_by_filename = checksums_by_filename_field(&parser.env, &templates);
+    let checksum_entry_keys = checksum_entry_keys_from_applied(checksums_applied.as_ref());
+    let checksums_by_filename = checksums_by_filename_from_applied(checksums_applied.as_ref());
 
     let resolved = ResolvedEasyconfig {
         name,
@@ -2115,16 +2119,24 @@ fn patch_names_field(
         .collect()
 }
 
-/// Dict keys per `checksums` list entry (empty vec for plain-string entries).
-fn checksum_entry_keys_field(
-    env: &HashMap<String, Value>,
-    templates: &HashMap<String, String>,
-) -> Vec<Vec<String>> {
-    let Some(v) = env.get("checksums") else {
+fn checksum_strings_from_applied(applied: Option<&Value>) -> Vec<String> {
+    let Some(v) = applied else {
         return Vec::new();
     };
-    let v = apply_templates_value(v, templates);
-    let Ok(items) = value_list_as_slice(Some(&v)) else {
+    match value_list_as_slice(Some(v)) {
+        Ok(items) => items.iter().flat_map(checksum_strings_from_value).collect(),
+        Err(_) => match v.expect_str("checksums") {
+            Ok(s) => vec![s],
+            Err(_) => Vec::new(),
+        },
+    }
+}
+
+fn checksum_entry_keys_from_applied(applied: Option<&Value>) -> Vec<Vec<String>> {
+    let Some(v) = applied else {
+        return Vec::new();
+    };
+    let Ok(items) = value_list_as_slice(Some(v)) else {
         return Vec::new();
     };
     items
@@ -2134,6 +2146,27 @@ fn checksum_entry_keys_field(
             _ => Vec::new(),
         })
         .collect()
+}
+
+fn checksums_by_filename_from_applied(applied: Option<&Value>) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let Some(v) = applied else {
+        return out;
+    };
+    let Ok(items) = value_list_as_slice(Some(v)) else {
+        return out;
+    };
+    for item in items {
+        let Value::Dict(entries) = item else {
+            continue;
+        };
+        for (filename, value) in entries {
+            if let Some(checksum) = checksum_strings_from_value(value).first() {
+                out.insert(filename.clone(), checksum.clone());
+            }
+        }
+    }
+    out
 }
 
 /// Structural findings for the `checksums` list (EasyBuild convention:
@@ -2182,60 +2215,6 @@ fn opt_str_field(
         let v = apply_templates_value(v, templates);
         v.expect_str(key).ok()
     })
-}
-
-fn opt_str_list_field(
-    env: &HashMap<String, Value>,
-    key: &str,
-    templates: &HashMap<String, String>,
-) -> Vec<String> {
-    let Some(v) = env.get(key) else {
-        return Vec::new();
-    };
-    let v = apply_templates_value(v, templates);
-    match value_list_as_slice(Some(&v)) {
-        Ok(items) => items.iter().flat_map(checksum_strings_from_value).collect(),
-        Err(_) => match v.expect_str(key) {
-            Ok(s) => vec![s],
-            Err(_) => Vec::new(),
-        },
-    }
-}
-
-/// EasyBuild checksums may be plain strings or one-key dicts
-/// `{'file.tar.gz': 'sha256…'}`. Packaging gates need the sha256 tokens.
-/// Checksums a recipe states by filename rather than by position.
-///
-/// EasyBuild lets a checksum entry be `{'file.tar.gz': 'sha…'}`, and a site
-/// uses that to give one entry several architectures' hashes. Positional
-/// indexing then goes wrong for everything after it, so a patch listed last
-/// reads as having no checksum at all. Keyed entries are recorded by name so
-/// the position never has to be guessed.
-fn checksums_by_filename_field(
-    env: &HashMap<String, Value>,
-    templates: &HashMap<String, String>,
-) -> BTreeMap<String, String> {
-    let mut out = BTreeMap::new();
-    let Some(v) = env.get("checksums") else {
-        return out;
-    };
-    let v = apply_templates_value(v, templates);
-    let Ok(items) = value_list_as_slice(Some(&v)) else {
-        return out;
-    };
-    for item in items {
-        let Value::Dict(entries) = item else {
-            continue;
-        };
-        for (filename, value) in entries {
-            // A tuple of hashes means any of them is acceptable; the first
-            // answers the question "does this artifact have a checksum".
-            if let Some(checksum) = checksum_strings_from_value(value).first() {
-                out.insert(filename.clone(), checksum.clone());
-            }
-        }
-    }
-    out
 }
 
 fn checksum_strings_from_value(v: &Value) -> Vec<String> {
@@ -2499,6 +2478,13 @@ fn candidate_matches_dep_core(
 pub fn check_recipe_deps(recipe: &ResolvedEasyconfig, universe: &[Candidate]) -> RecipeDepCheck {
     let hierarchy =
         crate::hierarchy::hierarchy_for_with_tree(&recipe.toolchain, None, universe).ok();
+    let mut by_name: HashMap<&str, Vec<&Candidate>> = HashMap::new();
+    for candidate in universe {
+        by_name
+            .entry(candidate.name.as_str())
+            .or_default()
+            .push(candidate);
+    }
     let mut missing = Vec::new();
     let mut found = Vec::new();
     for (role, deps) in [
@@ -2506,12 +2492,14 @@ pub fn check_recipe_deps(recipe: &ResolvedEasyconfig, universe: &[Candidate]) ->
         ("build", recipe.builddependencies.as_slice()),
     ] {
         for d in deps {
-            let matched = universe.iter().find(|c| {
-                if let Some(ref h) = hierarchy {
-                    candidate_matches_dep_for_recipe(c, d, h)
-                } else {
-                    candidate_matches_dep(c, d)
-                }
+            let matched = by_name.get(d.name.as_str()).and_then(|candidates| {
+                candidates.iter().copied().find(|c| {
+                    if let Some(ref h) = hierarchy {
+                        candidate_matches_dep_for_recipe(c, d, h)
+                    } else {
+                        candidate_matches_dep(c, d)
+                    }
+                })
             });
             if let Some(c) = matched {
                 found.push(format!(
@@ -2845,14 +2833,22 @@ pub fn validate_lock_deps(lock: &StackLock, cands: &[Candidate]) -> Result<(), S
     for p in &lock.packages {
         by_name.entry(p.name.as_str()).or_default().push(p);
     }
+    let mut cands_by_name: Map<&str, Vec<&Candidate>> = Map::new();
+    for candidate in cands {
+        cands_by_name
+            .entry(candidate.name.as_str())
+            .or_default()
+            .push(candidate);
+    }
     for p in &lock.packages {
-        let Some(c) = cands.iter().find(|c| {
-            c.name == p.name
-                && c.version == p.version
-                && c.toolchain.name == p.toolchain.name
-                && c.toolchain.version == p.toolchain.version
-                && c.versionsuffix.as_deref().unwrap_or("")
-                    == p.versionsuffix.as_deref().unwrap_or("")
+        let Some(c) = cands_by_name.get(p.name.as_str()).and_then(|candidates| {
+            candidates.iter().copied().find(|c| {
+                c.version == p.version
+                    && c.toolchain.name == p.toolchain.name
+                    && c.toolchain.version == p.toolchain.version
+                    && c.versionsuffix.as_deref().unwrap_or("")
+                        == p.versionsuffix.as_deref().unwrap_or("")
+            })
         }) else {
             continue;
         };
