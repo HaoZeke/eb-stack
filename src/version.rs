@@ -16,7 +16,9 @@
 //! same position is rare for EasyBuild; Num sorts before Alpha there for a
 //! total deterministic order.
 
+use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 /// One tokenized piece of a version string: a numeric run or an
 /// alphabetic run (lowercased). Separator characters are dropped during
@@ -67,10 +69,26 @@ pub fn parse_version_parts(v: &str) -> Vec<Part> {
     parts
 }
 
+thread_local! {
+    static VERSION_PARTS: RefCell<HashMap<String, Vec<Part>>> = RefCell::new(HashMap::new());
+}
+
+fn cached_parts(version: &str) -> Vec<Part> {
+    VERSION_PARTS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(parts) = cache.get(version) {
+            return parts.clone();
+        }
+        let parts = parse_version_parts(version);
+        cache.insert(version.to_string(), parts.clone());
+        parts
+    })
+}
+
 /// Order two version strings by their tokenized parts, digits before letters.
 pub fn cmp_version(a: &str, b: &str) -> Ordering {
-    let pa = parse_version_parts(a);
-    let pb = parse_version_parts(b);
+    let pa = cached_parts(a);
+    let pb = cached_parts(b);
     let n = pa.len().max(pb.len());
     for i in 0..n {
         let x = pa.get(i);
