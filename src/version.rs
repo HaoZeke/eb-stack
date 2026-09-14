@@ -88,8 +88,20 @@ pub fn cmp_version(a: &str, b: &str) -> Ordering {
             // side with nothing more (so "1.0rc1" < "1.0").
             (Some(Part::Num(x)), None) => x.cmp(&0),
             (None, Some(Part::Num(y))) => 0u64.cmp(y),
-            (Some(Part::Alpha(_)), None) => Ordering::Less,
-            (None, Some(Part::Alpha(_))) => Ordering::Greater,
+            (Some(Part::Alpha(alpha)), None) => {
+                if is_post_release(alpha) {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                }
+            }
+            (None, Some(Part::Alpha(alpha))) => {
+                if is_post_release(alpha) {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
+                }
+            }
             (None, None) => Ordering::Equal,
         };
         match o {
@@ -98,6 +110,10 @@ pub fn cmp_version(a: &str, b: &str) -> Ordering {
         }
     }
     Ordering::Equal
+}
+
+fn is_post_release(token: &str) -> bool {
+    matches!(token, "post" | "rev" | "pl")
 }
 
 /// One comparison in a requirement.
@@ -286,13 +302,11 @@ fn clause_matches(version: &str, clause: &RequirementClause) -> bool {
 ///
 /// A compound requirement matches only if **every** non-empty clause matches.
 pub fn matches_req(version: &str, req: &str) -> bool {
-    // A clause the language cannot express excludes nothing rather than
-    // everything. Ingestion turns the same parse failure into a visible
-    // residual, so the constraint is reported rather than quietly enforced as
-    // an empty version set.
+    // A clause the language cannot express excludes every candidate. The
+    // ingest path records a residual for the same parse failure.
     match parse_requirement(req) {
         Ok(requirement) => requirement.matches(version),
-        Err(_) => true,
+        Err(_) => false,
     }
 }
 
@@ -499,5 +513,22 @@ mod tests {
         // nonzero.
         assert_eq!(cmp_version("1.2.3", "1.2"), Ordering::Greater);
         assert_eq!(cmp_version("1.2.0", "1.2"), Ordering::Equal);
+    }
+
+    #[test]
+    fn post_release_sorts_after_the_final_release() {
+        assert_eq!(cmp_version("1.7.1.post2", "1.7.1"), Ordering::Greater);
+        assert_eq!(cmp_version("1.7.1", "1.7.1.post2"), Ordering::Less);
+        assert_eq!(cmp_version("1.2.3rev1", "1.2.3"), Ordering::Greater);
+        assert_eq!(cmp_version("1.2.3pl1", "1.2.3"), Ordering::Greater);
+        assert_eq!(cmp_version("1.0rc1", "1.0"), Ordering::Less);
+    }
+
+    #[test]
+    fn an_unparseable_requirement_matches_nothing() {
+        assert!(!matches_req("1.0", "latest"));
+        assert!(!matches_req("1.0", "*"));
+        assert!(!matches_req("1.0", "any"));
+        assert!(matches_req("1.0", ">=1.0"));
     }
 }

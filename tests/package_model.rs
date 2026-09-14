@@ -227,3 +227,51 @@ fn canonical_plan_writes_typed_cyclonedx_components() {
     );
     assert_eq!(distribution["hashes"][0], root["hashes"][0]);
 }
+
+#[test]
+fn a_gitlab_remote_does_not_invent_a_github_archive() {
+    let mut plan = qmcpack_plan();
+    plan.sources[0].git = Some("https://gitlab.com/org/pkg.git".into());
+    plan.sources[0].url = None;
+    let sbom = package_plan_to_cyclonedx(&plan).expect("typed CycloneDX SBOM");
+    let references = sbom["metadata"]["component"]["externalReferences"]
+        .as_array()
+        .expect("source references");
+    assert!(references.iter().any(|reference| {
+        reference["type"] == "vcs" && reference["url"] == "https://gitlab.com/org/pkg.git"
+    }));
+    assert!(
+        !references.iter().any(|reference| {
+            reference["type"] == "distribution"
+                && reference["url"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("/archive/")
+        }),
+        "{references:?}"
+    );
+}
+
+#[test]
+fn only_a_64_hex_checksum_is_asserted_as_sha256() {
+    let mut plan = qmcpack_plan();
+    plan.sources[0].sha256 = Some("not-a-sha256".into());
+    plan.sources.push(SourceArtifact {
+        url: Some("https://example.invalid/extra.tar.gz".into()),
+        filename: None,
+        sha256: Some("ab".repeat(32)),
+        git: None,
+        tag: None,
+        commit: None,
+        target_directory: None,
+        condition: ConditionExpr::Always,
+        provenance: Vec::new(),
+    });
+    let sbom = package_plan_to_cyclonedx(&plan).expect("typed CycloneDX SBOM");
+    let hashes = sbom["metadata"]["component"]["hashes"]
+        .as_array()
+        .expect("root hashes");
+    assert_eq!(hashes.len(), 1, "{hashes:?}");
+    assert_eq!(hashes[0]["alg"], "SHA-256");
+    assert_eq!(hashes[0]["content"], "ab".repeat(32));
+}

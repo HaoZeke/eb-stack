@@ -90,6 +90,7 @@ pub fn line_is_mechanically_fixable(line: &str) -> bool {
     }
     parse_string_assignment(line).is_some()
         || parse_dictionary_string_list(line).is_some()
+        || parse_assignment_string_list(line).is_some()
         || parse_list_string_item(line).is_some()
 }
 
@@ -166,6 +167,9 @@ fn try_format_line(line: &str) -> Option<Vec<String>> {
     }
     if let Some(field) = parse_dictionary_string_list(line) {
         return Some(format_dictionary_string_list(&field));
+    }
+    if let Some(list) = parse_assignment_string_list(line) {
+        return Some(format_assignment_string_list(&list));
     }
     // List / tuple element: `    'long…',` or `    "long…",`
     if let Some(item) = parse_list_string_item(line) {
@@ -342,6 +346,67 @@ struct StringAssignment<'a> {
     op: &'a str, // "=" or "+="
     quote: char,
     content: &'a str,
+}
+
+struct AssignmentStringList<'a> {
+    indent: &'a str,
+    key: &'a str,
+    items: Vec<(char, &'a str)>,
+}
+
+fn parse_assignment_string_list(line: &str) -> Option<AssignmentStringList<'_>> {
+    let indent_len = line.len() - line.trim_start().len();
+    let indent = &line[..indent_len];
+    let rest = line[indent_len..].trim_end();
+    let eq = rest.find('=')?;
+    let key = rest[..eq].trim();
+    if key.is_empty()
+        || !key
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
+    {
+        return None;
+    }
+    let after = rest[eq + 1..].trim();
+    let inner = after.strip_prefix('[')?.strip_suffix(']')?.trim();
+    if inner.is_empty() {
+        return None;
+    }
+    let mut items = Vec::new();
+    let mut rest = inner;
+    while !rest.is_empty() {
+        rest = rest.trim_start().trim_start_matches(',');
+        if rest.is_empty() {
+            break;
+        }
+        let quote = rest.chars().next()?;
+        if quote != '\'' && quote != '"' {
+            return None;
+        }
+        let inner = &rest[quote.len_utf8()..];
+        let end = inner.find(quote)?;
+        items.push((quote, &inner[..end]));
+        rest = inner[end + quote.len_utf8()..].trim_start();
+        if rest.starts_with(',') {
+            rest = rest[1..].trim_start();
+        }
+    }
+    (!items.is_empty()).then_some(AssignmentStringList { indent, key, items })
+}
+
+fn format_assignment_string_list(list: &AssignmentStringList<'_>) -> Vec<String> {
+    let mut lines = vec![format!("{}{} = [", list.indent, list.key)];
+    let item_indent = format!("{}    ", list.indent);
+    for (quote, item) in &list.items {
+        lines.extend(format_list_string_item(&ListStringItem {
+            indent: &item_indent,
+            quote: *quote,
+            content: item,
+            trailing_comma: true,
+        }));
+    }
+    lines.push(format!("{}]", list.indent));
+    lines
 }
 
 fn parse_string_assignment(line: &str) -> Option<StringAssignment<'_>> {
@@ -734,6 +799,28 @@ mod tests {
         assert!(result.remaining.is_empty(), "{:?}", result.remaining);
         assert!(result.text.contains("\\\'value with spaces\\\'"));
         assert!(result.text.contains(" + "));
+        assert!(result
+            .text
+            .lines()
+            .all(|line| line.chars().count() <= EB_MAX_LINE));
+    }
+
+    #[test]
+    fn format_assignment_string_list_wraps_source_urls() {
+        let url = format!(
+            "https://example.invalid/releases/{}/",
+            "0123456789abcdef".repeat(7)
+        );
+        let source = format!("source_urls = ['{url}']\n");
+        assert!(source.lines().next().unwrap().chars().count() > EB_MAX_LINE);
+        assert!(line_is_mechanically_fixable(source.trim_end()));
+
+        let result = format_style(&source);
+
+        assert!(result.remaining.is_empty(), "{:?}", result.remaining);
+        assert!(result.text.contains("source_urls = ["));
+        assert!(result.text.contains(" + "));
+        assert!(result.text.lines().last() == Some("]"));
         assert!(result
             .text
             .lines()

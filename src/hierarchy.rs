@@ -683,10 +683,7 @@ pub fn hierarchy_for_with_tree(
                 if defined {
                     HierarchyError::UnknownToolchain(parent.name.clone(), parent.version.clone())
                 } else {
-                    HierarchyError::UndefinedToolchain(
-                        parent.name.clone(),
-                        parent.version.clone(),
-                    )
+                    HierarchyError::UndefinedToolchain(parent.name.clone(), parent.version.clone())
                 }
             })
         }

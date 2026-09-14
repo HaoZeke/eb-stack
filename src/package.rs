@@ -1154,11 +1154,12 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
         .description
         .as_deref()
         .map(NormalizedString::new);
-    root.hashes = plan
+    let root_hashes: Vec<Hash> = plan
         .sources
-        .first()
-        .and_then(|source| source.sha256.as_deref())
-        .map(|checksum| Hashes(vec![sha256_hash(checksum)]));
+        .iter()
+        .filter_map(|source| source.sha256.as_deref().and_then(sha256_hash))
+        .collect();
+    root.hashes = (!root_hashes.is_empty()).then_some(Hashes(root_hashes));
     let mut source_references = Vec::new();
     let mut seen_references = BTreeSet::new();
     for source in &plan.sources {
@@ -1192,7 +1193,8 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
                 reference.hashes = source
                     .sha256
                     .as_deref()
-                    .map(|checksum| Hashes(vec![sha256_hash(checksum)]));
+                    .and_then(sha256_hash)
+                    .map(|hash| Hashes(vec![hash]));
                 reference.comment = source
                     .target_directory
                     .as_deref()
@@ -1303,26 +1305,57 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
     })
 }
 
-fn sha256_hash(checksum: &str) -> Hash {
-    Hash {
-        alg: HashAlgorithm::SHA_256,
-        content: HashValue(checksum.to_string()),
+fn sha256_hash(checksum: &str) -> Option<Hash> {
+    if checksum.len() == 64
+        && checksum
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        Some(Hash {
+            alg: HashAlgorithm::SHA_256,
+            content: HashValue(checksum.to_string()),
+        })
+    } else {
+        None
     }
 }
 
 fn source_archive_url(source: &SourceArtifact) -> Option<String> {
-    source.url.clone().or_else(|| {
-        let git = source.git.as_deref()?;
-        let base = git.trim_end_matches(".git");
-        if let Some(tag) = source.tag.as_deref() {
-            Some(format!("{base}/archive/refs/tags/{tag}.tar.gz"))
-        } else {
-            source
-                .commit
-                .as_deref()
-                .map(|commit| format!("{base}/archive/{commit}.tar.gz"))
-        }
-    })
+    if let Some(url) = source.url.clone() {
+        return Some(url);
+    }
+    let git = source.git.as_deref()?;
+    if !git_remote_is_github(git) {
+        return None;
+    }
+    let base = git.trim_end_matches(".git");
+    if let Some(tag) = source.tag.as_deref() {
+        Some(format!("{base}/archive/refs/tags/{tag}.tar.gz"))
+    } else {
+        source
+            .commit
+            .as_deref()
+            .map(|commit| format!("{base}/archive/{commit}.tar.gz"))
+    }
+}
+
+/// GitHub's `/archive/refs/tags/` URL is only defined for github.com remotes.
+///
+/// A substring match would invent that path for `gitlab.com/org/github.com`
+/// and for `notgithub.com`. The host is the only thing that certifies it.
+fn git_remote_is_github(git: &str) -> bool {
+    let lower = git.trim().to_ascii_lowercase();
+    let host_and_path = lower
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(lower.as_str());
+    let host = host_and_path.split('/').next().unwrap_or("");
+    let host = host.rsplit_once('@').map(|(_, rest)| rest).unwrap_or(host);
+    let host = host.split(':').next().unwrap_or(host);
+    host == "github.com"
+        || host.ends_with(".github.com")
+        || host == "githubusercontent.com"
+        || host.ends_with(".githubusercontent.com")
 }
 
 /// The planned BOM as JSON.
