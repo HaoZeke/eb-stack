@@ -598,13 +598,18 @@ pub fn build_graph(
                 .collect();
             // Nearest generation first, then the choice function decides among
             // equals. A dependency that pins a toolchain was already narrowed
-            // to that one build by `satisfies`.
+            // to that one build by `satisfies`. usize::MAX means "not in this
+            // generation": keep those out so an unknown local-* toolchain
+            // cannot walk to whichever GCCcore happens to hold the newest Lib.
             if let Some(best) = admissible
                 .iter()
                 .map(|c| distance(c, candidate, candidates))
+                .filter(|distance| *distance != usize::MAX)
                 .min()
             {
                 admissible.retain(|c| distance(c, candidate, candidates) == best);
+            } else {
+                admissible.clear();
             }
             let Some(picked) = choose(&admissible, choice) else {
                 let mut available: Vec<String> = candidates
@@ -1139,6 +1144,58 @@ mod tests {
                 !seq.iter().any(|name| name.contains("-CUDA-")),
                 "CUDA GCC must not win the toolchain line: {seq:?}"
             );
+        }
+    }
+
+    #[test]
+    fn unknown_hierarchy_does_not_take_another_generation_newest() {
+        let all = vec![
+            candidate("local", "1.0", tc("system", "system"), vec![]),
+            candidate(
+                "App",
+                "1.0",
+                tc("local", "1.0"),
+                vec![dep("Lib", ">=1", None)],
+            ),
+            candidate("Lib", "2.0", tc("local", "1.0"), vec![]),
+            candidate("Lib", "9.0", tc("GCCcore", "11.3.0"), vec![]),
+        ];
+        let order = build_order(&all, &["App".into()], Choice::Newest).expect("order");
+        let seq = names(&order);
+        assert!(
+            seq.iter().any(|name| name.starts_with("Lib-2.0")),
+            "in-generation Lib must win: {seq:?}"
+        );
+        assert!(
+            !seq.iter().any(|name| name.starts_with("Lib-9.0")),
+            "unknown hierarchy must not walk to GCCcore-11.3.0: {seq:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_hierarchy_does_not_satisfy_from_a_foreign_generation() {
+        let all = vec![
+            candidate("local", "1.0", tc("system", "system"), vec![]),
+            candidate("GCCcore", "11.3.0", tc("system", "system"), vec![]),
+            candidate(
+                "App",
+                "1.0",
+                tc("local", "1.0"),
+                vec![dep("Lib", ">=1", None)],
+            ),
+            candidate("Lib", "9.0", tc("GCCcore", "11.3.0"), vec![]),
+        ];
+        let err = build_order(&all, &["App".into()], Choice::Newest).unwrap_err();
+        match err {
+            OrderError::Unsatisfied { requirement, .. } => {
+                assert!(
+                    requirement.contains("Lib"),
+                    "the hole is Lib, not a missing toolchain: {requirement}"
+                );
+            }
+            other => panic!(
+                "foreign-generation Lib must not satisfy an unknown local hierarchy: {other}"
+            ),
         }
     }
 
