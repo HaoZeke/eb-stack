@@ -63,7 +63,8 @@ fn parse_cargo_toml(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let homepage = toml_string(package, "homepage").or_else(|| toml_string(package, "repository"));
     let summary = toml_string(package, "description");
     let license = toml_string(package, "license");
-    let python = is_python_crate(&value);
+    let crate_deps = cargo_deps(&value);
+    let python = is_python_crate(&value, &crate_deps);
     recipe(CrateFields {
         raw_name: name,
         version,
@@ -74,7 +75,8 @@ fn parse_cargo_toml(text: &str) -> Result<ForeignRecipe, ForeignError> {
         source_filename: None,
         sha256: None,
         python,
-        crate_deps: cargo_deps(&value),
+        crate_deps,
+        module_name: maturin_module_name(&value),
         note: "parsed from Cargo.toml",
     })
 }
@@ -161,6 +163,7 @@ fn crates_io_recipe(
         sha256: nonempty(version.checksum.clone()),
         python,
         crate_deps: Vec::new(),
+        module_name: None,
         note: "parsed from crates.io JSON",
     })
 }
@@ -231,6 +234,7 @@ struct CrateFields<'a> {
     sha256: Option<String>,
     python: bool,
     crate_deps: Vec<CargoDep>,
+    module_name: Option<String>,
     note: &'a str,
 }
 
@@ -246,16 +250,17 @@ fn recipe(fields: CrateFields<'_>) -> Result<ForeignRecipe, ForeignError> {
         sha256,
         python,
         crate_deps,
+        module_name,
         note,
     } = fields;
     let mut residuals = Vec::new();
     // A PyO3 crate publishes under a crate name and imports under a module
-    // name, and the mapping is a packaging decision rather than something the
-    // manifest states, so it comes from policy data instead of a name branch
-    // here.
-    let module_name = python
-        .then(|| crate::provides::python_module_for_crate(&raw_name))
-        .flatten();
+    // name. The manifest can state it; otherwise the mapping is policy data.
+    let module_name = module_name.or_else(|| {
+        python
+            .then(|| crate::provides::python_module_for_crate(&raw_name))
+            .flatten()
+    });
     let name = if let Some(module_name) = module_name {
         residuals.push(ForeignResidual {
             category: "cargo-python-name".into(),
@@ -393,7 +398,15 @@ fn recipe(fields: CrateFields<'_>) -> Result<ForeignRecipe, ForeignError> {
     })
 }
 
-fn is_python_crate(value: &toml::Value) -> bool {
+fn maturin_module_name(value: &toml::Value) -> Option<String> {
+    let maturin = value
+        .get("package")
+        .and_then(|package| package.get("metadata"))
+        .and_then(|meta| meta.get("maturin"))?;
+    toml_string(maturin, "module-name").or_else(|| toml_string(maturin, "name"))
+}
+
+fn is_python_crate(value: &toml::Value, deps: &[CargoDep]) -> bool {
     if value
         .get("package")
         .and_then(|package| package.get("metadata"))
@@ -402,9 +415,8 @@ fn is_python_crate(value: &toml::Value) -> bool {
     {
         return true;
     }
-    cargo_dep_names(value)
-        .iter()
-        .any(|name| crate::provides::is_python_marker_crate(name))
+    deps.iter()
+        .any(|dep| crate::provides::is_python_marker_crate(&dep.name))
 }
 
 /// Where a Cargo dependency comes from.
@@ -434,16 +446,27 @@ struct CargoDep {
 /// in the shared grammar and passes through.
 fn cargo_version_req(spec: &str) -> Option<String> {
     let spec = spec.trim();
-    if spec.is_empty() {
+    if spec.is_empty() || spec == "*" {
         return None;
+    }
+    if spec.contains(',') {
+        let parts: Vec<String> = spec
+            .split(',')
+            .filter_map(|part| cargo_version_req(part.trim()))
+            .collect();
+        return (!parts.is_empty()).then_some(parts.join(","));
     }
     if spec.starts_with(['=', '>', '<', '^', '~']) {
         return Some(spec.to_string());
     }
+    if let Some(prefix) = spec.strip_suffix(".*") {
+        if prefix.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+            return Some(format!(">={prefix}"));
+        }
+    }
     if spec.starts_with(|character: char| character.is_ascii_digit()) {
         return Some(format!("^{spec}"));
     }
-    // `*` and anything else stated loosely constrains nothing.
     None
 }
 
@@ -512,10 +535,6 @@ fn cargo_dep_from_spec(name: &str, spec: &toml::Value) -> CargoDep {
             kind: CargoDepKind::Registry,
         },
     }
-}
-
-fn cargo_dep_names(value: &toml::Value) -> Vec<String> {
-    cargo_deps(value).into_iter().map(|dep| dep.name).collect()
 }
 
 fn toml_string(value: &toml::Value, key: &str) -> Option<String> {
@@ -641,5 +660,30 @@ pyo3 = "0.22"
             !recipe.dependencies.iter().any(|dep| dep.name == "Python"),
             "dev-only pyo3 must not classify the crate as PythonPackage"
         );
+    }
+
+    #[test]
+    fn maturin_module_name_is_the_recipe_name() {
+        let recipe = parse_cargo_str(
+            r#"
+[package]
+name = "readcon-core"
+version = "0.13.1"
+
+[package.metadata.maturin]
+module-name = "readcon"
+"#,
+        )
+        .expect("parse");
+        assert_eq!(recipe.name, "readcon");
+    }
+
+    #[test]
+    fn cargo_version_req_keeps_comma_and_wildcard_floors() {
+        assert_eq!(
+            cargo_version_req(">=1.0, <2.0").as_deref(),
+            Some(">=1.0,<2.0")
+        );
+        assert_eq!(cargo_version_req("1.*").as_deref(), Some(">=1"));
     }
 }

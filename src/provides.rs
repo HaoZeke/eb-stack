@@ -243,17 +243,23 @@ pub fn existing_language_provider<'a>(
     candidates: &'a [Candidate],
 ) -> Option<&'a Candidate> {
     let identity = overlay_package_identity(name);
-    if let Some(parent) = candidates.iter().find(|candidate| {
-        !candidate.is_extension_provide()
-            && candidate.exts_list.iter().any(|ext| {
-                overlay_package_identity(&ext.name) == identity && !ext.version.is_empty()
-            })
-    }) {
-        return Some(parent);
+    let mut first_class = None;
+    for candidate in candidates {
+        if candidate.is_extension_provide() {
+            continue;
+        }
+        if candidate
+            .exts_list
+            .iter()
+            .any(|ext| overlay_package_identity(&ext.name) == identity && !ext.version.is_empty())
+        {
+            return Some(candidate);
+        }
+        if first_class.is_none() && overlay_package_identity(&candidate.name) == identity {
+            first_class = Some(candidate);
+        }
     }
-    candidates.iter().find(|candidate| {
-        !candidate.is_extension_provide() && overlay_package_identity(&candidate.name) == identity
-    })
+    first_class
 }
 
 /// Collapse a selected extension provide to its parent bundle candidate.
