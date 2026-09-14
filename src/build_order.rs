@@ -137,6 +137,15 @@ pub enum OrderError {
     /// component is named, not just the edge that happened to close it, since
     /// a bootstrap chain is broken by choosing where to cut the whole loop.
     Cycle(Vec<ModuleKey>),
+    /// Two recipes share a module key. Last-write would drop one of them.
+    DuplicateModule {
+        /// The key both recipes claim.
+        key: ModuleKey,
+        /// First recipe that claimed the key.
+        first: String,
+        /// Second recipe that claimed the same key.
+        second: String,
+    },
 }
 
 impl std::fmt::Display for OrderError {
@@ -176,6 +185,9 @@ impl std::fmt::Display for OrderError {
             Self::Cycle(component) => {
                 let names: Vec<String> = component.iter().map(ToString::to_string).collect();
                 write!(f, "dependency cycle among {}", names.join(", "))
+            }
+            Self::DuplicateModule { key, first, second } => {
+                write!(f, "{key} is provided by both {first} and {second}")
             }
         }
     }
@@ -292,7 +304,29 @@ fn module_version(candidate: &Candidate) -> String {
 ///
 /// The rules are EasyBuild's: a version requirement, an optional toolchain that
 /// names one build and no other, and an optional versionsuffix.
-fn satisfies(candidate: &Candidate, dep: &DepReq) -> bool {
+fn satisfies(candidate: &Candidate, dep: &DepReq, recipe: &Candidate) -> bool {
+    // Implicit pins stay inside the generation. SYSTEM is only admitted when
+    // the recipe is SYSTEM or the tuple names SYSTEM.
+    if crate::hierarchy::is_system_toolchain(&candidate.toolchain)
+        && !crate::hierarchy::is_system_toolchain(&recipe.toolchain)
+        && !dep
+            .toolchain
+            .as_ref()
+            .is_some_and(crate::hierarchy::is_system_toolchain)
+    {
+        return false;
+    }
+    if candidate.exts_list.iter().any(|ext| {
+        ext.name == dep.name
+            && (dep.version_req.is_empty()
+                || matches_req(&ext.version, &dep.version_req)
+                || dep
+                    .version_req
+                    .strip_prefix("==")
+                    .is_some_and(|pinned| pinned == ext.version))
+    }) {
+        return true;
+    }
     if candidate.name != dep.name {
         return false;
     }
@@ -388,6 +422,25 @@ fn choose<'a>(admissible: &[&'a Candidate], choice: Choice) -> Option<&'a Candid
     })
 }
 
+fn candidates_by_key(
+    candidates: &[Candidate],
+) -> Result<BTreeMap<ModuleKey, &Candidate>, OrderError> {
+    let mut map = BTreeMap::new();
+    for candidate in candidates {
+        let key = ModuleKey::of(candidate);
+        if let Some(previous) = map.insert(key.clone(), candidate) {
+            if previous.easyconfig_path != candidate.easyconfig_path {
+                return Err(OrderError::DuplicateModule {
+                    key,
+                    first: previous.easyconfig_path.clone(),
+                    second: candidate.easyconfig_path.clone(),
+                });
+            }
+        }
+    }
+    Ok(map)
+}
+
 /// Build the graph the recipes describe, reachable from `roots`.
 ///
 /// Nodes are whole modules and edges run from a dependency to what needs it.
@@ -406,8 +459,7 @@ pub fn build_graph(
     let mut graph: BuildGraph = DiGraph::new();
     let mut index: HashMap<ModuleKey, NodeIndex> = HashMap::new();
     let mut queue: Vec<ModuleKey> = Vec::new();
-    let by_key: BTreeMap<ModuleKey, &Candidate> =
-        candidates.iter().map(|c| (ModuleKey::of(c), c)).collect();
+    let by_key = candidates_by_key(candidates)?;
 
     let node_for = |graph: &mut BuildGraph,
                     index: &mut HashMap<ModuleKey, NodeIndex>,
@@ -504,8 +556,10 @@ pub fn build_graph(
         });
 
         for (dep, kind) in deps {
-            let mut admissible: Vec<&Candidate> =
-                candidates.iter().filter(|c| satisfies(c, dep)).collect();
+            let mut admissible: Vec<&Candidate> = candidates
+                .iter()
+                .filter(|c| satisfies(c, dep, candidate))
+                .collect();
             // Nearest generation first, then the choice function decides among
             // equals. A dependency that pins a toolchain was already narrowed
             // to that one build by `satisfies`.
@@ -557,8 +611,7 @@ pub fn build_order(
     choice: Choice,
 ) -> Result<Vec<Candidate>, OrderError> {
     let graph = build_graph(candidates, roots, choice)?;
-    let by_key: BTreeMap<ModuleKey, &Candidate> =
-        candidates.iter().map(|c| (ModuleKey::of(c), c)).collect();
+    let by_key = candidates_by_key(candidates)?;
 
     let sorted = petgraph::algo::toposort(&graph, None).map_err(|cycle| {
         // toposort names one node in a cycle; the useful answer is the whole
@@ -617,7 +670,7 @@ pub fn to_dot(graph: &BuildGraph) -> String {
 pub fn format_order(order: &[Candidate]) -> String {
     let mut out = String::new();
     for c in order {
-        if c.easyconfig_path.is_empty() {
+        if c.easyconfig_path.is_empty() || c.is_extension_provide() {
             continue;
         }
         out.push_str(&c.easyconfig_path);
@@ -793,6 +846,79 @@ mod tests {
             Some(2),
             "CUDA and plain must stay distinct: {multi:?}"
         );
+    }
+
+    #[test]
+    fn an_implicit_pin_does_not_take_a_system_build() {
+        let all = vec![
+            candidate(
+                "App",
+                "1.0",
+                tc("foss", "2026.1"),
+                vec![dep("Python", "==3.11.3", None)],
+            ),
+            candidate("Python", "3.11.3", tc("system", "system"), vec![]),
+        ];
+        let err = build_order(&all, &["App".into()], Choice::Newest).unwrap_err();
+        assert!(
+            matches!(err, OrderError::Unsatisfied { .. }),
+            "implicit pin must not take SYSTEM: {err}"
+        );
+    }
+
+    #[test]
+    fn an_explicit_system_tuple_still_takes_the_system_build() {
+        let all = vec![
+            candidate(
+                "App",
+                "1.0",
+                tc("foss", "2026.1"),
+                vec![dep("Python", "==3.11.3", Some(tc("system", "system")))],
+            ),
+            candidate("Python", "3.11.3", tc("system", "system"), vec![]),
+        ];
+        let order = build_order(&all, &["App".into()], Choice::Newest).expect("order");
+        assert!(
+            names(&order).iter().any(|s| s == "Python-3.11.3-system"),
+            "{:?}",
+            names(&order)
+        );
+    }
+
+    #[test]
+    fn a_bundle_provide_satisfies_an_extension_name() {
+        let mut bundle = candidate("SciPy-bundle", "2025.06", tc("foss", "2026.1"), vec![]);
+        bundle.exts_list = vec![crate::domain::ExtEntry {
+            name: "numpy".into(),
+            version: "2.3.1".into(),
+        }];
+        let all = vec![
+            candidate(
+                "App",
+                "1.0",
+                tc("foss", "2026.1"),
+                vec![dep("numpy", "==2.3.1", None)],
+            ),
+            bundle,
+        ];
+        let order = build_order(&all, &["App".into()], Choice::Newest).expect("order");
+        let seq = names(&order);
+        assert!(seq.iter().any(|s| s.starts_with("SciPy-bundle")), "{seq:?}");
+        assert!(
+            !format_order(&order).contains("#ext:"),
+            "{}",
+            format_order(&order)
+        );
+    }
+
+    #[test]
+    fn colliding_module_keys_are_refused() {
+        let mut first = candidate("Lib", "1.0", tc("foss", "2026.1"), vec![]);
+        first.easyconfig_path = "upstream/Lib-1.0.eb".into();
+        let mut second = candidate("Lib", "1.0", tc("foss", "2026.1"), vec![]);
+        second.easyconfig_path = "overlay/Lib-1.0.eb".into();
+        let err = build_order(&[first, second], &["Lib".into()], Choice::Newest).unwrap_err();
+        assert!(matches!(err, OrderError::DuplicateModule { .. }), "{err}");
     }
 
     #[test]

@@ -23,9 +23,9 @@ use crate::package_workflow::{
 };
 use crate::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use crate::{
-    artifact_facts_for_lock, load_json_file, lock_to_cyclonedx_with_facts, parse_package_index,
-    solve_from_easyconfigs_with_baseline_version_and_extras, with_outdir_overlay,
-    write_json_pretty, SbomFacts, SolveExtraOut, StackLock,
+    artifact_facts_for_lock, companion_argv, load_json_file, lock_to_cyclonedx_with_facts,
+    parse_package_index, solve_from_easyconfigs_with_baseline_version_and_extras,
+    with_outdir_overlay, write_json_pretty, SbomFacts, SolveExtraOut, StackLock,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -506,12 +506,22 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
     };
     let output = required_path(arguments, "out_dir")?;
     let easyconfigs = path_array(arguments, "easyconfigs")?;
+    let package_configs = string_array(arguments, "package_configs")?
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    let robot = easyconfigs
+        .first()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    let toolchain_name = target.name.clone();
+    let toolchain_version = target.version.clone();
     let bundle = plan_package_bump(&BumpPackageRequest {
         source: required_path(arguments, "source")?,
         toolchain: target,
         version: optional_string(arguments, "version"),
         source_checksum: optional_string(arguments, "source_checksum"),
-        easyconfig_roots: with_outdir_overlay(easyconfigs, &output),
+        easyconfig_roots: with_outdir_overlay(easyconfigs.clone(), &output),
         hierarchy_fixture: optional_path(arguments, "hierarchy_fixture"),
         overrides,
         stack_policy,
@@ -541,6 +551,29 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
             })
         })
         .collect::<Vec<_>>();
+    let companions = bundle
+        .plan
+        .residuals
+        .iter()
+        .filter(|residual| residual.category == "unresolved-generation-dep")
+        .map(|residual| {
+            let mut words = residual.summary.split_whitespace();
+            let name = words.next().unwrap_or_default();
+            let req = words.next().unwrap_or_default();
+            let pin = req.trim_start_matches('=').trim_start_matches('=');
+            let pin = if pin.is_empty() { None } else { Some(pin) };
+            companion_argv(
+                name,
+                pin,
+                &easyconfigs,
+                &package_configs,
+                &toolchain_name,
+                &toolchain_version,
+                &robot,
+                &output,
+            )
+        })
+        .collect::<Vec<_>>();
     Ok(json!({
         "package": bundle.plan.package.name,
         "version": bundle.plan.package.version,
@@ -550,6 +583,7 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
         "easyconfigs": written.easyconfigs,
         "patches": written.patches,
         "residuals": residuals,
+        "companions": companions,
         "claims": {"resolves": !blocking, "builds": false, "binary_verified": false}
     }))
 }

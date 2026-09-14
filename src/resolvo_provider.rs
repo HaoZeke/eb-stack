@@ -136,7 +136,10 @@ impl EbProvider {
                 || crate::hierarchy::is_system_toolchain(&recipe.toolchain);
             if let Some(pinned) = dep.version_req.strip_prefix("==") {
                 let key = system_at(pinned);
-                if self.name_ids.contains_key(&key) {
+                // Only pin to the SYSTEM key when the recipe or the tuple
+                // asked for SYSTEM. A foss recipe with ('zlib', '1.2.13')
+                // must still be allowed to take the GCCcore build.
+                if wants_system && self.name_ids.contains_key(&key) {
                     return vec![key];
                 }
             }
