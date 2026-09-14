@@ -148,7 +148,10 @@ pub fn materialize_pypi(
     std::fs::create_dir_all(&dir).map_err(|error| RegistryError::Io(dir.clone(), error))?;
     let dump = dir.join(format!("{}.json", sanitize_ingest_name(pkg, version)));
     std::fs::write(&dump, &bytes).map_err(|error| RegistryError::Io(dump.clone(), error))?;
-    let source_tree = materialize_pypi_sdist(&value, client, &dir, pkg, version)?;
+    let source_tree = match materialize_pypi_sdist(&value, client, &dir, pkg, version) {
+        Ok(tree) => tree,
+        Err(_) => None,
+    };
     Ok(MaterializedIngest { dump, source_tree })
 }
 
@@ -199,7 +202,10 @@ fn materialize_pypi_sdist(
     let archive = dir.join(filename);
     std::fs::write(&archive, &bytes).map_err(|error| RegistryError::Io(archive.clone(), error))?;
     let tree = dir.join(sanitize_ingest_name(pkg, version));
-    unpack_sdist(&bytes, &tree)?;
+    if let Err(error) = unpack_sdist(&bytes, &tree) {
+        let _ = std::fs::remove_dir_all(&tree);
+        return Err(error);
+    }
     Ok(Some(tree))
 }
 
@@ -337,9 +343,22 @@ pub fn resolve_ingest_source(
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| format!("invalid registry name {}", source.display()))?;
-    let ingest = materialize_registry_name(name, format, &UreqClient, &out_dir.join("ingest"))
+    let ingest_root = out_dir.join("ingest");
+    if let Some(dump) = existing_ingest_dump(&ingest_root, format, name) {
+        return Ok(dump);
+    }
+    let ingest = materialize_registry_name(name, format, &UreqClient, &ingest_root)
         .map_err(|error| format!("fetch {name} as {}: {error}", format.as_str()))?;
     Ok(ingest.dump)
+}
+
+fn existing_ingest_dump(ingest_root: &Path, format: ForeignFormat, name: &str) -> Option<PathBuf> {
+    let (pkg, version) = split_name_and_version(name);
+    let version = version?;
+    let dump = ingest_root
+        .join(format.as_str())
+        .join(format!("{}.json", sanitize_ingest_name(pkg, version)));
+    dump.is_file().then_some(dump)
 }
 
 /// Fetch a registry name into `ingest_root` and return the dump path.

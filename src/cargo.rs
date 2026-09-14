@@ -32,9 +32,10 @@ pub fn eessi_cargo_host_isolation() -> &'static str {
         r#"_triple_env=$(printf %s "$_triple" | tr "[:lower:]-" "[:upper:]_") && "#,
         r#"if [ -n "$_triple_env" ]; then eval export CARGO_TARGET_${_triple_env}_LINKER=${CC:-gcc}; fi && "#,
         r#"_arch=$(uname -m) && "#,
-        r#"_ebld=/cvmfs/software.eessi.io/versions/${EESSI_VERSION:-2025.06}/compat/linux/${_arch}/usr/bin && "#,
+        r#"_ebld=/cvmfs/software.eessi.io/versions/${EESSI_VERSION:?EESSI_VERSION is unset}/compat/linux/${_arch}/usr/bin && "#,
         r#"export PATH="$_ebld:$PATH" && "#,
-        r#"export RUSTFLAGS="-C link-arg=-B$_ebld $(printf -- '-L %s ' $(echo ${LIBRARY_PATH:-} | tr ':' ' '))" && "#,
+        r#"_libflags=$( [ -n "${LIBRARY_PATH:-}" ] && printf -- '-L %s ' $(echo "$LIBRARY_PATH" | tr ':' ' ') ) && "#,
+        r#"export RUSTFLAGS="-C link-arg=-B$_ebld ${_libflags}" && "#,
     )
 }
 
@@ -81,42 +82,93 @@ fn parse_cargo_toml(text: &str) -> Result<ForeignRecipe, ForeignError> {
 fn parse_crates_io_json(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let value: Value = serde_json::from_str(text)
         .map_err(|error| ForeignError::Parse(format!("crates.io json: {error}")))?;
-    let doc: CratesIoDocument = serde_json::from_value(value.clone())
+    if value.get("version").is_some() && value.get("versions").is_none() {
+        return parse_crates_io_version_document(&value);
+    }
+    let doc: CratesIoDocument = serde_json::from_value(value)
         .map_err(|error| ForeignError::Parse(format!("crates.io json: {error}")))?;
-    let version = doc
-        .versions
-        .iter()
-        .find(|entry| {
-            entry.num == doc.krate.max_stable_version || entry.num == doc.krate.max_version
-        })
-        .or_else(|| doc.versions.first())
+    let version = pick_crates_io_version(&doc)
         .ok_or_else(|| ForeignError::Parse("crates.io json has no versions".into()))?;
+    crates_io_recipe(&doc.krate, version)
+}
+
+fn parse_crates_io_version_document(value: &Value) -> Result<ForeignRecipe, ForeignError> {
+    let version: CratesIoVersion =
+        serde_json::from_value(value.get("version").cloned().ok_or_else(|| {
+            ForeignError::Parse("crates.io version document missing version".into())
+        })?)
+        .map_err(|error| ForeignError::Parse(format!("crates.io json: {error}")))?;
+    let name = version
+        .krate
+        .clone()
+        .or_else(|| {
+            value
+                .pointer("/version/crate")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        })
+        .ok_or_else(|| {
+            ForeignError::Parse("crates.io version document missing crate name".into())
+        })?;
+    let krate = CratesIoCrate {
+        name,
+        id: String::new(),
+        description: None,
+        homepage: None,
+        repository: None,
+        max_version: None,
+        max_stable_version: None,
+    };
+    crates_io_recipe(&krate, &version)
+}
+
+fn pick_crates_io_version(doc: &CratesIoDocument) -> Option<&CratesIoVersion> {
+    let wanted = nonempty(doc.krate.max_stable_version.clone())
+        .or_else(|| nonempty(doc.krate.max_version.clone()));
+    if let Some(wanted) = wanted {
+        if let Some(entry) = doc.versions.iter().find(|entry| entry.num == wanted) {
+            return Some(entry);
+        }
+    }
+    doc.versions
+        .iter()
+        .filter(|entry| !entry.num.contains('-'))
+        .max_by(|left, right| crate::version::cmp_version(&left.num, &right.num))
+        .or_else(|| doc.versions.first())
+}
+
+fn crates_io_recipe(
+    krate: &CratesIoCrate,
+    version: &CratesIoVersion,
+) -> Result<ForeignRecipe, ForeignError> {
     let url = nonempty(version.url.clone()).unwrap_or_else(|| {
         format!(
             "https://static.crates.io/crates/{}/{}-{}.crate",
-            doc.krate.name, doc.krate.name, version.num
+            krate.name, krate.name, version.num
         )
     });
     let filename = nonempty(version.filename.clone())
-        .unwrap_or_else(|| format!("{}-{}.crate", doc.krate.name, version.num));
-    let python = doc.versions.iter().any(|entry| {
-        entry
-            .features
-            .keys()
-            .any(|feature| feature.contains("pyo3") || feature.contains("python"))
-    });
+        .unwrap_or_else(|| format!("{}-{}.crate", krate.name, version.num));
+    let python = version_looks_python(version);
     recipe(CrateFields {
-        raw_name: doc.krate.name,
+        raw_name: krate.name.clone(),
         version: version.num.clone(),
-        homepage: nonempty(doc.krate.homepage).or_else(|| nonempty(doc.krate.repository)),
-        summary: nonempty(doc.krate.description),
-        license: None,
+        homepage: nonempty(krate.homepage.clone()).or_else(|| nonempty(krate.repository.clone())),
+        summary: nonempty(krate.description.clone()),
+        license: nonempty(version.license.clone()),
         source_url: Some(url),
         source_filename: Some(filename),
         sha256: nonempty(version.checksum.clone()),
         python,
         crate_deps: Vec::new(),
         note: "parsed from crates.io JSON",
+    })
+}
+
+fn version_looks_python(version: &CratesIoVersion) -> bool {
+    version.features.keys().any(|feature| {
+        let feature = feature.to_ascii_lowercase();
+        feature == "pyo3" || feature == "extension-module" || feature.starts_with("pyo3-")
     })
 }
 
@@ -141,9 +193,9 @@ struct CratesIoCrate {
     #[serde(default)]
     repository: Option<String>,
     #[serde(default)]
-    max_version: String,
+    max_version: Option<String>,
     #[serde(default)]
-    max_stable_version: String,
+    max_stable_version: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -157,6 +209,10 @@ struct CratesIoVersion {
     filename: Option<String>,
     #[serde(default)]
     features: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    license: Option<String>,
+    #[serde(default, rename = "crate")]
+    krate: Option<String>,
 }
 
 /// One crate's metadata, from Cargo.toml or from the crates.io index.
@@ -393,44 +449,69 @@ fn cargo_version_req(spec: &str) -> Option<String> {
 
 fn cargo_deps(value: &toml::Value) -> Vec<CargoDep> {
     let mut deps = Vec::new();
-    for table in ["dependencies", "build-dependencies", "dev-dependencies"] {
-        let Some(map) = value.get(table).and_then(toml::Value::as_table) else {
-            continue;
-        };
-        for (name, spec) in map {
-            let dep = match spec {
-                toml::Value::String(version) => CargoDep {
-                    name: name.clone(),
-                    req: cargo_version_req(version),
-                    kind: CargoDepKind::Registry,
-                },
-                toml::Value::Table(entry) => {
-                    let kind = if entry.contains_key("path") {
-                        CargoDepKind::Path
-                    } else if entry.contains_key("git") {
-                        CargoDepKind::Git
-                    } else {
-                        CargoDepKind::Registry
-                    };
-                    CargoDep {
-                        name: name.clone(),
-                        req: entry
-                            .get("version")
-                            .and_then(toml::Value::as_str)
-                            .and_then(cargo_version_req),
-                        kind,
-                    }
-                }
-                _ => CargoDep {
-                    name: name.clone(),
-                    req: None,
-                    kind: CargoDepKind::Registry,
-                },
-            };
-            deps.push(dep);
+    collect_dep_table(value.get("dependencies"), &mut deps);
+    collect_dep_table(value.get("build-dependencies"), &mut deps);
+    if let Some(targets) = value.get("target").and_then(toml::Value::as_table) {
+        for spec in targets.values() {
+            collect_dep_table(spec.get("dependencies"), &mut deps);
+            collect_dep_table(spec.get("build-dependencies"), &mut deps);
         }
     }
     deps
+}
+
+fn collect_dep_table(table: Option<&toml::Value>, deps: &mut Vec<CargoDep>) {
+    let Some(map) = table.and_then(toml::Value::as_table) else {
+        return;
+    };
+    for (name, spec) in map {
+        deps.push(cargo_dep_from_spec(name, spec));
+    }
+}
+
+fn cargo_dep_from_spec(name: &str, spec: &toml::Value) -> CargoDep {
+    match spec {
+        toml::Value::String(version) => CargoDep {
+            name: name.to_string(),
+            req: cargo_version_req(version),
+            kind: CargoDepKind::Registry,
+        },
+        toml::Value::Table(entry) => {
+            let crate_name = entry
+                .get("package")
+                .and_then(toml::Value::as_str)
+                .unwrap_or(name)
+                .to_string();
+            let kind = if entry.contains_key("path") {
+                CargoDepKind::Path
+            } else if entry.contains_key("git") {
+                CargoDepKind::Git
+            } else {
+                CargoDepKind::Registry
+            };
+            let workspace = entry
+                .get("workspace")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(false);
+            CargoDep {
+                name: crate_name,
+                req: if workspace {
+                    None
+                } else {
+                    entry
+                        .get("version")
+                        .and_then(toml::Value::as_str)
+                        .and_then(cargo_version_req)
+                },
+                kind,
+            }
+        }
+        _ => CargoDep {
+            name: name.to_string(),
+            req: None,
+            kind: CargoDepKind::Registry,
+        },
+    }
 }
 
 fn cargo_dep_names(value: &toml::Value) -> Vec<String> {
@@ -514,6 +595,51 @@ pyo3 = "0.22"
         assert!(
             !prelude.contains("X86_64"),
             "triple and compat arch are runtime, not a plan-time x86_64 literal:\n{prelude}"
+        );
+        assert!(
+            !prelude.contains("2025.06"),
+            "compat version comes from EESSI_VERSION, not a default:\n{prelude}"
+        );
+        assert!(
+            prelude.contains("LIBRARY_PATH"),
+            "empty LIBRARY_PATH must not always emit -L:\n{prelude}"
+        );
+    }
+
+    #[test]
+    fn crates_io_pinned_version_document_parses() {
+        let recipe = parse_cargo_str(
+            r#"{
+              "version": {
+                "crate": "demo",
+                "num": "1.2.3",
+                "license": "MIT",
+                "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            }"#,
+        )
+        .expect("pinned version document");
+        assert_eq!(recipe.name, "demo");
+        assert_eq!(recipe.version, "1.2.3");
+        assert_eq!(recipe.license.as_deref(), Some("MIT"));
+    }
+
+    #[test]
+    fn cargo_toml_skips_dev_dependencies() {
+        let recipe = parse_cargo_str(
+            r#"
+[package]
+name = "demo"
+version = "1.0.0"
+
+[dev-dependencies]
+pyo3 = "0.22"
+"#,
+        )
+        .expect("parse");
+        assert!(
+            !recipe.dependencies.iter().any(|dep| dep.name == "Python"),
+            "dev-only pyo3 must not classify the crate as PythonPackage"
         );
     }
 }
