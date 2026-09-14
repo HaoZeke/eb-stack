@@ -437,7 +437,10 @@ pub fn upsert_raw_assignment(src: &str, key: &str, rhs: &str) -> Result<String, 
     Ok(out)
 }
 
-fn find_assignment_span(src: &str, key: &str) -> Result<Option<(usize, usize)>, EmitError> {
+pub(crate) fn find_assignment_span(
+    src: &str,
+    key: &str,
+) -> Result<Option<(usize, usize)>, EmitError> {
     let re = regex::Regex::new(&format!(r"(?m)^[ \t]*{}[ \t]*=[ \t]*", regex::escape(key)))
         .map_err(|e| EmitError::Rewrite(e.to_string()))?;
     let Some(header) = re.find(src) else {

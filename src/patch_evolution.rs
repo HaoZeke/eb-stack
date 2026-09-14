@@ -13,7 +13,7 @@
 use std::path::Path;
 
 use crate::domain::{Candidate, Toolchain};
-use crate::eb_emit::{find_list_assignment_span, EmitError};
+use crate::eb_emit::{find_assignment_span, find_list_assignment_span, EmitError};
 
 /// What happens to one patch across the bump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -225,8 +225,8 @@ pub fn adopt_sibling_patch_block(text: &str, sibling_path: &str) -> Result<Strin
     let sibling_text = std::fs::read_to_string(Path::new(sibling_path))
         .map_err(|e| EmitError::Rewrite(format!("read sibling {sibling_path}: {e}")))?;
 
-    let ours = find_list_assignment_span(text, "patches")?;
-    let theirs = find_list_assignment_span(&sibling_text, "patches")?;
+    let ours = find_patches_span(text)?;
+    let theirs = find_patches_span(&sibling_text)?;
 
     let spliced = match (ours, theirs) {
         (Some((our_start, our_end)), Some((their_start, their_end))) => format!(
@@ -256,6 +256,13 @@ pub fn adopt_sibling_patch_block(text: &str, sibling_path: &str) -> Result<Strin
         (None, None) => text.to_string(),
     };
     adopt_sibling_checksum_block(&spliced, &sibling_text)
+}
+
+fn find_patches_span(text: &str) -> Result<Option<(usize, usize)>, EmitError> {
+    if let Some(span) = find_list_assignment_span(text, "patches")? {
+        return Ok(Some(span));
+    }
+    find_assignment_span(text, "patches")
 }
 
 fn adopt_sibling_checksum_block(text: &str, sibling_text: &str) -> Result<String, EmitError> {
