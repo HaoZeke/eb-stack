@@ -1,5 +1,7 @@
 //! Copy-paste companion argv for a failed generation bump.
 
+use crate::target::shell_quote;
+use crate::version::cmp_version;
 use std::path::{Path, PathBuf};
 
 /// If `--out-dir/easyconfigs` exists, search it as a robot root.
@@ -25,7 +27,7 @@ pub fn find_named_easyconfig(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
 
 fn newest_named_eb(dir: &Path, name: &str) -> Option<PathBuf> {
     let prefix = format!("{name}-");
-    let mut hits: Vec<PathBuf> = std::fs::read_dir(dir)
+    std::fs::read_dir(dir)
         .ok()?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
@@ -36,9 +38,20 @@ fn newest_named_eb(dir: &Path, name: &str) -> Option<PathBuf> {
                     .and_then(|file| file.to_str())
                     .is_some_and(|file| file.starts_with(&prefix))
         })
-        .collect();
-    hits.sort();
-    hits.pop()
+        .max_by(|left, right| {
+            cmp_version(
+                &easyconfig_version_key(left, &prefix),
+                &easyconfig_version_key(right, &prefix),
+            )
+        })
+}
+
+fn easyconfig_version_key(path: &Path, prefix: &str) -> String {
+    path.file_name()
+        .and_then(|file| file.to_str())
+        .and_then(|file| file.strip_prefix(prefix))
+        .map(|rest| rest.trim_end_matches(".eb").to_string())
+        .unwrap_or_default()
 }
 
 /// `{name}.toml` next to a parent `--package-config`.
@@ -93,39 +106,57 @@ pub fn companion_argv(
 ) -> String {
     if let Some(source) = find_named_easyconfig(roots, name) {
         let mut line = format!(
-            "eb-stack package bump --source {} --toolchain-name {toolchain_name} --toolchain-version {toolchain_version}",
-            source.display()
+            "eb-stack package bump --source {} --toolchain-name {} --toolchain-version {}",
+            shell_quote(&source.display().to_string()),
+            shell_quote(toolchain_name),
+            shell_quote(toolchain_version)
         );
-        if let Some(pin) = version_pin.filter(|pin| {
-            !pin.is_empty() && pin.chars().next().is_some_and(|c| c.is_ascii_digit())
-        }) {
-            line.push_str(&format!(" --version {pin}"));
+        if let Some(pin) = version_pin
+            .filter(|pin| !pin.is_empty() && pin.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        {
+            line.push_str(&format!(" --version {}", shell_quote(pin)));
         }
         if let Some(config) = find_sibling_package_config(package_configs, name) {
-            line.push_str(&format!(" --package-config {}", config.display()));
+            line.push_str(&format!(
+                " --package-config {}",
+                shell_quote(&config.display().to_string())
+            ));
         }
         line.push_str(&format!(
-            " --easyconfigs {robot} --out-dir {}",
-            out_dir.display()
+            " --easyconfigs {} --out-dir {}",
+            shell_quote(robot),
+            shell_quote(&out_dir.display().to_string())
         ));
         return line;
     }
     if let Some(config) = find_sibling_package_config(package_configs, name) {
-        let mut line = format!("eb-stack package plan --package-config {}", config.display());
+        let mut line = format!(
+            "eb-stack package plan --package-config {}",
+            shell_quote(&config.display().to_string())
+        );
         if let Some(foreign) = find_foreign_package_py(roots, name) {
-            line.push_str(&format!(" --source {}", foreign.display()));
+            line.push_str(&format!(
+                " --source {}",
+                shell_quote(&foreign.display().to_string())
+            ));
         }
         let (plan_tc, policy) =
             plan_toolchain_and_policy(&config, toolchain_name, toolchain_version);
         line.push_str(&format!(
-            " --toolchain-name {plan_tc} --toolchain-version {toolchain_version}"
+            " --toolchain-name {} --toolchain-version {}",
+            shell_quote(&plan_tc),
+            shell_quote(toolchain_version)
         ));
         if let Some(policy) = policy {
-            line.push_str(&format!(" --stack-policy {}", policy.display()));
+            line.push_str(&format!(
+                " --stack-policy {}",
+                shell_quote(&policy.display().to_string())
+            ));
         }
         line.push_str(&format!(
-            " --easyconfigs {robot} --out-dir {}",
-            out_dir.display()
+            " --easyconfigs {} --out-dir {}",
+            shell_quote(robot),
+            shell_quote(&out_dir.display().to_string())
         ));
         return line;
     }
@@ -175,7 +206,10 @@ mod tests {
         fs::create_dir_all(robot.join("a").join("ASAGI")).expect("asagi dir");
         fs::create_dir_all(&pkg).expect("pkg dir");
         fs::write(
-            robot.join("a").join("ASAGI").join("ASAGI-1.0-foss-2023a.eb"),
+            robot
+                .join("a")
+                .join("ASAGI")
+                .join("ASAGI-1.0-foss-2023a.eb"),
             "name = 'ASAGI'\n",
         )
         .expect("asagi recipe");
@@ -211,7 +245,10 @@ mod tests {
         fs::create_dir_all(&stacks).expect("stacks");
         fs::create_dir_all(temp.path().join("spack").join("py_pspamm")).expect("spack");
         fs::write(
-            temp.path().join("spack").join("py_pspamm").join("package.py"),
+            temp.path()
+                .join("spack")
+                .join("py_pspamm")
+                .join("package.py"),
             "class PyPspamm:\n    pass\n",
         )
         .expect("package.py");
@@ -246,6 +283,70 @@ mod tests {
         assert!(
             argv.contains("gfbf-2025a.toml"),
             "PythonPackage companion must pick the gfbf sibling stack, got {argv}"
+        );
+    }
+
+    #[test]
+    fn newest_named_eb_picks_version_newest_not_lex_last() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let dir = temp.path().join("p").join("Python");
+        fs::create_dir_all(&dir).expect("python dir");
+        fs::write(
+            dir.join("Python-3.9.16-GCCcore-12.3.0.eb"),
+            "name = 'Python'\n",
+        )
+        .expect("3.9");
+        fs::write(
+            dir.join("Python-3.10.13-GCCcore-12.3.0.eb"),
+            "name = 'Python'\n",
+        )
+        .expect("3.10");
+        let found = newest_named_eb(&dir, "Python").expect("hit");
+        assert!(
+            found
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("Python-3.10.13-")),
+            "3.10 must beat 3.9, got {}",
+            found.display()
+        );
+    }
+
+    #[test]
+    fn companion_argv_quotes_paths_with_spaces() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path().join("robot dir");
+        let pkg = temp.path().join("packages");
+        let out = temp.path().join("out dir");
+        fs::create_dir_all(robot.join("a").join("ASAGI")).expect("asagi dir");
+        fs::create_dir_all(&pkg).expect("pkg dir");
+        let source = robot
+            .join("a")
+            .join("ASAGI")
+            .join("ASAGI-1.0-foss-2023a.eb");
+        fs::write(&source, "name = 'ASAGI'\n").expect("asagi recipe");
+        fs::write(pkg.join("asagi.toml"), "schema_version = 1\n").expect("asagi toml");
+        let argv = companion_argv(
+            "ASAGI",
+            Some("1.0"),
+            &[robot.clone()],
+            &[pkg.join("asagi.toml")],
+            "foss",
+            "2025a",
+            robot.to_str().expect("utf8"),
+            &out,
+        );
+        assert!(
+            argv.contains(&format!("--source '{}'", source.display())),
+            "{argv}"
+        );
+        assert!(
+            argv.contains(&format!("--out-dir '{}'", out.display())),
+            "{argv}"
+        );
+        assert!(
+            argv.contains(&format!("--easyconfigs '{}'", robot.display())),
+            "{argv}"
         );
     }
 }

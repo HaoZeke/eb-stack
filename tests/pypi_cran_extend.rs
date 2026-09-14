@@ -731,6 +731,13 @@ fn plan_cran_takes_unpinned_versions_from_the_package_index() {
         "an R bundle needs somewhere to download from:\n{}",
         recipe.text
     );
+    assert!(
+        recipe
+            .text
+            .contains("cran.r-project.org/src/contrib/Archive/%(name)s"),
+        "archived CRAN releases are not at contrib/:\n{}",
+        recipe.text
+    );
 }
 
 /// `prepare_new_package_plan` is the documented split before

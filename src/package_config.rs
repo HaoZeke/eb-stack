@@ -36,8 +36,8 @@ pub struct PackageConfigLayer {
     /// Profile definitions, matched to existing profiles by name.
     #[serde(default)]
     pub profiles: Vec<ProfilePatch>,
-    /// SHA-256 digests for source artifacts, in source order. A version bump
-    /// without `--source-checksum` takes the first entry as the inject digest.
+    /// SHA-256 digests for source artifacts, in source order. The layer must
+    /// list one digest per plan source, or none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_checksums: Vec<String>,
 }
@@ -467,16 +467,7 @@ pub fn apply_package_layers(
                 ensure_dependency_requirement(plan, requirement, layer_index, requirement_index);
             }
         }
-        if let Some(checksum) = layer.source_checksums.first() {
-            if let Some(source) = plan.sources.first_mut() {
-                source.sha256 = Some(checksum.clone());
-            } else {
-                plan.sources.push(crate::package::SourceArtifact {
-                    sha256: Some(checksum.clone()),
-                    ..crate::package::SourceArtifact::default()
-                });
-            }
-        }
+        apply_layer_source_checksums(plan, &layer.source_checksums)?;
         for patch in &layer.profiles {
             let existing_index = plan
                 .profiles
@@ -578,6 +569,35 @@ fn validate_easyconfig_parameter_names(
     Ok(())
 }
 
+fn apply_layer_source_checksums(
+    plan: &mut PackagePlan,
+    checksums: &[String],
+) -> Result<(), PackageConfigError> {
+    if checksums.is_empty() {
+        return Ok(());
+    }
+    if plan.sources.is_empty() {
+        plan.sources = checksums
+            .iter()
+            .map(|checksum| crate::package::SourceArtifact {
+                sha256: Some(checksum.clone()),
+                ..crate::package::SourceArtifact::default()
+            })
+            .collect();
+        return Ok(());
+    }
+    if checksums.len() != plan.sources.len() {
+        return Err(PackageConfigError::SourceChecksumCount {
+            expected: plan.sources.len(),
+            actual: checksums.len(),
+        });
+    }
+    for (source, checksum) in plan.sources.iter_mut().zip(checksums) {
+        source.sha256 = Some(checksum.clone());
+    }
+    Ok(())
+}
+
 fn ensure_dependency_requirement(
     plan: &mut PackagePlan,
     requirement: &DependencyRequirement,
@@ -588,8 +608,7 @@ fn ensure_dependency_requirement(
     let identity = package_identity(&requirement.name);
     let existing = plan.dependencies.iter_mut().find(|dependency| {
         let effective_name = dependency.eb_name.as_deref().unwrap_or(&dependency.name);
-        package_identity(effective_name) == identity
-            && (condition == ConditionExpr::Always || dependency.condition == condition)
+        package_identity(effective_name) == identity && dependency.condition == condition
     });
     if let Some(dependency) = existing {
         dependency.eb_name = Some(requirement.name.clone());
@@ -625,20 +644,19 @@ fn ensure_dependency_requirement(
 }
 
 fn requirement_condition(features: &BTreeMap<String, bool>) -> ConditionExpr {
-    if features.is_empty() {
-        ConditionExpr::Always
-    } else {
-        ConditionExpr::All(
-            features
-                .iter()
-                .map(|(name, enabled)| {
-                    ConditionExpr::Predicate(ConditionPredicate::Feature {
-                        name: name.clone(),
-                        enabled: *enabled,
-                    })
-                })
-                .collect(),
-        )
+    let predicates: Vec<ConditionExpr> = features
+        .iter()
+        .map(|(name, enabled)| {
+            ConditionExpr::Predicate(ConditionPredicate::Feature {
+                name: name.clone(),
+                enabled: *enabled,
+            })
+        })
+        .collect();
+    match predicates.len() {
+        0 => ConditionExpr::Always,
+        1 => predicates.into_iter().next().expect("one feature"),
+        _ => ConditionExpr::All(predicates),
     }
 }
 
@@ -716,6 +734,14 @@ pub enum PackageConfigError {
     /// A `source_checksums` entry is not a SHA-256 hex digest.
     #[error("source checksum must be exactly 64 hexadecimal characters, got {0:?}")]
     InvalidSourceChecksum(String),
+    /// `source_checksums` must name one digest per plan source.
+    #[error("source_checksums has {actual} digest(s), plan has {expected} source(s)")]
+    SourceChecksumCount {
+        /// Number of source artifacts already on the plan.
+        expected: usize,
+        /// Number of digests the layer listed.
+        actual: usize,
+    },
     /// A profile inherits from one that does not exist in the plan.
     #[error("profile {profile} inherits missing profile {parent}")]
     MissingParent {

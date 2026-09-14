@@ -134,9 +134,9 @@ fn parse_package_list(text: &str) -> Result<ForeignRecipe, ForeignError> {
             None => dep_name,
         })
         .collect();
-    recipe_from_fields(CranFields {
-        name,
-        version,
+    let mut recipe = recipe_from_fields(CranFields {
+        name: name.clone(),
+        version: version.clone(),
         title: None,
         description: None,
         license: None,
@@ -145,7 +145,17 @@ fn parse_package_list(text: &str) -> Result<ForeignRecipe, ForeignError> {
         imports: &extras,
         linking_to: &[],
         note: "parsed from CRAN package list",
-    })
+    })?;
+    if pin.as_deref().and_then(exact_version).is_none() {
+        recipe.residuals.push(ForeignResidual {
+            category: "cran-version".into(),
+            severity: ResidualSeverity::Judgment,
+            summary: format!("root {name} has no exact pin; emitted version {version}"),
+            evidence: pin.clone(),
+            provenance: None,
+        });
+    }
+    Ok(recipe)
 }
 
 /// One CRAN package's metadata, however it was written down.
@@ -180,14 +190,7 @@ fn recipe_from_fields(fields: CranFields<'_>) -> Result<ForeignRecipe, ForeignEr
         note,
     } = fields;
     let mut residuals = Vec::new();
-    let mut dependencies = vec![ForeignDep {
-        name: "R".into(),
-        pin: None,
-        role: "run".into(),
-        original_spec: Some("R (implicit for RPackage)".into()),
-        condition: ConditionExpr::Always,
-        provenance: Vec::new(),
-    }];
+    let mut dependencies = Vec::new();
     for (role, entries) in [("run", depends), ("run", imports), ("build", linking_to)] {
         for entry in entries {
             match parse_r_dep(entry) {
@@ -216,11 +219,28 @@ fn recipe_from_fields(fields: CranFields<'_>) -> Result<ForeignRecipe, ForeignEr
             }
         }
     }
+    if !dependencies
+        .iter()
+        .any(|dep| dep.name.eq_ignore_ascii_case("R"))
+    {
+        dependencies.insert(
+            0,
+            ForeignDep {
+                name: "R".into(),
+                pin: None,
+                role: "run".into(),
+                original_spec: Some("R (implicit for RPackage)".into()),
+                condition: ConditionExpr::Always,
+                provenance: Vec::new(),
+            },
+        );
+    }
 
     // DESCRIPTION's URL field is the project's home page, which is usually a
     // repository or a documentation site and is not where the tarball lives.
-    // CRAN publishes every release at one predictable location, so the source
-    // comes from there and URL stays the homepage it is.
+    // The current CRAN release lives at contrib/; older ones live under
+    // Archive/{name}/. The emitter lists both source_urls so EasyBuild can
+    // try each. URL stays the homepage it is.
     let homepage = url.as_ref().and_then(|value| {
         value
             .split([',', ' '])
@@ -351,12 +371,34 @@ fn parse_debian_control(text: &str) -> BTreeMap<String, String> {
 }
 
 fn split_r_list(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-        .map(ToString::to_string)
-        .collect()
+    let mut items = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0u32;
+    for ch in value.chars() {
+        match ch {
+            '(' => {
+                depth = depth.saturating_add(1);
+                current.push(ch);
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                current.push(ch);
+            }
+            ',' if depth == 0 => {
+                let item = current.trim();
+                if !item.is_empty() {
+                    items.push(item.to_string());
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    let item = current.trim();
+    if !item.is_empty() {
+        items.push(item.to_string());
+    }
+    items
 }
 
 #[cfg(test)]
@@ -377,10 +419,17 @@ mod tests {
         .expect("parse");
         assert_eq!(recipe.name, "jsonlite");
         assert_eq!(recipe.version, "1.8.8");
-        assert!(recipe
+        let r_deps: Vec<_> = recipe
             .dependencies
             .iter()
-            .any(|dep| dep.name == "R" && dep.pin.as_deref() == Some(">= 3.1.0")));
+            .filter(|dep| dep.name == "R")
+            .collect();
+        assert_eq!(
+            r_deps.len(),
+            1,
+            "Depends R replaces the implicit unpinned R"
+        );
+        assert_eq!(r_deps[0].pin.as_deref(), Some(">= 3.1.0"));
         assert!(recipe
             .dependencies
             .iter()
@@ -390,6 +439,46 @@ mod tests {
             .iter()
             .any(|residual| residual.summary.contains("methods")));
         assert!(!recipe.dependencies.iter().any(|dep| dep.name == "methods"));
+    }
+
+    #[test]
+    fn split_r_list_keeps_commas_inside_version_pins() {
+        assert_eq!(
+            split_r_list("R (>= 3.1.0, < 4.0), jsonlite"),
+            ["R (>= 3.1.0, < 4.0)", "jsonlite"]
+        );
+        let recipe = parse_cran_str(
+            "Package: demo\n\
+             Version: 1.0\n\
+             Depends: R (>= 3.1.0, < 4.0), jsonlite\n",
+        )
+        .expect("parse");
+        let r = recipe
+            .dependencies
+            .iter()
+            .find(|dep| dep.name == "R")
+            .expect("R");
+        assert_eq!(r.pin.as_deref(), Some(">= 3.1.0, < 4.0"));
+        assert!(recipe.dependencies.iter().any(|dep| dep.name == "jsonlite"));
+        assert!(!recipe
+            .dependencies
+            .iter()
+            .any(|dep| dep.name.starts_with('<')));
+    }
+
+    #[test]
+    fn package_list_without_exact_pin_records_a_judgment_residual() {
+        let recipe = parse_cran_str("jsonlite>=1.8\n").expect("parse");
+        assert_eq!(recipe.version, "0.0.0");
+        assert!(
+            recipe.residuals.iter().any(|residual| {
+                residual.category == "cran-version"
+                    && residual.severity == ResidualSeverity::Judgment
+                    && residual.summary.contains("jsonlite")
+            }),
+            "unpinned root must not silently invent 0.0.0: {:?}",
+            recipe.residuals
+        );
     }
 
     #[test]

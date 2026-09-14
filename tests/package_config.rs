@@ -429,13 +429,30 @@ with_tests = false
         Some(&EasyconfigValue::Bool(false))
     );
 
-    let hdf5 = plan
+    let hdf5_always = plan
         .dependencies
         .iter()
-        .find(|dependency| dependency.eb_name.as_deref() == Some("HDF5"))
-        .expect("existing HDF5 intent is ensured");
-    assert_eq!(hdf5.condition, ConditionExpr::Always);
-    assert!(hdf5.roles.contains(&DependencyRole::Run));
+        .find(|dependency| {
+            dependency.eb_name.as_deref() == Some("HDF5")
+                && dependency.condition == ConditionExpr::Always
+        })
+        .expect("Always HDF5 is a new intent, not a hijacked conditional");
+    assert!(hdf5_always.roles.contains(&DependencyRole::Run));
+    let hdf5_gated = plan
+        .dependencies
+        .iter()
+        .filter(|dependency| {
+            let identity = dependency
+                .eb_name
+                .as_deref()
+                .unwrap_or(dependency.name.as_str());
+            identity.eq_ignore_ascii_case("hdf5") && dependency.condition != ConditionExpr::Always
+        })
+        .count();
+    assert_eq!(
+        hdf5_gated, 2,
+        "feature-gated HDF5 siblings stay after an Always requirement"
+    );
 
     let cmake = plan
         .dependencies
@@ -445,6 +462,49 @@ with_tests = false
     assert_eq!(cmake.constraint.as_deref(), Some(">=3.30"));
     assert_eq!(cmake.roles, [DependencyRole::Build]);
     assert_eq!(cmake.condition, ConditionExpr::Always);
+}
+
+#[test]
+fn source_checksums_zip_onto_every_plan_source() {
+    let digest_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let digest_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let config = PackageConfigLayer::from_toml_str(&format!(
+        "schema_version = 1\nsource_checksums = [\"{digest_a}\", \"{digest_b}\"]\n"
+    ))
+    .expect("layer");
+    let mut plan = qmcpack_plan();
+    plan.sources = vec![
+        eb_stack::package::SourceArtifact {
+            filename: Some("a.tar.gz".into()),
+            ..eb_stack::package::SourceArtifact::default()
+        },
+        eb_stack::package::SourceArtifact {
+            filename: Some("b.tar.gz".into()),
+            ..eb_stack::package::SourceArtifact::default()
+        },
+    ];
+    apply_package_layers(&mut plan, &[config]).expect("zip checksums");
+    assert_eq!(plan.sources[0].sha256.as_deref(), Some(digest_a));
+    assert_eq!(plan.sources[1].sha256.as_deref(), Some(digest_b));
+}
+
+#[test]
+fn source_checksums_count_must_match_plan_sources() {
+    let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let config = PackageConfigLayer::from_toml_str(&format!(
+        "schema_version = 1\nsource_checksums = [\"{digest}\"]\n"
+    ))
+    .expect("layer");
+    let mut plan = qmcpack_plan();
+    plan.sources = vec![
+        eb_stack::package::SourceArtifact::default(),
+        eb_stack::package::SourceArtifact::default(),
+    ];
+    let error = apply_package_layers(&mut plan, &[config]).expect_err("count mismatch");
+    assert!(
+        error.to_string().contains("source_checksums has 1"),
+        "{error}"
+    );
 }
 
 #[test]

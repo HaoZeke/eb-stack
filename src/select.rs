@@ -54,7 +54,7 @@ pub fn select_stack(
             easyconfig_path: c.easyconfig_path,
         })
         .collect();
-    packages_out.sort_by(|a, b| a.name.cmp(&b.name));
+    packages_out.sort_by(lock_package_identity_cmp);
 
     for root in &policy.roots {
         if !packages_out.iter().any(|p| &p.name == root) {
@@ -126,7 +126,13 @@ pub fn resolvo_resolve_dep_versions(
             continue;
         }
         if !universe_cands.iter().any(|c| c.name == s.name) {
-            continue;
+            if s.optional {
+                continue;
+            }
+            return Err(format!(
+                "no hierarchy candidate for required dep {}",
+                s.name
+            ));
         }
 
         let (version_req, pin_exact) =
@@ -140,11 +146,19 @@ pub fn resolvo_resolve_dep_versions(
                 (format!(">={}", s.version), None)
             };
 
-        let any_match = universe_cands
-            .iter()
-            .any(|c| c.name == s.name && matches_req(&c.version, &version_req));
+        let any_match = universe_cands.iter().any(|c| {
+            c.name == s.name
+                && matches_req(&c.version, &version_req)
+                && c.versionsuffix.as_deref().unwrap_or("").is_empty()
+        });
         if !any_match {
-            continue;
+            if s.optional {
+                continue;
+            }
+            return Err(format!(
+                "no candidate matching {} {} without a versionsuffix",
+                s.name, version_req
+            ));
         }
         if let Some(ver) = pin_exact {
             pins.push(crate::domain::Pin {
@@ -155,7 +169,9 @@ pub fn resolvo_resolve_dep_versions(
         dep_reqs.push(DepReq {
             name: s.name.clone(),
             version_req,
-            versionsuffix: None,
+            // Empty suffix is the unsuffixed module. None would let a CUDA
+            // variant win prefer_newer at the same version.
+            versionsuffix: Some(String::new()),
             toolchain: None,
         });
         resolvable.push(s.name.clone());
@@ -205,6 +221,14 @@ pub fn resolvo_resolve_dep_versions(
             continue;
         }
         if resolvable.iter().any(|n| n == &p.name) {
+            if p.versionsuffix.as_deref().is_some_and(|vs| !vs.is_empty()) {
+                return Err(format!(
+                    "selected {} {}{} but the spec asked for the unsuffixed module",
+                    p.name,
+                    p.version,
+                    p.versionsuffix.as_deref().unwrap_or("")
+                ));
+            }
             map.insert(p.name.clone(), p.version.clone());
         }
     }
@@ -218,6 +242,15 @@ pub fn resolvo_resolve_dep_versions(
         lock.solver.engine_version
     );
     Ok((map, note))
+}
+
+fn lock_package_identity_cmp(a: &LockPackage, b: &LockPackage) -> std::cmp::Ordering {
+    a.name
+        .cmp(&b.name)
+        .then_with(|| a.toolchain.name.cmp(&b.toolchain.name))
+        .then_with(|| a.toolchain.version.cmp(&b.toolchain.version))
+        .then_with(|| a.version.cmp(&b.version))
+        .then_with(|| a.versionsuffix.cmp(&b.versionsuffix))
 }
 
 /// Prefer non-SYSTEM install candidates when both SYSTEM and non-SYSTEM exist
@@ -770,5 +803,113 @@ mod prefer_installed_tests {
         installed.packages[0].version = "0.9".into();
         let lock = select_stack(&universe, &policy(true), Some(&installed)).expect("solve");
         assert_eq!(lock.package("Alpha").unwrap().version, "2.0");
+    }
+}
+
+#[cfg(test)]
+mod lock_identity_and_bump_pin_tests {
+    use super::*;
+    use crate::domain::*;
+    use crate::hierarchy::{SourceDepSpec, ToolchainHierarchy};
+
+    fn foss() -> Toolchain {
+        Toolchain {
+            name: "foss".into(),
+            version: "2025a".into(),
+        }
+    }
+
+    fn hierarchy() -> ToolchainHierarchy {
+        ToolchainHierarchy {
+            parent: foss(),
+            members: vec![foss()],
+        }
+    }
+
+    fn candidate(name: &str, version: &str, suffix: Option<&str>) -> Candidate {
+        let toolchain = foss();
+        Candidate {
+            name: name.into(),
+            version: version.into(),
+            toolchain,
+            versionsuffix: suffix.map(str::to_string),
+            easyconfig_path: format!("{name}-{version}.eb"),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+            moduleclass: None,
+        }
+    }
+
+    #[test]
+    fn lock_packages_sort_by_name_toolchain_version_and_suffix() {
+        let foss_tc = foss();
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let mut packages = vec![
+            LockPackage {
+                name: "zlib".into(),
+                version: "1.3".into(),
+                toolchain: foss_tc.clone(),
+                versionsuffix: None,
+                easyconfig_path: "zlib-foss.eb".into(),
+            },
+            LockPackage {
+                name: "zlib".into(),
+                version: "1.2".into(),
+                toolchain: system.clone(),
+                versionsuffix: None,
+                easyconfig_path: "zlib-system.eb".into(),
+            },
+            LockPackage {
+                name: "zlib".into(),
+                version: "1.3".into(),
+                toolchain: foss_tc,
+                versionsuffix: Some("-CUDA-12.8.0".into()),
+                easyconfig_path: "zlib-cuda.eb".into(),
+            },
+        ];
+        packages.sort_by(lock_package_identity_cmp);
+        assert_eq!(packages[0].easyconfig_path, "zlib-foss.eb");
+        assert_eq!(packages[1].easyconfig_path, "zlib-cuda.eb");
+        assert_eq!(packages[2].easyconfig_path, "zlib-system.eb");
+    }
+
+    #[test]
+    fn bump_pins_keep_the_unsuffixed_module() {
+        let cands = vec![
+            candidate("Lib", "1.0", None),
+            candidate("Lib", "1.0", Some("-CUDA-12.8.0")),
+        ];
+        let specs = [SourceDepSpec::plain("Lib", "1.0")];
+        let (map, _) =
+            resolvo_resolve_dep_versions(&specs, &cands, &hierarchy(), &foss(), "App", "1.0", None)
+                .expect("resolve");
+        assert_eq!(map.get("Lib").map(String::as_str), Some("1.0"));
+    }
+
+    #[test]
+    fn unmatched_required_dep_is_an_error() {
+        let cands = vec![candidate("Lib", "1.0", None)];
+        let specs = [SourceDepSpec::plain("Missing", "1.0")];
+        let err =
+            resolvo_resolve_dep_versions(&specs, &cands, &hierarchy(), &foss(), "App", "1.0", None)
+                .expect_err("required miss");
+        assert!(err.contains("Missing"), "{err}");
+    }
+
+    #[test]
+    fn unmatched_optional_dep_is_skipped() {
+        let cands = vec![candidate("Lib", "1.0", None)];
+        let mut optional = SourceDepSpec::plain("Extra", "1.0");
+        optional.optional = true;
+        let specs = [SourceDepSpec::plain("Lib", "1.0"), optional];
+        let (map, _) =
+            resolvo_resolve_dep_versions(&specs, &cands, &hierarchy(), &foss(), "App", "1.0", None)
+                .expect("optional miss is soft");
+        assert_eq!(map.get("Lib").map(String::as_str), Some("1.0"));
+        assert!(!map.contains_key("Extra"));
     }
 }

@@ -469,7 +469,13 @@ fn render_ext_from_source(
         .unwrap_or_else(|| format!("{}-{}.tar.gz", plan.package.name, plan.package.version));
     let mut options = Vec::new();
     if let Some(url) = &source.url {
-        if let Some(base) = url.rsplit_once('/').map(|(base, _)| base) {
+        if url.contains("cran.r-project.org/src/contrib") {
+            options.push(
+                "'source_urls': [\n        'https://cran.r-project.org/src/contrib/',\n        \
+                 'https://cran.r-project.org/src/contrib/Archive/%(name)s',\n    ]"
+                    .into(),
+            );
+        } else if let Some(base) = url.rsplit_once('/').map(|(base, _)| base) {
             options.push(format!("'source_urls': ['{}']", escape_single(base)));
         }
     }
