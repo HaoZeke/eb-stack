@@ -10,6 +10,7 @@ use crate::eb_parse::{
 };
 use crate::eb_style::{format_style_file, lint_style};
 use crate::foreign::ForeignFormat;
+use crate::package::ResidualSeverity;
 use crate::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
 use crate::package_catalog::{resolve_package_catalog_layers, PackageCatalogLayer};
 use crate::package_closure::{plan_package_closure_with_sources, write_package_closure};
@@ -21,7 +22,8 @@ use crate::package_workflow::{
 };
 use crate::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use crate::{
-    load_json_file, lock_to_cyclonedx, solve_from_easyconfigs_with_baseline_version_and_extras,
+    load_json_file, lock_to_cyclonedx, parse_package_index,
+    solve_from_easyconfigs_with_baseline_version_and_extras, with_outdir_overlay,
     write_json_pretty, SolveExtraOut, StackLock,
 };
 use serde_json::{json, Value};
@@ -55,8 +57,11 @@ pub fn run_server<R: BufRead, W: Write>(reader: R, mut writer: W) -> std::io::Re
 
 /// Answer one JSON-RPC message. `None` for a notification, which takes no reply.
 pub fn handle_message(message: &Value) -> Option<Value> {
-    let id = message.get("id").cloned().unwrap_or(Value::Null);
     let method = message.get("method").and_then(Value::as_str).unwrap_or("");
+    if message.get("id").is_none() {
+        return None;
+    }
+    let id = message.get("id").cloned().unwrap_or(Value::Null);
     match method {
         "notifications/initialized" | "notifications/cancelled" => None,
         "initialize" => Some(json!({
@@ -137,6 +142,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("conda_sources", "array"),
                 ("spack_sources", "array"),
                 ("cargo_sources", "array"),
+                ("package_index", "string"),
             ],
         ),
         tool_with_optional(
@@ -354,7 +360,7 @@ fn package_plan(arguments: &Value) -> Result<Value, String> {
         toolchain: toolchain(arguments)?,
         source_checksums: string_array(arguments, "source_checksums")?,
         package_layers: package_layers(arguments)?,
-        package_index: Default::default(),
+        package_index: load_mcp_package_index(arguments)?,
         easyconfig_roots: path_array(arguments, "easyconfigs")?,
         stack_policy,
     };
@@ -494,12 +500,14 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
             exclusions: Vec::new(),
         }
     };
+    let output = required_path(arguments, "out_dir")?;
+    let easyconfigs = path_array(arguments, "easyconfigs")?;
     let bundle = plan_package_bump(&BumpPackageRequest {
         source: required_path(arguments, "source")?,
         toolchain: target,
         version: optional_string(arguments, "version"),
         source_checksum: optional_string(arguments, "source_checksum"),
-        easyconfig_roots: path_array(arguments, "easyconfigs")?,
+        easyconfig_roots: with_outdir_overlay(easyconfigs, &output),
         hierarchy_fixture: optional_path(arguments, "hierarchy_fixture"),
         overrides: string_map(arguments, "dependencies")?,
         stack_policy,
@@ -511,8 +519,24 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
             .collect(),
     })
     .map_err(|error| error.to_string())?;
-    let written = write_package_bundle(&bundle, &required_path(arguments, "out_dir")?)
-        .map_err(|error| error.to_string())?;
+    let written = write_package_bundle(&bundle, &output).map_err(|error| error.to_string())?;
+    let blocking = bundle
+        .plan
+        .residuals
+        .iter()
+        .any(|residual| residual.severity == ResidualSeverity::Blocking);
+    let residuals = bundle
+        .plan
+        .residuals
+        .iter()
+        .map(|residual| {
+            json!({
+                "category": residual.category,
+                "summary": residual.summary,
+                "severity": format!("{:?}", residual.severity),
+            })
+        })
+        .collect::<Vec<_>>();
     Ok(json!({
         "package": bundle.plan.package.name,
         "version": bundle.plan.package.version,
@@ -520,7 +544,9 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
         "sbom": written.sbom,
         "locks": written.locks,
         "easyconfigs": written.easyconfigs,
-        "claims": {"resolves": true, "builds": false, "binary_verified": false}
+        "patches": written.patches,
+        "residuals": residuals,
+        "claims": {"resolves": !blocking, "builds": false, "binary_verified": false}
     }))
 }
 
@@ -611,6 +637,7 @@ fn stack_sbom(arguments: &Value) -> Result<Value, String> {
     let lock_path = required_path(arguments, "lock")?;
     let out = optional_path(arguments, "out").unwrap_or_else(|| PathBuf::from("stack.cdx.json"));
     let lock: StackLock = load_json_file(&lock_path).map_err(|error| error.to_string())?;
+    lock.validate_schema()?;
     let sbom = lock_to_cyclonedx(&lock);
     write_json_pretty(&out, &sbom).map_err(|error| error.to_string())?;
     let components = sbom
@@ -744,6 +771,17 @@ fn required_string(arguments: &Value, name: &str) -> Result<String, String> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| format!("missing string argument {name}"))
+}
+
+fn load_mcp_package_index(
+    arguments: &Value,
+) -> Result<std::collections::BTreeMap<String, crate::ecosystem::IndexEntry>, String> {
+    let Some(path) = optional_path(arguments, "package_index") else {
+        return Ok(Default::default());
+    };
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("read package index {}: {error}", path.display()))?;
+    Ok(parse_package_index(&text))
 }
 
 fn optional_string(arguments: &Value, name: &str) -> Option<String> {

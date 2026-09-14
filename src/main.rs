@@ -15,8 +15,7 @@ use eb_stack::{
     check_recipe_deps, cyclonedx_to_dot, format_style, format_style_file, inspect_new_package,
     is_registry_name, lint_style, load_json_file, lock_to_cyclonedx, materialize_registry_name,
     packaging_gate, parse_easyconfig_trees, plan_new_package, plan_package_bump,
-    plan_package_closure_with_sources,
-    resolve_easyconfig_file, resolve_package_catalog_layers,
+    plan_package_closure_with_sources, resolve_easyconfig_file, resolve_package_catalog_layers,
     solve_from_easyconfigs_with_baseline_version_and_extras, write_json_pretty,
     write_package_bundle, write_package_closure, BumpPackageRequest, ForeignFormat,
     NewPackageRequest, PackageBundle, PackageCatalogLayer, SolveExtraOut, StackLock, Toolchain,
@@ -585,10 +584,7 @@ fn run_package_bump(args: PackageBumpArgs, mode: BumpMode) -> Result<()> {
     };
     println!("mode={}", mode.verb());
     let toolchain = toolchain(&toolchain_name, &args.toolchain_version);
-    println!(
-        "toolchain={}-{}",
-        toolchain.name, toolchain.version
-    );
+    println!("toolchain={}-{}", toolchain.name, toolchain.version);
     let stack_policy = if let Some(path) = args.stack_policy.as_deref() {
         load_stack_policy(path)?
     } else {
@@ -683,9 +679,7 @@ fn run_package_bump(args: PackageBumpArgs, mode: BumpMode) -> Result<()> {
         println!(" --out-dir {}", out_dir.display());
         println!("done_when=exit 0");
         println!("next=eval each companion= line as a shell command, then eval re_run=");
-        anyhow::bail!(
-            "unresolved on this generation; run each companion= line, then re_run="
-        );
+        anyhow::bail!("unresolved on this generation; run each companion= line, then re_run=");
     }
     println!("done_when=exit 0");
     Ok(())
@@ -1074,6 +1068,8 @@ fn run_stack(command: StackCommand) -> Result<()> {
         }
         StackCommand::Easystack { lock, out, options } => {
             let lock: StackLock = load_json_file(&lock)?;
+            lock.validate_schema()
+                .map_err(|error| anyhow::anyhow!(error))?;
             let mut parsed = eb_stack::EasystackOptions::new();
             for spec in &options {
                 let (file, rest) = spec.split_once(':').ok_or_else(|| {
@@ -1100,6 +1096,8 @@ fn run_stack(command: StackCommand) -> Result<()> {
         }
         StackCommand::Sbom { lock, out } => {
             let lock: StackLock = load_json_file(&lock)?;
+            lock.validate_schema()
+                .map_err(|error| anyhow::anyhow!(error))?;
             // The checksums and source URLs live in the easyconfigs the lock
             // names, so read them: without those a component cannot be verified
             // against the bytes it was planned from.

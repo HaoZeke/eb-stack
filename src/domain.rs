@@ -252,7 +252,102 @@ pub struct StackLock {
 impl StackLock {
     /// The locked entry for `name`, or `None` when the stack has no such
     /// package.
+    /// The unique locked entry for `name`.
+    ///
+    /// A stack can carry the same name at more than one toolchain (SYSTEM
+    /// bootstrap next to a generation build). First-match would hide the
+    /// later one; if the name is not unique this returns `None`.
     pub fn package(&self, name: &str) -> Option<&LockPackage> {
-        self.packages.iter().find(|p| p.name == name)
+        let mut found = None;
+        for package in &self.packages {
+            if package.name != name {
+                continue;
+            }
+            if found.is_some() {
+                return None;
+            }
+            found = Some(package);
+        }
+        found
+    }
+
+    /// Reject a lock whose schema this reader does not know.
+    pub fn validate_schema(&self) -> Result<(), String> {
+        if self.schema_version != STACK_LOCK_SCHEMA_VERSION {
+            return Err(format!(
+                "unsupported stack lock schema version {}",
+                self.schema_version
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Schema version written into every [`StackLock`].
+pub const STACK_LOCK_SCHEMA_VERSION: u32 = 1;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lock(packages: Vec<LockPackage>, schema_version: u32) -> StackLock {
+        StackLock {
+            schema_version,
+            toolchain: Toolchain {
+                name: "foss".into(),
+                version: "2026.1".into(),
+            },
+            generation_label: None,
+            packages,
+            solver: SolverMeta {
+                engine: "test".into(),
+                engine_version: "test".into(),
+                timestamp: "STABLE".into(),
+            },
+        }
+    }
+
+    fn pkg(name: &str, version: &str, toolchain: &str) -> LockPackage {
+        LockPackage {
+            name: name.into(),
+            version: version.into(),
+            toolchain: Toolchain {
+                name: toolchain.into(),
+                version: "system".into(),
+            },
+            versionsuffix: None,
+            easyconfig_path: format!("{name}-{version}.eb"),
+        }
+    }
+
+    #[test]
+    fn package_lookup_is_none_when_the_name_is_not_unique() {
+        let stack = lock(
+            vec![
+                pkg("Python", "3.12.3", "system"),
+                pkg("Python", "3.13.1", "GCCcore"),
+            ],
+            STACK_LOCK_SCHEMA_VERSION,
+        );
+        assert!(stack.package("Python").is_none());
+        assert_eq!(stack.package("missing"), None);
+    }
+
+    #[test]
+    fn package_lookup_returns_the_unique_name() {
+        let stack = lock(
+            vec![pkg("Python", "3.12.3", "GCCcore")],
+            STACK_LOCK_SCHEMA_VERSION,
+        );
+        assert_eq!(stack.package("Python").unwrap().version, "3.12.3");
+    }
+
+    #[test]
+    fn unknown_stack_lock_schema_is_rejected() {
+        let stack = lock(Vec::new(), 99);
+        assert!(stack.validate_schema().is_err());
+        assert!(lock(Vec::new(), STACK_LOCK_SCHEMA_VERSION)
+            .validate_schema()
+            .is_ok());
     }
 }

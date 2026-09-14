@@ -37,6 +37,19 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     }
     assert_eq!(names.len(), 15, "unexpected MCP tools: {names:?}");
 
+    let package_plan = response["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "eb_package_plan")
+        .expect("package plan schema");
+    assert!(
+        package_plan["inputSchema"]["properties"]
+            .get("package_index")
+            .is_some(),
+        "plan schema must take a package index"
+    );
+
     let package_bump = response["result"]["tools"]
         .as_array()
         .unwrap()
@@ -422,4 +435,57 @@ fn mcp_stack_sbom_writes_cyclonedx_from_lock() {
     let sbom: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&out).expect("read sbom")).expect("json");
     assert_eq!(sbom["bomFormat"], "CycloneDX");
+}
+
+#[test]
+fn mcp_tools_call_notification_does_not_reply() {
+    assert!(handle_message(&json!({
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+            "name": "eb_target_list",
+            "arguments": {}
+        }
+    }))
+    .is_none());
+}
+
+#[test]
+fn mcp_stack_sbom_rejects_an_unknown_lock_schema() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let lock_path = temp.path().join("stack.lock.json");
+    std::fs::write(
+        &lock_path,
+        r#"{
+  "schema_version": 99,
+  "toolchain": {"name": "foss", "version": "2026.1"},
+  "packages": [],
+  "solver": {
+    "engine": "resolvo",
+    "engine_version": "0",
+    "timestamp": "2026-01-01T00:00:00Z"
+  }
+}"#,
+    )
+    .expect("lock");
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_stack_sbom",
+            "arguments": {
+                "lock": lock_path
+            }
+        }
+    }))
+    .expect("sbom response");
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        text.contains("schema"),
+        "unknown schema must be rejected: {response}"
+    );
 }

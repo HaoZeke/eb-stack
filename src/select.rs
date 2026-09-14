@@ -6,6 +6,7 @@
 
 use crate::domain::{
     Candidate, DepReq, LockPackage, Policy, SolverMeta, StackLock, Toolchain, Universe,
+    STACK_LOCK_SCHEMA_VERSION,
 };
 use crate::hierarchy::{
     filter_candidates_in_hierarchy, is_system_toolchain, SourceDepSpec, ToolchainHierarchy,
@@ -63,7 +64,7 @@ pub fn select_stack(
 
     let ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     Ok(StackLock {
-        schema_version: 1,
+        schema_version: STACK_LOCK_SCHEMA_VERSION,
         toolchain: policy.toolchain.clone(),
         generation_label: universe.generation_label.clone(),
         packages: packages_out,
@@ -684,7 +685,7 @@ mod prefer_installed_tests {
             candidates: candidates.clone(),
         };
         let installed = StackLock {
-            schema_version: 1,
+            schema_version: STACK_LOCK_SCHEMA_VERSION,
             toolchain,
             generation_label: Some("installed".into()),
             packages: vec![LockPackage {
