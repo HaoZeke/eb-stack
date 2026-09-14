@@ -234,6 +234,46 @@ pub fn known_hierarchy(parent: &Toolchain) -> Option<ToolchainHierarchy> {
 /// chain can be walked without knowing the family: an unfamiliar composite
 /// stops being unplannable, which for a site is the difference between a
 /// generation it can bump and one it cannot.
+fn candidate_defines_toolchain(candidate: &Candidate, toolchain: &Toolchain) -> bool {
+    if candidate.name != toolchain.name {
+        return false;
+    }
+    if candidate.version == toolchain.version {
+        return true;
+    }
+    let joined = format!(
+        "{}{}",
+        candidate.version,
+        candidate.versionsuffix.as_deref().unwrap_or_default()
+    );
+    joined == toolchain.version
+}
+
+fn is_definition_subtoolchain(candidate: &Candidate) -> bool {
+    is_system_toolchain(&candidate.toolchain)
+        && (matches!(
+            candidate.moduleclass.as_deref(),
+            Some("toolchain") | Some("compiler")
+        ) || matches!(
+            candidate.name.as_str(),
+            "GCC"
+                | "GCCcore"
+                | "gompi"
+                | "gfbf"
+                | "foss"
+                | "golf"
+                | "intel"
+                | "intel-compilers"
+                | "iimpi"
+                | "impi"
+                | "imkl"
+                | "NVHPC"
+                | "nvidia-compilers"
+                | "nvompi"
+                | "nvofbf"
+        ))
+}
+
 fn derive_hierarchy_by_walking(
     parent: &Toolchain,
     cands: &[Candidate],
@@ -241,6 +281,12 @@ fn derive_hierarchy_by_walking(
     let used_as_toolchain: std::collections::HashSet<&str> = cands
         .iter()
         .map(|candidate| candidate.toolchain.name.as_str())
+        .chain(
+            cands
+                .iter()
+                .filter(|candidate| is_definition_subtoolchain(candidate))
+                .map(|candidate| candidate.name.as_str()),
+        )
         .collect();
     let mut members: Vec<Toolchain> = vec![Toolchain {
         name: "system".into(),
@@ -256,7 +302,7 @@ fn derive_hierarchy_by_walking(
         }
         let Some(definition) = cands
             .iter()
-            .find(|c| c.name == current.name && c.version == current.version)
+            .find(|candidate| candidate_defines_toolchain(candidate, &current))
         else {
             continue;
         };
@@ -680,9 +726,9 @@ pub fn hierarchy_for_with_tree(
                 // answer is not "unknown" but "you did not give me the
                 // generation": upstream drops old toolchain definitions, and a
                 // site keeping a recipe on one has to keep its definition too.
-                let defined = cands.iter().any(|candidate| {
-                    candidate.name == parent.name && candidate.version == parent.version
-                });
+                let defined = cands
+                    .iter()
+                    .any(|candidate| candidate_defines_toolchain(candidate, parent));
                 if defined {
                     HierarchyError::UnknownToolchain(parent.name.clone(), parent.version.clone())
                 } else {
@@ -1652,6 +1698,77 @@ mod tests {
             .member_labels()
             .iter()
             .any(|label| label.starts_with("gompi")));
+    }
+
+    #[test]
+    fn definition_only_foss_tree_still_includes_gcccore() {
+        // A new generation's robot often has only the toolchain definitions,
+        // all built at SYSTEM. Nothing yet uses gompi as a toolchain, but the
+        // walk still has to name GCCcore or the generation is unplannable.
+        let parent = foss("2099a");
+        let mut foss_def = cand("foss", "2099a", "system", "", None);
+        foss_def.moduleclass = Some("toolchain".into());
+        foss_def.dependencies = vec![dep_pin("gompi", "2099a"), dep_pin("gfbf", "2099a")];
+        let mut gompi = cand("gompi", "2099a", "system", "", None);
+        gompi.moduleclass = Some("toolchain".into());
+        gompi.dependencies = vec![dep_pin("GCC", "15.2.0")];
+        let mut gfbf = cand("gfbf", "2099a", "system", "", None);
+        gfbf.moduleclass = Some("toolchain".into());
+        gfbf.dependencies = vec![dep_pin("GCC", "15.2.0")];
+        let mut gcc = cand("GCC", "15.2.0", "system", "", None);
+        gcc.moduleclass = Some("compiler".into());
+        gcc.dependencies = vec![dep_pin("GCCcore", "15.2.0")];
+        let mut gcccore = cand("GCCcore", "15.2.0", "system", "", None);
+        gcccore.moduleclass = Some("compiler".into());
+        let h = derive_hierarchy_from_candidates(&parent, &[foss_def, gompi, gfbf, gcc, gcccore])
+            .expect("derived from definitions alone");
+        for need in [
+            "system",
+            "GCCcore-15.2.0",
+            "GCC-15.2.0",
+            "gfbf-2099a",
+            "gompi-2099a",
+            "foss-2099a",
+        ] {
+            assert!(
+                h.member_labels().iter().any(|label| label == need),
+                "missing {need} in {:?}",
+                h.member_labels()
+            );
+        }
+    }
+
+    #[test]
+    fn definition_only_intel_tree_still_includes_gcccore() {
+        let parent = Toolchain {
+            name: "intel".into(),
+            version: "2026a".into(),
+        };
+        let mut intel = cand("intel", "2026a", "system", "", None);
+        intel.moduleclass = Some("toolchain".into());
+        intel.dependencies = vec![
+            dep_pin("intel-compilers", "2026.1.0"),
+            dep_pin("impi", "2021.16"),
+            dep_pin("imkl", "2025.2.0"),
+        ];
+        let mut compilers = cand("intel-compilers", "2026.1.0", "system", "", None);
+        compilers.moduleclass = Some("compiler".into());
+        compilers.dependencies = vec![dep_pin("GCCcore", "15.2.0")];
+        let mut impi = cand("impi", "2021.16", "system", "", None);
+        impi.moduleclass = Some("toolchain".into());
+        let mut imkl = cand("imkl", "2025.2.0", "system", "", None);
+        imkl.moduleclass = Some("toolchain".into());
+        let mut gcccore = cand("GCCcore", "15.2.0", "system", "", None);
+        gcccore.moduleclass = Some("compiler".into());
+        let h = derive_hierarchy_from_candidates(&parent, &[intel, compilers, impi, imkl, gcccore])
+            .expect("derived from intel definitions alone");
+        assert!(
+            h.member_labels()
+                .iter()
+                .any(|label| label == "GCCcore-15.2.0"),
+            "{:?}",
+            h.member_labels()
+        );
     }
 
     #[test]
