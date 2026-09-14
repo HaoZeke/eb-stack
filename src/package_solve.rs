@@ -107,7 +107,7 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
             continue;
         }
         let has_compatible = admitted.iter().any(|candidate| {
-            package_identities_match(&candidate.name, &name)
+            candidate.name == name
                 && candidate_matches_version_req(
                     candidate,
                     &version_req,
@@ -131,10 +131,6 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
         }
     }
     Ok(holes)
-}
-
-fn package_identities_match(left: &str, right: &str) -> bool {
-    normalize_package_identity(left) == normalize_package_identity(right)
 }
 
 /// Same three spellings Resolvo accepts: version, version+suffix, and the
@@ -380,6 +376,19 @@ pub fn solve_package_profile_with_hierarchy(
 
 fn match_robot_name(foreign_name: &str, candidates: &[Candidate]) -> String {
     let identity = normalize_package_identity(foreign_name);
+    let mut module_names = candidates
+        .iter()
+        .filter(|candidate| {
+            !candidate.is_extension_provide()
+                && normalize_package_identity(&candidate.name) == identity
+        })
+        .map(|candidate| candidate.name.as_str())
+        .collect::<Vec<_>>();
+    module_names.sort_unstable();
+    module_names.dedup();
+    if module_names.len() == 1 {
+        return module_names[0].to_string();
+    }
     let mut names = candidates
         .iter()
         .filter(|candidate| normalize_package_identity(&candidate.name) == identity)
@@ -652,11 +661,7 @@ fn apply_generation_consensus_pins(
     hierarchy: &ToolchainHierarchy,
 ) {
     for name in direct_roles.keys() {
-        if stack_policy
-            .pins
-            .iter()
-            .any(|pin| pin.name.eq_ignore_ascii_case(name))
-        {
+        if stack_policy.pins.iter().any(|pin| pin.name == *name) {
             continue;
         }
         let counts = count_generation_dep_versions(name, all_candidates, hierarchy);
@@ -687,7 +692,7 @@ fn apply_generation_consensus_pins(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_generation_consensus_pins, normalize_requirement};
+    use super::{apply_generation_consensus_pins, match_robot_name, normalize_requirement};
     use crate::domain::{Candidate, Toolchain};
     use crate::hierarchy::ToolchainHierarchy;
     use crate::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
@@ -702,6 +707,64 @@ mod tests {
         assert_eq!(normalize_requirement(Some("1.14.2")), "==1.14.2");
         assert_eq!(normalize_requirement(Some(">=1.14")), ">=1.14");
         assert_eq!(normalize_requirement(Some("^1.2.3")), "^1.2.3");
+    }
+
+    #[test]
+    fn match_robot_name_prefers_the_module_over_an_extension() {
+        let module = cand("PyTorch", "2.5.1", "foss", "2024a");
+        let extra = Candidate {
+            easyconfig_path: "Python-bundle-PyPI.eb#ext:torch".into(),
+            ..cand("torch", "2.5.1", "foss", "2024a")
+        };
+        assert_eq!(match_robot_name("pytorch", &[module, extra]), "PyTorch");
+        assert_eq!(
+            match_robot_name("pytorch", &[cand("PyTorch", "2.5.1", "foss", "2024a")]),
+            "PyTorch"
+        );
+    }
+
+    #[test]
+    fn a_lowercase_site_pin_does_not_suppress_consensus() {
+        let gcc = cand("Python", "3.12.3", "GCCcore", "13.3.0");
+        let mut policy = StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain: Toolchain {
+                name: "foss".into(),
+                version: "2024a".into(),
+            },
+            pins: vec![crate::package::StackPin {
+                name: "python".into(),
+                version_requirement: "==3.12.3".into(),
+                toolchain: None,
+                versionsuffix: None,
+                mode: crate::package::StackPinMode::Preferred,
+                source: Some("site".into()),
+            }],
+            exclusions: Vec::new(),
+        };
+        let mut roles = BTreeMap::new();
+        roles.insert("Python".into(), true);
+        let hierarchy = ToolchainHierarchy {
+            parent: Toolchain {
+                name: "foss".into(),
+                version: "2024a".into(),
+            },
+            members: vec![Toolchain {
+                name: "GCCcore".into(),
+                version: "13.3.0".into(),
+            }],
+        };
+        apply_generation_consensus_pins(&mut policy, &roles, &[gcc.clone()], &[gcc], &hierarchy);
+        assert!(
+            policy
+                .pins
+                .iter()
+                .any(|pin| pin.name == "Python"
+                    && pin.source.as_deref() == Some("generation-consensus")),
+            "{:?}",
+            policy.pins
+        );
     }
 
     fn cand(name: &str, ver: &str, tc_name: &str, tc_ver: &str) -> Candidate {
