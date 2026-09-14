@@ -4,11 +4,11 @@ use crate::target::shell_quote;
 use crate::version::cmp_version;
 use std::path::{Path, PathBuf};
 
-/// If `--out-dir/easyconfigs` exists, search it as a robot root.
+/// If `--out-dir/easyconfigs` exists, search it first as a robot root.
 pub fn with_outdir_overlay(mut roots: Vec<PathBuf>, out_dir: &Path) -> Vec<PathBuf> {
     let overlay = out_dir.join("easyconfigs");
     if overlay.is_dir() && !roots.iter().any(|root| root == &overlay) {
-        roots.push(overlay);
+        roots.insert(0, overlay);
     }
     roots
 }
@@ -67,12 +67,18 @@ pub fn find_sibling_package_config(configs: &[PathBuf], name: &str) -> Option<Pa
     None
 }
 
-/// `package.py` beside a robot copy (`../spack/py_{name}/package.py`).
+/// `package.py` beside a robot copy. Named slug first, then Spack
+/// `py-{slug}` / `packages/` layout, then the underscore fallback.
 pub fn find_foreign_package_py(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
     let slug = name.to_ascii_lowercase();
     let rels = [
-        format!("py_{slug}/package.py"),
         format!("{slug}/package.py"),
+        format!("packages/{slug}/package.py"),
+        format!("packages/py-{slug}/package.py"),
+        format!("py-{slug}/package.py"),
+        format!("spack/packages/{slug}/package.py"),
+        format!("spack/packages/py-{slug}/package.py"),
+        format!("py_{slug}/package.py"),
         format!("spack/py_{slug}/package.py"),
         format!("spack/{slug}/package.py"),
     ];
@@ -104,6 +110,8 @@ pub fn companion_argv(
     robot: &str,
     out_dir: &Path,
 ) -> String {
+    let roots = with_outdir_overlay(roots.to_vec(), out_dir);
+    let roots = roots.as_slice();
     if let Some(source) = find_named_easyconfig(roots, name) {
         let mut line = format!(
             "eb-stack package bump --source {} --toolchain-name {} --toolchain-version {}",
@@ -347,6 +355,66 @@ mod tests {
         assert!(
             argv.contains(&format!("--easyconfigs '{}'", robot.display())),
             "{argv}"
+        );
+    }
+
+    #[test]
+    fn find_foreign_package_py_finds_hyphenated_spack_layout() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pkg = temp.path().join("spack").join("packages").join("py-pspamm");
+        fs::create_dir_all(&pkg).expect("spack pkg");
+        let package_py = pkg.join("package.py");
+        fs::write(&package_py, "class PyPspamm:\n    pass\n").expect("package.py");
+        let found = find_foreign_package_py(&[temp.path().to_path_buf()], "PSpaMM")
+            .expect("hyphenated Spack dir");
+        assert_eq!(found, package_py);
+    }
+
+    #[test]
+    fn find_foreign_package_py_prefers_the_named_slug_over_py_slug() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let named = temp.path().join("asagi");
+        let py = temp.path().join("py_asagi");
+        fs::create_dir_all(&named).expect("named");
+        fs::create_dir_all(&py).expect("py");
+        fs::write(named.join("package.py"), "class Asagi:\n    pass\n").expect("named py");
+        fs::write(py.join("package.py"), "class PyAsagi:\n    pass\n").expect("py slug");
+        let found =
+            find_foreign_package_py(&[temp.path().to_path_buf()], "ASAGI").expect("named slug");
+        assert_eq!(found, named.join("package.py"));
+    }
+
+    #[test]
+    fn companion_argv_searches_outdir_overlay_first() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path().join("robot");
+        let out = temp.path().join("out");
+        let overlay = out.join("easyconfigs").join("a").join("ASAGI");
+        fs::create_dir_all(robot.join("a").join("ASAGI")).expect("robot asagi");
+        fs::create_dir_all(&overlay).expect("overlay asagi");
+        fs::write(
+            robot
+                .join("a")
+                .join("ASAGI")
+                .join("ASAGI-1.0-foss-2023a.eb"),
+            "name = 'ASAGI'\n",
+        )
+        .expect("robot recipe");
+        let overlay_source = overlay.join("ASAGI-1.1-foss-2025a.eb");
+        fs::write(&overlay_source, "name = 'ASAGI'\n").expect("overlay recipe");
+        let argv = companion_argv(
+            "ASAGI",
+            Some("1.1"),
+            &[robot],
+            &[],
+            "foss",
+            "2025a",
+            "robot",
+            &out,
+        );
+        assert!(
+            argv.contains(&overlay_source.display().to_string()),
+            "overlay recipe must win, got {argv}"
         );
     }
 }

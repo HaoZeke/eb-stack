@@ -17,8 +17,10 @@ use crate::foreign::{
     ForeignDep, ForeignError, ForeignFormat, ForeignRecipe, ForeignResidual, ForeignSource,
 };
 use crate::package::{ConditionExpr, ResidualSeverity};
+use serde::de::{self, Deserializer, Visitor};
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::fmt;
 
 /// Parse a DESCRIPTION file, CRAN JSON object, or package-list body.
 pub fn parse_cran_str(text: &str) -> Result<ForeignRecipe, ForeignError> {
@@ -53,12 +55,59 @@ struct CranJson {
     license: Option<String>,
     #[serde(default, alias = "URL")]
     url: Option<String>,
-    #[serde(default, alias = "Depends")]
+    #[serde(default, alias = "Depends", deserialize_with = "deserialize_r_list")]
     depends: Vec<String>,
-    #[serde(default, alias = "Imports")]
+    #[serde(default, alias = "Imports", deserialize_with = "deserialize_r_list")]
     imports: Vec<String>,
-    #[serde(default, alias = "LinkingTo")]
+    #[serde(default, alias = "LinkingTo", deserialize_with = "deserialize_r_list")]
     linking_to: Vec<String>,
+}
+
+fn deserialize_r_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct RListVisitor;
+    impl<'de> Visitor<'de> for RListVisitor {
+        type Value = Vec<String>;
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a Depends/Imports/LinkingTo string, array, or object")
+        }
+        fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+            Ok(split_r_list(value))
+        }
+        fn visit_string<E: de::Error>(self, value: String) -> Result<Self::Value, E> {
+            Ok(split_r_list(&value))
+        }
+        fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut items = Vec::new();
+            while let Some(item) = seq.next_element::<String>()? {
+                if !item.trim().is_empty() {
+                    items.push(item);
+                }
+            }
+            Ok(items)
+        }
+        fn visit_map<A: de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            let mut items = Vec::new();
+            while let Some((name, pin)) = map.next_entry::<String, serde_json::Value>()? {
+                match pin {
+                    serde_json::Value::Null => items.push(name),
+                    serde_json::Value::String(pin) if pin.is_empty() => items.push(name),
+                    serde_json::Value::String(pin) => items.push(format!("{name} ({pin})")),
+                    other => items.push(format!("{name} ({other})")),
+                }
+            }
+            Ok(items)
+        }
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+    }
+    deserializer.deserialize_any(RListVisitor)
 }
 
 fn parse_cran_json(text: &str) -> Result<ForeignRecipe, ForeignError> {
@@ -79,6 +128,12 @@ fn parse_cran_json(text: &str) -> Result<ForeignRecipe, ForeignError> {
 }
 
 fn parse_description(text: &str) -> Result<ForeignRecipe, ForeignError> {
+    let stanza_count = debian_package_stanza_count(text);
+    if stanza_count > 1 {
+        return Err(ForeignError::Parse(format!(
+            "PACKAGES index has {stanza_count} stanzas; pass one DESCRIPTION or a package list"
+        )));
+    }
     let fields = parse_debian_control(text);
     let package = fields
         .get("package")
@@ -88,7 +143,7 @@ fn parse_description(text: &str) -> Result<ForeignRecipe, ForeignError> {
         .get("version")
         .cloned()
         .ok_or_else(|| ForeignError::Parse("DESCRIPTION is missing Version".into()))?;
-    recipe_from_fields(CranFields {
+    let mut recipe = recipe_from_fields(CranFields {
         name: package,
         version,
         title: fields.get("title").cloned(),
@@ -99,7 +154,19 @@ fn parse_description(text: &str) -> Result<ForeignRecipe, ForeignError> {
         imports: &split_r_list(fields.get("imports").map(String::as_str).unwrap_or("")),
         linking_to: &split_r_list(fields.get("linkingto").map(String::as_str).unwrap_or("")),
         note: "parsed from DESCRIPTION",
-    })
+    })?;
+    if let Some(sysreq) = fields.get("systemrequirements") {
+        if !sysreq.trim().is_empty() {
+            recipe.residuals.push(ForeignResidual {
+                category: "cran-system-requirements".into(),
+                severity: ResidualSeverity::Judgment,
+                summary: format!("SystemRequirements not encoded: {sysreq}"),
+                evidence: Some(sysreq.clone()),
+                provenance: None,
+            });
+        }
+    }
+    Ok(recipe)
 }
 
 fn parse_package_list(text: &str) -> Result<ForeignRecipe, ForeignError> {
@@ -340,6 +407,27 @@ fn is_base_r(name: &str) -> bool {
     )
 }
 
+fn debian_package_stanza_count(text: &str) -> usize {
+    let mut count = 0;
+    let mut has_package = false;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            if has_package {
+                count += 1;
+                has_package = false;
+            }
+            continue;
+        }
+        if line.to_ascii_lowercase().starts_with("package:") {
+            has_package = true;
+        }
+    }
+    if has_package {
+        count += 1;
+    }
+    count
+}
+
 fn parse_debian_control(text: &str) -> BTreeMap<String, String> {
     let mut fields = BTreeMap::new();
     let mut current_key = None;
@@ -488,5 +576,51 @@ mod tests {
         assert_eq!(recipe.version, "1.8.8");
         assert_eq!(recipe.dependencies[0].name, "R");
         assert_eq!(recipe.dependencies[1].name, "curl");
+    }
+
+    #[test]
+    fn system_requirements_become_a_judgment_residual() {
+        let recipe = parse_cran_str(
+            "Package: xml2\n\
+             Version: 1.3.6\n\
+             SystemRequirements: libxml2 >= 2.9\n",
+        )
+        .expect("parse");
+        assert!(
+            recipe.residuals.iter().any(|residual| {
+                residual.category == "cran-system-requirements"
+                    && residual.summary.contains("libxml2")
+            }),
+            "{:?}",
+            recipe.residuals
+        );
+    }
+
+    #[test]
+    fn multi_stanza_packages_index_is_refused() {
+        let err =
+            parse_cran_str("Package: A\nVersion: 1.0\nDepends: foo\n\nPackage: B\nVersion: 2.0\n")
+                .expect_err("PACKAGES");
+        assert!(err.to_string().contains("stanzas"), "{err}");
+    }
+
+    #[test]
+    fn cran_json_accepts_string_and_object_depends() {
+        let from_string = parse_cran_str(
+            r#"{"Package":"jsonlite","Version":"1.8.8","Depends":"R (>= 3.1.0), methods"}"#,
+        )
+        .expect("string Depends");
+        assert!(from_string
+            .dependencies
+            .iter()
+            .any(|dep| dep.name == "R" && dep.pin.as_deref() == Some(">= 3.1.0")));
+        let from_object = parse_cran_str(
+            r#"{"Package":"jsonlite","Version":"1.8.8","Depends":{"R":">= 3.1.0"}}"#,
+        )
+        .expect("object Depends");
+        assert!(from_object
+            .dependencies
+            .iter()
+            .any(|dep| dep.name == "R" && dep.pin.as_deref() == Some(">= 3.1.0")));
     }
 }
