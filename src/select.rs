@@ -179,6 +179,26 @@ pub fn resolvo_resolve_dep_versions(
         return Err("no resolvable deps with hierarchy candidates matching floors".into());
     }
 
+    let mut keep: HashSet<String> = resolvable.iter().cloned().collect();
+    let mut pending: Vec<String> = keep.iter().cloned().collect();
+    while let Some(name) = pending.pop() {
+        for candidate in universe_cands
+            .iter()
+            .filter(|candidate| candidate.name == name)
+        {
+            for dep in candidate
+                .dependencies
+                .iter()
+                .chain(&candidate.builddependencies)
+            {
+                if keep.insert(dep.name.clone()) {
+                    pending.push(dep.name.clone());
+                }
+            }
+        }
+    }
+    universe_cands.retain(|candidate| keep.contains(&candidate.name));
+
     let synthetic = if universe_cands.iter().any(|c| c.name == root_name) {
         format!("__bump__{root_name}")
     } else {

@@ -273,10 +273,11 @@ fn strip_comments(src: &str) -> String {
 
 // --- recursive-descent expression parser -----------------------------------------
 
-struct Parser<'a> {
-    src: &'a [u8],
+struct Parser<'src, 'env> {
+    src: &'src [u8],
     pos: usize,
     env: HashMap<String, Value>,
+    parent: Option<&'env HashMap<String, Value>>,
     /// Statements the tolerant loop could not represent. Collected always;
     /// only `--strict` callers ask for them.
     skipped: Vec<SkippedStatement>,
@@ -286,8 +287,8 @@ struct Parser<'a> {
     depth: usize,
 }
 
-impl<'a> Parser<'a> {
-    fn new(src: &'a str) -> Self {
+impl<'src, 'env> Parser<'src, 'env> {
+    fn new(src: &'src str) -> Self {
         let mut env = HashMap::new();
         // Seed full EasyBuild TEMPLATE_CONSTANTS (%(…)s applied later).
         for (name, value) in EB_TEMPLATE_CONSTANTS {
@@ -297,9 +298,16 @@ impl<'a> Parser<'a> {
             src: src.as_bytes(),
             pos: 0,
             env,
+            parent: None,
             skipped: Vec::new(),
             depth: 0,
         }
+    }
+
+    fn lookup(&self, name: &str) -> Option<&Value> {
+        self.env
+            .get(name)
+            .or_else(|| self.parent.and_then(|parent| parent.get(name)))
     }
 
     fn err(&self, msg: impl Into<String>) -> String {
@@ -554,7 +562,7 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         let val = self.parse_expr()?;
         if aug_add {
-            match (self.env.get(&name).cloned(), val) {
+            match (self.lookup(&name).cloned(), val) {
                 (Some(Value::Str(a)), Value::Str(b)) => {
                     self.env.insert(name, Value::Str(a + &b));
                 }
@@ -898,7 +906,8 @@ impl<'a> Parser<'a> {
         let mut sub = Parser {
             src: fragment.as_bytes(),
             pos: 0,
-            env: self.env.clone(),
+            env: HashMap::new(),
+            parent: Some(&self.env),
             skipped: Vec::new(),
             // A fragment sits inside braces, so the bracket-sensitive rules
             // behave as if nested, which is what it is.
@@ -1022,7 +1031,7 @@ impl<'a> Parser<'a> {
             // through `%(arch)s`: IJulia asks for Julia at `-linux-%s' % ARCH`.
             "ARCH" => Ok(Value::Str(std::env::consts::ARCH.to_string())),
             other => {
-                if let Some(v) = self.env.get(other) {
+                if let Some(v) = self.lookup(other) {
                     Ok(v.clone())
                 } else {
                     Err(self.err(format!("unknown name '{other}'")))
@@ -1862,7 +1871,7 @@ impl std::fmt::Display for SkippedStatement {
 pub fn resolve_easyconfig_str_reporting(
     src: &str,
 ) -> Result<(ResolvedEasyconfig, Vec<SkippedStatement>), ParseError> {
-    resolve_easyconfig_str_inner(src)
+    resolve_easyconfig_str_inner(src, true)
 }
 
 /// As [`resolve_easyconfig_file`], also returning the skipped statements.
@@ -1885,11 +1894,12 @@ pub fn resolve_easyconfig_file_reporting(
 /// recipe still resolves. Use [`resolve_easyconfig_str_reporting`] when you
 /// need to know what was skipped.
 pub fn resolve_easyconfig_str(src: &str) -> Result<ResolvedEasyconfig, ParseError> {
-    resolve_easyconfig_str_inner(src).map(|(resolved, _skipped)| resolved)
+    resolve_easyconfig_str_inner(src, true).map(|(resolved, _skipped)| resolved)
 }
 
 fn resolve_easyconfig_str_inner(
     src: &str,
+    include_packaging: bool,
 ) -> Result<(ResolvedEasyconfig, Vec<SkippedStatement>), ParseError> {
     let cleaned = strip_comments(src);
     let mut parser = Parser::new(&cleaned);
@@ -2014,20 +2024,46 @@ fn resolve_easyconfig_str_inner(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| ParseError::Parse("<string>".into(), e))?;
 
-    let easyblock = opt_str_field(&parser.env, "easyblock", &templates);
-    let configopts = opt_str_field(&parser.env, "configopts", &templates);
     let moduleclass = opt_str_field(&parser.env, "moduleclass", &templates);
-    let homepage = opt_str_field(&parser.env, "homepage", &templates);
-    let checksums_applied = parser
-        .env
-        .get("checksums")
-        .map(|value| apply_templates_value(value, &templates));
-    let checksums = checksum_strings_from_applied(checksums_applied.as_ref());
-    let sources_count = env_list_len(&parser.env, "sources", &templates);
-    let source_urls = env_string_list(&parser.env, "source_urls", &templates);
-    let patch_names = patch_names_field(&parser.env, &templates);
-    let checksum_entry_keys = checksum_entry_keys_from_applied(checksums_applied.as_ref());
-    let checksums_by_filename = checksums_by_filename_from_applied(checksums_applied.as_ref());
+    let (
+        easyblock,
+        configopts,
+        homepage,
+        checksums,
+        sources_count,
+        source_urls,
+        patch_names,
+        checksum_entry_keys,
+        checksums_by_filename,
+    ) = if include_packaging {
+        let checksums_applied = parser
+            .env
+            .get("checksums")
+            .map(|value| apply_templates_value(value, &templates));
+        (
+            opt_str_field(&parser.env, "easyblock", &templates),
+            opt_str_field(&parser.env, "configopts", &templates),
+            opt_str_field(&parser.env, "homepage", &templates),
+            checksum_strings_from_applied(checksums_applied.as_ref()),
+            env_list_len(&parser.env, "sources", &templates),
+            env_string_list(&parser.env, "source_urls", &templates),
+            patch_names_field(&parser.env, &templates),
+            checksum_entry_keys_from_applied(checksums_applied.as_ref()),
+            checksums_by_filename_from_applied(checksums_applied.as_ref()),
+        )
+    } else {
+        (
+            None,
+            None,
+            None,
+            Vec::new(),
+            0,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+        )
+    };
 
     let resolved = ResolvedEasyconfig {
         name,
@@ -2239,19 +2275,27 @@ fn checksum_strings_from_value(v: &Value) -> Vec<String> {
 
 /// Resolve one `.eb` file to fully expanded fields.
 pub fn resolve_easyconfig_file(path: &Path) -> Result<ResolvedEasyconfig, ParseError> {
+    resolve_easyconfig_file_inner(path, true)
+}
+
+fn resolve_easyconfig_file_inner(
+    path: &Path,
+    include_packaging: bool,
+) -> Result<ResolvedEasyconfig, ParseError> {
     let raw =
         std::fs::read_to_string(path).map_err(|e| ParseError::Io(path.display().to_string(), e))?;
-    let mut resolved = resolve_easyconfig_str(&raw).map_err(|e| match e {
-        ParseError::Parse(_, msg) => ParseError::Parse(path.display().to_string(), msg),
-        other => other,
-    })?;
+    let (mut resolved, _skipped) =
+        resolve_easyconfig_str_inner(&raw, include_packaging).map_err(|e| match e {
+            ParseError::Parse(_, msg) => ParseError::Parse(path.display().to_string(), msg),
+            other => other,
+        })?;
     resolved.easyconfig_path = path.display().to_string();
     Ok(resolved)
 }
 
 /// Parse one `.eb` file into a solver-facing [`Candidate`].
 pub fn parse_easyconfig_file(path: &Path) -> Result<Candidate, ParseError> {
-    Ok(resolve_easyconfig_file(path)?.to_candidate())
+    Ok(resolve_easyconfig_file_inner(path, false)?.to_candidate())
 }
 
 /// One easyconfig path that could not be parsed into a candidate.

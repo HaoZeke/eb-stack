@@ -541,12 +541,24 @@ impl<'a> StaticEvaluator<'a> {
             .map(StaticValue::Mapping)
     }
 
+    fn resolve_name(&self, name: &str) -> Option<&StaticValue> {
+        self.environment
+            .get(name)
+            .or_else(|| self.attributes.get(name))
+    }
+
     fn evaluate_call(&self, call: &ast::ExprCall) -> Option<StaticValue> {
         if let ast::Expr::Attribute(attribute) = call.func.as_ref() {
-            let receiver = self.evaluate(&attribute.value)?;
+            let owned;
+            let receiver = if let ast::Expr::Name(name) = attribute.value.as_ref() {
+                self.resolve_name(name.id.as_str())?
+            } else {
+                owned = self.evaluate(&attribute.value)?;
+                &owned
+            };
             return match attribute.attr.as_str() {
                 "get" => {
-                    let StaticValue::Mapping(_) = &receiver else {
+                    let StaticValue::Mapping(_) = receiver else {
                         return None;
                     };
                     let key = self.evaluate(call.args.first()?)?;
@@ -561,7 +573,8 @@ impl<'a> StaticEvaluator<'a> {
                 "items" if call.args.is_empty() => match receiver {
                     StaticValue::Mapping(entries) => Some(StaticValue::Sequence(
                         entries
-                            .into_iter()
+                            .iter()
+                            .cloned()
                             .map(|(key, value)| StaticValue::Sequence(vec![key, value]))
                             .collect(),
                     )),
@@ -569,7 +582,7 @@ impl<'a> StaticEvaluator<'a> {
                 },
                 "keys" if call.args.is_empty() => match receiver {
                     StaticValue::Mapping(entries) => Some(StaticValue::Sequence(
-                        entries.into_iter().map(|(key, _)| key).collect(),
+                        entries.iter().map(|(key, _)| key.clone()).collect(),
                     )),
                     _ => None,
                 },
@@ -641,14 +654,20 @@ impl<'a> StaticEvaluator<'a> {
     }
 
     fn evaluate_subscript(&self, subscript: &ast::ExprSubscript) -> Option<StaticValue> {
-        let container = self.evaluate(&subscript.value)?;
+        let owned;
+        let container = if let ast::Expr::Name(name) = subscript.value.as_ref() {
+            self.resolve_name(name.id.as_str())?
+        } else {
+            owned = self.evaluate(&subscript.value)?;
+            &owned
+        };
         let key = self.evaluate(&subscript.slice)?;
         match container {
             StaticValue::Mapping(entries) => entries
-                .into_iter()
+                .iter()
                 .rev()
                 .find(|(candidate, _)| candidate == &key)
-                .map(|(_, value)| value),
+                .map(|(_, value)| value.clone()),
             StaticValue::Sequence(values) => {
                 sequence_index(&key).and_then(|index| values.get(index).cloned())
             }
