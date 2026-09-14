@@ -1,11 +1,11 @@
 //! EasyBuild stack lock: parse `.eb` files, resolvo SAT co-select, planned SBOM.
 #![warn(missing_docs)]
 
-mod companion_suggest;
 pub mod artifact_class;
 pub mod build_order;
 pub mod campaign;
 pub mod cargo;
+mod companion_suggest;
 pub mod cran;
 pub mod domain;
 pub mod easystack;
@@ -52,6 +52,10 @@ pub use artifact_class::{
     ArtifactClass, DeclaredVersion, FindingLevel, SeededChecksum, SourceFinding,
 };
 pub use build_order::{build_order, format_order, Choice, ModuleKey, OrderError};
+pub use companion_suggest::{
+    companion_argv, find_foreign_package_py, find_named_easyconfig, find_sibling_package_config,
+    with_outdir_overlay,
+};
 pub use domain::*;
 pub use easystack::{lock_to_easystack, EasystackOptions};
 pub use eb_maintainer::{
@@ -103,10 +107,6 @@ pub use package_closure::{
     ClosurePlanDocument, PackageClosure, PackageClosureError, WrittenPackageClosure,
     CLOSURE_BUNDLE_SCHEMA_VERSION,
 };
-pub use companion_suggest::{
-    companion_argv, find_foreign_package_py, find_named_easyconfig, find_sibling_package_config,
-    with_outdir_overlay,
-};
 pub use package_emit::{emit_profile_easyconfigs, EmittedEasyconfig, PackageEmitError};
 pub use package_solve::{
     solve_package_profile, solve_package_profile_with_hierarchy, unsatisfied_direct_dependencies,
@@ -122,9 +122,8 @@ pub use package_workflow::{
     complete_package_bump, complete_package_bundle, complete_package_bundle_with_hierarchy,
     inspect_new_package, plan_new_package, plan_package_bump, prepare_new_package_plan,
     prepare_package_bump, relative_posix, stack_policy_with_bump_overrides, validate_path_segment,
-    write_package_bundle,
-    write_package_bundle_into, BumpPackageRequest,
-    NewPackageRequest, PackageBundle, PackageWorkflowError, WrittenPackageBundle,
+    write_package_bundle, write_package_bundle_into, BumpPackageRequest, NewPackageRequest,
+    PackageBundle, PackageWorkflowError, WrittenPackageBundle,
 };
 pub use provides::{
     existing_language_provider, expand_extension_provides, extension_parent_path,
@@ -132,8 +131,8 @@ pub use provides::{
     resolve_extension_provider, EXT_PROVIDE_MARKER,
 };
 pub use registry::{
-    is_registry_name, materialize_pypi, materialize_registry_name, resolve_ingest_source, MapClient,
-    MaterializedIngest, RegistryClient, RegistryError, UreqClient,
+    is_registry_name, materialize_pypi, materialize_registry_name, resolve_ingest_source,
+    MapClient, MaterializedIngest, RegistryClient, RegistryError, UreqClient,
 };
 pub use report::{
     classify_stack_diff, format_build_list, format_stack_diff_markdown, ordered_build_paths,
@@ -281,7 +280,7 @@ pub fn filter_baseline_candidates(
         )?;
         Ok(base_cands
             .iter()
-            .filter(|c| c.toolchain.name == policy_toolchain.name && c.toolchain.version == bv)
+            .filter(|c| c.toolchain.name != policy_toolchain.name || c.toolchain.version == bv)
             .cloned()
             .collect())
     } else {
@@ -428,17 +427,18 @@ pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
     let policy: Policy = load_json_file(policy_path)?;
     let tree = parse_easyconfig_trees(easyconfigs_roots).map_err(|e| anyhow::anyhow!(e))?;
     if !tree.skipped.is_empty() {
-        eprintln!(
-            "parse: skipped {} unparseable easyconfig(s) across {} tree(s)",
+        let mut detail = format!(
+            "parse skipped {} unparseable easyconfig(s) across {} tree(s)",
             tree.skip_count(),
             easyconfigs_roots.len()
         );
         for s in tree.skipped.iter().take(20) {
-            eprintln!("  skip {}: {}", s.path, s.error);
+            detail.push_str(&format!("\n  skip {}: {}", s.path, s.error));
         }
         if tree.skipped.len() > 20 {
-            eprintln!("  ... and {} more", tree.skipped.len() - 20);
+            detail.push_str(&format!("\n  ... and {} more", tree.skipped.len() - 20));
         }
+        bail!("{detail}");
     }
     let all = tree.candidates;
     // The universe has to carry the subtoolchains as well as the policy
@@ -448,7 +448,7 @@ pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
     let hierarchy_members =
         crate::hierarchy::hierarchy_for_with_tree(&policy.toolchain, None, &all)
             .map(|h| h.members)
-            .unwrap_or_default();
+            .map_err(|error| anyhow::anyhow!(error))?;
     let universe_cands = filter_toolchain_hierarchy(&all, &policy.toolchain, &hierarchy_members);
     if universe_cands.is_empty() {
         let roots_disp = easyconfigs_roots
@@ -474,6 +474,13 @@ pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
 
     let baseline = if let Some(base_root) = baseline_easyconfigs {
         let base_tree = parse_easyconfig_tree(base_root).map_err(|e| anyhow::anyhow!(e))?;
+        if !base_tree.skipped.is_empty() {
+            bail!(
+                "baseline parse skipped {} unparseable easyconfig(s) under {}",
+                base_tree.skip_count(),
+                base_root.display()
+            );
+        }
         let base_all = base_tree.candidates;
         let base_cands =
             filter_baseline_candidates(&base_all, &policy.toolchain, baseline_toolchain_version)?;

@@ -268,10 +268,17 @@ pub fn declared_version(source_tree: &Path) -> Option<DeclaredVersion> {
 
 /// `project(name VERSION 4.3.9 LANGUAGES C CXX)`, across lines.
 fn cmake_project_version(text: &str) -> Option<String> {
-    let re = regex::Regex::new(r"(?is)\bproject\s*\((.*?)\)").ok()?;
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(r"(?is)\bproject\s*\((.*?)\)").expect("literal cmake project")
+    });
     let caps = re.captures(text)?;
     let body = caps.get(1)?.as_str();
-    let ver = regex::Regex::new(r"(?i)\bVERSION\s+([0-9][0-9A-Za-z.\-+]*)").ok()?;
+    static VER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let ver = VER.get_or_init(|| {
+        regex::Regex::new(r"(?i)\bVERSION\s+([0-9][0-9A-Za-z.\-+]*)")
+            .expect("literal cmake version")
+    });
     Some(ver.captures(body)?.get(1)?.as_str().to_string())
 }
 
@@ -335,7 +342,11 @@ fn meson_project_version(text: &str) -> Option<String> {
 
 /// `AC_INIT([name], [1.2.3], ...)`.
 fn autoconf_init_version(text: &str) -> Option<String> {
-    let re = regex::Regex::new(r"(?is)AC_INIT\s*\(\s*\[[^\]]*\]\s*,\s*\[([^\]]+)\]").ok()?;
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(r"(?is)AC_INIT\s*\(\s*\[[^\]]*\]\s*,\s*\[([^\]]+)\]")
+            .expect("literal autoconf init")
+    });
     Some(re.captures(text)?.get(1)?.as_str().trim().to_string())
 }
 

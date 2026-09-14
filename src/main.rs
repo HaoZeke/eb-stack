@@ -601,6 +601,11 @@ fn run_package_bump(args: PackageBumpArgs, mode: BumpMode) -> Result<()> {
     let toolchain_version = args.toolchain_version.clone();
     let version = args.version.clone();
     let source_checksum = args.source_checksum.clone();
+    let dep_flags = args.dependencies.clone();
+    let stack_policy_flag = args.stack_policy.clone();
+    let hierarchy_flag = args.hierarchy_fixture.clone();
+    let foreign_flags = args.foreign_sources.clone();
+    let strict_patches = args.strict_patches;
     let bundle = plan_package_bump(&BumpPackageRequest {
         source: args.source,
         toolchain,
@@ -673,8 +678,23 @@ fn run_package_bump(args: PackageBumpArgs, mode: BumpMode) -> Result<()> {
         for config in &package_configs {
             print!(" --package-config {}", config.display());
         }
-        if !robot.is_empty() {
-            print!(" --easyconfigs {robot}");
+        for robot_path in &easyconfigs {
+            print!(" --easyconfigs {}", robot_path.display());
+        }
+        if let Some(path) = &stack_policy_flag {
+            print!(" --stack-policy {}", path.display());
+        }
+        if let Some(path) = &hierarchy_flag {
+            print!(" --hierarchy-fixture {}", path.display());
+        }
+        for path in &foreign_flags {
+            print!(" --foreign {}", path.display());
+        }
+        for dep in &dep_flags {
+            print!(" --dep {dep}");
+        }
+        if strict_patches {
+            print!(" --strict-patches");
         }
         println!(" --out-dir {}", out_dir.display());
         println!("done_when=exit 0");
@@ -972,8 +992,12 @@ fn run_stack(command: StackCommand) -> Result<()> {
                         "roots": roots,
                         "objective": "prefer_newer",
                     });
-                    written_policy = std::env::temp_dir()
-                        .join(format!("eb-stack-policy-{}-{}.json", name, version));
+                    written_policy = std::env::temp_dir().join(format!(
+                        "eb-stack-policy-{}-{}-{}.json",
+                        name,
+                        version,
+                        std::process::id()
+                    ));
                     std::fs::write(&written_policy, serde_json::to_vec_pretty(&policy)?)?;
                     written_policy
                 }
