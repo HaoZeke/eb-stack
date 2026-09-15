@@ -439,71 +439,90 @@ impl EbProvider {
         let mut excluded_ranks: HashMap<String, HashMap<u32, String>> = HashMap::new();
         if let Some(stack) = stack_policy {
             for pin in &stack.pins {
-                let matching_result = matching_ranks(
-                    &candidates,
-                    &ranks,
-                    &pin.name,
-                    &pin.version_requirement,
-                    pin.toolchain.as_ref(),
-                    pin.versionsuffix.as_deref(),
-                );
-                match pin.mode {
-                    StackPinMode::Preferred => {
-                        if let Ok(matching) = matching_result {
+                let keys = keys_for_name(&ranks, &pin.name);
+                if keys.is_empty() {
+                    return Err(format!(
+                        "stack policy references unknown package {}",
+                        pin.name
+                    ));
+                }
+                let mut matched_anywhere = false;
+                for key in keys {
+                    let matching = matching_ranks_for_key(
+                        &candidates,
+                        &ranks,
+                        &key,
+                        &pin.version_requirement,
+                        pin.toolchain.as_ref(),
+                        pin.versionsuffix.as_deref(),
+                    );
+                    match pin.mode {
+                        StackPinMode::Preferred => {
                             if let Some(selected_rank) = matching.last().copied() {
-                                favored_ranks.insert(pin.name.clone(), selected_rank);
+                                favored_ranks.insert(key, selected_rank);
+                                matched_anywhere = true;
+                            }
+                        }
+                        StackPinMode::Locked => {
+                            let allowed = if let Some(existing) = pin_ranks.get(&key) {
+                                matching
+                                    .into_iter()
+                                    .filter(|rank| existing.contains(rank))
+                                    .collect::<Vec<_>>()
+                            } else {
+                                matching
+                            };
+                            pin_ranks.insert(key.clone(), allowed.clone());
+                            if !allowed.is_empty() {
+                                matched_anywhere = true;
+                            }
+                            if allowed.len() == 1 {
+                                locked_ranks.insert(key, allowed[0]);
                             }
                         }
                     }
-                    StackPinMode::Locked => {
-                        let matching = matching_result?;
-                        if matching.is_empty() {
-                            return Err(format!(
-                                "stack pin {} {} matches no candidates",
-                                pin.name, pin.version_requirement
-                            ));
-                        }
-                        let allowed = if let Some(existing) = pin_ranks.get(&pin.name) {
-                            matching
-                                .into_iter()
-                                .filter(|rank| existing.contains(rank))
-                                .collect::<Vec<_>>()
-                        } else {
-                            matching
-                        };
-                        if allowed.is_empty() {
-                            return Err(format!(
-                                "locked stack pin {} {} conflicts with package policy pins",
-                                pin.name, pin.version_requirement
-                            ));
-                        }
-                        pin_ranks.insert(pin.name.clone(), allowed.clone());
-                        if allowed.len() == 1 {
-                            locked_ranks.insert(pin.name.clone(), allowed[0]);
-                        }
-                    }
+                }
+                if pin.mode == StackPinMode::Locked && !matched_anywhere {
+                    return Err(format!(
+                        "stack pin {} {} matches no candidates",
+                        pin.name, pin.version_requirement
+                    ));
                 }
             }
 
             for exclusion in &stack.exclusions {
-                let matching = matching_ranks(
-                    &candidates,
-                    &ranks,
-                    &exclusion.name,
-                    &exclusion.version_requirement,
-                    None,
-                    None,
-                )?;
-                if matching.is_empty() {
+                let keys = keys_for_name(&ranks, &exclusion.name);
+                if keys.is_empty() {
+                    return Err(format!(
+                        "stack policy references unknown package {}",
+                        exclusion.name
+                    ));
+                }
+                let reason = exclusion_reason(exclusion);
+                let mut matched_anywhere = false;
+                for key in keys {
+                    let matching = matching_ranks_for_key(
+                        &candidates,
+                        &ranks,
+                        &key,
+                        &exclusion.version_requirement,
+                        None,
+                        None,
+                    );
+                    if matching.is_empty() {
+                        continue;
+                    }
+                    matched_anywhere = true;
+                    let package_exclusions = excluded_ranks.entry(key).or_default();
+                    for rank in matching {
+                        package_exclusions.insert(rank, reason.clone());
+                    }
+                }
+                if !matched_anywhere {
                     return Err(format!(
                         "candidate exclusion {} {} matches no candidates",
                         exclusion.name, exclusion.version_requirement
                     ));
-                }
-                let reason = exclusion_reason(exclusion);
-                let package_exclusions = excluded_ranks.entry(exclusion.name.clone()).or_default();
-                for rank in matching {
-                    package_exclusions.insert(rank, reason.clone());
                 }
             }
         }
@@ -963,27 +982,18 @@ fn validate_stack_policy(policy: &Policy, stack: &StackPolicy) -> Result<(), Str
     Ok(())
 }
 
-fn matching_ranks(
+fn matching_ranks_for_key(
     candidates: &[Candidate],
     ranks: &HashMap<String, Vec<(u32, usize)>>,
-    name: &str,
+    key: &str,
     version_requirement: &str,
     toolchain: Option<&crate::domain::Toolchain>,
     versionsuffix: Option<&str>,
-) -> Result<Vec<u32>, String> {
-    // Policy says a name; the pool holds keys, qualified by toolchain for any
-    // name carried at several levels. A pin on such a package means every
-    // build of it, so all of its keys are searched.
-    let keys = keys_for_name(ranks, name);
-    if keys.is_empty() {
-        return Err(format!("stack policy references unknown package {name}"));
-    }
-    let ranked: Vec<(u32, usize)> = keys
-        .iter()
-        .filter_map(|key| ranks.get(key))
-        .flat_map(|ranked| ranked.iter().copied())
-        .collect();
-    Ok(ranked
+) -> Vec<u32> {
+    let Some(ranked) = ranks.get(key) else {
+        return Vec::new();
+    };
+    ranked
         .iter()
         .filter(|(_, index)| {
             let candidate = &candidates[*index];
@@ -1000,7 +1010,7 @@ fn matching_ranks(
                     .unwrap_or(true)
         })
         .map(|(rank, _)| *rank)
-        .collect())
+        .collect()
 }
 
 fn exclusion_reason(exclusion: &CandidateExclusion) -> String {

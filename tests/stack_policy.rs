@@ -176,6 +176,82 @@ fn locked_stack_pin_without_full_identity_constrains_resolvo_candidates() {
 }
 
 #[test]
+fn locked_stack_pin_constrains_every_interned_key() {
+    let foss = toolchain();
+    let gcccore = Toolchain {
+        name: "GCCcore".into(),
+        version: "15.2.0".into(),
+    };
+    let system = Toolchain {
+        name: "system".into(),
+        version: "system".into(),
+    };
+    let perl = |version: &str, toolchain: &Toolchain| Candidate {
+        name: "Perl".into(),
+        version: version.into(),
+        toolchain: toolchain.clone(),
+        versionsuffix: None,
+        easyconfig_path: format!("Perl-{version}-{}.eb", toolchain.identity_label()),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+        moduleclass: None,
+    };
+    let result = solve_with_stack_policy(
+        &[
+            perl("5.38.0", &system),
+            perl("5.42.0", &system),
+            perl("5.38.0", &gcccore),
+            perl("5.42.0", &gcccore),
+            Candidate {
+                name: "App".into(),
+                version: "1.0".into(),
+                toolchain: foss.clone(),
+                versionsuffix: None,
+                easyconfig_path: "App-1.0-foss-2026.1.eb".into(),
+                dependencies: vec![dep("Perl", "")],
+                builddependencies: Vec::new(),
+                exts_list: Vec::new(),
+                moduleclass: None,
+            },
+        ],
+        &policy(),
+        None,
+        &StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "eessi-test".into(),
+            toolchain: foss,
+            pins: vec![StackPin {
+                name: "Perl".into(),
+                version_requirement: "==5.38.0".into(),
+                toolchain: None,
+                versionsuffix: None,
+                mode: StackPinMode::Locked,
+                source: Some("eessi-test.cdx.json".into()),
+            }],
+            exclusions: Vec::new(),
+        },
+    )
+    .expect("locked Perl 5.38.0");
+    let perls: Vec<&Candidate> = result
+        .selected
+        .iter()
+        .filter(|candidate| candidate.name == "Perl")
+        .collect();
+    assert!(
+        !perls.is_empty(),
+        "Perl must be selected: {:#?}",
+        result.selected
+    );
+    for selected in perls {
+        assert_eq!(
+            selected.version, "5.38.0",
+            "every interned Perl key must honor the lock: {selected:?}"
+        );
+    }
+}
+
+#[test]
 fn exclusions_are_solver_inputs_and_retain_reasons() {
     let mut stack = stack_policy(StackPinMode::Preferred);
     stack.pins.clear();
