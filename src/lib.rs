@@ -305,18 +305,54 @@ fn restrict_baseline_to_generation(
     }
 }
 
-/// One newest candidate per package name, so a baseline lock has unique rows.
+/// Collapse leftover versions so a baseline lock has one row per
+/// (name, identity_label, suffix).
+///
+/// A generation carries some names at more than one level (Perl @ GCCcore and
+/// Perl @ SYSTEM) and some SYSTEM names at more than one version (binutils
+/// 2.40 building the GCCcore that builds 2.42). Those are different modules.
+/// Name-only newest would drop the extra identity or the older bootstrap
+/// sibling, and `require_upgrade` would then take a single remaining row.
 fn newest_candidate_per_name(cands: &[Candidate]) -> Vec<Candidate> {
-    let mut best: std::collections::BTreeMap<String, Candidate> = std::collections::BTreeMap::new();
+    let mut system_versions: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
+        std::collections::HashMap::new();
     for cand in cands {
-        match best.get(&cand.name) {
+        if cand.toolchain.is_system() {
+            system_versions
+                .entry(cand.name.clone())
+                .or_default()
+                .insert(cand.version.clone());
+        }
+    }
+    let system_multi: std::collections::HashSet<String> = system_versions
+        .into_iter()
+        .filter(|(_, versions)| versions.len() > 1)
+        .map(|(name, _)| name)
+        .collect();
+
+    let mut best: std::collections::BTreeMap<(String, String, String), Candidate> =
+        std::collections::BTreeMap::new();
+    let mut system_multi_rows = Vec::new();
+    for cand in cands {
+        if system_multi.contains(&cand.name) && cand.toolchain.is_system() {
+            system_multi_rows.push(cand.clone());
+            continue;
+        }
+        let key = (
+            cand.name.clone(),
+            cand.toolchain.identity_label(),
+            cand.versionsuffix.clone().unwrap_or_default(),
+        );
+        match best.get(&key) {
             Some(prev) if cmp_version(&cand.version, &prev.version) != Ordering::Greater => {}
             _ => {
-                best.insert(cand.name.clone(), cand.clone());
+                best.insert(key, cand.clone());
             }
         }
     }
-    best.into_values().collect()
+    let mut out: Vec<Candidate> = best.into_values().collect();
+    out.extend(system_multi_rows);
+    out
 }
 
 /// Write text to a path, creating the parent directory first.
@@ -538,8 +574,10 @@ pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
             .find(|c| c.toolchain.name == policy.toolchain.name)
             .map(|c| c.toolchain.clone())
             .unwrap_or_else(|| base_cands[0].toolchain.clone());
-        // One row per name: lock_from_candidates of every leftover version
-        // makes StackLock::package None and require_upgrade take the oldest.
+        // One row per (name, identity, suffix), except SYSTEM bootstrap pairs.
+        // Dumping every leftover version makes StackLock::package None and
+        // require_upgrade take the oldest; collapsing by name drops Perl at
+        // GCCcore vs SYSTEM and both SYSTEM binutils versions.
         let newest = newest_candidate_per_name(&base_cands);
         let mut lock = lock_from_candidates(
             &newest,
@@ -697,6 +735,52 @@ mod tests {
         assert_eq!(gromacs[0].version, "2024.4");
     }
 
+    #[test]
+    fn newest_candidate_per_name_keeps_perl_at_each_identity() {
+        let got = newest_candidate_per_name(&[
+            cand("Perl", "5.38.0", "GCCcore", "14.2.0"),
+            cand("Perl", "5.38.0", "system", "system"),
+            cand("Perl", "5.42.0", "GCCcore", "14.2.0"),
+        ]);
+        let perls: Vec<_> = got.iter().filter(|c| c.name == "Perl").collect();
+        assert_eq!(
+            perls.len(),
+            2,
+            "GCCcore and SYSTEM are different identities, got {perls:?}"
+        );
+        let gcc = perls
+            .iter()
+            .find(|c| c.toolchain.name == "GCCcore")
+            .expect("Perl @ GCCcore");
+        assert_eq!(gcc.version, "5.42.0");
+        let sys = perls
+            .iter()
+            .find(|c| c.toolchain.is_system())
+            .expect("Perl @ SYSTEM");
+        assert_eq!(sys.version, "5.38.0");
+    }
+
+    #[test]
+    fn newest_candidate_per_name_keeps_every_system_multi_binutils() {
+        let got = newest_candidate_per_name(&[
+            cand("binutils", "2.40", "system", "system"),
+            cand("binutils", "2.42", "system", "system"),
+            cand("binutils", "2.42", "GCCcore", "14.2.0"),
+        ]);
+        let mut sys: Vec<_> = got
+            .iter()
+            .filter(|c| c.name == "binutils" && c.toolchain.is_system())
+            .map(|c| c.version.as_str())
+            .collect();
+        sys.sort();
+        assert_eq!(sys, vec!["2.40", "2.42"]);
+        assert!(
+            got.iter()
+                .any(|c| c.name == "binutils" && c.toolchain.name == "GCCcore"),
+            "non-SYSTEM binutils still collapses by identity"
+        );
+    }
+
     /// foss-2025a has GROMACS 2024.1 and 2024.4; foss-2025b has only 2024.4.
     /// A dump of every leftover version makes require_upgrade use 2024.1 and
     /// lock 2024.4. A real lock (newest row per name) is unsatisfiable.
@@ -762,6 +846,168 @@ mod tests {
                 || msg.contains("newer than baseline"),
             "unexpected error: {err}"
         );
+    }
+
+    /// Write a foss-2025a tree with Perl at GCCcore and SYSTEM plus SYSTEM binutils.
+    ///
+    /// `unused_perl_gcccore` is the leftover newer Perl (wrong-generation
+    /// GCCcore-14.3.0, dropped by the generation filter). `universe_perl_gcccore`
+    /// is the competing newer Perl at this generation's GCCcore, so
+    /// prefer_installed has something to refuse.
+    fn write_perl_binutils_tree(
+        root: &std::path::Path,
+        unused_perl_gcccore: Option<&str>,
+        universe_perl_gcccore: Option<&str>,
+    ) {
+        let write = |rel: &str, body: &str| {
+            let path = root.join(rel);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(path, body).unwrap();
+        };
+        write(
+            "Perl-5.38.0-GCCcore-14.2.0.eb",
+            "name = 'Perl'\nversion = '5.38.0'\ntoolchain = {'name': 'GCCcore', 'version': '14.2.0'}\n",
+        );
+        write(
+            "Perl-5.38.0.eb",
+            "name = 'Perl'\nversion = '5.38.0'\ntoolchain = SYSTEM\n",
+        );
+        if let Some(version) = unused_perl_gcccore {
+            write(
+                &format!("Perl-{version}-GCCcore-14.3.0.eb"),
+                &format!(
+                    "name = 'Perl'\nversion = '{version}'\ntoolchain = {{'name': 'GCCcore', 'version': '14.3.0'}}\n"
+                ),
+            );
+        }
+        if let Some(version) = universe_perl_gcccore {
+            write(
+                &format!("Perl-{version}-GCCcore-14.2.0.eb"),
+                &format!(
+                    "name = 'Perl'\nversion = '{version}'\ntoolchain = {{'name': 'GCCcore', 'version': '14.2.0'}}\n"
+                ),
+            );
+        }
+        write(
+            "binutils-2.40.eb",
+            "name = 'binutils'\nversion = '2.40'\ntoolchain = SYSTEM\n",
+        );
+        write(
+            "binutils-2.42.eb",
+            "name = 'binutils'\nversion = '2.42'\ntoolchain = SYSTEM\n\
+             dependencies = [\n\
+                ('Perl', '5.38.0', '', SYSTEM),\n\
+                ('binutils', '2.40', '', SYSTEM),\n\
+             ]\n",
+        );
+        write(
+            "App-1.0-foss-2025a.eb",
+            "name = 'App'\nversion = '1.0'\ntoolchain = {'name': 'foss', 'version': '2025a'}\n\
+             dependencies = [\n\
+                ('Perl', '>=5.38.0', '', ('GCCcore', '14.2.0')),\n\
+                ('binutils', '2.42', '', SYSTEM),\n\
+             ]\n",
+        );
+    }
+
+    /// Baseline leftover after the generation filter is Perl 5.38 at GCCcore
+    /// and at SYSTEM. A name-only collapse would drop one identity; with both
+    /// rows in the lock, prefer_installed keeps 5.38 at both levels even when
+    /// the universe also has a newer unused Perl at this GCCcore.
+    #[test]
+    fn solve_prefer_installed_keeps_perl_5_38_at_both_levels() {
+        let tmp = tempfile::tempdir().unwrap();
+        let universe = tmp.path().join("universe");
+        let baseline = tmp.path().join("baseline");
+        write_perl_binutils_tree(&universe, None, Some("5.42.0"));
+        write_perl_binutils_tree(&baseline, Some("5.42.0"), None);
+
+        let policy = tmp.path().join("policy.json");
+        std::fs::write(
+            &policy,
+            r#"{
+  "toolchain": { "name": "foss", "version": "2025a" },
+  "roots": ["App"],
+  "pins": [],
+  "forbid": [],
+  "objective": "prefer_newer",
+  "prefer_installed": true
+}
+"#,
+        )
+        .unwrap();
+
+        let lock = solve_from_easyconfigs(
+            &[universe.as_path()],
+            &policy,
+            Some(&baseline),
+            &tmp.path().join("lock.json"),
+            None,
+        )
+        .expect("prefer_installed must keep installed Perl 5.38 at both levels");
+
+        let perls: Vec<&LockPackage> = lock.packages.iter().filter(|p| p.name == "Perl").collect();
+        assert!(
+            perls
+                .iter()
+                .any(|p| p.version == "5.38.0" && p.toolchain.name == "GCCcore"),
+            "Perl @ GCCcore must stay 5.38.0, got {perls:?}"
+        );
+        assert!(
+            perls
+                .iter()
+                .any(|p| p.version == "5.38.0" && p.toolchain.is_system()),
+            "Perl @ SYSTEM must stay 5.38.0, got {perls:?}"
+        );
+        assert!(
+            perls.iter().all(|p| p.version == "5.38.0"),
+            "no Perl row may move off 5.38.0, got {perls:?}"
+        );
+    }
+
+    /// Both SYSTEM binutils bootstrap versions must remain in the baseline
+    /// lock. Name-only newest leaves only 2.42, and require_upgrade then
+    /// asks for something newer than 2.42.
+    #[test]
+    fn solve_require_upgrade_binutils_system_multi_still_constructs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ecs = tmp.path().join("easyconfigs");
+        write_perl_binutils_tree(&ecs, Some("5.42.0"), None);
+
+        let policy = tmp.path().join("policy.json");
+        std::fs::write(
+            &policy,
+            r#"{
+  "toolchain": { "name": "foss", "version": "2025a" },
+  "roots": ["App"],
+  "pins": [],
+  "forbid": [],
+  "objective": "prefer_newer",
+  "require_upgrade": { "name": "binutils", "relative_to_baseline": true }
+}
+"#,
+        )
+        .unwrap();
+
+        let lock = solve_from_easyconfigs(
+            &[ecs.as_path()],
+            &policy,
+            Some(&ecs),
+            &tmp.path().join("lock.json"),
+            None,
+        )
+        .expect("require_upgrade binutils must still construct with both SYSTEM versions");
+
+        let mut binutils: Vec<&str> = lock
+            .packages
+            .iter()
+            .filter(|p| p.name == "binutils")
+            .map(|p| p.version.as_str())
+            .collect();
+        binutils.sort();
+        assert_eq!(binutils, vec!["2.40", "2.42"]);
     }
 
     /// Full solve-with-baseline path on a tree with three foss generations.
