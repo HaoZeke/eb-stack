@@ -403,7 +403,12 @@ impl EbProvider {
                 cmp_version(&candidates[a].version, &candidates[b].version).then_with(|| {
                     let sa = candidates[a].versionsuffix.as_deref().unwrap_or("");
                     let sb = candidates[b].versionsuffix.as_deref().unwrap_or("");
-                    sa.cmp(sb)
+                    // Same version: unsuffixed is not older than CUDA.
+                    match (sa.is_empty(), sb.is_empty()) {
+                        (true, false) => std::cmp::Ordering::Greater,
+                        (false, true) => std::cmp::Ordering::Less,
+                        _ => sa.cmp(sb),
+                    }
                 })
             });
         }
@@ -1637,6 +1642,23 @@ mod tests {
             lib.versionsuffix
         );
         assert_eq!(lib.easyconfig_path, "Lib-1.0.eb");
+    }
+
+    #[test]
+    fn a_root_does_not_prefer_cuda_at_the_same_version() {
+        let candidates = vec![
+            cand("App", "1.0", None, "App-1.0.eb", vec![]),
+            cand("App", "1.0", Some("-CUDA-12.8"), "App-1.0-CUDA.eb", vec![]),
+        ];
+        let selected =
+            solve_with_resolvo(&candidates, &policy(vec!["App"], vec![]), None).expect("solve");
+        let app = selected.iter().find(|c| c.name == "App").expect("App");
+        assert_eq!(app.easyconfig_path, "App-1.0.eb");
+        assert!(
+            app.versionsuffix.is_none() || app.versionsuffix.as_deref() == Some(""),
+            "CUDA is not a newer 1.0: {:?}",
+            app.versionsuffix
+        );
     }
 
     #[test]
