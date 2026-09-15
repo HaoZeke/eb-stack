@@ -1425,21 +1425,30 @@ fn source_archive_url(source: &SourceArtifact) -> Option<String> {
 /// scp-style and ssh/git URLs are accepted as remotes, but the archive
 /// GitHub serves is only at https://github.com/{owner}/{repo}/archive/...
 fn github_https_repo(git: &str) -> Option<String> {
-    if !git_remote_is_github(git) {
+    if !git_remote_is_github(git) || github_remote_host(git)?.as_str() != "github.com" {
         return None;
     }
     let trimmed = git.trim();
     let lower = trimmed.to_ascii_lowercase();
-    let offset = if lower.starts_with("git@github.com:") {
-        "git@github.com:".len()
+    let path = if lower.starts_with("git@github.com:") {
+        &trimmed["git@github.com:".len()..]
     } else if let Some(idx) = lower.find("github.com/") {
-        idx + "github.com/".len()
+        &trimmed[idx + "github.com/".len()..]
     } else if let Some(idx) = lower.find("github.com:") {
-        idx + "github.com:".len()
+        let after = &trimmed[idx + "github.com:".len()..];
+        match after.find('/') {
+            Some(slash)
+                if after[..slash]
+                    .chars()
+                    .all(|character| character.is_ascii_digit()) =>
+            {
+                &after[slash + 1..]
+            }
+            _ => after,
+        }
     } else {
         return None;
     };
-    let path = &trimmed[offset..];
     let path = if path.to_ascii_lowercase().ends_with(".git") {
         &path[..path.len() - 4]
     } else {
@@ -1451,11 +1460,7 @@ fn github_https_repo(git: &str) -> Option<String> {
     Some(format!("https://github.com/{owner}/{repo}"))
 }
 
-/// GitHub's `/archive/refs/tags/` URL is only defined for github.com remotes.
-///
-/// A substring match would invent that path for `gitlab.com/org/github.com`
-/// and for `notgithub.com`. The host is the only thing that certifies it.
-fn git_remote_is_github(git: &str) -> bool {
+fn github_remote_host(git: &str) -> Option<String> {
     let lower = git.trim().to_ascii_lowercase();
     let host_and_path = lower
         .split_once("://")
@@ -1464,10 +1469,19 @@ fn git_remote_is_github(git: &str) -> bool {
     let host = host_and_path.split('/').next().unwrap_or("");
     let host = host.rsplit_once('@').map(|(_, rest)| rest).unwrap_or(host);
     let host = host.split(':').next().unwrap_or(host);
-    host == "github.com"
-        || host.ends_with(".github.com")
-        || host == "githubusercontent.com"
-        || host.ends_with(".githubusercontent.com")
+    (!host.is_empty()).then(|| host.to_string())
+}
+
+/// GitHub's `/archive/refs/tags/` URL is only defined for github.com remotes.
+///
+/// A substring match would invent that path for `gitlab.com/org/github.com`
+/// and for `notgithub.com`. The host is the only thing that certifies it.
+fn git_remote_is_github(git: &str) -> bool {
+    match github_remote_host(git).as_deref() {
+        Some("github.com") | Some("githubusercontent.com") => true,
+        Some(host) => host.ends_with(".github.com") || host.ends_with(".githubusercontent.com"),
+        None => false,
+    }
 }
 
 /// The planned BOM as JSON.
