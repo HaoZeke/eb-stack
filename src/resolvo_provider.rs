@@ -454,13 +454,16 @@ impl EbProvider {
                 };
                 let allowed: Vec<u32> = ranked
                     .iter()
-                    .filter(|(_, idx)| matches_req(&candidates[*idx].version, &pin.version_req))
+                    .filter(|(_, idx)| {
+                        candidate_matches_depreq(&candidates[*idx], &pin.version_req)
+                    })
                     .map(|(r, _)| *r)
                     .collect();
-                if allowed.is_empty() {
-                    continue;
+                // A key with no matching rank is still pinned. An empty
+                // allow-list makes it unselectable, same as a Locked stack pin.
+                if !allowed.is_empty() {
+                    matched_anywhere = true;
                 }
-                matched_anywhere = true;
                 pin_ranks.insert(key.clone(), allowed);
             }
             if !matched_anywhere {
@@ -625,9 +628,10 @@ impl EbProvider {
 
         // Prefer what the baseline already installed, when the policy asks for
         // it. This runs after every hard constraint is known, so it can only
-        // choose between candidates that were all valid anyway: a pin, an
-        // exclusion or a require_upgrade on the same package wins, and a
-        // baseline version that is no longer a candidate is simply not found.
+        // choose between candidates that were all valid anyway: a pin stays a
+        // hard allow-set, an exclusion or a require_upgrade on the same
+        // package wins, and a baseline version that is no longer a candidate
+        // is simply not found.
         //
         // Without this the objective is newest-wins for every package at once,
         // which plans a new generation well and maintains one badly: a package
@@ -639,7 +643,6 @@ impl EbProvider {
                     for key in keys_for_name(&keys_by_name, &installed.name) {
                         if favored_ranks.contains_key(&key)
                             || locked_ranks.contains_key(&key)
-                            || pin_ranks.contains_key(&key)
                             || min_rank_exclusive.contains_key(&key)
                         {
                             continue;
@@ -665,6 +668,12 @@ impl EbProvider {
                             if excluded_ranks
                                 .get(&key)
                                 .is_some_and(|excluded| excluded.contains_key(&rank))
+                            {
+                                continue;
+                            }
+                            if pin_ranks
+                                .get(&key)
+                                .is_some_and(|allowed| !allowed.contains(&rank))
                             {
                                 continue;
                             }
@@ -1076,6 +1085,30 @@ fn validate_stack_policy(policy: &Policy, stack: &StackPolicy) -> Result<(), Str
         ));
     }
     Ok(())
+}
+
+/// Whether a candidate satisfies a DepReq-spelled version requirement.
+///
+/// A pin and a dependency use the same three forms: the version, the version
+/// plus versionsuffix, and the EasyBuild module identity. Comparing only
+/// `candidate.version` rejects `==25.3-CUDA-12.8.0` for an NVHPC whose version
+/// field is `25.3`.
+fn candidate_matches_depreq(candidate: &Candidate, version_req: &str) -> bool {
+    let suffix = candidate.versionsuffix.as_deref().unwrap_or("");
+    if matches_req(&candidate.version, version_req)
+        || (!suffix.is_empty()
+            && matches_req(&format!("{}{suffix}", candidate.version), version_req))
+    {
+        return true;
+    }
+    if crate::hierarchy::is_system_toolchain(&candidate.toolchain) {
+        return false;
+    }
+    let module = format!(
+        "{}-{}-{}",
+        candidate.version, candidate.toolchain.name, candidate.toolchain.version
+    );
+    matches_req(&module, version_req) || matches_req(&format!("{module}{suffix}"), version_req)
 }
 
 fn matching_ranks_for_key(
@@ -1521,7 +1554,9 @@ fn solve_feasibility_scoped(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{DepReq, ExtEntry, LockPackage, RequireUpgrade, SolverMeta, Toolchain};
+    use crate::domain::{
+        DepReq, ExtEntry, LockPackage, Pin, RequireUpgrade, SolverMeta, Toolchain,
+    };
 
     fn tc() -> Toolchain {
         Toolchain {
@@ -2286,5 +2321,128 @@ mod tests {
             !low.contains("cmake"),
             "must not report CMake as missing: {error}"
         );
+    }
+
+    #[test]
+    fn a_policy_pin_constrains_every_interned_key() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let gcccore = Toolchain {
+            name: "GCCcore".into(),
+            version: "14.3.0".into(),
+        };
+        let at = |name: &str, version: &str, toolchain: &Toolchain| Candidate {
+            name: name.into(),
+            version: version.into(),
+            toolchain: toolchain.clone(),
+            versionsuffix: None,
+            easyconfig_path: format!("{name}-{version}-{}.eb", toolchain.label()),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+            moduleclass: None,
+        };
+        let candidates = vec![
+            at("CMake", "3.31.0", &system),
+            at("CMake", "3.29.3", &gcccore),
+            cand(
+                "App",
+                "1.0",
+                None,
+                "App-1.0.eb",
+                vec![DepReq {
+                    name: "CMake".into(),
+                    version_req: "==3.31.0".into(),
+                    versionsuffix: None,
+                    toolchain: None,
+                }],
+            ),
+        ];
+        let mut pol = policy(vec!["App"], vec![]);
+        pol.pins = vec![Pin {
+            name: "CMake".into(),
+            version_req: "==3.29.3".into(),
+        }];
+        let err = solve_with_resolvo(&candidates, &pol, None)
+            .expect_err("SYSTEM CMake 3.31.0 must not escape a global 3.29.3 pin");
+        let low = err.to_lowercase();
+        assert!(
+            low.contains("unsatisfiable") || low.contains("cmake"),
+            "expected unsat naming CMake, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_policy_pin_uses_depreq_spelling() {
+        let candidates = vec![
+            cand(
+                "NVHPC",
+                "25.3",
+                Some("-CUDA-12.8.0"),
+                "NVHPC-25.3-CUDA-12.8.0.eb",
+                vec![],
+            ),
+            cand(
+                "App",
+                "1.0",
+                None,
+                "App-1.0.eb",
+                vec![DepReq {
+                    name: "NVHPC".into(),
+                    version_req: "==25.3-CUDA-12.8.0".into(),
+                    versionsuffix: None,
+                    toolchain: None,
+                }],
+            ),
+        ];
+        let mut pol = policy(vec!["App"], vec![]);
+        pol.pins = vec![Pin {
+            name: "NVHPC".into(),
+            version_req: "==25.3-CUDA-12.8.0".into(),
+        }];
+        let selected = solve_with_resolvo(&candidates, &pol, None)
+            .expect("joined-module pin must admit the CUDA NVHPC");
+        let nvhpc = selected
+            .iter()
+            .find(|candidate| candidate.name == "NVHPC")
+            .expect("NVHPC");
+        assert_eq!(nvhpc.version, "25.3");
+        assert_eq!(nvhpc.versionsuffix.as_deref(), Some("-CUDA-12.8.0"));
+    }
+
+    #[test]
+    fn prefer_installed_still_applies_under_a_range_pin() {
+        let candidates = vec![
+            cand("Lib", "1.2", None, "Lib-1.2.eb", vec![]),
+            cand("Lib", "1.3", None, "Lib-1.3.eb", vec![]),
+            cand(
+                "App",
+                "1.0",
+                None,
+                "App-1.0.eb",
+                vec![DepReq {
+                    name: "Lib".into(),
+                    version_req: ">=1.2".into(),
+                    versionsuffix: None,
+                    toolchain: None,
+                }],
+            ),
+        ];
+        let mut pol = policy(vec!["App"], vec![]);
+        pol.prefer_installed = true;
+        pol.pins = vec![Pin {
+            name: "Lib".into(),
+            version_req: ">=1.2".into(),
+        }];
+        let baseline = baseline_lock(vec![lock_pkg("Lib", "1.2")]);
+        let selected = solve_with_resolvo(&candidates, &pol, Some(&baseline))
+            .expect("range pin must still prefer the installed Lib");
+        let lib = selected
+            .iter()
+            .find(|candidate| candidate.name == "Lib")
+            .expect("Lib");
+        assert_eq!(lib.version, "1.2");
     }
 }

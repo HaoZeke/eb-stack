@@ -1117,6 +1117,79 @@ mod prefer_installed_tests {
             "SYSTEM dummy/empty must match system/system"
         );
     }
+
+    #[test]
+    fn prefer_installed_still_applies_under_a_range_pin() {
+        let foss = Toolchain {
+            name: "foss".into(),
+            version: "2025b".into(),
+        };
+        let lib = |version: &str| Candidate {
+            name: "Lib".into(),
+            version: version.into(),
+            toolchain: foss.clone(),
+            versionsuffix: None,
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            easyconfig_path: format!("Lib-{version}.eb"),
+            exts_list: Vec::new(),
+            moduleclass: None,
+        };
+        let universe = Universe {
+            toolchain: foss.clone(),
+            generation_label: Some("foss-2025b".into()),
+            candidates: vec![
+                lib("1.2"),
+                lib("1.3"),
+                Candidate {
+                    name: "App".into(),
+                    version: "1.0".into(),
+                    toolchain: foss.clone(),
+                    versionsuffix: None,
+                    dependencies: vec![DepReq {
+                        name: "Lib".into(),
+                        version_req: ">=1.2".into(),
+                        toolchain: None,
+                        versionsuffix: None,
+                    }],
+                    builddependencies: Vec::new(),
+                    easyconfig_path: "App-1.0.eb".into(),
+                    exts_list: Vec::new(),
+                    moduleclass: None,
+                },
+            ],
+        };
+        let installed = StackLock {
+            schema_version: STACK_LOCK_SCHEMA_VERSION,
+            toolchain: foss.clone(),
+            generation_label: Some("installed".into()),
+            packages: vec![LockPackage {
+                name: "Lib".into(),
+                version: "1.2".into(),
+                toolchain: foss.clone(),
+                versionsuffix: None,
+                easyconfig_path: "Lib-1.2.eb".into(),
+            }],
+            solver: SolverMeta {
+                engine: "eb_parse".into(),
+                engine_version: "0".into(),
+                timestamp: "2026-08-12T00:00:00Z".into(),
+            },
+        };
+        let mut pol = policy(true);
+        pol.toolchain = foss;
+        pol.roots = vec!["App".into()];
+        pol.pins = vec![Pin {
+            name: "Lib".into(),
+            version_req: ">=1.2".into(),
+        }];
+        let lock = select_stack(&universe, &pol, Some(&installed)).expect("solve");
+        assert_eq!(
+            lock.package("Lib").unwrap().version,
+            "1.2",
+            "a range pin must still prefer the installed Lib"
+        );
+    }
 }
 
 #[cfg(test)]
