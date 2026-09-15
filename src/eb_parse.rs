@@ -1011,14 +1011,18 @@ impl<'src, 'env> Parser<'src, 'env> {
     /// conversion is an error rather than a guess, because a silently
     /// mis-rendered version is worse than a recipe that is skipped.
     fn parse_fstring(&mut self) -> Result<Value, String> {
+        let mut raw = false;
         while matches!(self.peek(), Some(b'f' | b'F' | b'r' | b'R')) {
+            if matches!(self.peek(), Some(b'r' | b'R')) {
+                raw = true;
+            }
             self.pos += 1;
         }
-        let Value::Str(raw) = self.parse_string()? else {
+        let Value::Str(body) = self.parse_string_kind(raw)? else {
             return Err(self.err("f-string body is not a string"));
         };
         let mut out = String::new();
-        let mut rest = raw.as_str();
+        let mut rest = body.as_str();
         while let Some(at) = rest.find(['{', '}']) {
             let (before, tail) = rest.split_at(at);
             out.push_str(before);
@@ -3306,6 +3310,26 @@ mod tests {
                    homepage = rf'https://{name}.example'\n";
         let parsed = resolve_easyconfig_str(src).expect("parse");
         assert_eq!(parsed.homepage.as_deref(), Some("https://App.example"));
+    }
+
+    #[test]
+    fn an_rf_string_keeps_backslash_escapes() {
+        let src = "name = 'X'\nversion = '1'\ntoolchain = SYSTEM\n\
+                   configopts = rf'C:\\new'\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(
+            parsed.configopts.as_deref(),
+            Some(r"C:\new"),
+            "rf \\n must stay two characters"
+        );
+        let src = "name = 'X'\nversion = '1'\ntoolchain = SYSTEM\n\
+                   configopts = fr'C:\\new'\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(
+            parsed.configopts.as_deref(),
+            Some(r"C:\new"),
+            "fr \\n must stay two characters"
+        );
     }
 
     #[test]
