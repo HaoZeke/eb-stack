@@ -720,18 +720,11 @@ fn render_sources(
         .iter()
         .map(|(source, _)| *source)
         .chain(resolved.iter().map(|(source, _)| *source))
-        .map(|source| {
-            source
-                .sha256
-                .as_deref()
-                .map(|checksum| format!("'{}'", escape_single(checksum)))
-                .unwrap_or_else(|| "''".into())
-        })
+        .map(|source| checksum_slot(source.sha256.as_deref()))
         .chain(
             patches
                 .iter()
-                .filter_map(|patch| patch.sha256.as_ref())
-                .map(|checksum| format!("'{}'", escape_single(checksum))),
+                .map(|patch| checksum_slot(patch.sha256.as_deref())),
         )
         .collect::<Vec<_>>();
     let checksum_lines = format!("checksums = {}", render_multiline_list(&checksums));
@@ -1045,15 +1038,21 @@ fn is_zip_archive(filename: &str) -> bool {
     filename.to_ascii_lowercase().ends_with(".zip")
 }
 
+fn checksum_slot(digest: Option<&str>) -> String {
+    match digest {
+        Some(checksum) => format!("'{}'", escape_single(checksum)),
+        None => "None".into(),
+    }
+}
+
 fn render_patch_checksums(patches: &[crate::package::PatchArtifact]) -> String {
-    let checksums = patches
-        .iter()
-        .filter_map(|patch| patch.sha256.as_ref())
-        .map(|checksum| format!("'{}'", escape_single(checksum)))
-        .collect::<Vec<_>>();
-    if checksums.is_empty() {
+    if patches.is_empty() {
         return String::new();
     }
+    let checksums = patches
+        .iter()
+        .map(|patch| checksum_slot(patch.sha256.as_deref()))
+        .collect::<Vec<_>>();
     format!("checksums = {}\n", render_multiline_list(&checksums))
 }
 
@@ -1761,10 +1760,33 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let block = render_sources("Pkg", "1.0", &sources, &[], None);
+        let patches = vec![
+            crate::package::PatchArtifact {
+                filename: "first.patch".into(),
+                sha256: None,
+                url: None,
+                source: None,
+                condition: crate::package::ConditionExpr::Always,
+                resolved_source: None,
+            },
+            crate::package::PatchArtifact {
+                filename: "second.patch".into(),
+                sha256: Some(
+                    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".into(),
+                ),
+                url: None,
+                source: None,
+                condition: crate::package::ConditionExpr::Always,
+                resolved_source: None,
+            },
+        ];
+        let block = render_sources("Pkg", "1.0", &sources, &patches, None);
         assert!(
-            block.checksums.contains("''") && block.checksums.contains("bbbbbbbb"),
-            "missing first sha256 must keep its slot:\n{}",
+            block.checksums.contains("None")
+                && block.checksums.contains("bbbbbbbb")
+                && block.checksums.contains("dddddddd")
+                && !block.checksums.contains("''"),
+            "missing slots must be None, not empty quotes:\n{}",
             block.checksums
         );
     }

@@ -102,6 +102,8 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A missing source or patch digest is EasyBuild `None`, not `''` and
+  not a dropped slot, so later checksums stay on the right file.
 - An Always requirement named `FFTW` no longer hijacks a virtual `fftw`
   row. Self-`inherits = "default"` keeps the default profile instead of
   turning it off.
