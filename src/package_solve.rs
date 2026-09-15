@@ -167,24 +167,34 @@ fn candidate_matches_version_req(
     version_req: &str,
     versionsuffix: Option<&str>,
 ) -> bool {
-    let suffix = candidate.versionsuffix.as_deref().unwrap_or("");
     if let Some(want) = versionsuffix {
-        if suffix != want {
+        if candidate.versionsuffix.as_deref().unwrap_or("") != want {
             return false;
         }
     }
-    let with_suffix = format!("{}{suffix}", candidate.version);
-    let with_toolchain = if is_system_toolchain(&candidate.toolchain) {
-        with_suffix.clone()
-    } else {
-        format!(
-            "{}-{}-{}{suffix}",
-            candidate.version, candidate.toolchain.name, candidate.toolchain.version
-        )
-    };
-    matches_req(&candidate.version, version_req)
-        || matches_req(&with_suffix, version_req)
-        || matches_req(&with_toolchain, version_req)
+    candidate_matches_any_spelling(candidate, version_req)
+}
+
+/// Version, version+suffix, module without suffix, and module with suffix.
+///
+/// A CUDA pin stores `==5.0.3-GCC-13.3.0` in the version field and
+/// `-CUDA-12.6.0` separately. The module spelling without the suffix must
+/// still match.
+fn candidate_matches_any_spelling(candidate: &Candidate, version_req: &str) -> bool {
+    let suffix = candidate.versionsuffix.as_deref().unwrap_or("");
+    if matches_req(&candidate.version, version_req)
+        || matches_req(&format!("{}{suffix}", candidate.version), version_req)
+    {
+        return true;
+    }
+    if is_system_toolchain(&candidate.toolchain) {
+        return false;
+    }
+    let module = format!(
+        "{}-{}-{}",
+        candidate.version, candidate.toolchain.name, candidate.toolchain.version
+    );
+    matches_req(&module, version_req) || matches_req(&format!("{module}{suffix}"), version_req)
 }
 
 /// Select dependencies for one profile against a candidate set.
@@ -732,7 +742,7 @@ fn dependency_candidate_matches(
     parent_hierarchy: Option<&ToolchainHierarchy>,
 ) -> bool {
     if candidate.name != dependency.name
-        || !matches_req(&candidate.version, &dependency.version_req)
+        || !candidate_matches_any_spelling(candidate, &dependency.version_req)
     {
         return false;
     }
@@ -829,10 +839,11 @@ fn apply_generation_consensus_pins(
 #[cfg(test)]
 mod tests {
     use super::{
-        admit_named_dependency_toolchains, apply_generation_consensus_pins, match_robot_name,
+        admit_named_dependency_toolchains, apply_generation_consensus_pins,
+        candidate_matches_version_req, dependency_candidate_matches, match_robot_name,
         normalize_requirement,
     };
-    use crate::domain::{Candidate, Toolchain};
+    use crate::domain::{Candidate, DepReq, Toolchain};
     use crate::hierarchy::ToolchainHierarchy;
     use crate::package::{ConditionExpr, DependencyIntent, DependencyRole};
     use crate::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
@@ -938,6 +949,48 @@ mod tests {
         admit_named_dependency_toolchains(&[cuda.clone(), plain], &mut admitted, &[dep]);
         assert_eq!(admitted.len(), 1, "{admitted:?}");
         assert_eq!(admitted[0].versionsuffix.as_deref(), Some("-CUDA-12.6.0"));
+    }
+
+    #[test]
+    fn hole_check_accepts_a_module_form_plus_cuda_suffix() {
+        let cuda = Candidate {
+            versionsuffix: Some("-CUDA-12.6.0".into()),
+            ..cand("OpenMPI", "5.0.3", "GCC", "13.3.0")
+        };
+        assert!(candidate_matches_version_req(
+            &cuda,
+            "==5.0.3-GCC-13.3.0",
+            Some("-CUDA-12.6.0"),
+        ));
+        assert!(!candidate_matches_version_req(
+            &cuda,
+            "==5.0.3-GCC-13.3.0",
+            Some(""),
+        ));
+    }
+
+    #[test]
+    fn pin_closure_matches_a_module_form_version_req() {
+        let omp = cand("OpenMPI", "5.0.3", "GCC", "13.3.0");
+        let dep = DepReq {
+            name: "OpenMPI".into(),
+            version_req: "==5.0.3-GCC-13.3.0".into(),
+            versionsuffix: None,
+            toolchain: None,
+        };
+        let hierarchy = ToolchainHierarchy {
+            parent: Toolchain {
+                name: "GCC".into(),
+                version: "13.3.0".into(),
+            },
+            members: vec![Toolchain {
+                name: "GCC".into(),
+                version: "13.3.0".into(),
+            }],
+        };
+        assert!(dependency_candidate_matches(&omp, &dep, Some(&hierarchy)));
+        let foss = cand("OpenMPI", "5.0.3", "foss", "2023b");
+        assert!(!dependency_candidate_matches(&foss, &dep, Some(&hierarchy)));
     }
 
     #[test]
