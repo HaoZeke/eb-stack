@@ -430,8 +430,70 @@ fn choose<'a>(admissible: &[&'a Candidate], choice: Choice) -> Option<&'a Candid
         };
         // Ties break on the whole key so the answer cannot depend on the
         // order the tree happened to be read in.
-        ordered.then_with(|| ModuleKey::of(b).cmp(&ModuleKey::of(a)))
+        ordered.then_with(|| cmp_candidate_identity(b, a))
     })
+}
+
+fn cmp_candidate_identity(a: &Candidate, b: &Candidate) -> std::cmp::Ordering {
+    a.name
+        .cmp(&b.name)
+        .then_with(|| a.version.cmp(&b.version))
+        .then_with(|| cmp_identity_toolchain(&a.toolchain, &b.toolchain))
+        .then_with(|| {
+            a.versionsuffix
+                .as_deref()
+                .unwrap_or("")
+                .cmp(b.versionsuffix.as_deref().unwrap_or(""))
+        })
+}
+
+fn cmp_identity_toolchain(
+    a: &crate::domain::Toolchain,
+    b: &crate::domain::Toolchain,
+) -> std::cmp::Ordering {
+    cmp_identity_label_parts(
+        a.is_system(),
+        &a.name,
+        &a.version,
+        b.is_system(),
+        &b.name,
+        &b.version,
+    )
+}
+
+fn cmp_identity_label_parts(
+    a_system: bool,
+    a_name: &str,
+    a_version: &str,
+    b_system: bool,
+    b_name: &str,
+    b_version: &str,
+) -> std::cmp::Ordering {
+    let a = if a_system {
+        ["system", "", ""]
+    } else {
+        [a_name, "-", a_version]
+    };
+    let b = if b_system {
+        ["system", "", ""]
+    } else {
+        [b_name, "-", b_version]
+    };
+    let mut left = a.into_iter().flat_map(str::chars);
+    let mut right = b.into_iter().flat_map(str::chars);
+    loop {
+        match (left.next(), right.next()) {
+            (Some(x), Some(y)) => {
+                let order = x.cmp(&y);
+                if order != std::cmp::Ordering::Equal {
+                    return order;
+                }
+            }
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+        }
+    }
 }
 
 fn candidates_by_key(
