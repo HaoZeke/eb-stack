@@ -41,10 +41,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
             roles: dependency_roles(&dependency.role),
             condition: dependency.condition.clone(),
             virtual_capability: foreign_virtual_capability(&dependency.name),
-            solver_excluded: matches!(
-                dependency.condition,
-                crate::package::ConditionExpr::Opaque { .. }
-            ),
+            solver_excluded: dependency.condition.is_undecidable(),
             provenance: dependency.provenance.clone(),
         })
         .collect();

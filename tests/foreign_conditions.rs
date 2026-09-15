@@ -195,6 +195,71 @@ fn conda_classic_selectors_control_cuda_dependencies() {
 }
 
 #[test]
+fn conda_not_py3k_is_not_an_always_on_dependency() {
+    let recipe = parse_foreign_str(
+        ForeignFormat::CondaForge,
+        r#"
+package:
+  name: selector-fixture
+  version: 1.0
+source:
+  url: https://example.invalid/selector-fixture-1.0.tar.gz
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+requirements:
+  run:
+    - python
+    - futures  # [not py3k]
+"#,
+    )
+    .expect("parse conda not-py3k selector");
+    let futures = recipe
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "futures")
+        .expect("futures dependency");
+    assert!(
+        !futures.condition.evaluate(&ConditionContext::default()),
+        "not py3k must not admit under an empty context: {:?}",
+        futures.condition
+    );
+
+    let plan = eb_stack::package_plan_from_foreign(
+        &recipe,
+        &eb_stack::Toolchain {
+            name: "foss".into(),
+            version: "2025a".into(),
+        },
+    );
+    let futures_intent = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "futures")
+        .expect("futures intent");
+    assert!(
+        futures_intent.solver_excluded,
+        "undecidable not-py3k must be solver-excluded"
+    );
+    let materialized = eb_stack::package::materialize_profile(
+        &plan,
+        "default",
+        &eb_stack::package::ProfileEnvironment::default(),
+    )
+    .expect("materialize default");
+    assert!(
+        materialized
+            .dependencies
+            .iter()
+            .all(|dependency| dependency.name != "futures"),
+        "not py3k must not become an always-on dependency: {:?}",
+        materialized
+            .dependencies
+            .iter()
+            .map(|dependency| &dependency.name)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn unconditional_dependencies_use_always_condition() {
     let recipe = parse_foreign_path(
         &fixture("fixtures/foreign_ingest/spack_qmcpack/package.py"),

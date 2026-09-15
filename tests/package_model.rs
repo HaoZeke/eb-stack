@@ -186,6 +186,23 @@ fn conditions_evaluate_against_materialized_profile_and_stack() {
 }
 
 #[test]
+fn not_opaque_is_not_true() {
+    let opaque = ConditionExpr::Opaque {
+        source: "py3k".into(),
+    };
+    let not_opaque = ConditionExpr::Not(Box::new(opaque.clone()));
+    let context = ConditionContext::default();
+    assert!(!opaque.evaluate(&context));
+    assert!(
+        !not_opaque.evaluate(&context),
+        "Not(Opaque) must stay unknown, not become Always"
+    );
+    assert!(!ConditionExpr::Not(Box::new(not_opaque.clone())).evaluate(&context));
+    assert!(ConditionExpr::Any(vec![ConditionExpr::Always, opaque.clone()]).evaluate(&context));
+    assert!(!ConditionExpr::All(vec![ConditionExpr::Always, opaque]).evaluate(&context));
+}
+
+#[test]
 fn canonical_plan_writes_typed_cyclonedx_components() {
     let sbom = package_plan_to_cyclonedx(&qmcpack_plan()).expect("typed CycloneDX SBOM");
     assert_eq!(sbom["bomFormat"], "CycloneDX");
