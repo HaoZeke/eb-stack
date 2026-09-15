@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use thiserror::Error;
 
 /// Schema version of a target configuration layer.
@@ -688,10 +688,12 @@ impl CommandPlan {
     /// Run the command and capture its output.
     ///
     /// Executed without a shell, so nothing in the plan is re-parsed for
-    /// metacharacters.
+    /// metacharacters. Stdin is `/dev/null` so an SSH-routed probe cannot
+    /// consume a stdio JSON-RPC stream.
     pub fn execute(&self) -> Result<std::process::Output, TargetError> {
         Command::new(&self.program)
             .args(&self.args)
+            .stdin(Stdio::null())
             .output()
             .map_err(|error| TargetError::Spawn(self.program.clone(), error))
     }
@@ -704,7 +706,11 @@ impl CommandPlan {
 pub fn doctor_target(target: &BuildTarget) -> Result<TargetDoctorReport, TargetError> {
     let transport = target.route_tokens(vec!["true".into()], false);
     let executor = target.route_tokens(vec!["true".into()], true);
-    let runtime = target.route_tokens(target.runtime_tokens(vec!["true".into()]), true);
+    // Rocky ENTRYPOINT passthroughs only env/eb; bare `true` becomes `eb true`.
+    let runtime = target.route_tokens(
+        target.runtime_tokens(vec!["env".into(), "true".into()]),
+        true,
+    );
     let easybuild = target.route_tokens(
         target.runtime_tokens(vec![target.easybuild.command.clone(), "--version".into()]),
         true,
@@ -735,15 +741,25 @@ pub fn doctor_target(target: &BuildTarget) -> Result<TargetDoctorReport, TargetE
 }
 
 fn run_doctor_check(layer: &str, command: CommandPlan) -> Result<DoctorCheck, TargetError> {
-    let output = command.execute()?;
-    Ok(DoctorCheck {
-        layer: layer.into(),
-        success: output.status.success(),
-        exit_code: output.status.code(),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        command,
-    })
+    match command.execute() {
+        Ok(output) => Ok(DoctorCheck {
+            layer: layer.into(),
+            success: output.status.success(),
+            exit_code: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            command,
+        }),
+        Err(TargetError::Spawn(program, error)) => Ok(DoctorCheck {
+            layer: layer.into(),
+            success: false,
+            exit_code: None,
+            stdout: String::new(),
+            stderr: format!("spawn {program}: {error}"),
+            command,
+        }),
+        Err(error) => Err(error),
+    }
 }
 
 fn push_option(tokens: &mut Vec<String>, flag: &str, value: Option<&str>) {
@@ -845,6 +861,25 @@ pub enum TargetError {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+
+    fn host_workload(command: &str) -> EasyBuildWorkload {
+        EasyBuildWorkload {
+            command: command.into(),
+            robot_paths: Vec::new(),
+            work_root: "/tmp".into(),
+            tmp_root: "/tmp".into(),
+            environment: BTreeMap::new(),
+        }
+    }
+
+    fn write_executable(path: &Path, body: &str) {
+        std::fs::write(path, body).expect("write executable");
+        let mut permissions = std::fs::metadata(path).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).expect("chmod");
+    }
 
     #[test]
     fn read_file_uses_the_transport_not_a_controller_open() {
@@ -857,15 +892,114 @@ mod tests {
             transport: TargetTransport::Local,
             executor: TargetExecutor::Direct,
             runtime: TargetRuntime::Host,
-            easybuild: EasyBuildWorkload {
-                command: "eb".into(),
-                robot_paths: Vec::new(),
-                work_root: "/tmp".into(),
-                tmp_root: "/tmp".into(),
-                environment: BTreeMap::new(),
-            },
+            easybuild: host_workload("eb"),
         };
         let body = target.read_file(&path).expect("cat");
         assert!(body.contains("GLIBC_2.38"), "{body}");
+    }
+
+    #[test]
+    fn doctor_runtime_probe_ends_with_env_true() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let podman = temp.path().join("podman");
+        write_executable(&podman, "#!/bin/sh\nprintf '%s\\n' \"$0\" \"$@\"\n");
+        let target = BuildTarget {
+            name: "local-rocky9".into(),
+            transport: TargetTransport::Local,
+            executor: TargetExecutor::Direct,
+            runtime: TargetRuntime::Podman {
+                image: "localhost/eb-stack-rocky9:latest".into(),
+                command: podman.to_string_lossy().into_owned(),
+                args: Vec::new(),
+                mounts: Vec::new(),
+                workdir: None,
+            },
+            easybuild: host_workload("eb"),
+        };
+        let report = doctor_target(&target).expect("doctor");
+        let runtime = report
+            .checks
+            .iter()
+            .find(|check| check.layer == "runtime")
+            .expect("runtime check");
+        assert!(
+            runtime
+                .command
+                .args
+                .ends_with(&["env".into(), "true".into()]),
+            "{:?}",
+            runtime.command.args
+        );
+
+        let image = "localhost/eb-stack-rocky9:latest";
+        let inner: Vec<_> = runtime
+            .command
+            .args
+            .iter()
+            .skip_while(|token| token.as_str() != image)
+            .skip(1)
+            .cloned()
+            .collect();
+        let fake_bin = temp.path().join("bin");
+        std::fs::create_dir_all(&fake_bin).expect("bin");
+        write_executable(
+            &fake_bin.join("eb"),
+            "#!/usr/bin/env sh\nprintf 'eb:%s\\n' \"$*\"\n",
+        );
+        let path = format!(
+            "{}:{}",
+            fake_bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let entrypoint = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("skills/new-package/container/rocky9/eb-entrypoint");
+        let output = Command::new(entrypoint)
+            .args(&inner)
+            .env("PATH", path)
+            .output()
+            .expect("entrypoint");
+        assert!(output.status.success(), "{:?}", output);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(!stdout.contains("eb:true"), "{stdout}");
+    }
+
+    #[test]
+    fn command_plan_execute_uses_null_stdin() {
+        let output = CommandPlan {
+            program: "readlink".into(),
+            args: vec!["/proc/self/fd/0".into()],
+        }
+        .execute()
+        .expect("execute");
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("null"), "{stdout}");
+    }
+
+    #[test]
+    fn doctor_target_records_missing_executor_as_failed_check() {
+        let target = BuildTarget {
+            name: "missing-srun".into(),
+            transport: TargetTransport::Local,
+            executor: TargetExecutor::Slurm {
+                command: "/definitely/missing/eb-stack-srun".into(),
+                partition: None,
+                account: None,
+                cpus: None,
+                memory: None,
+                time: None,
+                gres: None,
+            },
+            runtime: TargetRuntime::Host,
+            easybuild: host_workload("true"),
+        };
+        let report = doctor_target(&target).expect("report");
+        assert!(!report.ok());
+        let executor = report
+            .checks
+            .iter()
+            .find(|check| check.layer == "executor")
+            .expect("executor check");
+        assert!(!executor.success);
     }
 }
