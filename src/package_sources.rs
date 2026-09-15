@@ -7,7 +7,7 @@
 //! version requirements only — never package-name control flow.
 
 use crate::domain::{Candidate, Toolchain};
-use crate::eb_parse::parse_easyconfig_tree;
+use crate::eb_parse::{parse_easyconfig_tree, resolve_easyconfig_file, ResolvedEasyconfig};
 use crate::foreign::{detect_foreign_format, parse_foreign_path, ForeignFormat};
 use crate::hierarchy::{hierarchy_for, is_system_toolchain, known_hierarchy, ToolchainHierarchy};
 use crate::package_catalog::{CatalogProviderKind, PackageSourceProvider};
@@ -786,6 +786,130 @@ fn walk_source_files(
     Ok(())
 }
 
+/// Two same-easyblock neighbor recipes, ranked by dep and configopts overlap.
+///
+/// A zero-overlap query still returns same-easyblock fallbacks. The target
+/// name is never included. EasyBuild's default easyblock is `ConfigureMake`.
+pub fn neighbor_easyconfigs(
+    robot: &Path,
+    easyblock: &str,
+    exclude_name: &str,
+    want_deps: &[String],
+    want_configopts: Option<&str>,
+) -> Result<Vec<PathBuf>, PackageSourceError> {
+    let want_block = resolved_easyblock_name(Some(easyblock));
+    let exclude = exclude_name.to_ascii_lowercase();
+    let want_dep_set = token_set(want_deps.iter().map(|name| name.as_str()));
+    let want_opt_set = configopt_tokens(want_configopts.unwrap_or(""));
+    let mut scored = Vec::new();
+    let mut stack = vec![robot.to_path_buf()];
+    let mut visited = HashSet::new();
+    while let Some(dir) = stack.pop() {
+        let identity = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+        if !visited.insert(identity) {
+            continue;
+        }
+        let entries = std::fs::read_dir(&dir)
+            .map_err(|error| PackageSourceError::Io(dir.display().to_string(), error))?;
+        for entry in entries {
+            let entry =
+                entry.map_err(|error| PackageSourceError::Io(dir.display().to_string(), error))?;
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("eb") {
+                continue;
+            }
+            let recipe = match resolve_easyconfig_file(&path) {
+                Ok(recipe) => recipe,
+                Err(_) => continue,
+            };
+            if recipe.name.eq_ignore_ascii_case(&exclude) {
+                continue;
+            }
+            if resolved_easyblock_name(recipe.easyblock.as_deref()) != want_block {
+                continue;
+            }
+            let score = neighbor_overlap_score(&recipe, &want_dep_set, &want_opt_set);
+            scored.push((score, path));
+        }
+    }
+    scored.sort_by(|left, right| {
+        right
+            .0
+            .partial_cmp(&left.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    let mut chosen = Vec::new();
+    for (score, path) in &scored {
+        if *score > 0.0 && chosen.len() < 2 {
+            chosen.push(path.clone());
+        }
+    }
+    for (_, path) in &scored {
+        if chosen.len() >= 2 {
+            break;
+        }
+        if !chosen.iter().any(|picked| picked == path) {
+            chosen.push(path.clone());
+        }
+    }
+    Ok(chosen)
+}
+
+fn resolved_easyblock_name(easyblock: Option<&str>) -> String {
+    easyblock
+        .filter(|name| !name.is_empty())
+        .unwrap_or("ConfigureMake")
+        .to_ascii_lowercase()
+}
+
+fn neighbor_overlap_score(
+    recipe: &ResolvedEasyconfig,
+    want_deps: &HashSet<String>,
+    want_opts: &HashSet<String>,
+) -> f64 {
+    let have_deps = token_set(
+        recipe
+            .dependencies
+            .iter()
+            .chain(recipe.builddependencies.iter())
+            .map(|dep| dep.name.as_str()),
+    );
+    let have_opts = configopt_tokens(recipe.configopts.as_deref().unwrap_or(""));
+    0.6 * jaccard(want_deps, &have_deps) + 0.4 * jaccard(want_opts, &have_opts)
+}
+
+fn configopt_tokens(opts: &str) -> HashSet<String> {
+    token_set(opts.split_whitespace())
+}
+
+fn token_set<'a, I>(tokens: I) -> HashSet<String>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    tokens
+        .into_iter()
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_ascii_lowercase())
+        .collect()
+}
+
+fn jaccard(left: &HashSet<String>, right: &HashSet<String>) -> f64 {
+    if left.is_empty() && right.is_empty() {
+        return 0.0;
+    }
+    let union = left.union(right).count();
+    if union == 0 {
+        0.0
+    } else {
+        left.intersection(right).count() as f64 / union as f64
+    }
+}
+
 /// Map a source EasyBuild recipe's toolchain family onto the target generation.
 ///
 /// Subtoolchains stay in-family: a `GCCcore` source becomes the `GCCcore`
@@ -1530,5 +1654,104 @@ class Dupe(Package):
             Some("-CUDA-12.6.0"),
             "plain OpenMPI must not win a CUDA hole: {selected:?}"
         );
+    }
+
+    fn neighbor_recipe(name: &str, easyblock: &str, deps: &str, configopts: &str) -> String {
+        format!(
+            "easyblock = '{easyblock}'\nname = '{name}'\nversion = '1.0'\nhomepage = 'https://example.invalid/{name}'\ndescription = '{name}'\ntoolchain = SYSTEM\nsources = ['{name}-1.0.tar.gz']\nchecksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\ndependencies = [{deps}]\nconfigopts = '{configopts}'\nmoduleclass = 'tools'\n"
+        )
+    }
+
+    #[test]
+    fn neighbor_recipe_fixture_resolves() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("Meson-1.0.eb");
+        write(
+            &path,
+            &neighbor_recipe(
+                "Meson",
+                "MesonNinja",
+                "('pytest', '1.0'), ('zlib', '1.2')",
+                "-Dfoo=1",
+            ),
+        );
+        resolve_easyconfig_file(&path).expect("fixture must resolve");
+    }
+
+    #[test]
+    fn neighbor_easyconfigs_ranks_overlap_and_never_returns_the_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let robot = temp.path();
+        write(
+            &robot.join("m/Meson/Meson-1.0.eb"),
+            &neighbor_recipe(
+                "Meson",
+                "MesonNinja",
+                "('pytest', '1.0'), ('zlib', '1.2')",
+                "-Dfoo=1",
+            ),
+        );
+        write(
+            &robot.join("n/Ninja/Ninja-1.0.eb"),
+            &neighbor_recipe("Ninja", "MesonNinja", "('pytest', '1.0')", "-Dfoo=1"),
+        );
+        write(
+            &robot.join("c/CMake/CMake-1.0.eb"),
+            &neighbor_recipe(
+                "CMake",
+                "CMakeMake",
+                "('pytest', '1.0'), ('zlib', '1.2')",
+                "-Dfoo=1",
+            ),
+        );
+        write(
+            &robot.join("z/Zero/Zero-1.0.eb"),
+            &neighbor_recipe("Zero", "MesonNinja", "('hdf5', '1.0')", "-Dbar=1"),
+        );
+        let neighbors = neighbor_easyconfigs(
+            robot,
+            "MesonNinja",
+            "Target",
+            &["pytest".into(), "zlib".into()],
+            Some("-Dfoo=1"),
+        )
+        .expect("neighbors");
+        assert_eq!(neighbors.len(), 2);
+        let names: Vec<String> = neighbors
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names[0], "Meson-1.0.eb");
+        assert_eq!(names[1], "Ninja-1.0.eb");
+        assert!(!names.iter().any(|name| name.starts_with("Target")));
+        assert!(!names.iter().any(|name| name.starts_with("CMake")));
+    }
+
+    #[test]
+    fn neighbor_easyconfigs_falls_back_to_same_easyblock_without_overlap() {
+        let temp = tempfile::tempdir().unwrap();
+        let robot = temp.path();
+        write(
+            &robot.join("z/Zero/Zero-1.0.eb"),
+            &neighbor_recipe("Zero", "MesonNinja", "('hdf5', '1.0')", "-Dbar=1"),
+        );
+        write(
+            &robot.join("o/Other/Other-1.0.eb"),
+            &neighbor_recipe("Other", "MesonNinja", "('netcdf', '1.0')", "-Dbaz=1"),
+        );
+        write(
+            &robot.join("t/Target/Target-1.0.eb"),
+            &neighbor_recipe("Target", "MesonNinja", "('pytest', '1.0')", "-Dfoo=1"),
+        );
+        let neighbors = neighbor_easyconfigs(robot, "MesonNinja", "Target", &["zlib".into()], None)
+            .expect("neighbors");
+        assert_eq!(neighbors.len(), 2);
+        let names: Vec<String> = neighbors
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"Zero-1.0.eb".into()));
+        assert!(names.contains(&"Other-1.0.eb".into()));
+        assert!(!names.iter().any(|name| name.starts_with("Target")));
     }
 }
