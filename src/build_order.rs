@@ -299,6 +299,13 @@ fn module_version(candidate: &Candidate) -> String {
     )
 }
 
+/// Whether a glued module name (`version` + `versionsuffix`) is the same
+/// string as an exact pin. Token comparison would treat `1.0-9` as `1.0.9`.
+fn joined_module_eq(with_suffix: &str, version_req: &str) -> bool {
+    let exact = version_req.strip_prefix("==").unwrap_or(version_req);
+    !exact.is_empty() && with_suffix == exact
+}
+
 /// Whether a candidate satisfies one stated dependency.
 ///
 /// The rules are EasyBuild's: a version requirement, an optional toolchain that
@@ -360,7 +367,8 @@ fn satisfies(candidate: &Candidate, dep: &DepReq, recipe: &Candidate) -> bool {
         // called: foss-2019a asks for GCC 8.2.0-2.31.1, and the recipe that
         // provides it is version 8.2.0 with versionsuffix -2.31.1. Both
         // spellings have to match or every recipe using the second one reads
-        // as unsatisfiable.
+        // as unsatisfiable. The glued spelling is the same string, not a
+        // tokenized match: 1.0-9 is a suffix, not version 1.0.9.
         let with_suffix = format!(
             "{}{}",
             candidate.version,
@@ -370,7 +378,7 @@ fn satisfies(candidate: &Candidate, dep: &DepReq, recipe: &Candidate) -> bool {
         let joined_ok = dep.versionsuffix.as_deref().unwrap_or("").is_empty()
             && !candidate.versionsuffix.as_deref().unwrap_or("").is_empty()
             && !version_ok
-            && matches_req(&with_suffix, &dep.version_req);
+            && joined_module_eq(&with_suffix, &dep.version_req);
         if !version_ok && !joined_ok {
             return false;
         }
@@ -455,7 +463,7 @@ fn root_version_matches(candidate: &Candidate, version_req: &str) -> bool {
         candidate.version,
         candidate.versionsuffix.as_deref().unwrap_or("")
     );
-    matches_req(&with_suffix, version_req)
+    joined_module_eq(&with_suffix, version_req)
 }
 
 /// Version used to rank a candidate for `dep_name`.
@@ -835,7 +843,11 @@ pub fn build_graph(
                 continue;
             }
             let node = node_for(&mut graph, &mut index, &dep_key);
-            graph.add_edge(node, dependent, kind);
+            // One predecessor is one input. A name listed as both a runtime
+            // and a build dependency is still one module.
+            if !graph.contains_edge(node, dependent) {
+                graph.add_edge(node, dependent, kind);
+            }
             queue.push(dep_key);
         }
     }
@@ -1136,6 +1148,57 @@ mod tests {
                 .any(|name| name.contains("NVHPC") && name.contains("CUDA")),
             "{seq:?}"
         );
+    }
+
+    #[test]
+    fn a_numeric_suffix_is_not_a_dotted_version() {
+        let mut foo = candidate("Foo", "1.0", tc("foss", "2026.1"), vec![]);
+        foo.versionsuffix = Some("-9".into());
+        let all = vec![
+            candidate(
+                "App",
+                "1.0",
+                tc("foss", "2026.1"),
+                vec![dep("Foo", "==1.0.9", None)],
+            ),
+            foo,
+        ];
+        let err = build_order(&tree(&all), &["App".into()], Choice::Newest).unwrap_err();
+        assert!(
+            matches!(err, OrderError::Unsatisfied { .. }),
+            "1.0-9 is not 1.0.9: {err}"
+        );
+    }
+
+    #[test]
+    fn a_root_numeric_suffix_is_not_a_dotted_version() {
+        let mut foo = candidate("Foo", "1.0", tc("system", "system"), vec![]);
+        foo.versionsuffix = Some("-9".into());
+        let err = build_order(&[foo], &["Foo==1.0.9".into()], Choice::Newest).unwrap_err();
+        match err {
+            OrderError::NoSuchVersion { requirement, .. } => {
+                assert!(requirement.contains("1.0.9"), "{requirement}");
+            }
+            other => panic!("1.0-9 is not 1.0.9: {other}"),
+        }
+    }
+
+    #[test]
+    fn a_dep_listed_as_runtime_and_build_is_one_edge() {
+        let lib_dep = dep("Lib", "", None);
+        let mut app = candidate("App", "1.0", tc("foss", "2026.1"), vec![lib_dep.clone()]);
+        app.builddependencies = vec![lib_dep];
+        let all = vec![app, candidate("Lib", "1.0", tc("foss", "2026.1"), vec![])];
+        let graph = build_graph(&tree(&all), &["App".into()], Choice::Newest).expect("graph");
+        let app_node = graph
+            .node_indices()
+            .find(|n| graph[*n].name == "App")
+            .expect("App");
+        let from_lib = graph
+            .edges_directed(app_node, petgraph::Direction::Incoming)
+            .filter(|edge| graph[edge.source()].name == "Lib")
+            .count();
+        assert_eq!(from_lib, 1, "Lib must be one predecessor, not two");
     }
 
     #[test]

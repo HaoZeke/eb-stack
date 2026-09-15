@@ -289,6 +289,38 @@ mod tests {
     }
 
     #[test]
+    fn a_build_dep_that_is_already_a_runtime_dep_does_not_double_hash() {
+        let runtime_only = tempfile::tempdir().unwrap();
+        let both = tempfile::tempdir().unwrap();
+        let lib_body = "name = 'Lib'\nversion = '1.0'\n";
+        let runtime = tree(runtime_only.path(), lib_body);
+        let mut runtime_and_build = tree(both.path(), lib_body);
+        let lib_dep = runtime_and_build
+            .iter()
+            .find(|c| c.name == "App")
+            .expect("App")
+            .dependencies[0]
+            .clone();
+        runtime_and_build
+            .iter_mut()
+            .find(|c| c.name == "App")
+            .expect("App")
+            .builddependencies = vec![lib_dep];
+
+        let app = |m: &BTreeMap<ModuleKey, InputHash>| {
+            m.iter()
+                .find(|(k, _)| k.name == "App")
+                .map(|(_, h)| h.hash.clone())
+                .unwrap()
+        };
+        assert_eq!(
+            app(&hashes_for(&runtime)),
+            app(&hashes_for(&runtime_and_build)),
+            "the same predecessor must hash once whether listed as runtime, build, or both"
+        );
+    }
+
+    #[test]
     fn a_recipe_that_cannot_be_read_is_hashed_but_not_called_complete() {
         let dir = tempfile::tempdir().unwrap();
         let mut candidates = tree(dir.path(), "name = 'Lib'\nversion = '1.0'\n");
