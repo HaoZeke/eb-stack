@@ -355,17 +355,18 @@ fn lock_package_identity_cmp(a: &LockPackage, b: &LockPackage) -> std::cmp::Orde
 /// Prefer non-SYSTEM install candidates when both SYSTEM and non-SYSTEM exist
 /// for the same package name (EasyBuild generation installs over bare SYSTEM).
 fn drop_system_when_non_system_exists(cands: Vec<Candidate>) -> Vec<Candidate> {
-    let mut has_non_sys: HashMap<String, bool> = HashMap::new();
+    let mut has_non_sys: HashSet<(String, String)> = HashSet::new();
     for c in &cands {
         if !is_system_toolchain(&c.toolchain) {
-            has_non_sys.insert(c.name.clone(), true);
+            has_non_sys.insert((c.name.clone(), c.versionsuffix.clone().unwrap_or_default()));
         }
     }
     cands
         .into_iter()
         .filter(|c| {
             if is_system_toolchain(&c.toolchain)
-                && has_non_sys.get(&c.name).copied().unwrap_or(false)
+                && has_non_sys
+                    .contains(&(c.name.clone(), c.versionsuffix.clone().unwrap_or_default()))
             {
                 return false;
             }
@@ -1107,6 +1108,41 @@ mod lock_identity_and_bump_pin_tests {
         assert_eq!(text.matches("unsatisfiable stack").count(), 1, "{text}");
         let missing = SelectError::MissingPackage("GROMACS".into());
         assert_eq!(missing.to_string(), "no candidates for package GROMACS");
+    }
+
+    #[test]
+    fn a_cuda_sibling_does_not_drop_the_unsuffixed_system_module() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let mut system_lib = candidate("Lib", "1.0", None);
+        system_lib.toolchain = system.clone();
+        system_lib.easyconfig_path = "Lib-1.0.eb".into();
+        let mut cuda = candidate("Lib", "1.0", Some("-CUDA-12.8.0"));
+        cuda.easyconfig_path = "Lib-1.0-foss-2025a-CUDA-12.8.0.eb".into();
+        let hierarchy = ToolchainHierarchy {
+            parent: foss(),
+            members: vec![
+                Toolchain {
+                    name: "system".into(),
+                    version: String::new(),
+                },
+                foss(),
+            ],
+        };
+        let specs = [SourceDepSpec::plain("Lib", "1.0")];
+        let (map, _) = resolvo_resolve_dep_versions(
+            &specs,
+            &[system_lib, cuda],
+            &hierarchy,
+            &foss(),
+            "App",
+            "1.0",
+            None,
+        )
+        .expect("unsuffixed SYSTEM must survive a CUDA sibling");
+        assert_eq!(map.get("Lib").map(String::as_str), Some("1.0"));
     }
 
     #[test]
