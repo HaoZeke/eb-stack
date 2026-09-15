@@ -91,23 +91,10 @@ fn toolchain_from_easyconfig_path(path: &Path, name: &str) -> Option<Toolchain> 
         })
         .and_then(|rest| rest.strip_prefix('-'))?;
     let parts: Vec<&str> = rest.split('-').collect();
-    for index in 0..parts.len().saturating_sub(1) {
-        if !parts[index].is_empty()
-            && parts[index]
-                .chars()
-                .all(|character| character.is_ascii_alphabetic())
-            && parts[index + 1]
-                .chars()
-                .next()
-                .is_some_and(|character| character.is_ascii_digit())
-        {
-            return Some(Toolchain {
-                name: parts[index].to_string(),
-                version: parts[index + 1].to_string(),
-            });
-        }
-    }
-    None
+    first_toolchain_span(&parts).map(|(name_at, version_at)| Toolchain {
+        name: parts[name_at..version_at].join("-"),
+        version: parts[version_at].to_string(),
+    })
 }
 
 fn easyconfig_version_key(path: &Path, name: &str) -> String {
@@ -127,7 +114,17 @@ fn easyconfig_version_key(path: &Path, name: &str) -> String {
         return String::new();
     };
     let parts: Vec<&str> = rest.split('-').collect();
-    let mut toolchain_at = None;
+    match first_toolchain_span(&parts) {
+        Some((0, _)) => String::new(),
+        Some((name_at, _)) => parts[..name_at].join("-"),
+        None => rest.to_string(),
+    }
+}
+
+/// First toolchain in `parts`: all-alpha run plus the digit-leading version.
+///
+/// `intel-compilers-2023.2.0` is one name, not `compilers-2023.2.0`.
+fn first_toolchain_span(parts: &[&str]) -> Option<(usize, usize)> {
     for index in 0..parts.len().saturating_sub(1) {
         if !parts[index].is_empty()
             && parts[index]
@@ -138,15 +135,19 @@ fn easyconfig_version_key(path: &Path, name: &str) -> String {
                 .next()
                 .is_some_and(|character| character.is_ascii_digit())
         {
-            toolchain_at = Some(index);
-            break;
+            let mut name_at = index;
+            while name_at > 0
+                && !parts[name_at - 1].is_empty()
+                && parts[name_at - 1]
+                    .chars()
+                    .all(|character| character.is_ascii_alphabetic())
+            {
+                name_at -= 1;
+            }
+            return Some((name_at, index + 1));
         }
     }
-    match toolchain_at {
-        Some(0) => String::new(),
-        Some(index) => parts[..index].join("-"),
-        None => rest.to_string(),
-    }
+    None
 }
 
 /// `{name}.toml` next to a parent `--package-config`.
@@ -567,6 +568,15 @@ mod tests {
             argv.contains("--toolchain-name NVHPC") || argv.contains("--toolchain-name foss"),
             "expected NVHPC family or mapped parent, got {argv}"
         );
+    }
+
+    #[test]
+    fn a_hyphenated_toolchain_name_stays_one_pair() {
+        let path = Path::new("MKL-2023.2.0-intel-compilers-2023.2.0.eb");
+        let toolchain = toolchain_from_easyconfig_path(path, "MKL").expect("toolchain");
+        assert_eq!(toolchain.name, "intel-compilers");
+        assert_eq!(toolchain.version, "2023.2.0");
+        assert_eq!(easyconfig_version_key(path, "MKL"), "2023.2.0");
     }
 
     #[test]
