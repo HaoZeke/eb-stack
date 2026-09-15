@@ -295,6 +295,13 @@ fn is_sha256_hex(checksum: &str) -> bool {
     checksum.len() == 64 && checksum.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+fn is_checksum_algorithm_token(token: &str) -> bool {
+    matches!(
+        token.trim().to_ascii_lowercase().as_str(),
+        "sha256" | "sha512" | "sha384" | "sha224" | "sha1" | "md5" | "adler32" | "crc32" | "size"
+    )
+}
+
 /// Span of the first SHA-256 in the `checksums` list (the source slot).
 /// A dict key (`{'file.tar.gz': '...'}`) is skipped so the value is the slot.
 fn first_source_sha256_span(text: &str) -> Option<(usize, usize)> {
@@ -325,6 +332,11 @@ fn first_source_sha256_span(text: &str) -> Option<(usize, usize)> {
             }
             if j < bytes.len() && bytes[j] == b':' {
                 i = j + 1;
+                continue;
+            }
+            // Typed tuples put the algorithm first: ('sha256', hex). Skip it
+            // so the digest stays the source slot.
+            if is_checksum_algorithm_token(tok) {
                 continue;
             }
             if is_sha256_hex(tok) {
@@ -361,14 +373,40 @@ fn version_token_in_name(name: &str, version: &str) -> bool {
 }
 
 fn strip_patch_suffix(name: &str) -> &str {
-    name.strip_suffix(".patch")
-        .or_else(|| name.strip_suffix(".diff"))
-        .unwrap_or(name)
+    for suffix in [
+        ".patch.gz",
+        ".diff.gz",
+        ".patch.bz2",
+        ".diff.bz2",
+        ".patch.xz",
+        ".diff.xz",
+        ".patch.zst",
+        ".diff.zst",
+        ".patch",
+        ".diff",
+    ] {
+        if let Some(stem) = name.strip_suffix(suffix) {
+            return stem;
+        }
+    }
+    name
+}
+
+fn token_looks_like_version(token: &str) -> bool {
+    // Dotted (5.0.7), all-digit (1), or letterful (2023a, 1.0rc1). A
+    // letterful token is otherwise a silent carry: 2023a is neither
+    // dotted nor all-digit.
+    !token.is_empty()
+        && (token.contains('.')
+            || token.chars().all(|character| character.is_ascii_digit())
+            || token
+                .chars()
+                .any(|character| character.is_ascii_alphabetic()))
 }
 
 fn pins_other_version(patch: &str, new_version: &str) -> bool {
-    // `X-2.0.patch` tokenizes as `2.0.patch` if the suffix stays; that is a
-    // self-pin on 2.0, not a foreign version.
+    // `X-2.0.patch` and `X-2.0.patch.gz` tokenize as a glued suffix if
+    // the extension stays; those are a self-pin on 2.0, not foreign.
     let patch = strip_patch_suffix(patch);
     if version_token_in_name(patch, new_version) {
         return false;
@@ -382,10 +420,7 @@ fn pins_other_version(patch: &str, new_version: &str) -> bool {
                 i += 1;
             }
             let token = patch[start..i].trim_end_matches('.');
-            if token != new_version
-                && (token.contains('.')
-                    || token.chars().all(|character| character.is_ascii_digit()))
-            {
+            if token != new_version && token_looks_like_version(token) {
                 return true;
             }
         } else {
@@ -546,6 +581,30 @@ mod tests {
         assert!(plan.undecided().is_empty(), "{:?}", plan.calls);
         let plan = plan_patch_evolution("2024a", &["X-2024a_fix.patch".into()], None);
         assert!(plan.undecided().is_empty(), "{:?}", plan.calls);
+        assert_eq!(
+            plan.calls
+                .iter()
+                .find(|c| c.patch == "X-2024a_fix.patch")
+                .unwrap()
+                .decision,
+            PatchDecision::Carry
+        );
+    }
+
+    #[test]
+    fn a_foreign_letterful_version_is_undecided() {
+        let plan = plan_patch_evolution("2024a", &["X-2023a_fix.patch".into()], None);
+        assert_eq!(plan.undecided(), vec!["X-2023a_fix.patch"]);
+        let plan = plan_patch_evolution("2024a", &["X-2024a_fix.patch".into()], None);
+        assert!(plan.undecided().is_empty(), "{:?}", plan.calls);
+        assert_eq!(
+            plan.calls
+                .iter()
+                .find(|c| c.patch == "X-2024a_fix.patch")
+                .unwrap()
+                .decision,
+            PatchDecision::Carry
+        );
     }
 
     #[test]
@@ -570,6 +629,18 @@ mod tests {
                 .decision,
             PatchDecision::Carry
         );
+        let plan = plan_patch_evolution("2.0", &["X-2.0.patch.gz".into()], None);
+        assert!(plan.undecided().is_empty(), "{:?}", plan.calls);
+        assert_eq!(
+            plan.calls
+                .iter()
+                .find(|c| c.patch == "X-2.0.patch.gz")
+                .unwrap()
+                .decision,
+            PatchDecision::Carry
+        );
+        let plan = plan_patch_evolution("2.0", &["X-1.0.patch.gz".into()], None);
+        assert_eq!(plan.undecided(), vec!["X-1.0.patch.gz"]);
     }
 
     #[test]
@@ -654,6 +725,52 @@ mod tests {
         assert!(out.contains(&format!("'{cli}'")), "{out}");
         assert!(!out.contains(&format!("'{sib}'")), "{out}");
         assert!(out.contains(&format!("'{patch}'")), "{out}");
+    }
+
+    #[test]
+    fn typed_tuple_checksums_keep_the_emitted_source_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let sib_path = dir.path().join("sib.eb");
+        let cli = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let sib = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let patch = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        std::fs::write(
+            &sib_path,
+            format!(
+                "patches = ['new.patch']\nchecksums = [\n    ('sha256', '{sib}'),\n    '{patch}',\n]\nmoduleclass = 'lib'\n"
+            ),
+        )
+        .unwrap();
+        let ours = format!(
+            "name = 'X'\npatches = ['old.patch']\nchecksums = [('sha256', '{cli}')]\nmoduleclass = 'lib'\n"
+        );
+        let out = adopt_sibling_patch_block(&ours, sib_path.to_str().unwrap()).unwrap();
+        assert!(out.contains(cli), "{out}");
+        assert!(!out.contains(sib), "{out}");
+        assert!(out.contains(patch), "{out}");
+    }
+
+    #[test]
+    fn dict_typed_tuple_checksums_keep_the_emitted_source_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let sib_path = dir.path().join("sib.eb");
+        let cli = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let sib = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let patch = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        std::fs::write(
+            &sib_path,
+            format!(
+                "patches = ['new.patch']\nchecksums = [\n    {{'app-2.0.tar.gz': ('sha256', '{sib}')}},\n    '{patch}',\n]\nmoduleclass = 'lib'\n"
+            ),
+        )
+        .unwrap();
+        let ours = format!(
+            "name = 'X'\npatches = ['old.patch']\nchecksums = [{{'app-2.0.tar.gz': ('sha256', '{cli}')}}]\nmoduleclass = 'lib'\n"
+        );
+        let out = adopt_sibling_patch_block(&ours, sib_path.to_str().unwrap()).unwrap();
+        assert!(out.contains(cli), "{out}");
+        assert!(!out.contains(sib), "{out}");
+        assert!(out.contains(patch), "{out}");
     }
 
     #[test]
