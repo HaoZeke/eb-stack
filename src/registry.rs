@@ -179,6 +179,7 @@ fn materialize_pypi_sdist(
     let bytes = match client.get(url) {
         Ok(bytes) => bytes,
         Err(RegistryError::Missing(_)) => return Ok(None),
+        Err(error) if is_body_exceeds(&error) => return Ok(None),
         Err(error) => return Err(error),
     };
     if let Some(expected) = sdist
@@ -412,10 +413,58 @@ pub fn resolve_ingest_source(
 fn existing_ingest_dump(ingest_root: &Path, format: ForeignFormat, name: &str) -> Option<PathBuf> {
     let (pkg, version) = split_name_and_version(name);
     let version = version?;
-    let dump = ingest_root
-        .join(format.as_str())
-        .join(format!("{}.json", sanitize_ingest_name(pkg, version)));
-    dump.is_file().then_some(dump)
+    let dir = ingest_root.join(format.as_str());
+    for stem in ingest_dump_stems(format, pkg, version) {
+        let dump = dir.join(format!("{stem}.json"));
+        if dump.is_file() {
+            return Some(dump);
+        }
+    }
+    None
+}
+
+fn ingest_dump_stems(format: ForeignFormat, pkg: &str, version: &str) -> Vec<String> {
+    let raw = sanitize_ingest_name(pkg, version);
+    let normalized = match format {
+        ForeignFormat::Pypi => sanitize_ingest_name(&normalize_pypi_name(pkg), version),
+        ForeignFormat::Cargo => sanitize_ingest_name(&pkg.to_ascii_lowercase(), version),
+        _ => raw.clone(),
+    };
+    if raw == normalized {
+        vec![raw]
+    } else {
+        vec![raw, normalized]
+    }
+}
+
+/// PEP 503 name: lowercase, runs of `[-_.]` become one `-`.
+fn normalize_pypi_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut pending_dash = false;
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if pending_dash && !out.is_empty() {
+                out.push('-');
+            }
+            pending_dash = false;
+            out.push(ch.to_ascii_lowercase());
+        } else if matches!(ch, '-' | '_' | '.') {
+            pending_dash = true;
+        } else {
+            if pending_dash && !out.is_empty() {
+                out.push('-');
+            }
+            pending_dash = false;
+            for lower in ch.to_lowercase() {
+                out.push(lower);
+            }
+        }
+    }
+    out
+}
+
+fn is_body_exceeds(error: &RegistryError) -> bool {
+    matches!(error, RegistryError::Fetch(message) if message.contains("body exceeds"))
 }
 
 /// Fetch a registry name into `ingest_root` and return the dump path.
@@ -620,5 +669,72 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp");
         let err = resolve_ingest_source(Path::new("numpy"), None, temp.path()).unwrap_err();
         assert!(err.contains("format"), "{err}");
+    }
+
+    struct BodyExceedsClient {
+        json: Vec<u8>,
+        json_url: String,
+    }
+
+    impl RegistryClient for BodyExceedsClient {
+        fn get(&self, url: &str) -> Result<Vec<u8>, RegistryError> {
+            if url == self.json_url {
+                return Ok(self.json.clone());
+            }
+            Err(RegistryError::Fetch(format!(
+                "{url}: body exceeds {} bytes",
+                32 * 1024 * 1024
+            )))
+        }
+    }
+
+    #[test]
+    fn materialize_pypi_writes_dump_when_sdist_exceeds_body_cap() {
+        let json = br#"{
+              "info": {"name": "demo", "version": "1.0.0"},
+              "urls": [{
+                "packagetype": "sdist",
+                "url": "https://files.pythonhosted.org/demo-1.0.0.tar.gz",
+                "filename": "demo-1.0.0.tar.gz"
+              }]
+            }"#;
+        let client = BodyExceedsClient {
+            json: json.to_vec(),
+            json_url: "https://pypi.org/pypi/demo/1.0.0/json".into(),
+        };
+        let root = tempfile::tempdir().expect("temp");
+        let ingest = materialize_pypi("demo==1.0.0", &client, "https://pypi.org", root.path())
+            .expect("dump survives body exceeds");
+        assert!(ingest.dump.ends_with("pypi/demo-1.0.0.json"));
+        assert!(ingest.dump.is_file(), "warehouse dump must be written");
+        assert!(ingest.source_tree.is_none());
+        let replay = std::fs::read_to_string(&ingest.dump).expect("read");
+        assert!(replay.contains("\"name\": \"demo\""));
+    }
+
+    #[test]
+    fn resolve_ingest_source_reuses_canonical_pypi_dump_for_pinned_alias() {
+        let temp = tempfile::tempdir().expect("temp");
+        let dump = temp.path().join("ingest/pypi/beautifulsoup4-4.12.3.json");
+        std::fs::create_dir_all(dump.parent().expect("parent")).expect("mkdir");
+        std::fs::write(
+            &dump,
+            r#"{"info":{"name":"beautifulsoup4","version":"4.12.3"}}"#,
+        )
+        .expect("write");
+        let resolved = resolve_ingest_source(
+            Path::new("BeautifulSoup4==4.12.3"),
+            Some(ForeignFormat::Pypi),
+            temp.path(),
+        )
+        .expect("reuse dump");
+        assert_eq!(resolved, dump);
+    }
+
+    #[test]
+    fn normalize_pypi_name_lowercases_and_folds_separators() {
+        assert_eq!(normalize_pypi_name("BeautifulSoup4"), "beautifulsoup4");
+        assert_eq!(normalize_pypi_name("Friendly_Bard"), "friendly-bard");
+        assert_eq!(normalize_pypi_name("FRIENDLY.BARD"), "friendly-bard");
     }
 }
