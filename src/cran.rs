@@ -77,6 +77,8 @@ struct CranJson {
     suggests: Vec<String>,
     #[serde(default, alias = "SystemRequirements")]
     system_requirements: Option<String>,
+    #[serde(default, alias = "OS_type")]
+    os_type: Option<String>,
     #[serde(default, alias = "SHA256")]
     sha256: Option<String>,
 }
@@ -100,9 +102,7 @@ where
         fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
             let mut items = Vec::new();
             while let Some(item) = seq.next_element::<String>()? {
-                if !item.trim().is_empty() {
-                    items.push(item);
-                }
+                items.extend(split_r_list(&item));
             }
             Ok(items)
         }
@@ -144,6 +144,7 @@ fn parse_cran_json(text: &str) -> Result<ForeignRecipe, ForeignError> {
         note: "parsed from CRAN JSON",
     })?;
     record_system_requirements(&mut recipe, doc.system_requirements.as_deref());
+    record_os_type(&mut recipe, doc.os_type.as_deref());
     let suggests = if doc.suggests.is_empty() {
         None
     } else {
@@ -203,6 +204,7 @@ fn parse_description(text: &str) -> Result<ForeignRecipe, ForeignError> {
         fields.get("systemrequirements").map(String::as_str),
     );
     record_suggests(&mut recipe, fields.get("suggests").map(String::as_str));
+    record_os_type(&mut recipe, fields.get("os_type").map(String::as_str));
     Ok(recipe)
 }
 
@@ -370,6 +372,19 @@ fn record_suggests(recipe: &mut ForeignRecipe, suggests: Option<&str>) {
         severity: ResidualSeverity::Judgment,
         summary: format!("Suggests not encoded: {suggests}"),
         evidence: Some(suggests.to_string()),
+        provenance: None,
+    });
+}
+
+fn record_os_type(recipe: &mut ForeignRecipe, os_type: Option<&str>) {
+    let Some(os_type) = os_type.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    recipe.residuals.push(ForeignResidual {
+        category: "cran-os-type".into(),
+        severity: ResidualSeverity::Judgment,
+        summary: format!("OS_type not encoded: {os_type}"),
+        evidence: Some(os_type.to_string()),
         provenance: None,
     });
 }
@@ -1137,6 +1152,44 @@ mod tests {
         assert_eq!(
             recipe.source_url.as_deref(),
             Some("https://cran.r-project.org/src/contrib/jsonlite_1.8.8.tar.gz")
+        );
+    }
+
+    #[test]
+    fn json_array_depends_splits_a_comma_list() {
+        let recipe = parse_cran_str(
+            r#"{"Package":"demo","Version":"1.0","Depends":["R (>= 3.1.0), jsonlite"]}"#,
+        )
+        .expect("parse");
+        assert_eq!(
+            recipe
+                .dependencies
+                .iter()
+                .find(|dep| dep.name == "R")
+                .and_then(|dep| dep.pin.as_deref()),
+            Some(">= 3.1.0")
+        );
+        assert!(
+            recipe.dependencies.iter().any(|dep| dep.name == "jsonlite"),
+            "{:?}",
+            recipe.dependencies
+        );
+    }
+
+    #[test]
+    fn os_type_becomes_a_judgment_residual() {
+        let recipe =
+            parse_cran_str("Package: foo\nVersion: 1.0\nOS_type: windows\n").expect("parse");
+        assert!(
+            recipe.residuals.iter().any(|residual| {
+                residual.category == "cran-os-type"
+                    && residual
+                        .evidence
+                        .as_deref()
+                        .is_some_and(|evidence| evidence.contains("windows"))
+            }),
+            "{:?}",
+            recipe.residuals
         );
     }
 }

@@ -18,6 +18,7 @@ use crate::foreign::{
 use crate::package::{ConditionExpr, ResidualSeverity};
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 /// Parse a PyPI JSON document or a requirements.txt body.
 pub fn parse_pypi_str(text: &str) -> Result<ForeignRecipe, ForeignError> {
@@ -66,6 +67,8 @@ struct WarehouseInfo {
     home_page: Option<String>,
     #[serde(default)]
     project_url: Option<String>,
+    #[serde(default)]
+    project_urls: BTreeMap<String, String>,
     #[serde(default)]
     summary: Option<String>,
     #[serde(default)]
@@ -286,7 +289,9 @@ fn recipe_from_document(doc: WarehouseDocument) -> Result<ForeignRecipe, Foreign
         }
     }
 
-    let homepage = nonempty(doc.info.home_page).or_else(|| nonempty(doc.info.project_url));
+    let homepage = nonempty(doc.info.home_page)
+        .or_else(|| homepage_from_project_urls(&doc.info.project_urls))
+        .or_else(|| nonempty(doc.info.project_url));
     if !dependencies
         .iter()
         .any(|dep| dep.name.eq_ignore_ascii_case("python"))
@@ -373,6 +378,24 @@ fn warehouse_sha256(value: Option<&str>) -> Option<String> {
     }
 }
 
+fn strip_pip_requirement_tail(line: &str) -> String {
+    let line = line.trim_end_matches('\\').trim();
+    match line.find(" --") {
+        Some(idx) => line[..idx].trim().to_string(),
+        None => line.to_string(),
+    }
+}
+
+fn homepage_from_project_urls(urls: &BTreeMap<String, String>) -> Option<String> {
+    urls.iter().find_map(|(key, value)| {
+        if key.eq_ignore_ascii_case("homepage") || key.eq_ignore_ascii_case("home") {
+            nonempty(Some(value.clone()))
+        } else {
+            None
+        }
+    })
+}
+
 fn strip_inline_comment(line: &str) -> &str {
     let mut in_quote = None;
     for (index, character) in line.char_indices() {
@@ -445,7 +468,7 @@ fn parse_requirements_txt(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let mut residuals = Vec::new();
     let mut specs = Vec::new();
     for (index, line) in text.lines().enumerate() {
-        let line = strip_inline_comment(line.trim());
+        let line = strip_pip_requirement_tail(strip_inline_comment(line.trim()));
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
@@ -459,7 +482,7 @@ fn parse_requirements_txt(text: &str) -> Result<ForeignRecipe, ForeignError> {
             });
             continue;
         }
-        match parse_pep508(line) {
+        match parse_pep508(&line) {
             Pep508::Requirement {
                 name,
                 pin,
@@ -469,9 +492,13 @@ fn parse_requirements_txt(text: &str) -> Result<ForeignRecipe, ForeignError> {
                 specs.push((name, pin, original, marker));
             }
             Pep508::SkipExtra { spec } => {
-                return Err(ForeignError::Parse(format!(
-                    "requirements.txt:{index}: extra marker not supported: {spec}"
-                )));
+                residuals.push(ForeignResidual {
+                    category: "pypi-extra".into(),
+                    severity: ResidualSeverity::Mechanical,
+                    summary: format!("skipped extra-only requirement {spec}"),
+                    evidence: Some(spec),
+                    provenance: None,
+                });
             }
             Pep508::Invalid { spec, reason } => {
                 return Err(ForeignError::Parse(format!(
@@ -971,6 +998,54 @@ mod tests {
             }),
             "{:?}",
             recipe.residuals
+        );
+    }
+
+    #[test]
+    fn pip_hash_tail_is_not_the_root_version() {
+        let recipe = parse_pypi_str(
+            "demo==1.0 --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+        )
+        .expect("parse");
+        assert_eq!(recipe.version, "1.0");
+    }
+
+    #[test]
+    fn requirements_extra_marker_is_skipped() {
+        let recipe = parse_pypi_str("demo==1.0\npytest>=7; extra == 'test'\n").expect("parse");
+        assert!(
+            recipe.dependencies.iter().all(|dep| dep.name != "pytest"),
+            "{:?}",
+            recipe.dependencies
+        );
+        assert!(
+            recipe
+                .residuals
+                .iter()
+                .any(|residual| residual.category == "pypi-extra"),
+            "{:?}",
+            recipe.residuals
+        );
+    }
+
+    #[test]
+    fn project_urls_homepage_wins_over_pypi_listing() {
+        let recipe = parse_pypi_str(
+            r#"{
+              "info": {
+                "name": "demo",
+                "version": "1.0",
+                "home_page": "",
+                "project_url": "https://pypi.org/project/demo/",
+                "project_urls": {"Homepage": "https://example.invalid/demo"}
+              },
+              "urls": []
+            }"#,
+        )
+        .expect("parse");
+        assert_eq!(
+            recipe.homepage.as_deref(),
+            Some("https://example.invalid/demo")
         );
     }
 }

@@ -102,6 +102,13 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A CRAN JSON `Depends` array that is one comma-separated DESCRIPTION
+  string is split the same way a string field is. `OS_type` is recorded
+  as a judgment residual instead of disappearing.
+- A requirements.txt `==` pin no longer treats `--hash=` or a
+  continuation backslash as the EasyBuild version. Extra-gated lines
+  become residuals instead of aborting parse. Warehouse
+  `project_urls.Homepage` wins over the PyPI listing.
 - A LuaRocks `source.hash` is kept as SHA-256 only when it is 64 hex.
   `source.sha256` wins over `hash`, so an MD5 no longer shadows a real
   digest or become a checksum EasyBuild cannot use.
