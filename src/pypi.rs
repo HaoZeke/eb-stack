@@ -468,6 +468,18 @@ fn parse_requirements_txt(text: &str) -> Result<ForeignRecipe, ForeignError> {
         provenance: Vec::new(),
     }];
     for (dep_name, dep_pin, original, marker) in specs.into_iter().skip(1) {
+        if crate::provides::shipped_with_python(&dep_name) {
+            residuals.push(ForeignResidual {
+                category: "pypi-requirement".into(),
+                severity: ResidualSeverity::Mechanical,
+                summary: format!(
+                    "{dep_name} comes with the Python module, so it is not a dependency"
+                ),
+                evidence: Some(original),
+                provenance: None,
+            });
+            continue;
+        }
         let condition = if let Some(marker) = marker {
             residuals.push(ForeignResidual {
                 category: "pypi-marker".into(),
@@ -659,6 +671,26 @@ mod tests {
         let err = parse_pypi_str("pkg @ https://example.invalid/pkg-1.0.tar.gz\n")
             .expect_err("direct ref");
         assert!(err.to_string().contains("direct URL"), "{err}");
+    }
+
+    #[test]
+    fn requirements_txt_skips_python_shipped_names() {
+        let recipe = parse_pypi_str("demo==1.0\nsetuptools==69.0.3\npip==24.0\n").expect("parse");
+        assert!(
+            recipe
+                .dependencies
+                .iter()
+                .all(|dep| !crate::provides::shipped_with_python(&dep.name)),
+            "{:?}",
+            recipe.dependencies
+        );
+        assert!(
+            recipe.residuals.iter().any(|residual| {
+                residual.category == "pypi-requirement" && residual.summary.contains("setuptools")
+            }),
+            "{:?}",
+            recipe.residuals
+        );
     }
 
     #[test]
