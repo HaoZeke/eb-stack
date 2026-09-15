@@ -12,7 +12,7 @@ use crate::hierarchy::{
     filter_candidates_in_hierarchy, is_system_toolchain, toolchains_match, SourceDepSpec,
     ToolchainHierarchy,
 };
-use crate::provides::expand_extension_provides;
+use crate::provides::{expand_extension_provides, lookup_named_candidates};
 use crate::resolvo_provider::solve_with_resolvo;
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
@@ -125,7 +125,7 @@ pub fn resolvo_resolve_dep_versions(
         if s.versionsuffix.as_deref().is_some_and(|vs| !vs.is_empty()) {
             continue;
         }
-        let Some(named) = by_name.get(s.name.as_str()) else {
+        let Some((sat_name, named)) = lookup_named_candidates(&by_name, &s.name) else {
             if s.optional {
                 continue;
             }
@@ -171,26 +171,26 @@ pub fn resolvo_resolve_dep_versions(
             // Parent-toolchain builds are generation-authoritative, not a
             // downgrade. SAT must not keep the source floor as a hard req
             // on those rows; other members of the name stay on the floor.
-            parent_floors.insert(s.name.clone(), version_req.clone());
+            parent_floors.insert(sat_name.clone(), version_req.clone());
             version_req = ">=0".into();
         }
         if let Some(ver) = pin_exact {
             pins.push(crate::domain::Pin {
-                name: s.name.clone(),
+                name: sat_name.clone(),
                 version_req: format!("=={ver}"),
             });
         }
         dep_reqs.push(DepReq {
-            name: s.name.clone(),
+            name: sat_name.clone(),
             version_req,
             // Empty suffix is the unsuffixed module. None would let a CUDA
             // variant win prefer_newer at the same version.
             versionsuffix: Some(String::new()),
             toolchain: None,
         });
-        resolvable.insert(s.name.clone());
+        resolvable.insert(sat_name.clone());
         if s.optional {
-            optional_names.insert(s.name.clone());
+            optional_names.insert(sat_name);
         }
     }
     if dep_reqs.is_empty() {
@@ -1706,5 +1706,25 @@ mod lock_identity_and_bump_pin_tests {
         )
         .expect("numpy via SciPy-bundle exts_list must reach SAT");
         assert_eq!(map.get("numpy").map(String::as_str), Some("2.3.1"));
+    }
+
+    #[test]
+    fn aliased_extension_provide_reaches_the_foreign_name_index() {
+        let mut bundle = candidate("Python-bundle-PyPI", "2025.04", None);
+        bundle.exts_list = vec![ExtEntry {
+            name: "poetry-core".into(),
+            version: "1.9.0".into(),
+        }];
+        let (map, _) = resolvo_resolve_dep_versions(
+            &[SourceDepSpec::plain("poetry-core", "1.9.0")],
+            &[bundle],
+            &hierarchy(),
+            &foss(),
+            "App",
+            "1.0",
+            None,
+        )
+        .expect("poetry-core via bundle exts_list must reach SAT");
+        assert_eq!(map.get("poetry").map(String::as_str), Some("1.9.0"));
     }
 }

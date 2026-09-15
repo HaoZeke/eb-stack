@@ -10,7 +10,9 @@ use crate::package::{
     ProfileEnvironment, ProfileLock, StackPin, StackPinMode, StackPolicy,
     PROFILE_LOCK_SCHEMA_VERSION,
 };
-use crate::provides::{expand_extension_provides, resolve_extension_provider};
+use crate::provides::{
+    candidate_answers_name, expand_extension_provides, resolve_extension_provider,
+};
 use crate::resolvo_provider::solve_curated_with_stack_policy;
 use crate::version::matches_req;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -133,7 +135,7 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
             continue;
         }
         let has_compatible = admitted.iter().any(|candidate| {
-            candidate.name == name
+            candidate_answers_name(candidate, &name)
                 && candidate_matches_version_req(
                     candidate,
                     &version_req,
@@ -841,13 +843,17 @@ mod tests {
     use super::{
         admit_named_dependency_toolchains, apply_generation_consensus_pins,
         candidate_matches_version_req, dependency_candidate_matches, match_robot_name,
-        normalize_requirement,
+        normalize_requirement, unsatisfied_direct_dependencies_with_hierarchy,
     };
-    use crate::domain::{Candidate, DepReq, Toolchain};
+    use crate::domain::{Candidate, DepReq, ExtEntry, Toolchain};
     use crate::hierarchy::ToolchainHierarchy;
-    use crate::package::{ConditionExpr, DependencyIntent, DependencyRole};
-    use crate::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
+    use crate::package::{
+        BuildSpec, ConditionExpr, DependencyIntent, DependencyRole, PackageMetadata, PackageOrigin,
+        PackagePlan, ProductProfile, ProfileEnvironment, StackPolicy, PACKAGE_SCHEMA_VERSION,
+        STACK_POLICY_SCHEMA_VERSION,
+    };
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
 
     #[test]
     fn normalizes_foreign_version_syntax_for_resolvo() {
@@ -1082,5 +1088,105 @@ mod tests {
             .find(|pin| pin.name == "CMake")
             .expect("CMake pin");
         assert_eq!(pin.version_requirement, "==3.29.3");
+    }
+
+    #[test]
+    fn aliased_bundle_provide_is_not_a_direct_dependency_hole() {
+        let plan = PackagePlan {
+            schema_version: PACKAGE_SCHEMA_VERSION,
+            origin: PackageOrigin::Pypi,
+            package: PackageMetadata {
+                name: "App".into(),
+                version: "1.0".into(),
+                upstream_version: None,
+                homepage: None,
+                description: None,
+                license: None,
+            },
+            sources: Vec::new(),
+            dependencies: vec![DependencyIntent {
+                id: "dep:poetry-core".into(),
+                name: "poetry-core".into(),
+                eb_name: None,
+                constraint: Some("==1.9.0".into()),
+                toolchain: None,
+                versionsuffix: None,
+                roles: vec![DependencyRole::Build],
+                condition: ConditionExpr::Always,
+                virtual_capability: None,
+                solver_excluded: false,
+                provenance: Vec::new(),
+            }],
+            rules: Vec::new(),
+            build: BuildSpec {
+                toolchain: Toolchain {
+                    name: "foss".into(),
+                    version: "2026.1".into(),
+                },
+                easyblock: None,
+                build_systems: Vec::new(),
+                source_root: None,
+                config_options: Vec::new(),
+                moduleclass: None,
+                patches: Vec::new(),
+                easyconfig_parameters: BTreeMap::new(),
+            },
+            profiles: vec![ProductProfile {
+                name: "default".into(),
+                default: true,
+                versionsuffix: Vec::new(),
+                platform: None,
+                architecture: None,
+                features: BTreeMap::new(),
+                parameters: BTreeMap::new(),
+                toolchain_options: BTreeMap::new(),
+                config_options: Vec::new(),
+                easyconfig_parameters: BTreeMap::new(),
+                verification_commands: Vec::new(),
+            }],
+            outputs: Vec::new(),
+            residuals: Vec::new(),
+            overlay_extensions: Vec::new(),
+            package_index: Default::default(),
+        };
+        let bundle = Candidate {
+            name: "Python-bundle-PyPI".into(),
+            version: "2025.04".into(),
+            toolchain: Toolchain {
+                name: "foss".into(),
+                version: "2026.1".into(),
+            },
+            versionsuffix: None,
+            easyconfig_path: "Python-bundle-PyPI-2025.04-foss-2026.1.eb".into(),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: vec![ExtEntry {
+                name: "poetry-core".into(),
+                version: "1.9.0".into(),
+            }],
+            moduleclass: None,
+        };
+        let stack = StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "test".into(),
+            toolchain: bundle.toolchain.clone(),
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        };
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/toolchain_hierarchy/foss-2026.1.json");
+        let holes = unsatisfied_direct_dependencies_with_hierarchy(
+            &plan,
+            "default",
+            &ProfileEnvironment::default(),
+            &[bundle],
+            &stack,
+            Some(&fixture),
+        )
+        .expect("hole check");
+        assert!(
+            holes.is_empty(),
+            "poetry-core via aliased bundle provide must not be a hole: {holes:?}"
+        );
     }
 }

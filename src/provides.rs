@@ -222,6 +222,35 @@ pub fn aliased_module_name(name: &str) -> String {
         .unwrap_or_else(|| name.to_string())
 }
 
+/// Candidates indexed under `name` or its aliased module name.
+///
+/// [`provide_from_parent`] writes `Candidate.name` as the aliased module
+/// (`poetry`). Specs still use the foreign spelling (`poetry-core`). Returns
+/// the SAT index key that actually holds the rows.
+pub fn lookup_named_candidates<'a>(
+    by_name: &HashMap<&str, Vec<&'a Candidate>>,
+    name: &str,
+) -> Option<(String, Vec<&'a Candidate>)> {
+    if let Some(named) = by_name.get(name) {
+        return Some((name.to_string(), named.clone()));
+    }
+    let aliased = aliased_module_name(name);
+    if aliased != name {
+        if let Some(named) = by_name.get(aliased.as_str()) {
+            return Some((aliased, named.clone()));
+        }
+    }
+    None
+}
+
+/// True when `candidate` satisfies an exact-name request for `name`.
+///
+/// Matches the stored module name or a foreign spelling that aliases to it.
+pub fn candidate_answers_name(candidate: &Candidate, name: &str) -> bool {
+    candidate.name == name
+        || overlay_package_identity(&candidate.name) == overlay_package_identity(name)
+}
+
 /// True when `--format pypi` must not emit a `PythonBundle` overlay.
 ///
 /// These are toolchain-built extensions. A pip wheel on top of EESSI
@@ -265,18 +294,11 @@ pub fn existing_language_provider<'a>(
 
 /// Overlay-identity map for [`existing_language_provider_in`].
 ///
-/// Bundle parents overwrite first-class recipes, matching
-/// [`existing_language_provider`].
+/// Bundle `exts_list` parents are keyed first so they win over a standalone
+/// first-class recipe, matching [`existing_language_provider`]. First-class
+/// names only fill identities no bundle already provides.
 pub fn language_provider_index(candidates: &[Candidate]) -> HashMap<String, &Candidate> {
     let mut index = HashMap::new();
-    for candidate in candidates {
-        if candidate.is_extension_provide() {
-            continue;
-        }
-        index
-            .entry(overlay_package_identity(&candidate.name))
-            .or_insert(candidate);
-    }
     for candidate in candidates {
         if candidate.is_extension_provide() {
             continue;
@@ -289,6 +311,14 @@ pub fn language_provider_index(candidates: &[Candidate]) -> HashMap<String, &Can
                 .entry(overlay_package_identity(&ext.name))
                 .or_insert(candidate);
         }
+    }
+    for candidate in candidates {
+        if candidate.is_extension_provide() {
+            continue;
+        }
+        index
+            .entry(overlay_package_identity(&candidate.name))
+            .or_insert(candidate);
     }
     index
 }
@@ -509,5 +539,46 @@ mod tests {
             .expect("index");
         assert_eq!(linear.easyconfig_path, first.easyconfig_path);
         assert_eq!(indexed.easyconfig_path, first.easyconfig_path);
+    }
+
+    #[test]
+    fn language_provider_index_prefers_bundle_over_first_class() {
+        let mut numpy = bundle();
+        numpy.name = "numpy".into();
+        numpy.version = "2.3.1".into();
+        numpy.exts_list.clear();
+        numpy.easyconfig_path = "numpy-2.3.1-foss-2026.1.eb".into();
+        let universe = [numpy, bundle()];
+        let linear = existing_language_provider("numpy", &universe).expect("linear");
+        let indexed = existing_language_provider_in("numpy", &language_provider_index(&universe))
+            .expect("index");
+        assert_eq!(linear.easyconfig_path, indexed.easyconfig_path);
+        assert_eq!(linear.name, "SciPy-bundle");
+        assert_eq!(indexed.name, "SciPy-bundle");
+    }
+
+    #[test]
+    fn lookup_named_candidates_finds_aliased_provide() {
+        let mut parent = bundle();
+        parent.name = "Python-bundle-PyPI".into();
+        parent.exts_list = vec![ExtEntry {
+            name: "poetry-core".into(),
+            version: "1.9.0".into(),
+        }];
+        let expanded = expand_extension_provides(vec![parent]);
+        let mut by_name: HashMap<&str, Vec<&Candidate>> = HashMap::new();
+        for candidate in &expanded {
+            by_name
+                .entry(candidate.name.as_str())
+                .or_default()
+                .push(candidate);
+        }
+        let (sat_name, named) =
+            lookup_named_candidates(&by_name, "poetry-core").expect("aliased provide");
+        assert_eq!(sat_name, "poetry");
+        assert!(named.iter().any(|candidate| candidate.version == "1.9.0"));
+        let poetry = named[0];
+        assert!(candidate_answers_name(poetry, "poetry-core"));
+        assert!(candidate_answers_name(poetry, "poetry"));
     }
 }
