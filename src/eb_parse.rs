@@ -829,9 +829,21 @@ impl<'src, 'env> Parser<'src, 'env> {
                     let right = self.parse_postfix()?;
                     left = match (left, right) {
                         (Value::Str(fmt), Value::Str(arg)) => {
+                            let need = count_percent_conversions(&fmt);
+                            if need != 1 {
+                                return Err(self.err(format!(
+                                    "% format has {need} conversion(s) but 1 operand"
+                                )));
+                            }
                             Value::Str(python_percent_format_one(&fmt, &arg))
                         }
                         (Value::Str(fmt), Value::Int(arg)) => {
+                            let need = count_percent_conversions(&fmt);
+                            if need != 1 {
+                                return Err(self.err(format!(
+                                    "% format has {need} conversion(s) but 1 operand"
+                                )));
+                            }
                             Value::Str(python_percent_format_one(&fmt, &arg.to_string()))
                         }
                         (Value::Str(fmt), Value::Tuple(args)) => {
@@ -1846,7 +1858,7 @@ fn parse_dep_filename(s: &str) -> Option<ResolvedDep> {
             // all-alpha does not steal the real toolchain pair that follows.
             // CUDA after an earlier pair is a versionsuffix, not a second
             // toolchain.
-            if parts[index].eq_ignore_ascii_case("CUDA") && toolchain_at.is_some() {
+            if toolchain_at.is_some() && is_filename_versionsuffix_token(parts[index]) {
                 continue;
             }
             toolchain_at = Some(index);
@@ -1897,6 +1909,12 @@ fn looks_like_toolchain_name(name: &str) -> bool {
         && name
             .chars()
             .all(|character| character.is_ascii_alphabetic())
+}
+
+fn is_filename_versionsuffix_token(name: &str) -> bool {
+    name.eq_ignore_ascii_case("CUDA")
+        || name.eq_ignore_ascii_case("Java")
+        || name.eq_ignore_ascii_case("Python")
 }
 
 fn value_to_ext(val: &Value) -> Result<ResolvedExt, String> {
@@ -4700,6 +4718,19 @@ toolchain = {'name': 'GCCcore', 'version': '14.3.0'}
 "#;
         let r = resolve_easyconfig_str(too_few).expect("file still resolves");
         assert_eq!(r.homepage, None, "unfilled conversion must skip the field");
+
+        let single = r#"
+name = 'demo'
+version = '1.0'
+homepage = 'https://example.org/%s/%s' % name
+toolchain = {'name': 'GCCcore', 'version': '14.3.0'}
+"#;
+        let r = resolve_easyconfig_str(single).expect("file still resolves");
+        assert_eq!(
+            r.homepage, None,
+            "a single operand must not leave a leftover %s: {:?}",
+            r.homepage
+        );
     }
 
     #[test]
@@ -4859,6 +4890,27 @@ homepage = 'https://example.invalid'
             Some("intel-compilers-2023.2.0".into())
         );
         assert!(parsed.dependencies[0].versionsuffix.is_none());
+    }
+
+    #[test]
+    fn filename_dependency_keeps_a_java_pair_as_versionsuffix() {
+        let src = "name = 'App'\nversion = '1.0'\n\
+                   toolchain = {'name': 'foss', 'version': '2023a'}\n\
+                   dependencies = ['Spark-3.5.1-foss-2023a-Java-17.eb']\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.dependencies[0].name, "Spark");
+        assert_eq!(parsed.dependencies[0].version, "3.5.1");
+        assert_eq!(
+            parsed.dependencies[0]
+                .toolchain
+                .as_ref()
+                .map(|toolchain| toolchain.label()),
+            Some("foss-2023a".into())
+        );
+        assert_eq!(
+            parsed.dependencies[0].versionsuffix.as_deref(),
+            Some("-Java-17")
+        );
     }
 
     #[test]
