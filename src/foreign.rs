@@ -516,6 +516,10 @@ pub(crate) fn guess_easyblock(recipe: &ForeignRecipe, warnings: &mut Vec<String>
         warnings.push(format!("build-system hint {hint} → easyblock Crate"));
         return "Crate".into();
     }
+    if let Some(hint) = hint(&["luarocks"]) {
+        warnings.push(format!("build-system hint {hint} → easyblock LuaRocks"));
+        return "LuaRocks".into();
+    }
     if let Some(hint) = hint(&["python-bundle"]) {
         warnings.push(format!("build-system hint {hint} → easyblock PythonBundle"));
         return "PythonBundle".into();
@@ -2557,5 +2561,20 @@ source:
         };
         let mut notes = Vec::new();
         assert_eq!(guess_easyblock(&recipe, &mut notes), "PythonPackage");
+    }
+
+    #[test]
+    fn luarocks_hint_selects_the_luarocks_easyblock() {
+        let recipe = crate::luarocks::parse_luarocks_str(
+            r#"
+package = "lfs"
+version = "1.8.0-1"
+source = { url = "https://example.invalid/lfs.tgz" }
+"#,
+        )
+        .expect("parse");
+        let mut notes = Vec::new();
+        assert_eq!(guess_easyblock(&recipe, &mut notes), "LuaRocks");
+        assert!(notes.iter().any(|note| note.contains("LuaRocks")));
     }
 }
