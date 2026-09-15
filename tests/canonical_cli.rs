@@ -600,3 +600,173 @@ fn package_bump_re_run_keeps_contributor() {
         "re_run= must keep --contributor: {re_run}"
     );
 }
+
+#[test]
+fn package_bump_companion_reprints_parent_eval_context() {
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Gamma-1.0-foss-2023a.eb");
+    let robot = temp.path().join("robot");
+    let site = temp.path().join("site-robot");
+    std::fs::create_dir_all(&robot).expect("robot");
+    std::fs::create_dir_all(&site).expect("site robot");
+    std::fs::write(
+        &source,
+        "easyblock = 'CMakeMake'\nname = 'Gamma'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['gamma-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [\n    ('KeptLib', '1.0'),\n    ('VanishedLib', '20211028'),\n]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    std::fs::write(
+        robot.join("KeptLib-1.0-foss-2025a.eb"),
+        "easyblock = 'ConfigureMake'\nname = 'KeptLib'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Kept'\n\
+         toolchain = {'name': 'foss', 'version': '2025a'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'lib'\n",
+    )
+    .expect("kept candidate");
+    std::fs::write(
+        site.join("VanishedLib-20211028-foss-2023a.eb"),
+        "easyblock = 'ConfigureMake'\nname = 'VanishedLib'\nversion = '20211028'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Vanished'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'lib'\n",
+    )
+    .expect("vanished source");
+    let policy = temp.path().join("site.toml");
+    std::fs::write(
+        &policy,
+        "schema_version = 1\nname = \"site\"\n[toolchain]\nname = \"foss\"\nversion = \"2025a\"\n",
+    )
+    .expect("stack policy");
+    let hierarchy = temp.path().join("foss-2025a.json");
+    std::fs::write(
+        &hierarchy,
+        r#"{"parent":{"name":"foss","version":"2025a"},"members":[{"name":"system","version":"system"},{"name":"foss","version":"2025a"}]}"#,
+    )
+    .expect("hierarchy fixture");
+    let output = temp.path().join("bundle");
+    let result = Command::new(binary)
+        .args([
+            "package",
+            "bump",
+            "--source",
+            source.to_str().unwrap(),
+            "--toolchain-name",
+            "foss",
+            "--toolchain-version",
+            "2025a",
+            "--version",
+            "1.7.0",
+            "--source-checksum",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--easyconfigs",
+            robot.to_str().unwrap(),
+            "--easyconfigs",
+            site.to_str().unwrap(),
+            "--stack-policy",
+            policy.to_str().unwrap(),
+            "--hierarchy-fixture",
+            hierarchy.to_str().unwrap(),
+            "--contributor",
+            "Ada Lovelace",
+            "--out-dir",
+            output.to_str().unwrap(),
+        ])
+        .output()
+        .expect("package bump with unresolved dep");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        !result.status.success(),
+        "unresolved generation dep must fail: {combined}"
+    );
+    let companions: Vec<&str> = combined
+        .lines()
+        .filter(|line| line.starts_with("companion="))
+        .collect();
+    assert!(
+        !companions.is_empty(),
+        "expected companion= lines: {combined}"
+    );
+    for line in &companions {
+        assert!(
+            line.contains(robot.to_str().unwrap()),
+            "companion must keep first --easyconfigs: {line}"
+        );
+        assert!(
+            line.contains(site.to_str().unwrap()),
+            "companion must keep second --easyconfigs: {line}"
+        );
+        assert!(
+            line.contains("--stack-policy") && line.contains(policy.to_str().unwrap()),
+            "companion must keep --stack-policy: {line}"
+        );
+        assert!(
+            line.contains("--hierarchy-fixture") && line.contains(hierarchy.to_str().unwrap()),
+            "companion must keep --hierarchy-fixture: {line}"
+        );
+        assert!(
+            line.contains("--contributor") && line.contains("Ada Lovelace"),
+            "companion must keep --contributor: {line}"
+        );
+    }
+}
+
+#[test]
+fn recipe_lint_style_finding_names_the_file() {
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let legal = temp.path().join("legal.eb");
+    let long = temp.path().join("too-long.eb");
+    std::fs::write(
+        &legal,
+        "easyblock = 'ConfigureMake'\nname = 'Legal'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'ok'\n\
+         toolchain = {'name': 'foss', 'version': '2025a'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'tools'\n",
+    )
+    .expect("legal recipe");
+    let over = format!("description = '{}'\n", "x".repeat(130));
+    std::fs::write(&long, over).expect("long recipe");
+    let result = Command::new(binary)
+        .args([
+            "recipe",
+            "lint",
+            legal.to_str().unwrap(),
+            long.to_str().unwrap(),
+        ])
+        .output()
+        .expect("recipe lint two files");
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        !result.status.success(),
+        "E501 must fail lint: {stdout}\nstderr={}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("lint json");
+    let style = parsed
+        .get("style")
+        .and_then(|value| value.as_array())
+        .expect("style array");
+    assert_eq!(style.len(), 1, "one E501 expected: {stdout}");
+    let path = style[0]
+        .get("path")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    assert!(
+        path.contains("too-long.eb"),
+        "style finding must name the long file, got {path:?} in {stdout}"
+    );
+    assert!(
+        !path.contains("legal.eb"),
+        "style finding must not name the legal file: {stdout}"
+    );
+}

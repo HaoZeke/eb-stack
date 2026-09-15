@@ -662,7 +662,7 @@ fn run_package_bump(args: PackageBumpArgs, mode: BumpMode) -> Result<()> {
             let pin = if pin.is_empty() { None } else { Some(pin) };
             println!(
                 "companion={}",
-                eb_stack::companion_argv(
+                eb_stack::companion_argv_with(
                     name,
                     pin,
                     &easyconfigs,
@@ -671,6 +671,11 @@ fn run_package_bump(args: PackageBumpArgs, mode: BumpMode) -> Result<()> {
                     &toolchain_version,
                     &robot,
                     &out_dir,
+                    eb_stack::CompanionParent {
+                        stack_policy: stack_policy_flag.as_deref(),
+                        hierarchy_fixture: hierarchy_flag.as_deref(),
+                        contributor: contributor.as_deref(),
+                    },
                 )
             );
         }
@@ -918,7 +923,11 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             for path in paths {
                 let text = std::fs::read_to_string(&path)
                     .with_context(|| format!("read {}", path.display()))?;
-                findings.extend(lint_style(&text));
+                findings.extend(
+                    lint_style(&text)
+                        .into_iter()
+                        .map(|finding| finding.with_path(path.display().to_string())),
+                );
                 let report = check_maintainer_acceptability_text(&text);
                 for f in report.findings {
                     maintainer_all.push(serde_json::json!({

@@ -22,6 +22,9 @@ pub const EB_MAX_LINE: usize = 120;
 /// One style finding (currently E501 only).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StyleFinding {
+    /// Recipe path, when the finding was produced from a named file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     /// 1-based line number.
     pub line: usize,
     /// 1-based column where the line exceeds the limit (usually 121).
@@ -57,12 +60,19 @@ impl StyleFinding {
     /// A long-line finding for `line`, which is `len` characters.
     pub fn e501(line: usize, len: usize, mechanical: bool) -> Self {
         Self {
+            path: None,
             line,
             column: EB_MAX_LINE + 1,
             code: "E501".into(),
             message: format!("line too long ({len} > {EB_MAX_LINE} characters)"),
             mechanical,
         }
+    }
+
+    /// Attach the recipe this finding was read from.
+    pub fn with_path(mut self, path: impl Into<String>) -> Self {
+        self.path = Some(path.into());
+        self
     }
 }
 
@@ -852,6 +862,9 @@ fn wrap_words(body: &str, width: usize) -> Vec<String> {
 
 impl fmt::Display for StyleFinding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(path) = &self.path {
+            write!(f, "{path}:")?;
+        }
         write!(
             f,
             "{}:{}:{}: {} {}",

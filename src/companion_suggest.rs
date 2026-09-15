@@ -255,6 +255,17 @@ pub fn find_foreign_package_py(roots: &[PathBuf], name: &str) -> Option<PathBuf>
     None
 }
 
+/// Parent bump flags a companion must reprint so `eval` stays site-complete.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CompanionParent<'a> {
+    /// Parent `--stack-policy`, when the bump named one.
+    pub stack_policy: Option<&'a Path>,
+    /// Parent `--hierarchy-fixture`, when the bump named one.
+    pub hierarchy_fixture: Option<&'a Path>,
+    /// Parent `--contributor`, when the bump named one.
+    pub contributor: Option<&'a str>,
+}
+
 /// Full `eb-stack package …` argv. Text after `companion=` is `eval`-able.
 pub fn companion_argv(
     name: &str,
@@ -266,14 +277,38 @@ pub fn companion_argv(
     robot: &str,
     out_dir: &Path,
 ) -> String {
-    let roots = with_outdir_overlay(roots.to_vec(), out_dir);
-    let roots = roots.as_slice();
+    companion_argv_with(
+        name,
+        version_pin,
+        roots,
+        package_configs,
+        toolchain_name,
+        toolchain_version,
+        robot,
+        out_dir,
+        CompanionParent::default(),
+    )
+}
+
+/// Same as [`companion_argv`], reprinting the parent bump's eval context.
+pub fn companion_argv_with(
+    name: &str,
+    version_pin: Option<&str>,
+    roots: &[PathBuf],
+    package_configs: &[PathBuf],
+    toolchain_name: &str,
+    toolchain_version: &str,
+    robot: &str,
+    out_dir: &Path,
+    parent: CompanionParent<'_>,
+) -> String {
+    let search_roots = with_outdir_overlay(roots.to_vec(), out_dir);
     let pick = SourcePick {
         parent_family: Some(toolchain_name),
         want_cuda: version_pin.is_some_and(pin_asks_for_cuda),
     };
-    if let Some(source) = find_named_easyconfig_preferring(roots, name, pick) {
-        let parent = Toolchain {
+    if let Some(source) = find_named_easyconfig_preferring(&search_roots, name, pick) {
+        let parent_tc = Toolchain {
             name: toolchain_name.to_string(),
             version: toolchain_version.to_string(),
         };
@@ -281,7 +316,7 @@ pub fn companion_argv(
             name: "system".into(),
             version: "system".into(),
         });
-        let mapped = map_source_toolchain_to_target(Some(&parsed), &parent, None);
+        let mapped = map_source_toolchain_to_target(Some(&parsed), &parent_tc, None);
         // Mapper empties SYSTEM version; bump `--toolchain-version` needs `system`.
         let emitted_version = if mapped.is_system() && mapped.version.is_empty() {
             "system"
@@ -303,31 +338,76 @@ pub fn companion_argv(
                 shell_quote(&config.display().to_string())
             ));
         }
+        push_easyconfig_roots(&mut line, roots, robot);
+        push_parent_context(&mut line, parent, false);
         line.push_str(&format!(
-            " --easyconfigs {} --out-dir {}",
-            shell_quote(robot),
+            " --out-dir {}",
             shell_quote(&out_dir.display().to_string())
         ));
         return line;
     }
     if let Some(config) = find_sibling_package_config(package_configs, name) {
         if let (Some(foreign), (plan_tc, Some(policy))) = (
-            find_foreign_package_py(roots, name),
+            find_foreign_package_py(&search_roots, name),
             plan_toolchain_and_policy(&config, toolchain_name, toolchain_version),
         ) {
-            return format!(
-                "eb-stack package plan --package-config {} --source {} --toolchain-name {} --toolchain-version {} --stack-policy {} --easyconfigs {} --out-dir {}",
+            let mut line = format!(
+                "eb-stack package plan --package-config {} --source {} --toolchain-name {} --toolchain-version {} --stack-policy {}",
                 shell_quote(&config.display().to_string()),
                 shell_quote(&foreign.display().to_string()),
                 shell_quote(&plan_tc),
                 shell_quote(toolchain_version),
-                shell_quote(&policy.display().to_string()),
-                shell_quote(robot),
-                shell_quote(&out_dir.display().to_string())
+                shell_quote(&policy.display().to_string())
             );
+            push_easyconfig_roots(&mut line, roots, robot);
+            push_parent_context(&mut line, parent, true);
+            line.push_str(&format!(
+                " --out-dir {}",
+                shell_quote(&out_dir.display().to_string())
+            ));
+            return line;
         }
     }
     format!("eb-stack package bump # {name}: no source or package-config")
+}
+
+fn push_easyconfig_roots(line: &mut String, roots: &[PathBuf], robot: &str) {
+    if roots.is_empty() {
+        if !robot.is_empty() {
+            line.push_str(&format!(" --easyconfigs {}", shell_quote(robot)));
+        }
+        return;
+    }
+    for root in roots {
+        line.push_str(&format!(
+            " --easyconfigs {}",
+            shell_quote(&root.display().to_string())
+        ));
+    }
+}
+
+fn push_parent_context(
+    line: &mut String,
+    parent: CompanionParent<'_>,
+    already_has_stack_policy: bool,
+) {
+    if !already_has_stack_policy {
+        if let Some(path) = parent.stack_policy {
+            line.push_str(&format!(
+                " --stack-policy {}",
+                shell_quote(&path.display().to_string())
+            ));
+        }
+    }
+    if let Some(path) = parent.hierarchy_fixture {
+        line.push_str(&format!(
+            " --hierarchy-fixture {}",
+            shell_quote(&path.display().to_string())
+        ));
+    }
+    if let Some(name) = parent.contributor {
+        line.push_str(&format!(" --contributor {}", shell_quote(name)));
+    }
 }
 
 fn plan_toolchain_and_policy(
@@ -1137,6 +1217,67 @@ mod tests {
         assert!(
             !argv.contains("--toolchain-name foss"),
             "parent foss must not be stamped on a GCCcore recipe: {argv}"
+        );
+    }
+
+    #[test]
+    fn companion_argv_reprints_parent_eval_context() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path().join("robot");
+        let overlay = temp.path().join("site");
+        let out = temp.path().join("out");
+        let policy = temp.path().join("site.toml");
+        let hierarchy = temp.path().join("foss-2025a.json");
+        fs::create_dir_all(robot.join("a").join("ASAGI")).expect("asagi dir");
+        fs::create_dir_all(&overlay).expect("overlay");
+        fs::write(
+            robot
+                .join("a")
+                .join("ASAGI")
+                .join("ASAGI-1.0-foss-2023a.eb"),
+            "name = 'ASAGI'\n",
+        )
+        .expect("asagi recipe");
+        fs::write(&policy, "schema_version = 1\n").expect("policy");
+        fs::write(&hierarchy, "{}\n").expect("hierarchy");
+        let argv = companion_argv_with(
+            "ASAGI",
+            Some("1.0"),
+            &[robot.clone(), overlay.clone()],
+            &[],
+            "foss",
+            "2025a",
+            robot.to_str().expect("utf8"),
+            &out,
+            CompanionParent {
+                stack_policy: Some(policy.as_path()),
+                hierarchy_fixture: Some(hierarchy.as_path()),
+                contributor: Some("Ada Lovelace"),
+            },
+        );
+        assert!(
+            argv.contains(&format!("--easyconfigs {}", robot.display()))
+                || argv.contains(&format!("--easyconfigs '{}'", robot.display())),
+            "first robot must be reprinted: {argv}"
+        );
+        assert!(
+            argv.contains(&format!("--easyconfigs {}", overlay.display()))
+                || argv.contains(&format!("--easyconfigs '{}'", overlay.display())),
+            "second robot must be reprinted: {argv}"
+        );
+        assert!(
+            argv.contains(&format!("--stack-policy {}", policy.display()))
+                || argv.contains(&format!("--stack-policy '{}'", policy.display())),
+            "parent --stack-policy must be reprinted: {argv}"
+        );
+        assert!(
+            argv.contains(&format!("--hierarchy-fixture {}", hierarchy.display()))
+                || argv.contains(&format!("--hierarchy-fixture '{}'", hierarchy.display())),
+            "parent --hierarchy-fixture must be reprinted: {argv}"
+        );
+        assert!(
+            argv.contains("--contributor 'Ada Lovelace'"),
+            "parent --contributor must be reprinted: {argv}"
         );
     }
 }

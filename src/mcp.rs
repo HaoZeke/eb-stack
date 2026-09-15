@@ -25,7 +25,7 @@ use crate::package_workflow::{
 };
 use crate::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use crate::{
-    artifact_facts_for_lock, companion_argv, load_json_file, lock_to_cyclonedx_with_facts,
+    artifact_facts_for_lock, companion_argv_with, load_json_file, lock_to_cyclonedx_with_facts,
     parse_package_index, resolve_ingest_source,
     solve_from_easyconfigs_with_baseline_version_and_extras, with_outdir_overlay,
     write_json_pretty, SbomFacts, SolveExtraOut, StackLock,
@@ -559,6 +559,14 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
             })
         })
         .collect::<Vec<_>>();
+    let parent_stack_policy = optional_path(arguments, "stack_policy");
+    let parent_hierarchy = optional_path(arguments, "hierarchy_fixture");
+    let parent_contributor = optional_string(arguments, "contributor");
+    let parent = crate::CompanionParent {
+        stack_policy: parent_stack_policy.as_deref(),
+        hierarchy_fixture: parent_hierarchy.as_deref(),
+        contributor: parent_contributor.as_deref(),
+    };
     let companions = bundle
         .plan
         .residuals
@@ -570,7 +578,7 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
             let req = words.next().unwrap_or_default();
             let pin = req.trim_start_matches('=').trim_start_matches('=');
             let pin = if pin.is_empty() { None } else { Some(pin) };
-            companion_argv(
+            companion_argv_with(
                 name,
                 pin,
                 &easyconfigs,
@@ -579,6 +587,7 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
                 &toolchain_version,
                 &robot,
                 &output,
+                parent,
             )
         })
         .collect::<Vec<_>>();
