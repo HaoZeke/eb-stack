@@ -63,6 +63,18 @@ fn detect_pypi_and_cran_paths() {
         detect_foreign_format(Path::new("META6.json")),
         Some(ForeignFormat::Raku)
     );
+    assert_eq!(
+        detect_foreign_format(Path::new("ingest/pypi/beautifulsoup4-4.12.3.json")),
+        Some(ForeignFormat::Pypi)
+    );
+    assert_eq!(
+        detect_foreign_format(Path::new("ingest/cran/jsonlite-1.8.9.json")),
+        Some(ForeignFormat::Cran)
+    );
+    assert_eq!(
+        detect_foreign_format(Path::new("ingest/cargo/readcon-0.13.1.json")),
+        Some(ForeignFormat::Cargo)
+    );
 }
 
 #[test]

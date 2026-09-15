@@ -326,7 +326,32 @@ pub fn detect_foreign_format(path: &Path) -> Option<ForeignFormat> {
     if name == "meta6.json" {
         return Some(ForeignFormat::Raku);
     }
+    if name.ends_with(".json") {
+        if let Some(format) = detect_ingest_dump_format(path) {
+            return Some(format);
+        }
+    }
     None
+}
+
+/// Name-mode writes `ingest/<format>/<name>-<version>.json`.
+fn detect_ingest_dump_format(path: &Path) -> Option<ForeignFormat> {
+    let parent = path.parent()?;
+    let format_dir = parent.file_name()?.to_str()?.to_ascii_lowercase();
+    let ingest = parent
+        .parent()?
+        .file_name()?
+        .to_str()?
+        .eq_ignore_ascii_case("ingest");
+    if !ingest {
+        return None;
+    }
+    match format_dir.as_str() {
+        "pypi" => Some(ForeignFormat::Pypi),
+        "cran" => Some(ForeignFormat::Cran),
+        "cargo" => Some(ForeignFormat::Cargo),
+        _ => None,
+    }
 }
 
 /// Parse foreign recipe text for the given format.
@@ -2555,6 +2580,22 @@ source:
             Some(ForeignFormat::Raku)
         );
         assert_eq!(detect_foreign_format(Path::new("foo.eb")), None);
+        assert_eq!(
+            detect_foreign_format(Path::new("ingest/pypi/beautifulsoup4-4.12.3.json")),
+            Some(ForeignFormat::Pypi)
+        );
+        assert_eq!(
+            detect_foreign_format(Path::new("ingest/cran/jsonlite-1.8.9.json")),
+            Some(ForeignFormat::Cran)
+        );
+        assert_eq!(
+            detect_foreign_format(Path::new("ingest/cargo/readcon-0.13.1.json")),
+            Some(ForeignFormat::Cargo)
+        );
+        assert_eq!(
+            detect_foreign_format(Path::new("pypi/beautifulsoup4-4.12.3.json")),
+            None
+        );
     }
 
     fn recipe_with_hints(hints: &[&str]) -> ForeignRecipe {
