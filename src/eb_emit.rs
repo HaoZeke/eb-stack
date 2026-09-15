@@ -131,6 +131,38 @@ struct RepeatedArtifactRewrite {
     count: usize,
 }
 
+fn version_continuation(after: &str) -> bool {
+    let mut characters = after.chars();
+    match characters.next() {
+        Some(character) if character.is_ascii_digit() => true,
+        Some('.') => characters
+            .next()
+            .is_some_and(|character| character.is_ascii_digit()),
+        _ => false,
+    }
+}
+
+fn version_token_is_standalone(text: &str, version: &str) -> bool {
+    let Some(index) = text.find(version) else {
+        return false;
+    };
+    !version_continuation(&text[index + version.len()..])
+}
+
+fn replace_version_token(text: &str, old_version: &str, new_version: &str) -> String {
+    let Some(index) = text.find(old_version) else {
+        return text.to_string();
+    };
+    if version_continuation(&text[index + old_version.len()..]) {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    out.push_str(&text[..index]);
+    out.push_str(new_version);
+    out.push_str(&text[index + old_version.len()..]);
+    out
+}
+
 /// Rename every further `{'<name>-<old>.<ext>': '<sha256>'}` entry in the recipe.
 ///
 /// The top-level `checksums` entry is rewritten by `rewrite_source_checksum`,
@@ -155,12 +187,12 @@ fn rewrite_repeated_artifact_checksums(
         let re = regex::Regex::new(&pattern).map_err(|e| EmitError::Rewrite(e.to_string()))?;
         let mut replaced = 0usize;
         let out = re.replace_all(&text, |caps: &regex::Captures| {
+            let key = caps.name("key").expect("key group").as_str();
+            if !version_token_is_standalone(key, old_version) {
+                return caps.get(0).expect("full match").as_str().to_string();
+            }
             replaced += 1;
-            let key =
-                caps.name("key")
-                    .expect("key group")
-                    .as_str()
-                    .replacen(old_version, new_version, 1);
+            let key = replace_version_token(key, old_version, new_version);
             let hash = new_checksum.unwrap_or("");
             let sep = caps.name("sep").expect("sep group").as_str();
             format!("{quote}{key}{quote}{sep}{quote}{hash}{quote}")
@@ -2021,6 +2053,41 @@ checksums = [
         // patch set still needs human review after a version bump.
         assert_eq!(r.warnings.len(), 1, "warnings: {:?}", r.warnings);
         assert!(r.warnings[0].contains("patches"), "{:?}", r.warnings);
+    }
+
+    #[test]
+    fn a_prefix_version_bump_does_not_rewrite_the_new_checksum_key() {
+        let src = "\
+name = 'Pkg'
+version = '1.0'
+toolchain = {'name': 'foss', 'version': '2025a'}
+checksums = [
+    {'pkg-1.0.tar.gz': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'},
+]
+";
+        let params = EmitParams {
+            toolchain: foss("2025a"),
+            version: Some("1.0.1".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: Some(
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+            ),
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert!(
+            r.text.contains(
+                "{'pkg-1.0.1.tar.gz': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}"
+            ),
+            "{}",
+            r.text
+        );
+        assert!(
+            !r.text.contains("pkg-1.0.1.1.tar.gz"),
+            "prefix rematch must not fire: {}",
+            r.text
+        );
     }
 
     const GPU_WITH_EXTENSION: &str = r#"name = 'GROMACS'
