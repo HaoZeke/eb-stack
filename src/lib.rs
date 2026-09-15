@@ -386,7 +386,16 @@ fn write_lock_sbom_and_extras(
     let build_map = build_dep_map_from_universe(lock, universe);
     // SBOM is opt-in: only write when the caller supplies an output path.
     if let Some(path) = sbom_out {
-        let sbom = lock_to_cyclonedx_with_runtime_and_build(lock, Some(&dep_map), Some(&build_map));
+        let artifacts = artifact_facts_for_lock(lock);
+        let sbom = lock_to_cyclonedx_with_facts(
+            lock,
+            SbomFacts {
+                runtime_dep_map: Some(&dep_map),
+                build_dep_map: Some(&build_map),
+                artifacts: Some(&artifacts),
+                ..SbomFacts::default()
+            },
+        );
         write_json_pretty(path, &sbom)?;
     }
 
@@ -1179,6 +1188,47 @@ mod tests {
             sbom_out.is_file(),
             "explicit --sbom-out must write the file"
         );
+    }
+
+    #[test]
+    fn solve_with_sbom_out_includes_typed_source_sha256() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ecs = tmp.path().join("easyconfigs/e/Example");
+        std::fs::create_dir_all(&ecs).unwrap();
+        let sha = "e".repeat(64);
+        std::fs::write(
+            ecs.join("Example-1.0.eb"),
+            format!(
+                "name = 'Example'\nversion = '1.0'\ntoolchain = SYSTEM\nhomepage = 'https://example.invalid'\ndescription = 'Example'\nsources = ['Example-1.0.tar.gz']\nchecksums = [('sha256', '{sha}')]\n"
+            ),
+        )
+        .unwrap();
+        let policy = tmp.path().join("policy.json");
+        std::fs::write(
+            &policy,
+            r#"{"toolchain":{"name":"system","version":"system"},"roots":["Example"],"objective":"prefer_newer"}"#,
+        )
+        .unwrap();
+        let lock_out = tmp.path().join("stack.lock.json");
+        let sbom_out = tmp.path().join("stack.cdx.json");
+        solve_from_easyconfigs(
+            &[tmp.path().join("easyconfigs").as_path()],
+            &policy,
+            None,
+            &lock_out,
+            Some(&sbom_out),
+        )
+        .expect("solve");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&sbom_out).unwrap()).unwrap();
+        let example = json["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "Example")
+            .expect("Example");
+        assert_eq!(example["hashes"][0]["alg"], "SHA-256");
+        assert_eq!(example["hashes"][0]["content"], sha);
     }
 
     /// Overlay tree wins on name+version+toolchain; non-overridden upstream remains.

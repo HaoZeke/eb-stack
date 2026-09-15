@@ -35,7 +35,7 @@ use std::str::FromStr;
 pub(crate) fn lock_package_key(package: &LockPackage) -> String {
     let key = package.identity_key();
     format!(
-        "{}@{}+{}{}",
+        "{}@{}+{}+vs{}",
         key.name, key.version, key.toolchain, key.versionsuffix
     )
 }
@@ -264,9 +264,10 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
             })
         }) {
             let mut hashes: Vec<Hash> = Vec::new();
+            let mut source_slot = true;
             for stated in &facts.checksums {
                 if let Some(hash) = sha256_hash(stated) {
-                    if hashes.is_empty() {
+                    if source_slot && hashes.is_empty() {
                         hashes.push(hash);
                     } else {
                         props.push(Property::new("easybuild:checksum_extra", stated));
@@ -274,6 +275,7 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
                 } else if !stated.trim().is_empty() {
                     props.push(Property::new("easybuild:checksum_unmapped", stated));
                 }
+                source_slot = false;
             }
             if !hashes.is_empty() {
                 component.hashes = Some(Hashes(hashes));
@@ -731,7 +733,7 @@ pub fn cyclonedx_to_dot(bom: &Value) -> String {
 fn candidate_identity(candidate: &crate::domain::Candidate) -> String {
     let key = candidate.identity_key();
     format!(
-        "{}@{}+{}{}",
+        "{}@{}+{}+vs{}",
         key.name, key.version, key.toolchain, key.versionsuffix
     )
 }
@@ -2074,6 +2076,66 @@ mod artifact_facts_tests {
         let hashes = hashes.as_array().expect("hashes");
         assert_eq!(hashes[0]["alg"], "SHA-256");
         assert_eq!(hashes[0]["content"], sha);
+    }
+
+    #[test]
+    fn a_leading_md5_does_not_promote_the_next_sha256_to_the_component() {
+        let md5 = "b".repeat(32);
+        let sha = "c".repeat(64);
+        let map = facts_map(ArtifactFacts {
+            checksums: vec![md5.clone(), sha.clone()],
+            ..Default::default()
+        });
+        let json = lock_to_cyclonedx_with_facts(
+            &one_package_lock(),
+            SbomFacts {
+                artifacts: Some(&map),
+                ..SbomFacts::default()
+            },
+        );
+        let c = component(&json);
+        assert!(c.get("hashes").is_none(), "{c}");
+        let props = c["properties"].as_array().expect("properties");
+        assert!(
+            props.iter().any(|property| {
+                property["name"] == "easybuild:checksum_unmapped" && property["value"] == md5
+            }),
+            "{props:?}"
+        );
+        assert!(
+            props.iter().any(|property| {
+                property["name"] == "easybuild:checksum_extra" && property["value"] == sha
+            }),
+            "{props:?}"
+        );
+    }
+
+    #[test]
+    fn glued_toolchain_and_suffix_do_not_share_a_map_key() {
+        let foss = Toolchain {
+            name: "foss".into(),
+            version: "2025b".into(),
+        };
+        let foss_cuda = Toolchain {
+            name: "foss".into(),
+            version: "2025b-CUDA-12.8.0".into(),
+        };
+        let suffixed = LockPackage {
+            name: "Lib".into(),
+            version: "1.0".into(),
+            toolchain: foss,
+            versionsuffix: Some("-CUDA-12.8.0".into()),
+            easyconfig_path: "Lib-CUDA.eb".into(),
+        };
+        let joined = LockPackage {
+            name: "Lib".into(),
+            version: "1.0".into(),
+            toolchain: foss_cuda,
+            versionsuffix: None,
+            easyconfig_path: "Lib-joined.eb".into(),
+        };
+        assert_ne!(lock_package_key(&suffixed), lock_package_key(&joined));
+        assert_ne!(bom_ref_for(&suffixed), bom_ref_for(&joined));
     }
 }
 

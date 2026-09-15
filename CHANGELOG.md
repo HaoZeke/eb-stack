@@ -102,6 +102,12 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `stack solve --sbom-out` records typed source SHA-256 hashes from the
+  easyconfig. A lock identity key separates toolchain from versionsuffix
+  (`+vs`) so a suffixed `foss-2025b` and an unsuffixed
+  `foss-2025b-CUDA-12.8.0` stay two components. Only the first checksum
+  slot can become the component SHA-256; a leading MD5 does not promote
+  the next digest.
 - Campaign findings store a noise-stripped causal `signature` and the SHA-256
   of the bundle locks. EasyBuild v5's `ERROR: installation failed` and
   `ERROR: Shell command failed!` are not the causal line; classification
