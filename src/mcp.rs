@@ -590,6 +590,8 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
             let req = words.next().unwrap_or_default();
             let pin = req.trim_start_matches('=').trim_start_matches('=');
             let pin = if pin.is_empty() { None } else { Some(pin) };
+            let mut hole_parent = parent;
+            hole_parent.versionsuffix = residual.evidence.as_deref();
             companion_argv_with(
                 name,
                 pin,
@@ -599,7 +601,7 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
                 &toolchain_version,
                 &robot,
                 &output,
-                parent,
+                hole_parent,
             )
         })
         .collect::<Vec<_>>();

@@ -1165,7 +1165,7 @@ pub fn complete_package_bump(
                         "{} {} has no candidate on this generation",
                         hole.name, hole.version_req
                     ),
-                    evidence: None,
+                    evidence: hole.versionsuffix.clone(),
                     provenance: None,
                 });
             }

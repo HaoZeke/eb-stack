@@ -675,7 +675,7 @@ fn run_package_bump(args: PackageBumpArgs, mode: BumpMode) -> Result<()> {
                         stack_policy: stack_policy_flag.as_deref(),
                         hierarchy_fixture: hierarchy_flag.as_deref(),
                         contributor: contributor.as_deref(),
-                        versionsuffix: None,
+                        versionsuffix: residual.evidence.as_deref(),
                     },
                 )
             );
