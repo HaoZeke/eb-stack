@@ -1553,6 +1553,17 @@ fn build_templates(
     tv
 }
 
+/// Recipe `github_account` / `bitbucket_account` override the namelower
+/// defaults so `GITHUB_SOURCE` and `BITBUCKET_*` expand to the stated host.
+fn overlay_hosting_accounts(tv: &mut HashMap<String, String>, env: &HashMap<String, Value>) {
+    if let Some(account) = env.get("github_account").and_then(Value::as_str) {
+        tv.insert("github_account".into(), account.to_string());
+    }
+    if let Some(account) = env.get("bitbucket_account").and_then(Value::as_str) {
+        tv.insert("bitbucket_account".into(), account.to_string());
+    }
+}
+
 /// `%(key)s`, compiled once. The pattern is a literal, so a failure here would
 /// be a build-time defect rather than anything a recipe can cause.
 /// Dependency names that define version templates, and the prefix each uses.
@@ -1840,11 +1851,16 @@ fn fstring_field_has_format_spec(expr: &str) -> bool {
 }
 
 fn parse_dep_filename(s: &str) -> Option<ResolvedDep> {
-    // Name-version-Toolchain-tcver[versionsuffix].eb
+    // Name-version[-Toolchain-tcver][versionsuffix].eb
+    // SYSTEM recipes are Name-version.eb (two or three hyphen parts when the
+    // name itself is hyphenated), so they never have a toolchain pair.
     let s = s.strip_suffix(".eb")?;
     let parts: Vec<&str> = s.split('-').collect();
-    if parts.len() < 4 {
+    if parts.len() < 2 {
         return None;
+    }
+    if parts.len() < 4 {
+        return parse_system_dep_filename(&parts);
     }
     let mut toolchain_at = None;
     for index in 1..parts.len() - 1 {
@@ -1901,6 +1917,31 @@ fn parse_dep_filename(s: &str) -> Option<ResolvedDep> {
         version,
         versionsuffix,
         toolchain: Some(toolchain),
+    })
+}
+
+fn parse_system_dep_filename(parts: &[&str]) -> Option<ResolvedDep> {
+    let version_at = parts.iter().position(|part| {
+        part.chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_digit())
+    })?;
+    if version_at == 0 {
+        return None;
+    }
+    let name = parts[..version_at].join("-");
+    let version = parts[version_at..].join("-");
+    if name.is_empty() || version.is_empty() {
+        return None;
+    }
+    Some(ResolvedDep {
+        name,
+        version,
+        versionsuffix: None,
+        toolchain: Some(Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        }),
     })
 }
 
@@ -2052,19 +2093,21 @@ fn resolve_easyconfig_str_inner(
         .map_err(|e| ParseError::Parse("<string>".into(), e))?;
 
     let vs_for_templates = versionsuffix_raw.clone().unwrap_or_default();
-    let templates = build_templates(&name, &version, &vs_for_templates, &toolchain);
+    let mut templates = build_templates(&name, &version, &vs_for_templates, &toolchain);
+    overlay_hosting_accounts(&mut templates, &parser.env);
 
     // Apply templates to fields that may contain %(…)s (including nested deps/exts).
     let name = apply_templates_str(&name, &templates);
     let version = apply_templates_str(&version, &templates);
     let versionsuffix = versionsuffix_raw.map(|s| apply_templates_str(&s, &templates));
     // Rebuild templates if name/version changed (rare for name/version themselves).
-    let templates = build_templates(
+    let mut templates = build_templates(
         &name,
         &version,
         versionsuffix.as_deref().unwrap_or(""),
         &toolchain,
     );
+    overlay_hosting_accounts(&mut templates, &parser.env);
 
     let deps_val = parser
         .env
@@ -2372,9 +2415,13 @@ fn opt_str_field(
 fn checksum_strings_from_value(v: &Value) -> Vec<String> {
     match v {
         Value::Str(s) => vec![s.clone()],
+        // A dict is one artifact with per-filename (often per-arch) hashes,
+        // not several artifacts. Emitting every value shifted later positions,
+        // so a patch string after a multi-arch dict read as the second arch.
         Value::Dict(items) => items
             .iter()
-            .filter_map(|(_, val)| val.expect_str("checksum").ok())
+            .find_map(|(_, val)| val.expect_str("checksum").ok())
+            .into_iter()
             .collect(),
         // A tuple of hashes is one artifact with alternatives, not several
         // artifacts: OpenMolcas lists two acceptable hashes for its tarball
@@ -4054,6 +4101,34 @@ dependencies = []
     }
 
     #[test]
+    fn github_account_assignment_expands_github_source() {
+        let src = "name = 'cargo-c'\nversion = '0.10.23'\n\
+                   toolchain = SYSTEM\n\
+                   github_account = 'lu-zero'\n\
+                   source_urls = [GITHUB_SOURCE]\n\
+                   dependencies = []\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(
+            parsed.source_urls,
+            vec!["https://github.com/lu-zero/cargo-c/archive".to_string()],
+            "recipe github_account must win over the namelower default"
+        );
+    }
+
+    #[test]
+    fn github_source_defaults_to_namelower_without_an_account() {
+        let src = "name = 'cargo-c'\nversion = '0.10.23'\n\
+                   toolchain = SYSTEM\n\
+                   source_urls = [GITHUB_SOURCE]\n\
+                   dependencies = []\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(
+            parsed.source_urls,
+            vec!["https://github.com/cargo-c/cargo-c/archive".to_string()]
+        );
+    }
+
+    #[test]
     fn parse_tolerates_if_for_and_junk_after_required_fields() {
         let src = r#"
 name = 'TolerantApp'
@@ -4161,7 +4236,38 @@ builddependencies = [
         let r = resolve_easyconfig_str(arch).expect("parse arch recipe");
         assert_eq!(r.sources_count, 1);
         assert_eq!(r.checksum_entry_keys.len(), 1);
+        assert_eq!(r.checksums.len(), 1, "got {:?}", r.checksums);
         assert!(checksum_structure_findings(&r).is_empty());
+    }
+
+    #[test]
+    fn multi_key_checksum_dict_is_one_artifact() {
+        let src = "name = 'Sdk'\nversion = '1.0'\n\
+                   toolchain = SYSTEM\n\
+                   sources = ['sdk.tar.gz']\n\
+                   patches = ['fix.patch']\n\
+                   checksums = [{'sdk_aarch64.tar.gz': 'aa', 'sdk_x86_64.tar.gz': 'bb'}, 'patchhash']\n\
+                   dependencies = []\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.checksums.len(), 2, "got {:?}", parsed.checksums);
+        assert_eq!(
+            parsed.checksums.last().map(String::as_str),
+            Some("patchhash")
+        );
+        assert_eq!(
+            parsed
+                .checksums_by_filename
+                .get("sdk_aarch64.tar.gz")
+                .map(String::as_str),
+            Some("aa")
+        );
+        assert_eq!(
+            parsed
+                .checksums_by_filename
+                .get("sdk_x86_64.tar.gz")
+                .map(String::as_str),
+            Some("bb")
+        );
     }
 
     #[test]
@@ -4833,6 +4939,40 @@ homepage = 'https://example.invalid'
             resolved.homepage.as_deref(),
             Some("https://example.invalid"),
             "the following assignment must survive intact"
+        );
+    }
+
+    #[test]
+    fn filename_dependency_system_form_is_name_and_version() {
+        let src = "name = 'App'\nversion = '1.0'\n\
+                   toolchain = SYSTEM\n\
+                   dependencies = ['zlib-1.2.13.eb']\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.dependencies[0].name, "zlib");
+        assert_eq!(parsed.dependencies[0].version, "1.2.13");
+        assert_eq!(
+            parsed.dependencies[0]
+                .toolchain
+                .as_ref()
+                .map(|toolchain| (toolchain.name.as_str(), toolchain.version.as_str())),
+            Some(("system", "system"))
+        );
+    }
+
+    #[test]
+    fn filename_dependency_system_form_keeps_a_hyphenated_name() {
+        let src = "name = 'App'\nversion = '1.0'\n\
+                   toolchain = SYSTEM\n\
+                   dependencies = ['SciPy-bundle-2024.05.eb']\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.dependencies[0].name, "SciPy-bundle");
+        assert_eq!(parsed.dependencies[0].version, "2024.05");
+        assert_eq!(
+            parsed.dependencies[0]
+                .toolchain
+                .as_ref()
+                .map(|toolchain| (toolchain.name.as_str(), toolchain.version.as_str())),
+            Some(("system", "system"))
         );
     }
 
