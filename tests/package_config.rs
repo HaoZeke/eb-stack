@@ -395,6 +395,23 @@ py-numpy = { provider = "SciPy-bundle", constraints = "drop" }
 }
 
 #[test]
+fn empty_virtual_capability_is_rejected() {
+    let error = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[dependencies.virtuals]
+hdf5 = ""
+"#,
+    )
+    .expect_err("empty virtual");
+    assert!(
+        error.to_string().contains("hdf5") && error.to_string().contains("empty"),
+        "{error}"
+    );
+}
+
+#[test]
 fn requirement_keeps_an_existing_provider_alias() {
     let config = PackageConfigLayer::from_toml_str(
         r#"

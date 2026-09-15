@@ -365,6 +365,11 @@ impl PackageConfigLayer {
                     ));
                 }
             }
+            for (name, capability) in &dependencies.virtuals {
+                if capability.trim().is_empty() {
+                    return Err(PackageConfigError::EmptyVirtualCapability(name.clone()));
+                }
+            }
         }
         Ok(())
     }
@@ -794,6 +799,9 @@ pub enum PackageConfigError {
     /// An added requirement lists no roles, so it would apply nowhere.
     #[error("dependency requirement {0} must have at least one role")]
     EmptyDependencyRoles(String),
+    /// A virtual mapping blanks the capability, which would drop the dep.
+    #[error("virtual capability for {0} cannot be empty")]
+    EmptyVirtualCapability(String),
     /// A patch names a path rather than a filename; EasyBuild takes the
     /// basename only.
     #[error("patch filename must not contain a directory: {0:?}")]
