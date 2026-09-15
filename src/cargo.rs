@@ -57,9 +57,12 @@ fn parse_cargo_toml(text: &str) -> Result<ForeignRecipe, ForeignError> {
         .ok_or_else(|| ForeignError::Parse("cargo toml missing [package]".into()))?;
     let name = toml_string(package, "name")
         .ok_or_else(|| ForeignError::Parse("cargo toml missing package.name".into()))?;
-    let version = toml_string(package, "version").ok_or_else(|| {
-        ForeignError::Parse("cargo toml package.version is missing or workspace-inherited".into())
-    })?;
+    let version =
+        toml_inherit_string(package, value.get("workspace"), "version").ok_or_else(|| {
+            ForeignError::Parse(
+                "cargo toml package.version is missing or workspace-inherited".into(),
+            )
+        })?;
     let homepage = toml_string(package, "homepage").or_else(|| toml_string(package, "repository"));
     let summary = toml_string(package, "description");
     let license = toml_string(package, "license");
@@ -427,7 +430,7 @@ fn is_python_crate(value: &toml::Value, deps: &[CargoDep]) -> bool {
         return true;
     }
     deps.iter()
-        .any(|dep| crate::provides::is_python_marker_crate(&dep.name))
+        .any(|dep| !dep.optional && crate::provides::is_python_marker_crate(&dep.name))
 }
 
 /// Where a Cargo dependency comes from.
@@ -484,27 +487,27 @@ fn cargo_version_req(spec: &str) -> Option<String> {
 
 fn cargo_deps(value: &toml::Value) -> Vec<CargoDep> {
     let mut deps = Vec::new();
-    collect_dep_table(value.get("dependencies"), &mut deps);
-    collect_dep_table(value.get("build-dependencies"), &mut deps);
+    collect_dep_table(value.get("dependencies"), value, &mut deps);
+    collect_dep_table(value.get("build-dependencies"), value, &mut deps);
     if let Some(targets) = value.get("target").and_then(toml::Value::as_table) {
         for spec in targets.values() {
-            collect_dep_table(spec.get("dependencies"), &mut deps);
-            collect_dep_table(spec.get("build-dependencies"), &mut deps);
+            collect_dep_table(spec.get("dependencies"), value, &mut deps);
+            collect_dep_table(spec.get("build-dependencies"), value, &mut deps);
         }
     }
     deps
 }
 
-fn collect_dep_table(table: Option<&toml::Value>, deps: &mut Vec<CargoDep>) {
+fn collect_dep_table(table: Option<&toml::Value>, root: &toml::Value, deps: &mut Vec<CargoDep>) {
     let Some(map) = table.and_then(toml::Value::as_table) else {
         return;
     };
     for (name, spec) in map {
-        deps.push(cargo_dep_from_spec(name, spec));
+        deps.push(cargo_dep_from_spec(name, spec, root));
     }
 }
 
-fn cargo_dep_from_spec(name: &str, spec: &toml::Value) -> CargoDep {
+fn cargo_dep_from_spec(name: &str, spec: &toml::Value, root: &toml::Value) -> CargoDep {
     match spec {
         toml::Value::String(version) => CargoDep {
             name: name.to_string(),
@@ -529,16 +532,29 @@ fn cargo_dep_from_spec(name: &str, spec: &toml::Value) -> CargoDep {
                 .get("workspace")
                 .and_then(toml::Value::as_bool)
                 .unwrap_or(false);
+            if workspace {
+                if let Some(inherited) = root
+                    .get("workspace")
+                    .and_then(|workspace| workspace.get("dependencies"))
+                    .and_then(|dependencies| dependencies.get(name))
+                {
+                    let mut inherited = cargo_dep_from_spec(name, inherited, root);
+                    inherited.optional = entry
+                        .get("optional")
+                        .and_then(toml::Value::as_bool)
+                        .unwrap_or(inherited.optional);
+                    if entry.get("package").and_then(toml::Value::as_str).is_some() {
+                        inherited.name = crate_name;
+                    }
+                    return inherited;
+                }
+            }
             CargoDep {
                 name: crate_name,
-                req: if workspace {
-                    None
-                } else {
-                    entry
-                        .get("version")
-                        .and_then(toml::Value::as_str)
-                        .and_then(cargo_version_req)
-                },
+                req: entry
+                    .get("version")
+                    .and_then(toml::Value::as_str)
+                    .and_then(cargo_version_req),
                 kind,
                 optional: entry
                     .get("optional")
@@ -562,6 +578,28 @@ fn crates_io_sha256(value: Option<&str>) -> Option<String> {
     } else {
         None
     }
+}
+
+fn toml_inherit_string(
+    table: &toml::Value,
+    workspace: Option<&toml::Value>,
+    key: &str,
+) -> Option<String> {
+    if let Some(value) = toml_string(table, key) {
+        return Some(value);
+    }
+    let inherited = table
+        .get(key)
+        .and_then(toml::Value::as_table)
+        .and_then(|entry| entry.get("workspace"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false);
+    if !inherited {
+        return None;
+    }
+    workspace
+        .and_then(|workspace| workspace.get("package"))
+        .and_then(|package| toml_string(package, key))
 }
 
 fn toml_string(value: &toml::Value, key: &str) -> Option<String> {
@@ -628,6 +666,80 @@ pyo3 = "0.22"
             Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         );
         assert!(!recipe.dependencies.iter().any(|dep| dep.name == "Python"));
+    }
+
+    #[test]
+    fn same_document_workspace_inherit_is_applied() {
+        let recipe = parse_cargo_str(
+            r#"
+[workspace.package]
+version = "1.2.3"
+
+[workspace.dependencies]
+serde = "1.0"
+core = { path = "crates/core" }
+
+[package]
+name = "demo"
+version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+core = { workspace = true }
+"#,
+        )
+        .expect("parse");
+        assert_eq!(recipe.version, "1.2.3");
+        assert!(
+            recipe.residuals.iter().any(|residual| {
+                residual.category == "cargo-dep"
+                    && residual.summary.contains("serde")
+                    && residual.summary.contains("`^1.0`")
+            }),
+            "{:?}",
+            recipe.residuals
+        );
+        assert!(
+            recipe
+                .residuals
+                .iter()
+                .any(|residual| residual.category == "cargo-path-dep"
+                    && residual.summary.contains("core")),
+            "{:?}",
+            recipe.residuals
+        );
+    }
+
+    #[test]
+    fn optional_pyo3_does_not_make_a_python_crate() {
+        let recipe = parse_cargo_str(
+            r#"
+[package]
+name = "demo"
+version = "1.0.0"
+
+[dependencies]
+pyo3 = { version = "0.22", optional = true }
+"#,
+        )
+        .expect("parse");
+        assert!(
+            recipe
+                .dependencies
+                .iter()
+                .all(|dep| dep.name != "Python" && dep.name != "maturin"),
+            "{:?}",
+            recipe.dependencies
+        );
+        assert!(
+            recipe
+                .residuals
+                .iter()
+                .any(|residual| residual.category == "cargo-optional-dep"
+                    && residual.summary.contains("pyo3")),
+            "{:?}",
+            recipe.residuals
+        );
     }
 
     #[test]
