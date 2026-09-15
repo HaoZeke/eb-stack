@@ -132,9 +132,10 @@ pub fn parse_luarocks_str(text: &str) -> Result<ForeignRecipe, ForeignError> {
 fn lua_string(text: &str, key: &str) -> Option<String> {
     for line in text.lines() {
         let trimmed = line.trim();
-        let prefix = format!("{key} =");
-        if let Some(rest) = trimmed.strip_prefix(&prefix) {
-            return unquote(rest.trim());
+        for prefix in [format!("{key} ="), format!("{key}=")] {
+            if let Some(rest) = trimmed.strip_prefix(&prefix) {
+                return unquote(rest.trim());
+            }
         }
     }
     None
@@ -154,7 +155,7 @@ fn lua_nested_string(text: &str, table: &str, key: &str) -> Option<String> {
 }
 
 fn lua_table_body(text: &str, table: &str) -> Option<String> {
-    let prefix = format!("{table} =");
+    let prefixes = [format!("{table} ="), format!("{table}=")];
     let mut waiting = false;
     let mut collecting = false;
     let mut depth = 0i32;
@@ -162,7 +163,10 @@ fn lua_table_body(text: &str, table: &str) -> Option<String> {
     for line in text.lines() {
         let trimmed = line.trim();
         if !collecting {
-            if let Some(rest) = trimmed.strip_prefix(&prefix) {
+            if let Some(rest) = prefixes
+                .iter()
+                .find_map(|prefix| trimmed.strip_prefix(prefix.as_str()))
+            {
                 if let Some(idx) = rest.find('{') {
                     collecting = true;
                     depth = 1;
@@ -206,7 +210,9 @@ fn lua_string_list(text: &str, key: &str) -> Vec<String> {
     let mut in_list = false;
     for line in text.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with(&format!("{key} =")) && trimmed.contains('{') {
+        if (trimmed.starts_with(&format!("{key} =")) || trimmed.starts_with(&format!("{key}=")))
+            && trimmed.contains('{')
+        {
             in_list = true;
             if let Some(start) = trimmed.find('{') {
                 collect_quoted(&trimmed[start + 1..], &mut items);
@@ -318,5 +324,25 @@ dependencies = {
             recipe.sha256.as_deref(),
             Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         );
+    }
+
+    #[test]
+    fn assignment_without_a_space_is_still_read() {
+        let recipe = parse_luarocks_str(
+            r#"
+package="lfs"
+version="1.0-1"
+source={url="https://example.invalid/lfs.tgz"}
+dependencies={"bit32"}
+"#,
+        )
+        .expect("parse");
+        assert_eq!(recipe.name, "lfs");
+        assert_eq!(recipe.version, "1.0");
+        assert_eq!(
+            recipe.source_url.as_deref(),
+            Some("https://example.invalid/lfs.tgz")
+        );
+        assert!(recipe.dependencies.iter().any(|dep| dep.name == "bit32"));
     }
 }
