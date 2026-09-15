@@ -257,21 +257,20 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
         if let Some(facts) =
             artifacts.and_then(|m| m.get(&lock_package_key(p)).or_else(|| m.get(&p.name)))
         {
-            let hashes: Vec<Hash> = facts
-                .checksums
-                .iter()
-                .filter_map(|c| sha256_hash(c))
-                .take(1)
-                .collect();
-            if !hashes.is_empty() {
-                component.hashes = Some(Hashes(hashes));
-            }
-            // A checksum the spec cannot express as a hash is still evidence,
-            // and dropping it silently would hide that the recipe states one.
+            let mut hashes: Vec<Hash> = Vec::new();
             for stated in &facts.checksums {
-                if sha256_hash(stated).is_none() && !stated.trim().is_empty() {
+                if let Some(hash) = sha256_hash(stated) {
+                    if hashes.is_empty() {
+                        hashes.push(hash);
+                    } else {
+                        props.push(Property::new("easybuild:checksum_extra", stated));
+                    }
+                } else if !stated.trim().is_empty() {
                     props.push(Property::new("easybuild:checksum_unmapped", stated));
                 }
+            }
+            if !hashes.is_empty() {
+                component.hashes = Some(Hashes(hashes));
             }
             let refs: Vec<ExternalReference> = facts
                 .source_urls
@@ -1573,6 +1572,42 @@ mod formulation_tests {
             .expect("App task");
         let inputs = app["inputs"].as_array().expect("inputs");
         assert_eq!(inputs.len(), 1, "{app}");
+    }
+
+    #[test]
+    fn a_second_sha256_is_kept_as_a_property() {
+        let source = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let patch = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let artifacts = HashMap::from([(
+            "App".to_string(),
+            ArtifactFacts {
+                checksums: vec![source.into(), patch.into()],
+                source_urls: Vec::new(),
+                patches: Vec::new(),
+            },
+        )]);
+        let json = lock_to_cyclonedx_with_facts(
+            &lock(),
+            SbomFacts {
+                artifacts: Some(&artifacts),
+                ..SbomFacts::default()
+            },
+        );
+        let app = json["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|component| component["name"] == "App")
+            .expect("App");
+        let hashes = app["hashes"].as_array().expect("hashes");
+        assert_eq!(hashes[0]["content"], source);
+        let props = app["properties"].as_array().expect("properties");
+        assert!(
+            props.iter().any(|property| {
+                property["name"] == "easybuild:checksum_extra" && property["value"] == patch
+            }),
+            "{props:?}"
+        );
     }
 }
 
