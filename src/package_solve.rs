@@ -13,7 +13,7 @@ use crate::package::{
 use crate::provides::{expand_extension_provides, resolve_extension_provider};
 use crate::resolvo_provider::solve_curated_with_stack_policy;
 use crate::version::matches_req;
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::Path;
 use thiserror::Error;
 
@@ -107,6 +107,7 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
         stack_policy,
         hierarchy_fixture,
     )?;
+    let robot_names = robot_name_index(candidates);
 
     let mut holes = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -117,7 +118,7 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
         let name = dependency
             .eb_name
             .clone()
-            .unwrap_or_else(|| match_robot_name(&dependency.name, candidates));
+            .unwrap_or_else(|| match_robot_name_in(&dependency.name, &robot_names));
         let build_only = !dependency.roles.is_empty()
             && dependency
                 .roles
@@ -222,6 +223,7 @@ pub fn solve_package_profile_with_hierarchy(
         stack_policy,
         hierarchy_fixture,
     )?;
+    let robot_names = robot_name_index(candidates);
     let synthetic_name = format!("__package_profile__{}__{}", plan.package.name, profile_name);
     let mut direct_roles: BTreeMap<String, bool> = BTreeMap::new();
     let mut implicit_easybuild_dependencies = HashSet::new();
@@ -234,7 +236,7 @@ pub fn solve_package_profile_with_hierarchy(
         let name = dependency
             .eb_name
             .clone()
-            .unwrap_or_else(|| match_robot_name(&dependency.name, candidates));
+            .unwrap_or_else(|| match_robot_name_in(&dependency.name, &robot_names));
         let build_only = !dependency.roles.is_empty()
             && dependency
                 .roles
@@ -395,33 +397,47 @@ pub fn solve_package_profile_with_hierarchy(
     })
 }
 
-fn match_robot_name(foreign_name: &str, candidates: &[Candidate]) -> String {
+struct RobotNameIndex {
+    modules: HashMap<String, Vec<String>>,
+    all: HashMap<String, Vec<String>>,
+}
+
+fn robot_name_index(candidates: &[Candidate]) -> RobotNameIndex {
+    let mut modules: HashMap<String, Vec<String>> = HashMap::new();
+    let mut all: HashMap<String, Vec<String>> = HashMap::new();
+    for candidate in candidates {
+        let identity = normalize_package_identity(&candidate.name);
+        if !candidate.is_extension_provide() {
+            let names = modules.entry(identity.clone()).or_default();
+            if !names.iter().any(|name| name == &candidate.name) {
+                names.push(candidate.name.clone());
+            }
+        }
+        let names = all.entry(identity).or_default();
+        if !names.iter().any(|name| name == &candidate.name) {
+            names.push(candidate.name.clone());
+        }
+    }
+    RobotNameIndex { modules, all }
+}
+
+fn match_robot_name_in(foreign_name: &str, index: &RobotNameIndex) -> String {
     let identity = normalize_package_identity(foreign_name);
-    let mut module_names = candidates
-        .iter()
-        .filter(|candidate| {
-            !candidate.is_extension_provide()
-                && normalize_package_identity(&candidate.name) == identity
-        })
-        .map(|candidate| candidate.name.as_str())
-        .collect::<Vec<_>>();
-    module_names.sort_unstable();
-    module_names.dedup();
-    if module_names.len() == 1 {
-        return module_names[0].to_string();
+    if let Some(names) = index.modules.get(&identity) {
+        if names.len() == 1 {
+            return names[0].clone();
+        }
     }
-    let mut names = candidates
-        .iter()
-        .filter(|candidate| normalize_package_identity(&candidate.name) == identity)
-        .map(|candidate| candidate.name.as_str())
-        .collect::<Vec<_>>();
-    names.sort_unstable();
-    names.dedup();
-    if names.len() == 1 {
-        names[0].to_string()
-    } else {
-        foreign_name.to_string()
+    if let Some(names) = index.all.get(&identity) {
+        if names.len() == 1 {
+            return names[0].clone();
+        }
     }
+    foreign_name.to_string()
+}
+
+fn match_robot_name(foreign_name: &str, candidates: &[Candidate]) -> String {
+    match_robot_name_in(foreign_name, &robot_name_index(candidates))
 }
 
 fn normalize_package_identity(name: &str) -> String {
