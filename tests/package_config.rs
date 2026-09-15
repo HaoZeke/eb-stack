@@ -412,6 +412,36 @@ hdf5 = ""
 }
 
 #[test]
+fn empty_alias_provider_is_rejected() {
+    let error = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[dependencies.aliases]
+hdf5 = ""
+"#,
+    )
+    .expect_err("empty alias");
+    assert!(
+        error.to_string().contains("hdf5") && error.to_string().contains("empty"),
+        "{error}"
+    );
+    let table = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[dependencies.aliases]
+hdf5 = { provider = "" }
+"#,
+    )
+    .expect_err("empty table provider");
+    assert!(
+        table.to_string().contains("hdf5") && table.to_string().contains("empty"),
+        "{table}"
+    );
+}
+
+#[test]
 fn requirement_keeps_an_existing_provider_alias() {
     let config = PackageConfigLayer::from_toml_str(
         r#"

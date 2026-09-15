@@ -370,6 +370,11 @@ impl PackageConfigLayer {
                     return Err(PackageConfigError::EmptyVirtualCapability(name.clone()));
                 }
             }
+            for (name, alias) in &dependencies.aliases {
+                if alias.provider().trim().is_empty() {
+                    return Err(PackageConfigError::EmptyAliasProvider(name.clone()));
+                }
+            }
         }
         Ok(())
     }
@@ -802,6 +807,9 @@ pub enum PackageConfigError {
     /// A virtual mapping blanks the capability, which would drop the dep.
     #[error("virtual capability for {0} cannot be empty")]
     EmptyVirtualCapability(String),
+    /// An alias blanks the provider, which would write an empty eb_name.
+    #[error("alias provider for {0} cannot be empty")]
+    EmptyAliasProvider(String),
     /// A patch names a path rather than a filename; EasyBuild takes the
     /// basename only.
     #[error("patch filename must not contain a directory: {0:?}")]
