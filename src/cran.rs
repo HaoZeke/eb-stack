@@ -63,6 +63,8 @@ struct CranJson {
     linking_to: Vec<String>,
     #[serde(default, alias = "SystemRequirements")]
     system_requirements: Option<String>,
+    #[serde(default, alias = "SHA256")]
+    sha256: Option<String>,
 }
 
 fn deserialize_r_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -125,6 +127,7 @@ fn parse_cran_json(text: &str) -> Result<ForeignRecipe, ForeignError> {
         depends: &doc.depends,
         imports: &doc.imports,
         linking_to: &doc.linking_to,
+        sha256: cran_sha256(doc.sha256.as_deref()),
         note: "parsed from CRAN JSON",
     })?;
     record_system_requirements(&mut recipe, doc.system_requirements.as_deref());
@@ -157,6 +160,7 @@ fn parse_description(text: &str) -> Result<ForeignRecipe, ForeignError> {
         depends: &split_r_list(fields.get("depends").map(String::as_str).unwrap_or("")),
         imports: &split_r_list(fields.get("imports").map(String::as_str).unwrap_or("")),
         linking_to: &split_r_list(fields.get("linkingto").map(String::as_str).unwrap_or("")),
+        sha256: None,
         note: "parsed from DESCRIPTION",
     })?;
     record_system_requirements(
@@ -165,6 +169,42 @@ fn parse_description(text: &str) -> Result<ForeignRecipe, ForeignError> {
     );
     record_suggests(&mut recipe, fields.get("suggests").map(String::as_str));
     Ok(recipe)
+}
+
+fn cran_sha256(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.len() == 64 && value.chars().all(|character| character.is_ascii_hexdigit()) {
+        Some(value.to_ascii_lowercase())
+    } else {
+        None
+    }
+}
+
+fn push_run_dep(
+    dependencies: &mut Vec<ForeignDep>,
+    name: String,
+    pin: Option<String>,
+    role: &str,
+    entry: &str,
+) {
+    if let Some(existing) = dependencies
+        .iter_mut()
+        .find(|dep| dep.name.eq_ignore_ascii_case(&name))
+    {
+        if existing.pin.is_none() && pin.is_some() {
+            existing.pin = pin;
+            existing.original_spec = Some(entry.to_string());
+        }
+        return;
+    }
+    dependencies.push(ForeignDep {
+        name,
+        pin,
+        role: role.into(),
+        original_spec: Some(entry.to_string()),
+        condition: ConditionExpr::Always,
+        provenance: Vec::new(),
+    });
 }
 
 fn record_suggests(recipe: &mut ForeignRecipe, suggests: Option<&str>) {
@@ -235,6 +275,7 @@ fn parse_package_list(text: &str) -> Result<ForeignRecipe, ForeignError> {
         depends: &[],
         imports: &extras,
         linking_to: &[],
+        sha256: None,
         note: "parsed from CRAN package list",
     })?;
     if pin.as_deref().and_then(exact_version).is_none() {
@@ -264,6 +305,7 @@ struct CranFields<'a> {
     depends: &'a [String],
     imports: &'a [String],
     linking_to: &'a [String],
+    sha256: Option<String>,
     note: &'a str,
 }
 
@@ -278,6 +320,7 @@ fn recipe_from_fields(fields: CranFields<'_>) -> Result<ForeignRecipe, ForeignEr
         depends,
         imports,
         linking_to,
+        sha256,
         note,
     } = fields;
     let mut residuals = Vec::new();
@@ -292,14 +335,9 @@ fn recipe_from_fields(fields: CranFields<'_>) -> Result<ForeignRecipe, ForeignEr
                     evidence: Some(entry.clone()),
                     provenance: None,
                 }),
-                RDep::Requirement { name, pin } => dependencies.push(ForeignDep {
-                    name,
-                    pin,
-                    role: role.into(),
-                    original_spec: Some(entry.clone()),
-                    condition: ConditionExpr::Always,
-                    provenance: Vec::new(),
-                }),
+                RDep::Requirement { name, pin } => {
+                    push_run_dep(&mut dependencies, name, pin, role, entry);
+                }
                 RDep::Invalid { reason } => residuals.push(ForeignResidual {
                     category: "cran-requirement".into(),
                     severity: ResidualSeverity::Judgment,
@@ -340,7 +378,7 @@ fn recipe_from_fields(fields: CranFields<'_>) -> Result<ForeignRecipe, ForeignEr
     let sources = vec![ForeignSource {
         url: Some(source_url.clone()),
         filename: Some(format!("{name}_{version}.tar.gz")),
-        sha256: None,
+        sha256: sha256.clone(),
         git: None,
         tag: None,
         commit: None,
@@ -355,7 +393,7 @@ fn recipe_from_fields(fields: CranFields<'_>) -> Result<ForeignRecipe, ForeignEr
         homepage,
         source_url: Some(source_url),
         source_filename: None,
-        sha256: None,
+        sha256,
         sources,
         summary: title,
         description,
@@ -648,6 +686,41 @@ mod tests {
         assert_eq!(
             recipe.homepage.as_deref(),
             Some("https://jeroen.r-universe.dev/jsonlite")
+        );
+    }
+
+    #[test]
+    fn imports_and_linking_to_the_same_package_are_one_dep() {
+        let recipe = parse_cran_str(
+            "Package: foo\n\
+             Version: 1.0\n\
+             Imports: Rcpp (>= 1.0.7)\n\
+             LinkingTo: Rcpp\n",
+        )
+        .expect("parse");
+        let rcpp: Vec<_> = recipe
+            .dependencies
+            .iter()
+            .filter(|dep| dep.name == "Rcpp")
+            .collect();
+        assert_eq!(rcpp.len(), 1, "{:?}", recipe.dependencies);
+        assert_eq!(rcpp[0].pin.as_deref(), Some(">= 1.0.7"));
+    }
+
+    #[test]
+    fn cran_json_sha256_is_kept() {
+        let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let recipe = parse_cran_str(&format!(
+            r#"{{"Package":"xml2","Version":"1.6.0","sha256":"{digest}"}}"#
+        ))
+        .expect("parse");
+        assert_eq!(recipe.sha256.as_deref(), Some(digest));
+        assert_eq!(
+            recipe
+                .sources
+                .first()
+                .and_then(|source| source.sha256.as_deref()),
+            Some(digest)
         );
     }
 
