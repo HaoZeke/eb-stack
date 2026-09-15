@@ -148,10 +148,7 @@ pub fn materialize_pypi(
     std::fs::create_dir_all(&dir).map_err(|error| RegistryError::Io(dir.clone(), error))?;
     let dump = dir.join(format!("{}.json", sanitize_ingest_name(pkg, version)));
     std::fs::write(&dump, &bytes).map_err(|error| RegistryError::Io(dump.clone(), error))?;
-    let source_tree = match materialize_pypi_sdist(&value, client, &dir, pkg, version) {
-        Ok(tree) => tree,
-        Err(_) => None,
-    };
+    let source_tree = materialize_pypi_sdist(&value, client, &dir, pkg, version)?;
     Ok(MaterializedIngest { dump, source_tree })
 }
 
@@ -199,7 +196,7 @@ fn materialize_pypi_sdist(
         .get("filename")
         .and_then(|value| value.as_str())
         .unwrap_or("sdist.tar.gz");
-    let archive = dir.join(filename);
+    let archive = dir.join(sanitize_archive_filename(filename));
     std::fs::write(&archive, &bytes).map_err(|error| RegistryError::Io(archive.clone(), error))?;
     let tree = dir.join(sanitize_ingest_name(pkg, version));
     if let Err(error) = unpack_sdist(&bytes, &tree) {
@@ -213,6 +210,19 @@ fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn sanitize_archive_filename(filename: &str) -> String {
+    Path::new(filename)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("sdist.tar.gz")
+        .chars()
+        .map(|character| match character {
+            '/' | '\\' | ':' => '_',
+            other => other,
+        })
+        .collect()
 }
 
 fn sanitize_ingest_name(pkg: &str, version: &str) -> String {
@@ -395,6 +405,59 @@ pub fn materialize_registry_name(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn materialize_pypi_propagates_a_sdist_checksum_mismatch() {
+        let mut client = MapClient::default();
+        client.pages.insert(
+            "https://pypi.org/pypi/demo/1.0.0/json".into(),
+            br#"{
+              "info": {"name": "demo", "version": "1.0.0"},
+              "urls": [{
+                "packagetype": "sdist",
+                "url": "https://files.pythonhosted.org/demo-1.0.0.tar.gz",
+                "filename": "demo-1.0.0.tar.gz",
+                "digests": {"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+              }]
+            }"#
+            .to_vec(),
+        );
+        client.pages.insert(
+            "https://files.pythonhosted.org/demo-1.0.0.tar.gz".into(),
+            b"not-the-sdist".to_vec(),
+        );
+        let root = tempfile::tempdir().expect("temp");
+        let error = materialize_pypi("demo==1.0.0", &client, "https://pypi.org", root.path())
+            .expect_err("checksum");
+        assert!(error.to_string().contains("sha256"), "{error}");
+    }
+
+    #[test]
+    fn materialize_pypi_does_not_join_an_escaping_sdist_filename() {
+        let mut client = MapClient::default();
+        client.pages.insert(
+            "https://pypi.org/pypi/demo/1.0.0/json".into(),
+            br#"{
+              "info": {"name": "demo", "version": "1.0.0"},
+              "urls": [{
+                "packagetype": "sdist",
+                "url": "https://files.pythonhosted.org/demo.tgz",
+                "filename": "../escape.tar.gz"
+              }]
+            }"#
+            .to_vec(),
+        );
+        client.pages.insert(
+            "https://files.pythonhosted.org/demo.tgz".into(),
+            b"junk".to_vec(),
+        );
+        let root = tempfile::tempdir().expect("temp");
+        let _ = materialize_pypi("demo==1.0.0", &client, "https://pypi.org", root.path());
+        assert!(
+            !root.path().join("escape.tar.gz").is_file(),
+            "must not write outside ingest/pypi"
+        );
+    }
 
     #[test]
     fn materialize_pypi_writes_dump_from_map_client() {
