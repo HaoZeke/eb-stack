@@ -366,10 +366,19 @@ fn satisfies(candidate: &Candidate, dep: &DepReq, recipe: &Candidate) -> bool {
             candidate.version,
             candidate.versionsuffix.as_deref().unwrap_or("")
         );
-        if !matches_req(&candidate.version, &dep.version_req)
-            && !matches_req(&with_suffix, &dep.version_req)
-        {
+        let version_ok = matches_req(&candidate.version, &dep.version_req);
+        let joined_ok = dep.versionsuffix.as_deref().unwrap_or("").is_empty()
+            && !candidate.versionsuffix.as_deref().unwrap_or("").is_empty()
+            && !version_ok
+            && matches_req(&with_suffix, &dep.version_req);
+        if !version_ok && !joined_ok {
             return false;
+        }
+        if joined_ok {
+            return dep
+                .toolchain
+                .as_ref()
+                .is_none_or(|want| crate::hierarchy::toolchains_match(&candidate.toolchain, want));
         }
     }
     if let Some(want) = dep.toolchain.as_ref() {
@@ -379,7 +388,8 @@ fn satisfies(candidate: &Candidate, dep: &DepReq, recipe: &Candidate) -> bool {
     }
     // A 2-tuple leaves versionsuffix None, which is "no suffix", not "any
     // suffix". Treating None as any would let Newest pick a -bare/-CUDA
-    // build for ('Python', '3.11.3').
+    // build for ('Python', '3.11.3'). A version field that already names
+    // the joined module is the SAT exception handled above.
     dep.versionsuffix.as_deref().unwrap_or("") == candidate.versionsuffix.as_deref().unwrap_or("")
 }
 
@@ -1099,6 +1109,28 @@ mod tests {
         assert!(
             !seq.iter().any(|s| s.contains("-bare")),
             "unsuffixed pin must not pick -bare: {seq:?}"
+        );
+    }
+
+    #[test]
+    fn a_joined_module_2_tuple_selects_the_split_candidate() {
+        let mut nvhpc = candidate("NVHPC", "25.3", tc("foss", "2025b"), vec![]);
+        nvhpc.versionsuffix = Some("-CUDA-12.8.0".into());
+        let all = vec![
+            candidate(
+                "App",
+                "1.0",
+                tc("foss", "2025b"),
+                vec![dep("NVHPC", "==25.3-CUDA-12.8.0", None)],
+            ),
+            nvhpc,
+        ];
+        let order = build_order(&tree(&all), &["App".into()], Choice::Newest).expect("order");
+        let seq = names(&order);
+        assert!(
+            seq.iter()
+                .any(|name| name.contains("NVHPC") && name.contains("CUDA")),
+            "{seq:?}"
         );
     }
 
