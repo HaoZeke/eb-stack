@@ -115,15 +115,24 @@ fn resolve_filename_templates(suffix: &str, text: &str) -> String {
     }
 }
 
-/// The version of a named dependency, from a `('Name', 'version', ...)` tuple.
+/// The version of a named dependency, from a live `('Name', 'version', ...)` tuple.
+///
+/// A leftover `# ('CUDA', '11.8.0')` is a comment, not a pin: skip it the same
+/// way `names_dependency_tuple` does, so a later live tuple wins.
 fn dependency_version(text: &str, name: &str) -> Option<String> {
     let pattern = format!(
         r#"\(\s*['"]{}['"]\s*,\s*['"]([^'"]+)['"]"#,
         regex::escape(name)
     );
     let re = regex::Regex::new(&pattern).ok()?;
-    re.captures(text)
-        .map(|caps| caps.get(1).expect("version group").as_str().to_string())
+    for caps in re.captures_iter(text) {
+        let full = caps.get(0).expect("full match");
+        if position_is_in_comment(text, full.start()) {
+            continue;
+        }
+        return Some(caps.get(1).expect("version group").as_str().to_string());
+    }
+    None
 }
 
 struct RepeatedArtifactRewrite {
@@ -156,23 +165,37 @@ fn archive_suffix(filename: &str) -> Option<&str> {
         .find(|suffix| filename.ends_with(suffix))
 }
 
-/// True when `filename` is `{name}-{version}` plus an archive suffix.
+/// True when `filename` is a versioned archive of `name`.
 ///
-/// The name is matched case-insensitively so `SeisSol` and `seissol-1.1.4.tar.gz`
-/// agree. A companion such as `pkg-data-1.0.tar.gz` is a different stem.
+/// Matches `{name}-{version}`, GitHub `v{version}`, and `{name}-v{version}`,
+/// each plus an archive suffix. The name is matched case-insensitively so
+/// `EASI` and `easi-v1.7.0.tar.gz` agree. A companion such as
+/// `pkg-data-1.0.tar.gz` or `v2.2.1.tar.gz` next to a different main version
+/// is a different stem.
 fn is_package_version_archive(filename: &str, name: &str, version: &str) -> bool {
     let Some(suffix) = archive_suffix(filename) else {
         return false;
     };
     let stem = &filename[..filename.len() - suffix.len()];
-    if stem.len() != name.len() + 1 + version.len() {
+    if !version_token_is_standalone(filename, version) {
         return false;
     }
-    let (file_name, rest) = stem.split_at(name.len());
-    file_name.eq_ignore_ascii_case(name)
-        && rest.starts_with('-')
-        && &rest[1..] == version
-        && version_token_is_standalone(filename, version)
+    if stem.len() == version.len() + 1 && stem.starts_with('v') && &stem[1..] == version {
+        return true;
+    }
+    if stem.len() == name.len() + 1 + version.len() {
+        let (file_name, rest) = stem.split_at(name.len());
+        if file_name.eq_ignore_ascii_case(name) && rest.starts_with('-') && &rest[1..] == version {
+            return true;
+        }
+    }
+    if stem.len() == name.len() + 2 + version.len() {
+        let (file_name, rest) = stem.split_at(name.len());
+        if file_name.eq_ignore_ascii_case(name) && rest.starts_with("-v") && &rest[2..] == version {
+            return true;
+        }
+    }
+    false
 }
 
 fn replace_version_token(text: &str, old_version: &str, new_version: &str) -> String {
@@ -194,7 +217,8 @@ fn replace_version_token(text: &str, old_version: &str, new_version: &str) -> St
 /// The top-level `checksums` entry is rewritten by `rewrite_source_checksum`,
 /// which renames its key to the new version, so it no longer matches here. What
 /// is left is the copies: an `exts_list` extension whose `source_tmpl` is the
-/// main tarball keeps its own checksum entry. A companion archive such as
+/// main tarball keeps its own checksum entry, as a bare 64-hex dict, a
+/// `('sha256', hex)` dict, or a positional hash. A companion archive such as
 /// `{name}-data-{version}.tar.gz` is not a copy and is left alone.
 fn rewrite_repeated_artifact_checksums(
     src: &str,
@@ -203,34 +227,218 @@ fn rewrite_repeated_artifact_checksums(
     new_version: &str,
     new_checksum: Option<&str>,
 ) -> Result<RepeatedArtifactRewrite, EmitError> {
+    let keyed = rewrite_repeated_dict_checksums(src, name, old_version, new_version, new_checksum)?;
+    let positional = rewrite_positional_checksums_under_source_tmpl(
+        &keyed.text,
+        name,
+        old_version,
+        new_checksum,
+    )?;
+    Ok(RepeatedArtifactRewrite {
+        text: positional.text,
+        count: keyed.count + positional.count,
+    })
+}
+
+/// Rewrite `{'<main-archive>': <checksum>}` copies, including typed tuples.
+fn rewrite_repeated_dict_checksums(
+    src: &str,
+    name: &str,
+    old_version: &str,
+    new_version: &str,
+    new_checksum: Option<&str>,
+) -> Result<RepeatedArtifactRewrite, EmitError> {
+    let mut edits = Vec::new();
+    for &(start, end, quote) in &quoted_tokens(src) {
+        if end <= start + 1 {
+            continue;
+        }
+        let key = &src[start + 1..end - 1];
+        if !is_package_version_archive(key, name, old_version) {
+            continue;
+        }
+        let after = &src[end..];
+        let trimmed = after.trim_start();
+        if !trimmed.starts_with(':') {
+            continue;
+        }
+        let colon_at = end + (after.len() - trimmed.len());
+        let value_start = skip_to_first_entry(src.as_bytes(), colon_at + 1);
+        if value_start >= src.len() {
+            continue;
+        }
+        let value_end = entry_span(src.as_bytes(), value_start)?;
+        let new_key = replace_version_token(key, old_version, new_version);
+        let new_val = rewrite_checksum_value(&src[value_start..value_end], new_checksum)?;
+        let mut replacement = String::with_capacity(new_key.len() + new_val.text.len() + 8);
+        replacement.push(quote);
+        replacement.push_str(&new_key);
+        replacement.push(quote);
+        replacement.push_str(&src[end..value_start]);
+        replacement.push_str(&new_val.text);
+        edits.push((start, value_end, replacement));
+    }
+    let count = edits.len();
     let mut text = src.to_string();
-    let mut count = 0usize;
-    for quote in ['\'', '"'] {
-        let pattern = format!(
-            r#"{q}(?P<key>[^{q}]*{ver}[^{q}]*\.(?:tar\.gz|tgz|tar\.xz|tar\.bz2|tar|zip)){q}(?P<sep>\s*:\s*){q}(?P<hash>[0-9a-fA-F]{{64}}){q}"#,
-            q = regex::escape(&quote.to_string()),
-            ver = regex::escape(old_version),
-        );
-        let re = regex::Regex::new(&pattern).map_err(|e| EmitError::Rewrite(e.to_string()))?;
-        let mut replaced = 0usize;
-        let out = re.replace_all(&text, |caps: &regex::Captures| {
-            let key = caps.name("key").expect("key group").as_str();
-            if !is_package_version_archive(key, name, old_version) {
-                return caps.get(0).expect("full match").as_str().to_string();
-            }
-            replaced += 1;
-            let key = replace_version_token(key, old_version, new_version);
-            let hash = new_checksum.unwrap_or("");
-            let sep = caps.name("sep").expect("sep group").as_str();
-            format!("{quote}{key}{quote}{sep}{quote}{hash}{quote}")
-        });
-        text = out.into_owned();
-        count += replaced;
+    for (from, to, replacement) in edits.into_iter().rev() {
+        text.replace_range(from..to, &replacement);
     }
     Ok(RepeatedArtifactRewrite { text, count })
 }
 
-/// Rename `{name}-{old}` archive filenames inside the `sources` list.
+/// True when `source_tmpl` names the main package archive at `version`.
+fn source_tmpl_tracks_package_version(tmpl: &str, name: &str, version: &str) -> bool {
+    if tmpl.starts_with("SOURCE") || tmpl.starts_with("V_VERSION") {
+        return true;
+    }
+    let rendered = tmpl.replace("%(version)s", version).replace("%s", version);
+    is_package_version_archive(&rendered, name, version)
+}
+
+/// Quoted or identifier value of `source_tmpl` inside a dict literal.
+fn dict_source_tmpl(dict: &str) -> Option<String> {
+    for quote in ['\'', '"'] {
+        let needle = format!("{quote}source_tmpl{quote}");
+        let mut search = 0usize;
+        while let Some(rel) = dict[search..].find(&needle) {
+            let idx = search + rel;
+            if position_is_in_comment(dict, idx) {
+                search = idx + 1;
+                continue;
+            }
+            let after = &dict[idx + needle.len()..];
+            let trimmed = after.trim_start();
+            if !trimmed.starts_with(':') {
+                search = idx + 1;
+                continue;
+            }
+            let value = trimmed[1..].trim_start();
+            if value.starts_with('\'') || value.starts_with('"') {
+                let tokens = quoted_tokens(value);
+                let &(start, end, _) = tokens.first()?;
+                return Some(value[start + 1..end - 1].to_string());
+            }
+            let ident: String = value
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if !ident.is_empty() {
+                return Some(ident);
+            }
+            return None;
+        }
+    }
+    None
+}
+
+/// Inner span of a `'checksums': [ ... ]` list inside a dict literal.
+fn dict_checksums_list_span(dict: &str) -> Result<Option<(usize, usize)>, EmitError> {
+    for quote in ['\'', '"'] {
+        let needle = format!("{quote}checksums{quote}");
+        let mut search = 0usize;
+        while let Some(rel) = dict[search..].find(&needle) {
+            let idx = search + rel;
+            if position_is_in_comment(dict, idx) {
+                search = idx + 1;
+                continue;
+            }
+            let after = &dict[idx + needle.len()..];
+            let trimmed = after.trim_start();
+            if !trimmed.starts_with(':') {
+                search = idx + 1;
+                continue;
+            }
+            let after_colon = trimmed[1..].trim_start();
+            if !after_colon.starts_with('[') {
+                search = idx + 1;
+                continue;
+            }
+            let list_at = dict.len() - after_colon.len();
+            let list_end = balanced_span(dict.as_bytes(), list_at, b'[', b']');
+            if list_end <= list_at + 1 {
+                return Ok(None);
+            }
+            return Ok(Some((list_at + 1, list_end - 1)));
+        }
+    }
+    Ok(None)
+}
+
+/// Rewrite a positional hash whose sibling `source_tmpl` tracks the package version.
+fn rewrite_positional_checksums_under_source_tmpl(
+    src: &str,
+    name: &str,
+    old_version: &str,
+    new_checksum: Option<&str>,
+) -> Result<RepeatedArtifactRewrite, EmitError> {
+    let bytes = src.as_bytes();
+    let mut spans = Vec::new();
+    let mut i = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
+    let mut comment = false;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if comment {
+            if byte == b'\n' {
+                comment = false;
+            }
+        } else if let Some(active) = quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == active {
+                quote = None;
+            }
+        } else if byte == b'#' {
+            comment = true;
+        } else if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+        } else if byte == b'{' {
+            spans.push((i, balanced_span(bytes, i, b'{', b'}')));
+        }
+        i += 1;
+    }
+
+    let mut edits = Vec::new();
+    for (start, end) in spans {
+        if end <= start + 1 {
+            continue;
+        }
+        let dict = &src[start..end];
+        let Some(tmpl) = dict_source_tmpl(dict) else {
+            continue;
+        };
+        if !source_tmpl_tracks_package_version(&tmpl, name, old_version) {
+            continue;
+        }
+        let Some((list_open, list_close)) = dict_checksums_list_span(dict)? else {
+            continue;
+        };
+        let body = &src[start + list_open..start + list_close];
+        let entry_at = skip_to_first_entry(body.as_bytes(), 0);
+        if entry_at >= body.len() || body.as_bytes()[entry_at] == b'{' {
+            continue;
+        }
+        let entry_end = entry_span(body.as_bytes(), entry_at)?;
+        let value = rewrite_checksum_value(&body[entry_at..entry_end], new_checksum)?;
+        edits.push((
+            start + list_open + entry_at,
+            start + list_open + entry_end,
+            value.text,
+        ));
+    }
+    let count = edits.len();
+    let mut text = src.to_string();
+    for (from, to, replacement) in edits.into_iter().rev() {
+        text.replace_range(from..to, &replacement);
+    }
+    Ok(RepeatedArtifactRewrite { text, count })
+}
+
+/// Rename `{name}-{old}`, `v{old}`, and `{name}-v{old}` archive filenames
+/// inside the `sources` list.
 ///
 /// EasyBuild downloads the `sources` filename and looks up `checksums` by that
 /// name, so a version bump that only rewrites the checksum key leaves the
@@ -2296,6 +2504,125 @@ checksums = [
     }
 
     #[test]
+    fn version_bump_rewrites_github_v_version_source() {
+        let src = "\
+name = 'EASI'
+version = '1.7.0'
+toolchain = {'name': 'foss', 'version': '2023a'}
+sources = ['v1.7.0.tar.gz']
+checksums = [
+    {'v1.7.0.tar.gz': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'},
+]
+";
+        let digest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let params = EmitParams {
+            toolchain: foss("2023a"),
+            version: Some("1.8.0".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: Some(digest.into()),
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert!(
+            r.text.contains("sources = ['v1.8.0.tar.gz']"),
+            "GitHub v-version download name must move:\n{}",
+            r.text
+        );
+        assert!(
+            r.text.contains(&format!("{{'v1.8.0.tar.gz': '{digest}'}}")),
+            "checksum key must match the download name:\n{}",
+            r.text
+        );
+        assert!(
+            !r.text.contains("v1.7.0.tar.gz"),
+            "old GitHub tag archive leaked:\n{}",
+            r.text
+        );
+    }
+
+    #[test]
+    fn version_bump_rewrites_github_name_v_version_source() {
+        let src = "\
+name = 'EASI'
+version = '1.7.0'
+toolchain = {'name': 'foss', 'version': '2023a'}
+sources = ['easi-v1.7.0.tar.gz']
+checksums = [
+    {'easi-v1.7.0.tar.gz': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'},
+]
+";
+        let digest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let params = EmitParams {
+            toolchain: foss("2023a"),
+            version: Some("1.8.0".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: Some(digest.into()),
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert!(
+            r.text.contains("sources = ['easi-v1.8.0.tar.gz']"),
+            "GitHub name-v-version download name must move:\n{}",
+            r.text
+        );
+        assert!(
+            r.text
+                .contains(&format!("{{'easi-v1.8.0.tar.gz': '{digest}'}}")),
+            "checksum key must match the download name:\n{}",
+            r.text
+        );
+        assert!(
+            !r.text.contains("easi-v1.7.0.tar.gz"),
+            "old GitHub release asset leaked:\n{}",
+            r.text
+        );
+    }
+
+    #[test]
+    fn version_bump_leaves_companion_v_version_untouched() {
+        let src = "\
+name = 'eOn'
+version = '2.16.0'
+toolchain = {'name': 'foss', 'version': '2023a'}
+sources = ['eon-2.16.0.tar.gz', 'v2.2.1.tar.gz']
+checksums = [
+    {'eon-2.16.0.tar.gz': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'},
+    {'v2.2.1.tar.gz': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'},
+]
+";
+        let digest = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let params = EmitParams {
+            toolchain: foss("2023a"),
+            version: Some("2.17.0".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: Some(digest.into()),
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert!(
+            r.text
+                .contains("sources = ['eon-2.17.0.tar.gz', 'v2.2.1.tar.gz']"),
+            "companion v-version must stay beside the new main tarball:\n{}",
+            r.text
+        );
+        assert!(
+            r.text.contains(
+                "{'v2.2.1.tar.gz': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}"
+            ),
+            "companion digest must stay:\n{}",
+            r.text
+        );
+        assert!(
+            !r.text.contains("v2.2.1.tar.gz': 'c") && !r.text.contains("v2.17.0.tar.gz"),
+            "main digest must not stamp the companion tag archive:\n{}",
+            r.text
+        );
+    }
+
+    #[test]
     fn version_bump_rewrites_literal_sources_filename() {
         let src = "\
 name = 'SeisSol'
@@ -2413,6 +2740,109 @@ exts_list = [
 "#;
 
     #[test]
+    fn repeated_artifact_rewrites_typed_tuple_extension_checksum() {
+        let src = "\
+name = 'GROMACS'
+version = '2026.2'
+toolchain = {'name': 'foss', 'version': '2025b'}
+sources = [SOURCELOWER_TAR_GZ]
+checksums = [
+    {'gromacs-2026.2.tar.gz': ('sha256', 'd27e4455e8246177952366798631a0dad9f2e1f567400a6cb854a168dcc050dd')},
+    {'pkg-data-2026.2.tar.gz': ('sha256', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')},
+]
+exts_list = [
+    ('gmxapi', '0.5.0a1', {
+        'source_tmpl': 'gromacs-%s.tar.gz' % _gmxapi_source_version,
+        'checksums': [
+            {'gromacs-2026.2.tar.gz': ('sha256', 'd27e4455e8246177952366798631a0dad9f2e1f567400a6cb854a168dcc050dd')},
+        ],
+    }),
+]
+";
+        let digest = "1094b7bbc6a3960223827114626657110b40096cdf9598a727935fc84ebf8aa0";
+        let params = EmitParams {
+            toolchain: foss("2025b"),
+            version: Some("2026.3".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: Some(digest.into()),
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert_eq!(
+            r.text
+                .matches(&format!(
+                    "{{'gromacs-2026.3.tar.gz': ('sha256', '{digest}')}}"
+                ))
+                .count(),
+            2,
+            "{}",
+            r.text
+        );
+        assert!(
+            !r.text.contains("gromacs-2026.2.tar.gz"),
+            "old typed-tuple key leaked:\n{}",
+            r.text
+        );
+        assert!(
+            r.text.contains(
+                "{'pkg-data-2026.2.tar.gz': ('sha256', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')}"
+            ),
+            "pkg-data must keep its own digest:\n{}",
+            r.text
+        );
+        assert!(
+            !r.text
+                .contains(&format!("pkg-data-2026.2.tar.gz': ('sha256', '{digest}')"))
+                && !r.text.contains("pkg-data-2026.3.tar.gz"),
+            "main digest must not stamp pkg-data:\n{}",
+            r.text
+        );
+    }
+
+    #[test]
+    fn repeated_artifact_rewrites_positional_hash_under_source_tmpl() {
+        let src = "\
+name = 'GROMACS'
+version = '2026.2'
+toolchain = {'name': 'foss', 'version': '2025b'}
+sources = [SOURCELOWER_TAR_GZ]
+checksums = [
+    {'gromacs-2026.2.tar.gz': 'd27e4455e8246177952366798631a0dad9f2e1f567400a6cb854a168dcc050dd'},
+]
+exts_list = [
+    ('gmxapi', '0.5.0a1', {
+        'source_tmpl': 'gromacs-%s.tar.gz' % _gmxapi_source_version,
+        'checksums': [
+            'd27e4455e8246177952366798631a0dad9f2e1f567400a6cb854a168dcc050dd',
+        ],
+    }),
+]
+";
+        let digest = "1094b7bbc6a3960223827114626657110b40096cdf9598a727935fc84ebf8aa0";
+        let params = EmitParams {
+            toolchain: foss("2025b"),
+            version: Some("2026.3".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: Some(digest.into()),
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert_eq!(
+            r.text.matches(digest).count(),
+            2,
+            "positional extension hash must take the new digest:\n{}",
+            r.text
+        );
+        assert!(
+            !r.text.contains("d27e4455"),
+            "old positional digest leaked:\n{}",
+            r.text
+        );
+    }
+
+    #[test]
     fn version_bump_rewrites_the_extension_copy_of_the_source_checksum() {
         let params = EmitParams {
             toolchain: foss("2025b"),
@@ -2442,6 +2872,36 @@ exts_list = [
             2,
             "{}",
             r.text
+        );
+    }
+
+    #[test]
+    fn commented_cuda_tuple_does_not_win_filename_suffix() {
+        let src = GPU_WITH_EXTENSION.replace(
+            "dependencies = [\n    ('CUDA', '12.9.1', '', SYSTEM),",
+            "dependencies = [\n    # ('CUDA', '11.8.0'),\n    ('CUDA', '12.9.1', '', SYSTEM),",
+        );
+        let params = EmitParams {
+            toolchain: foss("2025b"),
+            version: Some("2026.3".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: Some(
+                "1094b7bbc6a3960223827114626657110b40096cdf9598a727935fc84ebf8aa0".into(),
+            ),
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(&src, &params).expect("emit");
+        assert_eq!(r.filename, "GROMACS-2026.3-foss-2025b-CUDA-12.9.1.eb");
+        assert!(
+            r.text.contains("# ('CUDA', '11.8.0'),"),
+            "commented pin must stay:\n{}",
+            r.text
+        );
+        assert!(
+            !r.filename.contains("11.8.0"),
+            "commented CUDA must not name the file: {}",
+            r.filename
         );
     }
 
