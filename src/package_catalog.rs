@@ -149,6 +149,14 @@ pub enum PackageCatalogError {
     #[error("package catalog entry name cannot be empty")]
     /// An entry has no package name.
     EmptyPackageName,
+    #[error("package catalog entry {name} source checksum must be exactly 64 hexadecimal characters, got {checksum:?}")]
+    /// A `source_checksums` entry is not a SHA-256 hex digest.
+    InvalidSourceChecksum {
+        /// Entry that declared the digest.
+        name: String,
+        /// The rejected digest text.
+        checksum: String,
+    },
     #[error("package catalog entry {name} is missing a recipe source path")]
     /// An entry names no recipe to generate from.
     MissingSource {
@@ -243,6 +251,14 @@ impl PackageCatalogLayer {
         for package in &self.packages {
             if package.name.trim().is_empty() {
                 return Err(PackageCatalogError::EmptyPackageName);
+            }
+            for checksum in &package.source_checksums {
+                if checksum.len() != 64 || !checksum.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return Err(PackageCatalogError::InvalidSourceChecksum {
+                        name: package.name.clone(),
+                        checksum: checksum.clone(),
+                    });
+                }
             }
         }
         Ok(())

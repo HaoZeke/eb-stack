@@ -590,6 +590,28 @@ source_checksums = [
 }
 
 #[test]
+fn catalog_rejects_a_source_checksum_that_is_not_sha256() {
+    let err = PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "HDF5"
+source_checksums = ["not-a-digest"]
+"#,
+    )
+    .expect_err("invalid digest");
+    assert!(
+        matches!(err, PackageCatalogError::InvalidSourceChecksum { .. }),
+        "{err:?}"
+    );
+    assert!(
+        err.to_string().contains("HDF5") && err.to_string().contains("not-a-digest"),
+        "{err}"
+    );
+}
+
+#[test]
 fn easybuild_bump_requires_source_and_toolchain() {
     let err = resolve_package_catalog_layers(&[PackageCatalogLayer::from_toml_str(
         r#"
