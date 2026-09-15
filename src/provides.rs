@@ -285,7 +285,9 @@ pub fn language_provider_index(candidates: &[Candidate]) -> HashMap<String, &Can
             if ext.version.is_empty() {
                 continue;
             }
-            index.insert(overlay_package_identity(&ext.name), candidate);
+            index
+                .entry(overlay_package_identity(&ext.name))
+                .or_insert(candidate);
         }
     }
     index
@@ -326,7 +328,10 @@ fn provide_from_parent(parent: &Candidate, ext: &ExtEntry) -> Option<Candidate> 
         name: aliased_module_name(&ext.name),
         version: ext.version.clone(),
         toolchain: parent.toolchain.clone(),
-        versionsuffix: parent.versionsuffix.clone(),
+        // The language identity is unsuffixed. The parent pin still carries
+        // the bundle suffix so SAT selects the CUDA bundle, not a second
+        // language module.
+        versionsuffix: None,
         easyconfig_path: format!(
             "{}{EXT_PROVIDE_MARKER}{}",
             parent.easyconfig_path,
@@ -470,5 +475,39 @@ mod tests {
         let universe = [pytorch];
         let provider = existing_language_provider("torch", &universe).expect("module");
         assert_eq!(provider.name, "PyTorch");
+    }
+
+    #[test]
+    fn a_cuda_bundle_provide_stays_an_unsuffixed_language_identity() {
+        let mut parent = bundle();
+        parent.versionsuffix = Some("-CUDA-12.8.0".into());
+        let expanded = expand_extension_provides(vec![parent]);
+        let numpy = expanded
+            .iter()
+            .find(|candidate| candidate.name == "numpy")
+            .expect("numpy provide");
+        assert!(
+            numpy.versionsuffix.is_none() || numpy.versionsuffix.as_deref() == Some(""),
+            "language provide is unsuffixed: {:?}",
+            numpy.versionsuffix
+        );
+        assert_eq!(
+            numpy.dependencies[0].versionsuffix.as_deref(),
+            Some("-CUDA-12.8.0")
+        );
+    }
+
+    #[test]
+    fn language_provider_index_matches_first_wins() {
+        let first = bundle();
+        let mut second = bundle();
+        second.easyconfig_path = "other-bundle.eb".into();
+        second.name = "other-bundle".into();
+        let universe = [first.clone(), second];
+        let linear = existing_language_provider("numpy", &universe).expect("linear");
+        let indexed = existing_language_provider_in("numpy", &language_provider_index(&universe))
+            .expect("index");
+        assert_eq!(linear.easyconfig_path, first.easyconfig_path);
+        assert_eq!(indexed.easyconfig_path, first.easyconfig_path);
     }
 }
