@@ -13,7 +13,7 @@ use crate::domain::{Candidate, DepReq, Toolchain};
 use crate::version::cmp_version;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use thiserror::Error;
@@ -294,6 +294,26 @@ fn is_definition_subtoolchain(candidate: &Candidate) -> bool {
         ))
 }
 
+/// Insert `found` immediately before `namer` so a walk from the parent stays
+/// lowest-first (`GCCcore` before `GCC` before `gompi` before `foss`).
+fn insert_before_namer(members: &mut Vec<Toolchain>, namer: &Toolchain, found: Toolchain) {
+    if members
+        .iter()
+        .any(|member| toolchains_match(member, &found))
+    {
+        return;
+    }
+    if let Some(idx) = members
+        .iter()
+        .position(|member| toolchains_match(member, namer))
+    {
+        members.insert(idx, found);
+    } else {
+        let idx = members.len().saturating_sub(1);
+        members.insert(idx, found);
+    }
+}
+
 fn derive_hierarchy_by_walking(
     parent: &Toolchain,
     cands: &[Candidate],
@@ -308,15 +328,20 @@ fn derive_hierarchy_by_walking(
                 .map(|candidate| candidate.name.as_str()),
         )
         .collect();
-    let mut members: Vec<Toolchain> = vec![Toolchain {
-        name: "system".into(),
-        version: String::new(),
-    }];
-    let mut pending = vec![parent.clone()];
+    // Parent starts in the list so each discovered level can be inserted
+    // before the toolchain that named it. `pending.pop()` DFS plus push
+    // left GCCcore last among the subs; BFS plus insert-before-namer keeps
+    // system < GCCcore < GCC < gompi < foss.
+    let mut members: Vec<Toolchain> = vec![
+        Toolchain {
+            name: "system".into(),
+            version: String::new(),
+        },
+        parent.clone(),
+    ];
+    let mut pending = VecDeque::from([parent.clone()]);
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    // Breadth-first from the parent down; each level found is inserted before
-    // the toolchain that named it, so the result stays lowest-first.
-    while let Some(current) = pending.pop() {
+    while let Some(current) = pending.pop_front() {
         if !seen.insert(format!("{}-{}", current.name, current.version)) {
             continue;
         }
@@ -340,8 +365,8 @@ fn derive_hierarchy_by_walking(
                     && !members.iter().any(|m| toolchains_match(m, toolchain))
             });
             if let Some(toolchain) = named {
-                members.push((*toolchain).clone());
-                pending.push((*toolchain).clone());
+                insert_before_namer(&mut members, &current, (*toolchain).clone());
+                pending.push_back((*toolchain).clone());
             }
             if !used_as_toolchain.contains(dependency.name.as_str()) {
                 continue;
@@ -354,9 +379,9 @@ fn derive_hierarchy_by_walking(
                 version: version.to_string(),
             };
             if !members.iter().any(|m| toolchains_match(m, &found)) {
-                members.push(found.clone());
+                insert_before_namer(&mut members, &current, found.clone());
             }
-            pending.push(found);
+            pending.push_back(found);
         }
     }
     if !cands
@@ -365,7 +390,6 @@ fn derive_hierarchy_by_walking(
     {
         return None;
     }
-    members.push(parent.clone());
     Some(ToolchainHierarchy {
         parent: parent.clone(),
         members,
@@ -480,6 +504,77 @@ fn version_prefix_of(version: &str, spelled: &str) -> bool {
     }
     let rest = &spelled[version.len()..];
     rest.is_empty() || rest.starts_with('-')
+}
+
+fn candidate_joined_version(candidate: &Candidate) -> String {
+    format!(
+        "{}{}",
+        candidate.version,
+        candidate.versionsuffix.as_deref().unwrap_or_default()
+    )
+}
+
+/// Whether a prefix-matching definition is the one the joined parent asked for.
+///
+/// NVHPC already disambiguates two `25.3` + `-CUDA-%(cudaver)s` recipes by the
+/// compiler pin whose identity equals the joined parent. Compiler-only
+/// `nvidia-compilers` recipes pin CUDA (and keep the expanded suffix on disk)
+/// rather than pinning themselves, so those two spellings count as well.
+fn definition_pin_matches_parent(candidate: &Candidate, parent: &Toolchain) -> bool {
+    let pins = candidate
+        .dependencies
+        .iter()
+        .chain(candidate.builddependencies.iter())
+        .any(|dep| {
+            let Some(identity) = compiler_pin_identity(dep) else {
+                return false;
+            };
+            if identity == parent.version {
+                return true;
+            }
+            dep.name == "CUDA" && parent.version.ends_with(&format!("-CUDA-{identity}"))
+        });
+    if pins {
+        return true;
+    }
+    let file = candidate
+        .easyconfig_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(candidate.easyconfig_path.as_str());
+    let stem = file.strip_suffix(".eb").unwrap_or(file);
+    stem == format!("{}-{}", parent.name, parent.version)
+}
+
+fn find_defining_candidate<'a>(
+    parent: &Toolchain,
+    cands: &'a [Candidate],
+) -> Option<&'a Candidate> {
+    cands
+        .iter()
+        .find(|candidate| candidate.name == parent.name && candidate.version == parent.version)
+        .or_else(|| {
+            cands.iter().find(|candidate| {
+                candidate.name == parent.name
+                    && candidate_joined_version(candidate) == parent.version
+            })
+        })
+        .or_else(|| {
+            let prefixed: Vec<&Candidate> = cands
+                .iter()
+                .filter(|candidate| {
+                    candidate.name == parent.name
+                        && version_prefix_of(&candidate.version, &parent.version)
+                })
+                .collect();
+            match prefixed.as_slice() {
+                [only] => Some(*only),
+                many => many
+                    .iter()
+                    .copied()
+                    .find(|candidate| definition_pin_matches_parent(candidate, parent)),
+            }
+        })
 }
 
 /// `NVHPC` is a composite in its own right since EasyBuild 5.2.0:
@@ -695,19 +790,7 @@ fn derive_compiler_toolchain_hierarchy(
     if parent.version.is_empty() || is_system_toolchain(parent) {
         return None;
     }
-    let def = cands
-        .iter()
-        .find(|c| c.name == parent.name && c.version == parent.version)
-        .or_else(|| {
-            cands.iter().find(|c| {
-                c.name == parent.name
-                    && format!(
-                        "{}{}",
-                        c.version,
-                        c.versionsuffix.as_deref().unwrap_or_default()
-                    ) == parent.version
-            })
-        })?;
+    let def = find_defining_candidate(parent, cands)?;
     let gcccore_ver = def
         .dependencies
         .iter()
@@ -1977,6 +2060,27 @@ mod tests {
                 h.member_labels()
             );
         }
+        let pos = |label: &str| {
+            h.member_labels()
+                .iter()
+                .position(|member| member == label)
+                .unwrap_or_else(|| panic!("missing {label} in {:?}", h.member_labels()))
+        };
+        assert!(
+            pos("GCCcore-15.2.0") < pos("GCC-15.2.0"),
+            "{:?}",
+            h.member_labels()
+        );
+        assert!(
+            pos("GCC-15.2.0") < pos("gompi-2099a"),
+            "{:?}",
+            h.member_labels()
+        );
+        assert!(
+            pos("gompi-2099a") < pos("foss-2099a"),
+            "{:?}",
+            h.member_labels()
+        );
     }
 
     #[test]
@@ -2010,6 +2114,22 @@ mod tests {
             "{:?}",
             h.member_labels()
         );
+        let pos = |label: &str| {
+            h.member_labels()
+                .iter()
+                .position(|member| member == label)
+                .unwrap_or_else(|| panic!("missing {label} in {:?}", h.member_labels()))
+        };
+        assert!(
+            pos("GCCcore-15.2.0") < pos("intel-compilers-2026.1.0"),
+            "{:?}",
+            h.member_labels()
+        );
+        assert!(
+            pos("intel-compilers-2026.1.0") < pos("intel-2026a"),
+            "{:?}",
+            h.member_labels()
+        );
     }
 
     #[test]
@@ -2036,6 +2156,48 @@ mod tests {
         assert!(!h.contains(&ucx_133.toolchain));
         // No defining recipe -> not derivable.
         assert!(derive_hierarchy_from_candidates(&parent, &[]).is_none());
+    }
+
+    /// nvidia-compilers keeps `versionsuffix = '-CUDA-%(cudaver)s'` unexpanded,
+    /// so a joined parent `25.3-CUDA-12.9.1` never equals the template. The
+    /// same prefix+pin disambiguation NVHPC already has must pick the 12.9.1
+    /// file's GCCcore, not the first 12.8.0 recipe in the tree.
+    #[test]
+    fn compiler_only_joined_cuda_parent_matches_template_definition() {
+        let parent = Toolchain {
+            name: "nvidia-compilers".into(),
+            version: "25.3-CUDA-12.9.1".into(),
+        };
+        let mut first = cand(
+            "nvidia-compilers",
+            "25.3",
+            "system",
+            "",
+            Some("-CUDA-%(cudaver)s"),
+        );
+        first.easyconfig_path = "nvidia-compilers-25.3-CUDA-12.8.0.eb".into();
+        first.dependencies = vec![dep_pin("GCCcore", "13.3.0"), dep_pin("CUDA", "12.8.0")];
+        let mut second = cand(
+            "nvidia-compilers",
+            "25.3",
+            "system",
+            "",
+            Some("-CUDA-%(cudaver)s"),
+        );
+        second.easyconfig_path = "nvidia-compilers-25.3-CUDA-12.9.1.eb".into();
+        second.dependencies = vec![dep_pin("GCCcore", "14.2.0"), dep_pin("CUDA", "12.9.1")];
+        let h = derive_hierarchy_from_candidates(&parent, &[first, second])
+            .expect("joined CUDA parent must match the template definition");
+        assert_eq!(
+            h.members
+                .iter()
+                .find(|member| member.name == "GCCcore")
+                .map(|member| member.version.as_str()),
+            Some("14.2.0"),
+            "{:?}",
+            h.member_labels()
+        );
+        assert_eq!(h.members.last(), Some(&parent), "{:?}", h.member_labels());
     }
 
     #[test]
