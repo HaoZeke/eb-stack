@@ -115,7 +115,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
     // A constraint the requirement language cannot express is reported here
     // rather than handed to the solver, where it would build an empty version
     // set and make the dependency look unsatisfiable.
-    for dependency in &recipe.dependencies {
+    for (index, dependency) in recipe.dependencies.iter().enumerate() {
         let Some(constraint) =
             canonical_version_constraint(recipe.format, dependency.pin.as_deref())
         else {
@@ -134,11 +134,12 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
                 evidence: dependency.original_spec.clone(),
                 provenance: dependency.provenance.first().cloned(),
             });
-            if let Some(intent) = dependencies.iter_mut().find(|intent| {
-                intent.name == dependency.name
+            if let Some(intent) = dependencies.get_mut(index) {
+                if intent.name == dependency.name
                     && intent.constraint.as_deref() == Some(constraint.as_str())
-            }) {
-                intent.constraint = None;
+                {
+                    intent.constraint = None;
+                }
             }
         }
     }
@@ -317,7 +318,7 @@ fn canonical_version_constraint(format: ForeignFormat, pin: Option<&str>) -> Opt
     } else if format == ForeignFormat::Spack {
         canonical_spack_version_constraint(version_field)
     } else if format == ForeignFormat::CondaForge {
-        Some(expand_digit_wildcards(&rewrite_conda_eq_pin(pin)))
+        Some(expand_digit_wildcards(&rewrite_conda_eq_pin(version_field)))
     } else if format == ForeignFormat::Raku {
         if let Some(minimum) = version_field
             .strip_suffix('+')
@@ -384,34 +385,16 @@ fn canonical_spack_version_constraint(version: &str) -> Option<String> {
             terms.push(format!(">={minimum}"));
         }
         if !maximum.is_empty() {
-            terms.push(series_successor(maximum).map_or_else(
-                || format!("<={maximum}"),
-                |successor| format!("<{successor}"),
-            ));
+            let maximum = maximum.strip_suffix(".*").unwrap_or(maximum);
+            return Some(match (minimum.is_empty(), terms.is_empty()) {
+                (true, _) => format!("<{maximum}||{maximum}.*"),
+                (false, _) => format!(">={minimum},<{maximum}||{maximum}.*"),
+            });
         }
         return (!terms.is_empty()).then(|| terms.join(","));
     }
-    series_successor(version)
-        .map(|successor| format!(">={version},<{successor}"))
-        .or_else(|| Some(format!("=={version}")))
-}
-
-fn series_successor(version: &str) -> Option<String> {
     let version = version.strip_suffix(".*").unwrap_or(version);
-    let mut components = version
-        .split('.')
-        .map(str::parse::<u64>)
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
-    let last = components.last_mut()?;
-    *last = last.checked_add(1)?;
-    Some(
-        components
-            .iter()
-            .map(u64::to_string)
-            .collect::<Vec<_>>()
-            .join("."),
-    )
+    Some(format!("{version}.*"))
 }
 
 fn dependency_roles(role: &str) -> Vec<DependencyRole> {
@@ -474,6 +457,18 @@ mod tests {
         assert!(matches_req("1.11", &union), "{union}");
         assert!(matches_req("1.14.1", &union), "{union}");
         assert!(!matches_req("1.13", &union), "{union}");
+        assert!(
+            !matches_req("1.13.0rc1", &union),
+            "next-series prerelease must not satisfy 1.10:1.12: {union}"
+        );
+    }
+
+    #[test]
+    fn conda_version_plus_build_string_stays_a_series() {
+        let pin = canonical_version_constraint(ForeignFormat::CondaForge, Some("2.1.* *cpu*"))
+            .expect("conda pin");
+        assert!(matches_req("2.1.5", &pin), "{pin}");
+        assert!(!matches_req("2.2.0", &pin), "{pin}");
     }
 
     #[test]

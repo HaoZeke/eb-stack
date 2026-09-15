@@ -75,8 +75,8 @@ pub fn expand_extension_provides(mut candidates: Vec<Candidate>) -> Vec<Candidat
         for ext in &parent.exts_list {
             if let Some(child) = provide_from_parent(parent, ext) {
                 let key = (
-                    child.name.clone(),
-                    child.version.clone(),
+                    ext.name.clone(),
+                    ext.version.clone(),
                     parent.easyconfig_path.clone(),
                 );
                 if seen.insert(key) {
@@ -374,11 +374,7 @@ fn provide_from_parent(parent: &Candidate, ext: &ExtEntry) -> Option<Candidate> 
         // the bundle suffix so SAT selects the CUDA bundle, not a second
         // language module.
         versionsuffix: None,
-        easyconfig_path: format!(
-            "{}{EXT_PROVIDE_MARKER}{}",
-            parent.easyconfig_path,
-            aliased_module_name(&ext.name)
-        ),
+        easyconfig_path: format!("{}{EXT_PROVIDE_MARKER}{}", parent.easyconfig_path, ext.name),
         dependencies: vec![DepReq {
             name: parent.name.clone(),
             version_req: format!("=={}", parent.version),
@@ -511,6 +507,37 @@ mod tests {
         hatchling.exts_list.clear();
         hatchling.easyconfig_path = "hatchling-1.27.0.eb".into();
         assert!(existing_language_provider("hatch-vcs", &[hatchling]).is_none());
+    }
+
+    #[test]
+    fn aliased_provides_keep_distinct_paths() {
+        let mut parent = bundle();
+        parent.name = "Python-bundle-PyPI".into();
+        parent.exts_list = vec![
+            ExtEntry {
+                name: "poetry-core".into(),
+                version: "1.9.0".into(),
+            },
+            ExtEntry {
+                name: "poetry".into(),
+                version: "1.8.3".into(),
+            },
+        ];
+        let expanded = expand_extension_provides(vec![parent]);
+        let provides: Vec<&Candidate> = expanded
+            .iter()
+            .filter(|candidate| candidate.is_extension_provide())
+            .collect();
+        assert_eq!(provides.len(), 2, "{provides:?}");
+        assert_ne!(
+            provides[0].easyconfig_path,
+            provides[1].easyconfig_path,
+            "{:?}",
+            provides
+                .iter()
+                .map(|candidate| candidate.easyconfig_path.as_str())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

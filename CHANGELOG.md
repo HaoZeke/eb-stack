@@ -102,6 +102,10 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `format_style` does not bisect `%(installdir)s`. Aliased extension
+  provides keep the original ext name in `easyconfig_path`. Spack
+  `@1.10:1.12` does not admit `1.13.0rc1`. A conda `2.1.* *cpu*` pin is
+  the `2.1.*` series, not an exact unsatisfiable token.
 - An undecidable Spack `if` unbinds names assigned in either branch, so
   a linux `url` is not kept as a fact after `if sys.platform == darwin`.
 - An ingest dump is reused only when the file's declared name (and

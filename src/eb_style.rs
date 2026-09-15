@@ -915,21 +915,88 @@ fn preferred_split(s: &str, budget: usize) -> Option<usize> {
             return Some(pos);
         }
     }
+    // If the window ends inside `%(installdir)s`, split before the template.
+    if let Some(pos) = truncated_percent_template_start(window) {
+        if pos > 8 {
+            return Some(pos);
+        }
+    }
     // last whitespace
     if let Some(pos) = window.char_indices().rev().find(|(_, c)| c.is_whitespace()) {
         return Some(pos.0 + pos.1.len_utf8());
     }
-    // last non-alnum (avoid mid-identifier hard cuts when possible)
-    if let Some((i, character)) = window
-        .char_indices()
-        .rev()
-        .find(|(_, c)| !c.is_ascii_alphanumeric() && *c != '_')
-    {
+    // last non-alnum (avoid mid-identifier hard cuts when possible).
+    // Do not land on `)` inside `%(installdir)s` — that bisects the template.
+    if let Some((i, character)) = window.char_indices().rev().find(|(i, c)| {
+        if percent_template_covers(window, *i) {
+            return false;
+        }
+        !c.is_ascii_alphanumeric() && *c != '_'
+    }) {
         if i > 8 {
             return Some(i + character.len_utf8());
         }
     }
     None
+}
+
+/// Start of a `%(name)s` that is not fully inside `window`.
+fn truncated_percent_template_start(window: &str) -> Option<usize> {
+    let bytes = window.as_bytes();
+    let mut cursor = 0;
+    let mut last = None;
+    while cursor + 1 < bytes.len() {
+        if bytes[cursor] == b'%' && bytes[cursor + 1] == b'(' {
+            if let Some(rel) = window.get(cursor + 2..).and_then(|rest| rest.find(')')) {
+                let close = cursor + 2 + rel;
+                let end = if window
+                    .get(close + 1..)
+                    .is_some_and(|rest| rest.starts_with('s'))
+                {
+                    close + 2
+                } else {
+                    close + 1
+                };
+                if end > window.len() {
+                    last = Some(cursor);
+                }
+                cursor = end.min(window.len());
+                continue;
+            } else {
+                return Some(cursor);
+            }
+        }
+        cursor += 1;
+    }
+    last
+}
+
+/// True when `index` sits inside `%(name)s` (or `%(name)`).
+fn percent_template_covers(window: &str, index: usize) -> bool {
+    let bytes = window.as_bytes();
+    let mut cursor = 0;
+    while cursor + 1 < bytes.len() {
+        if bytes[cursor] == b'%' && bytes[cursor + 1] == b'(' {
+            if let Some(rel) = window.get(cursor + 2..).and_then(|rest| rest.find(')')) {
+                let close = cursor + 2 + rel;
+                let end = if window
+                    .get(close + 1..)
+                    .is_some_and(|rest| rest.starts_with('s'))
+                {
+                    close + 2
+                } else {
+                    close + 1
+                };
+                if index >= cursor && index < end {
+                    return true;
+                }
+                cursor = end;
+                continue;
+            }
+        }
+        cursor += 1;
+    }
+    false
 }
 
 fn wrap_words(body: &str, width: usize) -> Vec<String> {
@@ -1084,6 +1151,16 @@ mod tests {
             assert!(l.chars().count() <= EB_MAX_LINE, "{l}");
         }
         assert!(r.text.contains(" + "));
+    }
+
+    #[test]
+    fn format_keeps_percent_installdir_template() {
+        let body = format!("AAAAAAAA%(installdir)s{}", "B".repeat(120));
+        let out = format_style(&format!("configopts = '{body}'\n")).text;
+        assert!(
+            out.contains("%(installdir)s"),
+            "must not bisect %(installdir)s: {out}"
+        );
     }
 
     #[test]
