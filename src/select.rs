@@ -12,6 +12,7 @@ use crate::hierarchy::{
     filter_candidates_in_hierarchy, is_system_toolchain, toolchains_match, SourceDepSpec,
     ToolchainHierarchy,
 };
+use crate::provides::expand_extension_provides;
 use crate::resolvo_provider::solve_with_resolvo;
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
@@ -77,8 +78,10 @@ pub fn select_stack(
 /// source-recipe deps that exist under the generation hierarchy, solves with
 /// [`select_stack`], and returns name→version for co-selected deps plus a
 /// human note (engine id). Hierarchy membership is already enforced by
-/// [`filter_candidates_in_hierarchy`]; candidate toolchains stay as they
-/// were so SAT identity keeps GCCcore vs foss of the same name distinct.
+/// [`filter_candidates_in_hierarchy`]; [`expand_extension_provides`] runs
+/// before the name index so a bundle `exts_list` entry is a hierarchy hit.
+/// Candidate toolchains stay as they were so SAT identity keeps GCCcore vs
+/// foss of the same name distinct.
 ///
 /// When `preferred_pins` is set (typically hierarchy consensus), those packages
 /// are **exact pins** in the policy: resolvo joint-checks feasibility under
@@ -98,7 +101,8 @@ pub fn resolvo_resolve_dep_versions(
     root_version: &str,
     preferred_pins: Option<&HashMap<String, String>>,
 ) -> Result<(HashMap<String, String>, String), String> {
-    let universe_cands = filter_candidates_in_hierarchy(cands, hierarchy);
+    let universe_cands =
+        expand_extension_provides(filter_candidates_in_hierarchy(cands, hierarchy));
     if universe_cands.is_empty() {
         return Err("no candidates under hierarchy members".into());
     }
@@ -224,6 +228,13 @@ pub fn resolvo_resolve_dep_versions(
                  pins: Vec<crate::domain::Pin>|
      -> Result<(HashMap<String, String>, String), String> {
         let mut keep: HashSet<String> = resolvable.iter().cloned().collect();
+        // SAT re-derives hierarchy from the trimmed set. A new generation's
+        // foss/NVHPC/site definition is not a resolvable spec unless a spec is
+        // literally named that.
+        keep.insert(toolchain.name.clone());
+        for member in &hierarchy.members {
+            keep.insert(member.name.clone());
+        }
         let mut pending: Vec<String> = keep.iter().cloned().collect();
         while let Some(name) = pending.pop() {
             for candidate in admitted.iter().filter(|candidate| candidate.name == name) {
@@ -1621,5 +1632,79 @@ mod lock_identity_and_bump_pin_tests {
             !error.contains("0.9") || error.contains("unsatisfiable") || error.contains("Lib"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn keep_retains_an_unknown_generation_toolchain_definition() {
+        let foss_2099 = Toolchain {
+            name: "foss".into(),
+            version: "2099.1".into(),
+        };
+        let system = Toolchain {
+            name: "system".into(),
+            version: String::new(),
+        };
+        let gcc = Toolchain {
+            name: "GCC".into(),
+            version: "99.0.0".into(),
+        };
+        let gcccore = Toolchain {
+            name: "GCCcore".into(),
+            version: "99.0.0".into(),
+        };
+        let foss_def = Candidate {
+            name: "foss".into(),
+            version: "2099.1".into(),
+            toolchain: system.clone(),
+            versionsuffix: None,
+            easyconfig_path: "foss-2099.1.eb".into(),
+            dependencies: vec![DepReq {
+                name: "GCC".into(),
+                version_req: "==99.0.0".into(),
+                versionsuffix: None,
+                toolchain: None,
+            }],
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+            moduleclass: Some("toolchain".into()),
+        };
+        let mut lib = candidate("Lib", "1.0", None);
+        lib.toolchain = foss_2099.clone();
+        lib.easyconfig_path = "Lib-1.0-foss-2099.1.eb".into();
+        let hierarchy = ToolchainHierarchy {
+            parent: foss_2099.clone(),
+            members: vec![system, gcccore, gcc, foss_2099.clone()],
+        };
+        let (map, _) = resolvo_resolve_dep_versions(
+            &[SourceDepSpec::plain("Lib", "1.0")],
+            &[foss_def, lib],
+            &hierarchy,
+            &foss_2099,
+            "App",
+            "1.0",
+            None,
+        )
+        .expect("unknown foss-2099.1 must keep its SYSTEM definition");
+        assert_eq!(map.get("Lib").map(String::as_str), Some("1.0"));
+    }
+
+    #[test]
+    fn extension_provide_reaches_the_name_index() {
+        let mut bundle = candidate("SciPy-bundle", "2025.06", None);
+        bundle.exts_list = vec![ExtEntry {
+            name: "numpy".into(),
+            version: "2.3.1".into(),
+        }];
+        let (map, _) = resolvo_resolve_dep_versions(
+            &[SourceDepSpec::plain("numpy", "2.3.1")],
+            &[bundle],
+            &hierarchy(),
+            &foss(),
+            "App",
+            "1.0",
+            None,
+        )
+        .expect("numpy via SciPy-bundle exts_list must reach SAT");
+        assert_eq!(map.get("numpy").map(String::as_str), Some("2.3.1"));
     }
 }
