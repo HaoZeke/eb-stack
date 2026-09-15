@@ -246,6 +246,62 @@ source:
 }
 
 #[test]
+fn uppercase_declared_patch_digest_writes_the_bundle() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let recipe_dir = temp.path().join("recipe");
+    let patch = recipe_dir.join("fix.patch");
+    std::fs::create_dir_all(&recipe_dir).expect("recipe directory");
+    let patch_bytes = b"authoritative patch bytes\n";
+    std::fs::write(&patch, patch_bytes).expect("write patch");
+    let digest = Sha256::digest(patch_bytes)
+        .iter()
+        .fold(String::new(), |mut output, byte| {
+            write!(&mut output, "{byte:02X}").expect("format digest");
+            output
+        });
+    let source = recipe_dir.join("package.py");
+    std::fs::write(
+        &source,
+        format!(
+            r#"
+class Patchfix(Package):
+    homepage = "https://example.invalid/patchfix"
+    url = "https://example.invalid/patchfix-1.0.tar.gz"
+    version("1.0", sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    patch("fix.patch", sha256="{digest}")
+"#
+        ),
+    )
+    .expect("write Spack package");
+    let robot = temp.path().join("robot");
+    std::fs::create_dir(&robot).expect("robot directory");
+    let bundle = plan_new_package(&NewPackageRequest {
+        source,
+        format: Some(ForeignFormat::Spack),
+        toolchain: toolchain(),
+        source_checksums: Vec::new(),
+        package_layers: Vec::new(),
+        package_index: Default::default(),
+        easyconfig_roots: vec![robot],
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "test".into(),
+            toolchain: toolchain(),
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+    })
+    .expect("uppercase digest must plan");
+    let written = write_package_bundle(&bundle, &temp.path().join("bundle"))
+        .expect("uppercase digest must write");
+    assert_eq!(written.patches.len(), 1);
+    assert_eq!(
+        std::fs::read(&written.patches[0]).expect("copied patch"),
+        patch_bytes
+    );
+}
+
+#[test]
 fn a_declared_patch_missing_beside_the_recipe_is_a_residual() {
     let temp = tempfile::tempdir().expect("tempdir");
     let recipe_dir = temp.path().join("recipe");

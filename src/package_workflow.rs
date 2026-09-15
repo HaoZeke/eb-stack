@@ -1009,7 +1009,7 @@ fn validate_patch_source(patch: &PatchArtifact) -> Result<PathBuf, PackageWorkfl
         .map_err(|error| PackageWorkflowError::PatchIo(source.clone(), error))?;
     let actual = sha256_hex(&bytes);
     let expected = patch.sha256.as_deref().unwrap_or_default();
-    if actual != expected {
+    if !actual.eq_ignore_ascii_case(expected) {
         return Err(PackageWorkflowError::PatchChecksumMismatch {
             filename: patch.filename.clone(),
             expected: expected.to_string(),
@@ -1376,26 +1376,37 @@ pub fn complete_package_bump(
             .find_map(|path| {
                 resolve_easyconfig_file(Path::new(&path))
                     .ok()
-                    .map(|recipe| crate::patch_evolution::SiblingRecipe {
-                        easyconfig_path: path,
-                        toolchain: recipe.toolchain,
-                        patch_names: recipe.patch_names,
-                    })
+                    .map(|recipe| (path, recipe))
             });
+            let sibling_evidence =
+                sibling
+                    .as_ref()
+                    .map(|(path, recipe)| crate::patch_evolution::SiblingRecipe {
+                        easyconfig_path: path.clone(),
+                        toolchain: recipe.toolchain.clone(),
+                        patch_names: recipe.patch_names.clone(),
+                    });
             let patch_plan = crate::patch_evolution::plan_patch_evolution(
                 new_version,
                 &source_recipe.patch_names,
-                sibling.as_ref(),
+                sibling_evidence.as_ref(),
             );
             if request.strict_patches && !patch_plan.undecided().is_empty() {
                 return Err(PackageWorkflowError::UndecidedPatches(
                     patch_plan.undecided().join(", "),
                 ));
             }
-            if let Some(sibling_path) = &patch_plan.sibling {
+            if let Some((sibling_path, sibling_recipe)) = &sibling {
                 result.text =
                     crate::patch_evolution::adopt_sibling_patch_block(&result.text, sibling_path)
                         .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+                plan.build.patches = patches_from_final_names(
+                    &patch_plan.final_patches(),
+                    sibling_recipe,
+                    &request.source,
+                    &plan.build.patches,
+                );
+                refresh_checksum_residuals(&mut plan);
                 // Per-patch evidence supersedes the blanket review warning.
                 result
                     .warnings
@@ -1582,6 +1593,69 @@ fn resolved_bump_source_checksum(request: &BumpPackageRequest) -> Option<&str> {
             .rev()
             .find_map(|layer| layer.source_checksums.first().map(String::as_str))
     })
+}
+
+/// Rebuild `plan.build.patches` from the adopted sibling set.
+///
+/// `complete_package_bump` used to splice only `result.text`. The writer
+/// copies `plan.build.patches`, so without this the overlay still holds the
+/// source-version files.
+fn patches_from_final_names(
+    final_names: &[&str],
+    sibling: &crate::eb_parse::ResolvedEasyconfig,
+    source_path: &Path,
+    previous: &[PatchArtifact],
+) -> Vec<PatchArtifact> {
+    let sibling_dir = Path::new(&sibling.easyconfig_path).parent();
+    let source_dir = source_path.parent();
+    let source_count = if sibling.sources_count > 0 {
+        sibling.sources_count
+    } else {
+        sibling
+            .checksums
+            .len()
+            .saturating_sub(sibling.patch_names.len())
+    };
+    final_names
+        .iter()
+        .enumerate()
+        .map(|(index, filename)| {
+            let resolved_source = sibling_dir
+                .map(|directory| directory.join(filename))
+                .filter(|path| path.is_file())
+                .or_else(|| {
+                    source_dir
+                        .map(|directory| directory.join(filename))
+                        .filter(|path| path.is_file())
+                });
+            let sha256 = sibling
+                .checksums_by_filename
+                .get(*filename)
+                .cloned()
+                .or_else(|| sibling.checksums.get(source_count + index).cloned())
+                .or_else(|| {
+                    previous
+                        .iter()
+                        .find(|patch| patch.filename == *filename)
+                        .and_then(|patch| patch.sha256.clone())
+                })
+                .or_else(|| {
+                    resolved_source
+                        .as_ref()
+                        .and_then(|path| std::fs::read(path).ok().map(|bytes| sha256_hex(&bytes)))
+                });
+            PatchArtifact {
+                filename: (*filename).to_string(),
+                sha256,
+                url: None,
+                source: resolved_source
+                    .as_deref()
+                    .map(|path| path.display().to_string()),
+                condition: ConditionExpr::Always,
+                resolved_source,
+            }
+        })
+        .collect()
 }
 
 fn package_plan_from_easyconfig(
@@ -2048,7 +2122,7 @@ pub fn write_package_bundle_into(
                 .map_err(|error| PackageWorkflowError::PatchIo(source.clone(), error))?;
             let actual = sha256_hex(&content);
             let expected = patch.sha256.as_deref().unwrap_or_default();
-            if actual != expected {
+            if !actual.eq_ignore_ascii_case(expected) {
                 return Err(PackageWorkflowError::PatchChecksumMismatch {
                     filename: patch.filename.clone(),
                     expected: expected.to_string(),

@@ -6,9 +6,20 @@ use eb_stack::package_config::PackageConfigLayer;
 use eb_stack::{
     plan_package_bump, resolve_easyconfig_str, write_package_bundle, BumpPackageRequest, Toolchain,
 };
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .fold(String::new(), |mut output, byte| {
+            write!(&mut output, "{byte:02x}").expect("format digest");
+            output
+        })
+}
 
 fn fixture(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path)
@@ -287,15 +298,25 @@ fn version_bump_adopts_the_same_version_siblings_patch_block() {
     .expect("source recipe");
     // The maintainer already ships 2.0 under another toolchain, with an
     // evolved patch set carrying a level tuple that must survive verbatim.
+    let portable_bytes = b"portable fix\n";
+    let new_fix_bytes = b"new version fix\n";
+    let old_fix_bytes = b"old version fix\n";
+    fs::write(temp.path().join("Beta-1.0_old-fix.patch"), old_fix_bytes).expect("old patch");
+    fs::write(robot.join("portable-fix.patch"), portable_bytes).expect("portable patch");
+    fs::write(robot.join("Beta-2.0_new-fix.patch"), new_fix_bytes).expect("new patch");
+    let portable_hash = sha256_hex(portable_bytes);
+    let new_fix_hash = sha256_hex(new_fix_bytes);
     fs::write(
         robot.join("Beta-2.0-GCCcore-13.3.0.eb"),
-        "easyblock = 'ConfigureMake'\nname = 'Beta'\nversion = '2.0'\n\
-         homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
-         toolchain = {'name': 'GCCcore', 'version': '13.3.0'}\n\
-         sources = ['beta-2.0.tar.gz']\n\
-         checksums = ['bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb']\n\
-         patches = [\n    'portable-fix.patch',\n    ('Beta-2.0_new-fix.patch', 1),\n]\n\
-         moduleclass = 'tools'\n",
+        format!(
+            "easyblock = 'ConfigureMake'\nname = 'Beta'\nversion = '2.0'\n\
+             homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+             toolchain = {{'name': 'GCCcore', 'version': '13.3.0'}}\n\
+             sources = ['beta-2.0.tar.gz']\n\
+             checksums = [\n    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',\n    '{portable_hash}',\n    '{new_fix_hash}',\n]\n\
+             patches = [\n    'portable-fix.patch',\n    ('Beta-2.0_new-fix.patch', 1),\n]\n\
+             moduleclass = 'tools'\n"
+        ),
     )
     .expect("sibling recipe");
     let toolchain = Toolchain {
@@ -366,6 +387,41 @@ fn version_bump_adopts_the_same_version_siblings_patch_block() {
             .iter()
             .any(|r| r.summary.contains("patches were not modified")),
         "blanket warning still present"
+    );
+
+    let out = temp.path().join("bundle");
+    let written = write_package_bundle(&bundle, &out).expect("write adopted overlay");
+    let names: Vec<String> = written
+        .patches
+        .iter()
+        .filter_map(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .collect();
+    assert!(
+        names.iter().any(|name| name == "Beta-2.0_new-fix.patch"),
+        "adopted sibling patch missing from overlay: {names:?}"
+    );
+    assert!(
+        names.iter().any(|name| name == "portable-fix.patch"),
+        "carried patch missing from overlay: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|name| name == "Beta-1.0_old-fix.patch"),
+        "source-version patch still copied: {names:?}"
+    );
+    let overlay_dir = written.easyconfigs[0].parent().expect("recipe parent");
+    assert!(overlay_dir.join("Beta-2.0_new-fix.patch").is_file());
+    assert!(overlay_dir.join("portable-fix.patch").is_file());
+    assert!(!overlay_dir.join("Beta-1.0_old-fix.patch").is_file());
+    assert_eq!(
+        fs::read(overlay_dir.join("Beta-2.0_new-fix.patch")).expect("read new patch"),
+        new_fix_bytes
+    );
+    assert_eq!(
+        fs::read(overlay_dir.join("portable-fix.patch")).expect("read portable patch"),
+        portable_bytes
     );
 }
 
@@ -695,6 +751,66 @@ fn version_bump_drops_a_direct_dep_with_no_candidate() {
                 && residual.summary.contains("VanishedLib")),
         "missing unresolved-generation-dep residual: {:?}",
         bundle.plan.residuals
+    );
+}
+
+#[test]
+fn version_bump_drops_a_one_line_vanished_dep() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Gamma-1.0-foss-2023a.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'CMakeMake'\nname = 'Gamma'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['gamma-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [('KeptLib', '1.0'), ('VanishedLib', '20211028')]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    fs::write(
+        robot.join("KeptLib-1.0-foss-2025a.eb"),
+        "easyblock = 'ConfigureMake'\nname = 'KeptLib'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Kept'\n\
+         toolchain = {'name': 'foss', 'version': '2025a'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'lib'\n",
+    )
+    .expect("kept candidate");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2025a".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: Some("1.7.0".into()),
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
+    })
+    .expect("version bump with a one-line vanished dep");
+    let text = &bundle.easyconfigs[0].text;
+    assert!(
+        !text.contains("VanishedLib"),
+        "vanished dep still emitted:\n{text}"
+    );
+    assert!(
+        text.contains("('KeptLib', '1.0')"),
+        "kept dep missing:\n{text}"
     );
 }
 
