@@ -4107,6 +4107,8 @@ mod tests {
     #[test]
     fn template_constants_resolve_major_families() {
         // Seeded TEMPLATE_CONSTANTS must not be unknown-name errors.
+        // A skipped `sources` assignment is not a parse error, so name/version
+        // alone stay green if a SOURCE_* constant is deleted.
         let src = r#"
 name = 'Foo'
 version = '1.2.3'
@@ -4124,6 +4126,28 @@ dependencies = []
         let r = resolve_easyconfig_str(src).expect("constants resolve");
         assert_eq!(r.name, "Foo");
         assert_eq!(r.version, "1.2.3");
+        assert_eq!(r.sources_count, 6);
+        assert_eq!(
+            crate::eb_template_constants::EB_TEMPLATE_CONSTANTS.len(),
+            crate::eb_template_constants::EB_TEMPLATE_CONSTANTS_COUNT
+        );
+    }
+
+    #[test]
+    fn easybuild_alternative_names_resolve_pypi_url_lower_and_source_lower_tgz() {
+        let src = r#"
+name = 'Foo'
+version = '1.2.3'
+toolchain = SYSTEM
+source_urls = [PYPI_URL_LOWER]
+sources = [SOURCE_LOWER_TGZ]
+"#;
+        let r = resolve_easyconfig_str(src).expect("EasyBuild alternative names resolve");
+        assert_eq!(
+            r.source_urls,
+            vec!["https://pypi.python.org/packages/source/f/foo".to_string()]
+        );
+        assert_eq!(r.sources_count, 1);
     }
 
     #[test]
