@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 use thiserror::Error;
 
 /// Minimum share of generation-scoped dependency pins a version must hold to
@@ -160,6 +161,30 @@ pub fn load_hierarchy_fixture(path: &Path) -> Result<ToolchainHierarchy, Hierarc
 
 /// Built-in hierarchy fixtures embedded at compile time (no EasyBuild at test/runtime).
 pub fn known_hierarchy(parent: &Toolchain) -> Option<ToolchainHierarchy> {
+    let key = format!("{}-{}", parent.name, parent.version);
+    let cache = known_hierarchy_cache();
+    if let Some(hit) = cache
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .get(&key)
+        .cloned()
+    {
+        return Some(hit);
+    }
+    let derived = known_hierarchy_uncached(parent)?;
+    cache
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .insert(key, derived.clone());
+    Some(derived)
+}
+
+fn known_hierarchy_cache() -> &'static Mutex<HashMap<String, ToolchainHierarchy>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, ToolchainHierarchy>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn known_hierarchy_uncached(parent: &Toolchain) -> Option<ToolchainHierarchy> {
     // Bare GCC-family compiler targets arise when a companion recipe is
     // retargeted to a member of a composite hierarchy. GCCcore admits SYSTEM;
     // GCC additionally admits its same-version GCCcore base.
@@ -1553,6 +1578,14 @@ mod tests {
     /// takes GCCcore from the wrong release: checking a real NVHPC-25.11 recipe
     /// put the tree on GCCcore-13.3.0 instead of 14.2.0, which then lost
     /// cryptography-44.0.2.
+    #[test]
+    fn known_hierarchy_is_stable_across_repeated_lookups() {
+        let parent = foss("2024a");
+        let first = known_hierarchy(&parent).expect("foss-2024a fixture");
+        let second = known_hierarchy(&parent).expect("cached foss-2024a");
+        assert_eq!(first.member_labels(), second.member_labels());
+    }
+
     #[test]
     fn a_shorter_release_does_not_answer_for_a_longer_one() {
         assert!(version_prefix_of("25.3", "25.3-CUDA-12.8.0"));
