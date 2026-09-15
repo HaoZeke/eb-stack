@@ -739,7 +739,7 @@ fn failed_profile_verification_preserves_the_build_claim_and_finding() {
     assert_eq!(state.findings[0].class, BuildFindingClass::Sanity);
     assert!(state.findings[0]
         .evidence
-        .contains("module=QMCPACK/4.3.0-complex-foss-2026.1"));
+        .contains("module=QMCPACK/4.3.0-foss-2026.1-complex"));
 }
 
 #[test]

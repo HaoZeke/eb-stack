@@ -918,7 +918,7 @@ fn module_name(
         ))
     } else {
         Ok(format!(
-            "{package}/{version}{}-{toolchain_name}-{toolchain_version}",
+            "{package}/{version}-{toolchain_name}-{toolchain_version}{}",
             profile.versionsuffix.join("")
         ))
     }
