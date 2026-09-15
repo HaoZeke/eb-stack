@@ -517,7 +517,10 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
     let mut text = source.to_string();
     text = rewrite_toolchain(&text, &params.toolchain)?;
     if params.version.is_some() {
-        text = rewrite_string_assign(&text, "version", &app_version)?;
+        text = match rewrite_string_assign(&text, "version", &app_version) {
+            Ok(rewritten) => rewritten,
+            Err(_) => upsert_raw_assignment(&text, "version", &format!("'{app_version}'"))?,
+        };
     }
     if !params.dep_versions.is_empty() || !params.dep_toolchains.is_empty() {
         text = rewrite_dep_list_selections(
@@ -797,19 +800,39 @@ pub fn insert_build_dependency(src: &str, name: &str, version: &str) -> Result<S
     insert_named_dependency_list(src, "builddependencies", name, version)
 }
 
+fn names_dependency_tuple_in_list(
+    src: &str,
+    list_key: &str,
+    name: &str,
+) -> Result<bool, EmitError> {
+    let Some((open, close)) = find_list_span(src, list_key)? else {
+        return Ok(false);
+    };
+    Ok(names_dependency_tuple(&src[open..close], name))
+}
+
 fn insert_named_dependency_list(
     src: &str,
     list_key: &str,
     name: &str,
     version: &str,
 ) -> Result<String, EmitError> {
-    if names_dependency_tuple(src, name) {
+    if names_dependency_tuple_in_list(src, list_key, name)? {
         return Ok(src.to_string());
     }
     let line = format!("    ('{name}', '{version}'),\n");
     if let Some((_open, close)) = find_list_span(src, list_key)? {
-        let mut out = String::with_capacity(src.len() + line.len());
-        out.push_str(&src[..close]);
+        let head = &src[..close];
+        let trimmed = head.trim_end();
+        let needs_comma = !trimmed.ends_with('[') && !trimmed.ends_with(',');
+        let mut out = String::with_capacity(src.len() + line.len() + 2);
+        out.push_str(head);
+        if needs_comma {
+            out.push(',');
+        }
+        if !head.ends_with('\n') {
+            out.push('\n');
+        }
         out.push_str(&line);
         out.push_str(&src[close..]);
         return Ok(out);
@@ -3295,6 +3318,77 @@ dependencies = [
         assert!(
             !r.text.contains("1.14.0"),
             "old pin must not stay:\n{}",
+            r.text
+        );
+    }
+
+    #[test]
+    fn insert_runtime_dependency_separates_a_one_line_list() {
+        let src = "dependencies = [('NetCDF-Fortran', '4.6.1')]\n";
+        let out = insert_runtime_dependency(src, "NetCDF", "4.9.2").expect("insert");
+        assert!(
+            out.contains("('NetCDF-Fortran', '4.6.1'),") && out.contains("('NetCDF', '4.9.2')"),
+            "one-line list must keep a comma between tuples:\n{out}"
+        );
+        assert_eq!(
+            out.matches("('NetCDF").count(),
+            2,
+            "both tuples must remain:\n{out}"
+        );
+    }
+
+    #[test]
+    fn insert_runtime_dependency_does_not_treat_a_build_tuple_as_runtime() {
+        let src = "\
+builddependencies = [
+    ('CMake', '3.26.3'),
+]
+moduleclass = 'tools'
+";
+        let out = insert_runtime_dependency(src, "CMake", "3.31.0").expect("insert");
+        assert!(
+            out.contains("('CMake', '3.26.3')"),
+            "build tuple must stay:\n{out}"
+        );
+        assert!(
+            out.contains("('CMake', '3.31.0')"),
+            "runtime list must gain CMake:\n{out}"
+        );
+        assert!(
+            out.contains("dependencies"),
+            "runtime list must be created:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_computed_version_assignment_can_be_rewritten() {
+        let src = "\
+name = 'Java'
+_java_version = '17'
+_patch_version = '6'
+version = f'{_java_version}.0.{_patch_version}'
+toolchain = SYSTEM
+";
+        let params = EmitParams {
+            toolchain: Toolchain {
+                name: "system".into(),
+                version: String::new(),
+            },
+            version: Some("17.0.8".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: None,
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert!(
+            r.text.contains("version = '17.0.8'"),
+            "computed version must become a literal:\n{}",
+            r.text
+        );
+        assert!(
+            !r.text.contains("f'{_java_version}"),
+            "f-string version must not remain:\n{}",
             r.text
         );
     }

@@ -102,6 +102,11 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- Inserting a dependency into a one-line list keeps a separating comma.
+  A name that exists only in `builddependencies` still lands on
+  `dependencies`. A computed `version = f'...'` can be rewritten to a
+  literal. A site pin written as an EasyBuild module identity is
+  admitted the same way a dependency 4-tuple is.
 - A site stack pin named `python` suppresses generation-consensus for
   robot `Python`, so the two cannot fight after the pin already matches
   that candidate.

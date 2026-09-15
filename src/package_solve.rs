@@ -792,7 +792,7 @@ fn scoped_dependency_name(scope: &str, name: &str) -> String {
 
 fn stack_pin_candidate_matches(candidate: &Candidate, pin: &crate::package::StackPin) -> bool {
     candidate.name.eq_ignore_ascii_case(&pin.name)
-        && matches_req(&candidate.version, &pin.version_requirement)
+        && candidate_matches_any_spelling(candidate, &pin.version_requirement)
         && pin
             .toolchain
             .as_ref()
@@ -919,7 +919,8 @@ mod tests {
         admit_named_dependency_toolchains, apply_generation_consensus_pins,
         candidate_matches_version_req, dependency_candidate_matches, match_robot_name,
         normalize_requirement, solve_package_profile, solve_package_profile_with_hierarchy,
-        unsatisfied_direct_dependencies_with_hierarchy, UnsatisfiedDirectDependency,
+        stack_pin_candidate_matches, unsatisfied_direct_dependencies_with_hierarchy,
+        UnsatisfiedDirectDependency,
     };
     use crate::domain::{Candidate, DepReq, ExtEntry, Toolchain};
     use crate::hierarchy::ToolchainHierarchy;
@@ -1127,6 +1128,26 @@ mod tests {
         assert!(dependency_candidate_matches(&omp, &dep, Some(&hierarchy)));
         let foss = cand("OpenMPI", "5.0.3", "foss", "2023b");
         assert!(!dependency_candidate_matches(&foss, &dep, Some(&hierarchy)));
+    }
+
+    #[test]
+    fn a_stack_pin_matches_module_form_version() {
+        let omp = cand("OpenMPI", "5.0.3", "GCC", "13.3.0");
+        let pin = crate::package::StackPin {
+            name: "OpenMPI".into(),
+            version_requirement: "==5.0.3-GCC-13.3.0".into(),
+            toolchain: Some(Toolchain {
+                name: "GCC".into(),
+                version: "13.3.0".into(),
+            }),
+            versionsuffix: None,
+            mode: crate::package::StackPinMode::Locked,
+            source: None,
+        };
+        assert!(
+            stack_pin_candidate_matches(&omp, &pin),
+            "module-form pin must admit OpenMPI 5.0.3 @ GCC-13.3.0"
+        );
     }
 
     #[test]
