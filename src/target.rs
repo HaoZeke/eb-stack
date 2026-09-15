@@ -707,12 +707,17 @@ pub fn doctor_target(target: &BuildTarget) -> Result<TargetDoctorReport, TargetE
     let transport = target.route_tokens(vec!["true".into()], false);
     let executor = target.route_tokens(vec!["true".into()], true);
     // Rocky ENTRYPOINT passthroughs only env/eb; bare `true` becomes `eb true`.
+    // A legal `/usr/local/bin/eb` becomes `eb /usr/local/bin/eb --version`.
     let runtime = target.route_tokens(
         target.runtime_tokens(vec!["env".into(), "true".into()]),
         true,
     );
     let easybuild = target.route_tokens(
-        target.runtime_tokens(vec![target.easybuild.command.clone(), "--version".into()]),
+        target.runtime_tokens(vec![
+            "env".into(),
+            target.easybuild.command.clone(),
+            "--version".into(),
+        ]),
         true,
     );
     let mut planned = vec![
@@ -961,6 +966,67 @@ mod tests {
         assert!(output.status.success(), "{:?}", output);
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(!stdout.contains("eb:true"), "{stdout}");
+    }
+
+    #[test]
+    fn doctor_easybuild_probe_starts_with_env() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let podman = temp.path().join("podman");
+        write_executable(&podman, "#!/bin/sh\nprintf '%s\\n' \"$0\" \"$@\"\n");
+        let target = BuildTarget {
+            name: "local-rocky9".into(),
+            transport: TargetTransport::Local,
+            executor: TargetExecutor::Direct,
+            runtime: TargetRuntime::Podman {
+                image: "localhost/eb-stack-rocky9:latest".into(),
+                command: podman.to_string_lossy().into_owned(),
+                args: Vec::new(),
+                mounts: Vec::new(),
+                workdir: None,
+            },
+            easybuild: host_workload("/usr/local/bin/eb"),
+        };
+        let report = doctor_target(&target).expect("doctor");
+        let easybuild = report
+            .checks
+            .iter()
+            .find(|check| check.layer == "easybuild")
+            .expect("easybuild check");
+        let image = "localhost/eb-stack-rocky9:latest";
+        let inner: Vec<_> = easybuild
+            .command
+            .args
+            .iter()
+            .skip_while(|token| token.as_str() != image)
+            .skip(1)
+            .cloned()
+            .collect();
+        assert!(inner.starts_with(&["env".into()]), "{inner:?}");
+        assert!(
+            inner.ends_with(&["/usr/local/bin/eb".into(), "--version".into()]),
+            "{inner:?}"
+        );
+
+        let fake_bin = temp.path().join("bin");
+        std::fs::create_dir_all(&fake_bin).expect("bin");
+        write_executable(
+            &fake_bin.join("eb"),
+            "#!/usr/bin/env sh\nprintf 'eb:%s\\n' \"$*\"\n",
+        );
+        let path = format!(
+            "{}:{}",
+            fake_bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let entrypoint = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("skills/new-package/container/rocky9/eb-entrypoint");
+        let output = Command::new(entrypoint)
+            .args(&inner)
+            .env("PATH", path)
+            .output()
+            .expect("entrypoint");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(!stdout.contains("eb:/usr/local/bin/eb"), "{stdout}");
     }
 
     #[test]
