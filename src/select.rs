@@ -9,7 +9,8 @@ use crate::domain::{
     STACK_LOCK_SCHEMA_VERSION,
 };
 use crate::hierarchy::{
-    filter_candidates_in_hierarchy, is_system_toolchain, SourceDepSpec, ToolchainHierarchy,
+    filter_candidates_in_hierarchy, is_system_toolchain, toolchains_match, SourceDepSpec,
+    ToolchainHierarchy,
 };
 use crate::resolvo_provider::solve_with_resolvo;
 use std::collections::{HashMap, HashSet};
@@ -133,7 +134,7 @@ pub fn resolvo_resolve_dep_versions(
             ));
         };
 
-        let (version_req, pin_exact) =
+        let (mut version_req, pin_exact) =
             if let Some(pref) = preferred_pins.and_then(|m| m.get(&s.name)) {
                 // Hierarchy consensus: exact pin, joint SAT under that version.
                 let req = format!("=={pref}");
@@ -144,14 +145,19 @@ pub fn resolvo_resolve_dep_versions(
                 (format!(">={}", s.version), None)
             };
 
+        let unsuffixed =
+            |candidate: &&Candidate| candidate.versionsuffix.as_deref().unwrap_or("").is_empty();
         let parsed = crate::version::parse_requirement(&version_req).ok();
-        let any_match = named.iter().any(|c| {
-            parsed
-                .as_ref()
-                .is_some_and(|requirement| requirement.matches(&c.version))
-                && c.versionsuffix.as_deref().unwrap_or("").is_empty()
+        let floor_match = named.iter().any(|candidate| {
+            unsuffixed(&candidate)
+                && parsed
+                    .as_ref()
+                    .is_some_and(|requirement| requirement.matches(&candidate.version))
         });
-        if !any_match {
+        let parent_match = named.iter().any(|candidate| {
+            unsuffixed(&candidate) && toolchains_match(&hierarchy.parent, &candidate.toolchain)
+        });
+        if !floor_match && !parent_match {
             if s.optional {
                 continue;
             }
@@ -159,6 +165,11 @@ pub fn resolvo_resolve_dep_versions(
                 "no candidate matching {} {} without a versionsuffix",
                 s.name, version_req
             ));
+        }
+        if pin_exact.is_none() && parent_match {
+            // Parent-toolchain builds are generation-authoritative, not a
+            // downgrade. SAT must not keep the source floor as a hard req.
+            version_req = ">=0".into();
         }
         if let Some(ver) = pin_exact {
             pins.push(crate::domain::Pin {
@@ -1106,5 +1117,38 @@ mod lock_identity_and_bump_pin_tests {
                 .expect("optional extra must not fail the resolve");
         assert_eq!(map.get("Lib").map(String::as_str), Some("1.0"));
         assert!(!map.contains_key("Extra"));
+    }
+
+    #[test]
+    fn parent_toolchain_candidate_is_exempt_from_the_source_floor() {
+        let gcccore = Toolchain {
+            name: "GCCcore".into(),
+            version: "13.3.0".into(),
+        };
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let binutils = |version: &str, toolchain: &Toolchain| Candidate {
+            name: "binutils".into(),
+            version: version.into(),
+            toolchain: toolchain.clone(),
+            versionsuffix: None,
+            easyconfig_path: format!("binutils-{version}.eb"),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+            moduleclass: None,
+        };
+        let hierarchy = ToolchainHierarchy {
+            parent: gcccore.clone(),
+            members: vec![gcccore.clone(), system.clone()],
+        };
+        let cands = vec![binutils("2.42", &gcccore), binutils("2.46.1", &system)];
+        let specs = [SourceDepSpec::plain("binutils", "2.45")];
+        let (map, _) =
+            resolvo_resolve_dep_versions(&specs, &cands, &hierarchy, &gcccore, "App", "1.0", None)
+                .expect("parent-toolchain 2.42 is not a downgrade");
+        assert_eq!(map.get("binutils").map(String::as_str), Some("2.42"));
     }
 }
