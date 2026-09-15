@@ -429,15 +429,25 @@ struct AssignmentStringList<'a> {
     items: Vec<(char, &'a str)>,
 }
 
+fn assignment_operator(rest: &str) -> Option<(usize, &'static str)> {
+    let key_end =
+        rest.find(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))?;
+    let after_key = rest[key_end..].trim_start();
+    let index = rest.len() - after_key.len();
+    if after_key.starts_with("+=") {
+        Some((index, "+="))
+    } else if after_key.starts_with('=') {
+        Some((index, "="))
+    } else {
+        None
+    }
+}
+
 fn parse_assignment_string_list(line: &str) -> Option<AssignmentStringList<'_>> {
     let indent_len = line.len() - line.trim_start().len();
     let indent = &line[..indent_len];
     let rest = line[indent_len..].trim_end();
-    let (eq, op) = if let Some(index) = rest.find("+=") {
-        (index, "+=")
-    } else {
-        (rest.find('=')?, "=")
-    };
+    let (eq, op) = assignment_operator(rest)?;
     let key = rest[..eq].trim();
     if key.is_empty()
         || !key
@@ -984,6 +994,23 @@ mod tests {
             .text
             .lines()
             .all(|line| line.chars().count() <= EB_MAX_LINE));
+    }
+
+    #[test]
+    fn format_assignment_string_list_keeps_plus_equals_inside_a_url() {
+        let url = format!("https://example.invalid/foo+=bar/{}", "x".repeat(80));
+        let source = format!("source_urls = ['{url}']\n");
+        assert!(source.lines().next().unwrap().chars().count() > EB_MAX_LINE);
+        assert!(line_is_mechanically_fixable(source.trim_end()));
+        let result = format_style(&source);
+        assert!(result.remaining.is_empty(), "{:?}", result.remaining);
+        assert!(result.text.contains("source_urls = ["));
+        let recipe = format!(
+            "name = 'X'\nversion = '1'\ntoolchain = SYSTEM\n{}dependencies = []\n",
+            result.text
+        );
+        let resolved = crate::eb_parse::resolve_easyconfig_str(&recipe).expect("parse");
+        assert_eq!(resolved.source_urls, vec![url]);
     }
 
     #[test]
