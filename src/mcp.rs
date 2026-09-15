@@ -355,6 +355,7 @@ fn package_inspect(arguments: &Value) -> Result<Value, String> {
     )
     .map_err(|error| error.to_string())?;
     Ok(json!({
+        "ok": true,
         "package": name,
         "version": version,
         "manifest": written.manifest,
@@ -1072,4 +1073,32 @@ fn tool_error(error: String) -> Value {
 
 fn json_rpc_error(id: Value, code: i64, message: String) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inspect_success_is_not_a_tool_error() {
+        let value = json!({
+            "ok": true,
+            "package": "demo",
+            "version": "1.0",
+            "claims": {"resolves": false, "builds": false, "binary_verified": false}
+        });
+        let out = tool_outcome(value);
+        assert_eq!(out["isError"], false);
+        assert_eq!(out["structuredContent"]["claims"]["resolves"], false);
+    }
+
+    #[test]
+    fn missing_ok_and_unresolved_claims_stay_a_tool_error() {
+        let value = json!({
+            "package": "demo",
+            "claims": {"resolves": false}
+        });
+        let out = tool_outcome(value);
+        assert_eq!(out["isError"], true);
+    }
 }

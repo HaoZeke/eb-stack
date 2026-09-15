@@ -102,6 +102,8 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A completed `eb_package_inspect` is not an MCP tool error.
+  `claims.resolves` stays false because inspect does not solve.
 - A CRAN JSON `Depends` array that is one comma-separated DESCRIPTION
   string is split the same way a string field is. `OS_type` is recorded
   as a judgment residual instead of disappearing.
