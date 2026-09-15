@@ -1830,6 +1830,13 @@ fn parse_dep_filename(s: &str) -> Option<ResolvedDep> {
                 .next()
                 .is_some_and(|character| character.is_ascii_digit())
         {
+            // Last pair wins so a hyphenated name whose last name token is
+            // all-alpha does not steal the real toolchain pair that follows.
+            // CUDA after an earlier pair is a versionsuffix, not a second
+            // toolchain.
+            if parts[index].eq_ignore_ascii_case("CUDA") && toolchain_at.is_some() {
+                continue;
+            }
             toolchain_at = Some(index);
         }
     }
@@ -4720,6 +4727,27 @@ homepage = 'https://example.invalid'
                 .as_ref()
                 .map(|toolchain| toolchain.label()),
             Some("foss-2024a".into())
+        );
+    }
+
+    #[test]
+    fn filename_dependency_keeps_cuda_pair_as_versionsuffix() {
+        let src = "name = 'App'\nversion = '1.0'\n\
+                   toolchain = {'name': 'foss', 'version': '2025b'}\n\
+                   dependencies = ['OpenMPI-4.1.6-foss-2025b-CUDA-12.8.0.eb']\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.dependencies[0].name, "OpenMPI");
+        assert_eq!(parsed.dependencies[0].version, "4.1.6");
+        assert_eq!(
+            parsed.dependencies[0]
+                .toolchain
+                .as_ref()
+                .map(|toolchain| toolchain.label()),
+            Some("foss-2025b".into())
+        );
+        assert_eq!(
+            parsed.dependencies[0].versionsuffix.as_deref(),
+            Some("-CUDA-12.8.0")
         );
     }
 
