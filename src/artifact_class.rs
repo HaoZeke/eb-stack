@@ -157,11 +157,14 @@ pub fn classify_url(url: &str) -> ArtifactClass {
 pub fn classify_foreign(url: Option<&str>, git: Option<&str>) -> ArtifactClass {
     if let Some(u) = url {
         let class = classify_url(u);
-        if matches!(
-            class,
-            ArtifactClass::GitHubTagArchive | ArtifactClass::GitHubReleaseAsset
-        ) {
+        // A classifiable download (PyPI, SourceForge, GitHub archive, Other)
+        // is the hash subject. Spack attaches git= so the file can be hashed;
+        // the remote does not make that hash a checkout hash.
+        if class != ArtifactClass::Unknown && class != ArtifactClass::GitCheckout {
             return class;
+        }
+        if class == ArtifactClass::GitCheckout {
+            return ArtifactClass::GitCheckout;
         }
     }
     if let Some(git) = git {
@@ -808,6 +811,24 @@ mod tests {
             sha256: Some("a".repeat(64)),
         };
         let findings = verify_sources(&[asset.into()], Some(&seed));
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn a_pypi_sdist_url_wins_over_a_git_remote() {
+        let sdist = "https://pypi.org/packages/source/f/foo/foo-1.0.tar.gz";
+        let git = "https://github.com/foo/foo.git";
+        assert_eq!(
+            classify_foreign(Some(sdist), Some(git)),
+            ArtifactClass::PyPiSdist
+        );
+        let seed = SeededChecksum {
+            origin: "spack".into(),
+            source_url: Some(sdist.into()),
+            git: Some(git.into()),
+            sha256: Some("a".repeat(64)),
+        };
+        let findings = verify_sources(&[sdist.into()], Some(&seed));
         assert!(findings.is_empty(), "{findings:?}");
     }
 
