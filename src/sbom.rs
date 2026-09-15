@@ -312,7 +312,7 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
             .get(&lock_package_key(p))
             .cloned()
             .expect("identity inserted before the dependency walk");
-        let depends_on: Vec<String> = if let Some(map) = runtime_dep_map {
+        let mut depends_on: Vec<String> = if let Some(map) = runtime_dep_map {
             map.get(&p.name)
                 .or_else(|| map.get(&lock_package_key(p)))
                 .into_iter()
@@ -322,6 +322,8 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
         } else {
             Vec::new()
         };
+        depends_on.sort();
+        depends_on.dedup();
         deps.push(Dependency {
             dependency_ref: r,
             dependencies: depends_on,
@@ -1728,6 +1730,54 @@ mod tests {
     }
 
     #[test]
+    fn a_repeated_runtime_dep_is_one_dependson_ref() {
+        let foss = Toolchain {
+            name: "foss".into(),
+            version: "2025b".into(),
+        };
+        let lock = StackLock {
+            schema_version: 1,
+            toolchain: foss.clone(),
+            generation_label: None,
+            packages: vec![
+                LockPackage {
+                    name: "App".into(),
+                    version: "1.0".into(),
+                    toolchain: foss.clone(),
+                    versionsuffix: None,
+                    easyconfig_path: "App.eb".into(),
+                },
+                LockPackage {
+                    name: "Lib".into(),
+                    version: "1.0".into(),
+                    toolchain: foss,
+                    versionsuffix: None,
+                    easyconfig_path: "Lib.eb".into(),
+                },
+            ],
+            solver: SolverMeta {
+                engine: "resolvo".into(),
+                engine_version: "0".into(),
+                timestamp: "2026-08-12T00:00:00Z".into(),
+            },
+        };
+        let runtime = HashMap::from([(
+            "App".to_string(),
+            vec!["Lib".to_string(), "Lib".to_string()],
+        )]);
+        let sbom = lock_to_cyclonedx_with_deps(&lock, Some(&runtime));
+        let app = sbom["dependencies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|edge| edge["ref"].as_str().unwrap_or("").contains("App@"))
+            .expect("App edge");
+        let depends = depends_on_list(app);
+        assert_eq!(depends.len(), 1, "{depends:?}");
+        assert!(depends[0].contains("Lib@"), "{depends:?}");
+    }
+
+    #[test]
     fn a_dep_on_a_duplicated_name_keeps_every_matching_ref() {
         let system = Toolchain {
             name: "system".into(),
@@ -1966,6 +2016,64 @@ mod artifact_facts_tests {
         let c = component(&bom_to_json_value(bom));
         assert!(c.get("hashes").is_none(), "{c}");
         assert!(c.get("externalReferences").is_none(), "{c}");
+    }
+
+    fn typed_checksum_easyconfig(
+        dir: &std::path::Path,
+        checksums_block: &str,
+    ) -> std::path::PathBuf {
+        let path = dir.join("Example-1.2.3-foss-2025a.eb");
+        std::fs::write(
+            &path,
+            format!(
+                "name = 'Example'\nversion = '1.2.3'\n\
+                 toolchain = {{'name': 'foss', 'version': '2025a'}}\n\
+                 sources = ['app-1.0.tar.gz']\n\
+                 checksums = {checksums_block}\n\
+                 dependencies = []\n"
+            ),
+        )
+        .unwrap();
+        path
+    }
+
+    fn hashes_from_lock_path(path: &std::path::Path) -> Value {
+        let mut lock = one_package_lock();
+        lock.packages[0].easyconfig_path = path.display().to_string();
+        let facts = artifact_facts_for_lock(&lock);
+        lock_to_cyclonedx_with_facts(
+            &lock,
+            SbomFacts {
+                artifacts: Some(&facts),
+                ..SbomFacts::default()
+            },
+        )["components"][0]["hashes"]
+            .clone()
+    }
+
+    #[test]
+    fn a_typed_sha256_tuple_from_the_easyconfig_becomes_a_sha256_hash() {
+        let sha = "e".repeat(64);
+        let dir = tempfile::tempdir().unwrap();
+        let path = typed_checksum_easyconfig(dir.path(), &format!("[('sha256', '{sha}')]"));
+        let hashes = hashes_from_lock_path(&path);
+        let hashes = hashes.as_array().expect("hashes");
+        assert_eq!(hashes[0]["alg"], "SHA-256");
+        assert_eq!(hashes[0]["content"], sha);
+    }
+
+    #[test]
+    fn a_dict_typed_sha256_tuple_from_the_easyconfig_becomes_a_sha256_hash() {
+        let sha = "e".repeat(64);
+        let dir = tempfile::tempdir().unwrap();
+        let path = typed_checksum_easyconfig(
+            dir.path(),
+            &format!("[{{'app-1.0.tar.gz': ('sha256', '{sha}')}}]"),
+        );
+        let hashes = hashes_from_lock_path(&path);
+        let hashes = hashes.as_array().expect("hashes");
+        assert_eq!(hashes[0]["alg"], "SHA-256");
+        assert_eq!(hashes[0]["content"], sha);
     }
 }
 

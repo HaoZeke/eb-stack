@@ -160,6 +160,43 @@ fn formulation_carries_the_build_order_and_the_identities() {
     assert!(uids.iter().all(|u| u.len() == 64), "{uids:?}");
 }
 
+#[test]
+fn a_repeated_runtime_dep_satisfies_unique_items() {
+    let schema = schema();
+    let validator = jsonschema::options()
+        .with_retriever(VendoredSchemas(schema_dir()))
+        .build(&schema)
+        .expect("the schema compiles");
+    let runtime = HashMap::from([(
+        "App".to_string(),
+        vec!["Lib".to_string(), "Lib".to_string()],
+    )]);
+    let document = lock_to_cyclonedx_with_facts(
+        &lock(),
+        SbomFacts {
+            runtime_dep_map: Some(&runtime),
+            ..SbomFacts::default()
+        },
+    );
+    let errors: Vec<String> = validator
+        .iter_errors(&document)
+        .map(|e| format!("{} at {}", e, e.instance_path))
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "duplicate dependsOn must be uniqueItems-clean:\n{}",
+        errors.join("\n")
+    );
+    let app = document["dependencies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|edge| edge["ref"].as_str().unwrap_or("").contains("App@"))
+        .expect("App edge");
+    let depends = app["dependsOn"].as_array().expect("dependsOn");
+    assert_eq!(depends.len(), 1, "{depends:?}");
+}
+
 /// A validation test that cannot fail proves nothing, so this breaks the
 /// document on purpose and insists the validator notices.
 ///

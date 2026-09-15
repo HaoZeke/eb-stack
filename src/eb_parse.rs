@@ -2412,26 +2412,52 @@ fn opt_str_field(
     })
 }
 
+fn is_checksum_algorithm_token(s: &str) -> bool {
+    matches!(
+        s.trim().to_ascii_lowercase().as_str(),
+        "sha256" | "sha512" | "sha384" | "sha224" | "sha1" | "md5" | "adler32" | "crc32" | "size"
+    )
+}
+
 fn checksum_strings_from_value(v: &Value) -> Vec<String> {
     match v {
         Value::Str(s) => vec![s.clone()],
         // A dict is one artifact with per-filename (often per-arch) hashes,
         // not several artifacts. Emitting every value shifted later positions,
         // so a patch string after a multi-arch dict read as the second arch.
+        // Values may themselves be typed tuples: {'file': ('sha256', '<hex>')}.
         Value::Dict(items) => items
             .iter()
-            .find_map(|(_, val)| val.expect_str("checksum").ok())
+            .find_map(|(_, val)| checksum_strings_from_value(val).into_iter().next())
             .into_iter()
             .collect(),
         // A tuple of hashes is one artifact with alternatives, not several
         // artifacts: OpenMolcas lists two acceptable hashes for its tarball
         // and its patch's checksum comes after. Dropping the entry moved every
         // position after it, so the patch read as having no checksum at all.
-        Value::Tuple(items) | Value::List(items) => items
-            .iter()
-            .find_map(|item| item.expect_str("checksum").ok())
-            .into_iter()
-            .collect(),
+        // EasyBuild also writes typed tuples ('sha256', '<hex>'); the first
+        // string is then the algorithm token, not the digest.
+        Value::Tuple(items) | Value::List(items) => {
+            let strings: Vec<&str> = items.iter().filter_map(Value::as_str).collect();
+            if strings
+                .first()
+                .is_some_and(|s| is_checksum_algorithm_token(s))
+            {
+                if let Some(digest) = strings
+                    .iter()
+                    .skip(1)
+                    .copied()
+                    .find(|s| !is_checksum_algorithm_token(s))
+                {
+                    return vec![digest.to_string()];
+                }
+            }
+            items
+                .iter()
+                .find_map(|item| checksum_strings_from_value(item).into_iter().next())
+                .into_iter()
+                .collect()
+        }
         _ => Vec::new(),
     }
 }
@@ -4267,6 +4293,39 @@ builddependencies = [
                 .get("sdk_x86_64.tar.gz")
                 .map(String::as_str),
             Some("bb")
+        );
+    }
+
+    #[test]
+    fn a_typed_sha256_tuple_yields_the_hex_not_the_algorithm_token() {
+        let sha = "e".repeat(64);
+        let src = format!(
+            "name = 'App'\nversion = '1.0'\n\
+             toolchain = SYSTEM\n\
+             sources = ['app-1.0.tar.gz']\n\
+             checksums = [('sha256', '{sha}')]\n\
+             dependencies = []\n"
+        );
+        let parsed = resolve_easyconfig_str(&src).expect("parse typed tuple");
+        assert_eq!(parsed.checksums, vec![sha.clone()]);
+        assert_ne!(parsed.checksums[0], "sha256");
+    }
+
+    #[test]
+    fn a_dict_typed_sha256_tuple_yields_the_hex_not_the_algorithm_token() {
+        let sha = "e".repeat(64);
+        let src = format!(
+            "name = 'App'\nversion = '1.0'\n\
+             toolchain = SYSTEM\n\
+             sources = ['app-1.0.tar.gz']\n\
+             checksums = [{{'app-1.0.tar.gz': ('sha256', '{sha}')}}]\n\
+             dependencies = []\n"
+        );
+        let parsed = resolve_easyconfig_str(&src).expect("parse dict typed tuple");
+        assert_eq!(parsed.checksums, vec![sha.clone()]);
+        assert_eq!(
+            parsed.checksums_by_filename.get("app-1.0.tar.gz"),
+            Some(&sha)
         );
     }
 
