@@ -115,6 +115,7 @@ pub fn resolvo_resolve_dep_versions(
     let mut dep_reqs: Vec<DepReq> = Vec::new();
     let mut resolvable: HashSet<String> = HashSet::new();
     let mut pins: Vec<crate::domain::Pin> = Vec::new();
+    let mut optional_names: HashSet<String> = HashSet::new();
     for s in specs {
         if s.system_toolchain {
             continue;
@@ -174,6 +175,9 @@ pub fn resolvo_resolve_dep_versions(
             toolchain: None,
         });
         resolvable.insert(s.name.clone());
+        if s.optional {
+            optional_names.insert(s.name.clone());
+        }
     }
     if dep_reqs.is_empty() {
         return Ok((
@@ -182,88 +186,109 @@ pub fn resolvo_resolve_dep_versions(
         ));
     }
 
-    let mut keep: HashSet<String> = resolvable.iter().cloned().collect();
-    let mut pending: Vec<String> = keep.iter().cloned().collect();
-    while let Some(name) = pending.pop() {
-        for candidate in universe_cands
-            .iter()
-            .filter(|candidate| candidate.name == name)
-        {
-            for dep in candidate
-                .dependencies
-                .iter()
-                .chain(&candidate.builddependencies)
-            {
-                if keep.insert(dep.name.clone()) {
-                    pending.push(dep.name.clone());
+    let admitted = universe_cands;
+    let solve = |dep_reqs: Vec<DepReq>,
+                 resolvable: HashSet<String>,
+                 pins: Vec<crate::domain::Pin>|
+     -> Result<(HashMap<String, String>, String), String> {
+        let mut keep: HashSet<String> = resolvable.iter().cloned().collect();
+        let mut pending: Vec<String> = keep.iter().cloned().collect();
+        while let Some(name) = pending.pop() {
+            for candidate in admitted.iter().filter(|candidate| candidate.name == name) {
+                for dep in candidate
+                    .dependencies
+                    .iter()
+                    .chain(&candidate.builddependencies)
+                {
+                    if keep.insert(dep.name.clone()) {
+                        pending.push(dep.name.clone());
+                    }
                 }
             }
         }
-    }
-    universe_cands.retain(|candidate| keep.contains(&candidate.name));
+        let mut universe_cands: Vec<Candidate> = admitted
+            .iter()
+            .filter(|candidate| keep.contains(&candidate.name))
+            .cloned()
+            .collect();
 
-    let synthetic = if universe_cands.iter().any(|c| c.name == root_name) {
-        format!("__bump__{root_name}")
-    } else {
-        root_name.to_string()
-    };
+        let synthetic = if universe_cands.iter().any(|c| c.name == root_name) {
+            format!("__bump__{root_name}")
+        } else {
+            root_name.to_string()
+        };
 
-    universe_cands.push(Candidate {
-        name: synthetic.clone(),
-        version: root_version.to_string(),
-        toolchain: toolchain.clone(),
-        versionsuffix: None,
-        easyconfig_path: format!("__bump__/{synthetic}-{root_version}.eb"),
-        dependencies: dep_reqs,
-        builddependencies: Vec::new(),
-        exts_list: Vec::new(),
-        moduleclass: None,
-    });
+        universe_cands.push(Candidate {
+            name: synthetic.clone(),
+            version: root_version.to_string(),
+            toolchain: toolchain.clone(),
+            versionsuffix: None,
+            easyconfig_path: format!("__bump__/{synthetic}-{root_version}.eb"),
+            dependencies: dep_reqs,
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+            moduleclass: None,
+        });
 
-    let universe = Universe {
-        toolchain: toolchain.clone(),
-        generation_label: Some(format!("bump-{}-{}", toolchain.name, toolchain.version)),
-        candidates: universe_cands,
-    };
-    let policy = Policy {
-        prefer_installed: false,
-        toolchain: toolchain.clone(),
-        roots: vec![synthetic.clone()],
-        root_priority: None,
-        pins,
-        forbid: Vec::new(),
-        objective: "prefer_newer".into(),
-        require_upgrade: Vec::new(),
-    };
+        let universe = Universe {
+            toolchain: toolchain.clone(),
+            generation_label: Some(format!("bump-{}-{}", toolchain.name, toolchain.version)),
+            candidates: universe_cands,
+        };
+        let policy = Policy {
+            prefer_installed: false,
+            toolchain: toolchain.clone(),
+            roots: vec![synthetic.clone()],
+            root_priority: None,
+            pins,
+            forbid: Vec::new(),
+            objective: "prefer_newer".into(),
+            require_upgrade: Vec::new(),
+        };
 
-    let lock = select_stack(&universe, &policy, None).map_err(|e| e.to_string())?;
-    let mut map = HashMap::new();
-    for p in &lock.packages {
-        if p.name == synthetic {
-            continue;
-        }
-        if resolvable.contains(&p.name) {
-            if p.versionsuffix.as_deref().is_some_and(|vs| !vs.is_empty()) {
-                return Err(format!(
-                    "selected {} {}{} but the spec asked for the unsuffixed module",
-                    p.name,
-                    p.version,
-                    p.versionsuffix.as_deref().unwrap_or("")
-                ));
+        let lock = select_stack(&universe, &policy, None).map_err(|e| e.to_string())?;
+        let mut map = HashMap::new();
+        for p in &lock.packages {
+            if p.name == synthetic {
+                continue;
             }
-            map.insert(p.name.clone(), p.version.clone());
+            if resolvable.contains(&p.name) {
+                if p.versionsuffix.as_deref().is_some_and(|vs| !vs.is_empty()) {
+                    return Err(format!(
+                        "selected {} {}{} but the spec asked for the unsuffixed module",
+                        p.name,
+                        p.version,
+                        p.versionsuffix.as_deref().unwrap_or("")
+                    ));
+                }
+                map.insert(p.name.clone(), p.version.clone());
+            }
         }
+        if map.is_empty() {
+            return Err("resolvo lock had no co-selected deps".into());
+        }
+        let note = format!(
+            "resolvo joint co-selected {} dep(s) via {} ({})",
+            map.len(),
+            lock.solver.engine,
+            lock.solver.engine_version
+        );
+        Ok((map, note))
+    };
+
+    match solve(dep_reqs.clone(), resolvable.clone(), pins.clone()) {
+        Ok(ok) => Ok(ok),
+        Err(_) if !optional_names.is_empty() => {
+            dep_reqs.retain(|dep| !optional_names.contains(&dep.name));
+            resolvable.retain(|name| !optional_names.contains(name));
+            pins.retain(|pin| !optional_names.contains(&pin.name));
+            if dep_reqs.is_empty() {
+                return Ok((HashMap::new(), "optional extras were unsatisfiable".into()));
+            }
+            solve(dep_reqs, resolvable, pins)
+        }
+        Err(error) => Err(error),
     }
-    if map.is_empty() {
-        return Err("resolvo lock had no co-selected deps".into());
-    }
-    let note = format!(
-        "resolvo joint co-selected {} dep(s) via {} ({})",
-        map.len(),
-        lock.solver.engine,
-        lock.solver.engine_version
-    );
-    Ok((map, note))
 }
 
 fn lock_package_identity_cmp(a: &LockPackage, b: &LockPackage) -> std::cmp::Ordering {
@@ -1061,5 +1086,25 @@ mod lock_identity_and_bump_pin_tests {
         )
         .expect("frozen-only specs are not a floor miss");
         assert!(map.is_empty(), "{map:?}");
+    }
+
+    #[test]
+    fn unsatisfiable_optional_extra_is_dropped() {
+        let mut extra = candidate("Extra", "1.0", None);
+        extra.dependencies.push(DepReq {
+            name: "MissingTool".into(),
+            version_req: "==1.0".into(),
+            versionsuffix: None,
+            toolchain: None,
+        });
+        let cands = vec![candidate("Lib", "1.0", None), extra];
+        let mut optional = SourceDepSpec::plain("Extra", "1.0");
+        optional.optional = true;
+        let specs = [SourceDepSpec::plain("Lib", "1.0"), optional];
+        let (map, _) =
+            resolvo_resolve_dep_versions(&specs, &cands, &hierarchy(), &foss(), "App", "1.0", None)
+                .expect("optional extra must not fail the resolve");
+        assert_eq!(map.get("Lib").map(String::as_str), Some("1.0"));
+        assert!(!map.contains_key("Extra"));
     }
 }
