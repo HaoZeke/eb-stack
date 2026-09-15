@@ -490,14 +490,80 @@ fn toml_package_version(text: &str) -> Option<String> {
 
 /// `project('name', 'c', version : '1.2.3')`.
 ///
-/// Only the `project()` argument body is scanned. A later
-/// `dependency(..., version: ...)` is not a declared project version.
+/// Only a word-boundary `project (` call is scanned. `subproject(...)` and a
+/// later `dependency(..., version: ...)` are not a declared project version.
 fn meson_project_version(text: &str) -> Option<String> {
-    let lower = text.to_ascii_lowercase();
-    let start = lower.find("project(")?;
-    let open = start + "project".len();
-    let close = meson_matching_paren(text, open)?;
-    let mut search = &text[open + 1..close];
+    let mut from = 0;
+    while let Some(open) = meson_next_project_paren(text, from) {
+        let Some(close) = meson_matching_paren(text, open) else {
+            from = open + 1;
+            continue;
+        };
+        if let Some(version) = meson_version_in_call(&text[open + 1..close]) {
+            return Some(version);
+        }
+        from = close + 1;
+    }
+    None
+}
+
+fn meson_next_project_paren(text: &str, from: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let n = bytes.len();
+    let mut i = from;
+    let mut in_quote = None;
+    let mut escaped = false;
+    while i < n {
+        let c = bytes[i];
+        if let Some(q) = in_quote {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == q {
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'#' {
+            while i < n && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if c == b'\'' || c == b'"' {
+            in_quote = Some(c);
+            i += 1;
+            continue;
+        }
+        if i + 7 <= n
+            && text
+                .get(i..i + 7)
+                .is_some_and(|s| s.eq_ignore_ascii_case("project"))
+        {
+            let before_ok = i == 0 || !meson_ident_byte(bytes[i - 1]);
+            if before_ok {
+                let mut j = i + 7;
+                while j < n && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if j < n && bytes[j] == b'(' {
+                    return Some(j);
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn meson_ident_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn meson_version_in_call(search: &str) -> Option<String> {
+    let mut search = search;
     while let Some(idx) = search.to_ascii_lowercase().find("version") {
         let before = search[..idx].trim_end();
         if before.to_ascii_lowercase().ends_with("meson_") {
@@ -998,6 +1064,26 @@ mod declared_version_tests {
                 "project('foo', 'c', meson_version: '>=1.8.0')\ndependency('bar', version: '>=1.2.3')\n"
             ),
             None
+        );
+    }
+
+    #[test]
+    fn meson_project_version_skips_subproject_and_allows_whitespace() {
+        assert_eq!(
+            meson_project_version(
+                "subproject('wrap', version: '1.2.3')\nproject('x', 'c', version: '4.0.0')\n"
+            ),
+            Some("4.0.0".into())
+        );
+        assert_eq!(
+            meson_project_version("project (\n  'x',\n  'c',\n  version: '1.4.2',\n)\n"),
+            Some("1.4.2".into())
+        );
+        assert_eq!(
+            meson_project_version(
+                "# project('old', version: '0.1')\nproject('x', version: '2.0')\n"
+            ),
+            Some("2.0".into())
         );
     }
 

@@ -102,6 +102,12 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- Meson `project (` with whitespace is a project call. `subproject()`
+  and a commented `project(` are not. The declared version is the
+  project's, not a wrap's.
+- A Kahn leftover on a Perl-binutils cycle dumps the cycle first, then
+  Autoconf. Dependents stay after the SCC instead of sorting first by
+  name.
 - A classifiable download URL (PyPI, SourceForge, Other) wins over a
   Spack `git=` remote, so the file hash is not treated as a checkout.
 - A missing source or patch digest is EasyBuild `None`, not `''` and

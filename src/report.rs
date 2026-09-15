@@ -110,17 +110,52 @@ pub fn ordered_packages<'a>(
         }
     }
     if order.len() < by_key.len() {
-        for key in by_key.keys() {
-            if !order.contains(key) {
-                order.push(key.clone());
+        // Kahn leftover is the cycle plus every still-blocked dependent.
+        // Dependents still have a well-defined constraint (after the SCC).
+        // Dumping leftover keys in BTree order puts Autoconf before Perl.
+        let remaining: Vec<String> = by_key
+            .keys()
+            .filter(|key| !order.contains(*key))
+            .cloned()
+            .collect();
+        let mut cyclic = Vec::new();
+        let mut acyclic = Vec::new();
+        for key in remaining {
+            if reaches_self(&key, &dependents) {
+                cyclic.push(key);
+            } else {
+                acyclic.push(key);
             }
         }
+        cyclic.sort();
+        acyclic.sort();
+        order.extend(cyclic);
+        order.extend(acyclic);
     }
 
     order
         .into_iter()
         .filter_map(|key| by_key.get(&key).copied())
         .collect()
+}
+
+fn reaches_self(start: &str, dependents: &BTreeMap<String, Vec<String>>) -> bool {
+    let mut stack = vec![start.to_string()];
+    let mut seen = BTreeSet::new();
+    while let Some(key) = stack.pop() {
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        if let Some(children) = dependents.get(&key) {
+            for child in children {
+                if child == start {
+                    return true;
+                }
+                stack.push(child.clone());
+            }
+        }
+    }
+    false
 }
 
 fn package_row_key(package: &LockPackage) -> String {
@@ -521,6 +556,32 @@ mod tests {
         assert!(idx("OpenMPI") < g, "OpenMPI before GROMACS");
         assert!(idx("FFTW") < g, "FFTW before GROMACS");
         assert!(idx("Python") < g, "Python before GROMACS");
+    }
+
+    #[test]
+    fn cycle_remainder_keeps_dependents_after_the_scc() {
+        let lock = lock_of(vec![
+            pkg("Autoconf", "2.71", "Autoconf-2.71.eb"),
+            pkg("Perl", "5.38.0", "Perl-5.38.0.eb"),
+            pkg("binutils", "2.40", "binutils-2.40.eb"),
+        ]);
+        let mut dep_map = HashMap::new();
+        dep_map.insert("Perl".into(), vec!["binutils".into()]);
+        dep_map.insert("binutils".into(), vec!["Perl".into()]);
+        dep_map.insert("Autoconf".into(), vec!["Perl".into()]);
+        let ordered = ordered_packages(&lock, &dep_map);
+        let idx = |name: &str| {
+            ordered
+                .iter()
+                .position(|package| package.name == name)
+                .expect(name)
+        };
+        let names: Vec<&str> = ordered
+            .iter()
+            .map(|package| package.name.as_str())
+            .collect();
+        assert!(idx("Autoconf") > idx("Perl"), "{names:?}");
+        assert!(idx("Autoconf") > idx("binutils"), "{names:?}");
     }
 
     #[test]
