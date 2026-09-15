@@ -286,14 +286,16 @@ pub fn resolvo_resolve_dep_versions(
             }
             if resolvable.contains(&p.name) {
                 if p.versionsuffix.as_deref().is_some_and(|vs| !vs.is_empty()) {
-                    return Err(format!(
-                        "selected {} {}{} but the spec asked for the unsuffixed module",
-                        p.name,
-                        p.version,
-                        p.versionsuffix.as_deref().unwrap_or("")
-                    ));
+                    continue;
                 }
                 map.insert(p.name.clone(), p.version.clone());
+            }
+        }
+        for name in &resolvable {
+            if !map.contains_key(name) {
+                return Err(format!(
+                    "selected {name} but the spec asked for the unsuffixed module"
+                ));
             }
         }
         if map.is_empty() {
@@ -370,12 +372,13 @@ pub fn resolvo_resolve_dep_versions(
 }
 
 fn lock_package_identity_cmp(a: &LockPackage, b: &LockPackage) -> std::cmp::Ordering {
-    a.name
-        .cmp(&b.name)
-        .then_with(|| a.toolchain.name.cmp(&b.toolchain.name))
-        .then_with(|| a.toolchain.version.cmp(&b.toolchain.version))
-        .then_with(|| a.version.cmp(&b.version))
-        .then_with(|| a.versionsuffix.cmp(&b.versionsuffix))
+    let left = a.identity_key();
+    let right = b.identity_key();
+    left.name
+        .cmp(&right.name)
+        .then_with(|| left.toolchain.cmp(&right.toolchain))
+        .then_with(|| left.version.cmp(&right.version))
+        .then_with(|| left.versionsuffix.cmp(&right.versionsuffix))
 }
 
 /// Prefer non-SYSTEM install candidates when both SYSTEM and non-SYSTEM exist
@@ -1102,6 +1105,83 @@ mod lock_identity_and_bump_pin_tests {
         assert_eq!(packages[0].easyconfig_path, "zlib-foss.eb");
         assert_eq!(packages[1].easyconfig_path, "zlib-cuda.eb");
         assert_eq!(packages[2].easyconfig_path, "zlib-system.eb");
+    }
+
+    #[test]
+    fn lock_identity_collapses_system_spelling_and_empty_suffix() {
+        let pkg = |toolchain: Toolchain, version: &str, suffix: Option<&str>| LockPackage {
+            name: "binutils".into(),
+            version: version.into(),
+            toolchain,
+            versionsuffix: suffix.map(str::to_string),
+            easyconfig_path: format!("binutils-{version}.eb"),
+        };
+        let dummy = Toolchain {
+            name: "dummy".into(),
+            version: "dummy".into(),
+        };
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        assert_eq!(
+            lock_package_identity_cmp(
+                &pkg(dummy.clone(), "2.40", Some("")),
+                &pkg(system.clone(), "2.40", None)
+            ),
+            std::cmp::Ordering::Equal
+        );
+        assert_eq!(
+            lock_package_identity_cmp(&pkg(dummy, "2.40", None), &pkg(system, "2.42", Some(""))),
+            std::cmp::Ordering::Less
+        );
+    }
+
+    #[test]
+    fn a_cuda_lock_row_does_not_abort_an_unsuffixed_coselect() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let foss_tc = foss();
+        let mut python = candidate("Python", "3.12.0", None);
+        python.toolchain = system.clone();
+        python.easyconfig_path = "Python-3.12.0.eb".into();
+        let mut python_cuda = candidate("Python", "3.12.0", Some("-CUDA-12.8.0"));
+        python_cuda.toolchain = foss_tc.clone();
+        let mut scipy = candidate("SciPy", "1.0.0", None);
+        scipy.dependencies = vec![DepReq {
+            name: "Python".into(),
+            version_req: "==3.12.0".into(),
+            versionsuffix: Some("-CUDA-12.8.0".into()),
+            toolchain: None,
+        }];
+        let hierarchy = ToolchainHierarchy {
+            parent: foss_tc.clone(),
+            members: vec![
+                Toolchain {
+                    name: "system".into(),
+                    version: String::new(),
+                },
+                foss_tc,
+            ],
+        };
+        let specs = [
+            SourceDepSpec::plain("Python", "3.12.0"),
+            SourceDepSpec::plain("SciPy", "1.0.0"),
+        ];
+        let (map, _) = resolvo_resolve_dep_versions(
+            &specs,
+            &[python, python_cuda, scipy],
+            &hierarchy,
+            &foss(),
+            "App",
+            "1.0",
+            None,
+        )
+        .expect("unsuffixed Python must survive a CUDA sibling");
+        assert_eq!(map.get("Python").map(String::as_str), Some("3.12.0"));
+        assert_eq!(map.get("SciPy").map(String::as_str), Some("1.0.0"));
     }
 
     #[test]
