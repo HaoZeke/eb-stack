@@ -2,8 +2,9 @@
 
 use eb_stack::{
     classify_stack_diff, dep_map_from_universe, format_build_list, format_stack_diff_markdown,
-    ordered_build_paths, solve_from_easyconfigs_with_baseline_version_and_extras,
-    PackageChangeKind, SolveExtraOut, StackLock, Universe,
+    ordered_build_paths, ordered_packages, solve_from_easyconfigs_with_baseline_version_and_extras,
+    LockPackage, PackageChangeKind, SolveExtraOut, SolverMeta, StackLock, Toolchain, Universe,
+    STACK_LOCK_SCHEMA_VERSION,
 };
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -111,6 +112,53 @@ fn pure_formatters_match_shipped_solve_outputs() {
     let md = format_stack_diff_markdown(&baseline, &lock);
     assert!(md.starts_with("# Stack diff\n"));
     assert!(md.contains("**version-bumped**:"));
+}
+
+#[test]
+fn ordered_packages_keeps_system_bootstrap_siblings() {
+    let system = Toolchain {
+        name: "system".into(),
+        version: "system".into(),
+    };
+    let lock_pkg = |name: &str, version: &str| LockPackage {
+        name: name.into(),
+        version: version.into(),
+        toolchain: system.clone(),
+        versionsuffix: None,
+        easyconfig_path: format!("{name}-{version}.eb"),
+    };
+    let lock = StackLock {
+        schema_version: STACK_LOCK_SCHEMA_VERSION,
+        toolchain: system.clone(),
+        generation_label: None,
+        packages: vec![
+            lock_pkg("binutils", "2.40"),
+            lock_pkg("binutils", "2.42"),
+            lock_pkg("Perl", "5.38.0"),
+        ],
+        solver: SolverMeta {
+            engine: "test".into(),
+            engine_version: "0".into(),
+            timestamp: "1970-01-01T00:00:00Z".into(),
+        },
+    };
+    let mut dep_map = std::collections::HashMap::new();
+    dep_map.insert("Perl".into(), vec!["binutils".into()]);
+    dep_map.insert("binutils".into(), vec!["Perl".into()]);
+    let ordered = ordered_packages(&lock, &dep_map);
+    let paths: Vec<&str> = ordered
+        .iter()
+        .map(|package| package.easyconfig_path.as_str())
+        .collect();
+    assert!(
+        paths.contains(&"binutils-2.40.eb"),
+        "missing SYSTEM binutils 2.40: {paths:?}"
+    );
+    assert!(
+        paths.contains(&"binutils-2.42.eb"),
+        "missing SYSTEM binutils 2.42: {paths:?}"
+    );
+    assert_eq!(ordered.len(), 3, "Perl plus both binutils rows: {paths:?}");
 }
 
 #[test]

@@ -113,8 +113,9 @@ pub fn ordered_packages<'a>(
 
 fn package_row_key(package: &LockPackage) -> String {
     format!(
-        "{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}",
         package.name,
+        package.version,
         package.toolchain.name,
         package.toolchain.version,
         package.versionsuffix.as_deref().unwrap_or("")
