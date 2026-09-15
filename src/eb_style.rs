@@ -381,14 +381,16 @@ fn format_list_string_item(item: &ListStringItem<'_>) -> Vec<String> {
         let mut out = Vec::new();
         let mut first = true;
         while !rest.is_empty() {
-            let take = rest
-                .char_indices()
-                .take_while(|(i, _)| *i < budget)
-                .last()
-                .map(|(i, c)| i + c.len_utf8())
-                .unwrap_or(rest.len().min(budget))
-                .max(1)
-                .min(rest.len());
+            let take = unescaped_cut(
+                rest,
+                rest.char_indices()
+                    .take_while(|(i, _)| *i < budget)
+                    .last()
+                    .map(|(i, c)| i + c.len_utf8())
+                    .unwrap_or(rest.len().min(budget))
+                    .max(1)
+                    .min(rest.len()),
+            );
             let (head, tail) = rest.split_at(take);
             if first {
                 out.push(format!("{indent}({q}{head}{q}"));
@@ -644,15 +646,18 @@ fn format_string_assignment_hard(asg: &StringAssignment<'_>) -> Vec<String> {
     let mut rest = asg.content;
     let mut first = true;
     while !rest.is_empty() {
-        let take = preferred_split(rest, budget).unwrap_or_else(|| {
-            rest.char_indices()
-                .take_while(|(i, _)| *i < budget)
-                .last()
-                .map(|(i, c)| i + c.len_utf8())
-                .unwrap_or(rest.len().min(budget))
-                .max(1)
-                .min(rest.len())
-        });
+        let take = unescaped_cut(
+            rest,
+            preferred_split(rest, budget).unwrap_or_else(|| {
+                rest.char_indices()
+                    .take_while(|(i, _)| *i < budget)
+                    .last()
+                    .map(|(i, c)| i + c.len_utf8())
+                    .unwrap_or(rest.len().min(budget))
+                    .max(1)
+                    .min(rest.len())
+            }),
+        );
         let (head, tail) = rest.split_at(take);
         if first {
             lines.push(format!("{prefix_first}{q}{head}{q}"));
@@ -677,20 +682,54 @@ fn split_string_content(content: &str, budget: usize) -> Vec<String> {
             chunks.push(rest.to_string());
             break;
         }
-        let split = preferred_split(rest, budget).unwrap_or_else(|| {
-            rest.char_indices()
-                .take_while(|(i, _)| *i < budget)
-                .last()
-                .map(|(i, c)| i + c.len_utf8())
-                .unwrap_or(budget)
-                .max(1)
-                .min(rest.len())
-        });
+        let split = unescaped_cut(
+            rest,
+            preferred_split(rest, budget).unwrap_or_else(|| {
+                rest.char_indices()
+                    .take_while(|(i, _)| *i < budget)
+                    .last()
+                    .map(|(i, c)| i + c.len_utf8())
+                    .unwrap_or(budget)
+                    .max(1)
+                    .min(rest.len())
+            }),
+        );
         let (head, tail) = rest.split_at(split);
         chunks.push(head.to_string());
         rest = tail;
     }
     chunks
+}
+
+/// Move a cut so the added closer is not escaped by a trailing backslash.
+fn unescaped_cut(rest: &str, take: usize) -> usize {
+    let mut take = take.max(1).min(rest.len());
+    if take == rest.len() {
+        return take;
+    }
+    while odd_trailing_backslashes(&rest[..take]) {
+        let Some(extra) = rest[take..]
+            .chars()
+            .next()
+            .map(|character| character.len_utf8())
+        else {
+            break;
+        };
+        take += extra;
+        if take >= rest.len() {
+            return rest.len();
+        }
+    }
+    take
+}
+
+fn odd_trailing_backslashes(head: &str) -> bool {
+    head.chars()
+        .rev()
+        .take_while(|character| *character == '\\')
+        .count()
+        % 2
+        == 1
 }
 
 fn preferred_split(s: &str, budget: usize) -> Option<usize> {
@@ -984,6 +1023,32 @@ mod tests {
             .text
             .lines()
             .all(|line| line.chars().count() <= EB_MAX_LINE));
+    }
+
+    #[test]
+    fn format_style_does_not_escape_the_closer_after_a_backslash() {
+        let body = format!("{}\\{}", "x".repeat(100), "y".repeat(40));
+        let source = format!("configopts = '{body}'\n");
+        let result = format_style(&source);
+        assert!(result.remaining.is_empty(), "{:?}", result.remaining);
+        for line in result.text.lines() {
+            let trimmed = line.trim();
+            let Some(after) = trimmed
+                .strip_prefix("configopts = ")
+                .or_else(|| trimmed.strip_prefix("configopts += "))
+            else {
+                continue;
+            };
+            assert!(
+                !after.ends_with("\\'") && !after.ends_with("\\\""),
+                "{line}"
+            );
+        }
+        let recipe = format!(
+            "name = 'X'\nversion = '1'\ntoolchain = SYSTEM\n{}dependencies = []\n",
+            result.text
+        );
+        crate::eb_parse::resolve_easyconfig_str(&recipe).expect("formatted assignment parses");
     }
 
     #[test]
