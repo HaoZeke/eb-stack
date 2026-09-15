@@ -160,7 +160,7 @@ fn crates_io_recipe(
         license: nonempty(version.license.clone()),
         source_url: Some(url),
         source_filename: Some(filename),
-        sha256: nonempty(version.checksum.clone()),
+        sha256: crates_io_sha256(version.checksum.as_deref()),
         python,
         crate_deps: Vec::new(),
         module_name: None,
@@ -537,6 +537,15 @@ fn cargo_dep_from_spec(name: &str, spec: &toml::Value) -> CargoDep {
     }
 }
 
+fn crates_io_sha256(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.len() == 64 && value.chars().all(|character| character.is_ascii_hexdigit()) {
+        Some(value.to_ascii_lowercase())
+    } else {
+        None
+    }
+}
+
 fn toml_string(value: &toml::Value, key: &str) -> Option<String> {
     value
         .get(key)
@@ -601,6 +610,19 @@ pyo3 = "0.22"
             Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         );
         assert!(!recipe.dependencies.iter().any(|dep| dep.name == "Python"));
+    }
+
+    #[test]
+    fn crates_io_checksum_must_be_sixty_four_hex() {
+        let recipe = parse_cargo_str(
+            r#"{
+              "crate": {"id": "demo", "name": "demo", "max_version": "1.0.0"},
+              "versions": [{"num": "1.0.0", "checksum": "not-a-digest"}]
+            }"#,
+        )
+        .expect("parse");
+        assert_eq!(recipe.sha256, None);
+        assert!(recipe.sources.iter().all(|source| source.sha256.is_none()));
     }
 
     #[test]
