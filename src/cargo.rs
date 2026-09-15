@@ -12,6 +12,7 @@ use crate::foreign::{
 use crate::package::{ConditionExpr, ResidualSeverity};
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 /// Shell prelude that isolates host Cargo/rustc when EasyBuild runs cargo
 /// inside EESSI-extend.
@@ -19,8 +20,10 @@ use serde_json::Value;
 /// Host `sccache`, `clang`, and `mold` are not in the EESSI module graph.
 /// foss wrappers can drop the compat `ld` that `collect2` needs. The cargo
 /// target triple and compat arch come from the build host (`rustc -vV`,
-/// `uname -m`), not from a plan-time x86_64 literal. Cargo leftovers and
-/// mesonpy wraps that invoke cargo both emit this string.
+/// `uname -m`), not from a plan-time x86_64 literal. An empty `EESSI_VERSION`
+/// skips the compat PATH and `-B` prepend; it does not default a version and
+/// must not abort the chain. Cargo leftovers and mesonpy wraps that invoke
+/// cargo both emit this string.
 pub fn eessi_cargo_host_isolation() -> &'static str {
     concat!(
         "unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER RUSTFLAGS CARGO_ENCODED_RUSTFLAGS && ",
@@ -31,10 +34,13 @@ pub fn eessi_cargo_host_isolation() -> &'static str {
         r#"_triple_env=$(printf %s "$_triple" | tr "[:lower:]-" "[:upper:]_") && "#,
         r#"if [ -n "$_triple_env" ]; then eval export CARGO_TARGET_${_triple_env}_LINKER=${CC:-gcc}; fi && "#,
         r#"_arch=$(uname -m) && "#,
-        r#"_ebld=/cvmfs/software.eessi.io/versions/${EESSI_VERSION:?EESSI_VERSION is unset}/compat/linux/${_arch}/usr/bin && "#,
-        r#"export PATH="$_ebld:$PATH" && "#,
+        r#"if [ -n "${EESSI_VERSION:-}" ]; then "#,
+        r#"_ebld=/cvmfs/software.eessi.io/versions/${EESSI_VERSION}/compat/linux/${_arch}/usr/bin; "#,
+        r#"export PATH="$_ebld:$PATH"; "#,
+        r#"_bflag="-C link-arg=-B$_ebld"; "#,
+        r#"else _ebld=; _bflag=; fi && "#,
         r#"_libflags=$( [ -n "${LIBRARY_PATH:-}" ] && printf -- '-L %s ' $(echo "$LIBRARY_PATH" | tr ':' ' '); : ) && "#,
-        r#"export RUSTFLAGS="-C link-arg=-B$_ebld ${_libflags}" && "#,
+        r#"export RUSTFLAGS="${_bflag} ${_libflags}" && "#,
     )
 }
 
@@ -153,7 +159,7 @@ fn crates_io_recipe(
     });
     let filename = nonempty(version.filename.clone())
         .unwrap_or_else(|| format!("{}-{}.crate", krate.name, version.num));
-    let python = version_has_required_python_marker(version);
+    let python = version_is_python_crate(&krate.name, version);
     recipe(CrateFields {
         raw_name: krate.name.clone(),
         version: version.num.clone(),
@@ -170,6 +176,30 @@ fn crates_io_recipe(
     })
 }
 
+fn version_is_python_crate(crate_name: &str, version: &CratesIoVersion) -> bool {
+    if version_has_required_python_marker(version) {
+        return true;
+    }
+    if crate::provides::is_python_marker_crate(crate_name) {
+        return false;
+    }
+    crates_io_default_enables_python(&version.features)
+        || version
+            .deps
+            .iter()
+            .chain(version.dependencies.iter())
+            .any(|dep| {
+                dep.optional
+                    && dep.is_runtime_or_build()
+                    && dep
+                        .crate_name()
+                        .is_some_and(|name| default_feature_items_enable(&version.features, name))
+                    && dep
+                        .crate_name()
+                        .is_some_and(crate::provides::is_python_marker_crate)
+            })
+}
+
 fn version_has_required_python_marker(version: &CratesIoVersion) -> bool {
     version
         .deps
@@ -182,6 +212,29 @@ fn version_has_required_python_marker(version: &CratesIoVersion) -> bool {
                     .crate_name()
                     .is_some_and(crate::provides::is_python_marker_crate)
         })
+}
+
+fn crates_io_default_enables_python(features: &BTreeMap<String, Vec<String>>) -> bool {
+    default_feature_walk(features, is_python_feature_item)
+}
+
+fn default_feature_items_enable(features: &BTreeMap<String, Vec<String>>, dep_name: &str) -> bool {
+    default_feature_walk(features, |item| feature_names_dep(item, dep_name))
+}
+
+fn default_feature_walk(
+    features: &BTreeMap<String, Vec<String>>,
+    mut matches: impl FnMut(&str) -> bool,
+) -> bool {
+    let Some(default) = features.get("default") else {
+        return false;
+    };
+    default.iter().any(|feat| {
+        matches(feat)
+            || features
+                .get(feat)
+                .is_some_and(|items| items.iter().any(|item| matches(item)))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -223,6 +276,8 @@ struct CratesIoVersion {
     deps: Vec<CratesIoDep>,
     #[serde(default)]
     dependencies: Vec<CratesIoDep>,
+    #[serde(default)]
+    features: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     license: Option<String>,
     #[serde(default, rename = "crate")]
@@ -464,19 +519,20 @@ fn is_python_crate(value: &toml::Value, deps: &[CargoDep]) -> bool {
     }
     deps.iter().any(|dep| {
         crate::provides::is_python_marker_crate(&dep.name)
-            && (!dep.optional || default_features_enable(value, &dep.name))
+            && (!dep.optional || default_features_enable(value, dep))
     })
 }
 
-fn default_features_enable(value: &toml::Value, dep_name: &str) -> bool {
+fn default_features_enable(value: &toml::Value, dep: &CargoDep) -> bool {
     let Some(features) = value.get("features").and_then(toml::Value::as_table) else {
         return false;
     };
     let Some(default) = features.get("default").and_then(toml::Value::as_array) else {
         return false;
     };
+    let names = [dep.key.as_str(), dep.name.as_str()];
     default.iter().filter_map(toml::Value::as_str).any(|feat| {
-        feature_names_dep(feat, dep_name)
+        names.iter().any(|name| feature_names_dep(feat, name))
             || features
                 .get(feat)
                 .and_then(toml::Value::as_array)
@@ -484,13 +540,25 @@ fn default_features_enable(value: &toml::Value, dep_name: &str) -> bool {
                     items
                         .iter()
                         .filter_map(toml::Value::as_str)
-                        .any(|item| feature_names_dep(item, dep_name))
+                        .any(|item| names.iter().any(|name| feature_names_dep(item, name)))
                 })
     })
 }
 
+/// Cargo feature item that names a dependency: `name`, `dep:name`, or `name/feat`.
+fn feature_crate_name(item: &str) -> &str {
+    let item = item.strip_prefix("dep:").unwrap_or(item);
+    let crate_name = item.split_once('/').map_or(item, |(name, _)| name);
+    crate_name.strip_suffix('?').unwrap_or(crate_name)
+}
+
 fn feature_names_dep(item: &str, dep_name: &str) -> bool {
-    item == dep_name || item.strip_prefix("dep:") == Some(dep_name)
+    feature_crate_name(item) == dep_name
+}
+
+fn is_python_feature_item(item: &str) -> bool {
+    let name = feature_crate_name(item);
+    crate::provides::is_python_marker_crate(name) || name.eq_ignore_ascii_case("extension-module")
 }
 
 /// Where a Cargo dependency comes from.
@@ -508,6 +576,8 @@ enum CargoDepKind {
 /// One Cargo dependency, with the requirement the manifest states.
 #[derive(Debug, Clone)]
 struct CargoDep {
+    /// Table key Cargo uses in `[features]` (`package =` does not change it).
+    key: String,
     name: String,
     /// The requirement, translated into the shared grammar.
     req: Option<String>,
@@ -570,6 +640,7 @@ fn collect_dep_table(table: Option<&toml::Value>, root: &toml::Value, deps: &mut
 fn cargo_dep_from_spec(name: &str, spec: &toml::Value, root: &toml::Value) -> CargoDep {
     match spec {
         toml::Value::String(version) => CargoDep {
+            key: name.to_string(),
             name: name.to_string(),
             req: cargo_version_req(version),
             kind: CargoDepKind::Registry,
@@ -599,6 +670,7 @@ fn cargo_dep_from_spec(name: &str, spec: &toml::Value, root: &toml::Value) -> Ca
                     .and_then(|dependencies| dependencies.get(name))
                 {
                     let mut inherited = cargo_dep_from_spec(name, inherited, root);
+                    inherited.key = name.to_string();
                     inherited.optional = entry
                         .get("optional")
                         .and_then(toml::Value::as_bool)
@@ -610,6 +682,7 @@ fn cargo_dep_from_spec(name: &str, spec: &toml::Value, root: &toml::Value) -> Ca
                 }
             }
             CargoDep {
+                key: name.to_string(),
                 name: crate_name,
                 req: entry
                     .get("version")
@@ -623,6 +696,7 @@ fn cargo_dep_from_spec(name: &str, spec: &toml::Value, root: &toml::Value) -> Ca
             }
         }
         _ => CargoDep {
+            key: name.to_string(),
             name: name.to_string(),
             req: None,
             kind: CargoDepKind::Registry,
@@ -807,6 +881,114 @@ default = ["pyo3"]
     }
 
     #[test]
+    fn default_enabled_pyo3_feature_path_is_a_python_crate() {
+        let recipe = parse_cargo_str(
+            r#"
+[package]
+name = "demo"
+version = "1.0.0"
+
+[dependencies]
+pyo3 = { version = "0.22", optional = true }
+
+[features]
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]
+"#,
+        )
+        .expect("parse");
+        assert!(
+            recipe.dependencies.iter().any(|dep| dep.name == "Python"),
+            "{:?}",
+            recipe.dependencies
+        );
+        assert!(
+            recipe.dependencies.iter().any(|dep| dep.name == "maturin"),
+            "{:?}",
+            recipe.dependencies
+        );
+        assert!(
+            recipe
+                .build_system_hints
+                .iter()
+                .any(|hint| hint == "maturin"),
+            "{:?}",
+            recipe.build_system_hints
+        );
+    }
+
+    #[test]
+    fn empty_default_features_leave_optional_pyo3_as_a_crate() {
+        let recipe = parse_cargo_str(
+            r#"
+[package]
+name = "demo"
+version = "1.0.0"
+
+[dependencies]
+pyo3 = { version = "0.22", optional = true }
+
+[features]
+default = []
+extension-module = ["pyo3/extension-module"]
+"#,
+        )
+        .expect("parse");
+        assert!(
+            recipe
+                .dependencies
+                .iter()
+                .all(|dep| dep.name != "Python" && dep.name != "maturin"),
+            "{:?}",
+            recipe.dependencies
+        );
+        assert!(
+            recipe
+                .build_system_hints
+                .iter()
+                .all(|hint| hint != "maturin" && hint != "python"),
+            "{:?}",
+            recipe.build_system_hints
+        );
+    }
+
+    #[test]
+    fn package_rename_default_feature_key_enables_pyo3() {
+        let recipe = parse_cargo_str(
+            r#"
+[package]
+name = "demo"
+version = "1.0.0"
+
+[dependencies]
+py = { package = "pyo3", version = "0.22", optional = true }
+
+[features]
+default = ["py"]
+"#,
+        )
+        .expect("parse");
+        assert!(
+            recipe.dependencies.iter().any(|dep| dep.name == "Python"),
+            "{:?}",
+            recipe.dependencies
+        );
+        assert!(
+            recipe.dependencies.iter().any(|dep| dep.name == "maturin"),
+            "{:?}",
+            recipe.dependencies
+        );
+        assert!(
+            recipe
+                .build_system_hints
+                .iter()
+                .any(|hint| hint == "maturin"),
+            "{:?}",
+            recipe.build_system_hints
+        );
+    }
+
+    #[test]
     fn optional_pyo3_does_not_make_a_python_crate() {
         let recipe = parse_cargo_str(
             r#"
@@ -907,6 +1089,37 @@ serde = { version = "1.0", optional = true }
     }
 
     #[test]
+    fn eessi_cargo_isolation_survives_unset_eessi_version() {
+        let prelude = eessi_cargo_host_isolation();
+        assert!(
+            !prelude.contains("EESSI_VERSION:?") && !prelude.contains("${EESSI_VERSION:?"),
+            "unset EESSI_VERSION must not abort:\n{prelude}"
+        );
+        assert!(
+            !prelude.contains("2025.06"),
+            "compat version comes from EESSI_VERSION, not a default:\n{prelude}"
+        );
+        let script = format!(
+            "{}echo SURVIVED",
+            prelude.replace("%(builddir)s", "/tmp/eb-stack-cargo-iso")
+        );
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(&script)
+            .env_remove("EESSI_VERSION")
+            .env_remove("LIBRARY_PATH")
+            .output()
+            .expect("bash");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success() && stdout.contains("SURVIVED"),
+            "status={} stdout={stdout:?} stderr={stderr:?}",
+            output.status
+        );
+    }
+
+    #[test]
     fn eessi_cargo_isolation_survives_unset_library_path() {
         let prelude =
             eessi_cargo_host_isolation().replace("%(builddir)s", "/tmp/eb-stack-cargo-iso");
@@ -940,6 +1153,113 @@ serde = { version = "1.0", optional = true }
               "versions": [{
                 "num": "0.22.0",
                 "features": { "extension-module": [], "abi3": [] }
+              }]
+            }"#,
+        )
+        .expect("parse");
+        assert!(
+            recipe
+                .dependencies
+                .iter()
+                .all(|dep| dep.name != "Python" && dep.name != "maturin"),
+            "{:?}",
+            recipe.dependencies
+        );
+        assert!(
+            recipe
+                .build_system_hints
+                .iter()
+                .all(|hint| hint != "maturin" && hint != "python"),
+            "{:?}",
+            recipe.build_system_hints
+        );
+    }
+
+    #[test]
+    fn crates_io_default_feature_pyo3_without_deps_is_python() {
+        let recipe = parse_cargo_str(
+            r#"{
+              "crate": {
+                "id": "demo",
+                "name": "demo",
+                "max_version": "1.0.0"
+              },
+              "versions": [{
+                "num": "1.0.0",
+                "features": { "default": ["pyo3"], "pyo3": [] }
+              }]
+            }"#,
+        )
+        .expect("parse");
+        assert!(
+            recipe.dependencies.iter().any(|dep| dep.name == "Python"),
+            "{:?}",
+            recipe.dependencies
+        );
+        assert!(
+            recipe.dependencies.iter().any(|dep| dep.name == "maturin"),
+            "{:?}",
+            recipe.dependencies
+        );
+        assert!(
+            recipe
+                .build_system_hints
+                .iter()
+                .any(|hint| hint == "maturin"),
+            "{:?}",
+            recipe.build_system_hints
+        );
+    }
+
+    #[test]
+    fn crates_io_default_extension_module_without_deps_is_python() {
+        let recipe = parse_cargo_str(
+            r#"{
+              "crate": {
+                "id": "demo",
+                "name": "demo",
+                "max_version": "1.0.0"
+              },
+              "versions": [{
+                "num": "1.0.0",
+                "features": { "default": ["extension-module"], "extension-module": [] }
+              }]
+            }"#,
+        )
+        .expect("parse");
+        assert!(
+            recipe.dependencies.iter().any(|dep| dep.name == "Python"),
+            "{:?}",
+            recipe.dependencies
+        );
+        assert!(
+            recipe.dependencies.iter().any(|dep| dep.name == "maturin"),
+            "{:?}",
+            recipe.dependencies
+        );
+        assert!(
+            recipe
+                .build_system_hints
+                .iter()
+                .any(|hint| hint == "maturin"),
+            "{:?}",
+            recipe.build_system_hints
+        );
+    }
+
+    #[test]
+    fn crates_io_pyo3_crate_default_macros_stays_a_crate() {
+        let recipe = parse_cargo_str(
+            r#"{
+              "crate": {
+                "id": "pyo3",
+                "name": "pyo3",
+                "max_version": "0.22.0",
+                "max_stable_version": "0.22.0"
+              },
+              "versions": [{
+                "num": "0.22.0",
+                "features": { "default": ["macros"], "macros": [], "extension-module": [] }
               }]
             }"#,
         )
