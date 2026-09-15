@@ -117,6 +117,23 @@ fn keys_for_name(keys_by_name: &HashMap<String, Vec<String>>, name: &str) -> Vec
     keys_by_name.get(name).cloned().unwrap_or_default()
 }
 
+fn require_upgrade_baseline_version(lock: &StackLock, name: &str) -> Option<String> {
+    if let Some(package) = lock.package(name) {
+        return Some(package.version.clone());
+    }
+    let mut versions: Vec<&str> = lock
+        .packages
+        .iter()
+        .filter(|package| package.name == name)
+        .map(|package| package.version.as_str())
+        .collect();
+    if versions.is_empty() {
+        return None;
+    }
+    versions.sort_by(|left, right| cmp_version(left, right));
+    versions.first().map(|version| (*version).to_string())
+}
+
 impl EbProvider {
     /// Which resolvo package names can satisfy one dependency of one recipe.
     ///
@@ -400,8 +417,7 @@ impl EbProvider {
                 ));
             }
             let base_ver = baseline
-                .and_then(|b| b.package(&ru.name))
-                .map(|p| p.version.clone())
+                .and_then(|lock| require_upgrade_baseline_version(lock, &ru.name))
                 .ok_or_else(|| {
                     format!("require_upgrade {} needs baseline package version", ru.name)
                 })?;
@@ -414,6 +430,15 @@ impl EbProvider {
                 let Some(ranked) = ranks.get(key) else {
                     continue;
                 };
+                let has_newer = ranked.iter().any(|(_, idx)| {
+                    cmp_version(&candidates[*idx].version, &base_ver) == std::cmp::Ordering::Greater
+                });
+                if !has_newer {
+                    // A system_multi sibling whose only rank is the older
+                    // bootstrap build must stay selectable.
+                    continue;
+                }
+                any_upgrade = true;
                 let mut max_non_upgrade: Option<u32> = None;
                 for (rank, idx) in ranked {
                     if cmp_version(&candidates[*idx].version, &base_ver)
@@ -424,11 +449,6 @@ impl EbProvider {
                 }
                 if let Some(m) = max_non_upgrade {
                     min_rank_exclusive.insert(key.clone(), m);
-                }
-                if ranked.iter().any(|(_, idx)| {
-                    cmp_version(&candidates[*idx].version, &base_ver) == std::cmp::Ordering::Greater
-                }) {
-                    any_upgrade = true;
                 }
             }
             if !any_upgrade {
@@ -1737,6 +1757,75 @@ mod tests {
         }]);
         solve_with_resolvo(&candidates, &pol, Some(&baseline))
             .expect("2.42 is newer than baseline 2.40");
+    }
+
+    #[test]
+    fn require_upgrade_keeps_the_older_system_multi_sibling() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let at_system = |name: &str, version: &str, deps: Vec<DepReq>| Candidate {
+            name: name.into(),
+            version: version.into(),
+            toolchain: system.clone(),
+            versionsuffix: None,
+            easyconfig_path: format!("{name}-{version}.eb"),
+            dependencies: deps,
+            builddependencies: vec![],
+            exts_list: vec![],
+            moduleclass: None,
+        };
+        let need = |name: &str, version: &str| DepReq {
+            name: name.into(),
+            version_req: format!("=={version}"),
+            versionsuffix: None,
+            toolchain: Some(system.clone()),
+        };
+        let candidates = vec![
+            at_system("binutils", "2.40", vec![]),
+            at_system("binutils", "2.42", vec![need("Perl", "5.38.0")]),
+            at_system("Perl", "5.38.0", vec![need("binutils", "2.40")]),
+            cand(
+                "App",
+                "1.0",
+                None,
+                "App-1.0.eb",
+                vec![need("binutils", "2.42")],
+            ),
+        ];
+        let pol = policy(
+            vec!["App"],
+            vec![RequireUpgrade {
+                name: "binutils".into(),
+                relative_to_baseline: true,
+            }],
+        );
+        let baseline = baseline_lock(vec![
+            LockPackage {
+                name: "binutils".into(),
+                version: "2.40".into(),
+                toolchain: system.clone(),
+                versionsuffix: None,
+                easyconfig_path: "binutils-2.40.eb".into(),
+            },
+            LockPackage {
+                name: "binutils".into(),
+                version: "2.42".into(),
+                toolchain: system,
+                versionsuffix: None,
+                easyconfig_path: "binutils-2.42.eb".into(),
+            },
+        ]);
+        let selected = solve_with_resolvo(&candidates, &pol, Some(&baseline))
+            .expect("two-row binutils lock must construct");
+        let mut binutils: Vec<&str> = selected
+            .iter()
+            .filter(|c| c.name == "binutils")
+            .map(|c| c.version.as_str())
+            .collect();
+        binutils.sort();
+        assert_eq!(binutils, vec!["2.40", "2.42"]);
     }
 
     #[test]
