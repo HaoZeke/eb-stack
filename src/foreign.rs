@@ -945,26 +945,17 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>, Vec<ForeignResidu
         residuals.push(foreign_residual("template-evaluation", summary));
     }
 
-    let pure_macro_requirement_re =
-        static_regex!(r#"(?m)^[ \t]*-[ \t]*(?:\$\{\{|\{\{)[^\r\n]*\}\}[ \t]*(?:#.*)?(?:\r?\n|$)"#);
-    let macro_requirement_count = pure_macro_requirement_re.find_iter(&out).count();
-    out = pure_macro_requirement_re.replace_all(&out, "").to_string();
-    let cross_python_requirement_re = static_regex!(
-        r#"(?m)^[ \t]*-[ \t]*cross-python_(?:\$\{\{|\{\{)[^\r\n]*\}\}[ \t]*(?:#.*)?(?:\r?\n|$)"#
-    );
-    let cross_python_requirement_count = cross_python_requirement_re.find_iter(&out).count();
-    out = cross_python_requirement_re
-        .replace_all(&out, "")
-        .to_string();
-    let toolchain_requirement_count = macro_requirement_count + cross_python_requirement_count;
-    if toolchain_requirement_count > 0 {
+    // Expand identifier templates before dropping leftover macros so
+    // `- {{ blas }}` becomes a real host/run edge when `blas` is in vars.
+    out = remove_duplicate_selector_keys(&out, &mut notes);
+    out = expand_conda_variable_expressions(&out, &vars);
+    let (stripped, leftover_macro_count) = strip_leftover_conda_macro_requirements(&out);
+    out = stripped;
+    if leftover_macro_count > 0 {
         notes.push(format!(
-            "skipped {toolchain_requirement_count} toolchain or cross-build template requirement(s)"
+            "skipped {leftover_macro_count} toolchain or cross-build template requirement(s)"
         ));
     }
-    out = remove_duplicate_selector_keys(&out, &mut notes);
-
-    out = expand_conda_variable_expressions(&out, &vars);
 
     if out.contains("{{") || out.contains("${{") {
         let summary =
@@ -974,6 +965,45 @@ fn expand_conda_templates(text: &str) -> (String, Vec<String>, Vec<ForeignResidu
     }
 
     (out, notes, residuals)
+}
+
+/// Drop leftover `compiler()` / function-call macros after identifier
+/// expansion. Unresolved `{{ name }}` lines stay so they remain residuals.
+fn strip_leftover_conda_macro_requirements(text: &str) -> (String, usize) {
+    let identifier_re = static_regex!(r"^[A-Za-z_][A-Za-z0-9_]*(?:\s*\|[^\r\n]*)?$");
+    let mut count = 0usize;
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        if is_leftover_conda_macro_requirement(line, identifier_re) {
+            count += 1;
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    (out, count)
+}
+
+fn is_leftover_conda_macro_requirement(line: &str, identifier_re: &Regex) -> bool {
+    let trimmed = line.trim();
+    let Some(spec) = trimmed.strip_prefix('-') else {
+        return false;
+    };
+    let Some(spec) = spec.strip_prefix(' ').or_else(|| spec.strip_prefix('\t')) else {
+        return false;
+    };
+    let spec = spec.split(" #").next().unwrap_or(spec).trim();
+    if spec.starts_with("cross-python_") && (spec.contains("{{") || spec.contains("${{")) {
+        return true;
+    }
+    let inner = spec
+        .strip_prefix("${{")
+        .or_else(|| spec.strip_prefix("{{"))
+        .and_then(|rest| rest.strip_suffix("}}"));
+    let Some(inner) = inner else {
+        return false;
+    };
+    !identifier_re.is_match(inner.trim())
 }
 
 fn expand_conda_variable_expressions(text: &str, vars: &HashMap<String, String>) -> String {
@@ -1295,10 +1325,18 @@ fn parse_conda_selector(selector: &str) -> ConditionExpr {
     if let Some(condition) = parse_conda_python_selector(selector) {
         return condition;
     }
-    if matches!(
-        selector,
-        "linux" | "osx" | "win" | "unix" | "aarch64" | "x86_64" | "arm64" | "ppc64le"
-    ) {
+    if selector == "unix" {
+        // conda-build: unix is every non-Windows platform.
+        return ConditionExpr::Not(Box::new(ConditionExpr::Predicate(
+            ConditionPredicate::Platform { name: "win".into() },
+        )));
+    }
+    if matches!(selector, "aarch64" | "x86_64" | "arm64" | "ppc64le") {
+        return ConditionExpr::Predicate(ConditionPredicate::Architecture {
+            name: selector.into(),
+        });
+    }
+    if matches!(selector, "linux" | "osx" | "win") {
         return ConditionExpr::Predicate(ConditionPredicate::Platform {
             name: selector.into(),
         });
@@ -1408,6 +1446,7 @@ fn yaml_as_string(v: &YamlValue) -> Option<String> {
         YamlValue::String(s) => Some(s.clone()),
         YamlValue::Number(n) => Some(n.to_string()),
         YamlValue::Bool(b) => Some(b.to_string()),
+        YamlValue::Sequence(items) => items.iter().find_map(yaml_as_string),
         _ => None,
     }
 }
@@ -2333,6 +2372,60 @@ about:
         let names: Vec<_> = r.dependencies.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"make"), "{names:?}");
         assert!(names.contains(&"libgcc-ng"), "{names:?}");
+    }
+
+    #[test]
+    fn conda_identifier_templates_expand_before_macro_strip() {
+        let recipe = parse_conda_forge(
+            r#"
+{% set blas = "openblas" %}
+package:
+  name: blas-fixture
+  version: 1.0
+source:
+  url: https://example.invalid/blas-fixture-1.0.tar.gz
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+requirements:
+  host:
+    - {{ blas }}
+    - fftw
+"#,
+        )
+        .expect("parse identifier template");
+        let names: Vec<_> = recipe
+            .dependencies
+            .iter()
+            .map(|dependency| dependency.name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"openblas"),
+            "expanded identifier missing: {names:?}"
+        );
+        assert!(names.contains(&"fftw"), "plain host dep missing: {names:?}");
+    }
+
+    #[test]
+    fn conda_source_url_sequence_uses_first_entry() {
+        let recipe = parse_conda_forge(
+            r#"
+package:
+  name: url-seq
+  version: 1.0
+source:
+  url: [https://example.invalid/first.tar.gz, https://example.invalid/second.tar.gz]
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+"#,
+        )
+        .expect("parse url sequence");
+        assert_eq!(recipe.sources.len(), 1);
+        assert_eq!(
+            recipe.sources[0].url.as_deref(),
+            Some("https://example.invalid/first.tar.gz")
+        );
+        assert_eq!(
+            recipe.sources[0].sha256.as_deref(),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
     }
 
     #[test]

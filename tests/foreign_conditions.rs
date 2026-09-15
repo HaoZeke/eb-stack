@@ -195,6 +195,71 @@ fn conda_classic_selectors_control_cuda_dependencies() {
 }
 
 #[test]
+fn conda_unix_and_cpu_selectors_lower_as_not_windows_and_architecture() {
+    let recipe = parse_foreign_str(
+        ForeignFormat::CondaForge,
+        r#"
+package:
+  name: selector-fixture
+  version: 1.0
+source:
+  url: https://example.invalid/selector-fixture-1.0.tar.gz
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+requirements:
+  build:
+    - make  # [unix]
+    - foo  # [aarch64]
+"#,
+    )
+    .expect("parse unix/cpu selectors");
+    let make = recipe
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "make")
+        .expect("make dependency");
+    let foo = recipe
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "foo")
+        .expect("foo dependency");
+
+    let linux = ConditionContext {
+        platform: Some("linux".into()),
+        ..ConditionContext::default()
+    };
+    assert!(
+        make.condition.evaluate(&linux),
+        "unix must hold on linux: {:?}",
+        make.condition
+    );
+    let win = ConditionContext {
+        platform: Some("win".into()),
+        ..ConditionContext::default()
+    };
+    assert!(
+        !make.condition.evaluate(&win),
+        "unix must fail on win: {:?}",
+        make.condition
+    );
+
+    let aarch64 = ConditionContext {
+        architecture: Some("aarch64".into()),
+        platform: Some("linux".into()),
+        ..ConditionContext::default()
+    };
+    assert!(
+        foo.condition.evaluate(&aarch64),
+        "aarch64 must hold when architecture is aarch64: {:?}",
+        foo.condition
+    );
+    assert!(
+        !foo.condition.evaluate(&linux),
+        "aarch64 must fail without architecture: {:?}",
+        foo.condition
+    );
+}
+
+#[test]
 fn conda_not_py3k_is_not_an_always_on_dependency() {
     let recipe = parse_foreign_str(
         ForeignFormat::CondaForge,
