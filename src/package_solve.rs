@@ -328,6 +328,7 @@ pub fn solve_package_profile_with_hierarchy(
         candidates,
         &original_candidates,
         &hierarchy,
+        &materialized.dependencies,
     );
     let policy = Policy {
         prefer_installed: false,
@@ -777,6 +778,7 @@ fn apply_generation_consensus_pins(
     all_candidates: &[Candidate],
     admitted: &[Candidate],
     hierarchy: &ToolchainHierarchy,
+    dependencies: &[crate::package::DependencyIntent],
 ) {
     let all_counts = crate::hierarchy::count_generation_dep_versions_all(all_candidates, hierarchy);
     for name in direct_roles.keys() {
@@ -793,9 +795,20 @@ fn apply_generation_consensus_pins(
             .filter(|candidate| candidate.name.eq_ignore_ascii_case(name))
             .collect();
         let preferred = prefer_non_system_candidates(&admitted_for_name);
+        let package_bound = dependencies.iter().find_map(|dependency| {
+            let dep_name = dependency
+                .eb_name
+                .as_deref()
+                .unwrap_or(dependency.name.as_str());
+            (dep_name == name).then_some(dependency.constraint.as_deref())
+        });
         let mut eligible = preferred
             .iter()
             .map(|candidate| candidate.version.clone())
+            .filter(|version| match package_bound {
+                Some(Some(constraint)) => crate::version::matches_req(version, constraint),
+                _ => true,
+            })
             .collect::<Vec<_>>();
         eligible.sort();
         eligible.dedup();
@@ -882,7 +895,14 @@ mod tests {
                 version: "13.3.0".into(),
             }],
         };
-        apply_generation_consensus_pins(&mut policy, &roles, &[gcc.clone()], &[gcc], &hierarchy);
+        apply_generation_consensus_pins(
+            &mut policy,
+            &roles,
+            &[gcc.clone()],
+            &[gcc],
+            &hierarchy,
+            &[],
+        );
         assert!(
             policy
                 .pins
@@ -1001,6 +1021,7 @@ mod tests {
             &[gcc.clone(), sys.clone()],
             &[gcc, sys],
             &hierarchy,
+            &[],
         );
         let pin = policy
             .pins

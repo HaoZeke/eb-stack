@@ -1364,3 +1364,79 @@ fn bump_emits_the_plan_default_profile_even_when_it_is_not_named_default() {
     );
     assert_eq!(bundle.locks[0].profile, "gpu");
 }
+
+#[test]
+fn seissol_class_eigen_stays_on_3_4_unless_the_package_asks_for_5() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("SeisSol-1.1.4-foss-2023a.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'CMakeMake'\nname = 'SeisSol'\nversion = '1.1.4'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['seissol-1.1.4.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [('Eigen', '3.4.0')]\n\
+         moduleclass = 'geo'\n",
+    )
+    .expect("source recipe");
+    fs::write(
+        robot.join("Eigen-3.4.0-GCCcore-13.3.0.eb"),
+        "name = 'Eigen'\nversion = '3.4.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Eigen 3.4'\n\
+         toolchain = {'name': 'GCCcore', 'version': '13.3.0'}\n\
+         moduleclass = 'lib'\n",
+    )
+    .expect("Eigen 3.4");
+    fs::write(
+        robot.join("Eigen-5.0.0-GCCcore-13.3.0.eb"),
+        "name = 'Eigen'\nversion = '5.0.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Eigen 5'\n\
+         toolchain = {'name': 'GCCcore', 'version': '13.3.0'}\n\
+         moduleclass = 'lib'\n",
+    )
+    .expect("Eigen 5");
+    let config_path = temp.path().join("seissol.toml");
+    fs::write(
+        &config_path,
+        "schema_version = 1\n\n[[dependencies.requirements]]\n\
+         name = \"Eigen\"\nconstraint = \">=3.4,<5\"\n",
+    )
+    .expect("layer");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2024a".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: None,
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+        foreign_sources: Vec::new(),
+    })
+    .expect("SeisSol Eigen bound");
+    let eigen = bundle.locks[0]
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "Eigen")
+        .expect("Eigen locked");
+    assert!(
+        eigen.version.starts_with("3.4"),
+        "package-config >=3.4,<5 must keep Eigen on 3.4, got {}",
+        eigen.version
+    );
+}
