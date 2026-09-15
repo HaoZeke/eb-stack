@@ -3,7 +3,8 @@
 //! Emission targets conventional EasyBuild style used by easybuilders/easyconfigs:
 //!
 //! - primary GitHub tag archives use `github_account` / `GITHUB_SOURCE` /
-//!   `SOURCELOWER_TAR_GZ` when they match the package identity;
+//!   `SOURCELOWER_TAR_GZ` when the GitHub repo matches the recipe name;
+//!   a different repo name gets a literal `…/{repo}/archive` URL;
 //! - dependency tuples omit the toolchain when the lock identity sits on the
 //!   package toolchain or a hierarchy member (GCCcore/gompi under foss, …);
 //! - cross-generation pins keep an explicit four-element tuple.
@@ -376,6 +377,9 @@ fn render_language_bundle(
     };
     let exts = render_exts_list(plan, materialized, kind);
     let default_ext_opts = overlay_exts_default_options(plan, kind);
+    // Bundle sources carry checksums inside exts_list. Top-level checksums
+    // must still line up with `patches`, or EasyBuild has nothing to verify.
+    let checksum_line = render_patch_checksums(&materialized.build.patches);
     let rendered = format!(
         "{easyblock_line}name = '{name}'\n\
 version = '{version}'\n\
@@ -388,6 +392,7 @@ toolchain = {{'name': '{toolchain_name}', 'version': '{toolchain_version}'}}\n\
 {default_class}\
 {default_ext_opts}\
 {patch_line}\
+{checksum_line}\
 {config_line}\
 exts_list = {exts}\n\n\
 {build_dependencies}\
@@ -858,8 +863,20 @@ fn try_render_github_primary(
             format!("'{repo}-{package_version}.tar.gz'")
         };
 
+    // GITHUB_SOURCE expands to github.com/%(github_account)s/%(name)s/archive.
+    // GitHub folds case (QMCPACK/qmcpack), but OpenMPI + open-mpi/ompi is a
+    // different repo and 404s unless the URL names `ompi`.
+    let source_urls = if repo.eq_ignore_ascii_case(package_name) {
+        "GITHUB_SOURCE".to_string()
+    } else {
+        format!(
+            "'https://github.com/{}/{}/archive'",
+            escape_single(&account),
+            escape_single(&repo)
+        )
+    };
     let prelude = format!(
-        "github_account = '{}'\nsource_urls = [GITHUB_SOURCE]\n",
+        "github_account = '{}'\nsource_urls = [{source_urls}]\n",
         escape_single(&account)
     );
     // Same multi-line dict shape as staged multi-source entries so format_style
@@ -919,16 +936,18 @@ fn render_source(
     };
     if !safe_relative_target(target)
         || source_root.is_some_and(|root| !safe_relative_source_root(root))
-        || !is_tar_archive(download_filename)
     {
         return format!("'{}'", escape_single(url));
     }
-
     let filename = source.filename.as_deref().unwrap_or(download_filename);
     let staging_directory = source_root.map_or_else(
         || format!("%(builddir)s/{target}"),
         |root| format!("%(builddir)s/{root}/{target}"),
     );
+    let Some(extract_cmd) = staged_extract_cmd(download_filename, &staging_directory) else {
+        return format!("'{}'", escape_single(url));
+    };
+
     let mut fields = vec!["{".to_string()];
     fields.push(format!(
         "    'source_urls': ['{}'],",
@@ -941,12 +960,22 @@ fn render_source(
         ));
     }
     fields.push(format!("    'filename': '{}',", escape_single(filename)));
-    fields.push(format!(
-        "    'extract_cmd': 'mkdir -p {staging_directory} && ' +\n        \
-                 'tar -xf %s -C {staging_directory} --strip-components=1',"
-    ));
+    fields.push(extract_cmd);
     fields.push("}".to_string());
     fields.join("\n")
+}
+
+fn staged_extract_cmd(download_filename: &str, staging_directory: &str) -> Option<String> {
+    let extract = if is_tar_archive(download_filename) {
+        format!("tar -xf %s -C {staging_directory} --strip-components=1")
+    } else if is_zip_archive(download_filename) {
+        format!("unzip -o %s -d {staging_directory}")
+    } else {
+        return None;
+    };
+    Some(format!(
+        "    'extract_cmd': 'mkdir -p {staging_directory} && ' +\n        '{extract}',"
+    ))
 }
 
 fn split_source_url(url: &str) -> Option<(&str, &str)> {
@@ -984,6 +1013,22 @@ fn is_tar_archive(filename: &str) -> bool {
     ]
     .iter()
     .any(|suffix| filename.ends_with(suffix))
+}
+
+fn is_zip_archive(filename: &str) -> bool {
+    filename.to_ascii_lowercase().ends_with(".zip")
+}
+
+fn render_patch_checksums(patches: &[crate::package::PatchArtifact]) -> String {
+    let checksums = patches
+        .iter()
+        .filter_map(|patch| patch.sha256.as_ref())
+        .map(|checksum| format!("'{}'", escape_single(checksum)))
+        .collect::<Vec<_>>();
+    if checksums.is_empty() {
+        return String::new();
+    }
+    format!("checksums = {}\n", render_multiline_list(&checksums))
 }
 
 fn render_dependency(
@@ -1194,6 +1239,69 @@ mod tests {
         assert!(
             !block.sources.contains("archive/refs/tags"),
             "commit must not collapse to a tag archive:\n{}",
+            block.sources
+        );
+    }
+
+    #[test]
+    fn github_source_names_the_repo_when_it_differs_from_the_recipe() {
+        let source = crate::package::SourceArtifact {
+            url: Some("https://github.com/open-mpi/ompi/archive/refs/tags/v5.0.7.tar.gz".into()),
+            ..Default::default()
+        };
+        let block = render_sources("OpenMPI", "5.0.7", &[source], &[], None);
+        assert!(
+            block.prelude.contains("github_account = 'open-mpi'"),
+            "account must stay open-mpi:\n{}",
+            block.prelude
+        );
+        assert!(
+            !block.prelude.contains("GITHUB_SOURCE"),
+            "GITHUB_SOURCE expands to OpenMPI/archive:\n{}",
+            block.prelude
+        );
+        assert!(
+            block.prelude.contains("ompi")
+                && (block
+                    .prelude
+                    .contains("https://github.com/open-mpi/ompi/archive")
+                    || block.prelude.contains("/ompi/archive")),
+            "source_urls must name repo ompi:\n{}",
+            block.prelude
+        );
+    }
+
+    #[test]
+    fn zip_target_directory_emits_extract_into_that_path() {
+        let sources = vec![
+            crate::package::SourceArtifact {
+                url: Some("https://example.invalid/pkg-1.0.tar.gz".into()),
+                sha256: Some("aa".repeat(32)),
+                ..Default::default()
+            },
+            crate::package::SourceArtifact {
+                url: Some(
+                    "https://github.com/nlohmann/json/releases/download/v3.12.0/include.zip".into(),
+                ),
+                target_directory: Some("subprojects/nlohmann_json-3.12.0".into()),
+                sha256: Some("bb".repeat(32)),
+                ..Default::default()
+            },
+        ];
+        let block = render_sources("Pkg", "1.0", &sources, &[], None);
+        assert!(
+            !block.sources.contains(
+                "'https://github.com/nlohmann/json/releases/download/v3.12.0/include.zip'"
+            ),
+            "zip with target_directory must not be a bare URL:\n{}",
+            block.sources
+        );
+        assert!(
+            block.sources.contains("include.zip")
+                && block.sources.contains("extract_cmd")
+                && block.sources.contains("subprojects/nlohmann_json-3.12.0")
+                && block.sources.contains("unzip"),
+            "zip must extract into the target path:\n{}",
             block.sources
         );
     }
@@ -1482,6 +1590,107 @@ mod tests {
         assert!(
             emitted[0].text.contains("('soupsieve', '2.5')"),
             "the leftover must appear in exts_list:\n{}",
+            emitted[0].text
+        );
+    }
+
+    #[test]
+    fn language_bundle_emits_patch_checksums() {
+        let toolchain = crate::domain::Toolchain {
+            name: "foss".into(),
+            version: "2026.1".into(),
+        };
+        let patch_sha = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let plan = crate::package::PackagePlan {
+            schema_version: crate::package::PACKAGE_SCHEMA_VERSION,
+            origin: crate::package::PackageOrigin::Pypi,
+            package: crate::package::PackageMetadata {
+                name: "demo".into(),
+                version: "1.0".into(),
+                upstream_version: None,
+                homepage: None,
+                description: None,
+                license: None,
+            },
+            sources: vec![crate::package::SourceArtifact {
+                url: Some("https://example.invalid/demo-1.0.tar.gz".into()),
+                sha256: Some(
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                ),
+                ..Default::default()
+            }],
+            dependencies: Vec::new(),
+            rules: Vec::new(),
+            build: crate::package::BuildSpec {
+                toolchain: toolchain.clone(),
+                easyblock: Some("PythonBundle".into()),
+                build_systems: vec!["pypi".into()],
+                source_root: None,
+                config_options: Vec::new(),
+                moduleclass: Some("lang".into()),
+                patches: vec![crate::package::PatchArtifact {
+                    filename: "demo-fix.patch".into(),
+                    sha256: Some(patch_sha.into()),
+                    url: None,
+                    source: None,
+                    condition: crate::package::ConditionExpr::Always,
+                    resolved_source: None,
+                }],
+                easyconfig_parameters: Default::default(),
+            },
+            profiles: vec![crate::package::ProductProfile {
+                name: "default".into(),
+                default: true,
+                versionsuffix: Vec::new(),
+                platform: None,
+                architecture: None,
+                features: Default::default(),
+                parameters: Default::default(),
+                toolchain_options: Default::default(),
+                config_options: Vec::new(),
+                easyconfig_parameters: Default::default(),
+                verification_commands: Vec::new(),
+            }],
+            outputs: vec![crate::package::OutputRequest {
+                profile: "default".into(),
+                stack: "foss-2026.1".into(),
+            }],
+            residuals: Vec::new(),
+            overlay_extensions: vec![crate::package::OverlayExtension {
+                name: "soupsieve".into(),
+                version: "2.5".into(),
+                checksum: None,
+            }],
+            package_index: Default::default(),
+        };
+        let lock = crate::package::ProfileLock {
+            schema_version: crate::package::PROFILE_LOCK_SCHEMA_VERSION,
+            package: "demo".into(),
+            version: "1.0".into(),
+            profile: "default".into(),
+            toolchain,
+            versionsuffix: String::new(),
+            dependencies: Vec::new(),
+            pin_outcomes: Vec::new(),
+            exclusions: Vec::new(),
+            solver: "resolvo".into(),
+        };
+        let emitted = emit_profile_easyconfigs(&plan, &[lock]).expect("emit");
+        assert!(
+            emitted[0].text.contains("easyblock = 'PythonBundle'")
+                && emitted[0].text.contains("patches")
+                && emitted[0].text.contains("demo-fix.patch"),
+            "leftover bundle must keep the patch:\n{}",
+            emitted[0].text
+        );
+        let checksums_at = emitted[0]
+            .text
+            .find("checksums")
+            .expect("top-level checksums");
+        let digest_at = emitted[0].text.find(patch_sha).expect("patch digest");
+        assert!(
+            checksums_at < digest_at,
+            "patch digest must sit in top-level checksums:\n{}",
             emitted[0].text
         );
     }
