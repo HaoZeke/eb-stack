@@ -1346,25 +1346,30 @@ fn versions_in_trial_order(
     // fails this trial and the next version is tried: hard constraints keep
     // winning, and the preference only decides between feasible outcomes.
     if policy.prefer_installed {
-        if let Some(installed) = baseline.and_then(|lock| lock.package(name)) {
-            // The installed entry has to name a build that still exists, and
-            // same version is not same build: a candidate differing only in
-            // versionsuffix is a different module, so promoting its version
-            // would keep nothing that is installed.
-            let installed_exists = candidates.iter().any(|candidate| {
-                candidate.name == name
-                    && candidate.version == installed.version
-                    && candidate.versionsuffix.as_deref().unwrap_or("")
-                        == installed.versionsuffix.as_deref().unwrap_or("")
-                    && crate::hierarchy::toolchains_match(
-                        &candidate.toolchain,
-                        &installed.toolchain,
-                    )
-            });
-            if installed_exists {
-                if let Some(at) = versions.iter().position(|v| *v == installed.version) {
-                    let preferred = versions.remove(at);
-                    versions.insert(0, preferred);
+        // `StackLock::package` is None when the name is not unique. A
+        // multi-level baseline still has installed rows; walk every one,
+        // same as the non-root prefer_installed path.
+        if let Some(lock) = baseline {
+            for installed in lock.packages.iter().filter(|package| package.name == name) {
+                // The installed entry has to name a build that still exists, and
+                // same version is not same build: a candidate differing only in
+                // versionsuffix is a different module, so promoting its version
+                // would keep nothing that is installed.
+                let installed_exists = candidates.iter().any(|candidate| {
+                    candidate.name == name
+                        && candidate.version == installed.version
+                        && candidate.versionsuffix.as_deref().unwrap_or("")
+                            == installed.versionsuffix.as_deref().unwrap_or("")
+                        && crate::hierarchy::toolchains_match(
+                            &candidate.toolchain,
+                            &installed.toolchain,
+                        )
+                });
+                if installed_exists {
+                    if let Some(at) = versions.iter().position(|v| *v == installed.version) {
+                        let preferred = versions.remove(at);
+                        versions.insert(0, preferred);
+                    }
                 }
             }
         }

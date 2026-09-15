@@ -1012,6 +1012,89 @@ mod prefer_installed_tests {
         );
     }
 
+    /// Two lock rows for the same name make `StackLock::package` return None.
+    /// The root trial must still see the installed version.
+    #[test]
+    fn prefer_installed_keeps_a_multi_level_root() {
+        let foss = Toolchain {
+            name: "foss".into(),
+            version: "2025b".into(),
+        };
+        let gcccore = Toolchain {
+            name: "GCCcore".into(),
+            version: "14.3.0".into(),
+        };
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let perl = |version: &str, toolchain: &Toolchain| Candidate {
+            name: "Perl".into(),
+            version: version.into(),
+            toolchain: toolchain.clone(),
+            versionsuffix: None,
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            easyconfig_path: format!("p/Perl/Perl-{version}.eb"),
+            exts_list: Vec::new(),
+            moduleclass: None,
+        };
+        let universe = Universe {
+            toolchain: foss.clone(),
+            generation_label: Some("foss-2025b".into()),
+            candidates: vec![
+                perl("5.38.0", &gcccore),
+                perl("5.42.0", &gcccore),
+                perl("5.38.0", &system),
+                perl("5.42.0", &system),
+            ],
+        };
+        let installed = StackLock {
+            schema_version: STACK_LOCK_SCHEMA_VERSION,
+            toolchain: foss.clone(),
+            generation_label: Some("installed".into()),
+            packages: vec![
+                LockPackage {
+                    name: "Perl".into(),
+                    version: "5.38.0".into(),
+                    toolchain: gcccore,
+                    versionsuffix: None,
+                    easyconfig_path: "p/Perl/Perl-5.38.0.eb".into(),
+                },
+                LockPackage {
+                    name: "Perl".into(),
+                    version: "5.38.0".into(),
+                    toolchain: system,
+                    versionsuffix: None,
+                    easyconfig_path: "p/Perl/Perl-5.38.0.eb".into(),
+                },
+            ],
+            solver: SolverMeta {
+                engine: "eb_parse".into(),
+                engine_version: "0".into(),
+                timestamp: "2026-08-12T00:00:00Z".into(),
+            },
+        };
+        let mut pol = policy(true);
+        pol.toolchain = foss;
+        pol.roots = vec!["Perl".into()];
+        let lock = select_stack(&universe, &pol, Some(&installed)).expect("solve");
+        let perl_versions: Vec<&str> = lock
+            .packages
+            .iter()
+            .filter(|package| package.name == "Perl")
+            .map(|package| package.version.as_str())
+            .collect();
+        assert!(
+            !perl_versions.is_empty(),
+            "Perl must appear in the solved lock"
+        );
+        assert!(
+            perl_versions.iter().all(|version| *version == "5.38.0"),
+            "root prefer_installed must keep 5.38 when both levels are in the baseline, got {perl_versions:?}"
+        );
+    }
+
     #[test]
     fn prefer_installed_matches_system_spelling_variants() {
         let (mut universe, mut installed) = universe_with(&["1.0", "2.0"]);
