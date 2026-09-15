@@ -102,6 +102,11 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- Cargo `default = ["extension-module"]` is a Python leftover, matching
+  crates.io. Companion layout segments include versionsuffix so `-MPI`
+  and `-CUDA` do not overwrite one directory. GCC `-B` for EESSI compat
+  `ld` ends with `/`. A requirements `--package-index` line with
+  `extra ==` is not stored as a pin.
 - A Cargo `[target.'cfg(windows)']` pyo3 dependency does not classify a
   Linux leftover as a Python package.
 - `format_style` does not bisect `%(installdir)s`. Aliased extension

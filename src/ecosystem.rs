@@ -88,6 +88,10 @@ pub fn parse_package_index(text: &str) -> std::collections::BTreeMap<String, Ind
             if line.is_empty() {
                 continue;
             }
+            let line = line.split(';').next().unwrap_or(line).trim();
+            if line.is_empty() {
+                continue;
+            }
             let (name, pin) = split_name_and_pin(line);
             let name = name.split('[').next().unwrap_or(&name).trim().to_string();
             let Some(version) = pin.as_deref().and_then(exact_version) else {
@@ -255,6 +259,16 @@ mod tests {
         assert_eq!(
             nonempty(Some(" https://x ".into())),
             Some("https://x".into())
+        );
+    }
+
+    #[test]
+    fn package_index_skips_extra_marker_lines() {
+        let index = parse_package_index("demo==1.0\npytest; extra == 'test'\n");
+        assert!(!index.contains_key("pytestextra"), "{index:?}");
+        assert_eq!(
+            index.get("demo").map(|entry| entry.version.as_str()),
+            Some("1.0")
         );
     }
 }

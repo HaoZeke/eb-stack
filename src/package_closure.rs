@@ -416,10 +416,26 @@ pub fn package_layout_segment(bundle: &PackageBundle) -> Result<String, PackageC
     validate_path_segment(version, "package version")?;
     validate_path_segment(&toolchain.name, "toolchain name")?;
     validate_path_segment(&toolchain.version, "toolchain version")?;
+    let suffix = layout_versionsuffix(bundle);
+    if !suffix.is_empty() {
+        validate_path_segment(&suffix, "versionsuffix")?;
+    }
     Ok(format!(
-        "{}-{}-{}-{}",
+        "{}-{}-{}-{}{suffix}",
         name, version, toolchain.name, toolchain.version
     ))
+}
+
+fn layout_versionsuffix(bundle: &PackageBundle) -> String {
+    bundle
+        .plan
+        .profiles
+        .iter()
+        .find(|profile| profile.default)
+        .or_else(|| bundle.plan.profiles.first())
+        .map(|profile| profile.versionsuffix.join(""))
+        .filter(|suffix| !suffix.is_empty())
+        .unwrap_or_default()
 }
 
 fn package_ref_from_written(
@@ -1290,6 +1306,7 @@ fn package_identity(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::package::{BuildSpec, PackageMetadata, ProductProfile};
 
     #[test]
     fn package_identity_normalizes() {
@@ -1339,6 +1356,70 @@ mod tests {
         )
         .expect("request");
         assert_eq!(request.package_index, index);
+    }
+
+    #[test]
+    fn package_layout_segment_includes_versionsuffix() {
+        let mpi = layout_bundle(vec!["-MPI".into()]);
+        let cuda = layout_bundle(vec!["-CUDA".into()]);
+        let mpi_seg = package_layout_segment(&mpi).expect("mpi");
+        let cuda_seg = package_layout_segment(&cuda).expect("cuda");
+        assert_ne!(mpi_seg, cuda_seg, "{mpi_seg} vs {cuda_seg}");
+        assert!(mpi_seg.ends_with("-MPI"), "{mpi_seg}");
+        assert!(cuda_seg.ends_with("-CUDA"), "{cuda_seg}");
+    }
+
+    fn layout_bundle(suffix: Vec<String>) -> PackageBundle {
+        PackageBundle {
+            plan: PackagePlan {
+                schema_version: crate::package::PACKAGE_SCHEMA_VERSION,
+                origin: PackageOrigin::EasyBuild,
+                package: PackageMetadata {
+                    name: "bravo".into(),
+                    version: "1.0".into(),
+                    upstream_version: None,
+                    homepage: None,
+                    description: None,
+                    license: None,
+                },
+                sources: Vec::new(),
+                dependencies: Vec::new(),
+                rules: Vec::new(),
+                build: BuildSpec {
+                    toolchain: Toolchain {
+                        name: "foss".into(),
+                        version: "2026.1".into(),
+                    },
+                    easyblock: None,
+                    build_systems: Vec::new(),
+                    source_root: None,
+                    config_options: Vec::new(),
+                    moduleclass: None,
+                    patches: Vec::new(),
+                    easyconfig_parameters: BTreeMap::new(),
+                },
+                profiles: vec![ProductProfile {
+                    name: "default".into(),
+                    default: true,
+                    versionsuffix: suffix,
+                    platform: None,
+                    architecture: None,
+                    features: BTreeMap::new(),
+                    parameters: BTreeMap::new(),
+                    toolchain_options: BTreeMap::new(),
+                    config_options: Vec::new(),
+                    easyconfig_parameters: BTreeMap::new(),
+                    verification_commands: Vec::new(),
+                }],
+                outputs: Vec::new(),
+                residuals: Vec::new(),
+                overlay_extensions: Vec::new(),
+                package_index: Default::default(),
+            },
+            sbom: serde_json::json!({}),
+            locks: Vec::new(),
+            easyconfigs: Vec::new(),
+        }
     }
 
     #[test]

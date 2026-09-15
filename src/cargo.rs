@@ -37,7 +37,7 @@ pub fn eessi_cargo_host_isolation() -> &'static str {
         r#"if [ -n "${EESSI_VERSION:-}" ]; then "#,
         r#"_ebld=/cvmfs/software.eessi.io/versions/${EESSI_VERSION}/compat/linux/${_arch}/usr/bin; "#,
         r#"export PATH="$_ebld:$PATH"; "#,
-        r#"_bflag="-C link-arg=-B$_ebld"; "#,
+        r#"_bflag="-C link-arg=-B$_ebld/"; "#,
         r#"else _ebld=; _bflag=; fi && "#,
         r#"_libflags=$( [ -n "${LIBRARY_PATH:-}" ] && printf -- '-L %s ' $(echo "$LIBRARY_PATH" | tr ':' ' '); : ) && "#,
         r#"export RUSTFLAGS="${_bflag} ${_libflags}" && "#,
@@ -517,9 +517,33 @@ fn is_python_crate(value: &toml::Value, deps: &[CargoDep]) -> bool {
     {
         return true;
     }
+    if toml_default_enables_python(value) {
+        return true;
+    }
     deps.iter().any(|dep| {
         crate::provides::is_python_marker_crate(&dep.name)
             && (!dep.optional || default_features_enable(value, dep))
+    })
+}
+
+fn toml_default_enables_python(value: &toml::Value) -> bool {
+    let Some(features) = value.get("features").and_then(toml::Value::as_table) else {
+        return false;
+    };
+    let Some(default) = features.get("default").and_then(toml::Value::as_array) else {
+        return false;
+    };
+    default.iter().filter_map(toml::Value::as_str).any(|feat| {
+        is_python_feature_item(feat)
+            || features
+                .get(feat)
+                .and_then(toml::Value::as_array)
+                .is_some_and(|items| {
+                    items
+                        .iter()
+                        .filter_map(toml::Value::as_str)
+                        .any(is_python_feature_item)
+                })
     })
 }
 
@@ -856,6 +880,35 @@ core = { workspace = true }
     }
 
     #[test]
+    fn default_extension_module_feature_is_a_python_crate() {
+        let recipe = parse_cargo_str(
+            r#"
+[package]
+name = "demo"
+version = "1.0.0"
+
+[dependencies]
+pyo3 = { version = "0.22", optional = true }
+
+[features]
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]
+"#,
+        )
+        .expect("parse");
+        assert!(
+            recipe.dependencies.iter().any(|dep| dep.name == "Python"),
+            "{:?}",
+            recipe.dependencies
+        );
+        assert!(
+            recipe.dependencies.iter().any(|dep| dep.name == "maturin"),
+            "{:?}",
+            recipe.dependencies
+        );
+    }
+
+    #[test]
     fn windows_target_pyo3_does_not_make_a_python_crate() {
         let recipe = parse_cargo_str(
             r#"
@@ -1106,7 +1159,10 @@ serde = { version = "1.0", optional = true }
         assert!(prelude.contains("unset RUSTC_WRAPPER"));
         assert!(prelude.contains("uname -m"));
         assert!(prelude.contains("compat/linux/${_arch}/usr/bin"));
-        assert!(prelude.contains("link-arg=-B"));
+        assert!(
+            prelude.contains("link-arg=-B$_ebld/"),
+            "GCC -B prefix must end with /:\n{prelude}"
+        );
         assert!(prelude.contains("LINKER=${CC:-gcc}"));
         assert!(
             !prelude.contains("X86_64"),
