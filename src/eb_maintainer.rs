@@ -487,7 +487,7 @@ fn check_unwrapped_compiler_rpath_on(
     let Some(compiler) = driven_by else {
         return out;
     };
-    if text.contains("--disable-new-dtags") {
+    if recipe_passes_disable_new_dtags(text) {
         return out;
     }
     if recipe_disables_readelf_rpath(text) {
@@ -538,6 +538,12 @@ fn toolchain_wraps_compiler(compiler: &str, toolchain_name: &str) -> bool {
     }
 }
 
+/// True only when `--disable-new-dtags` is on a link line, not a comment.
+fn recipe_passes_disable_new_dtags(text: &str) -> bool {
+    text.lines()
+        .any(|line| strip_inline_comment(line).contains("--disable-new-dtags"))
+}
+
 /// True only for an assignment `check_readelf_rpath = False`, not a mention.
 fn recipe_disables_readelf_rpath(text: &str) -> bool {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
@@ -545,6 +551,20 @@ fn recipe_disables_readelf_rpath(text: &str) -> bool {
         regex::Regex::new(r"(?m)^\s*check_readelf_rpath\s*=\s*False\b").expect("static regex")
     });
     re.is_match(text)
+}
+
+/// `#` to end of line, unless the `#` is inside quotes.
+fn strip_inline_comment(line: &str) -> &str {
+    let mut in_quote = None;
+    for (index, character) in line.char_indices() {
+        match (character, in_quote) {
+            ('#', None) => return line[..index].trim_end(),
+            ('\'' | '"', None) => in_quote = Some(character),
+            (quote, Some(open)) if quote == open => in_quote = None,
+            _ => {}
+        }
+    }
+    line
 }
 
 /// A GPU architecture list written into the recipe by hand.
@@ -593,15 +613,16 @@ pub fn check_hardcoded_gpu_arch(text: &str) -> Vec<MaintainerFinding> {
 }
 
 fn runtest_is_enabled(line: &str) -> bool {
-    let line = line.trim_start();
-    let Some(rest) = line
-        .strip_prefix("runtests")
-        .or_else(|| line.strip_prefix("runtest"))
-    else {
+    let line = strip_inline_comment(line).trim_start();
+    let Some(rest) = line.strip_prefix("runtest") else {
         return false;
     };
-    let rest = rest.trim_start_matches([' ', '\t', '=']);
-    !matches!(rest, "False" | "false" | "0" | "None")
+    // `runtests` is a misspelling EasyBuild ignores.
+    if !matches!(rest.chars().next(), Some(' ' | '\t' | '=')) {
+        return false;
+    }
+    let value = rest.trim_start_matches([' ', '\t', '=']).trim();
+    !matches!(value, "False" | "false" | "0" | "None" | "")
 }
 
 /// A git source archived as `.tar.gz`.
@@ -619,7 +640,7 @@ pub fn check_git_source_archive(text: &str) -> Vec<MaintainerFinding> {
     static GZ: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let gz = GZ.get_or_init(|| {
         regex::Regex::new(
-            r#"(?i)['\"]?filename['\"]?\s*[:=]\s*(SOURCE(?:LOWER)?_TAR_GZ|['\"][^'\"]*\.tar\.gz['\"])"#,
+            r#"(?i)(?:['\"]filename['\"]|(?:^|[^A-Za-z0-9_])filename)\s*[:=]\s*(SOURCE(?:LOWER)?_TAR_GZ|['\"][^'\"]*\.tar\.gz['\"])"#,
         )
         .expect("static regex")
     });
@@ -1062,6 +1083,48 @@ mod tests {
     }
 
     #[test]
+    fn runtests_misspelling_does_not_count_as_runtest() {
+        let text = "configopts = '-Dwith_tests=true'\nruntests = True\n";
+        let findings = check_fat_build(text);
+        assert!(
+            findings.iter().any(|f| f.code == "EB_MAINT_TESTS_OFF"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn runtest_false_with_trailing_comment_is_still_off() {
+        let text = "configopts = '-Dwith_tests=true'\nruntest = False # GPU\n";
+        let findings = check_fat_build(text);
+        assert!(
+            findings.iter().any(|f| f.code == "EB_MAINT_TESTS_OFF"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn runtest_false_is_silent_without_a_tests_on_flag() {
+        for line in ["runtest = False\n", "runtest=False\n"] {
+            let findings = check_fat_build(line);
+            assert!(
+                !findings.iter().any(|f| f.code == "EB_MAINT_TESTS_OFF"),
+                "{line:?} => {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn runtest_meson_counts_as_enabled() {
+        assert!(runtest_is_enabled("runtest = meson"));
+        let text = "configopts = '-Dwith_tests=true'\nruntest = meson\n";
+        let findings = check_fat_build(text);
+        assert!(
+            !findings.iter().any(|f| f.code == "EB_MAINT_TESTS_OFF"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
     fn versionsuffix_variant_may_stay_thin() {
         let text = "versionsuffix = '-client'\nconfigopts = '-Dwith_rpc_client_only=true'\n";
         let findings = check_fat_build(text);
@@ -1260,6 +1323,15 @@ preconfigopts = _use_clang
     }
 
     #[test]
+    fn a_comment_that_names_disable_new_dtags_does_not_suppress() {
+        let stated = format!("{CLANG_RUNPATH}\n# remember to pass --disable-new-dtags\n");
+        let findings = check_unwrapped_compiler_rpath(&stated);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].code, "EB_MAINT_UNWRAPPED_COMPILER_RPATH");
+        assert!(findings[0].is_error());
+    }
+
+    #[test]
     fn leaves_a_gcc_build_alone() {
         let gcc = "toolchain = {'name': 'foss', 'version': '2025a'}\nconfigopts = '-DAPP_MPI=ON'\n";
         assert!(check_unwrapped_compiler_rpath(gcc).is_empty());
@@ -1382,6 +1454,18 @@ sources = [{
         let text = r#"
 sources = [{
     'filename': SOURCE_TAR_XZ,
+    'git_config': {'url': 'https://github.com/example', 'repo_name': 'example', 'commit': _commit},
+}]
+"#;
+        assert!(check_git_source_archive(text).is_empty());
+    }
+
+    #[test]
+    fn download_filename_gz_does_not_name_the_archive() {
+        let text = r#"
+sources = [{
+    'filename': SOURCE_TAR_XZ,
+    'download_filename': 'v1.0.0.tar.gz',
     'git_config': {'url': 'https://github.com/example', 'repo_name': 'example', 'commit': _commit},
 }]
 "#;
