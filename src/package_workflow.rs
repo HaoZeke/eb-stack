@@ -17,7 +17,9 @@ use crate::package::{
     ProductProfile, ProfileLock, Provenance, Residual, ResidualSeverity, ResidualStage,
     SourceArtifact, StackPin, StackPinMode, StackPolicy, PACKAGE_SCHEMA_VERSION,
 };
-use crate::package_config::{apply_package_layers, PackageConfigLayer};
+use crate::package_config::{
+    apply_package_dependency_policy, apply_package_layers, PackageConfigLayer,
+};
 use crate::package_emit::{emit_profile_easyconfigs, EmittedEasyconfig};
 use crate::package_solve::{
     solve_package_profile_with_hierarchy, unsatisfied_direct_dependencies_with_hierarchy,
@@ -1038,6 +1040,14 @@ pub fn prepare_package_bump(
     );
     apply_package_layers(&mut plan, &request.package_layers)
         .map_err(|error| PackageWorkflowError::Config(error.to_string()))?;
+    // Layers write [package] version onto the plan. A CLI --version is the
+    // later word and must win here too, or the plan and the emitted recipe
+    // disagree: emit used to reread only request.version.
+    if let Some(version) = request.version.as_deref() {
+        if version != plan.package.version {
+            plan.package.version = version.to_string();
+        }
+    }
     // Layers write source_checksums onto the plan. A CLI digest is the later
     // word and must win here too, or the plan/SBOM and the emitted recipe
     // disagree: emit rereads resolved_bump_source_checksum (CLI first).
@@ -1103,8 +1113,8 @@ pub fn complete_package_bump(
 ) -> Result<PackageBundle, PackageWorkflowError> {
     let source_recipe = resolve_easyconfig_file(&request.source)
         .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
-    let version_changed = request
-        .version
+    let emit_version = bump_emit_version(request, &plan, &source_recipe.version);
+    let version_changed = emit_version
         .as_deref()
         .is_some_and(|version| version != source_recipe.version);
     let mut dropped_dep_names = Vec::new();
@@ -1265,7 +1275,7 @@ pub fn complete_package_bump(
         &request.source,
         &EmitParams {
             toolchain: request.toolchain.clone(),
-            version: request.version.clone(),
+            version: emit_version.clone(),
             dep_versions: dependency_versions,
             dep_toolchains: dependency_toolchains,
             // What the solve itself derived, so the emitter can tell an
@@ -1363,7 +1373,7 @@ pub fn complete_package_bump(
     // recorded decision. Without a sibling, version-pinned patch names are
     // flagged rather than silently carried.
     let mut patch_calls: Vec<crate::patch_evolution::PatchCall> = Vec::new();
-    if let Some(new_version) = request.version.as_deref() {
+    if let Some(new_version) = emit_version.as_deref() {
         if new_version != source_recipe.version {
             let sibling = crate::patch_evolution::sibling_paths(
                 &source_recipe.name,
@@ -1541,7 +1551,23 @@ fn merge_foreign_inspect_deps(
             });
         }
     }
+    apply_package_dependency_policy(plan, &request.package_layers);
     Ok(())
+}
+
+/// Version the bump writes into the recipe.
+///
+/// `request.version` wins when the CLI set one. Otherwise a layer version
+/// that already rewrote the plan reaches emit so plan and recipe agree.
+fn bump_emit_version(
+    request: &BumpPackageRequest,
+    plan: &PackagePlan,
+    source_version: &str,
+) -> Option<String> {
+    if let Some(version) = request.version.clone() {
+        return Some(version);
+    }
+    (plan.package.version != source_version).then(|| plan.package.version.clone())
 }
 
 /// Map a foreign dependency to `(plan name, optional EasyBuild module)`.
@@ -2748,6 +2774,157 @@ class Gitpkg(Package):
             }),
             "unconstrained Python 3.12.3 must stay selectable: {:?}",
             bundle.plan.dependencies
+        );
+    }
+
+    fn write_bump_source(dir: &Path, version: &str) -> PathBuf {
+        let source = dir.join(format!("App-{version}-foss-2023b.eb"));
+        std::fs::write(
+            &source,
+            format!(
+                "easyblock = 'ConfigureMake'\n\
+                 name = 'App'\n\
+                 version = '{version}'\n\
+                 homepage = 'https://example.invalid/'\n\
+                 description = 'Synthetic package'\n\
+                 toolchain = {{'name': 'foss', 'version': '2023b'}}\n\
+                 sources = ['app-{version}.tar.gz']\n\
+                 checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+                 moduleclass = 'tools'\n"
+            ),
+        )
+        .expect("source recipe");
+        source
+    }
+
+    fn bump_request(
+        source: PathBuf,
+        robot: PathBuf,
+        version: Option<&str>,
+        layers: Vec<PackageConfigLayer>,
+        foreign_sources: Vec<PathBuf>,
+    ) -> BumpPackageRequest {
+        let target = toolchain("foss", "2026.1");
+        BumpPackageRequest {
+            source,
+            toolchain: target.clone(),
+            version: version.map(str::to_string),
+            source_checksum: None,
+            easyconfig_roots: vec![robot],
+            hierarchy_fixture: None,
+            overrides: HashMap::new(),
+            stack_policy: stack_policy(&target),
+            strict_patches: false,
+            package_layers: layers,
+            foreign_sources,
+        }
+    }
+
+    #[test]
+    fn merge_foreign_inspect_excludes_policy_named_dep() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = write_bump_source(temp.path(), "1.0");
+        let robot = temp.path().join("robot");
+        std::fs::create_dir_all(&robot).expect("robot");
+        let foreign = temp.path().join("package.py");
+        std::fs::write(
+            &foreign,
+            "from spack.package import *\n\n\
+             class App(CMakePackage):\n\
+             \thomepage = 'https://example.invalid/'\n\
+             \turl = 'https://example.invalid/app-1.0.tar.gz'\n\
+             \tversion('1.0', sha256='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')\n\
+             \tdepends_on('py-pybind11')\n",
+        )
+        .expect("spack recipe");
+        let layer = PackageConfigLayer::from_toml_str(
+            "schema_version = 1\n\n[dependencies]\nexclude_from_solve = [\"pybind11\"]\n",
+        )
+        .expect("exclude layer");
+        let request = bump_request(source, robot, None, vec![layer], vec![foreign]);
+        let (plan, _) = prepare_package_bump(&request).expect("prepare");
+        let pybind11 = plan
+            .dependencies
+            .iter()
+            .find(|dependency| {
+                dependency.name.eq_ignore_ascii_case("pybind11")
+                    || dependency
+                        .eb_name
+                        .as_deref()
+                        .is_some_and(|name| name.eq_ignore_ascii_case("pybind11"))
+            })
+            .expect("merged pybind11 intent");
+        assert!(
+            pybind11.solver_excluded,
+            "foreign inspect merge must apply exclude_from_solve: {:?}",
+            plan.dependencies
+        );
+        assert!(
+            plan.residuals
+                .iter()
+                .any(|residual| residual.category == "foreign-inspect-added-dep"
+                    && residual.summary.contains("pybind11")),
+            "pybind11 must come from inspect, not the source recipe: {:?}",
+            plan.residuals
+        );
+    }
+
+    #[test]
+    fn layer_version_reaches_emit_when_request_version_is_none() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = write_bump_source(temp.path(), "1.1.4");
+        let robot = temp.path().join("robot");
+        std::fs::create_dir_all(&robot).expect("robot");
+        let layer = PackageConfigLayer::from_toml_str(
+            "schema_version = 1\n\n[package]\nversion = \"1.3.2\"\n",
+        )
+        .expect("layer version");
+        let request = bump_request(source, robot.clone(), None, vec![layer], Vec::new());
+        let (plan, _) = prepare_package_bump(&request).expect("prepare");
+        assert_eq!(plan.package.version, "1.3.2");
+        let tree = parse_easyconfig_trees(&[robot.as_path()]).expect("robot");
+        let bundle = complete_package_bump(&request, plan, &tree.candidates, &request.stack_policy)
+            .expect("emit");
+        assert_eq!(bundle.plan.package.version, "1.3.2");
+        assert!(
+            bundle.easyconfigs[0].text.contains("version = '1.3.2'"),
+            "layer version must reach the recipe:\n{}",
+            bundle.easyconfigs[0].text
+        );
+    }
+
+    #[test]
+    fn request_version_wins_over_layer_version() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = write_bump_source(temp.path(), "1.1.4");
+        let robot = temp.path().join("robot");
+        std::fs::create_dir_all(&robot).expect("robot");
+        let layer = PackageConfigLayer::from_toml_str(
+            "schema_version = 1\n\n[package]\nversion = \"1.3.2\"\n",
+        )
+        .expect("layer version");
+        let request = bump_request(
+            source,
+            robot.clone(),
+            Some("1.4.0"),
+            vec![layer],
+            Vec::new(),
+        );
+        let (plan, _) = prepare_package_bump(&request).expect("prepare");
+        assert_eq!(plan.package.version, "1.4.0");
+        let tree = parse_easyconfig_trees(&[robot.as_path()]).expect("robot");
+        let bundle = complete_package_bump(&request, plan, &tree.candidates, &request.stack_policy)
+            .expect("emit");
+        assert_eq!(bundle.plan.package.version, "1.4.0");
+        assert!(
+            bundle.easyconfigs[0].text.contains("version = '1.4.0'"),
+            "CLI version must win over the layer:\n{}",
+            bundle.easyconfigs[0].text
+        );
+        assert!(
+            !bundle.easyconfigs[0].text.contains("version = '1.3.2'"),
+            "layer version must not leak into the recipe:\n{}",
+            bundle.easyconfigs[0].text
         );
     }
 }

@@ -1729,3 +1729,165 @@ fn seissol_class_eigen_stays_on_3_4_unless_the_package_asks_for_5() {
         eigen.version
     );
 }
+
+#[test]
+fn foreign_inspect_merge_applies_exclude_from_solve() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("App-1.0-foss-2023a.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'CMakeMake'\nname = 'App'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['app-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    let foreign = temp.path().join("package.py");
+    fs::write(
+        &foreign,
+        "from spack.package import *\n\n\
+         class App(CMakePackage):\n\
+         \thomepage = 'https://example.invalid/'\n\
+         \turl = 'https://example.invalid/app-1.0.tar.gz'\n\
+         \tversion('1.0', sha256='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')\n\
+         \tdepends_on('py-pybind11')\n",
+    )
+    .expect("spack recipe");
+    let config_path = temp.path().join("app.toml");
+    fs::write(
+        &config_path,
+        "schema_version = 1\n\n[dependencies]\nexclude_from_solve = [\"pybind11\"]\n",
+    )
+    .expect("package config");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2025a".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: None,
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+        foreign_sources: vec![foreign],
+    })
+    .expect("bump with excluded foreign inspect dep");
+    let pybind11 = bundle
+        .plan
+        .dependencies
+        .iter()
+        .find(|dependency| {
+            dependency.name.eq_ignore_ascii_case("pybind11")
+                || dependency
+                    .eb_name
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("pybind11"))
+        })
+        .expect("merged pybind11 intent");
+    assert!(
+        pybind11.solver_excluded,
+        "exclude_from_solve must apply after foreign inspect merge: {:?}",
+        bundle.plan.dependencies
+    );
+    assert!(
+        !bundle.easyconfigs[0].text.contains("pybind11"),
+        "excluded inspect dep still emitted:\n{}",
+        bundle.easyconfigs[0].text
+    );
+}
+
+#[test]
+fn layer_version_and_request_version_agree_with_emit() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("App-1.1.4-foss-2023a.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'App'\nversion = '1.1.4'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['app-1.1.4.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    let config_path = temp.path().join("app.toml");
+    fs::write(
+        &config_path,
+        "schema_version = 1\n\n[package]\nversion = \"1.3.2\"\n",
+    )
+    .expect("package config");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2025a".into(),
+    };
+    let layer_only = plan_package_bump(&BumpPackageRequest {
+        source: source.clone(),
+        toolchain: toolchain.clone(),
+        version: None,
+        source_checksum: None,
+        easyconfig_roots: vec![robot.clone()],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain: toolchain.clone(),
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+        foreign_sources: Vec::new(),
+    })
+    .expect("layer version bump");
+    assert_eq!(layer_only.plan.package.version, "1.3.2");
+    assert!(
+        layer_only.easyconfigs[0].text.contains("version = '1.3.2'"),
+        "layer version must reach emit:\n{}",
+        layer_only.easyconfigs[0].text
+    );
+
+    let cli_wins = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: Some("1.4.0".into()),
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+        foreign_sources: Vec::new(),
+    })
+    .expect("CLI version wins");
+    assert_eq!(cli_wins.plan.package.version, "1.4.0");
+    assert!(
+        cli_wins.easyconfigs[0].text.contains("version = '1.4.0'"),
+        "CLI version must win over the layer:\n{}",
+        cli_wins.easyconfigs[0].text
+    );
+}

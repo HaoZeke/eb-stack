@@ -486,29 +486,7 @@ pub fn apply_package_layers(
                 .easyconfig_parameters
                 .extend(build.easyconfig_parameters.clone());
         }
-        if let Some(dependencies) = &layer.dependencies {
-            for dependency in &mut plan.dependencies {
-                if let Some(alias) = alias_policy_value(&dependencies.aliases, &dependency.name) {
-                    dependency.eb_name = Some(alias.provider().to_string());
-                    if alias.drops_constraint() {
-                        dependency.constraint = None;
-                    }
-                }
-                if let Some(capability) = policy_value(&dependencies.virtuals, &dependency.name) {
-                    dependency.virtual_capability = Some(capability.clone());
-                }
-                if dependencies
-                    .exclude_from_solve
-                    .iter()
-                    .any(|name| package_identity(name) == package_identity(&dependency.name))
-                {
-                    dependency.solver_excluded = true;
-                }
-            }
-            for (requirement_index, requirement) in dependencies.requirements.iter().enumerate() {
-                ensure_dependency_requirement(plan, requirement, layer_index, requirement_index);
-            }
-        }
+        apply_one_layer_dependency_policy(plan, layer, layer_index);
         apply_layer_source_checksums(plan, &layer.source_checksums)?;
         apply_profile_patches(plan, &layer.profiles)?;
     }
@@ -531,6 +509,59 @@ pub fn apply_package_layers(
         })
         .collect();
     Ok(())
+}
+
+/// Apply alias, virtual, exclude, and requirement policy from `layers`.
+///
+/// [`apply_package_layers`] runs this per layer. A bump merge that adds
+/// foreign inspect intents calls it again so those rows see the same policy.
+pub(crate) fn apply_package_dependency_policy(
+    plan: &mut PackagePlan,
+    layers: &[PackageConfigLayer],
+) {
+    for (layer_index, layer) in layers.iter().enumerate() {
+        apply_one_layer_dependency_policy(plan, layer, layer_index);
+    }
+}
+
+fn apply_one_layer_dependency_policy(
+    plan: &mut PackagePlan,
+    layer: &PackageConfigLayer,
+    layer_index: usize,
+) {
+    let Some(dependencies) = &layer.dependencies else {
+        return;
+    };
+    for dependency in &mut plan.dependencies {
+        if let Some(alias) = alias_policy_value(&dependencies.aliases, &dependency.name) {
+            dependency.eb_name = Some(alias.provider().to_string());
+            if alias.drops_constraint() {
+                dependency.constraint = None;
+            }
+        }
+        if let Some(capability) = policy_value(&dependencies.virtuals, &dependency.name) {
+            dependency.virtual_capability = Some(capability.clone());
+        }
+        if dependencies
+            .exclude_from_solve
+            .iter()
+            .any(|name| exclude_matches_dependency(name, dependency))
+        {
+            dependency.solver_excluded = true;
+        }
+    }
+    for (requirement_index, requirement) in dependencies.requirements.iter().enumerate() {
+        ensure_dependency_requirement(plan, requirement, layer_index, requirement_index);
+    }
+}
+
+fn exclude_matches_dependency(excluded: &str, dependency: &DependencyIntent) -> bool {
+    let excluded = package_identity(excluded);
+    package_identity(&dependency.name) == excluded
+        || dependency
+            .eb_name
+            .as_deref()
+            .is_some_and(|name| package_identity(name) == excluded)
 }
 
 fn validate_easyconfig_parameter_names(
@@ -854,4 +885,97 @@ pub enum PackageConfigError {
     /// After every layer applied, the plan has no single default profile.
     #[error("package plan must contain exactly one default profile, found {0}")]
     DefaultProfileCount(usize),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::package::{
+        BuildSpec, DependencyRole, PackageMetadata, PackageOrigin, PACKAGE_SCHEMA_VERSION,
+    };
+    use crate::Toolchain;
+
+    fn seed_plan(name: &str, eb_name: Option<&str>) -> PackagePlan {
+        PackagePlan {
+            schema_version: PACKAGE_SCHEMA_VERSION,
+            origin: PackageOrigin::EasyBuild,
+            package: PackageMetadata {
+                name: "App".into(),
+                version: "1.0".into(),
+                upstream_version: None,
+                homepage: None,
+                description: None,
+                license: None,
+            },
+            sources: Vec::new(),
+            dependencies: vec![DependencyIntent {
+                id: format!("dep:{name}"),
+                name: name.into(),
+                eb_name: eb_name.map(str::to_string),
+                constraint: None,
+                toolchain: None,
+                versionsuffix: None,
+                roles: vec![DependencyRole::Run],
+                condition: ConditionExpr::Always,
+                virtual_capability: None,
+                solver_excluded: false,
+                provenance: Vec::new(),
+            }],
+            rules: Vec::new(),
+            build: BuildSpec {
+                toolchain: Toolchain {
+                    name: "foss".into(),
+                    version: "2026.1".into(),
+                },
+                easyblock: None,
+                build_systems: Vec::new(),
+                source_root: None,
+                config_options: Vec::new(),
+                moduleclass: None,
+                patches: Vec::new(),
+                easyconfig_parameters: BTreeMap::new(),
+            },
+            profiles: vec![ProductProfile {
+                name: "default".into(),
+                default: true,
+                versionsuffix: Vec::new(),
+                platform: None,
+                architecture: None,
+                features: BTreeMap::new(),
+                parameters: BTreeMap::new(),
+                toolchain_options: BTreeMap::new(),
+                config_options: Vec::new(),
+                easyconfig_parameters: BTreeMap::new(),
+                verification_commands: Vec::new(),
+            }],
+            outputs: Vec::new(),
+            residuals: Vec::new(),
+            overlay_extensions: Vec::new(),
+            package_index: Default::default(),
+        }
+    }
+
+    #[test]
+    fn exclude_from_solve_matches_post_alias_provider() {
+        let config = PackageConfigLayer::from_toml_str(
+            r#"
+schema_version = 1
+
+[dependencies]
+exclude_from_solve = ["PyTorch"]
+
+[dependencies.aliases]
+libtorch = "PyTorch"
+"#,
+        )
+        .expect("alias plus exclude");
+        let mut plan = seed_plan("libtorch", None);
+        apply_package_layers(&mut plan, &[config]).expect("apply");
+        let dependency = &plan.dependencies[0];
+        assert_eq!(dependency.eb_name.as_deref(), Some("PyTorch"));
+        assert!(
+            dependency.solver_excluded,
+            "exclude_from_solve = [PyTorch] must match the post-alias provider"
+        );
+    }
 }

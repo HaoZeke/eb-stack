@@ -378,6 +378,43 @@ py-setuptools = { provider = "Python", constraint = "drop" }
 }
 
 #[test]
+fn exclude_from_solve_matches_post_alias_provider() {
+    let config = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[dependencies]
+exclude_from_solve = ["PyTorch"]
+
+[dependencies.aliases]
+libtorch = "PyTorch"
+"#,
+    )
+    .expect("alias plus exclude");
+    let mut plan = qmcpack_plan();
+    plan.dependencies = vec![DependencyIntent {
+        id: "dep:libtorch".into(),
+        name: "libtorch".into(),
+        eb_name: None,
+        constraint: None,
+        toolchain: None,
+        versionsuffix: None,
+        roles: vec![DependencyRole::Run],
+        condition: ConditionExpr::Always,
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: Vec::new(),
+    }];
+    apply_package_layers(&mut plan, &[config]).expect("apply");
+    let dependency = &plan.dependencies[0];
+    assert_eq!(dependency.eb_name.as_deref(), Some("PyTorch"));
+    assert!(
+        dependency.solver_excluded,
+        "exclude_from_solve = [PyTorch] must match the post-alias provider"
+    );
+}
+
+#[test]
 fn provider_alias_rejects_unknown_table_keys() {
     let error = PackageConfigLayer::from_toml_str(
         r#"
