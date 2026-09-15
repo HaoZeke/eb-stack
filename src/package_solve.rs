@@ -603,50 +603,56 @@ fn scope_cross_generation_pin_closures(
     stack_policy: &StackPolicy,
     target_hierarchy: &ToolchainHierarchy,
 ) {
-    let base = universe.clone();
-    let by_name = candidates_by_name(&base);
-    let mut hierarchy_cache = HashMap::new();
+    let mut root_updates: Vec<(usize, Vec<DepReq>)> = Vec::new();
     let mut scoped_candidates = Vec::new();
-    for (pin_index, pin) in stack_policy.pins.iter().enumerate() {
-        let root_indexes = universe
-            .iter()
-            .enumerate()
-            .filter(|(_, candidate)| {
-                stack_pin_candidate_matches(candidate, pin)
-                    && !target_hierarchy.contains(&candidate.toolchain)
-            })
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
-        for root_index in root_indexes {
-            let scope = format!("pin{pin_index}");
-            let root = universe[root_index].clone();
-            let mut queue = VecDeque::new();
-            let mut visited = HashSet::new();
-            universe[root_index].dependencies = scoped_dependencies(
-                &root,
-                &base,
-                &by_name,
-                &mut hierarchy_cache,
-                &scope,
-                &mut queue,
-                &mut visited,
-            );
-            while let Some(candidate) = queue.pop_front() {
-                let mut scoped = candidate.clone();
-                scoped.name = scoped_dependency_name(&scope, &candidate.name);
-                scoped.dependencies = scoped_dependencies(
-                    &candidate,
-                    &base,
+    {
+        let by_name = candidates_by_name(universe);
+        let mut hierarchy_cache = HashMap::new();
+        for (pin_index, pin) in stack_policy.pins.iter().enumerate() {
+            let root_indexes = universe
+                .iter()
+                .enumerate()
+                .filter(|(_, candidate)| {
+                    stack_pin_candidate_matches(candidate, pin)
+                        && !target_hierarchy.contains(&candidate.toolchain)
+                })
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            for root_index in root_indexes {
+                let scope = format!("pin{pin_index}");
+                let root = universe[root_index].clone();
+                let mut queue = VecDeque::new();
+                let mut visited = HashSet::new();
+                let root_deps = scoped_dependencies(
+                    &root,
+                    universe,
                     &by_name,
                     &mut hierarchy_cache,
                     &scope,
                     &mut queue,
                     &mut visited,
                 );
-                scoped.builddependencies.clear();
-                scoped_candidates.push(scoped);
+                root_updates.push((root_index, root_deps));
+                while let Some(candidate) = queue.pop_front() {
+                    let mut scoped = candidate.clone();
+                    scoped.name = scoped_dependency_name(&scope, &candidate.name);
+                    scoped.dependencies = scoped_dependencies(
+                        &candidate,
+                        universe,
+                        &by_name,
+                        &mut hierarchy_cache,
+                        &scope,
+                        &mut queue,
+                        &mut visited,
+                    );
+                    scoped.builddependencies.clear();
+                    scoped_candidates.push(scoped);
+                }
             }
         }
+    }
+    for (root_index, dependencies) in root_updates {
+        universe[root_index].dependencies = dependencies;
     }
     universe.extend(scoped_candidates);
 }
