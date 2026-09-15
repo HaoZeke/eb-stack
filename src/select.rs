@@ -117,6 +117,7 @@ pub fn resolvo_resolve_dep_versions(
     let mut resolvable: HashSet<String> = HashSet::new();
     let mut pins: Vec<crate::domain::Pin> = Vec::new();
     let mut optional_names: HashSet<String> = HashSet::new();
+    let mut parent_floors: HashMap<String, String> = HashMap::new();
     for s in specs {
         if s.system_toolchain {
             continue;
@@ -168,7 +169,9 @@ pub fn resolvo_resolve_dep_versions(
         }
         if pin_exact.is_none() && parent_match {
             // Parent-toolchain builds are generation-authoritative, not a
-            // downgrade. SAT must not keep the source floor as a hard req.
+            // downgrade. SAT must not keep the source floor as a hard req
+            // on those rows; other members of the name stay on the floor.
+            parent_floors.insert(s.name.clone(), version_req.clone());
             version_req = ">=0".into();
         }
         if let Some(ver) = pin_exact {
@@ -197,7 +200,16 @@ pub fn resolvo_resolve_dep_versions(
         ));
     }
 
-    let admitted = universe_cands;
+    let admitted: Vec<Candidate> = universe_cands
+        .into_iter()
+        .filter(|candidate| match parent_floors.get(&candidate.name) {
+            None => true,
+            Some(_) if toolchains_match(&hierarchy.parent, &candidate.toolchain) => true,
+            Some(floor) => crate::version::parse_requirement(floor)
+                .map(|requirement| requirement.matches(&candidate.version))
+                .unwrap_or(false),
+        })
+        .collect();
     let solve = |dep_reqs: Vec<DepReq>,
                  resolvable: HashSet<String>,
                  pins: Vec<crate::domain::Pin>|
@@ -1251,5 +1263,43 @@ mod lock_identity_and_bump_pin_tests {
             resolvo_resolve_dep_versions(&specs, &cands, &hierarchy, &gcccore, "App", "1.0", None)
                 .expect("parent-toolchain 2.42 is not a downgrade");
         assert_eq!(map.get("binutils").map(String::as_str), Some("2.42"));
+    }
+
+    #[test]
+    fn a_parent_floor_exemption_does_not_admit_a_below_floor_sibling() {
+        let foss = foss();
+        let gcccore = Toolchain {
+            name: "GCCcore".into(),
+            version: "14.2.0".into(),
+        };
+        let mut parent_lib = candidate("Lib", "1.0", None);
+        parent_lib.toolchain = foss.clone();
+        parent_lib.dependencies.push(DepReq {
+            name: "MissingTool".into(),
+            version_req: "==1.0".into(),
+            versionsuffix: None,
+            toolchain: None,
+        });
+        let mut sibling = candidate("Lib", "0.9", None);
+        sibling.toolchain = gcccore.clone();
+        sibling.easyconfig_path = "Lib-0.9-GCCcore-14.2.0.eb".into();
+        let hierarchy = ToolchainHierarchy {
+            parent: foss.clone(),
+            members: vec![gcccore, foss.clone()],
+        };
+        let error = resolvo_resolve_dep_versions(
+            &[SourceDepSpec::plain("Lib", "1.0")],
+            &[parent_lib, sibling],
+            &hierarchy,
+            &foss,
+            "App",
+            "1.0",
+            None,
+        )
+        .expect_err("below-floor GCCcore must not satisfy a 1.0 spec");
+        assert!(
+            !error.contains("0.9") || error.contains("unsatisfiable") || error.contains("Lib"),
+            "{error}"
+        );
     }
 }
