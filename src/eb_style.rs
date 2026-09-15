@@ -481,7 +481,7 @@ fn parse_assignment_string_list(line: &str) -> Option<AssignmentStringList<'_>> 
             return None;
         }
         let inner = &rest[quote.len_utf8()..];
-        let end = inner.find(quote)?;
+        let end = find_unescaped_delimiter(inner, quote)?;
         items.push((quote, &inner[..end]));
         rest = inner[end + quote.len_utf8()..].trim_start();
         if rest.starts_with(',') {
@@ -572,11 +572,11 @@ fn parse_string_assignment(line: &str) -> Option<StringAssignment<'_>> {
     })
 }
 
-fn contains_unescaped_delimiter(content: &str, delimiter: char) -> bool {
+fn find_unescaped_delimiter(content: &str, delimiter: char) -> Option<usize> {
     let mut backslashes = 0usize;
-    for character in content.chars() {
+    for (index, character) in content.char_indices() {
         if character == delimiter && backslashes.is_multiple_of(2) {
-            return true;
+            return Some(index);
         }
         if character == '\\' {
             backslashes += 1;
@@ -584,7 +584,11 @@ fn contains_unescaped_delimiter(content: &str, delimiter: char) -> bool {
             backslashes = 0;
         }
     }
-    false
+    None
+}
+
+fn contains_unescaped_delimiter(content: &str, delimiter: char) -> bool {
+    find_unescaped_delimiter(content, delimiter).is_some()
 }
 
 fn format_string_assignment(asg: &StringAssignment<'_>) -> Vec<String> {
@@ -713,13 +717,24 @@ fn split_string_content(content: &str, budget: usize) -> Vec<String> {
     chunks
 }
 
-/// Move a cut so the added closer is not escaped by a trailing backslash.
+/// Move a cut so the added closer is not escaped or consumed.
+///
+/// A trailing backslash escapes `'…'` / `"…"` closers. A trailing quote is
+/// consumed by a triple closer (`…""""`) or a single closer (`…''`).
 fn unescaped_cut(rest: &str, take: usize) -> usize {
     let mut take = take.max(1).min(rest.len());
     if take == rest.len() {
         return take;
     }
-    while odd_trailing_backslashes(&rest[..take]) {
+    loop {
+        if take >= rest.len() {
+            return rest.len();
+        }
+        let head = &rest[..take];
+        let consumed_by_closer = matches!(head.chars().last(), Some('\'') | Some('"'));
+        if !odd_trailing_backslashes(head) && !consumed_by_closer {
+            break;
+        }
         let Some(extra) = rest[take..]
             .chars()
             .next()
@@ -728,9 +743,6 @@ fn unescaped_cut(rest: &str, take: usize) -> usize {
             break;
         };
         take += extra;
-        if take >= rest.len() {
-            return rest.len();
-        }
     }
     take
 }
@@ -975,6 +987,50 @@ mod tests {
     }
 
     #[test]
+    fn format_assignment_string_list_honors_escaped_quotes() {
+        let hex = "0123456789abcdef".repeat(7);
+        let url = format!("https://example.invalid/o\\'reilly/{hex}");
+        let source = format!("source_urls = ['{url}']\n");
+        assert!(source.lines().next().unwrap().chars().count() > EB_MAX_LINE);
+        assert!(line_is_mechanically_fixable(source.trim_end()));
+
+        let result = format_style(&source);
+
+        assert!(result.remaining.is_empty(), "{:?}", result.remaining);
+        assert!(result
+            .text
+            .lines()
+            .all(|line| line.chars().count() <= EB_MAX_LINE));
+        let recipe = format!(
+            "name = 'X'\nversion = '1'\ntoolchain = SYSTEM\n{}dependencies = []\n",
+            result.text
+        );
+        let resolved = crate::eb_parse::resolve_easyconfig_str(&recipe).expect("parse");
+        assert_eq!(
+            resolved.source_urls,
+            vec![format!("https://example.invalid/o'reilly/{hex}")]
+        );
+    }
+
+    #[test]
+    fn parse_assignment_string_list_keeps_escaped_closer_on_first_item() {
+        let url = "https://example.invalid/long";
+        let source = format!("source_urls = ['end\\'', '{url}']\n");
+        let parsed = parse_assignment_string_list(source.trim_end()).expect("parse list");
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(parsed.items[0].1, "end\\'");
+        assert_eq!(parsed.items[1].1, url);
+
+        let recipe =
+            format!("name = 'X'\nversion = '1'\ntoolchain = SYSTEM\n{source}dependencies = []\n");
+        let resolved = crate::eb_parse::resolve_easyconfig_str(&recipe).expect("parse");
+        assert_eq!(
+            resolved.source_urls,
+            vec!["end'".to_string(), url.to_string()]
+        );
+    }
+
+    #[test]
     fn format_assignment_string_list_wraps_source_urls() {
         let url = format!(
             "https://example.invalid/releases/{}/",
@@ -1102,6 +1158,42 @@ mod tests {
             })
             .collect();
         assert_eq!(joined, body);
+    }
+
+    #[test]
+    fn format_triple_quoted_wrap_does_not_close_on_an_embedded_quote() {
+        let body = format!("{}\"{}", "x".repeat(90), "y".repeat(90));
+        let source = format!("description = \"\"\"{body}\"\"\"\n");
+        assert!(source.lines().next().unwrap().chars().count() > EB_MAX_LINE);
+
+        let result = format_style(&source);
+
+        assert!(result.remaining.is_empty(), "{:?}", result.remaining);
+        assert!(result
+            .text
+            .lines()
+            .all(|line| line.chars().count() <= EB_MAX_LINE));
+        let joined: String = result
+            .text
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                let after = trimmed
+                    .strip_prefix("description = ")
+                    .or_else(|| trimmed.strip_prefix("description += "))?;
+                after
+                    .strip_prefix("\"\"\"")
+                    .and_then(|rest| rest.strip_suffix("\"\"\""))
+                    .map(str::to_string)
+            })
+            .collect();
+        assert_eq!(joined, body);
+        let recipe = format!(
+            "name = 'X'\nversion = '1'\ntoolchain = SYSTEM\n{}dependencies = []\n",
+            result.text
+        );
+        crate::eb_parse::resolve_easyconfig_str(&recipe)
+            .expect("formatted triple-quoted description parses");
     }
 
     #[test]
