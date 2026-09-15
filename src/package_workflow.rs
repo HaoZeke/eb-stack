@@ -867,7 +867,7 @@ fn require_source_checksums(
             .sources
             .iter()
             .enumerate()
-            .filter(|(_, source)| source.sha256.is_none())
+            .filter(|(_, source)| source_missing_required_sha256(source))
             .map(|(index, _)| index)
             .collect();
         if !missing.is_empty() {
@@ -903,6 +903,15 @@ fn require_source_checksums(
     Ok(())
 }
 
+/// A checkout is pinned by git/tag/commit. Same exemption as
+/// [`crate::manifest::package_plan_from_foreign`].
+fn source_missing_required_sha256(source: &SourceArtifact) -> bool {
+    source.sha256.is_none()
+        && source.git.is_none()
+        && source.commit.is_none()
+        && source.tag.is_none()
+}
+
 fn refresh_checksum_residuals(plan: &mut PackagePlan) {
     plan.residuals.retain(|residual| {
         !matches!(
@@ -910,7 +919,7 @@ fn refresh_checksum_residuals(plan: &mut PackagePlan) {
             "source:missing-sha256" | "patch:missing-sha256" | "patch:missing-source"
         )
     });
-    if plan.sources.iter().any(|source| source.sha256.is_none()) {
+    if plan.sources.iter().any(source_missing_required_sha256) {
         plan.residuals.push(Residual {
             id: "source:missing-sha256".into(),
             stage: ResidualStage::Normalize,
@@ -1112,19 +1121,12 @@ pub fn complete_package_bump(
         )
         .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?;
         for (index, hole) in holes.into_iter().enumerate() {
-            let already_excluded = plan.dependencies.iter().any(|dependency| {
-                let identity = dependency
-                    .eb_name
-                    .as_deref()
-                    .unwrap_or(dependency.name.as_str());
-                identity.eq_ignore_ascii_case(&hole.name) && dependency.solver_excluded
-            });
+            let already_excluded = plan
+                .dependencies
+                .iter()
+                .any(|dependency| hole.matches_intent(dependency) && dependency.solver_excluded);
             for dependency in &mut plan.dependencies {
-                let identity = dependency
-                    .eb_name
-                    .as_deref()
-                    .unwrap_or(dependency.name.as_str());
-                if identity.eq_ignore_ascii_case(&hole.name) {
+                if hole.matches_intent(dependency) {
                     dependency.solver_excluded = true;
                 }
             }
@@ -2466,5 +2468,212 @@ mod tests {
             &toolchain("foss", "2023b"),
             &toolchain("foss", "2024a"),
         ));
+    }
+
+    fn stack_policy(target: &Toolchain) -> StackPolicy {
+        StackPolicy {
+            schema_version: crate::package::STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain: target.clone(),
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn refresh_checksum_residuals_exempts_git_tag_and_commit_sources() {
+        let mut plan = PackagePlan {
+            schema_version: PACKAGE_SCHEMA_VERSION,
+            origin: PackageOrigin::Spack,
+            package: PackageMetadata {
+                name: "Gitpkg".into(),
+                version: "1.0".into(),
+                upstream_version: None,
+                homepage: None,
+                description: None,
+                license: None,
+            },
+            sources: vec![SourceArtifact {
+                git: Some("https://github.com/org/gitpkg.git".into()),
+                commit: Some("abc123".into()),
+                ..SourceArtifact::default()
+            }],
+            dependencies: Vec::new(),
+            rules: Vec::new(),
+            build: BuildSpec {
+                toolchain: toolchain("foss", "2026.1"),
+                easyblock: None,
+                build_systems: Vec::new(),
+                source_root: None,
+                config_options: Vec::new(),
+                moduleclass: None,
+                patches: Vec::new(),
+                easyconfig_parameters: BTreeMap::new(),
+            },
+            profiles: Vec::new(),
+            outputs: Vec::new(),
+            residuals: Vec::new(),
+            overlay_extensions: Vec::new(),
+            package_index: Default::default(),
+        };
+        refresh_checksum_residuals(&mut plan);
+        assert!(
+            !plan
+                .residuals
+                .iter()
+                .any(|residual| residual.id == "source:missing-sha256"),
+            "{:?}",
+            plan.residuals
+        );
+        require_source_checksums(&plan, true).expect("git checkout does not need sha256");
+    }
+
+    #[test]
+    fn inspect_does_not_flag_a_spack_git_checkout_as_missing_sha256() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("package.py");
+        std::fs::write(
+            &source,
+            r#"
+from spack.package import *
+
+class Gitpkg(Package):
+    homepage = "https://example.invalid"
+    git = "https://github.com/org/gitpkg.git"
+    version("1.0", git="https://github.com/org/gitpkg.git", commit="abc123")
+"#,
+        )
+        .expect("write spack");
+        let target = toolchain("foss", "2026.1");
+        let (plan, _) = inspect_new_package(&source, Some(ForeignFormat::Spack), &target, &[])
+            .expect("inspect");
+        assert!(
+            !plan.residuals.iter().any(|residual| {
+                residual.id == "source:missing-sha256"
+                    && residual.severity == ResidualSeverity::Blocking
+            }),
+            "{:?}",
+            plan.residuals
+        );
+        require_source_checksums(&plan, true).expect("git checkout does not need sha256");
+
+        let robot = temp.path().join("robot");
+        std::fs::create_dir(&robot).expect("robot");
+        let bundle = plan_new_package(&NewPackageRequest {
+            source,
+            format: Some(ForeignFormat::Spack),
+            toolchain: target.clone(),
+            source_checksums: Vec::new(),
+            package_layers: Vec::new(),
+            package_index: Default::default(),
+            easyconfig_roots: vec![robot],
+            stack_policy: stack_policy(&target),
+        })
+        .expect("plan_new_package must not require a sha256 for a git checkout");
+        let recipe = bundle.easyconfigs[0].text.as_str();
+        assert!(
+            recipe.contains("git_config"),
+            "checkout must emit git_config:\n{recipe}"
+        );
+        assert!(
+            !bundle
+                .plan
+                .sources
+                .iter()
+                .any(|source| source.sha256.is_some()),
+            "must not invent a digest: {:?}",
+            bundle.plan.sources
+        );
+    }
+
+    #[test]
+    fn complete_package_bump_excludes_only_the_matching_version_hole() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("App-1.0-foss-2023b.eb");
+        std::fs::write(
+            &source,
+            "easyblock = 'ConfigureMake'\n\
+             name = 'App'\n\
+             version = '1.0'\n\
+             homepage = 'https://example.invalid/'\n\
+             description = 'Synthetic package'\n\
+             toolchain = {'name': 'foss', 'version': '2023b'}\n\
+             sources = ['app-1.0.tar.gz']\n\
+             checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+             dependencies = [('Python', '3.12.3')]\n\
+             moduleclass = 'tools'\n",
+        )
+        .expect("source recipe");
+        let robot = temp.path().join("robot");
+        std::fs::create_dir_all(&robot).expect("robot");
+        std::fs::write(
+            robot.join("Python-3.12.3-GCCcore-15.2.0.eb"),
+            "easyblock = 'PythonBundle'\n\
+             name = 'Python'\n\
+             version = '3.12.3'\n\
+             homepage = 'https://example.invalid/'\n\
+             description = 'Python'\n\
+             toolchain = {'name': 'GCCcore', 'version': '15.2.0'}\n\
+             sources = []\n\
+             checksums = []\n\
+             moduleclass = 'lang'\n",
+        )
+        .expect("python candidate");
+        let target = toolchain("foss", "2026.1");
+        let request = BumpPackageRequest {
+            source,
+            toolchain: target.clone(),
+            version: None,
+            source_checksum: None,
+            easyconfig_roots: vec![robot.clone()],
+            hierarchy_fixture: Some(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("fixtures/toolchain_hierarchy/foss-2026.1.json"),
+            ),
+            overrides: HashMap::new(),
+            stack_policy: stack_policy(&target),
+            strict_patches: false,
+            package_layers: Vec::new(),
+            foreign_sources: Vec::new(),
+        };
+        let (mut plan, _) = prepare_package_bump(&request).expect("prepare");
+        plan.dependencies.push(DependencyIntent {
+            id: "dep:Python:missing".into(),
+            name: "Python".into(),
+            eb_name: Some("Python".into()),
+            constraint: Some("==9.9.9".into()),
+            toolchain: None,
+            versionsuffix: None,
+            roles: vec![DependencyRole::Run],
+            condition: ConditionExpr::Always,
+            virtual_capability: None,
+            solver_excluded: false,
+            provenance: Vec::new(),
+        });
+        let tree = parse_easyconfig_trees(&[robot.as_path()]).expect("robot");
+        let bundle = complete_package_bump(&request, plan, &tree.candidates, &request.stack_policy)
+            .expect("bump");
+        let excluded: Vec<_> = bundle
+            .plan
+            .dependencies
+            .iter()
+            .filter(|dependency| {
+                dependency.name.eq_ignore_ascii_case("Python") && dependency.solver_excluded
+            })
+            .collect();
+        assert_eq!(
+            excluded.len(),
+            1,
+            "only the missing pin should be excluded: {:?}",
+            bundle.plan.dependencies
+        );
+        assert_eq!(excluded[0].constraint.as_deref(), Some("==9.9.9"));
+        assert!(
+            bundle.plan.dependencies.iter().any(|dependency| {
+                dependency.name.eq_ignore_ascii_case("Python") && !dependency.solver_excluded
+            }),
+            "unconstrained Python 3.12.3 must stay selectable: {:?}",
+            bundle.plan.dependencies
+        );
     }
 }

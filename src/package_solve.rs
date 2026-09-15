@@ -43,8 +43,36 @@ pub struct UnsatisfiedDirectDependency {
     pub name: String,
     /// Version requirement it must satisfy.
     pub version_req: String,
+    /// Versionsuffix the dependency names, when it names one.
+    pub versionsuffix: Option<String>,
     /// True for a build-time-only dependency.
     pub build: bool,
+}
+
+impl UnsatisfiedDirectDependency {
+    /// True when this hole is the same name, version requirement, and suffix
+    /// as `dependency`. A name-only match would drop every Python intent
+    /// because one of them is missing.
+    pub fn matches_intent(&self, dependency: &crate::package::DependencyIntent) -> bool {
+        let identity = dependency
+            .eb_name
+            .as_deref()
+            .unwrap_or(dependency.name.as_str());
+        identity.eq_ignore_ascii_case(&self.name)
+            && normalize_requirement(dependency.constraint.as_deref()) == self.version_req
+            && dependency.versionsuffix.as_deref().unwrap_or("")
+                == self.versionsuffix.as_deref().unwrap_or("")
+    }
+
+    /// True when `versionsuffix` is compatible with this hole.
+    ///
+    /// `None` on the hole means any suffix; `Some("")` means only the unsuffixed
+    /// module.
+    pub fn matches_versionsuffix(&self, versionsuffix: Option<&str>) -> bool {
+        self.versionsuffix
+            .as_deref()
+            .is_none_or(|want| versionsuffix.unwrap_or("") == want)
+    }
 }
 
 /// List direct dependencies that have no compatible candidate after hierarchy
@@ -154,6 +182,7 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
             holes.push(UnsatisfiedDirectDependency {
                 name,
                 version_req,
+                versionsuffix: dependency.versionsuffix.clone(),
                 build: build_only,
             });
         }
@@ -625,6 +654,8 @@ fn scope_cross_generation_pin_closures(
 ) {
     let mut root_updates: Vec<(usize, Vec<DepReq>)> = Vec::new();
     let mut scoped_candidates = Vec::new();
+    let mut hide_paths = HashSet::new();
+    let mut root_paths = HashSet::new();
     {
         let by_name = candidates_by_name(universe);
         let mut hierarchy_cache = HashMap::new();
@@ -641,6 +672,7 @@ fn scope_cross_generation_pin_closures(
             for root_index in root_indexes {
                 let scope = format!("pin{pin_index}");
                 let root = universe[root_index].clone();
+                root_paths.insert(root.easyconfig_path.clone());
                 let mut queue = VecDeque::new();
                 let mut visited = HashSet::new();
                 let root_deps = scoped_dependencies(
@@ -654,6 +686,13 @@ fn scope_cross_generation_pin_closures(
                 );
                 root_updates.push((root_index, root_deps));
                 while let Some(candidate) = queue.pop_front() {
+                    // Scoped copies satisfy the pin's own tree. The unscoped
+                    // member must not stay selectable by real name: a
+                    // foss-2026.1 profile would otherwise lock Python 3.12.3
+                    // @ GCCcore-13.3.0 from a foss-2024a pin closure.
+                    if !target_hierarchy.contains(&candidate.toolchain) {
+                        hide_paths.insert(candidate.easyconfig_path.clone());
+                    }
                     let mut scoped = candidate.clone();
                     scoped.name = scoped_dependency_name(&scope, &candidate.name);
                     scoped.dependencies = scoped_dependencies(
@@ -674,6 +713,10 @@ fn scope_cross_generation_pin_closures(
     for (root_index, dependencies) in root_updates {
         universe[root_index].dependencies = dependencies;
     }
+    universe.retain(|candidate| {
+        !hide_paths.contains(&candidate.easyconfig_path)
+            || root_paths.contains(&candidate.easyconfig_path)
+    });
     universe.extend(scoped_candidates);
 }
 
@@ -843,7 +886,8 @@ mod tests {
     use super::{
         admit_named_dependency_toolchains, apply_generation_consensus_pins,
         candidate_matches_version_req, dependency_candidate_matches, match_robot_name,
-        normalize_requirement, unsatisfied_direct_dependencies_with_hierarchy,
+        normalize_requirement, solve_package_profile,
+        unsatisfied_direct_dependencies_with_hierarchy,
     };
     use crate::domain::{Candidate, DepReq, ExtEntry, Toolchain};
     use crate::hierarchy::ToolchainHierarchy;
@@ -1188,5 +1232,175 @@ mod tests {
             holes.is_empty(),
             "poetry-core via aliased bundle provide must not be a hole: {holes:?}"
         );
+    }
+
+    fn minimal_plan(name: &str, toolchain: Toolchain, deps: Vec<DependencyIntent>) -> PackagePlan {
+        PackagePlan {
+            schema_version: PACKAGE_SCHEMA_VERSION,
+            origin: PackageOrigin::EasyBuild,
+            package: PackageMetadata {
+                name: name.into(),
+                version: "1.0".into(),
+                upstream_version: None,
+                homepage: None,
+                description: None,
+                license: None,
+            },
+            sources: Vec::new(),
+            dependencies: deps,
+            rules: Vec::new(),
+            build: BuildSpec {
+                toolchain,
+                easyblock: None,
+                build_systems: Vec::new(),
+                source_root: None,
+                config_options: Vec::new(),
+                moduleclass: None,
+                patches: Vec::new(),
+                easyconfig_parameters: BTreeMap::new(),
+            },
+            profiles: vec![ProductProfile {
+                name: "default".into(),
+                default: true,
+                versionsuffix: Vec::new(),
+                platform: None,
+                architecture: None,
+                features: BTreeMap::new(),
+                parameters: BTreeMap::new(),
+                toolchain_options: BTreeMap::new(),
+                config_options: Vec::new(),
+                easyconfig_parameters: BTreeMap::new(),
+                verification_commands: Vec::new(),
+            }],
+            outputs: Vec::new(),
+            residuals: Vec::new(),
+            overlay_extensions: Vec::new(),
+            package_index: Default::default(),
+        }
+    }
+
+    fn intent(name: &str, constraint: &str, versionsuffix: Option<&str>) -> DependencyIntent {
+        DependencyIntent {
+            id: format!("dep:{name}"),
+            name: name.into(),
+            eb_name: Some(name.into()),
+            constraint: Some(constraint.into()),
+            toolchain: None,
+            versionsuffix: versionsuffix.map(str::to_string),
+            roles: vec![DependencyRole::Run],
+            condition: ConditionExpr::Always,
+            virtual_capability: None,
+            solver_excluded: false,
+            provenance: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn hole_record_carries_the_versionsuffix() {
+        let foss = Toolchain {
+            name: "foss".into(),
+            version: "2026.1".into(),
+        };
+        let plan = minimal_plan(
+            "App",
+            foss.clone(),
+            vec![intent("OpenMPI", "==5.0.3", Some("-CUDA-12.6.0"))],
+        );
+        let plain = cand("OpenMPI", "5.0.3", "foss", "2026.1");
+        let stack = StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "test".into(),
+            toolchain: foss.clone(),
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        };
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/toolchain_hierarchy/foss-2026.1.json");
+        let holes = unsatisfied_direct_dependencies_with_hierarchy(
+            &plan,
+            "default",
+            &ProfileEnvironment::default(),
+            &[plain],
+            &stack,
+            Some(&fixture),
+        )
+        .expect("hole check");
+        assert_eq!(holes.len(), 1, "{holes:?}");
+        assert_eq!(holes[0].name, "OpenMPI");
+        assert_eq!(holes[0].versionsuffix.as_deref(), Some("-CUDA-12.6.0"));
+    }
+
+    #[test]
+    fn a_cross_generation_pin_closure_member_is_not_selectable_by_real_name() {
+        let foss_2026 = Toolchain {
+            name: "foss".into(),
+            version: "2026.1".into(),
+        };
+        let foss_2024a = Toolchain {
+            name: "foss".into(),
+            version: "2024a".into(),
+        };
+        let gcccore_2024a = Toolchain {
+            name: "GCCcore".into(),
+            version: "13.3.0".into(),
+        };
+        let plan = minimal_plan(
+            "App",
+            foss_2026.clone(),
+            vec![
+                intent("PyTorch", "2.9.1", None),
+                intent("Python", "3.14.2", None),
+            ],
+        );
+        let python_312 = DepReq {
+            name: "Python".into(),
+            version_req: "==3.12.3".into(),
+            versionsuffix: None,
+            toolchain: None,
+        };
+        let mut pytorch = cand("PyTorch", "2.9.1", "foss", "2024a");
+        pytorch.dependencies = vec![python_312];
+        let candidates = vec![
+            cand("PyTorch", "2.8.0", "foss", "2026.1"),
+            pytorch,
+            cand("Python", "3.12.3", "GCCcore", "13.3.0"),
+        ];
+        let stack = StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "site".into(),
+            toolchain: foss_2026.clone(),
+            pins: vec![crate::package::StackPin {
+                name: "PyTorch".into(),
+                version_requirement: "==2.9.1".into(),
+                toolchain: Some(foss_2024a.clone()),
+                versionsuffix: Some(String::new()),
+                mode: crate::package::StackPinMode::Preferred,
+                source: Some("site stack".into()),
+            }],
+            exclusions: Vec::new(),
+        };
+        let solved = solve_package_profile(
+            &plan,
+            "default",
+            &ProfileEnvironment::default(),
+            &candidates,
+            &stack,
+        );
+        match solved {
+            Ok(lock) => {
+                let python = lock
+                    .dependencies
+                    .iter()
+                    .find(|dependency| dependency.name == "Python");
+                assert!(
+                    python.is_none_or(|dependency| {
+                        dependency.version != "3.12.3" || dependency.toolchain != gcccore_2024a
+                    }),
+                    "unscoped pin-closure Python must not satisfy a foss-2026.1 profile: {lock:?}"
+                );
+                panic!("expected a Python hole or solve error, got lock {lock:?}");
+            }
+            Err(_) => {}
+        }
     }
 }

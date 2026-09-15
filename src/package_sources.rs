@@ -891,6 +891,7 @@ pub fn discover_provider_candidates_for_hole(
         .iter()
         .filter(|candidate| package_identity(&candidate.name) == identity)
         .filter(|candidate| matches_req(&candidate.version, &hole.version_req))
+        .filter(|candidate| hole.matches_versionsuffix(candidate.versionsuffix.as_deref()))
         .filter(|candidate| {
             source_toolchain_family_is_admitted(candidate, target_parent, hierarchy)
         })
@@ -906,6 +907,7 @@ pub fn discover_provider_candidates_for_hole(
         .iter()
         .filter(|candidate| package_identity(&candidate.name) == identity)
         .filter(|candidate| matches_req(&candidate.version, &hole.version_req))
+        .filter(|candidate| hole.matches_versionsuffix(candidate.versionsuffix.as_deref()))
         .cloned()
         .collect::<Vec<_>>();
 
@@ -1323,6 +1325,7 @@ source:
         let hole = UnsatisfiedDirectDependency {
             name: "MidLib".into(),
             version_req: ">=3.0".into(),
+            versionsuffix: None,
             build: false,
         };
         let target = Toolchain {
@@ -1358,6 +1361,7 @@ source:
         let hole = UnsatisfiedDirectDependency {
             name: "CoreLib".into(),
             version_req: ">=1.0".into(),
+            versionsuffix: None,
             build: false,
         };
         let target = Toolchain {
@@ -1414,6 +1418,7 @@ source:
         let hole = UnsatisfiedDirectDependency {
             name: "UniqueLib".into(),
             version_req: ">=0.4".into(),
+            versionsuffix: None,
             build: false,
         };
         let target = Toolchain {
@@ -1460,6 +1465,7 @@ class Dupe(Package):
         let hole = UnsatisfiedDirectDependency {
             name: "dupe".into(),
             version_req: ">=1.0".into(),
+            versionsuffix: None,
             build: false,
         };
         let target = Toolchain {
@@ -1476,5 +1482,53 @@ class Dupe(Package):
             }
             other => panic!("expected Ambiguous, got {other}"),
         }
+    }
+
+    #[test]
+    fn hole_versionsuffix_selects_the_cuda_openmpi_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let eb = temp.path().join("eb");
+        write(
+            &eb.join("OpenMPI-5.0.3-foss-2023b.eb"),
+            "name = 'OpenMPI'\n\
+             version = '5.0.3'\n\
+             toolchain = {'name': 'foss', 'version': '2023b'}\n",
+        );
+        write(
+            &eb.join("OpenMPI-5.0.3-foss-2023b-CUDA-12.6.0.eb"),
+            "name = 'OpenMPI'\n\
+             version = '5.0.3'\n\
+             versionsuffix = '-CUDA-12.6.0'\n\
+             toolchain = {'name': 'foss', 'version': '2023b'}\n",
+        );
+        let mut roots = PackageSourceRoots {
+            schema_version: 1,
+            source_roots: Vec::new(),
+        };
+        roots.push(SourceRootKind::EasyBuild, eb);
+        let index = PackageSourceIndex::build(&roots).expect("index");
+        let hole = UnsatisfiedDirectDependency {
+            name: "OpenMPI".into(),
+            version_req: "==5.0.3".into(),
+            versionsuffix: Some("-CUDA-12.6.0".into()),
+            build: false,
+        };
+        let target = Toolchain {
+            name: "foss".into(),
+            version: "2026.1".into(),
+        };
+        let provider = discover_provider_for_hole(&index, &hole, &target, None).expect("discover");
+        assert_eq!(provider.provider, CatalogProviderKind::EasyBuildBump);
+        assert_eq!(provider.version.as_deref(), Some("5.0.3"));
+        let selected = index
+            .easybuild
+            .iter()
+            .find(|candidate| candidate.path == provider.source)
+            .expect("selected source");
+        assert_eq!(
+            selected.versionsuffix.as_deref(),
+            Some("-CUDA-12.6.0"),
+            "plain OpenMPI must not win a CUDA hole: {selected:?}"
+        );
     }
 }
