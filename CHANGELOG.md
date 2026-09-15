@@ -102,6 +102,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- Four `postinstallcmds +=` lines are not a preconfig shell-monster
+  hard error. A commented `CMAKE_C_COMPILER=` is not an unwrapped
+  compiler driver.
 - `configopts = '-Dwithout_tests=true'` is a tests-off flag, not a
   compiled-but-never-run suite.
 - Binding crates such as `pyo3` stay `Crate` even when they require

@@ -211,7 +211,7 @@ pub fn check_shell_monsters(text: &str) -> Vec<MaintainerFinding> {
             t.starts_with("preconfigopts +=")
                 || t.starts_with("preconfigopts+=")
                 || t.starts_with("preinstallopts +=")
-                || t.starts_with("postinstallcmds +=")
+                || t.starts_with("preinstallopts+=")
         })
         .count();
 
@@ -478,8 +478,13 @@ fn check_unwrapped_compiler_rpath_on(
         .expect("static regex")
     });
 
+    let live: String = text
+        .lines()
+        .map(strip_inline_comment)
+        .collect::<Vec<_>>()
+        .join("\n");
     let driven_by = driver
-        .captures_iter(text)
+        .captures_iter(&live)
         .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
         .find(|cmd| match unwrapped_compiler_stem(cmd) {
             Some(stem) => !toolchain_name.is_some_and(|tc| toolchain_wraps_compiler(stem, tc)),
@@ -936,6 +941,24 @@ mod tests {
                 .any(|f| f.code == "EB_MAINT_SHELL_MONSTER" || f.code == "EB_MAINT_PATCHELF_RPATH"),
             "{:?}",
             report
+        );
+    }
+
+    #[test]
+    fn postinstallcmds_plus_equals_is_not_a_preconfig_hard_error() {
+        let text = "\
+postinstallcmds = ['true']
+postinstallcmds += ['true']
+postinstallcmds += ['true']
+postinstallcmds += ['true']
+postinstallcmds += ['true']
+";
+        let findings = check_shell_monsters(text);
+        assert!(
+            findings
+                .iter()
+                .all(|finding| finding.code != "EB_MAINT_SHELL_MONSTER" || !finding.is_error()),
+            "{findings:?}"
         );
     }
 
@@ -1411,6 +1434,22 @@ configopts = '-DCMAKE_C_COMPILER=/usr/bin/clang-18 -DCMAKE_CXX_COMPILER=/usr/bin
         assert!(
             findings[0].message.contains("clang-18")
                 || findings[0].message.contains("/usr/bin/clang-18"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn commented_compiler_assignment_is_not_an_unwrapped_driver() {
+        let text = "\
+# CMAKE_C_COMPILER=clang
+# or: description = \"set CC=clang\"
+toolchain = {'name': 'foss', 'version': '2025a'}
+";
+        let findings = check_unwrapped_compiler_rpath(text);
+        assert!(
+            findings
+                .iter()
+                .all(|finding| finding.code != "EB_MAINT_UNWRAPPED_COMPILER_RPATH"),
             "{findings:?}"
         );
     }
