@@ -123,13 +123,11 @@ pub fn ordered_packages<'a>(
 }
 
 fn package_row_key(package: &LockPackage) -> String {
+    // Domain identity: dummy/system and empty suffix collapse like identity_key.
+    let key = package.identity_key();
     format!(
-        "{}|{}|{}|{}|{}",
-        package.name,
-        package.version,
-        package.toolchain.name,
-        package.toolchain.version,
-        package.versionsuffix.as_deref().unwrap_or("")
+        "{}|{}|{}|{}",
+        key.name, key.version, key.toolchain, key.versionsuffix
     )
 }
 
@@ -522,5 +520,44 @@ mod tests {
         let lock = lock_of(vec![]);
         let map = HashMap::new();
         assert_eq!(format_build_list(&lock, &map), "");
+    }
+
+    #[test]
+    fn stack_diff_collapses_system_spellings_when_name_has_two_rows() {
+        let dummy = Toolchain {
+            name: "dummy".into(),
+            version: String::new(),
+        };
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let gcccore = Toolchain {
+            name: "GCCcore".into(),
+            version: "13.2.0".into(),
+        };
+        let perl = |toolchain: Toolchain, suffix: Option<String>, path: &str| LockPackage {
+            name: "Perl".into(),
+            version: "5.38".into(),
+            toolchain,
+            versionsuffix: suffix,
+            easyconfig_path: path.into(),
+        };
+        let baseline = lock_of(vec![
+            perl(dummy, Some(String::new()), "Perl-5.38.eb"),
+            perl(gcccore.clone(), None, "Perl-5.38-GCCcore-13.2.0.eb"),
+        ]);
+        let solved = lock_of(vec![
+            perl(system, None, "Perl-5.38.eb"),
+            perl(gcccore, None, "Perl-5.38-GCCcore-13.2.0.eb"),
+        ]);
+        let changes = classify_stack_diff(&baseline, &solved);
+        assert_eq!(changes.len(), 2, "{changes:?}");
+        assert!(
+            changes
+                .iter()
+                .all(|c| c.name == "Perl" && c.kind == PackageChangeKind::Unchanged),
+            "{changes:?}"
+        );
     }
 }
