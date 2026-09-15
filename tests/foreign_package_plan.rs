@@ -183,6 +183,30 @@ class Pkg(Package):
 }
 
 #[test]
+fn autotools_is_not_reported_as_a_default_easyblock() {
+    let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let recipe = parse_foreign_str(
+        ForeignFormat::Spack,
+        &format!(
+            r#"
+class Pkg(AutotoolsPackage):
+    version("1.0", sha256="{digest}")
+"#
+        ),
+    )
+    .expect("parse");
+    let plan = package_plan_from_foreign(&recipe, &toolchain());
+    assert_eq!(plan.build.easyblock.as_deref(), Some("ConfigureMake"));
+    assert!(
+        plan.residuals
+            .iter()
+            .all(|residual| residual.id != "easyblock:default"),
+        "{:?}",
+        plan.residuals
+    );
+}
+
+#[test]
 fn cran_sanity_dirs_are_under_the_r_library() {
     let recipe = parse_foreign_str(ForeignFormat::Cran, "Package: jsonlite\nVersion: 1.8.8\n")
         .expect("parse");

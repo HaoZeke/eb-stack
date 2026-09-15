@@ -283,13 +283,21 @@ fn adopt_sibling_checksum_block(text: &str, sibling_text: &str) -> Result<String
 /// version being bumped to. `OpenMPI-5.0.7_fix_gpfs.patch` pins 5.0.7 even
 /// when the bump is 5.0.8 -> 5.0.10, so matching only the old version would
 /// miss it; any foreign version pin makes applicability a guess.
+fn version_token_in_name(name: &str, version: &str) -> bool {
+    name.split(|character: char| !(character.is_ascii_alphanumeric() || character == '.'))
+        .any(|token| token == version)
+}
+
 fn pins_other_version(patch: &str, new_version: &str) -> bool {
+    if version_token_in_name(patch, new_version) {
+        return false;
+    }
     let bytes = patch.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i].is_ascii_digit() {
             let start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'.') {
                 i += 1;
             }
             let token = patch[start..i].trim_end_matches('.');
@@ -449,6 +457,14 @@ mod tests {
         let new = vec!["X-2.0_fix.patch".to_string()];
         let plan = plan_patch_evolution("2.0", &new, None);
         assert!(plan.undecided().is_empty());
+    }
+
+    #[test]
+    fn a_letterful_target_version_is_a_self_pin() {
+        let plan = plan_patch_evolution("1.0rc1", &["Pkg-1.0rc1_fix.patch".into()], None);
+        assert!(plan.undecided().is_empty(), "{:?}", plan.calls);
+        let plan = plan_patch_evolution("2024a", &["X-2024a_fix.patch".into()], None);
+        assert!(plan.undecided().is_empty(), "{:?}", plan.calls);
     }
 
     #[test]

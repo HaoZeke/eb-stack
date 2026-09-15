@@ -544,7 +544,10 @@ pub(crate) fn guess_easyblock(recipe: &ForeignRecipe, warnings: &mut Vec<String>
         warnings.push(format!("build-system hint {hint} → easyblock CMakeNinja"));
         return "CMakeNinja".into();
     }
-    if hint(&["autotools", "autoreconf"]).is_some() {
+    if let Some(hint) = hint(&["autotools", "autoreconf"]) {
+        warnings.push(format!(
+            "build-system hint {hint} → easyblock ConfigureMake"
+        ));
         return "ConfigureMake".into();
     }
     // Dep names as weak signal
