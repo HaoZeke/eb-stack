@@ -1195,18 +1195,12 @@ fn solve_feasibility(
 fn in_generation(
     candidate_tc: &crate::domain::Toolchain,
     policy_tc: &crate::domain::Toolchain,
-    candidates: &[Candidate],
+    members: &[crate::domain::Toolchain],
 ) -> bool {
-    if crate::hierarchy::toolchains_match(candidate_tc, policy_tc) {
-        return true;
-    }
-    crate::hierarchy::hierarchy_for_with_tree(policy_tc, None, candidates)
-        .map(|h| {
-            h.members
-                .iter()
-                .any(|m| crate::hierarchy::toolchains_match(candidate_tc, m))
-        })
-        .unwrap_or(false)
+    crate::hierarchy::toolchains_match(candidate_tc, policy_tc)
+        || members
+            .iter()
+            .any(|member| crate::hierarchy::toolchains_match(candidate_tc, member))
 }
 
 fn require_generation_hierarchy(
@@ -1224,6 +1218,9 @@ fn versions_in_trial_order(
     name: &str,
     baseline: Option<&StackLock>,
 ) -> Vec<String> {
+    let members = crate::hierarchy::hierarchy_for_with_tree(&policy.toolchain, None, candidates)
+        .map(|hierarchy| hierarchy.members)
+        .unwrap_or_default();
     let mut versions: Vec<String> = candidates
         .iter()
         .filter(|c| {
@@ -1232,7 +1229,7 @@ fn versions_in_trial_order(
             // must find it where it legitimately lives rather than report that
             // the package does not exist.
             c.name == name
-                && in_generation(&c.toolchain, &policy.toolchain, candidates)
+                && in_generation(&c.toolchain, &policy.toolchain, &members)
                 && !policy
                     .forbid
                     .iter()
