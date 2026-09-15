@@ -1,10 +1,12 @@
 use eb_stack::package::{StackPin, StackPinMode, StackPolicy, STACK_POLICY_SCHEMA_VERSION};
 use eb_stack::package_config::PackageConfigLayer;
 use eb_stack::{
-    inspect_new_package, plan_new_package, resolve_easyconfig_file, write_package_bundle,
-    ForeignFormat, NewPackageRequest, Toolchain,
+    inspect_new_package, plan_new_package, plan_package_bump, prepare_package_bump,
+    resolve_easyconfig_file, write_package_bundle, BumpPackageRequest, ForeignFormat,
+    NewPackageRequest, Toolchain,
 };
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 fn toolchain() -> Toolchain {
@@ -398,4 +400,72 @@ class Orbit(Package):
         easyconfig.contains("patches = ['https://example.invalid/commits/fix.patch?full_index=1']"),
         "{easyconfig}"
     );
+}
+
+#[test]
+fn same_system_spelling_bump_keeps_exact_dep_pins() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("App-1.0.eb");
+    let robot = temp.path().join("robot");
+    std::fs::create_dir_all(&robot).expect("robot directory");
+    std::fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'App'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'SYSTEM app'\n\
+         toolchain = {'name': 'dummy', 'version': ''}\n\
+         sources = ['app-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [('Lib', '1.0')]\nmoduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    for version in ["1.0", "2.0"] {
+        std::fs::write(
+            robot.join(format!("Lib-{version}.eb")),
+            format!(
+                "easyblock = 'ConfigureMake'\nname = 'Lib'\nversion = '{version}'\n\
+                 homepage = 'https://example.invalid/'\ndescription = 'SYSTEM lib'\n\
+                 toolchain = SYSTEM\nsources = []\nchecksums = []\nmoduleclass = 'lib'\n"
+            ),
+        )
+        .expect("lib candidate");
+    }
+    let toolchain = Toolchain {
+        name: "system".into(),
+        version: "system".into(),
+    };
+    let request = BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: None,
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
+    };
+
+    let (plan, _) = prepare_package_bump(&request).expect("prepare same-SYSTEM bump");
+    let lib = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "Lib")
+        .expect("Lib intent");
+    assert_eq!(lib.constraint.as_deref(), Some("==1.0"));
+
+    let bundle = plan_package_bump(&request).expect("plan same-SYSTEM bump");
+    let locked = bundle.locks[0]
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "Lib")
+        .expect("Lib lock");
+    assert_eq!(locked.version, "1.0");
 }

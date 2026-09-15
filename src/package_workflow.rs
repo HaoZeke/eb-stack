@@ -8,7 +8,7 @@ use crate::eb_parse::{
 use crate::foreign::{parse_foreign_path, ForeignFormat};
 use crate::hierarchy::{
     count_generation_dep_versions_for_suffix, filter_candidates_in_hierarchy,
-    hierarchy_for_with_tree, is_system_toolchain,
+    hierarchy_for_with_tree, is_system_toolchain, toolchains_match,
 };
 use crate::manifest::package_plan_from_foreign;
 use crate::package::{
@@ -1918,8 +1918,10 @@ fn apply_system_dep_consensus(
     }
 }
 
+/// True when the bump changes toolchain generation. SYSTEM spellings
+/// (`dummy`/`system`, empty/`system` version) are the same module.
 fn is_generation_retarget(source: &Toolchain, target: &Toolchain) -> bool {
-    !source.name.eq_ignore_ascii_case(&target.name) || source.version != target.version
+    !toolchains_match(source, target)
 }
 
 fn dependency_from_easyconfig(
@@ -2413,4 +2415,56 @@ pub enum PackageWorkflowError {
         /// Root it had to stay within.
         root: PathBuf,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn toolchain(name: &str, version: &str) -> Toolchain {
+        Toolchain {
+            name: name.into(),
+            version: version.into(),
+        }
+    }
+
+    #[test]
+    fn dummy_empty_to_system_system_is_not_a_generation_retarget() {
+        assert!(!is_generation_retarget(
+            &toolchain("dummy", ""),
+            &toolchain("system", "system"),
+        ));
+    }
+
+    #[test]
+    fn system_spellings_are_not_a_generation_retarget() {
+        assert!(!is_generation_retarget(
+            &toolchain("SYSTEM", ""),
+            &toolchain("system", "system"),
+        ));
+        assert!(!is_generation_retarget(
+            &toolchain("dummy", "dummy"),
+            &toolchain("system", ""),
+        ));
+        assert!(!is_generation_retarget(
+            &toolchain("system", "system"),
+            &toolchain("system", "system"),
+        ));
+    }
+
+    #[test]
+    fn foss_to_gcccore_is_a_generation_retarget() {
+        assert!(is_generation_retarget(
+            &toolchain("foss", "2023b"),
+            &toolchain("GCCcore", "13.3.0"),
+        ));
+    }
+
+    #[test]
+    fn toolchain_version_change_is_a_generation_retarget() {
+        assert!(is_generation_retarget(
+            &toolchain("foss", "2023b"),
+            &toolchain("foss", "2024a"),
+        ));
+    }
 }
