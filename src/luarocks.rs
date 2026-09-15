@@ -17,8 +17,8 @@ pub fn parse_luarocks_str(text: &str) -> Result<ForeignRecipe, ForeignError> {
         .unwrap_or(&version)
         .to_string();
     let url = lua_nested_string(text, "source", "url");
-    let sha256 = lua_nested_string(text, "source", "hash")
-        .or_else(|| lua_nested_string(text, "source", "sha256"));
+    let sha256 = luarocks_sha256(lua_nested_string(text, "source", "sha256"))
+        .or_else(|| luarocks_sha256(lua_nested_string(text, "source", "hash")));
     let tag = lua_nested_string(text, "source", "tag");
     let source_file = lua_nested_string(text, "source", "file");
     let homepage = lua_nested_string(text, "description", "homepage")
@@ -113,6 +113,17 @@ pub fn parse_luarocks_str(text: &str) -> Result<ForeignRecipe, ForeignError> {
         },
         classifiers: Vec::new(),
     })
+}
+
+/// LuaRocks `source.hash` is historically MD5. Only a 64-hex SHA-256 is kept.
+fn luarocks_sha256(value: Option<String>) -> Option<String> {
+    let value = value?;
+    let value = value.trim();
+    if value.len() == 64 && value.chars().all(|character| character.is_ascii_hexdigit()) {
+        Some(value.to_ascii_lowercase())
+    } else {
+        None
+    }
 }
 
 fn split_luarocks_dep(spec: &str) -> (String, Option<String>) {
@@ -596,6 +607,47 @@ dependencies = {
         assert_eq!(
             recipe.sha256.as_deref(),
             Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+    }
+
+    #[test]
+    fn md5_hash_does_not_steal_or_become_sha256() {
+        let both = parse_luarocks_str(
+            r#"
+package = "lfs"
+version = "1.8.0-1"
+source = {
+  url = "https://example.invalid/lfs.tar.gz",
+  hash = "0123456789abcdef0123456789abcdef",
+  sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}
+"#,
+        )
+        .expect("parse");
+        assert_eq!(
+            both.sha256.as_deref(),
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        );
+
+        let md5_only = parse_luarocks_str(
+            r#"
+package = "lfs"
+version = "1.8.0-1"
+source = {
+  url = "https://example.invalid/lfs.tar.gz",
+  hash = "0123456789abcdef0123456789abcdef"
+}
+"#,
+        )
+        .expect("parse");
+        assert_eq!(md5_only.sha256, None);
+        assert!(
+            md5_only
+                .residuals
+                .iter()
+                .any(|residual| residual.category == "luarocks-checksum"),
+            "{:?}",
+            md5_only.residuals
         );
     }
 

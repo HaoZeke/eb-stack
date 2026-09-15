@@ -102,6 +102,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A LuaRocks `source.hash` is kept as SHA-256 only when it is 64 hex.
+  `source.sha256` wins over `hash`, so an MD5 no longer shadows a real
+  digest or become a checksum EasyBuild cannot use.
 - A required spec that shares a SAT name with an optional spec stays
   required. Required `poetry-core` and optional `poetry` both map to
   SAT `poetry`; the first unsat no longer drops the required pin as an
