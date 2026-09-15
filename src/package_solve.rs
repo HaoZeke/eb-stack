@@ -65,6 +65,32 @@ pub fn unsatisfied_direct_dependencies(
     )
 }
 
+fn admit_profile_universe(
+    plan: &PackagePlan,
+    profile_name: &str,
+    environment: &ProfileEnvironment,
+    candidates: &[Candidate],
+    stack_policy: &StackPolicy,
+    hierarchy_fixture: Option<&Path>,
+) -> Result<
+    (
+        crate::package::MaterializedProfile,
+        crate::hierarchy::ToolchainHierarchy,
+        Vec<Candidate>,
+    ),
+    ProfileSolveError,
+> {
+    let materialized = materialize_profile(plan, profile_name, environment)
+        .map_err(|error| ProfileSolveError::Materialize(error.to_string()))?;
+    let hierarchy = hierarchy_for_with_tree(&plan.build.toolchain, hierarchy_fixture, candidates)
+        .map_err(|error| ProfileSolveError::Resolve(error.to_string()))?;
+    let mut admitted = filter_candidates_in_hierarchy(candidates, &hierarchy);
+    admit_stack_pin_closures(candidates, &mut admitted, stack_policy);
+    admit_named_dependency_toolchains(candidates, &mut admitted, &materialized.dependencies);
+    admitted = expand_extension_provides(admitted);
+    Ok((materialized, hierarchy, admitted))
+}
+
 /// Like [`unsatisfied_direct_dependencies`], with an optional hierarchy fixture.
 pub fn unsatisfied_direct_dependencies_with_hierarchy(
     plan: &PackagePlan,
@@ -74,14 +100,14 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
     stack_policy: &StackPolicy,
     hierarchy_fixture: Option<&Path>,
 ) -> Result<Vec<UnsatisfiedDirectDependency>, ProfileSolveError> {
-    let materialized = materialize_profile(plan, profile_name, environment)
-        .map_err(|error| ProfileSolveError::Materialize(error.to_string()))?;
-    let hierarchy = hierarchy_for_with_tree(&plan.build.toolchain, hierarchy_fixture, candidates)
-        .map_err(|error| ProfileSolveError::Resolve(error.to_string()))?;
-    let mut admitted = filter_candidates_in_hierarchy(candidates, &hierarchy);
-    admit_stack_pin_closures(candidates, &mut admitted, stack_policy);
-    admit_named_dependency_toolchains(candidates, &mut admitted, &materialized.dependencies);
-    admitted = expand_extension_provides(admitted);
+    let (materialized, _hierarchy, admitted) = admit_profile_universe(
+        plan,
+        profile_name,
+        environment,
+        candidates,
+        stack_policy,
+        hierarchy_fixture,
+    )?;
 
     let mut holes = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -189,8 +215,14 @@ pub fn solve_package_profile_with_hierarchy(
     stack_policy: &StackPolicy,
     hierarchy_fixture: Option<&Path>,
 ) -> Result<ProfileLock, ProfileSolveError> {
-    let materialized = materialize_profile(plan, profile_name, environment)
-        .map_err(|error| ProfileSolveError::Materialize(error.to_string()))?;
+    let (materialized, hierarchy, mut original_candidates) = admit_profile_universe(
+        plan,
+        profile_name,
+        environment,
+        candidates,
+        stack_policy,
+        hierarchy_fixture,
+    )?;
     let synthetic_name = format!("__package_profile__{}__{}", plan.package.name, profile_name);
     let mut direct_roles: BTreeMap<String, bool> = BTreeMap::new();
     let mut implicit_easybuild_dependencies = HashSet::new();
@@ -229,16 +261,6 @@ pub fn solve_package_profile_with_hierarchy(
         }
     }
 
-    let hierarchy = hierarchy_for_with_tree(&plan.build.toolchain, hierarchy_fixture, candidates)
-        .map_err(|error| ProfileSolveError::Resolve(error.to_string()))?;
-    let mut original_candidates = filter_candidates_in_hierarchy(candidates, &hierarchy);
-    admit_stack_pin_closures(candidates, &mut original_candidates, stack_policy);
-    admit_named_dependency_toolchains(
-        candidates,
-        &mut original_candidates,
-        &materialized.dependencies,
-    );
-    original_candidates = expand_extension_provides(original_candidates);
     // A recipe does not compete with itself. A bundle's own `exts_list` holds
     // packages it installs, and expanding those into provides puts them beside
     // the modules the same recipe depends on: a CUDA wheel bundle carries
