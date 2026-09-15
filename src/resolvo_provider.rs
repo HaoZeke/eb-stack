@@ -66,6 +66,42 @@ fn toolchain_label(tc: &crate::domain::Toolchain) -> String {
     tc.identity_label()
 }
 
+/// Names and paths `forbid` must remove, including a provide reminted
+/// after its first-class sibling was dropped by path.
+fn forbidden_names(universe: &[Candidate], forbid: &[String]) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for entry in forbid {
+        names.insert(entry.clone());
+        if let Some(candidate) = universe
+            .iter()
+            .find(|candidate| candidate.easyconfig_path == *entry)
+        {
+            names.insert(candidate.name.clone());
+        }
+    }
+    names
+}
+
+fn apply_forbid(
+    candidates: Vec<Candidate>,
+    universe: &[Candidate],
+    forbid: &[String],
+) -> Vec<Candidate> {
+    if forbid.is_empty() {
+        return candidates;
+    }
+    let names = forbidden_names(universe, forbid);
+    candidates
+        .into_iter()
+        .filter(|candidate| {
+            !names.contains(&candidate.name)
+                && !forbid
+                    .iter()
+                    .any(|entry| entry == &candidate.easyconfig_path)
+        })
+        .collect()
+}
+
 /// The resolvo package name for a candidate.
 ///
 /// Plain for the ordinary case, qualified by toolchain for the names that a
@@ -297,7 +333,11 @@ impl EbProvider {
                 })
                 .cloned()
                 .collect();
-            crate::provides::expand_extension_provides(filtered)
+            apply_forbid(
+                crate::provides::expand_extension_provides(filtered),
+                candidates_in,
+                &policy.forbid,
+            )
         };
 
         // A generation carries some packages at more than one level, and they
@@ -1408,7 +1448,11 @@ fn scope_generation(candidates: &[Candidate], policy: &Policy) -> Result<Vec<Can
         })
         .cloned()
         .collect();
-    Ok(crate::provides::expand_extension_provides(filtered))
+    Ok(apply_forbid(
+        crate::provides::expand_extension_provides(filtered),
+        candidates,
+        &policy.forbid,
+    ))
 }
 
 fn solve_feasibility_scoped(
@@ -1448,7 +1492,7 @@ fn solve_feasibility_scoped(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{DepReq, LockPackage, RequireUpgrade, SolverMeta, Toolchain};
+    use crate::domain::{DepReq, ExtEntry, LockPackage, RequireUpgrade, SolverMeta, Toolchain};
 
     fn tc() -> Toolchain {
         Toolchain {
@@ -1805,6 +1849,72 @@ mod tests {
         assert_eq!(zlib.version, "1.2.13");
         assert_eq!(zlib.toolchain.name, "GCCcore");
         assert_eq!(zlib.toolchain.version, "14.3.0");
+    }
+
+    #[test]
+    fn forbid_name_drops_a_reminted_extension_provide() {
+        let mut bundle = cand("Bundle", "1.0", None, "Bundle-1.0.eb", vec![]);
+        bundle.exts_list = vec![ExtEntry {
+            name: "Lib".into(),
+            version: "2.0".into(),
+        }];
+        let candidates = vec![
+            bundle,
+            cand(
+                "App",
+                "1.0",
+                None,
+                "App-1.0.eb",
+                vec![DepReq {
+                    name: "Lib".into(),
+                    version_req: "==2.0".into(),
+                    versionsuffix: None,
+                    toolchain: None,
+                }],
+            ),
+        ];
+        let mut pol = policy(vec!["App"], vec![]);
+        pol.forbid = vec!["Lib".into()];
+        let error = solve_with_resolvo(&candidates, &pol, None)
+            .expect_err("forbidding Lib must not leave a provide");
+        assert!(
+            error.contains("unsatisfiable") || error.contains("Lib"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn forbid_first_class_path_drops_the_same_named_provide() {
+        let mut bundle = cand("Bundle", "1.0", None, "Bundle-1.0.eb", vec![]);
+        bundle.exts_list = vec![ExtEntry {
+            name: "Lib".into(),
+            version: "2.0".into(),
+        }];
+        let first_class = cand("Lib", "2.0", None, "Lib-2.0.eb", vec![]);
+        let candidates = vec![
+            bundle,
+            first_class,
+            cand(
+                "App",
+                "1.0",
+                None,
+                "App-1.0.eb",
+                vec![DepReq {
+                    name: "Lib".into(),
+                    version_req: "==2.0".into(),
+                    versionsuffix: None,
+                    toolchain: None,
+                }],
+            ),
+        ];
+        let mut pol = policy(vec!["App"], vec![]);
+        pol.forbid = vec!["Lib-2.0.eb".into()];
+        let error = solve_with_resolvo(&candidates, &pol, None)
+            .expect_err("forbidding the first-class path must drop the provide too");
+        assert!(
+            error.contains("unsatisfiable") || error.contains("Lib"),
+            "{error}"
+        );
     }
 
     #[test]
