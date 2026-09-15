@@ -61,6 +61,8 @@ struct CranJson {
     imports: Vec<String>,
     #[serde(default, alias = "LinkingTo", deserialize_with = "deserialize_r_list")]
     linking_to: Vec<String>,
+    #[serde(default, alias = "SystemRequirements")]
+    system_requirements: Option<String>,
 }
 
 fn deserialize_r_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -113,7 +115,7 @@ where
 fn parse_cran_json(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let doc: CranJson = serde_json::from_str(text)
         .map_err(|error| ForeignError::Parse(format!("cran json: {error}")))?;
-    recipe_from_fields(CranFields {
+    let mut recipe = recipe_from_fields(CranFields {
         name: doc.package,
         version: doc.version,
         title: doc.title,
@@ -124,7 +126,9 @@ fn parse_cran_json(text: &str) -> Result<ForeignRecipe, ForeignError> {
         imports: &doc.imports,
         linking_to: &doc.linking_to,
         note: "parsed from CRAN JSON",
-    })
+    })?;
+    record_system_requirements(&mut recipe, doc.system_requirements.as_deref());
+    Ok(recipe)
 }
 
 fn parse_description(text: &str) -> Result<ForeignRecipe, ForeignError> {
@@ -155,18 +159,24 @@ fn parse_description(text: &str) -> Result<ForeignRecipe, ForeignError> {
         linking_to: &split_r_list(fields.get("linkingto").map(String::as_str).unwrap_or("")),
         note: "parsed from DESCRIPTION",
     })?;
-    if let Some(sysreq) = fields.get("systemrequirements") {
-        if !sysreq.trim().is_empty() {
-            recipe.residuals.push(ForeignResidual {
-                category: "cran-system-requirements".into(),
-                severity: ResidualSeverity::Judgment,
-                summary: format!("SystemRequirements not encoded: {sysreq}"),
-                evidence: Some(sysreq.clone()),
-                provenance: None,
-            });
-        }
-    }
+    record_system_requirements(
+        &mut recipe,
+        fields.get("systemrequirements").map(String::as_str),
+    );
     Ok(recipe)
+}
+
+fn record_system_requirements(recipe: &mut ForeignRecipe, sysreq: Option<&str>) {
+    let Some(sysreq) = sysreq.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    recipe.residuals.push(ForeignResidual {
+        category: "cran-system-requirements".into(),
+        severity: ResidualSeverity::Judgment,
+        summary: format!("SystemRequirements not encoded: {sysreq}"),
+        evidence: Some(sysreq.to_string()),
+        provenance: None,
+    });
 }
 
 fn parse_package_list(text: &str) -> Result<ForeignRecipe, ForeignError> {
@@ -649,6 +659,22 @@ mod tests {
             "Package: xml2\n\
              Version: 1.3.6\n\
              SystemRequirements: libxml2 >= 2.9\n",
+        )
+        .expect("parse");
+        assert!(
+            recipe.residuals.iter().any(|residual| {
+                residual.category == "cran-system-requirements"
+                    && residual.summary.contains("libxml2")
+            }),
+            "{:?}",
+            recipe.residuals
+        );
+    }
+
+    #[test]
+    fn cran_json_system_requirements_become_a_judgment_residual() {
+        let recipe = parse_cran_str(
+            r#"{"Package":"xml2","Version":"1.6.0","SystemRequirements":"libxml2 >= 2.9"}"#,
         )
         .expect("parse");
         assert!(
