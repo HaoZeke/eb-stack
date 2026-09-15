@@ -105,7 +105,8 @@ fn toolchain_from_easyconfig_path(path: &Path) -> Option<Toolchain> {
 }
 
 fn easyconfig_version_key(path: &Path, name: &str) -> String {
-    path.file_name()
+    let Some(rest) = path
+        .file_name()
         .and_then(|file| file.to_str())
         .and_then(|file| file.strip_suffix(".eb"))
         .and_then(|file| {
@@ -115,9 +116,31 @@ fn easyconfig_version_key(path: &Path, name: &str) -> String {
                         .is_some_and(|prefix| prefix.eq_ignore_ascii_case(name))
                 })
                 .and_then(|rest| rest.strip_prefix('-'))
-                .map(ToString::to_string)
         })
-        .unwrap_or_default()
+    else {
+        return String::new();
+    };
+    let parts: Vec<&str> = rest.split('-').collect();
+    let mut toolchain_at = None;
+    for index in 0..parts.len().saturating_sub(1) {
+        if !parts[index].is_empty()
+            && parts[index]
+                .chars()
+                .all(|character| character.is_ascii_alphabetic())
+            && parts[index + 1]
+                .chars()
+                .next()
+                .is_some_and(|character| character.is_ascii_digit())
+        {
+            toolchain_at = Some(index);
+            break;
+        }
+    }
+    match toolchain_at {
+        Some(0) => String::new(),
+        Some(index) => parts[..index].join("-"),
+        None => rest.to_string(),
+    }
 }
 
 /// `{name}.toml` next to a parent `--package-config`.
@@ -418,6 +441,32 @@ mod tests {
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.starts_with("Python-3.10.13-")),
             "3.10 must beat 3.9, got {}",
+            found.display()
+        );
+    }
+
+    #[test]
+    fn newest_named_eb_prefers_a_release_over_the_matching_rc() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let dir = temp.path().join("p").join("Python");
+        fs::create_dir_all(&dir).expect("python dir");
+        fs::write(
+            dir.join("Python-3.12.0rc1-GCCcore-13.3.0.eb"),
+            "name = 'Python'\n",
+        )
+        .expect("rc");
+        fs::write(
+            dir.join("Python-3.12.0-GCCcore-13.3.0.eb"),
+            "name = 'Python'\n",
+        )
+        .expect("release");
+        let found = newest_named_eb(&dir, "Python").expect("hit");
+        assert!(
+            found
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("Python-3.12.0-")),
+            "release must beat rc, got {}",
             found.display()
         );
     }
