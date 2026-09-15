@@ -481,7 +481,10 @@ impl BuildTarget {
         self.build_command_with_robot_paths(recipe, &[])
     }
 
-    /// Route an EasyBuild command with additional robot roots after configured roots.
+    /// Route an EasyBuild command with additional robot roots before configured roots.
+    ///
+    /// EasyBuild first-match means a campaign overlay must precede the site
+    /// robot, or a same-identity dep stays on the upstream recipe.
     pub fn build_command_with_robot_paths(
         &self,
         recipe: &str,
@@ -496,8 +499,13 @@ impl BuildTarget {
                 .map(|(name, value)| format!("{name}={value}")),
         );
         tokens.push(self.easybuild.command.clone());
-        let mut robot_paths = self.easybuild.robot_paths.clone();
+        let mut robot_paths = Vec::new();
         for path in additional_robot_paths {
+            if !robot_paths.contains(path) {
+                robot_paths.push(path.clone());
+            }
+        }
+        for path in &self.easybuild.robot_paths {
             if !robot_paths.contains(path) {
                 robot_paths.push(path.clone());
             }

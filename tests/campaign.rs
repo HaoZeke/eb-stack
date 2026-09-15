@@ -395,7 +395,7 @@ fn campaign_adds_the_staged_bundle_overlay_to_robot_paths() {
     })
     .expect("campaign");
     let finding = state.findings.last().expect("build finding");
-    let expected = format!("--robot=/tmp:{}", bundle.join("easyconfigs").display());
+    let expected = format!("--robot={}:/tmp", bundle.join("easyconfigs").display());
     assert!(
         finding
             .command
