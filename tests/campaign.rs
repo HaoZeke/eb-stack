@@ -151,7 +151,7 @@ fn campaign_interns_easybuild_command_output_before_classifying() {
     std::fs::write(
         &command,
         format!(
-            "#!/bin/sh\nprintf '%s\\n' 'output (stdout + stderr)  ->  {}'\nprintf '%s\\n' 'ERROR: installation failed'\nexit 1\n",
+            "#!/bin/sh\nprintf '%s\\n' '    full command              ->  make -j 2'\nprintf '%s\\n' '    working directory         ->  /tmp/eb-build'\nprintf '%s\\n' '    called from               ->  build_step'\nprintf '%s\\n' '    output (stdout + stderr)  ->  {}'\nprintf '%s\\n' '    interactive shell script  ->  /tmp/eb-build/cmd.sh'\nprintf '%s\\n' 'ERROR: installation failed'\nexit 1\n",
             nested_log.display()
         ),
     )
@@ -171,6 +171,15 @@ fn campaign_interns_easybuild_command_output_before_classifying() {
     assert!(state.findings[0]
         .evidence
         .contains(&nested_log.display().to_string()));
+    assert!(state.findings[0]
+        .evidence
+        .contains("full command: make -j 2"));
+    assert!(state.findings[0]
+        .evidence
+        .contains("working directory: /tmp/eb-build"));
+    assert!(state.findings[0]
+        .evidence
+        .contains("interactive shell script: /tmp/eb-build/cmd.sh"));
 }
 
 #[test]

@@ -1220,6 +1220,11 @@ fn compact_evidence(stdout: &str, stderr: &str) -> String {
 fn build_failure_evidence(target: &BuildTarget, stdout: &str, stderr: &str) -> String {
     let mut evidence = compact_evidence(stdout, stderr);
     let combined = format!("{stdout}\n{stderr}");
+    let banner = easybuild_banner_fields(&combined);
+    if !banner.is_empty() {
+        evidence.push('\n');
+        evidence.push_str(&banner);
+    }
     for path in easybuild_output_paths(&combined).into_iter().take(4) {
         let nested = if matches!(target.transport, TargetTransport::Local) {
             match std::fs::read_to_string(&path) {
@@ -1245,6 +1250,36 @@ fn build_failure_evidence(target: &BuildTarget, stdout: &str, stderr: &str) -> S
         ));
     }
     evidence
+}
+
+fn easybuild_banner_fields(output: &str) -> String {
+    let mut fields = Vec::new();
+    for line in output.lines() {
+        let lower = line.to_ascii_lowercase();
+        let key = if lower.contains("full command") {
+            "full command"
+        } else if lower.contains("working directory") {
+            "working directory"
+        } else if lower.contains("interactive shell script") {
+            "interactive shell script"
+        } else if lower.contains("called from") {
+            "called from"
+        } else {
+            continue;
+        };
+        let Some((_, rest)) = line.split_once("->") else {
+            continue;
+        };
+        let rest = rest
+            .split_once('\u{1b}')
+            .map(|(path, _)| path)
+            .unwrap_or(rest)
+            .trim();
+        if !rest.is_empty() {
+            fields.push(format!("{key}: {rest}"));
+        }
+    }
+    fields.join("\n")
 }
 
 fn easybuild_output_paths(output: &str) -> Vec<PathBuf> {
