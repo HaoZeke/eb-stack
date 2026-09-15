@@ -711,11 +711,20 @@ impl ClosureState<'_> {
             if deferred == holes.len() && defers_holes_to_overlay_extensions(&plan.origin) {
                 return Ok(());
             }
+            if let Some(hole) =
+                first_unadmitted_generated_hole(&holes, self.generated.keys().map(String::as_str))
+            {
+                return Err(PackageClosureError::GeneratedCandidateNotAdmitted {
+                    name: hole.name.clone(),
+                    required: hole.version_req.clone(),
+                    profile: profile.to_string(),
+                });
+            }
             let hole = &holes[0];
-            return Err(PackageClosureError::GeneratedCandidateNotAdmitted {
+            return Err(PackageClosureError::MissingSource {
                 name: hole.name.clone(),
-                required: hole.version_req.clone(),
-                profile: profile.to_string(),
+                version_req: hole.version_req.clone(),
+                candidates: Vec::new(),
             });
         }
     }
@@ -1264,6 +1273,18 @@ fn language_root_already_provided(plan: &PackagePlan, candidates: &[Candidate]) 
     existing_language_provider(&plan.package.name, &admitted).is_some()
 }
 
+fn first_unadmitted_generated_hole<'a>(
+    holes: &'a [UnsatisfiedDirectDependency],
+    generated_keys: impl Iterator<Item = &'a str>,
+) -> Option<&'a UnsatisfiedDirectDependency> {
+    let keys: Vec<&str> = generated_keys.collect();
+    holes.iter().find(|hole| {
+        let identity = package_identity(&hole.name);
+        keys.iter()
+            .any(|key| key.split('@').next() == Some(identity.as_str()))
+    })
+}
+
 fn hole_path_step(hole: &UnsatisfiedDirectDependency) -> String {
     match hole
         .versionsuffix
@@ -1450,6 +1471,27 @@ mod tests {
             locks: Vec::new(),
             easyconfigs: Vec::new(),
         }
+    }
+
+    #[test]
+    fn unresolved_error_names_the_generated_companion_not_the_first_leftover() {
+        let foo = UnsatisfiedDirectDependency {
+            name: "foo".into(),
+            version_req: ">=0".into(),
+            versionsuffix: None,
+            build: false,
+        };
+        let bravo = UnsatisfiedDirectDependency {
+            name: "bravo".into(),
+            version_req: ">=1.0".into(),
+            versionsuffix: None,
+            build: false,
+        };
+        let holes = [foo, bravo];
+        let generated = ["bravo@1.5@foss-2025a@"];
+        let named = first_unadmitted_generated_hole(&holes, generated.into_iter())
+            .expect("generated bravo");
+        assert_eq!(named.name, "bravo");
     }
 
     #[test]

@@ -102,6 +102,8 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- When a generated companion is not admitted, the typed error names
+  that companion, not the first leftover that has no source.
 - A crates.io version dump that already lists `deps` records those
   crate-graph residuals instead of dropping them.
 - A `.tar.gz` release next to a `.tar.xz` git checkout is not a
