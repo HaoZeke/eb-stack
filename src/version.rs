@@ -373,6 +373,30 @@ fn numeric_components(version: &str) -> Vec<u64> {
 
 /// Upper bound of a release series, as `[components…]` with `index` bumped and
 /// everything after it dropped.
+/// Whether `version` is in the series strictly below `ceiling`.
+///
+/// `cmp_version` treats a pre-release of the ceiling as Less (`1.3.0rc1` <
+/// `1.3`). That is the right order, but `~=` / `^` / `~` exclude the next
+/// series entirely, including its pre-releases.
+fn below_series_ceiling(version: &str, ceiling: &str) -> bool {
+    if cmp_version(version, ceiling) != Ordering::Less {
+        return false;
+    }
+    let version_nums = numeric_components(version);
+    let ceiling_nums = numeric_components(ceiling);
+    let n = version_nums.len().max(ceiling_nums.len());
+    for i in 0..n {
+        let left = version_nums.get(i).copied().unwrap_or(0);
+        let right = ceiling_nums.get(i).copied().unwrap_or(0);
+        match left.cmp(&right) {
+            Ordering::Less => return true,
+            Ordering::Greater => return false,
+            Ordering::Equal => {}
+        }
+    }
+    false
+}
+
 fn series_ceiling(components: &[u64], index: usize) -> String {
     let mut bound: Vec<u64> = components[..=index].to_vec();
     bound[index] += 1;
@@ -394,7 +418,7 @@ fn matches_compatible_release(version: &str, floor: &str) -> bool {
         return true;
     }
     let ceiling = series_ceiling(&components, components.len() - 2);
-    cmp_version(version, &ceiling) == Ordering::Less
+    below_series_ceiling(version, &ceiling)
 }
 
 /// `^X.Y.Z` allows anything up to the next change of the left-most non-zero
@@ -412,7 +436,7 @@ fn matches_caret(version: &str, floor: &str) -> bool {
         .position(|component| *component != 0)
         .unwrap_or(components.len() - 1);
     let ceiling = series_ceiling(&components, significant);
-    cmp_version(version, &ceiling) == Ordering::Less
+    below_series_ceiling(version, &ceiling)
 }
 
 /// `~X.Y.Z` and `~X.Y` allow patch-level changes, `~X` minor-level ones.
@@ -426,7 +450,7 @@ fn matches_tilde(version: &str, floor: &str) -> bool {
     }
     let index = if components.len() >= 2 { 1 } else { 0 };
     let ceiling = series_ceiling(&components, index);
-    cmp_version(version, &ceiling) == Ordering::Less
+    below_series_ceiling(version, &ceiling)
 }
 
 #[cfg(test)]
@@ -491,6 +515,15 @@ mod ecosystem_operator_tests {
     fn a_prerelease_suffix_does_not_move_the_bound() {
         assert!(matches_req("1.2.3rc1", "^1.2.0"));
         assert!(matches_req("1.2.3", "~=1.2.0"));
+    }
+
+    #[test]
+    fn a_pre_release_of_the_next_series_is_outside_the_bound() {
+        assert!(!matches_req("1.3.0rc1", "~=1.2.0"));
+        assert!(!matches_req("2.0rc1", "^1.2.0"));
+        assert!(!matches_req("1.3.0rc1", "~1.2.3"));
+        assert!(!matches_req("2.0a", "~=1.2"));
+        assert!(matches_req("1.2.3rc1", "^1.2.0"));
     }
 }
 
