@@ -823,6 +823,107 @@ mod prefer_installed_tests {
         let lock = select_stack(&universe, &policy(true), Some(&installed)).expect("solve");
         assert_eq!(lock.package("Alpha").unwrap().version, "2.0");
     }
+
+    #[test]
+    fn prefer_installed_keeps_a_multi_level_package() {
+        let foss = Toolchain {
+            name: "foss".into(),
+            version: "2025b".into(),
+        };
+        let gcccore = Toolchain {
+            name: "GCCcore".into(),
+            version: "14.3.0".into(),
+        };
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let perl = |version: &str, toolchain: &Toolchain| Candidate {
+            name: "Perl".into(),
+            version: version.into(),
+            toolchain: toolchain.clone(),
+            versionsuffix: None,
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            easyconfig_path: format!("p/Perl/Perl-{version}.eb"),
+            exts_list: Vec::new(),
+            moduleclass: None,
+        };
+        let universe = Universe {
+            toolchain: foss.clone(),
+            generation_label: Some("foss-2025b".into()),
+            candidates: vec![
+                perl("5.38.0", &gcccore),
+                perl("5.42.0", &gcccore),
+                perl("5.38.0", &system),
+                Candidate {
+                    name: "App".into(),
+                    version: "1.0".into(),
+                    toolchain: foss.clone(),
+                    versionsuffix: None,
+                    dependencies: vec![DepReq {
+                        name: "Perl".into(),
+                        version_req: String::new(),
+                        toolchain: Some(gcccore.clone()),
+                        versionsuffix: None,
+                    }],
+                    builddependencies: Vec::new(),
+                    easyconfig_path: "a/App/App-1.0.eb".into(),
+                    exts_list: Vec::new(),
+                    moduleclass: None,
+                },
+            ],
+        };
+        let installed = StackLock {
+            schema_version: STACK_LOCK_SCHEMA_VERSION,
+            toolchain: foss.clone(),
+            generation_label: Some("installed".into()),
+            packages: vec![LockPackage {
+                name: "Perl".into(),
+                version: "5.38.0".into(),
+                toolchain: gcccore,
+                versionsuffix: None,
+                easyconfig_path: "p/Perl/Perl-5.38.0.eb".into(),
+            }],
+            solver: SolverMeta {
+                engine: "eb_parse".into(),
+                engine_version: "0".into(),
+                timestamp: "2026-08-12T00:00:00Z".into(),
+            },
+        };
+        let mut pol = policy(true);
+        pol.toolchain = foss;
+        pol.roots = vec!["App".into()];
+        let lock = select_stack(&universe, &pol, Some(&installed)).expect("solve");
+        assert_eq!(
+            lock.package("Perl").unwrap().version,
+            "5.38.0",
+            "multi-level Perl must stay at the installed GCCcore build"
+        );
+    }
+
+    #[test]
+    fn prefer_installed_matches_system_spelling_variants() {
+        let (mut universe, mut installed) = universe_with(&["1.0", "2.0"]);
+        for candidate in &mut universe.candidates {
+            candidate.toolchain = Toolchain {
+                name: "system".into(),
+                version: "system".into(),
+            };
+        }
+        universe.candidates[0].versionsuffix = Some(String::new());
+        installed.packages[0].toolchain = Toolchain {
+            name: "dummy".into(),
+            version: String::new(),
+        };
+        installed.packages[0].versionsuffix = None;
+        let lock = select_stack(&universe, &policy(true), Some(&installed)).expect("solve");
+        assert_eq!(
+            lock.package("Alpha").unwrap().version,
+            "1.0",
+            "SYSTEM dummy/empty must match system/system"
+        );
+    }
 }
 
 #[cfg(test)]

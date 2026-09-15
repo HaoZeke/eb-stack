@@ -525,36 +525,40 @@ impl EbProvider {
         if policy.prefer_installed {
             if let Some(base) = baseline {
                 for installed in &base.packages {
-                    let name = &installed.name;
-                    if favored_ranks.contains_key(name)
-                        || locked_ranks.contains_key(name)
-                        || pin_ranks.contains_key(name)
-                        || min_rank_exclusive.contains_key(name)
-                    {
-                        continue;
-                    }
-                    let Some(ranked) = ranks.get(name) else {
-                        continue;
-                    };
-                    // Same version is not the same build: a variant differing
-                    // only in versionsuffix is a different module, and
-                    // preferring it would keep nothing that is installed.
-                    let installed_rank = ranked.iter().find_map(|(rank, idx)| {
-                        let candidate = &candidates[*idx];
-                        (candidate.version == installed.version
-                            && candidate.versionsuffix.as_deref().unwrap_or("")
-                                == installed.versionsuffix.as_deref().unwrap_or("")
-                            && candidate.toolchain == installed.toolchain)
-                            .then_some(*rank)
-                    });
-                    if let Some(rank) = installed_rank {
-                        if excluded_ranks
-                            .get(name)
-                            .is_some_and(|excluded| excluded.contains_key(&rank))
+                    for key in keys_for_name(&ranks, &installed.name) {
+                        if favored_ranks.contains_key(&key)
+                            || locked_ranks.contains_key(&key)
+                            || pin_ranks.contains_key(&key)
+                            || min_rank_exclusive.contains_key(&key)
                         {
                             continue;
                         }
-                        favored_ranks.insert(name.clone(), rank);
+                        let Some(ranked) = ranks.get(&key) else {
+                            continue;
+                        };
+                        // Same version is not the same build: a variant differing
+                        // only in versionsuffix is a different module, and
+                        // preferring it would keep nothing that is installed.
+                        let installed_rank = ranked.iter().find_map(|(rank, idx)| {
+                            let candidate = &candidates[*idx];
+                            (candidate.version == installed.version
+                                && candidate.versionsuffix.as_deref().unwrap_or("")
+                                    == installed.versionsuffix.as_deref().unwrap_or("")
+                                && crate::hierarchy::toolchains_match(
+                                    &candidate.toolchain,
+                                    &installed.toolchain,
+                                ))
+                            .then_some(*rank)
+                        });
+                        if let Some(rank) = installed_rank {
+                            if excluded_ranks
+                                .get(&key)
+                                .is_some_and(|excluded| excluded.contains_key(&rank))
+                            {
+                                continue;
+                            }
+                            favored_ranks.insert(key, rank);
+                        }
                     }
                 }
             }
@@ -1252,7 +1256,10 @@ fn versions_in_trial_order(
                     && candidate.version == installed.version
                     && candidate.versionsuffix.as_deref().unwrap_or("")
                         == installed.versionsuffix.as_deref().unwrap_or("")
-                    && candidate.toolchain == installed.toolchain
+                    && crate::hierarchy::toolchains_match(
+                        &candidate.toolchain,
+                        &installed.toolchain,
+                    )
             });
             if installed_exists {
                 if let Some(at) = versions.iter().position(|v| *v == installed.version) {
