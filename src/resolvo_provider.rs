@@ -225,6 +225,7 @@ impl EbProvider {
             baseline,
             stack_policy,
             false,
+            false,
         )
     }
 
@@ -234,6 +235,7 @@ impl EbProvider {
         baseline: Option<&StackLock>,
         stack_policy: Option<&StackPolicy>,
         curated_toolchains: bool,
+        already_scoped: bool,
     ) -> Result<Self, String> {
         if let Some(stack) = stack_policy {
             validate_stack_policy(policy, stack)?;
@@ -254,18 +256,22 @@ impl EbProvider {
                 |t: &crate::domain::Toolchain| crate::hierarchy::toolchains_match(&c.toolchain, t);
             same(&policy.toolchain) || hierarchy_members.iter().any(same)
         };
-        let filtered: Vec<Candidate> = candidates_in
-            .iter()
-            .filter(|c| {
-                (curated_toolchains || in_generation(c))
-                    && !policy
-                        .forbid
-                        .iter()
-                        .any(|f| f == &c.easyconfig_path || f == &c.name)
-            })
-            .cloned()
-            .collect();
-        let candidates = crate::provides::expand_extension_provides(filtered);
+        let candidates = if already_scoped {
+            candidates_in.to_vec()
+        } else {
+            let filtered: Vec<Candidate> = candidates_in
+                .iter()
+                .filter(|c| {
+                    (curated_toolchains || in_generation(c))
+                        && !policy
+                            .forbid
+                            .iter()
+                            .any(|f| f == &c.easyconfig_path || f == &c.name)
+                })
+                .cloned()
+                .collect();
+            crate::provides::expand_extension_provides(filtered)
+        };
 
         // A generation carries some packages at more than one level, and they
         // are different modules: EasyBuild installs Perl at GCCcore and Perl at
@@ -1030,6 +1036,7 @@ fn solve_feasibility_with_stack_policy(
         baseline,
         Some(stack_policy),
         curated_toolchains,
+        false,
     )?;
     let requirements = provider.root_requirements(&policy.roots);
     if requirements.len() != policy.roots.len() {
@@ -1302,6 +1309,7 @@ pub fn solve_with_resolvo(
         return Err("unsatisfiable stack: policy has no roots".into());
     }
     require_generation_hierarchy(&policy.toolchain, candidates)?;
+    let scoped = scope_generation(candidates, policy)?;
 
     // Sequential lex maximization: for each root in priority order, pin the
     // newest version that remains jointly feasible with already-chosen higher
@@ -1309,7 +1317,7 @@ pub fn solve_with_resolvo(
     let mut chosen_root_versions: Vec<(String, String)> = Vec::new();
 
     for root in &priority {
-        let versions = versions_in_trial_order(candidates, policy, root, baseline);
+        let versions = versions_in_trial_order(&scoped, policy, root, baseline);
         if versions.is_empty() {
             return Err(format!("no candidates for root package {root}"));
         }
@@ -1320,7 +1328,7 @@ pub fn solve_with_resolvo(
             let mut trial_pins = chosen_root_versions.clone();
             trial_pins.push((root.clone(), ver.clone()));
             let trial_policy = policy_with_root_version_pins(policy, &trial_pins);
-            match solve_feasibility(candidates, &trial_policy, baseline) {
+            match solve_feasibility_scoped(&scoped, &trial_policy, baseline) {
                 Ok(_) => {
                     found = Some(ver.clone());
                     break;
@@ -1350,7 +1358,62 @@ pub fn solve_with_resolvo(
     // Final solve with all priority-optimal root versions pinned; co-selected
     // non-root packages still prefer newer via resolvo's sort_candidates.
     let final_policy = policy_with_root_version_pins(policy, &chosen_root_versions);
-    solve_feasibility(candidates, &final_policy, baseline)
+    solve_feasibility_scoped(&scoped, &final_policy, baseline)
+}
+
+fn scope_generation(candidates: &[Candidate], policy: &Policy) -> Result<Vec<Candidate>, String> {
+    let hierarchy_members =
+        crate::hierarchy::hierarchy_for_with_tree(&policy.toolchain, None, candidates)
+            .map(|h| h.members)
+            .map_err(|error| error.to_string())?;
+    let filtered: Vec<Candidate> = candidates
+        .iter()
+        .filter(|c| {
+            let same =
+                |t: &crate::domain::Toolchain| crate::hierarchy::toolchains_match(&c.toolchain, t);
+            (same(&policy.toolchain) || hierarchy_members.iter().any(same))
+                && !policy
+                    .forbid
+                    .iter()
+                    .any(|f| f == &c.easyconfig_path || f == &c.name)
+        })
+        .cloned()
+        .collect();
+    Ok(crate::provides::expand_extension_provides(filtered))
+}
+
+fn solve_feasibility_scoped(
+    scoped: &[Candidate],
+    policy: &Policy,
+    baseline: Option<&StackLock>,
+) -> Result<Vec<Candidate>, String> {
+    let provider = EbProvider::from_universe_with_stack_policy_scope(
+        scoped, policy, baseline, None, false, true,
+    )?;
+    let requirements = provider.root_requirements(&policy.roots);
+    if requirements.len() != policy.roots.len() {
+        return Err("unsatisfiable stack: no valid root version sets (pins/upgrade)".into());
+    }
+    let mut solver = resolvo::Solver::new(provider);
+    let problem = resolvo::Problem::new().requirements(requirements);
+    match solver.solve(problem) {
+        Ok(solvables) => {
+            let provider = solver.provider();
+            let mut selected: Vec<Candidate> = solvables
+                .iter()
+                .map(|solvable| provider.candidate_for_solvable(*solvable).clone())
+                .collect();
+            selected.sort_by(|left, right| left.name.cmp(&right.name));
+            Ok(selected)
+        }
+        Err(resolvo::UnsolvableOrCancelled::Unsolvable(conflict)) => {
+            let message = conflict.display_user_friendly(&solver).to_string();
+            Err(format!("unsatisfiable stack (Resolvo SAT): {message}"))
+        }
+        Err(resolvo::UnsolvableOrCancelled::Cancelled(reason)) => {
+            Err(format!("solver cancelled: {reason:?}"))
+        }
+    }
 }
 
 #[cfg(test)]
