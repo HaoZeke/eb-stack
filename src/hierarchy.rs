@@ -339,7 +339,10 @@ fn derive_hierarchy_by_walking(
             pending.push(found);
         }
     }
-    if members.len() < 2 {
+    if !cands
+        .iter()
+        .any(|candidate| candidate_defines_toolchain(candidate, parent))
+    {
         return None;
     }
     members.push(parent.clone());

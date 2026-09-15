@@ -248,7 +248,7 @@ impl EbProvider {
         let hierarchy_members =
             crate::hierarchy::hierarchy_for_with_tree(&policy.toolchain, None, candidates_in)
                 .map(|h| h.members)
-                .unwrap_or_default();
+                .map_err(|error| error.to_string())?;
         let in_generation = |c: &Candidate| {
             let same =
                 |t: &crate::domain::Toolchain| crate::hierarchy::toolchains_match(&c.toolchain, t);
@@ -1190,6 +1190,15 @@ fn in_generation(
         .unwrap_or(false)
 }
 
+fn require_generation_hierarchy(
+    policy_tc: &crate::domain::Toolchain,
+    candidates: &[Candidate],
+) -> Result<(), String> {
+    crate::hierarchy::hierarchy_for_with_tree(policy_tc, None, candidates)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
 fn versions_in_trial_order(
     candidates: &[Candidate],
     policy: &Policy,
@@ -1276,6 +1285,7 @@ pub fn solve_with_resolvo(
     if priority.is_empty() {
         return Err("unsatisfiable stack: policy has no roots".into());
     }
+    require_generation_hierarchy(&policy.toolchain, candidates)?;
 
     // Sequential lex maximization: for each root in priority order, pin the
     // newest version that remains jointly feasible with already-chosen higher
@@ -1635,5 +1645,47 @@ mod tests {
         }"#;
         let p: Policy = serde_json::from_str(json).expect("null require_upgrade");
         assert!(p.require_upgrade.is_empty());
+    }
+
+    #[test]
+    fn unknown_hierarchy_is_not_a_missing_package() {
+        let local = Toolchain {
+            name: "local".into(),
+            version: "1.0".into(),
+        };
+        let mut app = cand(
+            "App",
+            "1.0",
+            None,
+            "App-1.0.eb",
+            vec![DepReq {
+                name: "CMake".into(),
+                version_req: String::new(),
+                versionsuffix: None,
+                toolchain: None,
+            }],
+        );
+        app.toolchain = local.clone();
+        let mut cmake = cand("CMake", "3.29.3", None, "CMake-3.29.3.eb", vec![]);
+        cmake.toolchain = Toolchain {
+            name: "GCCcore".into(),
+            version: "11.3.0".into(),
+        };
+        let mut pol = policy(vec!["App"], vec![]);
+        pol.toolchain = local;
+        let error = solve_with_resolvo(&[app, cmake], &pol, None)
+            .expect_err("undefined local-1.0 must not look like a missing CMake");
+        let low = error.to_lowercase();
+        assert!(
+            low.contains("local")
+                && (low.contains("defines")
+                    || low.contains("unknown")
+                    || low.contains("hierarchy")),
+            "hierarchy failure must be named, got: {error}"
+        );
+        assert!(
+            !low.contains("cmake"),
+            "must not report CMake as missing: {error}"
+        );
     }
 }
