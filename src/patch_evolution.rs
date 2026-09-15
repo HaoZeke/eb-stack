@@ -274,12 +274,28 @@ fn adopt_sibling_checksum_block(text: &str, sibling_text: &str) -> Result<String
             // The sibling list is the patch hashes; the CLI digest wins.
             Ok(keep_emitted_source_digest(text, &spliced))
         }
+        (Some(_), None) => Ok(retain_source_checksum_only(text)),
         (None, Some((their_start, their_end))) => Ok(insert_block_before_moduleclass(
             text,
             &sibling_text[their_start..their_end],
         )),
-        _ => Ok(text.to_string()),
+        (None, None) => Ok(text.to_string()),
     }
+}
+
+fn retain_source_checksum_only(text: &str) -> String {
+    let Ok(Some((assign_start, assign_end))) = find_list_assignment_span(text, "checksums") else {
+        return text.to_string();
+    };
+    let Some((digest_start, digest_end)) = first_source_sha256_span(text) else {
+        return text.to_string();
+    };
+    let digest = &text[digest_start..digest_end];
+    format!(
+        "{}checksums = ['{digest}']{}",
+        &text[..assign_start],
+        &text[assign_end..]
+    )
 }
 
 fn insert_block_before_moduleclass(text: &str, block: &str) -> String {
@@ -310,6 +326,12 @@ fn first_source_sha256_span(text: &str) -> Option<(usize, usize)> {
     let bytes = block.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
+        if bytes[i] == b'#' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
         let quote = bytes[i];
         if quote == b'\'' || quote == b'"' {
             let tok_start = i + 1;
@@ -355,12 +377,23 @@ fn keep_emitted_source_digest(before: &str, spliced: &str) -> String {
     };
     let keep = &before[keep_start..keep_end];
     let Some((slot_start, slot_end)) = first_source_sha256_span(spliced) else {
-        return spliced.to_string();
+        return insert_source_digest(spliced, keep);
     };
     if &spliced[slot_start..slot_end] == keep {
         return spliced.to_string();
     }
     format!("{}{}{}", &spliced[..slot_start], keep, &spliced[slot_end..])
+}
+
+fn insert_source_digest(text: &str, digest: &str) -> String {
+    let Ok(Some((assign_start, assign_end))) = find_list_assignment_span(text, "checksums") else {
+        return text.to_string();
+    };
+    format!(
+        "{}checksums = ['{digest}']{}",
+        &text[..assign_start],
+        &text[assign_end..]
+    )
 }
 
 /// Whether a patch file name embeds a version-like token other than the
@@ -790,5 +823,62 @@ mod tests {
         let out = adopt_sibling_patch_block(ours, sib_path.to_str().unwrap()).unwrap();
         assert!(out.contains(&format!("'{sib}'")), "{out}");
         assert!(out.contains(&format!("'{patch}'")), "{out}");
+    }
+
+    #[test]
+    fn sibling_without_checksums_drops_stale_patch_hashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let sib_path = dir.path().join("sib.eb");
+        std::fs::write(&sib_path, "name = 'X'\nmoduleclass = 'lib'\n").unwrap();
+        let src = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let old = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let ours = format!(
+            "name = 'X'\npatches = ['old.patch']\nchecksums = ['{src}', '{old}']\nmoduleclass = 'lib'\n"
+        );
+        let out = adopt_sibling_patch_block(&ours, sib_path.to_str().unwrap()).unwrap();
+        assert!(!out.contains("old.patch"), "{out}");
+        assert!(out.contains(&format!("'{src}'")), "{out}");
+        assert!(!out.contains(&format!("'{old}'")), "{out}");
+    }
+
+    #[test]
+    fn empty_sibling_checksums_keep_the_emitted_source_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let sib_path = dir.path().join("sib.eb");
+        let cli = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        std::fs::write(
+            &sib_path,
+            "patches = ['new.patch']\nchecksums = []\nmoduleclass = 'lib'\n",
+        )
+        .unwrap();
+        let ours = format!(
+            "name = 'X'\npatches = ['old.patch']\nchecksums = ['{cli}']\nmoduleclass = 'lib'\n"
+        );
+        let out = adopt_sibling_patch_block(&ours, sib_path.to_str().unwrap()).unwrap();
+        assert!(out.contains(&format!("'{cli}'")), "{out}");
+    }
+
+    #[test]
+    fn commented_checksum_is_not_the_source_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let sib_path = dir.path().join("sib.eb");
+        let cli = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let sib = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let stale = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let patch = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        std::fs::write(
+            &sib_path,
+            format!(
+                "patches = ['new.patch']\nchecksums = [\n    '{sib}',\n    '{patch}',\n]\nmoduleclass = 'lib'\n"
+            ),
+        )
+        .unwrap();
+        let ours = format!(
+            "name = 'X'\npatches = ['old.patch']\nchecksums = [\n    # was '{stale}'\n    '{cli}',\n]\nmoduleclass = 'lib'\n"
+        );
+        let out = adopt_sibling_patch_block(&ours, sib_path.to_str().unwrap()).unwrap();
+        assert!(out.contains(cli), "{out}");
+        assert!(!out.contains(stale), "{out}");
+        assert!(out.contains(patch), "{out}");
     }
 }
