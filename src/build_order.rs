@@ -723,7 +723,7 @@ pub fn build_graph(
                 .min()
             {
                 scored.retain(|(_, distance)| *distance == best);
-            } else {
+            } else if dep.toolchain.is_none() {
                 scored.clear();
             }
             let admissible: Vec<&Candidate> = scored.into_iter().map(|(c, _)| c).collect();
@@ -1304,6 +1304,28 @@ mod tests {
         assert!(
             !seq.iter().any(|name| name.starts_with("Lib-9.0")),
             "unknown hierarchy must not walk to GCCcore-11.3.0: {seq:?}"
+        );
+    }
+
+    #[test]
+    fn a_pinned_foreign_toolchain_is_kept() {
+        let all = vec![
+            candidate(
+                "App",
+                "1.0",
+                tc("foss", "2026.1"),
+                vec![dep("Lib", ">=1", Some(tc("foss", "2023b")))],
+            ),
+            candidate("Lib", "2.0", tc("foss", "2023b"), vec![]),
+        ];
+        let order = build_order(&tree(&all), &["App".into()], Choice::Newest)
+            .expect("explicit toolchain pin must leave the generation");
+        assert!(
+            names(&order)
+                .iter()
+                .any(|name| name.starts_with("Lib-2.0-foss-2023b")),
+            "{:?}",
+            names(&order)
         );
     }
 
