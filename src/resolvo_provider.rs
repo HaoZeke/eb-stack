@@ -744,6 +744,7 @@ impl EbProvider {
                 // module (`25.3-CUDA-12.8.0`) is not an unsuffixed pin.
                 let joined = versionsuffix.is_none()
                     && !got.is_empty()
+                    && !version_ok
                     && requirement.matches(&format!("{}{got}", c.version));
                 if !joined {
                     continue;
@@ -1652,6 +1653,35 @@ mod tests {
             lib.versionsuffix
         );
         assert_eq!(lib.easyconfig_path, "Lib-1.0.eb");
+    }
+
+    #[test]
+    fn a_range_2_tuple_does_not_take_a_newer_cuda_rank() {
+        let candidates = vec![
+            cand("Lib", "1.0", None, "Lib-1.0.eb", vec![]),
+            cand("Lib", "2.0", Some("-CUDA-12.8"), "Lib-2.0-CUDA.eb", vec![]),
+            cand(
+                "App",
+                "1.0",
+                None,
+                "App-1.0.eb",
+                vec![DepReq {
+                    name: "Lib".into(),
+                    version_req: ">=1.0".into(),
+                    versionsuffix: None,
+                    toolchain: None,
+                }],
+            ),
+        ];
+        let selected =
+            solve_with_resolvo(&candidates, &policy(vec!["App"], vec![]), None).expect("solve");
+        let lib = selected.iter().find(|c| c.name == "Lib").expect("Lib");
+        assert_eq!(lib.easyconfig_path, "Lib-1.0.eb");
+        assert!(
+            lib.versionsuffix.is_none() || lib.versionsuffix.as_deref() == Some(""),
+            ">=1.0 unsuffixed is not CUDA 2.0: {:?}",
+            lib.versionsuffix
+        );
     }
 
     #[test]
