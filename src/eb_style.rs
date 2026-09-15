@@ -743,13 +743,13 @@ fn preferred_split(s: &str, budget: usize) -> Option<usize> {
         return Some(pos.0 + pos.1.len_utf8());
     }
     // last non-alnum (avoid mid-identifier hard cuts when possible)
-    if let Some((i, _)) = window
+    if let Some((i, character)) = window
         .char_indices()
         .rev()
         .find(|(_, c)| !c.is_ascii_alphanumeric() && *c != '_')
     {
         if i > 8 {
-            return Some(i + 1);
+            return Some(i + character.len_utf8());
         }
     }
     None
@@ -984,6 +984,30 @@ mod tests {
             .text
             .lines()
             .all(|line| line.chars().count() <= EB_MAX_LINE));
+    }
+
+    #[test]
+    fn format_style_does_not_panic_on_a_multibyte_split() {
+        let body = format!("{}ü{}", "x".repeat(80), "y".repeat(80));
+        let source = format!("configopts = '{body}'\n");
+        let result = format_style(&source);
+        assert!(result.remaining.is_empty(), "{:?}", result.remaining);
+        let joined: String = result
+            .text
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                let after = trimmed
+                    .strip_prefix("configopts = ")
+                    .or_else(|| trimmed.strip_prefix("configopts += "))?;
+                let quote = after.chars().next()?;
+                if quote != '\'' && quote != '"' {
+                    return None;
+                }
+                Some(after[1..after.len() - 1].to_string())
+            })
+            .collect();
+        assert_eq!(joined, body);
     }
 
     #[test]
