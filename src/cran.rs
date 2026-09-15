@@ -61,6 +61,8 @@ struct CranJson {
     imports: Vec<String>,
     #[serde(default, alias = "LinkingTo", deserialize_with = "deserialize_r_list")]
     linking_to: Vec<String>,
+    #[serde(default, alias = "Suggests", deserialize_with = "deserialize_r_list")]
+    suggests: Vec<String>,
     #[serde(default, alias = "SystemRequirements")]
     system_requirements: Option<String>,
     #[serde(default, alias = "SHA256")]
@@ -131,6 +133,12 @@ fn parse_cran_json(text: &str) -> Result<ForeignRecipe, ForeignError> {
         note: "parsed from CRAN JSON",
     })?;
     record_system_requirements(&mut recipe, doc.system_requirements.as_deref());
+    let suggests = if doc.suggests.is_empty() {
+        None
+    } else {
+        Some(doc.suggests.join(", "))
+    };
+    record_suggests(&mut recipe, suggests.as_deref());
     Ok(recipe)
 }
 
@@ -793,6 +801,42 @@ mod tests {
             }),
             "{:?}",
             recipe.residuals
+        );
+    }
+
+    #[test]
+    fn cran_json_suggests_become_a_judgment_residual() {
+        for payload in [
+            r#"{"Package":"demo","Version":"1.0","Suggests":"jsonlite"}"#,
+            r#"{"Package":"demo","Version":"1.0","Suggests":["jsonlite"]}"#,
+            r#"{"Package":"demo","Version":"1.0","Suggests":{"jsonlite":"*"}}"#,
+        ] {
+            let recipe = parse_cran_str(payload).expect(payload);
+            assert!(
+                recipe.residuals.iter().any(|residual| {
+                    residual.category == "cran-suggests" && residual.summary.contains("jsonlite")
+                }),
+                "{payload} {:?}",
+                recipe.residuals
+            );
+            assert!(
+                recipe
+                    .dependencies
+                    .iter()
+                    .all(|dep| !dep.name.eq_ignore_ascii_case("jsonlite")),
+                "{payload} {:?}",
+                recipe.dependencies
+            );
+        }
+        let empty = parse_cran_str(r#"{"Package":"demo","Version":"1.0","Suggests":null}"#)
+            .expect("null suggests");
+        assert!(
+            empty
+                .residuals
+                .iter()
+                .all(|residual| residual.category != "cran-suggests"),
+            "{:?}",
+            empty.residuals
         );
     }
 
