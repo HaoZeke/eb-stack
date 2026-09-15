@@ -370,6 +370,80 @@ fn version_bump_adopts_the_same_version_siblings_patch_block() {
 }
 
 #[test]
+fn version_bump_keeps_cli_source_checksum_when_adopting_sibling_checksums() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Beta-1.0-GCCcore-14.3.0.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    let cli = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    let sib = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let patch = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+    fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'Beta'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+         toolchain = {'name': 'GCCcore', 'version': '14.3.0'}\n\
+         sources = ['beta-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         patches = ['old.patch']\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    fs::write(
+        robot.join("Beta-2.0-GCCcore-13.3.0.eb"),
+        format!(
+            "easyblock = 'ConfigureMake'\nname = 'Beta'\nversion = '2.0'\n\
+             homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+             toolchain = {{'name': 'GCCcore', 'version': '13.3.0'}}\n\
+             sources = ['beta-2.0.tar.gz']\n\
+             checksums = ['{sib}', '{patch}']\n\
+             patches = ['new.patch']\n\
+             moduleclass = 'tools'\n"
+        ),
+    )
+    .expect("sibling recipe");
+    let toolchain = Toolchain {
+        name: "GCCcore".into(),
+        version: "15.2.0".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: Some("2.0".into()),
+        source_checksum: Some(cli.into()),
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
+    })
+    .expect("bump with CLI digest and sibling checksums");
+
+    assert_eq!(bundle.plan.sources[0].sha256.as_deref(), Some(cli));
+    let text = &bundle.easyconfigs[0].text;
+    assert!(
+        text.contains(&format!("'{cli}'")) || text.contains(&format!("\"{cli}\"")),
+        "CLI digest must keep the source slot:\n{text}"
+    );
+    assert!(
+        !text.contains(sib),
+        "sibling source digest must not overwrite CLI:\n{text}"
+    );
+    assert!(
+        text.contains(patch),
+        "sibling patch hash may still be adopted:\n{text}"
+    );
+}
+
+#[test]
 fn strict_patches_fails_on_a_version_pinned_patch_without_sibling_evidence() {
     let temp = tempfile::tempdir().expect("tempdir");
     let source = temp.path().join("Gamma-1.0-GCCcore-14.3.0.eb");
