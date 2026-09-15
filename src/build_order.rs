@@ -413,6 +413,20 @@ fn distance(
 /// A `--roots name==version` pin matches the recipe version, or the version
 /// with versionsuffix glued on: foss-2019a writes GCC 8.2.0-2.31.1 for a
 /// recipe whose version is 8.2.0 and whose suffix is -2.31.1.
+fn root_matches(candidate: &Candidate, root_name: &str, version_req: &str) -> bool {
+    if candidate.name == root_name {
+        return root_version_matches(candidate, version_req);
+    }
+    candidate.exts_list.iter().any(|ext| {
+        ext.name == root_name
+            && (version_req.is_empty()
+                || matches_req(&ext.version, version_req)
+                || version_req
+                    .strip_prefix("==")
+                    .is_some_and(|pinned| pinned == ext.version))
+    })
+}
+
 fn root_version_matches(candidate: &Candidate, version_req: &str) -> bool {
     if version_req.is_empty() {
         return true;
@@ -620,21 +634,16 @@ pub fn build_graph(
             Some((name, version)) => (name, format!("=={version}")),
             None => (root.as_str(), String::new()),
         };
-        let admissible: Vec<&Candidate> = by_name
-            .get(name)
+        let admissible: Vec<&Candidate> = candidates_named(&by_name, &by_ext, name)
             .into_iter()
-            .flatten()
-            .copied()
-            .filter(|c| root_version_matches(c, &version_req))
+            .filter(|c| root_matches(c, name, &version_req))
             .collect();
-        let start = match choose(&admissible, choice) {
+        let start = match choose_for_dep(&admissible, choice, name) {
             Some(picked) => picked,
             None => {
-                let mut of_that_name: Vec<String> = by_name
-                    .get(name)
+                let mut of_that_name: Vec<String> = candidates_named(&by_name, &by_ext, name)
                     .into_iter()
-                    .flatten()
-                    .map(|c| c.version.clone())
+                    .map(|c| ranking_version(c, name).to_string())
                     .collect();
                 of_that_name.sort_by(|a, b| cmp_version(b, a));
                 of_that_name.dedup();
@@ -1111,6 +1120,29 @@ mod tests {
         let order = build_order(&tree(&all), &["App".into()], Choice::Newest).expect("order");
         assert!(
             names(&order).iter().any(|s| s == "Python-3.11.3-system"),
+            "{:?}",
+            names(&order)
+        );
+    }
+
+    #[test]
+    fn a_root_name_resolves_through_a_bundle_provide() {
+        let mut bundle = candidate("SciPy-bundle", "2025.06", tc("foss", "2026.1"), vec![]);
+        bundle.exts_list = vec![crate::domain::ExtEntry {
+            name: "numpy".into(),
+            version: "2.3.1".into(),
+        }];
+        let order = build_order(&tree(&[bundle.clone()]), &["numpy".into()], Choice::Newest)
+            .expect("root numpy");
+        assert!(
+            names(&order).iter().any(|s| s.starts_with("SciPy-bundle")),
+            "{:?}",
+            names(&order)
+        );
+        let order = build_order(&tree(&[bundle]), &["numpy==2.3.1".into()], Choice::Newest)
+            .expect("root numpy==2.3.1");
+        assert!(
+            names(&order).iter().any(|s| s.starts_with("SciPy-bundle")),
             "{:?}",
             names(&order)
         );
