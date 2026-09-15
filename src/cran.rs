@@ -172,7 +172,7 @@ fn parse_description(text: &str) -> Result<ForeignRecipe, ForeignError> {
 fn parse_package_list(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let mut specs = Vec::new();
     for (index, line) in text.lines().enumerate() {
-        let line = line.trim();
+        let line = strip_inline_comment(line.trim());
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
@@ -404,6 +404,19 @@ fn is_base_r(name: &str) -> bool {
     )
 }
 
+fn strip_inline_comment(line: &str) -> &str {
+    let mut in_quote = None;
+    for (index, character) in line.char_indices() {
+        match (character, in_quote) {
+            ('#', None) => return line[..index].trim_end(),
+            ('\'' | '"', None) => in_quote = Some(character),
+            (quote, Some(open)) if quote == open => in_quote = None,
+            _ => {}
+        }
+    }
+    line
+}
+
 fn first_http_url(value: &str) -> Option<String> {
     value
         .split(|character: char| character == ',' || character.is_whitespace())
@@ -571,6 +584,20 @@ mod tests {
             }),
             "unpinned root must not silently invent 0.0.0: {:?}",
             recipe.residuals
+        );
+    }
+
+    #[test]
+    fn package_list_strips_an_inline_hash_comment() {
+        let recipe = parse_cran_str("jsonlite==1.8.8 # pinned\n").expect("parse");
+        assert_eq!(recipe.version, "1.8.8");
+        assert!(
+            recipe
+                .source_url
+                .as_deref()
+                .is_some_and(|url| url.ends_with("jsonlite_1.8.8.tar.gz") && !url.contains('#')),
+            "inline comment leaked into the tarball name: {:?}",
+            recipe.source_url
         );
     }
 
