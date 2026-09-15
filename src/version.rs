@@ -14,8 +14,10 @@
 //! a pre-release suffix (rc, alpha, beta, or a bare trailing letter) that
 //! sorts before the side with nothing more. Mixed Num versus Alpha at the
 //! same position is rare for EasyBuild. A post-release token (`post`, `rev`,
-//! `pl`) sorts after the number; any other Alpha (rc, alpha, a year-letter)
-//! sorts before it, so `1.0rc1` is less than both `1.0` and `1.0.0`.
+//! `pl`) sorts after the final release and after a zero pad of that release,
+//! but before a later nonzero numeric segment, so `1.0` < `1.0post1` < `1.0.1`.
+//! Any other Alpha (rc, alpha, a year-letter) sorts before the number, so
+//! `1.0rc1` is less than both `1.0` and `1.0.0`.
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -98,17 +100,19 @@ pub fn cmp_version(a: &str, b: &str) -> Ordering {
             (Some(Part::Num(x)), Some(Part::Num(y))) => x.cmp(y),
             (Some(Part::Alpha(x)), Some(Part::Alpha(y))) => x.cmp(y),
             // Mixed types at an aligned position: a post-release token
-            // sorts after the number; any other Alpha is a pre-release.
-            (Some(Part::Num(_)), Some(Part::Alpha(alpha))) => {
+            // sits after a zero pad of the same release and before a later
+            // nonzero segment (`1.0` < `1.0post1` < `1.0.1`). Any other
+            // Alpha is a pre-release and sorts before the number.
+            (Some(Part::Num(number)), Some(Part::Alpha(alpha))) => {
                 if is_post_release(alpha) {
-                    Ordering::Less
+                    cmp_post_against_number(*number).reverse()
                 } else {
                     Ordering::Greater
                 }
             }
-            (Some(Part::Alpha(alpha)), Some(Part::Num(_))) => {
+            (Some(Part::Alpha(alpha)), Some(Part::Num(number))) => {
                 if is_post_release(alpha) {
-                    Ordering::Greater
+                    cmp_post_against_number(*number)
                 } else {
                     Ordering::Less
                 }
@@ -116,7 +120,8 @@ pub fn cmp_version(a: &str, b: &str) -> Ordering {
             // One side ran out of tokens: a numeric remainder pads the
             // missing side with 0 (so "1.2.3" > "1.2"); an alphabetic
             // remainder is a pre-release suffix that sorts before the
-            // side with nothing more (so "1.0rc1" < "1.0").
+            // side with nothing more (so "1.0rc1" < "1.0"), unless it is
+            // a post-release token (so "1.7.1.post2" > "1.7.1").
             (Some(Part::Num(x)), None) => x.cmp(&0),
             (None, Some(Part::Num(y))) => 0u64.cmp(y),
             (Some(Part::Alpha(alpha)), None) => {
@@ -145,6 +150,19 @@ pub fn cmp_version(a: &str, b: &str) -> Ordering {
 
 fn is_post_release(token: &str) -> bool {
     matches!(token, "post" | "rev" | "pl")
+}
+
+/// Order a post-release token against a numeric segment at the same position.
+///
+/// `0` is the pad used for a missing release component (`1.0` == `1.0.0`), so
+/// the post-release still sorts after it. A later nonzero segment is the next
+/// release and sorts after the post-release.
+fn cmp_post_against_number(number: u64) -> Ordering {
+    if number == 0 {
+        Ordering::Greater
+    } else {
+        Ordering::Less
+    }
 }
 
 /// One comparison in a requirement.
@@ -316,7 +334,9 @@ impl Requirement {
         }
         self.clauses
             .iter()
-            .find(|clause| clause.op == RequirementOp::Exact)
+            .find(|clause| {
+                clause.op == RequirementOp::Exact && series_star_prefix(&clause.version).is_none()
+            })
             .map(|clause| clause.version.as_str())
     }
 
@@ -353,14 +373,13 @@ impl Requirement {
             if !clause.op.is_lower_bound() {
                 continue;
             }
-            if !self.matches(&clause.version) {
+            let named = clause_bound_version(clause);
+            if !self.matches(named) {
                 continue;
             }
             best = Some(match best {
-                None => clause.version.as_str(),
-                Some(previous) if cmp_version(&clause.version, previous) == Ordering::Greater => {
-                    clause.version.as_str()
-                }
+                None => named,
+                Some(previous) if cmp_version(named, previous) == Ordering::Greater => named,
                 Some(previous) => previous,
             });
         }
@@ -368,11 +387,39 @@ impl Requirement {
     }
 }
 
+/// Trailing `.*` on a pin names a release series, not the prefix itself.
+///
+/// `parse_version_parts` drops `*` as a separator, so `1.2.*` would otherwise
+/// tokenize as `[1, 2]` and `==1.2.*` would mean Exact `1.2`.
+fn series_star_prefix(version: &str) -> Option<&str> {
+    let mut prefix = version;
+    let mut stripped = false;
+    while let Some(rest) = prefix.strip_suffix(".*") {
+        prefix = rest;
+        stripped = true;
+    }
+    if stripped && prefix.chars().any(|character| character.is_ascii_digit()) {
+        Some(prefix)
+    } else {
+        None
+    }
+}
+
+fn clause_bound_version(clause: &RequirementClause) -> &str {
+    series_star_prefix(&clause.version).unwrap_or(clause.version.as_str())
+}
+
 fn clause_matches(version: &str, clause: &RequirementClause) -> bool {
     let right = clause.version.as_str();
     match clause.op {
-        RequirementOp::Exact => cmp_version(version, right) == Ordering::Equal,
-        RequirementOp::NotEqual => cmp_version(version, right) != Ordering::Equal,
+        RequirementOp::Exact => match series_star_prefix(right) {
+            Some(prefix) => matches_release_series(version, prefix),
+            None => cmp_version(version, right) == Ordering::Equal,
+        },
+        RequirementOp::NotEqual => match series_star_prefix(right) {
+            Some(prefix) => !matches_release_series(version, prefix),
+            None => cmp_version(version, right) != Ordering::Equal,
+        },
         RequirementOp::AtLeast => matches!(
             cmp_version(version, right),
             Ordering::Equal | Ordering::Greater
@@ -457,6 +504,19 @@ fn series_ceiling(components: &[u64], index: usize) -> String {
         .map(u64::to_string)
         .collect::<Vec<_>>()
         .join(".")
+}
+
+/// `1.2.*` is the series `>=1.2, <1.3`, not equality with the prefix `1.2`.
+fn matches_release_series(version: &str, prefix: &str) -> bool {
+    if cmp_version(version, prefix) == Ordering::Less {
+        return false;
+    }
+    let components = numeric_components(prefix);
+    if components.is_empty() {
+        return false;
+    }
+    let ceiling = series_ceiling(&components, components.len() - 1);
+    cmp_version(version, &ceiling) == Ordering::Less
 }
 
 /// `~=X.Y.Z` is `>=X.Y.Z, <X.(Y+1)`; `~=X.Y` is `>=X.Y, <(X+1)`.
@@ -675,6 +735,38 @@ mod tests {
         assert_eq!(cmp_version("1.2.3rev1", "1.2.3"), Ordering::Greater);
         assert_eq!(cmp_version("1.2.3pl1", "1.2.3"), Ordering::Greater);
         assert_eq!(cmp_version("1.0rc1", "1.0"), Ordering::Less);
+    }
+
+    #[test]
+    fn post_release_sorts_before_a_later_numeric_segment() {
+        assert_eq!(cmp_version("1.0", "1.0post1"), Ordering::Less);
+        assert_eq!(cmp_version("1.0post1", "1.0.1"), Ordering::Less);
+        assert_eq!(cmp_version("1.0.1", "1.0post1"), Ordering::Greater);
+        assert_eq!(cmp_version("1.7.1.post2", "1.7.1.1"), Ordering::Less);
+        assert_eq!(cmp_version("1.7.1.1", "1.7.1.post2"), Ordering::Greater);
+        assert_eq!(cmp_version("1.7.1.post2", "1.7.1"), Ordering::Greater);
+        // Zero pad is the same release, so the post-release still follows it.
+        assert_eq!(cmp_version("1.0post1", "1.0.0"), Ordering::Greater);
+        assert!(!matches_req("1.7.1.post2", ">=1.7.1.1"));
+        assert!(matches_req("1.7.1.post2", ">=1.7.1"));
+        assert!(matches_req("1.0.1", ">=1.0post1"));
+    }
+
+    #[test]
+    fn a_trailing_star_in_a_pin_is_the_release_series() {
+        assert!(matches_req("1.2.3", "==1.2.*"));
+        assert!(matches_req("1.2.3", "1.2.*"));
+        assert!(matches_req("1.2", "==1.2.*"));
+        assert!(matches_req("1.2.0", "==1.2.*"));
+        assert!(!matches_req("1.3.0", "==1.2.*"));
+        assert!(!matches_req("1.1.9", "==1.2.*"));
+        assert!(!matches_req("1.2.3", "==1.2"));
+        assert_eq!(parse_requirement("==1.2.*").expect("parse").exact(), None);
+        assert_eq!(
+            parse_requirement("==1.2.*").expect("parse").lower_bound(),
+            Some("1.2")
+        );
+        assert!(!matches_req("1.0", "*"));
     }
 
     #[test]
