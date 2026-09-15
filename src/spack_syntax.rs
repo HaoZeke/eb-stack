@@ -223,10 +223,7 @@ impl<'a> StaticEvaluator<'a> {
             _ => None,
         };
         if let Some(value) = combined {
-            self.bind_target(&assignment.target, value.clone());
-            if let ast::Expr::Name(name) = assignment.target.as_ref() {
-                self.attributes.insert(name.id.to_string(), value);
-            }
+            self.bind_target(&assignment.target, value);
         } else {
             self.unbind_target(&assignment.target);
         }
@@ -256,11 +253,7 @@ impl<'a> StaticEvaluator<'a> {
             return;
         };
         for target in &assignment.targets {
-            if self.bind_target(target, value.clone()) {
-                if let ast::Expr::Name(name) = target {
-                    self.attributes.insert(name.id.to_string(), value.clone());
-                }
-            } else {
+            if !self.bind_target(target, value.clone()) {
                 self.unbind_target(target);
             }
         }
@@ -268,11 +261,7 @@ impl<'a> StaticEvaluator<'a> {
 
     fn assign_expression(&mut self, target: &ast::Expr, expression: &ast::Expr) {
         if let Some(value) = self.evaluate(expression) {
-            if self.bind_target(target, value.clone()) {
-                if let ast::Expr::Name(name) = target {
-                    self.attributes.insert(name.id.to_string(), value);
-                }
-            } else {
+            if !self.bind_target(target, value) {
                 self.unbind_target(target);
             }
         } else {
@@ -325,6 +314,7 @@ impl<'a> StaticEvaluator<'a> {
             return;
         };
         let Some(values) = iteration_values(iterable) else {
+            self.unbind_target(&statement.target);
             self.residual(
                 statement.iter.as_ref(),
                 "non-iterable static for-loop value",
@@ -332,6 +322,7 @@ impl<'a> StaticEvaluator<'a> {
             return;
         };
         if values.len() > self.expansion_budget {
+            self.unbind_target(&statement.target);
             self.residual(
                 statement.iter.as_ref(),
                 "static for-loop exceeds remaining expansion budget",
@@ -344,6 +335,7 @@ impl<'a> StaticEvaluator<'a> {
         }
         for value in values {
             if self.expansion_budget == 0 {
+                self.unbind_target(&statement.target);
                 self.residual(
                     statement.iter.as_ref(),
                     "static for-loop expansion budget exhausted",
@@ -628,17 +620,20 @@ impl<'a> StaticEvaluator<'a> {
                     let mut template = receiver.as_string()?;
                     for (index, argument) in call.args.iter().enumerate() {
                         let value = self.evaluate(argument)?.as_string()?;
-                        let numbered = format!("{{{index}}}");
-                        template = replace_first(&template, "{}", &value)
-                            .or_else(|| replace_first(&template, &numbered, &value))?;
+                        template = replace_simple_format_field(
+                            &template,
+                            &index.to_string(),
+                            &value,
+                            true,
+                        )?;
                     }
                     for keyword in &call.keywords {
                         let Some(name) = keyword.arg.as_ref() else {
                             continue;
                         };
                         let value = self.evaluate(&keyword.value)?.as_string()?;
-                        let named = format!("{{{name}}}");
-                        template = replace_first(&template, &named, &value)?;
+                        template =
+                            replace_simple_format_field(&template, name.as_str(), &value, false)?;
                     }
                     if leftover_format_placeholder(&template) {
                         return None;
@@ -762,6 +757,7 @@ impl<'a> StaticEvaluator<'a> {
     fn bind_target(&mut self, target: &ast::Expr, value: StaticValue) -> bool {
         match target {
             ast::Expr::Name(name) => {
+                self.attributes.insert(name.id.to_string(), value.clone());
                 self.environment.insert(name.id.to_string(), value);
                 true
             }
@@ -909,6 +905,63 @@ class Pkg(Package):
                 .any(|residual| residual.contains("dynamic version")),
             "leftover placeholder must residual, not become a source URL: {:?}",
             syntax.residuals
+        );
+    }
+
+    #[test]
+    fn format_spec_is_not_a_source_url() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    version("1.2", url="https://example.invalid/{0:>8}.tar.gz".format("1.2"))
+"#,
+        )
+        .expect("parse");
+        assert!(
+            syntax
+                .residuals
+                .iter()
+                .any(|residual| residual.contains("dynamic version")),
+            "format spec must residual, not become a source URL: calls={:?} residuals={:?}",
+            syntax.calls,
+            syntax.residuals
+        );
+        assert!(
+            syntax.calls.iter().all(|call| call
+                .kw_string("url")
+                .is_none_or(|url| !url.contains("1.2:>8}"))),
+            "format spec must not invent a source URL: {:?}",
+            syntax.calls
+        );
+    }
+
+    #[test]
+    fn format_index_prefix_is_not_a_source_url() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    version("1.2", url="https://example.invalid/{10}.tar.gz".format("a", "1.2"))
+    version("1.3", url="https://example.invalid/{name:s}.tar.gz".format(name="1.2"))
+"#,
+        )
+        .expect("parse");
+        assert!(
+            syntax
+                .residuals
+                .iter()
+                .any(|residual| residual.contains("dynamic version")),
+            "prefix field must residual: calls={:?} residuals={:?}",
+            syntax.calls,
+            syntax.residuals
+        );
+        assert!(
+            syntax.calls.iter().all(|call| {
+                call.kw_string("url").is_none_or(|url| {
+                    !url.contains("1.210}") && !url.contains("1.2:s}") && !url.contains("a0}")
+                })
+            }),
+            "prefix field must not invent a source URL: {:?}",
+            syntax.calls
         );
     }
 
@@ -1142,6 +1195,113 @@ class Pkg(Package):
     }
 
     #[test]
+    fn a_non_iterable_for_target_forgets_the_previous_value() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    ver = "1.0"
+    for ver in 5:
+        pass
+    version(ver, sha256="aaa")
+"#,
+        )
+        .expect("parse");
+        assert!(
+            syntax
+                .residuals
+                .iter()
+                .any(|residual| residual.contains("dynamic version")),
+            "stale ver must not become version(1.0): calls={:?} residuals={:?}",
+            syntax.calls,
+            syntax.residuals
+        );
+        assert!(
+            syntax
+                .calls
+                .iter()
+                .all(|call| call.name != "version" || call.arg_string(0).as_deref() != Some("1.0")),
+            "non-iterable for must forget 1.0: {:?}",
+            syntax.calls
+        );
+    }
+
+    #[test]
+    fn a_budget_abort_for_target_forgets_the_previous_value() {
+        let items = (0..1025)
+            .map(|index| format!("\"v{index}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let source = format!(
+            r#"
+class Pkg(Package):
+    ver = "1.0"
+    for ver in [{items}]:
+        pass
+    version(ver, sha256="aaa")
+"#
+        );
+        let syntax = parse_spack_syntax(&source).expect("parse");
+        assert!(
+            syntax
+                .residuals
+                .iter()
+                .any(|residual| residual.contains("dynamic version")),
+            "budget abort must not keep version(1.0): calls={:?} residuals={:?}",
+            syntax.calls,
+            syntax.residuals
+        );
+        assert!(
+            syntax
+                .calls
+                .iter()
+                .all(|call| call.name != "version" || call.arg_string(0).as_deref() != Some("1.0")),
+            "budget abort must forget 1.0: {:?}",
+            syntax.calls
+        );
+    }
+
+    #[test]
+    fn tuple_bind_writes_attributes() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    url = "https://example.invalid/stale.tar.gz"
+    url, extra = "https://example.invalid/new.tar.gz", "x"
+    version("1.0", sha256="aaa")
+"#,
+        )
+        .expect("parse");
+        match syntax.attributes.get("url") {
+            Some(StaticValue::String(url)) => {
+                assert_eq!(url, "https://example.invalid/new.tar.gz");
+            }
+            None => {}
+            other => panic!("tuple bind must write the new url or unbind: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn for_bind_writes_attributes() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    url = "https://example.invalid/stale.tar.gz"
+    for url in ["https://example.invalid/new.tar.gz"]:
+        pass
+    version("1.0", sha256="aaa")
+"#,
+        )
+        .expect("parse");
+        match syntax.attributes.get("url") {
+            Some(StaticValue::String(url)) => {
+                assert_eq!(url, "https://example.invalid/new.tar.gz");
+            }
+            None => {}
+            other => panic!("for bind must write the new url or unbind: {other:?}"),
+        }
+    }
+
+    #[test]
     fn a_failed_destructuring_rebind_forgets_the_previous_names() {
         let syntax = parse_spack_syntax(
             r#"
@@ -1305,8 +1465,62 @@ fn sequence_index(key: &StaticValue) -> Option<usize> {
     }
 }
 
+// Prefix replace of {0}/{name} leaves remnants such as 1.2:>8} and 1.210}.
 fn leftover_format_placeholder(value: &str) -> bool {
-    value.contains("{") || value.contains("%s") || value.contains("%d")
+    value.contains('{') || value.contains('}') || value.contains("%s") || value.contains("%d")
+}
+
+fn format_field_name(content: &str) -> &str {
+    content
+        .find(['!', ':', '.', '['])
+        .map_or(content, |index| &content[..index])
+}
+
+fn replace_matching_format_field(
+    input: &str,
+    replacement: &str,
+    matches: impl Fn(&str) -> bool,
+) -> Option<String> {
+    let mut index = 0;
+    while index < input.len() {
+        if input[index..].starts_with("{{") || input[index..].starts_with("}}") {
+            index += 2;
+            continue;
+        }
+        if !input[index..].starts_with('{') {
+            index += 1;
+            continue;
+        }
+        let rest = &input[index + 1..];
+        let end = rest.find('}')?;
+        let content = &rest[..end];
+        if matches(content) {
+            let mut output = String::with_capacity(input.len() + replacement.len());
+            output.push_str(&input[..index]);
+            output.push_str(replacement);
+            output.push_str(&rest[end + 1..]);
+            return Some(output);
+        }
+        if matches(format_field_name(content)) {
+            return None;
+        }
+        index += end + 2;
+    }
+    None
+}
+
+fn replace_simple_format_field(
+    input: &str,
+    field: &str,
+    replacement: &str,
+    allow_auto: bool,
+) -> Option<String> {
+    let numbered = replace_matching_format_field(input, replacement, |content| content == field);
+    if allow_auto {
+        replace_matching_format_field(input, replacement, |content| content.is_empty()).or(numbered)
+    } else {
+        numbered
+    }
 }
 
 fn replace_first(input: &str, pattern: &str, replacement: &str) -> Option<String> {
