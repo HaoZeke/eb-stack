@@ -1081,6 +1081,15 @@ pub fn stack_policy_with_bump_overrides(
 /// Preserves source recipe build mechanics, source/patch identity, and checksum
 /// order via the annual-bump emitter. Stack-policy preferred pins remain a
 /// Resolvo input; lock evidence records selection and fallback outcomes.
+fn default_profile_name(plan: &PackagePlan) -> &str {
+    plan.profiles
+        .iter()
+        .find(|profile| profile.default)
+        .map(|profile| profile.name.as_str())
+        .or_else(|| plan.outputs.first().map(|output| output.profile.as_str()))
+        .unwrap_or("default")
+}
+
 /// Solve the bumped plan and emit the new easyconfig.
 pub fn complete_package_bump(
     request: &BumpPackageRequest,
@@ -1096,10 +1105,11 @@ pub fn complete_package_bump(
         .is_some_and(|version| version != source_recipe.version);
     let mut dropped_dep_names = Vec::new();
     let generation_retarget = is_generation_retarget(&source_recipe.toolchain, &request.toolchain);
+    let profile_name = default_profile_name(&plan).to_string();
     if version_changed || generation_retarget {
         let holes = unsatisfied_direct_dependencies_with_hierarchy(
             &plan,
-            "default",
+            &profile_name,
             &Default::default(),
             candidates,
             stack_policy,
@@ -1156,7 +1166,7 @@ pub fn complete_package_bump(
     }
     let lock = solve_package_profile_with_hierarchy(
         &plan,
-        "default",
+        &profile_name,
         &Default::default(),
         candidates,
         stack_policy,
@@ -1435,7 +1445,7 @@ pub fn complete_package_bump(
         sbom,
         locks: vec![lock],
         easyconfigs: vec![EmittedEasyconfig {
-            profile: "default".into(),
+            profile: profile_name,
             filename: result.filename,
             text: result.text,
         }],

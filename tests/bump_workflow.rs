@@ -1309,3 +1309,58 @@ fn dual_role_stated_versions_still_rewrite_the_runtime_line() {
         bundle.easyconfigs[0].text
     );
 }
+
+#[test]
+fn bump_emits_the_plan_default_profile_even_when_it_is_not_named_default() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Alpha-1.0-foss-2023a.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'Alpha'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['alpha-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    let config_path = temp.path().join("gpu.toml");
+    fs::write(
+        &config_path,
+        "schema_version = 1\n\n\
+         [[profiles]]\nname = \"default\"\ndefault = false\n\n\
+         [[profiles]]\nname = \"gpu\"\ninherits = \"default\"\ndefault = true\n",
+    )
+    .expect("layer");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2024a".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: None,
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: vec![PackageConfigLayer::from_path(&config_path).expect("load layer")],
+        foreign_sources: Vec::new(),
+    })
+    .expect("gpu default bump");
+    assert_eq!(
+        bundle.easyconfigs[0].profile, "gpu",
+        "emitted recipe must be the plan default profile"
+    );
+    assert_eq!(bundle.locks[0].profile, "gpu");
+}
