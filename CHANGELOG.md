@@ -102,6 +102,8 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A crates.io version dump that already lists `deps` records those
+  crate-graph residuals instead of dropping them.
 - A `.tar.gz` release next to a `.tar.xz` git checkout is not a
   git-source-archive warning. A commented `git_config` does not flag
   a live release tarball.

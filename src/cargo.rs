@@ -170,7 +170,7 @@ fn crates_io_recipe(
         source_filename: Some(filename),
         sha256: crates_io_sha256(version.checksum.as_deref()),
         python,
-        crate_deps: Vec::new(),
+        crate_deps: crates_io_deps(version),
         module_name: None,
         note: "parsed from crates.io JSON",
     })
@@ -300,6 +300,26 @@ struct CratesIoDep {
     optional: bool,
     #[serde(default)]
     kind: Option<String>,
+    #[serde(default)]
+    req: Option<String>,
+}
+
+fn crates_io_deps(version: &CratesIoVersion) -> Vec<CargoDep> {
+    version
+        .deps
+        .iter()
+        .chain(version.dependencies.iter())
+        .filter_map(|dep| {
+            let name = dep.crate_name()?.to_string();
+            Some(CargoDep {
+                key: name.clone(),
+                name,
+                req: dep.req.as_deref().and_then(cargo_version_req),
+                kind: CargoDepKind::Registry,
+                optional: dep.optional,
+            })
+        })
+        .collect()
 }
 
 impl CratesIoDep {
@@ -1444,6 +1464,27 @@ pyo3-ffi = "0.22"
         assert_eq!(
             recipe.summary.as_deref(),
             Some("A generic serialization/deserialization framework")
+        );
+    }
+
+    #[test]
+    fn crates_io_version_document_records_declared_deps() {
+        let recipe = parse_cargo_str(
+            r#"{
+              "version": {
+                "crate": "demo",
+                "num": "1.0.0",
+                "deps": [{ "name": "serde", "optional": false, "kind": "normal", "req": "^1.0" }]
+              }
+            }"#,
+        )
+        .expect("parse");
+        assert!(
+            recipe.residuals.iter().any(|residual| {
+                residual.category == "cargo-dep" && residual.summary.contains("serde")
+            }),
+            "{:?}",
+            recipe.residuals
         );
     }
 
