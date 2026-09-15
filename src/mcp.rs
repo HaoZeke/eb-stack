@@ -147,6 +147,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("spack_sources", "array"),
                 ("cargo_sources", "array"),
                 ("package_index", "string"),
+                ("contributor", "string"),
             ],
         ),
         tool_with_optional(
@@ -168,6 +169,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("package_configs", "array"),
                 ("foreign", "array"),
                 ("strict_patches", "boolean"),
+                ("contributor", "string"),
             ],
         ),
         tool_with_optional(
@@ -189,6 +191,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("package_configs", "array"),
                 ("foreign", "array"),
                 ("strict_patches", "boolean"),
+                ("contributor", "string"),
             ],
         ),
         tool_with_optional(
@@ -361,6 +364,7 @@ fn package_inspect(arguments: &Value) -> Result<Value, String> {
 }
 
 fn package_plan(arguments: &Value) -> Result<Value, String> {
+    apply_contributor(arguments);
     let stack_policy = load_stack_policy(&required_path(arguments, "stack_policy")?)?;
     let output = required_path(arguments, "out_dir")?;
     let format = foreign_format(arguments)?;
@@ -384,6 +388,7 @@ fn package_plan(arguments: &Value) -> Result<Value, String> {
     if !use_closure {
         let bundle = plan_new_package(&request).map_err(|error| error.to_string())?;
         let written = write_package_bundle(&bundle, &output).map_err(|error| error.to_string())?;
+        stamp_easyconfigs(&written.easyconfigs, "contributed", arguments)?;
         return Ok(json!({
             "package": bundle.plan.package.name,
             "version": bundle.plan.package.version,
@@ -406,6 +411,10 @@ fn package_plan(arguments: &Value) -> Result<Value, String> {
     let package = closure.root.plan.package.name.clone();
     let version = closure.root.plan.package.version.clone();
     let written = write_package_closure(&closure, &output).map_err(|error| error.to_string())?;
+    stamp_easyconfigs(&written.root.easyconfigs, "contributed", arguments)?;
+    for companion in &written.companions {
+        stamp_easyconfigs(&companion.easyconfigs, "contributed", arguments)?;
+    }
     let companions = written
         .companions
         .iter()
@@ -478,6 +487,7 @@ fn package_bump(arguments: &Value) -> Result<Value, String> {
 }
 
 fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
+    apply_contributor(arguments);
     let overrides = dep_overrides(arguments)?;
     let source = required_path(arguments, "source")?;
     let recipe = resolve_easyconfig_file(&source).map_err(|error| error.to_string())?;
@@ -541,6 +551,7 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
     })
     .map_err(|error| error.to_string())?;
     let written = write_package_bundle(&bundle, &output).map_err(|error| error.to_string())?;
+    stamp_easyconfigs(&written.easyconfigs, "updated", arguments)?;
     let blocking = bundle
         .plan
         .residuals
@@ -602,6 +613,7 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
         "patches": written.patches,
         "residuals": residuals,
         "companions": companions,
+        "ok": !blocking,
         "claims": {"resolves": !blocking, "builds": false, "binary_verified": false}
     }))
 }
@@ -645,6 +657,7 @@ fn recipe_check(arguments: &Value) -> Result<Value, String> {
         "packaging_errors": packaging_errors,
         "maintainer_errors": maintainer_errors,
         "duplicate_upstream": duplicates,
+        "ok": resolves,
         "claims": {"resolves": resolves, "builds": false, "binary_verified": false}
     }))
 }
@@ -975,8 +988,72 @@ fn string_map(arguments: &Value, name: &str) -> Result<HashMap<String, String>, 
     }
 }
 
+fn apply_contributor(arguments: &Value) {
+    if let Some(name) = optional_string(arguments, "contributor") {
+        if !name.trim().is_empty() {
+            std::env::set_var("EB_STACK_CONTRIBUTOR", name);
+        }
+    }
+}
+
+fn stamp_easyconfigs(paths: &[PathBuf], kind: &str, arguments: &Value) -> Result<(), String> {
+    let Some(name) = optional_string(arguments, "contributor") else {
+        return Ok(());
+    };
+    let name = name.trim();
+    if name.is_empty() {
+        return Ok(());
+    }
+    let line = format!(
+        "# {kind} by: {name} (eb-stack {})",
+        env!("CARGO_PKG_VERSION")
+    );
+    for path in paths {
+        let src = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+        if src.lines().any(|existing| existing.trim() == line) {
+            continue;
+        }
+        std::fs::write(path, insert_attribution_line(&src, &line))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn insert_attribution_line(src: &str, line: &str) -> String {
+    let mut insert_at = 0;
+    for row in src.split_inclusive('\n') {
+        let trimmed = row.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            insert_at += row.len();
+            continue;
+        }
+        let mut out = String::with_capacity(src.len() + line.len() + 2);
+        out.push_str(&src[..insert_at]);
+        out.push_str(line);
+        out.push('\n');
+        out.push_str(&src[insert_at..]);
+        return out;
+    }
+    let mut out = src.to_string();
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(line);
+    out.push('\n');
+    out
+}
+
 fn tool_outcome(value: Value) -> Value {
-    let is_error = value.get("ok") == Some(&Value::Bool(false));
+    let is_error = match value.get("ok") {
+        Some(Value::Bool(false)) => true,
+        Some(Value::Bool(true)) => false,
+        _ => {
+            value
+                .get("claims")
+                .and_then(|claims| claims.get("resolves"))
+                == Some(&Value::Bool(false))
+        }
+    };
     json!({
         "content": [{"type": "text", "text": serde_json::to_string_pretty(&value).unwrap_or_default()}],
         "structuredContent": value,

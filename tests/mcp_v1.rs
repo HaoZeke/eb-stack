@@ -65,12 +65,27 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "stack_policy",
         "package_configs",
         "strict_patches",
+        "contributor",
     ] {
         assert!(
             package_bump["inputSchema"]["properties"]
                 .get(optional)
                 .is_some(),
             "bump schema missing optional {optional}"
+        );
+    }
+    for name in ["eb_package_plan", "eb_package_mutate"] {
+        let tool = response["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("{name} schema"));
+        assert!(
+            tool["inputSchema"]["properties"]
+                .get("contributor")
+                .is_some(),
+            "{name} schema must advertise contributor"
         );
     }
     assert_eq!(
@@ -548,4 +563,116 @@ fn mcp_bump_rejects_an_empty_dependency_pin() {
         text.contains("non-empty"),
         "empty pin must be rejected: {response}"
     );
+}
+
+fn vanished_gamma_fixture(temp: &tempfile::TempDir) -> (PathBuf, PathBuf, PathBuf) {
+    let source = temp.path().join("Gamma-1.0-foss-2023a.eb");
+    let robot = temp.path().join("robot");
+    let output = temp.path().join("bundle");
+    std::fs::create_dir_all(&robot).expect("robot");
+    std::fs::write(
+        &source,
+        "easyblock = 'CMakeMake'\nname = 'Gamma'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['gamma-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [\n    ('KeptLib', '1.0'),\n    ('VanishedLib', '20211028'),\n]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    std::fs::write(
+        robot.join("KeptLib-1.0-foss-2025a.eb"),
+        "easyblock = 'ConfigureMake'\nname = 'KeptLib'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Kept'\n\
+         toolchain = {'name': 'foss', 'version': '2025a'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'lib'\n",
+    )
+    .expect("kept candidate");
+    (source, robot, output)
+}
+
+#[test]
+fn mcp_package_bump_stamps_contributor_on_written_recipe() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let (source, robot, output) = vanished_gamma_fixture(&temp);
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_package_bump",
+            "arguments": {
+                "source": source,
+                "toolchain_name": "foss",
+                "toolchain_version": "2025a",
+                "version": "1.7.0",
+                "source_checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "easyconfigs": [robot],
+                "contributor": "Ada Lovelace",
+                "out_dir": output
+            }
+        }
+    }))
+    .expect("bump response");
+    let body = &response["result"]["structuredContent"];
+    let written = output.join("easyconfigs/g/Gamma/Gamma-1.7.0-foss-2025a.eb");
+    assert!(written.is_file(), "expected written recipe: {body}");
+    let text = std::fs::read_to_string(&written).expect("read written recipe");
+    assert!(
+        text.contains("Ada Lovelace"),
+        "contributor must be stamped into the recipe:\n{text}"
+    );
+}
+
+#[test]
+fn mcp_recipe_check_failed_gate_is_error() {
+    let recipe = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/maintainer_reject_26435/bad_cross_gen.eb");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let robot = temp.path().join("robot");
+    std::fs::create_dir_all(&robot).expect("robot");
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_recipe_check",
+            "arguments": {
+                "recipe": recipe,
+                "easyconfigs": [robot]
+            }
+        }
+    }))
+    .expect("check response");
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let body = &response["result"]["structuredContent"];
+    assert_eq!(body["claims"]["resolves"], false, "{body}");
+}
+
+#[test]
+fn mcp_package_bump_vanished_dep_is_error() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let (source, robot, output) = vanished_gamma_fixture(&temp);
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_package_bump",
+            "arguments": {
+                "source": source,
+                "toolchain_name": "foss",
+                "toolchain_version": "2025a",
+                "version": "1.7.0",
+                "source_checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "easyconfigs": [robot],
+                "out_dir": output
+            }
+        }
+    }))
+    .expect("bump response");
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let body = &response["result"]["structuredContent"];
+    assert_eq!(body["claims"]["resolves"], false, "{body}");
 }
