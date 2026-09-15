@@ -318,7 +318,15 @@ fn satisfies(candidate: &Candidate, dep: &DepReq, recipe: &Candidate) -> bool {
                     .strip_prefix("==")
                     .is_some_and(|pinned| pinned == ext.version))
     }) {
-        return true;
+        // A provide is the parent module: suffix and toolchain pins still
+        // apply, or a plain bundle would answer a CUDA tuple.
+        if let Some(want) = dep.toolchain.as_ref() {
+            if !crate::hierarchy::toolchains_match(&candidate.toolchain, want) {
+                return false;
+            }
+        }
+        return dep.versionsuffix.as_deref().unwrap_or("")
+            == candidate.versionsuffix.as_deref().unwrap_or("");
     }
     if candidate.name != dep.name {
         return false;
@@ -420,10 +428,43 @@ fn root_version_matches(candidate: &Candidate, version_req: &str) -> bool {
     matches_req(&with_suffix, version_req)
 }
 
+/// Version used to rank a candidate for `dep_name`.
+///
+/// A bundle provide is the extension's version, not the parent recipe's.
+fn ranking_version<'a>(candidate: &'a Candidate, dep_name: &str) -> &'a str {
+    if candidate.name == dep_name {
+        return candidate.version.as_str();
+    }
+    candidate
+        .exts_list
+        .iter()
+        .find(|ext| ext.name == dep_name)
+        .map(|ext| ext.version.as_str())
+        .unwrap_or(candidate.version.as_str())
+}
+
 /// Pick one candidate from those a requirement admits.
 fn choose<'a>(admissible: &[&'a Candidate], choice: Choice) -> Option<&'a Candidate> {
+    choose_ranked(admissible, choice, |candidate| candidate.version.as_str())
+}
+
+fn choose_for_dep<'a>(
+    admissible: &[&'a Candidate],
+    choice: Choice,
+    dep_name: &str,
+) -> Option<&'a Candidate> {
+    choose_ranked(admissible, choice, |candidate| {
+        ranking_version(candidate, dep_name)
+    })
+}
+
+fn choose_ranked<'a>(
+    admissible: &[&'a Candidate],
+    choice: Choice,
+    version_of: impl Fn(&Candidate) -> &str,
+) -> Option<&'a Candidate> {
     admissible.iter().copied().max_by(|a, b| {
-        let by_version = cmp_version(&a.version, &b.version);
+        let by_version = cmp_version(version_of(a), version_of(b));
         let ordered = match choice {
             Choice::Newest => by_version,
             Choice::Oldest => by_version.reverse(),
@@ -727,7 +768,7 @@ pub fn build_graph(
                 scored.clear();
             }
             let admissible: Vec<&Candidate> = scored.into_iter().map(|(c, _)| c).collect();
-            let Some(picked) = choose(&admissible, choice) else {
+            let Some(picked) = choose_for_dep(&admissible, choice, &dep.name) else {
                 let mut available: Vec<String> = candidates_named(&by_name, &by_ext, &dep.name)
                     .into_iter()
                     .map(|c| format!("{}-{}", c.version, ModuleKey::of(c).toolchain))
@@ -1099,6 +1140,82 @@ mod tests {
             "{}",
             format_order(&order)
         );
+    }
+
+    #[test]
+    fn a_cuda_pin_is_not_satisfied_by_a_plain_bundle() {
+        let mut bundle = candidate("SciPy-bundle", "2025.06", tc("foss", "2026.1"), vec![]);
+        bundle.exts_list = vec![crate::domain::ExtEntry {
+            name: "numpy".into(),
+            version: "2.3.1".into(),
+        }];
+        let mut cuda = candidate("numpy", "2.3.1", tc("foss", "2026.1"), vec![]);
+        cuda.versionsuffix = Some("-CUDA-12.8.0".into());
+        let mut app_dep = dep("numpy", "==2.3.1", None);
+        app_dep.versionsuffix = Some("-CUDA-12.8.0".into());
+        let all = vec![
+            candidate("App", "1.0", tc("foss", "2026.1"), vec![app_dep]),
+            bundle,
+            cuda,
+        ];
+        let order = build_order(&tree(&all), &["App".into()], Choice::Newest).expect("order");
+        let seq = names(&order);
+        assert!(
+            seq.iter()
+                .any(|s| s.contains("numpy") && s.contains("CUDA")),
+            "{seq:?}"
+        );
+        assert!(
+            seq.iter().all(|s| !s.starts_with("SciPy-bundle")),
+            "{seq:?}"
+        );
+    }
+
+    #[test]
+    fn newest_prefers_a_newer_first_class_over_a_bundle_provide() {
+        let mut bundle = candidate("SciPy-bundle", "2025.06", tc("foss", "2026.1"), vec![]);
+        bundle.exts_list = vec![crate::domain::ExtEntry {
+            name: "numpy".into(),
+            version: "2.1".into(),
+        }];
+        let first_class = candidate("numpy", "2.4.0", tc("foss", "2026.1"), vec![]);
+        let all = vec![
+            candidate(
+                "App",
+                "1.0",
+                tc("foss", "2026.1"),
+                vec![dep("numpy", ">=2.0", None)],
+            ),
+            bundle,
+            first_class,
+        ];
+        let order = build_order(&tree(&all), &["App".into()], Choice::Newest).expect("order");
+        let seq = names(&order);
+        assert!(seq.iter().any(|s| s.starts_with("numpy-2.4.0")), "{seq:?}");
+        assert!(
+            seq.iter().all(|s| !s.starts_with("SciPy-bundle")),
+            "{seq:?}"
+        );
+    }
+
+    #[test]
+    fn a_toolchain_pin_is_not_satisfied_by_a_foreign_bundle() {
+        let mut bundle = candidate("SciPy-bundle", "2025.06", tc("foss", "2026.1"), vec![]);
+        bundle.exts_list = vec![crate::domain::ExtEntry {
+            name: "numpy".into(),
+            version: "2.3.1".into(),
+        }];
+        let all = vec![
+            candidate(
+                "App",
+                "1.0",
+                tc("foss", "2026.1"),
+                vec![dep("numpy", "==2.3.1", Some(tc("foss", "2023b")))],
+            ),
+            bundle,
+        ];
+        let err = build_order(&tree(&all), &["App".into()], Choice::Newest).unwrap_err();
+        assert!(matches!(err, OrderError::Unsatisfied { .. }), "{err}");
     }
 
     #[test]
