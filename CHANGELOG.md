@@ -102,6 +102,11 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- An Always requirement named `FFTW` no longer hijacks a virtual `fftw`
+  row. Self-`inherits = "default"` keeps the default profile instead of
+  turning it off.
+- An exact pin `==1.0-9` is the joined module string, not tokenized
+  `1.0.9`. Newest no longer prefers the dotted version.
 - A completed `eb_package_inspect` is not an MCP tool error.
   `claims.resolves` stays false because inspect does not solve.
 - A CRAN JSON `Depends` array that is one comma-separated DESCRIPTION

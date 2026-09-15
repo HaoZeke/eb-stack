@@ -616,6 +616,22 @@ fn apply_one_profile_patch(
         .iter()
         .position(|profile| profile.name == patch.name);
     let mut profile = match patch.inherits.as_deref() {
+        Some(parent) if parent == patch.name => match existing_index {
+            Some(index) => plan.profiles[index].clone(),
+            None => ProductProfile {
+                name: patch.name.clone(),
+                default: false,
+                versionsuffix: Vec::new(),
+                platform: None,
+                architecture: None,
+                features: BTreeMap::new(),
+                parameters: BTreeMap::new(),
+                toolchain_options: BTreeMap::new(),
+                config_options: Vec::new(),
+                easyconfig_parameters: BTreeMap::new(),
+                verification_commands: Vec::new(),
+            },
+        },
         Some(parent) => {
             let mut inherited = plan
                 .profiles
@@ -717,6 +733,11 @@ fn ensure_dependency_requirement(
     for dependency in &mut plan.dependencies {
         let effective_name = dependency.eb_name.as_deref().unwrap_or(&dependency.name);
         if package_identity(effective_name) != identity || dependency.condition != condition {
+            continue;
+        }
+        // A virtual fftw row is not EasyBuild FFTW. Matching it would mark
+        // found and leave virtual_capability set, so SAT never sees FFTW.
+        if dependency.virtual_capability.is_some() {
             continue;
         }
         found = true;
@@ -976,6 +997,64 @@ libtorch = "PyTorch"
         assert!(
             dependency.solver_excluded,
             "exclude_from_solve = [PyTorch] must match the post-alias provider"
+        );
+    }
+
+    #[test]
+    fn a_requirement_does_not_hijack_a_virtual_same_identity_row() {
+        let config = PackageConfigLayer::from_toml_str(
+            r#"
+schema_version = 1
+
+[[dependencies.requirements]]
+name = "FFTW"
+"#,
+        )
+        .expect("requirement");
+        let mut plan = seed_plan("fftw", None);
+        plan.dependencies[0].virtual_capability = Some("fftw".into());
+        apply_package_layers(&mut plan, &[config]).expect("apply");
+        assert!(
+            plan.dependencies.iter().any(|dependency| {
+                dependency.eb_name.as_deref() == Some("FFTW")
+                    && dependency.virtual_capability.is_none()
+                    && !dependency.solver_excluded
+            }),
+            "{:?}",
+            plan.dependencies
+        );
+        assert!(
+            plan.dependencies.iter().any(|dependency| {
+                dependency.name == "fftw"
+                    && dependency.virtual_capability.as_deref() == Some("fftw")
+            }),
+            "virtual row must remain: {:?}",
+            plan.dependencies
+        );
+    }
+
+    #[test]
+    fn self_inherit_keeps_the_default_profile() {
+        let config = PackageConfigLayer::from_toml_str(
+            r#"
+schema_version = 1
+
+[[profiles]]
+name = "default"
+inherits = "default"
+"#,
+        )
+        .expect("self inherit");
+        let mut plan = seed_plan("Lib", None);
+        apply_package_layers(&mut plan, &[config]).expect("apply");
+        assert_eq!(
+            plan.profiles
+                .iter()
+                .filter(|profile| profile.default)
+                .count(),
+            1,
+            "{:?}",
+            plan.profiles
         );
     }
 }

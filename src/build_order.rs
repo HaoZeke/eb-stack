@@ -325,11 +325,7 @@ fn satisfies(candidate: &Candidate, dep: &DepReq, recipe: &Candidate) -> bool {
     if candidate.exts_list.iter().any(|ext| {
         ext.name == dep.name
             && (dep.version_req.is_empty()
-                || matches_req(&ext.version, &dep.version_req)
-                || dep
-                    .version_req
-                    .strip_prefix("==")
-                    .is_some_and(|pinned| pinned == ext.version))
+                || exact_or_range_matches(&ext.version, &ext.version, &dep.version_req))
     }) {
         // A provide is the parent module: suffix and toolchain pins still
         // apply, or a plain bundle would answer a CUDA tuple.
@@ -374,7 +370,8 @@ fn satisfies(candidate: &Candidate, dep: &DepReq, recipe: &Candidate) -> bool {
             candidate.version,
             candidate.versionsuffix.as_deref().unwrap_or("")
         );
-        let version_ok = matches_req(&candidate.version, &dep.version_req);
+        let version_ok =
+            exact_or_range_matches(&candidate.version, &candidate.version, &dep.version_req);
         let joined_ok = dep.versionsuffix.as_deref().unwrap_or("").is_empty()
             && !candidate.versionsuffix.as_deref().unwrap_or("").is_empty()
             && !version_ok
@@ -444,10 +441,7 @@ fn root_matches(candidate: &Candidate, root_name: &str, version_req: &str) -> bo
     candidate.exts_list.iter().any(|ext| {
         ext.name == root_name
             && (version_req.is_empty()
-                || matches_req(&ext.version, version_req)
-                || version_req
-                    .strip_prefix("==")
-                    .is_some_and(|pinned| pinned == ext.version))
+                || exact_or_range_matches(&ext.version, &ext.version, version_req))
     })
 }
 
@@ -455,15 +449,20 @@ fn root_version_matches(candidate: &Candidate, version_req: &str) -> bool {
     if version_req.is_empty() {
         return true;
     }
-    if matches_req(&candidate.version, version_req) {
-        return true;
-    }
     let with_suffix = format!(
         "{}{}",
         candidate.version,
         candidate.versionsuffix.as_deref().unwrap_or("")
     );
-    joined_module_eq(&with_suffix, version_req)
+    exact_or_range_matches(&candidate.version, &with_suffix, version_req)
+}
+
+/// Exact pins compare as module strings so `1.0-9` is not `1.0.9`.
+fn exact_or_range_matches(version: &str, glued: &str, version_req: &str) -> bool {
+    match version_req.strip_prefix("==") {
+        Some(exact) => version == exact || joined_module_eq(glued, version_req),
+        None => matches_req(version, version_req) || joined_module_eq(glued, version_req),
+    }
 }
 
 /// Version used to rank a candidate for `dep_name`.
@@ -1180,6 +1179,72 @@ mod tests {
                 assert!(requirement.contains("1.0.9"), "{requirement}");
             }
             other => panic!("1.0-9 is not 1.0.9: {other}"),
+        }
+    }
+
+    #[test]
+    fn a_dotted_version_is_not_a_numeric_suffix_pin() {
+        let dotted = candidate("Foo", "1.0.9", tc("foss", "2026.1"), vec![]);
+        let mut suffixed = candidate("Foo", "1.0", tc("foss", "2026.1"), vec![]);
+        suffixed.versionsuffix = Some("-9".into());
+        let err = build_order(
+            &tree(&[
+                candidate(
+                    "App",
+                    "1.0",
+                    tc("foss", "2026.1"),
+                    vec![dep("Foo", "==1.0-9", None)],
+                ),
+                dotted.clone(),
+            ]),
+            &["App".into()],
+            Choice::Newest,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, OrderError::Unsatisfied { .. }),
+            "1.0.9 is not 1.0-9: {err}"
+        );
+
+        let order = build_order(
+            &tree(&[
+                candidate(
+                    "App",
+                    "1.0",
+                    tc("foss", "2026.1"),
+                    vec![dep("Foo", "==1.0-9", None)],
+                ),
+                dotted,
+                suffixed,
+            ]),
+            &["App".into()],
+            Choice::Newest,
+        )
+        .expect("suffixed Foo");
+        assert!(
+            order.iter().any(|candidate| {
+                candidate.name == "Foo"
+                    && candidate.version == "1.0"
+                    && candidate.versionsuffix.as_deref() == Some("-9")
+            }),
+            "{:?}",
+            names(&order)
+        );
+        assert!(
+            !order
+                .iter()
+                .any(|candidate| candidate.name == "Foo" && candidate.version == "1.0.9"),
+            "{:?}",
+            names(&order)
+        );
+
+        let dotted_root = candidate("Foo", "1.0.9", tc("system", "system"), vec![]);
+        let err = build_order(&[dotted_root], &["Foo==1.0-9".into()], Choice::Newest).unwrap_err();
+        match err {
+            OrderError::NoSuchVersion { requirement, .. } => {
+                assert!(requirement.contains("1.0-9"), "{requirement}");
+            }
+            other => panic!("1.0.9 is not 1.0-9: {other}"),
         }
     }
 
