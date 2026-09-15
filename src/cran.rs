@@ -3,11 +3,12 @@
 //! Default tests never fetch the CRAN PACKAGES index. The parser accepts:
 //!
 //! 1. a DESCRIPTION file (`Package:`, `Version:`, `Depends:`, `Imports:`);
-//! 2. a JSON object with the same fields;
+//! 2. a JSON object with the same fields, or a one-element JSON array of that object;
 //! 3. a package list (`jsonlite==1.8.8`, one spec per line).
 //!
-//! Base-R packages are dropped. `R (>= x)` becomes a dependency on EasyBuild
-//! `R` with the version constraint preserved.
+//! Base-R packages are dropped. `R (>= x)` and a versioned base package
+//! (`methods (>= 4.1.0)`) become a dependency on EasyBuild `R` with the
+//! version constraint preserved.
 
 use crate::ecosystem::{exact_version, split_name_and_pin};
 
@@ -17,15 +18,17 @@ use crate::foreign::{
     ForeignDep, ForeignError, ForeignFormat, ForeignRecipe, ForeignResidual, ForeignSource,
 };
 use crate::package::{ConditionExpr, ResidualSeverity};
+use crate::version::{cmp_version, parse_requirement};
 use serde::de::{self, Deserializer, Visitor};
 use serde::Deserialize;
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt;
 
 /// Parse a DESCRIPTION file, CRAN JSON object, or package-list body.
 pub fn parse_cran_str(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let trimmed = text.trim();
-    if trimmed.starts_with('{') {
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
         parse_cran_json(trimmed)
     } else if looks_like_description(trimmed) {
         parse_description(trimmed)
@@ -117,8 +120,7 @@ where
 }
 
 fn parse_cran_json(text: &str) -> Result<ForeignRecipe, ForeignError> {
-    let doc: CranJson = serde_json::from_str(text)
-        .map_err(|error| ForeignError::Parse(format!("cran json: {error}")))?;
+    let doc = cran_json_document(text)?;
     let mut recipe = recipe_from_fields(CranFields {
         name: doc.package,
         version: doc.version,
@@ -140,6 +142,22 @@ fn parse_cran_json(text: &str) -> Result<ForeignRecipe, ForeignError> {
     };
     record_suggests(&mut recipe, suggests.as_deref());
     Ok(recipe)
+}
+
+fn cran_json_document(text: &str) -> Result<CranJson, ForeignError> {
+    let parse_err = |error| ForeignError::Parse(format!("cran json: {error}"));
+    if text.trim_start().starts_with('[') {
+        let mut docs: Vec<CranJson> = serde_json::from_str(text).map_err(parse_err)?;
+        match docs.len() {
+            0 => Err(ForeignError::Parse("cran json array is empty".into())),
+            1 => Ok(docs.remove(0)),
+            n => Err(ForeignError::Parse(format!(
+                "JSON array has {n} packages; pass one object or a package list"
+            ))),
+        }
+    } else {
+        serde_json::from_str(text).map_err(parse_err)
+    }
 }
 
 fn parse_description(text: &str) -> Result<ForeignRecipe, ForeignError> {
@@ -199,8 +217,9 @@ fn push_run_dep(
         .iter_mut()
         .find(|dep| dep.name.eq_ignore_ascii_case(&name))
     {
-        if existing.pin.is_none() && pin.is_some() {
-            existing.pin = pin;
+        let next = tighter_pin(existing.pin.as_deref(), pin.as_deref());
+        if next.as_deref() != existing.pin.as_deref() {
+            existing.pin = next;
             existing.original_spec = Some(entry.to_string());
         }
         return;
@@ -213,6 +232,29 @@ fn push_run_dep(
         condition: ConditionExpr::Always,
         provenance: Vec::new(),
     });
+}
+
+/// R's install rule is the intersection: the higher lower-bound wins.
+fn tighter_pin(existing: Option<&str>, incoming: Option<&str>) -> Option<String> {
+    match (existing, incoming) {
+        (None, other) | (other, None) => other.map(str::to_string),
+        (Some(old), Some(new))
+            if pin_floor(new).is_some_and(|new_floor| {
+                pin_floor(old).is_none_or(|old_floor| {
+                    cmp_version(&new_floor, &old_floor) == Ordering::Greater
+                })
+            }) =>
+        {
+            Some(new.to_string())
+        }
+        (Some(old), Some(_)) => Some(old.to_string()),
+    }
+}
+
+fn pin_floor(pin: &str) -> Option<String> {
+    parse_requirement(pin)
+        .ok()
+        .and_then(|req| req.lower_bound().map(str::to_string))
 }
 
 fn record_suggests(recipe: &mut ForeignRecipe, suggests: Option<&str>) {
@@ -336,13 +378,18 @@ fn recipe_from_fields(fields: CranFields<'_>) -> Result<ForeignRecipe, ForeignEr
     for (role, entries) in [("run", depends), ("run", imports), ("run", linking_to)] {
         for entry in entries {
             match parse_r_dep(entry) {
-                RDep::SkipBase { name } => residuals.push(ForeignResidual {
-                    category: "cran-base".into(),
-                    severity: ResidualSeverity::Mechanical,
-                    summary: format!("skipped base-R package {name}"),
-                    evidence: Some(entry.clone()),
-                    provenance: None,
-                }),
+                RDep::SkipBase { name, pin } => {
+                    residuals.push(ForeignResidual {
+                        category: "cran-base".into(),
+                        severity: ResidualSeverity::Mechanical,
+                        summary: format!("skipped base-R package {name}"),
+                        evidence: Some(entry.clone()),
+                        provenance: None,
+                    });
+                    if let Some(pin) = pin {
+                        push_run_dep(&mut dependencies, "R".into(), Some(pin), role, entry);
+                    }
+                }
                 RDep::Requirement { name, pin } => {
                     push_run_dep(&mut dependencies, name, pin, role, entry);
                 }
@@ -419,7 +466,7 @@ fn recipe_from_fields(fields: CranFields<'_>) -> Result<ForeignRecipe, ForeignEr
 }
 
 enum RDep {
-    SkipBase { name: String },
+    SkipBase { name: String, pin: Option<String> },
     Requirement { name: String, pin: Option<String> },
     Invalid { reason: String },
 }
@@ -445,6 +492,7 @@ fn parse_r_dep(entry: &str) -> RDep {
     if is_base_r(name_part) {
         return RDep::SkipBase {
             name: name_part.to_string(),
+            pin,
         };
     }
     RDep::Requirement {
@@ -866,5 +914,57 @@ mod tests {
             .dependencies
             .iter()
             .any(|dep| dep.name == "R" && dep.pin.as_deref() == Some(">= 3.1.0")));
+    }
+
+    #[test]
+    fn json_array_is_not_a_package_list() {
+        let compact = r#"[{"Package":"jsonlite","Version":"1.8.8"}]"#;
+        let pretty = "[\n{\"Package\":\"jsonlite\",\"Version\":\"1.8.8\"}]";
+        for payload in [compact, pretty] {
+            let recipe = parse_cran_str(payload).unwrap_or_else(|error| {
+                panic!("{payload} must parse as CRAN JSON, not a package list: {error}");
+            });
+            assert_eq!(recipe.name, "jsonlite", "{payload}");
+            assert_eq!(recipe.version, "1.8.8", "{payload}");
+        }
+    }
+
+    #[test]
+    fn later_stricter_pin_for_the_same_package_is_kept() {
+        let recipe = parse_cran_str(
+            "Package: foo\n\
+             Version: 1.0\n\
+             Depends: Rcpp (>= 1.0.0)\n\
+             Imports: Rcpp (>= 1.0.7)\n",
+        )
+        .expect("parse");
+        let rcpp: Vec<_> = recipe
+            .dependencies
+            .iter()
+            .filter(|dep| dep.name == "Rcpp")
+            .collect();
+        assert_eq!(rcpp.len(), 1, "{:?}", recipe.dependencies);
+        assert_eq!(rcpp[0].pin.as_deref(), Some(">= 1.0.7"));
+    }
+
+    #[test]
+    fn versioned_base_r_spec_constrains_r() {
+        let recipe = parse_cran_str(
+            "Package: demo\n\
+             Version: 1.0\n\
+             Depends: methods (>= 4.1.0)\n",
+        )
+        .expect("parse");
+        let r = recipe
+            .dependencies
+            .iter()
+            .find(|dep| dep.name == "R")
+            .expect("R");
+        assert_eq!(r.pin.as_deref(), Some(">= 4.1.0"));
+        assert!(!recipe.dependencies.iter().any(|dep| dep.name == "methods"));
+        assert!(recipe
+            .residuals
+            .iter()
+            .any(|residual| residual.summary.contains("methods")));
     }
 }
