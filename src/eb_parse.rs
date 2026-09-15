@@ -832,9 +832,9 @@ impl<'src, 'env> Parser<'src, 'env> {
             b'f' | b'F' | b'r' | b'R' if self.starts_fstring() => self.parse_fstring(),
             b'r' | b'R' if self.starts_raw_string() => {
                 self.pos += 1;
-                self.parse_string()
+                self.parse_string_kind(true)
             }
-            b'\'' | b'"' => self.parse_string(),
+            b'\'' | b'"' => self.parse_string_kind(false),
             b'[' => self.parse_list(),
             b'(' => self.parse_tuple_or_group(),
             b'{' => self.parse_dict(),
@@ -845,6 +845,10 @@ impl<'src, 'env> Parser<'src, 'env> {
     }
 
     fn parse_string(&mut self) -> Result<Value, String> {
+        self.parse_string_kind(false)
+    }
+
+    fn parse_string_kind(&mut self, raw: bool) -> Result<Value, String> {
         self.skip_ws();
         let quote = self.bump().ok_or_else(|| self.err("expected string"))?;
         // Triple-quoted
@@ -860,7 +864,7 @@ impl<'src, 'env> Parser<'src, 'env> {
                         .map_err(|e| self.err(e.to_string()))?
                         .to_string();
                     self.pos += 3;
-                    return Ok(Value::Str(unescape_python_str(&s)));
+                    return Ok(Value::Str(if raw { s } else { unescape_python_str(&s) }));
                 }
                 self.pos += 1;
             }
@@ -875,15 +879,20 @@ impl<'src, 'env> Parser<'src, 'env> {
                 let n = self
                     .bump()
                     .ok_or_else(|| self.err("unterminated string escape"))?;
-                out.push(match n {
-                    b'n' => '\n',
-                    b't' => '\t',
-                    b'r' => '\r',
-                    b'\\' => '\\',
-                    b'\'' => '\'',
-                    b'"' => '"',
-                    other => other as char,
-                });
+                if raw {
+                    out.push('\\');
+                    out.push(n as char);
+                } else {
+                    out.push(match n {
+                        b'n' => '\n',
+                        b't' => '\t',
+                        b'r' => '\r',
+                        b'\\' => '\\',
+                        b'\'' => '\'',
+                        b'"' => '"',
+                        other => other as char,
+                    });
+                }
             } else {
                 let start = self.pos - 1;
                 let width = utf8_char_width(c);
@@ -3216,6 +3225,18 @@ mod tests {
                    toolchain = SYSTEM\n";
         let parsed = resolve_easyconfig_str(src).expect("parse");
         assert_eq!(parsed.version, "11.0.27");
+    }
+
+    #[test]
+    fn a_raw_string_keeps_backslash_escapes() {
+        let src = "name = 'X'\nversion = '1'\ntoolchain = SYSTEM\n\
+                   configopts = r'C:\\new'\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(
+            parsed.configopts.as_deref(),
+            Some(r"C:\new"),
+            "raw \\n must stay two characters"
+        );
     }
 
     #[test]
