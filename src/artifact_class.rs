@@ -150,7 +150,17 @@ pub fn classify_url(url: &str) -> ArtifactClass {
 
 /// Classify a foreign recipe's source, which may name a checkout instead of a
 /// download.
+///
+/// A GitHub tag-archive URL wins over a git remote. Spack (and similar)
+/// attach both so the archive can be hashed; the remote does not make that
+/// hash a checkout hash.
 pub fn classify_foreign(url: Option<&str>, git: Option<&str>) -> ArtifactClass {
+    if let Some(u) = url {
+        let class = classify_url(u);
+        if class == ArtifactClass::GitHubTagArchive {
+            return class;
+        }
+    }
     if let Some(git) = git {
         if !git.trim().is_empty() {
             return ArtifactClass::GitCheckout;
@@ -267,19 +277,140 @@ pub fn declared_version(source_tree: &Path) -> Option<DeclaredVersion> {
 }
 
 /// `project(name VERSION 4.3.9 LANGUAGES C CXX)`, across lines.
+///
+/// Commented `project()` is skipped. A `)` inside a quoted DESCRIPTION does
+/// not end the command.
 fn cmake_project_version(text: &str) -> Option<String> {
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re = RE.get_or_init(|| {
-        regex::Regex::new(r"(?is)\bproject\s*\((.*?)\)").expect("literal cmake project")
-    });
-    let caps = re.captures(text)?;
-    let body = caps.get(1)?.as_str();
     static VER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let ver = VER.get_or_init(|| {
         regex::Regex::new(r"(?i)\bVERSION\s+([0-9][0-9A-Za-z.\-+]*)")
             .expect("literal cmake version")
     });
-    Some(ver.captures(body)?.get(1)?.as_str().to_string())
+    let mut from = 0;
+    while let Some(body) = next_cmake_project_body(text, &mut from) {
+        if let Some(caps) = ver.captures(body) {
+            return Some(caps.get(1)?.as_str().to_string());
+        }
+    }
+    None
+}
+
+/// Next `project(...)` argument body after `from`, skipping comments and
+/// matching parentheses outside quoted strings. Advances `from` past it.
+fn next_cmake_project_body<'a>(text: &'a str, from: &mut usize) -> Option<&'a str> {
+    let bytes = text.as_bytes();
+    let n = bytes.len();
+    let mut i = *from;
+    let mut in_string = false;
+    let mut escaped = false;
+    while i < n {
+        let c = bytes[i];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'#' {
+            while i < n && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if c == b'"' {
+            in_string = true;
+            i += 1;
+            continue;
+        }
+        if matches!(c, b'p' | b'P')
+            && i + 7 <= n
+            && text[i..i + 7].eq_ignore_ascii_case("project")
+            && (i == 0 || !cmake_ident_byte(bytes[i - 1]))
+        {
+            let mut j = i + 7;
+            while j < n && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j < n && bytes[j] == b'(' {
+                if let Some(close) = cmake_matching_paren(text, j) {
+                    *from = close + 1;
+                    return Some(&text[j + 1..close]);
+                }
+            }
+        }
+        i += 1;
+    }
+    *from = n;
+    None
+}
+
+fn cmake_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Index of the `)` that closes the `(` at `open`, ignoring parens inside
+/// quotes and `#` comments.
+fn cmake_matching_paren(text: &str, open: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let n = bytes.len();
+    let mut i = open + 1;
+    let mut depth = 1usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    while i < n && depth > 0 {
+        let c = bytes[i];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'#' {
+            while i < n && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if c == b'"' {
+            in_string = true;
+            i += 1;
+            continue;
+        }
+        if c == b'(' {
+            depth += 1;
+        } else if c == b')' {
+            depth -= 1;
+            if depth == 0 {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// `#` to end of line, unless the `#` is inside quotes.
+fn strip_inline_comment(line: &str) -> &str {
+    let mut in_quote = None;
+    for (index, character) in line.char_indices() {
+        match (character, in_quote) {
+            ('#', None) => return line[..index].trim_end(),
+            ('\'' | '"', None) => in_quote = Some(character),
+            (quote, Some(open)) if quote == open => in_quote = None,
+            _ => {}
+        }
+    }
+    line
 }
 
 fn host_matches(host: &str, name: &str) -> bool {
@@ -291,10 +422,13 @@ fn path_has_segment(path: &str, segment: &str) -> bool {
 }
 
 /// `version = "1.2.3"` in `[package]` or `[project]`, not the first hit in the file.
+///
+/// Inline comments are stripped. `version = { workspace = true }` is inherit,
+/// not a version string; cargo.rs resolves that form.
 fn toml_package_version(text: &str) -> Option<String> {
     let mut section = "";
     for line in text.lines() {
-        let trimmed = line.trim();
+        let trimmed = strip_inline_comment(line.trim());
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             section = trimmed;
             continue;
@@ -305,7 +439,11 @@ fn toml_package_version(text: &str) -> Option<String> {
         if let Some(rest) = trimmed.strip_prefix("version") {
             let rest = rest.trim_start();
             if let Some(rest) = rest.strip_prefix('=') {
-                let rest = rest.trim().trim_matches('"').trim_matches('\'');
+                let rest = rest.trim();
+                if rest.starts_with('{') {
+                    return None;
+                }
+                let rest = rest.trim_matches('"').trim_matches('\'');
                 if !rest.is_empty() {
                     return Some(rest.to_string());
                 }
@@ -555,6 +693,24 @@ mod tests {
     }
 
     #[test]
+    fn a_github_tag_archive_url_wins_over_a_git_remote() {
+        let archive = "https://github.com/acct/Name/archive/v1.0.tar.gz";
+        let git = "https://github.com/acct/Name.git";
+        assert_eq!(
+            classify_foreign(Some(archive), Some(git)),
+            ArtifactClass::GitHubTagArchive
+        );
+        let seed = SeededChecksum {
+            origin: "spack".into(),
+            source_url: Some(archive.into()),
+            git: Some(git.into()),
+            sha256: Some("a".repeat(64)),
+        };
+        let findings = verify_sources(&[archive.into()], Some(&seed));
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
     fn an_empty_or_opaque_url_is_unknown_not_compatible() {
         assert_eq!(classify_url(""), ArtifactClass::Unknown);
         assert_eq!(classify_url("   "), ArtifactClass::Unknown);
@@ -681,6 +837,30 @@ mod declared_version_tests {
             std::fs::write(dir.path().join(name), body).unwrap();
         }
         dir
+    }
+
+    #[test]
+    fn toml_package_version_strips_comments_and_refuses_workspace_inherit() {
+        assert_eq!(
+            toml_package_version("[package]\nversion = \"0.13.1\" # release\n"),
+            Some("0.13.1".into())
+        );
+        assert_eq!(
+            toml_package_version("[package]\nversion = { workspace = true }\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn cmake_project_version_skips_comments_and_keeps_description_parens() {
+        assert_eq!(
+            cmake_project_version("# see project()\nproject(Foo VERSION 4.3.9)\n"),
+            Some("4.3.9".into())
+        );
+        assert_eq!(
+            cmake_project_version("project(Foo DESCRIPTION \"Fast (FFT)\" VERSION 4.3.9)\n"),
+            Some("4.3.9".into())
+        );
     }
 
     #[test]
