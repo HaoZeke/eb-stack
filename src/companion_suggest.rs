@@ -23,9 +23,10 @@ pub fn with_outdir_overlay(mut roots: Vec<PathBuf>, out_dir: &Path) -> Vec<PathB
 pub fn find_named_easyconfig(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
     let letter = name.chars().next()?.to_ascii_lowercase();
     for root in roots {
-        let dir = root.join(letter.to_string()).join(name);
-        if let Some(found) = newest_named_eb(&dir, name) {
-            return Some(found);
+        if let Some(dir) = named_package_dir(&root.join(letter.to_string()), name) {
+            if let Some(found) = newest_named_eb(&dir, name) {
+                return Some(found);
+            }
         }
         if let Some(found) = newest_named_eb(root, name) {
             return Some(found);
@@ -34,8 +35,33 @@ pub fn find_named_easyconfig(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
     None
 }
 
+fn named_package_dir(letter_dir: &Path, name: &str) -> Option<PathBuf> {
+    let exact = letter_dir.join(name);
+    if exact.is_dir() {
+        return Some(exact);
+    }
+    let mut matches = Vec::new();
+    for entry in std::fs::read_dir(letter_dir).ok()? {
+        let path = entry.ok()?.path();
+        if path.is_dir()
+            && path
+                .file_name()
+                .and_then(|file| file.to_str())
+                .is_some_and(|file| file.eq_ignore_ascii_case(name))
+        {
+            matches.push(path);
+        }
+    }
+    (matches.len() == 1).then(|| matches.pop().expect("one match"))
+}
+
+fn filename_matches_package(file: &str, name: &str) -> bool {
+    file.get(..name.len() + 1).is_some_and(|prefix| {
+        prefix[..name.len()].eq_ignore_ascii_case(name) && prefix.ends_with('-')
+    })
+}
+
 fn newest_named_eb(dir: &Path, name: &str) -> Option<PathBuf> {
-    let prefix = format!("{name}-");
     std::fs::read_dir(dir)
         .ok()?
         .filter_map(|entry| entry.ok())
@@ -45,12 +71,12 @@ fn newest_named_eb(dir: &Path, name: &str) -> Option<PathBuf> {
                 && path
                     .file_name()
                     .and_then(|file| file.to_str())
-                    .is_some_and(|file| file.starts_with(&prefix))
+                    .is_some_and(|file| filename_matches_package(file, name))
         })
         .max_by(|left, right| {
             cmp_version(
-                &easyconfig_version_key(left, &prefix),
-                &easyconfig_version_key(right, &prefix),
+                &easyconfig_version_key(left, name),
+                &easyconfig_version_key(right, name),
             )
         })
 }
@@ -78,11 +104,19 @@ fn toolchain_from_easyconfig_path(path: &Path) -> Option<Toolchain> {
     })
 }
 
-fn easyconfig_version_key(path: &Path, prefix: &str) -> String {
+fn easyconfig_version_key(path: &Path, name: &str) -> String {
     path.file_name()
         .and_then(|file| file.to_str())
-        .and_then(|file| file.strip_prefix(prefix))
-        .map(|rest| rest.trim_end_matches(".eb").to_string())
+        .and_then(|file| file.strip_suffix(".eb"))
+        .and_then(|file| {
+            file.get(name.len()..)
+                .filter(|_| {
+                    file.get(..name.len())
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(name))
+                })
+                .and_then(|rest| rest.strip_prefix('-'))
+                .map(ToString::to_string)
+        })
         .unwrap_or_default()
 }
 
@@ -396,6 +430,18 @@ mod tests {
         let path = robot.join("HDF5-1.14.6-foss-2025a.eb");
         fs::write(&path, "name = 'HDF5'\n").expect("flat hdf5");
         let found = find_named_easyconfig(&[robot], "HDF5").expect("flat robot hit");
+        assert_eq!(found, path);
+    }
+
+    #[test]
+    fn find_named_easyconfig_matches_module_case() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path().join("robot");
+        let dir = robot.join("h").join("HDF5");
+        fs::create_dir_all(&dir).expect("hdf5 dir");
+        let path = dir.join("HDF5-1.14.3-foss-2023a.eb");
+        fs::write(&path, "name = 'HDF5'\n").expect("hdf5 recipe");
+        let found = find_named_easyconfig(&[robot], "hdf5").expect("case-insensitive hit");
         assert_eq!(found, path);
     }
 
