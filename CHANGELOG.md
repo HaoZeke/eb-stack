@@ -102,6 +102,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- Adopting a sibling with no `checksums` list drops leftover patch
+  hashes. An empty sibling `checksums = []` keeps the emitted source
+  digest. A commented hash is not the source slot.
 - Four `postinstallcmds +=` lines are not a preconfig shell-monster
   hard error. A commented `CMAKE_C_COMPILER=` is not an unwrapped
   compiler driver.
