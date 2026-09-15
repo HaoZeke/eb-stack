@@ -424,10 +424,10 @@ fn parse_requirements_txt(text: &str) -> Result<ForeignRecipe, ForeignError> {
             Pep508::Requirement {
                 name,
                 pin,
+                marker,
                 original,
-                ..
             } => {
-                specs.push((name, pin, original));
+                specs.push((name, pin, original, marker));
             }
             Pep508::SkipExtra { spec } => {
                 return Err(ForeignError::Parse(format!(
@@ -441,7 +441,7 @@ fn parse_requirements_txt(text: &str) -> Result<ForeignRecipe, ForeignError> {
             }
         }
     }
-    let Some((name, pin, _)) = specs.first().cloned() else {
+    let Some((name, pin, _, _)) = specs.first().cloned() else {
         return Err(ForeignError::Parse(
             "requirements.txt has no package specs".into(),
         ));
@@ -467,19 +467,30 @@ fn parse_requirements_txt(text: &str) -> Result<ForeignRecipe, ForeignError> {
         condition: ConditionExpr::Always,
         provenance: Vec::new(),
     }];
-    dependencies.extend(
-        specs
-            .into_iter()
-            .skip(1)
-            .map(|(dep_name, dep_pin, original)| ForeignDep {
-                name: dep_name,
-                pin: dep_pin,
-                role: "run".into(),
-                original_spec: Some(original),
-                condition: ConditionExpr::Always,
-                provenance: Vec::new(),
-            }),
-    );
+    for (dep_name, dep_pin, original, marker) in specs.into_iter().skip(1) {
+        let condition = if let Some(marker) = marker {
+            residuals.push(ForeignResidual {
+                category: "pypi-marker".into(),
+                severity: ResidualSeverity::Judgment,
+                summary: format!(
+                    "{dep_name} is gated by environment marker {marker} and does not constrain every profile"
+                ),
+                evidence: Some(original.clone()),
+                provenance: None,
+            });
+            ConditionExpr::Opaque { source: marker }
+        } else {
+            ConditionExpr::Always
+        };
+        dependencies.push(ForeignDep {
+            name: dep_name,
+            pin: dep_pin,
+            role: "run".into(),
+            original_spec: Some(original),
+            condition,
+            provenance: Vec::new(),
+        });
+    }
     Ok(ForeignRecipe {
         format: ForeignFormat::Pypi,
         name,
@@ -648,6 +659,29 @@ mod tests {
         let err = parse_pypi_str("pkg @ https://example.invalid/pkg-1.0.tar.gz\n")
             .expect_err("direct ref");
         assert!(err.to_string().contains("direct URL"), "{err}");
+    }
+
+    #[test]
+    fn requirements_txt_platform_marker_is_opaque() {
+        let recipe =
+            parse_pypi_str("demo==1.0\npywin32>=1.0; sys_platform == 'win32'\n").expect("parse");
+        let pywin = recipe
+            .dependencies
+            .iter()
+            .find(|dep| dep.name == "pywin32")
+            .expect("pywin32");
+        assert!(
+            matches!(pywin.condition, ConditionExpr::Opaque { .. }),
+            "{pywin:?}"
+        );
+        assert!(
+            recipe
+                .residuals
+                .iter()
+                .any(|residual| residual.category == "pypi-marker"),
+            "{:?}",
+            recipe.residuals
+        );
     }
 
     #[test]
