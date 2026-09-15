@@ -740,7 +740,14 @@ impl EbProvider {
             let want = versionsuffix.unwrap_or("");
             let got = c.versionsuffix.as_deref().unwrap_or("");
             if got != want {
-                continue;
+                // A 2-tuple whose version field already names the joined
+                // module (`25.3-CUDA-12.8.0`) is not an unsuffixed pin.
+                let joined = versionsuffix.is_none()
+                    && !got.is_empty()
+                    && requirement.matches(&format!("{}{got}", c.version));
+                if !joined {
+                    continue;
+                }
             }
             range = range.union(&Ranges::singleton(*rank));
         }
@@ -1653,6 +1660,39 @@ mod tests {
         let cuda = cand("Lib", "1.0", Some("-CUDA-12.8"), "Lib-1.0-CUDA.eb", vec![]);
         assert_eq!(candidate_version_label(&plain), "1.0");
         assert_eq!(candidate_version_label(&cuda), "1.0-CUDA-12.8");
+    }
+
+    #[test]
+    fn a_joined_module_version_req_matches_the_split_candidate() {
+        let candidates = vec![
+            cand(
+                "NVHPC",
+                "25.3",
+                Some("-CUDA-12.8.0"),
+                "NVHPC-25.3-CUDA-12.8.0.eb",
+                vec![],
+            ),
+            cand(
+                "App",
+                "1.0",
+                None,
+                "App-1.0.eb",
+                vec![DepReq {
+                    name: "NVHPC".into(),
+                    version_req: "==25.3-CUDA-12.8.0".into(),
+                    versionsuffix: None,
+                    toolchain: None,
+                }],
+            ),
+        ];
+        let selected = solve_with_resolvo(&candidates, &policy(vec!["App"], vec![]), None)
+            .expect("joined module version is the CUDA build");
+        let nvhpc = selected
+            .iter()
+            .find(|candidate| candidate.name == "NVHPC")
+            .expect("NVHPC");
+        assert_eq!(nvhpc.version, "25.3");
+        assert_eq!(nvhpc.versionsuffix.as_deref(), Some("-CUDA-12.8.0"));
     }
 
     #[test]
