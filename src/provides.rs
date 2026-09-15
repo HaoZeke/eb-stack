@@ -497,6 +497,20 @@ mod tests {
         assert!(refuses_pip_overlay("SciPy"));
         assert!(refuses_pip_overlay("torch"));
         assert!(!refuses_pip_overlay("beautifulsoup4"));
+        assert_ne!(
+            overlay_package_identity("hatch-vcs"),
+            overlay_package_identity("hatchling")
+        );
+    }
+
+    #[test]
+    fn hatch_vcs_is_not_provided_by_hatchling() {
+        let mut hatchling = bundle();
+        hatchling.name = "hatchling".into();
+        hatchling.version = "1.27.0".into();
+        hatchling.exts_list.clear();
+        hatchling.easyconfig_path = "hatchling-1.27.0.eb".into();
+        assert!(existing_language_provider("hatch-vcs", &[hatchling]).is_none());
     }
 
     #[test]

@@ -413,18 +413,45 @@ impl<'a> StaticEvaluator<'a> {
         {
             Some(true) => self.walk_statements(&statement.body),
             Some(false) => self.walk_statements(&statement.orelse),
-            None if statement
-                .body
-                .iter()
-                .chain(&statement.orelse)
-                .any(|body| self.statement_mentions_directive(body)) =>
-            {
-                self.residual(
-                    statement.test.as_ref(),
-                    "dynamic if-statement contains package directives",
-                );
+            None => {
+                self.unbind_assignments_in(&statement.body);
+                self.unbind_assignments_in(&statement.orelse);
+                if statement
+                    .body
+                    .iter()
+                    .chain(&statement.orelse)
+                    .any(|body| self.statement_mentions_directive(body))
+                {
+                    self.residual(
+                        statement.test.as_ref(),
+                        "dynamic if-statement contains package directives",
+                    );
+                }
             }
-            None => {}
+        }
+    }
+
+    fn unbind_assignments_in(&mut self, statements: &[ast::Stmt]) {
+        for statement in statements {
+            match statement {
+                ast::Stmt::Assign(assign) => {
+                    for target in &assign.targets {
+                        self.unbind_target(target);
+                    }
+                }
+                ast::Stmt::AugAssign(aug) => self.unbind_target(&aug.target),
+                ast::Stmt::AnnAssign(ann) => self.unbind_target(ann.target.as_ref()),
+                ast::Stmt::If(inner) => {
+                    self.unbind_assignments_in(&inner.body);
+                    self.unbind_assignments_in(&inner.orelse);
+                }
+                ast::Stmt::For(inner) => {
+                    self.unbind_assignments_in(&inner.body);
+                    self.unbind_assignments_in(&inner.orelse);
+                }
+                ast::Stmt::With(inner) => self.unbind_assignments_in(&inner.body),
+                _ => {}
+            }
         }
     }
 
@@ -1358,6 +1385,28 @@ class Pkg(Package):
                 .all(|call| call.name != "version" || call.arg_string(0).as_deref() != Some("1.0")),
             "failed += must forget 1.0: {:?}",
             syntax.calls
+        );
+    }
+
+    #[test]
+    fn a_dynamic_if_forgets_assigned_names() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    url = "https://linux.example/a.tar.gz"
+    if sys.platform == "darwin":
+        url = "https://mac.example/a.tar.gz"
+    version("1.0", sha256="aaa")
+"#,
+        )
+        .expect("parse");
+        assert!(
+            !matches!(
+                syntax.attributes.get("url"),
+                Some(StaticValue::String(url)) if url == "https://linux.example/a.tar.gz"
+            ),
+            "undecidable if must not keep the linux url: {:?}",
+            syntax.attributes.get("url")
         );
     }
 

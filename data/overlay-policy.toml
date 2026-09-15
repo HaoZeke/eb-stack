@@ -13,7 +13,6 @@ torch = "pytorch"
 # and a project states `poetry-core`, which is the same thing to a recipe.
 poetrycore = "poetry"
 flitcore = "flit"
-hatchvcs = "hatchling"
 
 # Packages an overlay must never pip-install on top of an EasyBuild stack.
 # These are toolchain-built extensions: a wheel would shadow the module and

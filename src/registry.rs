@@ -416,11 +416,76 @@ fn existing_ingest_dump(ingest_root: &Path, format: ForeignFormat, name: &str) -
     let dir = ingest_root.join(format.as_str());
     for stem in ingest_dump_stems(format, pkg, version) {
         let dump = dir.join(format!("{stem}.json"));
-        if dump.is_file() {
+        if dump.is_file() && dump_matches_request(&dump, format, pkg, version) {
             return Some(dump);
         }
     }
     None
+}
+
+fn dump_matches_request(path: &Path, format: ForeignFormat, pkg: &str, version: &str) -> bool {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    let Some(declared_name) = dump_declared_name(&value, format) else {
+        return false;
+    };
+    let declared_version = dump_declared_version(&value, format);
+    names_match_request(format, &declared_name, pkg)
+        && declared_version.is_none_or(|got| got == version)
+}
+
+fn dump_declared_name(value: &serde_json::Value, format: ForeignFormat) -> Option<String> {
+    match format {
+        ForeignFormat::Pypi => value
+            .get("info")
+            .and_then(|info| info.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        ForeignFormat::Cran => value
+            .get("Package")
+            .or_else(|| value.get("package"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        ForeignFormat::Cargo => value
+            .pointer("/crate/name")
+            .or_else(|| value.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        _ => None,
+    }
+}
+
+fn dump_declared_version(value: &serde_json::Value, format: ForeignFormat) -> Option<String> {
+    match format {
+        ForeignFormat::Pypi => value
+            .get("info")
+            .and_then(|info| info.get("version"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        ForeignFormat::Cran => value
+            .get("Version")
+            .or_else(|| value.get("version"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        ForeignFormat::Cargo => value
+            .pointer("/crate/max_version")
+            .or_else(|| value.pointer("/crate/newest_version"))
+            .or_else(|| value.get("vers"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        _ => None,
+    }
+}
+
+fn names_match_request(format: ForeignFormat, declared: &str, requested: &str) -> bool {
+    match format {
+        ForeignFormat::Pypi => normalize_pypi_name(declared) == normalize_pypi_name(requested),
+        _ => declared.eq_ignore_ascii_case(requested),
+    }
 }
 
 fn ingest_dump_stems(format: ForeignFormat, pkg: &str, version: &str) -> Vec<String> {
@@ -710,6 +775,23 @@ mod tests {
         assert!(ingest.source_tree.is_none());
         let replay = std::fs::read_to_string(&ingest.dump).expect("read");
         assert!(replay.contains("\"name\": \"demo\""));
+    }
+
+    #[test]
+    fn resolve_ingest_source_does_not_reuse_a_colliding_dump_stem() {
+        let temp = tempfile::tempdir().expect("temp");
+        let dump = temp.path().join("ingest/pypi/demo-1.0-0.json");
+        std::fs::create_dir_all(dump.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&dump, r#"{"info":{"name":"demo","version":"1.0-0"}}"#).expect("write");
+        let resolved = resolve_ingest_source(
+            Path::new("demo-1.0==0"),
+            Some(ForeignFormat::Pypi),
+            temp.path(),
+        );
+        assert!(
+            resolved.as_ref().map_or(true, |path| path != &dump),
+            "demo-1.0==0 must not reuse demo 1.0-0: {resolved:?}"
+        );
     }
 
     #[test]

@@ -102,6 +102,13 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- An undecidable Spack `if` unbinds names assigned in either branch, so
+  a linux `url` is not kept as a fact after `if sys.platform == darwin`.
+- An ingest dump is reused only when the file's declared name (and
+  version, when present) match the request. `demo-1.0==0` does not
+  reuse `demo` `1.0-0`.
+- `hatch-vcs` is not `hatchling`. The overlay alias that collapsed them
+  is gone.
 - Meson `project (` with whitespace is a project call. `subproject()`
   and a commented `project(` are not. The declared version is the
   project's, not a wrap's.
