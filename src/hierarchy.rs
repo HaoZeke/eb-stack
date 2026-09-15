@@ -9,7 +9,7 @@
 //! Checked-in JSON fixtures under `fixtures/toolchain_hierarchy/` capture that
 //! output so unit tests and runtime resolution do not require EasyBuild.
 
-use crate::domain::{Candidate, Toolchain};
+use crate::domain::{Candidate, DepReq, Toolchain};
 use crate::version::cmp_version;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -538,7 +538,7 @@ fn derive_nvidia_family_hierarchy(
             .chain(c.builddependencies.iter())
             .any(|dep| {
                 matches!(dep.name.as_str(), "nvidia-compilers" | "NVHPC")
-                    && exact_pin_version(&dep.version_req) == Some(parent.version.as_str())
+                    && compiler_pin_identity(dep).as_deref() == Some(parent.version.as_str())
             })
     };
     let def = cands
@@ -578,7 +578,7 @@ fn derive_nvidia_family_hierarchy(
                 .iter()
                 .chain(def.builddependencies.iter())
                 .find(|d| d.name == *compiler)
-                .and_then(|d| exact_pin_version(&d.version_req))
+                .and_then(compiler_pin_identity)
         })?
         .to_string();
 
@@ -883,6 +883,14 @@ fn exact_pin_version(version_req: &str) -> Option<&str> {
         return None;
     }
     Some(ver)
+}
+
+fn compiler_pin_identity(dep: &DepReq) -> Option<String> {
+    let version = exact_pin_version(&dep.version_req)?;
+    match dep.versionsuffix.as_deref() {
+        Some(suffix) if !suffix.is_empty() => Some(format!("{version}{suffix}")),
+        _ => Some(version.to_string()),
+    }
 }
 
 /// Count exact version pins of dependency `name` among recipes whose **own**
@@ -1733,6 +1741,60 @@ mod tests {
         nvc_new.dependencies = vec![dep_pin("GCCcore", "14.2.0")];
         let h = derive_hierarchy_from_candidates(&parent, &[first, second, nvc_old, nvc_new])
             .expect("12.9.1 parent must not take the first 12.8.0 definition");
+        assert_eq!(
+            h.members
+                .iter()
+                .find(|member| member.name == "GCCcore")
+                .map(|member| member.version.as_str()),
+            Some("14.2.0"),
+            "{:?}",
+            h.member_labels()
+        );
+    }
+
+    #[test]
+    fn nvidia_split_suffix_pin_selects_the_parent_cuda_variant() {
+        let parent = Toolchain {
+            name: "NVHPC".into(),
+            version: "25.3-CUDA-12.9.1".into(),
+        };
+        let mut first = cand("NVHPC", "25.3", "system", "", Some("-CUDA-12.8.0"));
+        first.easyconfig_path = "NVHPC-25.3-CUDA-12.8.0.eb".into();
+        let mut old_pin = dep_pin("nvidia-compilers", "25.3");
+        old_pin.versionsuffix = Some("-CUDA-12.8.0".into());
+        first.dependencies = vec![old_pin];
+        let mut second = cand("NVHPC", "25.3", "system", "", Some("-CUDA-12.9.1"));
+        second.easyconfig_path = "NVHPC-25.3-CUDA-12.9.1.eb".into();
+        let mut new_pin = dep_pin("nvidia-compilers", "25.3");
+        new_pin.versionsuffix = Some("-CUDA-12.9.1".into());
+        second.dependencies = vec![new_pin];
+        let mut nvc_old = cand(
+            "nvidia-compilers",
+            "25.3",
+            "system",
+            "",
+            Some("-CUDA-12.8.0"),
+        );
+        nvc_old.dependencies = vec![dep_pin("GCCcore", "13.3.0")];
+        let mut nvc_new = cand(
+            "nvidia-compilers",
+            "25.3",
+            "system",
+            "",
+            Some("-CUDA-12.9.1"),
+        );
+        nvc_new.dependencies = vec![dep_pin("GCCcore", "14.2.0")];
+        let h = derive_hierarchy_from_candidates(&parent, &[first, second, nvc_old, nvc_new])
+            .expect("split suffix pin must pick 12.9.1");
+        assert_eq!(
+            h.members
+                .iter()
+                .find(|member| member.name == "nvidia-compilers")
+                .map(|member| member.version.as_str()),
+            Some("25.3-CUDA-12.9.1"),
+            "{:?}",
+            h.member_labels()
+        );
         assert_eq!(
             h.members
                 .iter()
