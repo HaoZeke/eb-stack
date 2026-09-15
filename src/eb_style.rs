@@ -613,14 +613,21 @@ fn format_string_assignment(asg: &StringAssignment<'_>) -> Vec<String> {
 
 fn format_triple_quoted_assignment(asg: &StringAssignment<'_>) -> Vec<String> {
     let delim = if asg.quote == '"' { "\"\"\"" } else { "'''" };
-    let width = EB_MAX_LINE
-        .saturating_sub(asg.indent.chars().count())
-        .max(16);
-    let mut lines = vec![format!("{}{} {} {delim}", asg.indent, asg.key, asg.op)];
-    for chunk in wrap_words(asg.content.trim(), width) {
-        lines.push(format!("{}{chunk}", asg.indent));
+    let prefix_first = format!("{}{} {} ", asg.indent, asg.key, asg.op);
+    let prefix_cont = format!("{}{} += ", asg.indent, asg.key);
+    let budget = EB_MAX_LINE
+        .saturating_sub(prefix_cont.chars().count())
+        .saturating_sub(delim.len() * 2)
+        .max(8);
+    let chunks = split_string_content(asg.content, budget);
+    let mut lines = Vec::new();
+    for (i, chunk) in chunks.iter().enumerate() {
+        if i == 0 {
+            lines.push(format!("{prefix_first}{delim}{chunk}{delim}"));
+        } else {
+            lines.push(format!("{prefix_cont}{delim}{chunk}{delim}"));
+        }
     }
-    lines.push(format!("{}{delim}", asg.indent));
     lines
 }
 
@@ -994,6 +1001,21 @@ mod tests {
             .text
             .lines()
             .all(|line| line.chars().count() <= EB_MAX_LINE));
+        let joined: String = result
+            .text
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                let after = trimmed
+                    .strip_prefix("description = ")
+                    .or_else(|| trimmed.strip_prefix("description += "))?;
+                after
+                    .strip_prefix("\"\"\"")
+                    .and_then(|rest| rest.strip_suffix("\"\"\""))
+                    .map(str::to_string)
+            })
+            .collect();
+        assert_eq!(joined, body);
     }
 
     #[test]
