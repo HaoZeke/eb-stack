@@ -102,6 +102,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A failed download whose URL contains `ssh:` is still Source, not
+  Transport. Transport stays for SSH/connection failures that are not
+  a source fetch.
 - A download that times out is a Source finding, not a generic Timeout
   or Transport finding. A connection timeout without a download stays
   Transport.

@@ -828,9 +828,10 @@ pub fn classify_build_failure(
         || text.contains("can't find file to patch")
         || text.contains("patch failed")
         || text.contains("hunk #") && text.contains("failed");
-    if text.contains("ssh:")
-        || ((text.contains("connection refused") || text.contains("connection timed out"))
-            && !source_failure)
+    if (text.contains("ssh:")
+        || text.contains("connection refused")
+        || text.contains("connection timed out"))
+        && !source_failure
     {
         BuildFindingClass::Transport
     } else if text.contains("slurm") && (text.contains("error") || text.contains("invalid")) {
@@ -1780,6 +1781,15 @@ mod campaign_signature_tests {
         assert_eq!(
             classify_build_failure("build", "connection timed out", "", None),
             BuildFindingClass::Transport
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "failed to download git+ssh://example.invalid/repo.git",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
         );
     }
 
