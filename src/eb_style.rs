@@ -97,7 +97,6 @@ pub fn line_is_mechanically_fixable(line: &str) -> bool {
 
 /// Rewrite fixable long lines; leave other long lines intact (still reported).
 pub fn format_style(text: &str) -> FormatStyleResult {
-    let ends_with_nl = text.ends_with('\n');
     let mut out_lines: Vec<String> = Vec::new();
     let mut rewritten = 0usize;
 
@@ -115,11 +114,12 @@ pub fn format_style(text: &str) -> FormatStyleResult {
         }
     }
 
+    let trailing_newlines = text.bytes().rev().take_while(|byte| *byte == b'\n').count();
     let mut text_out = out_lines.join("\n");
-    if (ends_with_nl || text.is_empty()) && !text_out.ends_with('\n') {
-        text_out.push('\n');
+    text_out = text_out.trim_end_matches('\n').to_string();
+    if trailing_newlines > 0 {
+        text_out.push_str(&"\n".repeat(trailing_newlines));
     }
-    // Empty input stays empty without forced newline unless original had content.
     if text.is_empty() {
         text_out.clear();
     }
@@ -139,8 +139,10 @@ pub fn format_style_file(path: &Path, out: Option<&Path>) -> Result<FormatStyleR
     let result = format_style(&text);
     let dest = out.unwrap_or(path);
     if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| StyleError::Io(format!("mkdir {}: {e}", parent.display())))?;
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| StyleError::Io(format!("mkdir {}: {e}", parent.display())))?;
+        }
     }
     std::fs::write(dest, &result.text)
         .map_err(|e| StyleError::Io(format!("write {}: {e}", dest.display())))?;
@@ -1166,6 +1168,27 @@ mod tests {
         let r = format_style(src);
         assert_eq!(r.lines_rewritten, 0);
         assert_eq!(r.text, src);
+    }
+
+    #[test]
+    fn format_style_keeps_a_trailing_blank_line() {
+        let src = "name = 'eOn'\nversion = '1'\n\n";
+        let result = format_style(src);
+        assert_eq!(result.lines_rewritten, 0);
+        assert_eq!(result.text, src);
+    }
+
+    #[test]
+    fn format_style_file_writes_a_relative_basename() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let previous = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(dir.path()).expect("chdir");
+        std::fs::write("Package.eb", "name = 'X'\nversion = '1'\n").expect("write");
+        let result = format_style_file(Path::new("Package.eb"), None);
+        std::env::set_current_dir(previous).expect("restore cwd");
+        result.expect("format relative basename");
+        let written = std::fs::read_to_string(dir.path().join("Package.eb")).expect("read");
+        assert!(written.contains("name = 'X'"), "{written}");
     }
 
     #[test]
