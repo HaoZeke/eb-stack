@@ -63,11 +63,7 @@ pub struct EbProvider {
 /// SYSTEM is normalized, since an easyconfig writes it as name and version
 /// both "system" while a hierarchy carries an empty version.
 fn toolchain_label(tc: &crate::domain::Toolchain) -> String {
-    if crate::hierarchy::is_system_toolchain(tc) {
-        "system".to_string()
-    } else {
-        format!("{}-{}", tc.name, tc.version)
-    }
+    tc.identity_label()
 }
 
 /// The resolvo package name for a candidate.

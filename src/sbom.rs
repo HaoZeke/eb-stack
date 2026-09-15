@@ -33,12 +33,10 @@ use std::convert::TryFrom;
 use std::str::FromStr;
 
 pub(crate) fn lock_package_key(package: &LockPackage) -> String {
+    let key = package.identity_key();
     format!(
         "{}@{}+{}{}",
-        package.name,
-        package.version,
-        package.toolchain.label(),
-        package.versionsuffix.as_deref().unwrap_or("")
+        key.name, key.version, key.toolchain, key.versionsuffix
     )
 }
 
@@ -710,12 +708,10 @@ pub fn cyclonedx_to_dot(bom: &Value) -> String {
 }
 
 fn candidate_identity(candidate: &crate::domain::Candidate) -> String {
+    let key = candidate.identity_key();
     format!(
         "{}@{}+{}{}",
-        candidate.name,
-        candidate.version,
-        candidate.toolchain.label(),
-        candidate.versionsuffix.as_deref().unwrap_or("")
+        key.name, key.version, key.toolchain, key.versionsuffix
     )
 }
 

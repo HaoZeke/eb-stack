@@ -133,14 +133,9 @@ impl ToolchainHierarchy {
     }
 }
 
-/// EasyBuild / parser SYSTEM toolchains: name `system` (any case), version empty or `system`.
+/// EasyBuild `SYSTEM`, including the historical `dummy` spelling.
 pub fn is_system_toolchain(tc: &Toolchain) -> bool {
-    // EasyBuild called this toolchain `dummy` before it was renamed to
-    // `system`, and a robot path outlives the rename: a 2019 tree writes 1374
-    // of its recipes that way. Reading `dummy` as an ordinary toolchain makes
-    // every one of them unsatisfiable, so the two spellings mean the same
-    // thing here.
-    tc.name.eq_ignore_ascii_case("system") || tc.name.eq_ignore_ascii_case("dummy")
+    tc.is_system()
 }
 
 /// Equality for hierarchy membership, with SYSTEM normalization.

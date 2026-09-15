@@ -55,14 +55,7 @@ impl ModuleKey {
         Self {
             name: candidate.name.clone(),
             version: candidate.version.clone(),
-            toolchain: if crate::hierarchy::is_system_toolchain(&candidate.toolchain) {
-                "system".to_string()
-            } else {
-                format!(
-                    "{}-{}",
-                    candidate.toolchain.name, candidate.toolchain.version
-                )
-            },
+            toolchain: candidate.toolchain.identity_label(),
             versionsuffix: candidate.versionsuffix.clone().unwrap_or_default(),
         }
     }

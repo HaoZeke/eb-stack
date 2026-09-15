@@ -17,6 +17,20 @@ impl Toolchain {
     pub fn label(&self) -> String {
         format!("{}-{}", self.name, self.version)
     }
+
+    /// EasyBuild `SYSTEM` / historical `dummy`, regardless of version spelling.
+    pub fn is_system(&self) -> bool {
+        self.name.eq_ignore_ascii_case("system") || self.name.eq_ignore_ascii_case("dummy")
+    }
+
+    /// Identity label: `system` for SYSTEM/dummy, otherwise [`Self::label`].
+    pub fn identity_label(&self) -> String {
+        if self.is_system() {
+            "system".into()
+        } else {
+            self.label()
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +96,31 @@ pub struct Candidate {
     /// topic at all and upstream classes both as `tools`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moduleclass: Option<String>,
+}
+
+/// The four fields that make two candidates the same module.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CandidateKey {
+    /// Package name.
+    pub name: String,
+    /// Package version.
+    pub version: String,
+    /// [`Toolchain::identity_label`].
+    pub toolchain: String,
+    /// Versionsuffix, empty when the recipe has none.
+    pub versionsuffix: String,
+}
+
+impl Candidate {
+    /// Identity for walks and maps: SYSTEM/dummy collapse, empty suffix is none.
+    pub fn identity_key(&self) -> CandidateKey {
+        CandidateKey {
+            name: self.name.clone(),
+            version: self.version.clone(),
+            toolchain: self.toolchain.identity_label(),
+            versionsuffix: self.versionsuffix.clone().unwrap_or_default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -247,6 +286,18 @@ pub struct LockPackage {
     pub easyconfig_path: String,
 }
 
+impl LockPackage {
+    /// The same four-field identity a [`Candidate`] uses.
+    pub fn identity_key(&self) -> CandidateKey {
+        CandidateKey {
+            name: self.name.clone(),
+            version: self.version.clone(),
+            toolchain: self.toolchain.identity_label(),
+            versionsuffix: self.versionsuffix.clone().unwrap_or_default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Provenance of a solve, so a lock says what produced it.
 pub struct SolverMeta {
@@ -366,6 +417,46 @@ mod tests {
             STACK_LOCK_SCHEMA_VERSION,
         );
         assert_eq!(stack.package("Python").unwrap().version, "3.12.3");
+    }
+
+    #[test]
+    fn system_and_dummy_share_an_identity_label() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let dummy = Toolchain {
+            name: "dummy".into(),
+            version: String::new(),
+        };
+        assert_eq!(system.identity_label(), dummy.identity_label());
+        assert_eq!(system.identity_label(), "system");
+        assert_ne!(system.label(), dummy.label());
+    }
+
+    #[test]
+    fn empty_suffix_and_none_share_a_candidate_key() {
+        let toolchain = Toolchain {
+            name: "foss".into(),
+            version: "2026.1".into(),
+        };
+        let plain = Candidate {
+            name: "Lib".into(),
+            version: "1.0".into(),
+            toolchain: toolchain.clone(),
+            versionsuffix: None,
+            easyconfig_path: "a.eb".into(),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+            moduleclass: None,
+        };
+        let mut empty = plain.clone();
+        empty.versionsuffix = Some(String::new());
+        empty.easyconfig_path = "b.eb".into();
+        empty.moduleclass = Some("lib".into());
+        assert_eq!(plain.identity_key(), empty.identity_key());
+        assert_ne!(plain, empty);
     }
 
     #[test]
