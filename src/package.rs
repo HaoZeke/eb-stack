@@ -505,6 +505,10 @@ impl ConditionExpr {
     /// `not py3k` is not admitted just because `py3k` could not be lowered.
     /// An unset platform is unknown the same way: `unix` (`not win`) and
     /// `linux` stay together instead of splitting into true and false.
+    /// An unset architecture is unknown the same way: `not ppc64le` and
+    /// `x86_64` stay together. A missing dependency feature is unknown, so
+    /// `hdf5+mpi` and `hdf5~mpi` stay together instead of making the
+    /// negation always-on.
     pub fn evaluate(&self, context: &ConditionContext) -> bool {
         self.known(context) == Some(true)
     }
@@ -538,6 +542,20 @@ impl ConditionExpr {
                 .platform
                 .as_deref()
                 .map(|platform| platform.eq_ignore_ascii_case(name)),
+            Self::Predicate(ConditionPredicate::Architecture { name }) => context
+                .architecture
+                .as_deref()
+                .map(|architecture| architecture.eq_ignore_ascii_case(name)),
+            Self::Predicate(ConditionPredicate::DependencyFeature {
+                dependency,
+                name,
+                enabled,
+            }) => context
+                .dependency_features
+                .get(dependency)
+                .and_then(|features| features.get(name))
+                .copied()
+                .map(|value| value == *enabled),
             Self::Predicate(predicate) => Some(predicate.evaluate(context)),
             Self::All(expressions) => {
                 let mut unknown = false;
@@ -1533,5 +1551,47 @@ mod tests {
         });
         assert!(!ConditionExpr::Any(vec![linux, opaque.clone()]).is_undecidable());
         assert!(!ConditionExpr::All(vec![ConditionExpr::Never, opaque]).is_undecidable());
+    }
+
+    #[test]
+    fn unset_architecture_is_unknown() {
+        let not_ppc = ConditionExpr::Not(Box::new(ConditionExpr::Predicate(
+            ConditionPredicate::Architecture {
+                name: "ppc64le".into(),
+            },
+        )));
+        let x86 = ConditionExpr::Predicate(ConditionPredicate::Architecture {
+            name: "x86_64".into(),
+        });
+        let context = ConditionContext::default();
+        assert_eq!(
+            not_ppc.evaluate(&context),
+            x86.evaluate(&context),
+            "unset architecture must not admit not-ppc64le while rejecting x86_64"
+        );
+        assert!(!not_ppc.evaluate(&context));
+        assert!(!x86.evaluate(&context));
+    }
+
+    #[test]
+    fn missing_dependency_features_are_unknown() {
+        let plus = ConditionExpr::Predicate(ConditionPredicate::DependencyFeature {
+            dependency: "hdf5".into(),
+            name: "mpi".into(),
+            enabled: true,
+        });
+        let minus = ConditionExpr::Predicate(ConditionPredicate::DependencyFeature {
+            dependency: "hdf5".into(),
+            name: "mpi".into(),
+            enabled: false,
+        });
+        let context = ConditionContext::default();
+        assert_eq!(
+            plus.evaluate(&context),
+            minus.evaluate(&context),
+            "missing dependency features must not admit hdf5~mpi while rejecting hdf5+mpi"
+        );
+        assert!(!plus.evaluate(&context));
+        assert!(!minus.evaluate(&context));
     }
 }

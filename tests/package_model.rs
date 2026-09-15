@@ -1,8 +1,9 @@
 use eb_stack::package::{
-    package_plan_to_cyclonedx, BuildSpec, ConditionContext, ConditionExpr, ConditionPredicate,
-    Confidence, DependencyIntent, DependencyRole, OutputRequest, OverlayExtension, PackageMetadata,
-    PackageOrigin, PackagePlan, ProductProfile, Provenance, Residual, ResidualSeverity,
-    ResidualStage, SourceArtifact, SourceSpan, PACKAGE_SCHEMA_VERSION,
+    materialize_profile, package_plan_to_cyclonedx, BuildSpec, ConditionContext, ConditionExpr,
+    ConditionPredicate, Confidence, DependencyIntent, DependencyRole, OutputRequest,
+    OverlayExtension, PackageMetadata, PackageOrigin, PackagePlan, ProductProfile,
+    ProfileEnvironment, Provenance, Residual, ResidualSeverity, ResidualStage, SourceArtifact,
+    SourceSpan, PACKAGE_SCHEMA_VERSION,
 };
 use eb_stack::Toolchain;
 use serde_json::Value;
@@ -198,6 +199,79 @@ fn empty_platform_keeps_unix_and_linux_together() {
         unix.evaluate(&context),
         linux.evaluate(&context),
         "unset platform must not admit unix while rejecting linux"
+    );
+}
+
+#[test]
+fn empty_architecture_keeps_not_ppc64le_and_x86_64_together() {
+    let not_ppc = ConditionExpr::Not(Box::new(ConditionExpr::Predicate(
+        ConditionPredicate::Architecture {
+            name: "ppc64le".into(),
+        },
+    )));
+    let x86 = ConditionExpr::Predicate(ConditionPredicate::Architecture {
+        name: "x86_64".into(),
+    });
+    let context = ConditionContext::default();
+    assert_eq!(
+        not_ppc.evaluate(&context),
+        x86.evaluate(&context),
+        "unset architecture must not admit not-ppc64le while rejecting x86_64"
+    );
+}
+
+#[test]
+fn missing_dependency_features_keep_hdf5_plus_and_minus_mpi_together() {
+    let plus = ConditionExpr::Predicate(ConditionPredicate::DependencyFeature {
+        dependency: "hdf5".into(),
+        name: "mpi".into(),
+        enabled: true,
+    });
+    let minus = ConditionExpr::Predicate(ConditionPredicate::DependencyFeature {
+        dependency: "hdf5".into(),
+        name: "mpi".into(),
+        enabled: false,
+    });
+    let context = ConditionContext::default();
+    assert_eq!(
+        plus.evaluate(&context),
+        minus.evaluate(&context),
+        "missing dependency features must not admit hdf5~mpi while rejecting hdf5+mpi"
+    );
+}
+
+#[test]
+fn materialize_does_not_admit_caret_pkg_not_feat_without_dependency_features() {
+    let mut plan = qmcpack_plan();
+    plan.dependencies.push(DependencyIntent {
+        id: "dep:netcdf-c".into(),
+        name: "netcdf-c".into(),
+        eb_name: Some("netCDF".into()),
+        constraint: None,
+        toolchain: None,
+        versionsuffix: None,
+        roles: vec![DependencyRole::Run],
+        condition: ConditionExpr::Predicate(ConditionPredicate::DependencyFeature {
+            dependency: "hdf5".into(),
+            name: "mpi".into(),
+            enabled: false,
+        }),
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: vec![provenance(
+            200,
+            "depends_on(\"netcdf-c\", when=\"^hdf5~mpi\")",
+        )],
+    });
+    let materialized = materialize_profile(&plan, "default", &ProfileEnvironment::default())
+        .expect("materialize default");
+    assert!(
+        materialized
+            .dependencies
+            .iter()
+            .all(|dependency| dependency.name != "netcdf-c"),
+        "caret hdf5~mpi must not admit netcdf-c: {:?}",
+        materialized.dependencies
     );
 }
 
