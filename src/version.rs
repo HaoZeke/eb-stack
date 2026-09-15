@@ -173,17 +173,12 @@ pub enum RequirementOp {
 impl RequirementOp {
     /// Whether this operator puts a floor under the version.
     ///
-    /// The emitted-extension path needs a concrete version, and for every
-    /// operator that bounds from below the floor is the version named.
+    /// The named version must itself satisfy the operator. `>` is excluded:
+    /// `>1.2` does not admit `1.2`.
     fn is_lower_bound(self) -> bool {
         matches!(
             self,
-            Self::Exact
-                | Self::AtLeast
-                | Self::Above
-                | Self::Compatible
-                | Self::Caret
-                | Self::Tilde
+            Self::Exact | Self::AtLeast | Self::Compatible | Self::Caret | Self::Tilde
         )
     }
 }
@@ -299,12 +294,26 @@ impl Requirement {
     /// requirement the floor is the honest choice: it is the version the
     /// foreign metadata actually named.
     pub fn lower_bound(&self) -> Option<&str> {
-        self.exact().or_else(|| {
-            self.clauses
-                .iter()
-                .find(|clause| clause.op.is_lower_bound())
-                .map(|clause| clause.version.as_str())
-        })
+        if let Some(exact) = self.exact() {
+            return Some(exact);
+        }
+        let mut best: Option<&str> = None;
+        for clause in &self.clauses {
+            if !clause.op.is_lower_bound() {
+                continue;
+            }
+            if !self.matches(&clause.version) {
+                continue;
+            }
+            best = Some(match best {
+                None => clause.version.as_str(),
+                Some(previous) if cmp_version(&clause.version, previous) == Ordering::Greater => {
+                    clause.version.as_str()
+                }
+                Some(previous) => previous,
+            });
+        }
+        best
     }
 }
 
@@ -431,6 +440,15 @@ mod ecosystem_operator_tests {
         // The form that made every PyPI dependency carrying one unsatisfiable.
         assert!(matches_req("2.1.3", ">=1.0,!=2.0.0"));
         assert!(!matches_req("2.0.0", ">=1.0,!=2.0.0"));
+    }
+
+    #[test]
+    fn lower_bound_is_a_version_the_requirement_admits() {
+        let req = parse_requirement(">=2.0,>=3.0").expect("parse");
+        let floor = req.lower_bound().expect("floor");
+        assert!(req.matches(floor), "{floor}");
+        let above = parse_requirement(">1.2").expect("parse");
+        assert_ne!(above.lower_bound(), Some("1.2"));
     }
 
     #[test]
