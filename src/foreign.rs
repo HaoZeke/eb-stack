@@ -534,7 +534,11 @@ pub(crate) fn guess_easyblock(recipe: &ForeignRecipe, warnings: &mut Vec<String>
         ));
         return "PythonPackage".into();
     }
-    if let Some(hint) = hint(&["python", "pip"]) {
+    // PythonExtension is a Spack mixin, not a Python build system.
+    if let Some(hint) = recipe.build_system_hints.iter().find(|hint| {
+        let lower = hint.to_ascii_lowercase();
+        (lower.contains("python") || lower.contains("pip")) && !lower.contains("pythonextension")
+    }) {
         warnings.push(format!(
             "build-system hint {hint} → easyblock PythonPackage"
         ));
@@ -2135,19 +2139,8 @@ fn parse_spack_condition_term(term: &str) -> Option<ConditionExpr> {
             version,
         }));
     }
-    if let Some(dependency) = term.strip_prefix('^') {
-        let dependency = dependency
-            .trim_start_matches('[')
-            .split([']', '@', '+', '~', '%'])
-            .find(|part| !part.is_empty() && !part.contains('='))
-            .unwrap_or(dependency);
-        return Some(ConditionExpr::Predicate(
-            ConditionPredicate::DependencyFeature {
-                dependency: dependency.into(),
-                name: "selected".into(),
-                enabled: true,
-            },
-        ));
+    if let Some(spec) = term.strip_prefix('^') {
+        return parse_spack_caret_when_term(spec);
     }
     if let Some((name, value)) = term.split_once('=') {
         let name = name.trim();
@@ -2163,6 +2156,35 @@ fn parse_spack_condition_term(term: &str) -> Option<ConditionExpr> {
         }
     }
     None
+}
+
+/// Lower `^hdf5+mpi` to a dependency feature. Bare `^hdf5` and
+/// `^[virtuals=...]` are unlowerable and stay Opaque.
+fn parse_spack_caret_when_term(spec: &str) -> Option<ConditionExpr> {
+    if spec.starts_with('[') || spec.contains('=') {
+        return None;
+    }
+    let (dependency, feature, enabled) = if let Some((dependency, feature)) = spec.split_once('+') {
+        (dependency, feature, true)
+    } else if let Some((dependency, feature)) = spec.split_once('~') {
+        (dependency, feature, false)
+    } else {
+        return None;
+    };
+    if dependency.is_empty()
+        || feature.is_empty()
+        || dependency.contains(['@', '%', '[', ']', ' '])
+        || feature.contains(['+', '~', '@', '%', '[', ']', '=', ' '])
+    {
+        return None;
+    }
+    Some(ConditionExpr::Predicate(
+        ConditionPredicate::DependencyFeature {
+            dependency: dependency.into(),
+            name: feature.into(),
+            enabled,
+        },
+    ))
 }
 
 fn spack_version_range(range: &str) -> String {
@@ -2533,6 +2555,98 @@ source:
             Some(ForeignFormat::Raku)
         );
         assert_eq!(detect_foreign_format(Path::new("foo.eb")), None);
+    }
+
+    fn recipe_with_hints(hints: &[&str]) -> ForeignRecipe {
+        ForeignRecipe {
+            format: ForeignFormat::Spack,
+            name: "demo".into(),
+            version: "1.0".into(),
+            homepage: None,
+            source_url: None,
+            source_filename: None,
+            sha256: None,
+            sources: Vec::new(),
+            summary: None,
+            description: None,
+            license: None,
+            dependencies: Vec::new(),
+            build_system_hints: hints.iter().map(|hint| (*hint).to_string()).collect(),
+            configopts: None,
+            patches: Vec::new(),
+            variants: Vec::new(),
+            rules: Vec::new(),
+            notes: Vec::new(),
+            residuals: Vec::new(),
+            classifiers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn python_extension_does_not_steal_cmake_or_meson_easyblock() {
+        let mut notes = Vec::new();
+        assert_eq!(
+            guess_easyblock(
+                &recipe_with_hints(&[
+                    "CMakePackage",
+                    "CudaPackage",
+                    "ROCmPackage",
+                    "PythonExtension",
+                ]),
+                &mut notes
+            ),
+            "CMakeNinja"
+        );
+        notes.clear();
+        assert_eq!(
+            guess_easyblock(
+                &recipe_with_hints(&["MesonPackage", "PythonExtension"]),
+                &mut notes
+            ),
+            "MesonNinja"
+        );
+        notes.clear();
+        assert_eq!(
+            guess_easyblock(&recipe_with_hints(&["PythonPackage"]), &mut notes),
+            "PythonPackage"
+        );
+    }
+
+    #[test]
+    fn spack_caret_when_terms_do_not_invent_selected() {
+        let virtuals = parse_spack_condition("@:3.4.0 ^[virtuals=blas,lapack] intel-oneapi-mkl");
+        let virtuals_json = serde_json::to_string(&virtuals).expect("json");
+        assert!(
+            !virtuals_json.contains("\"name\":\"selected\"")
+                && !virtuals_json.contains("\"name\": \"selected\""),
+            "{virtuals_json}"
+        );
+        assert!(
+            !virtuals_json.contains("\"dependency\":\"[virtuals=blas,lapack]\"")
+                && !virtuals_json.contains("\"dependency\": \"[virtuals=blas,lapack]\""),
+            "{virtuals_json}"
+        );
+        assert!(
+            virtuals_json.contains("\"op\":\"opaque\""),
+            "{virtuals_json}"
+        );
+        assert!(matches!(
+            parse_spack_condition_term("^[virtuals=blas,lapack]"),
+            None
+        ));
+
+        let hdf5 = parse_spack_condition("^hdf5+mpi");
+        assert_eq!(
+            hdf5,
+            ConditionExpr::Predicate(ConditionPredicate::DependencyFeature {
+                dependency: "hdf5".into(),
+                name: "mpi".into(),
+                enabled: true,
+            })
+        );
+        let hdf5_json = serde_json::to_string(&hdf5).expect("json");
+        assert!(!hdf5_json.contains("selected"), "{hdf5_json}");
+        assert!(matches!(parse_spack_condition_term("^hdf5"), None));
     }
 
     #[test]

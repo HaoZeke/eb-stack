@@ -198,6 +198,132 @@ requirements:
 }
 
 #[test]
+fn spack_lammps_cmake_plus_python_extension_is_cmakeninja() {
+    let recipe = parse_foreign_path(
+        &root().join("spack_lammps/package.py"),
+        Some(ForeignFormat::Spack),
+    )
+    .expect("parse Spack LAMMPS");
+    assert!(recipe
+        .build_system_hints
+        .iter()
+        .any(|hint| hint.contains("CMake")));
+    assert!(recipe
+        .build_system_hints
+        .iter()
+        .any(|hint| hint.contains("PythonExtension")));
+    let plan = package_plan_from_foreign(&recipe, &toolchain("2026.1"));
+    assert_eq!(plan.build.easyblock.as_deref(), Some("CMakeNinja"));
+
+    let python_only = parse_foreign_str(
+        ForeignFormat::Spack,
+        r#"
+class Demo(PythonPackage):
+    homepage = "https://example.invalid/demo"
+    url = "https://example.invalid/demo-1.0.tar.gz"
+    version("1.0", sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+"#,
+    )
+    .expect("lone PythonPackage");
+    let python_plan = package_plan_from_foreign(&python_only, &toolchain("2026.1"));
+    assert_eq!(
+        python_plan.build.easyblock.as_deref(),
+        Some("PythonPackage")
+    );
+}
+
+#[test]
+fn conda_eq_pin_survives_as_exact_constraint() {
+    let recipe = parse_foreign_str(
+        ForeignFormat::CondaForge,
+        r#"
+package:
+  name: feedstock
+  version: 1.0
+source:
+  url: https://example.invalid/feedstock-1.0.tar.gz
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+requirements:
+  run:
+    - mlip =3.0
+"#,
+    )
+    .expect("parse conda = pin");
+    let plan = package_plan_from_foreign(&recipe, &toolchain("2026.1"));
+    let mlip = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "mlip")
+        .expect("mlip");
+    assert_eq!(mlip.constraint.as_deref(), Some("==3.0"));
+    assert!(
+        !plan
+            .residuals
+            .iter()
+            .any(|residual| residual.category == "unparsed-constraint"),
+        "unparsed-constraint residuals: {:?}",
+        plan.residuals
+    );
+    let constraint = mlip.constraint.as_deref().expect("constraint");
+    assert!(eb_stack::version::matches_req("3.0", constraint));
+    assert!(!eb_stack::version::matches_req("4.0", constraint));
+}
+
+#[test]
+fn spack_caret_virtuals_when_is_not_a_selected_feature() {
+    let recipe = parse_foreign_path(
+        &root().join("spack_qmcpack/package.py"),
+        Some(ForeignFormat::Spack),
+    )
+    .expect("parse QMCPACK");
+    let rule = recipe
+        .rules
+        .iter()
+        .find(|rule| {
+            rule.kind == eb_stack::ForeignRuleKind::Conflict
+                && rule.when.as_deref() == Some("@:3.4.0 ^[virtuals=blas,lapack] intel-oneapi-mkl")
+        })
+        .expect("mkl virtuals conflict");
+    let json = serde_json::to_string(&rule.condition).expect("condition JSON");
+    assert!(!json.contains("\"name\":\"selected\""), "{json}");
+    assert!(!json.contains("\"name\": \"selected\""), "{json}");
+    assert!(
+        !json.contains("\"dependency\":\"[virtuals=blas,lapack]\"")
+            && !json.contains("\"dependency\": \"[virtuals=blas,lapack]\""),
+        "{json}"
+    );
+
+    let synthetic = parse_foreign_str(
+        ForeignFormat::Spack,
+        r#"
+class Orbit(CMakePackage):
+    homepage = "https://example.invalid/orbit"
+    url = "https://example.invalid/orbit-1.0.tar.gz"
+    version("1.0", sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    depends_on("mpi", when="^hdf5+mpi")
+"#,
+    )
+    .expect("synthetic caret when");
+    let mpi = synthetic
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "mpi")
+        .expect("mpi");
+    let json = serde_json::to_string(&mpi.condition).expect("condition JSON");
+    assert!(!json.contains("selected"), "{json}");
+    assert_ne!(
+        mpi.condition,
+        eb_stack::package::ConditionExpr::Predicate(
+            eb_stack::package::ConditionPredicate::DependencyFeature {
+                dependency: "hdf5".into(),
+                name: "selected".into(),
+                enabled: true,
+            }
+        )
+    );
+}
+
+#[test]
 fn spack_lammps_honors_preference_and_materializes_sources() {
     let path = root().join("spack_lammps/package.py");
     let recipe = parse_foreign_path(&path, Some(ForeignFormat::Spack)).expect("parse Spack LAMMPS");

@@ -316,6 +316,8 @@ fn canonical_version_constraint(format: ForeignFormat, pin: Option<&str>) -> Opt
         None
     } else if format == ForeignFormat::Spack {
         canonical_spack_version_constraint(version_field)
+    } else if format == ForeignFormat::CondaForge {
+        Some(expand_digit_wildcards(&rewrite_conda_eq_pin(pin)))
     } else if format == ForeignFormat::Raku {
         if let Some(minimum) = version_field
             .strip_suffix('+')
@@ -328,6 +330,19 @@ fn canonical_version_constraint(format: ForeignFormat, pin: Option<&str>) -> Opt
     } else {
         Some(expand_digit_wildcards(pin))
     }
+}
+
+/// Conda-build writes `name =3.0`; the shared language only accepts `==`.
+fn rewrite_conda_eq_pin(pin: &str) -> String {
+    pin.split(',')
+        .map(str::trim)
+        .filter(|clause| !clause.is_empty())
+        .map(|clause| match clause.strip_prefix('=') {
+            Some(rest) if !rest.starts_with('=') => format!("=={rest}"),
+            _ => clause.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn expand_digit_wildcards(pin: &str) -> String {
@@ -498,5 +513,23 @@ mod tests {
             .expect("pypi wildcard");
         assert!(matches_req("1.2.3", &pypi), "{pypi}");
         assert!(!matches_req("1.3.0", &pypi), "{pypi}");
+    }
+
+    #[test]
+    fn conda_eq_pin_rewrites_to_exact_before_parse() {
+        let pin = canonical_version_constraint(ForeignFormat::CondaForge, Some("=3.0"))
+            .expect("conda = pin");
+        assert_eq!(pin, "==3.0");
+        crate::version::parse_requirement(&pin).expect("parse");
+        assert!(matches_req("3.0", &pin), "{pin}");
+        assert!(!matches_req("4.0", &pin), "{pin}");
+        assert_eq!(
+            canonical_version_constraint(ForeignFormat::CondaForge, Some("==3.0")).as_deref(),
+            Some("==3.0")
+        );
+        assert_eq!(
+            canonical_version_constraint(ForeignFormat::CondaForge, Some(">=3.0")).as_deref(),
+            Some(">=3.0")
+        );
     }
 }
