@@ -488,6 +488,106 @@ toolchain = {{ name = "foss", version = "2026.1" }}
 }
 
 #[test]
+fn unversioned_catalog_sibling_does_not_veto_unique_versioned_provider() {
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let robot = root.join("robot");
+    std::fs::create_dir_all(&robot).unwrap();
+
+    let alpha = conda_recipe(root, "alpha.yaml", "alpha", "1.0", &["bravo >=1.0"]);
+    let _wildcard = conda_recipe(root, "bravo-wildcard.yaml", "bravo", "9.9", &[]);
+    let _pinned = conda_recipe(root, "bravo.yaml", "bravo", "1.0", &[]);
+
+    let catalog = catalog_from_toml(
+        root,
+        &format!(
+            r#"
+schema_version = 1
+
+[[packages]]
+name = "bravo"
+source = "bravo-wildcard.yaml"
+format = "conda-forge"
+source_checksums = ["{CHECKSUM}"]
+profile = "default"
+toolchain = {{ name = "foss", version = "2026.1" }}
+
+[[packages]]
+name = "bravo"
+version = "1.0"
+source = "bravo.yaml"
+format = "conda-forge"
+source_checksums = ["{CHECKSUM}"]
+profile = "default"
+toolchain = {{ name = "foss", version = "2026.1" }}
+"#
+        ),
+    );
+
+    let closure = plan_package_closure(&request(alpha, robot), &catalog).expect("close");
+    assert_eq!(closure.companions.len(), 1);
+    assert_eq!(closure.companions[0].plan.package.name, "bravo");
+    assert_eq!(closure.companions[0].plan.package.version, "1.0");
+}
+
+#[test]
+fn two_versioned_catalog_entries_stay_ambiguous_with_unversioned_sibling() {
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let robot = root.join("robot");
+    std::fs::create_dir_all(&robot).unwrap();
+
+    let alpha = conda_recipe(root, "alpha.yaml", "alpha", "1.0", &["bravo >=1.0"]);
+    let _wildcard = conda_recipe(root, "bravo-wildcard.yaml", "bravo", "9.9", &[]);
+    let _b1 = conda_recipe(root, "bravo-a.yaml", "bravo", "1.0", &[]);
+    let _b2 = conda_recipe(root, "bravo-b.yaml", "bravo", "2.0", &[]);
+
+    let catalog = catalog_from_toml(
+        root,
+        &format!(
+            r#"
+schema_version = 1
+
+[[packages]]
+name = "bravo"
+source = "bravo-wildcard.yaml"
+format = "conda-forge"
+source_checksums = ["{CHECKSUM}"]
+profile = "default"
+toolchain = {{ name = "foss", version = "2026.1" }}
+
+[[packages]]
+name = "bravo"
+version = "1.0"
+source = "bravo-a.yaml"
+format = "conda-forge"
+source_checksums = ["{CHECKSUM}"]
+profile = "default"
+toolchain = {{ name = "foss", version = "2026.1" }}
+
+[[packages]]
+name = "bravo"
+version = "2.0"
+source = "bravo-b.yaml"
+format = "conda-forge"
+source_checksums = ["{CHECKSUM}"]
+profile = "default"
+toolchain = {{ name = "foss", version = "2026.1" }}
+"#
+        ),
+    );
+
+    let err = plan_package_closure(&request(alpha, robot), &catalog).expect_err("ambiguous");
+    match err {
+        PackageClosureError::AmbiguousProvider { name, count, .. } => {
+            assert!(name.to_lowercase().contains("bravo"), "{name}");
+            assert_eq!(count, 2);
+        }
+        other => panic!("expected AmbiguousProvider count 2, got {other}"),
+    }
+}
+
+#[test]
 fn incompatible_provider_version_is_typed_error() {
     let temp = tempfile::tempdir().expect("temp");
     let root = temp.path();

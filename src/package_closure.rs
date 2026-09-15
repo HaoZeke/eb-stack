@@ -963,7 +963,24 @@ fn resolve_provider_candidates_for_hole(
                     .is_none_or(|version| matches_req(version, &hole.version_req))
             })
             .collect::<Vec<_>>();
-        return match compatible.as_slice() {
+        // Unversioned wildcards must not veto a unique versioned sibling.
+        let versioned = compatible
+            .iter()
+            .copied()
+            .filter(|provider| provider.version.is_some())
+            .collect::<Vec<_>>();
+        let preferred = match versioned.as_slice() {
+            [_] => versioned,
+            [] => compatible,
+            many => {
+                return Err(PackageClosureError::AmbiguousProvider {
+                    name: hole.name.clone(),
+                    version: format!(" ({})", hole.version_req),
+                    count: many.len(),
+                });
+            }
+        };
+        return match preferred.as_slice() {
             [provider] => Ok(vec![(*provider).clone()]),
             [] => Err(PackageClosureError::IncompatibleProviderVersion {
                 name: hole.name.clone(),
