@@ -98,14 +98,10 @@ pub fn resolvo_resolve_dep_versions(
     root_version: &str,
     preferred_pins: Option<&HashMap<String, String>>,
 ) -> Result<(HashMap<String, String>, String), String> {
-    let mut universe_cands = filter_candidates_in_hierarchy(cands, hierarchy);
+    let universe_cands = filter_candidates_in_hierarchy(cands, hierarchy);
     if universe_cands.is_empty() {
         return Err("no candidates under hierarchy members".into());
     }
-    // Drop SYSTEM installs when a non-SYSTEM hierarchy member of the same name
-    // exists (mirrors hierarchy::prefer_non_system_candidates).
-    universe_cands = drop_system_when_non_system_exists(universe_cands);
-
     let mut by_name: HashMap<&str, Vec<&Candidate>> = HashMap::new();
     for candidate in &universe_cands {
         by_name
@@ -202,14 +198,27 @@ pub fn resolvo_resolve_dep_versions(
 
     let admitted: Vec<Candidate> = universe_cands
         .into_iter()
-        .filter(|candidate| match parent_floors.get(&candidate.name) {
-            None => true,
-            Some(_) if toolchains_match(&hierarchy.parent, &candidate.toolchain) => true,
-            Some(floor) => crate::version::parse_requirement(floor)
-                .map(|requirement| requirement.matches(&candidate.version))
-                .unwrap_or(false),
+        .filter(|candidate| {
+            if let Some(floor) = parent_floors.get(&candidate.name) {
+                if toolchains_match(&hierarchy.parent, &candidate.toolchain) {
+                    return true;
+                }
+                return crate::version::parse_requirement(floor)
+                    .map(|requirement| requirement.matches(&candidate.version))
+                    .unwrap_or(false);
+            }
+            if let Some(dep) = dep_reqs.iter().find(|dep| dep.name == candidate.name) {
+                return crate::version::parse_requirement(&dep.version_req)
+                    .map(|requirement| requirement.matches(&candidate.version))
+                    .unwrap_or(true);
+            }
+            true
         })
         .collect();
+    // Drop SYSTEM only among floor/parent-eligible rows, the same order as
+    // prefer_non_system_candidates. A below-floor GCCcore sibling must not
+    // hide a SYSTEM install that meets the source floor.
+    let admitted = drop_system_when_non_system_exists(admitted);
     let solve = |dep_reqs: Vec<DepReq>,
                  resolvable: HashSet<String>,
                  pins: Vec<crate::domain::Pin>|
@@ -317,17 +326,22 @@ pub fn resolvo_resolve_dep_versions(
                 .filter(|pin| !optional_names.contains(&pin.name))
                 .cloned()
                 .collect();
-            if required_reqs.is_empty() {
-                return Ok((HashMap::new(), "optional extras were unsatisfiable".into()));
-            }
-            let mut kept = solve(
-                required_reqs.clone(),
-                required_names.clone(),
-                required_pins.clone(),
-            )?;
-            let mut trial_reqs = required_reqs;
-            let mut trial_names = required_names;
-            let mut trial_pins = required_pins;
+            let (mut kept, mut trial_reqs, mut trial_names, mut trial_pins) =
+                if required_reqs.is_empty() {
+                    (
+                        (HashMap::new(), "optional extras were unsatisfiable".into()),
+                        Vec::new(),
+                        HashSet::new(),
+                        Vec::new(),
+                    )
+                } else {
+                    let kept = solve(
+                        required_reqs.clone(),
+                        required_names.clone(),
+                        required_pins.clone(),
+                    )?;
+                    (kept, required_reqs, required_names, required_pins)
+                };
             let mut extras: Vec<String> = optional_names.into_iter().collect();
             extras.sort();
             for extra in extras {
@@ -1233,6 +1247,34 @@ mod lock_identity_and_bump_pin_tests {
     }
 
     #[test]
+    fn all_optional_unsat_still_keeps_a_sat_extra() {
+        let mut extra = candidate("Extra", "1.0", None);
+        extra.dependencies.push(DepReq {
+            name: "MissingTool".into(),
+            version_req: "==1.0".into(),
+            versionsuffix: None,
+            toolchain: None,
+        });
+        let extra2 = candidate("Extra2", "1.0", None);
+        let mut optional = SourceDepSpec::plain("Extra", "1.0");
+        optional.optional = true;
+        let mut optional2 = SourceDepSpec::plain("Extra2", "1.0");
+        optional2.optional = true;
+        let (map, _) = resolvo_resolve_dep_versions(
+            &[optional, optional2],
+            &[extra, extra2],
+            &hierarchy(),
+            &foss(),
+            "App",
+            "1.0",
+            None,
+        )
+        .expect("a sat extra must survive when every spec is optional");
+        assert!(!map.contains_key("Extra"));
+        assert_eq!(map.get("Extra2").map(String::as_str), Some("1.0"));
+    }
+
+    #[test]
     fn parent_toolchain_candidate_is_exempt_from_the_source_floor() {
         let gcccore = Toolchain {
             name: "GCCcore".into(),
@@ -1263,6 +1305,48 @@ mod lock_identity_and_bump_pin_tests {
             resolvo_resolve_dep_versions(&specs, &cands, &hierarchy, &gcccore, "App", "1.0", None)
                 .expect("parent-toolchain 2.42 is not a downgrade");
         assert_eq!(map.get("binutils").map(String::as_str), Some("2.42"));
+    }
+
+    #[test]
+    fn a_below_floor_non_system_sibling_does_not_hide_system() {
+        let foss = Toolchain {
+            name: "foss".into(),
+            version: "2024a".into(),
+        };
+        let gcccore = Toolchain {
+            name: "GCCcore".into(),
+            version: "13.3.0".into(),
+        };
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let at = |version: &str, toolchain: &Toolchain| Candidate {
+            name: "CMake".into(),
+            version: version.into(),
+            toolchain: toolchain.clone(),
+            versionsuffix: None,
+            easyconfig_path: format!("CMake-{version}.eb"),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+            moduleclass: None,
+        };
+        let hierarchy = ToolchainHierarchy {
+            parent: foss.clone(),
+            members: vec![system.clone(), gcccore.clone(), foss.clone()],
+        };
+        let (map, _) = resolvo_resolve_dep_versions(
+            &[SourceDepSpec::plain("CMake", "3.30")],
+            &[at("3.29.3", &gcccore), at("3.31.8", &system)],
+            &hierarchy,
+            &foss,
+            "App",
+            "1.0",
+            None,
+        )
+        .expect("SYSTEM 3.31.8 meets the floor");
+        assert_eq!(map.get("CMake").map(String::as_str), Some("3.31.8"));
     }
 
     #[test]
