@@ -1853,7 +1853,14 @@ fn parse_dep_filename(s: &str) -> Option<ResolvedDep> {
         }
     }
     let toolchain_at = toolchain_at?;
-    let head = &parts[..toolchain_at];
+    // A toolchain name may be several all-alpha tokens (`intel-compilers`).
+    // Walk left from the token before the version; stop at a version-like
+    // part so a hyphenated package name stays in the head.
+    let mut name_start = toolchain_at;
+    while name_start > 1 && looks_like_toolchain_name(parts[name_start - 1]) {
+        name_start -= 1;
+    }
+    let head = &parts[..name_start];
     let version_at = head.iter().position(|part| {
         part.chars()
             .next()
@@ -1868,7 +1875,7 @@ fn parse_dep_filename(s: &str) -> Option<ResolvedDep> {
         return None;
     }
     let toolchain = Toolchain {
-        name: parts[toolchain_at].to_string(),
+        name: parts[name_start..=toolchain_at].join("-"),
         version: parts[toolchain_at + 1].to_string(),
     };
     let suffix = parts[toolchain_at + 2..].join("-");
@@ -4834,6 +4841,24 @@ homepage = 'https://example.invalid'
             parsed.dependencies[0].versionsuffix.as_deref(),
             Some("-CUDA-12.8.0")
         );
+    }
+
+    #[test]
+    fn filename_dependency_keeps_a_hyphenated_toolchain_name() {
+        let src = "name = 'App'\nversion = '1.0'\n\
+                   toolchain = {'name': 'intel', 'version': '2023b'}\n\
+                   dependencies = ['MKL-2023.2.0-intel-compilers-2023.2.0.eb']\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.dependencies[0].name, "MKL");
+        assert_eq!(parsed.dependencies[0].version, "2023.2.0");
+        assert_eq!(
+            parsed.dependencies[0]
+                .toolchain
+                .as_ref()
+                .map(|toolchain| toolchain.label()),
+            Some("intel-compilers-2023.2.0".into())
+        );
+        assert!(parsed.dependencies[0].versionsuffix.is_none());
     }
 
     #[test]
