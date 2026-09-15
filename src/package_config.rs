@@ -677,11 +677,13 @@ fn ensure_dependency_requirement(
 ) {
     let condition = requirement_condition(&requirement.features);
     let identity = package_identity(&requirement.name);
-    let existing = plan.dependencies.iter_mut().find(|dependency| {
+    let mut found = false;
+    for dependency in &mut plan.dependencies {
         let effective_name = dependency.eb_name.as_deref().unwrap_or(&dependency.name);
-        package_identity(effective_name) == identity && dependency.condition == condition
-    });
-    if let Some(dependency) = existing {
+        if package_identity(effective_name) != identity || dependency.condition != condition {
+            continue;
+        }
+        found = true;
         if dependency
             .eb_name
             .as_deref()
@@ -697,8 +699,10 @@ fn ensure_dependency_requirement(
                 dependency.roles.push(*role);
             }
         }
-        dependency.condition = condition;
+        dependency.condition = condition.clone();
         dependency.solver_excluded = false;
+    }
+    if found {
         return;
     }
 

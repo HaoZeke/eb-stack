@@ -481,6 +481,69 @@ roles = ["run"]
 }
 
 #[test]
+fn requirement_updates_every_same_identity_always_edge() {
+    let config = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[dependencies.aliases]
+py-numpy = { provider = "SciPy-bundle", constraint = "drop" }
+py-scipy = { provider = "SciPy-bundle", constraint = "drop" }
+
+[[dependencies.requirements]]
+name = "SciPy-bundle"
+constraint = "==1.2.3"
+roles = ["run"]
+"#,
+    )
+    .expect("aliases plus pin");
+    let mut plan = qmcpack_plan();
+    plan.dependencies = vec![
+        DependencyIntent {
+            id: "numpy".into(),
+            name: "py-numpy".into(),
+            eb_name: None,
+            constraint: Some("1.26".into()),
+            toolchain: None,
+            versionsuffix: None,
+            roles: vec![DependencyRole::Run],
+            condition: ConditionExpr::Always,
+            virtual_capability: None,
+            solver_excluded: false,
+            provenance: Vec::new(),
+        },
+        DependencyIntent {
+            id: "scipy".into(),
+            name: "py-scipy".into(),
+            eb_name: None,
+            constraint: Some("1.11".into()),
+            toolchain: None,
+            versionsuffix: None,
+            roles: vec![DependencyRole::Run],
+            condition: ConditionExpr::Always,
+            virtual_capability: None,
+            solver_excluded: false,
+            provenance: Vec::new(),
+        },
+    ];
+    apply_package_layers(&mut plan, &[config]).expect("apply");
+    let pinned: Vec<_> = plan
+        .dependencies
+        .iter()
+        .filter(|dependency| {
+            dependency.eb_name.as_deref() == Some("SciPy-bundle")
+                && dependency.constraint.as_deref() == Some("==1.2.3")
+        })
+        .collect();
+    assert_eq!(
+        pinned.len(),
+        2,
+        "both aliased Always rows must carry the pin: {:?}",
+        plan.dependencies
+    );
+}
+
+#[test]
 fn inherits_applies_after_the_parent_patch_in_the_same_layer() {
     let config = PackageConfigLayer::from_toml_str(
         r#"
