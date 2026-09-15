@@ -100,18 +100,21 @@ fn package_key(
 /// pool speaks in keys, which are qualified by toolchain for any name the
 /// generation carries at several levels. Everything that reads policy has to
 /// cross that gap, and a lookup by plain name silently finds nothing.
-fn keys_for_name<T>(by_key: &HashMap<String, T>, name: &str) -> Vec<String> {
-    if by_key.contains_key(name) {
-        return vec![name.to_string()];
+fn index_keys_by_name<T>(by_key: &HashMap<String, T>) -> HashMap<String, Vec<String>> {
+    let mut index: HashMap<String, Vec<String>> = HashMap::new();
+    for key in by_key.keys() {
+        let name = key.split('@').next().unwrap_or(key.as_str());
+        index.entry(name.to_string()).or_default().push(key.clone());
     }
-    let prefix = format!("{name}@");
-    let mut keys: Vec<String> = by_key
-        .keys()
-        .filter(|key| key.starts_with(&prefix))
-        .cloned()
-        .collect();
-    keys.sort();
-    keys
+    for keys in index.values_mut() {
+        keys.sort();
+        keys.dedup();
+    }
+    index
+}
+
+fn keys_for_name(keys_by_name: &HashMap<String, Vec<String>>, name: &str) -> Vec<String> {
+    keys_by_name.get(name).cloned().unwrap_or_default()
 }
 
 impl EbProvider {
@@ -142,12 +145,13 @@ impl EbProvider {
                 }
             }
             let mut keys: Vec<String> = self
-                .name_ids
-                .keys()
+                .keys_by_name
+                .get(&dep.name)
+                .into_iter()
+                .flatten()
                 .filter(|key| key.starts_with(&format!("{}@system==", dep.name)))
                 .cloned()
                 .collect();
-            keys.sort();
             if !wants_system && self.multi_level.contains(&dep.name) {
                 // The name also lives inside the generation, and a recipe
                 // there may take either.
@@ -344,13 +348,14 @@ impl EbProvider {
             }
             ranks.insert(name.clone(), ranked);
         }
+        let keys_by_name = index_keys_by_name(&ranks);
 
         let mut pin_ranks: HashMap<String, Vec<u32>> = HashMap::new();
         for pin in &policy.pins {
             // Ranks are per key, so a pin on a package carried at several
             // levels has to be applied to each of them separately: rank 2 of
             // one key is a different build from rank 2 of another.
-            let pin_keys = keys_for_name(&ranks, &pin.name);
+            let pin_keys = keys_for_name(&keys_by_name, &pin.name);
             if pin_keys.is_empty() {
                 return Err(format!("pin references unknown package {}", pin.name));
             }
@@ -394,7 +399,7 @@ impl EbProvider {
                 .ok_or_else(|| {
                     format!("require_upgrade {} needs baseline package version", ru.name)
                 })?;
-            let upgrade_keys = keys_for_name(&ranks, &ru.name);
+            let upgrade_keys = keys_for_name(&keys_by_name, &ru.name);
             if upgrade_keys.is_empty() {
                 return Err(format!("require_upgrade unknown package {}", ru.name));
             }
@@ -429,7 +434,7 @@ impl EbProvider {
         }
 
         for root in &policy.roots {
-            if keys_for_name(&ranks, root).is_empty() {
+            if keys_for_name(&keys_by_name, root).is_empty() {
                 return Err(format!("no candidates for root package {root}"));
             }
         }
@@ -439,7 +444,7 @@ impl EbProvider {
         let mut excluded_ranks: HashMap<String, HashMap<u32, String>> = HashMap::new();
         if let Some(stack) = stack_policy {
             for pin in &stack.pins {
-                let keys = keys_for_name(&ranks, &pin.name);
+                let keys = keys_for_name(&keys_by_name, &pin.name);
                 if keys.is_empty() {
                     return Err(format!(
                         "stack policy references unknown package {}",
@@ -491,7 +496,7 @@ impl EbProvider {
             }
 
             for exclusion in &stack.exclusions {
-                let keys = keys_for_name(&ranks, &exclusion.name);
+                let keys = keys_for_name(&keys_by_name, &exclusion.name);
                 if keys.is_empty() {
                     return Err(format!(
                         "stack policy references unknown package {}",
@@ -540,7 +545,7 @@ impl EbProvider {
         if policy.prefer_installed {
             if let Some(base) = baseline {
                 for installed in &base.packages {
-                    for key in keys_for_name(&ranks, &installed.name) {
+                    for key in keys_for_name(&keys_by_name, &installed.name) {
                         if favored_ranks.contains_key(&key)
                             || locked_ranks.contains_key(&key)
                             || pin_ranks.contains_key(&key)
@@ -576,21 +581,6 @@ impl EbProvider {
                         }
                     }
                 }
-            }
-        }
-
-        let mut keys_by_name: HashMap<String, Vec<String>> = HashMap::new();
-        for c in candidates.iter() {
-            let key = package_key(
-                &c.name,
-                &c.toolchain,
-                &c.version,
-                &multi_level,
-                &system_multi,
-            );
-            let entry = keys_by_name.entry(c.name.clone()).or_default();
-            if !entry.contains(&key) {
-                entry.push(key);
             }
         }
 
@@ -701,7 +691,7 @@ impl EbProvider {
                 // root means any of them satisfies it, so the requirement is
                 // their union.
                 let mut sets = Vec::new();
-                for key in keys_for_name(&self.ranks, name) {
+                for key in keys_for_name(&self.keys_by_name, name) {
                     let Some(&name_id) = self.name_ids.get(&key) else {
                         continue;
                     };
