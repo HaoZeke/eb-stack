@@ -547,11 +547,17 @@ fn admit_stack_pin_closures(
         }
     }
 
+    let by_name = candidates_by_name(candidates);
+    let mut hierarchy_cache = HashMap::new();
     while let Some(parent) = queue.pop_front() {
-        let parent_hierarchy = hierarchy_for_with_tree(&parent.toolchain, None, candidates).ok();
+        let parent_hierarchy =
+            cached_hierarchy(&mut hierarchy_cache, &parent.toolchain, candidates);
         for dependency in &parent.dependencies {
-            for candidate in candidates.iter().filter(|candidate| {
-                dependency_candidate_matches(candidate, dependency, parent_hierarchy.as_ref())
+            let Some(named) = by_name.get(&dependency.name) else {
+                continue;
+            };
+            for candidate in named.iter().copied().filter(|candidate| {
+                dependency_candidate_matches(candidate, dependency, parent_hierarchy)
             }) {
                 if paths.insert(candidate.easyconfig_path.clone()) {
                     admitted.push(candidate.clone());
@@ -562,12 +568,37 @@ fn admit_stack_pin_closures(
     }
 }
 
+fn candidates_by_name(candidates: &[Candidate]) -> HashMap<String, Vec<&Candidate>> {
+    let mut by_name: HashMap<String, Vec<&Candidate>> = HashMap::new();
+    for candidate in candidates {
+        by_name
+            .entry(candidate.name.clone())
+            .or_default()
+            .push(candidate);
+    }
+    by_name
+}
+
+fn cached_hierarchy<'a>(
+    cache: &'a mut HashMap<String, Option<ToolchainHierarchy>>,
+    toolchain: &crate::domain::Toolchain,
+    candidates: &[Candidate],
+) -> Option<&'a ToolchainHierarchy> {
+    let key = toolchain.identity_label();
+    cache
+        .entry(key)
+        .or_insert_with(|| hierarchy_for_with_tree(toolchain, None, candidates).ok())
+        .as_ref()
+}
+
 fn scope_cross_generation_pin_closures(
     universe: &mut Vec<Candidate>,
     stack_policy: &StackPolicy,
     target_hierarchy: &ToolchainHierarchy,
 ) {
     let base = universe.clone();
+    let by_name = candidates_by_name(&base);
+    let mut hierarchy_cache = HashMap::new();
     let mut scoped_candidates = Vec::new();
     for (pin_index, pin) in stack_policy.pins.iter().enumerate() {
         let root_indexes = universe
@@ -584,13 +615,27 @@ fn scope_cross_generation_pin_closures(
             let root = universe[root_index].clone();
             let mut queue = VecDeque::new();
             let mut visited = HashSet::new();
-            universe[root_index].dependencies =
-                scoped_dependencies(&root, &base, &scope, &mut queue, &mut visited);
+            universe[root_index].dependencies = scoped_dependencies(
+                &root,
+                &base,
+                &by_name,
+                &mut hierarchy_cache,
+                &scope,
+                &mut queue,
+                &mut visited,
+            );
             while let Some(candidate) = queue.pop_front() {
                 let mut scoped = candidate.clone();
                 scoped.name = scoped_dependency_name(&scope, &candidate.name);
-                scoped.dependencies =
-                    scoped_dependencies(&candidate, &base, &scope, &mut queue, &mut visited);
+                scoped.dependencies = scoped_dependencies(
+                    &candidate,
+                    &base,
+                    &by_name,
+                    &mut hierarchy_cache,
+                    &scope,
+                    &mut queue,
+                    &mut visited,
+                );
                 scoped.builddependencies.clear();
                 scoped_candidates.push(scoped);
             }
@@ -602,17 +647,23 @@ fn scope_cross_generation_pin_closures(
 fn scoped_dependencies(
     parent: &Candidate,
     candidates: &[Candidate],
+    by_name: &HashMap<String, Vec<&Candidate>>,
+    hierarchy_cache: &mut HashMap<String, Option<ToolchainHierarchy>>,
     scope: &str,
     queue: &mut VecDeque<Candidate>,
     visited: &mut HashSet<String>,
 ) -> Vec<DepReq> {
-    let parent_hierarchy = hierarchy_for_with_tree(&parent.toolchain, None, candidates).ok();
+    let parent_hierarchy = cached_hierarchy(hierarchy_cache, &parent.toolchain, candidates);
     parent
         .dependencies
         .iter()
         .map(|dependency| {
-            for candidate in candidates.iter().filter(|candidate| {
-                dependency_candidate_matches(candidate, dependency, parent_hierarchy.as_ref())
+            let named = by_name
+                .get(&dependency.name)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            for candidate in named.iter().copied().filter(|candidate| {
+                dependency_candidate_matches(candidate, dependency, parent_hierarchy)
             }) {
                 let identity = format!(
                     "{}|{}|{}|{}|{}",
