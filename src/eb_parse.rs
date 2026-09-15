@@ -197,6 +197,18 @@ impl Value {
             other => Err(format!("{ctx}: expected string, got {other:?}")),
         }
     }
+
+    /// Python truthiness: `False`, `None`, `0`, and empty containers are false.
+    fn is_truthy(&self) -> bool {
+        match self {
+            Value::Bool(flag) => *flag,
+            Value::None | Value::Int(0) => false,
+            Value::Int(_) => true,
+            Value::Str(text) => !text.is_empty(),
+            Value::List(items) | Value::Tuple(items) => !items.is_empty(),
+            Value::Dict(items) => !items.is_empty(),
+        }
+    }
 }
 
 fn system_toolchain_value() -> Value {
@@ -439,6 +451,17 @@ impl<'src, 'env> Parser<'src, 'env> {
             }
         }
         false
+    }
+
+    fn at_keyword(&self, keyword: &[u8]) -> bool {
+        let rest = &self.src[self.pos..];
+        if !rest.starts_with(keyword) {
+            return false;
+        }
+        let next = self.src.get(self.pos + keyword.len()).copied();
+        !next
+            .map(|character| character.is_ascii_alphanumeric() || character == b'_')
+            .unwrap_or(false)
     }
 
     /// Skip a compound statement (header line + indented body) or a single line.
@@ -729,6 +752,30 @@ impl<'src, 'env> Parser<'src, 'env> {
     }
 
     fn parse_expr(&mut self) -> Result<Value, String> {
+        // `or_test ['if' or_test 'else' expression]`: the condition is not
+        // another ternary, the false branch is, so `a if b else c if d else e`
+        // is right-associative the way Python writes it. A newline at depth 0
+        // starts a new statement, so `toolchain = SYSTEM\nif True:` is not a
+        // ternary and must leave the `if` for the control-statement skipper.
+        let left = self.parse_ops()?;
+        let before_ws = self.pos;
+        self.skip_ws();
+        let crossed_line = self.src[before_ws..self.pos].contains(&b'\n');
+        if !self.at_keyword(b"if") || (crossed_line && self.depth == 0) {
+            return Ok(left);
+        }
+        self.pos += 3;
+        let cond = self.parse_ops()?;
+        self.skip_ws();
+        if !self.at_keyword(b"else") {
+            return Err(self.err("expected 'else' in conditional expression"));
+        }
+        self.pos += 4;
+        let right = self.parse_expr()?;
+        Ok(if cond.is_truthy() { left } else { right })
+    }
+
+    fn parse_ops(&mut self) -> Result<Value, String> {
         let mut left = self.parse_postfix()?;
         // String / value binary ops used in real easyconfigs: `+` concat, `%` format.
         loop {
@@ -817,7 +864,14 @@ impl<'src, 'env> Parser<'src, 'env> {
                         }
                     };
                 }
-                _ => break,
+                _ => {
+                    // Leave a following statement's leading newline in place so
+                    // `parse_expr` can tell `SYSTEM\nif` is not a ternary.
+                    if crossed_line && self.depth == 0 {
+                        self.pos = before_ws;
+                    }
+                    break;
+                }
             }
         }
         Ok(left)
@@ -4764,6 +4818,30 @@ homepage = 'https://example.invalid'
                    sources = 'App-1.0.tar.gz'\n";
         let parsed = resolve_easyconfig_str(src).expect("parse");
         assert_eq!(parsed.sources_count, 1);
+    }
+
+    #[test]
+    fn an_unparenthesized_false_ternary_does_not_keep_the_true_branch() {
+        let src = "name = 'App'\nversion = '1.0'\n\
+                   toolchain = {'name': 'foss', 'version': '2024a'}\n\
+                   dependencies = [('Foo', '1.0')] if False else []\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert!(
+            parsed.dependencies.is_empty(),
+            "False branch must win: {:?}",
+            parsed.dependencies
+        );
+    }
+
+    #[test]
+    fn an_unparenthesized_true_ternary_keeps_the_true_branch() {
+        let src = "name = 'App'\nversion = '1.0'\n\
+                   toolchain = {'name': 'foss', 'version': '2024a'}\n\
+                   dependencies = [('Foo', '1.0')] if True else []\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.dependencies.len(), 1);
+        assert_eq!(parsed.dependencies[0].name, "Foo");
+        assert_eq!(parsed.dependencies[0].version, "1.0");
     }
 }
 
