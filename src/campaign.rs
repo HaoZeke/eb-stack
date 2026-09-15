@@ -850,6 +850,21 @@ pub fn classify_build_failure(
 
 /// First causal error line, with path, hash, and position noise stripped.
 pub fn failure_signature(text: &str) -> String {
+    if let Some(causal) = interned_causal_section(text) {
+        let signed = signature_from_body(causal);
+        if signed != "verification failed without a recognized error" {
+            return signed;
+        }
+    }
+    signature_from_body(text)
+}
+
+fn interned_causal_section(text: &str) -> Option<&str> {
+    let marker = "EasyBuild command output ";
+    text.find(marker).map(|start| &text[start..])
+}
+
+fn signature_from_body(text: &str) -> String {
     let lines = text.lines().collect::<Vec<_>>();
     for (index, line) in lines.iter().enumerate() {
         if is_generic_failure_footer(line) {
@@ -884,12 +899,15 @@ fn is_generic_failure_footer(line: &str) -> bool {
     let stripped = line
         .strip_prefix("==> error:")
         .or_else(|| line.strip_prefix("error:"))
+        .or_else(|| line.strip_prefix("failed:"))
         .map(str::trim)
         .unwrap_or(line.as_str());
     stripped == "installation failed"
+        || stripped == "installation ended unsuccessfully"
         || stripped.starts_with("the following packages failed to install")
         || stripped.starts_with("build of ") && stripped.contains(" failed")
         || stripped.starts_with("installation of ") && stripped.contains(" failed")
+        || stripped.starts_with("installation ended unsuccessfully")
 }
 
 fn has_compiler_error_line(text: &str) -> bool {

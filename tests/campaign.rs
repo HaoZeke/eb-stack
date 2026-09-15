@@ -899,6 +899,24 @@ fn failure_signature_prefers_the_causal_line_to_the_install_footer() {
         failure_signature("ERROR: installation failed\n"),
         "verification failed without a recognized error"
     );
+    assert_eq!(
+        failure_signature("FAILED: Installation ended unsuccessfully\n"),
+        "verification failed without a recognized error"
+    );
+}
+
+#[test]
+fn failure_signature_prefers_interned_easybuild_output_to_the_v5_footer() {
+    let evidence = "\
+FAILED: Installation ended unsuccessfully: shell command 'make ...' failed with exit code 2
+ERROR: installation failed
+EasyBuild command output /tmp/eb-xxx/out.txt:
+error: undeclared identifier foo
+";
+    assert_eq!(
+        failure_signature(evidence),
+        "error: undeclared identifier foo"
+    );
 }
 
 #[test]
