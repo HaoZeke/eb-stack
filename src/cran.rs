@@ -163,7 +163,21 @@ fn parse_description(text: &str) -> Result<ForeignRecipe, ForeignError> {
         &mut recipe,
         fields.get("systemrequirements").map(String::as_str),
     );
+    record_suggests(&mut recipe, fields.get("suggests").map(String::as_str));
     Ok(recipe)
+}
+
+fn record_suggests(recipe: &mut ForeignRecipe, suggests: Option<&str>) {
+    let Some(suggests) = suggests.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    recipe.residuals.push(ForeignResidual {
+        category: "cran-suggests".into(),
+        severity: ResidualSeverity::Judgment,
+        summary: format!("Suggests not encoded: {suggests}"),
+        evidence: Some(suggests.to_string()),
+        provenance: None,
+    });
 }
 
 fn record_system_requirements(recipe: &mut ForeignRecipe, sysreq: Option<&str>) {
@@ -651,6 +665,28 @@ mod tests {
             .find(|dep| dep.name == "BH")
             .expect("BH");
         assert_eq!(bh.role, "run");
+    }
+
+    #[test]
+    fn suggests_become_a_judgment_residual() {
+        let recipe = parse_cran_str(
+            "Package: demo\n\
+             Version: 1.0\n\
+             Suggests: jsonlite\n",
+        )
+        .expect("parse");
+        assert!(
+            recipe.residuals.iter().any(|residual| {
+                residual.category == "cran-suggests" && residual.summary.contains("jsonlite")
+            }),
+            "{:?}",
+            recipe.residuals
+        );
+        assert!(
+            recipe.dependencies.iter().all(|dep| dep.name != "jsonlite"),
+            "Suggests must not become a solver edge: {:?}",
+            recipe.dependencies
+        );
     }
 
     #[test]
