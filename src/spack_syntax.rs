@@ -256,18 +256,24 @@ impl<'a> StaticEvaluator<'a> {
             return;
         };
         for target in &assignment.targets {
-            self.bind_target(target, value.clone());
-            if let ast::Expr::Name(name) = target {
-                self.attributes.insert(name.id.to_string(), value.clone());
+            if self.bind_target(target, value.clone()) {
+                if let ast::Expr::Name(name) = target {
+                    self.attributes.insert(name.id.to_string(), value.clone());
+                }
+            } else {
+                self.unbind_target(target);
             }
         }
     }
 
     fn assign_expression(&mut self, target: &ast::Expr, expression: &ast::Expr) {
         if let Some(value) = self.evaluate(expression) {
-            self.bind_target(target, value.clone());
-            if let ast::Expr::Name(name) = target {
-                self.attributes.insert(name.id.to_string(), value);
+            if self.bind_target(target, value.clone()) {
+                if let ast::Expr::Name(name) = target {
+                    self.attributes.insert(name.id.to_string(), value);
+                }
+            } else {
+                self.unbind_target(target);
             }
         } else {
             self.unbind_target(target);
@@ -290,12 +296,22 @@ impl<'a> StaticEvaluator<'a> {
                     self.unbind_target(element);
                 }
             }
+            ast::Expr::Subscript(subscript) => match subscript.value.as_ref() {
+                ast::Expr::Name(name) => {
+                    // The mapping is stale; leave get() dynamic rather than
+                    // keeping the previous entry or inventing None.
+                    self.environment.remove(name.id.as_str());
+                    self.attributes.remove(name.id.as_str());
+                }
+                other => self.unbind_target(other),
+            },
             _ => {}
         }
     }
 
     fn walk_for(&mut self, statement: &ast::StmtFor) {
         let Some(iterable) = self.evaluate(&statement.iter) else {
+            self.unbind_target(&statement.target);
             if statement
                 .body
                 .iter()
@@ -338,6 +354,7 @@ impl<'a> StaticEvaluator<'a> {
             if self.bind_target(&statement.target, value) {
                 self.walk_statements(&statement.body);
             } else {
+                self.unbind_target(&statement.target);
                 self.residual(
                     statement.target.as_ref(),
                     "for-loop target cannot bind static value",
@@ -580,8 +597,15 @@ impl<'a> StaticEvaluator<'a> {
                         return Some(value);
                     }
                     match call.args.get(1) {
-                        None => Some(StaticValue::None),
                         Some(default) => self.evaluate(default),
+                        None => match call
+                            .keywords
+                            .iter()
+                            .find(|keyword| keyword.arg.as_deref() == Some("default"))
+                        {
+                            Some(keyword) => self.evaluate(&keyword.value),
+                            None => Some(StaticValue::None),
+                        },
                     }
                 }
                 "items" if call.args.is_empty() => match receiver {
@@ -969,6 +993,26 @@ class Pkg(Package):
     }
 
     #[test]
+    fn dict_get_keyword_default_is_not_invented_as_none() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    options = {}
+    variant("feature", when=options.get("when", default=discover_when()))
+"#,
+        )
+        .expect("parse");
+        assert!(
+            syntax
+                .residuals
+                .iter()
+                .any(|residual| residual.contains("dynamic variant")),
+            "keyword default must residual, not become Always: {:?}",
+            syntax.residuals
+        );
+    }
+
+    #[test]
     fn dict_get_with_a_dynamic_default_is_not_none() {
         let syntax = parse_spack_syntax(
             r#"
@@ -1003,6 +1047,97 @@ class Pkg(Package):
             syntax.residuals.is_empty(),
             "url_for_version must not look like version(: {:?}",
             syntax.residuals
+        );
+    }
+
+    #[test]
+    fn a_failed_subscript_rebind_forgets_the_previous_entry() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    options = {}
+    options["skip"] = True
+    options["skip"] = discover()
+    if not options.get("skip"):
+        depends_on("backend")
+"#,
+        )
+        .expect("parse");
+        assert!(
+            syntax.calls.iter().all(|call| call.name != "depends_on"
+                || call.arg_string(0).as_deref() != Some("backend")),
+            "stale skip must not hide or keep the body: calls={:?} residuals={:?}",
+            syntax.calls,
+            syntax.residuals
+        );
+        assert!(
+            syntax
+                .residuals
+                .iter()
+                .any(|residual| residual.contains("dynamic")),
+            "failed subscript write must residual: {:?}",
+            syntax.residuals
+        );
+    }
+
+    #[test]
+    fn a_failed_bind_after_a_static_rhs_forgets_the_previous_names() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    ver, sha = "1.0", "aaa"
+    ver, sha = "2.0"
+    version(ver, sha256=sha)
+"#,
+        )
+        .expect("parse");
+        assert!(
+            syntax
+                .residuals
+                .iter()
+                .any(|residual| residual.contains("dynamic version")),
+            "stale ver must not become version(1.0): calls={:?} residuals={:?}",
+            syntax.calls,
+            syntax.residuals
+        );
+        assert!(
+            syntax
+                .calls
+                .iter()
+                .all(|call| call.name != "version" || call.arg_string(0).as_deref() != Some("1.0")),
+            "failed bind must forget 1.0: {:?}",
+            syntax.calls
+        );
+    }
+
+    #[test]
+    fn a_dynamic_for_target_forgets_the_previous_value() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    ver = "1.0"
+    for ver in discover_versions():
+        pass
+    version(ver, sha256="aaa")
+"#,
+        )
+        .expect("parse");
+        assert!(
+            syntax
+                .residuals
+                .iter()
+                .any(|residual| residual.contains("dynamic version")),
+            "stale ver must not become version(1.0): calls={:?} residuals={:?}",
+            syntax.calls,
+            syntax.residuals
+        );
+        assert!(
+            syntax
+                .calls
+                .iter()
+                .all(|call| call.name != "version" || call.arg_string(0).as_deref() != Some("1.0")),
+            "dynamic for must forget 1.0: {:?}",
+            syntax.calls
         );
     }
 
