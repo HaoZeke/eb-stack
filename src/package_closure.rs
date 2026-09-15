@@ -286,7 +286,7 @@ pub fn plan_package_closure_with_sources(
 
     let (plan, sbom) = prepare_new_package_plan(request)?;
     let mut state = ClosureState {
-        robot: tree.candidates,
+        assembled: tree.candidates,
         generated: HashMap::new(),
         topo: Vec::new(),
         catalog,
@@ -592,7 +592,7 @@ impl PreparedCompanion {
 }
 
 struct ClosureState<'a> {
-    robot: Vec<Candidate>,
+    assembled: Vec<Candidate>,
     generated: HashMap<String, GeneratedEntry>,
     topo: Vec<String>,
     catalog: &'a PackageSourceCatalog,
@@ -605,14 +605,8 @@ struct ClosureState<'a> {
 }
 
 impl ClosureState<'_> {
-    fn universe(&self) -> Vec<Candidate> {
-        let mut candidates = self.robot.clone();
-        for key in &self.topo {
-            if let Some(entry) = self.generated.get(key) {
-                candidates.extend(entry.candidates.iter().cloned());
-            }
-        }
-        candidates
+    fn universe(&self) -> &[Candidate] {
+        &self.assembled
     }
 
     fn close_package(
@@ -799,6 +793,7 @@ impl ClosureState<'_> {
         }
 
         self.topo.push(key.clone());
+        self.assembled.extend(candidates.iter().cloned());
         self.generated.insert(
             key,
             GeneratedEntry {
@@ -833,7 +828,7 @@ impl ClosureState<'_> {
             )));
         }
 
-        let mut candidates = self.universe();
+        let mut candidates = self.universe().to_vec();
         let mut prospective = self.source_index.retargeted_candidates_for_providers(
             providers,
             &self.target_toolchain,
