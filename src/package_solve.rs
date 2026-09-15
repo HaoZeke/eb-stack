@@ -50,15 +50,17 @@ pub struct UnsatisfiedDirectDependency {
 }
 
 impl UnsatisfiedDirectDependency {
-    /// True when this hole is the same name, version requirement, and suffix
-    /// as `dependency`. A name-only match would drop every Python intent
-    /// because one of them is missing.
+    /// True when this hole is the same package, version requirement, and suffix
+    /// as `dependency`. Overlay identity is what the solver remaps (`poetry-core`
+    /// to `poetry`); a raw spelling compare would miss that hole. A name-only
+    /// match would drop every Python intent because one of them is missing.
     pub fn matches_intent(&self, dependency: &crate::package::DependencyIntent) -> bool {
         let identity = dependency
             .eb_name
             .as_deref()
             .unwrap_or(dependency.name.as_str());
-        identity.eq_ignore_ascii_case(&self.name)
+        crate::provides::overlay_package_identity(identity)
+            == crate::provides::overlay_package_identity(&self.name)
             && normalize_requirement(dependency.constraint.as_deref()) == self.version_req
             && dependency.versionsuffix.as_deref().unwrap_or("")
                 == self.versionsuffix.as_deref().unwrap_or("")
@@ -465,6 +467,23 @@ fn robot_name_index(candidates: &[Candidate]) -> RobotNameIndex {
         let names = all.entry(identity).or_default();
         if !names.iter().any(|name| name == &candidate.name) {
             names.push(candidate.name.clone());
+        }
+        // Unexpanded robot rows carry `poetry-core` only on `exts_list`.
+        // Resolvo interned the aliased provide (`poetry`); index that SAT
+        // name so a profile DepReq is not spelled `poetry-core`.
+        if candidate.is_extension_provide() {
+            continue;
+        }
+        for ext in &candidate.exts_list {
+            if ext.name.is_empty() || ext.version.is_empty() {
+                continue;
+            }
+            let aliased = crate::provides::aliased_module_name(&ext.name);
+            let identity = normalize_package_identity(&aliased);
+            let names = all.entry(identity).or_default();
+            if !names.iter().any(|name| name == &aliased) {
+                names.push(aliased);
+            }
         }
     }
     RobotNameIndex { modules, all }
@@ -886,8 +905,8 @@ mod tests {
     use super::{
         admit_named_dependency_toolchains, apply_generation_consensus_pins,
         candidate_matches_version_req, dependency_candidate_matches, match_robot_name,
-        normalize_requirement, solve_package_profile,
-        unsatisfied_direct_dependencies_with_hierarchy,
+        normalize_requirement, solve_package_profile, solve_package_profile_with_hierarchy,
+        unsatisfied_direct_dependencies_with_hierarchy, UnsatisfiedDirectDependency,
     };
     use crate::domain::{Candidate, DepReq, ExtEntry, Toolchain};
     use crate::hierarchy::ToolchainHierarchy;
@@ -921,6 +940,60 @@ mod tests {
         assert_eq!(
             match_robot_name("pytorch", &[cand("PyTorch", "2.5.1", "foss", "2024a")]),
             "PyTorch"
+        );
+    }
+
+    #[test]
+    fn match_robot_name_sees_aliased_bundle_provide() {
+        let bundle = Candidate {
+            name: "Python-bundle-PyPI".into(),
+            version: "2025.04".into(),
+            toolchain: Toolchain {
+                name: "foss".into(),
+                version: "2026.1".into(),
+            },
+            versionsuffix: None,
+            easyconfig_path: "Python-bundle-PyPI-2025.04-foss-2026.1.eb".into(),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: vec![ExtEntry {
+                name: "poetry-core".into(),
+                version: "1.9.0".into(),
+            }],
+            moduleclass: None,
+        };
+        assert_eq!(match_robot_name("poetry-core", &[bundle]), "poetry");
+    }
+
+    #[test]
+    fn matches_intent_follows_overlay_identity_after_poetry_remap() {
+        let hole = UnsatisfiedDirectDependency {
+            name: "poetry".into(),
+            version_req: "==2.0.0".into(),
+            versionsuffix: None,
+            build: true,
+        };
+        let mut dependency = DependencyIntent {
+            id: "dep:poetry-core".into(),
+            name: "poetry-core".into(),
+            eb_name: None,
+            constraint: Some("==2.0.0".into()),
+            toolchain: None,
+            versionsuffix: None,
+            roles: vec![DependencyRole::Build],
+            condition: ConditionExpr::Always,
+            virtual_capability: None,
+            solver_excluded: false,
+            provenance: Vec::new(),
+        };
+        assert!(
+            hole.matches_intent(&dependency),
+            "poetry-core==2.0.0 must match a remapped poetry hole"
+        );
+        dependency.constraint = Some("==1.8.0".into());
+        assert!(
+            !hole.matches_intent(&dependency),
+            "overlay identity must not drop a different version pin"
         );
     }
 
@@ -1223,7 +1296,7 @@ mod tests {
             &plan,
             "default",
             &ProfileEnvironment::default(),
-            &[bundle],
+            &[bundle.clone()],
             &stack,
             Some(&fixture),
         )
@@ -1231,6 +1304,122 @@ mod tests {
         assert!(
             holes.is_empty(),
             "poetry-core via aliased bundle provide must not be a hole: {holes:?}"
+        );
+        let lock = solve_package_profile_with_hierarchy(
+            &plan,
+            "default",
+            &ProfileEnvironment::default(),
+            &[bundle],
+            &stack,
+            Some(&fixture),
+        )
+        .expect("poetry-core via aliased bundle provide must lock, not MissingSelection");
+        assert!(
+            lock.dependencies
+                .iter()
+                .any(|dependency| dependency.name == "Python-bundle-PyPI"
+                    && dependency.version == "2025.04"),
+            "poetry-core must lock the parent bundle: {lock:?}"
+        );
+    }
+
+    #[test]
+    fn poetry_core_version_hole_matches_the_remapped_intent() {
+        let plan = PackagePlan {
+            schema_version: PACKAGE_SCHEMA_VERSION,
+            origin: PackageOrigin::Pypi,
+            package: PackageMetadata {
+                name: "App".into(),
+                version: "1.0".into(),
+                upstream_version: None,
+                homepage: None,
+                description: None,
+                license: None,
+            },
+            sources: Vec::new(),
+            dependencies: vec![DependencyIntent {
+                id: "dep:poetry-core".into(),
+                name: "poetry-core".into(),
+                eb_name: None,
+                constraint: Some("==2.0.0".into()),
+                toolchain: None,
+                versionsuffix: None,
+                roles: vec![DependencyRole::Build],
+                condition: ConditionExpr::Always,
+                virtual_capability: None,
+                solver_excluded: false,
+                provenance: Vec::new(),
+            }],
+            rules: Vec::new(),
+            build: BuildSpec {
+                toolchain: Toolchain {
+                    name: "foss".into(),
+                    version: "2026.1".into(),
+                },
+                easyblock: None,
+                build_systems: Vec::new(),
+                source_root: None,
+                config_options: Vec::new(),
+                moduleclass: None,
+                patches: Vec::new(),
+                easyconfig_parameters: BTreeMap::new(),
+            },
+            profiles: vec![ProductProfile {
+                name: "default".into(),
+                default: true,
+                versionsuffix: Vec::new(),
+                platform: None,
+                architecture: None,
+                features: BTreeMap::new(),
+                parameters: BTreeMap::new(),
+                toolchain_options: BTreeMap::new(),
+                config_options: Vec::new(),
+                easyconfig_parameters: BTreeMap::new(),
+                verification_commands: Vec::new(),
+            }],
+            outputs: Vec::new(),
+            residuals: Vec::new(),
+            overlay_extensions: Vec::new(),
+            package_index: Default::default(),
+        };
+        let poetry = Candidate {
+            name: "poetry".into(),
+            version: "1.8.0".into(),
+            toolchain: Toolchain {
+                name: "foss".into(),
+                version: "2026.1".into(),
+            },
+            versionsuffix: None,
+            easyconfig_path: "poetry-1.8.0-foss-2026.1.eb".into(),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+            moduleclass: None,
+        };
+        let stack = StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "test".into(),
+            toolchain: poetry.toolchain.clone(),
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        };
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/toolchain_hierarchy/foss-2026.1.json");
+        let holes = unsatisfied_direct_dependencies_with_hierarchy(
+            &plan,
+            "default",
+            &ProfileEnvironment::default(),
+            &[poetry],
+            &stack,
+            Some(&fixture),
+        )
+        .expect("hole check");
+        assert_eq!(holes.len(), 1, "{holes:?}");
+        assert_eq!(holes[0].name, "poetry");
+        assert_eq!(holes[0].version_req, "==2.0.0");
+        assert!(
+            holes[0].matches_intent(&plan.dependencies[0]),
+            "poetry-core==2.0.0 intent must match the remapped poetry hole"
         );
     }
 
