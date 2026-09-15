@@ -787,9 +787,11 @@ impl<'src, 'env> Parser<'src, 'env> {
                 // easyconfigs keep a long command under the line limit. Inside
                 // brackets they may span lines; outside them Python needs the
                 // literals on one logical line, and joining across a newline
-                // there would swallow the next statement.
-                Some(b'\'') | Some(b'"')
-                    if matches!(left, Value::Str(_)) && (self.depth > 0 || !crossed_line) =>
+                // there would swallow the next statement. Prefixed literals
+                // (`r'…'`, `f'…'`) are still strings.
+                _ if matches!(left, Value::Str(_))
+                    && (self.depth > 0 || !crossed_line)
+                    && self.starts_string_literal() =>
                 {
                     let right = self.parse_postfix()?;
                     left = match (left, right) {
@@ -987,6 +989,12 @@ impl<'src, 'env> Parser<'src, 'env> {
     fn starts_raw_string(&self) -> bool {
         matches!(self.src.get(self.pos), Some(b'r' | b'R'))
             && matches!(self.src.get(self.pos + 1), Some(b'\'' | b'"'))
+    }
+
+    fn starts_string_literal(&self) -> bool {
+        matches!(self.peek(), Some(b'\'') | Some(b'"'))
+            || self.starts_fstring()
+            || self.starts_raw_string()
     }
 
     /// Whether what follows is an f-string rather than a name beginning with f.
@@ -3310,6 +3318,20 @@ mod tests {
                    homepage = rf'https://{name}.example'\n";
         let parsed = resolve_easyconfig_str(src).expect("parse");
         assert_eq!(parsed.homepage.as_deref(), Some("https://App.example"));
+    }
+
+    #[test]
+    fn prefixed_adjacent_literals_join() {
+        let src = "name = 'App'\nversion = '1'\n\
+                   toolchain = {'name': 'foss', 'version': '2024a'}\n\
+                   versionsuffix = '-a' r'-b'\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.versionsuffix.as_deref(), Some("-a-b"));
+        let src = "name = 'App'\nversion = '1'\n\
+                   toolchain = {'name': 'foss', 'version': '2024a'}\n\
+                   versionsuffix = f'-{name}' f'{version}'\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.versionsuffix.as_deref(), Some("-App1"));
     }
 
     #[test]
