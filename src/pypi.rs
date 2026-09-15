@@ -222,13 +222,20 @@ fn recipe_from_document(doc: WarehouseDocument) -> Result<ForeignRecipe, Foreign
     };
 
     if let Some(build_system) = &doc.build_system {
-        for spec in &build_system.requires {
+        for (index, spec) in build_system.requires.iter().enumerate() {
             match parse_pep508(spec) {
+                Pep508::SkipExtra { spec } => residuals.push(ForeignResidual {
+                    category: "pypi-extra".into(),
+                    severity: ResidualSeverity::Mechanical,
+                    summary: format!("skipped extra-only requirement {spec}"),
+                    evidence: Some(spec),
+                    provenance: None,
+                }),
                 Pep508::Requirement {
                     name,
                     pin,
+                    marker,
                     original,
-                    ..
                 } => {
                     if crate::provides::ignored_build_requirement(&name) {
                         continue;
@@ -245,16 +252,36 @@ fn recipe_from_document(doc: WarehouseDocument) -> Result<ForeignRecipe, Foreign
                         });
                         continue;
                     }
+                    let condition = if let Some(marker) = marker {
+                        residuals.push(ForeignResidual {
+                            category: "pypi-marker".into(),
+                            severity: ResidualSeverity::Judgment,
+                            summary: format!(
+                                "{name} is gated by environment marker {marker} and does not constrain every profile"
+                            ),
+                            evidence: Some(original.clone()),
+                            provenance: None,
+                        });
+                        ConditionExpr::Opaque { source: marker }
+                    } else {
+                        ConditionExpr::Always
+                    };
                     dependencies.push(ForeignDep {
                         name,
                         pin,
                         role: "build".into(),
                         original_spec: Some(original),
-                        condition: ConditionExpr::Always,
+                        condition,
                         provenance: Vec::new(),
                     });
                 }
-                Pep508::SkipExtra { .. } | Pep508::Invalid { .. } => {}
+                Pep508::Invalid { spec, reason } => residuals.push(ForeignResidual {
+                    category: "pypi-requirement".into(),
+                    severity: ResidualSeverity::Judgment,
+                    summary: format!("could not parse build_system.requires[{index}]: {reason}"),
+                    evidence: Some(spec),
+                    provenance: None,
+                }),
             }
         }
     }
@@ -835,6 +862,115 @@ mod tests {
                 .any(|dep| dep.name.eq_ignore_ascii_case("setuptools")),
             "setuptools is shipped with Python: {:?}",
             recipe.dependencies
+        );
+    }
+
+    #[test]
+    fn pep518_build_requires_marker_is_opaque() {
+        let recipe = parse_pypi_str(
+            r#"{
+              "info": {
+                "name": "demo",
+                "version": "1.0",
+                "requires_dist": []
+              },
+              "build_system": {
+                "build-backend": "setuptools.build_meta",
+                "requires": ["tomli>=2.0.1; python_version < 3.11"]
+              },
+              "urls": []
+            }"#,
+        )
+        .expect("parse");
+        let tomli = recipe
+            .dependencies
+            .iter()
+            .find(|dep| dep.name == "tomli")
+            .expect("tomli");
+        assert_eq!(tomli.role, "build");
+        assert_eq!(tomli.pin.as_deref(), Some(">=2.0.1"));
+        assert!(
+            matches!(
+                &tomli.condition,
+                ConditionExpr::Opaque { source } if source.contains("python_version")
+            ),
+            "{tomli:?}"
+        );
+        assert!(
+            recipe
+                .residuals
+                .iter()
+                .any(|residual| residual.category == "pypi-marker"),
+            "{:?}",
+            recipe.residuals
+        );
+        let plan = crate::package_plan_from_foreign(
+            &recipe,
+            &crate::Toolchain {
+                name: "foss".into(),
+                version: "2025a".into(),
+            },
+        );
+        let tomli_intent = plan
+            .dependencies
+            .iter()
+            .find(|dep| dep.name == "tomli")
+            .expect("tomli intent");
+        assert!(
+            tomli_intent.solver_excluded,
+            "opaque PEP 518 marker must be solver-excluded: {tomli_intent:?}"
+        );
+    }
+
+    #[test]
+    fn pep518_skip_extra_and_invalid_leave_residuals() {
+        let recipe = parse_pypi_str(
+            r#"{
+              "info": {
+                "name": "demo",
+                "version": "1.0",
+                "requires_dist": []
+              },
+              "build_system": {
+                "build-backend": "setuptools.build_meta",
+                "requires": [
+                  "setuptools @ https://example.invalid/setuptools-1.0.tar.gz",
+                  "pytest; extra == test"
+                ]
+              },
+              "urls": []
+            }"#,
+        )
+        .expect("parse");
+        assert!(
+            recipe
+                .dependencies
+                .iter()
+                .all(|dep| dep.name != "setuptools" && dep.name != "pytest"),
+            "no invented deps: {:?}",
+            recipe.dependencies
+        );
+        assert!(
+            recipe.residuals.iter().any(|residual| {
+                residual.category == "pypi-requirement"
+                    && residual
+                        .evidence
+                        .as_deref()
+                        .is_some_and(|evidence| evidence.contains('@'))
+            }),
+            "{:?}",
+            recipe.residuals
+        );
+        assert!(
+            recipe.residuals.iter().any(|residual| {
+                residual.category == "pypi-extra"
+                    && residual
+                        .evidence
+                        .as_deref()
+                        .is_some_and(|evidence| evidence.contains("pytest"))
+            }),
+            "{:?}",
+            recipe.residuals
         );
     }
 }
