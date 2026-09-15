@@ -512,8 +512,17 @@ impl ConditionExpr {
         match self {
             Self::Opaque { .. } => true,
             Self::Not(inner) => inner.is_undecidable(),
-            Self::All(expressions) | Self::Any(expressions) => {
+            Self::All(expressions) => {
                 expressions.iter().any(Self::is_undecidable)
+                    && expressions.iter().all(|expression| {
+                        expression.is_undecidable() || matches!(expression, Self::Always)
+                    })
+            }
+            Self::Any(expressions) => {
+                expressions.iter().any(Self::is_undecidable)
+                    && expressions.iter().all(|expression| {
+                        expression.is_undecidable() || matches!(expression, Self::Never)
+                    })
             }
             _ => false,
         }
@@ -1480,5 +1489,22 @@ fn origin_name(origin: &PackageOrigin) -> &'static str {
         PackageOrigin::Cargo => "cargo",
         PackageOrigin::Luarocks => "luarocks",
         PackageOrigin::Raku => "raku",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn any_decidable_or_opaque_is_not_undecidable() {
+        let opaque = ConditionExpr::Opaque {
+            source: "py3k".into(),
+        };
+        let linux = ConditionExpr::Predicate(ConditionPredicate::Platform {
+            name: "linux".into(),
+        });
+        assert!(!ConditionExpr::Any(vec![linux, opaque.clone()]).is_undecidable());
+        assert!(!ConditionExpr::All(vec![ConditionExpr::Never, opaque]).is_undecidable());
     }
 }
