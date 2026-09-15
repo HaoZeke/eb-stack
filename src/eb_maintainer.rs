@@ -433,11 +433,13 @@ fn is_same_easyconfig(lhs: &str, rhs: &str) -> bool {
     }
 }
 
-/// Compiler commands EasyBuild never wraps for RPATH under a GCC toolchain.
+/// Compiler commands EasyBuild wraps only when they are the toolchain's own
+/// `COMPILER_CC` / `COMPILER_CXX`.
 ///
-/// `Toolchain.compilers()` returns the toolchain's own `COMPILER_CC` and
-/// `COMPILER_CXX`, so `prepare_rpath_wrappers` wraps `gcc`, `g++`, `gfortran`
-/// and the linkers and nothing else.
+/// `prepare_rpath_wrappers` wraps `Toolchain.compilers()` and nothing else, so
+/// `clang` is unwrapped under foss/GCC/GCCcore. `icx`/`icpx` are the wrapped
+/// names on intel; `nvc`/`nvc++` are the wrapped names on nvhpc. A version
+/// suffix (`clang-18`) is the same command.
 const UNWRAPPED_COMPILERS: &[&str] = &["clang", "clang++", "icx", "icpx", "nvc", "nvc++", "flang"];
 
 /// A build that drives an unwrapped compiler and never asks for `DT_RPATH`.
@@ -457,11 +459,19 @@ const UNWRAPPED_COMPILERS: &[&str] = &["clang", "clang++", "icx", "icpx", "nvc",
 /// everything else for exactly this reason, and a recipe that goes around the
 /// wrappers has to carry that flag itself.
 pub fn check_unwrapped_compiler_rpath(text: &str) -> Vec<MaintainerFinding> {
+    let parsed = recipe_toolchain_name_from_text(text);
+    check_unwrapped_compiler_rpath_on(text, parsed.as_deref())
+}
+
+fn check_unwrapped_compiler_rpath_on(
+    text: &str,
+    toolchain_name: Option<&str>,
+) -> Vec<MaintainerFinding> {
     let mut out = Vec::new();
     static DRIVER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let driver = DRIVER.get_or_init(|| {
         regex::Regex::new(
-            r#"(?:CMAKE_(?:C|CXX|Fortran)_COMPILER|OMPI_(?:CC|CXX|FC)|MPICH_(?:CC|CXX)|\bCC|\bCXX)\s*=\s*["']?([A-Za-z+_.-]+)"#,
+            r#"(?:CMAKE_(?:C|CXX|Fortran)_COMPILER|OMPI_(?:CC|CXX|FC)|MPICH_(?:CC|CXX)|\bCC|\bCXX)\s*=\s*["']?([^\s"']+)"#,
         )
         .expect("static regex")
     });
@@ -469,9 +479,9 @@ pub fn check_unwrapped_compiler_rpath(text: &str) -> Vec<MaintainerFinding> {
     let driven_by = driver
         .captures_iter(text)
         .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
-        .find(|cmd| {
-            let base = cmd.rsplit('/').next().unwrap_or(cmd);
-            UNWRAPPED_COMPILERS.contains(&base)
+        .find(|cmd| match unwrapped_compiler_stem(cmd) {
+            Some(stem) => !toolchain_name.is_some_and(|tc| toolchain_wraps_compiler(stem, tc)),
+            None => false,
         });
 
     let Some(compiler) = driven_by else {
@@ -480,9 +490,10 @@ pub fn check_unwrapped_compiler_rpath(text: &str) -> Vec<MaintainerFinding> {
     if text.contains("--disable-new-dtags") {
         return out;
     }
-    if text.contains("check_readelf_rpath") {
-        // The recipe already states that its binaries carry no RPATH. That is a
-        // separate judgement, and HPCToolkit and Dakota both make it.
+    if recipe_disables_readelf_rpath(text) {
+        // Assigned False: the recipe states its binaries carry no RPATH.
+        // HPCToolkit and Dakota both make that judgement. A True assignment
+        // or a comment that only names the parameter does not.
         return out;
     }
 
@@ -497,6 +508,43 @@ pub fn check_unwrapped_compiler_rpath(text: &str) -> Vec<MaintainerFinding> {
         ),
     ));
     out
+}
+
+/// Basename of a compiler command, with a trailing `-<digits>` version dropped.
+///
+/// `CMAKE_C_COMPILER=/usr/bin/clang-18` is the same unwrapped driver as `clang`.
+fn unwrapped_compiler_stem(cmd: &str) -> Option<&str> {
+    let base = cmd.rsplit('/').next().unwrap_or(cmd);
+    let stem = match base.rsplit_once('-') {
+        Some((name, ver)) if !ver.is_empty() && ver.chars().all(|c| c.is_ascii_digit()) => name,
+        _ => base,
+    };
+    UNWRAPPED_COMPILERS
+        .iter()
+        .copied()
+        .find(|&known| known == stem)
+}
+
+/// `icx`/`icpx` are `Toolchain.compilers()` on intel; `nvc`/`nvc++` on nvhpc.
+fn toolchain_wraps_compiler(compiler: &str, toolchain_name: &str) -> bool {
+    let tc = toolchain_name.to_ascii_lowercase();
+    match compiler {
+        "icx" | "icpx" => matches!(
+            tc.as_str(),
+            "intel" | "intel-compilers" | "iimpi" | "iimkl" | "iomkl"
+        ),
+        "nvc" | "nvc++" => matches!(tc.as_str(), "nvhpc" | "nvompi"),
+        _ => false,
+    }
+}
+
+/// True only for an assignment `check_readelf_rpath = False`, not a mention.
+fn recipe_disables_readelf_rpath(text: &str) -> bool {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(r"(?m)^\s*check_readelf_rpath\s*=\s*False\b").expect("static regex")
+    });
+    re.is_match(text)
 }
 
 /// A GPU architecture list written into the recipe by hand.
@@ -674,7 +722,10 @@ pub fn check_maintainer_acceptability(
     findings.extend(check_dep_toolchain_pins(recipe));
     findings.extend(check_shell_monsters(source_text));
     findings.extend(check_fat_build(source_text));
-    findings.extend(check_build_failure_modes(source_text));
+    findings.extend(check_build_failure_modes_on(
+        source_text,
+        Some(recipe.toolchain.name.as_str()),
+    ));
     MaintainerReport { findings }
 }
 
@@ -682,7 +733,15 @@ pub fn check_maintainer_acceptability(
 /// a review. Each one names a mechanism that produces a build the recipe reads
 /// as correct.
 pub fn check_build_failure_modes(source_text: &str) -> Vec<MaintainerFinding> {
-    let mut out = check_unwrapped_compiler_rpath(source_text);
+    let parsed = recipe_toolchain_name_from_text(source_text);
+    check_build_failure_modes_on(source_text, parsed.as_deref())
+}
+
+fn check_build_failure_modes_on(
+    source_text: &str,
+    toolchain_name: Option<&str>,
+) -> Vec<MaintainerFinding> {
+    let mut out = check_unwrapped_compiler_rpath_on(source_text, toolchain_name);
     out.extend(check_hardcoded_gpu_arch(source_text));
     out.extend(check_git_source_archive(source_text));
     out.extend(check_install_log_copy(source_text));
@@ -714,6 +773,34 @@ pub fn check_maintainer_acceptability_text(source_text: &str) -> MaintainerRepor
         }
     }
     MaintainerReport { findings }
+}
+
+fn recipe_toolchain_name_from_text(text: &str) -> Option<String> {
+    // toolchain = {'name': 'foss', 'version': '2026.1'}
+    for line in text.lines() {
+        let t = line.trim();
+        if !t.starts_with("toolchain") {
+            continue;
+        }
+        for key in ["'name'", "\"name\""] {
+            let Some(idx) = t.find(key) else {
+                continue;
+            };
+            let rest = &t[idx + key.len()..];
+            let Some(colon) = rest.find(':') else {
+                continue;
+            };
+            let vpart = rest[colon + 1..]
+                .trim()
+                .trim_start_matches(['\'', '"', ' ']);
+            let end = vpart.find(['\'', '"', ',', '}']).unwrap_or(vpart.len());
+            let v = &vpart[..end];
+            if !v.is_empty() && !v.eq_ignore_ascii_case("name") {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn recipe_toolchain_version_from_text(text: &str) -> Option<String> {
@@ -1138,6 +1225,7 @@ mod tests {
 #[cfg(test)]
 mod build_failure_tests {
     use super::*;
+    use crate::eb_parse::resolve_easyconfig_str;
 
     /// The shape that failed the RPATH sanity check on a site pipeline: clang
     /// named as the CMake compiler, rpath directories on the link line, and no
@@ -1181,6 +1269,75 @@ preconfigopts = _use_clang
     fn a_recipe_that_states_its_binaries_carry_no_rpath_is_its_own_answer() {
         let stated = format!("{CLANG_RUNPATH}\ncheck_readelf_rpath = False\n");
         assert!(check_unwrapped_compiler_rpath(&stated).is_empty());
+    }
+
+    #[test]
+    fn intel_icx_is_the_wrapped_compiler_and_is_not_an_error() {
+        let text = r#"
+easyblock = 'CMakeMake'
+name = 'Example'
+version = '1.0'
+toolchain = {'name': 'intel', 'version': '2025a'}
+configopts = '-DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx'
+"#;
+        assert!(
+            check_unwrapped_compiler_rpath(text).is_empty(),
+            "{:?}",
+            check_unwrapped_compiler_rpath(text)
+        );
+        let recipe = resolve_easyconfig_str(text).unwrap();
+        let report = check_maintainer_acceptability(&recipe, text);
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.code == "EB_MAINT_UNWRAPPED_COMPILER_RPATH"),
+            "{report:?}"
+        );
+        assert!(report.ok_for_upstream(), "{report:?}");
+    }
+
+    #[test]
+    fn foss_plus_clang_is_still_the_unwrapped_error() {
+        let findings = check_unwrapped_compiler_rpath(CLANG_RUNPATH);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].code, "EB_MAINT_UNWRAPPED_COMPILER_RPATH");
+        assert!(findings[0].is_error());
+    }
+
+    #[test]
+    fn path_and_versioned_clang_is_an_unwrapped_compiler() {
+        let text = r#"
+toolchain = {'name': 'foss', 'version': '2025a'}
+configopts = '-DCMAKE_C_COMPILER=/usr/bin/clang-18 -DCMAKE_CXX_COMPILER=/usr/bin/clang++-18'
+"#;
+        let findings = check_unwrapped_compiler_rpath(text);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].code, "EB_MAINT_UNWRAPPED_COMPILER_RPATH");
+        assert!(findings[0].is_error());
+        assert!(
+            findings[0].message.contains("clang-18")
+                || findings[0].message.contains("/usr/bin/clang-18"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn check_readelf_rpath_true_does_not_suppress_the_rpath_error() {
+        let stated = format!("{CLANG_RUNPATH}\ncheck_readelf_rpath = True\n");
+        let findings = check_unwrapped_compiler_rpath(&stated);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].code, "EB_MAINT_UNWRAPPED_COMPILER_RPATH");
+        assert!(findings[0].is_error());
+    }
+
+    #[test]
+    fn a_comment_that_names_check_readelf_rpath_does_not_suppress() {
+        let stated = format!("{CLANG_RUNPATH}\n# see check_readelf_rpath\n");
+        let findings = check_unwrapped_compiler_rpath(&stated);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].code, "EB_MAINT_UNWRAPPED_COMPILER_RPATH");
+        assert!(findings[0].is_error());
     }
 
     /// CMake aborted in one second on the H100 partition because the recipe
