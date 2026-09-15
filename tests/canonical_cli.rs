@@ -477,3 +477,57 @@ fn package_mutate_accepts_a_family_change() {
         .join("easyconfigs/e/Epsilon/Epsilon-1.0-gfbf-2024a.eb")
         .is_file());
 }
+
+#[test]
+fn package_bump_cli_prints_copied_sibling_patches() {
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let src_dir = temp.path().join("src");
+    std::fs::create_dir_all(&src_dir).expect("source directory");
+    let patch_name = "Epsilon-1.0_fix.patch";
+    std::fs::write(src_dir.join(patch_name), "--- a/x\n+++ b/x\n").expect("patch file");
+    let source = src_dir.join("Epsilon-1.0-foss-2023a.eb");
+    std::fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'Epsilon'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['epsilon-1.0.tar.gz']\n\
+         patches = ['Epsilon-1.0_fix.patch']\n\
+         checksums = [\n    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',\n    '922dd52a81ff1c3d456cb861de7ad959496295c809971e848d414d3cdfe3fb23',\n]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    let robot = temp.path().join("robot");
+    std::fs::create_dir_all(&robot).expect("robot");
+    let output = temp.path().join("bundle");
+    let result = Command::new(binary)
+        .args([
+            "package",
+            "bump",
+            "--source",
+            source.to_str().unwrap(),
+            "--toolchain-name",
+            "foss",
+            "--toolchain-version",
+            "2025a",
+            "--easyconfigs",
+            robot.to_str().unwrap(),
+            "--out-dir",
+            output.to_str().unwrap(),
+        ])
+        .output()
+        .expect("package bump with sibling patch");
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        result.status.success(),
+        "stdout={stdout}\nstderr={}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("patch=") && line.contains(patch_name)),
+        "bump must print patch= for each copied file:\n{stdout}"
+    );
+}

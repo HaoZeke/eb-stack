@@ -628,6 +628,9 @@ fn run_package_bump(args: PackageBumpArgs, mode: BumpMode) -> Result<()> {
     for path in written.easyconfigs {
         println!("easyconfig={}", path.display());
     }
+    for path in written.patches {
+        println!("patch={}", path.display());
+    }
     println!("generation_target={toolchain_name}-{toolchain_version}");
     let mut generation_holes = false;
     let mut other_blocking = false;
