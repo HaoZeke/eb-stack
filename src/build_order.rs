@@ -1692,6 +1692,52 @@ mod tests {
     }
 
     #[test]
+    fn suffixed_foss_first_does_not_satisfy_from_cuda_generation() {
+        let mut cuda_foss = candidate(
+            "foss",
+            "2099a",
+            tc("system", "system"),
+            vec![
+                dep("GCCcore", "==11.3.0", None),
+                dep("CUDA", "==12.8.0", None),
+            ],
+        );
+        cuda_foss.versionsuffix = Some("-CUDA-12.8.0".into());
+        let mut plain_foss = candidate(
+            "foss",
+            "2099a",
+            tc("system", "system"),
+            vec![dep("GCC", "==15.2.0", None)],
+        );
+        plain_foss.moduleclass = Some("toolchain".into());
+        let all = vec![
+            cuda_foss,
+            plain_foss,
+            candidate("GCC", "15.2.0", tc("system", "system"), vec![]),
+            candidate("GCCcore", "11.3.0", tc("system", "system"), vec![]),
+            candidate("GCCcore", "15.2.0", tc("system", "system"), vec![]),
+            candidate(
+                "App",
+                "1.0",
+                tc("foss", "2099a"),
+                vec![dep("Lib", ">=1", None)],
+            ),
+            candidate("Lib", "9.0", tc("GCCcore", "11.3.0"), vec![]),
+            candidate("Lib", "2.0", tc("GCCcore", "15.2.0"), vec![]),
+        ];
+        let order = build_order(&all, &["App".into()], Choice::Newest).expect("order");
+        let seq = names(&order);
+        assert!(
+            seq.iter().any(|name| name.starts_with("Lib-2.0")),
+            "unsuffixed foss-2099a must pick Lib-2.0: {seq:?}"
+        );
+        assert!(
+            !seq.iter().any(|name| name.starts_with("Lib-9.0")),
+            "CUDA foss must not satisfy Lib from GCCcore-11.3.0: {seq:?}"
+        );
+    }
+
+    #[test]
     fn unknown_hierarchy_does_not_take_another_generation_newest() {
         let all = vec![
             candidate("local", "1.0", tc("system", "system"), vec![]),

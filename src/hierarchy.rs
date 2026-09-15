@@ -231,42 +231,43 @@ fn known_hierarchy_uncached(parent: &Toolchain) -> Option<ToolchainHierarchy> {
     })
 }
 
-/// Derive a GCC-family generation hierarchy from the parsed easyconfig universe.
-///
-/// The robot tree itself defines each generation: the `foss-<gen>` (or
-/// `gompi-<gen>` / `gfbf-<gen>`) toolchain-definition easyconfig pins the
-/// generation's `GCC` version, and the intermediate composite definitions
-/// exist as sibling recipes. Deriving from the tree makes any generation
-/// present in the robot tree work with no fixture (the annual-bump case:
-/// a brand-new `foss-2026.1` must not require shipping a new fixture).
-///
-/// Members mirror EasyBuild's `get_toolchain_hierarchy` order for foss-family
-/// generations: `system < GCCcore < GCC < gompi < gfbf < parent`. Intermediate
-/// composites are included only when their definition recipe is in the tree.
-/// GCCcore is assumed version-paired with GCC (true for all modern
-/// generations, 2020a+). Non-GCC-family parents return `None`.
-/// A hierarchy read off the tree, for a toolchain no family rule covers.
-///
-/// A toolchain is defined by a recipe, and that recipe's dependencies say what
-/// it is made of: `iimpi` names `intel-compilers` and `impi`, and
-/// `intel-compilers` names the `GCCcore` it was built on. Any dependency that
-/// other recipes in the tree use *as* a toolchain is a subtoolchain, so the
-/// chain can be walked without knowing the family: an unfamiliar composite
-/// stops being unplannable, which for a site is the difference between a
-/// generation it can bump and one it cannot.
+fn candidate_suffix(candidate: &Candidate) -> &str {
+    candidate.versionsuffix.as_deref().unwrap_or("")
+}
+
+/// A CUDA-suffixed `foss`/`GCC` is not the unsuffixed generation's definition.
+/// Empty suffix matches `name`+`version`; a non-empty suffix matches only the
+/// joined spelling (`2099a-CUDA-12.8.0`).
 fn candidate_defines_toolchain(candidate: &Candidate, toolchain: &Toolchain) -> bool {
     if candidate.name != toolchain.name {
         return false;
     }
-    if candidate.version == toolchain.version {
-        return true;
+    let suffix = candidate_suffix(candidate);
+    if suffix.is_empty() {
+        return candidate.version == toolchain.version;
     }
-    let joined = format!(
-        "{}{}",
-        candidate.version,
-        candidate.versionsuffix.as_deref().unwrap_or_default()
-    );
-    joined == toolchain.version
+    format!("{}{suffix}", candidate.version) == toolchain.version
+}
+
+/// Prefer unsuffixed `name`+`version` when both a CUDA variant and a plain
+/// definition exist; otherwise the first candidate whose suffix matches.
+fn find_toolchain_definition<'a>(
+    cands: &'a [Candidate],
+    toolchain: &Toolchain,
+) -> Option<&'a Candidate> {
+    let mut matched_suffix = None;
+    for candidate in cands {
+        if !candidate_defines_toolchain(candidate, toolchain) {
+            continue;
+        }
+        if candidate_suffix(candidate).is_empty() && candidate.version == toolchain.version {
+            return Some(candidate);
+        }
+        if matched_suffix.is_none() {
+            matched_suffix = Some(candidate);
+        }
+    }
+    matched_suffix
 }
 
 fn is_definition_subtoolchain(candidate: &Candidate) -> bool {
@@ -314,6 +315,15 @@ fn insert_before_namer(members: &mut Vec<Toolchain>, namer: &Toolchain, found: T
     }
 }
 
+/// A hierarchy read off the tree, for a toolchain no family rule covers.
+///
+/// A toolchain is defined by a recipe, and that recipe's dependencies say what
+/// it is made of: `iimpi` names `intel-compilers` and `impi`, and
+/// `intel-compilers` names the `GCCcore` it was built on. Any dependency that
+/// other recipes in the tree use *as* a toolchain is a subtoolchain, so the
+/// chain can be walked without knowing the family: an unfamiliar composite
+/// stops being unplannable, which for a site is the difference between a
+/// generation it can bump and one it cannot.
 fn derive_hierarchy_by_walking(
     parent: &Toolchain,
     cands: &[Candidate],
@@ -345,10 +355,7 @@ fn derive_hierarchy_by_walking(
         if !seen.insert(format!("{}-{}", current.name, current.version)) {
             continue;
         }
-        let Some(definition) = cands
-            .iter()
-            .find(|candidate| candidate_defines_toolchain(candidate, &current))
-        else {
+        let Some(definition) = find_toolchain_definition(cands, &current) else {
             continue;
         };
         for dependency in definition
@@ -434,10 +441,9 @@ pub fn derive_hierarchy_from_candidates(
             .filter(|derived| derived.members.len() > 2)
             .or_else(|| derive_compiler_toolchain_hierarchy(parent, cands));
     }
-    // The parent generation's own toolchain-definition recipe.
-    let def = cands
-        .iter()
-        .find(|c| c.name == parent.name && c.version == parent.version)?;
+    // The parent generation's own toolchain-definition recipe. Name+version
+    // alone would take a CUDA foss/GCC first in parse order.
+    let def = find_toolchain_definition(cands, parent)?;
     let Some(gcc_ver) = def
         .dependencies
         .iter()
@@ -471,9 +477,9 @@ pub fn derive_hierarchy_from_candidates(
         _ => &[],
     };
     for comp in extras {
-        let defined = cands
-            .iter()
-            .any(|c| c.name == *comp && c.version == parent.version);
+        let defined = cands.iter().any(|c| {
+            c.name == *comp && c.version == parent.version && candidate_suffix(c).is_empty()
+        });
         if defined {
             members.push(Toolchain {
                 name: (*comp).into(),
@@ -1998,6 +2004,35 @@ mod tests {
             version: "2026a".into(),
         };
         assert!(derive_hierarchy_from_candidates(&intel, &cands).is_none());
+    }
+
+    #[test]
+    fn suffixed_foss_does_not_define_unsuffixed_generation() {
+        let parent = foss("2099a");
+        assert!(
+            known_hierarchy(&parent).is_none(),
+            "foss-2099a must derive from the tree"
+        );
+        let mut cuda_foss = cand("foss", "2099a", "system", "", Some("-CUDA-12.8.0"));
+        cuda_foss.dependencies = vec![dep_pin("GCCcore", "11.3.0"), dep_pin("CUDA", "12.8.0")];
+        let mut plain_foss = cand("foss", "2099a", "system", "", None);
+        plain_foss.dependencies = vec![dep_pin("GCC", "15.2.0")];
+        let h = derive_hierarchy_from_candidates(&parent, &[cuda_foss, plain_foss])
+            .expect("unsuffixed foss defines the generation");
+        assert_eq!(
+            h.members
+                .iter()
+                .find(|member| member.name == "GCCcore")
+                .map(|member| member.version.as_str()),
+            Some("15.2.0"),
+            "{:?}",
+            h.member_labels()
+        );
+        assert!(
+            !h.members.iter().any(|member| member.version == "11.3.0"),
+            "CUDA foss must not pin the unsuffixed generation: {:?}",
+            h.member_labels()
+        );
     }
 
     #[test]
