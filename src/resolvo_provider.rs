@@ -137,6 +137,29 @@ fn require_upgrade_baseline_version(lock: &StackLock, name: &str) -> Option<Stri
 impl EbProvider {
     /// Which resolvo package names can satisfy one dependency of one recipe.
     ///
+    /// Keys at the recipe's level and everything under it. EasyBuild's
+    /// minimal-toolchain search never goes above the recipe.
+    fn keys_at_or_below(&self, name: &str, recipe: &Candidate) -> Vec<String> {
+        let recipe_at = self
+            .hierarchy_members
+            .iter()
+            .position(|member| crate::hierarchy::toolchains_match(member, &recipe.toolchain));
+        let admissible: Vec<&crate::domain::Toolchain> = match recipe_at {
+            Some(at) => self.hierarchy_members[..=at].iter().collect(),
+            None => self.hierarchy_members.iter().collect(),
+        };
+        let mut keys: Vec<String> = admissible
+            .into_iter()
+            .map(|tc| format!("{name}@{}", toolchain_label(tc)))
+            .filter(|key| self.name_ids.contains_key(key))
+            .collect();
+        let own = format!("{name}@{}", toolchain_label(&recipe.toolchain));
+        if self.name_ids.contains_key(&own) && !keys.contains(&own) {
+            keys.push(own);
+        }
+        keys
+    }
+
     /// A plain name for a package the generation carries once. For a package
     /// carried at several levels: the level the dependency pins, or, when it
     /// pins none, every level at or below the recipe's own, which is the range
@@ -170,14 +193,19 @@ impl EbProvider {
                 .cloned()
                 .collect();
             if !wants_system && self.multi_level.contains(&dep.name) {
-                // The name also lives inside the generation, and a recipe
-                // there may take either.
+                // The name also lives inside the generation. A foss recipe
+                // with ('zlib', '1.2.13') may take the GCCcore build, not
+                // only a SYSTEM key or the recipe's own (usually absent) key.
                 if let Some(tc) = dep.toolchain.as_ref() {
-                    keys.push(format!("{}@{}", dep.name, toolchain_label(tc)));
+                    let key = format!("{}@{}", dep.name, toolchain_label(tc));
+                    if self.name_ids.contains_key(&key) && !keys.contains(&key) {
+                        keys.push(key);
+                    }
                 } else {
-                    let own = format!("{}@{}", dep.name, toolchain_label(&recipe.toolchain));
-                    if self.name_ids.contains_key(&own) {
-                        keys.push(own);
+                    for key in self.keys_at_or_below(&dep.name, recipe) {
+                        if !keys.contains(&key) {
+                            keys.push(key);
+                        }
                     }
                 }
             }
@@ -191,25 +219,7 @@ impl EbProvider {
         if let Some(tc) = dep.toolchain.as_ref() {
             return vec![format!("{}@{}", dep.name, toolchain_label(tc))];
         }
-        let recipe_at = self
-            .hierarchy_members
-            .iter()
-            .position(|m| crate::hierarchy::toolchains_match(m, &recipe.toolchain));
-        // The hierarchy is ordered lowest level first, so a recipe may take a
-        // dependency from its own level and anything under it, never above.
-        let admissible: Vec<&crate::domain::Toolchain> = match recipe_at {
-            Some(at) => self.hierarchy_members[..=at].iter().collect(),
-            None => self.hierarchy_members.iter().collect(),
-        };
-        let mut keys: Vec<String> = admissible
-            .into_iter()
-            .map(|tc| format!("{}@{}", dep.name, toolchain_label(tc)))
-            .filter(|key| self.name_ids.contains_key(key))
-            .collect();
-        let own = format!("{}@{}", dep.name, toolchain_label(&recipe.toolchain));
-        if self.name_ids.contains_key(&own) && !keys.contains(&own) {
-            keys.push(own);
-        }
+        let mut keys = self.keys_at_or_below(&dep.name, recipe);
         if keys.is_empty() && self.widen_cross_generation {
             // A stack policy can admit a closure from another generation on
             // purpose. Ordinary solves stay at or below the recipe.
@@ -1746,6 +1756,55 @@ mod tests {
             .collect();
         binutils.sort();
         assert_eq!(binutils, vec!["2.40", "2.42"]);
+    }
+
+    #[test]
+    fn system_multi_still_admits_the_generation_member() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let gcccore = Toolchain {
+            name: "GCCcore".into(),
+            version: "14.3.0".into(),
+        };
+        let at = |name: &str, version: &str, toolchain: &Toolchain| Candidate {
+            name: name.into(),
+            version: version.into(),
+            toolchain: toolchain.clone(),
+            versionsuffix: None,
+            easyconfig_path: format!("{name}-{version}-{}.eb", toolchain.label()),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+            moduleclass: None,
+        };
+        let candidates = vec![
+            at("zlib", "1.2.11", &system),
+            at("zlib", "1.2.12", &system),
+            at("zlib", "1.2.13", &gcccore),
+            cand(
+                "App",
+                "1.0",
+                None,
+                "App-1.0.eb",
+                vec![DepReq {
+                    name: "zlib".into(),
+                    version_req: "==1.2.13".into(),
+                    versionsuffix: None,
+                    toolchain: None,
+                }],
+            ),
+        ];
+        let selected = solve_with_resolvo(&candidates, &policy(vec!["App"], vec![]), None)
+            .expect("foss may take the GCCcore zlib");
+        let zlib = selected
+            .iter()
+            .find(|candidate| candidate.name == "zlib")
+            .expect("zlib");
+        assert_eq!(zlib.version, "1.2.13");
+        assert_eq!(zlib.toolchain.name, "GCCcore");
+        assert_eq!(zlib.toolchain.version, "14.3.0");
     }
 
     #[test]
