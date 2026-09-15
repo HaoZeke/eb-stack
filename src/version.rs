@@ -295,7 +295,7 @@ impl Requirement {
     /// foreign metadata actually named.
     pub fn lower_bound(&self) -> Option<&str> {
         if let Some(exact) = self.exact() {
-            return Some(exact);
+            return self.matches(exact).then_some(exact);
         }
         let mut best: Option<&str> = None;
         for clause in &self.clauses {
@@ -473,6 +473,13 @@ mod ecosystem_operator_tests {
         assert!(req.matches(floor), "{floor}");
         let above = parse_requirement(">1.2").expect("parse");
         assert_ne!(above.lower_bound(), Some("1.2"));
+        let rejected = parse_requirement("==2.0,>=3.0").expect("parse");
+        assert_ne!(rejected.lower_bound(), Some("2.0"));
+        assert!(rejected
+            .lower_bound()
+            .is_none_or(|version| rejected.matches(version)));
+        let admitted = parse_requirement(">=1.0,==2.0").expect("parse");
+        assert_eq!(admitted.lower_bound(), Some("2.0"));
     }
 
     #[test]
