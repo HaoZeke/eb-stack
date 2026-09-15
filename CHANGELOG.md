@@ -109,6 +109,9 @@ All notable changes to this project are documented here.
   continuation backslash as the EasyBuild version. Extra-gated lines
   become residuals instead of aborting parse. Warehouse
   `project_urls.Homepage` wins over the PyPI listing.
+- A `{` inside a quoted LuaRocks `summary` no longer hides a later
+  `dependencies` table. `external_dependencies` is recorded as a
+  judgment residual instead of disappearing.
 - A LuaRocks `source.hash` is kept as SHA-256 only when it is 64 hex.
   `source.sha256` wins over `hash`, so an MD5 no longer shadows a real
   digest or become a checksum EasyBuild cannot use.

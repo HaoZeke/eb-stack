@@ -100,19 +100,39 @@ pub fn parse_luarocks_str(text: &str) -> Result<ForeignRecipe, ForeignError> {
         variants: Vec::new(),
         rules: Vec::new(),
         notes: vec!["parsed from a rockspec".into()],
-        residuals: if sha256.is_none() && git.is_none() {
-            vec![ForeignResidual {
-                category: "luarocks-checksum".into(),
-                severity: ResidualSeverity::Judgment,
-                summary: "rockspec source has no hash/sha256".into(),
-                evidence: url.clone(),
-                provenance: None,
-            }]
-        } else {
-            Vec::new()
+        residuals: {
+            let mut residuals = Vec::new();
+            if sha256.is_none() && git.is_none() {
+                residuals.push(ForeignResidual {
+                    category: "luarocks-checksum".into(),
+                    severity: ResidualSeverity::Judgment,
+                    summary: "rockspec source has no hash/sha256".into(),
+                    evidence: url.clone(),
+                    provenance: None,
+                });
+            }
+            record_external_dependencies(text, &mut residuals);
+            residuals
         },
         classifiers: Vec::new(),
     })
+}
+
+fn record_external_dependencies(text: &str, residuals: &mut Vec<ForeignResidual>) {
+    let Some(body) = lua_table_body(text, "external_dependencies") else {
+        return;
+    };
+    for entry in lua_table_entries(&body) {
+        if let LuaEntry::Table { key, .. } = entry {
+            residuals.push(ForeignResidual {
+                category: "luarocks-external".into(),
+                severity: ResidualSeverity::Judgment,
+                summary: format!("external_dependencies not encoded: {key}"),
+                evidence: Some(key),
+                provenance: None,
+            });
+        }
+    }
 }
 
 /// LuaRocks `source.hash` is historically MD5. Only a 64-hex SHA-256 is kept.
@@ -504,9 +524,28 @@ fn lua_live_line(line: &str) -> Option<&str> {
 }
 
 fn lua_brace_delta(text: &str) -> i32 {
-    let opens = text.chars().filter(|c| *c == '{').count() as i32;
-    let closes = text.chars().filter(|c| *c == '}').count() as i32;
-    opens - closes
+    let mut delta = 0i32;
+    let mut quote = None;
+    let mut chars = text.chars().peekable();
+    while let Some(character) = chars.next() {
+        if let Some(open) = quote {
+            if character == '\\' {
+                let _ = chars.next();
+                continue;
+            }
+            if character == open {
+                quote = None;
+            }
+            continue;
+        }
+        match character {
+            '"' | '\'' => quote = Some(character),
+            '{' => delta += 1,
+            '}' => delta -= 1,
+            _ => {}
+        }
+    }
+    delta
 }
 
 fn collect_quoted(text: &str, items: &mut Vec<String>) {
@@ -648,6 +687,45 @@ source = {
                 .any(|residual| residual.category == "luarocks-checksum"),
             "{:?}",
             md5_only.residuals
+        );
+    }
+
+    #[test]
+    fn braces_inside_a_quoted_summary_do_not_hide_dependencies() {
+        let recipe = parse_luarocks_str(
+            r#"
+package = "lfs"
+version = "1.8.0-1"
+source = { url = "https://example.invalid/lfs.tgz" }
+description = { summary = "uses {" }
+dependencies = { "bit32" }
+"#,
+        )
+        .expect("parse");
+        assert!(
+            recipe.dependencies.iter().any(|dep| dep.name == "bit32"),
+            "{:?}",
+            recipe.dependencies
+        );
+    }
+
+    #[test]
+    fn external_dependencies_become_a_judgment_residual() {
+        let recipe = parse_luarocks_str(
+            r#"
+package = "lfs"
+version = "1.8.0-1"
+source = { url = "https://example.invalid/lfs.tgz" }
+external_dependencies = { EXPAT = { header = "expat.h" } }
+"#,
+        )
+        .expect("parse");
+        assert!(
+            recipe.residuals.iter().any(|residual| {
+                residual.category == "luarocks-external" && residual.summary.contains("EXPAT")
+            }),
+            "{:?}",
+            recipe.residuals
         );
     }
 
