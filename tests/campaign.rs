@@ -69,6 +69,14 @@ fn failure_classifier_preserves_the_build_error_domain() {
         ),
         ("ssh: connect to host failed", BuildFindingClass::Transport),
         (
+            "Failed to download file from https://example.invalid/foo.tar.gz\nURLError: <urlopen error [Errno 110] Connection timed out>\nERROR: installation failed",
+            BuildFindingClass::Source,
+        ),
+        (
+            "Couldn't find file foo.tar.gz anywhere, and downloading it didn't work either\nConnection refused",
+            BuildFindingClass::Source,
+        ),
+        (
             "flex: /lib64/libc.so.6: version `GLIBC_2.38' not found",
             BuildFindingClass::Runtime,
         ),
@@ -274,6 +282,86 @@ fn campaign_rejects_missing_checksums_before_easybuild() {
     assert_eq!(state.findings[0].class, BuildFindingClass::Checksum);
     assert_eq!(state.findings[0].stage, "preflight");
     assert!(state.findings[0].evidence.contains("missing checksums"));
+}
+
+fn missing_checksum_bundle(root: &Path) -> std::path::PathBuf {
+    let bundle = root.join("bundle");
+    let recipes = bundle.join("easyconfigs/q/QMCPACK");
+    std::fs::create_dir_all(&recipes).expect("recipes");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"QMCPACK","version":"4.3.0"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .expect("lock");
+    std::fs::write(
+        recipes.join("QMCPACK.eb"),
+        "name = 'QMCPACK'\nversion = '4.3.0'\ntoolchain = SYSTEM\nchecksums = []\nmoduleclass = 'chem'\n",
+    )
+    .expect("recipe");
+    bundle
+}
+
+#[test]
+fn preflight_repeats_record_stuck_on_signature() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = missing_checksum_bundle(temp.path());
+    let state_path = temp.path().join("campaign.json");
+    let request = CampaignRequest {
+        bundle: bundle.clone(),
+        target: target("true"),
+        state_path: state_path.clone(),
+    };
+    run_campaign(&request).expect("first preflight");
+    let second = run_campaign(&request).expect("second preflight");
+    assert!(
+        second
+            .history
+            .iter()
+            .any(|event| event.detail.contains("stuck on signature after")),
+        "{:?}",
+        second.history
+    );
+}
+
+#[test]
+fn successful_retry_supersedes_preflight() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = missing_checksum_bundle(temp.path());
+    let state_path = temp.path().join("campaign.json");
+    run_campaign(&CampaignRequest {
+        bundle: bundle.clone(),
+        target: target("true"),
+        state_path: state_path.clone(),
+    })
+    .expect("preflight");
+    write_valid_recipe(
+        &bundle.join("easyconfigs/q/QMCPACK/QMCPACK.eb"),
+        "QMCPACK",
+        "4.3.0",
+    );
+    let completed = run_campaign(&CampaignRequest {
+        bundle,
+        target: target("true"),
+        state_path,
+    })
+    .expect("retry");
+    assert_eq!(completed.status, CampaignStatus::Completed);
+    assert!(completed.claims.builds);
+    assert!(
+        completed
+            .findings
+            .iter()
+            .any(|finding| finding.stage == "preflight"
+                && finding.status == FindingStatus::Superseded),
+        "{:?}",
+        completed.findings
+    );
 }
 
 #[test]

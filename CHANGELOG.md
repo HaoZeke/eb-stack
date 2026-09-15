@@ -102,6 +102,13 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A layer-only version bump drops the previous source SHA-256 from the
+  plan and SBOM. An unpinned overlay leftover reads `--package-index`
+  instead of installing version `0` from SAT's `>=0`. Stack and root
+  pins accept EasyBuild joined-module spelling (`25.3-CUDA-12.8.0`).
+  EasyBuild download timeouts classify as Source, not Transport.
+  Preflight and stage findings participate in stuck-on-signature and
+  are superseded by a successful retry.
 - A stack-policy pin or exclusion named `hdf5` matches a robot `HDF5`
   candidate instead of failing as an unknown package.
 - `package bump` remaps an explicit dependency toolchain through the

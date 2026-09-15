@@ -373,15 +373,30 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
             });
             state.status = CampaignStatus::Failed;
             state.current_recipe = None;
+            let stuck = is_stuck_on_signature(
+                &state,
+                state
+                    .findings
+                    .last()
+                    .and_then(|finding| finding.signature.as_deref())
+                    .unwrap_or(""),
+            );
             state.history.push(CampaignEvent {
                 attempt: state.attempts,
                 status: CampaignStatus::Failed,
                 recipe: Some(recipe_text),
-                detail: format!("classified packaging preflight failure as {class:?}"),
+                detail: if stuck {
+                    format!(
+                        "classified packaging preflight failure as {class:?}; stuck on signature after {MAX_ATTEMPTS_PER_SIGNATURE} identical failures"
+                    )
+                } else {
+                    format!("classified packaging preflight failure as {class:?}")
+                },
             });
             write_state(&request.state_path, &state)?;
             return Ok(state);
         }
+        supersede_findings(&mut state, "preflight", &recipe_text);
     }
 
     let staged_bundle = match request.target.stage_bundle(&request.bundle) {
@@ -414,16 +429,31 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
             });
             state.status = CampaignStatus::Failed;
             state.current_recipe = None;
+            let stuck = is_stuck_on_signature(
+                &state,
+                state
+                    .findings
+                    .last()
+                    .and_then(|finding| finding.signature.as_deref())
+                    .unwrap_or(""),
+            );
             state.history.push(CampaignEvent {
                 attempt: state.attempts,
                 status: CampaignStatus::Failed,
                 recipe: None,
-                detail: "classified bundle staging failure as Transport".into(),
+                detail: if stuck {
+                    format!(
+                        "classified bundle staging failure as Transport; stuck on signature after {MAX_ATTEMPTS_PER_SIGNATURE} identical failures"
+                    )
+                } else {
+                    "classified bundle staging failure as Transport".into()
+                },
             });
             write_state(&request.state_path, &state)?;
             return Ok(state);
         }
     };
+    supersede_findings(&mut state, "stage", "");
 
     for recipe in recipes {
         let relative_recipe = recipe
@@ -798,8 +828,8 @@ pub fn classify_build_failure(
         || text.contains("patch failed")
         || text.contains("hunk #") && text.contains("failed");
     if text.contains("ssh:")
-        || text.contains("connection refused")
-        || text.contains("connection timed out")
+        || ((text.contains("connection refused") || text.contains("connection timed out"))
+            && !source_failure)
     {
         BuildFindingClass::Transport
     } else if text.contains("slurm") && (text.contains("error") || text.contains("invalid")) {

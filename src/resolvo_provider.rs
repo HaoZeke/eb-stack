@@ -1135,7 +1135,7 @@ fn matching_ranks_for_key(
         .iter()
         .filter(|(_, index)| {
             let candidate = &candidates[*index];
-            matches_req(&candidate.version, version_requirement)
+            candidate_matches_depreq(candidate, version_requirement)
                 && toolchain
                     .map(|toolchain| {
                         crate::hierarchy::toolchains_match(&candidate.toolchain, toolchain)
@@ -1389,8 +1389,18 @@ fn versions_in_trial_order(
     versions.sort_by(|a, b| cmp_version(b, a));
     versions.dedup();
     // Honour existing policy pins for this package when listing trial versions.
-    if let Some(pin) = policy.pins.iter().find(|p| p.name == name) {
-        versions.retain(|v| matches_req(v, &pin.version_req));
+    if let Some(pin) = policy
+        .pins
+        .iter()
+        .find(|pin| pin.name.eq_ignore_ascii_case(name))
+    {
+        versions.retain(|version| {
+            candidates.iter().any(|candidate| {
+                candidate.name.eq_ignore_ascii_case(name)
+                    && candidate.version == *version
+                    && candidate_matches_depreq(candidate, &pin.version_req)
+            })
+        });
     }
     // With prefer_installed the root is tried at the version already installed
     // before anything newer. The trial loop takes the first version that is
@@ -2424,6 +2434,79 @@ mod tests {
         let selected = solve_with_resolvo(&candidates, &pol, None)
             .expect("joined-module pin must admit the CUDA NVHPC");
         let nvhpc = selected
+            .iter()
+            .find(|candidate| candidate.name == "NVHPC")
+            .expect("NVHPC");
+        assert_eq!(nvhpc.version, "25.3");
+        assert_eq!(nvhpc.versionsuffix.as_deref(), Some("-CUDA-12.8.0"));
+    }
+
+    #[test]
+    fn a_root_policy_pin_uses_depreq_spelling() {
+        let candidates = vec![cand(
+            "NVHPC",
+            "25.3",
+            Some("-CUDA-12.8.0"),
+            "NVHPC-25.3-CUDA-12.8.0.eb",
+            vec![],
+        )];
+        let mut pol = policy(vec!["NVHPC"], vec![]);
+        pol.pins = vec![Pin {
+            name: "NVHPC".into(),
+            version_req: "==25.3-CUDA-12.8.0".into(),
+        }];
+        let selected = solve_with_resolvo(&candidates, &pol, None)
+            .expect("joined-module root pin must list the CUDA NVHPC");
+        let nvhpc = selected
+            .iter()
+            .find(|candidate| candidate.name == "NVHPC")
+            .expect("NVHPC");
+        assert_eq!(nvhpc.version, "25.3");
+        assert_eq!(nvhpc.versionsuffix.as_deref(), Some("-CUDA-12.8.0"));
+    }
+
+    #[test]
+    fn a_stack_pin_uses_depreq_spelling() {
+        let candidates = vec![
+            cand(
+                "NVHPC",
+                "25.3",
+                Some("-CUDA-12.8.0"),
+                "NVHPC-25.3-CUDA-12.8.0.eb",
+                vec![],
+            ),
+            cand(
+                "App",
+                "1.0",
+                None,
+                "App-1.0.eb",
+                vec![DepReq {
+                    name: "NVHPC".into(),
+                    version_req: "==25.3-CUDA-12.8.0".into(),
+                    versionsuffix: None,
+                    toolchain: None,
+                }],
+            ),
+        ];
+        let pol = policy(vec!["App"], vec![]);
+        let stack = StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "site".into(),
+            toolchain: tc(),
+            pins: vec![StackPin {
+                name: "NVHPC".into(),
+                version_requirement: "==25.3-CUDA-12.8.0".into(),
+                toolchain: None,
+                versionsuffix: None,
+                mode: StackPinMode::Locked,
+                source: None,
+            }],
+            exclusions: Vec::new(),
+        };
+        let solved = solve_with_stack_policy(&candidates, &pol, None, &stack)
+            .expect("joined-module stack pin must lock the CUDA NVHPC");
+        let nvhpc = solved
+            .selected
             .iter()
             .find(|candidate| candidate.name == "NVHPC")
             .expect("NVHPC");

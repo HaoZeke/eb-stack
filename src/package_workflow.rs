@@ -349,7 +349,7 @@ fn promote_language_overlay_extras(
         if refuses_pip_overlay(&hole.name) {
             continue;
         }
-        let (version, checksum) = version_from_constraint(Some(hole.version_req.as_str()))
+        let (version, checksum) = named_overlay_hole_version(&hole)
             .map(|version| (version, None))
             .or_else(|| overlay_extension_entry(plan, &hole.name))
             .ok_or_else(|| PackageWorkflowError::OverlayExtraNeedsVersion {
@@ -700,6 +700,18 @@ fn inject_overlay_build_tools(
     }
 }
 
+fn named_overlay_hole_version(
+    hole: &crate::package_solve::UnsatisfiedDirectDependency,
+) -> Option<String> {
+    let requirement = hole.version_req.trim();
+    // SAT writes >=0 for an unconstrained leftover. That is not a version
+    // the metadata named, and must not hide --package-index.
+    if requirement.is_empty() || requirement == ">=0" {
+        return None;
+    }
+    version_from_constraint(Some(requirement))
+}
+
 fn overlay_extension_entry(plan: &PackagePlan, name: &str) -> Option<(String, Option<String>)> {
     if let Some(entry) = plan
         .package_index
@@ -1041,6 +1053,11 @@ pub fn prepare_package_bump(
         resolved_bump_source_checksum(request),
         hierarchy.as_ref(),
     );
+    let recipe_checksums = plan
+        .sources
+        .iter()
+        .map(|source| source.sha256.clone())
+        .collect::<Vec<_>>();
     apply_package_layers(&mut plan, &request.package_layers)
         .map_err(|error| PackageWorkflowError::Config(error.to_string()))?;
     // Layers write [package] version onto the plan. A CLI --version is the
@@ -1062,6 +1079,13 @@ pub fn prepare_package_bump(
                 sha256: Some(checksum.to_string()),
                 ..SourceArtifact::default()
             });
+        }
+    }
+    if plan.package.version != resolved.version && request.source_checksum.is_none() {
+        for (source, original) in plan.sources.iter_mut().zip(recipe_checksums) {
+            if source.sha256 == original {
+                source.sha256 = None;
+            }
         }
     }
     merge_foreign_inspect_deps(&mut plan, request)?;
@@ -2930,6 +2954,11 @@ class Gitpkg(Package):
         let request = bump_request(source, robot.clone(), None, vec![layer], Vec::new());
         let (plan, _) = prepare_package_bump(&request).expect("prepare");
         assert_eq!(plan.package.version, "1.3.2");
+        assert!(
+            plan.sources.iter().all(|source| source.sha256.is_none()),
+            "layer-only version bump must drop the previous archive digest: {:?}",
+            plan.sources
+        );
         let tree = parse_easyconfig_trees(&[robot.as_path()]).expect("robot");
         let bundle = complete_package_bump(&request, plan, &tree.candidates, &request.stack_policy)
             .expect("emit");
@@ -2938,6 +2967,20 @@ class Gitpkg(Package):
             bundle.easyconfigs[0].text.contains("version = '1.3.2'"),
             "layer version must reach the recipe:\n{}",
             bundle.easyconfigs[0].text
+        );
+        assert!(
+            bundle
+                .plan
+                .sources
+                .iter()
+                .all(|source| source.sha256.is_none()),
+            "emitted plan must not keep the 1.1.4 digest: {:?}",
+            bundle.plan.sources
+        );
+        let sbom = bundle.sbom.to_string();
+        assert!(
+            !sbom.contains(&"a".repeat(64)),
+            "SBOM must not publish the previous archive digest: {sbom}"
         );
     }
 
@@ -3266,6 +3309,88 @@ class Gitpkg(Package):
                 .map(|extension| (extension.name.as_str(), extension.version.as_str()))
                 .collect::<Vec<_>>(),
             vec![("foo", "2")]
+        );
+    }
+
+    #[test]
+    fn unconstrained_overlay_hole_uses_the_package_index() {
+        let target = toolchain("system", "system");
+        let mut plan = PackagePlan {
+            schema_version: PACKAGE_SCHEMA_VERSION,
+            origin: PackageOrigin::Pypi,
+            package: PackageMetadata {
+                name: "App".into(),
+                version: "1.0".into(),
+                upstream_version: None,
+                homepage: None,
+                description: None,
+                license: None,
+            },
+            sources: vec![SourceArtifact {
+                sha256: Some("aa".repeat(32)),
+                ..SourceArtifact::default()
+            }],
+            dependencies: vec![DependencyIntent {
+                id: "dep:processx".into(),
+                name: "processx".into(),
+                eb_name: Some("processx".into()),
+                constraint: None,
+                toolchain: None,
+                versionsuffix: None,
+                roles: vec![DependencyRole::Run],
+                condition: ConditionExpr::Always,
+                virtual_capability: None,
+                solver_excluded: false,
+                provenance: Vec::new(),
+            }],
+            rules: Vec::new(),
+            build: BuildSpec {
+                toolchain: target.clone(),
+                easyblock: None,
+                build_systems: Vec::new(),
+                source_root: None,
+                config_options: Vec::new(),
+                moduleclass: None,
+                patches: Vec::new(),
+                easyconfig_parameters: BTreeMap::new(),
+            },
+            profiles: vec![ProductProfile {
+                name: "default".into(),
+                default: true,
+                versionsuffix: Vec::new(),
+                platform: None,
+                architecture: None,
+                features: BTreeMap::new(),
+                parameters: BTreeMap::new(),
+                toolchain_options: BTreeMap::new(),
+                config_options: Vec::new(),
+                easyconfig_parameters: BTreeMap::new(),
+                verification_commands: Vec::new(),
+            }],
+            outputs: vec![OutputRequest {
+                profile: "default".into(),
+                stack: target.label(),
+            }],
+            residuals: Vec::new(),
+            overlay_extensions: Vec::new(),
+            package_index: crate::ecosystem::parse_package_index(
+                "Package: processx\nVersion: 3.8.4\nMD5sum: 1111111111111111111111111111abcd\n",
+            ),
+        };
+        promote_language_overlay_extras(&mut plan, &[], &stack_policy(&target), None)
+            .expect("promote");
+        assert_eq!(
+            plan.overlay_extensions
+                .iter()
+                .map(|extension| (extension.name.as_str(), extension.version.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("processx", "3.8.4")],
+            ">=0 must not hide the index: {:?}",
+            plan.overlay_extensions
+        );
+        assert_eq!(
+            plan.overlay_extensions[0].checksum.as_deref(),
+            Some("md5:1111111111111111111111111111abcd")
         );
     }
 }
