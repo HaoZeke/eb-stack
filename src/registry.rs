@@ -236,9 +236,16 @@ fn sanitize_ingest_name(pkg: &str, version: &str) -> String {
 }
 
 fn unpack_sdist(bytes: &[u8], dest: &Path) -> Result<(), RegistryError> {
+    std::fs::create_dir_all(dest).map_err(|error| RegistryError::Io(dest.to_path_buf(), error))?;
+    if bytes.starts_with(b"PK") {
+        return unpack_zip_sdist(bytes, dest);
+    }
+    unpack_tar_gz_sdist(bytes, dest)
+}
+
+fn unpack_tar_gz_sdist(bytes: &[u8], dest: &Path) -> Result<(), RegistryError> {
     use flate2::read::GzDecoder;
     use tar::Archive;
-    std::fs::create_dir_all(dest).map_err(|error| RegistryError::Io(dest.to_path_buf(), error))?;
     let decoder = GzDecoder::new(std::io::Cursor::new(bytes));
     let mut archive = Archive::new(decoder);
     let entries = archive
@@ -254,6 +261,35 @@ fn unpack_sdist(bytes: &[u8], dest: &Path) -> Result<(), RegistryError> {
                 "sdist member escapes the ingest directory".into(),
             ));
         }
+    }
+    Ok(())
+}
+
+fn unpack_zip_sdist(bytes: &[u8], dest: &Path) -> Result<(), RegistryError> {
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(cursor)
+        .map_err(|error| RegistryError::Parse(format!("zip sdist: {error}")))?;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| RegistryError::Parse(format!("zip sdist: {error}")))?;
+        let Some(name) = entry.enclosed_name() else {
+            return Err(RegistryError::Parse(
+                "sdist member escapes the ingest directory".into(),
+            ));
+        };
+        let path = dest.join(name);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&path).map_err(|error| RegistryError::Io(path, error))?;
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| RegistryError::Io(parent.to_path_buf(), error))?;
+        }
+        let mut out =
+            std::fs::File::create(&path).map_err(|error| RegistryError::Io(path.clone(), error))?;
+        std::io::copy(&mut entry, &mut out).map_err(|error| RegistryError::Io(path, error))?;
     }
     Ok(())
 }
@@ -457,6 +493,50 @@ mod tests {
             !root.path().join("escape.tar.gz").is_file(),
             "must not write outside ingest/pypi"
         );
+    }
+
+    #[test]
+    fn materialize_pypi_unpacks_a_zip_sdist() {
+        use std::io::{Cursor, Write};
+        let mut zip_bytes = Cursor::new(Vec::new());
+        {
+            let mut archive = zip::ZipWriter::new(&mut zip_bytes);
+            let options = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            archive
+                .start_file("demo-1.0.0/pyproject.toml", options)
+                .expect("start");
+            archive
+                .write_all(b"[project]\nname = \"demo\"\n")
+                .expect("write");
+            archive.finish().expect("finish");
+        }
+        let body = zip_bytes.into_inner();
+        let digest = sha256_hex(&body);
+        let mut client = MapClient::default();
+        client.pages.insert(
+            "https://pypi.org/pypi/demo/1.0.0/json".into(),
+            format!(
+                r#"{{
+              "info": {{"name": "demo", "version": "1.0.0"}},
+              "urls": [{{
+                "packagetype": "sdist",
+                "url": "https://files.pythonhosted.org/demo-1.0.0.zip",
+                "filename": "demo-1.0.0.zip",
+                "digests": {{"sha256": "{digest}"}}
+              }}]
+            }}"#
+            )
+            .into_bytes(),
+        );
+        client
+            .pages
+            .insert("https://files.pythonhosted.org/demo-1.0.0.zip".into(), body);
+        let root = tempfile::tempdir().expect("temp");
+        let ingest = materialize_pypi("demo==1.0.0", &client, "https://pypi.org", root.path())
+            .expect("materialize");
+        let tree = ingest.source_tree.expect("zip tree");
+        assert!(tree.join("demo-1.0.0/pyproject.toml").is_file());
     }
 
     #[test]
