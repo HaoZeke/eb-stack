@@ -176,7 +176,10 @@ pub fn resolvo_resolve_dep_versions(
         resolvable.insert(s.name.clone());
     }
     if dep_reqs.is_empty() {
-        return Err("no resolvable deps with hierarchy candidates matching floors".into());
+        return Ok((
+            HashMap::new(),
+            "no unfrozen deps; caller keeps source pins".into(),
+        ));
     }
 
     let mut keep: HashSet<String> = resolvable.iter().cloned().collect();
@@ -1040,5 +1043,23 @@ mod lock_identity_and_bump_pin_tests {
                 .expect("optional miss is soft");
         assert_eq!(map.get("Lib").map(String::as_str), Some("1.0"));
         assert!(!map.contains_key("Extra"));
+    }
+
+    #[test]
+    fn all_frozen_specs_return_an_empty_map() {
+        let cands = vec![candidate("Lib", "1.0", None)];
+        let mut frozen = SourceDepSpec::plain("Lib", "1.0");
+        frozen.system_toolchain = true;
+        let (map, _) = resolvo_resolve_dep_versions(
+            &[frozen],
+            &cands,
+            &hierarchy(),
+            &foss(),
+            "App",
+            "1.0",
+            None,
+        )
+        .expect("frozen-only specs are not a floor miss");
+        assert!(map.is_empty(), "{map:?}");
     }
 }
