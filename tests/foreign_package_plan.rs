@@ -1,5 +1,7 @@
 use eb_stack::package::{package_plan_to_cyclonedx, PackageRuleKind};
-use eb_stack::{package_plan_from_foreign, parse_foreign_path, ForeignFormat, Toolchain};
+use eb_stack::{
+    package_plan_from_foreign, parse_foreign_path, parse_foreign_str, ForeignFormat, Toolchain,
+};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -149,5 +151,54 @@ fn foreign_dependency_names_are_preserved_until_resolution_policy() {
             .iter()
             .any(|dependency| dependency.name == "sccache"),
         "compiler wrappers and build accelerators are not package edges"
+    );
+}
+
+#[test]
+fn spack_build_plus_link_is_a_runtime_edge() {
+    let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let recipe = parse_foreign_str(
+        ForeignFormat::Spack,
+        &format!(
+            r#"
+class Pkg(Package):
+    version("1.0", sha256="{digest}")
+    depends_on("hdf5", type=("build", "link"))
+"#
+        ),
+    )
+    .expect("parse");
+    let plan = package_plan_from_foreign(&recipe, &toolchain());
+    let hdf5 = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "hdf5")
+        .expect("hdf5");
+    assert!(
+        hdf5.roles
+            .iter()
+            .any(|role| matches!(role, eb_stack::package::DependencyRole::Run)),
+        "{hdf5:?}"
+    );
+}
+
+#[test]
+fn cran_sanity_dirs_are_under_the_r_library() {
+    let recipe = parse_foreign_str(ForeignFormat::Cran, "Package: jsonlite\nVersion: 1.8.8\n")
+        .expect("parse");
+    let plan = package_plan_from_foreign(&recipe, &toolchain());
+    let paths = plan.build.easyconfig_parameters.get("sanity_check_paths");
+    let Some(eb_stack::package::EasyconfigValue::Table(table)) = paths else {
+        panic!("sanity_check_paths: {paths:?}");
+    };
+    let Some(eb_stack::package::EasyconfigValue::List(dirs)) = table.get("dirs") else {
+        panic!("dirs: {table:?}");
+    };
+    assert!(
+        dirs.iter().any(|value| matches!(
+            value,
+            eb_stack::package::EasyconfigValue::String(path) if path == "lib/R/library/jsonlite"
+        )),
+        "{dirs:?}"
     );
 }

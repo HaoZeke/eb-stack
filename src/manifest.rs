@@ -276,7 +276,10 @@ fn foreign_easyconfig_parameters(recipe: &ForeignRecipe) -> BTreeMap<String, Eas
         paths.insert("files".into(), EasyconfigValue::List(Vec::new()));
         paths.insert(
             "dirs".into(),
-            EasyconfigValue::List(vec![EasyconfigValue::String(recipe.name.clone())]),
+            EasyconfigValue::List(vec![EasyconfigValue::String(format!(
+                "lib/R/library/{}",
+                recipe.name
+            ))]),
         );
         parameters.insert("sanity_check_paths".into(), EasyconfigValue::Table(paths));
     }
@@ -373,7 +376,7 @@ fn dependency_roles(role: &str) -> Vec<DependencyRole> {
         let role = match value {
             "build" => Some(DependencyRole::Build),
             "host" => Some(DependencyRole::Host),
-            "run" => Some(DependencyRole::Run),
+            "run" | "link" => Some(DependencyRole::Run),
             "test" => Some(DependencyRole::Test),
             _ => None,
         };

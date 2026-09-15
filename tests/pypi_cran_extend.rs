@@ -204,7 +204,8 @@ fn plan_cran_emits_a_single_r_package() {
         recipe.text
     );
     assert!(
-        recipe.text.contains("sanity_check_paths"),
+        recipe.text.contains("sanity_check_paths")
+            && recipe.text.contains("lib/R/library/jsonlite"),
         "{}",
         recipe.text
     );
