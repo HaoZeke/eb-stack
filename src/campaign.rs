@@ -427,7 +427,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         if !output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
             let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-            let evidence = build_failure_evidence(&stdout, &stderr);
+            let evidence = build_failure_evidence(&request.target, &stdout, &stderr);
             let class = classify_build_failure("build", &evidence, "", output.status.code());
             state.findings.push(BuildFinding {
                 id: format!(
@@ -974,12 +974,26 @@ fn compact_evidence(stdout: &str, stderr: &str) -> String {
     compact
 }
 
-fn build_failure_evidence(stdout: &str, stderr: &str) -> String {
+fn build_failure_evidence(target: &BuildTarget, stdout: &str, stderr: &str) -> String {
     let mut evidence = compact_evidence(stdout, stderr);
     let combined = format!("{stdout}\n{stderr}");
     for path in easybuild_output_paths(&combined).into_iter().take(4) {
-        let Ok(nested) = std::fs::read_to_string(&path) else {
-            continue;
+        let nested = if matches!(target.transport, TargetTransport::Local) {
+            match std::fs::read_to_string(&path) {
+                Ok(nested) => nested,
+                Err(_) => match target.read_file(&path) {
+                    Ok(nested) => nested,
+                    Err(_) => continue,
+                },
+            }
+        } else {
+            match target.read_file(&path) {
+                Ok(nested) => nested,
+                Err(_) => match std::fs::read_to_string(&path) {
+                    Ok(nested) => nested,
+                    Err(_) => continue,
+                },
+            }
         };
         evidence.push_str(&format!(
             "\nEasyBuild command output {}:\n{}",

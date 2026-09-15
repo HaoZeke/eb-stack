@@ -476,6 +476,24 @@ impl BuildTarget {
         Ok(destination)
     }
 
+    /// Read a path on the target through the transport, not the controller.
+    ///
+    /// EasyBuild writes command logs under `EASYBUILD_TMPDIR` on the target.
+    /// A controller-local open misses those files and classification then
+    /// sees only the outer `ERROR` line.
+    pub fn read_file(&self, path: &Path) -> Result<String, TargetError> {
+        let plan = self.route_tokens(vec!["cat".into(), path.display().to_string()], false);
+        let output = plan.execute()?;
+        if !output.status.success() {
+            return Err(TargetError::CommandFailed {
+                program: plan.program,
+                exit_code: output.status.code(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
     /// The command that builds one recipe, wrapped by every layer.
     pub fn build_command(&self, recipe: &str) -> CommandPlan {
         self.build_command_with_robot_paths(recipe, &[])
@@ -821,4 +839,33 @@ pub enum TargetError {
         /// What it printed on standard error.
         stderr: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn read_file_uses_the_transport_not_a_controller_open() {
+        let dir = std::env::temp_dir().join("eb-stack-target-read-file");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("nested.out");
+        std::fs::write(&path, "flex: version `GLIBC_2.38' not found\n").expect("write");
+        let target = BuildTarget {
+            name: "local".into(),
+            transport: TargetTransport::Local,
+            executor: TargetExecutor::Direct,
+            runtime: TargetRuntime::Host,
+            easybuild: EasyBuildWorkload {
+                command: "eb".into(),
+                robot_paths: Vec::new(),
+                work_root: "/tmp".into(),
+                tmp_root: "/tmp".into(),
+                environment: BTreeMap::new(),
+            },
+        };
+        let body = target.read_file(&path).expect("cat");
+        assert!(body.contains("GLIBC_2.38"), "{body}");
+    }
 }
