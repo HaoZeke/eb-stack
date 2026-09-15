@@ -566,6 +566,7 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
         stack_policy: parent_stack_policy.as_deref(),
         hierarchy_fixture: parent_hierarchy.as_deref(),
         contributor: parent_contributor.as_deref(),
+        versionsuffix: None,
     };
     let companions = bundle
         .plan

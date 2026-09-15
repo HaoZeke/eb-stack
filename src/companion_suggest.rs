@@ -1,6 +1,7 @@
 //! Copy-paste companion argv for a failed generation bump.
 
 use crate::domain::Toolchain;
+use crate::hierarchy::load_hierarchy_fixture;
 use crate::package_config::PackageConfigLayer;
 use crate::package_sources::map_source_toolchain_to_target;
 use crate::target::shell_quote;
@@ -264,6 +265,8 @@ pub struct CompanionParent<'a> {
     pub hierarchy_fixture: Option<&'a Path>,
     /// Parent `--contributor`, when the bump named one.
     pub contributor: Option<&'a str>,
+    /// Hole `versionsuffix` (`-CUDA-12.6.0`). Source pick only; not reprinted.
+    pub versionsuffix: Option<&'a str>,
 }
 
 /// Full `eb-stack package …` argv. Text after `companion=` is `eval`-able.
@@ -305,7 +308,8 @@ pub fn companion_argv_with(
     let search_roots = with_outdir_overlay(roots.to_vec(), out_dir);
     let pick = SourcePick {
         parent_family: Some(toolchain_name),
-        want_cuda: version_pin.is_some_and(pin_asks_for_cuda),
+        want_cuda: version_pin.is_some_and(pin_asks_for_cuda)
+            || parent.versionsuffix.is_some_and(pin_asks_for_cuda),
     };
     if let Some(source) = find_named_easyconfig_preferring(&search_roots, name, pick) {
         let parent_tc = Toolchain {
@@ -316,7 +320,10 @@ pub fn companion_argv_with(
             name: "system".into(),
             version: "system".into(),
         });
-        let mapped = map_source_toolchain_to_target(Some(&parsed), &parent_tc, None);
+        let hierarchy = parent
+            .hierarchy_fixture
+            .and_then(|path| load_hierarchy_fixture(path).ok());
+        let mapped = map_source_toolchain_to_target(Some(&parsed), &parent_tc, hierarchy.as_ref());
         // Mapper empties SYSTEM version; bump `--toolchain-version` needs `system`.
         let emitted_version = if mapped.is_system() && mapped.version.is_empty() {
             "system"
@@ -339,7 +346,7 @@ pub fn companion_argv_with(
             ));
         }
         push_easyconfig_roots(&mut line, roots, robot);
-        push_parent_context(&mut line, parent, false);
+        push_parent_context(&mut line, parent, false, true);
         line.push_str(&format!(
             " --out-dir {}",
             shell_quote(&out_dir.display().to_string())
@@ -360,7 +367,7 @@ pub fn companion_argv_with(
                 shell_quote(&policy.display().to_string())
             );
             push_easyconfig_roots(&mut line, roots, robot);
-            push_parent_context(&mut line, parent, true);
+            push_parent_context(&mut line, parent, true, false);
             line.push_str(&format!(
                 " --out-dir {}",
                 shell_quote(&out_dir.display().to_string())
@@ -390,6 +397,7 @@ fn push_parent_context(
     line: &mut String,
     parent: CompanionParent<'_>,
     already_has_stack_policy: bool,
+    reprint_hierarchy: bool,
 ) {
     if !already_has_stack_policy {
         if let Some(path) = parent.stack_policy {
@@ -399,11 +407,13 @@ fn push_parent_context(
             ));
         }
     }
-    if let Some(path) = parent.hierarchy_fixture {
-        line.push_str(&format!(
-            " --hierarchy-fixture {}",
-            shell_quote(&path.display().to_string())
-        ));
+    if reprint_hierarchy {
+        if let Some(path) = parent.hierarchy_fixture {
+            line.push_str(&format!(
+                " --hierarchy-fixture {}",
+                shell_quote(&path.display().to_string())
+            ));
+        }
     }
     if let Some(name) = parent.contributor {
         line.push_str(&format!(" --contributor {}", shell_quote(name)));
@@ -1253,6 +1263,7 @@ mod tests {
                 stack_policy: Some(policy.as_path()),
                 hierarchy_fixture: Some(hierarchy.as_path()),
                 contributor: Some("Ada Lovelace"),
+                versionsuffix: None,
             },
         );
         assert!(
@@ -1278,6 +1289,147 @@ mod tests {
         assert!(
             argv.contains("--contributor 'Ada Lovelace'"),
             "parent --contributor must be reprinted: {argv}"
+        );
+    }
+
+    #[test]
+    fn companion_argv_maps_gcccore_through_the_parent_hierarchy_fixture() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path().join("robot");
+        let out = temp.path().join("out");
+        let hierarchy = temp.path().join("foss-2099a.json");
+        fs::create_dir_all(robot.join("c").join("CMake")).expect("cmake dir");
+        fs::write(
+            robot
+                .join("c")
+                .join("CMake")
+                .join("CMake-3.26.3-GCCcore-12.3.0.eb"),
+            "name = 'CMake'\n",
+        )
+        .expect("recipe");
+        fs::write(
+            &hierarchy,
+            r#"{"parent":{"name":"foss","version":"2099a"},"members":[{"name":"system","version":""},{"name":"GCCcore","version":"99.0.0"},{"name":"foss","version":"2099a"}]}"#,
+        )
+        .expect("hierarchy");
+        let argv = companion_argv_with(
+            "CMake",
+            Some("3.26.3"),
+            &[robot.clone()],
+            &[],
+            "foss",
+            "2099a",
+            robot.to_str().expect("utf8"),
+            &out,
+            CompanionParent {
+                hierarchy_fixture: Some(hierarchy.as_path()),
+                ..CompanionParent::default()
+            },
+        );
+        assert!(
+            argv.contains("--toolchain-name GCCcore"),
+            "CMake companion must bump the GCCcore member, got {argv}"
+        );
+        assert!(
+            argv.contains("--toolchain-version 99.0.0"),
+            "fixture GCCcore member must win, got {argv}"
+        );
+        assert!(
+            !argv.contains("--toolchain-version 12.3.0"),
+            "source GCCcore version must not leak through, got {argv}"
+        );
+    }
+
+    #[test]
+    fn companion_argv_sources_the_cuda_file_when_the_hole_names_a_suffix() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path();
+        fs::write(
+            robot.join("OpenMPI-5.0.3-foss-2023a.eb"),
+            "name = 'OpenMPI'\n",
+        )
+        .expect("plain");
+        fs::write(
+            robot.join("OpenMPI-5.0.3-foss-2023a-CUDA-12.6.0.eb"),
+            "name = 'OpenMPI'\n",
+        )
+        .expect("cuda");
+        let argv = companion_argv_with(
+            "OpenMPI",
+            Some("==5.0.3"),
+            &[robot.to_path_buf()],
+            &[],
+            "foss",
+            "2025a",
+            robot.to_str().expect("utf8"),
+            &temp.path().join("out"),
+            CompanionParent {
+                versionsuffix: Some("-CUDA-12.6.0"),
+                ..CompanionParent::default()
+            },
+        );
+        assert!(
+            argv.contains("OpenMPI-5.0.3-foss-2023a-CUDA-12.6.0.eb"),
+            "CUDA hole must source the CUDA file: {argv}"
+        );
+        assert!(
+            !argv.contains("OpenMPI-5.0.3-foss-2023a.eb"),
+            "unsuffixed file must not win a CUDA hole: {argv}"
+        );
+        assert!(
+            !argv.contains("--toolchain-name CUDA"),
+            "CUDA versionsuffix must not become the toolchain: {argv}"
+        );
+    }
+
+    #[test]
+    fn plan_companion_does_not_reprint_hierarchy_fixture() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path().join("robot");
+        let pkg = temp.path().join("packages");
+        let stacks = temp.path().join("stacks");
+        let out = temp.path().join("out");
+        let hierarchy = temp.path().join("site.json");
+        fs::create_dir_all(&robot).expect("robot");
+        fs::create_dir_all(&pkg).expect("pkg");
+        fs::create_dir_all(&stacks).expect("stacks");
+        fs::create_dir_all(temp.path().join("spack").join("py_pspamm")).expect("spack");
+        fs::write(
+            temp.path()
+                .join("spack")
+                .join("py_pspamm")
+                .join("package.py"),
+            "class PyPspamm:\n    pass\n",
+        )
+        .expect("package.py");
+        fs::write(
+            pkg.join("pspamm.toml"),
+            "schema_version = 1\n\n[build]\neasyblock = \"PythonPackage\"\n",
+        )
+        .expect("pspamm toml");
+        fs::write(stacks.join("gfbf-2025a.toml"), "schema_version = 1\n").expect("gfbf stack");
+        fs::write(&hierarchy, "{}\n").expect("hierarchy");
+        let argv = companion_argv_with(
+            "PSpaMM",
+            Some("0.3.1"),
+            &[robot.clone()],
+            &[pkg.join("pspamm.toml")],
+            "foss",
+            "2025a",
+            robot.to_str().expect("utf8"),
+            &out,
+            CompanionParent {
+                hierarchy_fixture: Some(hierarchy.as_path()),
+                ..CompanionParent::default()
+            },
+        );
+        assert!(
+            argv.starts_with("eb-stack package plan "),
+            "expected a plan companion, got {argv}"
+        );
+        assert!(
+            !argv.contains("--hierarchy-fixture"),
+            "package plan rejects --hierarchy-fixture: {argv}"
         );
     }
 }
