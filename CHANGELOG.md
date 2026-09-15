@@ -102,6 +102,8 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A catalog Bravo without a suffix does not veto a `-CUDA` hole. Cycle
+  detection treats `bravo-MPI` and `bravo-CUDA` as distinct steps.
 - Cargo `default = ["extension-module"]` is a Python leftover, matching
   crates.io. Companion layout segments include versionsuffix so `-MPI`
   and `-CUDA` do not overwrite one directory. GCC `-B` for EESSI compat

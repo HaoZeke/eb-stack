@@ -746,12 +746,10 @@ impl ClosureState<'_> {
         hole: &UnsatisfiedDirectDependency,
         path: &[String],
     ) -> Result<(), PackageClosureError> {
-        if path
-            .iter()
-            .any(|step| package_identity(step) == package_identity(&hole.name))
-        {
+        let step = hole_path_step(hole);
+        if path.iter().any(|seen| seen == &step) {
             let mut cycle = path.to_vec();
-            cycle.push(hole.name.clone());
+            cycle.push(step);
             return Err(PackageClosureError::Cycle { path: cycle });
         }
 
@@ -809,7 +807,7 @@ impl ClosureState<'_> {
         )?;
 
         let mut child_path = path.to_vec();
-        child_path.push(prepared.plan().package.name.clone());
+        child_path.push(step);
 
         let companion_bundle = self.close_package(prepared, &companion_policy, &child_path)?;
 
@@ -987,6 +985,7 @@ fn resolve_provider_candidates_for_hole(
         .providers()
         .iter()
         .filter(|provider| package_identity(&provider.name) == package_identity(&hole.name))
+        .filter(|provider| catalog_provider_matches_hole_suffix(provider, hole))
         .collect::<Vec<_>>();
     if !named.is_empty() {
         let compatible = named
@@ -1265,6 +1264,37 @@ fn language_root_already_provided(plan: &PackagePlan, candidates: &[Candidate]) 
     existing_language_provider(&plan.package.name, &admitted).is_some()
 }
 
+fn hole_path_step(hole: &UnsatisfiedDirectDependency) -> String {
+    match hole
+        .versionsuffix
+        .as_deref()
+        .filter(|suffix| !suffix.is_empty())
+    {
+        Some(suffix) => format!("{}{suffix}", hole.name),
+        None => hole.name.clone(),
+    }
+}
+
+fn catalog_provider_matches_hole_suffix(
+    provider: &PackageSourceProvider,
+    hole: &UnsatisfiedDirectDependency,
+) -> bool {
+    if hole
+        .versionsuffix
+        .as_deref()
+        .is_none_or(|suffix| suffix.is_empty())
+    {
+        return true;
+    }
+    if provider.provider != CatalogProviderKind::EasyBuildBump {
+        return false;
+    }
+    let suffix = resolve_easyconfig_file(&provider.source)
+        .ok()
+        .and_then(|resolved| resolved.versionsuffix);
+    hole.matches_versionsuffix(suffix.as_deref())
+}
+
 fn companion_key(provider: &PackageSourceProvider, hole: &UnsatisfiedDirectDependency) -> String {
     format!(
         "{}@{}@{}@{}",
@@ -1420,6 +1450,58 @@ mod tests {
             locks: Vec::new(),
             easyconfigs: Vec::new(),
         }
+    }
+
+    #[test]
+    fn hole_path_step_keeps_suffix() {
+        let mpi = UnsatisfiedDirectDependency {
+            name: "bravo".into(),
+            version_req: "==1.0".into(),
+            versionsuffix: Some("-MPI".into()),
+            build: false,
+        };
+        let cuda = UnsatisfiedDirectDependency {
+            name: "bravo".into(),
+            version_req: "==1.0".into(),
+            versionsuffix: Some("-CUDA".into()),
+            build: false,
+        };
+        assert_ne!(hole_path_step(&mpi), hole_path_step(&cuda));
+        assert_eq!(hole_path_step(&mpi), "bravo-MPI");
+        assert_eq!(hole_path_step(&cuda), "bravo-CUDA");
+    }
+
+    #[test]
+    fn catalog_unsuffixed_provider_does_not_match_a_cuda_hole() {
+        let temp = tempfile::tempdir().expect("temp");
+        let recipe = temp.path().join("bravo-1.0-foss-2026.1.eb");
+        std::fs::write(
+            &recipe,
+            "easyblock = 'ConfigureMake'\nname = 'bravo'\nversion = '1.0'\nhomepage = 'https://example.invalid'\ndescription = 'x'\ntoolchain = {'name': 'foss', 'version': '2026.1'}\nsources = ['bravo-1.0.tar.gz']\nchecksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n",
+        )
+        .expect("write");
+        let provider = PackageSourceProvider {
+            name: "bravo".into(),
+            provider: CatalogProviderKind::EasyBuildBump,
+            version: Some("1.0".into()),
+            source: recipe,
+            format: None,
+            package_config: Vec::new(),
+            source_checksums: Vec::new(),
+            profile: "default".into(),
+            toolchain: Toolchain {
+                name: "foss".into(),
+                version: "2026.1".into(),
+            },
+            stack_policy: None,
+        };
+        let hole = UnsatisfiedDirectDependency {
+            name: "bravo".into(),
+            version_req: "==1.0".into(),
+            versionsuffix: Some("-CUDA".into()),
+            build: false,
+        };
+        assert!(!catalog_provider_matches_hole_suffix(&provider, &hole));
     }
 
     #[test]
