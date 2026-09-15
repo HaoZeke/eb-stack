@@ -6,7 +6,7 @@
 
 use crate::domain::{Candidate, Pin, Policy, StackLock};
 use crate::package::{
-    CandidateExclusion, StackPinMode, StackPinOutcome, StackPolicy, StackPolicySolve,
+    CandidateExclusion, StackPin, StackPinMode, StackPinOutcome, StackPolicy, StackPolicySolve,
     STACK_POLICY_SCHEMA_VERSION,
 };
 use crate::version::{cmp_version, matches_req};
@@ -1190,6 +1190,20 @@ fn solve_feasibility_with_stack_policy(
     }
 }
 
+/// Whether a selected row is the pin's identity: name, toolchain, suffix.
+///
+/// Version is not part of this match. Two interned keys can share a name, and
+/// `find` by name alone reports the first row after the name-only sort.
+fn stack_pin_selected_matches(candidate: &Candidate, pin: &StackPin) -> bool {
+    candidate.name == pin.name
+        && pin.toolchain.as_ref().is_none_or(|toolchain| {
+            crate::hierarchy::toolchains_match(&candidate.toolchain, toolchain)
+        })
+        && pin.versionsuffix.as_deref().is_none_or(|versionsuffix| {
+            candidate.versionsuffix.as_deref().unwrap_or_default() == versionsuffix
+        })
+}
+
 /// Co-select a stack under a policy, honouring site pins and exclusions.
 pub fn solve_with_stack_policy(
     candidates: &[Candidate],
@@ -1229,16 +1243,12 @@ fn solve_with_stack_policy_scope(
         .iter()
         .map(|pin| {
             let preferred_candidate_available = candidates.iter().any(|candidate| {
-                candidate.name == pin.name
+                stack_pin_selected_matches(candidate, pin)
                     && matches_req(&candidate.version, &pin.version_requirement)
-                    && pin.toolchain.as_ref().is_none_or(|toolchain| {
-                        crate::hierarchy::toolchains_match(&candidate.toolchain, toolchain)
-                    })
-                    && pin.versionsuffix.as_deref().is_none_or(|versionsuffix| {
-                        candidate.versionsuffix.as_deref().unwrap_or_default() == versionsuffix
-                    })
             });
-            let selected_candidate = selected.iter().find(|candidate| candidate.name == pin.name);
+            let selected_candidate = selected
+                .iter()
+                .find(|candidate| stack_pin_selected_matches(candidate, pin));
             let selected_version = selected_candidate.map(|candidate| candidate.version.clone());
             let selected_toolchain =
                 selected_candidate.map(|candidate| candidate.toolchain.clone());
@@ -2444,5 +2454,53 @@ mod tests {
             .find(|candidate| candidate.name == "Lib")
             .expect("Lib");
         assert_eq!(lib.version, "1.2");
+    }
+
+    #[test]
+    fn stack_pin_selected_match_uses_name_toolchain_and_suffix() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let gcccore = Toolchain {
+            name: "GCCcore".into(),
+            version: "15.2.0".into(),
+        };
+        let perl = |toolchain: &Toolchain, versionsuffix: Option<&str>| Candidate {
+            name: "Perl".into(),
+            version: "5.38".into(),
+            toolchain: toolchain.clone(),
+            versionsuffix: versionsuffix.map(str::to_string),
+            easyconfig_path: format!("Perl-5.38-{}.eb", toolchain.identity_label()),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+            moduleclass: None,
+        };
+        let selected = vec![perl(&system, None), perl(&gcccore, None)];
+        let pin = StackPin {
+            name: "Perl".into(),
+            version_requirement: "==5.38".into(),
+            toolchain: Some(gcccore.clone()),
+            versionsuffix: None,
+            mode: StackPinMode::Preferred,
+            source: None,
+        };
+        let found = selected
+            .iter()
+            .find(|candidate| stack_pin_selected_matches(candidate, &pin))
+            .expect("GCCcore Perl");
+        assert_eq!(found.toolchain, gcccore);
+
+        let selected = vec![perl(&gcccore, Some("-threads")), perl(&gcccore, None)];
+        let pin = StackPin {
+            versionsuffix: Some("-threads".into()),
+            ..pin
+        };
+        let found = selected
+            .iter()
+            .find(|candidate| stack_pin_selected_matches(candidate, &pin))
+            .expect("suffixed Perl");
+        assert_eq!(found.versionsuffix.as_deref(), Some("-threads"));
     }
 }
