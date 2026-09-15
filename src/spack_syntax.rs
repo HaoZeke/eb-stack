@@ -504,7 +504,7 @@ impl<'a> StaticEvaluator<'a> {
             ast::Expr::Compare(compare) => self.evaluate_comparison(compare),
             ast::Expr::UnaryOp(unary) if unary.op == ast::UnaryOp::Not => self
                 .evaluate(&unary.operand)
-                .and_then(|value| value.as_bool())
+                .and_then(|value| is_truthy(&value))
                 .map(|value| StaticValue::Bool(!value)),
             ast::Expr::IfExp(conditional) => {
                 match self
@@ -870,6 +870,26 @@ class Pkg(Package):
             .filter_map(|call| call.arg_string(0))
             .collect();
         assert_eq!(versions, ["1.0", "2.0"]);
+    }
+
+    #[test]
+    fn not_none_from_missing_dict_get_is_true() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    options = {}
+    if not options.get("skip"):
+        depends_on("backend")
+"#,
+        )
+        .expect("parse");
+        assert!(
+            syntax.calls.iter().any(|call| call.name == "depends_on"
+                && call.arg_string(0).as_deref() == Some("backend")),
+            "not None must keep the body: calls={:?} residuals={:?}",
+            syntax.calls,
+            syntax.residuals
+        );
     }
 
     #[test]
