@@ -893,7 +893,7 @@ pub(crate) fn find_list_assignment_span(
 }
 
 fn find_list_span(src: &str, key: &str) -> Result<Option<(usize, usize)>, EmitError> {
-    let re_hdr = regex::Regex::new(&format!(r"(?m)^(\s*{}\s*=\s*\[)", regex::escape(key)))
+    let re_hdr = regex::Regex::new(&format!(r"(?m)^(\s*{}\s*\+?=\s*\[)", regex::escape(key)))
         .map_err(|e| EmitError::Rewrite(e.to_string()))?;
     let Some(m) = re_hdr.find(src) else {
         return Ok(None);
@@ -955,23 +955,30 @@ fn rewrite_dep_list_selections(
     target_toolchain: &Toolchain,
     hierarchy: &[Toolchain],
 ) -> Result<String, EmitError> {
-    let Some((list_open_end, list_close_start)) = find_list_span(src, key)? else {
-        // No such list — nothing to rewrite (not an error).
-        return Ok(src.to_string());
-    };
-    let body = &src[list_open_end..list_close_start];
-    let new_body = rewrite_dep_tuples_in_body(
-        body,
-        version_overrides,
-        toolchain_overrides,
-        target_toolchain,
-        hierarchy,
-    )?;
-    let mut out = String::with_capacity(src.len() + 32);
-    out.push_str(&src[..list_open_end]);
-    out.push_str(&new_body);
-    out.push_str(&src[list_close_start..]);
-    Ok(out)
+    let mut text = src.to_string();
+    let mut search_from = 0usize;
+    loop {
+        let Some((list_open_end, list_close_start)) = find_list_span(&text[search_from..], key)?
+            .map(|(open, close)| (search_from + open, search_from + close))
+        else {
+            break;
+        };
+        let body = &text[list_open_end..list_close_start];
+        let new_body = rewrite_dep_tuples_in_body(
+            body,
+            version_overrides,
+            toolchain_overrides,
+            target_toolchain,
+            hierarchy,
+        )?;
+        let mut out = String::with_capacity(text.len() + 32);
+        out.push_str(&text[..list_open_end]);
+        out.push_str(&new_body);
+        out.push_str(&text[list_close_start..]);
+        search_from = list_open_end + new_body.len();
+        text = out;
+    }
+    Ok(text)
 }
 
 /// Rewrite the SOURCE tarball entry (the first element) inside a
@@ -1728,6 +1735,35 @@ builddependencies = [
         // Unmentioned dep unchanged.
         assert!(r.text.contains("('FFTW', '3.3.10')"));
         assert!(r.text.contains("homepage = 'https://www.gromacs.org'"));
+    }
+
+    #[test]
+    fn plus_equals_dependency_lists_take_solver_pins() {
+        let src = "\
+name = 'App'
+version = '1.0'
+toolchain = {'name': 'foss', 'version': '2025a'}
+dependencies = [
+    ('zlib', '1.3.1'),
+]
+dependencies += [
+    ('Lib', '0.3.27'),
+]
+";
+        let mut deps = HashMap::new();
+        deps.insert("Lib".into(), "0.3.29".into());
+        let params = EmitParams {
+            toolchain: foss("2025a"),
+            version: None,
+            dep_versions: deps,
+            dep_toolchains: HashMap::new(),
+            source_checksum: None,
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert!(r.text.contains("('Lib', '0.3.29')"), "{}", r.text);
+        assert!(!r.text.contains("('Lib', '0.3.27')"), "{}", r.text);
+        assert!(r.text.contains("('zlib', '1.3.1')"), "{}", r.text);
     }
 
     #[test]
