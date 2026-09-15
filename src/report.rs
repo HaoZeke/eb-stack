@@ -2,6 +2,7 @@
 //! baseline-vs-solved markdown stack diff.
 
 use crate::domain::{LockPackage, StackLock};
+use crate::version::cmp_version;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Return co-selected easyconfig paths in dependency order (deps before apps).
@@ -131,10 +132,24 @@ fn package_row_key(package: &LockPackage) -> String {
     )
 }
 
-/// Multi-row stack-diff join: same name + identity toolchain + suffix, not version.
+/// Toolchain family for a stack-diff join: SYSTEM/dummy collapse, else the name.
+fn package_diff_family(package: &LockPackage) -> &str {
+    if package.toolchain.is_system() {
+        "system"
+    } else {
+        package.toolchain.name.as_str()
+    }
+}
+
+/// Multi-row stack-diff join: same name + toolchain family + suffix, not version.
 fn package_diff_join_key(package: &LockPackage) -> String {
     let key = package.identity_key();
-    format!("{}|{}|{}", key.name, key.toolchain, key.versionsuffix)
+    format!(
+        "{}|{}|{}",
+        key.name,
+        package_diff_family(package),
+        key.versionsuffix
+    )
 }
 
 /// Classification of one logical package between baseline and solved locks.
@@ -183,9 +198,10 @@ pub struct PackageChange {
 
 /// Classify every logical package between baseline and solved locks.
 ///
-/// Single-row names match on name. Multi-row names join on identity
-/// toolchain and suffix, then compare versions so a bump is not
-/// Removed+Added. Result is grouped by package name for stable markdown.
+/// Single-row names match on name. Multi-row names join on toolchain
+/// family and suffix, then pair equal versions before leftover bumps so
+/// a family bump is not Removed+Added and SYSTEM siblings stay distinct.
+/// Result is grouped by package name for stable markdown.
 pub fn classify_stack_diff(baseline: &StackLock, solved: &StackLock) -> Vec<PackageChange> {
     let mut base_by: BTreeMap<&str, Vec<&LockPackage>> = BTreeMap::new();
     for package in &baseline.packages {
@@ -213,20 +229,79 @@ pub fn classify_stack_diff(baseline: &StackLock, solved: &StackLock) -> Vec<Pack
             changes.push(diff_pair(name, base.first().copied(), sol.first().copied()));
             continue;
         }
-        let mut base_id: BTreeMap<String, &LockPackage> = base
-            .iter()
-            .map(|package| (package_diff_join_key(package), *package))
-            .collect();
-        let mut sol_id: BTreeMap<String, &LockPackage> = sol
-            .iter()
-            .map(|package| (package_diff_join_key(package), *package))
-            .collect();
+        let mut base_id: BTreeMap<String, Vec<&LockPackage>> = BTreeMap::new();
+        for package in &base {
+            base_id
+                .entry(package_diff_join_key(package))
+                .or_default()
+                .push(*package);
+        }
+        let mut sol_id: BTreeMap<String, Vec<&LockPackage>> = BTreeMap::new();
+        for package in &sol {
+            sol_id
+                .entry(package_diff_join_key(package))
+                .or_default()
+                .push(*package);
+        }
         let mut keys: BTreeSet<String> = BTreeSet::new();
         keys.extend(base_id.keys().cloned());
         keys.extend(sol_id.keys().cloned());
         for key in keys {
-            changes.push(diff_pair(name, base_id.remove(&key), sol_id.remove(&key)));
+            changes.extend(diff_join_group(
+                name,
+                base_id.remove(&key).unwrap_or_default(),
+                sol_id.remove(&key).unwrap_or_default(),
+            ));
         }
+    }
+    changes
+}
+
+/// Pair one join-key group: equal versions first, then leftover bumps.
+fn diff_join_group(
+    name: &str,
+    mut baseline: Vec<&LockPackage>,
+    mut solved: Vec<&LockPackage>,
+) -> Vec<PackageChange> {
+    baseline.sort_by(|a, b| cmp_version(&a.version, &b.version));
+    solved.sort_by(|a, b| cmp_version(&a.version, &b.version));
+
+    let mut used_sol = vec![false; solved.len()];
+    let mut used_base = vec![false; baseline.len()];
+    let mut changes = Vec::new();
+
+    for (bi, base) in baseline.iter().enumerate() {
+        if let Some(si) = solved
+            .iter()
+            .enumerate()
+            .find(|(si, sol)| !used_sol[*si] && sol.version == base.version)
+            .map(|(si, _)| si)
+        {
+            used_base[bi] = true;
+            used_sol[si] = true;
+            changes.push(diff_pair(name, Some(*base), Some(solved[si])));
+        }
+    }
+
+    let leftover_base: Vec<&LockPackage> = baseline
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !used_base[*i])
+        .map(|(_, package)| *package)
+        .collect();
+    let leftover_sol: Vec<&LockPackage> = solved
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !used_sol[*i])
+        .map(|(_, package)| *package)
+        .collect();
+    let paired = leftover_base.len().max(leftover_sol.len());
+    for i in 0..paired {
+        changes.push(diff_pair(
+            name,
+            leftover_base.get(i).copied(),
+            leftover_sol.get(i).copied(),
+        ));
     }
     changes
 }
@@ -613,6 +688,118 @@ mod tests {
         assert!(
             changes.iter().all(|c| {
                 c.name == "Perl"
+                    && c.kind != PackageChangeKind::Added
+                    && c.kind != PackageChangeKind::Removed
+            }),
+            "{changes:?}"
+        );
+    }
+
+    #[test]
+    fn stack_diff_joins_gcccore_family_across_generation() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let gcc_old = Toolchain {
+            name: "GCCcore".into(),
+            version: "13.2.0".into(),
+        };
+        let gcc_new = Toolchain {
+            name: "GCCcore".into(),
+            version: "14.2.0".into(),
+        };
+        let perl = |version: &str, toolchain: Toolchain, path: &str| LockPackage {
+            name: "Perl".into(),
+            version: version.into(),
+            toolchain,
+            versionsuffix: None,
+            easyconfig_path: path.into(),
+        };
+        let baseline = lock_of(vec![
+            perl("5.38", gcc_old, "Perl-5.38-GCCcore-13.2.0.eb"),
+            perl("5.38", system.clone(), "Perl-5.38.eb"),
+        ]);
+        let solved = lock_of(vec![
+            perl("5.42", gcc_new, "Perl-5.42-GCCcore-14.2.0.eb"),
+            perl("5.38", system, "Perl-5.38.eb"),
+        ]);
+        let changes = classify_stack_diff(&baseline, &solved);
+        assert_eq!(changes.len(), 2, "{changes:?}");
+        let bumped: Vec<_> = changes
+            .iter()
+            .filter(|c| c.kind == PackageChangeKind::VersionBumped)
+            .collect();
+        let unchanged: Vec<_> = changes
+            .iter()
+            .filter(|c| c.kind == PackageChangeKind::Unchanged)
+            .collect();
+        assert_eq!(bumped.len(), 1, "{changes:?}");
+        assert_eq!(unchanged.len(), 1, "{changes:?}");
+        assert_eq!(bumped[0].baseline_version.as_deref(), Some("5.38"));
+        assert_eq!(bumped[0].solved_version.as_deref(), Some("5.42"));
+        assert_eq!(unchanged[0].baseline_version.as_deref(), Some("5.38"));
+        assert_eq!(unchanged[0].solved_version.as_deref(), Some("5.38"));
+        assert!(
+            changes.iter().all(|c| {
+                c.name == "Perl"
+                    && c.kind != PackageChangeKind::Added
+                    && c.kind != PackageChangeKind::Removed
+            }),
+            "{changes:?}"
+        );
+    }
+
+    #[test]
+    fn stack_diff_keeps_system_bootstrap_siblings() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let binutils = |version: &str| LockPackage {
+            name: "binutils".into(),
+            version: version.into(),
+            toolchain: system.clone(),
+            versionsuffix: None,
+            easyconfig_path: format!("binutils-{version}.eb"),
+        };
+        let same = lock_of(vec![binutils("2.40"), binutils("2.42")]);
+        let same_changes = classify_stack_diff(&same, &same);
+        assert_eq!(same_changes.len(), 2, "{same_changes:?}");
+        assert!(
+            same_changes.iter().all(|c| {
+                c.name == "binutils"
+                    && c.kind == PackageChangeKind::Unchanged
+                    && c.baseline_version == c.solved_version
+            }),
+            "{same_changes:?}"
+        );
+        let versions: BTreeSet<_> = same_changes
+            .iter()
+            .filter_map(|c| c.baseline_version.as_deref())
+            .collect();
+        assert_eq!(versions, BTreeSet::from(["2.40", "2.42"]));
+
+        let bumped_lock = lock_of(vec![binutils("2.40"), binutils("2.44")]);
+        let changes = classify_stack_diff(&same, &bumped_lock);
+        assert_eq!(changes.len(), 2, "{changes:?}");
+        let unchanged: Vec<_> = changes
+            .iter()
+            .filter(|c| c.kind == PackageChangeKind::Unchanged)
+            .collect();
+        let bumped: Vec<_> = changes
+            .iter()
+            .filter(|c| c.kind == PackageChangeKind::VersionBumped)
+            .collect();
+        assert_eq!(unchanged.len(), 1, "{changes:?}");
+        assert_eq!(bumped.len(), 1, "{changes:?}");
+        assert_eq!(unchanged[0].baseline_version.as_deref(), Some("2.40"));
+        assert_eq!(unchanged[0].solved_version.as_deref(), Some("2.40"));
+        assert_eq!(bumped[0].baseline_version.as_deref(), Some("2.42"));
+        assert_eq!(bumped[0].solved_version.as_deref(), Some("2.44"));
+        assert!(
+            changes.iter().all(|c| {
+                c.name == "binutils"
                     && c.kind != PackageChangeKind::Added
                     && c.kind != PackageChangeKind::Removed
             }),
