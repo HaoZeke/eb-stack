@@ -815,6 +815,11 @@ pub fn build_graph(
                 });
             };
             let dep_key = ModuleKey::of(picked);
+            if dep_key == key {
+                // A provide is this module. Depending on a name the recipe
+                // ships is already satisfied, not a bootstrap cycle.
+                continue;
+            }
             let node = node_for(&mut graph, &mut index, &dep_key);
             graph.add_edge(node, dependent, kind);
             queue.push(dep_key);
@@ -1164,6 +1169,27 @@ mod tests {
             }
             other => panic!("expected UnknownRoot, got {other}"),
         }
+    }
+
+    #[test]
+    fn a_bundle_depending_on_its_own_provide_is_not_a_cycle() {
+        let mut bundle = candidate(
+            "SciPy-bundle",
+            "2025.06",
+            tc("foss", "2026.1"),
+            vec![dep("numpy", "==2.3.1", None)],
+        );
+        bundle.exts_list = vec![crate::domain::ExtEntry {
+            name: "numpy".into(),
+            version: "2.3.1".into(),
+        }];
+        let order = build_order(&tree(&[bundle]), &["SciPy-bundle".into()], Choice::Newest)
+            .expect("self-provide is not a cycle");
+        assert!(
+            names(&order).iter().any(|s| s.starts_with("SciPy-bundle")),
+            "{:?}",
+            names(&order)
+        );
     }
 
     #[test]
