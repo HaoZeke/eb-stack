@@ -53,8 +53,8 @@ pub use artifact_class::{
 };
 pub use build_order::{build_order, format_order, Choice, ModuleKey, OrderError};
 pub use companion_suggest::{
-    companion_argv, find_foreign_package_py, find_named_easyconfig, find_sibling_package_config,
-    with_outdir_overlay,
+    companion_argv, companion_argv_with, find_foreign_package_py, find_named_easyconfig,
+    find_sibling_package_config, with_outdir_overlay, CompanionParent,
 };
 pub use domain::*;
 pub use easystack::{lock_to_easystack, EasystackOptions};
@@ -240,9 +240,11 @@ pub fn select_baseline_generation(
 
 /// Filter baseline candidates to one generation of the policy toolchain family.
 ///
-/// When the tree only contains the policy target version (single generation), candidates
-/// are left unchanged. When other versions of the same toolchain name exist, applies
+/// When other versions of the same toolchain name exist, applies
 /// [`select_baseline_generation`] (optional explicit override, else nearest lower).
+/// The leftover set is that generation plus its hierarchy members (SYSTEM,
+/// that generation's GCCcore, and the composites), not every non-family
+/// toolchain in the tree.
 pub fn filter_baseline_candidates(
     base_cands: &[Candidate],
     policy_toolchain: &Toolchain,
@@ -263,29 +265,58 @@ pub fn filter_baseline_candidates(
         v
     };
 
-    let only_target = versions.len() == 1 && versions[0] == policy_toolchain.version;
-    if only_target && explicit_baseline_version.is_none() {
-        return Ok(base_cands.to_vec());
-    }
-
-    // Multi-generation (or explicit override): pick one version of this family.
-    if versions.len() > 1
-        || explicit_baseline_version.is_some()
-        || versions.iter().any(|v| v != &policy_toolchain.version)
+    let selected_version = if versions.len() == 1
+        && versions[0] == policy_toolchain.version
+        && explicit_baseline_version.is_none()
     {
-        let bv = select_baseline_generation(
+        versions[0].clone()
+    } else {
+        select_baseline_generation(
             versions.iter().map(|s| s.as_str()),
             &policy_toolchain.version,
             explicit_baseline_version,
-        )?;
-        Ok(base_cands
-            .iter()
-            .filter(|c| c.toolchain.name != policy_toolchain.name || c.toolchain.version == bv)
-            .cloned()
-            .collect())
-    } else {
-        Ok(base_cands.to_vec())
+        )?
+    };
+
+    let selected = Toolchain {
+        name: policy_toolchain.name.clone(),
+        version: selected_version,
+    };
+    Ok(restrict_baseline_to_generation(base_cands, &selected))
+}
+
+/// Keep the selected family toolchain and that generation's hierarchy members.
+///
+/// Unknown generations still keep SYSTEM so bootstrap pins stay; every other
+/// GCCcore is dropped because the generation's compiler is not known.
+fn restrict_baseline_to_generation(
+    base_cands: &[Candidate],
+    selected: &Toolchain,
+) -> Vec<Candidate> {
+    match crate::hierarchy::hierarchy_for_with_tree(selected, None, base_cands) {
+        Ok(h) => filter_toolchain_hierarchy(base_cands, selected, &h.members),
+        Err(_) => {
+            let system = Toolchain {
+                name: "system".into(),
+                version: String::new(),
+            };
+            filter_toolchain_hierarchy(base_cands, selected, std::slice::from_ref(&system))
+        }
     }
+}
+
+/// One newest candidate per package name, so a baseline lock has unique rows.
+fn newest_candidate_per_name(cands: &[Candidate]) -> Vec<Candidate> {
+    let mut best: std::collections::BTreeMap<String, Candidate> = std::collections::BTreeMap::new();
+    for cand in cands {
+        match best.get(&cand.name) {
+            Some(prev) if cmp_version(&cand.version, &prev.version) != Ordering::Greater => {}
+            _ => {
+                best.insert(cand.name.clone(), cand.clone());
+            }
+        }
+    }
+    best.into_values().collect()
 }
 
 /// Write text to a path, creating the parent directory first.
@@ -502,14 +533,24 @@ pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
                 base_root.display()
             );
         }
-        Some(lock_from_candidates(
-            &base_cands,
+        let baseline_tc = base_cands
+            .iter()
+            .find(|c| c.toolchain.name == policy.toolchain.name)
+            .map(|c| c.toolchain.clone())
+            .unwrap_or_else(|| base_cands[0].toolchain.clone());
+        // One row per name: lock_from_candidates of every leftover version
+        // makes StackLock::package None and require_upgrade take the oldest.
+        let newest = newest_candidate_per_name(&base_cands);
+        let mut lock = lock_from_candidates(
+            &newest,
             Some(format!(
                 "baseline-from-eb-{}-{}",
-                base_cands[0].toolchain.name, base_cands[0].toolchain.version
+                baseline_tc.name, baseline_tc.version
             )),
             "eb_parse_baseline",
-        ))
+        );
+        lock.toolchain = baseline_tc;
+        Some(lock)
     } else {
         None
     };
@@ -571,12 +612,32 @@ mod tests {
         assert!(matches!(err, BaselineGenError::NoLowerGeneration { .. }));
     }
 
+    fn cand(name: &str, version: &str, tc_name: &str, tc_version: &str) -> Candidate {
+        Candidate {
+            name: name.into(),
+            version: version.into(),
+            toolchain: Toolchain {
+                name: tc_name.into(),
+                version: tc_version.into(),
+            },
+            versionsuffix: None,
+            easyconfig_path: format!("{name}-{version}-{tc_name}-{tc_version}.eb"),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+            moduleclass: None,
+        }
+    }
+
     #[test]
     fn filter_baseline_candidates_picks_nearest_lower_on_multi_gen_tree() {
         let root = multi_gen_root().join("easyconfigs");
-        let all = parse_easyconfig_tree(&root)
+        let mut all = parse_easyconfig_tree(&root)
             .expect("parse multi-gen")
             .candidates;
+        all.push(cand("CMake", "3.29.3", "GCCcore", "13.3.0"));
+        all.push(cand("CMake", "3.31.0", "GCCcore", "14.2.0"));
+        all.push(cand("zlib", "1.3.1", "system", "system"));
         let policy_tc = Toolchain {
             name: "foss".into(),
             version: "2025b".into(),
@@ -586,18 +647,121 @@ mod tests {
             !filtered.is_empty(),
             "expected baseline candidates for nearest lower gen"
         );
+        let selected = Toolchain {
+            name: "foss".into(),
+            version: "2025a".into(),
+        };
+        let hier = crate::hierarchy::hierarchy_for_with_tree(&selected, None, &all)
+            .expect("foss-2025a hierarchy");
+        assert!(
+            filtered.iter().all(|c| hier.contains(&c.toolchain)),
+            "expected only foss-2025a / that generation, got {:?}",
+            filtered
+                .iter()
+                .map(|c| format!("{}@{}-{}", c.name, c.toolchain.name, c.toolchain.version))
+                .collect::<Vec<_>>()
+        );
         assert!(
             filtered
                 .iter()
-                .all(|c| c.toolchain.name == "foss" && c.toolchain.version == "2025a"),
-            "expected only foss-2025a, got {:?}",
+                .any(|c| c.name == "CMake" && c.toolchain.version == "14.2.0"),
+            "same-generation GCCcore must stay"
+        );
+        assert!(
             filtered
                 .iter()
-                .map(|c| format!("{}-{}", c.toolchain.name, c.toolchain.version))
-                .collect::<Vec<_>>()
+                .any(|c| c.name == "zlib" && c.toolchain.is_system()),
+            "SYSTEM of the selected generation must stay"
+        );
+        assert!(
+            filtered
+                .iter()
+                .all(|c| !(c.name == "CMake" && c.toolchain.version == "13.3.0")),
+            "older-generation CMake @ GCCcore-13.3.0 must be dropped"
         );
         // Must not be the first-in-sort-order generation (2024b).
-        assert!(filtered.iter().all(|c| c.toolchain.version != "2024b"));
+        assert!(filtered
+            .iter()
+            .all(|c| c.toolchain.name != "foss" || c.toolchain.version != "2024b"));
+    }
+
+    #[test]
+    fn newest_candidate_per_name_keeps_one_gromacs() {
+        let got = newest_candidate_per_name(&[
+            cand("GROMACS", "2024.1", "foss", "2025a"),
+            cand("GROMACS", "2024.4", "foss", "2025a"),
+            cand("FFTW", "3.3.10", "foss", "2025a"),
+        ]);
+        let gromacs: Vec<_> = got.iter().filter(|c| c.name == "GROMACS").collect();
+        assert_eq!(gromacs.len(), 1, "baseline lock must have one GROMACS row");
+        assert_eq!(gromacs[0].version, "2024.4");
+    }
+
+    /// foss-2025a has GROMACS 2024.1 and 2024.4; foss-2025b has only 2024.4.
+    /// A dump of every leftover version makes require_upgrade use 2024.1 and
+    /// lock 2024.4. A real lock (newest row per name) is unsatisfiable.
+    #[test]
+    fn solve_from_easyconfigs_with_baseline_version_unsat_when_newest_already_at_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ecs = tmp.path().join("easyconfigs");
+        let write_eb = |gen: &str, name: &str, version: &str, deps: &[(&str, &str)]| {
+            let dir = ecs.join(format!("foss-{gen}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut body = format!(
+                "name = '{name}'\nversion = '{version}'\ntoolchain = {{'name': 'foss', 'version': '{gen}'}}\ndependencies = [\n"
+            );
+            for (dep_name, dep_ver) in deps {
+                body.push_str(&format!("    ('{dep_name}', '{dep_ver}'),\n"));
+            }
+            body.push_str("]\n");
+            std::fs::write(dir.join(format!("{name}-{version}-foss-{gen}.eb")), body).unwrap();
+        };
+        let leaves = [
+            ("OpenBLAS", "0.3.23"),
+            ("OpenMPI", "4.1.5"),
+            ("FFTW", "3.3.10"),
+        ];
+        for gen in ["2025a", "2025b"] {
+            for (name, version) in leaves {
+                write_eb(gen, name, version, &[]);
+            }
+        }
+        write_eb("2025a", "GROMACS", "2024.1", &leaves);
+        write_eb("2025a", "GROMACS", "2024.4", &leaves);
+        write_eb("2025b", "GROMACS", "2024.4", &leaves);
+
+        let policy = tmp.path().join("policy.json");
+        std::fs::write(
+            &policy,
+            r#"{
+  "toolchain": { "name": "foss", "version": "2025b" },
+  "roots": ["GROMACS"],
+  "pins": [],
+  "forbid": [],
+  "objective": "prefer_newer",
+  "require_upgrade": { "name": "GROMACS", "relative_to_baseline": true }
+}
+"#,
+        )
+        .unwrap();
+
+        let err = solve_from_easyconfigs_with_baseline_version(
+            &[ecs.as_path()],
+            &policy,
+            Some(&ecs),
+            None,
+            &tmp.path().join("lock.json"),
+            None,
+        )
+        .expect_err("baseline newest GROMACS is 2024.4; require_upgrade must be unsat");
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("unsatisfiable")
+                || msg.contains("unsat")
+                || msg.contains("no candidate")
+                || msg.contains("newer than baseline"),
+            "unexpected error: {err}"
+        );
     }
 
     /// Full solve-with-baseline path on a tree with three foss generations.
