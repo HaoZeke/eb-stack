@@ -102,6 +102,7 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- EasyBuild's `Couldn't download file` is a Source finding.
 - A failed download whose URL contains `ssh:` is still Source, not
   Transport. Transport stays for SSH/connection failures that are not
   a source fetch.

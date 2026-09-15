@@ -820,6 +820,7 @@ pub fn classify_build_failure(
         || text.contains("download failed")
         || text.contains("unable to download")
         || text.contains("could not download")
+        || text.contains("couldn't download")
         || text.contains("couldn't find file") && text.contains("downloading it didn't work")
         || text.contains("download") && (text.contains("timed out") || text.contains("timeout"));
     let patch_failure = text.contains("failed to apply patch")
@@ -1776,6 +1777,10 @@ mod campaign_signature_tests {
         );
         assert_eq!(
             classify_build_failure("build", "download timed out", "", None),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "Couldn't download file foo.tar.gz", "", None),
             BuildFindingClass::Source
         );
         assert_eq!(
