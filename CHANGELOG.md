@@ -102,6 +102,8 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A stack-policy pin or exclusion named `hdf5` matches a robot `HDF5`
+  candidate instead of failing as an unknown package.
 - `package bump` remaps an explicit dependency toolchain through the
   request hierarchy fixture, so a 4-tuple `GCCcore` pin follows the
   target generation instead of remaining on the source compiler and

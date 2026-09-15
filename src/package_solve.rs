@@ -791,7 +791,7 @@ fn scoped_dependency_name(scope: &str, name: &str) -> String {
 }
 
 fn stack_pin_candidate_matches(candidate: &Candidate, pin: &crate::package::StackPin) -> bool {
-    candidate.name == pin.name
+    candidate.name.eq_ignore_ascii_case(&pin.name)
         && matches_req(&candidate.version, &pin.version_requirement)
         && pin
             .toolchain

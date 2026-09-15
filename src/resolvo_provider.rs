@@ -160,7 +160,14 @@ fn index_keys_by_name<T>(by_key: &HashMap<String, T>) -> HashMap<String, Vec<Str
 }
 
 fn keys_for_name(keys_by_name: &HashMap<String, Vec<String>>, name: &str) -> Vec<String> {
-    keys_by_name.get(name).cloned().unwrap_or_default()
+    if let Some(keys) = keys_by_name.get(name) {
+        return keys.clone();
+    }
+    keys_by_name
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, keys)| keys.clone())
+        .unwrap_or_default()
 }
 
 fn require_upgrade_baseline_version(lock: &StackLock, name: &str) -> Option<String> {
@@ -269,8 +276,9 @@ impl EbProvider {
         if keys.is_empty() && self.widen_cross_generation {
             // A stack policy can admit a closure from another generation on
             // purpose. Ordinary solves stay at or below the recipe.
-            if let Some(all) = self.keys_by_name.get(&dep.name) {
-                return all.clone();
+            let all = keys_for_name(&self.keys_by_name, &dep.name);
+            if !all.is_empty() {
+                return all;
             }
         }
         keys
@@ -1030,8 +1038,9 @@ impl DependencyProvider for EbProvider {
             if sets.is_empty() && self.widen_cross_generation {
                 // A stack policy can admit a closure from another generation on
                 // purpose. Ordinary solves stay at or below the recipe.
-                if let Some(all) = self.keys_by_name.get(&d.name) {
-                    for key in all {
+                let all = keys_for_name(&self.keys_by_name, &d.name);
+                if !all.is_empty() {
+                    for key in &all {
                         if keys.contains(key) {
                             continue;
                         }
@@ -1195,7 +1204,7 @@ fn solve_feasibility_with_stack_policy(
 /// Version is not part of this match. Two interned keys can share a name, and
 /// `find` by name alone reports the first row after the name-only sort.
 fn stack_pin_selected_matches(candidate: &Candidate, pin: &StackPin) -> bool {
-    candidate.name == pin.name
+    candidate.name.eq_ignore_ascii_case(&pin.name)
         && pin.toolchain.as_ref().is_none_or(|toolchain| {
             crate::hierarchy::toolchains_match(&candidate.toolchain, toolchain)
         })
@@ -2502,5 +2511,35 @@ mod tests {
             .find(|candidate| stack_pin_selected_matches(candidate, &pin))
             .expect("suffixed Perl");
         assert_eq!(found.versionsuffix.as_deref(), Some("-threads"));
+    }
+
+    #[test]
+    fn a_stack_pin_matches_a_robot_cased_candidate() {
+        let candidates = vec![cand("HDF5", "1.16.0", None, "HDF5-1.16.0.eb", vec![])];
+        let pol = policy(vec!["HDF5"], vec![]);
+        let stack = StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "site".into(),
+            toolchain: tc(),
+            pins: vec![StackPin {
+                name: "hdf5".into(),
+                version_requirement: "==1.16.0".into(),
+                toolchain: None,
+                versionsuffix: None,
+                mode: StackPinMode::Preferred,
+                source: None,
+            }],
+            exclusions: Vec::new(),
+        };
+        EbProvider::from_universe_with_stack_policy(&candidates, &pol, None, Some(&stack))
+            .expect("hdf5 pin must see robot HDF5");
+        let solved = solve_with_stack_policy(&candidates, &pol, None, &stack).expect("solve");
+        assert!(
+            solved.selected.iter().any(|candidate| {
+                candidate.name.eq_ignore_ascii_case("hdf5") && candidate.version == "1.16.0"
+            }),
+            "{:?}",
+            solved.selected
+        );
     }
 }
