@@ -825,17 +825,20 @@ impl EbProvider {
     }
 }
 
+fn candidate_version_label(candidate: &Candidate) -> String {
+    match candidate.versionsuffix.as_deref() {
+        Some(suffix) if !suffix.is_empty() => format!("{}{suffix}", candidate.version),
+        _ => candidate.version.clone(),
+    }
+}
+
 impl Interner for EbProvider {
     type NameId = NameId;
     type SolvableId = SolvableId;
 
     fn display_solvable(&self, solvable: SolvableId) -> impl Display + '_ {
         // Version (+ versionsuffix when present): resolvo already prefixes display_name.
-        let c = self.candidate_for_solvable(solvable);
-        match &c.versionsuffix {
-            Some(s) if !s.is_empty() => format!("{}{}", c.version, s),
-            _ => c.version.clone(),
-        }
+        candidate_version_label(self.candidate_for_solvable(solvable))
     }
 
     fn display_name(&self, name: NameId) -> impl Display + '_ {
@@ -854,7 +857,7 @@ impl Interner for EbProvider {
         if let Some(ranked) = self.ranks.get(&name) {
             for (rank, idx) in ranked {
                 if range.contains(rank) {
-                    versions.push(self.candidates[*idx].version.clone());
+                    versions.push(candidate_version_label(&self.candidates[*idx]));
                 }
             }
         }
@@ -1642,6 +1645,14 @@ mod tests {
             lib.versionsuffix
         );
         assert_eq!(lib.easyconfig_path, "Lib-1.0.eb");
+    }
+
+    #[test]
+    fn candidate_version_label_includes_the_suffix() {
+        let plain = cand("Lib", "1.0", None, "Lib-1.0.eb", vec![]);
+        let cuda = cand("Lib", "1.0", Some("-CUDA-12.8"), "Lib-1.0-CUDA.eb", vec![]);
+        assert_eq!(candidate_version_label(&plain), "1.0");
+        assert_eq!(candidate_version_label(&cuda), "1.0-CUDA-12.8");
     }
 
     #[test]
