@@ -254,9 +254,15 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
         let mut component = Component::new(Classification::Library, &p.name, &p.version, Some(r));
         component.purl = Purl::from_str(&purl_str).ok();
 
-        if let Some(facts) =
-            artifacts.and_then(|m| m.get(&lock_package_key(p)).or_else(|| m.get(&p.name)))
-        {
+        if let Some(facts) = artifacts.and_then(|m| {
+            m.get(&lock_package_key(p)).or_else(|| {
+                if name_counts.get(&p.name) == Some(&1) {
+                    m.get(&p.name)
+                } else {
+                    None
+                }
+            })
+        }) {
             let mut hashes: Vec<Hash> = Vec::new();
             for stated in &facts.checksums {
                 if let Some(hash) = sha256_hash(stated) {
@@ -585,6 +591,10 @@ fn compositions_statement(stack_ref: &str, unresolved: Option<&[String]>) -> Com
 /// failing the document, since an SBOM missing one component's hashes is worth
 /// more than no SBOM, and the count of what was read is reported to the caller.
 pub fn artifact_facts_for_lock(lock: &StackLock) -> HashMap<String, ArtifactFacts> {
+    let mut name_counts: HashMap<String, u32> = HashMap::new();
+    for package in &lock.packages {
+        *name_counts.entry(package.name.clone()).or_insert(0) += 1;
+    }
     let mut out = HashMap::new();
     for package in &lock.packages {
         if package.easyconfig_path.is_empty() {
@@ -607,7 +617,9 @@ pub fn artifact_facts_for_lock(lock: &StackLock) -> HashMap<String, ArtifactFact
             patches: resolved.patch_names.clone(),
         };
         out.insert(lock_package_key(package), facts.clone());
-        out.insert(package.name.clone(), facts);
+        if name_counts.get(&package.name) == Some(&1) {
+            out.insert(package.name.clone(), facts);
+        }
     }
     out
 }
@@ -1158,6 +1170,97 @@ mod tests {
         assert_ne!(refs[0], refs[1], "{refs:?}");
         assert!(refs.iter().any(|r| r.contains("5.38.0")), "{refs:?}");
         assert!(refs.iter().any(|r| r.contains("5.42.0")), "{refs:?}");
+    }
+
+    #[test]
+    fn a_duplicate_name_does_not_inherit_a_sibling_checksum() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let gcc = Toolchain {
+            name: "GCCcore".into(),
+            version: "15.2.0".into(),
+        };
+        let lock = StackLock {
+            schema_version: 1,
+            toolchain: gcc.clone(),
+            generation_label: None,
+            packages: vec![
+                LockPackage {
+                    name: "Perl".into(),
+                    version: "5.38.0".into(),
+                    toolchain: system,
+                    versionsuffix: None,
+                    easyconfig_path: "Perl-system.eb".into(),
+                },
+                LockPackage {
+                    name: "Perl".into(),
+                    version: "5.42.0".into(),
+                    toolchain: gcc,
+                    versionsuffix: None,
+                    easyconfig_path: "Perl-gcc.eb".into(),
+                },
+            ],
+            solver: SolverMeta {
+                engine: "resolvo".into(),
+                engine_version: "0".into(),
+                timestamp: "2026-08-12T00:00:00Z".into(),
+            },
+        };
+        let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let gcc_key = lock_package_key(&lock.packages[1]);
+        let artifacts = HashMap::from([
+            (
+                gcc_key,
+                ArtifactFacts {
+                    checksums: vec![digest.into()],
+                    source_urls: Vec::new(),
+                    patches: Vec::new(),
+                },
+            ),
+            (
+                "Perl".to_string(),
+                ArtifactFacts {
+                    checksums: vec![digest.into()],
+                    source_urls: Vec::new(),
+                    patches: Vec::new(),
+                },
+            ),
+        ]);
+        let json = lock_to_cyclonedx_with_facts(
+            &lock,
+            SbomFacts {
+                artifacts: Some(&artifacts),
+                ..SbomFacts::default()
+            },
+        );
+        let components = json["components"].as_array().expect("components");
+        let system_perl = components
+            .iter()
+            .find(|component| component["name"] == "Perl" && component["version"] == "5.38.0")
+            .expect("SYSTEM Perl");
+        let gcc_perl = components
+            .iter()
+            .find(|component| component["name"] == "Perl" && component["version"] == "5.42.0")
+            .expect("GCCcore Perl");
+        assert!(system_perl.get("hashes").is_none(), "{system_perl}");
+        let hashes = gcc_perl["hashes"].as_array().expect("GCCcore hashes");
+        assert_eq!(hashes[0]["content"], digest);
+        if let Some(props) = system_perl
+            .get("properties")
+            .and_then(|value| value.as_array())
+        {
+            assert!(
+                props.iter().all(|property| {
+                    !property["name"]
+                        .as_str()
+                        .unwrap_or("")
+                        .starts_with("easybuild:checksum")
+                }),
+                "{props:?}"
+            );
+        }
     }
 
     #[test]
