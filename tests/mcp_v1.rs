@@ -1,5 +1,6 @@
 use eb_stack::mcp::handle_message;
 use serde_json::json;
+use std::path::PathBuf;
 
 #[test]
 fn mcp_catalog_matches_the_version_one_workflows() {
@@ -376,7 +377,7 @@ fn mcp_recipe_lint_reports_style_findings() {
         }
     }))
     .expect("lint response");
-    assert_eq!(response["result"]["isError"], false, "{response}");
+    assert_eq!(response["result"]["isError"], true, "{response}");
     let body = &response["result"]["structuredContent"];
     let results = body["results"].as_array().expect("results");
     assert_eq!(results.len(), 1);
@@ -386,6 +387,36 @@ fn mcp_recipe_lint_reports_style_findings() {
             .map(|findings| !findings.is_empty())
             .unwrap_or(false),
         "expected E501 findings: {body}"
+    );
+}
+
+#[test]
+fn mcp_recipe_lint_surfaces_maintainer_errors() {
+    let recipe = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/maintainer_reject_26435/bad_cross_gen.eb");
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_recipe_lint",
+            "arguments": {
+                "recipes": [recipe]
+            }
+        }
+    }))
+    .expect("lint response");
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let body = &response["result"]["structuredContent"];
+    let results = body["results"].as_array().expect("results");
+    let maintainer = results[0]["maintainer_acceptability"]
+        .as_array()
+        .expect("maintainer");
+    assert!(
+        maintainer.iter().any(|finding| {
+            finding.get("severity").and_then(|value| value.as_str()) == Some("error")
+        }),
+        "expected maintainer error: {body}"
     );
 }
 

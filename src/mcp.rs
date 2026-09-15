@@ -5,7 +5,9 @@ use crate::campaign::{
     FindingResolution,
 };
 use crate::domain::Toolchain;
-use crate::eb_maintainer::{check_duplicate_upstream, check_maintainer_acceptability};
+use crate::eb_maintainer::{
+    check_duplicate_upstream, check_maintainer_acceptability, check_maintainer_acceptability_text,
+};
 use crate::eb_parse::{
     check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,
 };
@@ -93,7 +95,7 @@ pub fn handle_message(message: &Value) -> Option<Value> {
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": match result {
-                    Ok(value) => tool_success(value),
+                    Ok(value) => tool_outcome(value),
                     Err(error) => tool_error(error),
                 }
             }))
@@ -552,7 +554,8 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
             json!({
                 "category": residual.category,
                 "summary": residual.summary,
-                "severity": format!("{:?}", residual.severity),
+                "severity": serde_json::to_value(residual.severity)
+                    .unwrap_or_else(|_| json!("unknown")),
             })
         })
         .collect::<Vec<_>>();
@@ -639,14 +642,37 @@ fn recipe_check(arguments: &Value) -> Result<Value, String> {
 fn recipe_lint(arguments: &Value) -> Result<Value, String> {
     let paths = recipe_paths(arguments)?;
     let mut results = Vec::with_capacity(paths.len());
+    let mut failed = false;
     for path in paths {
         let text = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
+        let findings = lint_style(&text);
+        let report = check_maintainer_acceptability_text(&text);
+        let maintainer = report
+            .findings
+            .iter()
+            .map(|finding| {
+                json!({
+                    "code": finding.code,
+                    "severity": finding.severity,
+                    "message": finding.message,
+                    "evidence": finding.evidence,
+                })
+            })
+            .collect::<Vec<_>>();
+        let maintainer_errors = maintainer
+            .iter()
+            .filter(|finding| finding.get("severity").and_then(Value::as_str) == Some("error"))
+            .count();
+        if !findings.is_empty() || maintainer_errors > 0 {
+            failed = true;
+        }
         results.push(json!({
             "recipe": path,
-            "findings": lint_style(&text),
+            "findings": findings,
+            "maintainer_acceptability": maintainer,
         }));
     }
-    Ok(json!({"results": results}))
+    Ok(json!({"results": results, "ok": !failed}))
 }
 
 fn recipe_format(arguments: &Value) -> Result<Value, String> {
@@ -939,11 +965,12 @@ fn string_map(arguments: &Value, name: &str) -> Result<HashMap<String, String>, 
     }
 }
 
-fn tool_success(value: Value) -> Value {
+fn tool_outcome(value: Value) -> Value {
+    let is_error = value.get("ok") == Some(&Value::Bool(false));
     json!({
         "content": [{"type": "text", "text": serde_json::to_string_pretty(&value).unwrap_or_default()}],
         "structuredContent": value,
-        "isError": false
+        "isError": is_error
     })
 }
 
