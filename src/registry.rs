@@ -147,8 +147,8 @@ pub fn materialize_pypi(
     let dir = ingest_root.join("pypi");
     std::fs::create_dir_all(&dir).map_err(|error| RegistryError::Io(dir.clone(), error))?;
     let dump = dir.join(format!("{}.json", sanitize_ingest_name(pkg, version)));
-    std::fs::write(&dump, &bytes).map_err(|error| RegistryError::Io(dump.clone(), error))?;
     let source_tree = materialize_pypi_sdist(&value, client, &dir, pkg, version)?;
+    std::fs::write(&dump, &bytes).map_err(|error| RegistryError::Io(dump.clone(), error))?;
     Ok(MaterializedIngest { dump, source_tree })
 }
 
@@ -466,6 +466,10 @@ mod tests {
         let error = materialize_pypi("demo==1.0.0", &client, "https://pypi.org", root.path())
             .expect_err("checksum");
         assert!(error.to_string().contains("sha256"), "{error}");
+        assert!(
+            !root.path().join("pypi/demo-1.0.0.json").is_file(),
+            "failed sdist must not cache a warehouse dump"
+        );
     }
 
     #[test]
