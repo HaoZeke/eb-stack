@@ -530,10 +530,10 @@ fn overlay_exts_default_options(plan: &PackagePlan, kind: LanguageBundleKind) ->
 }
 
 fn mesonpy_backend(plan: &PackagePlan) -> bool {
-    plan.build.build_systems.iter().any(|hint| {
-        let hint = hint.to_ascii_lowercase();
-        hint.contains("mesonpy") || hint == "meson"
-    })
+    plan.build
+        .build_systems
+        .iter()
+        .any(|hint| hint.to_ascii_lowercase().contains("mesonpy"))
 }
 
 fn needs_cargo_host_isolation(plan: &PackagePlan) -> bool {
@@ -1334,6 +1334,88 @@ mod tests {
         assert!(
             !emitted[0].text.contains("unset RUSTC_WRAPPER"),
             "a mesonpy package with no Rust must not inherit cargo host isolation:\n{}",
+            emitted[0].text
+        );
+    }
+
+    #[test]
+    fn conda_meson_build_dep_is_not_mesonpy() {
+        let toolchain = crate::domain::Toolchain {
+            name: "foss".into(),
+            version: "2026.1".into(),
+        };
+        let plan = crate::package::PackagePlan {
+            schema_version: crate::package::PACKAGE_SCHEMA_VERSION,
+            origin: crate::package::PackageOrigin::CondaForge,
+            package: crate::package::PackageMetadata {
+                name: "demo".into(),
+                version: "1.0".into(),
+                upstream_version: None,
+                homepage: None,
+                description: None,
+                license: None,
+            },
+            sources: vec![crate::package::SourceArtifact {
+                url: Some("https://example.invalid/demo-1.0.tar.gz".into()),
+                sha256: Some(
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                ),
+                ..Default::default()
+            }],
+            dependencies: Vec::new(),
+            rules: Vec::new(),
+            build: crate::package::BuildSpec {
+                toolchain: toolchain.clone(),
+                easyblock: Some("MesonNinja".into()),
+                build_systems: vec!["Meson".into()],
+                source_root: None,
+                config_options: Vec::new(),
+                moduleclass: Some("lib".into()),
+                patches: Vec::new(),
+                easyconfig_parameters: Default::default(),
+            },
+            profiles: vec![crate::package::ProductProfile {
+                name: "default".into(),
+                default: true,
+                versionsuffix: Vec::new(),
+                platform: None,
+                architecture: None,
+                features: Default::default(),
+                parameters: Default::default(),
+                toolchain_options: Default::default(),
+                config_options: Vec::new(),
+                easyconfig_parameters: Default::default(),
+                verification_commands: Vec::new(),
+            }],
+            outputs: vec![crate::package::OutputRequest {
+                profile: "default".into(),
+                stack: "foss-2026.1".into(),
+            }],
+            residuals: Vec::new(),
+            overlay_extensions: Vec::new(),
+            package_index: Default::default(),
+        };
+        let lock = crate::package::ProfileLock {
+            schema_version: crate::package::PROFILE_LOCK_SCHEMA_VERSION,
+            package: "demo".into(),
+            version: "1.0".into(),
+            profile: "default".into(),
+            toolchain,
+            versionsuffix: String::new(),
+            dependencies: Vec::new(),
+            pin_outcomes: Vec::new(),
+            exclusions: Vec::new(),
+            solver: "resolvo".into(),
+        };
+        let emitted = emit_profile_easyconfigs(&plan, &[lock]).expect("emit");
+        assert!(
+            emitted[0].text.contains("easyblock = 'MesonNinja'"),
+            "conda Meson must stay MesonNinja:\n{}",
+            emitted[0].text
+        );
+        assert!(
+            !emitted[0].text.contains("wrap_mode=default"),
+            "conda Meson must not emit meson-python wrap_mode:\n{}",
             emitted[0].text
         );
     }
