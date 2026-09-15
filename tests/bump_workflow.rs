@@ -1106,6 +1106,105 @@ fn bump_inspects_a_spack_recipe_for_deps_the_easyconfig_never_declared() {
 }
 
 #[test]
+fn bump_inspect_maps_spack_hdf5_onto_robot_hdf5() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Gromacsish-1.0-foss-2023a.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'CMakeMake'\nname = 'Gromacsish'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['gromacsish-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         moduleclass = 'chem'\n",
+    )
+    .expect("source recipe");
+    fs::write(
+        robot.join("HDF5-1.14.6-foss-2025a.eb"),
+        "easyblock = 'CMakeMake'\nname = 'HDF5'\nversion = '1.14.6'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'HDF5'\n\
+         toolchain = {'name': 'foss', 'version': '2025a'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'data'\n",
+    )
+    .expect("HDF5 candidate");
+    let foreign = temp.path().join("package.py");
+    fs::write(
+        &foreign,
+        "from spack.package import *\n\n\
+         class Gromacsish(CMakePackage):\n\
+         \thomepage = 'https://example.invalid/'\n\
+         \turl = 'https://example.invalid/gromacsish-1.0.tar.gz'\n\
+         \tversion('1.0', sha256='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')\n\
+         \tdepends_on('hdf5')\n\
+         \tdepends_on('boost')\n",
+    )
+    .expect("spack recipe");
+    fs::write(
+        robot.join("Boost-1.85.0-GCC-14.2.0.eb"),
+        "easyblock = 'EB_Boost'\nname = 'Boost'\nversion = '1.85.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Boost'\n\
+         toolchain = {'name': 'GCC', 'version': '14.2.0'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'devel'\n",
+    )
+    .expect("Boost candidate");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2025a".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: None,
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: Vec::new(),
+        foreign_sources: vec![foreign],
+    })
+    .expect("bump with hdf5 inspect");
+    let hdf5 = bundle.locks[0]
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "HDF5")
+        .expect("HDF5 locked");
+    assert_eq!(hdf5.version, "1.14.6");
+    assert!(
+        !bundle.locks[0]
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.name == "hdf5"),
+        "lowercase hdf5 must not be the lock identity: {:?}",
+        bundle.locks[0].dependencies
+    );
+    assert!(
+        bundle.easyconfigs[0].text.contains("('HDF5'"),
+        "inspect of Spack hdf5 must emit HDF5:\n{}",
+        bundle.easyconfigs[0].text
+    );
+    assert!(
+        !bundle
+            .plan
+            .residuals
+            .iter()
+            .any(|residual| residual.category.contains("unresolved")
+                && residual.summary.to_ascii_lowercase().contains("hdf5")),
+        "hdf5 must not become an unresolved hole: {:?}",
+        bundle.plan.residuals
+    );
+}
+
+#[test]
 fn toolchain_only_bump_copies_a_sibling_patch_file() {
     let temp = tempfile::tempdir().expect("tempdir");
     let src_dir = temp.path().join("src");

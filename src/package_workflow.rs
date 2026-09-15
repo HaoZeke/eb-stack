@@ -1485,7 +1485,7 @@ fn merge_foreign_inspect_deps(
     for foreign in sources {
         let (foreign_plan, _) = inspect_new_package(&foreign, None, &request.toolchain, &[])?;
         for (index, dependency) in foreign_plan.dependencies.into_iter().enumerate() {
-            let Some(eb_name) = easybuild_name_from_foreign(&dependency.name) else {
+            let Some((name, eb_name)) = easybuild_name_from_foreign(&dependency.name) else {
                 continue;
             };
             if plan.dependencies.iter().any(|existing| {
@@ -1493,16 +1493,18 @@ fn merge_foreign_inspect_deps(
                     .eb_name
                     .as_deref()
                     .unwrap_or(existing.name.as_str());
-                existing_name.eq_ignore_ascii_case(&eb_name)
+                existing_name.eq_ignore_ascii_case(eb_name.as_deref().unwrap_or(&name))
                     || existing.name.eq_ignore_ascii_case(&dependency.name)
+                    || existing.name.eq_ignore_ascii_case(&name)
             }) {
                 continue;
             }
             let foreign_name = dependency.name.clone();
+            let residual_name = eb_name.clone().unwrap_or_else(|| name.clone());
             plan.dependencies.push(DependencyIntent {
-                id: format!("foreign-inspect:{index}:{eb_name}"),
-                name: eb_name.clone(),
-                eb_name: Some(eb_name.clone()),
+                id: format!("foreign-inspect:{index}:{residual_name}"),
+                name,
+                eb_name,
                 constraint: dependency.constraint,
                 toolchain: None,
                 versionsuffix: None,
@@ -1513,12 +1515,12 @@ fn merge_foreign_inspect_deps(
                 provenance: dependency.provenance,
             });
             plan.residuals.push(Residual {
-                id: format!("foreign-inspect-added-dep:{eb_name}"),
+                id: format!("foreign-inspect-added-dep:{residual_name}"),
                 stage: ResidualStage::Resolve,
                 category: "foreign-inspect-added-dep".into(),
                 severity: ResidualSeverity::Mechanical,
                 summary: format!(
-                    "{eb_name} came from package inspect of {}",
+                    "{residual_name} came from package inspect of {}",
                     foreign.display()
                 ),
                 evidence: Some(foreign_name),
@@ -1529,7 +1531,11 @@ fn merge_foreign_inspect_deps(
     Ok(())
 }
 
-fn easybuild_name_from_foreign(name: &str) -> Option<String> {
+/// Map a foreign dependency to `(plan name, optional EasyBuild module)`.
+///
+/// Known remaps set `eb_name`. Unknown names keep their original spelling and
+/// leave `eb_name` unset so the solver can bind `hdf5` to robot `HDF5`.
+fn easybuild_name_from_foreign(name: &str) -> Option<(String, Option<String>)> {
     let lower = name.to_ascii_lowercase();
     if matches!(
         lower.as_str(),
@@ -1552,14 +1558,18 @@ fn easybuild_name_from_foreign(name: &str) -> Option<String> {
         return None;
     }
     let stripped = lower.strip_prefix("py-").unwrap_or(lower.as_str());
-    Some(match stripped {
-        "python" => "Python".into(),
-        "cmake" => "CMake".into(),
-        "pybind11" => "pybind11".into(),
-        "mpi4py" => "mpi4py".into(),
-        "networkx" => "networkx".into(),
-        other => other.to_string(),
-    })
+    let mapped = match stripped {
+        "python" => Some("Python"),
+        "cmake" => Some("CMake"),
+        "pybind11" => Some("pybind11"),
+        "mpi4py" => Some("mpi4py"),
+        "networkx" => Some("networkx"),
+        _ => None,
+    };
+    match mapped {
+        Some(mapped) => Some((mapped.to_string(), Some(mapped.to_string()))),
+        None => Some((name.to_string(), None)),
+    }
 }
 
 fn resolved_bump_source_checksum(request: &BumpPackageRequest) -> Option<&str> {
