@@ -1,7 +1,8 @@
 use eb_stack::campaign::{
-    claim_finding, classify_build_failure, resolve_finding, run_campaign, BuildFindingClass,
-    CampaignRequest, CampaignState, CampaignStatus, ClaimLadder, FindingDisposition,
-    FindingResolution, FindingStatus, CAMPAIGN_SCHEMA_VERSION,
+    claim_finding, classify_build_failure, failure_signature, is_stuck_on_signature,
+    resolve_finding, run_campaign, BuildFinding, BuildFindingClass, CampaignRequest, CampaignState,
+    CampaignStatus, ClaimLadder, FindingDisposition, FindingResolution, FindingStatus,
+    CAMPAIGN_SCHEMA_VERSION, MAX_ATTEMPTS_PER_SIGNATURE,
 };
 use eb_stack::target::{
     BuildTarget, EasyBuildWorkload, TargetExecutor, TargetRuntime, TargetTransport,
@@ -98,6 +99,18 @@ fn failure_classifier_preserves_the_build_error_domain() {
         (
             "env: rustc: No such file or directory",
             BuildFindingClass::Runtime,
+        ),
+        (
+            "ERROR: installation failed",
+            BuildFindingClass::Install,
+        ),
+        (
+            "error: undeclared identifier foo\nERROR: installation failed",
+            BuildFindingClass::Compile,
+        ),
+        (
+            "==> Error: The following packages failed to install:\nERROR: installation failed",
+            BuildFindingClass::Install,
         ),
     ];
     for (log, expected) in cases {
@@ -289,6 +302,7 @@ fn campaign_resume_records_an_abandoned_running_attempt() {
         current_recipe: Some(interrupted_recipe.into()),
         findings: Vec::new(),
         history: Vec::new(),
+        lock_identity: None,
     };
     std::fs::write(
         &state_path,
@@ -865,4 +879,190 @@ fn campaign_cli_claims_and_resolves_findings_for_omp_workers() {
             .expect("state JSON");
     assert_eq!(state["findings"][0]["status"], "resolved");
     assert_eq!(state["findings"][0]["owner"], "omp-worker-1");
+}
+
+#[test]
+fn failure_signature_prefers_the_causal_line_to_the_install_footer() {
+    assert_eq!(
+        failure_signature(
+            "/usr/bin/llvm-config: No such file or directory\nERROR: installation failed\n"
+        ),
+        "/usr/bin/llvm-config: No such file or directory"
+    );
+    assert_eq!(
+        failure_signature(
+            "1 out of 3 hunks FAILED -- saving rejects to file package.py.rej\nERROR: installation failed\n"
+        ),
+        "1 out of 3 hunks FAILED -- saving rejects to file package.py.rej"
+    );
+    assert_eq!(
+        failure_signature("ERROR: installation failed\n"),
+        "verification failed without a recognized error"
+    );
+}
+
+#[test]
+fn failure_signature_strips_tmp_paths_hashes_and_positions() {
+    let first = failure_signature(
+        "/tmp/eb-aaa/work/src/foo.c:12:3: error: undeclared identifier deadbeef\nERROR: installation failed\n",
+    );
+    let second = failure_signature(
+        "/tmp/eb-bbb/work/src/foo.c:44:9: error: undeclared identifier cafebabe\nERROR: installation failed\n",
+    );
+    assert_eq!(first, second);
+    assert_eq!(first, "<tmp> error: undeclared identifier <hash>");
+}
+
+#[test]
+fn distinct_cmake_messages_do_not_share_a_signature() {
+    let taskflow = failure_signature(
+        "CMake Error at CMakeLists.txt:100 (message):\n\n  Taskflow currently supports the following compilers:\n\nERROR: installation failed\n",
+    );
+    let cgal = failure_signature(
+        "CMake Error at cmake/macros/macro_configure_feature.cmake:111 (message):\n\n  Could not find the cgal library!\n\nERROR: installation failed\n",
+    );
+    assert_eq!(
+        taskflow,
+        "CMake Error: Taskflow currently supports the following compilers:"
+    );
+    assert_eq!(cgal, "CMake Error: Could not find the cgal library!");
+    assert_ne!(taskflow, cgal);
+}
+
+#[test]
+fn two_identical_signatures_are_stuck() {
+    let signature = failure_signature(
+        "/tmp/eb-aaa/foo.c:12:3: error: undeclared identifier deadbeef\nERROR: installation failed\n",
+    );
+    let finding = |attempt: u32| BuildFinding {
+        id: format!("attempt:{attempt}:finding:1"),
+        class: BuildFindingClass::Compile,
+        disposition: FindingDisposition::RequiresJudgment,
+        stage: "build".into(),
+        recipe: "easyconfigs/e/eOn/eOn.eb".into(),
+        target: "test-builder".into(),
+        summary: "compile".into(),
+        evidence: String::new(),
+        command: eb_stack::target::CommandPlan {
+            program: "eb".into(),
+            args: vec![],
+        },
+        exit_code: Some(1),
+        attempt,
+        signature: Some(signature.clone()),
+        status: FindingStatus::Open,
+        owner: None,
+        resolution: None,
+    };
+    let mut state = CampaignState {
+        schema_version: CAMPAIGN_SCHEMA_VERSION,
+        package: "eOn".into(),
+        version: "2.16.0".into(),
+        bundle: "bundle".into(),
+        target: "test-builder".into(),
+        status: CampaignStatus::Failed,
+        attempts: 1,
+        claims: ClaimLadder {
+            resolves: true,
+            builds: false,
+            binary_verified: false,
+        },
+        current_recipe: None,
+        findings: vec![finding(1)],
+        history: Vec::new(),
+        lock_identity: None,
+    };
+    assert_eq!(MAX_ATTEMPTS_PER_SIGNATURE, 2);
+    assert!(!is_stuck_on_signature(&state, &signature));
+    state.findings.push(finding(2));
+    assert!(is_stuck_on_signature(&state, &signature));
+}
+
+#[test]
+fn campaign_records_a_signature_and_stuck_history_on_repeat() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipes = bundle.join("easyconfigs/e/eOn");
+    std::fs::create_dir_all(&recipes).expect("recipes");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"eOn","version":"2.16.0"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .expect("lock");
+    write_valid_recipe(&recipes.join("eOn.eb"), "eOn", "2.16.0");
+    let command = temp.path().join("fake-eb");
+    std::fs::write(
+        &command,
+        "#!/bin/sh\nprintf '%s\\n' 'error: undeclared identifier foo'\nprintf '%s\\n' 'ERROR: installation failed'\nexit 1\n",
+    )
+    .expect("command");
+    let mut permissions = std::fs::metadata(&command).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&command, permissions).expect("permissions");
+    let request = CampaignRequest {
+        bundle,
+        target: target(command.to_str().expect("command path")),
+        state_path: temp.path().join("campaign.json"),
+    };
+    let first = run_campaign(&request).expect("first attempt");
+    assert_eq!(first.findings[0].class, BuildFindingClass::Compile);
+    assert_eq!(
+        first.findings[0].signature.as_deref(),
+        Some("error: undeclared identifier foo")
+    );
+    assert!(first
+        .history
+        .iter()
+        .all(|event| !event.detail.contains("stuck on signature")));
+    let second = run_campaign(&request).expect("second attempt");
+    assert!(
+        second.history.iter().any(|event| event
+            .detail
+            .contains("stuck on signature after 2 identical failures")),
+        "{:?}",
+        second.history
+    );
+}
+
+#[test]
+fn campaign_records_a_lock_identity_change_on_resume() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipes = bundle.join("easyconfigs/e/eOn");
+    std::fs::create_dir_all(&recipes).expect("recipes");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"eOn","version":"2.16.0"}}"#,
+    )
+    .expect("manifest");
+    let lock = bundle.join("locks/default.lock.json");
+    std::fs::write(&lock, r#"{"profile":"default","solver":"resolvo"}"#).expect("lock");
+    write_valid_recipe(&recipes.join("eOn.eb"), "eOn", "2.16.0");
+    let request = CampaignRequest {
+        bundle: bundle.clone(),
+        target: target("true"),
+        state_path: temp.path().join("campaign.json"),
+    };
+    let first = run_campaign(&request).expect("first campaign");
+    assert_eq!(first.status, CampaignStatus::Completed);
+    let original = first.lock_identity.clone().expect("lock identity");
+    std::fs::write(&lock, r#"{"profile":"default","solver":"resolvo","x":1}"#).expect("rewrite");
+    let second = run_campaign(&request).expect("resumed campaign");
+    let changed = second.lock_identity.clone().expect("new lock identity");
+    assert_ne!(original, changed);
+    assert!(
+        second
+            .history
+            .iter()
+            .any(|event| event.detail.contains("lock identity changed")),
+        "{:?}",
+        second.history
+    );
 }

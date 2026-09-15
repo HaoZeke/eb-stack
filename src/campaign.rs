@@ -155,6 +155,9 @@ pub struct BuildFinding {
     pub exit_code: Option<i32>,
     /// Attempt number this arose on.
     pub attempt: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Noise-stripped causal line used to detect a stuck retry loop.
+    pub signature: Option<String>,
     #[serde(default)]
     /// How far it has been taken.
     pub status: FindingStatus,
@@ -224,7 +227,14 @@ pub struct CampaignState {
     #[serde(default)]
     /// Ordered record of what happened.
     pub history: Vec<CampaignEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// SHA-256 of the bundle lock files. A recipe edit that does not change
+    /// SAT keeps this identity; a new lock is a new DAG.
+    pub lock_identity: Option<String>,
 }
+
+/// Identical causal signatures this many times means the retry is stuck.
+pub const MAX_ATTEMPTS_PER_SIGNATURE: u32 = 2;
 
 /// Run a campaign to completion or to its first unresolved failure.
 ///
@@ -282,8 +292,22 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
             current_recipe: None,
             findings: Vec::new(),
             history: Vec::new(),
+            lock_identity: None,
         }
     };
+
+    let identity = lock_identity(&locks);
+    if let (Some(previous), Some(current)) = (state.lock_identity.as_ref(), identity.as_ref()) {
+        if previous != current {
+            state.history.push(CampaignEvent {
+                attempt: state.attempts,
+                status: state.status,
+                recipe: None,
+                detail: format!("lock identity changed from {previous} to {current}"),
+            });
+        }
+    }
+    state.lock_identity = identity;
 
     record_interrupted_attempt(&mut state, &request.state_path);
     state.attempts += 1;
@@ -328,13 +352,14 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 recipe: recipe_text.clone(),
                 target: request.target.name.clone(),
                 summary: "recipe packaging preflight failed".into(),
-                evidence,
+                evidence: evidence.clone(),
                 command: CommandPlan {
                     program: "recipe-metadata-gate".into(),
                     args: vec![recipe.display().to_string()],
                 },
                 exit_code: None,
                 attempt: state.attempts,
+                signature: Some(failure_signature(&evidence)),
                 status: FindingStatus::Open,
                 owner: None,
                 resolution: None,
@@ -368,13 +393,14 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 recipe: String::new(),
                 target: request.target.name.clone(),
                 summary: "package bundle staging failed".into(),
-                evidence,
+                evidence: evidence.clone(),
                 command: CommandPlan {
                     program: "stage-bundle".into(),
                     args: vec![request.bundle.display().to_string()],
                 },
                 exit_code: None,
                 attempt: state.attempts,
+                signature: Some(failure_signature(&evidence)),
                 status: FindingStatus::Open,
                 owner: None,
                 resolution: None,
@@ -429,6 +455,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
             let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
             let evidence = build_failure_evidence(&request.target, &stdout, &stderr);
             let class = classify_build_failure("build", &evidence, "", output.status.code());
+            let signature = failure_signature(&evidence);
             state.findings.push(BuildFinding {
                 id: format!(
                     "attempt:{}:finding:{}",
@@ -445,17 +472,25 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 command,
                 exit_code: output.status.code(),
                 attempt: state.attempts,
+                signature: Some(signature.clone()),
                 status: FindingStatus::Open,
                 owner: None,
                 resolution: None,
             });
             state.status = CampaignStatus::Failed;
             state.current_recipe = None;
+            let stuck = is_stuck_on_signature(&state, &signature);
             state.history.push(CampaignEvent {
                 attempt: state.attempts,
                 status: CampaignStatus::Failed,
                 recipe: Some(recipe_text),
-                detail: format!("classified build failure as {class:?}"),
+                detail: if stuck {
+                    format!(
+                        "classified build failure as {class:?}; stuck on signature after {MAX_ATTEMPTS_PER_SIGNATURE} identical failures: {signature}"
+                    )
+                } else {
+                    format!("classified build failure as {class:?} [{signature}]")
+                },
             });
             write_state(&request.state_path, &state)?;
             return Ok(state);
@@ -516,6 +551,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
                 let class =
                     classify_build_failure("verify", &stdout, &stderr, output.status.code());
+                let signature = failure_signature(&format!("{stdout}\n{stderr}"));
                 state.findings.push(BuildFinding {
                     id: format!(
                         "attempt:{}:finding:{}",
@@ -536,16 +572,24 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                     command,
                     exit_code: output.status.code(),
                     attempt: state.attempts,
+                    signature: Some(signature.clone()),
                     status: FindingStatus::Open,
                     owner: None,
                     resolution: None,
                 });
                 state.status = CampaignStatus::Failed;
+                let stuck = is_stuck_on_signature(&state, &signature);
                 state.history.push(CampaignEvent {
                     attempt: state.attempts,
                     status: CampaignStatus::Failed,
                     recipe: Some(format!("profile:{}", profile.name)),
-                    detail: format!("classified binary verification failure as {class:?}"),
+                    detail: if stuck {
+                        format!(
+                            "classified binary verification failure as {class:?}; stuck on signature after {MAX_ATTEMPTS_PER_SIGNATURE} identical failures: {signature}"
+                        )
+                    } else {
+                        format!("classified binary verification failure as {class:?} [{signature}]")
+                    },
                 });
                 write_state(&request.state_path, &state)?;
                 return Ok(state);
@@ -599,6 +643,7 @@ fn record_interrupted_attempt(state: &mut CampaignState, state_path: &Path) {
         },
         exit_code: None,
         attempt,
+        signature: None,
         status: FindingStatus::Superseded,
         owner: None,
         resolution: Some(FindingResolution {
@@ -788,8 +833,7 @@ pub fn classify_build_failure(
         BuildFindingClass::Test
     } else if text.contains("sanity check failed") {
         BuildFindingClass::Sanity
-    } else if text.contains("error:")
-        || text.contains("compilation terminated")
+    } else if has_compiler_error_line(&text)
         || stage.eq_ignore_ascii_case("build") && text.contains("make") && text.contains("***")
     {
         BuildFindingClass::Compile
@@ -802,6 +846,186 @@ pub fn classify_build_failure(
     } else {
         BuildFindingClass::Unknown
     }
+}
+
+/// First causal error line, with path, hash, and position noise stripped.
+pub fn failure_signature(text: &str) -> String {
+    let lines = text.lines().collect::<Vec<_>>();
+    for (index, line) in lines.iter().enumerate() {
+        if is_generic_failure_footer(line) {
+            continue;
+        }
+        if line.to_ascii_lowercase().contains("cmake error") {
+            return cmake_error_signature(&lines, index);
+        }
+        if let Some(signature) = signature_from_line(line) {
+            return normalize_signature(&signature);
+        }
+    }
+    "verification failed without a recognized error".into()
+}
+
+/// How many findings already carry this exact signature.
+pub fn signature_repeat_count(state: &CampaignState, signature: &str) -> u32 {
+    state
+        .findings
+        .iter()
+        .filter(|finding| finding.signature.as_deref() == Some(signature))
+        .count() as u32
+}
+
+/// True once [`MAX_ATTEMPTS_PER_SIGNATURE`] findings share `signature`.
+pub fn is_stuck_on_signature(state: &CampaignState, signature: &str) -> bool {
+    !signature.is_empty() && signature_repeat_count(state, signature) >= MAX_ATTEMPTS_PER_SIGNATURE
+}
+
+fn is_generic_failure_footer(line: &str) -> bool {
+    let line = line.trim().to_ascii_lowercase();
+    let stripped = line
+        .strip_prefix("==> error:")
+        .or_else(|| line.strip_prefix("error:"))
+        .map(str::trim)
+        .unwrap_or(line.as_str());
+    stripped == "installation failed"
+        || stripped.starts_with("the following packages failed to install")
+        || stripped.starts_with("build of ") && stripped.contains(" failed")
+        || stripped.starts_with("installation of ") && stripped.contains(" failed")
+}
+
+fn has_compiler_error_line(text: &str) -> bool {
+    text.lines().any(|line| {
+        if is_generic_failure_footer(line) {
+            return false;
+        }
+        let line = line.to_ascii_lowercase();
+        line.contains("error:") || line.contains("compilation terminated")
+    })
+}
+
+fn cmake_error_signature(lines: &[&str], index: usize) -> String {
+    for message in lines.iter().skip(index + 1).take(8) {
+        let message = message.trim();
+        if message.is_empty() {
+            continue;
+        }
+        let lower = message.to_ascii_lowercase();
+        if lower.starts_with("call stack") || message.starts_with("--") {
+            continue;
+        }
+        return normalize_signature(&format!("CMake Error: {message}"));
+    }
+    normalize_signature(lines[index].trim())
+}
+
+fn signature_from_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if let Some(idx) = lower.find(": no such file or directory") {
+        return Some(trimmed[..idx + ": no such file or directory".len()].to_string());
+    }
+    if lower.contains("hunks failed")
+        || lower.contains("fatal error:")
+        || lower.contains("==> error:")
+        || lower.contains("error:")
+        || lower.contains("failed:")
+        || lower.contains("modulenotfounderror:")
+        || lower.contains("importerror:")
+    {
+        return Some(trimmed.to_string());
+    }
+    None
+}
+
+fn normalize_signature(signature: &str) -> String {
+    let collapsed = collapse_signature_noise(signature);
+    collapsed.chars().take(200).collect()
+}
+
+fn collapse_signature_noise(signature: &str) -> String {
+    let chars = signature.chars().collect::<Vec<_>>();
+    let mut out = String::new();
+    let mut i = 0;
+    let mut last_was_space = false;
+    while i < chars.len() {
+        if chars[i..].starts_with(&['/', 't', 'm', 'p', '/']) {
+            out.push_str("<tmp>");
+            i += 5;
+            while i < chars.len() && !matches!(chars[i], ' ' | '\t' | '\'' | '"') {
+                i += 1;
+            }
+            last_was_space = false;
+            continue;
+        }
+        if chars[i] == ':' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
+            let mut j = i + 1;
+            while j < chars.len() && chars[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j < chars.len() && chars[j] == ':' {
+                let mut k = j + 1;
+                while k < chars.len() && chars[k].is_ascii_digit() {
+                    k += 1;
+                }
+                if k > j + 1 {
+                    out.push_str(":<pos>");
+                    i = k;
+                    last_was_space = false;
+                    continue;
+                }
+            }
+        }
+        if chars[i].is_ascii_hexdigit() {
+            let at_boundary = i == 0 || !chars[i - 1].is_ascii_alphanumeric();
+            if at_boundary {
+                let mut j = i;
+                while j < chars.len() && chars[j].is_ascii_hexdigit() {
+                    j += 1;
+                }
+                let after_ok = j == chars.len() || !chars[j].is_ascii_alphanumeric();
+                if j - i >= 7 && after_ok {
+                    out.push_str("<hash>");
+                    i = j;
+                    last_was_space = false;
+                    continue;
+                }
+            }
+        }
+        if chars[i].is_whitespace() {
+            if !last_was_space && !out.is_empty() {
+                out.push(' ');
+                last_was_space = true;
+            }
+            i += 1;
+            continue;
+        }
+        out.push(chars[i]);
+        last_was_space = false;
+        i += 1;
+    }
+    out.trim().to_string()
+}
+
+fn lock_identity(locks: &[PathBuf]) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    if locks.is_empty() {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    for path in locks {
+        let name = path.file_name()?.to_string_lossy();
+        let bytes = std::fs::read(path).ok()?;
+        hasher.update(name.as_bytes());
+        hasher.update([0xff]);
+        hasher.update(&bytes);
+        hasher.update([0xff]);
+    }
+    Some(
+        hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    )
 }
 
 fn record_target_command_failure(
@@ -829,6 +1053,7 @@ fn record_target_command_failure(
         command,
         exit_code: None,
         attempt: state.attempts,
+        signature: Some(failure_signature(&error.to_string())),
         status: FindingStatus::Open,
         owner: None,
         resolution: None,
@@ -1350,5 +1575,41 @@ mod campaign_lock_tests {
         ));
 
         drop(lock);
+    }
+}
+
+#[cfg(test)]
+mod campaign_signature_tests {
+    use super::*;
+
+    #[test]
+    fn generic_install_footer_is_not_a_compiler_error() {
+        assert!(!has_compiler_error_line("error: installation failed"));
+        assert!(has_compiler_error_line(
+            "error: undeclared identifier foo\nerror: installation failed"
+        ));
+    }
+
+    #[test]
+    fn lock_identity_is_stable_for_the_same_bytes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("default.lock.json");
+        std::fs::write(&path, r#"{"profile":"default","solver":"resolvo"}"#).expect("lock");
+        let first = lock_identity(std::slice::from_ref(&path));
+        let second = lock_identity(&[path]);
+        assert_eq!(first, second);
+        assert_eq!(first.as_ref().map(String::len), Some(64));
+    }
+
+    #[test]
+    fn lock_identity_changes_when_lock_bytes_change() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("default.lock.json");
+        std::fs::write(&path, r#"{"profile":"default","solver":"resolvo"}"#).expect("lock");
+        let before = lock_identity(std::slice::from_ref(&path)).expect("identity");
+        std::fs::write(&path, r#"{"profile":"default","solver":"resolvo","x":1}"#)
+            .expect("rewrite");
+        let after = lock_identity(&[path]).expect("identity");
+        assert_ne!(before, after);
     }
 }
