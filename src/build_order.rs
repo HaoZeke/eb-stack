@@ -709,8 +709,12 @@ pub fn build_graph(
                 .flatten()
                 .copied()
                 .filter(|c| {
-                    c.version == candidate.toolchain.version
-                        && c.versionsuffix.as_deref().unwrap_or("").is_empty()
+                    let suffix = c.versionsuffix.as_deref().unwrap_or("");
+                    if suffix.is_empty() {
+                        c.version == candidate.toolchain.version
+                    } else {
+                        format!("{}{suffix}", c.version) == candidate.toolchain.version
+                    }
                 })
                 .collect();
             let system_defs: Vec<&Candidate> = admissible
@@ -1598,6 +1602,30 @@ mod tests {
                 "CUDA GCC must not win the toolchain line: {seq:?}"
             );
         }
+    }
+
+    #[test]
+    fn toolchain_edge_accepts_a_glued_binutils_suffix() {
+        let mut gcc = candidate("GCC", "8.2.0", tc("system", "system"), vec![]);
+        gcc.versionsuffix = Some("-2.31.1".into());
+        let app = candidate("App", "1.0", tc("GCC", "8.2.0-2.31.1"), vec![]);
+        let order = build_order(&tree(&[gcc, app]), &["App".into()], Choice::Newest)
+            .expect("glued GCC 8.2.0-2.31.1");
+        let seq = names(&order);
+        assert!(
+            seq.iter()
+                .any(|name| name.contains("GCC") && name.contains("8.2.0")),
+            "{seq:?}"
+        );
+        let gcc_idx = seq
+            .iter()
+            .position(|name| name.contains("GCC"))
+            .expect("GCC");
+        let app_idx = seq
+            .iter()
+            .position(|name| name.contains("App"))
+            .expect("App");
+        assert!(gcc_idx < app_idx, "{seq:?}");
     }
 
     #[test]
