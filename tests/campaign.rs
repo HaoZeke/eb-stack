@@ -168,6 +168,14 @@ fn campaign_interns_easybuild_command_output_before_classifying() {
     .expect("campaign finding");
     assert_eq!(state.findings[0].class, BuildFindingClass::Runtime);
     assert!(state.findings[0].evidence.contains("GLIBC_2.38"));
+    assert!(
+        state.findings[0]
+            .signature
+            .as_deref()
+            .is_some_and(|signature| signature.contains("GLIBC")),
+        "{:?}",
+        state.findings[0].signature
+    );
     assert!(state.findings[0]
         .evidence
         .contains(&nested_log.display().to_string()));
@@ -362,6 +370,7 @@ fn campaign_resume_records_an_abandoned_running_attempt() {
         findings: Vec::new(),
         history: Vec::new(),
         lock_identity: None,
+        lock_epoch_start_attempt: 0,
     };
     std::fs::write(
         &state_path,
@@ -979,6 +988,33 @@ error: undeclared identifier foo
 }
 
 #[test]
+fn failure_signature_prefers_interned_body_without_error_to_the_v5_banner() {
+    let glibc = "\
+ERROR: Shell command failed!
+EasyBuild command output /tmp/eb-xxx/out.txt:
+flex: /lib64/libc.so.6: version `GLIBC_2.38' not found
+";
+    let make = "\
+ERROR: Shell command failed!
+EasyBuild command output /tmp/eb-xxx/out.txt:
+make: *** [foo.o] Error 2
+";
+    let glibc_signature = failure_signature(glibc);
+    let make_signature = failure_signature(make);
+    assert!(
+        !glibc_signature.eq_ignore_ascii_case("ERROR: Shell command failed!"),
+        "{glibc_signature}"
+    );
+    assert!(
+        !glibc_signature.contains("Shell command failed"),
+        "{glibc_signature}"
+    );
+    assert!(glibc_signature.contains("GLIBC"), "{glibc_signature}");
+    assert_ne!(glibc_signature, make_signature);
+    assert!(make_signature.contains("***"), "{make_signature}");
+}
+
+#[test]
 fn failure_signature_strips_tmp_paths_hashes_and_positions() {
     let first = failure_signature(
         "/tmp/eb-aaa/work/src/foo.c:12:3: error: undeclared identifier deadbeef\nERROR: installation failed\n",
@@ -988,6 +1024,30 @@ fn failure_signature_strips_tmp_paths_hashes_and_positions() {
     );
     assert_eq!(first, second);
     assert_eq!(first, "<tmp> error: undeclared identifier <hash>");
+}
+
+#[test]
+fn failure_signature_collapses_site_tmp_roots_and_eb_hash_paths() {
+    let work_a = failure_signature(
+        "/work/eb-aaa/src/foo.c:12:3: error: undeclared identifier deadbeef\nERROR: installation failed\n",
+    );
+    let work_b = failure_signature(
+        "/work/eb-bbb/src/foo.c:44:9: error: undeclared identifier cafebabe\nERROR: installation failed\n",
+    );
+    assert_eq!(work_a, work_b);
+    assert_eq!(work_a, "<tmp> error: undeclared identifier <hash>");
+
+    let scratch = failure_signature(
+        "/scratch/eb-aaa/src/foo.c:12:3: error: undeclared identifier deadbeef\n",
+    );
+    let shm = failure_signature(
+        "/dev/shm/eb-bbb/src/foo.c:44:9: error: undeclared identifier cafebabe\n",
+    );
+    let hashed =
+        failure_signature("/var/eb-aaa/src/foo.c:12:3: error: undeclared identifier deadbeef\n");
+    assert_eq!(scratch, work_a);
+    assert_eq!(shm, work_a);
+    assert_eq!(hashed, work_a);
 }
 
 #[test]
@@ -1048,6 +1108,7 @@ fn two_identical_signatures_are_stuck() {
         findings: vec![finding(1)],
         history: Vec::new(),
         lock_identity: None,
+        lock_epoch_start_attempt: 0,
     };
     assert_eq!(MAX_ATTEMPTS_PER_SIGNATURE, 2);
     assert!(!is_stuck_on_signature(&state, &signature));
@@ -1141,5 +1202,75 @@ fn campaign_records_a_lock_identity_change_on_resume() {
             .any(|event| event.detail.contains("lock identity changed")),
         "{:?}",
         second.history
+    );
+}
+
+#[test]
+fn lock_identity_change_does_not_count_prior_signatures_as_stuck() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipes = bundle.join("easyconfigs/e/eOn");
+    std::fs::create_dir_all(&recipes).expect("recipes");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"eOn","version":"2.16.0"}}"#,
+    )
+    .expect("manifest");
+    let lock = bundle.join("locks/default.lock.json");
+    std::fs::write(&lock, r#"{"profile":"default","solver":"resolvo"}"#).expect("lock");
+    write_valid_recipe(&recipes.join("eOn.eb"), "eOn", "2.16.0");
+    let command = temp.path().join("fake-eb");
+    std::fs::write(
+        &command,
+        "#!/bin/sh\nprintf '%s\\n' 'error: undeclared identifier foo'\nprintf '%s\\n' 'ERROR: installation failed'\nexit 1\n",
+    )
+    .expect("command");
+    let mut permissions = std::fs::metadata(&command).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&command, permissions).expect("permissions");
+    let request = CampaignRequest {
+        bundle,
+        target: target(command.to_str().expect("command path")),
+        state_path: temp.path().join("campaign.json"),
+    };
+    let first = run_campaign(&request).expect("first attempt");
+    assert!(first
+        .history
+        .iter()
+        .all(|event| !event.detail.contains("stuck on signature")));
+    let second = run_campaign(&request).expect("second attempt");
+    assert!(
+        second.history.iter().any(|event| event
+            .detail
+            .contains("stuck on signature after 2 identical failures")),
+        "{:?}",
+        second.history
+    );
+    std::fs::write(&lock, r#"{"profile":"default","solver":"resolvo","x":1}"#).expect("rewrite");
+    let third = run_campaign(&request).expect("first post-replan attempt");
+    assert!(
+        third
+            .history
+            .iter()
+            .any(|event| event.detail.contains("lock identity changed")),
+        "{:?}",
+        third.history
+    );
+    assert!(
+        third
+            .history
+            .iter()
+            .filter(|event| event.attempt == third.attempts)
+            .all(|event| !event.detail.contains("stuck on signature")),
+        "{:?}",
+        third.history
+    );
+    assert_eq!(
+        third
+            .findings
+            .last()
+            .and_then(|finding| finding.signature.as_deref()),
+        Some("error: undeclared identifier foo")
     );
 }

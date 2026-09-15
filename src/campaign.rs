@@ -231,6 +231,10 @@ pub struct CampaignState {
     /// SHA-256 of the bundle lock files. A recipe edit that does not change
     /// SAT keeps this identity; a new lock is a new DAG.
     pub lock_identity: Option<String>,
+    /// First attempt that belongs to [`Self::lock_identity`]. Findings from
+    /// earlier attempts are a previous DAG and do not count toward stuck.
+    #[serde(default, skip_serializing_if = "u32_is_zero")]
+    pub lock_epoch_start_attempt: u32,
 }
 
 /// Identical causal signatures this many times means the retry is stuck.
@@ -293,6 +297,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
             findings: Vec::new(),
             history: Vec::new(),
             lock_identity: None,
+            lock_epoch_start_attempt: 0,
         }
     };
 
@@ -305,6 +310,8 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 recipe: None,
                 detail: format!("lock identity changed from {previous} to {current}"),
             });
+            // Next attempt is the first one on the new DAG.
+            state.lock_epoch_start_attempt = state.attempts + 1;
         }
     }
     state.lock_identity = identity;
@@ -851,7 +858,7 @@ pub fn classify_build_failure(
 /// First causal error line, with path, hash, and position noise stripped.
 pub fn failure_signature(text: &str) -> String {
     if let Some(causal) = interned_causal_section(text) {
-        let signed = signature_from_body(causal);
+        let signed = signature_from_interned(causal);
         if signed != "verification failed without a recognized error" {
             return signed;
         }
@@ -862,6 +869,32 @@ pub fn failure_signature(text: &str) -> String {
 fn interned_causal_section(text: &str) -> Option<&str> {
     let marker = "EasyBuild command output ";
     text.find(marker).map(|start| &text[start..])
+}
+
+fn signature_from_interned(section: &str) -> String {
+    let signed = signature_from_body(section);
+    if signed != "verification failed without a recognized error" {
+        return signed;
+    }
+    interned_fallback_signature(section).unwrap_or(signed)
+}
+
+fn interned_fallback_signature(section: &str) -> Option<String> {
+    for line in section.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || is_generic_failure_footer(trimmed) {
+            continue;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.starts_with("easybuild command output ")
+            || lower == "stdout:"
+            || lower == "stderr:"
+        {
+            continue;
+        }
+        return Some(normalize_signature(trimmed));
+    }
+    None
 }
 
 fn signature_from_body(text: &str) -> String {
@@ -880,12 +913,16 @@ fn signature_from_body(text: &str) -> String {
     "verification failed without a recognized error".into()
 }
 
-/// How many findings already carry this exact signature.
+/// How many findings already carry this exact signature on the current lock DAG.
 pub fn signature_repeat_count(state: &CampaignState, signature: &str) -> u32 {
+    let start = state.lock_epoch_start_attempt;
     state
         .findings
         .iter()
-        .filter(|finding| finding.signature.as_deref() == Some(signature))
+        .filter(|finding| {
+            finding.signature.as_deref() == Some(signature)
+                && (start == 0 || finding.attempt >= start)
+        })
         .count() as u32
 }
 
@@ -908,6 +945,7 @@ fn is_generic_failure_footer(line: &str) -> bool {
         || stripped.starts_with("build of ") && stripped.contains(" failed")
         || stripped.starts_with("installation of ") && stripped.contains(" failed")
         || stripped.starts_with("installation ended unsuccessfully")
+        || stripped.starts_with("shell command failed")
 }
 
 fn has_compiler_error_line(text: &str) -> bool {
@@ -959,18 +997,40 @@ fn normalize_signature(signature: &str) -> String {
     collapsed.chars().take(200).collect()
 }
 
+fn u32_is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
+fn tmp_like_path_len(chars: &[char]) -> Option<usize> {
+    if chars.first() != Some(&'/') {
+        return None;
+    }
+    let end = chars
+        .iter()
+        .position(|&c| matches!(c, ' ' | '\t' | '\'' | '"'))
+        .unwrap_or(chars.len());
+    let path = chars[..end].iter().collect::<String>().to_ascii_lowercase();
+    let known_tmp = path.starts_with("/tmp/")
+        || path.starts_with("/work/")
+        || path.starts_with("/scratch/")
+        || path.starts_with("/dev/shm/");
+    let eb_hash_dir = path.split('/').any(|segment| {
+        segment
+            .strip_prefix("eb-")
+            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_hexdigit()))
+    });
+    (known_tmp || eb_hash_dir).then_some(end)
+}
+
 fn collapse_signature_noise(signature: &str) -> String {
     let chars = signature.chars().collect::<Vec<_>>();
     let mut out = String::new();
     let mut i = 0;
     let mut last_was_space = false;
     while i < chars.len() {
-        if chars[i..].starts_with(&['/', 't', 'm', 'p', '/']) {
+        if let Some(len) = tmp_like_path_len(&chars[i..]) {
             out.push_str("<tmp>");
-            i += 5;
-            while i < chars.len() && !matches!(chars[i], ' ' | '\t' | '\'' | '"') {
-                i += 1;
-            }
+            i += len;
             last_was_space = false;
             continue;
         }
