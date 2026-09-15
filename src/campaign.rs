@@ -1225,7 +1225,13 @@ fn build_failure_evidence(target: &BuildTarget, stdout: &str, stderr: &str) -> S
         evidence.push('\n');
         evidence.push_str(&banner);
     }
-    for path in easybuild_output_paths(&combined).into_iter().take(4) {
+    let mut paths = easybuild_output_paths(&combined);
+    for extra in easybuild_cmd_sh_sibling_outputs(&combined) {
+        if !paths.contains(&extra) {
+            paths.push(extra);
+        }
+    }
+    for path in paths.into_iter().take(4) {
         let nested = if matches!(target.transport, TargetTransport::Local) {
             match std::fs::read_to_string(&path) {
                 Ok(nested) => nested,
@@ -1280,6 +1286,36 @@ fn easybuild_banner_fields(output: &str) -> String {
         }
     }
     fields.join("\n")
+}
+
+fn easybuild_cmd_sh_sibling_outputs(output: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for line in output.lines() {
+        if !line
+            .to_ascii_lowercase()
+            .contains("interactive shell script")
+        {
+            continue;
+        }
+        let Some((_, raw_path)) = line.rsplit_once("->") else {
+            continue;
+        };
+        let raw_path = raw_path
+            .split_once('\u{1b}')
+            .map(|(path, _)| path)
+            .unwrap_or(raw_path)
+            .trim();
+        if raw_path.is_empty() {
+            continue;
+        }
+        let cmd = PathBuf::from(raw_path);
+        if let Some(sibling) = cmd.parent().map(|parent| parent.join("out.txt")) {
+            paths.push(sibling);
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 fn easybuild_output_paths(output: &str) -> Vec<PathBuf> {

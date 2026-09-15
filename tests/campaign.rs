@@ -183,6 +183,56 @@ fn campaign_interns_easybuild_command_output_before_classifying() {
 }
 
 #[test]
+fn campaign_interns_out_txt_beside_cmd_sh_when_the_banner_omits_stdout() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipes = bundle.join("easyconfigs/e/eOn");
+    std::fs::create_dir_all(&recipes).expect("recipes");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"eOn","version":"2.16.0"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .expect("lock");
+    write_valid_recipe(&recipes.join("eOn.eb"), "eOn", "2.16.0");
+
+    let cmd_dir = temp.path().join("run-shell-cmd-output/make-xyz");
+    std::fs::create_dir_all(&cmd_dir).expect("cmd dir");
+    std::fs::write(
+        cmd_dir.join("out.txt"),
+        "flex: /lib64/libc.so.6: version `GLIBC_2.38' not found\n",
+    )
+    .expect("out.txt");
+    std::fs::write(cmd_dir.join("cmd.sh"), "#!/bin/sh\n").expect("cmd.sh");
+    let command = temp.path().join("fake-eb");
+    std::fs::write(
+        &command,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' '    interactive shell script  ->  {}'\nprintf '%s\\n' 'ERROR: installation failed'\nexit 1\n",
+            cmd_dir.join("cmd.sh").display()
+        ),
+    )
+    .expect("command");
+    let mut permissions = std::fs::metadata(&command).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&command, permissions).expect("permissions");
+
+    let state = run_campaign(&CampaignRequest {
+        bundle,
+        target: target(command.to_str().expect("command path")),
+        state_path: temp.path().join("campaign.json"),
+    })
+    .expect("campaign finding");
+    assert_eq!(state.findings[0].class, BuildFindingClass::Runtime);
+    assert!(state.findings[0].evidence.contains("GLIBC_2.38"));
+}
+
+#[test]
 fn campaign_rejects_missing_checksums_before_easybuild() {
     let temp = tempfile::tempdir().expect("tempdir");
     let bundle = temp.path().join("bundle");
