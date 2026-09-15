@@ -437,6 +437,8 @@ struct AssignmentStringList<'a> {
     op: &'a str,
     closer: char,
     items: Vec<(char, &'a str)>,
+    /// A comma makes `(…)` a tuple. Adjacent literals stay one grouped string.
+    comma: bool,
 }
 
 fn assignment_operator(rest: &str) -> Option<(usize, &'static str)> {
@@ -481,8 +483,13 @@ fn parse_assignment_string_list(line: &str) -> Option<AssignmentStringList<'_>> 
     }
     let mut items = Vec::new();
     let mut rest = inner;
+    let mut comma = false;
     while !rest.is_empty() {
-        rest = rest.trim_start().trim_start_matches(',');
+        rest = rest.trim_start();
+        if rest.starts_with(',') {
+            comma = true;
+            rest = rest[1..].trim_start();
+        }
         if rest.is_empty() {
             break;
         }
@@ -495,6 +502,7 @@ fn parse_assignment_string_list(line: &str) -> Option<AssignmentStringList<'_>> 
         items.push((quote, &inner[..end]));
         rest = inner[end + quote.len_utf8()..].trim_start();
         if rest.starts_with(',') {
+            comma = true;
             rest = rest[1..].trim_start();
         }
     }
@@ -504,10 +512,24 @@ fn parse_assignment_string_list(line: &str) -> Option<AssignmentStringList<'_>> 
         op,
         closer,
         items,
+        comma,
     })
 }
 
 fn format_assignment_string_list(list: &AssignmentStringList<'_>) -> Vec<String> {
+    // `('long')` / `('aaa' 'bbb')` is a grouped string. A trailing comma is a tuple.
+    if list.closer == ')' && !list.comma {
+        let content = list.items.iter().map(|(_, item)| *item).collect::<String>();
+        let quote = list.items[0].0;
+        return format_string_assignment(&StringAssignment {
+            indent: list.indent,
+            key: list.key,
+            op: list.op,
+            quote,
+            triple: false,
+            content: &content,
+        });
+    }
     let opener = if list.closer == ')' { '(' } else { '[' };
     let mut lines = vec![format!("{}{} {} {opener}", list.indent, list.key, list.op)];
     let item_indent = format!("{}    ", list.indent);
@@ -640,21 +662,103 @@ fn format_string_assignment(asg: &StringAssignment<'_>) -> Vec<String> {
 }
 
 fn format_triple_quoted_assignment(asg: &StringAssignment<'_>) -> Vec<String> {
-    let delim = if asg.quote == '"' { "\"\"\"" } else { "'''" };
     let prefix_first = format!("{}{} {} ", asg.indent, asg.key, asg.op);
     let prefix_cont = format!("{}{} += ", asg.indent, asg.key);
     let budget = EB_MAX_LINE
         .saturating_sub(prefix_cont.chars().count())
-        .saturating_sub(delim.len() * 2)
+        .saturating_sub(6)
         .max(8);
     let chunks = split_string_content(asg.content, budget);
     let mut lines = Vec::new();
     for (i, chunk) in chunks.iter().enumerate() {
-        if i == 0 {
-            lines.push(format!("{prefix_first}{delim}{chunk}{delim}"));
+        let prefix = if i == 0 {
+            prefix_first.as_str()
         } else {
-            lines.push(format!("{prefix_cont}{delim}{chunk}{delim}"));
+            prefix_cont.as_str()
+        };
+        lines.push(format_triple_quoted_line(prefix, chunk, asg.quote));
+    }
+    if lines.iter().any(|line| line.chars().count() > EB_MAX_LINE) {
+        return format_triple_quoted_assignment_hard(asg);
+    }
+    lines
+}
+
+/// Prefer `asg.quote` triples. A trailing quote of that kind eats the closer
+/// (`…""""`), so that chunk uses the other delimiter.
+fn format_triple_quoted_line(prefix: &str, chunk: &str, preferred: char) -> String {
+    let delim = triple_quoted_delim(chunk, preferred);
+    format!("{prefix}{delim}{chunk}{delim}")
+}
+
+fn triple_quoted_delim(chunk: &str, preferred: char) -> &'static str {
+    let preferred_delim = if preferred == '"' { "\"\"\"" } else { "'''" };
+    let other_delim = if preferred == '"' { "'''" } else { "\"\"\"" };
+    let other = if preferred == '"' { '\'' } else { '"' };
+    if triple_quoted_chunk_ok(chunk, preferred) {
+        preferred_delim
+    } else if triple_quoted_chunk_ok(chunk, other) {
+        other_delim
+    } else {
+        preferred_delim
+    }
+}
+
+fn triple_quoted_chunk_ok(chunk: &str, quote: char) -> bool {
+    let delim = if quote == '"' { "\"\"\"" } else { "'''" };
+    !chunk.ends_with(quote) && !chunk.contains(delim)
+}
+
+fn format_triple_quoted_assignment_hard(asg: &StringAssignment<'_>) -> Vec<String> {
+    let prefix_first = format!("{}{} {} ", asg.indent, asg.key, asg.op);
+    let prefix_cont = format!("{}{} += ", asg.indent, asg.key);
+    let mut lines = Vec::new();
+    let mut rest = asg.content;
+    let mut first = true;
+    while !rest.is_empty() {
+        let prefix = if first {
+            prefix_first.as_str()
+        } else {
+            prefix_cont.as_str()
+        };
+        let budget = EB_MAX_LINE
+            .saturating_sub(prefix.chars().count())
+            .saturating_sub(6)
+            .max(8);
+        let mut take = unescaped_cut(
+            rest,
+            preferred_split(rest, budget).unwrap_or_else(|| {
+                rest.char_indices()
+                    .take_while(|(i, _)| *i < budget)
+                    .last()
+                    .map(|(i, c)| i + c.len_utf8())
+                    .unwrap_or(rest.len().min(budget))
+                    .max(1)
+                    .min(rest.len())
+            }),
+        );
+        while take > 1 {
+            let head = &rest[..take];
+            if format_triple_quoted_line(prefix, head, asg.quote)
+                .chars()
+                .count()
+                <= EB_MAX_LINE
+            {
+                break;
+            }
+            let Some((idx, _)) = rest[..take].char_indices().next_back() else {
+                break;
+            };
+            if idx == 0 {
+                take = rest.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+                break;
+            }
+            take = idx;
         }
+        let (head, tail) = rest.split_at(take.min(rest.len()));
+        lines.push(format_triple_quoted_line(prefix, head, asg.quote));
+        rest = tail;
+        first = false;
     }
     lines
 }
@@ -1239,6 +1343,101 @@ mod tests {
             })
             .collect();
         assert_eq!(joined, body);
+    }
+
+    #[test]
+    fn format_grouped_string_stays_a_string_not_a_tuple() {
+        let body = "x".repeat(130);
+        let source = format!("configopts = ('{body}')\n");
+        assert!(source.lines().next().unwrap().chars().count() > EB_MAX_LINE);
+
+        let result = format_style(&source);
+
+        assert!(result.remaining.is_empty(), "{:?}", result.remaining);
+        assert!(
+            !result.text.contains("',"),
+            "grouped string must not become a 1-tuple: {}",
+            result.text
+        );
+        let recipe = format!(
+            "name = 'X'\nversion = '1'\ntoolchain = SYSTEM\n{}dependencies = []\n",
+            result.text
+        );
+        let resolved = crate::eb_parse::resolve_easyconfig_str(&recipe)
+            .expect("grouped configopts still a string");
+        assert_eq!(resolved.configopts.as_deref(), Some(body.as_str()));
+    }
+
+    #[test]
+    fn format_grouped_adjacent_literals_stay_one_string() {
+        let left = "a".repeat(70);
+        let right = "b".repeat(70);
+        let source = format!("configopts = ('{left}' '{right}')\n");
+        assert!(source.lines().next().unwrap().chars().count() > EB_MAX_LINE);
+
+        let result = format_style(&source);
+
+        assert!(result.remaining.is_empty(), "{:?}", result.remaining);
+        let recipe = format!(
+            "name = 'X'\nversion = '1'\ntoolchain = SYSTEM\n{}dependencies = []\n",
+            result.text
+        );
+        let resolved = crate::eb_parse::resolve_easyconfig_str(&recipe)
+            .expect("adjacent literals stay one string");
+        assert_eq!(
+            resolved.configopts.as_deref(),
+            Some(format!("{left}{right}").as_str())
+        );
+    }
+
+    #[test]
+    fn format_triple_quoted_last_chunk_ending_in_quote_keeps_the_quote() {
+        let body = format!("{}\"", "x".repeat(99));
+        let source = format!("description += \"\"\"{body}\"\"\"\n");
+        assert!(source.lines().next().unwrap().chars().count() > EB_MAX_LINE);
+
+        let result = format_style(&source);
+
+        let joined: String = result
+            .text
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                let after = trimmed
+                    .strip_prefix("description = ")
+                    .or_else(|| trimmed.strip_prefix("description += "))?;
+                for delim in ["\"\"\"", "'''"] {
+                    if let Some(rest) = after.strip_prefix(delim) {
+                        if let Some(inner) = rest.strip_suffix(delim) {
+                            return Some(inner.to_string());
+                        }
+                    }
+                }
+                None
+            })
+            .collect();
+        assert_eq!(joined, body);
+        let recipe = format!(
+            "name = 'X'\nversion = '1'\ntoolchain = SYSTEM\n{}dependencies = []\n",
+            result.text
+        );
+        crate::eb_parse::resolve_easyconfig_str(&recipe)
+            .expect("formatted triple-quoted description parses");
+    }
+
+    #[test]
+    fn format_triple_quoted_wrap_hard_splits_an_overflow() {
+        let body = format!("{}\"{}", "x".repeat(97), "y".repeat(50));
+        let source = format!("description += \"\"\"{body}\"\"\"\n");
+        assert!(source.lines().next().unwrap().chars().count() > EB_MAX_LINE);
+
+        let result = format_style(&source);
+
+        assert!(result.remaining.is_empty(), "{:?}", result.remaining);
+        assert!(result
+            .text
+            .lines()
+            .all(|line| line.chars().count() <= EB_MAX_LINE));
     }
 
     #[test]
