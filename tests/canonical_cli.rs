@@ -531,3 +531,72 @@ fn package_bump_cli_prints_copied_sibling_patches() {
         "bump must print patch= for each copied file:\n{stdout}"
     );
 }
+
+#[test]
+fn package_bump_re_run_keeps_contributor() {
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Gamma-1.0-foss-2023a.eb");
+    let robot = temp.path().join("robot");
+    std::fs::create_dir_all(&robot).expect("robot");
+    std::fs::write(
+        &source,
+        "easyblock = 'CMakeMake'\nname = 'Gamma'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2023a'}\n\
+         sources = ['gamma-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [\n    ('KeptLib', '1.0'),\n    ('VanishedLib', '20211028'),\n]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    std::fs::write(
+        robot.join("KeptLib-1.0-foss-2025a.eb"),
+        "easyblock = 'ConfigureMake'\nname = 'KeptLib'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Kept'\n\
+         toolchain = {'name': 'foss', 'version': '2025a'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'lib'\n",
+    )
+    .expect("kept candidate");
+    let output = temp.path().join("bundle");
+    let result = Command::new(binary)
+        .args([
+            "package",
+            "bump",
+            "--source",
+            source.to_str().unwrap(),
+            "--toolchain-name",
+            "foss",
+            "--toolchain-version",
+            "2025a",
+            "--version",
+            "1.7.0",
+            "--source-checksum",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--easyconfigs",
+            robot.to_str().unwrap(),
+            "--contributor",
+            "Ada Lovelace",
+            "--out-dir",
+            output.to_str().unwrap(),
+        ])
+        .output()
+        .expect("package bump with unresolved dep");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        !result.status.success(),
+        "unresolved generation dep must fail: {combined}"
+    );
+    let re_run = combined
+        .lines()
+        .find(|line| line.starts_with("re_run="))
+        .expect("re_run= line");
+    assert!(
+        re_run.contains("--contributor") && re_run.contains("Ada Lovelace"),
+        "re_run= must keep --contributor: {re_run}"
+    );
+}

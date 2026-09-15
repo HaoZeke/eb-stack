@@ -605,6 +605,7 @@ fn run_package_bump(args: PackageBumpArgs, mode: BumpMode) -> Result<()> {
     let stack_policy_flag = args.stack_policy.clone();
     let hierarchy_flag = args.hierarchy_fixture.clone();
     let foreign_flags = args.foreign_sources.clone();
+    let contributor = args.contributor.clone();
     let strict_patches = args.strict_patches;
     let bundle = plan_package_bump(&BumpPackageRequest {
         source: args.source,
@@ -719,6 +720,9 @@ fn run_package_bump(args: PackageBumpArgs, mode: BumpMode) -> Result<()> {
         }
         if strict_patches {
             print!(" --strict-patches");
+        }
+        if let Some(name) = &contributor {
+            print!(" --contributor {}", eb_stack::target::shell_quote(name));
         }
         println!(
             " --out-dir {}",
