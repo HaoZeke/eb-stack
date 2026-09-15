@@ -657,10 +657,10 @@ fn derive_nvidia_family_hierarchy(
                 .collect();
             match prefixed.as_slice() {
                 [only] => Some(*only),
-                many => many
-                    .iter()
-                    .copied()
-                    .find(|candidate| pins_parent_compiler(candidate)),
+                many => many.iter().copied().find(|candidate| {
+                    pins_parent_compiler(candidate)
+                        || definition_pin_matches_parent(candidate, parent)
+                }),
             }
         })?;
     // The composite pins its compiler as a whole toolchain string, e.g.
@@ -687,7 +687,11 @@ fn derive_nvidia_family_hierarchy(
         name: "system".into(),
         version: String::new(),
     }];
-    if let Some(gcccore_ver) = nvidia_compilers_gcccore(&nvhpc_ver, cands) {
+    if let Some(gcccore_ver) = nvidia_compilers_gcccore(&nvhpc_ver, cands).or_else(|| {
+        (parent.version != nvhpc_ver)
+            .then(|| nvidia_compilers_gcccore(&parent.version, cands))
+            .flatten()
+    }) {
         members.push(Toolchain {
             name: "GCCcore".into(),
             version: gcccore_ver,
@@ -1854,6 +1858,85 @@ mod tests {
         nvc_new.dependencies = vec![dep_pin("GCCcore", "14.2.0")];
         let h = derive_hierarchy_from_candidates(&parent, &[first, second, nvc_old, nvc_new])
             .expect("12.9.1 parent must not take the first 12.8.0 definition");
+        assert_eq!(
+            h.members
+                .iter()
+                .find(|member| member.name == "GCCcore")
+                .map(|member| member.version.as_str()),
+            Some("14.2.0"),
+            "{:?}",
+            h.member_labels()
+        );
+    }
+
+    #[test]
+    fn a_second_cuda_compiler_does_not_drop_gcccore_from_the_family() {
+        let parent = Toolchain {
+            name: "NVHPC".into(),
+            version: "25.3-CUDA-12.8.0".into(),
+        };
+        let mut tree = nvidia_family_tree();
+        let mut extra = cand(
+            "nvidia-compilers",
+            "25.3",
+            "system",
+            "",
+            Some("-CUDA-12.9.1"),
+        );
+        extra.dependencies = vec![dep_pin("GCCcore", "13.3.0")];
+        tree.push(extra);
+        let h = derive_hierarchy_from_candidates(&parent, &tree)
+            .expect("joined parent must still hop to GCCcore");
+        assert_eq!(
+            h.members
+                .iter()
+                .find(|member| member.name == "GCCcore")
+                .map(|member| member.version.as_str()),
+            Some("14.2.0"),
+            "{:?}",
+            h.member_labels()
+        );
+    }
+
+    #[test]
+    fn template_suffix_nvhpc_rows_still_pick_the_filename_cuda_variant() {
+        let parent = Toolchain {
+            name: "NVHPC".into(),
+            version: "25.3-CUDA-12.9.1".into(),
+        };
+        let mut first = cand("NVHPC", "25.3", "system", "", Some("-CUDA-%(cudaver)s"));
+        first.easyconfig_path = "NVHPC-25.3-CUDA-12.8.0.eb".into();
+        let mut old_nvc = dep_pin("nvidia-compilers", "25.3");
+        old_nvc.versionsuffix = Some("-CUDA-%(cudaver)s".into());
+        first.dependencies = vec![old_nvc, dep_pin("CUDA", "12.8.0")];
+        let mut second = cand("NVHPC", "25.3", "system", "", Some("-CUDA-%(cudaver)s"));
+        second.easyconfig_path = "NVHPC-25.3-CUDA-12.9.1.eb".into();
+        let mut new_nvc = dep_pin("nvidia-compilers", "25.3");
+        new_nvc.versionsuffix = Some("-CUDA-%(cudaver)s".into());
+        second.dependencies = vec![new_nvc, dep_pin("CUDA", "12.9.1")];
+        let mut nvc_old = cand(
+            "nvidia-compilers",
+            "25.3",
+            "system",
+            "",
+            Some("-CUDA-12.8.0"),
+        );
+        nvc_old.dependencies = vec![dep_pin("GCCcore", "13.3.0")];
+        let mut nvc_new = cand(
+            "nvidia-compilers",
+            "25.3",
+            "system",
+            "",
+            Some("-CUDA-12.9.1"),
+        );
+        nvc_new.dependencies = vec![dep_pin("GCCcore", "14.2.0")];
+        let h = derive_hierarchy_from_candidates(&parent, &[first, second, nvc_old, nvc_new])
+            .expect("filename/CUDA pin must distinguish the template rows");
+        let names: Vec<&str> = h.members.iter().map(|m| m.name.as_str()).collect();
+        assert!(
+            names.contains(&"nvidia-compilers"),
+            "compiler level must stay a member: {names:?}"
+        );
         assert_eq!(
             h.members
                 .iter()
