@@ -66,20 +66,29 @@ fn toolchain_label(tc: &crate::domain::Toolchain) -> String {
     tc.identity_label()
 }
 
-/// Names and paths `forbid` must remove, including a provide reminted
-/// after its first-class sibling was dropped by path.
-fn forbidden_names(universe: &[Candidate], forbid: &[String]) -> HashSet<String> {
+/// Names, paths, and reminted (name, version) pairs `forbid` must remove.
+///
+/// A path entry drops that easyconfig and any extension provide of the same
+/// name and version. It does not drop other first-class versions of the name.
+fn forbidden_set(
+    universe: &[Candidate],
+    forbid: &[String],
+) -> (HashSet<String>, HashSet<String>, HashSet<(String, String)>) {
     let mut names = HashSet::new();
+    let mut paths = HashSet::new();
+    let mut provides = HashSet::new();
     for entry in forbid {
-        names.insert(entry.clone());
         if let Some(candidate) = universe
             .iter()
             .find(|candidate| candidate.easyconfig_path == *entry)
         {
-            names.insert(candidate.name.clone());
+            paths.insert(entry.clone());
+            provides.insert((candidate.name.clone(), candidate.version.clone()));
+        } else {
+            names.insert(entry.clone());
         }
     }
-    names
+    (names, paths, provides)
 }
 
 fn apply_forbid(
@@ -90,14 +99,15 @@ fn apply_forbid(
     if forbid.is_empty() {
         return candidates;
     }
-    let names = forbidden_names(universe, forbid);
+    let (names, paths, provides) = forbidden_set(universe, forbid);
     candidates
         .into_iter()
         .filter(|candidate| {
-            !names.contains(&candidate.name)
-                && !forbid
-                    .iter()
-                    .any(|entry| entry == &candidate.easyconfig_path)
+            if paths.contains(&candidate.easyconfig_path) || names.contains(&candidate.name) {
+                return false;
+            }
+            !(candidate.is_extension_provide()
+                && provides.contains(&(candidate.name.clone(), candidate.version.clone())))
         })
         .collect()
 }
@@ -2018,6 +2028,36 @@ mod tests {
             error.contains("unsatisfiable") || error.contains("Lib"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_path_forbid_keeps_another_first_class_version() {
+        let candidates = vec![
+            cand("Lib", "1.0", None, "Lib-1.0.eb", vec![]),
+            cand("Lib", "2.0", None, "Lib-2.0.eb", vec![]),
+            cand(
+                "App",
+                "1.0",
+                None,
+                "App-1.0.eb",
+                vec![DepReq {
+                    name: "Lib".into(),
+                    version_req: "==2.0".into(),
+                    versionsuffix: None,
+                    toolchain: None,
+                }],
+            ),
+        ];
+        let mut pol = policy(vec!["App"], vec![]);
+        pol.forbid = vec!["Lib-1.0.eb".into()];
+        let selected = solve_with_resolvo(&candidates, &pol, None)
+            .expect("forbidding Lib-1.0.eb must keep Lib 2.0");
+        let lib = selected
+            .iter()
+            .find(|candidate| candidate.name == "Lib")
+            .expect("Lib");
+        assert_eq!(lib.version, "2.0");
+        assert_eq!(lib.easyconfig_path, "Lib-2.0.eb");
     }
 
     #[test]
