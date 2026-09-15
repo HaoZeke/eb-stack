@@ -399,22 +399,31 @@ impl EbProvider {
                     format!("require_upgrade {} needs baseline package version", ru.name)
                 })?;
             let upgrade_keys = keys_for_name(&ranks, &ru.name);
-            let Some(ranked) = upgrade_keys.first().and_then(|key| ranks.get(key)) else {
+            if upgrade_keys.is_empty() {
                 return Err(format!("require_upgrade unknown package {}", ru.name));
-            };
-            let mut max_non_upgrade: Option<u32> = None;
-            for (rank, idx) in ranked {
-                if cmp_version(&candidates[*idx].version, &base_ver) != std::cmp::Ordering::Greater
-                {
-                    max_non_upgrade = Some(*rank);
+            }
+            let mut any_upgrade = false;
+            for key in &upgrade_keys {
+                let Some(ranked) = ranks.get(key) else {
+                    continue;
+                };
+                let mut max_non_upgrade: Option<u32> = None;
+                for (rank, idx) in ranked {
+                    if cmp_version(&candidates[*idx].version, &base_ver)
+                        != std::cmp::Ordering::Greater
+                    {
+                        max_non_upgrade = Some(*rank);
+                    }
+                }
+                if let Some(m) = max_non_upgrade {
+                    min_rank_exclusive.insert(key.clone(), m);
+                }
+                if ranked.iter().any(|(_, idx)| {
+                    cmp_version(&candidates[*idx].version, &base_ver) == std::cmp::Ordering::Greater
+                }) {
+                    any_upgrade = true;
                 }
             }
-            if let Some(m) = max_non_upgrade {
-                min_rank_exclusive.insert(ru.name.clone(), m);
-            }
-            let any_upgrade = ranked.iter().any(|(_, idx)| {
-                cmp_version(&candidates[*idx].version, &base_ver) == std::cmp::Ordering::Greater
-            });
             if !any_upgrade {
                 return Err(format!(
                     "no candidate for {} newer than baseline {}",
@@ -1618,6 +1627,46 @@ mod tests {
             .collect();
         binutils.sort();
         assert_eq!(binutils, vec!["2.40", "2.42"]);
+    }
+
+    #[test]
+    fn require_upgrade_system_multi_admits_the_newer_sibling() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let at_system = |name: &str, version: &str| Candidate {
+            name: name.into(),
+            version: version.into(),
+            toolchain: system.clone(),
+            versionsuffix: None,
+            easyconfig_path: format!("{name}-{version}.eb"),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+            moduleclass: None,
+        };
+        let candidates = vec![
+            at_system("binutils", "2.40"),
+            at_system("binutils", "2.42"),
+            cand("App", "1.0", None, "App-1.0.eb", vec![]),
+        ];
+        let pol = policy(
+            vec!["App"],
+            vec![RequireUpgrade {
+                name: "binutils".into(),
+                relative_to_baseline: true,
+            }],
+        );
+        let baseline = baseline_lock(vec![LockPackage {
+            name: "binutils".into(),
+            version: "2.40".into(),
+            toolchain: system,
+            versionsuffix: None,
+            easyconfig_path: "binutils-2.40.eb".into(),
+        }]);
+        solve_with_resolvo(&candidates, &pol, Some(&baseline))
+            .expect("2.42 is newer than baseline 2.40");
     }
 
     #[test]
