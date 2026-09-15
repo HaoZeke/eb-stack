@@ -104,6 +104,60 @@ fn inspect_pypi_warehouse_fixture() {
 }
 
 #[test]
+fn inspect_source_tree_pep518_marker_and_extra() {
+    use eb_stack::package::{ConditionExpr, DependencyRole};
+
+    let tmp = tempfile::tempdir().expect("temp");
+    let dump = tmp.path().join("demo-1.0.0.json");
+    std::fs::write(
+        &dump,
+        r#"{
+          "info": {
+            "name": "demo",
+            "version": "1.0.0",
+            "requires_dist": []
+          },
+          "urls": []
+        }"#,
+    )
+    .expect("dump");
+    let tree = tmp.path().join("demo-1.0.0");
+    std::fs::create_dir_all(&tree).expect("dirs");
+    std::fs::write(
+        tree.join("pyproject.toml"),
+        "[build-system]\nrequires = [\"tomli>=2.0.1; python_version < 3.11\", \"pytest; extra == test\"]\n",
+    )
+    .expect("pyproject");
+    let (plan, _) =
+        inspect_new_package(&dump, Some(ForeignFormat::Pypi), &toolchain(), &[]).expect("inspect");
+    let tomli = plan
+        .dependencies
+        .iter()
+        .find(|dep| dep.name == "tomli")
+        .expect("tomli");
+    assert!(
+        tomli
+            .roles
+            .iter()
+            .any(|role| *role == DependencyRole::Build),
+        "{tomli:?}"
+    );
+    assert!(
+        !matches!(tomli.condition, ConditionExpr::Always),
+        "tomli must not be Always: {tomli:?}"
+    );
+    assert!(
+        tomli.solver_excluded,
+        "opaque PEP 518 marker must be solver-excluded: {tomli:?}"
+    );
+    assert!(
+        plan.dependencies.iter().all(|dep| dep.name != "pytest"),
+        "pytest must not be a build dep: {:?}",
+        plan.dependencies
+    );
+}
+
+#[test]
 fn plan_pypi_emits_one_package_and_takes_soupsieve_from_the_robot() {
     let request = NewPackageRequest {
         source: root().join("fixtures/foreign_ingest/pypi_bs4/pypi.json"),

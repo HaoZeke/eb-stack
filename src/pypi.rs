@@ -328,7 +328,7 @@ fn recipe_from_document(doc: WarehouseDocument) -> Result<ForeignRecipe, Foreign
     })
 }
 
-enum Pep508 {
+pub(crate) enum Pep508 {
     SkipExtra {
         spec: String,
     },
@@ -401,7 +401,7 @@ fn strip_pep508_extras(req: &str) -> String {
     stripped
 }
 
-fn parse_pep508(spec: &str) -> Pep508 {
+pub(crate) fn parse_pep508(spec: &str) -> Pep508 {
     let original = spec.trim().to_string();
     if original.is_empty() {
         return Pep508::Invalid {

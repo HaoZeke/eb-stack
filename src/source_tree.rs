@@ -110,31 +110,65 @@ fn overlay_pyproject(recipe: &mut ForeignRecipe, path: &Path) {
         let Some(spec) = spec.as_str() else {
             continue;
         };
-        let name = spec
-            .split(|ch: char| {
-                ch == '>' || ch == '<' || ch == '=' || ch == '!' || ch == ' ' || ch == '['
-            })
-            .next()
-            .unwrap_or(spec)
-            .trim();
-        // The interpreter and the array package are the build backend's own
-        // floor rather than a dependency this recipe states, and which names
-        // those are is policy: data/overlay-policy.toml holds the list.
-        if name.is_empty() || crate::provides::ignored_build_requirement(name) {
-            continue;
+        match crate::pypi::parse_pep508(spec) {
+            crate::pypi::Pep508::SkipExtra { spec } => {
+                recipe.residuals.push(ForeignResidual {
+                    category: "pypi-extra".into(),
+                    severity: ResidualSeverity::Mechanical,
+                    summary: format!("skipped extra-only requirement {spec}"),
+                    evidence: Some(spec),
+                    provenance: None,
+                });
+            }
+            crate::pypi::Pep508::Requirement {
+                name,
+                marker,
+                original,
+                ..
+            } => {
+                // The interpreter and the array package are the build backend's own
+                // floor rather than a dependency this recipe states, and which names
+                // those are is policy: data/overlay-policy.toml holds the list.
+                if name.is_empty() || crate::provides::ignored_build_requirement(&name) {
+                    continue;
+                }
+                // The Python module installs setuptools, pip and wheel itself, so
+                // naming one as a build dependency sends the solver looking for
+                // whatever ships it. Upstream's coverage and cppy recipes name
+                // neither, and both declare setuptools as their backend.
+                if crate::provides::shipped_with_python(&name) {
+                    continue;
+                }
+                // A backend and the module that carries it are one name to a recipe:
+                // `poetry-core` is built by `poetry`, and emitting both asks for the
+                // same thing twice.
+                let name = crate::provides::aliased_module_name(&name);
+                let condition = if let Some(marker) = marker {
+                    recipe.residuals.push(ForeignResidual {
+                        category: "pypi-marker".into(),
+                        severity: ResidualSeverity::Judgment,
+                        summary: format!(
+                            "{name} is gated by environment marker {marker} and does not constrain every profile"
+                        ),
+                        evidence: Some(original.clone()),
+                        provenance: None,
+                    });
+                    ConditionExpr::Opaque { source: marker }
+                } else {
+                    ConditionExpr::Always
+                };
+                push_dep(recipe, &name, "build", &original, condition);
+            }
+            crate::pypi::Pep508::Invalid { spec, reason } => {
+                recipe.residuals.push(ForeignResidual {
+                    category: "pypi-requirement".into(),
+                    severity: ResidualSeverity::Judgment,
+                    summary: format!("could not parse PEP 518 require: {reason}"),
+                    evidence: Some(spec),
+                    provenance: None,
+                });
+            }
         }
-        // The Python module installs setuptools, pip and wheel itself, so
-        // naming one as a build dependency sends the solver looking for
-        // whatever ships it. Upstream's coverage and cppy recipes name
-        // neither, and both declare setuptools as their backend.
-        if crate::provides::shipped_with_python(name) {
-            continue;
-        }
-        // A backend and the module that carries it are one name to a recipe:
-        // `poetry-core` is built by `poetry`, and emitting both asks for the
-        // same thing twice.
-        let name = crate::provides::aliased_module_name(name);
-        push_dep(recipe, &name, "build", spec);
     }
 }
 
@@ -157,7 +191,13 @@ fn overlay_meson_wraps(recipe: &mut ForeignRecipe, subprojects: &Path) {
                 push_hint(recipe, "cargo");
             }
         }
-        push_dep(recipe, stem, "build", &format!("meson.wrap:{stem}"));
+        push_dep(
+            recipe,
+            stem,
+            "build",
+            &format!("meson.wrap:{stem}"),
+            ConditionExpr::Always,
+        );
     }
 }
 
@@ -350,7 +390,13 @@ fn push_hint(recipe: &mut ForeignRecipe, hint: &str) {
     }
 }
 
-fn push_dep(recipe: &mut ForeignRecipe, name: &str, role: &str, spec: &str) {
+fn push_dep(
+    recipe: &mut ForeignRecipe,
+    name: &str,
+    role: &str,
+    spec: &str,
+    condition: ConditionExpr,
+) {
     if declared(recipe, name) {
         return;
     }
@@ -359,7 +405,7 @@ fn push_dep(recipe: &mut ForeignRecipe, name: &str, role: &str, spec: &str) {
         pin: None,
         role: role.into(),
         original_spec: Some(spec.to_string()),
-        condition: ConditionExpr::Always,
+        condition,
         provenance: Vec::new(),
     });
 }
@@ -595,6 +641,85 @@ mod sdist_overlay_tests {
                 .any(|dependency| dependency.name.contains("poetry")),
             "{:?}",
             recipe.dependencies
+        );
+    }
+
+    #[test]
+    fn pep518_marker_is_not_always_and_extra_is_not_a_build_dep() {
+        let temp = tempfile::tempdir().expect("temp");
+        let ingest = temp.path().join("pypi");
+        let tree = ingest.join("demo-1.0.0");
+        std::fs::create_dir_all(&tree).expect("dirs");
+        std::fs::write(
+            tree.join("pyproject.toml"),
+            "[build-system]\nrequires = [\"tomli>=2.0.1; python_version < 3.11\", \"pytest; extra == test\"]\n",
+        )
+        .expect("write");
+        let dump = ingest.join("demo-1.0.0.json");
+        std::fs::write(&dump, "{}").expect("dump");
+        let mut recipe = ForeignRecipe {
+            format: ForeignFormat::Pypi,
+            name: "demo".into(),
+            version: "1.0.0".into(),
+            homepage: None,
+            source_url: None,
+            source_filename: None,
+            sha256: None,
+            sources: Vec::new(),
+            summary: None,
+            description: None,
+            license: None,
+            dependencies: Vec::new(),
+            build_system_hints: Vec::new(),
+            configopts: None,
+            patches: Vec::new(),
+            variants: Vec::new(),
+            rules: Vec::new(),
+            notes: Vec::new(),
+            residuals: Vec::new(),
+            classifiers: Vec::new(),
+        };
+        enrich_from_source_tree(&mut recipe, &dump);
+        let tomli = recipe
+            .dependencies
+            .iter()
+            .find(|dep| dep.name == "tomli")
+            .expect("tomli");
+        assert_eq!(tomli.role, "build");
+        assert!(
+            !matches!(tomli.condition, ConditionExpr::Always),
+            "tomli must not be Always: {tomli:?}"
+        );
+        assert!(
+            matches!(
+                &tomli.condition,
+                ConditionExpr::Opaque { source } if source.contains("python_version")
+            ),
+            "{tomli:?}"
+        );
+        assert!(
+            recipe
+                .residuals
+                .iter()
+                .any(|residual| residual.category == "pypi-marker"),
+            "{:?}",
+            recipe.residuals
+        );
+        assert!(
+            recipe.dependencies.iter().all(|dep| dep.name != "pytest"),
+            "pytest must not be a build dep: {:?}",
+            recipe.dependencies
+        );
+        assert!(
+            recipe.residuals.iter().any(|residual| {
+                residual.category == "pypi-extra"
+                    && residual
+                        .evidence
+                        .as_deref()
+                        .is_some_and(|evidence| evidence.contains("pytest"))
+            }),
+            "{:?}",
+            recipe.residuals
         );
     }
 }
