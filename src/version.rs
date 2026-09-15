@@ -13,8 +13,9 @@
 //! missing side with zero. An Alpha against a missing token is treated as
 //! a pre-release suffix (rc, alpha, beta, or a bare trailing letter) that
 //! sorts before the side with nothing more. Mixed Num versus Alpha at the
-//! same position is rare for EasyBuild; Num sorts before Alpha there for a
-//! total deterministic order.
+//! same position is rare for EasyBuild. A post-release token (`post`, `rev`,
+//! `pl`) sorts after the number; any other Alpha (rc, alpha, a year-letter)
+//! sorts before it, so `1.0rc1` is less than both `1.0` and `1.0.0`.
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -96,10 +97,22 @@ pub fn cmp_version(a: &str, b: &str) -> Ordering {
         let o = match (x, y) {
             (Some(Part::Num(x)), Some(Part::Num(y))) => x.cmp(y),
             (Some(Part::Alpha(x)), Some(Part::Alpha(y))) => x.cmp(y),
-            // Mixed types at an aligned position: numeric sorts before
-            // alphabetic for a deterministic total order.
-            (Some(Part::Num(_)), Some(Part::Alpha(_))) => Ordering::Less,
-            (Some(Part::Alpha(_)), Some(Part::Num(_))) => Ordering::Greater,
+            // Mixed types at an aligned position: a post-release token
+            // sorts after the number; any other Alpha is a pre-release.
+            (Some(Part::Num(_)), Some(Part::Alpha(alpha))) => {
+                if is_post_release(alpha) {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
+                }
+            }
+            (Some(Part::Alpha(alpha)), Some(Part::Num(_))) => {
+                if is_post_release(alpha) {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                }
+            }
             // One side ran out of tokens: a numeric remainder pads the
             // missing side with 0 (so "1.2.3" > "1.2"); an alphabetic
             // remainder is a pre-release suffix that sorts before the
@@ -472,6 +485,10 @@ mod tests {
         assert_eq!(cmp_version("2024.1", "2024.4"), Ordering::Less);
         assert_eq!(cmp_version("2025.0", "2024.4"), Ordering::Greater);
         assert_eq!(cmp_version("4.1.6", "4.1.5"), Ordering::Greater);
+        assert_eq!(cmp_version("1.0rc1", "1.0"), Ordering::Less);
+        assert_eq!(cmp_version("1.0.0", "1.0"), Ordering::Equal);
+        assert_eq!(cmp_version("1.0rc1", "1.0.0"), Ordering::Less);
+        assert!(matches_req("1.0rc1", ">=1.0") == matches_req("1.0rc1", ">=1.0.0"));
     }
 
     #[test]
