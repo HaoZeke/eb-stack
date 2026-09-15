@@ -66,8 +66,7 @@ fn filename_matches_package(file: &str, name: &str) -> bool {
     // different package, not UCX with a CUDA toolchain.
     file.get(name.len() + 1..)
         .and_then(|rest| rest.split('-').next())
-        .and_then(|token| token.chars().next())
-        .is_some_and(|character| character.is_ascii_digit())
+        .is_some_and(token_looks_like_version)
 }
 
 fn newest_named_eb(dir: &Path, name: &str) -> Option<PathBuf> {
@@ -139,6 +138,7 @@ fn first_toolchain_span(parts: &[&str]) -> Option<(usize, usize)> {
             && parts[index]
                 .chars()
                 .all(|character| character.is_ascii_alphabetic())
+            && !is_filename_versionsuffix_token(parts[index])
             && parts[index + 1]
                 .chars()
                 .next()
@@ -304,17 +304,28 @@ fn package_config_is_python_family(config: &Path) -> bool {
         })
 }
 
+fn token_looks_like_version(token: &str) -> bool {
+    let mut characters = token.chars();
+    match characters.next() {
+        Some(character) if character.is_ascii_digit() => true,
+        Some('v' | 'V') => characters.next().is_some_and(|next| next.is_ascii_digit()),
+        _ => false,
+    }
+}
+
+fn is_filename_versionsuffix_token(name: &str) -> bool {
+    name.eq_ignore_ascii_case("CUDA")
+        || name.eq_ignore_ascii_case("Java")
+        || name.eq_ignore_ascii_case("Python")
+}
+
 fn companion_version_arg(pin: Option<&str>) -> Option<String> {
     let pin = pin.map(str::trim).filter(|value| !value.is_empty())?;
     if let Ok(requirement) = parse_requirement(pin) {
         return version_from_requirement(&requirement);
     }
-    let stripped = pin.trim_start_matches(['=', 'v', 'V']);
-    stripped
-        .chars()
-        .next()
-        .is_some_and(|character| character.is_ascii_digit())
-        .then(|| stripped.to_string())
+    let stripped = pin.trim_start_matches('=');
+    token_looks_like_version(stripped).then(|| stripped.to_string())
 }
 
 fn version_from_requirement(requirement: &crate::version::Requirement) -> Option<String> {
@@ -631,6 +642,80 @@ mod tests {
             !argv.contains("--toolchain-name foss"),
             "must not retarget SYSTEM onto foss: {argv}"
         );
+    }
+
+    #[test]
+    fn a_system_cuda_suffix_is_not_the_toolchain() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path();
+        fs::write(robot.join("NCCL-2.18.3-CUDA-12.8.0.eb"), "name = 'NCCL'\n").expect("nccl");
+        let argv = companion_argv(
+            "NCCL",
+            Some("2.18.3"),
+            &[robot.to_path_buf()],
+            &[],
+            "foss",
+            "2025a",
+            robot.to_str().expect("utf8"),
+            &temp.path().join("out"),
+        );
+        assert!(
+            argv.contains("--toolchain-name system"),
+            "SYSTEM+CUDA filename is SYSTEM: {argv}"
+        );
+        assert!(
+            !argv.contains("--toolchain-name CUDA"),
+            "CUDA versionsuffix must not become the toolchain: {argv}"
+        );
+    }
+
+    #[test]
+    fn a_v_prefixed_version_is_still_a_source() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path();
+        let version = format!("v{}", 2406);
+        let file = format!("Demo-{version}-foss-2023a.eb");
+        fs::write(robot.join(&file), "name = 'Demo'\n").expect("demo");
+        let argv = companion_argv(
+            "Demo",
+            Some(&version),
+            &[robot.to_path_buf()],
+            &[],
+            "foss",
+            "2023a",
+            robot.to_str().expect("utf8"),
+            &temp.path().join("out"),
+        );
+        assert!(
+            argv.contains(&file),
+            "v-prefixed version must be a source: {argv}"
+        );
+        assert!(
+            argv.contains("--toolchain-name foss") || argv.contains("--toolchain-name GCC"),
+            "expected foss family, got {argv}"
+        );
+        assert!(
+            argv.contains(&format!("--version {version}")),
+            "v-prefixed pin must keep the v: {argv}"
+        );
+    }
+
+    #[test]
+    fn companion_version_arg_keeps_a_v_prefixed_pin() {
+        let pin = format!("v{}", 2406);
+        assert_eq!(
+            companion_version_arg(Some(&pin)).as_deref(),
+            Some(pin.as_str())
+        );
+        assert_eq!(
+            companion_version_arg(Some(&format!("=={pin}"))).as_deref(),
+            Some(pin.as_str())
+        );
+        assert_eq!(
+            companion_version_arg(Some(">=1.2.3")).as_deref(),
+            Some("1.2.3")
+        );
+        assert_eq!(companion_version_arg(Some(">=0")), None);
     }
 
     #[test]
