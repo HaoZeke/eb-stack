@@ -1027,7 +1027,7 @@ pub fn count_generation_dep_versions_for_suffix(
             .iter()
             .chain(consumer.builddependencies.iter())
         {
-            if dep.name != name {
+            if !dep.name.eq_ignore_ascii_case(name) {
                 continue;
             }
             if let Some(want) = suffix {
@@ -1073,7 +1073,14 @@ pub fn count_generation_dep_versions_all(
                 continue;
             };
             let suffix = dep.versionsuffix.clone().unwrap_or_default();
-            *all.entry((dep.name.clone(), suffix))
+            let key = all
+                .keys()
+                .find(|(existing, existing_suffix)| {
+                    existing.eq_ignore_ascii_case(&dep.name) && existing_suffix == &suffix
+                })
+                .cloned()
+                .unwrap_or_else(|| (dep.name.clone(), suffix));
+            *all.entry(key)
                 .or_default()
                 .entry(ver.to_string())
                 .or_insert(0) += 1;
@@ -2617,6 +2624,20 @@ mod tests {
         assert!(
             !counts.contains_key("3.31.8"),
             "SYSTEM GCCcore-15.2.0 must not count for foss-2024a: {counts:?}"
+        );
+    }
+
+    #[test]
+    fn generation_pin_counts_ignore_dep_case() {
+        let h = known_hierarchy(&foss("2024a")).unwrap();
+        let cands = vec![consumer_pinning(
+            "App", "1.0", "foss", "2024a", "hdf5", "1.14.3",
+        )];
+        let counts = count_generation_dep_versions("HDF5", &cands, &h);
+        assert_eq!(
+            counts.get("1.14.3").copied(),
+            Some(1),
+            "robot HDF5 must count a hdf5 pin: {counts:?}"
         );
     }
 

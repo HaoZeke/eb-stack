@@ -870,11 +870,20 @@ fn apply_generation_consensus_pins(
         {
             continue;
         }
-        let empty = std::collections::HashMap::new();
         let counts = all_counts
-            .get(&(name.clone(), String::new()))
-            .cloned()
-            .unwrap_or(empty);
+            .iter()
+            .filter(|((existing, suffix), _)| {
+                existing.eq_ignore_ascii_case(name) && suffix.is_empty()
+            })
+            .fold(
+                std::collections::HashMap::new(),
+                |mut acc, (_, versions)| {
+                    for (version, count) in versions {
+                        *acc.entry(version.clone()).or_insert(0) += count;
+                    }
+                    acc
+                },
+            );
         let admitted_for_name: Vec<&crate::domain::Candidate> = admitted
             .iter()
             .filter(|candidate| candidate.name.eq_ignore_ascii_case(name))
