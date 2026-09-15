@@ -123,9 +123,9 @@ fn parse_crates_io_version_document(value: &Value) -> Result<ForeignRecipe, Fore
     let krate = CratesIoCrate {
         name,
         id: String::new(),
-        description: None,
-        homepage: None,
-        repository: None,
+        description: version.description.clone(),
+        homepage: version.homepage.clone(),
+        repository: version.repository.clone(),
         max_version: None,
         max_stable_version: None,
     };
@@ -177,11 +177,11 @@ fn crates_io_recipe(
 }
 
 fn version_is_python_crate(crate_name: &str, version: &CratesIoVersion) -> bool {
-    if version_has_required_python_marker(version) {
-        return true;
-    }
     if crate::provides::is_python_marker_crate(crate_name) {
         return false;
+    }
+    if version_has_required_python_marker(version) {
+        return true;
     }
     crates_io_default_enables_python(&version.features)
         || version
@@ -282,6 +282,12 @@ struct CratesIoVersion {
     license: Option<String>,
     #[serde(default, rename = "crate")]
     krate: Option<String>,
+    #[serde(default)]
+    homepage: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    repository: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -509,6 +515,14 @@ fn maturin_module_name(value: &toml::Value) -> Option<String> {
 }
 
 fn is_python_crate(value: &toml::Value, deps: &[CargoDep]) -> bool {
+    if value
+        .get("package")
+        .and_then(|package| toml_string(package, "name"))
+        .or_else(|| toml_string(value, "name"))
+        .is_some_and(|name| crate::provides::is_python_marker_crate(&name))
+    {
+        return false;
+    }
     if value
         .get("package")
         .and_then(|package| package.get("metadata"))
@@ -1369,6 +1383,67 @@ serde = { version = "1.0", optional = true }
                 .all(|hint| hint != "maturin" && hint != "python"),
             "{:?}",
             recipe.build_system_hints
+        );
+    }
+
+    #[test]
+    fn pyo3_with_required_pyo3_ffi_stays_a_crate() {
+        let toml = parse_cargo_str(
+            r#"
+[package]
+name = "pyo3"
+version = "0.22.0"
+
+[dependencies]
+pyo3-ffi = "0.22"
+"#,
+        )
+        .expect("toml");
+        assert!(
+            toml.dependencies
+                .iter()
+                .all(|dep| dep.name != "Python" && dep.name != "maturin"),
+            "{:?}",
+            toml.dependencies
+        );
+
+        let json = parse_cargo_str(
+            r#"{
+              "crate": { "id": "pyo3", "name": "pyo3", "max_version": "0.22.0" },
+              "versions": [{
+                "num": "0.22.0",
+                "deps": [{ "name": "pyo3-ffi", "optional": false, "kind": "normal" }]
+              }]
+            }"#,
+        )
+        .expect("json");
+        assert!(
+            json.dependencies
+                .iter()
+                .all(|dep| dep.name != "Python" && dep.name != "maturin"),
+            "{:?}",
+            json.dependencies
+        );
+    }
+
+    #[test]
+    fn crates_io_version_document_keeps_homepage_and_summary() {
+        let recipe = parse_cargo_str(
+            r#"{
+              "version": {
+                "crate": "serde",
+                "num": "1.0.210",
+                "homepage": "https://serde.rs",
+                "description": "A generic serialization/deserialization framework",
+                "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            }"#,
+        )
+        .expect("parse");
+        assert_eq!(recipe.homepage.as_deref(), Some("https://serde.rs"));
+        assert_eq!(
+            recipe.summary.as_deref(),
+            Some("A generic serialization/deserialization framework")
         );
     }
 
