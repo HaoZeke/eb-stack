@@ -205,7 +205,7 @@ fn recipe_from_document(doc: WarehouseDocument) -> Result<ForeignRecipe, Foreign
     let source = sdist.or_else(|| doc.urls.first());
     let source_url = source.and_then(|url| url.url.clone());
     let source_filename = source.and_then(|url| url.filename.clone());
-    let sha256 = source.and_then(|url| url.digests.sha256.clone());
+    let sha256 = source.and_then(|url| warehouse_sha256(url.digests.sha256.as_deref()));
     let sources = if source_url.is_some() || sha256.is_some() {
         vec![ForeignSource {
             url: source_url.clone(),
@@ -323,6 +323,15 @@ fn pypi_build_system_hints(build_system: Option<&WarehouseBuildSystem>) -> Vec<S
         hints.extend(["meson".into(), "mesonpy".into()]);
     }
     hints
+}
+
+fn warehouse_sha256(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.len() == 64 && value.chars().all(|character| character.is_ascii_hexdigit()) {
+        Some(value.to_ascii_lowercase())
+    } else {
+        None
+    }
 }
 
 fn strip_inline_comment(line: &str) -> &str {
@@ -521,6 +530,24 @@ mod tests {
             recipe.sha256.as_deref(),
             Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         );
+    }
+
+    #[test]
+    fn warehouse_sha256_must_be_sixty_four_hex() {
+        let recipe = parse_pypi_str(
+            r#"{
+              "info": {"name": "demo", "version": "1.0"},
+              "urls": [{
+                "packagetype": "sdist",
+                "url": "https://example.invalid/demo-1.0.tar.gz",
+                "filename": "demo-1.0.tar.gz",
+                "digests": {"sha256": "not-a-digest"}
+              }]
+            }"#,
+        )
+        .expect("parse");
+        assert_eq!(recipe.sha256, None);
+        assert!(recipe.sources.iter().all(|source| source.sha256.is_none()));
     }
 
     #[test]
