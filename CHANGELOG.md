@@ -102,6 +102,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A download that times out is a Source finding, not a generic Timeout
+  or Transport finding. A connection timeout without a download stays
+  Transport.
 - When a generated companion is not admitted, the typed error names
   that companion, not the first leftover that has no source.
 - A crates.io version dump that already lists `deps` records those

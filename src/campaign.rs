@@ -820,7 +820,8 @@ pub fn classify_build_failure(
         || text.contains("download failed")
         || text.contains("unable to download")
         || text.contains("could not download")
-        || text.contains("couldn't find file") && text.contains("downloading it didn't work");
+        || text.contains("couldn't find file") && text.contains("downloading it didn't work")
+        || text.contains("download") && (text.contains("timed out") || text.contains("timeout"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -1760,6 +1761,27 @@ mod campaign_lock_tests {
 #[cfg(test)]
 mod campaign_signature_tests {
     use super::*;
+
+    #[test]
+    fn download_timeout_is_a_source_failure() {
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "failed to download foo.tar.gz: timed out",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "download timed out", "", None),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "connection timed out", "", None),
+            BuildFindingClass::Transport
+        );
+    }
 
     #[test]
     fn generic_install_footer_is_not_a_compiler_error() {
