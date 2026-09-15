@@ -429,7 +429,18 @@ fn preferred_pin(
     spec_name: &str,
     sat_name: &str,
 ) -> Option<String> {
-    preferred_pins.and_then(|pins| pins.get(spec_name).or_else(|| pins.get(sat_name)).cloned())
+    preferred_pins.and_then(|pins| {
+        pins.get(spec_name)
+            .or_else(|| pins.get(sat_name))
+            .or_else(|| {
+                pins.iter()
+                    .find(|(key, _)| {
+                        key.eq_ignore_ascii_case(spec_name) || key.eq_ignore_ascii_case(sat_name)
+                    })
+                    .map(|(_, value)| value)
+            })
+            .cloned()
+    })
 }
 
 fn lock_package_identity_cmp(a: &LockPackage, b: &LockPackage) -> std::cmp::Ordering {
@@ -1893,5 +1904,14 @@ mod lock_identity_and_bump_pin_tests {
             Some("1.8.0")
         );
         assert_eq!(spec_map.get("numpy").map(String::as_str), Some("2.3.1"));
+    }
+
+    #[test]
+    fn preferred_pin_matches_robot_case() {
+        let pins = HashMap::from([("hdf5".into(), "1.14.3".into())]);
+        assert_eq!(
+            preferred_pin(Some(&pins), "HDF5", "HDF5").as_deref(),
+            Some("1.14.3")
+        );
     }
 }
