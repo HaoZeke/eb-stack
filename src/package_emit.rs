@@ -263,26 +263,6 @@ fn render_easyconfig(
             },
         );
     }
-    if plan.origin == crate::package::PackageOrigin::Cran {
-        return render_language_bundle(
-            plan,
-            materialized,
-            LanguageBundleKind::R,
-            BundleFragments {
-                easyblock_line: &easyblock_line,
-                homepage,
-                description,
-                versionsuffix_line: &versionsuffix_line,
-                toolchain_options_line: &toolchain_options_line,
-                easyconfig_parameter_lines: &easyconfig_parameter_lines,
-                patch_line: &patch_line,
-                config_line: &config_line,
-                build_dependencies: &build_dependencies,
-                runtime_dependencies: &runtime_dependencies,
-                moduleclass,
-            },
-        );
-    }
 
     let mesonpy_lines = if mesonpy_backend(plan) {
         format!(

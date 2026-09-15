@@ -198,8 +198,9 @@ fn plan_cran_emits_a_single_r_package() {
     let bundle = plan_new_package(&request).expect("plan cran");
     let recipe = &bundle.easyconfigs[0];
     assert!(
-        recipe.text.contains("easyblock = 'Bundle'")
-            && recipe.text.contains("exts_defaultclass = 'RPackage'"),
+        recipe.text.contains("easyblock = 'RPackage'")
+            && !recipe.text.contains("exts_list")
+            && !recipe.text.contains("exts_defaultclass"),
         "{}",
         recipe.text
     );
@@ -221,11 +222,6 @@ fn plan_cran_emits_a_single_r_package() {
             .any(|dep| dep.name == "R"),
         "R must be locked even when its easyconfig names binutils: {:?}",
         bundle.locks[0].dependencies
-    );
-    assert!(
-        recipe.text.contains("exts_list") && recipe.text.contains("jsonlite"),
-        "CRAN leftover is a Bundle exts_list:\n{}",
-        recipe.text
     );
 }
 
