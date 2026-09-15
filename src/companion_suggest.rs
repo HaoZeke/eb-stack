@@ -4,7 +4,7 @@ use crate::domain::Toolchain;
 use crate::package_config::PackageConfigLayer;
 use crate::package_sources::map_source_toolchain_to_target;
 use crate::target::shell_quote;
-use crate::version::{cmp_version, parse_requirement, RequirementOp};
+use crate::version::{cmp_version, parse_requirement};
 use std::path::{Path, PathBuf};
 
 /// If `--out-dir/easyconfigs` exists, search it first as a robot root.
@@ -329,27 +329,10 @@ fn companion_version_arg(pin: Option<&str>) -> Option<String> {
 }
 
 fn version_from_requirement(requirement: &crate::version::Requirement) -> Option<String> {
-    let mut lower = None;
-    for clause in &requirement.clauses {
-        match clause.op {
-            RequirementOp::Exact
-            | RequirementOp::AtLeast
-            | RequirementOp::Above
-            | RequirementOp::Compatible
-            | RequirementOp::Caret
-            | RequirementOp::Tilde => {
-                if clause.version == "0" || clause.version == "0.0.0" {
-                    continue;
-                }
-                lower = Some(clause.version.clone());
-                if matches!(clause.op, RequirementOp::Exact) {
-                    break;
-                }
-            }
-            RequirementOp::NotEqual | RequirementOp::AtMost | RequirementOp::Below => {}
-        }
-    }
-    lower
+    requirement
+        .lower_bound()
+        .filter(|version| *version != "0" && *version != "0.0.0")
+        .map(str::to_string)
 }
 
 #[cfg(test)]
@@ -872,6 +855,34 @@ mod tests {
         assert!(
             !unconstrained.contains("--version "),
             ">=0 stays unpinned: {unconstrained}"
+        );
+        let compound = companion_argv(
+            "ASAGI",
+            Some(">=2.0,>=3.0"),
+            &[robot.clone()],
+            &[],
+            "foss",
+            "2025a",
+            robot.to_str().expect("utf8"),
+            &out,
+        );
+        assert!(
+            compound.contains("--version 3.0"),
+            "matching floor: {compound}"
+        );
+        let above = companion_argv(
+            "ASAGI",
+            Some(">1.2"),
+            &[robot.clone()],
+            &[],
+            "foss",
+            "2025a",
+            robot.to_str().expect("utf8"),
+            &out,
+        );
+        assert!(
+            !above.contains("--version 1.2"),
+            ">1.2 is not a floor of 1.2: {above}"
         );
     }
 
