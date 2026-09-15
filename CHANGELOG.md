@@ -102,6 +102,13 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `package bump` remaps an explicit dependency toolchain through the
+  request hierarchy fixture, so a 4-tuple `GCCcore` pin follows the
+  target generation instead of remaining on the source compiler and
+  dropping as unresolved. Rewrite and insert treat robot case as the
+  same module (`hdf5` / `HDF5`). Overlay promote excludes only the
+  unsatisfied leftover intent, not every same-name pin on another
+  profile.
 - `stack solve --sbom-out` records typed source SHA-256 hashes from the
   easyconfig. A lock identity key separates toolchain from versionsuffix
   (`+vs`) so a suffixed `foss-2025b` and an unsuffixed

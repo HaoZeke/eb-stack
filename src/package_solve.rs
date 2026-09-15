@@ -147,10 +147,7 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
         if dependency.solver_excluded || dependency.virtual_capability.is_some() {
             continue;
         }
-        let name = dependency
-            .eb_name
-            .clone()
-            .unwrap_or_else(|| match_robot_name_in(&dependency.name, &robot_names));
+        let name = robot_or_stated_name(dependency, &robot_names);
         let build_only = !dependency.roles.is_empty()
             && dependency
                 .roles
@@ -276,10 +273,7 @@ pub fn solve_package_profile_with_hierarchy(
         if dependency.solver_excluded || dependency.virtual_capability.is_some() {
             continue;
         }
-        let name = dependency
-            .eb_name
-            .clone()
-            .unwrap_or_else(|| match_robot_name_in(&dependency.name, &robot_names));
+        let name = robot_or_stated_name(dependency, &robot_names);
         let build_only = !dependency.roles.is_empty()
             && dependency
                 .roles
@@ -487,6 +481,19 @@ fn robot_name_index(candidates: &[Candidate]) -> RobotNameIndex {
         }
     }
     RobotNameIndex { modules, all }
+}
+
+fn robot_or_stated_name(
+    dependency: &crate::package::DependencyIntent,
+    index: &RobotNameIndex,
+) -> String {
+    match_robot_name_in(
+        dependency
+            .eb_name
+            .as_deref()
+            .unwrap_or(dependency.name.as_str()),
+        index,
+    )
 }
 
 fn match_robot_name_in(foreign_name: &str, index: &RobotNameIndex) -> String {

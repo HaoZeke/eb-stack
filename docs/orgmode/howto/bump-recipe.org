@@ -52,7 +52,12 @@ lock, so a site preference never becomes an invisible post-solve edit.
 When a selected pin belongs to another toolchain generation, the emitted
 dependency tuple includes that toolchain explicitly. Source dependencies that
 already use an explicit toolchain preserve their family and retarget its
-generation before solving.
+generation before solving. That remap reads ~--hierarchy-fixture~ (the same
+file later used for holes), so a 4-tuple ~('binutils', '2.42', '',
+('GCCcore', '12.3.0'))~ becomes the target generation's ~GCCcore~ rather
+than staying on 12.3.0 and dropping as ~unresolved-generation-dep~.
+Robot-cased names match the source spelling: a source ~hdf5~ pin and a
+robot ~HDF5~ module rewrite to one tuple.
 
 An explicit override is also a locked solver input:
 

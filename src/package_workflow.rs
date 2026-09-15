@@ -8,7 +8,7 @@ use crate::eb_parse::{
 use crate::foreign::{parse_foreign_path, ForeignFormat};
 use crate::hierarchy::{
     count_generation_dep_versions_for_suffix, filter_candidates_in_hierarchy,
-    hierarchy_for_with_tree, is_system_toolchain, toolchains_match,
+    hierarchy_for_with_tree, is_system_toolchain, load_hierarchy_fixture, toolchains_match,
 };
 use crate::manifest::package_plan_from_foreign;
 use crate::package::{
@@ -349,20 +349,15 @@ fn promote_language_overlay_extras(
         if refuses_pip_overlay(&hole.name) {
             continue;
         }
-        let (version, checksum) = overlay_extension_entry(plan, &hole.name).ok_or_else(|| {
-            PackageWorkflowError::OverlayExtraNeedsVersion {
+        let (version, checksum) = version_from_constraint(Some(hole.version_req.as_str()))
+            .map(|version| (version, None))
+            .or_else(|| overlay_extension_entry(plan, &hole.name))
+            .ok_or_else(|| PackageWorkflowError::OverlayExtraNeedsVersion {
                 name: hole.name.clone(),
                 requirement: hole.version_req.clone(),
-            }
-        })?;
+            })?;
         for dependency in &mut plan.dependencies {
-            let identity = dependency
-                .eb_name
-                .as_deref()
-                .unwrap_or(dependency.name.as_str());
-            if crate::provides::overlay_package_identity(identity)
-                == crate::provides::overlay_package_identity(&hole.name)
-            {
+            if hole.matches_intent(dependency) {
                 dependency.solver_excluded = true;
             }
         }
@@ -1032,11 +1027,19 @@ pub fn prepare_package_bump(
 ) -> Result<(PackagePlan, Value), PackageWorkflowError> {
     let resolved = resolve_easyconfig_file(&request.source)
         .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+    let hierarchy = match request.hierarchy_fixture.as_deref() {
+        Some(path) => Some(
+            load_hierarchy_fixture(path)
+                .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?,
+        ),
+        None => None,
+    };
     let mut plan = package_plan_from_easyconfig(
         &resolved,
         &request.toolchain,
         request.version.as_deref(),
         resolved_bump_source_checksum(request),
+        hierarchy.as_ref(),
     );
     apply_package_layers(&mut plan, &request.package_layers)
         .map_err(|error| PackageWorkflowError::Config(error.to_string()))?;
@@ -1207,12 +1210,10 @@ pub fn complete_package_bump(
         // One lock row can stand for both lists. Skip the rewrite only when
         // every stated occurrence already names this module; otherwise a
         // matching build pin would leave a disagreeing runtime line in place.
-        let run_matches = stated_run
-            .get(dependency.name.as_str())
-            .is_none_or(|stated| *stated == module_version);
-        let build_matches = stated_build
-            .get(dependency.name.as_str())
-            .is_none_or(|stated| *stated == module_version);
+        let run_matches = named_lookup(&stated_run, &dependency.name)
+            .is_none_or(|stated| stated == module_version);
+        let build_matches = named_lookup(&stated_build, &dependency.name)
+            .is_none_or(|stated| stated == module_version);
         run_matches && build_matches
     };
     let mut dependency_versions = lock
@@ -1261,9 +1262,9 @@ pub fn complete_package_bump(
         .filter(|dependency| !names_the_selected_module(dependency))
         .filter(|dependency| {
             let stated = if dependency.build {
-                stated_build_tc.get(dependency.name.as_str())
+                named_lookup(&stated_build_tc, &dependency.name)
             } else {
-                stated_run_tc.get(dependency.name.as_str())
+                named_lookup(&stated_run_tc, &dependency.name)
             };
             stated.is_none_or(|already| {
                 !crate::hierarchy::toolchains_match(already, &dependency.toolchain)
@@ -1689,6 +1690,7 @@ fn package_plan_from_easyconfig(
     toolchain: &Toolchain,
     version: Option<&str>,
     source_checksum: Option<&str>,
+    hierarchy: Option<&crate::hierarchy::ToolchainHierarchy>,
 ) -> PackagePlan {
     let version = version.unwrap_or(&recipe.version).to_string();
     let version_changed = version != recipe.version;
@@ -1733,6 +1735,7 @@ fn package_plan_from_easyconfig(
                     index,
                     toolchain,
                     retarget,
+                    hierarchy,
                 )
             }),
     );
@@ -1749,6 +1752,7 @@ fn package_plan_from_easyconfig(
                     runtime_count + index,
                     toolchain,
                     retarget,
+                    hierarchy,
                 )
             }),
     );
@@ -2026,12 +2030,21 @@ fn is_generation_retarget(source: &Toolchain, target: &Toolchain) -> bool {
     !toolchains_match(source, target)
 }
 
+fn named_lookup<'a, T: Copy>(map: &HashMap<&str, T>, name: &str) -> Option<T> {
+    map.get(name).copied().or_else(|| {
+        map.iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| *value)
+    })
+}
+
 fn dependency_from_easyconfig(
     dependency: &ResolvedDep,
     role: DependencyRole,
     index: usize,
     target_toolchain: &Toolchain,
     retarget: bool,
+    hierarchy: Option<&crate::hierarchy::ToolchainHierarchy>,
 ) -> DependencyIntent {
     let external = dependency
         .toolchain
@@ -2050,7 +2063,7 @@ fn dependency_from_easyconfig(
         // nobody asked for.
         constraint: (!retarget).then(|| format!("=={}", dependency.version)),
         toolchain: dependency.toolchain.as_ref().map(|source_toolchain| {
-            map_source_toolchain_to_target(Some(source_toolchain), target_toolchain, None)
+            map_source_toolchain_to_target(Some(source_toolchain), target_toolchain, hierarchy)
         }),
         versionsuffix: dependency.versionsuffix.clone(),
         roles: vec![role],
@@ -2960,6 +2973,299 @@ class Gitpkg(Package):
             !bundle.easyconfigs[0].text.contains("version = '1.3.2'"),
             "layer version must not leak into the recipe:\n{}",
             bundle.easyconfigs[0].text
+        );
+    }
+
+    fn write_recipe(path: &Path, body: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("parent");
+        }
+        std::fs::write(path, body).expect("recipe");
+    }
+
+    fn write_foss_2026_fixture_with_gcccore(dir: &Path, gcccore: &str) -> PathBuf {
+        let path = dir.join("foss-2026.1.json");
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{
+  "parent": {{"name": "foss", "version": "2026.1"}},
+  "members": [
+    {{"name": "system", "version": ""}},
+    {{"name": "GCCcore", "version": "{gcccore}"}},
+    {{"name": "GCC", "version": "{gcccore}"}},
+    {{"name": "foss", "version": "2026.1"}}
+  ]
+}}
+"#
+            ),
+        )
+        .expect("fixture");
+        path
+    }
+
+    #[test]
+    fn bump_maps_an_explicit_dep_toolchain_through_the_request_fixture() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("App-1.0-foss-2023b.eb");
+        write_recipe(
+            &source,
+            "easyblock = 'ConfigureMake'\n\
+             name = 'App'\n\
+             version = '1.0'\n\
+             homepage = 'https://example.invalid/'\n\
+             description = 'Synthetic package'\n\
+             toolchain = {'name': 'foss', 'version': '2023b'}\n\
+             sources = ['app-1.0.tar.gz']\n\
+             checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+             dependencies = [('binutils', '2.42', '', ('GCCcore', '12.3.0'))]\n\
+             moduleclass = 'tools'\n",
+        );
+        let robot = temp.path().join("robot");
+        write_recipe(
+            &robot.join("binutils-2.42-GCCcore-99.0.0.eb"),
+            "easyblock = 'ConfigureMake'\n\
+             name = 'binutils'\n\
+             version = '2.42'\n\
+             homepage = 'https://example.invalid/'\n\
+             description = 'binutils'\n\
+             toolchain = {'name': 'GCCcore', 'version': '99.0.0'}\n\
+             sources = ['binutils-2.42.tar.gz']\n\
+             checksums = ['bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb']\n\
+             moduleclass = 'tools'\n",
+        );
+        let target = toolchain("foss", "2026.1");
+        let request = BumpPackageRequest {
+            source,
+            toolchain: target.clone(),
+            version: None,
+            source_checksum: None,
+            easyconfig_roots: vec![robot],
+            hierarchy_fixture: Some(write_foss_2026_fixture_with_gcccore(temp.path(), "99.0.0")),
+            overrides: HashMap::new(),
+            stack_policy: stack_policy(&target),
+            strict_patches: false,
+            package_layers: Vec::new(),
+            foreign_sources: Vec::new(),
+        };
+        let (plan, _) = prepare_package_bump(&request).expect("prepare");
+        let binutils = plan
+            .dependencies
+            .iter()
+            .find(|dependency| dependency.name.eq_ignore_ascii_case("binutils"))
+            .expect("binutils intent");
+        assert_eq!(
+            binutils.toolchain.as_ref(),
+            Some(&toolchain("GCCcore", "99.0.0")),
+            "explicit GCCcore 12.3.0 must retarget through the fixture: {:?}",
+            binutils.toolchain
+        );
+        let bundle = plan_package_bump(&request).expect("bump");
+        assert!(
+            bundle.locks.iter().any(|lock| {
+                lock.dependencies.iter().any(|dependency| {
+                    dependency.name.eq_ignore_ascii_case("binutils")
+                        && dependency.version == "2.42"
+                        && dependency.toolchain == toolchain("GCCcore", "99.0.0")
+                })
+            }),
+            "lock must keep the remapped binutils: {:?}",
+            bundle.locks
+        );
+    }
+
+    #[test]
+    fn bump_rewrite_keeps_one_tuple_when_robot_case_differs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("App-1.0-foss-2023b.eb");
+        write_recipe(
+            &source,
+            "easyblock = 'ConfigureMake'\n\
+             name = 'App'\n\
+             version = '1.0'\n\
+             homepage = 'https://example.invalid/'\n\
+             description = 'Synthetic package'\n\
+             toolchain = {'name': 'foss', 'version': '2023b'}\n\
+             sources = ['app-1.0.tar.gz']\n\
+             checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+             dependencies = [('hdf5', '1.14.0')]\n\
+             moduleclass = 'tools'\n",
+        );
+        let robot = temp.path().join("robot");
+        write_recipe(
+            &robot.join("HDF5-1.16.0-foss-2026.1.eb"),
+            "easyblock = 'ConfigureMake'\n\
+             name = 'HDF5'\n\
+             version = '1.16.0'\n\
+             homepage = 'https://example.invalid/'\n\
+             description = 'HDF5'\n\
+             toolchain = {'name': 'foss', 'version': '2026.1'}\n\
+             sources = ['hdf5-1.16.0.tar.gz']\n\
+             checksums = ['bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb']\n\
+             moduleclass = 'data'\n",
+        );
+        let target = toolchain("foss", "2026.1");
+        let request = BumpPackageRequest {
+            source,
+            toolchain: target.clone(),
+            version: None,
+            source_checksum: None,
+            easyconfig_roots: vec![robot],
+            hierarchy_fixture: Some(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("fixtures/toolchain_hierarchy/foss-2026.1.json"),
+            ),
+            overrides: HashMap::new(),
+            stack_policy: stack_policy(&target),
+            strict_patches: false,
+            package_layers: Vec::new(),
+            foreign_sources: Vec::new(),
+        };
+        let bundle = plan_package_bump(&request).expect("bump");
+        let text = &bundle.easyconfigs[0].text;
+        let tuples = text.matches("('hdf5'").count() + text.matches("('HDF5'").count();
+        assert_eq!(tuples, 1, "one hdf5/HDF5 tuple:\n{text}");
+        assert!(
+            text.contains("1.16.0"),
+            "emitted pin must be the robot version:\n{text}"
+        );
+        assert!(
+            !text.contains("1.14.0"),
+            "old pin must not remain beside the insert:\n{text}"
+        );
+    }
+
+    #[test]
+    fn promote_excludes_only_the_unsatisfied_intent() {
+        let target = toolchain("system", "system");
+        let extra_only = ConditionExpr::Predicate(crate::package::ConditionPredicate::Feature {
+            name: "extra".into(),
+            enabled: true,
+        });
+        let intent = |id: &str, constraint: &str, condition: ConditionExpr| DependencyIntent {
+            id: id.into(),
+            name: "foo".into(),
+            eb_name: Some("foo".into()),
+            constraint: Some(constraint.into()),
+            toolchain: None,
+            versionsuffix: None,
+            roles: vec![DependencyRole::Run],
+            condition,
+            virtual_capability: None,
+            solver_excluded: false,
+            provenance: Vec::new(),
+        };
+        let mut plan = PackagePlan {
+            schema_version: PACKAGE_SCHEMA_VERSION,
+            origin: PackageOrigin::Pypi,
+            package: PackageMetadata {
+                name: "App".into(),
+                version: "1.0".into(),
+                upstream_version: None,
+                homepage: None,
+                description: None,
+                license: None,
+            },
+            sources: vec![SourceArtifact {
+                sha256: Some("aa".repeat(32)),
+                ..SourceArtifact::default()
+            }],
+            dependencies: vec![
+                intent("dep:foo:default", "==1.0", ConditionExpr::Always),
+                intent("dep:foo:extra", ">=2", extra_only),
+            ],
+            rules: Vec::new(),
+            build: BuildSpec {
+                toolchain: target.clone(),
+                easyblock: None,
+                build_systems: Vec::new(),
+                source_root: None,
+                config_options: Vec::new(),
+                moduleclass: None,
+                patches: Vec::new(),
+                easyconfig_parameters: BTreeMap::new(),
+            },
+            profiles: vec![
+                ProductProfile {
+                    name: "default".into(),
+                    default: true,
+                    versionsuffix: Vec::new(),
+                    platform: None,
+                    architecture: None,
+                    features: BTreeMap::new(),
+                    parameters: BTreeMap::new(),
+                    toolchain_options: BTreeMap::new(),
+                    config_options: Vec::new(),
+                    easyconfig_parameters: BTreeMap::new(),
+                    verification_commands: Vec::new(),
+                },
+                ProductProfile {
+                    name: "extra".into(),
+                    default: false,
+                    versionsuffix: Vec::new(),
+                    platform: None,
+                    architecture: None,
+                    features: BTreeMap::from([("extra".into(), true)]),
+                    parameters: BTreeMap::new(),
+                    toolchain_options: BTreeMap::new(),
+                    config_options: Vec::new(),
+                    easyconfig_parameters: BTreeMap::new(),
+                    verification_commands: Vec::new(),
+                },
+            ],
+            outputs: vec![
+                OutputRequest {
+                    profile: "default".into(),
+                    stack: target.label(),
+                },
+                OutputRequest {
+                    profile: "extra".into(),
+                    stack: target.label(),
+                },
+            ],
+            residuals: Vec::new(),
+            overlay_extensions: Vec::new(),
+            package_index: Default::default(),
+        };
+        let candidates = [crate::domain::Candidate {
+            name: "foo".into(),
+            version: "1.0".into(),
+            toolchain: target.clone(),
+            versionsuffix: None,
+            easyconfig_path: "foo-1.0.eb".into(),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+            moduleclass: Some("tools".into()),
+        }];
+        promote_language_overlay_extras(&mut plan, &candidates, &stack_policy(&target), None)
+            .expect("promote");
+        let default = plan
+            .dependencies
+            .iter()
+            .find(|dependency| dependency.constraint.as_deref() == Some("==1.0"))
+            .expect("foo==1.0");
+        let leftover = plan
+            .dependencies
+            .iter()
+            .find(|dependency| dependency.constraint.as_deref() == Some(">=2"))
+            .expect("foo>=2");
+        assert!(
+            !default.solver_excluded,
+            "robot-provided foo==1.0 must stay selectable: {:?}",
+            plan.dependencies
+        );
+        assert!(
+            leftover.solver_excluded,
+            "only the unsatisfied leftover is an overlay extra: {:?}",
+            plan.dependencies
+        );
+        assert_eq!(
+            plan.overlay_extensions
+                .iter()
+                .map(|extension| (extension.name.as_str(), extension.version.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("foo", "2")]
         );
     }
 }

@@ -756,20 +756,25 @@ fn position_is_in_comment(src: &str, idx: usize) -> bool {
     false
 }
 
-/// True when `src` already declares a live dependency tuple whose name is exactly
-/// `name`. A prefix such as `NetCDF` must not match `NetCDF-Fortran`. A leftover
-/// `# ('CMake', '3.26.3')` is a comment, not a declaration.
+/// True when `src` already declares a live dependency tuple whose name is
+/// `name`. The recipe spelling need not match the robot's case (`hdf5` vs
+/// `HDF5`). A prefix such as `NetCDF` must not match `NetCDF-Fortran`. A
+/// leftover `# ('CMake', '3.26.3')` is a comment, not a declaration.
 fn names_dependency_tuple(src: &str, name: &str) -> bool {
     for quote in ['\'', '"'] {
-        let needle = format!("({quote}{name}{quote}");
+        let opener = format!("({quote}");
         let mut search_from = 0usize;
-        while let Some(rel) = src[search_from..].find(&needle) {
+        while let Some(rel) = src[search_from..].find(&opener) {
             let idx = search_from + rel;
-            if !position_is_in_comment(src, idx) {
-                let after = &src[idx + needle.len()..];
-                let next = after.chars().find(|c| !c.is_whitespace());
-                if matches!(next, Some(',') | Some(')')) {
-                    return true;
+            let name_start = idx + opener.len();
+            if let Some(name_end_rel) = src[name_start..].find(quote) {
+                let found = &src[name_start..name_start + name_end_rel];
+                if found.eq_ignore_ascii_case(name) && !position_is_in_comment(src, idx) {
+                    let after = &src[name_start + name_end_rel + 1..];
+                    let next = after.chars().find(|c| !c.is_whitespace());
+                    if matches!(next, Some(',') | Some(')')) {
+                        return true;
+                    }
                 }
             }
             search_from = idx + 1;
@@ -1757,6 +1762,14 @@ struct QuotedToken {
     quote: char,
 }
 
+fn map_get_ignore_ascii_case<'a, V>(map: &'a HashMap<String, V>, name: &str) -> Option<&'a V> {
+    map.get(name).or_else(|| {
+        map.iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value)
+    })
+}
+
 fn rewrite_dep_tuples_in_body(
     body: &str,
     version_overrides: &HashMap<String, String>,
@@ -1853,8 +1866,8 @@ fn rewrite_dependency_tuple(
         return Ok(tuple.to_string());
     }
     let name = &tuple[top[0].start..top[0].end];
-    let version_override = version_overrides.get(name);
-    let toolchain_override = toolchain_overrides.get(name);
+    let version_override = map_get_ignore_ascii_case(version_overrides, name);
+    let toolchain_override = map_get_ignore_ascii_case(toolchain_overrides, name);
     if version_override.is_none() && toolchain_override.is_none() {
         return Ok(tuple.to_string());
     }
@@ -3239,6 +3252,51 @@ checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']
             r.text
         );
         assert!(r.warnings.iter().any(|w| w.contains("local_commit_id")));
+    }
+
+    #[test]
+    fn insert_runtime_dependency_treats_robot_case_as_the_same_module() {
+        let src = "dependencies = [('hdf5', '1.14.0')]\n";
+        let out = insert_runtime_dependency(src, "HDF5", "1.16.0").expect("insert");
+        assert_eq!(
+            out, src,
+            "existing hdf5 must block a second HDF5 tuple:\n{out}"
+        );
+    }
+
+    #[test]
+    fn rewrite_updates_a_tuple_whose_case_differs_from_the_lock() {
+        let src = "\
+name = 'App'
+version = '1.0'
+toolchain = {'name': 'foss', 'version': '2023b'}
+dependencies = [
+    ('hdf5', '1.14.0'),
+]
+";
+        let mut deps = HashMap::new();
+        deps.insert("HDF5".into(), "1.16.0".into());
+        let params = EmitParams {
+            toolchain: foss("2026.1"),
+            version: None,
+            dep_versions: deps,
+            dep_toolchains: HashMap::new(),
+            source_checksum: None,
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        let hdf5 = r.text.matches("hdf5").count() + r.text.matches("HDF5").count();
+        assert_eq!(hdf5, 1, "one module name must remain:\n{}", r.text);
+        assert!(
+            r.text.contains("1.16.0"),
+            "robot version must replace 1.14.0:\n{}",
+            r.text
+        );
+        assert!(
+            !r.text.contains("1.14.0"),
+            "old pin must not stay:\n{}",
+            r.text
+        );
     }
 
     #[test]

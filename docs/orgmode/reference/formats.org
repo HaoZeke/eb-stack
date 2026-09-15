@@ -124,7 +124,14 @@ crate (same models as cargo-cyclonedx), serialized as CycloneDX 1.5 JSON.
 Opt-in: ~--sbom-out~ has no default filename. Omit it and ~stack solve~ writes
 only the lock (and any requested build list / stack diff). ~eb-stack stack
 sbom --lock LOCK~ defaults to ~stack.cdx.json~ because that command's sole
-purpose is SBOM emission.
+purpose is SBOM emission. Both paths now feed the same artifact facts: a
+typed ~('sha256', …)~ source digest on the easyconfig becomes
+~components[].hashes~ with ~alg: SHA-256~. Only the first checksum slot may
+become that hash; a leading MD5 (or any non-SHA-256) is recorded as
+~easybuild:checksum_unmapped~ and later 64-hex values as
+~easybuild:checksum_extra~. Component identity includes versionsuffix as its
+own ~+vs~ field, so a suffixed ~foss-2025b~ module and an unsuffixed
+~foss-2025b-CUDA-12.8.0~ module cannot share a ~bom-ref~.
 
 #+begin_src json
 {

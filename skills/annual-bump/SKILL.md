@@ -108,6 +108,11 @@ config once `eb --inject-checksums` has measured it. `--source-checksum`
 on the command line still wins. Do not copy a conda-forge or Spack
 checksum onto a different artifact class (`skills/verify-recipe/SKILL.md`).
 
+An explicit 4-tuple toolchain is remapped through `--hierarchy-fixture`
+before that hole check: `('binutils', '2.42', '', ('GCCcore', '12.3.0'))`
+becomes the target generation's `GCCcore`, not an unresolved leftover on
+12.3.0. Robot-cased names (`hdf5` vs `HDF5`) are one module.
+
 A dependency the source recipe still declares, with no candidate on the
 target generation, is a blocking `unresolved-generation-dep`. The parent
 exits 1 and prints `companion=` / `re_run=`. Do not pass
