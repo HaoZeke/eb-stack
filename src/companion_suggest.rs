@@ -81,27 +81,33 @@ fn newest_named_eb(dir: &Path, name: &str) -> Option<PathBuf> {
         })
 }
 
-fn toolchain_from_easyconfig_path(path: &Path) -> Option<Toolchain> {
+fn toolchain_from_easyconfig_path(path: &Path, name: &str) -> Option<Toolchain> {
     let file = path.file_name()?.to_str()?.strip_suffix(".eb")?;
-    let parts: Vec<&str> = file.split('-').collect();
-    let mut toolchain_at = None;
-    for index in 1..parts.len().saturating_sub(1) {
-        if parts[index]
-            .chars()
-            .all(|character| character.is_ascii_alphabetic())
+    let rest = file
+        .get(name.len()..)
+        .filter(|_| {
+            file.get(..name.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(name))
+        })
+        .and_then(|rest| rest.strip_prefix('-'))?;
+    let parts: Vec<&str> = rest.split('-').collect();
+    for index in 0..parts.len().saturating_sub(1) {
+        if !parts[index].is_empty()
+            && parts[index]
+                .chars()
+                .all(|character| character.is_ascii_alphabetic())
             && parts[index + 1]
                 .chars()
                 .next()
                 .is_some_and(|character| character.is_ascii_digit())
         {
-            toolchain_at = Some(index);
+            return Some(Toolchain {
+                name: parts[index].to_string(),
+                version: parts[index + 1].to_string(),
+            });
         }
     }
-    let toolchain_at = toolchain_at?;
-    Some(Toolchain {
-        name: parts[toolchain_at].to_string(),
-        version: parts[toolchain_at + 1].to_string(),
-    })
+    None
 }
 
 fn easyconfig_version_key(path: &Path, name: &str) -> String {
@@ -207,7 +213,7 @@ pub fn companion_argv(
             version: toolchain_version.to_string(),
         };
         let mapped = map_source_toolchain_to_target(
-            toolchain_from_easyconfig_path(&source).as_ref(),
+            toolchain_from_easyconfig_path(&source, name).as_ref(),
             &parent,
             None,
         );
@@ -529,6 +535,37 @@ mod tests {
         assert!(
             argv.contains(&format!("--easyconfigs '{}'", robot.display())),
             "{argv}"
+        );
+    }
+
+    #[test]
+    fn companion_argv_does_not_treat_cuda_suffix_as_the_toolchain() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path().join("robot");
+        let dir = robot.join("o").join("OpenMPI");
+        fs::create_dir_all(&dir).expect("openmpi dir");
+        fs::write(
+            dir.join("OpenMPI-5.0.7-NVHPC-25.11-CUDA-12.8.0.eb"),
+            "name = 'OpenMPI'\n",
+        )
+        .expect("openmpi recipe");
+        let argv = companion_argv(
+            "OpenMPI",
+            Some("5.0.7"),
+            &[robot.clone()],
+            &[],
+            "foss",
+            "2025a",
+            robot.to_str().expect("utf8"),
+            &temp.path().join("out"),
+        );
+        assert!(
+            !argv.contains("--toolchain-name CUDA"),
+            "CUDA versionsuffix must not become the toolchain: {argv}"
+        );
+        assert!(
+            argv.contains("--toolchain-name NVHPC") || argv.contains("--toolchain-name foss"),
+            "expected NVHPC family or mapped parent, got {argv}"
         );
     }
 
