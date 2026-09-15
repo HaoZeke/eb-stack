@@ -149,6 +149,32 @@ fn version_token_is_standalone(text: &str, version: &str) -> bool {
     !version_continuation(&text[index + version.len()..])
 }
 
+fn archive_suffix(filename: &str) -> Option<&str> {
+    const SUFFIXES: [&str; 6] = [".tar.gz", ".tgz", ".tar.xz", ".tar.bz2", ".tar", ".zip"];
+    SUFFIXES
+        .into_iter()
+        .find(|suffix| filename.ends_with(suffix))
+}
+
+/// True when `filename` is `{name}-{version}` plus an archive suffix.
+///
+/// The name is matched case-insensitively so `SeisSol` and `seissol-1.1.4.tar.gz`
+/// agree. A companion such as `pkg-data-1.0.tar.gz` is a different stem.
+fn is_package_version_archive(filename: &str, name: &str, version: &str) -> bool {
+    let Some(suffix) = archive_suffix(filename) else {
+        return false;
+    };
+    let stem = &filename[..filename.len() - suffix.len()];
+    if stem.len() != name.len() + 1 + version.len() {
+        return false;
+    }
+    let (file_name, rest) = stem.split_at(name.len());
+    file_name.eq_ignore_ascii_case(name)
+        && rest.starts_with('-')
+        && &rest[1..] == version
+        && version_token_is_standalone(filename, version)
+}
+
 fn replace_version_token(text: &str, old_version: &str, new_version: &str) -> String {
     let Some(index) = text.find(old_version) else {
         return text.to_string();
@@ -163,15 +189,16 @@ fn replace_version_token(text: &str, old_version: &str, new_version: &str) -> St
     out
 }
 
-/// Rename every further `{'<name>-<old>.<ext>': '<sha256>'}` entry in the recipe.
+/// Rename leftover copies of the main `{name}-{version}` tarball checksum.
 ///
 /// The top-level `checksums` entry is rewritten by `rewrite_source_checksum`,
 /// which renames its key to the new version, so it no longer matches here. What
 /// is left is the copies: an `exts_list` extension whose `source_tmpl` is the
-/// main tarball keeps its own checksum entry, and that entry is what turns a
-/// version bump into a build-time checksum failure.
+/// main tarball keeps its own checksum entry. A companion archive such as
+/// `{name}-data-{version}.tar.gz` is not a copy and is left alone.
 fn rewrite_repeated_artifact_checksums(
     src: &str,
+    name: &str,
     old_version: &str,
     new_version: &str,
     new_checksum: Option<&str>,
@@ -188,7 +215,7 @@ fn rewrite_repeated_artifact_checksums(
         let mut replaced = 0usize;
         let out = re.replace_all(&text, |caps: &regex::Captures| {
             let key = caps.name("key").expect("key group").as_str();
-            if !version_token_is_standalone(key, old_version) {
+            if !is_package_version_archive(key, name, old_version) {
                 return caps.get(0).expect("full match").as_str().to_string();
             }
             replaced += 1;
@@ -201,6 +228,52 @@ fn rewrite_repeated_artifact_checksums(
         count += replaced;
     }
     Ok(RepeatedArtifactRewrite { text, count })
+}
+
+/// Rename `{name}-{old}` archive filenames inside the `sources` list.
+///
+/// EasyBuild downloads the `sources` filename and looks up `checksums` by that
+/// name, so a version bump that only rewrites the checksum key leaves the
+/// download pointing at the previous tarball.
+fn rewrite_source_filenames(
+    src: &str,
+    name: &str,
+    old_version: &str,
+    new_version: &str,
+) -> Result<String, EmitError> {
+    let Some((open, close)) = find_list_span(src, "sources")? else {
+        return Ok(src.to_string());
+    };
+    let body = &src[open..close];
+    let mut new_body = String::with_capacity(body.len());
+    let mut last = 0usize;
+    for (start, end, quote) in quoted_tokens(body) {
+        if end <= start + 1
+            || body.as_bytes()[start] != quote as u8
+            || body.as_bytes()[end - 1] != quote as u8
+        {
+            new_body.push_str(&body[last..end]);
+            last = end;
+            continue;
+        }
+        let inner = &body[start + 1..end - 1];
+        new_body.push_str(&body[last..start]);
+        if is_package_version_archive(inner, name, old_version) {
+            let rewritten = replace_version_token(inner, old_version, new_version);
+            new_body.push(quote);
+            new_body.push_str(&rewritten);
+            new_body.push(quote);
+        } else {
+            new_body.push_str(&body[start..end]);
+        }
+        last = end;
+    }
+    new_body.push_str(&body[last..]);
+    let mut out = String::with_capacity(src.len() + 8);
+    out.push_str(&src[..open]);
+    out.push_str(&new_body);
+    out.push_str(&src[close..]);
+    Ok(out)
 }
 
 /// Emit next-generation easyconfig text and conventional filename from source text.
@@ -260,6 +333,9 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
     let mut warnings = Vec::new();
     if version_changed {
         if let Some(old_v) = source_version.as_deref() {
+            // EasyBuild downloads the sources filename and looks up checksums
+            // by that name, so a version bump has to rename both.
+            text = rewrite_source_filenames(&text, &name, old_v, &app_version)?;
             let rewrite = rewrite_source_checksum(
                 &text,
                 old_v,
@@ -283,6 +359,7 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
             // surfaces only when the extension is built.
             let repeated = rewrite_repeated_artifact_checksums(
                 &text,
+                &name,
                 old_v,
                 &app_version,
                 params.source_checksum.as_deref(),
@@ -383,19 +460,46 @@ pub fn remove_named_dependencies(src: &str, names: &[String]) -> Result<String, 
     Ok(text)
 }
 
-/// True when `src` already declares a dependency tuple whose name is exactly
-/// `name`. A prefix such as `NetCDF` must not match `NetCDF-Fortran`.
+/// True when `idx` sits on a `#` comment of its line, outside a quoted string.
+fn position_is_in_comment(src: &str, idx: usize) -> bool {
+    let line_start = src[..idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let mut quote = None;
+    let mut escaped = false;
+    for byte in src[line_start..idx].bytes() {
+        if let Some(active) = quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == active {
+                quote = None;
+            }
+        } else if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+        } else if byte == b'#' {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when `src` already declares a live dependency tuple whose name is exactly
+/// `name`. A prefix such as `NetCDF` must not match `NetCDF-Fortran`. A leftover
+/// `# ('CMake', '3.26.3')` is a comment, not a declaration.
 fn names_dependency_tuple(src: &str, name: &str) -> bool {
     for quote in ['\'', '"'] {
         let needle = format!("({quote}{name}{quote}");
-        let mut rest = src;
-        while let Some(idx) = rest.find(&needle) {
-            let after = &rest[idx + needle.len()..];
-            let next = after.chars().find(|c| !c.is_whitespace());
-            if matches!(next, Some(',') | Some(')')) {
-                return true;
+        let mut search_from = 0usize;
+        while let Some(rel) = src[search_from..].find(&needle) {
+            let idx = search_from + rel;
+            if !position_is_in_comment(src, idx) {
+                let after = &src[idx + needle.len()..];
+                let next = after.chars().find(|c| !c.is_whitespace());
+                if matches!(next, Some(',') | Some(')')) {
+                    return true;
+                }
             }
-            rest = &rest[idx + 1..];
+            search_from = idx + 1;
         }
     }
     false
@@ -2126,6 +2230,95 @@ checksums = [
         );
     }
 
+    #[test]
+    fn version_bump_rewrites_literal_sources_filename() {
+        let src = "\
+name = 'SeisSol'
+version = '1.1.4'
+toolchain = {'name': 'foss', 'version': '2023a'}
+sources = ['seissol-1.1.4.tar.gz']
+checksums = [
+    {'seissol-1.1.4.tar.gz': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'},
+]
+";
+        let digest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let params = EmitParams {
+            toolchain: foss("2023a"),
+            version: Some("1.3.2".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: Some(digest.into()),
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert!(
+            r.text.contains("sources = ['seissol-1.3.2.tar.gz']"),
+            "sources must name the new tarball:\n{}",
+            r.text
+        );
+        assert!(
+            r.text
+                .contains(&format!("{{'seissol-1.3.2.tar.gz': '{digest}'}}")),
+            "checksum key must match the sources filename:\n{}",
+            r.text
+        );
+        assert!(
+            !r.text.contains("seissol-1.1.4.tar.gz"),
+            "old tarball name leaked:\n{}",
+            r.text
+        );
+    }
+
+    #[test]
+    fn repeated_artifact_rewrite_does_not_stamp_companion_tarball() {
+        let src = "\
+name = 'Pkg'
+version = '1.0'
+toolchain = {'name': 'foss', 'version': '2025a'}
+sources = ['pkg-1.0.tar.gz', 'pkg-data-1.0.tar.gz']
+checksums = [
+    {'pkg-1.0.tar.gz': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'},
+    {'pkg-data-1.0.tar.gz': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'},
+]
+";
+        let digest = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let params = EmitParams {
+            toolchain: foss("2025a"),
+            version: Some("2.0".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            source_checksum: Some(digest.into()),
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert!(
+            r.text
+                .contains("sources = ['pkg-2.0.tar.gz', 'pkg-data-1.0.tar.gz']"),
+            "only the main tarball is a name-version copy:\n{}",
+            r.text
+        );
+        assert!(
+            r.text
+                .contains(&format!("{{'pkg-2.0.tar.gz': '{digest}'}}")),
+            "main digest belongs on the main tarball:\n{}",
+            r.text
+        );
+        assert!(
+            r.text.contains(
+                "{'pkg-data-1.0.tar.gz': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}"
+            ),
+            "companion must keep its own digest:\n{}",
+            r.text
+        );
+        assert!(
+            !r.text
+                .contains(&format!("pkg-data-1.0.tar.gz': '{digest}'"))
+                && !r.text.contains("pkg-data-2.0.tar.gz"),
+            "main digest must not stamp the companion:\n{}",
+            r.text
+        );
+    }
+
     const GPU_WITH_EXTENSION: &str = r#"name = 'GROMACS'
 version = '2026.2'
 versionsuffix = '-CUDA-%(cudaver)s'
@@ -2565,6 +2758,29 @@ moduleclass = 'tools'
         );
         let again = insert_build_dependency(&out, "CMake", "3.31.0").expect("idempotent");
         assert_eq!(again.matches("('CMake',").count(), 1, "{again}");
+    }
+
+    #[test]
+    fn commented_tuple_does_not_count_as_a_live_dependency() {
+        let src = "\
+dependencies = [
+    ('Python', '3.13.1'), # ('CMake', '3.26.3'),
+]
+";
+        let out = insert_build_dependency(src, "CMake", "3.31.0").expect("insert");
+        assert!(
+            out.contains("builddependencies = [") && out.contains("('CMake', '3.31.0')"),
+            "commented CMake must not block the live insert:\n{out}"
+        );
+        assert!(
+            out.contains("# ('CMake', '3.26.3'),"),
+            "the leftover comment must stay:\n{out}"
+        );
+        assert_eq!(
+            out.matches("('CMake', '3.31.0')").count(),
+            1,
+            "only the live tuple is inserted:\n{out}"
+        );
     }
 
     #[test]
