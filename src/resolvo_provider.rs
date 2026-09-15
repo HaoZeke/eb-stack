@@ -733,10 +733,8 @@ impl EbProvider {
             } else if crate::hierarchy::is_system_toolchain(&c.toolchain) {
                 false
             } else {
-                requirement.matches(&format!(
-                    "{}-{}-{}{suffix}",
-                    c.version, c.toolchain.name, c.toolchain.version
-                ))
+                let module = format!("{}-{}-{}", c.version, c.toolchain.name, c.toolchain.version);
+                requirement.matches(&format!("{module}{suffix}")) || requirement.matches(&module)
             };
             if !(version_ok || suffix_ok || module_ok) {
                 continue;
@@ -1692,6 +1690,53 @@ mod tests {
             ">=1.0 unsuffixed is not CUDA 2.0: {:?}",
             lib.versionsuffix
         );
+    }
+
+    #[test]
+    fn a_suffixed_pin_matches_the_unsuffixed_module_spelling() {
+        let gcc = Toolchain {
+            name: "GCC".into(),
+            version: "13.3.0".into(),
+        };
+        let at = |suffix: Option<&str>, path: &str| Candidate {
+            name: "OpenMPI".into(),
+            version: "5.0.3".into(),
+            toolchain: gcc.clone(),
+            versionsuffix: suffix.map(str::to_string),
+            easyconfig_path: path.into(),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+            moduleclass: None,
+        };
+        let candidates = vec![
+            at(None, "OpenMPI-5.0.3.eb"),
+            at(Some("-CUDA-12.6.0"), "OpenMPI-5.0.3-CUDA.eb"),
+            Candidate {
+                name: "App".into(),
+                version: "1.0".into(),
+                toolchain: gcc.clone(),
+                versionsuffix: None,
+                easyconfig_path: "App-1.0.eb".into(),
+                dependencies: vec![DepReq {
+                    name: "OpenMPI".into(),
+                    version_req: "==5.0.3-GCC-13.3.0".into(),
+                    versionsuffix: Some("-CUDA-12.6.0".into()),
+                    toolchain: None,
+                }],
+                builddependencies: vec![],
+                exts_list: vec![],
+                moduleclass: None,
+            },
+        ];
+        let mut pol = policy(vec!["App"], vec![]);
+        pol.toolchain = gcc;
+        let selected = solve_with_resolvo(&candidates, &pol, None).expect("solve");
+        let mpi = selected
+            .iter()
+            .find(|candidate| candidate.name == "OpenMPI")
+            .expect("OpenMPI");
+        assert_eq!(mpi.easyconfig_path, "OpenMPI-5.0.3-CUDA.eb");
     }
 
     #[test]
