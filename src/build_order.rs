@@ -515,6 +515,25 @@ fn candidates_by_key(
     Ok(map)
 }
 
+fn candidates_named<'a>(
+    by_name: &HashMap<&str, Vec<&'a Candidate>>,
+    by_ext: &HashMap<&str, Vec<&'a Candidate>>,
+    name: &str,
+) -> Vec<&'a Candidate> {
+    let mut named = Vec::new();
+    if let Some(candidates) = by_name.get(name) {
+        named.extend(candidates.iter().copied());
+    }
+    if let Some(candidates) = by_ext.get(name) {
+        for candidate in candidates {
+            if !named.iter().any(|seen| std::ptr::eq(*seen, *candidate)) {
+                named.push(*candidate);
+            }
+        }
+    }
+    named
+}
+
 /// Build the graph the recipes describe, reachable from `roots`.
 ///
 /// Nodes are whole modules and edges run from a dependency to what needs it.
@@ -534,6 +553,17 @@ pub fn build_graph(
     let mut index: HashMap<ModuleKey, NodeIndex> = HashMap::new();
     let mut queue: Vec<ModuleKey> = Vec::new();
     let by_key = candidates_by_key(candidates)?;
+    let mut by_name: HashMap<&str, Vec<&Candidate>> = HashMap::new();
+    let mut by_ext: HashMap<&str, Vec<&Candidate>> = HashMap::new();
+    for candidate in candidates {
+        by_name
+            .entry(candidate.name.as_str())
+            .or_default()
+            .push(candidate);
+        for ext in &candidate.exts_list {
+            by_ext.entry(ext.name.as_str()).or_default().push(candidate);
+        }
+    }
 
     let node_for = |graph: &mut BuildGraph,
                     index: &mut HashMap<ModuleKey, NodeIndex>,
@@ -549,16 +579,20 @@ pub fn build_graph(
             Some((name, version)) => (name, format!("=={version}")),
             None => (root.as_str(), String::new()),
         };
-        let admissible: Vec<&Candidate> = candidates
-            .iter()
-            .filter(|c| c.name == name && root_version_matches(c, &version_req))
+        let admissible: Vec<&Candidate> = by_name
+            .get(name)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|c| root_version_matches(c, &version_req))
             .collect();
         let start = match choose(&admissible, choice) {
             Some(picked) => picked,
             None => {
-                let mut of_that_name: Vec<String> = candidates
-                    .iter()
-                    .filter(|c| c.name == name)
+                let mut of_that_name: Vec<String> = by_name
+                    .get(name)
+                    .into_iter()
+                    .flatten()
                     .map(|c| c.version.clone())
                     .collect();
                 of_that_name.sort_by(|a, b| cmp_version(b, a));
@@ -603,11 +637,13 @@ pub fn build_graph(
         if !crate::hierarchy::is_system_toolchain(&candidate.toolchain) {
             // EasyBuild's toolchain line is the unsuffixed module. A CUDA
             // GCC-12.3.0 sitting first in parse order is not GCC-12.3.0.
-            let mut admissible: Vec<&Candidate> = candidates
-                .iter()
+            let mut admissible: Vec<&Candidate> = by_name
+                .get(candidate.toolchain.name.as_str())
+                .into_iter()
+                .flatten()
+                .copied()
                 .filter(|c| {
-                    c.name == candidate.toolchain.name
-                        && c.version == candidate.toolchain.version
+                    c.version == candidate.toolchain.version
                         && c.versionsuffix.as_deref().unwrap_or("").is_empty()
                 })
                 .collect();
@@ -630,9 +666,10 @@ pub fn build_graph(
                     }
                 }
                 None => {
-                    let mut available: Vec<String> = candidates
-                        .iter()
-                        .filter(|c| c.name == candidate.toolchain.name)
+                    let mut available: Vec<String> = by_name
+                        .get(candidate.toolchain.name.as_str())
+                        .into_iter()
+                        .flatten()
                         .map(|c| format!("{}-{}", c.version, ModuleKey::of(c)))
                         .collect();
                     available.sort();
@@ -668,11 +705,12 @@ pub fn build_graph(
                 .map(|hierarchy| hierarchy.members)
                 .unwrap_or_default();
         for (dep, kind) in deps {
-            let mut scored: Vec<(&Candidate, usize)> = candidates
-                .iter()
-                .filter(|c| satisfies(c, dep, candidate))
-                .map(|c| (c, distance(c, candidate, &recipe_members)))
-                .collect();
+            let mut scored: Vec<(&Candidate, usize)> =
+                candidates_named(&by_name, &by_ext, &dep.name)
+                    .into_iter()
+                    .filter(|c| satisfies(c, dep, candidate))
+                    .map(|c| (c, distance(c, candidate, &recipe_members)))
+                    .collect();
             // Nearest generation first, then the choice function decides among
             // equals. A dependency that pins a toolchain was already narrowed
             // to that one build by `satisfies`. usize::MAX means "not in this
@@ -690,9 +728,8 @@ pub fn build_graph(
             }
             let admissible: Vec<&Candidate> = scored.into_iter().map(|(c, _)| c).collect();
             let Some(picked) = choose(&admissible, choice) else {
-                let mut available: Vec<String> = candidates
-                    .iter()
-                    .filter(|c| c.name == dep.name)
+                let mut available: Vec<String> = candidates_named(&by_name, &by_ext, &dep.name)
+                    .into_iter()
                     .map(|c| format!("{}-{}", c.version, ModuleKey::of(c).toolchain))
                     .collect();
                 available.sort();
