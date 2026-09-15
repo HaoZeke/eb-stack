@@ -680,13 +680,12 @@ impl EbProvider {
             {
                 continue;
             }
-            // When the dep carries a versionsuffix, only candidates with the
-            // same suffix satisfy the requirement (distinct CUDA vs plain, etc.).
-            if let Some(want) = versionsuffix {
-                let got = c.versionsuffix.as_deref().unwrap_or("");
-                if got != want {
-                    continue;
-                }
+            // None and empty string are the unsuffixed module. A missing
+            // suffix is not "any variant": CUDA must not satisfy a 2-tuple.
+            let want = versionsuffix.unwrap_or("");
+            let got = c.versionsuffix.as_deref().unwrap_or("");
+            if got != want {
+                continue;
             }
             range = range.union(&Ranges::singleton(*rank));
         }
@@ -1569,7 +1568,6 @@ mod tests {
                 vec![DepReq {
                     name: "Lib".into(),
                     version_req: "==1.0".into(),
-                    // No versionsuffix on the dep: both identities match; prefer higher rank.
                     versionsuffix: None,
                     toolchain: None,
                 }],
@@ -1578,11 +1576,42 @@ mod tests {
         let pol = policy(vec!["App"], vec![]);
         let selected = solve_with_resolvo(&candidates, &pol, None).expect("solve");
         let lib = selected.iter().find(|c| c.name == "Lib").expect("Lib");
-        // Rank order: plain "" then CUDA (lexicographic suffix). Prefer newer = higher rank = CUDA.
-        // With no suffix constraint either may win via prefer_newer; assert a Lib was chosen
-        // and provider still had two identities (covered above). Here: both are valid.
         assert_eq!(lib.version, "1.0");
-        assert!(lib.versionsuffix.is_none() || lib.versionsuffix.as_deref() == Some("-CUDA-12.8"));
+        assert!(
+            lib.versionsuffix.is_none() || lib.versionsuffix.as_deref() == Some(""),
+            "a 2-tuple is the unsuffixed module, not CUDA: {:?}",
+            lib.versionsuffix
+        );
+        assert_eq!(lib.easyconfig_path, "Lib-1.0.eb");
+    }
+
+    #[test]
+    fn versionsuffix_empty_string_is_the_unsuffixed_module() {
+        let candidates = vec![
+            cand("Lib", "1.0", None, "Lib-1.0.eb", vec![]),
+            cand("Lib", "1.0", Some("-CUDA-12.8"), "Lib-1.0-CUDA.eb", vec![]),
+            cand(
+                "App",
+                "1.0",
+                None,
+                "App-1.0.eb",
+                vec![DepReq {
+                    name: "Lib".into(),
+                    version_req: "==1.0".into(),
+                    versionsuffix: Some(String::new()),
+                    toolchain: None,
+                }],
+            ),
+        ];
+        let pol = policy(vec!["App"], vec![]);
+        let selected = solve_with_resolvo(&candidates, &pol, None).expect("solve");
+        let lib = selected.iter().find(|c| c.name == "Lib").expect("Lib");
+        assert!(
+            lib.versionsuffix.is_none() || lib.versionsuffix.as_deref() == Some(""),
+            "empty suffix is unsuffixed, not CUDA: {:?}",
+            lib.versionsuffix
+        );
+        assert_eq!(lib.easyconfig_path, "Lib-1.0.eb");
     }
 
     #[test]
