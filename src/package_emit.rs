@@ -190,17 +190,22 @@ fn render_easyconfig(
     let mut easyconfig_parameters = plan.build.easyconfig_parameters.clone();
     easyconfig_parameters.extend(profile.easyconfig_parameters.clone());
     let easyconfig_parameter_lines = render_easyconfig_parameters(&easyconfig_parameters);
+    let package_hierarchy = hierarchy_for(&lock.toolchain, None).ok();
     let build_dependencies = lock
         .dependencies
         .iter()
         .filter(|dependency| dependency.build)
-        .map(|dependency| render_dependency(dependency, &lock.toolchain))
+        .map(|dependency| {
+            render_dependency(dependency, &lock.toolchain, package_hierarchy.as_ref())
+        })
         .collect::<Vec<_>>();
     let runtime_dependencies = lock
         .dependencies
         .iter()
         .filter(|dependency| !dependency.build)
-        .map(|dependency| render_dependency(dependency, &lock.toolchain))
+        .map(|dependency| {
+            render_dependency(dependency, &lock.toolchain, package_hierarchy.as_ref())
+        })
         .collect::<Vec<_>>();
     let moduleclass = plan.build.moduleclass.as_deref().unwrap_or("lib");
 
@@ -1004,11 +1009,12 @@ fn is_tar_archive(filename: &str) -> bool {
 fn render_dependency(
     dependency: &crate::package::LockedDependency,
     package_toolchain: &Toolchain,
+    package_hierarchy: Option<&crate::hierarchy::ToolchainHierarchy>,
 ) -> String {
     // Conventional easyconfigs omit the toolchain when EasyBuild can resolve it
     // through the package hierarchy (e.g. Boost on GCCcore under foss). Keep an
     // explicit identity only for cross-generation or out-of-hierarchy pins.
-    if dependency_requires_explicit_toolchain(dependency, package_toolchain) {
+    if dependency_requires_explicit_toolchain(dependency, package_toolchain, package_hierarchy) {
         return format!(
             "('{}', '{}', '{}', ('{}', '{}'))",
             escape_single(&dependency.name),
@@ -1036,6 +1042,7 @@ fn render_dependency(
 fn dependency_requires_explicit_toolchain(
     dependency: &crate::package::LockedDependency,
     package_toolchain: &Toolchain,
+    package_hierarchy: Option<&crate::hierarchy::ToolchainHierarchy>,
 ) -> bool {
     if dependency.toolchain == *package_toolchain {
         return false;
@@ -1045,10 +1052,10 @@ fn dependency_requires_explicit_toolchain(
     if is_system_toolchain(&dependency.toolchain) {
         return true;
     }
-    match hierarchy_for(package_toolchain, None) {
-        Ok(hierarchy) => hierarchy_member_rank(&hierarchy, &dependency.toolchain).is_none(),
+    match package_hierarchy {
+        Some(hierarchy) => hierarchy_member_rank(hierarchy, &dependency.toolchain).is_none(),
         // Unknown parent: keep the full identity rather than guessing.
-        Err(_) => true,
+        None => true,
     }
 }
 
@@ -1434,7 +1441,7 @@ mod tests {
             name: "foss".into(),
             version: "2024a".into(),
         };
-        let rendered = render_dependency(&dep, &foss);
+        let rendered = render_dependency(&dep, &foss, None);
         assert!(
             rendered.contains("system"),
             "SYSTEM must stay explicit: {rendered}"

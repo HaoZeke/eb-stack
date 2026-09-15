@@ -337,9 +337,11 @@ fn package_inspect(arguments: &Value) -> Result<Value, String> {
     let configs = package_layers(arguments)?;
     let (plan, sbom) = inspect_new_package(&source, format, &toolchain, &configs)
         .map_err(|error| error.to_string())?;
+    let name = plan.package.name.clone();
+    let version = plan.package.version.clone();
     let written = write_package_bundle(
         &PackageBundle {
-            plan: plan.clone(),
+            plan,
             sbom,
             locks: Vec::new(),
             easyconfigs: Vec::new(),
@@ -348,8 +350,8 @@ fn package_inspect(arguments: &Value) -> Result<Value, String> {
     )
     .map_err(|error| error.to_string())?;
     Ok(json!({
-        "package": plan.package.name,
-        "version": plan.package.version,
+        "package": name,
+        "version": version,
         "manifest": written.manifest,
         "sbom": written.sbom,
         "claims": {"resolves": false, "builds": false, "binary_verified": false}
