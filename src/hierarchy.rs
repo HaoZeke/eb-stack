@@ -813,6 +813,8 @@ pub struct ResolveDepOpts<'a> {
     /// among eligible install candidates (see [`resolve_dep_version_in_hierarchy_opts`]).
     /// Default false preserves prefer_newer among ranks when no floor is set.
     pub use_consensus: bool,
+    /// When set, skip a robot walk and use these generation pin counts.
+    pub precomputed_counts: Option<&'a HashMap<String, usize>>,
 }
 
 /// Among hierarchy members for `name`, pick a safe version for the target generation.
@@ -946,6 +948,43 @@ pub fn count_generation_dep_versions_for_suffix(
     counts
 }
 
+/// One robot walk: pin counts keyed by `(name, versionsuffix)`.
+pub fn count_generation_dep_versions_all(
+    cands: &[Candidate],
+    hierarchy: &ToolchainHierarchy,
+) -> HashMap<(String, String), HashMap<String, usize>> {
+    let mut all: HashMap<(String, String), HashMap<String, usize>> = HashMap::new();
+    for consumer in cands {
+        if hierarchy_member_rank(hierarchy, &consumer.toolchain).is_none() {
+            continue;
+        }
+        if is_system_toolchain(&consumer.toolchain)
+            && !hierarchy.members.iter().any(|member| {
+                !is_system_toolchain(member)
+                    && member.name == consumer.name
+                    && member.version == consumer.version
+            })
+        {
+            continue;
+        }
+        for dep in consumer
+            .dependencies
+            .iter()
+            .chain(consumer.builddependencies.iter())
+        {
+            let Some(ver) = exact_pin_version(&dep.version_req) else {
+                continue;
+            };
+            let suffix = dep.versionsuffix.clone().unwrap_or_default();
+            *all.entry((dep.name.clone(), suffix))
+                .or_default()
+                .entry(ver.to_string())
+                .or_insert(0) += 1;
+        }
+    }
+    all
+}
+
 /// Prefer generation-compiler / composite toolchains over SYSTEM among already
 /// hierarchy-eligible install candidates.
 ///
@@ -1070,8 +1109,14 @@ pub fn resolve_dep_version_in_hierarchy_opts(
             v.dedup();
             v
         };
-        let counts =
-            count_generation_dep_versions_for_suffix(name, cands, hierarchy, Some(want_suffix));
+        let owned_counts;
+        let counts = if let Some(precomputed) = opts.precomputed_counts {
+            precomputed
+        } else {
+            owned_counts =
+                count_generation_dep_versions_for_suffix(name, cands, hierarchy, Some(want_suffix));
+            &owned_counts
+        };
         if let Some(picked) = pick_consensus_version(&counts, &versions) {
             return Some(picked);
         }
@@ -1212,6 +1257,8 @@ pub fn resolve_dep_versions_for_specs(
 ) -> Result<(HashMap<String, String>, Vec<String>), HierarchyError> {
     let mut out = HashMap::new();
     let mut kept_old = Vec::new();
+    let all_counts = count_generation_dep_versions_all(cands, hierarchy);
+    let empty_counts = HashMap::new();
     for spec in specs {
         // versionsuffix-qualified deps stay at the source pin (do not bump).
         if let Some(vs) = spec.versionsuffix.as_deref() {
@@ -1234,10 +1281,14 @@ pub fn resolve_dep_versions_for_specs(
         // `# optional` marks the dep optional-to-include, not frozen: it
         // resolves/bumps like any other dep below (comment text is preserved
         // by the emitter regardless of whether the version changes).
+        let counts = all_counts
+            .get(&(spec.name.clone(), String::new()))
+            .unwrap_or(&empty_counts);
         let opts = ResolveDepOpts {
             floor_version: Some(spec.version.as_str()),
             versionsuffix: None,
             use_consensus: true,
+            precomputed_counts: Some(counts),
         };
         match resolve_dep_version_in_hierarchy_opts(&spec.name, cands, hierarchy, &opts) {
             Some(ver) => {
@@ -1737,6 +1788,7 @@ mod tests {
             floor_version: Some("3.0.0"),
             versionsuffix: None,
             use_consensus: true,
+            ..Default::default()
         };
         assert_eq!(
             resolve_dep_version_in_hierarchy_opts("Cython", &cands, &h, &opts).as_deref(),
@@ -1959,6 +2011,7 @@ mod tests {
             floor_version: Some("2.45"),
             versionsuffix: None,
             use_consensus: false,
+            ..Default::default()
         };
         assert_eq!(
             resolve_dep_version_in_hierarchy_opts("binutils", &cands, &h, &opts).as_deref(),
@@ -1980,6 +2033,7 @@ mod tests {
             floor_version: Some("14.0.0"),
             versionsuffix: None,
             use_consensus: true,
+            ..Default::default()
         };
         assert_eq!(
             resolve_dep_version_in_hierarchy_opts("LLVM", &cands, &h, &plain).as_deref(),
@@ -1990,6 +2044,7 @@ mod tests {
             floor_version: Some("14.0.0"),
             versionsuffix: Some("-llvmlite"),
             use_consensus: true,
+            ..Default::default()
         };
         assert_eq!(
             resolve_dep_version_in_hierarchy_opts("LLVM", &cands, &h, &llvmlite).as_deref(),
@@ -2118,6 +2173,7 @@ mod tests {
             floor_version: Some("3.27.6"),
             versionsuffix: None,
             use_consensus: true,
+            ..Default::default()
         };
         assert_eq!(
             resolve_dep_version_in_hierarchy_opts("CMake", &cands, &h, &opts).as_deref(),
@@ -2151,6 +2207,7 @@ mod tests {
             floor_version: Some("1.4.0"),
             versionsuffix: None,
             use_consensus: true,
+            ..Default::default()
         };
         assert_eq!(
             resolve_dep_version_in_hierarchy_opts("scikit-learn", &sk, &h, &opts_sk).as_deref(),
@@ -2216,6 +2273,7 @@ mod tests {
             floor_version: Some("3.30.0"),
             versionsuffix: None,
             use_consensus: true,
+            ..Default::default()
         };
         assert_eq!(
             resolve_dep_version_in_hierarchy_opts("CMake", &cands, &h, &opts).as_deref(),
@@ -2238,6 +2296,7 @@ mod tests {
             floor_version: Some("3.27.6"),
             versionsuffix: None,
             use_consensus: true,
+            ..Default::default()
         };
         assert_eq!(
             resolve_dep_version_in_hierarchy_opts("CMake", &cands, &h, &opts).as_deref(),
@@ -2335,6 +2394,7 @@ mod tests {
             floor_version: None,
             versionsuffix: None,
             use_consensus: true,
+            ..Default::default()
         };
         assert_eq!(
             resolve_dep_version_in_hierarchy_opts("HDF5", &cands, &h, &opts).as_deref(),
