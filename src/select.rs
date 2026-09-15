@@ -12,7 +12,7 @@ use crate::hierarchy::{
     filter_candidates_in_hierarchy, is_system_toolchain, toolchains_match, SourceDepSpec,
     ToolchainHierarchy,
 };
-use crate::provides::{expand_extension_provides, lookup_named_candidates};
+use crate::provides::{candidate_answers_name, expand_extension_provides, lookup_named_candidates};
 use crate::resolvo_provider::solve_with_resolvo;
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
@@ -87,6 +87,7 @@ pub fn select_stack(
 /// are **exact pins** in the policy: resolvo joint-checks feasibility under
 /// generation-native versions rather than free prefer_newer overriding
 /// consensus (which would re-select SYSTEM/out-of-generation newest).
+/// A pin matches the spec name or the SAT name (`poetry-core` or `poetry`).
 /// Unpinned resolvable specs still free-select under residual floors.
 ///
 /// Specs with SYSTEM toolchain or a non-empty versionsuffix are skipped
@@ -118,6 +119,7 @@ pub fn resolvo_resolve_dep_versions(
     let mut pins: Vec<crate::domain::Pin> = Vec::new();
     let mut optional_names: HashSet<String> = HashSet::new();
     let mut parent_floors: HashMap<String, String> = HashMap::new();
+    let mut emit_names: HashMap<String, Vec<String>> = HashMap::new();
     for s in specs {
         if s.system_toolchain {
             continue;
@@ -125,7 +127,7 @@ pub fn resolvo_resolve_dep_versions(
         if s.versionsuffix.as_deref().is_some_and(|vs| !vs.is_empty()) {
             continue;
         }
-        let Some((sat_name, named)) = lookup_named_candidates(&by_name, &s.name) else {
+        let Some((sat_name, named)) = named_candidates_for_spec(&by_name, &s.name) else {
             if s.optional {
                 continue;
             }
@@ -134,12 +136,16 @@ pub fn resolvo_resolve_dep_versions(
                 s.name
             ));
         };
+        emit_names
+            .entry(sat_name.clone())
+            .or_default()
+            .push(s.name.clone());
 
         let (mut version_req, pin_exact) =
-            if let Some(pref) = preferred_pins.and_then(|m| m.get(&s.name)) {
+            if let Some(pref) = preferred_pin(preferred_pins, &s.name, &sat_name) {
                 // Hierarchy consensus: exact pin, joint SAT under that version.
                 let req = format!("=={pref}");
-                (req.clone(), Some(pref.clone()))
+                (req.clone(), Some(pref))
             } else if s.version == "0.0.0" || s.version.is_empty() {
                 (">=0".into(), None)
             } else {
@@ -312,11 +318,21 @@ pub fn resolvo_resolve_dep_versions(
         if map.is_empty() {
             return Err("resolvo lock had no co-selected deps".into());
         }
+        let selected = map.len();
+        // SAT keys the lock. Emit still looks up the foreign spec spelling
+        // (`poetry-core`), so project that name onto the same version.
+        for (sat_name, specs) in &emit_names {
+            let Some(version) = map.get(sat_name).cloned() else {
+                continue;
+            };
+            for spec_name in specs {
+                map.entry(spec_name.clone())
+                    .or_insert_with(|| version.clone());
+            }
+        }
         let note = format!(
-            "resolvo joint co-selected {} dep(s) via {} ({})",
-            map.len(),
-            lock.solver.engine,
-            lock.solver.engine_version
+            "resolvo joint co-selected {selected} dep(s) via {} ({})",
+            lock.solver.engine, lock.solver.engine_version
         );
         Ok((map, note))
     };
@@ -380,6 +396,40 @@ pub fn resolvo_resolve_dep_versions(
         }
         Err(error) => Err(error),
     }
+}
+
+/// SAT index first (`poetry-core` → `poetry`), then overlay identity so
+/// `scipy` hits `SciPy` and `torch` hits `PyTorch`. The SAT name stays the
+/// stored candidate name.
+fn named_candidates_for_spec<'a>(
+    by_name: &HashMap<&str, Vec<&'a Candidate>>,
+    name: &str,
+) -> Option<(String, Vec<&'a Candidate>)> {
+    if let Some(found) = lookup_named_candidates(by_name, name) {
+        return Some(found);
+    }
+    let mut matches: Vec<(&str, Vec<&'a Candidate>)> = by_name
+        .iter()
+        .filter(|(_, named)| {
+            named
+                .iter()
+                .any(|candidate| candidate_answers_name(candidate, name))
+        })
+        .map(|(sat_name, named)| (*sat_name, named.clone()))
+        .collect();
+    matches.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    matches
+        .into_iter()
+        .next()
+        .map(|(sat_name, named)| (sat_name.to_string(), named))
+}
+
+fn preferred_pin(
+    preferred_pins: Option<&HashMap<String, String>>,
+    spec_name: &str,
+    sat_name: &str,
+) -> Option<String> {
+    preferred_pins.and_then(|pins| pins.get(spec_name).or_else(|| pins.get(sat_name)).cloned())
 }
 
 fn lock_package_identity_cmp(a: &LockPackage, b: &LockPackage) -> std::cmp::Ordering {
@@ -1726,5 +1776,122 @@ mod lock_identity_and_bump_pin_tests {
         )
         .expect("poetry-core via bundle exts_list must reach SAT");
         assert_eq!(map.get("poetry").map(String::as_str), Some("1.9.0"));
+        assert_eq!(map.get("poetry-core").map(String::as_str), Some("1.9.0"));
+    }
+
+    #[test]
+    fn foreign_overlay_identity_hits_first_class_module() {
+        let (scipy_map, _) = resolvo_resolve_dep_versions(
+            &[SourceDepSpec::plain("scipy", "1.0")],
+            &[candidate("SciPy", "1.0", None)],
+            &hierarchy(),
+            &foss(),
+            "App",
+            "1.0",
+            None,
+        )
+        .expect("scipy vs SciPy");
+        assert_eq!(scipy_map.get("scipy").map(String::as_str), Some("1.0"));
+        assert_eq!(scipy_map.get("SciPy").map(String::as_str), Some("1.0"));
+
+        let (torch_map, _) = resolvo_resolve_dep_versions(
+            &[SourceDepSpec::plain("torch", "2.5.1")],
+            &[candidate("PyTorch", "2.5.1", None)],
+            &hierarchy(),
+            &foss(),
+            "App",
+            "1.0",
+            None,
+        )
+        .expect("torch vs PyTorch");
+        assert_eq!(torch_map.get("torch").map(String::as_str), Some("2.5.1"));
+        assert_eq!(torch_map.get("PyTorch").map(String::as_str), Some("2.5.1"));
+
+        let mut bundle = candidate("Python-bundle-PyPI", "2025.04", None);
+        bundle.exts_list = vec![ExtEntry {
+            name: "poetry-core".into(),
+            version: "1.9.0".into(),
+        }];
+        let (map, _) = resolvo_resolve_dep_versions(
+            &[
+                SourceDepSpec::plain("poetry-core", "1.0"),
+                SourceDepSpec::plain("numpy", "2.3.1"),
+            ],
+            &[bundle, candidate("numpy", "2.3.1", None)],
+            &hierarchy(),
+            &foss(),
+            "App",
+            "1.0",
+            None,
+        )
+        .expect("poetry-core and first-class numpy still pass");
+        assert_eq!(map.get("poetry").map(String::as_str), Some("1.9.0"));
+        assert_eq!(map.get("poetry-core").map(String::as_str), Some("1.9.0"));
+        assert_eq!(map.get("numpy").map(String::as_str), Some("2.3.1"));
+    }
+
+    #[test]
+    fn preferred_pins_accept_sat_name_and_spec_name() {
+        let mut poetry_old = candidate("Python-bundle-PyPI", "2024.04", None);
+        poetry_old.exts_list = vec![ExtEntry {
+            name: "poetry-core".into(),
+            version: "1.8.0".into(),
+        }];
+        let mut poetry_new = candidate("Python-bundle-PyPI", "2025.04", None);
+        poetry_new.exts_list = vec![ExtEntry {
+            name: "poetry-core".into(),
+            version: "1.9.0".into(),
+        }];
+        let mut numpy_old = candidate("SciPy-bundle", "2024.05", None);
+        numpy_old.exts_list = vec![ExtEntry {
+            name: "numpy".into(),
+            version: "2.2.0".into(),
+        }];
+        let mut numpy_new = candidate("SciPy-bundle", "2025.06", None);
+        numpy_new.exts_list = vec![ExtEntry {
+            name: "numpy".into(),
+            version: "2.3.1".into(),
+        }];
+        let specs = [
+            SourceDepSpec::plain("poetry-core", "1.0"),
+            SourceDepSpec::plain("numpy", "1.0"),
+        ];
+        let cands = [poetry_old, poetry_new, numpy_old, numpy_new];
+
+        let sat_pins = HashMap::from([("poetry".into(), "1.8.0".into())]);
+        let (sat_map, _) = resolvo_resolve_dep_versions(
+            &specs,
+            &cands,
+            &hierarchy(),
+            &foss(),
+            "App",
+            "1.0",
+            Some(&sat_pins),
+        )
+        .expect("pin keyed poetry");
+        assert_eq!(sat_map.get("poetry").map(String::as_str), Some("1.8.0"));
+        assert_eq!(
+            sat_map.get("poetry-core").map(String::as_str),
+            Some("1.8.0")
+        );
+        assert_eq!(sat_map.get("numpy").map(String::as_str), Some("2.3.1"));
+
+        let spec_pins = HashMap::from([("poetry-core".into(), "1.8.0".into())]);
+        let (spec_map, _) = resolvo_resolve_dep_versions(
+            &specs,
+            &cands,
+            &hierarchy(),
+            &foss(),
+            "App",
+            "1.0",
+            Some(&spec_pins),
+        )
+        .expect("pin keyed poetry-core");
+        assert_eq!(spec_map.get("poetry").map(String::as_str), Some("1.8.0"));
+        assert_eq!(
+            spec_map.get("poetry-core").map(String::as_str),
+            Some("1.8.0")
+        );
+        assert_eq!(spec_map.get("numpy").map(String::as_str), Some("2.3.1"));
     }
 }
