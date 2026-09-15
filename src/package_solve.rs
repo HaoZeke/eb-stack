@@ -863,7 +863,11 @@ fn apply_generation_consensus_pins(
 ) {
     let all_counts = crate::hierarchy::count_generation_dep_versions_all(all_candidates, hierarchy);
     for name in direct_roles.keys() {
-        if stack_policy.pins.iter().any(|pin| pin.name == *name) {
+        if stack_policy
+            .pins
+            .iter()
+            .any(|pin| pin.name.eq_ignore_ascii_case(name))
+        {
             continue;
         }
         let empty = std::collections::HashMap::new();
@@ -881,7 +885,9 @@ fn apply_generation_consensus_pins(
                 .eb_name
                 .as_deref()
                 .unwrap_or(dependency.name.as_str());
-            (dep_name == name).then_some(dependency.constraint.as_deref())
+            dep_name
+                .eq_ignore_ascii_case(name)
+                .then_some(dependency.constraint.as_deref())
         });
         let mut eligible = preferred
             .iter()
@@ -1005,7 +1011,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lowercase_site_pin_does_not_suppress_consensus() {
+    fn a_lowercase_site_pin_suppresses_consensus() {
         let gcc = cand("Python", "3.12.3", "GCCcore", "13.3.0");
         let mut policy = StackPolicy {
             schema_version: STACK_POLICY_SCHEMA_VERSION,
@@ -1048,11 +1054,11 @@ mod tests {
             policy
                 .pins
                 .iter()
-                .any(|pin| pin.name == "Python"
-                    && pin.source.as_deref() == Some("generation-consensus")),
-            "{:?}",
+                .all(|pin| pin.source.as_deref() != Some("generation-consensus")),
+            "site pin python must stand for robot Python: {:?}",
             policy.pins
         );
+        assert_eq!(policy.pins.len(), 1);
     }
 
     #[test]

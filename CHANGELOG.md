@@ -102,6 +102,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A site stack pin named `python` suppresses generation-consensus for
+  robot `Python`, so the two cannot fight after the pin already matches
+  that candidate.
 - A layer-only version bump drops the previous source SHA-256 from the
   plan and SBOM. An unpinned overlay leftover reads `--package-index`
   instead of installing version `0` from SAT's `>=0`. Stack and root
