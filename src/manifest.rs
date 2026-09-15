@@ -326,7 +326,42 @@ fn canonical_version_constraint(format: ForeignFormat, pin: Option<&str>) -> Opt
             Some(pin.to_string())
         }
     } else {
-        Some(pin.to_string())
+        Some(expand_digit_wildcards(pin))
+    }
+}
+
+fn expand_digit_wildcards(pin: &str) -> String {
+    pin.split(',')
+        .map(str::trim)
+        .filter(|clause| !clause.is_empty())
+        .map(expand_digit_wildcard_clause)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn expand_digit_wildcard_clause(clause: &str) -> String {
+    let version = clause
+        .strip_prefix("===")
+        .or_else(|| clause.strip_prefix("=="))
+        .unwrap_or(clause)
+        .trim();
+    if !clause.starts_with("==")
+        && !version.starts_with(|character: char| character.is_ascii_digit())
+    {
+        return clause.to_string();
+    }
+    let mut prefix = version;
+    let mut stripped = false;
+    while let Some(rest) = prefix.strip_suffix(".*") {
+        prefix = rest;
+        stripped = true;
+    }
+    if !stripped || !prefix.chars().any(|value| value.is_ascii_digit()) {
+        return clause.to_string();
+    }
+    match series_successor(prefix) {
+        Some(successor) => format!(">={prefix},<{successor}"),
+        None => clause.to_string(),
     }
 }
 
@@ -334,6 +369,16 @@ fn canonical_spack_version_constraint(version: &str) -> Option<String> {
     let version = version.trim();
     if version.is_empty() {
         return None;
+    }
+    // Spack commas are unions: @1.8.0,1.10.0 is 1.8.0 OR 1.10.0. The shared
+    // requirement language uses comma for AND, so each alternative is
+    // canonicalized on its own and joined with ||.
+    if version.contains(',') {
+        let alternatives: Vec<String> = version
+            .split(',')
+            .filter_map(|part| canonical_spack_version_constraint(part.trim()))
+            .collect();
+        return (!alternatives.is_empty()).then(|| alternatives.join("||"));
     }
     if let Some(exact) = version.strip_prefix('=') {
         return Some(format!("=={exact}"));
@@ -349,19 +394,19 @@ fn canonical_spack_version_constraint(version: &str) -> Option<String> {
             terms.push(format!(">={minimum}"));
         }
         if !maximum.is_empty() {
-            terms.push(spack_prefix_successor(maximum).map_or_else(
+            terms.push(series_successor(maximum).map_or_else(
                 || format!("<={maximum}"),
                 |successor| format!("<{successor}"),
             ));
         }
         return (!terms.is_empty()).then(|| terms.join(","));
     }
-    spack_prefix_successor(version)
+    series_successor(version)
         .map(|successor| format!(">={version},<{successor}"))
         .or_else(|| Some(format!("=={version}")))
 }
 
-fn spack_prefix_successor(version: &str) -> Option<String> {
+fn series_successor(version: &str) -> Option<String> {
     let version = version.strip_suffix(".*").unwrap_or(version);
     let mut components = version
         .split('.')
@@ -420,5 +465,38 @@ fn foreign_virtual_capability(name: &str) -> Option<String> {
         Some(name.to_string())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::version::matches_req;
+
+    #[test]
+    fn spack_comma_version_unions_are_disjunctions() {
+        let listed = canonical_spack_version_constraint("1.8.0,1.10.0").expect("listed");
+        assert!(matches_req("1.8.0", &listed), "{listed}");
+        assert!(matches_req("1.10.0", &listed), "{listed}");
+        assert!(!matches_req("1.9.0", &listed), "{listed}");
+
+        let union = canonical_spack_version_constraint("1.10:1.12,1.14:").expect("union");
+        assert!(matches_req("1.11", &union), "{union}");
+        assert!(matches_req("1.14.1", &union), "{union}");
+        assert!(!matches_req("1.13", &union), "{union}");
+    }
+
+    #[test]
+    fn digit_wildcards_become_series_ranges() {
+        let conda = canonical_version_constraint(ForeignFormat::CondaForge, Some("1.2.*"))
+            .expect("conda wildcard");
+        assert!(matches_req("1.2.3", &conda), "{conda}");
+        assert!(!matches_req("1.3.0", &conda), "{conda}");
+        assert!(!matches_req("1.1.9", &conda), "{conda}");
+
+        let pypi = canonical_version_constraint(ForeignFormat::Pypi, Some("==1.2.*"))
+            .expect("pypi wildcard");
+        assert!(matches_req("1.2.3", &pypi), "{pypi}");
+        assert!(!matches_req("1.3.0", &pypi), "{pypi}");
     }
 }

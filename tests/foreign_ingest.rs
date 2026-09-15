@@ -466,6 +466,79 @@ class Orbit(CMakePackage):
 }
 
 #[test]
+fn spack_comma_version_unions_admit_each_alternative() {
+    let source = r#"
+class Orbit(Package):
+    homepage = "https://example.invalid/orbit"
+    url = "https://example.invalid/orbit-1.0.tar.gz"
+    version("1.0", sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+    depends_on("listed@1.8.0,1.10.0")
+    depends_on("union@1.10:1.12,1.14:")
+"#;
+    let recipe = parse_foreign_str(ForeignFormat::Spack, source).expect("Spack unions");
+    let plan = package_plan_from_foreign(&recipe, &toolchain("2026.1"));
+    let constraint = |name: &str| {
+        plan.dependencies
+            .iter()
+            .find(|dependency| dependency.name == name)
+            .and_then(|dependency| dependency.constraint.clone())
+    };
+
+    let listed = constraint("listed").expect("listed");
+    assert!(eb_stack::version::matches_req("1.8.0", &listed), "{listed}");
+    assert!(
+        eb_stack::version::matches_req("1.10.0", &listed),
+        "{listed}"
+    );
+    assert!(
+        !eb_stack::version::matches_req("1.9.0", &listed),
+        "{listed}"
+    );
+
+    let union = constraint("union").expect("union");
+    assert!(eb_stack::version::matches_req("1.11", &union), "{union}");
+    assert!(eb_stack::version::matches_req("1.14.1", &union), "{union}");
+    assert!(!eb_stack::version::matches_req("1.13", &union), "{union}");
+}
+
+#[test]
+fn digit_wildcards_become_series_ranges() {
+    let conda_source = r#"
+package:
+  name: orbit
+  version: 1.0
+source:
+  url: https://example.invalid/orbit-1.0.tar.gz
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+requirements:
+  run:
+    - numpy 1.2.*
+"#;
+    let conda = parse_foreign_str(ForeignFormat::CondaForge, conda_source).expect("conda");
+    let conda_plan = package_plan_from_foreign(&conda, &toolchain("2026.1"));
+    let numpy = conda_plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "numpy")
+        .and_then(|dependency| dependency.constraint.as_deref())
+        .expect("numpy");
+    assert!(eb_stack::version::matches_req("1.2.3", numpy), "{numpy}");
+    assert!(!eb_stack::version::matches_req("1.3.0", numpy), "{numpy}");
+
+    let pypi = parse_foreign_str(ForeignFormat::Pypi, "orbit==1.0.0\npkg==1.2.*\n").expect("pypi");
+    let pypi_plan = package_plan_from_foreign(&pypi, &toolchain("2026.1"));
+    let pkg = pypi_plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "pkg")
+        .and_then(|dependency| dependency.constraint.as_deref())
+        .expect("pkg");
+    assert!(eb_stack::version::matches_req("1.2.3", pkg), "{pkg}");
+    assert!(!eb_stack::version::matches_req("1.3.0", pkg), "{pkg}");
+}
+
+#[test]
 fn spack_qmcpack_preserves_variants_rules_and_conditions() {
     let recipe =
         parse_foreign_path(&root().join("spack_qmcpack/package.py"), None).expect("QMCPACK");

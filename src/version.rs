@@ -192,16 +192,21 @@ pub struct RequirementClause {
     pub version: String,
 }
 
-/// A parsed requirement: a conjunction of clauses.
+/// A parsed requirement: a conjunction of clauses, or a disjunction of those
+/// conjunctions when `||` separates alternatives.
 ///
 /// This is the single interpretation of a constraint string. The solver asks
 /// it what a candidate satisfies and the emitter asks it for a version, so the
 /// two cannot drift apart the way two hand-rolled readers of the same syntax
-/// did.
+/// did. Commas stay AND. `||` is OR, which is how Spack writes `@1.8.0,1.10.0`
+/// after the ingest path rewrites the comma list.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Requirement {
-    /// Every clause, all of which must hold.
+    /// Every clause in the first alternative; all of them must hold.
     pub clauses: Vec<RequirementClause>,
+    /// Further alternatives. The requirement matches if `clauses` match or any
+    /// of these does. Empty means a single conjunction.
+    pub unions: Vec<Requirement>,
 }
 
 /// A clause no operator in the language covers.
@@ -228,11 +233,30 @@ impl std::error::Error for UnsupportedRequirement {}
 
 /// Parse a requirement, or say which clause is not expressible.
 pub fn parse_requirement(req: &str) -> Result<Requirement, UnsupportedRequirement> {
-    let mut clauses = Vec::new();
-    for clause in req.split(',').map(str::trim).filter(|c| !c.is_empty()) {
-        clauses.push(parse_clause(clause)?);
+    let mut alternatives = Vec::new();
+    for alternative in req
+        .split("||")
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        let mut clauses = Vec::new();
+        for clause in alternative
+            .split(',')
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+        {
+            clauses.push(parse_clause(clause)?);
+        }
+        alternatives.push(Requirement {
+            clauses,
+            unions: Vec::new(),
+        });
     }
-    Ok(Requirement { clauses })
+    let Some(mut first) = alternatives.first().cloned() else {
+        return Ok(Requirement::default());
+    };
+    first.unions = alternatives.into_iter().skip(1).collect();
+    Ok(first)
 }
 
 fn parse_clause(clause: &str) -> Result<RequirementClause, UnsupportedRequirement> {
@@ -273,15 +297,23 @@ fn parse_clause(clause: &str) -> Result<RequirementClause, UnsupportedRequiremen
 }
 
 impl Requirement {
-    /// Whether a version satisfies every clause.
+    /// Whether a version satisfies this requirement.
+    ///
+    /// A single alternative matches when every clause holds. A union matches
+    /// when any alternative does.
     pub fn matches(&self, version: &str) -> bool {
-        self.clauses
+        let this = self
+            .clauses
             .iter()
-            .all(|clause| clause_matches(version, clause))
+            .all(|clause| clause_matches(version, clause));
+        this || self.unions.iter().any(|alt| alt.matches(version))
     }
 
     /// The exact version this requirement names, when it names one.
     pub fn exact(&self) -> Option<&str> {
+        if !self.unions.is_empty() {
+            return None;
+        }
         self.clauses
             .iter()
             .find(|clause| clause.op == RequirementOp::Exact)
@@ -292,8 +324,27 @@ impl Requirement {
     ///
     /// An extension entry needs one concrete version, and for a lower-bounded
     /// requirement the floor is the honest choice: it is the version the
-    /// foreign metadata actually named.
+    /// foreign metadata actually named. A union takes the lowest floor among
+    /// its alternatives.
     pub fn lower_bound(&self) -> Option<&str> {
+        if self.unions.is_empty() {
+            return self.conjunction_lower_bound();
+        }
+        let mut best = self.conjunction_lower_bound();
+        for alternative in &self.unions {
+            let Some(floor) = alternative.lower_bound() else {
+                continue;
+            };
+            best = Some(match best {
+                None => floor,
+                Some(previous) if cmp_version(floor, previous) == Ordering::Less => floor,
+                Some(previous) => previous,
+            });
+        }
+        best
+    }
+
+    fn conjunction_lower_bound(&self) -> Option<&str> {
         if let Some(exact) = self.exact() {
             return self.matches(exact).then_some(exact);
         }
@@ -339,9 +390,10 @@ fn clause_matches(version: &str, clause: &RequirementClause) -> bool {
 }
 
 /// Version requirements accept exact equality, ordered comparisons, bare exact
-/// versions, and comma-separated conjunctions of those clauses.
+/// versions, comma-separated conjunctions, and `||`-separated unions.
 ///
-/// A compound requirement matches only if **every** non-empty clause matches.
+/// A compound requirement matches only if **every** non-empty clause in an
+/// alternative matches; a union matches if any alternative does.
 pub fn matches_req(version: &str, req: &str) -> bool {
     // A clause the language cannot express excludes every candidate. The
     // ingest path records a residual for the same parse failure.
@@ -631,5 +683,20 @@ mod tests {
         assert!(!matches_req("1.0", "*"));
         assert!(!matches_req("1.0", "any"));
         assert!(matches_req("1.0", ">=1.0"));
+    }
+
+    #[test]
+    fn a_disjunction_matches_any_alternative() {
+        let listed = ">=1.8.0,<1.8.1||>=1.10.0,<1.10.1";
+        assert!(matches_req("1.8.0", listed));
+        assert!(matches_req("1.10.0", listed));
+        assert!(!matches_req("1.9.0", listed));
+        let union = ">=1.10,<1.13||>=1.14";
+        assert!(matches_req("1.11", union));
+        assert!(matches_req("1.14.1", union));
+        assert!(!matches_req("1.13", union));
+        let parsed = parse_requirement(listed).expect("parse");
+        assert_eq!(parsed.lower_bound(), Some("1.8.0"));
+        assert_eq!(parsed.exact(), None);
     }
 }
