@@ -98,7 +98,13 @@ pub fn cmp_version(a: &str, b: &str) -> Ordering {
         let y = pb.get(i);
         let o = match (x, y) {
             (Some(Part::Num(x)), Some(Part::Num(y))) => x.cmp(y),
-            (Some(Part::Alpha(x)), Some(Part::Alpha(y))) => x.cmp(y),
+            (Some(Part::Alpha(x)), Some(Part::Alpha(y))) => {
+                match (is_post_release(x), is_post_release(y)) {
+                    (true, false) => Ordering::Greater,
+                    (false, true) => Ordering::Less,
+                    _ => x.cmp(y),
+                }
+            }
             // Mixed types at an aligned position: a post-release token
             // sits after a zero pad of the same release and before a later
             // nonzero segment (`1.0` < `1.0post1` < `1.0.1`). Any other
@@ -762,6 +768,17 @@ mod tests {
         assert!(!matches_req("1.7.1.post2", ">=1.7.1.1"));
         assert!(matches_req("1.7.1.post2", ">=1.7.1"));
         assert!(matches_req("1.0.1", ">=1.0post1"));
+    }
+
+    #[test]
+    fn post_release_sorts_after_a_pre_release() {
+        assert_eq!(cmp_version("1.0rc1", "1.0"), Ordering::Less);
+        assert_eq!(cmp_version("1.0", "1.0post1"), Ordering::Less);
+        assert_eq!(cmp_version("1.0rc1", "1.0post1"), Ordering::Less);
+        assert_eq!(cmp_version("1.0post1", "1.0rc1"), Ordering::Greater);
+        assert!(matches_req("1.0", ">=1.0rc1"));
+        assert!(matches_req("1.0post1", ">=1.0rc1"));
+        assert_eq!(cmp_version("1.0rc1", "1.0pl1"), Ordering::Less);
     }
 
     #[test]

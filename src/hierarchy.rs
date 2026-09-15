@@ -1015,9 +1015,7 @@ pub fn count_generation_dep_versions_for_suffix(
         // recipes that themselves are this generation's members count.
         if is_system_toolchain(&consumer.toolchain)
             && !hierarchy.members.iter().any(|member| {
-                !is_system_toolchain(member)
-                    && member.name == consumer.name
-                    && member.version == consumer.version
+                !is_system_toolchain(member) && candidate_defines_toolchain(consumer, member)
             })
         {
             continue;
@@ -1057,9 +1055,7 @@ pub fn count_generation_dep_versions_all(
         }
         if is_system_toolchain(&consumer.toolchain)
             && !hierarchy.members.iter().any(|member| {
-                !is_system_toolchain(member)
-                    && member.name == consumer.name
-                    && member.version == consumer.version
+                !is_system_toolchain(member) && candidate_defines_toolchain(consumer, member)
             })
         {
             continue;
@@ -1712,6 +1708,27 @@ mod tests {
             .find(|m| m.name == "NVHPC")
             .expect("NVHPC member");
         assert_eq!(nvhpc.version, "25.3-CUDA-12.8.0");
+    }
+
+    #[test]
+    fn system_nvhpc_definition_votes_in_nvofbf_consensus() {
+        let parent = Toolchain {
+            name: "nvofbf".into(),
+            version: "2025.10".into(),
+        };
+        let mut tree = nvidia_family_tree();
+        for candidate in &mut tree {
+            if candidate.name == "NVHPC" {
+                candidate.builddependencies = vec![dep_pin("CMake", "3.29.3")];
+            }
+        }
+        let h = derive_hierarchy_from_candidates(&parent, &tree).expect("derive");
+        let counts = count_generation_dep_versions("CMake", &tree, &h);
+        assert_eq!(
+            counts.get("3.29.3").copied(),
+            Some(1),
+            "SYSTEM NVHPC 25.3-CUDA must vote: {counts:?}"
+        );
     }
 
     #[test]

@@ -2281,6 +2281,13 @@ fn env_string_list(
         return Vec::new();
     };
     let v = apply_templates_value(v, templates);
+    if let Value::Str(value) = &v {
+        return if value.is_empty() {
+            Vec::new()
+        } else {
+            vec![value.clone()]
+        };
+    }
     let Ok(items) = value_list_as_slice(Some(&v)) else {
         return Vec::new();
     };
@@ -2314,6 +2321,13 @@ fn patch_names_field(
         return Vec::new();
     };
     let v = apply_templates_value(v, templates);
+    if let Value::Str(name) = &v {
+        return if name.is_empty() {
+            Vec::new()
+        } else {
+            vec![name.clone()]
+        };
+    }
     let Ok(items) = value_list_as_slice(Some(&v)) else {
         return Vec::new();
     };
@@ -2437,9 +2451,7 @@ fn checksum_dict_digest(items: &[(String, Value)]) -> Option<String> {
     let preferred = items
         .iter()
         .find(|(key, _)| checksum_key_names_arch(key, host));
-    preferred
-        .or(items.first())
-        .and_then(|(_, value)| checksum_strings_from_value(value).into_iter().next())
+    preferred.and_then(|(_, value)| checksum_strings_from_value(value).into_iter().next())
 }
 
 fn checksum_key_names_arch(key: &str, arch: &str) -> bool {
@@ -4398,6 +4410,49 @@ builddependencies = [
             std::env::consts::ARCH,
             parsed.checksums_by_filename.keys().collect::<Vec<_>>(),
             parsed.checksums
+        );
+    }
+
+    #[test]
+    fn a_checksum_dict_without_this_host_does_not_take_the_first_key() {
+        let aarch64 = "aa".repeat(32);
+        let riscv = "cc".repeat(32);
+        let src = format!(
+            "name = 'Sdk'\nversion = '1.0'\n\
+             toolchain = SYSTEM\n\
+             sources = ['sdk.tar.gz']\n\
+             checksums = [{{'sdk_aarch64.tar.gz': '{aarch64}', \
+              'sdk_riscv64.tar.gz': '{riscv}'}}]\n\
+             dependencies = []\n"
+        );
+        let parsed = resolve_easyconfig_str(&src).expect("parse");
+        assert!(
+            parsed
+                .checksums
+                .first()
+                .is_none_or(|digest| digest != &aarch64 && digest != &riscv),
+            "unmatched host must not publish another arch: {:?}",
+            parsed.checksums
+        );
+    }
+
+    #[test]
+    fn a_string_patches_assignment_is_one_patch() {
+        let src = "\
+name = 'App'
+version = '1.0'
+toolchain = SYSTEM
+sources = ['app-1.0.tar.gz']
+patches = 'App-1.0_fix.patch'
+checksums = ['sourcehash', 'patchhash']
+dependencies = []
+";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(
+            parsed.patch_names,
+            vec!["App-1.0_fix.patch".to_string()],
+            "string patches must count as one: {:?}",
+            parsed.patch_names
         );
     }
 

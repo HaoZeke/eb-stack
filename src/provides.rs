@@ -234,10 +234,22 @@ pub fn lookup_named_candidates<'a>(
     if let Some(named) = by_name.get(name) {
         return Some((name.to_string(), named.clone()));
     }
+    if let Some((key, named)) = by_name
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+    {
+        return Some(((*key).to_string(), named.clone()));
+    }
     let aliased = aliased_module_name(name);
-    if aliased != name {
+    if !aliased.eq_ignore_ascii_case(name) {
         if let Some(named) = by_name.get(aliased.as_str()) {
             return Some((aliased, named.clone()));
+        }
+        if let Some((key, named)) = by_name
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(&aliased))
+        {
+            return Some(((*key).to_string(), named.clone()));
         }
     }
     None
@@ -580,5 +592,28 @@ mod tests {
         let poetry = named[0];
         assert!(candidate_answers_name(poetry, "poetry-core"));
         assert!(candidate_answers_name(poetry, "poetry"));
+    }
+
+    #[test]
+    fn lookup_named_candidates_finds_robot_cased_name() {
+        let hdf5 = Candidate {
+            name: "HDF5".into(),
+            version: "1.16.0".into(),
+            toolchain: Toolchain {
+                name: "foss".into(),
+                version: "2026.1".into(),
+            },
+            versionsuffix: None,
+            easyconfig_path: "HDF5-1.16.0.eb".into(),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+            moduleclass: None,
+        };
+        let mut by_name: HashMap<&str, Vec<&Candidate>> = HashMap::new();
+        by_name.entry(hdf5.name.as_str()).or_default().push(&hdf5);
+        let (sat_name, named) = lookup_named_candidates(&by_name, "hdf5").expect("robot case");
+        assert_eq!(sat_name, "HDF5");
+        assert_eq!(named[0].version, "1.16.0");
     }
 }
