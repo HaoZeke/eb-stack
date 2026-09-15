@@ -6,7 +6,11 @@ use eb_stack::package::{PackageOrigin, StackPolicy, STACK_POLICY_SCHEMA_VERSION}
 use eb_stack::package_catalog::{
     resolve_package_catalog_layers, PackageCatalogLayer, PackageSourceCatalog,
 };
-use eb_stack::package_closure::{plan_package_closure, write_package_closure, PackageClosureError};
+use eb_stack::package_closure::{
+    plan_package_closure, plan_package_closure_with_sources, write_package_closure,
+    PackageClosureError,
+};
+use eb_stack::package_sources::{PackageSourceRoots, SourceRootKind};
 use eb_stack::{resolve_easyconfig_str, ForeignFormat, NewPackageRequest, Toolchain};
 use std::path::{Path, PathBuf};
 
@@ -1194,4 +1198,129 @@ toolchain = { name = "foss", version = "2026.1" }
         .collect();
     assert!(names.contains(&"alpha"));
     assert!(names.contains(&"bravo"));
+}
+
+#[test]
+fn generated_companion_cache_distinguishes_versionsuffix() {
+    // Two holes bravo==1.0 -MPI and -CUDA must not share a suffix-blind cache key.
+    // Each suffix lives on its own wrapper so SAT identity is not asked to
+    // install both variants in one profile.
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let robot = root.join("robot");
+    let eb_sources = root.join("eb-sources");
+    std::fs::create_dir_all(&robot).unwrap();
+
+    let alpha = conda_recipe(
+        root,
+        "alpha.yaml",
+        "alpha",
+        "1.0",
+        &["wrapmpi >=1.0", "wrapcuda >=1.0"],
+    );
+    let _wrap_mpi = source_eb(
+        root,
+        "wrapmpi-1.0-foss-2023b.eb",
+        "wrapmpi",
+        "1.0",
+        "2023b",
+        &[],
+        "dependencies = [\n    ('bravo', '1.0', '-MPI'),\n]\n",
+    );
+    let _wrap_cuda = source_eb(
+        root,
+        "wrapcuda-1.0-foss-2023b.eb",
+        "wrapcuda",
+        "1.0",
+        "2023b",
+        &[],
+        "dependencies = [\n    ('bravo', '1.0', '-CUDA'),\n]\n",
+    );
+    let _bravo_mpi = source_eb(
+        &eb_sources,
+        "bravo-1.0-foss-2023b-MPI.eb",
+        "bravo",
+        "1.0",
+        "2023b",
+        &[],
+        "versionsuffix = '-MPI'\n",
+    );
+    let _bravo_cuda = source_eb(
+        &eb_sources,
+        "bravo-1.0-foss-2023b-CUDA.eb",
+        "bravo",
+        "1.0",
+        "2023b",
+        &[],
+        "versionsuffix = '-CUDA'\n",
+    );
+
+    let catalog = catalog_from_toml(
+        root,
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "wrapmpi"
+provider = "easybuild-bump"
+version = "1.0"
+source = "wrapmpi-1.0-foss-2023b.eb"
+toolchain = { name = "foss", version = "2026.1" }
+
+[[packages]]
+name = "wrapcuda"
+provider = "easybuild-bump"
+version = "1.0"
+source = "wrapcuda-1.0-foss-2023b.eb"
+toolchain = { name = "foss", version = "2026.1" }
+"#,
+    );
+
+    let mut sources = PackageSourceRoots {
+        schema_version: 1,
+        source_roots: Vec::new(),
+    };
+    sources.push(SourceRootKind::EasyBuild, eb_sources);
+
+    let closure = plan_package_closure_with_sources(&request(alpha, robot), &catalog, &sources)
+        .expect("two suffix variants must both emit");
+
+    let bravos: Vec<_> = closure
+        .companions
+        .iter()
+        .filter(|companion| companion.plan.package.name.eq_ignore_ascii_case("bravo"))
+        .collect();
+    assert_eq!(
+        bravos.len(),
+        2,
+        "MPI and CUDA holes must emit two companions, got {:?}",
+        closure
+            .companions
+            .iter()
+            .map(|companion| {
+                (
+                    companion.plan.package.name.as_str(),
+                    companion
+                        .locks
+                        .first()
+                        .map(|lock| lock.versionsuffix.as_str())
+                        .unwrap_or(""),
+                )
+            })
+            .collect::<Vec<_>>()
+    );
+    let suffixes: Vec<_> = bravos
+        .iter()
+        .map(|companion| {
+            companion
+                .locks
+                .first()
+                .map(|lock| lock.versionsuffix.as_str())
+                .unwrap_or("")
+        })
+        .collect();
+    assert!(
+        suffixes.contains(&"-MPI") && suffixes.contains(&"-CUDA"),
+        "companions must be distinguished by suffix, got {suffixes:?}"
+    );
 }

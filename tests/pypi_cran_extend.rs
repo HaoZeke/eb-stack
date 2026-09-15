@@ -1,7 +1,7 @@
 //! PyPI and CRAN ingest, extension provides, and language-bundle emission.
 
 use eb_stack::package::{PackageOrigin, StackPolicy, STACK_POLICY_SCHEMA_VERSION};
-use eb_stack::package_catalog::resolve_package_catalog_layers;
+use eb_stack::package_catalog::{resolve_package_catalog_layers, PackageCatalogLayer};
 use eb_stack::package_closure::plan_package_closure_with_sources;
 use eb_stack::package_config::PackageConfigLayer;
 use eb_stack::package_sources::{PackageSourceRoots, SourceRootKind};
@@ -543,6 +543,114 @@ fn plan_torch_uses_existing_pytorch_module() {
                 && residual.summary.contains("PyTorch")),
         "{:?}",
         bundle.plan.residuals
+    );
+}
+
+#[test]
+fn already_provided_language_root_does_not_emit_companions() {
+    let temp = tempfile::tempdir().expect("temp");
+    let filelock = temp.path().join("filelock.yaml");
+    std::fs::write(
+        &filelock,
+        r#"package:
+  name: filelock
+  version: "3.13.1"
+source:
+  url: https://example.invalid/filelock-3.13.1.tar.gz
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+requirements:
+  host: []
+"#,
+    )
+    .expect("filelock recipe");
+    let catalog_path = temp.path().join("catalog.toml");
+    std::fs::write(
+        &catalog_path,
+        format!(
+            r#"
+schema_version = 1
+
+[[packages]]
+name = "filelock"
+version = "3.13.1"
+source = "{}"
+format = "conda-forge"
+source_checksums = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+profile = "default"
+toolchain = {{ name = "foss", version = "2026.1" }}
+"#,
+            filelock.display()
+        ),
+    )
+    .expect("catalog");
+    let catalog = resolve_package_catalog_layers(&[
+        PackageCatalogLayer::from_path(&catalog_path).expect("catalog layer")
+    ])
+    .expect("resolve catalog");
+
+    let request = NewPackageRequest {
+        source: root().join("fixtures/foreign_ingest/pypi_numpy/torch.json"),
+        format: Some(ForeignFormat::Pypi),
+        toolchain: toolchain(),
+        source_checksums: Vec::new(),
+        package_layers: Vec::new(),
+        package_index: Default::default(),
+        easyconfig_roots: vec![root().join("fixtures/foreign_ingest/pypi_numpy/robot-pytorch")],
+        stack_policy: stack_policy(),
+    };
+    let single = plan_new_package(&request).expect("plan torch");
+    let closure = plan_package_closure_with_sources(
+        &request,
+        &catalog,
+        &PackageSourceRoots {
+            schema_version: 1,
+            source_roots: Vec::new(),
+        },
+    )
+    .expect("close torch");
+
+    assert!(
+        closure.root.easyconfigs.is_empty(),
+        "already-provided torch must not emit a pip overlay: {:?}",
+        closure.root.easyconfigs
+    );
+    assert!(
+        closure.companions.is_empty(),
+        "already-provided language root must not hole-fill leftovers: {:?}",
+        closure
+            .companions
+            .iter()
+            .map(|companion| companion.plan.package.name.as_str())
+            .collect::<Vec<_>>()
+    );
+    let single_residuals: Vec<_> = single
+        .plan
+        .residuals
+        .iter()
+        .map(|residual| {
+            (
+                residual.category.as_str(),
+                residual.summary.as_str(),
+                residual.evidence.as_deref(),
+            )
+        })
+        .collect();
+    let closure_residuals: Vec<_> = closure
+        .root
+        .plan
+        .residuals
+        .iter()
+        .map(|residual| {
+            (
+                residual.category.as_str(),
+                residual.summary.as_str(),
+                residual.evidence.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        closure_residuals, single_residuals,
+        "closure residual must match plan_new_package"
     );
 }
 
