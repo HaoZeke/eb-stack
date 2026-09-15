@@ -412,6 +412,40 @@ hdf5 = ""
 }
 
 #[test]
+fn empty_virtual_name_is_rejected() {
+    let error = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[dependencies.virtuals]
+"" = "mpi"
+"#,
+    )
+    .expect_err("empty virtual name");
+    assert!(
+        error.to_string().contains("virtual name") && error.to_string().contains("empty"),
+        "{error}"
+    );
+}
+
+#[test]
+fn empty_alias_name_is_rejected() {
+    let error = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[dependencies.aliases]
+"" = "HDF5"
+"#,
+    )
+    .expect_err("empty alias name");
+    assert!(
+        error.to_string().contains("alias name") && error.to_string().contains("empty"),
+        "{error}"
+    );
+}
+
+#[test]
 fn empty_alias_provider_is_rejected() {
     let error = PackageConfigLayer::from_toml_str(
         r#"
