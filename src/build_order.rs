@@ -766,6 +766,16 @@ pub fn build_order(
     roots: &[String],
     choice: Choice,
 ) -> Result<Vec<Candidate>, OrderError> {
+    Ok(build_order_with_graph(candidates, roots, choice)?.0)
+}
+
+/// As [`build_order`], also returning the graph used for the sort so hashes
+/// do not have to walk the tree a second time.
+pub fn build_order_with_graph(
+    candidates: &[Candidate],
+    roots: &[String],
+    choice: Choice,
+) -> Result<(Vec<Candidate>, BuildGraph), OrderError> {
     let graph = build_graph(candidates, roots, choice)?;
     let by_key = candidates_by_key(candidates)?;
 
@@ -780,10 +790,11 @@ pub fn build_order(
         OrderError::Cycle(guilty.into_iter().map(|n| graph[n].clone()).collect())
     })?;
 
-    Ok(sorted
+    let order = sorted
         .into_iter()
         .filter_map(|node| by_key.get(&graph[node]).map(|c| (*c).clone()))
-        .collect())
+        .collect();
+    Ok((order, graph))
 }
 
 /// Which edges would break the cycles in a graph, if any.

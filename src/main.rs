@@ -1065,8 +1065,9 @@ fn run_stack(command: StackCommand) -> Result<()> {
             } else {
                 eb_stack::Choice::Newest
             };
-            let order = eb_stack::build_order(&parsed.candidates, &roots, choice)
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let (order, graph) =
+                eb_stack::build_order::build_order_with_graph(&parsed.candidates, &roots, choice)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             std::fs::write(&out, eb_stack::format_order(&order))?;
             let multi = eb_stack::build_order::multi_build_names(&order);
             for (name, builds) in &multi {
@@ -1087,8 +1088,6 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 println!("easystack={}", path.display());
             }
             if let Some(path) = hashes_out.as_deref() {
-                let graph = eb_stack::build_order::build_graph(&parsed.candidates, &roots, choice)
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 let sequence: Vec<eb_stack::ModuleKey> =
                     order.iter().map(eb_stack::ModuleKey::of).collect();
                 let recipe_paths: std::collections::BTreeMap<eb_stack::ModuleKey, String> = order
