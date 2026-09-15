@@ -232,6 +232,7 @@ fn parse_clause(clause: &str) -> Result<RequirementClause, UnsupportedRequiremen
     for (prefix, op) in [
         ("~=", RequirementOp::Compatible),
         ("!=", RequirementOp::NotEqual),
+        ("===", RequirementOp::Exact),
         ("==", RequirementOp::Exact),
         (">=", RequirementOp::AtLeast),
         ("<=", RequirementOp::AtMost),
@@ -417,6 +418,13 @@ mod ecosystem_operator_tests {
         // The form that made every PyPI dependency carrying one unsatisfiable.
         assert!(matches_req("2.1.3", ">=1.0,!=2.0.0"));
         assert!(!matches_req("2.0.0", ">=1.0,!=2.0.0"));
+    }
+
+    #[test]
+    fn triple_equals_is_exact_of_the_version() {
+        assert!(matches_req("1.0", "===1.0"));
+        assert!(matches_req("1.0", "==1.0"));
+        assert!(!matches_req("1.1", "===1.0"));
     }
 
     #[test]
