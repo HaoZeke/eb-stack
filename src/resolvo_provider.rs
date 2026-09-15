@@ -619,6 +619,9 @@ impl EbProvider {
         let Some(ranked) = self.ranks.get(pkg) else {
             return Ranges::empty();
         };
+        let Ok(requirement) = crate::version::parse_requirement(version_req) else {
+            return Ranges::empty();
+        };
         let mut range = Ranges::empty();
         for (rank, idx) in ranked {
             let c = &self.candidates[*idx];
@@ -628,19 +631,23 @@ impl EbProvider {
             // 5.0.3-GCC-13.3.0. Both spell out what EasyBuild would install
             // the module as, so all three forms are compared.
             let suffix = c.versionsuffix.as_deref().unwrap_or("");
-            let with_suffix = format!("{}{suffix}", c.version);
-            let with_toolchain = if crate::hierarchy::is_system_toolchain(&c.toolchain) {
-                with_suffix.clone()
+            let version_ok = requirement.matches(&c.version);
+            let suffix_ok = if version_ok || suffix.is_empty() {
+                version_ok
             } else {
-                format!(
+                requirement.matches(&format!("{}{suffix}", c.version))
+            };
+            let module_ok = if version_ok || suffix_ok {
+                true
+            } else if crate::hierarchy::is_system_toolchain(&c.toolchain) {
+                false
+            } else {
+                requirement.matches(&format!(
                     "{}-{}-{}{suffix}",
                     c.version, c.toolchain.name, c.toolchain.version
-                )
+                ))
             };
-            if !matches_req(&c.version, version_req)
-                && !matches_req(&with_suffix, version_req)
-                && !matches_req(&with_toolchain, version_req)
-            {
+            if !(version_ok || suffix_ok || module_ok) {
                 continue;
             }
             if toolchain.is_some_and(|want| !crate::hierarchy::toolchains_match(&c.toolchain, want))
