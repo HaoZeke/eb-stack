@@ -1377,12 +1377,12 @@ fn versions_in_trial_order(
             // sit at GCCcore in a GCC generation, and asking for one by name
             // must find it where it legitimately lives rather than report that
             // the package does not exist.
-            c.name == name
+            c.name.eq_ignore_ascii_case(name)
                 && in_generation(&c.toolchain, &policy.toolchain, &members)
                 && !policy
                     .forbid
                     .iter()
-                    .any(|f| f == &c.easyconfig_path || f == &c.name)
+                    .any(|f| f == &c.easyconfig_path || f.eq_ignore_ascii_case(&c.name))
         })
         .map(|c| c.version.clone())
         .collect();
@@ -2614,6 +2614,15 @@ mod tests {
             }],
             exclusions: Vec::new(),
         };
+        let rooted = policy(vec!["hdf5"], vec![]);
+        let selected =
+            solve_with_resolvo(&candidates, &rooted, None).expect("root hdf5 must list robot HDF5");
+        assert!(
+            selected.iter().any(|candidate| {
+                candidate.name.eq_ignore_ascii_case("hdf5") && candidate.version == "1.16.0"
+            }),
+            "{selected:?}"
+        );
         EbProvider::from_universe_with_stack_policy(&candidates, &pol, None, Some(&stack))
             .expect("hdf5 pin must see robot HDF5");
         let solved = solve_with_stack_policy(&candidates, &pol, None, &stack).expect("solve");
