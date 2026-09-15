@@ -183,6 +183,26 @@ class Pkg(Package):
 }
 
 #[test]
+fn raku_trailing_plus_is_a_lower_bound() {
+    let recipe = parse_foreign_str(
+        ForeignFormat::Raku,
+        r#"{
+          "name": "Demo",
+          "version": "0.1.0",
+          "depends": ["JSON::Fast:ver<0.10+>"]
+        }"#,
+    )
+    .expect("parse");
+    let plan = package_plan_from_foreign(&recipe, &toolchain());
+    let dep = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "JSON::Fast")
+        .expect("JSON::Fast");
+    assert_eq!(dep.constraint.as_deref(), Some(">=0.10"));
+}
+
+#[test]
 fn autotools_is_not_reported_as_a_default_easyblock() {
     let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let recipe = parse_foreign_str(
