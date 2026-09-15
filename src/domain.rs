@@ -120,6 +120,7 @@ pub struct RequireUpgrade {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// What a solve is asked to produce: target toolchain, roots, and constraints.
 pub struct Policy {
     /// Toolchain generation to select for.
@@ -153,7 +154,10 @@ pub struct Policy {
     pub forbid: Vec<String>,
     /// Optimisation objective. `prefer_newer` when unset, which is the only
     /// value the shipped solver implements.
-    #[serde(default = "default_objective")]
+    #[serde(
+        default = "default_objective",
+        deserialize_with = "deserialize_objective"
+    )]
     pub objective: String,
     /// Packages that must be strictly newer than baseline (when
     /// `relative_to_baseline` is true). Accepts a single object or an array
@@ -182,6 +186,21 @@ where
 
 fn default_objective() -> String {
     "prefer_newer".into()
+}
+
+fn deserialize_objective<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value == "prefer_newer" {
+        Ok(value)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "unsupported policy objective {value}; only prefer_newer is implemented \
+             (set prefer_installed for the installed-version preference)"
+        )))
+    }
 }
 
 impl Policy {
@@ -373,6 +392,36 @@ mod tests {
             objective: default_objective(),
             require_upgrade: Vec::new(),
         }
+    }
+
+    #[test]
+    fn unknown_policy_objective_is_rejected() {
+        let json = r#"{
+            "toolchain": {"name": "foss", "version": "2026.1"},
+            "roots": ["App"],
+            "objective": "prefer_installed"
+        }"#;
+        let error = serde_json::from_str::<Policy>(json).expect_err("objective typo");
+        assert!(
+            error.to_string().contains("prefer_installed")
+                || error.to_string().contains("objective"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn unknown_policy_field_is_rejected() {
+        let json = r#"{
+            "toolchain": {"name": "foss", "version": "2026.1"},
+            "roots": ["App"],
+            "prefer_instaleld": true
+        }"#;
+        let error = serde_json::from_str::<Policy>(json).expect_err("field typo");
+        assert!(
+            error.to_string().contains("unknown field")
+                || error.to_string().contains("prefer_instaleld"),
+            "{error}"
+        );
     }
 
     #[test]
