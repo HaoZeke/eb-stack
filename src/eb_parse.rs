@@ -829,7 +829,7 @@ impl<'src, 'env> Parser<'src, 'env> {
             return Err(self.err("expected expression, got EOF"));
         };
         match c {
-            b'f' | b'F' if self.starts_fstring() => self.parse_fstring(),
+            b'f' | b'F' | b'r' | b'R' if self.starts_fstring() => self.parse_fstring(),
             b'r' | b'R' if self.starts_raw_string() => {
                 self.pos += 1;
                 self.parse_string()
@@ -929,11 +929,15 @@ impl<'src, 'env> Parser<'src, 'env> {
     /// Whether what follows is an f-string rather than a name beginning with f.
     fn starts_fstring(&self) -> bool {
         let mut at = self.pos;
-        // Accept fr'' and rf'' as well, which a recipe writes for a path.
+        let mut saw_f = false;
+        // Accept f'', fr'' and rf'', which a recipe writes for a path.
         while matches!(self.src.get(at), Some(b'f' | b'F' | b'r' | b'R')) && at < self.pos + 2 {
+            if matches!(self.src.get(at), Some(b'f' | b'F')) {
+                saw_f = true;
+            }
             at += 1;
         }
-        at > self.pos && matches!(self.src.get(at), Some(b'\'' | b'"'))
+        saw_f && matches!(self.src.get(at), Some(b'\'' | b'"'))
     }
 
     /// An f-string, with `{name}` filled from what the file has defined.
@@ -3212,6 +3216,14 @@ mod tests {
                    toolchain = SYSTEM\n";
         let parsed = resolve_easyconfig_str(src).expect("parse");
         assert_eq!(parsed.version, "11.0.27");
+    }
+
+    #[test]
+    fn an_rf_string_homepage_is_read() {
+        let src = "name = 'App'\nversion = '1'\ntoolchain = SYSTEM\n\
+                   homepage = rf'https://{name}.example'\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.homepage.as_deref(), Some("https://App.example"));
     }
 
     #[test]
