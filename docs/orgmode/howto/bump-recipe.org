@@ -84,6 +84,21 @@ versions, conventional filename, and source checksum entry. Patches remain
 explicit review work. Omitting the new checksum produces a residual and leaves
 the old digest visible; it never invents one.
 
+* Unresolved generation companions
+
+A dependency the source still declares, with no candidate on the target
+generation, is a blocking ~unresolved-generation-dep~. The parent exits 1
+and prints one ~companion=~ line per hole, then ~re_run=~. Each
+~companion=~ line is a full ~eb-stack package …~ command: ~eval~ the text
+after ~companion=~. Do not pass ~--allow-unresolved~ to skip a required
+companion.
+
+Bump companions reprint every parent ~--easyconfigs~ root plus
+~--stack-policy~, ~--hierarchy-fixture~, and ~--contributor~. Plan
+companions omit ~--hierarchy-fixture~ because ~package plan~ has no such
+flag. A hole with ~versionsuffix = -CUDA-12.6.0~ sources the CUDA
+easyconfig, not the unsuffixed sibling.
+
 * Check and build
 
 #+begin_src bash

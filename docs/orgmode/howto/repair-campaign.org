@@ -24,6 +24,13 @@ The three claims are independent. A failed build can retain ~resolves: true~
 while ~builds~ and ~binary_verified~ remain false. Resolving a finding records
 a repair decision; only a successful campaign retry establishes a build claim.
 
+Read ~signature~ next to ~class~. Two identical signatures mean the last
+repair did not change the causal line. History then records ~stuck on
+signature~. A new Resolvo lock resets that count; the first failure after a
+lock change is not stuck. Classify from the interned ~EasyBuild command
+output~ / ~out.txt~, not from ~ERROR: installation failed~ or ~ERROR: Shell
+command failed!~.
+
 * Check the routing layers
 
 Run the target doctor for ~transport~, ~executor~, or ~runtime~ findings, and
@@ -37,9 +44,12 @@ eb-stack target doctor \
 #+end_src
 
 The doctor verifies each configured routing layer and EasyBuild availability.
-It does not build the recipe. Compare its routed runtime command with the
-failed finding, including image, mounts, working directory, environment, robot
-roots, durable build path, and temporary path.
+It does not build the recipe. The runtime probe is ~env true~ so a Rocky
+image whose ~ENTRYPOINT~ wraps ~eb~ does not run ~eb true~. A missing
+~srun~/~podman~/~ssh~ is a failed check, not a spawn abort. Compare its
+routed runtime command with the failed finding, including image, mounts,
+working directory, environment, robot roots, durable build path, and
+temporary path.
 
 Container build and install roots belong to one runtime ABI. Keep Cargo and
 other package-manager build directories outside bind-mounted personal

@@ -21,6 +21,11 @@ family (`foss` ↔ `gfbf`). Copy the parent flags. Omit
 Exit 1 with `residual=` means continue. Each `companion=` line is a full
 `eb-stack package …` command: run it as printed (`eval` the text after
 `companion=`). Then run the `re_run=` line the same way.
+Bump companions reprint every parent `--easyconfigs` root plus
+`--stack-policy`, `--hierarchy-fixture`, and `--contributor`. Plan
+companions omit `--hierarchy-fixture` (`package plan` has no such flag).
+A CUDA `versionsuffix` hole sources the CUDA easyconfig, not the
+unsuffixed sibling.
 Stop only when that parent command exits 0. A child exit 0 is not done.
 Do not pass `--allow-unresolved` to skip a required companion.
 Do not write a helper script and stop; run the commands.

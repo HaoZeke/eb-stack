@@ -175,6 +175,9 @@ metadata, checksum structure, required configuration flags, or robot
 dependencies are invalid. Missing dependencies remain explicit work; the
 command does not create placeholder recipes.
 
+~recipe lint~ names the file on every style finding when more than one
+recipe is passed.
+
 ~recipe format~ only performs deterministic physical-line wrapping. Product
 configuration, source selection, checksums, patches, and sanity paths remain
 authored content.

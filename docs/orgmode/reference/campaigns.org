@@ -77,13 +77,18 @@ is active. Keep the unfiltered state for diagnosis and handoff evidence.
   },
   "current_recipe": null,
   "findings": [],
-  "history": []
+  "history": [],
+  "lock_identity": "…"
 }
 #+end_src
 
 Status is ~planned~, ~running~, ~failed~, or ~completed~. ~current_recipe~ is
 present while an EasyBuild recipe is active. History entries record attempt,
 status, optional recipe/profile, and a compact detail string.
+
+~lock_identity~ is the SHA-256 of the bundle lock files. A recipe edit that
+does not change SAT keeps it. A new lock is a new DAG: the history records
+the change and prior failure signatures no longer count toward stuck.
 
 * Claim ladder
 
@@ -110,14 +115,29 @@ A terminal failure appends a finding containing:
 | ~recipe~ | Relative recipe path or verification profile |
 | ~target~ | Routed target name |
 | ~summary~ / ~evidence~ | Compact diagnosis and terminal evidence |
+| ~signature~ | Noise-stripped causal line used to detect a stuck retry |
 | ~command~ / ~exit_code~ | Exact routed program, arguments, and exit status |
 | ~attempt~ | Attempt that observed the failure |
 | ~status~ / ~owner~ | Queue state and exclusive worker owner |
 | ~resolution~ | Action, evidence, and changed paths |
 
 Evidence contains the tail of routed stdout/stderr. When EasyBuild reports a
-separate combined-output path, the campaign interns the nested log before
-classification so the finding reflects the actual compiler or runtime error.
+separate combined-output path (~output (stdout + stderr) ->~), the campaign
+interns that nested log before classification. If that banner line is missing
+but ~interactive shell script -> …/cmd.sh~ remains, it interns sibling
+~out.txt~. EasyBuild v5's ~ERROR: installation failed~, ~FAILED: Installation
+ended unsuccessfully~, and ~ERROR: Shell command failed!~ are generic
+footers, not the causal line. Classification and ~signature~ come from the
+interned body (a compiler ~error:~, a ~GLIBC_… not found~, or ~make ***~).
+
+The v5 banner's ~full command~, ~working directory~, ~called from~, and
+~cmd.sh~ path are copied onto the finding so a retry can replay the step.
+
+Two findings with the same ~signature~ record ~stuck on signature~ in history.
+Path noise under ~/tmp/~, ~/work/~, ~/scratch/~, ~/dev/shm/~, and
+~/…/eb-<hash>/~ is stripped so the same compiler line does not look new. A
+changed ~lock_identity~ starts a new epoch: the first post-replan failure of
+that line is not stuck.
 
 * Classes, dispositions, and repair surfaces
 

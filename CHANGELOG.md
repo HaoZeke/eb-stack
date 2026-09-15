@@ -102,6 +102,20 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- Campaign findings store a noise-stripped causal `signature` and the SHA-256
+  of the bundle locks. EasyBuild v5's `ERROR: installation failed` and
+  `ERROR: Shell command failed!` are not the causal line; classification
+  and stuck-on-same use the interned `out.txt` (including the sibling of
+  `cmd.sh`). `/work/` and `/scratch/` collapse like `/tmp/`. A new lock
+  starts a new stuck epoch.
+- `companion=` reprints every parent `--easyconfigs` root plus
+  `--stack-policy`, `--hierarchy-fixture`, and `--contributor`. Plan
+  companions omit `--hierarchy-fixture`. A hole `versionsuffix` such as
+  `-CUDA-12.6.0` sources the CUDA easyconfig.
+- `recipe lint` names the file on a style finding. MCP `eb_package_bump`
+  stamps `--contributor` and sets `isError` when `claims.resolves` is
+  false. `target doctor` probes with `env true` so a Rocky entrypoint
+  does not run `eb true`.
 - A `pyproject.toml` was never parsed: `text.parse::<toml::Value>()` reads a
   TOML value rather than a document, so every build requirement a project
   states was dropped in silence, and an sdist's own top directory hid the
