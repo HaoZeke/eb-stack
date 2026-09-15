@@ -16,12 +16,18 @@ pub fn with_outdir_overlay(mut roots: Vec<PathBuf>, out_dir: &Path) -> Vec<PathB
     roots
 }
 
-/// Newest `{name}-*.eb` under `letter/name/`.
+/// Newest `{name}-*.eb` under `letter/name/`, then a flat robot root.
+///
+/// EasyBuild `--robot` accepts either the letter/name tree or a directory of
+/// `.eb` files. Companion argv must find both.
 pub fn find_named_easyconfig(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
     let letter = name.chars().next()?.to_ascii_lowercase();
     for root in roots {
         let dir = root.join(letter.to_string()).join(name);
         if let Some(found) = newest_named_eb(&dir, name) {
+            return Some(found);
+        }
+        if let Some(found) = newest_named_eb(root, name) {
             return Some(found);
         }
     }
@@ -380,6 +386,17 @@ mod tests {
             "3.10 must beat 3.9, got {}",
             found.display()
         );
+    }
+
+    #[test]
+    fn find_named_easyconfig_finds_a_flat_robot_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path().join("robot");
+        fs::create_dir_all(&robot).expect("robot");
+        let path = robot.join("HDF5-1.14.6-foss-2025a.eb");
+        fs::write(&path, "name = 'HDF5'\n").expect("flat hdf5");
+        let found = find_named_easyconfig(&[robot], "HDF5").expect("flat robot hit");
+        assert_eq!(found, path);
     }
 
     #[test]
