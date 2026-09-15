@@ -431,6 +431,7 @@ fn build_formula(
             .unwrap_or_else(|| package_ref.clone());
 
         let mut inputs: Vec<Input> = Vec::new();
+        let mut input_refs: Vec<String> = Vec::new();
         let mut edges: Vec<String> = Vec::new();
         for map in [runtime_dep_map, build_dep_map].into_iter().flatten() {
             for dep_name in map
@@ -440,22 +441,23 @@ fn build_formula(
                 .flatten()
             {
                 for dep_ref in resolve_named_refs(dep_name, unique_name_refs, package_refs) {
-                    // A task consumes the component its dependency produced,
-                    // which is what ties the how back to the what.
-                    inputs.push(Input {
-                        required: RequiredInputField::Resource(ResourceReference::Ref(
-                            dep_ref.clone(),
-                        )),
-                        source: None,
-                        target: None,
-                        properties: None,
-                    });
+                    input_refs.push(dep_ref.clone());
                     edges.push(task_ref(&dep_ref));
                 }
             }
         }
+        input_refs.sort();
+        input_refs.dedup();
         edges.sort();
         edges.dedup();
+        for dep_ref in input_refs {
+            inputs.push(Input {
+                required: RequiredInputField::Resource(ResourceReference::Ref(dep_ref)),
+                source: None,
+                target: None,
+                properties: None,
+            });
+        }
 
         tasks.push(Task {
             bom_ref: BomReference::new(task_ref(package_ref)),
@@ -1549,6 +1551,28 @@ mod formulation_tests {
         assert!(workflow.get("timeStart").is_none(), "{workflow}");
         assert!(workflow.get("timeEnd").is_none(), "{workflow}");
         assert_eq!(json["metadata"]["lifecycles"][0]["phase"], "pre-build");
+    }
+
+    #[test]
+    fn overlapping_runtime_and_build_deps_do_not_duplicate_inputs() {
+        let deps = HashMap::from([("App".to_string(), vec!["Lib".to_string()])]);
+        let json = lock_to_cyclonedx_with_facts(
+            &lock(),
+            SbomFacts {
+                runtime_dep_map: Some(&deps),
+                build_dep_map: Some(&deps),
+                ..SbomFacts::default()
+            },
+        );
+        let tasks = json["formulation"][0]["workflows"][0]["tasks"]
+            .as_array()
+            .expect("tasks");
+        let app = tasks
+            .iter()
+            .find(|task| task["name"].as_str() == Some("App/1.0"))
+            .expect("App task");
+        let inputs = app["inputs"].as_array().expect("inputs");
+        assert_eq!(inputs.len(), 1, "{app}");
     }
 }
 
