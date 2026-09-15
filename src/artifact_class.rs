@@ -151,13 +151,16 @@ pub fn classify_url(url: &str) -> ArtifactClass {
 /// Classify a foreign recipe's source, which may name a checkout instead of a
 /// download.
 ///
-/// A GitHub tag-archive URL wins over a git remote. Spack (and similar)
-/// attach both so the archive can be hashed; the remote does not make that
-/// hash a checkout hash.
+/// A GitHub tag-archive or release-asset URL wins over a git remote. Spack
+/// (and similar) attach both so the file can be hashed; the remote does not
+/// make that hash a checkout hash.
 pub fn classify_foreign(url: Option<&str>, git: Option<&str>) -> ArtifactClass {
     if let Some(u) = url {
         let class = classify_url(u);
-        if class == ArtifactClass::GitHubTagArchive {
+        if matches!(
+            class,
+            ArtifactClass::GitHubTagArchive | ArtifactClass::GitHubReleaseAsset
+        ) {
             return class;
         }
     }
@@ -288,11 +291,40 @@ fn cmake_project_version(text: &str) -> Option<String> {
     });
     let mut from = 0;
     while let Some(body) = next_cmake_project_body(text, &mut from) {
-        if let Some(caps) = ver.captures(body) {
+        let unquoted = cmake_without_quoted_strings(body);
+        if let Some(caps) = ver.captures(&unquoted) {
             return Some(caps.get(1)?.as_str().to_string());
         }
     }
     None
+}
+
+/// Replace double-quoted regions with spaces so `VERSION` inside DESCRIPTION
+/// text is not a keyword.
+fn cmake_without_quoted_strings(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    for c in text.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            out.push(' ');
+            continue;
+        }
+        if c == '"' {
+            in_string = true;
+            out.push(' ');
+            continue;
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Next `project(...)` argument body after `from`, skipping comments and
@@ -454,11 +486,15 @@ fn toml_package_version(text: &str) -> Option<String> {
 }
 
 /// `project('name', 'c', version : '1.2.3')`.
+///
+/// Only the `project()` argument body is scanned. A later
+/// `dependency(..., version: ...)` is not a declared project version.
 fn meson_project_version(text: &str) -> Option<String> {
     let lower = text.to_ascii_lowercase();
     let start = lower.find("project(")?;
-    let rest = &text[start + "project(".len()..];
-    let mut search = rest;
+    let open = start + "project".len();
+    let close = meson_matching_paren(text, open)?;
+    let mut search = &text[open + 1..close];
     while let Some(idx) = search.to_ascii_lowercase().find("version") {
         let before = search[..idx].trim_end();
         if before.to_ascii_lowercase().ends_with("meson_") {
@@ -474,6 +510,52 @@ fn meson_project_version(text: &str) -> Option<String> {
         let quote = after.chars().next().filter(|c| *c == '\'' || *c == '"')?;
         let inner = after.get(1..)?.find(quote)?;
         return Some(after[1..1 + inner].to_string());
+    }
+    None
+}
+
+/// Index of the `)` that closes the `(` at `open`, ignoring parens inside
+/// `'...'` / `"..."` and `#` comments.
+fn meson_matching_paren(text: &str, open: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let n = bytes.len();
+    let mut i = open + 1;
+    let mut depth = 1usize;
+    let mut in_quote: Option<u8> = None;
+    let mut escaped = false;
+    while i < n && depth > 0 {
+        let c = bytes[i];
+        if let Some(q) = in_quote {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == q {
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'#' {
+            while i < n && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if c == b'\'' || c == b'"' {
+            in_quote = Some(c);
+            i += 1;
+            continue;
+        }
+        if c == b'(' {
+            depth += 1;
+        } else if c == b')' {
+            depth -= 1;
+            if depth == 0 {
+                return Some(i);
+            }
+        }
+        i += 1;
     }
     None
 }
@@ -711,6 +793,25 @@ mod tests {
     }
 
     #[test]
+    fn a_github_release_asset_url_wins_over_a_git_remote() {
+        let asset =
+            "https://github.com/TheochemUI/eOn/releases/download/v2.16.0/eon-v2.16.0.tar.xz";
+        let git = "https://github.com/TheochemUI/eOn.git";
+        assert_eq!(
+            classify_foreign(Some(asset), Some(git)),
+            ArtifactClass::GitHubReleaseAsset
+        );
+        let seed = SeededChecksum {
+            origin: "spack".into(),
+            source_url: Some(asset.into()),
+            git: Some(git.into()),
+            sha256: Some("a".repeat(64)),
+        };
+        let findings = verify_sources(&[asset.into()], Some(&seed));
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
     fn an_empty_or_opaque_url_is_unknown_not_compatible() {
         assert_eq!(classify_url(""), ArtifactClass::Unknown);
         assert_eq!(classify_url("   "), ArtifactClass::Unknown);
@@ -860,6 +961,22 @@ mod declared_version_tests {
         assert_eq!(
             cmake_project_version("project(Foo DESCRIPTION \"Fast (FFT)\" VERSION 4.3.9)\n"),
             Some("4.3.9".into())
+        );
+        assert_eq!(
+            cmake_project_version(
+                "project(Foo DESCRIPTION \"Requires VERSION 2.0 API\" VERSION 4.3.9)\n"
+            ),
+            Some("4.3.9".into())
+        );
+    }
+
+    #[test]
+    fn meson_project_version_stays_inside_the_project_call() {
+        assert_eq!(
+            meson_project_version(
+                "project('foo', 'c', meson_version: '>=1.8.0')\ndependency('bar', version: '>=1.2.3')\n"
+            ),
+            None
         );
     }
 
