@@ -6,7 +6,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Return co-selected easyconfig paths in dependency order (deps before apps).
 ///
-/// Edges come from `dep_map` (package name → co-stack dependency names). Only
+/// Edges come from `dep_map` (package name or identity → co-stack dependency
+/// names or identity keys). Only
 /// dependencies that are also co-selected participate. Tie-break is stable by
 /// package name so the order is deterministic.
 pub fn ordered_build_paths(
@@ -47,6 +48,11 @@ pub fn ordered_packages<'a>(
         .iter()
         .map(|package| (package_row_key(package), package))
         .collect();
+    let by_identity: HashMap<String, &LockPackage> = lock
+        .packages
+        .iter()
+        .map(|package| (crate::sbom::lock_package_key(package), package))
+        .collect();
 
     let mut in_degree: BTreeMap<String, usize> = BTreeMap::new();
     let mut dependents: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -59,15 +65,20 @@ pub fn ordered_packages<'a>(
             .or_else(|| dep_map.get(&crate::sbom::lock_package_key(package)))
         {
             for dep_name in deps {
-                if let Some(dep_pkgs) = by_name.get(dep_name.as_str()) {
-                    for dep_pkg in dep_pkgs {
-                        if package_row_key(dep_pkg) != key {
-                            dependents
-                                .entry(package_row_key(dep_pkg))
-                                .or_default()
-                                .push(key.clone());
-                            deg += 1;
-                        }
+                let dep_pkgs: Vec<&LockPackage> = if let Some(dep_pkg) = by_identity.get(dep_name) {
+                    vec![*dep_pkg]
+                } else if let Some(dep_pkgs) = by_name.get(dep_name.as_str()) {
+                    dep_pkgs.clone()
+                } else {
+                    continue;
+                };
+                for dep_pkg in dep_pkgs {
+                    if package_row_key(dep_pkg) != key {
+                        dependents
+                            .entry(package_row_key(dep_pkg))
+                            .or_default()
+                            .push(key.clone());
+                        deg += 1;
                     }
                 }
             }

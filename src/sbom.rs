@@ -716,6 +716,22 @@ fn candidate_identity(candidate: &crate::domain::Candidate) -> String {
     )
 }
 
+fn dep_map_keys(lock: &StackLock, dependency: &crate::domain::DepReq) -> Vec<String> {
+    let named: Vec<&LockPackage> = lock
+        .packages
+        .iter()
+        .filter(|package| package.name == dependency.name)
+        .collect();
+    if named.is_empty() {
+        return vec![dependency.name.clone()];
+    }
+    named
+        .into_iter()
+        .filter(|package| crate::version::matches_req(&package.version, &dependency.version_req))
+        .map(lock_package_key)
+        .collect()
+}
+
 fn dep_names_map_from_universe(
     lock: &StackLock,
     universe: &Universe,
@@ -734,19 +750,14 @@ fn dep_names_map_from_universe(
         let names: Vec<String> = by_identity
             .get(&lock_package_key(package))
             .map(|candidate| {
-                if build_time {
-                    candidate
-                        .builddependencies
-                        .iter()
-                        .map(|dependency| dependency.name.clone())
-                        .collect()
+                let deps = if build_time {
+                    &candidate.builddependencies
                 } else {
-                    candidate
-                        .dependencies
-                        .iter()
-                        .map(|dependency| dependency.name.clone())
-                        .collect()
-                }
+                    &candidate.dependencies
+                };
+                deps.iter()
+                    .flat_map(|dependency| dep_map_keys(lock, dependency))
+                    .collect()
             })
             .unwrap_or_default();
         map.insert(lock_package_key(package), names.clone());
@@ -966,14 +977,26 @@ mod tests {
         let lock = select_stack(&universe, &policy, None).unwrap();
         let runtime = dep_map_from_universe(&lock, &universe);
         let build = build_dep_map_from_universe(&lock, &universe);
-        assert_eq!(runtime.get("App").unwrap(), &vec!["Lib".to_string()]);
-        assert_eq!(build.get("App").unwrap(), &vec!["Tool".to_string()]);
+        let lib = lock
+            .packages
+            .iter()
+            .find(|package| package.name == "Lib")
+            .map(lock_package_key)
+            .expect("Lib");
+        let tool = lock
+            .packages
+            .iter()
+            .find(|package| package.name == "Tool")
+            .map(lock_package_key)
+            .expect("Tool");
+        assert_eq!(runtime.get("App").unwrap(), &vec![lib.clone()]);
+        assert_eq!(build.get("App").unwrap(), &vec![tool.clone()]);
         assert!(
-            !runtime.get("App").unwrap().contains(&"Tool".to_string()),
+            !runtime.get("App").unwrap().contains(&tool),
             "runtime map must not include build-only deps"
         );
         assert!(
-            !build.get("App").unwrap().contains(&"Lib".to_string()),
+            !build.get("App").unwrap().contains(&lib),
             "build map must not include runtime-only deps"
         );
         // Serialized candidate still carries both roles separately.
@@ -1188,6 +1211,111 @@ mod tests {
         let gcc_key = lock_package_key(&lock.packages[1]);
         assert_eq!(runtime.get(&system_key).unwrap(), &vec!["zlib".to_string()]);
         assert_eq!(runtime.get(&gcc_key).unwrap(), &vec!["OpenSSL".to_string()]);
+    }
+
+    #[test]
+    fn a_versioned_dep_does_not_depend_on_every_identity() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let foss = Toolchain {
+            name: "foss".into(),
+            version: "2025b".into(),
+        };
+        let app = Candidate {
+            name: "App".into(),
+            version: "1.0".into(),
+            toolchain: foss.clone(),
+            versionsuffix: None,
+            easyconfig_path: "App.eb".into(),
+            dependencies: vec![DepReq {
+                name: "Lib".into(),
+                version_req: "==2.0".into(),
+                versionsuffix: None,
+                toolchain: None,
+            }],
+            builddependencies: vec![],
+            exts_list: vec![],
+            moduleclass: None,
+        };
+        let lib_old = Candidate {
+            name: "Lib".into(),
+            version: "1.0".into(),
+            toolchain: system.clone(),
+            versionsuffix: None,
+            easyconfig_path: "Lib-system.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+            moduleclass: None,
+        };
+        let lib_new = Candidate {
+            name: "Lib".into(),
+            version: "2.0".into(),
+            toolchain: foss.clone(),
+            versionsuffix: None,
+            easyconfig_path: "Lib-foss.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+            moduleclass: None,
+        };
+        let universe = Universe {
+            toolchain: foss.clone(),
+            generation_label: None,
+            candidates: vec![app, lib_old, lib_new],
+        };
+        let lock = StackLock {
+            schema_version: 1,
+            toolchain: foss.clone(),
+            generation_label: None,
+            packages: vec![
+                LockPackage {
+                    name: "App".into(),
+                    version: "1.0".into(),
+                    toolchain: foss.clone(),
+                    versionsuffix: None,
+                    easyconfig_path: "App.eb".into(),
+                },
+                LockPackage {
+                    name: "Lib".into(),
+                    version: "1.0".into(),
+                    toolchain: system,
+                    versionsuffix: None,
+                    easyconfig_path: "Lib-system.eb".into(),
+                },
+                LockPackage {
+                    name: "Lib".into(),
+                    version: "2.0".into(),
+                    toolchain: foss,
+                    versionsuffix: None,
+                    easyconfig_path: "Lib-foss.eb".into(),
+                },
+            ],
+            solver: SolverMeta {
+                engine: "resolvo".into(),
+                engine_version: "0".into(),
+                timestamp: "2026-08-12T00:00:00Z".into(),
+            },
+        };
+        let runtime = dep_map_from_universe(&lock, &universe);
+        let sbom = lock_to_cyclonedx_with_deps(&lock, Some(&runtime));
+        let app = sbom["dependencies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|edge| edge["ref"].as_str().unwrap_or("").contains("App@"))
+            .expect("App edge");
+        let depends = depends_on_list(app);
+        assert!(
+            depends.iter().any(|reference| reference.contains("2.0")),
+            "{depends:?}"
+        );
+        assert!(
+            depends.iter().all(|reference| !reference.contains("1.0")),
+            "{depends:?}"
+        );
     }
 
     #[test]
