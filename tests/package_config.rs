@@ -754,6 +754,41 @@ fn source_checksums_count_must_match_plan_sources() {
 }
 
 #[test]
+fn source_checksums_do_not_invent_sources_on_an_empty_plan() {
+    let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let config = PackageConfigLayer::from_toml_str(&format!(
+        "schema_version = 1\nsource_checksums = [\"{digest}\"]\n"
+    ))
+    .expect("layer");
+    let mut plan = qmcpack_plan();
+    plan.sources.clear();
+    let error = apply_package_layers(&mut plan, &[config]).expect_err("empty plan");
+    assert!(
+        error.to_string().contains("source_checksums has 1")
+            && error.to_string().contains("plan has 0"),
+        "{error}"
+    );
+    assert!(plan.sources.is_empty(), "{:?}", plan.sources);
+}
+
+#[test]
+fn patch_layer_sha256_must_be_sixty_four_hex() {
+    let error = PackageConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+[[build.patches]]
+filename = "portability.patch"
+sha256 = "abcd"
+"#,
+    )
+    .expect_err("short patch digest");
+    assert!(
+        error.to_string().contains("patch checksum") && error.to_string().contains("abcd"),
+        "{error}"
+    );
+}
+
+#[test]
 fn package_policy_rejects_python_fragments_as_easyconfig_parameter_names() {
     let error = PackageConfigLayer::from_toml_str(
         r#"

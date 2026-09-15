@@ -343,6 +343,11 @@ impl PackageConfigLayer {
                             patch.filename.clone(),
                         ));
                     }
+                    if let Some(checksum) = &patch.sha256 {
+                        if !is_sha256_hex(checksum) {
+                            return Err(PackageConfigError::InvalidPatchChecksum(checksum.clone()));
+                        }
+                    }
                 }
             }
         }
@@ -350,7 +355,7 @@ impl PackageConfigLayer {
             validate_easyconfig_parameter_names(&profile.easyconfig_parameters)?;
         }
         for checksum in &self.source_checksums {
-            if checksum.len() != 64 || !checksum.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            if !is_sha256_hex(checksum) {
                 return Err(PackageConfigError::InvalidSourceChecksum(checksum.clone()));
             }
         }
@@ -646,21 +651,15 @@ fn apply_one_profile_patch(
     Ok(())
 }
 
+fn is_sha256_hex(checksum: &str) -> bool {
+    checksum.len() == 64 && checksum.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn apply_layer_source_checksums(
     plan: &mut PackagePlan,
     checksums: &[String],
 ) -> Result<(), PackageConfigError> {
     if checksums.is_empty() {
-        return Ok(());
-    }
-    if plan.sources.is_empty() {
-        plan.sources = checksums
-            .iter()
-            .map(|checksum| crate::package::SourceArtifact {
-                sha256: Some(checksum.clone()),
-                ..crate::package::SourceArtifact::default()
-            })
-            .collect();
         return Ok(());
     }
     if checksums.len() != plan.sources.len() {
@@ -833,6 +832,9 @@ pub enum PackageConfigError {
     /// A `source_checksums` entry is not a SHA-256 hex digest.
     #[error("source checksum must be exactly 64 hexadecimal characters, got {0:?}")]
     InvalidSourceChecksum(String),
+    /// A `[[build.patches]]` sha256 is not a SHA-256 hex digest.
+    #[error("patch checksum must be exactly 64 hexadecimal characters, got {0:?}")]
+    InvalidPatchChecksum(String),
     /// `source_checksums` must name one digest per plan source.
     #[error("source_checksums has {actual} digest(s), plan has {expected} source(s)")]
     SourceChecksumCount {
