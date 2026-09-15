@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// An EasyBuild toolchain: the compiler and library generation a build targets.
 pub struct Toolchain {
     /// Toolchain name as EasyBuild spells it, e.g. `foss`, `GCCcore`. The
@@ -137,6 +138,7 @@ pub struct Universe {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// A constraint fixing one package to a version or range.
 pub struct Pin {
     /// Package the pin applies to.
@@ -147,6 +149,7 @@ pub struct Pin {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// A demand that a package move forward relative to the baseline lock.
 pub struct RequireUpgrade {
     /// Package that must advance.
@@ -251,6 +254,12 @@ impl Policy {
             Some(p) if !p.is_empty() => p.clone(),
             _ => self.roots.clone(),
         };
+        let mut pin_names = std::collections::BTreeSet::new();
+        for pin in &self.pins {
+            if !pin_names.insert(pin.name.as_str()) {
+                return Err(format!("pins lists {} more than once", pin.name));
+            }
+        }
         let mut seen = std::collections::BTreeSet::new();
         for name in &order {
             if !self.roots.iter().any(|root| root == name) {
@@ -498,6 +507,58 @@ mod tests {
                 || error.to_string().contains("objective"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn unknown_nested_policy_fields_are_rejected() {
+        let toolchain = r#"{
+            "toolchain": {"name": "foss", "version": "2026.1", "verison": "2025b"},
+            "roots": ["App"]
+        }"#;
+        let error = serde_json::from_str::<Policy>(toolchain).expect_err("toolchain typo");
+        assert!(
+            error.to_string().contains("unknown field") || error.to_string().contains("verison"),
+            "{error}"
+        );
+        let pin = r#"{
+            "toolchain": {"name": "foss", "version": "2026.1"},
+            "roots": ["App"],
+            "pins": [{"name": "Lib", "version_req": "==1.0", "version": "==2.0"}]
+        }"#;
+        let error = serde_json::from_str::<Policy>(pin).expect_err("pin typo");
+        assert!(
+            error.to_string().contains("unknown field") || error.to_string().contains("version"),
+            "{error}"
+        );
+        let upgrade = r#"{
+            "toolchain": {"name": "foss", "version": "2026.1"},
+            "roots": ["App"],
+            "require_upgrade": [{"name": "App", "relative_to_basline": true}]
+        }"#;
+        let error = serde_json::from_str::<Policy>(upgrade).expect_err("upgrade typo");
+        assert!(
+            error.to_string().contains("unknown field")
+                || error.to_string().contains("relative_to_basline")
+                || error.to_string().contains("untagged"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn duplicate_pin_names_are_an_error() {
+        let mut policy = policy(&["App"], None);
+        policy.pins = vec![
+            Pin {
+                name: "App".into(),
+                version_req: "==2.0".into(),
+            },
+            Pin {
+                name: "App".into(),
+                version_req: "==1.0".into(),
+            },
+        ];
+        let error = policy.effective_root_priority().expect_err("duplicate pin");
+        assert!(error.contains("App") && error.contains("pins"), "{error}");
     }
 
     #[test]
