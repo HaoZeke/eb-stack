@@ -347,6 +347,21 @@ fn strip_inline_comment(line: &str) -> &str {
     line
 }
 
+/// Extras are a name suffix (`pkg[extra]==1.2`), not a terminator.
+fn strip_pep508_extras(req: &str) -> String {
+    let Some(open) = req.find('[') else {
+        return req.to_string();
+    };
+    let Some(rel) = req[open..].find(']') else {
+        return req.to_string();
+    };
+    let close = open + rel;
+    let mut stripped = String::new();
+    stripped.push_str(req[..open].trim_end());
+    stripped.push_str(req[close + 1..].trim_start());
+    stripped
+}
+
 fn parse_pep508(spec: &str) -> Pep508 {
     let original = spec.trim().to_string();
     if original.is_empty() {
@@ -365,14 +380,14 @@ fn parse_pep508(spec: &str) -> Pep508 {
     {
         return Pep508::SkipExtra { spec: original };
     }
-    let req = req.split_once('[').map(|(name, _)| name).unwrap_or(req);
+    let req = strip_pep508_extras(req);
     if req.contains('@') {
         return Pep508::Invalid {
             spec: original,
             reason: "direct URL/VCS reference is not a named pin".into(),
         };
     }
-    let (name, pin) = split_name_and_pin(req);
+    let (name, pin) = split_name_and_pin(&req);
     if name.is_empty() {
         return Pep508::Invalid {
             spec: original,
@@ -529,6 +544,44 @@ mod tests {
         assert_eq!(
             recipe.sha256.as_deref(),
             Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+    }
+
+    #[test]
+    fn extras_do_not_eat_the_version_pin() {
+        let recipe = parse_pypi_str("demo[html]==4.12.3\n").expect("parse");
+        assert_eq!(recipe.name, "demo");
+        assert_eq!(recipe.version, "4.12.3");
+        assert!(
+            recipe
+                .residuals
+                .iter()
+                .all(|residual| residual.category != "pypi-version"),
+            "{:?}",
+            recipe.residuals
+        );
+        let recipe = parse_pypi_str(
+            r#"{
+              "info": {
+                "name": "app",
+                "version": "1.0",
+                "requires_dist": ["requests[security]>=2.31.0"]
+              },
+              "urls": []
+            }"#,
+        )
+        .expect("parse");
+        let dep = recipe
+            .dependencies
+            .iter()
+            .find(|dep| dep.name == "requests")
+            .expect("requests");
+        assert_eq!(dep.pin.as_deref(), Some(">=2.31.0"));
+        let err = parse_pypi_str("demo[foo] @ https://example.invalid/demo-1.0.tar.gz\n")
+            .expect_err("direct url");
+        assert!(
+            err.to_string().contains("URL") || err.to_string().contains("direct"),
+            "{err}"
         );
     }
 
