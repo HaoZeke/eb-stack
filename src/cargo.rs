@@ -620,12 +620,23 @@ fn cargo_deps(value: &toml::Value) -> Vec<CargoDep> {
     collect_dep_table(value.get("dependencies"), value, &mut deps);
     collect_dep_table(value.get("build-dependencies"), value, &mut deps);
     if let Some(targets) = value.get("target").and_then(toml::Value::as_table) {
-        for spec in targets.values() {
+        for (cfg, spec) in targets {
+            if target_cfg_is_non_unix(cfg) {
+                continue;
+            }
             collect_dep_table(spec.get("dependencies"), value, &mut deps);
             collect_dep_table(spec.get("build-dependencies"), value, &mut deps);
         }
     }
     deps
+}
+
+fn target_cfg_is_non_unix(cfg: &str) -> bool {
+    let lower = cfg.to_ascii_lowercase();
+    lower.contains("windows")
+        || lower.contains("win32")
+        || lower.contains("macos")
+        || lower.contains("osx")
 }
 
 fn collect_dep_table(table: Option<&toml::Value>, root: &toml::Value, deps: &mut Vec<CargoDep>) {
@@ -841,6 +852,29 @@ core = { workspace = true }
                     && residual.summary.contains("core")),
             "{:?}",
             recipe.residuals
+        );
+    }
+
+    #[test]
+    fn windows_target_pyo3_does_not_make_a_python_crate() {
+        let recipe = parse_cargo_str(
+            r#"
+[package]
+name = "demo"
+version = "1.0.0"
+
+[target.'cfg(windows)'.dependencies]
+pyo3 = "0.22"
+"#,
+        )
+        .expect("parse");
+        assert!(
+            recipe
+                .dependencies
+                .iter()
+                .all(|dep| dep.name != "Python" && dep.name != "maturin"),
+            "{:?}",
+            recipe.dependencies
         );
     }
 

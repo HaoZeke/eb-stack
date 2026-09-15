@@ -102,6 +102,8 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A Cargo `[target.'cfg(windows)']` pyo3 dependency does not classify a
+  Linux leftover as a Python package.
 - `format_style` does not bisect `%(installdir)s`. Aliased extension
   provides keep the original ext name in `easyconfig_path`. Spack
   `@1.10:1.12` does not admit `1.13.0rc1`. A conda `2.1.* *cpu*` pin is
