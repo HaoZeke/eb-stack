@@ -461,21 +461,42 @@ fn admit_named_dependency_toolchains(
         .iter()
         .map(|candidate| candidate.easyconfig_path.clone())
         .collect();
+    let mut wanted_toolchains: HashMap<String, Vec<&crate::domain::Toolchain>> = HashMap::new();
+    let mut module_pins: HashSet<(String, String, String)> = HashSet::new();
+    for dependency in dependencies {
+        let name = dependency
+            .eb_name
+            .as_deref()
+            .unwrap_or(dependency.name.as_str());
+        if let Some(toolchain) = dependency.toolchain.as_ref() {
+            wanted_toolchains
+                .entry(name.to_string())
+                .or_default()
+                .push(toolchain);
+        }
+        if let Some(constraint) = dependency.constraint.as_deref() {
+            let pinned = constraint.strip_prefix("==").unwrap_or(constraint);
+            if pinned.contains('-') {
+                module_pins.insert((
+                    name.to_string(),
+                    dependency.versionsuffix.clone().unwrap_or_default(),
+                    pinned.to_string(),
+                ));
+            }
+        }
+    }
     for candidate in all {
         if known.contains(&candidate.easyconfig_path) {
             continue;
         }
-        if dependencies.iter().any(|dependency| {
-            let name = dependency
-                .eb_name
-                .as_deref()
-                .unwrap_or(dependency.name.as_str());
-            name == candidate.name
-                && dependency
-                    .toolchain
-                    .as_ref()
-                    .is_some_and(|want| toolchains_match(&candidate.toolchain, want))
-        }) {
+        if wanted_toolchains
+            .get(&candidate.name)
+            .is_some_and(|wanted| {
+                wanted
+                    .iter()
+                    .any(|want| toolchains_match(&candidate.toolchain, want))
+            })
+        {
             admitted.push(candidate.clone());
             continue;
         }
@@ -483,39 +504,25 @@ fn admit_named_dependency_toolchains(
         // toolchain inside the string: a system-level application asks for
         // `('OpenMPI', '5.0.3-GCC-13.3.0')`. That names one build as exactly
         // as a toolchain element does, so it admits the same way.
-        if dependencies.iter().any(|dependency| {
-            let name = dependency
-                .eb_name
-                .as_deref()
-                .unwrap_or(dependency.name.as_str());
-            if name != candidate.name {
-                return false;
-            }
-            let Some(constraint) = dependency.constraint.as_deref() else {
-                return false;
-            };
-            let suffix = candidate.versionsuffix.as_deref().unwrap_or("");
-            let want_suffix = dependency.versionsuffix.as_deref().unwrap_or("");
-            if suffix != want_suffix {
-                return false;
-            }
-            let module_without_suffix = if is_system_toolchain(&candidate.toolchain) {
-                candidate.version.clone()
-            } else {
-                format!(
-                    "{}-{}-{}",
-                    candidate.version, candidate.toolchain.name, candidate.toolchain.version
-                )
-            };
-            let module_version = format!("{module_without_suffix}{suffix}");
-            let pinned = constraint.strip_prefix("==").unwrap_or(constraint);
-            // Only an exact pin, and only when it spells the module out:
-            // `==5.0.3-GCC-13.3.0` names one build. The CUDA tag lives in
-            // versionsuffix, so it is not required in the constraint.
-            // A range must not reach outside the hierarchy.
-            module_without_suffix != candidate.version
-                && (pinned == module_without_suffix || pinned == module_version)
-        }) {
+        if module_pins.is_empty() {
+            continue;
+        }
+        let suffix = candidate.versionsuffix.as_deref().unwrap_or("");
+        let module_without_suffix = if is_system_toolchain(&candidate.toolchain) {
+            continue;
+        } else {
+            format!(
+                "{}-{}-{}",
+                candidate.version, candidate.toolchain.name, candidate.toolchain.version
+            )
+        };
+        let module_version = format!("{module_without_suffix}{suffix}");
+        if module_pins.contains(&(
+            candidate.name.clone(),
+            suffix.to_string(),
+            module_without_suffix,
+        )) || module_pins.contains(&(candidate.name.clone(), suffix.to_string(), module_version))
+        {
             admitted.push(candidate.clone());
         }
     }
