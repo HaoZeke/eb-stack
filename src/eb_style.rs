@@ -90,6 +90,7 @@ pub fn line_is_mechanically_fixable(line: &str) -> bool {
     }
     parse_string_assignment(line).is_some()
         || parse_dictionary_string_list(line).is_some()
+        || parse_dictionary_string_scalar(line).is_some()
         || parse_assignment_string_list(line).is_some()
         || parse_list_string_item(line).is_some()
 }
@@ -168,6 +169,9 @@ fn try_format_line(line: &str) -> Option<Vec<String>> {
     if let Some(field) = parse_dictionary_string_list(line) {
         return Some(format_dictionary_string_list(&field));
     }
+    if let Some(field) = parse_dictionary_string_scalar(line) {
+        return Some(format_dictionary_string_scalar(&field));
+    }
     if let Some(list) = parse_assignment_string_list(line) {
         return Some(format_assignment_string_list(&list));
     }
@@ -241,6 +245,70 @@ fn format_dictionary_string_list(field: &DictionaryStringList<'_>) -> Vec<String
     }));
     lines.push(format!(
         "{}]{}",
+        field.indent,
+        if field.trailing_comma { "," } else { "" }
+    ));
+    lines
+}
+
+fn parse_dictionary_string_scalar(line: &str) -> Option<DictionaryStringList<'_>> {
+    let indent_len = line.len() - line.trim_start().len();
+    let indent = &line[..indent_len];
+    let rest = line[indent_len..].trim_end();
+    let trailing_comma = rest.ends_with(',');
+    let rest = rest.strip_suffix(',').unwrap_or(rest).trim_end();
+    let key_quote = rest.chars().next()?;
+    if key_quote != '\'' && key_quote != '"' {
+        return None;
+    }
+    let key_body = &rest[key_quote.len_utf8()..];
+    let key_end = key_body.find(key_quote)?;
+    let key = &key_body[..key_end];
+    if key.contains(key_quote) {
+        return None;
+    }
+    let after_key = key_body[key_end + key_quote.len_utf8()..].trim_start();
+    let value_part = after_key.strip_prefix(':')?.trim_start();
+    if value_part.starts_with('[') {
+        return None;
+    }
+    let value_quote = value_part.chars().next()?;
+    if value_quote != '\'' && value_quote != '"' || !value_part.ends_with(value_quote) {
+        return None;
+    }
+    if value_part.len() < 2 {
+        return None;
+    }
+    let value = &value_part[value_quote.len_utf8()..value_part.len() - value_quote.len_utf8()];
+    if contains_unescaped_delimiter(value, value_quote) || value.contains('\n') {
+        return None;
+    }
+    Some(DictionaryStringList {
+        indent,
+        key_quote,
+        key,
+        value_quote,
+        value,
+        trailing_comma,
+    })
+}
+
+fn format_dictionary_string_scalar(field: &DictionaryStringList<'_>) -> Vec<String> {
+    let mut lines = vec![format!(
+        "{}{quote}{}{quote}: (",
+        field.indent,
+        field.key,
+        quote = field.key_quote
+    )];
+    let item_indent = format!("{}    ", field.indent);
+    lines.extend(format_list_string_item(&ListStringItem {
+        indent: &item_indent,
+        quote: field.value_quote,
+        content: field.value,
+        trailing_comma: false,
+    }));
+    lines.push(format!(
+        "{}){}",
         field.indent,
         if field.trailing_comma { "," } else { "" }
     ));
@@ -947,6 +1015,30 @@ mod tests {
             .text
             .lines()
             .all(|line| line.chars().count() <= EB_MAX_LINE));
+    }
+
+    #[test]
+    fn format_dictionary_scalar_wraps_pythonbundle_preinstallopts() {
+        let source = "    'preinstallopts': 'export PYTHONPATH=%(installdir)s/lib/python%(pyshortver)s/site-packages${PYTHONPATH:+:$PYTHONPATH} && ',\n";
+        assert!(
+            source.lines().next().unwrap().chars().count() > EB_MAX_LINE,
+            "fixture must exceed 120"
+        );
+        assert!(line_is_mechanically_fixable(source.trim_end()));
+
+        let result = format_style(source);
+
+        assert!(result.remaining.is_empty(), "{:?}", result.remaining);
+        assert!(result.text.contains("'preinstallopts': ("));
+        assert!(result
+            .text
+            .lines()
+            .all(|line| line.chars().count() <= EB_MAX_LINE));
+        assert!(
+            result.text.contains("PYTHONPATH") && result.text.contains("site-packages"),
+            "wrapped value must keep the path: {}",
+            result.text
+        );
     }
 
     #[test]
