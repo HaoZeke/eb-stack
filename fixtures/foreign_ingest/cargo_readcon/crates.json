@@ -11,7 +11,8 @@
     {
       "num": "0.13.1",
       "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "features": { "pyo3": [] }
+      "features": { "pyo3": [] },
+      "deps": [{ "name": "pyo3", "optional": false, "kind": "normal", "req": "^0.22" }]
     }
   ]
 }
