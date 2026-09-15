@@ -350,6 +350,8 @@ fn detect_ingest_dump_format(path: &Path) -> Option<ForeignFormat> {
         "pypi" => Some(ForeignFormat::Pypi),
         "cran" => Some(ForeignFormat::Cran),
         "cargo" => Some(ForeignFormat::Cargo),
+        "luarocks" => Some(ForeignFormat::Luarocks),
+        "raku" => Some(ForeignFormat::Raku),
         _ => None,
     }
 }
@@ -599,6 +601,13 @@ pub(crate) fn guess_easyblock(recipe: &ForeignRecipe, warnings: &mut Vec<String>
     if dep_names.iter().any(|n| *n == "cmake" || *n == "ninja") {
         warnings.push("cmake/ninja in foreign deps → easyblock CMakeNinja".into());
         return "CMakeNinja".into();
+    }
+    if dep_names
+        .iter()
+        .any(|n| n.eq_ignore_ascii_case("python") || n.eq_ignore_ascii_case("pip"))
+    {
+        warnings.push("python/pip in foreign deps → easyblock PythonPackage".into());
+        return "PythonPackage".into();
     }
     "ConfigureMake".into()
 }
@@ -1737,10 +1746,11 @@ fn static_attribute_string(
 }
 
 fn static_placement_target(value: Option<&StaticValue>) -> Option<String> {
-    let StaticValue::Mapping(entries) = value? else {
-        return None;
-    };
-    entries.first()?.1.as_string()
+    match value? {
+        StaticValue::String(text) => Some(text.clone()),
+        StaticValue::Mapping(entries) => entries.first()?.1.as_string(),
+        _ => None,
+    }
 }
 
 fn static_scoped_condition(call: &StaticCall) -> ConditionExpr {
@@ -2593,6 +2603,14 @@ source:
             Some(ForeignFormat::Cargo)
         );
         assert_eq!(
+            detect_foreign_format(Path::new("ingest/luarocks/lfs-1.8.0.json")),
+            Some(ForeignFormat::Luarocks)
+        );
+        assert_eq!(
+            detect_foreign_format(Path::new("ingest/raku/JSON-Fast-0.19.json")),
+            Some(ForeignFormat::Raku)
+        );
+        assert_eq!(
             detect_foreign_format(Path::new("pypi/beautifulsoup4-4.12.3.json")),
             None
         );
@@ -2731,5 +2749,65 @@ source = { url = "https://example.invalid/lfs.tgz" }
         let mut notes = Vec::new();
         assert_eq!(guess_easyblock(&recipe, &mut notes), "LuaRocks");
         assert!(notes.iter().any(|note| note.contains("LuaRocks")));
+    }
+
+    #[test]
+    fn python_and_pip_deps_select_pythonpackage_after_cmake() {
+        let mut recipe = recipe_with_hints(&[]);
+        recipe.dependencies = vec![ForeignDep {
+            name: "python".into(),
+            pin: None,
+            role: "host".into(),
+            original_spec: None,
+            condition: ConditionExpr::Always,
+            provenance: Vec::new(),
+        }];
+        let mut notes = Vec::new();
+        assert_eq!(guess_easyblock(&recipe, &mut notes), "PythonPackage");
+
+        let mut lammps = recipe_with_hints(&[]);
+        lammps.dependencies = vec![
+            ForeignDep {
+                name: "cmake".into(),
+                pin: None,
+                role: "build".into(),
+                original_spec: None,
+                condition: ConditionExpr::Always,
+                provenance: Vec::new(),
+            },
+            ForeignDep {
+                name: "python".into(),
+                pin: None,
+                role: "run".into(),
+                original_spec: None,
+                condition: ConditionExpr::Always,
+                provenance: Vec::new(),
+            },
+        ];
+        let mut notes = Vec::new();
+        assert_eq!(guess_easyblock(&lammps, &mut notes), "CMakeNinja");
+    }
+
+    #[test]
+    fn a_string_resource_placement_is_the_target_directory() {
+        let text = r#"
+class Demo(Package):
+    homepage = "https://example.invalid"
+    url = "https://example.invalid/demo.tar.gz"
+    version("1.0", sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    resource(name="data", url="https://example.invalid/data.tar.gz", sha256="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", placement="potentials")
+"#;
+        let recipe = parse_spack_package(text).expect("parse");
+        let extra = recipe
+            .sources
+            .iter()
+            .find(|source| {
+                source
+                    .url
+                    .as_deref()
+                    .is_some_and(|url| url.contains("data.tar.gz"))
+            })
+            .expect("resource source");
+        assert_eq!(extra.target_directory.as_deref(), Some("potentials"));
     }
 }
