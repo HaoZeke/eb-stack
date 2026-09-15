@@ -342,22 +342,29 @@ pub fn solve_package_profile_with_hierarchy(
     let result = solve_curated_with_stack_policy(&universe, &policy, None, &stack_policy)
         .map_err(ProfileSolveError::Resolve)?;
 
+    let selected_by_name: HashMap<&str, &Candidate> = result
+        .selected
+        .iter()
+        .map(|candidate| (candidate.name.as_str(), candidate))
+        .collect();
+    let original_by_path: HashMap<&str, &Candidate> = original_candidates
+        .iter()
+        .map(|candidate| (candidate.easyconfig_path.as_str(), candidate))
+        .collect();
     let mut dependencies: Vec<LockedDependency> = Vec::new();
     let mut seen_providers = HashSet::new();
     for (name, build) in direct_roles {
-        let selected = result
-            .selected
-            .iter()
-            .find(|candidate| candidate.name == name)
+        let selected = *selected_by_name
+            .get(name.as_str())
             .ok_or_else(|| ProfileSolveError::MissingSelection(name.clone()))?;
-        let selected = original_candidates
-            .iter()
-            .find(|candidate| candidate.easyconfig_path == selected.easyconfig_path)
+        let selected = original_by_path
+            .get(selected.easyconfig_path.as_str())
+            .copied()
             .unwrap_or(selected);
         let provider = resolve_extension_provider(selected, &result.selected);
-        let provider = original_candidates
-            .iter()
-            .find(|candidate| candidate.easyconfig_path == provider.easyconfig_path)
+        let provider = original_by_path
+            .get(provider.easyconfig_path.as_str())
+            .copied()
             .unwrap_or(provider);
         if !seen_providers.insert(provider.name.clone()) {
             // BTreeMap order is not role order. A build-only extra that
