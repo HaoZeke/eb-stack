@@ -206,21 +206,27 @@ fn summarize(items: &[String]) -> String {
 /// Case first, because a wrong capital is the commonest miss in a tree whose
 /// names capitalise inconsistently, some shouted, some lowercase, some mixed.
 /// Then a prefix, then a single-character typo.
+fn name_is_near(name: &str, wanted: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == wanted
+        || lower.starts_with(wanted)
+        || wanted.starts_with(&lower)
+        || within_one_edit(&lower, wanted)
+}
+
 fn near_names(requested: &str, candidates: &[Candidate]) -> Vec<String> {
     let wanted = requested.to_ascii_lowercase();
-    let mut names: Vec<&str> = candidates.iter().map(|c| c.name.as_str()).collect();
-    names.sort_unstable();
-    names.dedup();
-
     let mut out: Vec<String> = Vec::new();
-    for name in names {
-        let lower = name.to_ascii_lowercase();
-        if lower == wanted
-            || lower.starts_with(&wanted)
-            || wanted.starts_with(&lower)
-            || within_one_edit(&lower, &wanted)
-        {
-            out.push(name.to_string());
+    for candidate in candidates {
+        let parent_near = name_is_near(&candidate.name, &wanted);
+        let ext_near = candidate
+            .exts_list
+            .iter()
+            .any(|ext| name_is_near(&ext.name, &wanted));
+        if parent_near || ext_near {
+            if !out.iter().any(|name| name == &candidate.name) {
+                out.push(candidate.name.clone());
+            }
         }
         if out.len() == 5 {
             break;
@@ -1139,6 +1145,25 @@ mod tests {
             "{:?}",
             names(&order)
         );
+    }
+
+    #[test]
+    fn unknown_root_suggests_the_bundle_that_provides_the_name() {
+        let mut bundle = candidate("SciPy-bundle", "2025.06", tc("foss", "2026.1"), vec![]);
+        bundle.exts_list = vec![crate::domain::ExtEntry {
+            name: "numpy".into(),
+            version: "2.3.1".into(),
+        }];
+        let err = build_order(&tree(&[bundle]), &["numpi".into()], Choice::Newest).unwrap_err();
+        match err {
+            OrderError::UnknownRoot { suggestions, .. } => {
+                assert!(
+                    suggestions.iter().any(|name| name == "SciPy-bundle"),
+                    "{suggestions:?}"
+                );
+            }
+            other => panic!("expected UnknownRoot, got {other}"),
+        }
     }
 
     #[test]
