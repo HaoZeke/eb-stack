@@ -186,6 +186,22 @@ fn conditions_evaluate_against_materialized_profile_and_stack() {
 }
 
 #[test]
+fn empty_platform_keeps_unix_and_linux_together() {
+    let unix = ConditionExpr::Not(Box::new(ConditionExpr::Predicate(
+        ConditionPredicate::Platform { name: "win".into() },
+    )));
+    let linux = ConditionExpr::Predicate(ConditionPredicate::Platform {
+        name: "linux".into(),
+    });
+    let context = ConditionContext::default();
+    assert_eq!(
+        unix.evaluate(&context),
+        linux.evaluate(&context),
+        "unset platform must not admit unix while rejecting linux"
+    );
+}
+
+#[test]
 fn not_opaque_is_not_true() {
     let opaque = ConditionExpr::Opaque {
         source: "py3k".into(),
@@ -268,6 +284,44 @@ fn an_ssh_github_remote_uses_the_https_archive() {
 fn a_github_remote_with_a_port_keeps_the_owner() {
     let mut plan = qmcpack_plan();
     plan.sources[0].git = Some("ssh://git@github.com:22/QMCPACK/qmcpack.git".into());
+    plan.sources[0].url = None;
+    let sbom = package_plan_to_cyclonedx(&plan).expect("typed CycloneDX SBOM");
+    let references = sbom["metadata"]["component"]["externalReferences"]
+        .as_array()
+        .expect("source references");
+    let distribution = references
+        .iter()
+        .find(|reference| reference["type"] == "distribution")
+        .expect("distribution reference");
+    assert_eq!(
+        distribution["url"],
+        "https://github.com/QMCPACK/qmcpack/archive/refs/tags/v4.3.0.tar.gz"
+    );
+}
+
+#[test]
+fn a_trailing_slash_github_remote_uses_the_https_archive() {
+    let mut plan = qmcpack_plan();
+    plan.sources[0].git = Some("https://github.com/QMCPACK/qmcpack.git/".into());
+    plan.sources[0].url = None;
+    let sbom = package_plan_to_cyclonedx(&plan).expect("typed CycloneDX SBOM");
+    let references = sbom["metadata"]["component"]["externalReferences"]
+        .as_array()
+        .expect("source references");
+    let distribution = references
+        .iter()
+        .find(|reference| reference["type"] == "distribution")
+        .expect("distribution reference");
+    assert_eq!(
+        distribution["url"],
+        "https://github.com/QMCPACK/qmcpack/archive/refs/tags/v4.3.0.tar.gz"
+    );
+}
+
+#[test]
+fn an_ssh_dot_github_remote_uses_the_https_archive() {
+    let mut plan = qmcpack_plan();
+    plan.sources[0].git = Some("git@ssh.github.com:QMCPACK/qmcpack.git".into());
     plan.sources[0].url = None;
     let sbom = package_plan_to_cyclonedx(&plan).expect("typed CycloneDX SBOM");
     let references = sbom["metadata"]["component"]["externalReferences"]

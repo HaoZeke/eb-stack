@@ -503,6 +503,8 @@ impl ConditionExpr {
     ///
     /// Opaque selectors are unknown, not false. Negating one stays unknown, so
     /// `not py3k` is not admitted just because `py3k` could not be lowered.
+    /// An unset platform is unknown the same way: `unix` (`not win`) and
+    /// `linux` stay together instead of splitting into true and false.
     pub fn evaluate(&self, context: &ConditionContext) -> bool {
         self.known(context) == Some(true)
     }
@@ -532,6 +534,10 @@ impl ConditionExpr {
         match self {
             Self::Always => Some(true),
             Self::Never => Some(false),
+            Self::Predicate(ConditionPredicate::Platform { name }) => context
+                .platform
+                .as_deref()
+                .map(|platform| platform.eq_ignore_ascii_case(name)),
             Self::Predicate(predicate) => Some(predicate.evaluate(context)),
             Self::All(expressions) => {
                 let mut unknown = false;
@@ -1420,15 +1426,21 @@ fn source_archive_url(source: &SourceArtifact) -> Option<String> {
     }
 }
 
-/// HTTPS repo root for a github.com remote, or nothing.
+/// HTTPS repo root for a GitHub remote, or nothing.
 ///
-/// scp-style and ssh/git URLs are accepted as remotes, but the archive
-/// GitHub serves is only at https://github.com/{owner}/{repo}/archive/...
+/// scp-style and ssh/git URLs are accepted as remotes, including
+/// `ssh.github.com`, but the archive GitHub serves is only at
+/// `https://github.com/{owner}/{repo}/archive/...`. gist.github.com is a
+/// GitHub host and is still rejected: it has no `/archive/refs/tags/` tree.
 fn github_https_repo(git: &str) -> Option<String> {
-    if !git_remote_is_github(git) || github_remote_host(git)?.as_str() != "github.com" {
+    if !git_remote_is_github(git) {
         return None;
     }
-    let trimmed = git.trim();
+    let host = github_remote_host(git)?;
+    if host == "gist.github.com" || host.ends_with(".gist.github.com") {
+        return None;
+    }
+    let trimmed = git.trim().trim_end_matches('/');
     let lower = trimmed.to_ascii_lowercase();
     let path = if lower.starts_with("git@github.com:") {
         &trimmed["git@github.com:".len()..]
@@ -1449,6 +1461,7 @@ fn github_https_repo(git: &str) -> Option<String> {
     } else {
         return None;
     };
+    let path = path.trim_end_matches('/');
     let path = if path.to_ascii_lowercase().ends_with(".git") {
         &path[..path.len() - 4]
     } else {
