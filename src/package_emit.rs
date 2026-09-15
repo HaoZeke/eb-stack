@@ -9,6 +9,7 @@
 //!   package toolchain or a hierarchy member (GCCcore/gompi under foss, …);
 //! - cross-generation pins keep an explicit four-element tuple.
 
+use crate::cran::{CRAN_SOURCE_FILENAME, CRAN_SOURCE_URLS};
 use crate::domain::Toolchain;
 use crate::eb_parse::easyconfig_basename;
 use crate::hierarchy::{hierarchy_for, hierarchy_member_rank, is_system_toolchain};
@@ -460,11 +461,10 @@ fn render_ext_from_source(
     let mut options = Vec::new();
     if let Some(url) = &source.url {
         if url.contains("cran.r-project.org/src/contrib") {
-            options.push(
-                "'source_urls': [\n        'https://cran.r-project.org/src/contrib/',\n        \
-                 'https://cran.r-project.org/src/contrib/Archive/%(name)s',\n    ]"
-                    .into(),
-            );
+            options.push(format!(
+                "'source_urls': [\n        '{}',\n        '{}',\n    ]",
+                CRAN_SOURCE_URLS[0], CRAN_SOURCE_URLS[1]
+            ));
         } else if let Some(base) = url.rsplit_once('/').map(|(base, _)| base) {
             options.push(format!("'source_urls': ['{}']", escape_single(base)));
         }
@@ -496,11 +496,11 @@ fn overlay_exts_default_options(plan: &PackagePlan, kind: LanguageBundleKind) ->
         if plan.overlay_extensions.is_empty() {
             return String::new();
         }
-        return "exts_default_options = {\n    'source_urls': [\n        \
-                'https://cran.r-project.org/src/contrib/',\n        \
-                'https://cran.r-project.org/src/contrib/Archive/%(name)s',\n    ],\n    \
-                'sources': ['%(name)s_%(version)s.tar.gz'],\n}\n\n"
-            .to_string();
+        return format!(
+            "exts_default_options = {{\n    'source_urls': [\n        \
+             '{}',\n        '{}',\n    ],\n    'sources': ['{CRAN_SOURCE_FILENAME}'],\n}}\n\n",
+            CRAN_SOURCE_URLS[0], CRAN_SOURCE_URLS[1]
+        );
     }
     // The prepended PYTHONPATH is what lets one extension import another it was
     // just installed beside. An R bundle installs into the R library path and
@@ -756,6 +756,13 @@ fn render_sources(
                     checksums: checksum_lines,
                 };
             }
+            if let Some(block) = try_render_cran_primary(url) {
+                return SourceBlock {
+                    prelude: block.prelude,
+                    sources: block.sources,
+                    checksums: checksum_lines,
+                };
+            }
         }
     }
 
@@ -835,6 +842,25 @@ fn try_render_pypi_primary(
         }
     }
     None
+}
+
+/// Conventional EasyBuild form for a CRAN source tarball.
+///
+/// CRAN keeps the current release at contrib/ and moves older ones to
+/// Archive/{name}/. A single absolute contrib URL 404s after that move.
+fn try_render_cran_primary(url: &str) -> Option<SourceBlock> {
+    if !url.contains("cran.r-project.org/src/contrib") {
+        return None;
+    }
+    let source_urls = CRAN_SOURCE_URLS
+        .iter()
+        .map(|entry| format!("'{entry}'"))
+        .collect::<Vec<_>>();
+    Some(SourceBlock {
+        prelude: format!("source_urls = {}\n", render_multiline_list(&source_urls)),
+        sources: format!("sources = ['{CRAN_SOURCE_FILENAME}']"),
+        checksums: String::new(),
+    })
 }
 
 /// Conventional EasyBuild form for a single primary GitHub tag archive.
@@ -1767,6 +1793,29 @@ mod tests {
                 "https://example.org/tqdm-4.67.1.tar.gz"
             ),
             None
+        );
+    }
+
+    #[test]
+    fn a_cran_tarball_renders_contrib_and_archive() {
+        let source = crate::package::SourceArtifact {
+            url: Some("https://cran.r-project.org/src/contrib/jsonlite_1.8.8.tar.gz".into()),
+            filename: Some("jsonlite_1.8.8.tar.gz".into()),
+            ..Default::default()
+        };
+        let block = render_sources("jsonlite", "1.8.8", &[source], &[], None);
+        let rendered = format!("{}{}", block.prelude, block.sources);
+        assert!(
+            rendered.contains("src/contrib/") && rendered.contains("src/contrib/Archive/%(name)s"),
+            "single RPackage must list current and archived CRAN:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("%(name)s_%(version)s.tar.gz"),
+            "CRAN tarball name is templated:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("https://cran.r-project.org/src/contrib/jsonlite_1.8.8.tar.gz"),
+            "a full contrib URL 404s once CRAN archives the release:\n{rendered}"
         );
     }
 }

@@ -14,11 +14,20 @@ use crate::ecosystem::{exact_version, split_name_and_pin};
 
 /// Where CRAN publishes every source release.
 const CRAN_CONTRIB: &str = "https://cran.r-project.org/src/contrib";
+/// EasyBuild `source_urls` for a CRAN tarball: current contrib, then Archive.
+pub(crate) const CRAN_SOURCE_URLS: [&str; 2] = [
+    "https://cran.r-project.org/src/contrib/",
+    "https://cran.r-project.org/src/contrib/Archive/%(name)s",
+];
+/// Conventional CRAN source filename. Current and archived releases share it.
+pub(crate) const CRAN_SOURCE_FILENAME: &str = "%(name)s_%(version)s.tar.gz";
 use crate::foreign::{
     ForeignDep, ForeignError, ForeignFormat, ForeignRecipe, ForeignResidual, ForeignSource,
 };
 use crate::package::{ConditionExpr, ResidualSeverity};
-use crate::version::{cmp_version, parse_requirement};
+use crate::version::{
+    cmp_version, parse_requirement, Requirement, RequirementClause, RequirementOp,
+};
 use serde::de::{self, Deserializer, Visitor};
 use serde::Deserialize;
 use std::cmp::Ordering;
@@ -234,27 +243,122 @@ fn push_run_dep(
     });
 }
 
-/// R's install rule is the intersection: the higher lower-bound wins.
+/// R's install rule is the intersection of every named bound, including uppers.
 fn tighter_pin(existing: Option<&str>, incoming: Option<&str>) -> Option<String> {
     match (existing, incoming) {
         (None, other) | (other, None) => other.map(str::to_string),
-        (Some(old), Some(new))
-            if pin_floor(new).is_some_and(|new_floor| {
-                pin_floor(old).is_none_or(|old_floor| {
-                    cmp_version(&new_floor, &old_floor) == Ordering::Greater
-                })
-            }) =>
-        {
-            Some(new.to_string())
-        }
-        (Some(old), Some(_)) => Some(old.to_string()),
+        (Some(old), Some(new)) => Some(intersect_pins(old, new)),
     }
 }
 
-fn pin_floor(pin: &str) -> Option<String> {
-    parse_requirement(pin)
-        .ok()
-        .and_then(|req| req.lower_bound().map(str::to_string))
+fn intersect_pins(old: &str, new: &str) -> String {
+    match (parse_requirement(old), parse_requirement(new)) {
+        (Ok(left), Ok(right)) => {
+            let merged = format_clauses(&intersect_clauses(&left, &right));
+            if merged.is_empty() {
+                old.to_string()
+            } else {
+                merged
+            }
+        }
+        (Ok(_), Err(_)) => old.to_string(),
+        (Err(_), Ok(_)) => new.to_string(),
+        (Err(_), Err(_)) => old.to_string(),
+    }
+}
+
+fn intersect_clauses(left: &Requirement, right: &Requirement) -> Vec<RequirementClause> {
+    let mut clauses = Vec::new();
+    clauses.extend(left.clauses.iter().cloned());
+    for alternative in &left.unions {
+        clauses.extend(alternative.clauses.iter().cloned());
+    }
+    clauses.extend(right.clauses.iter().cloned());
+    for alternative in &right.unions {
+        clauses.extend(alternative.clauses.iter().cloned());
+    }
+    reduce_clauses(clauses)
+}
+
+fn reduce_clauses(clauses: Vec<RequirementClause>) -> Vec<RequirementClause> {
+    let mut lower = None;
+    let mut upper = None;
+    let mut rest = Vec::new();
+    for clause in clauses {
+        match clause.op {
+            RequirementOp::AtLeast | RequirementOp::Above => {
+                lower = Some(match lower {
+                    None => clause,
+                    Some(previous) if tighter_lower(&clause, &previous) => clause,
+                    Some(previous) => previous,
+                });
+            }
+            RequirementOp::AtMost | RequirementOp::Below => {
+                upper = Some(match upper {
+                    None => clause,
+                    Some(previous) if tighter_upper(&clause, &previous) => clause,
+                    Some(previous) => previous,
+                });
+            }
+            _ => {
+                if !rest.contains(&clause) {
+                    rest.push(clause);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    if let Some(lower) = lower {
+        out.push(lower);
+    }
+    if let Some(upper) = upper {
+        out.push(upper);
+    }
+    out.extend(rest);
+    out
+}
+
+fn tighter_lower(candidate: &RequirementClause, current: &RequirementClause) -> bool {
+    match cmp_version(&candidate.version, &current.version) {
+        Ordering::Greater => true,
+        Ordering::Less => false,
+        Ordering::Equal => {
+            candidate.op == RequirementOp::Above && current.op == RequirementOp::AtLeast
+        }
+    }
+}
+
+fn tighter_upper(candidate: &RequirementClause, current: &RequirementClause) -> bool {
+    match cmp_version(&candidate.version, &current.version) {
+        Ordering::Less => true,
+        Ordering::Greater => false,
+        Ordering::Equal => {
+            candidate.op == RequirementOp::Below && current.op == RequirementOp::AtMost
+        }
+    }
+}
+
+fn format_clauses(clauses: &[RequirementClause]) -> String {
+    clauses
+        .iter()
+        .map(format_clause)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn format_clause(clause: &RequirementClause) -> String {
+    let op = match clause.op {
+        RequirementOp::Exact => "==",
+        RequirementOp::NotEqual => "!=",
+        RequirementOp::AtLeast => ">=",
+        RequirementOp::Above => ">",
+        RequirementOp::AtMost => "<=",
+        RequirementOp::Below => "<",
+        RequirementOp::Compatible => "~=",
+        RequirementOp::Caret => "^",
+        RequirementOp::Tilde => "~",
+    };
+    format!("{op} {}", clause.version)
 }
 
 fn record_suggests(recipe: &mut ForeignRecipe, suggests: Option<&str>) {
@@ -966,5 +1070,73 @@ mod tests {
             .residuals
             .iter()
             .any(|residual| residual.summary.contains("methods")));
+    }
+
+    #[test]
+    fn split_r_constraints_keep_the_upper_bound() {
+        let recipe = parse_cran_str(
+            "Package: demo\n\
+             Version: 1.0\n\
+             Depends: R (>= 3.5.0), R (< 4.4.0)\n",
+        )
+        .expect("parse");
+        let pin = recipe
+            .dependencies
+            .iter()
+            .find(|dep| dep.name == "R")
+            .and_then(|dep| dep.pin.as_deref())
+            .expect("R pin");
+        assert!(
+            !crate::version::matches_req("4.4.0", pin),
+            "R (< 4.4.0) must survive the merge: {pin}"
+        );
+        assert!(
+            crate::version::matches_req("3.5.0", pin) && crate::version::matches_req("4.3.9", pin),
+            "floor and open upper must remain: {pin}"
+        );
+        assert_ne!(pin, ">= 3.5.0");
+    }
+
+    #[test]
+    fn versioned_base_r_does_not_drop_an_existing_upper_bound() {
+        let recipe = parse_cran_str(
+            "Package: demo\n\
+             Version: 1.0\n\
+             Depends: R (>= 3.1.0, < 4.4), methods (>= 4.1.0)\n",
+        )
+        .expect("parse");
+        let pin = recipe
+            .dependencies
+            .iter()
+            .find(|dep| dep.name == "R")
+            .and_then(|dep| dep.pin.as_deref())
+            .expect("R pin");
+        assert!(
+            !crate::version::matches_req("4.4.0", pin) && !crate::version::matches_req("4.4", pin),
+            "R (< 4.4) must survive methods: {pin}"
+        );
+        assert!(
+            crate::version::matches_req("4.1.0", pin) && !crate::version::matches_req("4.0.9", pin),
+            "methods raises the floor: {pin}"
+        );
+        assert_ne!(pin, ">= 4.1.0");
+    }
+
+    #[test]
+    fn cran_jsonlite_fixture_names_the_tarball() {
+        let recipe = parse_cran_str(include_str!(
+            "../fixtures/foreign_ingest/cran_jsonlite/cran.json"
+        ))
+        .expect("fixture");
+        assert_eq!(recipe.name, "jsonlite");
+        assert_eq!(recipe.version, "1.8.8");
+        assert_eq!(
+            recipe.sources[0].filename.as_deref(),
+            Some("jsonlite_1.8.8.tar.gz")
+        );
+        assert_eq!(
+            recipe.source_url.as_deref(),
+            Some("https://cran.r-project.org/src/contrib/jsonlite_1.8.8.tar.gz")
+        );
     }
 }

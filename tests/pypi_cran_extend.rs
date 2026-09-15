@@ -277,6 +277,20 @@ fn plan_cran_emits_a_single_r_package() {
         "R must be locked even when its easyconfig names binutils: {:?}",
         bundle.locks[0].dependencies
     );
+    assert!(
+        recipe.text.contains("src/contrib/")
+            && recipe.text.contains("src/contrib/Archive/%(name)s")
+            && recipe.text.contains("%(name)s_%(version)s.tar.gz"),
+        "single RPackage must list current and archived CRAN:\n{}",
+        recipe.text
+    );
+    assert!(
+        !recipe
+            .text
+            .contains("sources = ['https://cran.r-project.org/src/contrib/jsonlite_1.8.8.tar.gz']"),
+        "a leftover-free plan must not emit one absolute contrib URL as sources:\n{}",
+        recipe.text
+    );
 }
 
 fn numpy_robot() -> PathBuf {
