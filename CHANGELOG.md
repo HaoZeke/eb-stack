@@ -102,6 +102,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A `.tar.gz` release next to a `.tar.xz` git checkout is not a
+  git-source-archive warning. A commented `git_config` does not flag
+  a live release tarball.
 - Adopting a sibling with no `checksums` list drops leftover patch
   hashes. An empty sibling `checksums = []` keeps the emitted source
   digest. A commented hash is not the source slot.

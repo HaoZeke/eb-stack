@@ -641,7 +641,12 @@ fn runtest_is_enabled(line: &str) -> bool {
 /// from a bad one and will reuse whatever sits under that name.
 pub fn check_git_source_archive(text: &str) -> Vec<MaintainerFinding> {
     let mut out = Vec::new();
-    if !text.contains("git_config") {
+    let live: String = text
+        .lines()
+        .map(strip_inline_comment)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !live.contains("git_config") {
         return out;
     }
     static GZ: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
@@ -651,17 +656,53 @@ pub fn check_git_source_archive(text: &str) -> Vec<MaintainerFinding> {
         )
         .expect("static regex")
     });
-    if let Some(caps) = gz.captures(text) {
-        out.push(MaintainerFinding::warning(
-            "EB_MAINT_GIT_SOURCE_ARCHIVE",
-            "a git_config source is named .tar.gz, off the format EasyBuild archives git checkouts in",
-            Some(format!(
-                "{} names the archive; .tar.xz is the default and the reproducible one, and a fresh name also keeps a bad cached archive from being reused, since a git source has no checksum to catch it",
-                caps.get(1).map(|m| m.as_str()).unwrap_or(".tar.gz")
-            )),
-        ));
+    for group in brace_groups(&live) {
+        if !group.contains("git_config") {
+            continue;
+        }
+        if let Some(caps) = gz.captures(group) {
+            out.push(MaintainerFinding::warning(
+                "EB_MAINT_GIT_SOURCE_ARCHIVE",
+                "a git_config source is named .tar.gz, off the format EasyBuild archives git checkouts in",
+                Some(format!(
+                    "{} names the archive; .tar.xz is the default and the reproducible one, and a fresh name also keeps a bad cached archive from being reused, since a git source has no checksum to catch it",
+                    caps.get(1).map(|m| m.as_str()).unwrap_or(".tar.gz")
+                )),
+            ));
+            break;
+        }
     }
     out
+}
+
+fn brace_groups(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut groups = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            let start = i;
+            let mut depth = 0i32;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            groups.push(&text[start..=i]);
+                            i += 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    groups
 }
 
 /// Build-tree diagnostics copied into the install prefix.
@@ -1535,6 +1576,26 @@ sources = [{
     #[test]
     fn a_release_tarball_named_gz_is_not_a_git_source() {
         let text = "sources = [SOURCE_TAR_GZ]\n";
+        assert!(check_git_source_archive(text).is_empty());
+    }
+
+    #[test]
+    fn a_gz_release_next_to_an_xz_git_source_is_not_flagged() {
+        let text = r#"
+sources = [
+    {'filename': SOURCE_TAR_GZ},
+    {'filename': SOURCE_TAR_XZ, 'git_config': {'commit': _c}},
+]
+"#;
+        assert!(check_git_source_archive(text).is_empty());
+    }
+
+    #[test]
+    fn a_commented_git_config_does_not_flag_a_gz_release() {
+        let text = r#"
+# 'git_config': {'commit': _c}
+sources = [{'filename': SOURCE_TAR_GZ}]
+"#;
         assert!(check_git_source_archive(text).is_empty());
     }
 
