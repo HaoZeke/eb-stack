@@ -290,13 +290,54 @@ pub fn resolvo_resolve_dep_versions(
     match solve(dep_reqs.clone(), resolvable.clone(), pins.clone()) {
         Ok(ok) => Ok(ok),
         Err(_) if !optional_names.is_empty() => {
-            dep_reqs.retain(|dep| !optional_names.contains(&dep.name));
-            resolvable.retain(|name| !optional_names.contains(name));
-            pins.retain(|pin| !optional_names.contains(&pin.name));
-            if dep_reqs.is_empty() {
+            let required_reqs: Vec<DepReq> = dep_reqs
+                .iter()
+                .filter(|dep| !optional_names.contains(&dep.name))
+                .cloned()
+                .collect();
+            let required_names: HashSet<String> = resolvable
+                .iter()
+                .filter(|name| !optional_names.contains(*name))
+                .cloned()
+                .collect();
+            let required_pins: Vec<crate::domain::Pin> = pins
+                .iter()
+                .filter(|pin| !optional_names.contains(&pin.name))
+                .cloned()
+                .collect();
+            if required_reqs.is_empty() {
                 return Ok((HashMap::new(), "optional extras were unsatisfiable".into()));
             }
-            solve(dep_reqs, resolvable, pins)
+            let mut kept = solve(
+                required_reqs.clone(),
+                required_names.clone(),
+                required_pins.clone(),
+            )?;
+            let mut trial_reqs = required_reqs;
+            let mut trial_names = required_names;
+            let mut trial_pins = required_pins;
+            let mut extras: Vec<String> = optional_names.into_iter().collect();
+            extras.sort();
+            for extra in extras {
+                let Some(dep) = dep_reqs.iter().find(|dep| dep.name == extra).cloned() else {
+                    continue;
+                };
+                let mut next_reqs = trial_reqs.clone();
+                next_reqs.push(dep);
+                let mut next_names = trial_names.clone();
+                next_names.insert(extra.clone());
+                let mut next_pins = trial_pins.clone();
+                if let Some(pin) = pins.iter().find(|pin| pin.name == extra) {
+                    next_pins.push(pin.clone());
+                }
+                if let Ok(map) = solve(next_reqs.clone(), next_names.clone(), next_pins.clone()) {
+                    trial_reqs = next_reqs;
+                    trial_names = next_names;
+                    trial_pins = next_pins;
+                    kept = map;
+                }
+            }
+            Ok(kept)
         }
         Err(error) => Err(error),
     }
@@ -1117,6 +1158,30 @@ mod lock_identity_and_bump_pin_tests {
                 .expect("optional extra must not fail the resolve");
         assert_eq!(map.get("Lib").map(String::as_str), Some("1.0"));
         assert!(!map.contains_key("Extra"));
+    }
+
+    #[test]
+    fn a_satisfiable_optional_survives_an_unsatisfiable_sibling() {
+        let mut extra = candidate("Extra", "1.0", None);
+        extra.dependencies.push(DepReq {
+            name: "MissingTool".into(),
+            version_req: "==1.0".into(),
+            versionsuffix: None,
+            toolchain: None,
+        });
+        let extra2 = candidate("Extra2", "1.0", None);
+        let cands = vec![candidate("Lib", "1.0", None), extra, extra2];
+        let mut optional = SourceDepSpec::plain("Extra", "1.0");
+        optional.optional = true;
+        let mut optional2 = SourceDepSpec::plain("Extra2", "1.0");
+        optional2.optional = true;
+        let specs = [SourceDepSpec::plain("Lib", "1.0"), optional, optional2];
+        let (map, _) =
+            resolvo_resolve_dep_versions(&specs, &cands, &hierarchy(), &foss(), "App", "1.0", None)
+                .expect("one unsat extra must not strip the sat sibling");
+        assert_eq!(map.get("Lib").map(String::as_str), Some("1.0"));
+        assert!(!map.contains_key("Extra"));
+        assert_eq!(map.get("Extra2").map(String::as_str), Some("1.0"));
     }
 
     #[test]
