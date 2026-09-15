@@ -204,6 +204,7 @@ impl<'a> StaticEvaluator<'a> {
             return;
         };
         let Some(right) = self.evaluate(&assignment.value) else {
+            self.unbind_target(&assignment.target);
             return;
         };
         let combined = match assignment.op {
@@ -274,9 +275,22 @@ impl<'a> StaticEvaluator<'a> {
     }
 
     fn unbind_target(&mut self, target: &ast::Expr) {
-        if let ast::Expr::Name(name) = target {
-            self.environment.remove(name.id.as_str());
-            self.attributes.remove(name.id.as_str());
+        match target {
+            ast::Expr::Name(name) => {
+                self.environment.remove(name.id.as_str());
+                self.attributes.remove(name.id.as_str());
+            }
+            ast::Expr::Tuple(tuple) => {
+                for element in &tuple.elts {
+                    self.unbind_target(element);
+                }
+            }
+            ast::Expr::List(list) => {
+                for element in &list.elts {
+                    self.unbind_target(element);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -729,8 +743,31 @@ impl<'a> StaticEvaluator<'a> {
             }
             ast::Expr::Tuple(tuple) => bind_sequence(self, &tuple.elts, value),
             ast::Expr::List(list) => bind_sequence(self, &list.elts, value),
+            ast::Expr::Subscript(subscript) => self.bind_subscript(subscript, value),
             _ => false,
         }
+    }
+
+    fn bind_subscript(&mut self, subscript: &ast::ExprSubscript, value: StaticValue) -> bool {
+        let ast::Expr::Name(name) = subscript.value.as_ref() else {
+            return false;
+        };
+        let Some(key) = self.evaluate(&subscript.slice) else {
+            return false;
+        };
+        let Some(StaticValue::Mapping(entries)) = self.environment.get_mut(name.id.as_str()) else {
+            return false;
+        };
+        if let Some((_, slot)) = entries
+            .iter_mut()
+            .rev()
+            .find(|(candidate, _)| candidate == &key)
+        {
+            *slot = value;
+        } else {
+            entries.push((key, value));
+        }
+        true
     }
 
     fn statement_mentions_directive(&self, statement: &ast::Stmt) -> bool {
@@ -873,6 +910,27 @@ class Pkg(Package):
     }
 
     #[test]
+    fn a_subscript_assignment_is_seen_by_dict_get() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    options = {}
+    options["skip"] = True
+    if not options.get("skip"):
+        depends_on("backend")
+"#,
+        )
+        .expect("parse");
+        assert!(
+            syntax.calls.iter().all(|call| call.name != "depends_on"
+                || call.arg_string(0).as_deref() != Some("backend")),
+            "written skip must hide the body: calls={:?} residuals={:?}",
+            syntax.calls,
+            syntax.residuals
+        );
+    }
+
+    #[test]
     fn not_none_from_missing_dict_get_is_true() {
         let syntax = parse_spack_syntax(
             r#"
@@ -945,6 +1003,66 @@ class Pkg(Package):
             syntax.residuals.is_empty(),
             "url_for_version must not look like version(: {:?}",
             syntax.residuals
+        );
+    }
+
+    #[test]
+    fn a_failed_destructuring_rebind_forgets_the_previous_names() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    ver, sha = "1.0", "aaa"
+    ver, sha = "2.0", discover()
+    version(ver, sha256=sha)
+"#,
+        )
+        .expect("parse");
+        assert!(
+            syntax
+                .residuals
+                .iter()
+                .any(|residual| residual.contains("dynamic version")),
+            "stale ver must not become version(1.0): calls={:?} residuals={:?}",
+            syntax.calls,
+            syntax.residuals
+        );
+        assert!(
+            syntax
+                .calls
+                .iter()
+                .all(|call| call.name != "version" || call.arg_string(0).as_deref() != Some("1.0")),
+            "failed unpack must forget 1.0: {:?}",
+            syntax.calls
+        );
+    }
+
+    #[test]
+    fn a_failed_plus_equals_forgets_the_previous_value() {
+        let syntax = parse_spack_syntax(
+            r#"
+class Pkg(Package):
+    ver = "1.0"
+    ver += discover_suffix()
+    version(ver, sha256="aaa")
+"#,
+        )
+        .expect("parse");
+        assert!(
+            syntax
+                .residuals
+                .iter()
+                .any(|residual| residual.contains("dynamic version")),
+            "stale ver must not become version(1.0): calls={:?} residuals={:?}",
+            syntax.calls,
+            syntax.residuals
+        );
+        assert!(
+            syntax
+                .calls
+                .iter()
+                .all(|call| call.name != "version" || call.arg_string(0).as_deref() != Some("1.0")),
+            "failed += must forget 1.0: {:?}",
+            syntax.calls
         );
     }
 
