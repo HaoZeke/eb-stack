@@ -5,7 +5,15 @@ use crate::package_config::PackageConfigLayer;
 use crate::package_sources::map_source_toolchain_to_target;
 use crate::target::shell_quote;
 use crate::version::{cmp_version, parse_requirement};
+use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
+
+/// Which same-version easyconfig to source when version keys tie.
+#[derive(Clone, Copy, Default)]
+struct SourcePick<'a> {
+    parent_family: Option<&'a str>,
+    want_cuda: bool,
+}
 
 /// If `--out-dir/easyconfigs` exists, search it first as a robot root.
 pub fn with_outdir_overlay(mut roots: Vec<PathBuf>, out_dir: &Path) -> Vec<PathBuf> {
@@ -21,14 +29,22 @@ pub fn with_outdir_overlay(mut roots: Vec<PathBuf>, out_dir: &Path) -> Vec<PathB
 /// EasyBuild `--robot` accepts either the letter/name tree or a directory of
 /// `.eb` files. Companion argv must find both.
 pub fn find_named_easyconfig(roots: &[PathBuf], name: &str) -> Option<PathBuf> {
+    find_named_easyconfig_preferring(roots, name, SourcePick::default())
+}
+
+fn find_named_easyconfig_preferring(
+    roots: &[PathBuf],
+    name: &str,
+    pick: SourcePick<'_>,
+) -> Option<PathBuf> {
     let letter = name.chars().next()?.to_ascii_lowercase();
     for root in roots {
         if let Some(dir) = named_package_dir(&root.join(letter.to_string()), name) {
-            if let Some(found) = newest_named_eb(&dir, name) {
+            if let Some(found) = newest_named_eb_preferring(&dir, name, pick) {
                 return Some(found);
             }
         }
-        if let Some(found) = newest_named_eb(root, name) {
+        if let Some(found) = newest_named_eb_preferring(root, name, pick) {
             return Some(found);
         }
     }
@@ -70,6 +86,10 @@ fn filename_matches_package(file: &str, name: &str) -> bool {
 }
 
 fn newest_named_eb(dir: &Path, name: &str) -> Option<PathBuf> {
+    newest_named_eb_preferring(dir, name, SourcePick::default())
+}
+
+fn newest_named_eb_preferring(dir: &Path, name: &str, pick: SourcePick<'_>) -> Option<PathBuf> {
     std::fs::read_dir(dir)
         .ok()?
         .filter_map(|entry| entry.ok())
@@ -81,33 +101,43 @@ fn newest_named_eb(dir: &Path, name: &str) -> Option<PathBuf> {
                     .and_then(|file| file.to_str())
                     .is_some_and(|file| filename_matches_package(file, name))
         })
-        .max_by(|left, right| {
-            cmp_version(
-                &easyconfig_version_key(left, name),
-                &easyconfig_version_key(right, name),
-            )
-        })
+        .max_by(|left, right| compare_named_sources(left, right, name, pick))
 }
 
-fn toolchain_from_easyconfig_path(path: &Path, name: &str) -> Option<Toolchain> {
-    let file = path.file_name()?.to_str()?.strip_suffix(".eb")?;
-    let rest = file
-        .get(name.len()..)
-        .filter(|_| {
-            file.get(..name.len())
-                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(name))
-        })
-        .and_then(|rest| rest.strip_prefix('-'))?;
-    let parts: Vec<&str> = rest.split('-').collect();
-    first_toolchain_span(&parts).map(|(name_at, version_at)| Toolchain {
-        name: parts[name_at..version_at].join("-"),
-        version: parts[version_at].to_string(),
+fn compare_named_sources(left: &Path, right: &Path, name: &str, pick: SourcePick<'_>) -> Ordering {
+    cmp_version(
+        &easyconfig_version_key(left, name),
+        &easyconfig_version_key(right, name),
+    )
+    .then_with(|| source_pick_score(left, name, pick).cmp(&source_pick_score(right, name, pick)))
+    .then_with(|| left.file_name().cmp(&right.file_name()))
+}
+
+/// Parent family first, then unsuffixed unless the caller asked for CUDA.
+fn source_pick_score(path: &Path, name: &str, pick: SourcePick<'_>) -> (u8, u8) {
+    let family = toolchain_from_easyconfig_path(path, name).map(|toolchain| toolchain.name);
+    let family_match = pick
+        .parent_family
+        .zip(family.as_deref())
+        .is_some_and(|(want, have)| want.eq_ignore_ascii_case(have));
+    let has_cuda = filename_has_cuda_token(path, name);
+    let suffix_score = if pick.want_cuda {
+        u8::from(has_cuda)
+    } else {
+        u8::from(!has_cuda)
+    };
+    (u8::from(family_match), suffix_score)
+}
+
+fn filename_has_cuda_token(path: &Path, name: &str) -> bool {
+    easyconfig_rest(path, name).is_some_and(|rest| {
+        rest.split('-')
+            .any(|part| part.eq_ignore_ascii_case("CUDA"))
     })
 }
 
-fn easyconfig_version_key(path: &Path, name: &str) -> String {
-    let Some(rest) = path
-        .file_name()
+fn easyconfig_rest<'a>(path: &'a Path, name: &str) -> Option<&'a str> {
+    path.file_name()
         .and_then(|file| file.to_str())
         .and_then(|file| file.strip_suffix(".eb"))
         .and_then(|file| {
@@ -118,14 +148,35 @@ fn easyconfig_version_key(path: &Path, name: &str) -> String {
                 })
                 .and_then(|rest| rest.strip_prefix('-'))
         })
-    else {
+}
+
+fn toolchain_from_easyconfig_path(path: &Path, name: &str) -> Option<Toolchain> {
+    let rest = easyconfig_rest(path, name)?;
+    let parts: Vec<&str> = rest.split('-').collect();
+    first_toolchain_span(&parts).map(|(name_at, version_at)| Toolchain {
+        name: parts[name_at..version_at].join("-"),
+        version: parts[version_at].to_string(),
+    })
+}
+
+fn easyconfig_version_key(path: &Path, name: &str) -> String {
+    let Some(rest) = easyconfig_rest(path, name) else {
         return String::new();
     };
     let parts: Vec<&str> = rest.split('-').collect();
     match first_toolchain_span(&parts) {
         Some((0, _)) => String::new(),
         Some((name_at, _)) => parts[..name_at].join("-"),
-        None => rest.to_string(),
+        // No-span rest still stops at a versionsuffix token so
+        // `2.18.3-CUDA-12.8.0` keys as `2.18.3`, not a pre-release.
+        None => match parts
+            .iter()
+            .position(|part| is_filename_versionsuffix_token(part))
+        {
+            Some(0) => String::new(),
+            Some(at) => parts[..at].join("-"),
+            None => rest.to_string(),
+        },
     }
 }
 
@@ -217,7 +268,11 @@ pub fn companion_argv(
 ) -> String {
     let roots = with_outdir_overlay(roots.to_vec(), out_dir);
     let roots = roots.as_slice();
-    if let Some(source) = find_named_easyconfig(roots, name) {
+    let pick = SourcePick {
+        parent_family: Some(toolchain_name),
+        want_cuda: version_pin.is_some_and(pin_asks_for_cuda),
+    };
+    if let Some(source) = find_named_easyconfig_preferring(roots, name, pick) {
         let parent = Toolchain {
             name: toolchain_name.to_string(),
             version: toolchain_version.to_string(),
@@ -227,11 +282,17 @@ pub fn companion_argv(
             version: "system".into(),
         });
         let mapped = map_source_toolchain_to_target(Some(&parsed), &parent, None);
+        // Mapper empties SYSTEM version; bump `--toolchain-version` needs `system`.
+        let emitted_version = if mapped.is_system() && mapped.version.is_empty() {
+            "system"
+        } else {
+            mapped.version.as_str()
+        };
         let mut line = format!(
             "eb-stack package bump --source {} --toolchain-name {} --toolchain-version {}",
             shell_quote(&source.display().to_string()),
             shell_quote(&mapped.name),
-            shell_quote(&mapped.version)
+            shell_quote(emitted_version)
         );
         if let Some(pin) = companion_version_arg(version_pin) {
             line.push_str(&format!(" --version {}", shell_quote(&pin)));
@@ -319,13 +380,36 @@ fn is_filename_versionsuffix_token(name: &str) -> bool {
         || name.eq_ignore_ascii_case("Python")
 }
 
+fn pin_asks_for_cuda(pin: &str) -> bool {
+    pin.split(['-', '=', ',', ' '])
+        .any(|token| token.eq_ignore_ascii_case("CUDA"))
+}
+
 fn companion_version_arg(pin: Option<&str>) -> Option<String> {
     let pin = pin.map(str::trim).filter(|value| !value.is_empty())?;
     if let Ok(requirement) = parse_requirement(pin) {
-        return version_from_requirement(&requirement);
+        return version_from_requirement(&requirement)
+            .map(|version| peel_application_version(&version));
     }
     let stripped = pin.trim_start_matches('=');
-    token_looks_like_version(stripped).then(|| stripped.to_string())
+    token_looks_like_version(stripped).then(|| peel_application_version(stripped))
+}
+
+/// Residual word 2 can be a module identity; bump `--version` is the app version.
+fn peel_application_version(version: &str) -> String {
+    let parts: Vec<&str> = version.split('-').collect();
+    let cut = match first_toolchain_span(&parts) {
+        Some((name_at, _)) if name_at > 0 => Some(name_at),
+        Some(_) => None,
+        None => parts
+            .iter()
+            .position(|part| is_filename_versionsuffix_token(part))
+            .filter(|&at| at > 0),
+    };
+    match cut {
+        Some(at) => parts[..at].join("-"),
+        None => version.to_string(),
+    }
 }
 
 fn version_from_requirement(requirement: &crate::version::Requirement) -> Option<String> {
@@ -622,6 +706,14 @@ mod tests {
             "Name-version.eb is SYSTEM, not the parent: {argv}"
         );
         assert!(
+            argv.contains("--toolchain-version system"),
+            "SYSTEM must emit version system, not empty quotes: {argv}"
+        );
+        assert!(
+            !argv.contains("--toolchain-version ''"),
+            "empty SYSTEM version would look like a generation move: {argv}"
+        );
+        assert!(
             !argv.contains("--toolchain-name foss"),
             "must not retarget SYSTEM onto foss: {argv}"
         );
@@ -698,7 +790,23 @@ mod tests {
             companion_version_arg(Some(">=1.2.3")).as_deref(),
             Some("1.2.3")
         );
+        assert_eq!(
+            companion_version_arg(Some("1.2.3")).as_deref(),
+            Some("1.2.3")
+        );
         assert_eq!(companion_version_arg(Some(">=0")), None);
+    }
+
+    #[test]
+    fn companion_version_arg_peels_a_module_identity() {
+        assert_eq!(
+            companion_version_arg(Some("5.0.3-GCC-13.3.0")).as_deref(),
+            Some("5.0.3")
+        );
+        assert_eq!(
+            companion_version_arg(Some("==5.0.3-GCC-13.3.0-CUDA-12.6.0")).as_deref(),
+            Some("5.0.3")
+        );
     }
 
     #[test]
@@ -708,6 +816,90 @@ mod tests {
         assert_eq!(toolchain.name, "intel-compilers");
         assert_eq!(toolchain.version, "2023.2.0");
         assert_eq!(easyconfig_version_key(path, "MKL"), "2023.2.0");
+    }
+
+    #[test]
+    fn a_cuda_suffix_is_not_part_of_the_version_key() {
+        let path = Path::new("NCCL-2.18.3-CUDA-12.8.0.eb");
+        assert_eq!(easyconfig_version_key(path, "NCCL"), "2.18.3");
+        assert!(toolchain_from_easyconfig_path(path, "NCCL").is_none());
+    }
+
+    #[test]
+    fn newest_named_eb_prefers_unsuffixed_over_same_version_cuda() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path();
+        fs::write(robot.join("NCCL-2.18.3.eb"), "name = 'NCCL'\n").expect("plain");
+        fs::write(robot.join("NCCL-2.18.3-CUDA-12.8.0.eb"), "name = 'NCCL'\n").expect("cuda");
+        let found = newest_named_eb(robot, "NCCL").expect("hit");
+        assert_eq!(
+            found.file_name().and_then(|name| name.to_str()),
+            Some("NCCL-2.18.3.eb")
+        );
+        let argv = companion_argv(
+            "NCCL",
+            Some("2.18.3"),
+            &[robot.to_path_buf()],
+            &[],
+            "foss",
+            "2025a",
+            robot.to_str().expect("utf8"),
+            &temp.path().join("out"),
+        );
+        assert!(
+            argv.contains("NCCL-2.18.3.eb"),
+            "unsuffixed source unless CUDA was requested: {argv}"
+        );
+        assert!(
+            !argv.contains("NCCL-2.18.3-CUDA-12.8.0.eb"),
+            "CUDA file must not win a plain pin: {argv}"
+        );
+        assert!(
+            !argv.contains("--toolchain-name CUDA"),
+            "CUDA must not become the toolchain: {argv}"
+        );
+    }
+
+    #[test]
+    fn newest_named_eb_prefers_parent_family_over_nvhpc() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path();
+        fs::write(
+            robot.join("OpenMPI-5.0.7-foss-2023a.eb"),
+            "name = 'OpenMPI'\n",
+        )
+        .expect("foss");
+        fs::write(
+            robot.join("OpenMPI-5.0.7-NVHPC-25.11-CUDA-12.8.0.eb"),
+            "name = 'OpenMPI'\n",
+        )
+        .expect("nvhpc");
+        let argv = companion_argv(
+            "OpenMPI",
+            Some("5.0.7"),
+            &[robot.to_path_buf()],
+            &[],
+            "foss",
+            "2025a",
+            robot.to_str().expect("utf8"),
+            &temp.path().join("out"),
+        );
+        assert!(
+            argv.contains("OpenMPI-5.0.7-foss-2023a.eb"),
+            "parent foss must source the foss file: {argv}"
+        );
+        assert!(
+            !argv.contains("OpenMPI-5.0.7-NVHPC-25.11-CUDA-12.8.0.eb"),
+            "NVHPC must not win when parent is foss: {argv}"
+        );
+        assert!(
+            !argv.contains("--toolchain-name CUDA"),
+            "CUDA versionsuffix must not become the toolchain: {argv}"
+        );
+        assert!(
+            argv.contains("--toolchain-name foss"),
+            "foss source must stay foss: {argv}"
+        );
     }
 
     #[test]
