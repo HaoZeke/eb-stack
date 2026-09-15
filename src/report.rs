@@ -131,6 +131,12 @@ fn package_row_key(package: &LockPackage) -> String {
     )
 }
 
+/// Multi-row stack-diff join: same name + identity toolchain + suffix, not version.
+fn package_diff_join_key(package: &LockPackage) -> String {
+    let key = package.identity_key();
+    format!("{}|{}|{}", key.name, key.toolchain, key.versionsuffix)
+}
+
 /// Classification of one logical package between baseline and solved locks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackageChangeKind {
@@ -175,9 +181,11 @@ pub struct PackageChange {
     pub solved_easyconfig_path: Option<String>,
 }
 
-/// Classify every logical package (by name) between baseline and solved locks.
+/// Classify every logical package between baseline and solved locks.
 ///
-/// Result is sorted by package name for stable markdown.
+/// Single-row names match on name. Multi-row names join on identity
+/// toolchain and suffix, then compare versions so a bump is not
+/// Removed+Added. Result is grouped by package name for stable markdown.
 pub fn classify_stack_diff(baseline: &StackLock, solved: &StackLock) -> Vec<PackageChange> {
     let mut base_by: BTreeMap<&str, Vec<&LockPackage>> = BTreeMap::new();
     for package in &baseline.packages {
@@ -207,11 +215,11 @@ pub fn classify_stack_diff(baseline: &StackLock, solved: &StackLock) -> Vec<Pack
         }
         let mut base_id: BTreeMap<String, &LockPackage> = base
             .iter()
-            .map(|package| (package_row_key(package), *package))
+            .map(|package| (package_diff_join_key(package), *package))
             .collect();
         let mut sol_id: BTreeMap<String, &LockPackage> = sol
             .iter()
-            .map(|package| (package_row_key(package), *package))
+            .map(|package| (package_diff_join_key(package), *package))
             .collect();
         let mut keys: BTreeSet<String> = BTreeSet::new();
         keys.extend(base_id.keys().cloned());
@@ -557,6 +565,57 @@ mod tests {
             changes
                 .iter()
                 .all(|c| c.name == "Perl" && c.kind == PackageChangeKind::Unchanged),
+            "{changes:?}"
+        );
+    }
+
+    #[test]
+    fn stack_diff_joins_multi_row_name_on_identity_not_version() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let gcccore = Toolchain {
+            name: "GCCcore".into(),
+            version: "13.2.0".into(),
+        };
+        let perl = |version: &str, toolchain: Toolchain, path: &str| LockPackage {
+            name: "Perl".into(),
+            version: version.into(),
+            toolchain,
+            versionsuffix: None,
+            easyconfig_path: path.into(),
+        };
+        let baseline = lock_of(vec![
+            perl("5.38", gcccore.clone(), "Perl-5.38-GCCcore-13.2.0.eb"),
+            perl("5.38", system.clone(), "Perl-5.38.eb"),
+        ]);
+        let solved = lock_of(vec![
+            perl("5.42", gcccore, "Perl-5.42-GCCcore-13.2.0.eb"),
+            perl("5.38", system, "Perl-5.38.eb"),
+        ]);
+        let changes = classify_stack_diff(&baseline, &solved);
+        assert_eq!(changes.len(), 2, "{changes:?}");
+        let bumped: Vec<_> = changes
+            .iter()
+            .filter(|c| c.kind == PackageChangeKind::VersionBumped)
+            .collect();
+        let unchanged: Vec<_> = changes
+            .iter()
+            .filter(|c| c.kind == PackageChangeKind::Unchanged)
+            .collect();
+        assert_eq!(bumped.len(), 1, "{changes:?}");
+        assert_eq!(unchanged.len(), 1, "{changes:?}");
+        assert_eq!(bumped[0].baseline_version.as_deref(), Some("5.38"));
+        assert_eq!(bumped[0].solved_version.as_deref(), Some("5.42"));
+        assert_eq!(unchanged[0].baseline_version.as_deref(), Some("5.38"));
+        assert_eq!(unchanged[0].solved_version.as_deref(), Some("5.38"));
+        assert!(
+            changes.iter().all(|c| {
+                c.name == "Perl"
+                    && c.kind != PackageChangeKind::Added
+                    && c.kind != PackageChangeKind::Removed
+            }),
             "{changes:?}"
         );
     }
