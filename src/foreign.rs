@@ -621,6 +621,7 @@ fn parse_conda_forge(text: &str) -> Result<ForeignRecipe, ForeignError> {
     let (expanded, ctx_notes, mut residuals) = expand_conda_templates(text);
     notes.extend(ctx_notes);
     let expanded = structure_conda_requirement_selectors(&expanded);
+    let expanded = structure_conda_source_selectors(&expanded);
 
     let yaml: YamlValue = serde_yaml::from_str(&expanded).map_err(|e| {
         ForeignError::Parse(format!(
@@ -851,6 +852,56 @@ fn structure_conda_requirement_selectors(text: &str) -> String {
                     serde_json::to_string(condition).unwrap_or_else(|_| format!("\"{condition}\""));
                 output.push(format!("{indentation}- if: {quoted}"));
                 output.push(format!("{indentation}  then: {value}"));
+                continue;
+            }
+        }
+        output.push(line.to_string());
+    }
+
+    let mut structured = output.join("\n");
+    if text.ends_with('\n') {
+        structured.push('\n');
+    }
+    structured
+}
+
+/// Lift `# [osx]` comments under `source:` into a sibling `if:` key.
+///
+/// Requirement selectors become `if`/`then` maps because the item is a scalar.
+/// A source item is a mapping (`url` plus `sha256`); wrapping the first line
+/// as `then: url: ...` is invalid YAML. The sibling key survives parse and
+/// [`flatten_conda_source_item`] turns it into [`ForeignSource::condition`].
+fn structure_conda_source_selectors(text: &str) -> String {
+    let selector = static_regex!(r#"^(\s*(?:-\s+)?)(.+?)\s+#\s*\[([^]]+)\]\s*$"#);
+    let mut output = Vec::new();
+    let mut source_indent = None;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let indent = line.len().saturating_sub(line.trim_start().len());
+        if trimmed == "source:" {
+            source_indent = Some(indent);
+            output.push(line.to_string());
+            continue;
+        }
+        if source_indent
+            .is_some_and(|base| !trimmed.is_empty() && !trimmed.starts_with('#') && indent <= base)
+        {
+            source_indent = None;
+        }
+        if source_indent.is_some() {
+            if let Some(captures) = selector.captures(line) {
+                let prefix = captures.get(1).map_or("", |value| value.as_str());
+                let value = captures.get(2).map_or("", |value| value.as_str());
+                let condition = captures.get(3).map_or("", |value| value.as_str());
+                let quoted =
+                    serde_json::to_string(condition).unwrap_or_else(|_| format!("\"{condition}\""));
+                let if_indent = prefix
+                    .rfind("- ")
+                    .map(|dash| format!("{}  ", &prefix[..dash]))
+                    .unwrap_or_else(|| prefix.to_string());
+                output.push(format!("{prefix}{value}"));
+                output.push(format!("{if_indent}if: {quoted}"));
                 continue;
             }
         }
@@ -1186,23 +1237,47 @@ fn parse_conda_sources(source_val: Option<&YamlValue>) -> Vec<ForeignSource> {
     let Some(v) = source_val else {
         return Vec::new();
     };
-    let mut out = Vec::new();
-    match v {
-        YamlValue::Sequence(seq) => {
-            for item in seq {
-                if let Some(s) = foreign_source_from_yaml_map(item) {
-                    out.push(s);
+    flatten_conda_source_item(v, &ConditionExpr::Always)
+}
+
+/// Flatten rattler `if`/`then`/`else` source maps and sibling `if:` keys.
+fn flatten_conda_source_item(item: &YamlValue, inherited: &ConditionExpr) -> Vec<ForeignSource> {
+    match item {
+        YamlValue::Sequence(seq) => seq
+            .iter()
+            .flat_map(|value| flatten_conda_source_item(value, inherited))
+            .collect(),
+        YamlValue::Mapping(m) => {
+            if let Some(selector) = m.get(YamlValue::from("if")).and_then(yaml_as_string) {
+                let selector_condition = parse_conda_selector(&selector);
+                let mut out = Vec::new();
+                if let Some(value) = m.get(YamlValue::from("then")) {
+                    let condition = condition_all(inherited.clone(), selector_condition.clone());
+                    out.extend(flatten_conda_source_item(value, &condition));
                 }
+                if let Some(value) = m.get(YamlValue::from("else")) {
+                    let condition = condition_all(
+                        inherited.clone(),
+                        ConditionExpr::Not(Box::new(selector_condition.clone())),
+                    );
+                    out.extend(flatten_conda_source_item(value, &condition));
+                }
+                if out.is_empty() {
+                    if let Some(mut source) = foreign_source_from_yaml_map(item) {
+                        source.condition = condition_all(inherited.clone(), selector_condition);
+                        out.push(source);
+                    }
+                }
+                return out;
             }
-        }
-        YamlValue::Mapping(_) => {
-            if let Some(s) = foreign_source_from_yaml_map(v) {
-                out.push(s);
+            if let Some(mut source) = foreign_source_from_yaml_map(item) {
+                source.condition = inherited.clone();
+                return vec![source];
             }
+            Vec::new()
         }
-        _ => {}
+        _ => Vec::new(),
     }
-    out
 }
 
 fn foreign_source_from_yaml_map(v: &YamlValue) -> Option<ForeignSource> {
@@ -2809,5 +2884,63 @@ class Demo(Package):
             })
             .expect("resource source");
         assert_eq!(extra.target_directory.as_deref(), Some("potentials"));
+    }
+
+    #[test]
+    fn conda_source_selectors_keep_platform_artifacts() {
+        let recipe = parse_conda_forge(
+            r#"
+package:
+  name: dual-source
+  version: 1.0
+source:
+  - if: linux
+    then:
+      url: https://example.invalid/linux.tar.gz
+      sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  - url: https://example.invalid/osx.tar.gz  # [osx]
+    sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+"#,
+        )
+        .expect("parse selected sources");
+        assert_eq!(recipe.sources.len(), 2, "{:?}", recipe.sources);
+        let linux = recipe
+            .sources
+            .iter()
+            .find(|source| {
+                source
+                    .url
+                    .as_deref()
+                    .is_some_and(|url| url.contains("linux.tar.gz"))
+            })
+            .expect("linux source");
+        let osx = recipe
+            .sources
+            .iter()
+            .find(|source| {
+                source
+                    .url
+                    .as_deref()
+                    .is_some_and(|url| url.contains("osx.tar.gz"))
+            })
+            .expect("osx source");
+        assert_eq!(
+            linux.condition,
+            ConditionExpr::Predicate(ConditionPredicate::Platform {
+                name: "linux".into()
+            })
+        );
+        assert_eq!(
+            osx.condition,
+            ConditionExpr::Predicate(ConditionPredicate::Platform { name: "osx".into() })
+        );
+        assert_eq!(
+            linux.sha256.as_deref(),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+        assert_eq!(
+            osx.sha256.as_deref(),
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        );
     }
 }

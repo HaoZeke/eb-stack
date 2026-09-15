@@ -102,6 +102,14 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A required spec that shares a SAT name with an optional spec stays
+  required. Required `poetry-core` and optional `poetry` both map to
+  SAT `poetry`; the first unsat no longer drops the required pin as an
+  optional extra.
+- Conda `source:` keeps rattler `if`/`then` artifacts and lowers
+  classic `# [osx]` comments to platform conditions. Requirement
+  selectors were already rewritten; sources were dropped or marked
+  Always.
 - Inserting a dependency into a one-line list keeps a separating comma.
   A name that exists only in `builddependencies` still lands on
   `dependencies`. A computed `version = f'...'` can be rewritten to a

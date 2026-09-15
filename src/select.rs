@@ -118,6 +118,7 @@ pub fn resolvo_resolve_dep_versions(
     let mut resolvable: HashSet<String> = HashSet::new();
     let mut pins: Vec<crate::domain::Pin> = Vec::new();
     let mut optional_names: HashSet<String> = HashSet::new();
+    let mut required_sat_names: HashSet<String> = HashSet::new();
     let mut parent_floors: HashMap<String, String> = HashMap::new();
     let mut emit_names: HashMap<String, Vec<String>> = HashMap::new();
     for s in specs {
@@ -197,7 +198,15 @@ pub fn resolvo_resolve_dep_versions(
         resolvable.insert(sat_name.clone());
         if s.optional {
             optional_names.insert(sat_name);
+        } else {
+            required_sat_names.insert(sat_name);
         }
+    }
+    // A SAT name is optional only when every spec that mapped to it is.
+    // Required poetry-core and optional poetry share SAT poetry; dropping
+    // poetry on the first unsat would drop the required spec.
+    for name in &required_sat_names {
+        optional_names.remove(name);
     }
     if dep_reqs.is_empty() {
         return Ok((
@@ -1913,5 +1922,67 @@ mod lock_identity_and_bump_pin_tests {
             preferred_pin(Some(&pins), "HDF5", "HDF5").as_deref(),
             Some("1.14.3")
         );
+    }
+
+    #[test]
+    fn required_spec_sharing_sat_name_with_optional_stays_required() {
+        let mut poetry = candidate("poetry", "1.9.0", None);
+        poetry.dependencies.push(DepReq {
+            name: "MissingTool".into(),
+            version_req: "==1.0".into(),
+            versionsuffix: None,
+            toolchain: None,
+        });
+        let mut optional_poetry = SourceDepSpec::plain("poetry", "1.0");
+        optional_poetry.optional = true;
+        let err = resolvo_resolve_dep_versions(
+            &[SourceDepSpec::plain("poetry-core", "1.0"), optional_poetry],
+            &[poetry.clone()],
+            &hierarchy(),
+            &foss(),
+            "App",
+            "1.0",
+            None,
+        )
+        .expect_err("required poetry-core must not drop as optional poetry");
+        assert!(
+            err.contains("MissingTool") || err.contains("unsatisfiable") || err.contains("poetry"),
+            "{err}"
+        );
+
+        let required_only = resolvo_resolve_dep_versions(
+            &[SourceDepSpec::plain("poetry-core", "1.0")],
+            &[poetry],
+            &hierarchy(),
+            &foss(),
+            "App",
+            "1.0",
+            None,
+        );
+        assert!(required_only.is_err(), "{required_only:?}");
+
+        let mut extra = candidate("Extra", "1.0", None);
+        extra.dependencies.push(DepReq {
+            name: "MissingTool".into(),
+            version_req: "==1.0".into(),
+            versionsuffix: None,
+            toolchain: None,
+        });
+        let sat = candidate("poetry", "1.9.0", None);
+        let mut optional_extra = SourceDepSpec::plain("Extra", "1.0");
+        optional_extra.optional = true;
+        let (map, _) = resolvo_resolve_dep_versions(
+            &[SourceDepSpec::plain("poetry-core", "1.0"), optional_extra],
+            &[sat, extra],
+            &hierarchy(),
+            &foss(),
+            "App",
+            "1.0",
+            None,
+        )
+        .expect("sat poetry-core must survive an unsat optional extra");
+        assert_eq!(map.get("poetry").map(String::as_str), Some("1.9.0"));
+        assert_eq!(map.get("poetry-core").map(String::as_str), Some("1.9.0"));
+        assert!(!map.contains_key("Extra"));
     }
 }
