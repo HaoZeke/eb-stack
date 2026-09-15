@@ -231,9 +231,20 @@ fn unpack_sdist(bytes: &[u8], dest: &Path) -> Result<(), RegistryError> {
     std::fs::create_dir_all(dest).map_err(|error| RegistryError::Io(dest.to_path_buf(), error))?;
     let decoder = GzDecoder::new(std::io::Cursor::new(bytes));
     let mut archive = Archive::new(decoder);
-    archive
-        .unpack(dest)
+    let entries = archive
+        .entries()
         .map_err(|error| RegistryError::Io(dest.to_path_buf(), error))?;
+    for entry in entries {
+        let mut entry = entry.map_err(|error| RegistryError::Io(dest.to_path_buf(), error))?;
+        let unpacked = entry
+            .unpack_in(dest)
+            .map_err(|error| RegistryError::Io(dest.to_path_buf(), error))?;
+        if !unpacked {
+            return Err(RegistryError::Parse(
+                "sdist member escapes the ingest directory".into(),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -418,6 +429,43 @@ mod tests {
         std::fs::write(&dump, "{}").expect("write");
         let resolved = resolve_ingest_source(&dump, None, temp.path()).expect("resolve");
         assert_eq!(resolved, dump);
+    }
+
+    #[test]
+    fn sdist_unpack_refuses_a_parent_directory_member() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        let payload = b"evil";
+        let mut header = [0u8; 512];
+        header[..13].copy_from_slice(b"../escape.txt");
+        let size = format!("{:011o}", payload.len());
+        header[124..135].copy_from_slice(size.as_bytes());
+        header[156] = b'0';
+        header[148..156].copy_from_slice(b"        ");
+        let sum: u32 = header.iter().map(|byte| u32::from(*byte)).sum();
+        let checksum = format!("{sum:06o}\0 ");
+        header[148..156].copy_from_slice(checksum.as_bytes());
+        let mut tar = header.to_vec();
+        tar.extend_from_slice(payload);
+        tar.extend(std::iter::repeat(0).take(512 - payload.len()));
+        tar.extend([0u8; 1024]);
+        let mut gz = Vec::new();
+        {
+            let mut encoder = GzEncoder::new(&mut gz, Compression::default());
+            encoder.write_all(&tar).expect("gzip");
+            encoder.finish().expect("finish");
+        }
+        let parent = tempfile::tempdir().expect("temp");
+        let dest = parent.path().join("dest");
+        let escaped = parent.path().join("escape.txt");
+        let error = unpack_sdist(&gz, &dest).expect_err("escape");
+        assert!(
+            error.to_string().contains("escapes") || error.to_string().contains("sdist"),
+            "{error}"
+        );
+        assert!(!escaped.exists(), "must not write {escaped:?}");
     }
 
     #[test]
