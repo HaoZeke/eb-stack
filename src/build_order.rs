@@ -780,15 +780,31 @@ pub fn build_graph(
             let Some(picked) = choose_for_dep(&admissible, choice, &dep.name) else {
                 let mut available: Vec<String> = candidates_named(&by_name, &by_ext, &dep.name)
                     .into_iter()
-                    .map(|c| format!("{}-{}", c.version, ModuleKey::of(c).toolchain))
+                    .map(|c| {
+                        let key = ModuleKey::of(c);
+                        format!(
+                            "{}-{}{}",
+                            ranking_version(c, &dep.name),
+                            key.toolchain,
+                            key.versionsuffix
+                        )
+                    })
                     .collect();
                 available.sort();
                 available.dedup();
+                let mut requirement = format!("{} {}", dep.name, dep.version_req);
+                if let Some(suffix) = dep.versionsuffix.as_deref() {
+                    if !suffix.is_empty() {
+                        requirement.push_str(suffix);
+                    }
+                }
+                if let Some(toolchain) = dep.toolchain.as_ref() {
+                    requirement.push(' ');
+                    requirement.push_str(&toolchain.label());
+                }
                 return Err(OrderError::Unsatisfied {
                     from: key.clone(),
-                    requirement: format!("{} {}", dep.name, dep.version_req)
-                        .trim()
-                        .to_string(),
+                    requirement: requirement.trim().to_string(),
                     available,
                 });
             };
@@ -1228,6 +1244,76 @@ mod tests {
             seq.iter().all(|s| !s.starts_with("SciPy-bundle")),
             "{seq:?}"
         );
+    }
+
+    #[test]
+    fn unsatisfied_available_names_the_provided_version() {
+        let mut bundle = candidate("SciPy-bundle", "2025.06", tc("foss", "2026.1"), vec![]);
+        bundle.exts_list = vec![crate::domain::ExtEntry {
+            name: "numpy".into(),
+            version: "2.3.1".into(),
+        }];
+        let err = build_order(
+            &tree(&[
+                candidate(
+                    "App",
+                    "1.0",
+                    tc("foss", "2026.1"),
+                    vec![dep("numpy", "==9.0", None)],
+                ),
+                bundle,
+            ]),
+            &["App".into()],
+            Choice::Newest,
+        )
+        .unwrap_err();
+        match err {
+            OrderError::Unsatisfied { available, .. } => {
+                assert!(
+                    available.iter().any(|entry| entry.contains("2.3.1")),
+                    "{available:?}"
+                );
+            }
+            other => panic!("expected Unsatisfied, got {other}"),
+        }
+    }
+
+    #[test]
+    fn unsatisfied_available_keeps_suffix_variants() {
+        let mut cuda = candidate("Python", "3.11.3", tc("foss", "2026.1"), vec![]);
+        cuda.versionsuffix = Some("-CUDA-12.8.0".into());
+        let err = build_order(
+            &tree(&[
+                candidate(
+                    "App",
+                    "1.0",
+                    tc("foss", "2026.1"),
+                    vec![dep("Python", "==9.0", None)],
+                ),
+                candidate("Python", "3.11.3", tc("foss", "2026.1"), vec![]),
+                cuda,
+            ]),
+            &["App".into()],
+            Choice::Newest,
+        )
+        .unwrap_err();
+        match err {
+            OrderError::Unsatisfied { available, .. } => {
+                assert!(
+                    available
+                        .iter()
+                        .any(|entry| entry.contains("3.11.3") && entry.contains("CUDA")),
+                    "{available:?}"
+                );
+                assert!(
+                    available
+                        .iter()
+                        .any(|entry| entry.contains("3.11.3") && !entry.contains("CUDA")),
+                    "{available:?}"
+                );
+            }
+            other => panic!("expected Unsatisfied, got {other}"),
+        }
     }
 
     #[test]
