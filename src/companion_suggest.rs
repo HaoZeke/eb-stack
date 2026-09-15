@@ -56,9 +56,18 @@ fn named_package_dir(letter_dir: &Path, name: &str) -> Option<PathBuf> {
 }
 
 fn filename_matches_package(file: &str, name: &str) -> bool {
-    file.get(..name.len() + 1).is_some_and(|prefix| {
-        prefix[..name.len()].eq_ignore_ascii_case(name) && prefix.ends_with('-')
-    })
+    let Some(prefix) = file.get(..name.len() + 1) else {
+        return false;
+    };
+    if !prefix[..name.len()].eq_ignore_ascii_case(name) || !prefix.ends_with('-') {
+        return false;
+    }
+    // The next token is the package version. `UCX-CUDA-1.18.0-…` is a
+    // different package, not UCX with a CUDA toolchain.
+    file.get(name.len() + 1..)
+        .and_then(|rest| rest.split('-').next())
+        .and_then(|token| token.chars().next())
+        .is_some_and(|character| character.is_ascii_digit())
 }
 
 fn newest_named_eb(dir: &Path, name: &str) -> Option<PathBuf> {
@@ -213,11 +222,11 @@ pub fn companion_argv(
             name: toolchain_name.to_string(),
             version: toolchain_version.to_string(),
         };
-        let mapped = map_source_toolchain_to_target(
-            toolchain_from_easyconfig_path(&source, name).as_ref(),
-            &parent,
-            None,
-        );
+        let parsed = toolchain_from_easyconfig_path(&source, name).unwrap_or_else(|| Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        });
+        let mapped = map_source_toolchain_to_target(Some(&parsed), &parent, None);
         let mut line = format!(
             "eb-stack package bump --source {} --toolchain-name {} --toolchain-version {}",
             shell_quote(&source.display().to_string()),
@@ -567,6 +576,60 @@ mod tests {
         assert!(
             argv.contains("--toolchain-name NVHPC") || argv.contains("--toolchain-name foss"),
             "expected NVHPC family or mapped parent, got {argv}"
+        );
+    }
+
+    #[test]
+    fn a_hyphenated_sibling_is_not_the_short_name() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path();
+        fs::write(
+            robot.join("UCX-CUDA-1.18.0-foss-2023a.eb"),
+            "name = 'UCX-CUDA'\n",
+        )
+        .expect("ucx-cuda");
+        let argv = companion_argv(
+            "UCX",
+            Some("1.18.0"),
+            &[robot.to_path_buf()],
+            &[],
+            "foss",
+            "2023a",
+            robot.to_str().expect("utf8"),
+            &temp.path().join("out"),
+        );
+        assert!(
+            !argv.contains("UCX-CUDA-1.18.0"),
+            "UCX-CUDA must not be sourced as UCX: {argv}"
+        );
+        assert!(
+            !argv.contains("--toolchain-name CUDA"),
+            "stolen prefix must not become CUDA: {argv}"
+        );
+    }
+
+    #[test]
+    fn a_filename_without_a_toolchain_pair_stays_system() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let robot = temp.path();
+        fs::write(robot.join("Java-11.0.2.eb"), "name = 'Java'\n").expect("java");
+        let argv = companion_argv(
+            "Java",
+            Some("11.0.2"),
+            &[robot.to_path_buf()],
+            &[],
+            "foss",
+            "2025a",
+            robot.to_str().expect("utf8"),
+            &temp.path().join("out"),
+        );
+        assert!(
+            argv.contains("--toolchain-name system"),
+            "Name-version.eb is SYSTEM, not the parent: {argv}"
+        );
+        assert!(
+            !argv.contains("--toolchain-name foss"),
+            "must not retarget SYSTEM onto foss: {argv}"
         );
     }
 
