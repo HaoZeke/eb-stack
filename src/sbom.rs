@@ -430,7 +430,13 @@ fn build_formula(
         let uid = input_hashes
             .and_then(|m| {
                 m.get(&lock_package_key(package))
-                    .or_else(|| m.get(&package.name))
+                    .or_else(|| {
+                        if unique_name_refs.contains_key(&package.name) {
+                            m.get(&package.name)
+                        } else {
+                            None
+                        }
+                    })
                     .cloned()
             })
             .unwrap_or_else(|| package_ref.clone());
@@ -728,11 +734,7 @@ fn candidate_identity(candidate: &crate::domain::Candidate) -> String {
     )
 }
 
-fn dep_matches_lock_package(
-    parent: &LockPackage,
-    package: &LockPackage,
-    dependency: &crate::domain::DepReq,
-) -> bool {
+fn dep_matches_lock_package(package: &LockPackage, dependency: &crate::domain::DepReq) -> bool {
     if package.name != dependency.name {
         return false;
     }
@@ -741,6 +743,7 @@ fn dep_matches_lock_package(
     let version_ok = crate::version::matches_req(&package.version, &dependency.version_req);
     let joined_ok = want_suffix.is_empty()
         && !have_suffix.is_empty()
+        && !version_ok
         && crate::version::matches_req(
             &format!("{}{have_suffix}", package.version),
             &dependency.version_req,
@@ -748,15 +751,13 @@ fn dep_matches_lock_package(
     if !(joined_ok || (version_ok && have_suffix == want_suffix)) {
         return false;
     }
-    let want_toolchain = dependency.toolchain.as_ref().unwrap_or(&parent.toolchain);
-    crate::hierarchy::toolchains_match(&package.toolchain, want_toolchain)
+    dependency
+        .toolchain
+        .as_ref()
+        .is_none_or(|want| crate::hierarchy::toolchains_match(&package.toolchain, want))
 }
 
-fn dep_map_keys(
-    lock: &StackLock,
-    parent: &LockPackage,
-    dependency: &crate::domain::DepReq,
-) -> Vec<String> {
+fn dep_map_keys(lock: &StackLock, dependency: &crate::domain::DepReq) -> Vec<String> {
     let named: Vec<&LockPackage> = lock
         .packages
         .iter()
@@ -767,7 +768,7 @@ fn dep_map_keys(
     }
     named
         .into_iter()
-        .filter(|package| dep_matches_lock_package(parent, package, dependency))
+        .filter(|package| dep_matches_lock_package(package, dependency))
         .map(lock_package_key)
         .collect()
 }
@@ -796,7 +797,7 @@ fn dep_names_map_from_universe(
                     &candidate.dependencies
                 };
                 deps.iter()
-                    .flat_map(|dependency| dep_map_keys(lock, package, dependency))
+                    .flat_map(|dependency| dep_map_keys(lock, dependency))
                     .collect()
             })
             .unwrap_or_default();
@@ -1548,6 +1549,185 @@ mod tests {
     }
 
     #[test]
+    fn a_2_tuple_can_depend_on_a_parent_level_python() {
+        let foss = Toolchain {
+            name: "foss".into(),
+            version: "2025b".into(),
+        };
+        let gcccore = Toolchain {
+            name: "GCCcore".into(),
+            version: "14.3.0".into(),
+        };
+        let app = Candidate {
+            name: "App".into(),
+            version: "1.0".into(),
+            toolchain: foss.clone(),
+            versionsuffix: None,
+            easyconfig_path: "App.eb".into(),
+            dependencies: vec![DepReq {
+                name: "Python".into(),
+                version_req: "==3.12.3".into(),
+                versionsuffix: None,
+                toolchain: None,
+            }],
+            builddependencies: vec![],
+            exts_list: vec![],
+            moduleclass: None,
+        };
+        let python = Candidate {
+            name: "Python".into(),
+            version: "3.12.3".into(),
+            toolchain: gcccore.clone(),
+            versionsuffix: None,
+            easyconfig_path: "Python.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+            moduleclass: None,
+        };
+        let universe = Universe {
+            toolchain: foss.clone(),
+            generation_label: None,
+            candidates: vec![app, python],
+        };
+        let lock = StackLock {
+            schema_version: 1,
+            toolchain: foss.clone(),
+            generation_label: None,
+            packages: vec![
+                LockPackage {
+                    name: "App".into(),
+                    version: "1.0".into(),
+                    toolchain: foss,
+                    versionsuffix: None,
+                    easyconfig_path: "App.eb".into(),
+                },
+                LockPackage {
+                    name: "Python".into(),
+                    version: "3.12.3".into(),
+                    toolchain: gcccore,
+                    versionsuffix: None,
+                    easyconfig_path: "Python.eb".into(),
+                },
+            ],
+            solver: SolverMeta {
+                engine: "resolvo".into(),
+                engine_version: "0".into(),
+                timestamp: "2026-08-12T00:00:00Z".into(),
+            },
+        };
+        let runtime = dep_map_from_universe(&lock, &universe);
+        let python_key = lock_package_key(&lock.packages[1]);
+        let app_key = lock_package_key(&lock.packages[0]);
+        assert!(
+            runtime
+                .get(&app_key)
+                .into_iter()
+                .flatten()
+                .any(|name| name == &python_key),
+            "{runtime:?}"
+        );
+    }
+
+    #[test]
+    fn a_range_does_not_depend_on_the_cuda_identity() {
+        let foss = Toolchain {
+            name: "foss".into(),
+            version: "2025b".into(),
+        };
+        let app = Candidate {
+            name: "App".into(),
+            version: "1.0".into(),
+            toolchain: foss.clone(),
+            versionsuffix: None,
+            easyconfig_path: "App.eb".into(),
+            dependencies: vec![DepReq {
+                name: "Lib".into(),
+                version_req: ">=1.0.0".into(),
+                versionsuffix: None,
+                toolchain: None,
+            }],
+            builddependencies: vec![],
+            exts_list: vec![],
+            moduleclass: None,
+        };
+        let lib = Candidate {
+            name: "Lib".into(),
+            version: "1.0.1".into(),
+            toolchain: foss.clone(),
+            versionsuffix: None,
+            easyconfig_path: "Lib.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+            moduleclass: None,
+        };
+        let lib_cuda = Candidate {
+            name: "Lib".into(),
+            version: "1.0.1".into(),
+            toolchain: foss.clone(),
+            versionsuffix: Some("-CUDA-12.8.0".into()),
+            easyconfig_path: "Lib-CUDA.eb".into(),
+            dependencies: vec![],
+            builddependencies: vec![],
+            exts_list: vec![],
+            moduleclass: None,
+        };
+        let universe = Universe {
+            toolchain: foss.clone(),
+            generation_label: None,
+            candidates: vec![app, lib, lib_cuda],
+        };
+        let lock = StackLock {
+            schema_version: 1,
+            toolchain: foss.clone(),
+            generation_label: None,
+            packages: vec![
+                LockPackage {
+                    name: "App".into(),
+                    version: "1.0".into(),
+                    toolchain: foss.clone(),
+                    versionsuffix: None,
+                    easyconfig_path: "App.eb".into(),
+                },
+                LockPackage {
+                    name: "Lib".into(),
+                    version: "1.0.1".into(),
+                    toolchain: foss.clone(),
+                    versionsuffix: None,
+                    easyconfig_path: "Lib.eb".into(),
+                },
+                LockPackage {
+                    name: "Lib".into(),
+                    version: "1.0.1".into(),
+                    toolchain: foss,
+                    versionsuffix: Some("-CUDA-12.8.0".into()),
+                    easyconfig_path: "Lib-CUDA.eb".into(),
+                },
+            ],
+            solver: SolverMeta {
+                engine: "resolvo".into(),
+                engine_version: "0".into(),
+                timestamp: "2026-08-12T00:00:00Z".into(),
+            },
+        };
+        let runtime = dep_map_from_universe(&lock, &universe);
+        let sbom = lock_to_cyclonedx_with_deps(&lock, Some(&runtime));
+        let app = sbom["dependencies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|edge| edge["ref"].as_str().unwrap_or("").contains("App@"))
+            .expect("App edge");
+        let depends = depends_on_list(app);
+        assert_eq!(depends.len(), 1, "{depends:?}");
+        assert!(
+            depends.iter().all(|reference| !reference.contains("CUDA")),
+            "{depends:?}"
+        );
+    }
+
+    #[test]
     fn a_dep_on_a_duplicated_name_keeps_every_matching_ref() {
         let system = Toolchain {
             name: "system".into(),
@@ -1965,6 +2145,62 @@ mod formulation_tests {
             }),
             "{props:?}"
         );
+    }
+
+    #[test]
+    fn a_name_keyed_input_hash_does_not_stamp_duplicate_identities() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let gcc = Toolchain {
+            name: "GCCcore".into(),
+            version: "15.2.0".into(),
+        };
+        let lock = StackLock {
+            schema_version: 1,
+            toolchain: gcc.clone(),
+            generation_label: None,
+            packages: vec![
+                LockPackage {
+                    name: "Perl".into(),
+                    version: "5.38.0".into(),
+                    toolchain: system,
+                    versionsuffix: None,
+                    easyconfig_path: "Perl-system.eb".into(),
+                },
+                LockPackage {
+                    name: "Perl".into(),
+                    version: "5.42.0".into(),
+                    toolchain: gcc,
+                    versionsuffix: None,
+                    easyconfig_path: "Perl-gcc.eb".into(),
+                },
+            ],
+            solver: SolverMeta {
+                engine: "resolvo".into(),
+                engine_version: "0".into(),
+                timestamp: "2026-08-12T00:00:00Z".into(),
+            },
+        };
+        let hashes = HashMap::from([("Perl".to_string(), "aaaa".to_string())]);
+        let json = lock_to_cyclonedx_with_facts(
+            &lock,
+            SbomFacts {
+                input_hashes: Some(&hashes),
+                ..SbomFacts::default()
+            },
+        );
+        let tasks = json["formulation"][0]["workflows"][0]["tasks"]
+            .as_array()
+            .expect("tasks");
+        assert_eq!(tasks.len(), 2, "{tasks:?}");
+        let uids: Vec<&str> = tasks
+            .iter()
+            .filter_map(|task| task["uid"].as_str())
+            .collect();
+        assert!(uids.iter().all(|uid| *uid != "aaaa"), "{uids:?}");
+        assert_ne!(uids[0], uids[1], "{uids:?}");
     }
 }
 
