@@ -318,33 +318,44 @@ fn recipe(fields: CrateFields<'_>) -> Result<ForeignRecipe, ForeignError> {
             .req
             .as_deref()
             .map_or_else(|| "unconstrained".to_string(), |req| format!("`{req}`"));
-        let (category, severity, summary) = match dep.kind {
-            CargoDepKind::Registry => (
-                "cargo-dep",
+        let (category, severity, summary) = if dep.optional {
+            (
+                "cargo-optional-dep",
                 ResidualSeverity::Mechanical,
                 format!(
-                    "Cargo dependency {} {requirement} stays inside the crate graph",
+                    "Cargo dependency {} {requirement} is optional and stays off the required crate graph",
                     dep.name
                 ),
-            ),
-            CargoDepKind::Path => (
-                "cargo-path-dep",
-                ResidualSeverity::Judgment,
-                format!(
-                    "Cargo dependency {} is a path dependency {requirement}: it is not in the \
+            )
+        } else {
+            match dep.kind {
+                CargoDepKind::Registry => (
+                    "cargo-dep",
+                    ResidualSeverity::Mechanical,
+                    format!(
+                        "Cargo dependency {} {requirement} stays inside the crate graph",
+                        dep.name
+                    ),
+                ),
+                CargoDepKind::Path => (
+                    "cargo-path-dep",
+                    ResidualSeverity::Judgment,
+                    format!(
+                        "Cargo dependency {} is a path dependency {requirement}: it is not in the \
                      published crate, so the released tarball cannot build on its own",
-                    dep.name
+                        dep.name
+                    ),
                 ),
-            ),
-            CargoDepKind::Git => (
-                "cargo-git-dep",
-                ResidualSeverity::Judgment,
-                format!(
-                    "Cargo dependency {} is a git dependency {requirement}: the build would \
+                CargoDepKind::Git => (
+                    "cargo-git-dep",
+                    ResidualSeverity::Judgment,
+                    format!(
+                        "Cargo dependency {} is a git dependency {requirement}: the build would \
                      fetch it, which an offline build cannot do",
-                    dep.name
+                        dep.name
+                    ),
                 ),
-            ),
+            }
         };
         residuals.push(ForeignResidual {
             category: category.into(),
@@ -438,6 +449,7 @@ struct CargoDep {
     /// The requirement, translated into the shared grammar.
     req: Option<String>,
     kind: CargoDepKind,
+    optional: bool,
 }
 
 /// Cargo's bare version string is a caret requirement.
@@ -498,6 +510,7 @@ fn cargo_dep_from_spec(name: &str, spec: &toml::Value) -> CargoDep {
             name: name.to_string(),
             req: cargo_version_req(version),
             kind: CargoDepKind::Registry,
+            optional: false,
         },
         toml::Value::Table(entry) => {
             let crate_name = entry
@@ -527,12 +540,17 @@ fn cargo_dep_from_spec(name: &str, spec: &toml::Value) -> CargoDep {
                         .and_then(cargo_version_req)
                 },
                 kind,
+                optional: entry
+                    .get("optional")
+                    .and_then(toml::Value::as_bool)
+                    .unwrap_or(false),
             }
         }
         _ => CargoDep {
             name: name.to_string(),
             req: None,
             kind: CargoDepKind::Registry,
+            optional: false,
         },
     }
 }
@@ -610,6 +628,39 @@ pyo3 = "0.22"
             Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         );
         assert!(!recipe.dependencies.iter().any(|dep| dep.name == "Python"));
+    }
+
+    #[test]
+    fn optional_cargo_deps_are_not_required_residuals() {
+        let recipe = parse_cargo_str(
+            r#"
+[package]
+name = "demo"
+version = "1.0.0"
+
+[dependencies]
+serde = { version = "1.0", optional = true }
+"#,
+        )
+        .expect("parse");
+        assert!(
+            recipe
+                .residuals
+                .iter()
+                .any(|residual| residual.category == "cargo-optional-dep"
+                    && residual.summary.contains("serde")),
+            "{:?}",
+            recipe.residuals
+        );
+        assert!(
+            recipe
+                .residuals
+                .iter()
+                .all(|residual| residual.category != "cargo-dep"
+                    || !residual.summary.contains("serde")),
+            "{:?}",
+            recipe.residuals
+        );
     }
 
     #[test]
