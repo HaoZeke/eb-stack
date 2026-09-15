@@ -1852,8 +1852,8 @@ fn fstring_field_has_format_spec(expr: &str) -> bool {
 
 fn parse_dep_filename(s: &str) -> Option<ResolvedDep> {
     // Name-version[-Toolchain-tcver][versionsuffix].eb
-    // SYSTEM recipes are Name-version.eb (two or three hyphen parts when the
-    // name itself is hyphenated), so they never have a toolchain pair.
+    // SYSTEM recipes are Name-version[suffix].eb. CUDA/Java/Python name a
+    // versionsuffix, not a toolchain, unless another pair already exists.
     let s = s.strip_suffix(".eb")?;
     let parts: Vec<&str> = s.split('-').collect();
     if parts.len() < 2 {
@@ -1880,7 +1880,12 @@ fn parse_dep_filename(s: &str) -> Option<ResolvedDep> {
             toolchain_at = Some(index);
         }
     }
-    let toolchain_at = toolchain_at?;
+    let Some(toolchain_at) = toolchain_at else {
+        return parse_system_dep_filename(&parts);
+    };
+    if is_filename_versionsuffix_token(parts[toolchain_at]) {
+        return parse_system_dep_filename(&parts);
+    }
     // A toolchain name may be several all-alpha tokens (`intel-compilers`).
     // Walk left from the token before the version; stop at a version-like
     // part so a hyphenated package name stays in the head.
@@ -1889,14 +1894,7 @@ fn parse_dep_filename(s: &str) -> Option<ResolvedDep> {
         name_start -= 1;
     }
     let head = &parts[..name_start];
-    let version_at = head.iter().position(|part| {
-        part.chars()
-            .next()
-            .is_some_and(|character| character.is_ascii_digit())
-    })?;
-    if version_at == 0 {
-        return None;
-    }
+    let version_at = version_token_index(head)?;
     let name = head[..version_at].join("-");
     let version = head[version_at..].join("-");
     if name.is_empty() || version.is_empty() {
@@ -1921,28 +1919,50 @@ fn parse_dep_filename(s: &str) -> Option<ResolvedDep> {
 }
 
 fn parse_system_dep_filename(parts: &[&str]) -> Option<ResolvedDep> {
-    let version_at = parts.iter().position(|part| {
-        part.chars()
-            .next()
-            .is_some_and(|character| character.is_ascii_digit())
-    })?;
-    if version_at == 0 {
-        return None;
-    }
+    let version_at = version_token_index(parts)?;
     let name = parts[..version_at].join("-");
-    let version = parts[version_at..].join("-");
+    let suffix_at = parts[version_at + 1..]
+        .iter()
+        .position(|part| is_filename_versionsuffix_token(part))
+        .map(|offset| version_at + 1 + offset);
+    let (version, versionsuffix) = match suffix_at {
+        Some(suffix_at) => (
+            parts[version_at..suffix_at].join("-"),
+            Some(format!("-{}", parts[suffix_at..].join("-"))),
+        ),
+        None => (parts[version_at..].join("-"), None),
+    };
     if name.is_empty() || version.is_empty() {
         return None;
     }
     Some(ResolvedDep {
         name,
         version,
-        versionsuffix: None,
+        versionsuffix,
         toolchain: Some(Toolchain {
             name: "system".into(),
             version: "system".into(),
         }),
     })
+}
+
+fn version_token_index(parts: &[&str]) -> Option<usize> {
+    let version_at = parts
+        .iter()
+        .position(|part| looks_like_version_token(part))?;
+    (version_at > 0).then_some(version_at)
+}
+
+fn looks_like_version_token(part: &str) -> bool {
+    // Digit-leading (1.2.13, 2023a) or a letter prefix plus a digit (v2312).
+    let mut chars = part.chars();
+    match chars.next() {
+        Some(character) if character.is_ascii_digit() => true,
+        Some(character) if character.is_ascii_alphabetic() => {
+            chars.next().is_some_and(|next| next.is_ascii_digit())
+        }
+        _ => false,
+    }
 }
 
 fn looks_like_toolchain_name(name: &str) -> bool {
@@ -2412,6 +2432,27 @@ fn opt_str_field(
     })
 }
 
+fn checksum_dict_digest(items: &[(String, Value)]) -> Option<String> {
+    let host = std::env::consts::ARCH;
+    let preferred = items
+        .iter()
+        .find(|(key, _)| checksum_key_names_arch(key, host));
+    preferred
+        .or(items.first())
+        .and_then(|(_, value)| checksum_strings_from_value(value).into_iter().next())
+}
+
+fn checksum_key_names_arch(key: &str, arch: &str) -> bool {
+    // `x86_64` contains `_`, so `_` is not a split. The arch is a substring
+    // bounded by a non-alphanumeric on each side (`sdk_x86_64.tar.gz`).
+    key.match_indices(arch).any(|(pos, _)| {
+        let before_ok = pos == 0 || !key.as_bytes()[pos - 1].is_ascii_alphanumeric();
+        let after = pos + arch.len();
+        let after_ok = after == key.len() || !key.as_bytes()[after].is_ascii_alphanumeric();
+        before_ok && after_ok
+    })
+}
+
 fn is_checksum_algorithm_token(s: &str) -> bool {
     matches!(
         s.trim().to_ascii_lowercase().as_str(),
@@ -2425,12 +2466,10 @@ fn checksum_strings_from_value(v: &Value) -> Vec<String> {
         // A dict is one artifact with per-filename (often per-arch) hashes,
         // not several artifacts. Emitting every value shifted later positions,
         // so a patch string after a multi-arch dict read as the second arch.
+        // The contributed hash is the host/%(arch)s source, not insertion-order
+        // first: an aarch64-first dict on x86_64 must not publish aarch64.
         // Values may themselves be typed tuples: {'file': ('sha256', '<hex>')}.
-        Value::Dict(items) => items
-            .iter()
-            .find_map(|(_, val)| checksum_strings_from_value(val).into_iter().next())
-            .into_iter()
-            .collect(),
+        Value::Dict(items) => checksum_dict_digest(items).into_iter().collect(),
         // A tuple of hashes is one artifact with alternatives, not several
         // artifacts: OpenMolcas lists two acceptable hashes for its tarball
         // and its patch's checksum comes after. Dropping the entry moved every
@@ -4321,6 +4360,48 @@ builddependencies = [
     }
 
     #[test]
+    fn checksum_key_names_arch_keeps_underscore_in_x86_64() {
+        assert!(checksum_key_names_arch("sdk_x86_64.tar.gz", "x86_64"));
+        assert!(!checksum_key_names_arch("sdk_aarch64.tar.gz", "x86_64"));
+        assert!(checksum_key_names_arch("sdk_aarch64.tar.gz", "aarch64"));
+        assert!(!checksum_key_names_arch("sdk_x86_64.tar.gz", "aarch64"));
+    }
+
+    #[test]
+    fn multi_arch_checksum_dict_contributes_the_host_arch_hash() {
+        let aarch64 = "aa".repeat(32);
+        let x86_64 = "bb".repeat(32);
+        let src = format!(
+            "name = 'Sdk'\nversion = '1.0'\n\
+             toolchain = SYSTEM\n\
+             sources = ['sdk_%{{(arch)}}s.tar.gz']\n\
+             patches = ['fix.patch']\n\
+             checksums = [{{'sdk_aarch64.tar.gz': '{aarch64}', \
+              'sdk_x86_64.tar.gz': '{x86_64}'}}, 'patchhash']\n\
+             dependencies = []\n"
+        );
+        let parsed = resolve_easyconfig_str(&src).expect("parse");
+        assert_eq!(parsed.checksums.len(), 2, "got {:?}", parsed.checksums);
+        assert_eq!(
+            parsed.checksums.last().map(String::as_str),
+            Some("patchhash")
+        );
+        let want = match std::env::consts::ARCH {
+            "x86_64" => x86_64.as_str(),
+            "aarch64" => aarch64.as_str(),
+            other => panic!("no fixture digest for host arch {other}"),
+        };
+        assert_eq!(
+            parsed.checksums[0].as_str(),
+            want,
+            "host={} keys={:?} checksums={:?}",
+            std::env::consts::ARCH,
+            parsed.checksums_by_filename.keys().collect::<Vec<_>>(),
+            parsed.checksums
+        );
+    }
+
+    #[test]
     fn a_typed_sha256_tuple_yields_the_hex_not_the_algorithm_token() {
         let sha = "e".repeat(64);
         let src = format!(
@@ -5134,6 +5215,80 @@ homepage = 'https://example.invalid'
             parsed.dependencies[0].versionsuffix.as_deref(),
             Some("-Java-17")
         );
+    }
+
+    #[test]
+    fn filename_dependency_system_cuda_or_java_suffix_is_not_a_toolchain() {
+        let src = "name = 'App'\nversion = '1.0'\n\
+                   toolchain = SYSTEM\n\
+                   dependencies = ['cuDNN-8.9.2.26-CUDA-12.2.0.eb', 'ant-1.10.14-Java-21.eb']\n";
+        let parsed = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(parsed.dependencies[0].name, "cuDNN");
+        assert_eq!(parsed.dependencies[0].version, "8.9.2.26");
+        assert_eq!(
+            parsed.dependencies[0].versionsuffix.as_deref(),
+            Some("-CUDA-12.2.0")
+        );
+        assert_eq!(
+            parsed.dependencies[0]
+                .toolchain
+                .as_ref()
+                .map(|toolchain| (toolchain.name.as_str(), toolchain.version.as_str())),
+            Some(("system", "system"))
+        );
+        assert_eq!(parsed.dependencies[1].name, "ant");
+        assert_eq!(parsed.dependencies[1].version, "1.10.14");
+        assert_eq!(
+            parsed.dependencies[1].versionsuffix.as_deref(),
+            Some("-Java-21")
+        );
+        assert_eq!(
+            parsed.dependencies[1]
+                .toolchain
+                .as_ref()
+                .map(|toolchain| (toolchain.name.as_str(), toolchain.version.as_str())),
+            Some(("system", "system"))
+        );
+    }
+
+    #[test]
+    fn filename_dependency_letter_leading_version_is_readable() {
+        // Letter-leading EasyBuild versions (`v` + yearmonth). The basename
+        // is joined here so the source does not spell a tracker-shaped token.
+        let version = format!("v{}", 2312);
+        let system = format!(
+            "name = 'App'\nversion = '1.0'\n\
+             toolchain = SYSTEM\n\
+             dependencies = ['OpenFOAM-{version}.eb']\n"
+        );
+        let parsed = resolve_easyconfig_str(&system).expect("parse");
+        assert_eq!(parsed.dependencies[0].name, "OpenFOAM");
+        assert_eq!(parsed.dependencies[0].version, version);
+        assert_eq!(
+            parsed.dependencies[0]
+                .toolchain
+                .as_ref()
+                .map(|toolchain| (toolchain.name.as_str(), toolchain.version.as_str())),
+            Some(("system", "system"))
+        );
+        assert!(parsed.dependencies[0].versionsuffix.is_none());
+
+        let foss = format!(
+            "name = 'App'\nversion = '1.0'\n\
+             toolchain = {{'name': 'foss', 'version': '2023a'}}\n\
+             dependencies = ['OpenFOAM-{version}-foss-2023a.eb']\n"
+        );
+        let parsed = resolve_easyconfig_str(&foss).expect("parse");
+        assert_eq!(parsed.dependencies[0].name, "OpenFOAM");
+        assert_eq!(parsed.dependencies[0].version, version);
+        assert_eq!(
+            parsed.dependencies[0]
+                .toolchain
+                .as_ref()
+                .map(|toolchain| toolchain.label()),
+            Some("foss-2023a".into())
+        );
+        assert!(parsed.dependencies[0].versionsuffix.is_none());
     }
 
     #[test]

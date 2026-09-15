@@ -2821,6 +2821,41 @@ class Gitpkg(Package):
     }
 
     #[test]
+    fn multi_arch_checksum_dict_plan_uses_the_host_arch_hash() {
+        let aarch64 = "aa".repeat(32);
+        let x86_64 = "bb".repeat(32);
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("Sdk-1.0.eb");
+        std::fs::write(
+            &source,
+            format!(
+                "easyblock = 'Tarball'\n\
+                 name = 'Sdk'\n\
+                 version = '1.0'\n\
+                 homepage = 'https://example.invalid/'\n\
+                 description = 'arch sdk'\n\
+                 toolchain = SYSTEM\n\
+                 sources = ['sdk_%(arch)s.tar.gz']\n\
+                 patches = ['fix.patch']\n\
+                 checksums = [{{'sdk_aarch64.tar.gz': '{aarch64}', \
+                  'sdk_x86_64.tar.gz': '{x86_64}'}}, 'patchhash']\n\
+                 moduleclass = 'tools'\n"
+            ),
+        )
+        .expect("source recipe");
+        let robot = temp.path().join("robot");
+        std::fs::create_dir_all(&robot).expect("robot");
+        let request = bump_request(source, robot, None, Vec::new(), Vec::new());
+        let (plan, _) = prepare_package_bump(&request).expect("prepare");
+        let want = match std::env::consts::ARCH {
+            "x86_64" => x86_64,
+            "aarch64" => aarch64,
+            other => panic!("no fixture digest for host arch {other}"),
+        };
+        assert_eq!(plan.sources[0].sha256.as_deref(), Some(want.as_str()));
+    }
+
+    #[test]
     fn merge_foreign_inspect_excludes_policy_named_dep() {
         let temp = tempfile::tempdir().expect("tempdir");
         let source = write_bump_source(temp.path(), "1.0");
