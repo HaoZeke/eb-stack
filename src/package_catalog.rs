@@ -380,10 +380,14 @@ pub fn resolve_package_catalog_layers(
             let entry = merged.get_mut(&key).expect("entry inserted");
             entry.name = patch.name.clone();
             if let Some(provider) = patch.provider {
+                let switching_to_bump = provider == CatalogProviderKind::EasyBuildBump
+                    && entry.provider != Some(CatalogProviderKind::EasyBuildBump);
                 entry.provider = Some(provider);
                 if provider == CatalogProviderKind::EasyBuildBump {
                     // Drop inherited foreign-authoring fields unless this patch
-                    // re-states them (which validation then rejects).
+                    // re-states them (which validation then rejects). A
+                    // restated easybuild-bump keeps a legal inherited digest;
+                    // only a kind switch drops checksums the overlay omitted.
                     if patch.format.is_none() {
                         entry.format = None;
                     }
@@ -393,7 +397,7 @@ pub fn resolve_package_catalog_layers(
                     if patch.profile.is_none() {
                         entry.profile = None;
                     }
-                    if patch.source_checksums.is_empty() {
+                    if switching_to_bump && patch.source_checksums.is_empty() {
                         entry.source_checksums.clear();
                     }
                 }
@@ -415,6 +419,11 @@ pub fn resolve_package_catalog_layers(
                 entry.source = Some(resolve_path(layer.base_directory.as_deref(), source));
                 if patch.source_checksums.is_empty() {
                     entry.source_checksums.clear();
+                }
+                // A new recipe does not inherit the previous format; omit
+                // `format` to auto-detect (recipe.yaml is not Spack).
+                if patch.format.is_none() {
+                    entry.format = None;
                 }
             }
             if patch.format.is_some() {

@@ -682,6 +682,145 @@ toolchain = { name = "foss", version = "2024a" }
 }
 
 #[test]
+fn restating_easybuild_bump_keeps_inherited_checksum() {
+    let digest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let base = PackageCatalogLayer::from_toml_str(&format!(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+version = "1.0"
+provider = "easybuild-bump"
+source = "Lib-1.0-foss-2023b.eb"
+toolchain = {{ name = "foss", version = "2026.1" }}
+source_checksums = ["{digest}"]
+"#
+    ))
+    .expect("base");
+    let overlay = PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+version = "1.0"
+provider = "easybuild-bump"
+stack_policy = "stacks/foss.toml"
+"#,
+    )
+    .expect("overlay");
+    let catalog = resolve_package_catalog_layers(&[base, overlay]).expect("restate bump");
+    let provider = catalog.lookup("Lib", Some("1.0")).expect("lookup");
+    assert_eq!(provider.provider, CatalogProviderKind::EasyBuildBump);
+    assert_eq!(provider.source_checksums, vec![digest.to_string()]);
+    assert_eq!(
+        provider.stack_policy,
+        Some(PathBuf::from("stacks/foss.toml"))
+    );
+}
+
+#[test]
+fn sparse_overlay_omitting_provider_keeps_bump_checksum() {
+    let digest = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    let base = PackageCatalogLayer::from_toml_str(&format!(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+version = "1.0"
+provider = "easybuild-bump"
+source = "Lib-1.0-foss-2023b.eb"
+toolchain = {{ name = "foss", version = "2026.1" }}
+source_checksums = ["{digest}"]
+"#
+    ))
+    .expect("base");
+    let overlay = PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+version = "1.0"
+stack_policy = "stacks/foss.toml"
+"#,
+    )
+    .expect("overlay");
+    let catalog = resolve_package_catalog_layers(&[base, overlay]).expect("sparse overlay");
+    let provider = catalog.lookup("Lib", Some("1.0")).expect("lookup");
+    assert_eq!(provider.source_checksums, vec![digest.to_string()]);
+}
+
+#[test]
+fn switching_to_easybuild_bump_drops_inherited_foreign_checksums() {
+    let base = PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+version = "1.0"
+source = "a/package.py"
+format = "spack"
+toolchain = { name = "foss", version = "2026.1" }
+source_checksums = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+"#,
+    )
+    .expect("base");
+    let overlay = PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+version = "1.0"
+provider = "easybuild-bump"
+source = "Lib-1.0-foss-2023b.eb"
+toolchain = { name = "foss", version = "2024a" }
+"#,
+    )
+    .expect("overlay");
+    let catalog = resolve_package_catalog_layers(&[base, overlay]).expect("switch to bump");
+    let provider = catalog.lookup("Lib", Some("1.0")).expect("lookup");
+    assert_eq!(provider.provider, CatalogProviderKind::EasyBuildBump);
+    assert!(provider.source_checksums.is_empty());
+}
+
+#[test]
+fn replacing_source_resets_stale_format_to_auto() {
+    let base = PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+version = "1.0"
+source = "a/package.py"
+format = "spack"
+toolchain = { name = "foss", version = "2026.1" }
+"#,
+    )
+    .expect("base");
+    let overlay = PackageCatalogLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[packages]]
+name = "Lib"
+version = "1.0"
+source = "recipe.yaml"
+"#,
+    )
+    .expect("overlay");
+    let catalog = resolve_package_catalog_layers(&[base, overlay]).expect("replace source");
+    let provider = catalog.lookup("Lib", Some("1.0")).expect("lookup");
+    assert_eq!(provider.source, PathBuf::from("recipe.yaml"));
+    assert_eq!(provider.format, None);
+}
+
+#[test]
 fn later_layer_setting_bump_with_format_is_rejected() {
     let base = PackageCatalogLayer::from_toml_str(
         r#"
