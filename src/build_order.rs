@@ -377,13 +377,14 @@ fn satisfies(candidate: &Candidate, dep: &DepReq, recipe: &Candidate) -> bool {
 /// into whatever generation happens to hold the newest matching version, which
 /// is how a 2026 root ends up pulling a GCCcore-11.3.0 bootstrap chain and
 /// closing a cycle that does not exist within either generation.
-fn distance(candidate: &Candidate, recipe: &Candidate, all: &[Candidate]) -> usize {
+fn distance(
+    candidate: &Candidate,
+    recipe: &Candidate,
+    members: &[crate::domain::Toolchain],
+) -> usize {
     if crate::hierarchy::toolchains_match(&candidate.toolchain, &recipe.toolchain) {
         return 0;
     }
-    let members = crate::hierarchy::hierarchy_for_with_tree(&recipe.toolchain, None, all)
-        .map(|h| h.members)
-        .unwrap_or_default();
     // Members run lowest level first, so walking from the recipe downwards
     // gives nearer levels a smaller distance.
     if let Some(at) = members
@@ -600,26 +601,32 @@ pub fn build_graph(
                 .then_with(|| a.version_req.cmp(&b.version_req))
         });
 
+        let recipe_members =
+            crate::hierarchy::hierarchy_for_with_tree(&candidate.toolchain, None, candidates)
+                .map(|hierarchy| hierarchy.members)
+                .unwrap_or_default();
         for (dep, kind) in deps {
-            let mut admissible: Vec<&Candidate> = candidates
+            let mut scored: Vec<(&Candidate, usize)> = candidates
                 .iter()
                 .filter(|c| satisfies(c, dep, candidate))
+                .map(|c| (c, distance(c, candidate, &recipe_members)))
                 .collect();
             // Nearest generation first, then the choice function decides among
             // equals. A dependency that pins a toolchain was already narrowed
             // to that one build by `satisfies`. usize::MAX means "not in this
             // generation": keep those out so an unknown local-* toolchain
             // cannot walk to whichever GCCcore happens to hold the newest Lib.
-            if let Some(best) = admissible
+            if let Some(best) = scored
                 .iter()
-                .map(|c| distance(c, candidate, candidates))
+                .map(|(_, distance)| *distance)
                 .filter(|distance| *distance != usize::MAX)
                 .min()
             {
-                admissible.retain(|c| distance(c, candidate, candidates) == best);
+                scored.retain(|(_, distance)| *distance == best);
             } else {
-                admissible.clear();
+                scored.clear();
             }
+            let admissible: Vec<&Candidate> = scored.into_iter().map(|(c, _)| c).collect();
             let Some(picked) = choose(&admissible, choice) else {
                 let mut available: Vec<String> = candidates
                     .iter()
