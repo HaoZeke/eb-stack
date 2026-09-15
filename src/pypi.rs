@@ -233,6 +233,18 @@ fn recipe_from_document(doc: WarehouseDocument) -> Result<ForeignRecipe, Foreign
                     if crate::provides::ignored_build_requirement(&name) {
                         continue;
                     }
+                    if crate::provides::shipped_with_python(&name) {
+                        residuals.push(ForeignResidual {
+                            category: "pypi-requirement".into(),
+                            severity: ResidualSeverity::Mechanical,
+                            summary: format!(
+                                "{name} comes with the Python module, so it is not a dependency"
+                            ),
+                            evidence: Some(original),
+                            provenance: None,
+                        });
+                        continue;
+                    }
                     dependencies.push(ForeignDep {
                         name,
                         pin,
@@ -786,7 +798,7 @@ mod tests {
               },
               "build_system": {
                 "build-backend": "mesonpy",
-                "requires": ["meson-python", "numpy"]
+                "requires": ["setuptools>=61", "meson-python", "numpy"]
               },
               "urls": []
             }"#,
@@ -814,6 +826,14 @@ mod tests {
                 .iter()
                 .any(|dep| dep.name.eq_ignore_ascii_case("numpy") && dep.role == "build"),
             "numpy stays a robot provide, not a build extra: {:?}",
+            recipe.dependencies
+        );
+        assert!(
+            !recipe
+                .dependencies
+                .iter()
+                .any(|dep| dep.name.eq_ignore_ascii_case("setuptools")),
+            "setuptools is shipped with Python: {:?}",
             recipe.dependencies
         );
     }
