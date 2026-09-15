@@ -295,10 +295,16 @@ impl PackageSourceCatalog {
             .collect();
 
         if let Some(requested) = version {
+            let requested = requested.trim();
             let exact: Vec<&PackageSourceProvider> = matches
                 .iter()
                 .copied()
-                .filter(|provider| provider.version.as_deref() == Some(requested))
+                .filter(|provider| {
+                    provider
+                        .version
+                        .as_deref()
+                        .is_some_and(|provided| provided.trim() == requested)
+                })
                 .collect();
             match exact.as_slice() {
                 [provider] => return Ok(*provider),

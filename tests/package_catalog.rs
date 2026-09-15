@@ -757,6 +757,8 @@ toolchain = { name = "foss", version = "2026.1" }
     .expect("resolve");
     let provider = catalog.lookup("Lib", Some("1.0")).expect("exact");
     assert_eq!(provider.version.as_deref(), Some("1.0"));
+    let padded = catalog.lookup("Lib", Some(" 1.0 ")).expect("padded exact");
+    assert_eq!(padded.version.as_deref(), Some("1.0"));
 }
 
 #[test]
