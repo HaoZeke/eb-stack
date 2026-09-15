@@ -168,7 +168,7 @@ fn cmp_post_against_number(number: u64) -> Ordering {
 /// One comparison in a requirement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequirementOp {
-    /// `==X` or a bare `X`.
+    /// `==X`, `=X`, `===X`, or a bare `X`.
     Exact,
     /// `!=X`.
     NotEqual,
@@ -284,6 +284,7 @@ fn parse_clause(clause: &str) -> Result<RequirementClause, UnsupportedRequiremen
         ("!=", RequirementOp::NotEqual),
         ("===", RequirementOp::Exact),
         ("==", RequirementOp::Exact),
+        ("=", RequirementOp::Exact),
         (">=", RequirementOp::AtLeast),
         ("<=", RequirementOp::AtMost),
         ("^", RequirementOp::Caret),
@@ -506,7 +507,8 @@ fn series_ceiling(components: &[u64], index: usize) -> String {
         .join(".")
 }
 
-/// `1.2.*` is the series `>=1.2, <1.3`, not equality with the prefix `1.2`.
+/// `1.2.*` is the series at or above the prefix and below the next series
+/// ceiling, not equality with the prefix `1.2`.
 fn matches_release_series(version: &str, prefix: &str) -> bool {
     if cmp_version(version, prefix) == Ordering::Less {
         return false;
@@ -516,7 +518,7 @@ fn matches_release_series(version: &str, prefix: &str) -> bool {
         return false;
     }
     let ceiling = series_ceiling(&components, components.len() - 1);
-    cmp_version(version, &ceiling) == Ordering::Less
+    below_series_ceiling(version, &ceiling)
 }
 
 /// `~=X.Y.Z` is `>=X.Y.Z, <X.(Y+1)`; `~=X.Y` is `>=X.Y, <(X+1)`.
@@ -599,6 +601,16 @@ mod ecosystem_operator_tests {
         assert!(matches_req("1.0", "===1.0"));
         assert!(matches_req("1.0", "==1.0"));
         assert!(!matches_req("1.1", "===1.0"));
+    }
+
+    #[test]
+    fn lone_equals_is_exact_of_the_version() {
+        let parsed = parse_requirement("=1.2.3").expect("parse");
+        assert_eq!(parsed.exact(), Some("1.2.3"));
+        assert_eq!(parsed.clauses[0].op, RequirementOp::Exact);
+        assert_eq!(parsed.clauses[0].version, "1.2.3");
+        assert!(matches_req("1.2.3", "=1.2.3"));
+        assert!(!matches_req("1.2.4", "=1.2.3"));
     }
 
     #[test]
@@ -761,6 +773,9 @@ mod tests {
         assert!(!matches_req("1.3.0", "==1.2.*"));
         assert!(!matches_req("1.1.9", "==1.2.*"));
         assert!(!matches_req("1.2.3", "==1.2"));
+        assert!(!matches_req("1.3.0rc1", "==1.2.*"));
+        assert!(matches_req("1.3.0rc1", "!=1.2.*"));
+        assert!(!matches_req("2.0a", "==1.*"));
         assert_eq!(parse_requirement("==1.2.*").expect("parse").exact(), None);
         assert_eq!(
             parse_requirement("==1.2.*").expect("parse").lower_bound(),

@@ -345,39 +345,14 @@ fn rewrite_conda_eq_pin(pin: &str) -> String {
         .join(",")
 }
 
+/// Keep trailing `.*` in the shared language. Rewriting `==1.2.*` to
+/// `>=1.2,<1.3` admits the next series pre-release (`1.3.0rc1` < `1.3`).
 fn expand_digit_wildcards(pin: &str) -> String {
     pin.split(',')
         .map(str::trim)
         .filter(|clause| !clause.is_empty())
-        .map(expand_digit_wildcard_clause)
         .collect::<Vec<_>>()
         .join(",")
-}
-
-fn expand_digit_wildcard_clause(clause: &str) -> String {
-    let version = clause
-        .strip_prefix("===")
-        .or_else(|| clause.strip_prefix("=="))
-        .unwrap_or(clause)
-        .trim();
-    if !clause.starts_with("==")
-        && !version.starts_with(|character: char| character.is_ascii_digit())
-    {
-        return clause.to_string();
-    }
-    let mut prefix = version;
-    let mut stripped = false;
-    while let Some(rest) = prefix.strip_suffix(".*") {
-        prefix = rest;
-        stripped = true;
-    }
-    if !stripped || !prefix.chars().any(|value| value.is_ascii_digit()) {
-        return clause.to_string();
-    }
-    match series_successor(prefix) {
-        Some(successor) => format!(">={prefix},<{successor}"),
-        None => clause.to_string(),
-    }
 }
 
 fn canonical_spack_version_constraint(version: &str) -> Option<String> {
@@ -508,11 +483,23 @@ mod tests {
         assert!(matches_req("1.2.3", &conda), "{conda}");
         assert!(!matches_req("1.3.0", &conda), "{conda}");
         assert!(!matches_req("1.1.9", &conda), "{conda}");
+        assert!(!matches_req("1.3.0rc1", &conda), "{conda}");
 
         let pypi = canonical_version_constraint(ForeignFormat::Pypi, Some("==1.2.*"))
             .expect("pypi wildcard");
         assert!(matches_req("1.2.3", &pypi), "{pypi}");
         assert!(!matches_req("1.3.0", &pypi), "{pypi}");
+        assert!(!matches_req("1.3.0rc1", &pypi), "{pypi}");
+    }
+
+    #[test]
+    fn cargo_equals_pin_stays_exact() {
+        let pin = canonical_version_constraint(ForeignFormat::Cargo, Some("=1.2.3"))
+            .expect("cargo = pin");
+        let parsed = crate::version::parse_requirement(&pin).expect("parse");
+        assert_eq!(parsed.exact(), Some("1.2.3"));
+        assert!(matches_req("1.2.3", &pin), "{pin}");
+        assert!(!matches_req("1.2.4", &pin), "{pin}");
     }
 
     #[test]
