@@ -2785,7 +2785,7 @@ fn candidate_identity_key(c: &Candidate) -> (String, String, String, String) {
     (
         c.name.clone(),
         c.version.clone(),
-        c.toolchain.label(),
+        c.toolchain.identity_label(),
         c.versionsuffix.clone().unwrap_or_default(),
     )
 }
@@ -4248,6 +4248,45 @@ builddependencies = [
         assert!(merged
             .iter()
             .any(|candidate| { candidate.versionsuffix.as_deref() == Some("-CUDA-12.6.0") }));
+    }
+
+    #[test]
+    fn merge_candidates_collapses_system_and_dummy() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let dummy = Toolchain {
+            name: "dummy".into(),
+            version: String::new(),
+        };
+        let candidate = |toolchain: Toolchain, suffix: Option<&str>, path: &str| Candidate {
+            name: "zlib".into(),
+            version: "1.2".into(),
+            toolchain,
+            versionsuffix: suffix.map(str::to_string),
+            easyconfig_path: path.into(),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+            moduleclass: None,
+        };
+        let merged = merge_candidates_with_precedence(&[
+            vec![candidate(system.clone(), None, "upstream/zlib-1.2.eb")],
+            vec![
+                candidate(dummy, None, "overlay/zlib-1.2.eb"),
+                candidate(system, Some("-CUDA-12.8"), "overlay/zlib-1.2-CUDA-12.8.eb"),
+            ],
+        ]);
+        let unsuffixed: Vec<_> = merged
+            .iter()
+            .filter(|c| c.versionsuffix.as_deref().unwrap_or("").is_empty())
+            .collect();
+        assert_eq!(unsuffixed.len(), 1, "SYSTEM and dummy are one identity");
+        assert_eq!(unsuffixed[0].easyconfig_path, "overlay/zlib-1.2.eb");
+        assert!(merged
+            .iter()
+            .any(|c| c.versionsuffix.as_deref() == Some("-CUDA-12.8")));
     }
 
     fn blank_recipe() -> ResolvedEasyconfig {
