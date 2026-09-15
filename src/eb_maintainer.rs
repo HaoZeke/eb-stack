@@ -344,6 +344,8 @@ const THIN_FLAGS: &[&str] = &[
 const TESTS_OFF_FLAGS: &[&str] = &[
     "with_tests=false",
     "with_tests=off",
+    "without_tests=true",
+    "without_tests=on",
     "build_tests=off",
     "build_testing=off",
     "enable_tests=off",
@@ -1079,6 +1081,25 @@ mod tests {
         assert!(
             findings.iter().any(|f| f.code == "EB_MAINT_TESTS_OFF"),
             "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn without_tests_is_tests_off_not_tests_on() {
+        let text = "configopts = '-Dwithout_tests=true'\nmoduleclass = 'tools'\n";
+        let findings = check_fat_build(text);
+        let tests_off: Vec<_> = findings
+            .iter()
+            .filter(|finding| finding.code == "EB_MAINT_TESTS_OFF")
+            .collect();
+        assert_eq!(tests_off.len(), 1, "{findings:?}");
+        assert!(
+            tests_off[0].message.contains("without_tests=true"),
+            "{tests_off:?}"
+        );
+        assert!(
+            !tests_off[0].message.contains("compiled but never run"),
+            "{tests_off:?}"
         );
     }
 

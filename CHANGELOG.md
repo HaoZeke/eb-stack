@@ -102,6 +102,8 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `configopts = '-Dwithout_tests=true'` is a tests-off flag, not a
+  compiled-but-never-run suite.
 - Binding crates such as `pyo3` stay `Crate` even when they require
   `pyo3-ffi`. A crates.io version document keeps homepage and summary.
 - A catalog Bravo without a suffix does not veto a `-CUDA` hole. Cycle
