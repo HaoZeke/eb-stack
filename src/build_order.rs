@@ -408,6 +408,24 @@ fn distance(candidate: &Candidate, recipe: &Candidate, all: &[Candidate]) -> usi
     usize::MAX
 }
 
+/// A `--roots name==version` pin matches the recipe version, or the version
+/// with versionsuffix glued on: foss-2019a writes GCC 8.2.0-2.31.1 for a
+/// recipe whose version is 8.2.0 and whose suffix is -2.31.1.
+fn root_version_matches(candidate: &Candidate, version_req: &str) -> bool {
+    if version_req.is_empty() {
+        return true;
+    }
+    if matches_req(&candidate.version, version_req) {
+        return true;
+    }
+    let with_suffix = format!(
+        "{}{}",
+        candidate.version,
+        candidate.versionsuffix.as_deref().unwrap_or("")
+    );
+    matches_req(&with_suffix, version_req)
+}
+
 /// Pick one candidate from those a requirement admits.
 fn choose<'a>(admissible: &[&'a Candidate], choice: Choice) -> Option<&'a Candidate> {
     admissible.iter().copied().max_by(|a, b| {
@@ -477,9 +495,7 @@ pub fn build_graph(
         };
         let admissible: Vec<&Candidate> = candidates
             .iter()
-            .filter(|c| {
-                c.name == name && (version_req.is_empty() || matches_req(&c.version, &version_req))
-            })
+            .filter(|c| c.name == name && root_version_matches(c, &version_req))
             .collect();
         let start = match choose(&admissible, choice) {
             Some(picked) => picked,
@@ -1106,6 +1122,15 @@ mod tests {
             oldest.iter().any(|s| s.starts_with("Lib-2.0")),
             "{oldest:?}"
         );
+    }
+
+    #[test]
+    fn a_root_can_pin_version_glued_to_versionsuffix() {
+        let mut gcc = candidate("GCC", "8.2.0", tc("system", "system"), vec![]);
+        gcc.versionsuffix = Some("-2.31.1".into());
+        let order = build_order(&[gcc], &["GCC==8.2.0-2.31.1".into()], Choice::Newest)
+            .expect("suffix-glued root");
+        assert_eq!(names(&order), vec!["GCC-8.2.0-system-2.31.1".to_string()]);
     }
 
     #[test]
