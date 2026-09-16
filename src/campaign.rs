@@ -888,7 +888,8 @@ pub fn classify_build_failure(
                 || text.contains("eperm")
                 || text.contains("estale")
                 || text.contains("exdev")
-                || text.contains("emlink"));
+                || text.contains("emlink")
+                || text.contains("enotempty"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -2205,6 +2206,15 @@ error: installation failed
         );
         assert_eq!(
             classify_build_failure("build", "failed to download foo.tar.gz: EMLINK", "", None),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "failed to download foo.tar.gz: ENOTEMPTY",
+                "",
+                None
+            ),
             BuildFindingClass::Source
         );
         assert_eq!(
