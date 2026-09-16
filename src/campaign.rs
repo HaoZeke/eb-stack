@@ -843,6 +843,7 @@ pub fn classify_build_failure(
         || text.contains("failed to retrieve")
         || text.contains("could not retrieve")
         || text.contains("unable to retrieve")
+        || text.contains("couldn't retrieve")
         || text.contains("couldn't find file") && text.contains("downloading it didn't work")
         || text.contains("download")
             && (text.contains("timed out")
@@ -2475,6 +2476,10 @@ error: installation failed
         );
         assert_eq!(
             classify_build_failure("build", "unable to retrieve foo.tar.gz", "", None),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "couldn't retrieve foo.tar.gz", "", None),
             BuildFindingClass::Source
         );
         assert_eq!(
