@@ -301,7 +301,7 @@ pub fn plan_package_closure_with_sources(
         package_index: request.package_index.clone(),
     };
 
-    let root_path = vec![plan.package.name.clone()];
+    let root_path = vec![package_identity(&plan.package.name)];
     let root = state.close_package(
         PreparedCompanion::Foreign { plan, sbom },
         &request.stack_policy,
@@ -1286,13 +1286,14 @@ fn first_unadmitted_generated_hole<'a>(
 }
 
 fn hole_path_step(hole: &UnsatisfiedDirectDependency) -> String {
+    let identity = package_identity(&hole.name);
     match hole
         .versionsuffix
         .as_deref()
         .filter(|suffix| !suffix.is_empty())
     {
-        Some(suffix) => format!("{}{suffix}", hole.name),
-        None => hole.name.clone(),
+        Some(suffix) => format!("{identity}{suffix}"),
+        None => identity,
     }
 }
 
@@ -1511,6 +1512,20 @@ mod tests {
         assert_ne!(hole_path_step(&mpi), hole_path_step(&cuda));
         assert_eq!(hole_path_step(&mpi), "bravo-MPI");
         assert_eq!(hole_path_step(&cuda), "bravo-CUDA");
+        let dashed = UnsatisfiedDirectDependency {
+            name: "Capn-Proto".into(),
+            version_req: ">=0".into(),
+            versionsuffix: None,
+            build: false,
+        };
+        let folded = UnsatisfiedDirectDependency {
+            name: "capnproto".into(),
+            version_req: ">=0".into(),
+            versionsuffix: None,
+            build: false,
+        };
+        assert_eq!(hole_path_step(&dashed), hole_path_step(&folded));
+        assert_eq!(hole_path_step(&dashed), "capnproto");
     }
 
     #[test]
