@@ -88,21 +88,19 @@ fn cached_parts(version: &str) -> Vec<Part> {
     })
 }
 
-fn first_post_index(parts: &[Part]) -> Option<usize> {
-    parts.iter().position(|part| match part {
-        Part::Alpha(token) => is_post_release(token),
-        Part::Num(_) => false,
-    })
+fn first_alpha_index(parts: &[Part]) -> Option<usize> {
+    parts.iter().position(|part| matches!(part, Part::Alpha(_)))
 }
 
-/// Insert `Num(0)` before a post-release token so both sides share a numeric prefix.
+/// Insert `Num(0)` before the first letter token so both sides share a numeric prefix.
 ///
-/// `1.0post1` is `[1, 0, post, 1]` and `1.0.0post2` is `[1, 0, 0, post, 2]`.
-/// Without this pad, post vs the zero pad returns at index 2 and never sees
-/// the post numbers. Do not flip [`cmp_post_against_number`] for `1.0post1`
+/// `1.0rc1` is `[1, 0, rc, 1]` and `1.0.0rc2` is `[1, 0, 0, rc, 2]`.
+/// Without this pad, rc vs the zero pad returns at index 2 and never sees
+/// the rc numbers. Post-releases keep the same pad (`1.0post1` vs
+/// `1.0.0post2`). Do not flip [`cmp_post_against_number`] for `1.0post1`
 /// vs `1.0.0`.
-fn pad_post_numeric_prefix(parts: Vec<Part>, width: usize) -> Vec<Part> {
-    let Some(index) = first_post_index(&parts) else {
+fn pad_alpha_numeric_prefix(parts: Vec<Part>, width: usize) -> Vec<Part> {
+    let Some(index) = first_alpha_index(&parts) else {
         return parts;
     };
     if index >= width {
@@ -114,13 +112,13 @@ fn pad_post_numeric_prefix(parts: Vec<Part>, width: usize) -> Vec<Part> {
     padded
 }
 
-fn align_post_numeric_prefixes(
+fn align_alpha_numeric_prefixes(
     mut left: Vec<Part>,
     mut right: Vec<Part>,
 ) -> (Vec<Part>, Vec<Part>) {
-    let left_post = first_post_index(&left);
-    let right_post = first_post_index(&right);
-    let width = match (left_post, right_post) {
+    let left_alpha = first_alpha_index(&left);
+    let right_alpha = first_alpha_index(&right);
+    let width = match (left_alpha, right_alpha) {
         (Some(left_width), Some(right_width)) => left_width.max(right_width),
         (Some(left_width), None) => left_width.max(
             right
@@ -135,14 +133,14 @@ fn align_post_numeric_prefixes(
         ),
         (None, None) => return (left, right),
     };
-    left = pad_post_numeric_prefix(left, width);
-    right = pad_post_numeric_prefix(right, width);
+    left = pad_alpha_numeric_prefix(left, width);
+    right = pad_alpha_numeric_prefix(right, width);
     (left, right)
 }
 
 /// Order two version strings by their tokenized parts, digits before letters.
 pub fn cmp_version(a: &str, b: &str) -> Ordering {
-    let (pa, pb) = align_post_numeric_prefixes(cached_parts(a), cached_parts(b));
+    let (pa, pb) = align_alpha_numeric_prefixes(cached_parts(a), cached_parts(b));
     let n = pa.len().max(pb.len());
     for i in 0..n {
         let x = pa.get(i);
@@ -829,6 +827,16 @@ mod tests {
         assert_eq!(cmp_version("1.0post1", "1.0.0"), Ordering::Greater);
         assert_eq!(cmp_version("1.0post1", "1.0.1"), Ordering::Less);
         assert_eq!(cmp_version("1.7.1.post2", "1.7.1.0.post2"), Ordering::Equal);
+    }
+
+    #[test]
+    fn zero_pad_before_pre_does_not_outrank_a_later_pre() {
+        assert_eq!(cmp_version("1.0rc1", "1.0.0rc1"), Ordering::Equal);
+        assert_eq!(cmp_version("1.0rc1", "1.0.0rc2"), Ordering::Less);
+        assert_eq!(cmp_version("1.0.0rc2", "1.0rc1"), Ordering::Greater);
+        assert_eq!(cmp_version("1.0rc1", "1.0"), Ordering::Less);
+        assert_eq!(cmp_version("1.0rc1", "1.0.0"), Ordering::Less);
+        assert_eq!(cmp_version("1.0a1", "1.0.0a1"), Ordering::Equal);
     }
 
     #[test]
