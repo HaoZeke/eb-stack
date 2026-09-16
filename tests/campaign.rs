@@ -76,6 +76,7 @@ fn failure_classifier_preserves_the_build_error_domain() {
             BuildFindingClass::Resource,
         ),
         ("ssh: connect to host failed", BuildFindingClass::Transport),
+        ("wget: command not found", BuildFindingClass::Runtime),
         (
             "Failed to download file from https://example.invalid/foo.tar.gz\nURLError: <urlopen error [Errno 110] Connection timed out>\nERROR: installation failed",
             BuildFindingClass::Source,

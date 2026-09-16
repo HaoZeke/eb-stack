@@ -815,12 +815,12 @@ pub fn classify_build_failure(
     exit_code: Option<i32>,
 ) -> BuildFindingClass {
     let text = format!("{stage}\n{stdout}\n{stderr}").to_ascii_lowercase();
-    let missing_executable = (text.contains("no such file or directory")
-        && (text.contains("could not execute process")
-            || text.contains("never executed")
-            || text.contains("command not found")
-            || text.contains("executable file not found")
-            || exit_code == Some(127)))
+    let missing_executable = text.contains("command not found")
+        || exit_code == Some(127)
+        || (text.contains("no such file or directory")
+            && (text.contains("could not execute process")
+                || text.contains("never executed")
+                || text.contains("executable file not found")))
         || text
             .lines()
             .any(|line| line.contains("no such file or directory") && line.contains("env:"));
@@ -2682,6 +2682,18 @@ error: installation failed
         assert_eq!(
             classify_build_failure("build", "ERROR 404: Not Found.", "", None),
             BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "wget: command not found", "", None),
+            BuildFindingClass::Runtime
+        );
+        assert_eq!(
+            classify_build_failure("build", "bash: eb: command not found", "", None),
+            BuildFindingClass::Runtime
+        );
+        assert_eq!(
+            classify_build_failure("build", "", "", Some(127)),
+            BuildFindingClass::Runtime
         );
         assert_eq!(
             classify_build_failure("build", "connection timed out", "", None),
