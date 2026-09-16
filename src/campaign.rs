@@ -851,7 +851,8 @@ pub fn classify_build_failure(
                 || text.contains("host is down")
                 || text.contains("no route to host")
                 || text.contains("software caused connection abort")
-                || text.contains("econnrefused"));
+                || text.contains("econnrefused")
+                || text.contains("etimedout"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -1982,6 +1983,15 @@ error: installation failed
             classify_build_failure(
                 "build",
                 "failed to download foo.tar.gz: ECONNREFUSED",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "failed to download foo.tar.gz: ETIMEDOUT",
                 "",
                 None
             ),
