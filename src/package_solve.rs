@@ -131,7 +131,7 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
     stack_policy: &StackPolicy,
     hierarchy_fixture: Option<&Path>,
 ) -> Result<Vec<UnsatisfiedDirectDependency>, ProfileSolveError> {
-    let (materialized, _hierarchy, admitted) = admit_profile_universe(
+    let (materialized, hierarchy, mut admitted) = admit_profile_universe(
         plan,
         profile_name,
         environment,
@@ -139,6 +139,9 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
         stack_policy,
         hierarchy_fixture,
     )?;
+    // Same hide as solve: an unscoped foss-2024a Python 3.12.3 must not
+    // satisfy a foss-2026.1 hole check.
+    scope_cross_generation_pin_closures(&mut admitted, stack_policy, &hierarchy);
     let robot_names = robot_name_index(candidates);
 
     let mut holes = Vec::new();
@@ -1634,5 +1637,67 @@ mod tests {
             }
             Err(_) => {}
         }
+    }
+
+    #[test]
+    fn hole_check_hides_unscoped_cross_generation_pin_closure_members() {
+        let foss_2026 = Toolchain {
+            name: "foss".into(),
+            version: "2026.1".into(),
+        };
+        let foss_2024a = Toolchain {
+            name: "foss".into(),
+            version: "2024a".into(),
+        };
+        let plan = minimal_plan(
+            "App",
+            foss_2026.clone(),
+            vec![
+                intent("PyTorch", "2.9.1", None),
+                intent("Python", "==3.12.3", None),
+            ],
+        );
+        let python_312 = DepReq {
+            name: "Python".into(),
+            version_req: "==3.12.3".into(),
+            versionsuffix: None,
+            toolchain: None,
+        };
+        let mut pytorch = cand("PyTorch", "2.9.1", "foss", "2024a");
+        pytorch.dependencies = vec![python_312];
+        let candidates = vec![
+            cand("PyTorch", "2.8.0", "foss", "2026.1"),
+            pytorch,
+            cand("Python", "3.12.3", "GCCcore", "13.3.0"),
+        ];
+        let stack = StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "site".into(),
+            toolchain: foss_2026.clone(),
+            pins: vec![crate::package::StackPin {
+                name: "PyTorch".into(),
+                version_requirement: "==2.9.1".into(),
+                toolchain: Some(foss_2024a.clone()),
+                versionsuffix: Some(String::new()),
+                mode: crate::package::StackPinMode::Preferred,
+                source: Some("site stack".into()),
+            }],
+            exclusions: Vec::new(),
+        };
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/toolchain_hierarchy/foss-2026.1.json");
+        let holes = unsatisfied_direct_dependencies_with_hierarchy(
+            &plan,
+            "default",
+            &ProfileEnvironment::default(),
+            &candidates,
+            &stack,
+            Some(&fixture),
+        )
+        .expect("hole check");
+        assert!(
+            holes.iter().any(|hole| hole.name == "Python"),
+            "unscoped pin-closure Python must be a hole: {holes:?}"
+        );
     }
 }
