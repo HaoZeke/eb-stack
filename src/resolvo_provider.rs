@@ -272,7 +272,7 @@ impl EbProvider {
         if let Some(tc) = dep.toolchain.as_ref() {
             return vec![format!("{}@{}", dep.name, toolchain_label(tc))];
         }
-        let mut keys = self.keys_at_or_below(&dep.name, recipe);
+        let keys = self.keys_at_or_below(&dep.name, recipe);
         if keys.is_empty() && self.widen_cross_generation {
             // A stack policy can admit a closure from another generation on
             // purpose. Ordinary solves stay at or below the recipe.
