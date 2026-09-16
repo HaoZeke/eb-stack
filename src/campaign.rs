@@ -858,6 +858,8 @@ pub fn classify_build_failure(
         || text.contains("incompleteread")
         || text.contains("proxyerror")
         || text.contains("chunkedencodingerror")
+        || text.contains("contentdecodingerror")
+        || text.contains("toomanyredirects")
         || text.contains("couldn't find file") && text.contains("downloading it didn't work")
         || text.contains("download")
             && (text.contains("timed out")
@@ -2603,6 +2605,24 @@ error: installation failed
             classify_build_failure(
                 "build",
                 "requests.exceptions.ChunkedEncodingError: ('Connection broken.', IncompleteRead(0 bytes read))",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "requests.exceptions.ContentDecodingError: ('Received response with content-encoding: gzip, but failed to decode it.', error('Error -3 while decompressing data'))",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "requests.exceptions.TooManyRedirects: Exceeded 30 redirects.",
                 "",
                 None
             ),
