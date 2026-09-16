@@ -855,6 +855,7 @@ pub fn classify_build_failure(
                 || text.contains("409")
                 || text.contains("410")
                 || text.contains("422")
+                || text.contains("451")
                 || text.contains("i/o error")
                 || text.contains("io error")
                 || text.contains("no space")
@@ -2355,6 +2356,10 @@ error: installation failed
         );
         assert_eq!(
             classify_build_failure("build", "failed to download foo.tar.gz: HTTP 422", "", None),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "failed to download foo.tar.gz: HTTP 451", "", None),
             BuildFindingClass::Source
         );
         assert_eq!(
