@@ -827,7 +827,8 @@ pub fn classify_build_failure(
                 || text.contains("timeout")
                 || text.contains("connection reset")
                 || text.contains("ssl")
-                || text.contains("certificate"));
+                || text.contains("certificate")
+                || text.contains("404"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -1804,6 +1805,10 @@ mod campaign_signature_tests {
                 "",
                 None
             ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "failed to download foo.tar.gz: HTTP 404", "", None),
             BuildFindingClass::Source
         );
         assert_eq!(
