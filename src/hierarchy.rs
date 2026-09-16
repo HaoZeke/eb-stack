@@ -1386,7 +1386,11 @@ pub fn resolve_dep_versions_for_specs(
         // resolves/bumps like any other dep below (comment text is preserved
         // by the emitter regardless of whether the version changes).
         let counts = all_counts
-            .get(&(spec.name.clone(), String::new()))
+            .iter()
+            .find(|((existing, existing_suffix), _)| {
+                existing.eq_ignore_ascii_case(&spec.name) && existing_suffix.is_empty()
+            })
+            .map(|(_, counts)| counts)
             .unwrap_or(&empty_counts);
         let opts = ResolveDepOpts {
             floor_version: Some(spec.version.as_str()),
@@ -2738,6 +2742,32 @@ mod tests {
             counts.get("1.14.3").copied(),
             Some(1),
             "robot HDF5 must count a hdf5 pin: {counts:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_specs_use_case_folded_generation_pin_counts() {
+        let h = known_hierarchy(&foss("2024a")).unwrap();
+        let mut cands = vec![
+            cand("HDF5", "1.14.3", "foss", "2024a", None),
+            cand("HDF5", "1.16.0", "foss", "2024a", None),
+        ];
+        for index in 0..10 {
+            cands.push(consumer_pinning(
+                &format!("App{index}"),
+                "1.0",
+                "foss",
+                "2024a",
+                "hdf5",
+                "1.14.3",
+            ));
+        }
+        let specs = vec![SourceDepSpec::plain("HDF5", "1.10.0")];
+        let (map, _) = resolve_dep_versions_for_specs(&specs, &cands, &h, false).unwrap();
+        assert_eq!(
+            map.get("HDF5").map(String::as_str),
+            Some("1.14.3"),
+            "batch lookup must reuse hdf5 pin counts for robot HDF5: {map:?}"
         );
     }
 
