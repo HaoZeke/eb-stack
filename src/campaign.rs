@@ -849,6 +849,9 @@ pub fn classify_build_failure(
         || text.contains("httperror")
         || text.contains("sslerror")
         || text.contains("gaierror")
+        || text.contains("readtimeout")
+        || text.contains("connecttimeout")
+        || text.contains("connectionerror")
         || text.contains("couldn't find file") && text.contains("downloading it didn't work")
         || text.contains("download")
             && (text.contains("timed out")
@@ -2513,6 +2516,33 @@ error: installation failed
             classify_build_failure(
                 "build",
                 "gaierror: [Errno -2] Name or service not known",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "ReadTimeout: HTTPConnectionPool(host='example.invalid', port=443)",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "ConnectTimeout: HTTPSConnectionPool(host='example.invalid', port=443)",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "requests.exceptions.ConnectionError: ('Connection aborted.', RemoteDisconnected())",
                 "",
                 None
             ),
