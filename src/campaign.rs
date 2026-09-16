@@ -889,7 +889,8 @@ pub fn classify_build_failure(
                 || text.contains("estale")
                 || text.contains("exdev")
                 || text.contains("emlink")
-                || text.contains("enotempty"));
+                || text.contains("enotempty")
+                || text.contains("ebusy"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -2215,6 +2216,10 @@ error: installation failed
                 "",
                 None
             ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "failed to download foo.tar.gz: EBUSY", "", None),
             BuildFindingClass::Source
         );
         assert_eq!(
