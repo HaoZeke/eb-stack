@@ -877,7 +877,8 @@ pub fn classify_build_failure(
                 || text.contains("efault")
                 || text.contains("eintr")
                 || text.contains("eagain")
-                || text.contains("ewouldblock"));
+                || text.contains("ewouldblock")
+                || text.contains("eproto"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -2150,6 +2151,10 @@ error: installation failed
                 "",
                 None
             ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "failed to download foo.tar.gz: EPROTO", "", None),
             BuildFindingClass::Source
         );
         assert_eq!(
