@@ -870,7 +870,8 @@ pub fn classify_build_failure(
                 || text.contains("eloop")
                 || text.contains("enxio")
                 || text.contains("enodev")
-                || text.contains("enotblk"));
+                || text.contains("enotblk")
+                || text.contains("enotty"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -2110,6 +2111,10 @@ error: installation failed
         );
         assert_eq!(
             classify_build_failure("build", "failed to download foo.tar.gz: ENOTBLK", "", None),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "failed to download foo.tar.gz: ENOTTY", "", None),
             BuildFindingClass::Source
         );
         assert_eq!(
