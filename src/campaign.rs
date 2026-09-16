@@ -849,7 +849,8 @@ pub fn classify_build_failure(
                 || text.contains("nodename nor servname")
                 || text.contains("temporary failure in name resolution")
                 || text.contains("host is down")
-                || text.contains("no route to host"));
+                || text.contains("no route to host")
+                || text.contains("software caused connection abort"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -1962,6 +1963,15 @@ error: installation failed
             classify_build_failure(
                 "build",
                 "failed to download foo.tar.gz: No route to host",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "failed to download foo.tar.gz: Software caused connection abort",
                 "",
                 None
             ),
