@@ -915,7 +915,8 @@ pub fn classify_build_failure(
                 || text.contains("enetdown")
                 || text.contains("eaddrnotavail")
                 || text.contains("eaddrinuse")
-                || text.contains("ehostdown"));
+                || text.contains("ehostdown")
+                || text.contains("ealready"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -2315,6 +2316,10 @@ error: installation failed
                 "",
                 None
             ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "failed to download foo.tar.gz: EALREADY", "", None),
             BuildFindingClass::Source
         );
         assert_eq!(
