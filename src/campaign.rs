@@ -847,7 +847,8 @@ pub fn classify_build_failure(
                 || text.contains("network is unreachable")
                 || text.contains("name or service not known")
                 || text.contains("nodename nor servname")
-                || text.contains("temporary failure in name resolution"));
+                || text.contains("temporary failure in name resolution")
+                || text.contains("host is down"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -1942,6 +1943,15 @@ error: installation failed
             classify_build_failure(
                 "build",
                 "failed to download foo.tar.gz: Temporary failure in name resolution",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "failed to download foo.tar.gz: Host is down",
                 "",
                 None
             ),
