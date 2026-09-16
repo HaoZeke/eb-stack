@@ -844,6 +844,9 @@ pub fn classify_build_failure(
         || text.contains("could not retrieve")
         || text.contains("unable to retrieve")
         || text.contains("couldn't retrieve")
+        || text.contains("urlerror")
+        || text.contains("urlopen error")
+        || text.contains("httperror")
         || text.contains("couldn't find file") && text.contains("downloading it didn't work")
         || text.contains("download")
             && (text.contains("timed out")
@@ -2483,7 +2486,24 @@ error: installation failed
             BuildFindingClass::Source
         );
         assert_eq!(
+            classify_build_failure(
+                "build",
+                "URLError: <urlopen error [Errno 111] Connection refused>",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "HTTPError: HTTP Error 404: Not Found", "", None),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
             classify_build_failure("build", "connection timed out", "", None),
+            BuildFindingClass::Transport
+        );
+        assert_eq!(
+            classify_build_failure("build", "connection refused", "", None),
             BuildFindingClass::Transport
         );
         assert_eq!(
