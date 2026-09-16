@@ -895,7 +895,8 @@ pub fn classify_build_failure(
                 || text.contains("eisconn")
                 || text.contains("enotconn")
                 || text.contains("eshutdown")
-                || text.contains("etoomanyrefs"));
+                || text.contains("etoomanyrefs")
+                || text.contains("enetreset"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -2252,6 +2253,15 @@ error: installation failed
             classify_build_failure(
                 "build",
                 "failed to download foo.tar.gz: ETOOMANYREFS",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "failed to download foo.tar.gz: ENETRESET",
                 "",
                 None
             ),
