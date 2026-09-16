@@ -838,6 +838,7 @@ pub fn classify_build_failure(
         || text.contains("couldn't download")
         || text.contains("failed to fetch")
         || text.contains("could not fetch")
+        || text.contains("unable to fetch")
         || text.contains("couldn't find file") && text.contains("downloading it didn't work")
         || text.contains("download")
             && (text.contains("timed out")
@@ -2450,6 +2451,10 @@ error: installation failed
         );
         assert_eq!(
             classify_build_failure("build", "could not fetch foo.tar.gz", "", None),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "unable to fetch foo.tar.gz", "", None),
             BuildFindingClass::Source
         );
         assert_eq!(
