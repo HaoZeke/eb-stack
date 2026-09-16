@@ -864,7 +864,8 @@ pub fn classify_build_failure(
                 || text.contains("emfile")
                 || text.contains("edquot")
                 || text.contains("erofs")
-                || text.contains("enotdir"));
+                || text.contains("enotdir")
+                || text.contains("eisdir"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -2075,6 +2076,10 @@ error: installation failed
         );
         assert_eq!(
             classify_build_failure("build", "failed to download foo.tar.gz: ENOTDIR", "", None),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "failed to download foo.tar.gz: EISDIR", "", None),
             BuildFindingClass::Source
         );
         assert_eq!(
