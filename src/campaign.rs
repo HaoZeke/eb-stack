@@ -838,7 +838,9 @@ pub fn classify_build_failure(
                 || text.contains("408")
                 || text.contains("410")
                 || text.contains("i/o error")
-                || text.contains("io error"));
+                || text.contains("io error")
+                || text.contains("no space")
+                || text.contains("enospc"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -1870,6 +1872,15 @@ error: installation failed
             classify_build_failure(
                 "build",
                 "failed to download foo.tar.gz: I/O error",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "failed to download foo.tar.gz: no space left on device",
                 "",
                 None
             ),
