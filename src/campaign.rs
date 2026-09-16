@@ -917,7 +917,8 @@ pub fn classify_build_failure(
                 || text.contains("eaddrinuse")
                 || text.contains("ehostdown")
                 || text.contains("ealready")
-                || text.contains("einprogress"));
+                || text.contains("einprogress")
+                || text.contains("edestaddrreq"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -2327,6 +2328,15 @@ error: installation failed
             classify_build_failure(
                 "build",
                 "failed to download foo.tar.gz: EINPROGRESS",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "failed to download foo.tar.gz: EDESTADDRREQ",
                 "",
                 None
             ),
