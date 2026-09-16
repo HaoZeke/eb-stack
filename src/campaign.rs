@@ -852,6 +852,8 @@ pub fn classify_build_failure(
         || text.contains("readtimeout")
         || text.contains("connecttimeout")
         || text.contains("connectionerror")
+        || text.contains("newconnectionerror")
+        || text.contains("maxretryerror")
         || text.contains("couldn't find file") && text.contains("downloading it didn't work")
         || text.contains("download")
             && (text.contains("timed out")
@@ -2543,6 +2545,24 @@ error: installation failed
             classify_build_failure(
                 "build",
                 "requests.exceptions.ConnectionError: ('Connection aborted.', RemoteDisconnected())",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "urllib3.exceptions.NewConnectionError: Failed to establish a new connection: [Errno 111] Connection refused",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='example.invalid', port=443)",
                 "",
                 None
             ),
