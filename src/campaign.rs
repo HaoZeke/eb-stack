@@ -854,6 +854,8 @@ pub fn classify_build_failure(
         || text.contains("connectionerror")
         || text.contains("newconnectionerror")
         || text.contains("maxretryerror")
+        || text.contains("protocolerror")
+        || text.contains("incompleteread")
         || text.contains("couldn't find file") && text.contains("downloading it didn't work")
         || text.contains("download")
             && (text.contains("timed out")
@@ -2563,6 +2565,24 @@ error: installation failed
             classify_build_failure(
                 "build",
                 "urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='example.invalid', port=443)",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "urllib3.exceptions.ProtocolError: ('Connection aborted.', RemoteDisconnected())",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "http.client.IncompleteRead: IncompleteRead(1024 bytes read)",
                 "",
                 None
             ),
