@@ -836,7 +836,9 @@ pub fn classify_build_failure(
                 || text.contains("429")
                 || text.contains("401")
                 || text.contains("408")
-                || text.contains("410"));
+                || text.contains("410")
+                || text.contains("i/o error")
+                || text.contains("io error"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -1862,6 +1864,15 @@ error: installation failed
         );
         assert_eq!(
             classify_build_failure("build", "failed to download foo.tar.gz: HTTP 410", "", None),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "failed to download foo.tar.gz: I/O error",
+                "",
+                None
+            ),
             BuildFindingClass::Source
         );
         assert_eq!(
