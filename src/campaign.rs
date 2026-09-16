@@ -879,7 +879,8 @@ pub fn classify_build_failure(
                 || text.contains("eagain")
                 || text.contains("ewouldblock")
                 || text.contains("eproto")
-                || text.contains("emsgsize"));
+                || text.contains("emsgsize")
+                || text.contains("enodata"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -2160,6 +2161,10 @@ error: installation failed
         );
         assert_eq!(
             classify_build_failure("build", "failed to download foo.tar.gz: EMSGSIZE", "", None),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "failed to download foo.tar.gz: ENODATA", "", None),
             BuildFindingClass::Source
         );
         assert_eq!(
