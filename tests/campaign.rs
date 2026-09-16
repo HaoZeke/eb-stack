@@ -64,6 +64,14 @@ fn failure_classifier_preserves_the_build_error_domain() {
             BuildFindingClass::Resource,
         ),
         (
+            "error: undeclared identifier foo\nSLURM_JOB_ID=42\nERROR: installation failed",
+            BuildFindingClass::Compile,
+        ),
+        (
+            "sbatch: error: Batch job submission failed",
+            BuildFindingClass::Executor,
+        ),
+        (
             "g++: fatal error: Killed signal terminated program cc1plus\ncompilation terminated.",
             BuildFindingClass::Resource,
         ),

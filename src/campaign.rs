@@ -789,6 +789,21 @@ fn supersede_findings(state: &mut CampaignState, stage: &str, recipe: &str) {
     }
 }
 
+/// True when the log names a Slurm executor failure, not just a `SLURM_*` env.
+fn slurm_executor_failure(text: &str) -> bool {
+    text.contains("slurmstepd")
+        || text.contains("sbatch: error")
+        || text.contains("sbatch: fatal")
+        || text.contains("srun: error")
+        || text.contains("srun: fatal")
+        || text.contains("salloc: error")
+        || text.contains("salloc: fatal")
+        || text.contains("slurmctld")
+        || text.contains("slurm: error")
+        || text.contains("unable to allocate resources")
+        || text.contains("batch job submission failed")
+}
+
 /// Classify a failed build stage from its output.
 ///
 /// Routing depends on this: the class decides whether a failure is worth
@@ -913,7 +928,7 @@ pub fn classify_build_failure(
         && !source_failure
     {
         BuildFindingClass::Transport
-    } else if text.contains("slurm") && (text.contains("error") || text.contains("invalid")) {
+    } else if slurm_executor_failure(&text) {
         if text.contains("oom") || text.contains("out of memory") {
             BuildFindingClass::Resource
         } else {
@@ -2314,6 +2329,28 @@ error: installation failed
                 None
             ),
             BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "",
+                "error: undeclared identifier foo\nSLURM_JOB_ID=42\nERROR: installation failed",
+                Some(1)
+            ),
+            BuildFindingClass::Compile
+        );
+        assert_eq!(
+            classify_build_failure("build", "slurmstepd: error: Detected 1 oom-kill", "", None),
+            BuildFindingClass::Resource
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "sbatch: error: Batch job submission failed",
+                "",
+                None
+            ),
+            BuildFindingClass::Executor
         );
     }
 
