@@ -860,6 +860,8 @@ pub fn classify_build_failure(
         || text.contains("chunkedencodingerror")
         || text.contains("contentdecodingerror")
         || text.contains("toomanyredirects")
+        || text.contains("invalidurl")
+        || text.contains("locationparseerror")
         || text.contains("couldn't find file") && text.contains("downloading it didn't work")
         || text.contains("download")
             && (text.contains("timed out")
@@ -2623,6 +2625,24 @@ error: installation failed
             classify_build_failure(
                 "build",
                 "requests.exceptions.TooManyRedirects: Exceeded 30 redirects.",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "requests.exceptions.InvalidURL: Failed to parse: http://[::1",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "urllib3.exceptions.LocationParseError: Failed to parse: http://[::1",
                 "",
                 None
             ),
