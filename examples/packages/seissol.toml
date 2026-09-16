@@ -53,6 +53,8 @@ constraint = "==1.0"
 [[dependencies.requirements]]
 name = "Eigen"
 constraint = ">=3.4,<5"
+# Header-only; SeisSol ships binaries only (PR 26851 review).
+roles = ["build"]
 
 [[dependencies.requirements]]
 name = "HDF5"
