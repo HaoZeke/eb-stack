@@ -856,6 +856,8 @@ pub fn classify_build_failure(
         || text.contains("maxretryerror")
         || text.contains("protocolerror")
         || text.contains("incompleteread")
+        || text.contains("proxyerror")
+        || text.contains("chunkedencodingerror")
         || text.contains("couldn't find file") && text.contains("downloading it didn't work")
         || text.contains("download")
             && (text.contains("timed out")
@@ -2583,6 +2585,24 @@ error: installation failed
             classify_build_failure(
                 "build",
                 "http.client.IncompleteRead: IncompleteRead(1024 bytes read)",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "urllib3.exceptions.ProxyError: Cannot connect to proxy",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "requests.exceptions.ChunkedEncodingError: ('Connection broken.', IncompleteRead(0 bytes read))",
                 "",
                 None
             ),
