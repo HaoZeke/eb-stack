@@ -884,7 +884,8 @@ pub fn classify_build_failure(
                 || text.contains("etime")
                 || text.contains("esrch")
                 || text.contains("eio")
-                || text.contains("eacces"));
+                || text.contains("eacces")
+                || text.contains("eperm"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -2185,6 +2186,10 @@ error: installation failed
         );
         assert_eq!(
             classify_build_failure("build", "failed to download foo.tar.gz: EACCES", "", None),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "failed to download foo.tar.gz: EPERM", "", None),
             BuildFindingClass::Source
         );
         assert_eq!(
