@@ -908,7 +908,9 @@ pub fn failure_signature(text: &str) -> String {
 
 fn interned_causal_section(text: &str) -> Option<&str> {
     let marker = "EasyBuild command output ";
-    text.find(marker).map(|start| &text[start..])
+    // The last interned block is the command that failed. An earlier
+    // successful configure dump can mention the same heading.
+    text.rfind(marker).map(|start| &text[start..])
 }
 
 fn signature_from_interned(section: &str) -> String {
@@ -1770,6 +1772,25 @@ mod campaign_lock_tests {
 #[cfg(test)]
 mod campaign_signature_tests {
     use super::*;
+
+    #[test]
+    fn signature_uses_the_last_interned_easybuild_output() {
+        let text = "\
+EasyBuild command output (configure):
+stdout:
+checking for foo... yes
+EasyBuild command output (build):
+stderr:
+error: undeclared identifier bar
+error: installation failed
+";
+        let signature = failure_signature(text);
+        assert!(
+            signature.contains("undeclared identifier") || signature.contains("bar"),
+            "{signature}"
+        );
+        assert!(!signature.contains("checking for foo"), "{signature}");
+    }
 
     #[test]
     fn download_timeout_is_a_source_failure() {
