@@ -873,7 +873,8 @@ pub fn classify_build_failure(
                 || text.contains("enotblk")
                 || text.contains("enotty")
                 || text.contains("etxtbsy")
-                || text.contains("ebadf"));
+                || text.contains("ebadf")
+                || text.contains("efault"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -2125,6 +2126,10 @@ error: installation failed
         );
         assert_eq!(
             classify_build_failure("build", "failed to download foo.tar.gz: EBADF", "", None),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "failed to download foo.tar.gz: EFAULT", "", None),
             BuildFindingClass::Source
         );
         assert_eq!(
