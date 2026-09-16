@@ -892,7 +892,8 @@ pub fn classify_build_failure(
                 || text.contains("enotempty")
                 || text.contains("ebusy")
                 || text.contains("eexist")
-                || text.contains("eisconn"));
+                || text.contains("eisconn")
+                || text.contains("enotconn"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -2230,6 +2231,10 @@ error: installation failed
         );
         assert_eq!(
             classify_build_failure("build", "failed to download foo.tar.gz: EISCONN", "", None),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "failed to download foo.tar.gz: ENOTCONN", "", None),
             BuildFindingClass::Source
         );
         assert_eq!(
