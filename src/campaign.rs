@@ -859,7 +859,8 @@ pub fn classify_build_failure(
                 || text.contains("econnaborted")
                 || text.contains("epipe")
                 || text.contains("enobufs")
-                || text.contains("enomem"));
+                || text.contains("enomem")
+                || text.contains("enfile"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -2050,6 +2051,10 @@ error: installation failed
         );
         assert_eq!(
             classify_build_failure("build", "failed to download foo.tar.gz: ENOMEM", "", None),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "failed to download foo.tar.gz: ENFILE", "", None),
             BuildFindingClass::Source
         );
         assert_eq!(
