@@ -847,6 +847,8 @@ pub fn classify_build_failure(
         || text.contains("urlerror")
         || text.contains("urlopen error")
         || text.contains("httperror")
+        || text.contains("sslerror")
+        || text.contains("gaierror")
         || text.contains("couldn't find file") && text.contains("downloading it didn't work")
         || text.contains("download")
             && (text.contains("timed out")
@@ -2496,6 +2498,24 @@ error: installation failed
         );
         assert_eq!(
             classify_build_failure("build", "HTTPError: HTTP Error 404: Not Found", "", None),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "SSLError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "gaierror: [Errno -2] Name or service not known",
+                "",
+                None
+            ),
             BuildFindingClass::Source
         );
         assert_eq!(
