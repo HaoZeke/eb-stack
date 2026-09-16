@@ -862,6 +862,8 @@ pub fn classify_build_failure(
         || text.contains("toomanyredirects")
         || text.contains("invalidurl")
         || text.contains("locationparseerror")
+        || text.contains("curl: (")
+        || text.contains("unable to resolve host")
         || text.contains("couldn't find file") && text.contains("downloading it didn't work")
         || text.contains("download")
             && (text.contains("timed out")
@@ -2643,6 +2645,24 @@ error: installation failed
             classify_build_failure(
                 "build",
                 "urllib3.exceptions.LocationParseError: Failed to parse: http://[::1",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "curl: (6) Could not resolve host: example.invalid",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "wget: unable to resolve host address 'example.invalid'",
                 "",
                 None
             ),
