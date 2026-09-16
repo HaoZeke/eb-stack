@@ -850,7 +850,8 @@ pub fn classify_build_failure(
                 || text.contains("temporary failure in name resolution")
                 || text.contains("host is down")
                 || text.contains("no route to host")
-                || text.contains("software caused connection abort"));
+                || text.contains("software caused connection abort")
+                || text.contains("econnrefused"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -1972,6 +1973,15 @@ error: installation failed
             classify_build_failure(
                 "build",
                 "failed to download foo.tar.gz: Software caused connection abort",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "failed to download foo.tar.gz: ECONNREFUSED",
                 "",
                 None
             ),
