@@ -857,7 +857,8 @@ pub fn classify_build_failure(
                 || text.contains("enetunreach")
                 || text.contains("econnreset")
                 || text.contains("econnaborted")
-                || text.contains("epipe"));
+                || text.contains("epipe")
+                || text.contains("enobufs"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -2040,6 +2041,10 @@ error: installation failed
         );
         assert_eq!(
             classify_build_failure("build", "failed to download foo.tar.gz: EPIPE", "", None),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "failed to download foo.tar.gz: ENOBUFS", "", None),
             BuildFindingClass::Source
         );
         assert_eq!(
