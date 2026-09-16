@@ -543,13 +543,7 @@ impl BuildTarget {
 
     /// The command that runs a verification program on the target.
     pub fn verification_command(&self, program: &str, args: &[String]) -> CommandPlan {
-        let mut tokens = vec!["env".to_string()];
-        tokens.extend(
-            self.easybuild
-                .environment
-                .iter()
-                .map(|(name, value)| format!("{name}={value}")),
-        );
+        let mut tokens = self.easybuild_env_tokens();
         tokens.push(program.to_string());
         tokens.extend(args.iter().cloned());
         self.route_tokens(self.runtime_tokens(tokens), true)
@@ -1096,6 +1090,58 @@ mod tests {
             "assignments must precede eb: {inner:?}"
         );
         assert_eq!(inner.get(eb + 1).map(String::as_str), Some("--version"));
+    }
+
+    #[test]
+    fn verification_command_carries_workload_environment() {
+        let mut workload = host_workload("true");
+        workload.tmp_root = "/work/tmp".into();
+        workload.environment.insert("MUST".into(), "1".into());
+        workload.environment.insert(
+            "EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES".into(),
+            "1".into(),
+        );
+        let target = BuildTarget {
+            name: "local".into(),
+            transport: TargetTransport::Local,
+            executor: TargetExecutor::Direct,
+            runtime: TargetRuntime::Host,
+            easybuild: workload,
+        };
+        let plan = target.verification_command("module", &["load".into(), "App/1.0".into()]);
+        assert_eq!(plan.program, "env");
+        assert!(
+            plan.args
+                .iter()
+                .any(|token| token == "EASYBUILD_TMPDIR=/work/tmp"),
+            "{:?}",
+            plan.args
+        );
+        assert!(
+            plan.args.iter().any(|token| token == "MUST=1"),
+            "{:?}",
+            plan.args
+        );
+        assert!(
+            plan.args
+                .iter()
+                .any(|token| { token == "EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES=1" }),
+            "{:?}",
+            plan.args
+        );
+        let module = plan
+            .args
+            .iter()
+            .position(|token| token == "module")
+            .expect("module");
+        assert!(
+            plan.args[..module]
+                .iter()
+                .any(|token| token == "EASYBUILD_TMPDIR=/work/tmp"),
+            "assignments must precede the program: {:?}",
+            plan.args
+        );
+        assert_eq!(plan.args.get(module + 1).map(String::as_str), Some("load"));
     }
 
     #[test]
