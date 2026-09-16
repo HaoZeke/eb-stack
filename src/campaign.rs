@@ -832,7 +832,8 @@ pub fn classify_build_failure(
                 || text.contains("403")
                 || text.contains("500")
                 || text.contains("502")
-                || text.contains("503"));
+                || text.contains("503")
+                || text.contains("429"));
     let patch_failure = text.contains("failed to apply patch")
         || text.contains("could not apply patch")
         || text.contains("couldn't apply patch")
@@ -1842,6 +1843,10 @@ error: installation failed
         );
         assert_eq!(
             classify_build_failure("build", "failed to download foo.tar.gz: HTTP 502", "", None),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "failed to download foo.tar.gz: HTTP 429", "", None),
             BuildFindingClass::Source
         );
         assert_eq!(
