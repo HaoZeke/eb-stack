@@ -508,14 +508,7 @@ impl BuildTarget {
         recipe: &str,
         additional_robot_paths: &[String],
     ) -> CommandPlan {
-        let mut tokens = vec!["env".to_string()];
-        tokens.push(format!("EASYBUILD_TMPDIR={}", self.easybuild.tmp_root));
-        tokens.extend(
-            self.easybuild
-                .environment
-                .iter()
-                .map(|(name, value)| format!("{name}={value}")),
-        );
+        let mut tokens = self.easybuild_env_tokens();
         tokens.push(self.easybuild.command.clone());
         let mut robot_paths = Vec::new();
         for path in additional_robot_paths {
@@ -534,6 +527,18 @@ impl BuildTarget {
         tokens.push(format!("--buildpath={}/build", self.easybuild.work_root));
         tokens.push(recipe.to_string());
         self.route_tokens(self.runtime_tokens(tokens), true)
+    }
+
+    fn easybuild_env_tokens(&self) -> Vec<String> {
+        let mut tokens = vec!["env".to_string()];
+        tokens.push(format!("EASYBUILD_TMPDIR={}", self.easybuild.tmp_root));
+        tokens.extend(
+            self.easybuild
+                .environment
+                .iter()
+                .map(|(name, value)| format!("{name}={value}")),
+        );
+        tokens
     }
 
     /// The command that runs a verification program on the target.
@@ -712,14 +717,10 @@ pub fn doctor_target(target: &BuildTarget) -> Result<TargetDoctorReport, TargetE
         target.runtime_tokens(vec!["env".into(), "true".into()]),
         true,
     );
-    let easybuild = target.route_tokens(
-        target.runtime_tokens(vec![
-            "env".into(),
-            target.easybuild.command.clone(),
-            "--version".into(),
-        ]),
-        true,
-    );
+    let mut easybuild_probe = target.easybuild_env_tokens();
+    easybuild_probe.push(target.easybuild.command.clone());
+    easybuild_probe.push("--version".into());
+    let easybuild = target.route_tokens(target.runtime_tokens(easybuild_probe), true);
     let mut planned = vec![
         ("transport", transport),
         ("executor", executor),
@@ -1027,6 +1028,74 @@ mod tests {
             .expect("entrypoint");
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(!stdout.contains("eb:/usr/local/bin/eb"), "{stdout}");
+    }
+
+    #[test]
+    fn doctor_easybuild_probe_carries_workload_environment() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let podman = temp.path().join("podman");
+        write_executable(&podman, "#!/bin/sh\nprintf '%s\\n' \"$0\" \"$@\"\n");
+        let mut workload = host_workload("/usr/local/bin/eb");
+        workload.tmp_root = "/work/tmp".into();
+        workload.environment.insert("MUST".into(), "1".into());
+        workload.environment.insert(
+            "EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES".into(),
+            "1".into(),
+        );
+        let target = BuildTarget {
+            name: "local-rocky9".into(),
+            transport: TargetTransport::Local,
+            executor: TargetExecutor::Direct,
+            runtime: TargetRuntime::Podman {
+                image: "localhost/eb-stack-rocky9:latest".into(),
+                command: podman.to_string_lossy().into_owned(),
+                args: Vec::new(),
+                mounts: Vec::new(),
+                workdir: None,
+            },
+            easybuild: workload,
+        };
+        let report = doctor_target(&target).expect("doctor");
+        let easybuild = report
+            .checks
+            .iter()
+            .find(|check| check.layer == "easybuild")
+            .expect("easybuild check");
+        let image = "localhost/eb-stack-rocky9:latest";
+        let inner: Vec<_> = easybuild
+            .command
+            .args
+            .iter()
+            .skip_while(|token| token.as_str() != image)
+            .skip(1)
+            .cloned()
+            .collect();
+        assert_eq!(inner.first().map(String::as_str), Some("env"), "{inner:?}");
+        assert!(
+            inner
+                .iter()
+                .any(|token| token == "EASYBUILD_TMPDIR=/work/tmp"),
+            "{inner:?}"
+        );
+        assert!(inner.iter().any(|token| token == "MUST=1"), "{inner:?}");
+        assert!(
+            inner
+                .iter()
+                .any(|token| { token == "EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES=1" }),
+            "{inner:?}"
+        );
+        let eb = inner
+            .iter()
+            .position(|token| token == "/usr/local/bin/eb")
+            .expect("eb");
+        assert!(
+            inner[..eb]
+                .iter()
+                .any(|token| token == "EASYBUILD_TMPDIR=/work/tmp")
+                && inner[..eb].iter().any(|token| token == "MUST=1"),
+            "assignments must precede eb: {inner:?}"
+        );
+        assert_eq!(inner.get(eb + 1).map(String::as_str), Some("--version"));
     }
 
     #[test]
