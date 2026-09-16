@@ -864,6 +864,8 @@ pub fn classify_build_failure(
         || text.contains("locationparseerror")
         || text.contains("curl: (")
         || text.contains("unable to resolve host")
+        || text.contains("fatal: unable to access")
+        || text.contains("error 404: not found")
         || text.contains("couldn't find file") && text.contains("downloading it didn't work")
         || text.contains("download")
             && (text.contains("timed out")
@@ -2666,6 +2668,19 @@ error: installation failed
                 "",
                 None
             ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure(
+                "build",
+                "fatal: unable to access 'https://example.invalid/repo.git/': Could not resolve host",
+                "",
+                None
+            ),
+            BuildFindingClass::Source
+        );
+        assert_eq!(
+            classify_build_failure("build", "ERROR 404: Not Found.", "", None),
             BuildFindingClass::Source
         );
         assert_eq!(
