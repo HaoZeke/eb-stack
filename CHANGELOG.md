@@ -102,6 +102,8 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A download that dies on an SSL or certificate error is a Source
+  finding.
 - A download that dies with `connection reset` is a Source finding.
 - EasyBuild's `Couldn't download file` is a Source finding.
 - A failed download whose URL contains `ssh:` is still Source, not
