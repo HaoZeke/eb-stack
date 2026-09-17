@@ -19,7 +19,6 @@ easyblock = "CMakeMake"
 build_systems = ["CMake"]
 moduleclass = "geo"
 config_options = [
-  "-DCMAKE_BUILD_TYPE=Release",
   "-DASAGI=ON",
   "-DNETCDF=ON",
   "-DTESTING=ON",
