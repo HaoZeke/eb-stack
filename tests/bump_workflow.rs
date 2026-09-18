@@ -675,6 +675,15 @@ fn easybuild_bump_within_one_generation_keeps_the_dependency_floor() {
         foreign_sources: Vec::new(),
     })
     .expect("same generation bump");
+    assert!(
+        bundle
+            .plan
+            .residuals
+            .iter()
+            .all(|residual| residual.category != "unresolved-generation-dep"),
+        "same-generation version bump must not invent generation holes: {:?}",
+        bundle.plan.residuals
+    );
     let dependency = bundle.locks[0]
         .dependencies
         .iter()

@@ -14,21 +14,28 @@ packset pin
 ljos search bump
 ```
 
-The first `eb-stack package bump` is the parent when the family stays
-the same. Use `package mutate --toolchain-name …` only to change
-family (`foss` ↔ `gfbf`). Copy the parent flags. Omit
-`--toolchain-name` on bump so the source family is kept.
-Exit 1 with `residual=` means continue. Each `companion=` line is a full
-`eb-stack package …` command: run it as printed (`eval` the text after
-`companion=`). Then run the `re_run=` line the same way.
-Bump companions reprint every parent `--easyconfigs` root plus
-`--stack-policy`, `--hierarchy-fixture`, and `--contributor`. Plan
-companions omit `--hierarchy-fixture` (`package plan` has no such flag).
-A CUDA `versionsuffix` hole sources the CUDA easyconfig, not the
-unsuffixed sibling.
-Stop only when that parent command exits 0. A child exit 0 is not done.
-Do not pass `--allow-unresolved` to skip a required companion.
-Do not write a helper script and stop; run the commands.
+Read the first lines of `package bump` before you invent a second run.
+`generation_retarget=` and `version_only=` print before the robot walk.
+
+- `version_only=true` (same family, same toolchain version, `--version`
+  changed): one parent command. Expect `exit 0` and
+  `companion_count=0`. A PLUMED 2.9.2 → 2.9.3 on foss-2024a is this
+  case. Do not start a companion campaign. Do not hand-write the `.eb`.
+  `companion=` here names a dep the robot on this generation does not
+  have, not a reason to bump the rest of the stack.
+- `generation_retarget=true` (toolchain version moved, family kept):
+  the parent may exit 1 with `companion=` / `re_run=`. That loop is
+  only for this case.
+- Family change (`foss` ↔ `gfbf`) is `package mutate --toolchain-name`,
+  not bump. Omit `--toolchain-name` on bump so the source family is kept.
+
+On the builder the robot trees are local. Do not ssh or rsync a bump
+whose `--easyconfigs` paths already exist there. packset and ljos stay
+on the laptop.
+
+Do not wrap the parent in a short tool timeout and retry. A full robot
+parse takes minutes. A timeout is not `exit 0` and is not `companion=`.
+Do not start a second parent while the first is still running.
 
 Use this skill only when an EasyBuild recipe already exists. Use `skills/new-package/SKILL.md` for conda-forge or Spack imports.
 
@@ -46,14 +53,13 @@ whose top-level help lists `solve`, `bump`, and `check-recipe` is stale.
 Use the current checkout on the configured builder. Do not use a stale
 `eb-stack` on PATH unless that check passes.
 
-Robot trees and `--out-dir` live on that builder. Do not `test -d` those
-paths on this machine. The pinned packset `package-bump` states the same
-contract (`ljos search bump`).
+Robot trees and `--out-dir` live on the builder. From a laptop agent, do
+not `test -d` those paths. If the agent is already on that builder, they
+are local. The pinned packset `package-bump` states the same contract
+(`ljos search bump`).
 
-`package bump --easyconfigs <robot>` parses every `*.eb` in that tree before
-it prints `companion=` / `re_run=`. A full upstream robot is thousands of
-files and can take many minutes. Do not wrap the parent command in a 300s
-tool timeout; wait for the process to exit. A timeout is not `exit 0`.
+`package bump --easyconfigs <robot>` parses every `*.eb` in that tree
+before it prints `companion=` / `re_run=`. Wait for the process to exit.
 
 ## Mechanical contract
 
@@ -114,12 +120,25 @@ becomes the target generation's `GCCcore`, not an unresolved leftover on
 12.3.0. Robot-cased names (`hdf5` vs `HDF5`) are one module.
 
 A dependency the source recipe still declares, with no candidate on the
-target generation, is a blocking `unresolved-generation-dep`. The parent
-exits 1 and prints `companion=` / `re_run=`. Do not pass
-`--allow-unresolved` to skip it. Names listed in `exclude_from_solve` are
-the Judgment drop (`version-bump-dropped-dep`); that flag is only for a
-dep the new version actually stopped needing. Lock selections that the
-source file never declared are inserted.
+target generation, is a blocking `unresolved-generation-dep`. On a
+generation retarget the parent exits 1 and prints `companion=` /
+`re_run=`. Each `companion=` line is a full `eb-stack package …`
+command: `eval` the text after `companion=`, then `eval` `re_run=`.
+Bump companions reprint every parent `--easyconfigs` root plus
+`--stack-policy`, `--hierarchy-fixture`, and `--contributor`. Plan
+companions omit `--hierarchy-fixture`. A CUDA `versionsuffix` hole
+sources the CUDA easyconfig, not the unsuffixed sibling. Stop only when
+that parent exits 0. A child exit 0 is not done. Do not pass
+`--allow-unresolved` to skip a required companion. Do not write a
+helper script and stop.
+
+On `version_only=true`, that loop is the wrong move. Fix the missing
+robot entry or the source pin; do not walk companions as a campaign.
+
+Names listed in `exclude_from_solve` are the Judgment drop
+(`version-bump-dropped-dep`); that flag is only for a dep the new
+version actually stopped needing. Lock selections that the source file
+never declared are inserted.
 
 ## When the target generation cannot build anything
 
@@ -184,18 +203,23 @@ Use repeatable `--dep NAME=VERSION` only for a package-specific hard override. I
 
 ## Run an application version bump
 
+Same generation, one command. Expect `version_only=true` and `exit 0`:
+
 ```sh
 eb-stack package bump \
-  --source GROMACS-2024.4-foss-2023b.eb \
+  --source PLUMED-2.9.2-foss-2024a.eb \
   --toolchain-version 2024a \
-  --version 2025.0 \
+  --version 2.9.3 \
   --source-checksum SHA256 \
   --easyconfigs /path/to/robot \
-  --stack-policy stacks/site.toml \
-  --out-dir work/gromacs-2025
+  --easyconfigs /path/to/site-overlay \
+  --out-dir work/plumed-2.9.3
 ```
 
-Verify source URLs, checksum ordering, and patch applicability for an application version change. Resolvo handles the dependency closure; it cannot prove that an old patch applies to new source.
+A version change that also moves the toolchain is a generation retarget
+plus `--version`. Verify source URLs, checksum ordering, and patch
+applicability. Resolvo handles the dependency closure; it cannot prove
+that an old patch applies to new source.
 
 ## Verify the bundle
 

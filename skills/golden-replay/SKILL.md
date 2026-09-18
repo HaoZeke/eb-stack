@@ -17,10 +17,12 @@ packset pin
 ljos search bump
 ```
 
-Then `eb-stack package bump` the parent. Each `companion=` line is a full
+Then `eb-stack package bump` the parent. This overlay is a generation
+retarget (`generation_retarget=true`). Each `companion=` line is a full
 `eb-stack package …` command: `eval` the text after `companion=`. Then
 `eval` `re_run=`. Stop only when the parent exits 0. Do not write a
-helper script and stop.
+helper script and stop. A `version_only=true` bump is not this overlay;
+see `skills/annual-bump/SKILL.md`.
 
 ## What compose must emit
 

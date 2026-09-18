@@ -583,12 +583,12 @@ class Orbit(CMakePackage):
             .and_then(|dependency| dependency.constraint.as_deref())
     };
 
-    assert_eq!(constraint("major"), Some(">=3,<4"));
-    assert_eq!(constraint("minor"), Some(">=3.2,<3.3"));
+    assert_eq!(constraint("major"), Some("3.*"));
+    assert_eq!(constraint("minor"), Some("3.2.*"));
     assert_eq!(constraint("exact"), Some("==3.2"));
-    assert_eq!(constraint("upper"), Some("<4"));
+    assert_eq!(constraint("upper"), Some("<3||3.*"));
     assert_eq!(constraint("lower"), Some(">=3"));
-    assert_eq!(constraint("bounded"), Some(">=1.2,<1.5"));
+    assert_eq!(constraint("bounded"), Some(">=1.2,<1.4||1.4.*"));
 }
 
 #[test]

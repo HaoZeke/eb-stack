@@ -2448,10 +2448,29 @@ fn opt_str_field(
 
 fn checksum_dict_digest(items: &[(String, Value)]) -> Option<String> {
     let host = std::env::consts::ARCH;
-    let preferred = items
+    if let Some((_, value)) = items
         .iter()
-        .find(|(key, _)| checksum_key_names_arch(key, host));
-    preferred.and_then(|(_, value)| checksum_strings_from_value(value).into_iter().next())
+        .find(|(key, _)| checksum_key_names_arch(key, host))
+    {
+        return checksum_strings_from_value(value).into_iter().next();
+    }
+    // Filename-keyed dicts have no arch token. A multi-arch dict that
+    // omitted this host must not fall through to another arch's hash.
+    if items
+        .iter()
+        .any(|(key, _)| checksum_key_names_any_arch(key))
+    {
+        return None;
+    }
+    items
+        .iter()
+        .find_map(|(_, value)| checksum_strings_from_value(value).into_iter().next())
+}
+
+fn checksum_key_names_any_arch(key: &str) -> bool {
+    ["x86_64", "aarch64", "ppc64le", "riscv64", "ppc64"]
+        .iter()
+        .any(|arch| checksum_key_names_arch(key, arch))
 }
 
 fn checksum_key_names_arch(key: &str, arch: &str) -> bool {
@@ -4377,6 +4396,8 @@ builddependencies = [
         assert!(!checksum_key_names_arch("sdk_aarch64.tar.gz", "x86_64"));
         assert!(checksum_key_names_arch("sdk_aarch64.tar.gz", "aarch64"));
         assert!(!checksum_key_names_arch("sdk_x86_64.tar.gz", "aarch64"));
+        assert!(checksum_key_names_any_arch("sdk_riscv64.tar.gz"));
+        assert!(!checksum_key_names_any_arch("app-1.0.tar.gz"));
     }
 
     #[test]

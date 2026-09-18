@@ -16,7 +16,7 @@ use eb_stack::{
     lint_style, load_json_file, lock_to_cyclonedx, packaging_gate, parse_easyconfig_trees,
     plan_new_package, plan_package_bump, plan_package_closure_with_sources,
     resolve_easyconfig_file, resolve_ingest_source, resolve_package_catalog_layers,
-    solve_from_easyconfigs_with_baseline_version_and_extras, write_json_pretty,
+    solve_from_easyconfigs_with_baseline_version_and_extras, toolchains_match, write_json_pretty,
     write_package_bundle, write_package_closure, BumpPackageRequest, ForeignFormat,
     NewPackageRequest, PackageBundle, PackageCatalogLayer, SolveExtraOut, StackLock, Toolchain,
 };
@@ -585,6 +585,14 @@ fn run_package_bump(args: PackageBumpArgs, mode: BumpMode) -> Result<()> {
     println!("mode={}", mode.verb());
     let toolchain = toolchain(&toolchain_name, &args.toolchain_version);
     println!("toolchain={}-{}", toolchain.name, toolchain.version);
+    let generation_retarget = !toolchains_match(&source_recipe.toolchain, &toolchain);
+    println!("generation_retarget={generation_retarget}");
+    let version_only = args
+        .version
+        .as_deref()
+        .is_some_and(|version| version != source_recipe.version)
+        && !generation_retarget;
+    println!("version_only={version_only}");
     let stack_policy = if let Some(path) = args.stack_policy.as_deref() {
         load_stack_policy(path)?
     } else {
@@ -651,6 +659,7 @@ fn run_package_bump(args: PackageBumpArgs, mode: BumpMode) -> Result<()> {
             .first()
             .map(|path| path.display().to_string())
             .unwrap_or_default();
+        let mut companion_count = 0usize;
         for residual in &bundle.plan.residuals {
             if residual.category != "unresolved-generation-dep" {
                 continue;
@@ -660,6 +669,7 @@ fn run_package_bump(args: PackageBumpArgs, mode: BumpMode) -> Result<()> {
             let req = words.next().unwrap_or_default();
             let pin = req.trim_start_matches('=').trim_start_matches('=');
             let pin = if pin.is_empty() { None } else { Some(pin) };
+            companion_count += 1;
             println!(
                 "companion={}",
                 eb_stack::companion_argv_with(
@@ -734,10 +744,18 @@ fn run_package_bump(args: PackageBumpArgs, mode: BumpMode) -> Result<()> {
             " --out-dir {}",
             eb_stack::target::shell_quote(&out_dir.display().to_string())
         );
+        println!("companion_count={companion_count}");
         println!("done_when=exit 0");
-        println!("next=eval each companion= line as a shell command, then eval re_run=");
+        if version_only {
+            println!(
+                "next=version_only bump; companion= names a dep missing from this generation robot, not a campaign"
+            );
+        } else {
+            println!("next=eval each companion= line as a shell command, then eval re_run=");
+        }
         anyhow::bail!("unresolved on this generation; run each companion= line, then re_run=");
     }
+    println!("companion_count=0");
     println!("done_when=exit 0");
     Ok(())
 }

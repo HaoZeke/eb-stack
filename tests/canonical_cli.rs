@@ -533,6 +533,82 @@ fn package_bump_cli_prints_copied_sibling_patches() {
 }
 
 #[test]
+fn package_bump_same_generation_version_prints_no_companions() {
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("PLUMED-2.9.2-foss-2024a.eb");
+    let robot = temp.path().join("robot");
+    std::fs::create_dir_all(&robot).expect("robot");
+    std::fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'PLUMED'\nversion = '2.9.2'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2024a'}\n\
+         sources = ['plumed-2.9.2.tgz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [('GSL', '2.8')]\n\
+         moduleclass = 'chem'\n",
+    )
+    .expect("source recipe");
+    std::fs::write(
+        robot.join("GSL-2.8-foss-2024a.eb"),
+        "easyblock = 'ConfigureMake'\nname = 'GSL'\nversion = '2.8'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'GSL'\n\
+         toolchain = {'name': 'foss', 'version': '2024a'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'numlib'\n",
+    )
+    .expect("gsl candidate");
+    let output = temp.path().join("bundle");
+    let result = Command::new(binary)
+        .args([
+            "package",
+            "bump",
+            "--source",
+            source.to_str().unwrap(),
+            "--toolchain-version",
+            "2024a",
+            "--version",
+            "2.9.3",
+            "--source-checksum",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--easyconfigs",
+            robot.to_str().unwrap(),
+            "--out-dir",
+            output.to_str().unwrap(),
+        ])
+        .output()
+        .expect("same-generation version bump");
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        result.status.success(),
+        "same-generation version bump must exit 0:\nstdout={stdout}\nstderr={stderr}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line == "generation_retarget=false"),
+        "must label a same-generation bump before companions can be invented:\n{stdout}"
+    );
+    assert!(
+        stdout.lines().any(|line| line == "version_only=true"),
+        "must label a version-only bump:\n{stdout}"
+    );
+    assert!(
+        stdout.lines().any(|line| line == "companion_count=0"),
+        "must print companion_count=0:\n{stdout}"
+    );
+    assert!(
+        !stdout.lines().any(|line| line.starts_with("companion=")),
+        "version-only bump must not emit companion=:\n{stdout}"
+    );
+    assert!(
+        !stdout.lines().any(|line| line.starts_with("re_run=")),
+        "version-only bump must not emit re_run=:\n{stdout}"
+    );
+}
+
+#[test]
 fn package_bump_re_run_keeps_contributor() {
     let binary = env!("CARGO_BIN_EXE_eb-stack");
     let temp = tempfile::tempdir().expect("tempdir");
@@ -590,6 +666,16 @@ fn package_bump_re_run_keeps_contributor() {
     assert!(
         !result.status.success(),
         "unresolved generation dep must fail: {combined}"
+    );
+    assert!(
+        combined
+            .lines()
+            .any(|line| line == "generation_retarget=true"),
+        "generation move must print generation_retarget=true: {combined}"
+    );
+    assert!(
+        combined.lines().any(|line| line == "version_only=false"),
+        "generation move is not version_only: {combined}"
     );
     let re_run = combined
         .lines()

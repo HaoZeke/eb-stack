@@ -4,6 +4,20 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+### Changed
+
+- `package bump` prints `generation_retarget=`, `version_only=`, and
+  `companion_count=` before a companion campaign can be invented. A
+  same-generation version bump (PLUMED 2.9.2 → 2.9.3 on foss-2024a) is
+  `version_only=true` and must exit 0 with `companion_count=0`. The
+  companion / `re_run=` loop is only for a generation retarget. MCP
+  `eb_package_bump` carries the same fields.
+- Filename-keyed `checksums` dicts (`{'app-1.0.tar.gz': …}` or a typed
+  `('sha256', hex)` value) contribute that digest. Only a multi-arch
+  dict that omits this host stays empty.
+- Spack `@3` stays `3.*` in the shared language. Expanding a prefix to
+  `>=3,<4` admitted the next series pre-release.
+
 ### Added
 
 - Overlay planning treats existing robot modules as leaves: a `Python`

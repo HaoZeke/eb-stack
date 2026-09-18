@@ -675,4 +675,7 @@ fn mcp_package_bump_vanished_dep_is_error() {
     assert_eq!(response["result"]["isError"], true, "{response}");
     let body = &response["result"]["structuredContent"];
     assert_eq!(body["claims"]["resolves"], false, "{body}");
+    assert_eq!(body["generation_retarget"], true, "{body}");
+    assert_eq!(body["version_only"], false, "{body}");
+    assert_eq!(body["companion_count"], 1, "{body}");
 }

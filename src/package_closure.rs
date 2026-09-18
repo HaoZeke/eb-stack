@@ -634,9 +634,9 @@ impl ClosureState<'_> {
         stack_policy: &StackPolicy,
         path: &[String],
     ) -> Result<PackageBundle, PackageClosureError> {
-        // A language root already on the robot (SciPy-bundle / PyTorch) must
-        // not hole-fill leftovers as companions. complete_package_bundle
-        // short-circuits to the same already-provided residual as plan_new_package.
+        // A language root already on the robot must not hole-fill leftovers
+        // as companions. complete_package_bundle short-circuits to the same
+        // already-provided residual as plan_new_package.
         if language_root_already_provided(prepared.plan(), self.universe()) {
             return self.complete_prepared(prepared, stack_policy);
         }

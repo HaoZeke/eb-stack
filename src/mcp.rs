@@ -534,10 +534,16 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
         .unwrap_or_default();
     let toolchain_name = target.name.clone();
     let toolchain_version = target.version.clone();
+    let generation_retarget = !crate::toolchains_match(&recipe.toolchain, &target);
+    let requested_version = optional_string(arguments, "version");
+    let version_only = requested_version
+        .as_deref()
+        .is_some_and(|version| version != recipe.version)
+        && !generation_retarget;
     let bundle = plan_package_bump(&BumpPackageRequest {
         source: required_path(arguments, "source")?,
         toolchain: target,
-        version: optional_string(arguments, "version"),
+        version: requested_version,
         source_checksum: optional_string(arguments, "source_checksum"),
         easyconfig_roots: with_outdir_overlay(easyconfigs.clone(), &output),
         hierarchy_fixture: optional_path(arguments, "hierarchy_fixture"),
@@ -616,6 +622,9 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
         "patches": written.patches,
         "residuals": residuals,
         "companions": companions,
+        "generation_retarget": generation_retarget,
+        "version_only": version_only,
+        "companion_count": companions.len(),
         "ok": !blocking,
         "claims": {"resolves": !blocking, "builds": false, "binary_verified": false}
     }))
