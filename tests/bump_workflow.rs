@@ -961,6 +961,14 @@ fn package_config_upserts_modulename_and_commit_on_version_bump() {
         "stale checksum must be cleared:\n{text}"
     );
     assert!(
+        bundle.plan.residuals.iter().any(|residual| {
+            residual.id == "source:missing-sha256"
+                && residual.severity == ResidualSeverity::Judgment
+        }),
+        "EasyBuild cleared digest is judgment, not blocking: {:?}",
+        bundle.plan.residuals
+    );
+    assert!(
         bundle
             .plan
             .sources

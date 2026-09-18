@@ -609,6 +609,105 @@ fn package_bump_same_generation_version_prints_no_companions() {
 }
 
 #[test]
+fn package_bump_cleared_checksum_exits_0() {
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("PLUMED-2.9.3-foss-2024a.eb");
+    let robot = temp.path().join("robot");
+    std::fs::create_dir_all(&robot).expect("robot");
+    std::fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'PLUMED'\nversion = '2.9.3'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2024a'}\n\
+         sources = [SOURCE_TGZ]\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [('GSL', '2.8')]\n\
+         moduleclass = 'chem'\n",
+    )
+    .expect("source recipe");
+    std::fs::write(
+        robot.join("GSL-2.8-foss-2024a.eb"),
+        "easyblock = 'ConfigureMake'\nname = 'GSL'\nversion = '2.8'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'GSL'\n\
+         toolchain = {'name': 'foss', 'version': '2024a'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'numlib'\n",
+    )
+    .expect("gsl candidate");
+    let sibling_hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    std::fs::write(
+        robot.join("PLUMED-2.9.4-foss-2025a.eb"),
+        format!(
+            "easyblock = 'ConfigureMake'\nname = 'PLUMED'\nversion = '2.9.4'\n\
+             homepage = 'https://example.invalid/'\ndescription = 'Sibling'\n\
+             toolchain = {{'name': 'foss', 'version': '2025a'}}\n\
+             sources = [SOURCE_TGZ]\n\
+             checksums = ['{sibling_hash}']\n\
+             dependencies = [('GSL', '2.8')]\n\
+             moduleclass = 'chem'\n"
+        ),
+    )
+    .expect("same-version sibling");
+    let output = temp.path().join("bundle");
+    let result = Command::new(binary)
+        .args([
+            "package",
+            "bump",
+            "--source",
+            source.to_str().unwrap(),
+            "--toolchain-version",
+            "2024a",
+            "--version",
+            "2.9.4",
+            "--easyconfigs",
+            robot.to_str().unwrap(),
+            "--out-dir",
+            output.to_str().unwrap(),
+        ])
+        .output()
+        .expect("version-only bump without --source-checksum");
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        result.status.success(),
+        "cleared EasyBuild checksum is judgment, not a blocking exit:\nstdout={stdout}\nstderr={stderr}"
+    );
+    assert!(
+        stdout.lines().any(|line| line == "version_only=true"),
+        "must stay a version-only bump:\n{stdout}"
+    );
+    assert!(
+        stdout.lines().any(|line| line == "companion_count=0"),
+        "must print companion_count=0:\n{stdout}"
+    );
+    assert!(
+        !stdout.lines().any(|line| line.starts_with("companion=")),
+        "cleared checksum must not invent companions:\n{stdout}"
+    );
+    assert!(
+        !stdout.lines().any(|line| line.starts_with("re_run=")),
+        "cleared checksum must not invent re_run=:\n{stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("residual=checksum")),
+        "must still print the missing-sha256 residual:\n{stdout}"
+    );
+    let emitted =
+        std::fs::read_to_string(output.join("easyconfigs/p/PLUMED/PLUMED-2.9.4-foss-2024a.eb"))
+            .unwrap_or_else(|_| format!("missing recipe; stdout={stdout}"));
+    assert!(
+        emitted.contains("checksums = ['']") || emitted.contains("checksums = [\"\"]"),
+        "cleared source slot must stay empty:\n{emitted}"
+    );
+    assert!(
+        !emitted.contains(sibling_hash),
+        "sibling generation hash must not fill the cleared slot:\n{emitted}"
+    );
+}
+
+#[test]
 fn package_bump_re_run_keeps_contributor() {
     let binary = env!("CARGO_BIN_EXE_eb-stack");
     let temp = tempfile::tempdir().expect("tempdir");

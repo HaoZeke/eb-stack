@@ -109,9 +109,13 @@ A version bump without `--source-checksum` and without
 `source_checksums` in `--package-config` clears the old digest to `''`
 and clears `local_commit_id` / a literal `git_config` commit hash. That
 is required: the previous tarball's hash is not a claim about the new
-artifact. Put the inject digest in `source_checksums` on the package
-config once `eb --inject-checksums` has measured it. `--source-checksum`
-on the command line still wins. Do not copy a conda-forge or Spack
+artifact. The parent still exits 0: `source:missing-sha256` is Judgment
+(`residual=checksum …`) and `companion_count=0`. Do not treat that
+residual as a companion campaign. A same-version sibling may keep its
+patch hashes; it must not fill the cleared source slot. Put the inject
+digest in `source_checksums` on the package config once
+`eb --inject-checksums` has measured it. `--source-checksum` on the
+command line still wins. Do not copy a conda-forge, Spack, or sibling
 checksum onto a different artifact class (`skills/verify-recipe/SKILL.md`).
 
 An explicit 4-tuple toolchain is remapped through `--hierarchy-fixture`

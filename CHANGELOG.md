@@ -12,6 +12,11 @@ All notable changes to this project are documented here.
   `version_only=true` and must exit 0 with `companion_count=0`. The
   companion / `re_run=` loop is only for a generation retarget. MCP
   `eb_package_bump` carries the same fields.
+- A version bump that clears the source digest to `''` keeps that empty
+  slot when a same-version sibling's `checksums` list is adopted. The
+  sibling supplies patch hashes only. EasyBuild-origin
+  `source:missing-sha256` is Judgment, so the parent still exits 0 with
+  `companion_count=0`. A foreign origin without a sha256 stays Blocking.
 - Filename-keyed `checksums` dicts (`{'app-1.0.tar.gz': …}` or a typed
   `('sha256', hex)` value) contribute that digest. Only a multi-arch
   dict that omits this host stays empty.

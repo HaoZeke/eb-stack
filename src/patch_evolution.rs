@@ -270,8 +270,9 @@ fn adopt_sibling_checksum_block(text: &str, sibling_text: &str) -> Result<String
                 &sibling_text[their_start..their_end],
                 &text[our_end..]
             );
-            // Emit already wrote `--source-checksum` into the first slot.
-            // The sibling list is the patch hashes; the CLI digest wins.
+            // Emit already wrote `--source-checksum` or a cleared `''` into
+            // the first slot. The sibling list is the patch hashes; the
+            // emitted source digest wins, including an empty slot.
             Ok(keep_emitted_source_digest(text, &spliced))
         }
         (Some(_), None) => Ok(retain_source_checksum_only(text)),
@@ -318,8 +319,10 @@ fn is_checksum_algorithm_token(token: &str) -> bool {
     )
 }
 
-/// Span of the first SHA-256 in the `checksums` list (the source slot).
-/// A dict key (`{'file.tar.gz': '...'}`) is skipped so the value is the slot.
+/// Span of the first source digest in the `checksums` list.
+/// An empty quoted token (`''`) is the cleared source slot after a
+/// version bump. A dict key (`{'file.tar.gz': '...'}`) is skipped so
+/// the value is the slot.
 fn first_source_sha256_span(text: &str) -> Option<(usize, usize)> {
     let (assign_start, assign_end) = find_list_assignment_span(text, "checksums").ok()??;
     let block = &text[assign_start..assign_end];
@@ -361,7 +364,10 @@ fn first_source_sha256_span(text: &str) -> Option<(usize, usize)> {
             if is_checksum_algorithm_token(tok) {
                 continue;
             }
-            if is_sha256_hex(tok) {
+            // A version bump clears the source slot to ''. That empty token
+            // is still the source digest: keep it so a sibling list cannot
+            // fill a different artifact's hash.
+            if tok.is_empty() || is_sha256_hex(tok) {
                 return Some((assign_start + tok_start, assign_start + tok_end));
             }
             return None;
@@ -807,7 +813,7 @@ mod tests {
     }
 
     #[test]
-    fn a_cleared_source_digest_does_not_block_sibling_adoption() {
+    fn a_cleared_source_digest_keeps_the_empty_slot_when_sibling_is_adopted() {
         let dir = tempfile::tempdir().unwrap();
         let sib_path = dir.path().join("sib.eb");
         let sib = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -821,8 +827,18 @@ mod tests {
         .unwrap();
         let ours = "name = 'X'\npatches = ['old.patch']\nchecksums = ['']\nmoduleclass = 'lib'\n";
         let out = adopt_sibling_patch_block(ours, sib_path.to_str().unwrap()).unwrap();
-        assert!(out.contains(&format!("'{sib}'")), "{out}");
-        assert!(out.contains(&format!("'{patch}'")), "{out}");
+        assert!(
+            !out.contains(sib),
+            "cleared source slot must not take the sibling tarball hash:\n{out}"
+        );
+        assert!(
+            out.contains("''"),
+            "cleared source digest must stay the empty slot:\n{out}"
+        );
+        assert!(
+            out.contains(&format!("'{patch}'")),
+            "sibling patch hash is still the patch slot:\n{out}"
+        );
     }
 
     #[test]

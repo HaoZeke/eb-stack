@@ -33,7 +33,9 @@ Pass the overlay as a later `--easyconfigs`.
 No EasyBuild recipe: `package plan` the foreign source with
 `--package-config`. Do not write a `.eb` by hand.
 
-A version bump clears the old checksum and git commit. Fill with
-`eb --inject-checksums`. Do not copy hashes across artifact classes.
+A version bump clears the old checksum and git commit. The parent
+exits 0 with `residual=checksum` as Judgment and `companion_count=0`.
+Fill with `eb --inject-checksums`. Do not copy hashes across artifact
+classes, including a same-version sibling's source digest.
 Site generation is the site default. Package extras belong in
 `--package-config`.

@@ -933,7 +933,11 @@ fn refresh_checksum_residuals(plan: &mut PackagePlan) {
             id: "source:missing-sha256".into(),
             stage: ResidualStage::Normalize,
             category: "checksum".into(),
-            severity: ResidualSeverity::Blocking,
+            severity: if plan.origin == PackageOrigin::EasyBuild {
+                ResidualSeverity::Judgment
+            } else {
+                ResidualSeverity::Blocking
+            },
             summary: "one or more source artifacts have no sha256".into(),
             evidence: None,
             provenance: None,
@@ -2615,6 +2619,67 @@ mod tests {
             pins: Vec::new(),
             exclusions: Vec::new(),
         }
+    }
+
+    fn empty_tarball_plan(origin: PackageOrigin) -> PackagePlan {
+        PackagePlan {
+            schema_version: PACKAGE_SCHEMA_VERSION,
+            origin,
+            package: PackageMetadata {
+                name: "Tarball".into(),
+                version: "1.0".into(),
+                upstream_version: None,
+                homepage: None,
+                description: None,
+                license: None,
+            },
+            sources: vec![SourceArtifact {
+                filename: Some("tarball-1.0.tar.gz".into()),
+                ..SourceArtifact::default()
+            }],
+            dependencies: Vec::new(),
+            rules: Vec::new(),
+            build: BuildSpec {
+                toolchain: toolchain("foss", "2024a"),
+                easyblock: None,
+                build_systems: Vec::new(),
+                source_root: None,
+                config_options: Vec::new(),
+                moduleclass: None,
+                patches: Vec::new(),
+                easyconfig_parameters: BTreeMap::new(),
+            },
+            profiles: Vec::new(),
+            outputs: Vec::new(),
+            residuals: Vec::new(),
+            overlay_extensions: Vec::new(),
+            package_index: Default::default(),
+        }
+    }
+
+    #[test]
+    fn easybuild_missing_sha256_is_judgment() {
+        let mut plan = empty_tarball_plan(PackageOrigin::EasyBuild);
+        refresh_checksum_residuals(&mut plan);
+        let residual = plan
+            .residuals
+            .iter()
+            .find(|residual| residual.id == "source:missing-sha256")
+            .expect("missing-sha256 residual");
+        assert_eq!(residual.severity, ResidualSeverity::Judgment);
+        assert_eq!(residual.category, "checksum");
+    }
+
+    #[test]
+    fn foreign_missing_sha256_stays_blocking() {
+        let mut plan = empty_tarball_plan(PackageOrigin::Spack);
+        refresh_checksum_residuals(&mut plan);
+        let residual = plan
+            .residuals
+            .iter()
+            .find(|residual| residual.id == "source:missing-sha256")
+            .expect("missing-sha256 residual");
+        assert_eq!(residual.severity, ResidualSeverity::Blocking);
     }
 
     #[test]
