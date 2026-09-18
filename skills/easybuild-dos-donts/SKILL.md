@@ -31,7 +31,10 @@ around those gates plus contribution practice.
    `BUILD_TESTS=ON`) *and* run them (`runtest`). Prefer a minor upstream
    release over an EB patch that fakes green (#26480: "We typically do prefer
    to run unit tests (if they exist) to validate the sanity of the
-   installation").
+   installation"). `skipsteps = ['test']` is the same class
+   (`EB_MAINT_TESTS_OFF`). A CUDA + usempi recipe whose easyblock defaults
+   MPI test ranks to `$parallel` needs `mpi_numprocs` pinned
+   (`EB_MAINT_MPI_TEST_RANKS`); do not skip the suite.
 7. **Keep recipes readable.** Short configopts; prefer Meson/CMake options over
    shell pipelines.
 8. **Build fat.** Enable every optional feature whose dependencies exist in

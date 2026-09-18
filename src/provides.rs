@@ -107,6 +107,16 @@ struct OverlayPolicy {
     build_requires: BuildRequires,
     #[serde(default)]
     python_provides: PythonProvides,
+    #[serde(default)]
+    mpi_test_ranks: MpiTestRanks,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct MpiTestRanks {
+    #[serde(default)]
+    names: Vec<String>,
+    #[serde(default)]
+    ranks: u32,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -206,6 +216,52 @@ pub fn overlay_package_identity(name: &str) -> String {
         .get(&identity)
         .cloned()
         .unwrap_or(identity)
+}
+
+/// MPI test rank count the overlay policy pins for this package, when the
+/// easyblock would otherwise take `$parallel`.
+pub fn mpi_test_rank_pin(package: &str) -> Option<u32> {
+    let identity = crate::package_sources::package_identity(package);
+    let policy = overlay_policy();
+    let listed = policy
+        .mpi_test_ranks
+        .names
+        .iter()
+        .any(|name| crate::package_sources::package_identity(name) == identity);
+    if !listed || policy.mpi_test_ranks.ranks == 0 {
+        return None;
+    }
+    Some(policy.mpi_test_ranks.ranks)
+}
+
+/// Whether this recipe text is a CUDA + usempi build that still leaves MPI
+/// test ranks to the easyblock default.
+pub fn missing_mpi_test_rank_pin(package: &str, text: &str) -> bool {
+    mpi_test_rank_pin(package).is_some()
+        && recipe_has_usempi(text)
+        && recipe_has_cuda(text)
+        && !recipe_has_mpi_numprocs(text)
+}
+
+fn recipe_has_usempi(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("usempi") && (lower.contains("true") || lower.contains("'true'"))
+}
+
+fn recipe_has_cuda(text: &str) -> bool {
+    text.to_ascii_lowercase().contains("cuda")
+}
+
+fn recipe_has_mpi_numprocs(text: &str) -> bool {
+    text.lines().any(|line| {
+        line.trim_start().strip_prefix('#').is_none()
+            && line
+                .split('#')
+                .next()
+                .unwrap_or("")
+                .trim_start()
+                .starts_with("mpi_numprocs")
+    })
 }
 
 /// The module name an alias maps a foreign name to, or the name unchanged.

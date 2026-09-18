@@ -42,3 +42,10 @@ marker_crates = ["pyo3", "pyo3-ffi", "maturin", "numpy"]
 # any module that ships the name.
 [python_provides]
 names = ["setuptools", "pip", "wheel"]
+
+# Easyblocks that default MPI test ranks to $parallel. A CUDA + usempi
+# recipe then launches one rank per core on a single device. Pin the
+# test rank count instead of skipping the test step.
+[mpi_test_ranks]
+names = ["gromacs"]
+ranks = 2

@@ -19,5 +19,6 @@ Reviewer quotes (PR #26480):
 - "No need to specify the toolchain here - in fact we only hard-code the
   toolchain for the dependency in very exceptional cases."
 
-Codes: `EB_MAINT_THIN_BUILD`, `EB_MAINT_TESTS_OFF`, `EB_MAINT_DEP_TOOLCHAIN_PIN`
-(all warnings; the #26435 classes stay the hard errors).
+Codes: `EB_MAINT_THIN_BUILD`, `EB_MAINT_TESTS_OFF`, `EB_MAINT_DEP_TOOLCHAIN_PIN`,
+`EB_MAINT_MPI_TEST_RANKS` (all warnings; the #26435 classes stay the hard
+errors). `skipsteps = ['test']` is `EB_MAINT_TESTS_OFF`.

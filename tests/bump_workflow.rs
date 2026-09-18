@@ -426,6 +426,110 @@ fn version_bump_adopts_the_same_version_siblings_patch_block() {
 }
 
 #[test]
+fn version_bump_pins_mpi_test_ranks_on_a_cuda_usempi_policy_package() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("GROMACS-2024.3-foss-2024a-CUDA-12.6.0.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'GROMACS'\nversion = '2024.3'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2024a'}\n\
+         toolchainopts = {'openmp': True, 'usempi': True}\n\
+         versionsuffix = '-CUDA-12.6.0'\n\
+         sources = ['gromacs-2024.3.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [('CUDA', '12.6.0', '', SYSTEM)]\n\
+         moduleclass = 'bio'\n",
+    )
+    .expect("source recipe");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2024a".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: Some("2024.4".into()),
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
+    })
+    .expect("cuda usempi version bump");
+    let text = &bundle.easyconfigs[0].text;
+    assert!(
+        text.contains("mpi_numprocs = 2"),
+        "GPU MPI tests must not inherit $parallel as NUMPROC:\n{text}"
+    );
+    assert!(
+        !text.contains("skipsteps"),
+        "a missing rank pin is not a reason to drop the test step:\n{text}"
+    );
+}
+
+#[test]
+fn version_bump_does_not_invent_mpi_test_ranks_off_policy() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Alpha-1.0-foss-2024a-CUDA-12.6.0.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'Alpha'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2024a'}\n\
+         toolchainopts = {'openmp': True, 'usempi': True}\n\
+         versionsuffix = '-CUDA-12.6.0'\n\
+         sources = ['alpha-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [('CUDA', '12.6.0', '', SYSTEM)]\n\
+         moduleclass = 'bio'\n",
+    )
+    .expect("source recipe");
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2024a".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: Some("1.1".into()),
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: Vec::new(),
+        foreign_sources: Vec::new(),
+    })
+    .expect("off-policy cuda bump");
+    let text = &bundle.easyconfigs[0].text;
+    assert!(
+        !text.contains("mpi_numprocs"),
+        "only overlay-policy names get a rank pin:\n{text}"
+    );
+}
+
+#[test]
 fn version_bump_keeps_cli_source_checksum_when_adopting_sibling_checksums() {
     let temp = tempfile::tempdir().expect("tempdir");
     let source = temp.path().join("Beta-1.0-GCCcore-14.3.0.eb");

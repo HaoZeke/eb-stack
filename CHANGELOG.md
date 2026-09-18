@@ -17,6 +17,10 @@ All notable changes to this project are documented here.
   sibling supplies patch hashes only. EasyBuild-origin
   `source:missing-sha256` is Judgment, so the parent still exits 0 with
   `companion_count=0`. A foreign origin without a sha256 stays Blocking.
+- `skipsteps = ['test']` is `EB_MAINT_TESTS_OFF`. A CUDA + usempi recipe
+  whose overlay policy lists the package gets `mpi_numprocs` pinned on
+  bump (default 2) instead of inheriting `$parallel` as NUMPROC, and
+  `recipe lint` warns `EB_MAINT_MPI_TEST_RANKS` when that pin is missing.
 - Filename-keyed `checksums` dicts (`{'app-1.0.tar.gz': …}` or a typed
   `('sha256', hex)` value) contribute that digest. Only a multi-arch
   dict that omits this host stays empty.

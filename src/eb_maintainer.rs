@@ -412,7 +412,74 @@ pub fn check_fat_build(text: &str) -> Vec<MaintainerFinding> {
         ));
     }
 
+    if skipsteps_includes_test(text) {
+        out.push(MaintainerFinding::warning(
+            "EB_MAINT_TESTS_OFF",
+            "skipsteps drops the test step; pin MPI test ranks or fix the failing test instead of skipping the suite (easybuild-easyconfigs #26480 review)".to_string(),
+            Some("skipsteps includes 'test'".into()),
+        ));
+    }
+
+    if let Some(name) = recipe_name_from_text(text) {
+        if crate::provides::missing_mpi_test_rank_pin(&name, text) {
+            if let Some(ranks) = crate::provides::mpi_test_rank_pin(&name) {
+                out.push(MaintainerFinding::warning(
+                    "EB_MAINT_MPI_TEST_RANKS",
+                    format!(
+                        "CUDA + usempi leaves MPI test ranks at $parallel; set mpi_numprocs = {ranks} so a single-GPU node does not launch one rank per core"
+                    ),
+                    Some("mpi_numprocs is unset".into()),
+                ));
+            }
+        }
+    }
+
     out
+}
+
+fn skipsteps_includes_test(text: &str) -> bool {
+    let mut in_skip = false;
+    for line in text.lines() {
+        let line = strip_inline_comment(line);
+        let trimmed = line.trim();
+        if trimmed.starts_with("skipsteps") {
+            in_skip = true;
+        } else if in_skip && looks_like_new_assignment(trimmed) {
+            in_skip = false;
+        }
+        if in_skip && (trimmed.contains("'test'") || trimmed.contains("\"test\"")) {
+            return true;
+        }
+    }
+    false
+}
+
+fn looks_like_new_assignment(trimmed: &str) -> bool {
+    if trimmed.is_empty() || trimmed.starts_with('[') || trimmed.starts_with(']') {
+        return false;
+    }
+    if trimmed.starts_with('\'') || trimmed.starts_with('"') {
+        return false;
+    }
+    trimmed.contains('=')
+}
+
+fn recipe_name_from_text(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = strip_inline_comment(line).trim();
+        let Some(rest) = line.strip_prefix("name") else {
+            continue;
+        };
+        if !matches!(rest.chars().next(), Some(' ' | '\t' | '=')) {
+            continue;
+        }
+        let value = rest.trim_start_matches([' ', '\t', '=']).trim();
+        let value = value.trim_matches(|c| c == '\'' || c == '"');
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
 }
 
 /// Whether two easyconfig paths name the same file on disk.
@@ -1135,6 +1202,70 @@ postinstallcmds += ['true']
                 .iter()
                 .any(|f| f.code == "EB_MAINT_TESTS_OFF"),
             "{report:?}"
+        );
+    }
+
+    #[test]
+    fn skipsteps_test_is_tests_off() {
+        let text = "skipsteps = ['test']\nmoduleclass = 'tools'\n";
+        let findings = check_fat_build(text);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.code == "EB_MAINT_TESTS_OFF" && f.message.contains("skipsteps")),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn skipsteps_multiline_test_is_tests_off() {
+        let text = "skipsteps = [\n    'configure',\n    'test',\n]\nmoduleclass = 'tools'\n";
+        let findings = check_fat_build(text);
+        assert!(
+            findings.iter().any(|f| f.code == "EB_MAINT_TESTS_OFF"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn skipsteps_without_test_is_silent() {
+        let text = "skipsteps = ['configure']\nmoduleclass = 'tools'\n";
+        let findings = check_fat_build(text);
+        assert!(
+            !findings.iter().any(|f| f.code == "EB_MAINT_TESTS_OFF"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn cuda_usempi_without_mpi_test_ranks_warns_for_a_policy_package() {
+        let text = "\
+name = 'GROMACS'
+toolchainopts = {'openmp': True, 'usempi': True}
+versionsuffix = '-CUDA-12.6.0'
+dependencies = [('CUDA', '12.6.0', '', SYSTEM)]
+moduleclass = 'bio'
+";
+        let findings = check_fat_build(text);
+        assert!(
+            findings.iter().any(|f| f.code == "EB_MAINT_MPI_TEST_RANKS"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn cuda_usempi_with_mpi_test_ranks_is_silent() {
+        let text = "\
+name = 'GROMACS'
+toolchainopts = {'openmp': True, 'usempi': True}
+versionsuffix = '-CUDA-12.6.0'
+mpi_numprocs = 2
+moduleclass = 'bio'
+";
+        let findings = check_fat_build(text);
+        assert!(
+            !findings.iter().any(|f| f.code == "EB_MAINT_MPI_TEST_RANKS"),
+            "{findings:?}"
         );
     }
 
