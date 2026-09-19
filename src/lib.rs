@@ -1,7 +1,6 @@
 //! EasyBuild stack lock: parse `.eb` files, resolvo SAT co-select, planned SBOM.
 #![warn(missing_docs)]
 
-mod attribution;
 pub mod artifact_class;
 pub mod build_order;
 pub mod campaign;
@@ -120,10 +119,8 @@ pub use package_workflow::{
     complete_package_bump, complete_package_bundle, complete_package_bundle_with_hierarchy,
     inspect_new_package, plan_new_package, plan_package_bump, prepare_new_package_plan,
     prepare_package_bump, relative_posix, stack_policy_with_bump_overrides, validate_path_segment,
-    find_foreign_package_py, find_named_easyconfig, find_sibling_package_config, with_outdir_overlay,
-    write_package_bundle,
-    write_package_bundle_into, BumpPackageRequest,
-    NewPackageRequest, PackageBundle, PackageWorkflowError, WrittenPackageBundle,
+    write_package_bundle, write_package_bundle_into, BumpPackageRequest, NewPackageRequest,
+    PackageBundle, PackageWorkflowError, WrittenPackageBundle,
 };
 pub use provides::{
     existing_language_provider, expand_extension_provides, extension_parent_path,
@@ -145,8 +142,8 @@ pub use repro_report::{
 };
 pub use resolvo_provider::solve_with_stack_policy;
 pub use sbom::{
-    artifact_facts_for_lock, build_dep_map_from_universe, cyclonedx_to_dot, dep_map_from_universe,
-    lock_to_bom, lock_to_bom_with_facts, lock_to_cyclonedx, lock_to_cyclonedx_with_deps,
+    artifact_facts_for_lock, build_dep_map_from_universe, dep_map_from_universe, lock_to_bom,
+    lock_to_bom_with_facts, lock_to_cyclonedx, lock_to_cyclonedx_with_deps,
     lock_to_cyclonedx_with_facts, lock_to_cyclonedx_with_runtime_and_build, ArtifactFacts,
     SbomFacts,
 };

@@ -203,9 +203,6 @@ fn canonical_plan_writes_typed_cyclonedx_components() {
     );
     let root = &sbom["metadata"]["component"];
     assert_eq!(root["hashes"][0]["alg"], "SHA-256");
-    let dot = eb_stack::cyclonedx_to_dot(&sbom);
-    assert!(dot.contains("digraph sbom"), "{dot}");
-    assert!(dot.contains("QMCPACK") || dot.contains("qmcpack"), "{dot}");
     assert_eq!(
         root["hashes"][0]["content"],
         "511d5f368db002f2f77504619e1ada8d4a3034200d25feef6773d12a6ed6d18e"
