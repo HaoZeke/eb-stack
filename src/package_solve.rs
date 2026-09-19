@@ -270,6 +270,7 @@ pub fn solve_package_profile_with_hierarchy(
         forbid: Vec::new(),
         objective: "prefer_newer".into(),
         require_upgrade: Vec::new(),
+        criteria: Vec::new(),
     };
     let result = solve_curated_with_stack_policy(&universe, &policy, None, stack_policy)
         .map_err(ProfileSolveError::Resolve)?;

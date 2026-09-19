@@ -104,6 +104,7 @@ fn standalone_numpy_recipe_still_competes_with_provide() {
         forbid: Vec::new(),
         objective: "prefer_newer".into(),
         require_upgrade: Vec::new(),
+        criteria: Vec::new(),
     };
     let lock = select_stack(
         &Universe {
@@ -130,6 +131,7 @@ fn missing_provide_still_unsat_when_no_bundle() {
         forbid: Vec::new(),
         objective: "prefer_newer".into(),
         require_upgrade: Vec::new(),
+        criteria: Vec::new(),
     };
     let err = select_stack(
         &Universe {

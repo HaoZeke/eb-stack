@@ -155,6 +155,11 @@ pub struct Policy {
     /// value the shipped solver implements.
     #[serde(default = "default_objective")]
     pub objective: String,
+    /// Optimisation criteria in precedence order, CUDF spelling. Empty means
+    /// derive them from `objective` and `prefer_installed`, which is what
+    /// every policy written before this field did; see [`Policy::criteria`].
+    #[serde(default)]
+    pub criteria: Vec<String>,
     /// Packages that must be strictly newer than baseline (when
     /// `relative_to_baseline` is true). Accepts a single object or an array
     /// in JSON for backward compatibility.
@@ -184,7 +189,99 @@ fn default_objective() -> String {
     "prefer_newer".into()
 }
 
+/// One optimisation criterion, applied in order until it decides.
+///
+/// Package selection is an optimisation problem, not a satisfaction problem:
+/// many assignments satisfy the constraints and the interesting question is
+/// which one a stated preference picks. Stating that preference as an ordered
+/// list is the design the package-solving literature settled on, in OPIUM
+/// (doi:10.1109/icse.2007.59), apt-pbo (doi:10.1145/1858996.1859087) and the
+/// CUDF criteria the MISC competitions ran on, and it is what Spack encodes
+/// declaratively (doi:10.1109/sc41404.2022.00040).
+///
+/// The spelling is CUDF's, `-name` for "minimise the count of", because the
+/// vocabulary is already understood and inventing another one buys nothing.
+/// eb-stack has two axes, which is exactly the point at which an unordered
+/// pair of booleans stops saying what it means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Criterion {
+    /// Minimise packages moved off the version the baseline already installed.
+    /// A rebuild nobody asked for costs hours of a partition.
+    #[serde(rename = "-changed")]
+    MinimiseChanged,
+    /// Minimise packages held below the newest candidate available to them.
+    #[serde(rename = "-notuptodate")]
+    MinimiseNotUptodate,
+}
+
+impl Criterion {
+    /// The CUDF spelling, which is what the lock records.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Criterion::MinimiseChanged => "-changed",
+            Criterion::MinimiseNotUptodate => "-notuptodate",
+        }
+    }
+
+    /// Parse the CUDF spelling. Unknown criteria are refused rather than
+    /// ignored: a criterion silently dropped is a solve optimising for
+    /// something other than what the policy asked for.
+    pub fn parse(spelling: &str) -> Result<Self, String> {
+        match spelling.trim() {
+            "-changed" => Ok(Criterion::MinimiseChanged),
+            "-notuptodate" => Ok(Criterion::MinimiseNotUptodate),
+            other => Err(format!(
+                "unknown optimisation criterion {other:?}; known: -changed, -notuptodate"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for Criterion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl Policy {
+    /// The criteria this policy optimises, in the order they are applied.
+    ///
+    /// Explicit `criteria` wins. Otherwise they are derived, and the derivation
+    /// is what the solver already did before the field existed: with
+    /// `prefer_installed`, staying put outranks moving to the newest, because a
+    /// candidate favoured for being installed is tried first and the solver
+    /// takes the first that works. Without it, newest is the only preference
+    /// expressed. So the default is not a new policy, it is the old one written
+    /// down.
+    ///
+    /// An unparseable criterion is dropped here rather than refused, because
+    /// this is on the read path; [`Policy::validate_criteria`] is what a caller
+    /// uses to reject a policy that names one.
+    pub fn criteria(&self) -> Vec<Criterion> {
+        if !self.criteria.is_empty() {
+            return self
+                .criteria
+                .iter()
+                .filter_map(|c| Criterion::parse(c).ok())
+                .collect();
+        }
+        let mut out = Vec::new();
+        if self.prefer_installed {
+            out.push(Criterion::MinimiseChanged);
+        }
+        out.push(Criterion::MinimiseNotUptodate);
+        out
+    }
+
+    /// Error text for the first criterion this policy names that is not known,
+    /// so a typo fails the solve instead of quietly changing what it optimises.
+    pub fn validate_criteria(&self) -> Result<(), String> {
+        for spelling in &self.criteria {
+            Criterion::parse(spelling)?;
+        }
+        Ok(())
+    }
+
     /// Effective root priority: explicit `root_priority` when non-empty,
     /// otherwise `roots` order. Any root missing from the priority list is
     /// appended in `roots` order so every application root is optimized.
@@ -230,6 +327,12 @@ pub struct SolverMeta {
     pub engine_version: String,
     /// When the solve ran, as an RFC 3339 timestamp.
     pub timestamp: String,
+    /// Optimisation criteria the solve applied, in precedence order, CUDF
+    /// spelling. Recorded so a reader can see why this assignment beat another
+    /// rather than only that it was reproducible. Empty in locks written before
+    /// the field existed.
+    #[serde(default)]
+    pub criteria: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

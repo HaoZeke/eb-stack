@@ -110,6 +110,90 @@ pub fn nearest_candidates_hint(name: &str, cands: &[Candidate]) -> String {
     }
 }
 
+/// Dependencies nothing in the universe can satisfy, and where they do live.
+///
+/// A SAT solver sees one universe. When a solve fails it can say a package was
+/// excluded for a missing dependency, but not whether that dependency is absent
+/// from the tree or merely absent from the levels this solve was given, because
+/// it never saw the rest of the tree. Both read the same way to whoever ran it
+/// (prefix-dev/resolvo#202, #9, and #252 for the variant case).
+///
+/// This is the half the solver cannot answer, computed from the two candidate
+/// sets rather than from the solver's message, so it does not depend on the
+/// wording of an explanation upstream is still changing. Cheap enough to run
+/// only on the failure path, which is where it is wired.
+///
+/// `universe` is what the solve searched, `all` the whole parsed tree. Returns
+/// one rendered line per unsatisfiable dependency name, most-needed first.
+pub fn unsatisfiable_deps(universe: &[Candidate], all: &[Candidate]) -> Vec<String> {
+    let present: std::collections::HashSet<&str> =
+        universe.iter().map(|c| c.name.as_str()).collect();
+
+    // dependency name -> the candidates in the universe that ask for it
+    let mut wanted_by: HashMap<&str, Vec<String>> = HashMap::new();
+    for cand in universe {
+        for dep in cand.dependencies.iter().chain(cand.builddependencies.iter()) {
+            if present.contains(dep.name.as_str()) {
+                continue;
+            }
+            wanted_by
+                .entry(dep.name.as_str())
+                .or_default()
+                .push(format!("{} {}", cand.name, cand.version));
+        }
+    }
+
+    let mut rows: Vec<(usize, String)> = wanted_by
+        .into_iter()
+        .map(|(dep, mut askers)| {
+            askers.sort();
+            askers.dedup();
+            let count = askers.len();
+            let shown = askers.first().cloned().unwrap_or_default();
+            let needed_by = match count {
+                0 => String::new(),
+                1 => format!(", needed by {shown}"),
+                _ => format!(", needed by {shown} and {} other(s)", count - 1),
+            };
+            (
+                count,
+                format!("{dep}{needed_by}{}", nearest_candidates_hint(dep, all)),
+            )
+        })
+        .collect();
+
+    // Most-wanted first, because one missing base package explains many
+    // exclusions and reading it first is what shortens the search.
+    rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    rows.into_iter().map(|(_, line)| line).collect()
+}
+
+/// `unsatisfiable_deps` as a block to append to a solver error, or empty when
+/// every dependency in the universe is satisfiable and the failure lies
+/// elsewhere. Capped, since a truncated universe can miss hundreds and the
+/// first few carry the diagnosis.
+pub fn unsatisfiable_deps_report(universe: &[Candidate], all: &[Candidate]) -> String {
+    const SHOWN: usize = 8;
+    let rows = unsatisfiable_deps(universe, all);
+    if rows.is_empty() {
+        return String::new();
+    }
+    let extra = rows.len().saturating_sub(SHOWN);
+    let mut out = String::from(
+        "\n\ndependencies nothing in the searched toolchain levels provides,\n\
+         which is the part the SAT solver cannot tell you:\n",
+    );
+    for row in rows.iter().take(SHOWN) {
+        out.push_str("  - ");
+        out.push_str(row);
+        out.push('\n');
+    }
+    if extra > 0 {
+        out.push_str(&format!("  ... and {extra} more\n"));
+    }
+    out
+}
+
 impl ToolchainHierarchy {
     /// Labels `name-version` for each member (system empty version → `system`).
     pub fn member_labels(&self) -> Vec<String> {

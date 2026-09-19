@@ -9,6 +9,8 @@ pub mod cargo;
 pub mod cran;
 pub mod domain;
 pub mod easystack;
+pub mod eb_easyblock;
+pub mod eb_engine_export;
 mod eb_emit;
 pub mod eb_maintainer;
 pub mod eb_parse;
@@ -493,8 +495,19 @@ pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
         None
     };
 
-    let lock =
-        select_stack(&universe, &policy, baseline.as_ref()).map_err(|e| anyhow::anyhow!(e))?;
+    // The solver searched `universe`, the hierarchy-filtered set. `all` is the
+    // whole parsed tree, and the difference between them is what it could not
+    // see: a dependency absent from the searched levels reads the same to it as
+    // one absent from every tree. Only on the failure path, so a solve that
+    // succeeds pays nothing for it.
+    let lock = select_stack(&universe, &policy, baseline.as_ref()).map_err(|e| {
+        let hint = crate::hierarchy::unsatisfiable_deps_report(&universe.candidates, &all);
+        // Two different questions the solver cannot answer: what the searched
+        // levels do not provide, and which of the constraints were written by
+        // hand rather than read off the tree.
+        let constraints = crate::select::policy_constraints_report(&policy, &universe.candidates);
+        anyhow::anyhow!("{e}{hint}{constraints}")
+    })?;
     validate_lock_deps(&lock, &universe.candidates).map_err(|e| anyhow::anyhow!(e))?;
     write_lock_sbom_and_extras(
         &lock,

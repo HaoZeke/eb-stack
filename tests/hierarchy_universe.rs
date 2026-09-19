@@ -225,3 +225,203 @@ fn one_package_at_two_toolchain_levels_is_two_packages() {
     assert!(perls.contains(&"5.42.0@GCCcore".to_string()), "{perls:?}");
     assert!(lock.package("OpenMPI").is_some(), "{lock:?}");
 }
+
+/// The question the solver cannot answer, and this can.
+///
+/// resolvo sees one universe. When a candidate is dropped for a missing
+/// dependency it says so, but "missing" covers two very different situations:
+/// nothing in the tree provides it, or the tree provides it at a level this
+/// solve was not given. Those need opposite fixes, and they print identically
+/// (prefix-dev/resolvo#202, #9). Comparing the searched set against the whole
+/// parsed tree separates them without reading the solver's prose.
+#[test]
+fn a_dependency_outside_the_searched_levels_says_where_it_lives() {
+    let dir = tempfile::tempdir().unwrap();
+    tree(dir.path());
+    let all = eb_stack::parse_easyconfig_tree(dir.path())
+        .expect("fixture tree parses")
+        .candidates;
+
+    // The universe the bug produced: filtered to the policy toolchain alone, so
+    // CMake at GCCcore was never loaded.
+    let universe: Vec<_> = all
+        .iter()
+        .filter(|c| c.toolchain.name == "GCC")
+        .cloned()
+        .collect();
+    assert!(!universe.is_empty(), "fixture gave no GCC-level candidate");
+
+    let rows = eb_stack::hierarchy::unsatisfiable_deps(&universe, &all);
+    assert_eq!(rows.len(), 1, "expected exactly CMake: {rows:?}");
+    let row = &rows[0];
+    assert!(row.starts_with("CMake"), "{row}");
+    assert!(row.contains("FlexiBLAS 3.5.0"), "who needs it: {row}");
+    assert!(
+        row.contains("GCCcore-15.2.0"),
+        "where it actually lives: {row}"
+    );
+
+    let report = eb_stack::hierarchy::unsatisfiable_deps_report(&universe, &all);
+    assert!(report.contains("CMake"), "{report}");
+    assert!(
+        report.contains("SAT solver cannot tell you"),
+        "the report should say why it exists: {report}"
+    );
+}
+
+/// The other half, so a green result is not just the function returning nothing.
+#[test]
+fn a_universe_that_covers_its_own_dependencies_reports_none() {
+    let dir = tempfile::tempdir().unwrap();
+    tree(dir.path());
+    let all = eb_stack::parse_easyconfig_tree(dir.path())
+        .expect("fixture tree parses")
+        .candidates;
+
+    assert!(
+        eb_stack::hierarchy::unsatisfiable_deps(&all, &all).is_empty(),
+        "the whole tree satisfies itself"
+    );
+    assert!(
+        eb_stack::hierarchy::unsatisfiable_deps_report(&all, &all).is_empty(),
+        "an empty diagnosis must add nothing to the error"
+    );
+}
+
+/// A pin that admits nothing and a tree that provides nothing print the same
+/// way from a solver, and need opposite fixes: widen the pin, or go author a
+/// recipe. Naming the hand-written constraints separates them.
+#[test]
+fn a_pin_that_admits_nothing_is_named_ahead_of_the_pins_that_are_fine() {
+    use eb_stack::domain::{Pin, Policy, Toolchain};
+
+    let dir = tempfile::tempdir().unwrap();
+    tree(dir.path());
+    let all = eb_stack::parse_easyconfig_tree(dir.path())
+        .expect("fixture tree parses")
+        .candidates;
+
+    let policy = Policy {
+        toolchain: Toolchain {
+            name: "GCC".into(),
+            version: "15.2.0".into(),
+        },
+        roots: vec!["FlexiBLAS".into()],
+        root_priority: None,
+        prefer_installed: false,
+        pins: vec![
+            Pin {
+                name: "CMake".into(),
+                version_req: "==9.9.9".into(),
+            },
+            Pin {
+                name: "FlexiBLAS".into(),
+                version_req: "==3.5.0".into(),
+            },
+        ],
+        forbid: vec![],
+        objective: "prefer_newer".into(),
+        criteria: Vec::new(),
+        require_upgrade: vec![],
+    };
+
+    let report = eb_stack::select::policy_constraints_report(&policy, &all);
+    assert!(!report.is_empty(), "constraints in force must be reported");
+
+    let impossible = report.find("CMake").expect("the unsatisfiable pin: {report}");
+    let satisfiable = report.find("FlexiBLAS").expect("the other pin: {report}");
+    assert!(
+        impossible < satisfiable,
+        "a pin admitting nothing is the answer and belongs first:\n{report}"
+    );
+    assert!(
+        report.contains("admits 0 of 1"),
+        "say how much room the pin leaves: {report}"
+    );
+
+    // And with no constraints at all it adds nothing, so a failure elsewhere is
+    // not padded with a section that says nothing.
+    let bare = Policy {
+        pins: vec![],
+        ..policy
+    };
+    assert!(eb_stack::select::policy_constraints_report(&bare, &all).is_empty());
+}
+
+/// Identity became (name, toolchain level) in the provider and in the lock.
+/// ebstack-fqh7 names two things that read those keys and so move with it: the
+/// build list ordering and the SBOM dependency graph. Nothing asserted either,
+/// and a build list that emits one Perl for two modules is a generation that
+/// cannot be built from its own plan.
+#[test]
+fn the_build_list_and_the_sbom_carry_both_levels_separately() {
+    use std::fs;
+
+    let dir = tempfile::tempdir().unwrap();
+    two_level_tree(dir.path());
+    let policy_path = dir.path().join("policy.json");
+    fs::write(
+        &policy_path,
+        r#"{"toolchain": {"name": "GCC", "version": "15.2.0"},
+            "roots": ["OpenMPI"], "objective": "prefer_newer"}"#,
+    )
+    .unwrap();
+    let lock_out = dir.path().join("gen.lock.json");
+    let build_list = dir.path().join("build-list.txt");
+    let lock = eb_stack::solve_from_easyconfigs_with_extras(
+        &[dir.path()],
+        &policy_path,
+        None,
+        &lock_out,
+        None,
+        eb_stack::SolveExtraOut {
+            build_list_out: Some(&build_list),
+            stack_diff_out: None,
+        },
+    )
+    .expect("both Perls are installable side by side");
+
+    // The build list names a file per module, so two Perls are two lines.
+    let listing = fs::read_to_string(&build_list).unwrap();
+    assert!(
+        listing.contains("Perl-5.38.0.eb"),
+        "the bootstrap Perl is missing from the build list:\n{listing}"
+    );
+    assert!(
+        listing.contains("Perl-5.42.0-GCCcore-15.2.0.eb"),
+        "the generation Perl is missing from the build list:\n{listing}"
+    );
+
+    // And in an order that can actually be built: zlib build-depends on the
+    // SYSTEM Perl, OpenMPI on the GCCcore one and on zlib.
+    let at = |needle: &str| listing.find(needle).unwrap_or_else(|| panic!("{needle} absent:\n{listing}"));
+    assert!(
+        at("Perl-5.38.0.eb") < at("zlib-2.3.2-GCCcore-15.2.0.eb"),
+        "a build dependency has to come first:\n{listing}"
+    );
+    assert!(
+        at("Perl-5.42.0-GCCcore-15.2.0.eb") < at("OpenMPI-5.0.10-GCC-15.2.0.eb"),
+        "a build dependency has to come first:\n{listing}"
+    );
+    assert!(
+        at("zlib-2.3.2-GCCcore-15.2.0.eb") < at("OpenMPI-5.0.10-GCC-15.2.0.eb"),
+        "a runtime dependency has to come first:\n{listing}"
+    );
+
+    // The SBOM has to distinguish them too, or the graph says one component was
+    // used at two versions rather than two components existing.
+    let bom = eb_stack::lock_to_cyclonedx(&lock);
+    let doc = serde_json::to_string(&bom).unwrap();
+    assert!(doc.contains("5.38.0"), "bootstrap Perl absent from the SBOM");
+    assert!(doc.contains("5.42.0"), "generation Perl absent from the SBOM");
+    let perl_components = bom["components"]
+        .as_array()
+        .expect("components is an array")
+        .iter()
+        .filter(|c| c["name"] == "Perl")
+        .count();
+    assert_eq!(
+        perl_components, 2,
+        "two modules must be two components, got {perl_components}: {doc}"
+    );
+}
