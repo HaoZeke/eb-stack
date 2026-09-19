@@ -883,8 +883,8 @@ fn try_render_github_primary(
         };
 
     // GITHUB_SOURCE expands to github.com/%(github_account)s/%(name)s/archive.
-    // GitHub folds case (QMCPACK/qmcpack), but OpenMPI + open-mpi/ompi is a
-    // different repo and 404s unless the URL names `ompi`.
+    // GitHub folds case on that path. A repo whose last component differs
+    // from the package name 404s unless the URL names that component.
     let source_urls = if repo.eq_ignore_ascii_case(package_name) {
         "GITHUB_SOURCE".to_string()
     } else {

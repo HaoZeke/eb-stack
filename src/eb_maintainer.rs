@@ -432,6 +432,13 @@ pub fn check_fat_build(text: &str) -> Vec<MaintainerFinding> {
                 ));
             }
         }
+        if crate::provides::missing_gpu_mpi_test_env(&name, text) {
+            out.push(MaintainerFinding::warning(
+                "EB_MAINT_MPI_TEST_RANKS",
+                "CUDA + usempi library-MPI GPU tests need pretestopts that count visible devices and disable direct GPU comm on GMX_MPI=ON".to_string(),
+                Some("GMX_DISABLE_DIRECT_GPU_COMM is unset".into()),
+            ));
+        }
     }
 
     out
@@ -1260,6 +1267,7 @@ name = 'GROMACS'
 toolchainopts = {'openmp': True, 'usempi': True}
 versionsuffix = '-CUDA-12.6.0'
 mpi_numprocs = 2
+pretestopts = 'export GMX_DISABLE_DIRECT_GPU_COMM=1 && '
 moduleclass = 'bio'
 ";
         let findings = check_fat_build(text);

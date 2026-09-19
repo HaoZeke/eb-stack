@@ -408,7 +408,7 @@ pub fn resolvo_resolve_dep_versions(
 }
 
 /// SAT index first (`poetry-core` → `poetry`), then overlay identity so
-/// `scipy` hits `SciPy` and `torch` hits `PyTorch`. The SAT name stays the
+/// a foreign spelling hits the robot module name. The SAT name stays the
 /// stored candidate name.
 fn named_candidates_for_spec<'a>(
     by_name: &HashMap<&str, Vec<&'a Candidate>>,

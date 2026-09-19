@@ -679,3 +679,52 @@ fn mcp_package_bump_vanished_dep_is_error() {
     assert_eq!(body["version_only"], false, "{body}");
     assert_eq!(body["companion_count"], 1, "{body}");
 }
+
+#[test]
+fn mcp_package_bump_version_only_hole_is_not_a_companion() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Gamma-1.0-foss-2024a.eb");
+    let robot = temp.path().join("robot");
+    let output = temp.path().join("bundle");
+    std::fs::create_dir_all(&robot).expect("robot");
+    std::fs::write(
+        &source,
+        "easyblock = 'CMakeMake'\nname = 'Gamma'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2024a'}\n\
+         sources = ['gamma-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [('VanishedLib', '20211028')]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 12,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_package_bump",
+            "arguments": {
+                "source": source,
+                "toolchain_name": "foss",
+                "toolchain_version": "2024a",
+                "version": "1.7.0",
+                "source_checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "easyconfigs": [robot],
+                "out_dir": output
+            }
+        }
+    }))
+    .expect("version-only bump response");
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let body = &response["result"]["structuredContent"];
+    assert_eq!(body["version_only"], true, "{body}");
+    assert_eq!(body["generation_retarget"], false, "{body}");
+    assert_eq!(body["companion_count"], 0, "{body}");
+    assert_eq!(
+        body["companions"].as_array().map(Vec::len),
+        Some(0),
+        "{body}"
+    );
+    assert_eq!(body["ok"], true, "{body}");
+}

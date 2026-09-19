@@ -25,7 +25,9 @@ All notable changes to this project are documented here.
   and prints `companion_count=0`. It does not emit `companion=` / `re_run=`.
 - CUDA + usempi packages listed in `[gpu_mpi_test_env]` get pretestopts
   that count visible devices and disable direct GPU comm only on the
-  library-MPI iteration.
+  library-MPI iteration. MCP `eb_package_bump` matches the CLI: a
+  version-only generation hole is `ok` with `companion_count=0`.
+  `recipe lint` warns the same GPU-test env gap as `EB_MAINT_MPI_TEST_RANKS`.
 - Filename-keyed `checksums` dicts (`{'app-1.0.tar.gz': …}` or a typed
   `('sha256', hex)` value) contribute that digest. Only a multi-arch
   dict that omits this host stays empty.

@@ -559,11 +559,6 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
     .map_err(|error| error.to_string())?;
     let written = write_package_bundle(&bundle, &output).map_err(|error| error.to_string())?;
     stamp_easyconfigs(&written.easyconfigs, "updated", arguments)?;
-    let blocking = bundle
-        .plan
-        .residuals
-        .iter()
-        .any(|residual| residual.severity == ResidualSeverity::Blocking);
     let residuals = bundle
         .plan
         .residuals
@@ -586,32 +581,40 @@ fn package_retarget(arguments: &Value, mutate: bool) -> Result<Value, String> {
         contributor: parent_contributor.as_deref(),
         versionsuffix: None,
     };
-    let companions = bundle
-        .plan
-        .residuals
-        .iter()
-        .filter(|residual| residual.category == "unresolved-generation-dep")
-        .map(|residual| {
-            let mut words = residual.summary.split_whitespace();
-            let name = words.next().unwrap_or_default();
-            let req = words.next().unwrap_or_default();
-            let pin = req.trim_start_matches('=').trim_start_matches('=');
-            let pin = if pin.is_empty() { None } else { Some(pin) };
-            let mut hole_parent = parent;
-            hole_parent.versionsuffix = residual.evidence.as_deref();
-            companion_argv_with(
-                name,
-                pin,
-                &easyconfigs,
-                &package_configs,
-                &toolchain_name,
-                &toolchain_version,
-                &robot,
-                &output,
-                hole_parent,
-            )
-        })
-        .collect::<Vec<_>>();
+    let companions = if version_only {
+        Vec::new()
+    } else {
+        bundle
+            .plan
+            .residuals
+            .iter()
+            .filter(|residual| residual.category == "unresolved-generation-dep")
+            .map(|residual| {
+                let mut words = residual.summary.split_whitespace();
+                let name = words.next().unwrap_or_default();
+                let req = words.next().unwrap_or_default();
+                let pin = req.trim_start_matches('=').trim_start_matches('=');
+                let pin = if pin.is_empty() { None } else { Some(pin) };
+                let mut hole_parent = parent;
+                hole_parent.versionsuffix = residual.evidence.as_deref();
+                companion_argv_with(
+                    name,
+                    pin,
+                    &easyconfigs,
+                    &package_configs,
+                    &toolchain_name,
+                    &toolchain_version,
+                    &robot,
+                    &output,
+                    hole_parent,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let blocking = bundle.plan.residuals.iter().any(|residual| {
+        residual.severity == ResidualSeverity::Blocking
+            && !(version_only && residual.category == "unresolved-generation-dep")
+    });
     Ok(json!({
         "package": bundle.plan.package.name,
         "version": bundle.plan.package.version,
