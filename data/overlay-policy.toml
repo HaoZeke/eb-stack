@@ -49,3 +49,9 @@ names = ["setuptools", "pip", "wheel"]
 [mpi_test_ranks]
 names = ["gromacs"]
 ranks = 2
+
+# CUDA + usempi recipes whose library-MPI iteration runs GPU tests. Emit
+# pretestopts that count visible devices and disable direct GPU comm only
+# when CMakeCache has GMX_MPI=ON. Do not skip the test step.
+[gpu_mpi_test_env]
+names = ["gromacs"]

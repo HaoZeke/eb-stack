@@ -1373,6 +1373,14 @@ pub fn complete_package_bump(
             .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
         }
     }
+    if crate::provides::missing_gpu_mpi_test_env(&plan.package.name, &result.text) {
+        result.text = crate::eb_emit::upsert_raw_assignment(
+            &result.text,
+            "pretestopts",
+            crate::provides::gpu_mpi_test_pretestopts(),
+        )
+        .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+    }
     if let Some(config_options) = request.package_layers.iter().rev().find_map(|layer| {
         layer
             .build

@@ -609,6 +609,68 @@ fn package_bump_same_generation_version_prints_no_companions() {
 }
 
 #[test]
+fn package_bump_version_only_with_generation_hole_prints_no_companions() {
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("PLUMED-2.9.2-foss-2024a.eb");
+    let robot = temp.path().join("robot");
+    std::fs::create_dir_all(&robot).expect("robot");
+    std::fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'PLUMED'\nversion = '2.9.2'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic'\n\
+         toolchain = {'name': 'foss', 'version': '2024a'}\n\
+         sources = [SOURCE_TGZ]\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [('GSL', '2.8')]\n\
+         moduleclass = 'chem'\n",
+    )
+    .expect("source recipe");
+    let output = temp.path().join("bundle");
+    let result = Command::new(binary)
+        .args([
+            "package",
+            "bump",
+            "--source",
+            source.to_str().unwrap(),
+            "--toolchain-version",
+            "2024a",
+            "--version",
+            "2.9.3",
+            "--source-checksum",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--easyconfigs",
+            robot.to_str().unwrap(),
+            "--out-dir",
+            output.to_str().unwrap(),
+        ])
+        .output()
+        .expect("version-only bump with a generation hole");
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        result.status.success(),
+        "version-only parent exits 0 even with a generation hole:\nstdout={stdout}\nstderr={stderr}"
+    );
+    assert!(
+        stdout.lines().any(|line| line == "version_only=true"),
+        "must stay version_only:\n{stdout}"
+    );
+    assert!(
+        stdout.lines().any(|line| line == "companion_count=0"),
+        "generation holes are not a companion campaign:\n{stdout}"
+    );
+    assert!(
+        !stdout.lines().any(|line| line.starts_with("companion=")),
+        "version-only must not print companion=:\n{stdout}"
+    );
+    assert!(
+        !stdout.lines().any(|line| line.starts_with("re_run=")),
+        "version-only must not print re_run=:\n{stdout}"
+    );
+}
+
+#[test]
 fn package_bump_cleared_checksum_exits_0() {
     let binary = env!("CARGO_BIN_EXE_eb-stack");
     let temp = tempfile::tempdir().expect("tempdir");

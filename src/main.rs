@@ -655,6 +655,14 @@ fn run_package_bump(args: PackageBumpArgs, mode: BumpMode) -> Result<()> {
         anyhow::bail!("blocking residuals remain; fix those before --allow-unresolved applies");
     }
     if generation_holes && !args.allow_unresolved {
+        if version_only {
+            println!("companion_count=0");
+            println!("done_when=exit 0");
+            println!(
+                "next=version_only bump; unresolved-generation-dep is not a companion campaign"
+            );
+            return Ok(());
+        }
         let robot = easyconfigs
             .first()
             .map(|path| path.display().to_string())

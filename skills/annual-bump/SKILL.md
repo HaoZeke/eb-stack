@@ -136,8 +136,10 @@ that parent exits 0. A child exit 0 is not done. Do not pass
 `--allow-unresolved` to skip a required companion. Do not write a
 helper script and stop.
 
-On `version_only=true`, that loop is the wrong move. Fix the missing
-robot entry or the source pin; do not walk companions as a campaign.
+On `version_only=true`, that loop is the wrong move. The parent still
+exits 0 with `companion_count=0` and does not print `companion=` /
+`re_run=`. Fix the missing robot entry or the source pin; do not walk
+companions as a campaign.
 
 Names listed in `exclude_from_solve` are the Judgment drop
 (`version-bump-dropped-dep`); that flag is only for a dep the new

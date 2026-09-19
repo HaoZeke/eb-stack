@@ -21,6 +21,11 @@ All notable changes to this project are documented here.
   whose overlay policy lists the package gets `mpi_numprocs` pinned on
   bump (default 2) instead of inheriting `$parallel` as NUMPROC, and
   `recipe lint` warns `EB_MAINT_MPI_TEST_RANKS` when that pin is missing.
+- `version_only=true` with an `unresolved-generation-dep` still exits 0
+  and prints `companion_count=0`. It does not emit `companion=` / `re_run=`.
+- CUDA + usempi packages listed in `[gpu_mpi_test_env]` get pretestopts
+  that count visible devices and disable direct GPU comm only on the
+  library-MPI iteration.
 - Filename-keyed `checksums` dicts (`{'app-1.0.tar.gz': …}` or a typed
   `('sha256', hex)` value) contribute that digest. Only a multi-arch
   dict that omits this host stays empty.

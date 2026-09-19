@@ -474,6 +474,14 @@ fn version_bump_pins_mpi_test_ranks_on_a_cuda_usempi_policy_package() {
         "GPU MPI tests must not inherit $parallel as NUMPROC:\n{text}"
     );
     assert!(
+        text.contains("GMX_DISABLE_DIRECT_GPU_COMM"),
+        "library-MPI GPU tests need direct GPU comm disabled:\n{text}"
+    );
+    assert!(
+        text.contains("GMX_TEST_REQUIRED_NUMBER_OF_DEVICES"),
+        "GPU test env must count visible devices:\n{text}"
+    );
+    assert!(
         !text.contains("skipsteps"),
         "a missing rank pin is not a reason to drop the test step:\n{text}"
     );

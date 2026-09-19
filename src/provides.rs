@@ -109,6 +109,8 @@ struct OverlayPolicy {
     python_provides: PythonProvides,
     #[serde(default)]
     mpi_test_ranks: MpiTestRanks,
+    #[serde(default)]
+    gpu_mpi_test_env: GpuMpiTestEnv,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -117,6 +119,12 @@ struct MpiTestRanks {
     names: Vec<String>,
     #[serde(default)]
     ranks: u32,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct GpuMpiTestEnv {
+    #[serde(default)]
+    names: Vec<String>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -241,6 +249,39 @@ pub fn missing_mpi_test_rank_pin(package: &str, text: &str) -> bool {
         && recipe_has_usempi(text)
         && recipe_has_cuda(text)
         && !recipe_has_mpi_numprocs(text)
+}
+
+/// Whether this CUDA + usempi recipe still lacks the library-MPI GPU test env.
+pub fn missing_gpu_mpi_test_env(package: &str, text: &str) -> bool {
+    wants_gpu_mpi_test_env(package)
+        && recipe_has_usempi(text)
+        && recipe_has_cuda(text)
+        && !text.contains("GMX_DISABLE_DIRECT_GPU_COMM")
+}
+
+/// Whether overlay policy lists this package for library-MPI GPU test env.
+pub fn wants_gpu_mpi_test_env(package: &str) -> bool {
+    let identity = crate::package_sources::package_identity(package);
+    overlay_policy()
+        .gpu_mpi_test_env
+        .names
+        .iter()
+        .any(|name| crate::package_sources::package_identity(name) == identity)
+}
+
+/// pretestopts value: count visible devices; disable direct GPU comm only
+/// when CMakeCache has GMX_MPI=ON.
+pub fn gpu_mpi_test_pretestopts() -> &'static str {
+    concat!(
+        "(\n",
+        "    \"export CTEST_OUTPUT_ON_FAILURE=1 && \"\n",
+        "    \"ngpu=$(nvidia-smi -L 2>/dev/null | wc -l) && \"\n",
+        "    \"if [ \\\"$ngpu\\\" -gt 0 ]; then \"\n",
+        "    \"export GMX_TEST_REQUIRED_NUMBER_OF_DEVICES=$ngpu; fi && \"\n",
+        "    \"if grep -q '^GMX_MPI:BOOL=ON$' CMakeCache.txt; \"\n",
+        "    \"then export GMX_DISABLE_DIRECT_GPU_COMM=1; fi && \"\n",
+        ")"
+    )
 }
 
 fn recipe_has_usempi(text: &str) -> bool {
