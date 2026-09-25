@@ -121,10 +121,16 @@ fn render_easyconfig(
         .iter()
         .find(|profile| profile.name == lock.profile)
         .expect("profile validated during materialization");
+    // A software-specific easyblock is found by name, and EasyBuild's own
+    // easyconfigs never spell it out, so the class derived from the name is
+    // written as no easyblock line at all.
     let easyblock_line = plan
         .build
         .easyblock
         .as_deref()
+        .filter(|easyblock| {
+            *easyblock != crate::eb_easyblock::encode_class_name(&plan.package.name)
+        })
         .map(|easyblock| format!("easyblock = '{}'\n\n", escape_single(easyblock)))
         .unwrap_or_default();
     let homepage = plan

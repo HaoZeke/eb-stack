@@ -1,0 +1,24 @@
+schema_version = 1
+
+# Layer after seissol.toml. SeisSol's HOST_ARCH sets the vector width of the
+# kernels its code generators emit, so it has to follow the build host rather
+# than stay at hsw. EB_SeisSol derives it (and GEMM_TOOLS_LIST, the graph
+# partitioners, and the binary name the sanity check needs) at configure time,
+# so the emitted easyconfig names no easyblock and no -DHOST_ARCH.
+#
+#   --package-config examples/packages/seissol.toml
+#   --package-config examples/packages/seissol-easyblock.toml
+
+[build]
+easyblock = "EB_SeisSol"
+# EB_SeisSol refuses these in configopts; it passes them itself.
+config_options = ["-DASAGI=ON", "-DNETCDF=ON", "-DTESTING=ON"]
+
+[[build.easyblocks]]
+filename = "seissol.py"
+source = "easyblocks/seissol.py"
+sha256 = "8c80992232a496096e6687679565509f2637d6cd2b03a0bbf49a3bc3a7488713"
+
+[build.easyconfig_parameters]
+order = 6
+equations = "elastic"

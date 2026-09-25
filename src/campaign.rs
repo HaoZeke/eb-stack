@@ -392,6 +392,16 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         }
     };
 
+    // Every easyblock module the bundle ships, at its staged path. A recipe
+    // whose class lives here cannot start without them.
+    let staged_easyblocks = bundle_easyblocks(&request.bundle)
+        .into_iter()
+        .filter_map(|path| {
+            path.strip_prefix(&request.bundle)
+                .ok()
+                .map(|relative| Path::new(&staged_bundle).join(relative).display().to_string())
+        })
+        .collect::<Vec<_>>();
     for recipe in recipes {
         let relative_recipe = recipe
             .strip_prefix(&request.bundle)
@@ -404,9 +414,10 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
             .join("easyconfigs")
             .display()
             .to_string();
-        let command = request.target.build_command_with_robot_paths(
+        let command = request.target.build_command_with_overlay(
             &staged_recipe.display().to_string(),
             &[staged_overlay],
+            &staged_easyblocks,
         );
         let output = match command.execute() {
             Ok(output) => output,
@@ -1319,4 +1330,25 @@ mod campaign_lock_tests {
 
         drop(lock);
     }
+}
+
+/// Easyblock modules under a bundle's `easyblocks/` directory, sorted.
+fn bundle_easyblocks(bundle: &Path) -> Vec<PathBuf> {
+    fn walk(directory: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|extension| extension == "py") {
+                out.push(path);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&bundle.join("easyblocks"), &mut out);
+    out.sort();
+    out
 }

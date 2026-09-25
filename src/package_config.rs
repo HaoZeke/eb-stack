@@ -2,7 +2,7 @@
 
 use crate::package::{
     is_easyconfig_parameter_name, ConditionExpr, ConditionPredicate, DependencyIntent,
-    DependencyRole, EasyconfigValue, OutputRequest, PackagePlan, PatchArtifact, ProductProfile,
+    DependencyRole, EasyblockArtifact, EasyconfigValue, OutputRequest, PackagePlan, PatchArtifact, ProductProfile,
     VerificationCommand,
 };
 use serde::{Deserialize, Serialize};
@@ -88,6 +88,10 @@ pub struct BuildPatch {
     /// patches the source recipe carried.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub patches: Option<Vec<PatchArtifact>>,
+    /// Easyblock modules the recipe needs and EasyBuild does not ship. A
+    /// layer that sets this owns the complete list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub easyblocks: Option<Vec<EasyblockArtifact>>,
     /// Raw easyconfig parameters written through verbatim. Keys are validated
     /// against the known EasyBuild parameter names.
     #[serde(default)]
@@ -261,6 +265,26 @@ impl PackageConfigLayer {
     }
 
     fn resolve_patch_sources(&mut self, base_directory: Option<&Path>) {
+        let resolve = |source: &str| {
+            let source = Path::new(source);
+            if source.is_absolute() {
+                source.to_path_buf()
+            } else if let Some(base_directory) = base_directory {
+                base_directory.join(source)
+            } else {
+                source.to_path_buf()
+            }
+        };
+        if let Some(easyblocks) = self
+            .build
+            .as_mut()
+            .and_then(|build| build.easyblocks.as_mut())
+        {
+            for easyblock in easyblocks {
+                let source = easyblock.source.as_deref().unwrap_or(&easyblock.filename);
+                easyblock.resolved_source = Some(resolve(source));
+            }
+        }
         let Some(patches) = self.build.as_mut().and_then(|build| build.patches.as_mut()) else {
             return;
         };
@@ -332,6 +356,17 @@ impl PackageConfigLayer {
                             patch.filename.clone(),
                         ));
                     }
+                }
+            }
+            for easyblock in build.easyblocks.iter().flatten() {
+                let path = Path::new(&easyblock.filename);
+                if path.file_name().and_then(|name| name.to_str())
+                    != Some(easyblock.filename.as_str())
+                    || path.extension().and_then(|extension| extension.to_str()) != Some("py")
+                {
+                    return Err(PackageConfigError::InvalidEasyblockFilename(
+                        easyblock.filename.clone(),
+                    ));
                 }
             }
         }
@@ -430,6 +465,9 @@ pub fn apply_package_layers(
                         }
                     }
                 }
+            }
+            if let Some(easyblocks) = &build.easyblocks {
+                plan.build.easyblocks = easyblocks.clone();
             }
             plan.build
                 .easyconfig_parameters
@@ -693,6 +731,10 @@ pub enum PackageConfigError {
     /// basename only.
     #[error("patch filename must not contain a directory: {0:?}")]
     InvalidPatchFilename(String),
+    /// An easyblock is not named by a bare Python module filename, which is
+    /// what `--include-easyblocks` and the easyblocks package both expect.
+    #[error("easyblock filename must be a bare module name ending in .py: {0:?}")]
+    InvalidEasyblockFilename(String),
     /// A profile inherits from one that does not exist in the plan.
     #[error("profile {profile} inherits missing profile {parent}")]
     MissingParent {

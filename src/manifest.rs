@@ -215,6 +215,7 @@ pub fn package_plan_from_foreign(recipe: &ForeignRecipe, toolchain: &Toolchain) 
                     })
                 })
                 .collect(),
+            easyblocks: Vec::new(),
             easyconfig_parameters: foreign_easyconfig_parameters(recipe),
         },
         profiles: vec![profile],

@@ -263,3 +263,63 @@ fn public_local_podman_target_is_complete_and_abi_isolated() {
         Some("/tmp/eb-stack/sources")
     );
 }
+
+#[test]
+fn shipped_easyblocks_reach_eb_as_explicit_include_easyblocks_files() {
+    let layer = TargetConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[targets]]
+name = "eessi-user"
+
+[targets.transport]
+kind = "local"
+
+[targets.executor]
+kind = "direct"
+
+[targets.runtime]
+kind = "host"
+
+[targets.easybuild]
+command = "eessi-extend-eb.sh"
+robot_paths = []
+work_root = "/work/campaign"
+tmp_root = "/work/tmp"
+"#,
+    )
+    .expect("target");
+    let targets = resolve_target_layers(&[layer]).expect("resolve targets");
+    let command = targets[0].build_command_with_overlay(
+        "/work/bundle/easyconfigs/s/SeisSol/SeisSol-1.3.2-foss-2025a.eb",
+        &["/work/bundle/easyconfigs".into()],
+        &[
+            "/work/bundle/easyblocks/p/pspamm.py".into(),
+            "/work/bundle/easyblocks/s/seissol.py".into(),
+        ],
+    );
+    let tokens = std::iter::once(command.program.clone())
+        .chain(command.args.iter().cloned())
+        .collect::<Vec<_>>();
+    let include = tokens
+        .iter()
+        .position(|token| {
+            token
+                == "--include-easyblocks=/work/bundle/easyblocks/p/pspamm.py,/work/bundle/easyblocks/s/seissol.py"
+        })
+        .unwrap_or_else(|| panic!("no --include-easyblocks in {tokens:?}"));
+    let recipe = tokens
+        .iter()
+        .position(|token| token.ends_with("SeisSol-1.3.2-foss-2025a.eb"))
+        .expect("recipe token");
+    assert!(include < recipe, "options must precede the recipe: {tokens:?}");
+    assert!(tokens.contains(&"--robot=/work/bundle/easyconfigs".to_string()));
+
+    let plain = targets[0].build_command_with_robot_paths("/work/bundle/x.eb", &[]);
+    assert!(
+        !plain.args.iter().any(|token| token.starts_with("--include-easyblocks")),
+        "no easyblocks means no option: {:?}",
+        plain.args
+    );
+}

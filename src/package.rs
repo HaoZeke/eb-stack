@@ -795,6 +795,33 @@ pub struct PatchArtifact {
     pub resolved_source: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// An easyblock the bundle ships because EasyBuild's own package lacks it.
+///
+/// EasyBuild resolves an easyblock by class name. A class that is not in the
+/// installed easyblocks package exists for a build only when its module is
+/// passed with `--include-easyblocks`, so the module travels with the recipe
+/// that needs it, checksummed like a patch.
+pub struct EasyblockArtifact {
+    /// Module filename, e.g. `seissol.py`. A bare name, never a path.
+    pub filename: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// SHA-256 of the module bytes.
+    pub sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Local path to copy the module from.
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Classes the module defines, read from its syntax tree when the plan
+    /// is checked.
+    pub classes: Vec<crate::eb_easyblock::EasyblockClass>,
+    #[serde(skip)]
+    /// Where the module was found on disk, resolved relative to the layer
+    /// that named it. Not serialized: it is a detail of this run.
+    pub resolved_source: Option<PathBuf>,
+}
+
 pub(crate) fn is_easyconfig_parameter_name(name: &str) -> bool {
     let mut characters = name.chars();
     let identifier = characters
@@ -846,6 +873,9 @@ pub struct BuildSpec {
     #[serde(default)]
     /// Patches applied before configuring.
     pub patches: Vec<PatchArtifact>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Easyblock modules shipped with the recipe.
+    pub easyblocks: Vec<EasyblockArtifact>,
     #[serde(default)]
     /// Raw easyconfig parameters written through verbatim.
     pub easyconfig_parameters: BTreeMap<String, EasyconfigValue>,

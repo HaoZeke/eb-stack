@@ -354,6 +354,7 @@ fn package_plan(arguments: &Value) -> Result<Value, String> {
             "locks": written.locks,
             "easyconfigs": written.easyconfigs,
             "patches": written.patches,
+            "easyblocks": written.easyblocks,
             "claims": {"resolves": true, "builds": false, "binary_verified": false}
         }));
     }
@@ -378,6 +379,7 @@ fn package_plan(arguments: &Value) -> Result<Value, String> {
                 "locks": companion.locks,
                 "easyconfigs": companion.easyconfigs,
                 "patches": companion.patches,
+                "easyblocks": companion.easyblocks,
             })
         })
         .collect::<Vec<_>>();
@@ -389,6 +391,7 @@ fn package_plan(arguments: &Value) -> Result<Value, String> {
         "locks": written.root.locks,
         "easyconfigs": written.root.easyconfigs,
         "patches": written.root.patches,
+        "easyblocks": written.root.easyblocks,
         "companions": companions,
         "closure_plan": written.closure_plan,
         "closure_sbom": written.closure_sbom,

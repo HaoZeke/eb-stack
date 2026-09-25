@@ -245,6 +245,12 @@ enum RecipeCommand {
         recipe: PathBuf,
         #[arg(long, required = true)]
         easyconfigs: Vec<PathBuf>,
+        /// Easyblock modules, as directories or files, to resolve the recipe's
+        /// class against. A bundle's own `easyblocks/` is searched first
+        /// without being named. Naming any root asserts the set is complete:
+        /// a software-specific class found in none of them fails the check.
+        #[arg(long = "easyblocks")]
+        easyblock_roots: Vec<PathBuf>,
         #[arg(long = "require-configopt")]
         require_configopts: Vec<String>,
         #[arg(long)]
@@ -512,6 +518,9 @@ fn run_package(command: PackageCommand) -> Result<()> {
                 for path in written.patches {
                     println!("patch={}", path.display());
                 }
+                for path in written.easyblocks {
+                    println!("easyblock={}", path.display());
+                }
                 return Ok(());
             }
 
@@ -540,6 +549,9 @@ fn run_package(command: PackageCommand) -> Result<()> {
             for path in &written.root.patches {
                 println!("patch={}", path.display());
             }
+            for path in &written.root.easyblocks {
+                println!("easyblock={}", path.display());
+            }
             for companion in &written.companions {
                 println!("companion_manifest={}", companion.manifest.display());
                 println!("companion_sbom={}", companion.sbom.display());
@@ -551,6 +563,9 @@ fn run_package(command: PackageCommand) -> Result<()> {
                 }
                 for path in &companion.patches {
                     println!("companion_patch={}", path.display());
+                }
+                for path in &companion.easyblocks {
+                    println!("easyblock={}", path.display());
                 }
             }
             Ok(())
@@ -586,6 +601,57 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
     }
     for path in written.easyconfigs {
         println!("easyconfig={}", path.display());
+    }
+    for path in written.easyblocks {
+        println!("easyblock={}", path.display());
+    }
+    Ok(())
+}
+
+/// Say which easyblock class the recipe resolves to and where it is defined.
+///
+/// The bundle's `easyblocks/` directory, found beside the `easyconfigs/` tree
+/// the recipe sits in, is searched before the named roots, matching the
+/// precedence `--include-easyblocks` has over the installed package.
+fn check_easyblock_resolution(
+    recipe: &std::path::Path,
+    resolved: &eb_stack::eb_parse::ResolvedEasyconfig,
+    explicit_roots: &[PathBuf],
+) -> Result<()> {
+    let derived = resolved.easyblock.is_none();
+    let class = resolved
+        .easyblock
+        .clone()
+        .unwrap_or_else(|| eb_stack::eb_easyblock::encode_class_name(&resolved.name));
+    let bundle_root = recipe
+        .ancestors()
+        .find(|ancestor| ancestor.file_name().is_some_and(|name| name == "easyconfigs"))
+        .and_then(|easyconfigs| easyconfigs.parent())
+        .map(|bundle| bundle.join("easyblocks"))
+        .filter(|easyblocks| easyblocks.is_dir());
+    let mut roots = Vec::new();
+    if let Some(bundle) = bundle_root.as_deref() {
+        roots.push(bundle);
+    }
+    roots.extend(explicit_roots.iter().map(PathBuf::as_path));
+    let index = eb_stack::eb_easyblock::index_easyblocks(&roots).map_err(anyhow::Error::msg)?;
+    let found = index.get(&class);
+    println!(
+        "easyblock_resolution={}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "class": class,
+            "derived_from_name": derived,
+            "defined_in": found.map(|(path, _)| path.display().to_string()),
+            "bases": found.map(|(_, class)| class.bases.clone()),
+            "extra_options": found.map(|(_, class)| class.extra_options.clone()),
+            "searched": roots.iter().map(|root| root.display().to_string()).collect::<Vec<_>>(),
+        }))?
+    );
+    if found.is_none() && !explicit_roots.is_empty() && class.starts_with(eb_stack::eb_easyblock::EASYBLOCK_CLASS_PREFIX) {
+        bail!(
+            "No software-specific easyblock '{class}' found for {}: none of the easyblock roots defines it",
+            resolved.name
+        );
     }
     Ok(())
 }
@@ -748,6 +814,7 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
         RecipeCommand::Check {
             recipe,
             easyconfigs,
+            easyblock_roots,
             require_configopts,
             metadata_only,
             verify_sources: check_sources,
@@ -838,6 +905,7 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
                     errors.join("; ")
                 );
             }
+            check_easyblock_resolution(&recipe, &resolved, &easyblock_roots)?;
             if metadata_only {
                 if let Err(errors) = gate {
                     bail!("packaging gate failed: {}", errors.join("; "));

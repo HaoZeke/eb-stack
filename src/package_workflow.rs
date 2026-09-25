@@ -10,6 +10,7 @@ use crate::hierarchy::{filter_candidates_in_hierarchy, hierarchy_for_with_tree};
 use crate::manifest::package_plan_from_foreign;
 use crate::package::{
     package_plan_to_cyclonedx, BuildSpec, ConditionExpr, DependencyIntent, DependencyRole,
+    EasyblockArtifact,
     OutputRequest, OverlayExtension, PackageMetadata, PackageOrigin, PackagePlan, PatchArtifact,
     ProductProfile, ProfileLock, Provenance, Residual, ResidualSeverity, ResidualStage,
     SourceArtifact, StackPin, StackPinMode, StackPolicy, PACKAGE_SCHEMA_VERSION,
@@ -111,6 +112,8 @@ pub struct WrittenPackageBundle {
     pub easyconfigs: Vec<PathBuf>,
     /// Patch files copied next to the recipes that apply them.
     pub patches: Vec<PathBuf>,
+    /// Easyblock modules, under `easyblocks/<letter>/` in the bundle.
+    pub easyblocks: Vec<PathBuf>,
 }
 
 /// Ingest a foreign recipe and apply configuration layers, without solving.
@@ -277,6 +280,7 @@ pub fn complete_package_bundle_with_hierarchy(
             .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?,
         );
     }
+    materialize_easyblocks(&mut plan)?;
     require_source_checksums(&plan)?;
     let easyconfigs = emit_profile_easyconfigs(&plan, &locks)
         .map_err(|error| PackageWorkflowError::Emit(error.to_string()))?;
@@ -907,6 +911,79 @@ fn validate_source_checksum(index: usize, checksum: &str) -> Result<(), PackageW
     Ok(())
 }
 
+/// Read every shipped easyblock, check its bytes, and record its classes.
+///
+/// The recipe must resolve to a class one of the modules defines: the class
+/// it names, or for a recipe that names none, the class EasyBuild derives
+/// from the software name. A module nothing resolves to would be copied into
+/// the bundle and never imported, which is a configuration mistake rather
+/// than a harmless extra.
+fn materialize_easyblocks(plan: &mut PackagePlan) -> Result<(), PackageWorkflowError> {
+    if plan.build.easyblocks.is_empty() {
+        return Ok(());
+    }
+    for easyblock in &mut plan.build.easyblocks {
+        let (_, classes) = verify_easyblock(easyblock)?;
+        easyblock.classes = classes;
+    }
+    let wanted = plan
+        .build
+        .easyblock
+        .clone()
+        .unwrap_or_else(|| crate::eb_easyblock::encode_class_name(&plan.package.name));
+    let defined = plan
+        .build
+        .easyblocks
+        .iter()
+        .flat_map(|easyblock| easyblock.classes.iter().map(|class| class.name.clone()))
+        .collect::<Vec<_>>();
+    if !defined.contains(&wanted) {
+        return Err(PackageWorkflowError::UnusedEasyblocks { wanted, defined });
+    }
+    Ok(())
+}
+
+/// Check one easyblock module against its declared checksum and parse it.
+fn verify_easyblock(
+    easyblock: &EasyblockArtifact,
+) -> Result<(PathBuf, Vec<crate::eb_easyblock::EasyblockClass>), PackageWorkflowError> {
+    let checksum = easyblock.sha256.as_deref().unwrap_or_default();
+    if checksum.len() != 64 || !checksum.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(PackageWorkflowError::InvalidEasyblockChecksum {
+            filename: easyblock.filename.clone(),
+            checksum: checksum.to_string(),
+        });
+    }
+    let source = easyblock
+        .resolved_source
+        .clone()
+        .or_else(|| easyblock.source.as_deref().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from(&easyblock.filename));
+    let bytes = std::fs::read(&source)
+        .map_err(|error| PackageWorkflowError::EasyblockIo(source.clone(), error))?;
+    let actual = sha256_hex(&bytes);
+    if actual != checksum {
+        return Err(PackageWorkflowError::EasyblockChecksumMismatch {
+            filename: easyblock.filename.clone(),
+            expected: checksum.to_string(),
+            actual,
+        });
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let classes = crate::eb_easyblock::defined_classes(&text, &easyblock.filename).map_err(
+        |message| PackageWorkflowError::EasyblockParse {
+            filename: easyblock.filename.clone(),
+            message,
+        },
+    )?;
+    if classes.is_empty() {
+        return Err(PackageWorkflowError::EasyblockDefinesNoClass(
+            easyblock.filename.clone(),
+        ));
+    }
+    Ok((source, classes))
+}
+
 fn validate_patch_checksum(patch: &PatchArtifact) -> Result<(), PackageWorkflowError> {
     let checksum = patch.sha256.as_deref().unwrap_or_default();
     if checksum.len() != 64 || !checksum.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -997,6 +1074,7 @@ pub fn complete_package_bump(
     candidates: &[crate::domain::Candidate],
     stack_policy: &StackPolicy,
 ) -> Result<PackageBundle, PackageWorkflowError> {
+    materialize_easyblocks(&mut plan)?;
     let source_recipe = resolve_easyconfig_file(&request.source)
         .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     let version_changed = request
@@ -1447,6 +1525,7 @@ fn package_plan_from_easyconfig(
             config_options: recipe.configopts.iter().cloned().collect(),
             moduleclass: recipe.moduleclass.clone(),
             patches,
+            easyblocks: Vec::new(),
             easyconfig_parameters: BTreeMap::new(),
         },
         profiles: vec![profile],
@@ -1557,6 +1636,7 @@ pub fn write_package_bundle_into(
 
     let mut easyconfigs = Vec::new();
     let mut patches = Vec::new();
+    let mut easyblocks = Vec::new();
     if !inspection_only {
         let package_name = &bundle.plan.package.name;
         validate_path_segment(package_name, "package name")?;
@@ -1594,6 +1674,35 @@ pub fn write_package_bundle_into(
                 .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
             patches.push(path);
         }
+        for easyblock in &bundle.plan.build.easyblocks {
+            let (source, _) = verify_easyblock(easyblock)?;
+            let directory = recipe_bundle_root
+                .join("easyblocks")
+                .join(crate::eb_easyblock::easyblock_letter_dir(&easyblock.filename));
+            std::fs::create_dir_all(&directory)
+                .map_err(|error| PackageWorkflowError::Io(directory.clone(), error))?;
+            let path = directory.join(&easyblock.filename);
+            let content = std::fs::read_to_string(&source)
+                .map_err(|error| PackageWorkflowError::EasyblockIo(source.clone(), error))?;
+            // Two packages may ship the same module; only different bytes at
+            // one path are a collision.
+            let key = relative_posix(path.strip_prefix(recipe_bundle_root).unwrap_or(&path));
+            match claimed_paths.get(&key) {
+                Some(previous) if *previous == content => {}
+                Some(_) => {
+                    return Err(PackageWorkflowError::OverlayCollision {
+                        path: key,
+                        reason: "easyblock already claimed with different content".into(),
+                    })
+                }
+                None => {
+                    claimed_paths.insert(key, content);
+                    std::fs::copy(&source, &path)
+                        .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
+                }
+            }
+            easyblocks.push(path);
+        }
     }
 
     Ok(WrittenPackageBundle {
@@ -1602,6 +1711,7 @@ pub fn write_package_bundle_into(
         locks,
         easyconfigs,
         patches,
+        easyblocks,
     })
 }
 
@@ -1620,6 +1730,13 @@ fn portable_package_plan(plan: &PackagePlan) -> PackagePlan {
         if let Some(provenance) = &mut residual.provenance {
             normalize_provenance_path(&portable.origin, provenance);
         }
+    }
+    for easyblock in &mut portable.build.easyblocks {
+        easyblock.source = Some(format!(
+            "easyblocks/{}/{}",
+            crate::eb_easyblock::easyblock_letter_dir(&easyblock.filename),
+            easyblock.filename
+        ));
     }
     for patch in &mut portable.build.patches {
         if patch.resolved_source.is_some()
@@ -1873,6 +1990,58 @@ pub enum PackageWorkflowError {
         expected: String,
         /// Checksum of the bytes on disk.
         actual: String,
+    },
+    /// An easyblock checksum is missing or not a SHA-256 hex digest.
+    #[error(
+        "easyblock checksum for {filename} must be exactly 64 hexadecimal characters, got {checksum:?}"
+    )]
+    InvalidEasyblockChecksum {
+        /// Module the value belongs to.
+        filename: String,
+        /// The value as given.
+        checksum: String,
+    },
+    /// An easyblock module could not be read.
+    #[error("read easyblock source {0}: {1}")]
+    EasyblockIo(
+        /// Module that could not be read.
+        PathBuf,
+        /// Underlying error.
+        std::io::Error,
+    ),
+    /// An easyblock on disk does not hash to what the plan declared.
+    #[error("easyblock checksum mismatch for {filename}: expected {expected}, got {actual}")]
+    EasyblockChecksumMismatch {
+        /// Module whose bytes disagree with the declared checksum.
+        filename: String,
+        /// Checksum the plan declared.
+        expected: String,
+        /// Checksum of the bytes on disk.
+        actual: String,
+    },
+    /// An easyblock module is not valid Python, so EasyBuild could not import it.
+    #[error("easyblock {filename} does not parse: {message}")]
+    EasyblockParse {
+        /// Module that failed to parse.
+        filename: String,
+        /// Parser message.
+        message: String,
+    },
+    /// An easyblock module defines no class for EasyBuild to find.
+    #[error("easyblock {0} defines no class")]
+    EasyblockDefinesNoClass(
+        /// Module without a top-level class.
+        String,
+    ),
+    /// No shipped module defines the class the recipe resolves to.
+    #[error(
+        "the recipe resolves to easyblock class {wanted}, which none of the shipped easyblocks defines (they define {defined:?})"
+    )]
+    UnusedEasyblocks {
+        /// Class the recipe names, or EasyBuild derives from the software name.
+        wanted: String,
+        /// Classes the shipped modules define.
+        defined: Vec<String>,
     },
     /// A robot tree could not be parsed.
     #[error("EasyBuild robot parse: {0}")]

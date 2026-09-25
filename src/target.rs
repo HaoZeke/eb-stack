@@ -413,6 +413,20 @@ impl BuildTarget {
         recipe: &str,
         additional_robot_paths: &[String],
     ) -> CommandPlan {
+        self.build_command_with_overlay(recipe, additional_robot_paths, &[])
+    }
+
+    /// Route an EasyBuild command with extra robot roots and easyblock modules.
+    ///
+    /// Easyblocks go to `--include-easyblocks` as explicit files, comma
+    /// separated, so the command does not depend on a shell or on EasyBuild
+    /// expanding a pattern.
+    pub fn build_command_with_overlay(
+        &self,
+        recipe: &str,
+        additional_robot_paths: &[String],
+        easyblocks: &[String],
+    ) -> CommandPlan {
         let mut tokens = vec!["env".to_string()];
         tokens.push(format!("EASYBUILD_TMPDIR={}", self.easybuild.tmp_root));
         tokens.extend(
@@ -430,6 +444,9 @@ impl BuildTarget {
         }
         if !robot_paths.is_empty() {
             tokens.push(format!("--robot={}", robot_paths.join(":")));
+        }
+        if !easyblocks.is_empty() {
+            tokens.push(format!("--include-easyblocks={}", easyblocks.join(",")));
         }
         tokens.push(format!("--buildpath={}/build", self.easybuild.work_root));
         tokens.push(recipe.to_string());
