@@ -42,6 +42,8 @@
 
    *Site R extras on EESSI?* → :doc:`howto/cran-extend`
 
+   *eOn on EESSI with EESSI-extend?* → :doc:`howto/eon-eessi-extend`
+
    *Existing recipe bump?* → :doc:`howto/bump-recipe`
 
    *CLI surface?* → :doc:`reference/cli`
@@ -107,6 +109,7 @@
    howto/new-package
    howto/pypi-extend
    howto/cran-extend
+   howto/eon-eessi-extend
    howto/repair-campaign
    howto/solve-lock
    howto/emit-reports

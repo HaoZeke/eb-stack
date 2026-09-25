@@ -1,0 +1,225 @@
+#+TITLE: eOn on EESSI with EESSI-extend and eb --robot
+#+OPTIONS: toc:t num:nil
+
+Install eOn, and the dependencies the European Environment for Scientific
+Software Installations (EESSI) lacks, into a user or project prefix on top of
+EESSI. EasyBuild's robot resolves the chain. Then build
+eOn from a working tree against the same modules for development.
+
+The build ran on 2026-09-21 and the development build on 2026-09-25, both
+against EESSI 2026.06 on an AMD Zen 5 (~x86_64/amd/zen5~) Slurm node with
+EasyBuild 5.4.0 from EESSI. The robot dry run was repeated on 2026-09-25 on an
+Intel laptop (~x86_64/intel/haswell~). The easyconfigs come from the open
+easyconfigs pull request #26480 (eOn 2.17.10 on ~foss/2026.1~). Until that pull
+request is merged, ~--from-pr 26480~ is how they reach the robot.
+
+* What EESSI provides and what gets built
+
+EESSI 2026.06 provides ~foss/2026.1~ (GCC 15.2.0, OpenMPI, FlexiBLAS, FFTW), Meson,
+Ninja, CMake, Eigen, Rust and Python. The robot builds the rest, eleven
+easyconfigs at ~GCCcore-15.2.0~ plus eOn. A dry run (~eb -D~ with the command
+below) reports 88 modules already present and these 12 to build:
+
+| Module | Why EESSI lacks it |
+|-
+| ~Highway/1.4.0~, ~inih/62~, ~fmt/12.2.0~, ~Catch2/3.14.0~ | not in the 2026.06 stack |
+| ~cargo-c/0.10.23~ | build dependency of ~readcon-core~ |
+| ~robin-map/1.4.1~, ~nanobind/2.13.0~ | ~nanobind~ needs ~robin-map~ |
+| ~CapnProto/1.4.0~, ~quill/11.1.0~, ~readcon-core/0.13.1~, ~rgpot/3.0.0~ | new in pull request #26480 |
+| ~eOn/2.17.10-foss-2026.1~ | new in pull request #26480 |
+
+The first full run built the chain in 13 minutes 38 seconds on 32 cores. With
+the dependencies installed, a rebuild of eOn alone takes about 2.5 minutes.
+
+* Prerequisites
+
+1. EESSI mounted at ~/cvmfs/software.eessi.io~ through the CernVM File System
+   (CVMFS). See [[*Without root][Without root]] when no
+   administrator can install the CVMFS client.
+2. A prefix for the installs. It must exist before ~EESSI-extend~ loads, or
+   the module refuses to load:
+
+   #+begin_src bash
+   export EESSI_USER_INSTALL=$HOME/EESSI      # or EESSI_PROJECT_INSTALL=/project/...
+   mkdir -p "$EESSI_USER_INSTALL"
+   #+end_src
+
+3. Optionally, a shallow clone of the easyconfigs ~develop~ branch as an extra
+   robot path, for recipes newer than the EasyBuild release in EESSI:
+
+   #+begin_src bash
+   git clone --depth 1 -b develop \
+     https://github.com/easybuilders/easybuild-easyconfigs.git ~/src/eb-develop
+   #+end_src
+
+* Build eOn with the robot
+
+~scripts/eessi-extend-eb.sh~ in this repository sources EESSI's init, loads
+~EESSI-extend~, isolates Cargo from host wrappers (for ~cargo-c~ and
+~readcon-core~), and execs ~eb~. Run it inside a batch job, not on a login node:
+
+#+begin_src bash
+#!/bin/bash
+#SBATCH --job-name=eon-eessi-2026.06
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=32
+#SBATCH --time=01:00:00
+#SBATCH --output=%x-%j.out
+set -euo pipefail
+export EESSI_VERSION=2026.06
+export EESSI_USER_INSTALL=$HOME/EESSI
+export WORKING_DIR=/tmp/$USER/eessi-work
+mkdir -p "$EESSI_USER_INSTALL" "$WORKING_DIR"
+/path/to/eb-stack/scripts/eessi-extend-eb.sh \
+  --from-pr 26480 \
+  --robot-paths=$HOME/src/eb-develop/easybuild/easyconfigs: -r \
+  --umask=022 \
+  --parallel="$SLURM_CPUS_PER_TASK" \
+  --dump-test-report=$HOME/eon-test-report-$(date +%Y%m%d-%H%M).md \
+  eOn-2.17.10-foss-2026.1.eb
+#+end_src
+
+What each option is for:
+
+- ~--from-pr 26480~ puts the pull request's easyconfigs first on the robot
+  path. Drop it once the recipes are in an EasyBuild release.
+- ~--robot-paths=<develop tree>:~ with the trailing colon appends the default
+  robot path, so EESSI's own easyconfigs still resolve. ~-r~ turns the robot on.
+- ~--umask=022~ matters for user installs: ~EESSI-extend~ sets umask 077 and the
+  sticky bit when ~EESSI_USER_INSTALL~ is set. That is fine for a private
+  prefix, but see [[*Without root][Without root]] for the case where it breaks module loads.
+- ~--dump-test-report~ writes the report EasyBuild would post to the pull request.
+
+The test report's summary on success:
+
+#+begin_example
+Build succeeded for 1 out of 1 (total: 2 mins 27 secs)
+ * SUCCESS eOn-2.17.10-foss-2026.1.eb
+#+end_example
+
+* Use the installed eOn
+
+#+begin_src bash
+source /cvmfs/software.eessi.io/versions/2026.06/init/lmod/bash
+export EESSI_USER_INSTALL=$HOME/EESSI
+module load EESSI-extend        # puts the user prefix on MODULEPATH
+module load eOn/2.17.10-foss-2026.1
+eonclient --help
+#+end_src
+
+The modules land under
+~$EESSI_USER_INSTALL/versions/2026.06/software/linux/$EESSI_SOFTWARE_SUBDIR/modules/all~,
+so a second CPU target gets its own tree, and each host loads the build for
+its own architecture.
+
+* Develop eOn from a working tree
+
+The installed modules are a development environment as well. eOn builds with
+Meson, and its ~develop~ branch needs Meson 1.8 or newer, rgpot 3.2 or newer and
+readcon-core 0.14.9 or newer. That is newer than the rgpot 3.0.0 and
+readcon-core 0.13.1 in pull request #26480, so Meson takes those two from its
+wraps (the compute node needs network for that) and everything else comes from
+EESSI and the prefix.
+
+This ran on 2026-09-25 as a 16-core Slurm job on EESSI 2026.06, with ~develop~
+at ~1916f9a9~: ~meson test --suite eon~ reported 43 passed and 0 failed.
+
+#+begin_src bash
+source /cvmfs/software.eessi.io/versions/2026.06/init/lmod/bash
+module use $HOME/EESSI/versions/2026.06/software/linux/$EESSI_SOFTWARE_SUBDIR/modules/all
+module load foss/2026.1 Meson/1.10.2-GCCcore-15.2.0 Ninja/1.13.2-GCCcore-15.2.0 \
+  CMake/4.2.1-GCCcore-15.2.0 pkgconf/2.5.1-GCCcore-15.2.0 Eigen/5.0.0-GCCcore-15.2.0 \
+  nlohmann_json/3.12.0-GCCcore-15.2.0 Rust/1.94.1-GCCcore-15.2.0 \
+  Python/3.14.2-GCCcore-15.2.0 quill/11.1.0-GCCcore-15.2.0 Highway/1.4.0-GCCcore-15.2.0 \
+  cargo-c/0.10.23-GCCcore-15.2.0 inih/62-GCCcore-15.2.0 fmt/12.2.0-GCCcore-15.2.0
+
+# Keep the host out of the build.
+export CC=gcc CXX=g++ FC=gfortran                 # no ccache or sccache wrapping
+unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER RUSTFLAGS CARGO_ENCODED_RUSTFLAGS
+WORK=/scratch/$USER/eon-dev                       # any directory outside $HOME
+export CARGO_HOME=$WORK/cargo-home
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+
+cd $WORK/eOn
+meson setup $WORK/build --buildtype release -Dwith_tests=true
+meson compile -C $WORK/build
+meson test -C $WORK/build --suite eon --print-errorlogs
+#+end_src
+
+Iterate with ~meson compile -C $WORK/build~ after each edit. Nothing here
+installs into the EESSI prefix, so the code under development lives in the
+working tree alone. ~module use~ on the prefix does what ~module load
+EESSI-extend~ does for ~MODULEPATH~, without the EasyBuild settings that module
+also sets.
+
+Three host settings broke earlier attempts, each with its own error:
+
+| Error | Cause | Fix |
+|-
+| ~ModuleNotFoundError: No module named 'mesonbuild'~ | the compat layer's ~usr/bin~ was prepended to ~PATH~; its ~python3~ ignores ~EBPYTHONPREFIXES~, so Meson's shebang found a Python without Meson | leave the compat layer off the front of ~PATH~; EESSI's GCC finds its linker without it |
+| ~gcc: error: unrecognized command-line option '-fuse-ld=/usr/bin/mold'~ | Cargo reads ~.cargo/config.toml~ from every parent of its working directory, so a build under ~$HOME~ picked up the host's linker settings | build outside ~$HOME~ and set ~CARGO_HOME~ to a fresh directory |
+| compilers run through the host's ~sccache~ | Meson wraps ~cc~ in a ccache it finds on ~PATH~ | name the compilers in ~CC~, ~CXX~ and ~FC~ |
+
+On EESSI 2025.06, the one Meson 1.8 module sits at ~GCCcore-14.3.0~, which means
+~foss/2025b~ rather than ~foss/2025a~.
+
+* Without root
+
+Where no administrator installs the CVMFS client, EESSI can still be mounted by
+an unprivileged user. Run ~cvmfs2~ against a private cache with ~-o libfuse=2~,
+then bind the mount at the canonical path inside a user namespace:
+
+#+begin_src bash
+cvmfs2 -o config=$HOME/.local/eessi/client.conf,libfuse=2 software.eessi.io $HOME/.local/eessi/mnt
+unshare --map-root-user --mount bash -c '
+  mount --bind $HOME/.local/eessi/mnt /cvmfs/software.eessi.io
+  source /cvmfs/software.eessi.io/versions/2026.06/init/lmod/bash
+  exec bash'
+#+end_src
+
+The libfuse 2 path matters on some hosts: CVMFS 2.13.3's libfuse 3 path served
+directory listings but never answered a file read against fuse3 3.18.2, while
+the libfuse 2 path answered at once. Inside the namespace the process is uid 0,
+which has four consequences for EasyBuild:
+
+| Symptom | Cause | Fix |
+|-
+| EasyBuild refuses to start | it will not run as root | ~--allow-use-as-root-and-accept-consequences~; files still belong to the real user |
+| sanity check: fake module unknown | Lmod as uid 0 skips a module directory without read and search for others; EESSI-extend's umask 077 makes it 0700 | ~--umask=022~ |
+| tar: ~Cannot change ownership to uid 1000~ | the namespace maps uid 0 alone, so restoring archive owners fails (~cargo-c~, ~CapnProto~) | ~export TAR_OPTIONS=--no-same-owner~ |
+| every run rebuilds everything | a prefix first created under umask 077 hides all later modules from Lmod | once, as the real user: ~find $EESSI_USER_INSTALL -type d ! -perm -o=rx -exec chmod o+rx {} +~ |
+
+A cancelled ~eb~ run also leaves its lock under ~software/.locks/~ in the prefix;
+remove it before the next run.
+
+* After pull request #26480 is merged
+
+EESSI's software-layer easystacks pin recipes that are not in an EasyBuild
+release with ~from-commit~ and a comment naming the pull request. The entries for
+~easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.0-2026.1.yml~:
+
+#+begin_src yaml
+  - Highway-1.4.0-GCCcore-15.2.0.eb
+  - inih-62-GCCcore-15.2.0.eb
+  - fmt-12.2.0-GCCcore-15.2.0.eb
+  - cargo-c-0.10.23-GCCcore-15.2.0.eb
+  - Catch2-3.14.0-GCCcore-15.2.0.eb
+  - robin-map-1.4.1-GCCcore-15.2.0.eb
+  - nanobind-2.13.0-GCCcore-15.2.0.eb
+  - eOn-2.17.10-foss-2026.1.eb:
+      options:
+        # see https://github.com/easybuilders/easybuild-easyconfigs/pull/26480
+        from-commit: <merge commit of #26480>
+#+end_src
+
+The four other new recipes (~CapnProto~, ~quill~, ~readcon-core~, ~rgpot~) carry
+the same ~from-commit~ block. The EESSI build bot then builds the easystack for
+each CPU target, and the prefix install above is no longer needed.
+
+* Related
+
+- [[file:pypi-extend.org][Site Python extras on EESSI]] and [[file:cran-extend.org][site R extras]] use
+  the same ~eessi-extend~ target through ~campaign run~.
+- [[file:../reference/targets.org][Build target configuration]] describes the ~eessi~
+  runtime that drives ~eessi_container.sh~.
