@@ -1,0 +1,88 @@
+#+TITLE: Spack on EESSI with EESSI installs as externals
+#+OPTIONS: toc:t num:nil
+
+Concretize a Spack package, here ~py-torch~, on top of the European
+Environment for Scientific Software Installations (EESSI). Everything EESSI
+already has comes in as a Spack external, and Spack builds the rest. The compiler
+is EESSI's GCCcore, and the CPU target stays the one EESSI built for.
+
+This ran on 2026-09-25 against EESSI 2025.06 on an AMD Zen 5 Slurm node
+(~x86_64/amd/zen5~). It used the ~eessi~ branch of
+[[https://github.com/lorisercole/spack][lorisercole/spack]] at ~492d483~ and
+EasyBuild 5.4.0 in a venv. ~py-torch~ concretized in 17 s with 54 of its 128
+dependencies as externals.
+
+* What the script does
+
+~scripts/eessi-spack-externals.py~ reads the easyconfig every EESSI install
+keeps under ~<install>/easybuild/~, walks the runtime dependency closure of the
+modules you name, and writes a Spack ~packages.yaml~:
+
+- GCCcore becomes the ~gcc~ external with its compiler paths, and a
+  ~require: '@<version>'~ so Spack compiles with it.
+- Toolchains such as ~foss~, ~gompi~ and ~GCC~ are skipped. Bundles are not
+  registered themselves; their Python extensions become ~py-*~ externals, and
+  a dependency on a bundle becomes a dependency on those.
+- With ~--spack-packages~ (the output of ~spack list~), names Spack does not
+  package are left out and reported on stderr.
+
+Compat-layer packages such as zlib, bzip2, ncurses and openssl are not in EESSI's
+software layer, so they come from ~spack external find~ in step 4.
+
+* Steps
+
+Run inside an EESSI environment (~source /cvmfs/software.eessi.io/versions/2025.06/init/bash~).
+
+1. A Python that imports EasyBuild, and Spack.
+   #+begin_src bash
+   python3 -m venv ~/.venvs/easybuild && ~/.venvs/easybuild/bin/pip install easybuild==5.4.0
+   git clone --branch eessi https://github.com/lorisercole/spack.git
+   . spack/share/spack/setup-env.sh
+   #+end_src
+2. Give Spack its own user scope. Do not set ~SPACK_DISABLE_LOCAL_CONFIG~: it
+   also drops the user scope, and Spack then never reads the generated file.
+   #+begin_src bash
+   export SPACK_USER_CONFIG_PATH=$PWD/spack-cfg SPACK_USER_CACHE_PATH=$PWD/spack-cache
+   mkdir -p $SPACK_USER_CONFIG_PATH
+   #+end_src
+3. Generate the externals for the modules the build should reuse.
+   #+begin_src bash
+   SW=/cvmfs/software.eessi.io/versions/2025.06/software/linux/$EESSI_SOFTWARE_SUBDIR
+   spack list > spack-packages.txt
+   ~/.venvs/easybuild/bin/python eb-stack/scripts/eessi-spack-externals.py \
+     --software $SW --target $(spack arch -t) --spack-packages spack-packages.txt \
+     Python/3.13.1-GCCcore-14.2.0 SciPy-bundle/2025.06-gfbf-2025a \
+     Python-bundle-PyPI/2025.04-GCCcore-14.2.0 CMake/3.31.3-GCCcore-14.2.0 \
+     Ninja/1.12.1-GCCcore-14.2.0 pybind11/2.13.6-GCC-14.2.0 \
+     PyYAML/6.0.2-GCCcore-14.2.0 networkx/3.5-gfbf-2025a \
+     > $SPACK_USER_CONFIG_PATH/packages.yaml
+   #+end_src
+4. Add the compat layer, excluding every package step 3 registered, and write
+   it to the user scope. The compat layer has its own gcc, cmake and python;
+   they are newer than EESSI's, so without the exclusions Spack prefers them.
+   Without ~--scope user~ the entries land in the Spack checkout's
+   ~etc/spack/packages.yaml~ and persist into later runs.
+   #+begin_src bash
+   EX=$(grep -E '^  [a-z0-9-]+:$' $SPACK_USER_CONFIG_PATH/packages.yaml | tr -d ' :' | sed 's/^/--exclude /')
+   for p in "$EESSI_EPREFIX" "$EESSI_EPREFIX/usr"; do
+     spack external find --scope user --all -p "$p" $EX
+   done
+   #+end_src
+5. Concretize.
+   #+begin_src bash
+   spack spec -I py-torch~cuda~distributed~mkldnn
+   #+end_src
+
+* What to check in the spec
+
+| Check | Expected (Zen 5, 2025.06) |
+|-------+----------------------------|
+| compiler on the root | ~%c,cxx=gcc@14.2.0~ |
+| target on the root | ~target=zen5~ |
+| ~[e]~ dependencies | 54 of 128, among them ~cmake@3.31.3~, ~py-numpy@2.3.1~, ~icu4c@76.1~ |
+| nodes on ~target=x86_64~ | 17, all compat-layer externals |
+
+A root on ~gcc@13.4.0~ or ~target=zen4~ means Spack picked the compat
+layer's gcc: step 2 or step 4 went wrong. An error that an external
+"there is no such external spec" names a dependency the
+script did not emit; run step 3 with ~--spack-packages~.

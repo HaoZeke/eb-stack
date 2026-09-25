@@ -44,6 +44,8 @@
 
    *eOn on EESSI with EESSI-extend?* → :doc:`howto/eon-eessi-extend`
 
+   *Spack on EESSI, EESSI installs as externals?* → :doc:`howto/spack-externals-eessi`
+
    *Existing recipe bump?* → :doc:`howto/bump-recipe`
 
    *CLI surface?* → :doc:`reference/cli`
@@ -110,6 +112,7 @@
    howto/pypi-extend
    howto/cran-extend
    howto/eon-eessi-extend
+   howto/spack-externals-eessi
    howto/repair-campaign
    howto/solve-lock
    howto/emit-reports
