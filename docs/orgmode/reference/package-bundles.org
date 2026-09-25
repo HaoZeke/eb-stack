@@ -14,6 +14,7 @@ BUNDLE/
   locks/<profile>.lock.json
   easyconfigs/<letter>/<name>/<recipe>.eb
   easyconfigs/<letter>/<name>/<patch files>
+  easyblocks/<letter>/<module>.py
 #+end_src
 
 ~package inspect~ writes only the plan and planned SBOM. ~package plan~ and
@@ -244,6 +245,44 @@ eb-stack recipe check \
   --easyconfigs /path/to/upstream/easyconfigs \
   --easyconfigs BUNDLE/easyconfigs
 #+end_src
+
+* Easyblocks shipped with the recipe
+
+Some software cannot be described by an easyconfig alone. SeisSol's
+~HOST_ARCH~ sets the vector width of the kernels its code generators emit, so
+it has to be derived from the build host at configure time, and the binary
+name, and with it the sanity check, follows from that value. That logic
+belongs in a software-specific easyblock, ~EB_SeisSol~, not in a hardcoded
+configure flag or a site hook.
+
+A package layer ships such an easyblock beside its easyconfigs:
+
+#+begin_src toml
+[build]
+easyblock = "EB_SeisSol"
+
+[[build.easyblocks]]
+filename = "seissol.py"
+source = "easyblocks/seissol.py"
+sha256 = "8c80992232a496096e6687679565509f2637d6cd2b03a0bbf49a3bc3a7488713"
+#+end_src
+
+~source~ is relative to the layer file. A layer that sets ~build.easyblocks~
+owns the complete list. Planning and bumping verify each module against its
+SHA-256, parse it (without importing it), and record the classes it defines,
+with their bases and ~extra_options~ keys, under ~build.easyblocks~ in the
+plan. Planning fails when no shipped module defines the class the recipe
+resolves to: the class named by ~build.easyblock~, or the class EasyBuild
+derives from the software name when none is named.
+
+EasyBuild finds a software-specific easyblock by name, and its own easyconfigs
+never spell it out, so when ~build.easyblock~ equals the derived class
+(~EB_SeisSol~ for SeisSol) the emitted recipe has no ~easyblock~ line.
+The writer copies each module to ~easyblocks/<letter>/<module>.py~, the layout
+of the easyblocks repository. A campaign passes every module in that directory
+to EasyBuild as ~--include-easyblocks=FILE,FILE~, so the class exists for the
+build without being installed first. ~examples/packages/seissol-easyblock.toml~
+layers this over ~examples/packages/seissol.toml~.
 
 The bundle establishes ~resolves~ only when every requested profile has a lock
 and recipe. See [[file:campaigns.org][campaign state and findings]] for the build and binary claims.

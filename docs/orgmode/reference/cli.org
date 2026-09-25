@@ -146,6 +146,7 @@ eb-stack recipe check \
   --recipe RECIPE.eb \
   --easyconfigs UPSTREAM \
   [--easyconfigs OVERLAY]... \
+  [--easyblocks DIR_OR_FILE]... \
   [--require-configopt FLAG]... \
   [--metadata-only]
 
@@ -158,6 +159,14 @@ eb-stack recipe format RECIPE.eb --out FORMATTED.eb
 metadata, checksum structure, required configuration flags, or robot
 dependencies are invalid. Missing dependencies remain explicit work; the
 command does not create placeholder recipes.
+
+It also prints ~easyblock_resolution~: the class the recipe resolves to
+(named, or derived from the software name), the file that defines it, its
+bases and its ~extra_options~ keys. A bundle's own ~easyblocks/~ directory,
+beside the ~easyconfigs/~ tree the recipe sits in, is searched first. Naming
+~--easyblocks~ roots, such as an easyblocks checkout, asserts that the set is
+complete: a software-specific ~EB_~ class found in none of them fails the
+check with the message EasyBuild would stop on.
 
 ~recipe format~ only performs deterministic physical-line wrapping. Product
 configuration, source selection, checksums, patches, and sanity paths remain
