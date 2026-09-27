@@ -314,7 +314,13 @@ impl EbProvider {
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, c) in candidates.iter().enumerate() {
             by_name
-                .entry(package_key(&c.name, &c.toolchain, &c.version, &multi_level, &system_multi))
+                .entry(package_key(
+                    &c.name,
+                    &c.toolchain,
+                    &c.version,
+                    &multi_level,
+                    &system_multi,
+                ))
                 .or_default()
                 .push(i);
         }
@@ -547,7 +553,13 @@ impl EbProvider {
 
         let mut keys_by_name: HashMap<String, Vec<String>> = HashMap::new();
         for c in candidates.iter() {
-            let key = package_key(&c.name, &c.toolchain, &c.version, &multi_level, &system_multi);
+            let key = package_key(
+                &c.name,
+                &c.toolchain,
+                &c.version,
+                &multi_level,
+                &system_multi,
+            );
             let entry = keys_by_name.entry(c.name.clone()).or_default();
             if !entry.contains(&key) {
                 entry.push(key);
@@ -1378,7 +1390,7 @@ mod tests {
             forbid: vec![],
             objective: "prefer_newer".into(),
             require_upgrade,
-        criteria: Vec::new(),
+            criteria: Vec::new(),
         }
     }
 

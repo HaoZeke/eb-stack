@@ -132,7 +132,11 @@ pub fn unsatisfiable_deps(universe: &[Candidate], all: &[Candidate]) -> Vec<Stri
     // dependency name -> the candidates in the universe that ask for it
     let mut wanted_by: HashMap<&str, Vec<String>> = HashMap::new();
     for cand in universe {
-        for dep in cand.dependencies.iter().chain(cand.builddependencies.iter()) {
+        for dep in cand
+            .dependencies
+            .iter()
+            .chain(cand.builddependencies.iter())
+        {
             if present.contains(dep.name.as_str()) {
                 continue;
             }
@@ -767,10 +771,7 @@ pub fn hierarchy_for_with_tree(
                 if defined {
                     HierarchyError::UnknownToolchain(parent.name.clone(), parent.version.clone())
                 } else {
-                    HierarchyError::UndefinedToolchain(
-                        parent.name.clone(),
-                        parent.version.clone(),
-                    )
+                    HierarchyError::UndefinedToolchain(parent.name.clone(), parent.version.clone())
                 }
             })
         }

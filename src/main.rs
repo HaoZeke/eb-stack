@@ -625,7 +625,11 @@ fn check_easyblock_resolution(
         .unwrap_or_else(|| eb_stack::eb_easyblock::encode_class_name(&resolved.name));
     let bundle_root = recipe
         .ancestors()
-        .find(|ancestor| ancestor.file_name().is_some_and(|name| name == "easyconfigs"))
+        .find(|ancestor| {
+            ancestor
+                .file_name()
+                .is_some_and(|name| name == "easyconfigs")
+        })
         .and_then(|easyconfigs| easyconfigs.parent())
         .map(|bundle| bundle.join("easyblocks"))
         .filter(|easyblocks| easyblocks.is_dir());
@@ -647,7 +651,10 @@ fn check_easyblock_resolution(
             "searched": roots.iter().map(|root| root.display().to_string()).collect::<Vec<_>>(),
         }))?
     );
-    if found.is_none() && !explicit_roots.is_empty() && class.starts_with(eb_stack::eb_easyblock::EASYBLOCK_CLASS_PREFIX) {
+    if found.is_none()
+        && !explicit_roots.is_empty()
+        && class.starts_with(eb_stack::eb_easyblock::EASYBLOCK_CLASS_PREFIX)
+    {
         bail!(
             "No software-specific easyblock '{class}' found for {}: none of the easyblock roots defines it",
             resolved.name
@@ -707,9 +714,7 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             if charmap {
                 let entries: Vec<_> = STRING_ENCODING_CHARMAP
                     .iter()
-                    .map(|(from, to)| {
-                        serde_json::json!({ "from": from.to_string(), "to": to })
-                    })
+                    .map(|(from, to)| serde_json::json!({ "from": from.to_string(), "to": to }))
                     .collect();
                 println!(
                     "{}",

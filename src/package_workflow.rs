@@ -10,10 +10,10 @@ use crate::hierarchy::{filter_candidates_in_hierarchy, hierarchy_for_with_tree};
 use crate::manifest::package_plan_from_foreign;
 use crate::package::{
     package_plan_to_cyclonedx, BuildSpec, ConditionExpr, DependencyIntent, DependencyRole,
-    EasyblockArtifact,
-    OutputRequest, OverlayExtension, PackageMetadata, PackageOrigin, PackagePlan, PatchArtifact,
-    ProductProfile, ProfileLock, Provenance, Residual, ResidualSeverity, ResidualStage,
-    SourceArtifact, StackPin, StackPinMode, StackPolicy, PACKAGE_SCHEMA_VERSION,
+    EasyblockArtifact, OutputRequest, OverlayExtension, PackageMetadata, PackageOrigin,
+    PackagePlan, PatchArtifact, ProductProfile, ProfileLock, Provenance, Residual,
+    ResidualSeverity, ResidualStage, SourceArtifact, StackPin, StackPinMode, StackPolicy,
+    PACKAGE_SCHEMA_VERSION,
 };
 use crate::package_config::{apply_package_layers, PackageConfigLayer};
 use crate::package_emit::{emit_profile_easyconfigs, EmittedEasyconfig};
@@ -505,7 +505,8 @@ fn adopt_moduleclass_from_tree(plan: &mut PackagePlan, candidates: &[crate::doma
         provenance: None,
     });
     plan.build.moduleclass = Some(existing);
-    plan.residuals.retain(|residual| residual.id != "moduleclass:inferred");
+    plan.residuals
+        .retain(|residual| residual.id != "moduleclass:inferred");
 }
 
 /// Say plainly that a moduleclass was inferred rather than known.
@@ -970,12 +971,13 @@ fn verify_easyblock(
         });
     }
     let text = String::from_utf8_lossy(&bytes);
-    let classes = crate::eb_easyblock::defined_classes(&text, &easyblock.filename).map_err(
-        |message| PackageWorkflowError::EasyblockParse {
-            filename: easyblock.filename.clone(),
-            message,
-        },
-    )?;
+    let classes =
+        crate::eb_easyblock::defined_classes(&text, &easyblock.filename).map_err(|message| {
+            PackageWorkflowError::EasyblockParse {
+                filename: easyblock.filename.clone(),
+                message,
+            }
+        })?;
     if classes.is_empty() {
         return Err(PackageWorkflowError::EasyblockDefinesNoClass(
             easyblock.filename.clone(),
@@ -1182,11 +1184,9 @@ pub fn complete_package_bump(
         .iter()
         .filter(|dependency| !names_the_selected_module(dependency))
         .filter(|dependency| {
-            stated
-                .get(dependency.name.as_str())
-                .is_none_or(|already| {
-                    !crate::hierarchy::toolchains_match(already, &dependency.toolchain)
-                })
+            stated.get(dependency.name.as_str()).is_none_or(|already| {
+                !crate::hierarchy::toolchains_match(already, &dependency.toolchain)
+            })
         })
         .map(|dependency| (dependency.name.clone(), dependency.toolchain.clone()))
         .collect::<HashMap<_, _>>();
@@ -1676,9 +1676,9 @@ pub fn write_package_bundle_into(
         }
         for easyblock in &bundle.plan.build.easyblocks {
             let (source, _) = verify_easyblock(easyblock)?;
-            let directory = recipe_bundle_root
-                .join("easyblocks")
-                .join(crate::eb_easyblock::easyblock_letter_dir(&easyblock.filename));
+            let directory = recipe_bundle_root.join("easyblocks").join(
+                crate::eb_easyblock::easyblock_letter_dir(&easyblock.filename),
+            );
             std::fs::create_dir_all(&directory)
                 .map_err(|error| PackageWorkflowError::Io(directory.clone(), error))?;
             let path = directory.join(&easyblock.filename);

@@ -351,7 +351,10 @@ fn patch_artifacts_emit_names_and_positional_checksums_after_sources() {
     let text = &emitted[0].text;
 
     // A single patch fits on a line, and that is how upstream writes one.
-    assert!(text.contains("patches = ['Orbit-2.0-portability.patch']"), "{text}");
+    assert!(
+        text.contains("patches = ['Orbit-2.0-portability.patch']"),
+        "{text}"
+    );
     let source_checksum = text
         .find("1e67f91eaa9c6325746438164e1ea371ffb7a662e6acb0a15faae90e0867f4fa")
         .expect("source checksum");

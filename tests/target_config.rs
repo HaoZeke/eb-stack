@@ -313,12 +313,18 @@ tmp_root = "/work/tmp"
         .iter()
         .position(|token| token.ends_with("SeisSol-1.3.2-foss-2025a.eb"))
         .expect("recipe token");
-    assert!(include < recipe, "options must precede the recipe: {tokens:?}");
+    assert!(
+        include < recipe,
+        "options must precede the recipe: {tokens:?}"
+    );
     assert!(tokens.contains(&"--robot=/work/bundle/easyconfigs".to_string()));
 
     let plain = targets[0].build_command_with_robot_paths("/work/bundle/x.eb", &[]);
     assert!(
-        !plain.args.iter().any(|token| token.starts_with("--include-easyblocks")),
+        !plain
+            .args
+            .iter()
+            .any(|token| token.starts_with("--include-easyblocks")),
         "no easyblocks means no option: {:?}",
         plain.args
     );

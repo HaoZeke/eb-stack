@@ -683,7 +683,8 @@ fn render_sources(
 
     if let [(source, url)] = resolved.as_slice() {
         if source.target_directory.is_none() {
-            if let Some(sources) = try_render_pypi_primary(package_name, package_version, source, url)
+            if let Some(sources) =
+                try_render_pypi_primary(package_name, package_version, source, url)
             {
                 return SourceBlock {
                     prelude: String::new(),

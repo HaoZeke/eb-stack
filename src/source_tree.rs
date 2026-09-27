@@ -420,7 +420,10 @@ mod sdist_overlay_tests {
         );
         overlay_pyproject(&mut recipe, &path);
         assert!(
-            recipe.build_system_hints.iter().any(|hint| hint.starts_with("backend:")),
+            recipe
+                .build_system_hints
+                .iter()
+                .any(|hint| hint.starts_with("backend:")),
             "hints {:?} deps {:?}",
             recipe.build_system_hints,
             recipe.dependencies

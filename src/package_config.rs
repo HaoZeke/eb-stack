@@ -2,8 +2,8 @@
 
 use crate::package::{
     is_easyconfig_parameter_name, ConditionExpr, ConditionPredicate, DependencyIntent,
-    DependencyRole, EasyblockArtifact, EasyconfigValue, OutputRequest, PackagePlan, PatchArtifact, ProductProfile,
-    VerificationCommand,
+    DependencyRole, EasyblockArtifact, EasyconfigValue, OutputRequest, PackagePlan, PatchArtifact,
+    ProductProfile, VerificationCommand,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

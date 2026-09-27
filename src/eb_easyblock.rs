@@ -163,7 +163,9 @@ pub fn defined_classes(source: &str, path: &str) -> Result<Vec<EasyblockClass>, 
                 .body
                 .iter()
                 .filter_map(|statement| match statement {
-                    ast::Stmt::FunctionDef(function) if function.name.as_str() == "extra_options" => {
+                    ast::Stmt::FunctionDef(function)
+                        if function.name.as_str() == "extra_options" =>
+                    {
                         Some(function)
                     }
                     _ => None,
@@ -347,7 +349,10 @@ class _Helper(object):
     #[test]
     fn extra_options_come_from_that_method_only() {
         let classes = defined_classes(SEISSOL_LIKE, "seissol.py").unwrap();
-        assert_eq!(classes[0].extra_options, ["host_arch", "order", "equations"]);
+        assert_eq!(
+            classes[0].extra_options,
+            ["host_arch", "order", "equations"]
+        );
         assert!(classes[1].extra_options.is_empty());
     }
 
@@ -371,7 +376,11 @@ class _Helper(object):
         std::fs::create_dir_all(&first).unwrap();
         std::fs::create_dir_all(second.join("__pycache__")).unwrap();
         std::fs::write(first.join("seissol.py"), SEISSOL_LIKE).unwrap();
-        std::fs::write(second.join("seissol.py"), "class EB_SeisSol(object):\n    pass\n").unwrap();
+        std::fs::write(
+            second.join("seissol.py"),
+            "class EB_SeisSol(object):\n    pass\n",
+        )
+        .unwrap();
         std::fs::write(second.join("__pycache__/junk.py"), "not python (").unwrap();
         let index = index_easyblocks(&[&base.join("bundle"), &base.join("installed")]).unwrap();
         let (path, class) = &index["EB_SeisSol"];
