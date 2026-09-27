@@ -39,7 +39,7 @@ hooks = [
     args = [
       "--skip=*.lock,*.svg,*.png,*.jpg,*.eb,*.patch,Cargo.lock,pixi.lock",
       "-L",
-      "unparseable,unparsable,intack,notin,thirdparty,anlysis,libray",
+      "unparseable,unparsable,intack,notin,thirdparty,anlysis,libray,atleast,atmost",
     ],
   },
 ]
