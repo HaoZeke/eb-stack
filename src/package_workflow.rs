@@ -1034,12 +1034,25 @@ pub fn prepare_package_bump(
         request.version.as_deref(),
         request.source_checksum.as_deref(),
     );
+    apply_dependency_overrides(&mut plan, &request.overrides);
     apply_package_layers(&mut plan, &request.package_layers)
         .map_err(|error| PackageWorkflowError::Config(error.to_string()))?;
     refresh_checksum_residuals(&mut plan);
     let sbom = package_plan_to_cyclonedx(&plan)
         .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
     Ok((plan, sbom))
+}
+
+/// Make each `--dep` override the dependency's own constraint as well.
+/// Within one generation a recipe dependency is pinned to the version the
+/// recipe names, so an override pin alone contradicts it and the solve fails.
+fn apply_dependency_overrides(plan: &mut PackagePlan, overrides: &HashMap<String, String>) {
+    for dependency in &mut plan.dependencies {
+        let name = dependency.eb_name.as_deref().unwrap_or(&dependency.name);
+        if let Some(version) = overrides.get(name) {
+            dependency.constraint = Some(format!("=={version}"));
+        }
+    }
 }
 
 /// Fold package-specific `--dep` overrides into locked stack pins.

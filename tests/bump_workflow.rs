@@ -874,3 +874,67 @@ fn package_config_merge_keeps_the_source_patch_file() {
         written.patches
     );
 }
+
+#[test]
+fn dep_override_moves_a_same_generation_dependency() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Alpha-1.0-GCCcore-15.2.0.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'Alpha'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+         toolchain = {'name': 'GCCcore', 'version': '15.2.0'}\n\
+         sources = ['alpha-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [('LibDep', '1.0')]\nmoduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    for version in ["1.0", "2.0"] {
+        fs::write(
+            robot.join(format!("LibDep-{version}-GCCcore-15.2.0.eb")),
+            format!(
+                "easyblock = 'ConfigureMake'\nname = 'LibDep'\nversion = '{version}'\n\
+                 homepage = 'https://example.invalid/'\ndescription = 'Library'\n\
+                 toolchain = {{'name': 'GCCcore', 'version': '15.2.0'}}\n\
+                 sources = []\nchecksums = []\nmoduleclass = 'lib'\n"
+            ),
+        )
+        .expect("candidate");
+    }
+    let toolchain = Toolchain {
+        name: "GCCcore".into(),
+        version: "15.2.0".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: None,
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::from([("LibDep".to_string(), "2.0".to_string())]),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: Vec::new(),
+    })
+    .expect("a --dep override within one generation solves");
+    let locked = bundle.locks[0]
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "LibDep")
+        .expect("LibDep lock");
+    assert_eq!(locked.version, "2.0");
+    let recipe = resolve_easyconfig_str(&bundle.easyconfigs[0].text).expect("parse bumped recipe");
+    assert!(recipe
+        .dependencies
+        .iter()
+        .any(|dependency| dependency.name == "LibDep" && dependency.version == "2.0"));
+}
