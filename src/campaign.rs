@@ -1258,6 +1258,27 @@ pub enum CampaignError {
     Json(PathBuf, serde_json::Error),
 }
 
+/// Easyblock modules under a bundle's `easyblocks/` directory, sorted.
+fn bundle_easyblocks(bundle: &Path) -> Vec<PathBuf> {
+    fn walk(directory: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|extension| extension == "py") {
+                out.push(path);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&bundle.join("easyblocks"), &mut out);
+    out.sort();
+    out
+}
+
 #[cfg(test)]
 mod campaign_lock_tests {
     use super::*;
@@ -1333,25 +1354,4 @@ mod campaign_lock_tests {
 
         drop(lock);
     }
-}
-
-/// Easyblock modules under a bundle's `easyblocks/` directory, sorted.
-fn bundle_easyblocks(bundle: &Path) -> Vec<PathBuf> {
-    fn walk(directory: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(directory) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk(&path, out);
-            } else if path.extension().is_some_and(|extension| extension == "py") {
-                out.push(path);
-            }
-        }
-    }
-    let mut out = Vec::new();
-    walk(&bundle.join("easyblocks"), &mut out);
-    out.sort();
-    out
 }
