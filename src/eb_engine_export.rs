@@ -20,9 +20,9 @@
 
 use serde_json::{json, Value};
 
+use crate::domain::Toolchain;
 use crate::eb_template_constants::EB_TEMPLATE_CONSTANTS;
 use crate::hierarchy::known_hierarchy;
-use crate::domain::Toolchain;
 
 /// How a derived template value is produced from the recipe's own fields.
 ///

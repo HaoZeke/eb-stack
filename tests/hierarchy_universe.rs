@@ -328,7 +328,9 @@ fn a_pin_that_admits_nothing_is_named_ahead_of_the_pins_that_are_fine() {
     let report = eb_stack::select::policy_constraints_report(&policy, &all);
     assert!(!report.is_empty(), "constraints in force must be reported");
 
-    let impossible = report.find("CMake").expect("the unsatisfiable pin: {report}");
+    let impossible = report
+        .find("CMake")
+        .expect("the unsatisfiable pin: {report}");
     let satisfiable = report.find("FlexiBLAS").expect("the other pin: {report}");
     assert!(
         impossible < satisfiable,
@@ -394,7 +396,11 @@ fn the_build_list_and_the_sbom_carry_both_levels_separately() {
 
     // And in an order that can actually be built: zlib build-depends on the
     // SYSTEM Perl, OpenMPI on the GCCcore one and on zlib.
-    let at = |needle: &str| listing.find(needle).unwrap_or_else(|| panic!("{needle} absent:\n{listing}"));
+    let at = |needle: &str| {
+        listing
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} absent:\n{listing}"))
+    };
     assert!(
         at("Perl-5.38.0.eb") < at("zlib-2.3.2-GCCcore-15.2.0.eb"),
         "a build dependency has to come first:\n{listing}"
@@ -412,8 +418,14 @@ fn the_build_list_and_the_sbom_carry_both_levels_separately() {
     // used at two versions rather than two components existing.
     let bom = eb_stack::lock_to_cyclonedx(&lock);
     let doc = serde_json::to_string(&bom).unwrap();
-    assert!(doc.contains("5.38.0"), "bootstrap Perl absent from the SBOM");
-    assert!(doc.contains("5.42.0"), "generation Perl absent from the SBOM");
+    assert!(
+        doc.contains("5.38.0"),
+        "bootstrap Perl absent from the SBOM"
+    );
+    assert!(
+        doc.contains("5.42.0"),
+        "generation Perl absent from the SBOM"
+    );
     let perl_components = bom["components"]
         .as_array()
         .expect("components is an array")

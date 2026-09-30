@@ -397,9 +397,12 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
     let staged_easyblocks = bundle_easyblocks(&request.bundle)
         .into_iter()
         .filter_map(|path| {
-            path.strip_prefix(&request.bundle)
-                .ok()
-                .map(|relative| Path::new(&staged_bundle).join(relative).display().to_string())
+            path.strip_prefix(&request.bundle).ok().map(|relative| {
+                Path::new(&staged_bundle)
+                    .join(relative)
+                    .display()
+                    .to_string()
+            })
         })
         .collect::<Vec<_>>();
     for recipe in recipes {

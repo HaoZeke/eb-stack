@@ -2157,7 +2157,10 @@ mod tests {
             "Environment :: Console".to_string(),
             "Topic :: Utilities".to_string(),
         ];
-        assert_eq!(moduleclass_from_classifiers(&tools).as_deref(), Some("tools"));
+        assert_eq!(
+            moduleclass_from_classifiers(&tools).as_deref(),
+            Some("tools")
+        );
         // Bio-informatics beats the library topic it also carries: upstream
         // classes such a package as bio, not lib.
         let both = vec![

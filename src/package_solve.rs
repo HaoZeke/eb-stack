@@ -213,7 +213,9 @@ pub fn solve_package_profile_with_hierarchy(
     let own = plan.package.name.clone();
     original_candidates.retain(|candidate| {
         !candidate.is_extension_provide()
-            || candidate.extension_parent_name().is_none_or(|parent| parent != own)
+            || candidate
+                .extension_parent_name()
+                .is_none_or(|parent| parent != own)
     });
     // A dependency written without a toolchain means "at my own level", so
     // for a recipe inside a generation the system-level build of that name is

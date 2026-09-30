@@ -68,7 +68,10 @@ fn an_unknown_criterion_is_refused_with_the_known_ones_named() {
         .validate_criteria()
         .expect_err("an unknown criterion must not pass validation");
     assert!(err.contains("-newest"), "{err}");
-    assert!(err.contains("-changed"), "the message should name what is known: {err}");
+    assert!(
+        err.contains("-changed"),
+        "the message should name what is known: {err}"
+    );
     assert!(policy(false, vec!["-changed"]).validate_criteria().is_ok());
 }
 

@@ -49,11 +49,8 @@ pub fn ordered_packages<'a>(
         )
     }
 
-    let by_key: BTreeMap<String, &LockPackage> = lock
-        .packages
-        .iter()
-        .map(|p| (module_key(p), p))
-        .collect();
+    let by_key: BTreeMap<String, &LockPackage> =
+        lock.packages.iter().map(|p| (module_key(p), p)).collect();
     let selected: BTreeSet<String> = by_key.keys().cloned().collect();
     // dep_map speaks in names, because a recipe names a dependency without
     // saying which level answers it. A name therefore constrains every selected

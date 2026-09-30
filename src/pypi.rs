@@ -153,7 +153,9 @@ fn recipe_from_warehouse(value: &Value) -> Result<ForeignRecipe, ForeignError> {
                     residuals.push(ForeignResidual {
                         category: "pypi-requirement".into(),
                         severity: ResidualSeverity::Mechanical,
-                        summary: format!("{name} comes with the Python module, so it is not a dependency"),
+                        summary: format!(
+                            "{name} comes with the Python module, so it is not a dependency"
+                        ),
                         evidence: Some(original),
                         provenance: None,
                     });

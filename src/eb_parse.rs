@@ -227,9 +227,8 @@ fn strip_comments(src: &str) -> String {
         let mut i = 0usize;
         while i < b.len() {
             let c = b[i];
-            let tripled = (c == b'"' || c == b'\'')
-                && b.get(i + 1) == Some(&c)
-                && b.get(i + 2) == Some(&c);
+            let tripled =
+                (c == b'"' || c == b'\'') && b.get(i + 1) == Some(&c) && b.get(i + 2) == Some(&c);
             match triple {
                 Some(quote) => {
                     if tripled && c == quote {
@@ -1216,7 +1215,10 @@ fn string_method(receiver: &Value, name: &str, args: &[Value]) -> Result<Value, 
         ("lower", []) => Ok(Value::Str(text()?.to_lowercase())),
         ("upper", []) => Ok(Value::Str(text()?.to_uppercase())),
         ("strip", []) => Ok(Value::Str(text()?.trim().to_string())),
-        _ => Err(format!("unsupported method .{name}() with {} args", args.len())),
+        _ => Err(format!(
+            "unsupported method .{name}() with {} args",
+            args.len()
+        )),
     }
 }
 
@@ -3108,10 +3110,7 @@ mod tests {
                    zmqversion = '3.2.2'\npythonversion = '2.7.3'\n\
                    versionsuffix = '-Python-%s-%s' % (pythonversion, 'zmq%s' % zmqversion.split('.')[0])\n";
         let parsed = resolve_easyconfig_str(src).expect("parse");
-        assert_eq!(
-            parsed.versionsuffix.as_deref(),
-            Some("-Python-2.7.3-zmq3")
-        );
+        assert_eq!(parsed.versionsuffix.as_deref(), Some("-Python-2.7.3-zmq3"));
     }
 
     #[test]
