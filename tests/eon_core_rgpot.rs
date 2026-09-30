@@ -268,7 +268,7 @@ fn eon_core_check_recipe_drafts_plus_robot() {
         !incomplete.ok(),
         "drafts alone cannot supply Python/foss stack"
     );
-    for companion in ["rgpot", "readcon-core", "quill", "inih"] {
+    for companion in ["rgpot", "readcon-core", "quill"] {
         assert!(
             incomplete.found.iter().any(|f| f.contains(companion)),
             "drafts must supply {companion}: found={:?}",

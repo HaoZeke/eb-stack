@@ -2,9 +2,7 @@
 //! class, ships the module, and the emitted recipes carry none of what the
 //! easyblock derives.
 
-use eb_stack::package::{
-    LockedDependency, OutputRequest, ProfileLock, PROFILE_LOCK_SCHEMA_VERSION,
-};
+use eb_stack::package::{LockedDependency, ProfileLock, PROFILE_LOCK_SCHEMA_VERSION};
 use eb_stack::package_config::{apply_package_layers, PackageConfigLayer};
 use eb_stack::{
     emit_profile_easyconfigs, package_plan_from_foreign, parse_foreign_path, ForeignFormat,
