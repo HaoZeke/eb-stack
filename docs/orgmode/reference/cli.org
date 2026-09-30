@@ -81,6 +81,12 @@ inputs close the hole without inventing versions:
   without a TOML file (order is discovery order);
 - ~--package-catalog~ layers explicit foreign or ~easybuild-bump~ providers as
   ordered overrides.
+- ~--emit-easyblock~ renders an easyblock skeleton for the package into
+  ~easyblocks/<letter>/<module>.py~, ships it with the recipes, names the
+  derived class as the easyblock and moves the variant options out of the
+  emitted recipes. Without it a package that owes an easyblock gets a
+  ~missing-easyblock~ residual. It does not combine with closure planning.
+  ~package bump~ takes the same flag.
 
 Robot candidates win over catalog entries. A closed plan writes companion
 packages under ~packages/~, a shared ~easyconfigs/~ overlay, topological

@@ -49,6 +49,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "hierarchy_fixture",
         "stack_policy",
         "package_configs",
+        "emit_easyblock",
     ] {
         assert!(
             package_bump["inputSchema"]["properties"]
@@ -106,6 +107,10 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     assert_eq!(
         package_plan["inputSchema"]["properties"]["package_configs"]["type"],
         "array"
+    );
+    assert_eq!(
+        package_plan["inputSchema"]["properties"]["emit_easyblock"]["type"],
+        "boolean"
     );
     assert_eq!(
         package_plan["inputSchema"]["properties"]["package_catalogs"]["type"],

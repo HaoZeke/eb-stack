@@ -286,3 +286,71 @@ layers this over ~examples/packages/seissol.toml~.
 
 The bundle establishes ~resolves~ only when every requested profile has a lock
 and recipe. See [[file:campaigns.org][campaign state and findings]] for the build and binary claims.
+
+* When a package owes an easyblock
+
+A package that carries variant logic as data repeats that logic in every
+recipe. A software-specific easyblock holds it once, and the easyconfigs lean
+on it. ~package plan~ and ~package bump~ decide whether a package owes one
+when its recipe resolves to a generic easyblock: ~build.easyblock~ names none
+or a class other than the one EasyBuild derives from the software name, and no
+shipped module defines the derived class. Any one of three triggers applies:
+
+1. Two or more profiles whose ~config_options~ differ from each other, after
+   the build-level options. A variant switch such as QMCPACK's
+   ~-DQMC_COMPLEX=ON~ against ~-DQMC_COMPLEX=OFF~ is this case.
+2. The build-level or any profile ~easyconfig_parameters~ carry
+   ~sanity_check_paths~, ~sanity_check_commands~, ~test_cmd~, ~testopts~,
+   ~pretestopts~, or ~runtest~ as a string command.
+3. A profile's ~sanity_check_paths.files~ or ~sanity_check_commands~ names a
+   binary that differs between profiles, as ~qmcpack~ and ~qmcpack_complex~ do.
+
+The plan then records one residual. Its stage is ~emit~, its category
+~missing-easyblock~, its severity ~judgment~, and its id
+~missing-easyblock:<class>~, for example ~missing-easyblock:EB_QMCPACK~. The
+summary names the derived class. The evidence lists the profile option
+differences, the parameters, and the binary names that would move into it.
+
+~--emit-easyblock~ on ~package plan~ and ~package bump~ (the ~emit_easyblock~
+argument of the MCP tools) renders a skeleton instead of leaving the residual:
+
+#+begin_src bash
+eb-stack package plan --emit-easyblock \
+  --source fixtures/foreign_ingest/spack_qmcpack/package.py \
+  --package-config examples/packages/qmcpack.toml \
+  --toolchain-version 2026.1 \
+  --easyconfigs /path/to/upstream/easyconfigs \
+  --stack-policy policy.toml \
+  --out-dir BUNDLE
+#+end_src
+
+The flag writes ~easyblocks/<letter>/<module>.py~ in the bundle, for QMCPACK
+~easyblocks/q/qmcpack.py~, records it under ~build.easyblocks~ with its
+SHA-256, and sets ~build.easyblock~ to the derived class, so no residual is
+raised. The module derives from the plan's easyblock (~CMakeMake~ when the
+plan names none) and carries:
+
+- one ~CUSTOM~ parameter per feature, with the default profile's value;
+- a ~configure_step~ that passes the options present in the profiles where a
+  feature is true and absent where it is false, and never overrides a
+  ~-D<option>=~ already in ~configopts~;
+- a ~test_step~ when ~test_cmd~, ~testopts~, or ~pretestopts~ exist, which
+  runs only when ~runtest~ is true;
+- a ~sanity_check_step~ built from ~sanity_check_paths~ and
+  ~sanity_check_commands~, with a binary name that differs between profiles
+  chosen by the feature that flips it;
+- ~make_module_extra~ from ~modextrapaths~.
+
+The options the class sets leave the emitted recipes, which then select a
+variant with a boolean parameter such as ~complex = True~. Options shared by
+every profile stay in the easyconfig. The recipes keep their test and sanity
+parameters, so the skeleton and the recipes agree until a human moves them.
+
+The module is a starting point. Its docstring says so, it has not been built,
+and a human completes and reviews it before it ships. The rendered text
+parses with the same reader that checks shipped modules, keeps lines within
+120 characters, and carries the EasyBuild copyright header.
+~examples/packages/easyblocks/qmcpack.py~ shows a finished easyblock of this
+shape. ~package bump --emit-easyblock~ writes the module and updates the plan
+manifest; the retargeted recipe keeps the text of its source recipe. The flag
+does not combine with package-closure planning.

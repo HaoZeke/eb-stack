@@ -6,6 +6,16 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `package plan` and `package bump` raise a `missing-easyblock` residual
+  (stage `emit`, severity `judgment`, id `missing-easyblock:<class>`) when a
+  package resolves to a generic easyblock and carries variant options that
+  differ between profiles, hand-written test or sanity parameters, or a
+  binary name that follows the profiles. `--emit-easyblock` (MCP argument
+  `emit_easyblock`) renders an easyblock skeleton to
+  `easyblocks/<letter>/<module>.py`, ships it with the recipes, and moves the
+  variant options out of the emitted easyconfigs. See "When a package owes an
+  easyblock" in `docs/orgmode/reference/package-bundles.org`.
+
 - Overlay planning treats existing robot modules as leaves: a `Python`
   easyconfig that names `binutils` no longer makes `package plan --format
   pypi` unsatisfiable. `--easyconfigs` is the solve robot only; it does
