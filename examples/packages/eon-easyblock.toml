@@ -12,6 +12,8 @@ schema_version = 1
 [build]
 easyblock = "EB_eOn"
 
+drop_easyconfig_parameters = ["sanity_check_commands", "sanity_check_paths", "modextrapaths"]
+
 [[build.easyblocks]]
 filename = "eon.py"
 source = "easyblocks/eon.py"
