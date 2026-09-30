@@ -1,0 +1,47 @@
+schema_version = 1
+
+# Layer after qmcpack.toml. The build variant (real or complex, precision,
+# GPU) is a set of CMake options that also names the installed binary, so
+# EB_QMCPACK derives them from the versionsuffix, the toolchain options and
+# the dependencies, runs the deterministic ctest label, and derives the
+# sanity check and the Nexus PYTHONPATH. The emitted easyconfig then names
+# no easyblock, no -DQMC_* flag, no sanity block and no test command.
+#
+#   --package-config examples/packages/qmcpack.toml
+#   --package-config examples/packages/qmcpack-easyblock.toml
+
+[build]
+easyblock = "EB_QMCPACK"
+
+drop_easyconfig_parameters = ["start_dir", "pretestopts", "test_cmd", "testopts", "sanity_check_commands", "sanity_check_paths", "modextrapaths"]
+
+[[build.easyblocks]]
+filename = "qmcpack.py"
+source = "easyblocks/qmcpack.py"
+sha256 = "9d15e1c4624c6bfeff7a9884cc81500da27fd05e6ec0a27a4b5a77bb544829e5"
+
+[build.easyconfig_parameters]
+runtest = true
+
+[[profiles]]
+name = "default"
+default = true
+config_options = []
+
+[profiles.features]
+mpi = true
+complex = false
+mixed = false
+
+[profiles.toolchain_options]
+usempi = true
+openmp = true
+
+[[profiles]]
+name = "complex"
+inherits = "default"
+versionsuffix = ["-complex"]
+config_options = []
+
+[profiles.features]
+complex = true

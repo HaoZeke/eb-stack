@@ -99,6 +99,15 @@ pub struct PackageBundle {
     pub easyconfigs: Vec<EmittedEasyconfig>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Choices that change what planning emits, beyond what the request says.
+pub struct PackageEmitOptions {
+    /// Bundle root under which a rendered easyblock skeleton is written, as
+    /// `easyblocks/<letter>/<module>.py`. `None` leaves the plan's easyblock
+    /// as it is and raises the `missing-easyblock` residual when one is owed.
+    pub easyblock_skeleton_root: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Where a written bundle landed, so a caller can report or verify the paths.
 pub struct WrittenPackageBundle {
@@ -232,6 +241,25 @@ pub fn complete_package_bundle_with_hierarchy(
     stack_policy: &StackPolicy,
     hierarchy_fixture: Option<&Path>,
 ) -> Result<PackageBundle, PackageWorkflowError> {
+    complete_package_bundle_with_options(
+        plan,
+        sbom,
+        candidates,
+        stack_policy,
+        hierarchy_fixture,
+        &PackageEmitOptions::default(),
+    )
+}
+
+/// Like [`complete_package_bundle_with_hierarchy`], with emission options.
+pub fn complete_package_bundle_with_options(
+    plan: PackagePlan,
+    sbom: Value,
+    candidates: &[crate::domain::Candidate],
+    stack_policy: &StackPolicy,
+    hierarchy_fixture: Option<&Path>,
+    options: &PackageEmitOptions,
+) -> Result<PackageBundle, PackageWorkflowError> {
     if matches!(
         plan.origin,
         PackageOrigin::Pypi | PackageOrigin::Cran | PackageOrigin::Cargo
@@ -280,7 +308,11 @@ pub fn complete_package_bundle_with_hierarchy(
             .map_err(|error| PackageWorkflowError::Solve(error.to_string()))?,
         );
     }
+    if let Some(bundle_root) = options.easyblock_skeleton_root.as_deref() {
+        emit_easyblock_skeleton(&mut plan, bundle_root)?;
+    }
     materialize_easyblocks(&mut plan)?;
+    raise_missing_easyblock(&mut plan);
     require_source_checksums(&plan)?;
     let easyconfigs = emit_profile_easyconfigs(&plan, &locks)
         .map_err(|error| PackageWorkflowError::Emit(error.to_string()))?;
@@ -763,6 +795,14 @@ fn already_provided_bundle(
 pub fn plan_new_package(
     request: &NewPackageRequest,
 ) -> Result<PackageBundle, PackageWorkflowError> {
+    plan_new_package_with(request, &PackageEmitOptions::default())
+}
+
+/// Like [`plan_new_package`], with emission options.
+pub fn plan_new_package_with(
+    request: &NewPackageRequest,
+    options: &PackageEmitOptions,
+) -> Result<PackageBundle, PackageWorkflowError> {
     if request.easyconfig_roots.is_empty() {
         return Err(PackageWorkflowError::NoEasyconfigRoots);
     }
@@ -775,7 +815,14 @@ pub fn plan_new_package(
         .collect::<Vec<_>>();
     let tree = parse_easyconfig_trees(&roots)
         .map_err(|error| PackageWorkflowError::Robot(error.to_string()))?;
-    complete_package_bundle(plan, sbom, &tree.candidates, &request.stack_policy)
+    complete_package_bundle_with_options(
+        plan,
+        sbom,
+        &tree.candidates,
+        &request.stack_policy,
+        None,
+        options,
+    )
 }
 
 fn apply_source_checksums(
@@ -944,6 +991,95 @@ fn materialize_easyblocks(plan: &mut PackagePlan) -> Result<(), PackageWorkflowE
     Ok(())
 }
 
+/// The `missing-easyblock` residual a plan owes, or `None`.
+///
+/// Raised when the recipe resolves to a generic easyblock and the plan carries
+/// variant options, a binary name that follows them, or hand-written test and
+/// sanity parameters. See [`crate::easyblock_skeleton::owed_easyblock`] for the
+/// triggers. The id is `missing-easyblock:<class>`, where the class is the one
+/// EasyBuild derives from the software name.
+pub fn missing_easyblock_residual(plan: &PackagePlan) -> Option<Residual> {
+    let owed = crate::easyblock_skeleton::owed_easyblock(plan)?;
+    Some(Residual {
+        id: format!("missing-easyblock:{}", owed.class_name),
+        stage: ResidualStage::Emit,
+        category: "missing-easyblock".into(),
+        severity: ResidualSeverity::Judgment,
+        summary: format!(
+            "{} is owed: the recipes carry variant options, variant binary names or hand-written \
+             test and sanity parameters that belong in a software-specific easyblock",
+            owed.class_name
+        ),
+        evidence: Some(owed.evidence()),
+        provenance: None,
+    })
+}
+
+/// Record the `missing-easyblock` residual on the plan, once.
+pub fn raise_missing_easyblock(plan: &mut PackagePlan) {
+    if let Some(residual) = missing_easyblock_residual(plan) {
+        if !plan
+            .residuals
+            .iter()
+            .any(|existing| existing.id == residual.id)
+        {
+            plan.residuals.push(residual);
+        }
+    }
+}
+
+/// Render an easyblock skeleton for the plan and ship it with the bundle.
+///
+/// Writes the module to `easyblocks/<letter>/<module>.py` under `bundle_root`,
+/// records it in `plan.build.easyblocks` with its SHA-256, names the derived
+/// class as the plan's easyblock, and moves the options and parameters the
+/// class owns out of the recipes. Returns the written path, or `None` when the
+/// plan already names the derived class or ships a module that defines it.
+pub fn emit_easyblock_skeleton(
+    plan: &mut PackagePlan,
+    bundle_root: &Path,
+) -> Result<Option<PathBuf>, PackageWorkflowError> {
+    let class = crate::easyblock_skeleton::derived_class(plan);
+    if plan.build.easyblock.as_deref() == Some(class.as_str())
+        || crate::easyblock_skeleton::ships_class(plan, &class)
+    {
+        return Ok(None);
+    }
+    let filename = crate::easyblock_skeleton::module_filename(plan);
+    validate_path_segment(&filename, "easyblock filename")?;
+    if plan
+        .build
+        .easyblocks
+        .iter()
+        .any(|easyblock| easyblock.filename == filename)
+    {
+        return Err(PackageWorkflowError::EasyblockSkeleton(format!(
+            "the plan already ships a module named {filename} that does not define {class}"
+        )));
+    }
+    let text =
+        crate::easyblock_skeleton::render(plan).map_err(PackageWorkflowError::EasyblockSkeleton)?;
+    let classes = crate::eb_easyblock::defined_classes(&text, &filename)
+        .map_err(PackageWorkflowError::EasyblockSkeleton)?;
+    let directory = bundle_root
+        .join("easyblocks")
+        .join(crate::eb_easyblock::easyblock_letter_dir(&filename));
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| PackageWorkflowError::Io(directory.clone(), error))?;
+    let path = directory.join(&filename);
+    std::fs::write(&path, &text).map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
+    plan.build.easyblocks.push(EasyblockArtifact {
+        filename,
+        sha256: Some(sha256_hex(text.as_bytes())),
+        source: Some(path.display().to_string()),
+        classes,
+        resolved_source: Some(path.clone()),
+    });
+    crate::easyblock_skeleton::apply_takeover(plan);
+    plan.build.easyblock = Some(class);
+    Ok(Some(path))
+}
+
 /// Check one easyblock module against its declared checksum and parse it.
 fn verify_easyblock(
     easyblock: &EasyblockArtifact,
@@ -1085,11 +1221,32 @@ pub fn stack_policy_with_bump_overrides(
 /// Solve the bumped plan and emit the new easyconfig.
 pub fn complete_package_bump(
     request: &BumpPackageRequest,
-    mut plan: PackagePlan,
+    plan: PackagePlan,
     candidates: &[crate::domain::Candidate],
     stack_policy: &StackPolicy,
 ) -> Result<PackageBundle, PackageWorkflowError> {
+    complete_package_bump_with_options(
+        request,
+        plan,
+        candidates,
+        stack_policy,
+        &PackageEmitOptions::default(),
+    )
+}
+
+/// Like [`complete_package_bump`], with emission options.
+pub fn complete_package_bump_with_options(
+    request: &BumpPackageRequest,
+    mut plan: PackagePlan,
+    candidates: &[crate::domain::Candidate],
+    stack_policy: &StackPolicy,
+    options: &PackageEmitOptions,
+) -> Result<PackageBundle, PackageWorkflowError> {
+    if let Some(bundle_root) = options.easyblock_skeleton_root.as_deref() {
+        emit_easyblock_skeleton(&mut plan, bundle_root)?;
+    }
     materialize_easyblocks(&mut plan)?;
+    raise_missing_easyblock(&mut plan);
     let source_recipe = resolve_easyconfig_file(&request.source)
         .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     let version_changed = request
@@ -1393,6 +1550,14 @@ pub fn complete_package_bump(
 pub fn plan_package_bump(
     request: &BumpPackageRequest,
 ) -> Result<PackageBundle, PackageWorkflowError> {
+    plan_package_bump_with(request, &PackageEmitOptions::default())
+}
+
+/// Like [`plan_package_bump`], with emission options.
+pub fn plan_package_bump_with(
+    request: &BumpPackageRequest,
+    options: &PackageEmitOptions,
+) -> Result<PackageBundle, PackageWorkflowError> {
     if request.easyconfig_roots.is_empty() {
         return Err(PackageWorkflowError::NoEasyconfigRoots);
     }
@@ -1405,7 +1570,7 @@ pub fn plan_package_bump(
     let tree = parse_easyconfig_trees(&roots)
         .map_err(|error| PackageWorkflowError::Robot(error.to_string()))?;
     let stack_policy = stack_policy_with_bump_overrides(&request.stack_policy, &request.overrides);
-    complete_package_bump(request, plan, &tree.candidates, &stack_policy)
+    complete_package_bump_with_options(request, plan, &tree.candidates, &stack_policy, options)
 }
 
 fn package_plan_from_easyconfig(
@@ -1710,8 +1875,16 @@ pub fn write_package_bundle_into(
                 }
                 None => {
                     claimed_paths.insert(key, content);
-                    std::fs::copy(&source, &path)
-                        .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
+                    // A module rendered into the bundle already sits at its
+                    // destination, and copying a file onto itself empties it.
+                    let in_place = matches!(
+                        (source.canonicalize(), path.canonicalize()),
+                        (Ok(from), Ok(to)) if from == to
+                    );
+                    if !in_place {
+                        std::fs::copy(&source, &path)
+                            .map_err(|error| PackageWorkflowError::Io(path.clone(), error))?;
+                    }
                 }
             }
             easyblocks.push(path);
@@ -2090,6 +2263,9 @@ pub enum PackageWorkflowError {
     /// The easyconfig could not be rendered.
     #[error("EasyBuild recipe emission: {0}")]
     Emit(String),
+    /// An easyblock skeleton could not be rendered or placed.
+    #[error("easyblock skeleton: {0}")]
+    EasyblockSkeleton(String),
     /// A bundle file could not be written.
     #[error("write {0}: {1}")]
     Io(

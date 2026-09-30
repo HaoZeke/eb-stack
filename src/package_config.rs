@@ -96,6 +96,11 @@ pub struct BuildPatch {
     /// against the known EasyBuild parameter names.
     #[serde(default)]
     pub easyconfig_parameters: BTreeMap<String, EasyconfigValue>,
+    /// Easyconfig parameters removed from the build level and from every
+    /// profile, for what a shipped easyblock derives itself (a sanity block,
+    /// a test command, a module path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop_easyconfig_parameters: Option<Vec<String>>,
 }
 
 /// How a package layer combines its patches with artifacts extracted from the
@@ -472,6 +477,12 @@ pub fn apply_package_layers(
             plan.build
                 .easyconfig_parameters
                 .extend(build.easyconfig_parameters.clone());
+            for name in build.drop_easyconfig_parameters.iter().flatten() {
+                plan.build.easyconfig_parameters.remove(name);
+                for profile in &mut plan.profiles {
+                    profile.easyconfig_parameters.remove(name);
+                }
+            }
         }
         if let Some(dependencies) = &layer.dependencies {
             for dependency in &mut plan.dependencies {

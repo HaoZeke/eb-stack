@@ -1,0 +1,39 @@
+schema_version = 1
+
+# Layer after eon.toml. eOn's Meson options move between releases and each
+# follows a dependency, so EB_eOn turns on every option whose dependencies
+# are present, passes only the options the source declares, runs
+# meson test --suite eon, and checks eonclient and the eon package. The
+# emitted easyconfig names no easyblock, no -Dwith_* flag and no sanity block.
+#
+#   --package-config examples/packages/eon.toml
+#   --package-config examples/packages/eon-easyblock.toml
+
+[build]
+easyblock = "EB_eOn"
+
+drop_easyconfig_parameters = ["sanity_check_commands", "sanity_check_paths", "modextrapaths"]
+
+[[build.easyblocks]]
+filename = "eon.py"
+source = "easyblocks/eon.py"
+sha256 = "eadff15ad401f0925211d7e6406b3d36454487ce49df0e02a7df2d4dd7b6fe9e"
+
+[build.easyconfig_parameters]
+runtest = true
+
+[[profiles]]
+name = "default"
+default = true
+config_options = ["--wrap-mode=nodownload", "-Dbuildtype=release"]
+
+[profiles.features]
+metatomic = false
+xtb = false
+serve = false
+rgpot = true
+mpi = false
+
+[profiles.toolchain_options]
+openmp = true
+pic = true

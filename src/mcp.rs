@@ -16,8 +16,8 @@ use crate::package_closure::{plan_package_closure_with_sources, write_package_cl
 use crate::package_config::PackageConfigLayer;
 use crate::package_sources::{PackageSourceRoots, SourceRootKind};
 use crate::package_workflow::{
-    inspect_new_package, plan_new_package, plan_package_bump, write_package_bundle,
-    BumpPackageRequest, NewPackageRequest, PackageBundle,
+    inspect_new_package, plan_new_package_with, plan_package_bump_with, write_package_bundle,
+    BumpPackageRequest, NewPackageRequest, PackageBundle, PackageEmitOptions,
 };
 use crate::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use crate::{
@@ -137,6 +137,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("conda_sources", "array"),
                 ("spack_sources", "array"),
                 ("cargo_sources", "array"),
+                ("emit_easyblock", "boolean"),
             ],
         ),
         tool_with_optional(
@@ -156,6 +157,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("hierarchy_fixture", "string"),
                 ("stack_policy", "string"),
                 ("package_configs", "array"),
+                ("emit_easyblock", "boolean"),
             ],
         ),
         tool_with_optional(
@@ -343,8 +345,16 @@ fn package_plan(arguments: &Value) -> Result<Value, String> {
         .collect::<Vec<_>>();
     let source_roots = load_package_source_roots(arguments)?;
     let use_closure = !catalog_paths.is_empty() || !source_roots.source_roots.is_empty();
+    let emit_easyblock = optional_bool(arguments, "emit_easyblock");
+    if use_closure && emit_easyblock {
+        return Err("emit_easyblock does not combine with package-closure planning".into());
+    }
     if !use_closure {
-        let bundle = plan_new_package(&request).map_err(|error| error.to_string())?;
+        let options = PackageEmitOptions {
+            easyblock_skeleton_root: emit_easyblock.then(|| output.clone()),
+        };
+        let bundle =
+            plan_new_package_with(&request, &options).map_err(|error| error.to_string())?;
         let written = write_package_bundle(&bundle, &output).map_err(|error| error.to_string())?;
         return Ok(json!({
             "package": bundle.plan.package.name,
@@ -444,18 +454,26 @@ fn package_bump(arguments: &Value) -> Result<Value, String> {
             exclusions: Vec::new(),
         }
     };
-    let bundle = plan_package_bump(&BumpPackageRequest {
-        source: required_path(arguments, "source")?,
-        toolchain: target,
-        version: optional_string(arguments, "version"),
-        source_checksum: optional_string(arguments, "source_checksum"),
-        easyconfig_roots: path_array(arguments, "easyconfigs")?,
-        hierarchy_fixture: optional_path(arguments, "hierarchy_fixture"),
-        overrides: string_map(arguments, "dependencies")?,
-        stack_policy,
-        strict_patches: false,
-        package_layers: package_layers(arguments)?,
-    })
+    let options = PackageEmitOptions {
+        easyblock_skeleton_root: optional_bool(arguments, "emit_easyblock")
+            .then(|| required_path(arguments, "out_dir"))
+            .transpose()?,
+    };
+    let bundle = plan_package_bump_with(
+        &BumpPackageRequest {
+            source: required_path(arguments, "source")?,
+            toolchain: target,
+            version: optional_string(arguments, "version"),
+            source_checksum: optional_string(arguments, "source_checksum"),
+            easyconfig_roots: path_array(arguments, "easyconfigs")?,
+            hierarchy_fixture: optional_path(arguments, "hierarchy_fixture"),
+            overrides: string_map(arguments, "dependencies")?,
+            stack_policy,
+            strict_patches: false,
+            package_layers: package_layers(arguments)?,
+        },
+        &options,
+    )
     .map_err(|error| error.to_string())?;
     let written = write_package_bundle(&bundle, &required_path(arguments, "out_dir")?)
         .map_err(|error| error.to_string())?;
@@ -466,6 +484,7 @@ fn package_bump(arguments: &Value) -> Result<Value, String> {
         "sbom": written.sbom,
         "locks": written.locks,
         "easyconfigs": written.easyconfigs,
+        "easyblocks": written.easyblocks,
         "claims": {"resolves": true, "builds": false, "binary_verified": false}
     }))
 }
@@ -690,6 +709,13 @@ fn required_string(arguments: &Value, name: &str) -> Result<String, String> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| format!("missing string argument {name}"))
+}
+
+fn optional_bool(arguments: &Value, name: &str) -> bool {
+    arguments
+        .get(name)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn optional_string(arguments: &Value, name: &str) -> Option<String> {

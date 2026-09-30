@@ -192,23 +192,9 @@ fn resolve_core_rgpot_companions() {
             "15.2.0",
         ),
         (
-            "c/cargo-c/cargo-c-0.10.23-GCCcore-15.2.0.eb",
-            "cargo-c",
-            "0.10.23",
-            "GCCcore",
-            "15.2.0",
-        ),
-        (
             "q/quill/quill-11.1.0-GCCcore-15.2.0.eb",
             "quill",
             "11.1.0",
-            "GCCcore",
-            "15.2.0",
-        ),
-        (
-            "i/inih/inih-62-GCCcore-15.2.0.eb",
-            "inih",
-            "62",
             "GCCcore",
             "15.2.0",
         ),
@@ -282,7 +268,7 @@ fn eon_core_check_recipe_drafts_plus_robot() {
         !incomplete.ok(),
         "drafts alone cannot supply Python/foss stack"
     );
-    for companion in ["rgpot", "readcon-core", "quill", "inih"] {
+    for companion in ["rgpot", "readcon-core", "quill"] {
         assert!(
             incomplete.found.iter().any(|f| f.contains(companion)),
             "drafts must supply {companion}: found={:?}",

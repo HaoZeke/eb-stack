@@ -14,12 +14,12 @@ use eb_stack::{
     check_duplicate_upstream, check_maintainer_acceptability, check_maintainer_acceptability_text,
     check_recipe_deps, format_style, format_style_file, inspect_new_package, is_registry_name,
     lint_style, load_json_file, materialize_registry_name, packaging_gate, parse_easyconfig_trees,
-    plan_new_package, plan_package_bump, plan_package_closure_with_sources,
+    plan_new_package_with, plan_package_bump_with, plan_package_closure_with_sources,
     resolve_easyconfig_file, resolve_package_catalog_layers,
     solve_from_easyconfigs_with_baseline_version_and_extras, write_json_pretty,
     write_package_bundle, write_package_closure, BumpPackageRequest, ForeignFormat,
-    NewPackageRequest, PackageBundle, PackageCatalogLayer, SolveExtraOut, StackLock, Toolchain,
-    UreqClient,
+    NewPackageRequest, PackageBundle, PackageCatalogLayer, PackageEmitOptions, SolveExtraOut,
+    StackLock, Toolchain, UreqClient,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -160,6 +160,14 @@ struct PackagePlanArgs {
     /// Ordered Cargo.toml / crates.io trees for PyO3 leftover discovery.
     #[arg(long = "cargo-source", value_name = "DIR")]
     cargo_sources: Vec<PathBuf>,
+    /// Render an easyblock skeleton for the package into the bundle.
+    ///
+    /// Writes `easyblocks/<letter>/<module>.py`, ships it with the recipes,
+    /// names the derived class as the easyblock, and moves the variant
+    /// options it sets out of the emitted recipes. Without the flag a package
+    /// that owes an easyblock gets a `missing-easyblock` residual instead.
+    #[arg(long = "emit-easyblock")]
+    emit_easyblock: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -188,6 +196,10 @@ struct PackageBumpArgs {
     strict_patches: bool,
     #[arg(long = "package-config")]
     package_configs: Vec<PathBuf>,
+    /// Render an easyblock skeleton for the package into the bundle, as
+    /// `package plan --emit-easyblock` does.
+    #[arg(long = "emit-easyblock")]
+    emit_easyblock: bool,
     #[arg(long)]
     out_dir: PathBuf,
 }
@@ -504,8 +516,14 @@ fn run_package(command: PackageCommand) -> Result<()> {
                 easyconfig_roots: args.easyconfigs,
                 stack_policy,
             };
+            if use_closure && args.emit_easyblock {
+                anyhow::bail!("--emit-easyblock does not combine with package-closure planning");
+            }
+            let options = PackageEmitOptions {
+                easyblock_skeleton_root: args.emit_easyblock.then(|| args.inspect.out_dir.clone()),
+            };
             if !use_closure {
-                let bundle = plan_new_package(&request)?;
+                let bundle = plan_new_package_with(&request, &options)?;
                 let written = write_package_bundle(&bundle, &args.inspect.out_dir)?;
                 println!("manifest={}", written.manifest.display());
                 println!("sbom={}", written.sbom.display());
@@ -581,18 +599,24 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
     } else {
         unconstrained_stack_policy(&toolchain)
     };
-    let bundle = plan_package_bump(&BumpPackageRequest {
-        source: args.source,
-        toolchain,
-        version: args.version,
-        source_checksum: args.source_checksum,
-        easyconfig_roots: args.easyconfigs,
-        hierarchy_fixture: args.hierarchy_fixture,
-        overrides: parse_dep_overrides(&args.dependencies)?,
-        stack_policy,
-        strict_patches: args.strict_patches,
-        package_layers: load_package_layers(&args.package_configs)?,
-    })?;
+    let options = PackageEmitOptions {
+        easyblock_skeleton_root: args.emit_easyblock.then(|| args.out_dir.clone()),
+    };
+    let bundle = plan_package_bump_with(
+        &BumpPackageRequest {
+            source: args.source,
+            toolchain,
+            version: args.version,
+            source_checksum: args.source_checksum,
+            easyconfig_roots: args.easyconfigs,
+            hierarchy_fixture: args.hierarchy_fixture,
+            overrides: parse_dep_overrides(&args.dependencies)?,
+            stack_policy,
+            strict_patches: args.strict_patches,
+            package_layers: load_package_layers(&args.package_configs)?,
+        },
+        &options,
+    )?;
     let written = write_package_bundle(&bundle, &args.out_dir)?;
     println!("manifest={}", written.manifest.display());
     println!("sbom={}", written.sbom.display());

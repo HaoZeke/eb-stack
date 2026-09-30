@@ -7,6 +7,7 @@ pub mod campaign;
 pub mod cargo;
 pub mod cran;
 pub mod domain;
+pub mod easyblock_skeleton;
 pub mod easystack;
 pub mod eb_easyblock;
 mod eb_emit;
@@ -116,11 +117,14 @@ pub use package_sources::{
     SourceRootKind, PACKAGE_SOURCE_ROOTS_SCHEMA_VERSION,
 };
 pub use package_workflow::{
-    complete_package_bump, complete_package_bundle, complete_package_bundle_with_hierarchy,
-    inspect_new_package, plan_new_package, plan_package_bump, prepare_new_package_plan,
-    prepare_package_bump, relative_posix, stack_policy_with_bump_overrides, validate_path_segment,
-    write_package_bundle, write_package_bundle_into, BumpPackageRequest, NewPackageRequest,
-    PackageBundle, PackageWorkflowError, WrittenPackageBundle,
+    complete_package_bump, complete_package_bump_with_options, complete_package_bundle,
+    complete_package_bundle_with_hierarchy, complete_package_bundle_with_options,
+    emit_easyblock_skeleton, inspect_new_package, missing_easyblock_residual, plan_new_package,
+    plan_new_package_with, plan_package_bump, plan_package_bump_with, prepare_new_package_plan,
+    prepare_package_bump, raise_missing_easyblock, relative_posix,
+    stack_policy_with_bump_overrides, validate_path_segment, write_package_bundle,
+    write_package_bundle_into, BumpPackageRequest, NewPackageRequest, PackageBundle,
+    PackageEmitOptions, PackageWorkflowError, WrittenPackageBundle,
 };
 pub use provides::{
     existing_language_provider, expand_extension_provides, extension_parent_path,
