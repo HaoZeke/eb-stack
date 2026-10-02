@@ -306,72 +306,75 @@ enum RecipeCommand {
     },
 }
 
+#[derive(clap::Args, Debug)]
+struct SolveArgs {
+    #[arg(long, required = true)]
+    easyconfigs: Vec<PathBuf>,
+    /// Policy file. Omit it and pass --toolchain and --root instead, which
+    /// is the same thing without a file to author first.
+    #[arg(long, conflicts_with_all = ["toolchain", "roots"])]
+    policy: Option<PathBuf>,
+    /// Target toolchain as `name/version`, e.g. `foss/2026.1`. Used with
+    /// --root in place of a policy file.
+    #[arg(long)]
+    toolchain: Option<String>,
+    /// Application the stack exists to provide. Repeatable. Used with
+    /// --toolchain in place of a policy file.
+    #[arg(long = "root", requires = "toolchain")]
+    roots: Vec<String>,
+    /// Take roots from a Jenkins build list as well: the package name of
+    /// every non-comment line. Repeatable. Used with --toolchain.
+    #[arg(long = "roots-from-build-list", requires = "toolchain")]
+    roots_from_build_list: Vec<PathBuf>,
+    #[arg(long)]
+    baseline_easyconfigs: Option<PathBuf>,
+    #[arg(long)]
+    baseline_toolchain_version: Option<String>,
+    /// Compare against what these easystacks install instead of a previous
+    /// generation: each entry and its pinned closure, read from the
+    /// --easyconfigs trees. Repeatable; pass every file of a software
+    /// layer version so `Unchanged` in the stack diff means "provided".
+    #[arg(long = "baseline-easystack", conflicts_with_all = ["baseline_easyconfigs", "baseline_toolchain_version"])]
+    baseline_easystacks: Vec<PathBuf>,
+    /// easybuild-easyconfigs checkout to read `from-commit` entries of the
+    /// baseline easystacks from. Without it they match by filename.
+    #[arg(long, requires = "baseline_easystacks")]
+    baseline_commits_from: Option<PathBuf>,
+    /// Another toolchain family to keep in the easystack baseline, as
+    /// `name/version` (e.g. `lfoss/2026.1`). Repeatable.
+    #[arg(long = "baseline-also-toolchain", requires = "baseline_easystacks")]
+    baseline_also_toolchains: Vec<String>,
+    #[arg(long, default_value = "stack.lock.json")]
+    lock_out: PathBuf,
+    #[arg(long)]
+    sbom_out: Option<PathBuf>,
+    #[arg(long)]
+    build_list_out: Option<PathBuf>,
+    /// Leave out of the build list every module the baseline provides
+    /// (same name, version, toolchain and versionsuffix). With an easystack
+    /// baseline this is the site layer.
+    #[arg(long)]
+    build_list_excludes_baseline: bool,
+    /// Also write the build list in the Jenkins build-list format:
+    /// filenames with per-line `eb` flags.
+    #[arg(long)]
+    jenkins_build_list_out: Option<PathBuf>,
+    /// Previous Jenkins build list whose per-package site flags (hooks,
+    /// site easyblocks, EULA acceptances) carry over. Repeatable.
+    #[arg(long = "jenkins-flags-from", requires = "jenkins_build_list_out")]
+    jenkins_flags_from: Vec<PathBuf>,
+    /// Systems CUDA modules are restricted to, comma-separated, written as
+    /// `--include-systems` on their lines.
+    #[arg(long, requires = "jenkins_build_list_out", value_delimiter = ',')]
+    jenkins_gpu_systems: Vec<String>,
+    #[arg(long)]
+    stack_diff_out: Option<PathBuf>,
+}
+
 #[derive(Subcommand, Debug)]
 enum StackCommand {
     /// Parse EasyBuild trees and solve a jointly consistent stack.
-    Solve {
-        #[arg(long, required = true)]
-        easyconfigs: Vec<PathBuf>,
-        /// Policy file. Omit it and pass --toolchain and --root instead, which
-        /// is the same thing without a file to author first.
-        #[arg(long, conflicts_with_all = ["toolchain", "roots"])]
-        policy: Option<PathBuf>,
-        /// Target toolchain as `name/version`, e.g. `foss/2026.1`. Used with
-        /// --root in place of a policy file.
-        #[arg(long)]
-        toolchain: Option<String>,
-        /// Application the stack exists to provide. Repeatable. Used with
-        /// --toolchain in place of a policy file.
-        #[arg(long = "root", requires = "toolchain")]
-        roots: Vec<String>,
-        /// Take roots from a Jenkins build list as well: the package name of
-        /// every non-comment line. Repeatable. Used with --toolchain.
-        #[arg(long = "roots-from-build-list", requires = "toolchain")]
-        roots_from_build_list: Vec<PathBuf>,
-        #[arg(long)]
-        baseline_easyconfigs: Option<PathBuf>,
-        #[arg(long)]
-        baseline_toolchain_version: Option<String>,
-        /// Compare against what these easystacks install instead of a previous
-        /// generation: each entry and its pinned closure, read from the
-        /// --easyconfigs trees. Repeatable; pass every file of a software
-        /// layer version so `Unchanged` in the stack diff means "provided".
-        #[arg(long = "baseline-easystack", conflicts_with_all = ["baseline_easyconfigs", "baseline_toolchain_version"])]
-        baseline_easystacks: Vec<PathBuf>,
-        /// easybuild-easyconfigs checkout to read `from-commit` entries of the
-        /// baseline easystacks from. Without it they match by filename.
-        #[arg(long, requires = "baseline_easystacks")]
-        baseline_commits_from: Option<PathBuf>,
-        /// Another toolchain family to keep in the easystack baseline, as
-        /// `name/version` (e.g. `lfoss/2026.1`). Repeatable.
-        #[arg(long = "baseline-also-toolchain", requires = "baseline_easystacks")]
-        baseline_also_toolchains: Vec<String>,
-        #[arg(long, default_value = "stack.lock.json")]
-        lock_out: PathBuf,
-        #[arg(long)]
-        sbom_out: Option<PathBuf>,
-        #[arg(long)]
-        build_list_out: Option<PathBuf>,
-        /// Leave out of the build list every module the baseline provides
-        /// (same name, version, toolchain and versionsuffix). With an easystack
-        /// baseline this is the site layer.
-        #[arg(long)]
-        build_list_excludes_baseline: bool,
-        /// Also write the build list in the Jenkins build-list format:
-        /// filenames with per-line `eb` flags.
-        #[arg(long)]
-        jenkins_build_list_out: Option<PathBuf>,
-        /// Previous Jenkins build list whose per-package site flags (hooks,
-        /// site easyblocks, EULA acceptances) carry over. Repeatable.
-        #[arg(long = "jenkins-flags-from", requires = "jenkins_build_list_out")]
-        jenkins_flags_from: Vec<PathBuf>,
-        /// Systems CUDA modules are restricted to, comma-separated, written as
-        /// `--include-systems` on their lines.
-        #[arg(long, requires = "jenkins_build_list_out", value_delimiter = ',')]
-        jenkins_gpu_systems: Vec<String>,
-        #[arg(long)]
-        stack_diff_out: Option<PathBuf>,
-    },
+    Solve(Box<SolveArgs>),
     /// Emit CycloneDX from an existing stack lock.
     Sbom {
         #[arg(long)]
@@ -1087,26 +1090,27 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
 
 fn run_stack(command: StackCommand) -> Result<()> {
     match command {
-        StackCommand::Solve {
-            easyconfigs,
-            policy,
-            toolchain,
-            mut roots,
-            roots_from_build_list,
-            baseline_easyconfigs,
-            baseline_toolchain_version,
-            baseline_easystacks,
-            baseline_commits_from,
-            baseline_also_toolchains,
-            lock_out,
-            sbom_out,
-            build_list_out,
-            build_list_excludes_baseline,
-            jenkins_build_list_out,
-            jenkins_flags_from,
-            jenkins_gpu_systems,
-            stack_diff_out,
-        } => {
+        StackCommand::Solve(args) => {
+            let SolveArgs {
+                easyconfigs,
+                policy,
+                toolchain,
+                mut roots,
+                roots_from_build_list,
+                baseline_easyconfigs,
+                baseline_toolchain_version,
+                baseline_easystacks,
+                baseline_commits_from,
+                baseline_also_toolchains,
+                lock_out,
+                sbom_out,
+                build_list_out,
+                build_list_excludes_baseline,
+                jenkins_build_list_out,
+                jenkins_flags_from,
+                jenkins_gpu_systems,
+                stack_diff_out,
+            } = *args;
             for path in &roots_from_build_list {
                 let text = std::fs::read_to_string(path)
                     .with_context(|| format!("reading build list {}", path.display()))?;
