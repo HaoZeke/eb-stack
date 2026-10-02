@@ -189,6 +189,7 @@ eb-stack stack solve \
   [--baseline-toolchain-version VERSION] \
   [--baseline-easystack EASYSTACK.yml]... [--baseline-commits-from EB_REPO] \
   [--baseline-also-toolchain NAME/VERSION]... \
+  [--filter-deps NAME,NAME...] \
   [--lock-out stack.lock.json] \
   [--sbom-out stack.cdx.json] \
   [--build-list-out build.list] [--build-list-excludes-baseline] \
@@ -211,7 +212,11 @@ to the policy toolchain's hierarchy. An entry pinned with ~from-commit~ is read
 from that commit of ~--baseline-commits-from~ when given, and matched by
 filename otherwise. Entries that name no recipe are listed on standard error.
 ~--baseline-also-toolchain~ keeps another family's hierarchy in the baseline,
-such as ~lfoss/2026.1~ beside a ~foss/2026.1~ solve.
+such as ~lfoss/2026.1~ beside a ~foss/2026.1~ solve. ~--filter-deps~ drops
+every dependency on the named packages before the solve, as EasyBuild's
+option of that name does; pass EESSI-extend's ~EASYBUILD_FILTER_DEPS~ list when
+solving against an EESSI baseline, or the build list carries modules the
+compat layer already provides.
 Against an EESSI version's easystacks, ~unchanged~ in the stack diff means the
 software layer already provides that module, and
 ~--build-list-excludes-baseline~ drops those modules (same name, version,

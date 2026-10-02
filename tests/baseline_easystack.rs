@@ -284,3 +284,38 @@ fn a_second_family_stays_in_the_baseline_only_when_named() {
         ["A", "B"]
     );
 }
+
+#[test]
+fn a_filtered_dependency_is_neither_solved_nor_built() {
+    let tmp = tempfile::tempdir().unwrap();
+    let lock = tmp.path().join("stack.lock.json");
+    let list = tmp.path().join("build.list");
+    let st = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .args(["stack", "solve", "--easyconfigs"])
+        .arg(easyconfigs())
+        .args([
+            "--toolchain",
+            "foss/2025b",
+            "--root",
+            "GROMACS",
+            "--filter-deps",
+            "FFTW,Python",
+        ])
+        .arg("--lock-out")
+        .arg(&lock)
+        .arg("--build-list-out")
+        .arg(&list)
+        .output()
+        .unwrap();
+    assert!(
+        st.status.success(),
+        "{}",
+        String::from_utf8_lossy(&st.stderr)
+    );
+    let solved: StackLock = serde_json::from_str(&std::fs::read_to_string(&lock).unwrap()).unwrap();
+    for gone in ["FFTW", "Python"] {
+        assert!(solved.package(gone).is_none(), "{gone} filtered but locked");
+    }
+    assert!(solved.package("GROMACS").is_some());
+    assert!(!std::fs::read_to_string(&list).unwrap().contains("FFTW"));
+}

@@ -315,6 +315,21 @@ pub struct SolveExtraOut<'a> {
     pub jenkins_build_list_out: Option<&'a Path>,
     /// Flags carried into the Jenkins list and the GPU systems for CUDA modules.
     pub jenkins: jenkins::JenkinsOptions,
+    /// Dependency names to drop from every recipe before solving, as
+    /// EasyBuild's `--filter-deps` does: the host or a compat layer provides
+    /// them, so they are neither solved nor built.
+    pub filter_deps: &'a [String],
+}
+
+/// Drop every runtime and build dependency on a name in `names`.
+pub fn filter_deps(candidates: &mut [Candidate], names: &[String]) {
+    if names.is_empty() {
+        return;
+    }
+    for c in candidates {
+        c.dependencies.retain(|d| !names.contains(&d.name));
+        c.builddependencies.retain(|d| !names.contains(&d.name));
+    }
 }
 
 fn write_lock_sbom_and_extras(
@@ -675,7 +690,8 @@ pub fn solve_with_baseline_source(
             eprintln!("  ... and {} more", tree.skipped.len() - 20);
         }
     }
-    let all = tree.candidates;
+    let mut all = tree.candidates;
+    filter_deps(&mut all, extra.filter_deps);
     // The universe has to carry the subtoolchains as well as the policy
     // toolchain, or a member's own build dependencies read as missing
     // packages. The hierarchy comes from the tree when no fixture knows the

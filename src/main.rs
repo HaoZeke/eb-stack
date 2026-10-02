@@ -340,6 +340,10 @@ struct SolveArgs {
     /// baseline easystacks from. Without it they match by filename.
     #[arg(long, requires = "baseline_easystacks")]
     baseline_commits_from: Option<PathBuf>,
+    /// Dependency names to drop from every recipe, as EasyBuild's
+    /// --filter-deps (comma-separated). EESSI-extend sets this list.
+    #[arg(long, value_delimiter = ',')]
+    filter_deps: Vec<String>,
     /// Another toolchain family to keep in the easystack baseline, as
     /// `name/version` (e.g. `lfoss/2026.1`). Repeatable.
     #[arg(long = "baseline-also-toolchain", requires = "baseline_easystacks")]
@@ -1101,6 +1105,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 baseline_toolchain_version,
                 baseline_easystacks,
                 baseline_commits_from,
+                filter_deps,
                 baseline_also_toolchains,
                 lock_out,
                 sbom_out,
@@ -1203,6 +1208,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     build_list_out: build_list_out.as_deref(),
                     stack_diff_out: stack_diff_out.as_deref(),
                     build_list_excludes_baseline,
+                    filter_deps: &filter_deps,
                     jenkins_build_list_out: jenkins_build_list_out.as_deref(),
                     jenkins: eb_stack::jenkins::JenkinsOptions {
                         previous: jenkins_previous,
