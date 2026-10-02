@@ -2732,9 +2732,13 @@ pub fn validate_lock_deps(lock: &StackLock, cands: &[Candidate]) -> Result<(), S
         by_name.entry(p.name.as_str()).or_default().push(p);
     }
     for p in &lock.packages {
+        // The versionsuffix is part of the identity: ant 1.10.15 exists as
+        // -Java-17 and -Java-21, and checking the wrong one reports a
+        // dependency the lock never needed.
         let Some(c) = cands.iter().find(|c| {
             c.name == p.name
                 && c.version == p.version
+                && c.versionsuffix == p.versionsuffix
                 && c.toolchain.name == p.toolchain.name
                 && c.toolchain.version == p.toolchain.version
         }) else {
@@ -3206,6 +3210,36 @@ mod tests {
             c.builddependencies.is_empty(),
             "runtime-only .eb must leave builddependencies empty"
         );
+    }
+
+    #[test]
+    fn validate_lock_deps_checks_the_variant_the_lock_names() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let at = |name: &str, version: &str, suffix: Option<&str>, deps: Vec<DepReq>| Candidate {
+            name: name.into(),
+            version: version.into(),
+            toolchain: system.clone(),
+            versionsuffix: suffix.map(str::to_string),
+            easyconfig_path: format!("{name}-{version}{}.eb", suffix.unwrap_or("")),
+            dependencies: deps,
+            builddependencies: vec![],
+            exts_list: vec![],
+            moduleclass: None,
+        };
+        let java = |version: &str| DepReq {
+            name: "Java".into(),
+            version_req: format!("=={version}"),
+            versionsuffix: None,
+            toolchain: None,
+        };
+        let ant17 = at("ant", "1.10.15", Some("-Java-17"), vec![java("17")]);
+        let ant21 = at("ant", "1.10.15", Some("-Java-21"), vec![java("21")]);
+        let java21 = at("Java", "21", None, vec![]);
+        let lock = lock_from_candidates(&[ant21.clone(), java21.clone()], None, "test");
+        assert!(validate_lock_deps(&lock, &[ant17, ant21, java21]).is_ok());
     }
 
     #[test]
