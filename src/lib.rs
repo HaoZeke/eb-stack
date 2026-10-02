@@ -468,9 +468,10 @@ pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
 /// with `from-commit` is read from that commit of `commits_repo` instead, when
 /// one is given, since the commit is what was built and develop may since have
 /// changed the file. Each matched recipe brings its whole pinned closure, the
-/// way EasyBuild's robot installs it. Modules outside `policy_toolchain`'s
-/// hierarchy are dropped, so an `lfoss` entry does not show up as removed from
-/// a `foss` stack.
+/// way EasyBuild's robot installs it. Modules outside every family in
+/// `families` are dropped, so an `lfoss` entry does not show up as removed
+/// from a `foss` stack unless `lfoss` is one of the families. Each family is a
+/// toolchain and the members of its hierarchy; the first names the lock.
 ///
 /// Returns the lock and the entries that matched nothing, as `file` or
 /// `file @ commit`.
@@ -478,9 +479,11 @@ pub fn baseline_from_easystacks(
     easystacks: &[&Path],
     candidates: &[Candidate],
     commits_repo: Option<&Path>,
-    policy_toolchain: &Toolchain,
-    hierarchy_members: &[Toolchain],
+    families: &[(Toolchain, Vec<Toolchain>)],
 ) -> Result<(StackLock, Vec<String>)> {
+    let Some((policy_toolchain, _)) = families.first() else {
+        bail!("an easystack baseline needs at least one toolchain family");
+    };
     let mut entries = Vec::new();
     for path in easystacks {
         let text = std::fs::read_to_string(path)
@@ -534,7 +537,15 @@ pub fn baseline_from_easystacks(
         .into_iter()
         .filter(|c| keys.contains(&ModuleKey::of(c)))
         .collect();
-    let in_family = filter_toolchain_hierarchy(&closure, policy_toolchain, hierarchy_members);
+    let in_family: Vec<Candidate> = closure
+        .iter()
+        .filter(|c| {
+            families.iter().any(|(tc, members)| {
+                !filter_toolchain_hierarchy(std::slice::from_ref(*c), tc, members).is_empty()
+            })
+        })
+        .cloned()
+        .collect();
     let lock = lock_from_candidates(
         &in_family,
         Some(format!(
@@ -631,6 +642,9 @@ pub enum BaselineSource<'a> {
         /// easybuild-easyconfigs checkout to read `from-commit` entries from.
         /// Without it those entries are matched by filename in the trees.
         commits_repo: Option<&'a Path>,
+        /// Toolchain families kept in the baseline besides the policy's, such
+        /// as `lfoss` beside `foss` for an EESSI version that ships both.
+        also_toolchains: &'a [Toolchain],
     },
 }
 
@@ -696,15 +710,17 @@ pub fn solve_with_baseline_source(
     let baseline = if let BaselineSource::Easystacks {
         files,
         commits_repo,
+        also_toolchains,
     } = baseline_source
     {
-        let (lock, unresolved) = baseline_from_easystacks(
-            files,
-            &all,
-            commits_repo,
-            &policy.toolchain,
-            &hierarchy_members,
-        )?;
+        let mut families = vec![(policy.toolchain.clone(), hierarchy_members.clone())];
+        for tc in also_toolchains {
+            let members = crate::hierarchy::hierarchy_for_with_tree(tc, None, &all)
+                .map(|h| h.members)
+                .map_err(|e| anyhow::anyhow!("baseline family {}: {e}", tc.label()))?;
+            families.push((tc.clone(), members));
+        }
+        let (lock, unresolved) = baseline_from_easystacks(files, &all, commits_repo, &families)?;
         if !unresolved.is_empty() {
             eprintln!(
                 "baseline: {} easystack entr{} name no easyconfig in the trees",

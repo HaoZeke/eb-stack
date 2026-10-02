@@ -342,6 +342,10 @@ enum StackCommand {
         /// baseline easystacks from. Without it they match by filename.
         #[arg(long, requires = "baseline_easystacks")]
         baseline_commits_from: Option<PathBuf>,
+        /// Another toolchain family to keep in the easystack baseline, as
+        /// `name/version` (e.g. `lfoss/2026.1`). Repeatable.
+        #[arg(long = "baseline-also-toolchain", requires = "baseline_easystacks")]
+        baseline_also_toolchains: Vec<String>,
         #[arg(long, default_value = "stack.lock.json")]
         lock_out: PathBuf,
         #[arg(long)]
@@ -1093,6 +1097,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
             baseline_toolchain_version,
             baseline_easystacks,
             baseline_commits_from,
+            baseline_also_toolchains,
             lock_out,
             sbom_out,
             build_list_out,
@@ -1146,6 +1151,19 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 .iter()
                 .map(PathBuf::as_path)
                 .collect::<Vec<_>>();
+            let also = baseline_also_toolchains
+                .iter()
+                .map(|t| {
+                    t.split_once('/')
+                        .map(|(name, version)| Toolchain {
+                            name: name.into(),
+                            version: version.into(),
+                        })
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("--baseline-also-toolchain wants name/version, got {t}")
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
             let baseline = if stacks.is_empty() {
                 match baseline_easyconfigs
                     .as_deref()
@@ -1161,6 +1179,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 eb_stack::BaselineSource::Easystacks {
                     files: &stacks,
                     commits_repo: baseline_commits_from.as_deref(),
+                    also_toolchains: &also,
                 }
             };
             let mut jenkins_previous = Vec::new();

@@ -568,6 +568,7 @@ fn stack_solve(arguments: &Value) -> Result<Value, String> {
         BaselineSource::Easystacks {
             files: &stack_refs,
             commits_repo: commits_from.as_deref(),
+            also_toolchains: &[],
         }
     } else if let Some(root) = baseline_tree.as_deref() {
         BaselineSource::Tree {

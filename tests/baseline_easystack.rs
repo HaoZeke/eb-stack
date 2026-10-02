@@ -65,8 +65,7 @@ fn solve(dir: &Path, extra: &[&str]) -> (std::process::Output, StackLock, StackL
         &stack_refs,
         &tree.candidates,
         repo.as_deref(),
-        &tc,
-        &members,
+        &[(tc, members)],
     )
     .unwrap();
     (out, baseline, solved)
@@ -240,4 +239,48 @@ fn the_build_list_can_leave_out_what_the_baseline_provides() {
         assert!(site.contains(&built.to_string()), "{site:?}");
     }
     assert_eq!(site.len() + 2, full.len(), "full {full:?} site {site:?}");
+}
+
+fn one(name: &str, tc: &str) -> eb_stack::Candidate {
+    eb_stack::Candidate {
+        name: name.into(),
+        version: "1.0".into(),
+        toolchain: eb_stack::Toolchain {
+            name: tc.into(),
+            version: "2026.1".into(),
+        },
+        versionsuffix: None,
+        easyconfig_path: format!("{name}-1.0-{tc}-2026.1.eb"),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+        moduleclass: None,
+    }
+}
+
+#[test]
+fn a_second_family_stays_in_the_baseline_only_when_named() {
+    let tmp = tempfile::tempdir().unwrap();
+    let stack = tmp.path().join("eessi.yml");
+    std::fs::write(
+        &stack,
+        "easyconfigs:\n  - A-1.0-foss-2026.1.eb\n  - B-1.0-lfoss-2026.1.eb\n",
+    )
+    .unwrap();
+    let cands = [one("A", "foss"), one("B", "lfoss")];
+    let tc = |n: &str| eb_stack::Toolchain {
+        name: n.into(),
+        version: "2026.1".into(),
+    };
+    let names = |families: &[(eb_stack::Toolchain, Vec<eb_stack::Toolchain>)]| -> Vec<String> {
+        let (lock, unresolved) =
+            eb_stack::baseline_from_easystacks(&[stack.as_path()], &cands, None, families).unwrap();
+        assert!(unresolved.is_empty(), "{unresolved:?}");
+        lock.packages.into_iter().map(|p| p.name).collect()
+    };
+    assert_eq!(names(&[(tc("foss"), Vec::new())]), ["A"]);
+    assert_eq!(
+        names(&[(tc("foss"), Vec::new()), (tc("lfoss"), Vec::new())]),
+        ["A", "B"]
+    );
 }
