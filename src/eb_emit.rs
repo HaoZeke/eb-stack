@@ -101,7 +101,9 @@ pub fn easyconfig_filename(
 /// Templated values cannot be resolved by textual rewriting: `-CUDA-%(cudaver)s`
 /// only becomes `-CUDA-12.8.0` once EasyBuild has the CUDA dependency in hand.
 fn has_unresolved_template(value: &str) -> bool {
-    value.contains("%(")
+    // `%(name)s` templates, and positional `%s`/`%d` left by a `%` expression
+    // that was not evaluated.
+    value.contains("%(") || value.contains("%s") || value.contains("%d")
 }
 
 /// Resolve the templates a filename can be built from, using the recipe itself.
@@ -290,7 +292,13 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
     // The rewritten text keeps whatever `versionsuffix` the source declared, so
     // the filename has to carry it too or the emitted basename disagrees with the
     // recipe it names (and with the name a build list refers to).
-    let versionsuffix = assign_string_raw(&text, "versionsuffix");
+    // The parser evaluates what a raw read of the line cannot, such as
+    // `'-lmax-%s-cp2k' % local_lmax`; the raw string is the fallback for a
+    // recipe the parser refuses.
+    let versionsuffix = crate::eb_parse::resolve_easyconfig_str(&text)
+        .ok()
+        .and_then(|r| r.versionsuffix)
+        .or_else(|| assign_string_raw(&text, "versionsuffix"));
     // `%(cudaver)s` resolves from the CUDA dependency the recipe itself declares,
     // the same way EasyBuild resolves it, so a CUDA recipe still gets its
     // `-CUDA-<ver>` basename instead of colliding with its CPU sibling.
@@ -2538,5 +2546,29 @@ moduleclass = 'tools'
             out.contains("toolchain = {'name': 'GCCcore', 'version': '14.3.0'}  # bootstrap"),
             "got:\n{out}"
         );
+    }
+
+    /// A versionsuffix built with `%` from a local variable names the file by
+    /// its value, as EasyBuild does; Libint's `-lmax-%s-cp2k` came out with the
+    /// `%s` still in the filename and the robot could not find it.
+    #[test]
+    fn a_percent_formatted_versionsuffix_names_the_file_by_its_value() {
+        let src = "name = 'Libint'\nversion = '2.11.1'\nlocal_lmax = 6\n\
+versionsuffix = '-lmax-%s-cp2k' % local_lmax\n\
+toolchain = {'name': 'GCC', 'version': '14.3.0'}\n";
+        let params = EmitParams {
+            toolchain: Toolchain {
+                name: "GCC".into(),
+                version: "15.2.0".into(),
+            },
+            version: None,
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
+            source_checksum: None,
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert_eq!(r.filename, "Libint-2.11.1-GCC-15.2.0-lmax-6-cp2k.eb");
     }
 }
