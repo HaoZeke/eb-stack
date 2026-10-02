@@ -306,6 +306,9 @@ pub struct SolveExtraOut<'a> {
     pub build_list_out: Option<&'a Path>,
     /// Where to write the stack diff against the baseline, when one is wanted.
     pub stack_diff_out: Option<&'a Path>,
+    /// Leave the modules the baseline provides out of the build list, so it
+    /// holds only what a site layer has to build on top.
+    pub build_list_excludes_baseline: bool,
 }
 
 fn write_lock_sbom_and_extras(
@@ -326,7 +329,14 @@ fn write_lock_sbom_and_extras(
     }
 
     if let Some(path) = extra.build_list_out {
-        let text = format_build_list(lock, &dep_map);
+        let text = if extra.build_list_excludes_baseline {
+            let Some(base) = baseline else {
+                bail!("excluding the baseline from the build list requires a baseline");
+            };
+            report::format_build_list_excluding(lock, &dep_map, base)
+        } else {
+            format_build_list(lock, &dep_map)
+        };
         write_text(path, &text)?;
     }
     if let Some(path) = extra.stack_diff_out {

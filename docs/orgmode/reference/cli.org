@@ -189,7 +189,7 @@ eb-stack stack solve \
   [--baseline-easystack EASYSTACK.yml]... [--baseline-commits-from EB_REPO] \
   [--lock-out stack.lock.json] \
   [--sbom-out stack.cdx.json] \
-  [--build-list-out build.list] \
+  [--build-list-out build.list [--build-list-excludes-baseline]] \
   [--stack-diff-out stack.diff.md]
 
 eb-stack stack sbom --lock stack.lock.json [--out stack.cdx.json]
@@ -207,7 +207,10 @@ to the policy toolchain's hierarchy. An entry pinned with ~from-commit~ is read
 from that commit of ~--baseline-commits-from~ when given, and matched by
 filename otherwise. Entries that name no recipe are listed on standard error.
 Against an EESSI version's easystacks, ~unchanged~ in the stack diff means the
-software layer already provides that module.
+software layer already provides that module, and
+~--build-list-excludes-baseline~ drops those modules (same name, version,
+toolchain and versionsuffix) from the build list, leaving what the site layer
+builds on top in dependency order.
 
 * Target commands
 

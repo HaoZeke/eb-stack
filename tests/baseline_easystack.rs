@@ -184,3 +184,60 @@ fn a_from_commit_entry_is_read_from_its_commit_not_the_tree() {
     let openblas = baseline.package("OpenBLAS").expect("OpenBLAS in baseline");
     assert_eq!(openblas.version, "0.3.23");
 }
+
+#[test]
+fn the_build_list_can_leave_out_what_the_baseline_provides() {
+    let tmp = tempfile::tempdir().unwrap();
+    let stack = tmp.path().join("eessi.yml");
+    std::fs::write(&stack, "easyconfigs:\n  - GROMACS-2024.4-foss-2025b.eb\n").unwrap();
+    let full = tmp.path().join("full.list");
+    let site = tmp.path().join("site.list");
+    for (out, exclude) in [(&full, false), (&site, true)] {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_eb-stack"));
+        cmd.args(["stack", "solve", "--easyconfigs"])
+            .arg(easyconfigs())
+            .args([
+                "--toolchain",
+                "foss/2025b",
+                "--root",
+                "GROMACS",
+                "--lock-out",
+            ])
+            .arg(tmp.path().join("stack.lock.json"))
+            .arg("--baseline-easystack")
+            .arg(&stack)
+            .arg("--build-list-out")
+            .arg(out);
+        if exclude {
+            cmd.arg("--build-list-excludes-baseline");
+        }
+        let st = cmd.output().unwrap();
+        assert!(
+            st.status.success(),
+            "{}",
+            String::from_utf8_lossy(&st.stderr)
+        );
+    }
+    let names = |p: &Path| -> Vec<String> {
+        std::fs::read_to_string(p)
+            .unwrap()
+            .lines()
+            .map(|l| l.rsplit('/').next().unwrap().to_string())
+            .collect()
+    };
+    let full = names(&full);
+    let site = names(&site);
+    // FFTW 3.3.10 and Python 3.12.3 are the same modules the baseline closure
+    // holds; GROMACS, OpenBLAS and OpenMPI move to versions it does not.
+    for provided in ["FFTW-3.3.10-foss-2025b.eb", "Python-3.12.3-foss-2025b.eb"] {
+        assert!(full.contains(&provided.to_string()), "{full:?}");
+        assert!(!site.contains(&provided.to_string()), "{site:?}");
+    }
+    for built in [
+        "GROMACS-2025.0-foss-2025b.eb",
+        "OpenBLAS-0.3.27-foss-2025b.eb",
+    ] {
+        assert!(site.contains(&built.to_string()), "{site:?}");
+    }
+    assert_eq!(site.len() + 2, full.len(), "full {full:?} site {site:?}");
+}

@@ -21,8 +21,8 @@ use crate::package_workflow::{
 };
 use crate::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use crate::{
-    load_json_file, lock_to_cyclonedx, solve_from_easyconfigs_with_baseline_version_and_extras,
-    write_json_pretty, SolveExtraOut, StackLock,
+    load_json_file, lock_to_cyclonedx, solve_with_baseline_source, write_json_pretty,
+    BaselineSource, SolveExtraOut, StackLock,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -189,8 +189,11 @@ fn tool_catalog() -> Vec<Value> {
             &[
                 ("baseline_easyconfigs", "string"),
                 ("baseline_toolchain_version", "string"),
+                ("baseline_easystacks", "array"),
+                ("baseline_commits_from", "string"),
                 ("sbom_out", "string"),
                 ("build_list_out", "string"),
+                ("build_list_excludes_baseline", "boolean"),
                 ("stack_diff_out", "string"),
             ],
         ),
@@ -550,17 +553,40 @@ fn stack_solve(arguments: &Value) -> Result<Value, String> {
     let root_refs = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
     let policy = required_path(arguments, "policy")?;
     let lock_out = required_path(arguments, "lock_out")?;
-    let baseline = optional_path(arguments, "baseline_easyconfigs");
-    let lock = solve_from_easyconfigs_with_baseline_version_and_extras(
+    let baseline_tree = optional_path(arguments, "baseline_easyconfigs");
+    let baseline_version = optional_string(arguments, "baseline_toolchain_version");
+    let stacks: Vec<PathBuf> = string_array(arguments, "baseline_easystacks")?
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    let stack_refs = stacks.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+    let commits_from = optional_path(arguments, "baseline_commits_from");
+    let baseline = if !stack_refs.is_empty() {
+        if baseline_tree.is_some() {
+            return Err("pass baseline_easyconfigs or baseline_easystacks, not both".into());
+        }
+        BaselineSource::Easystacks {
+            files: &stack_refs,
+            commits_repo: commits_from.as_deref(),
+        }
+    } else if let Some(root) = baseline_tree.as_deref() {
+        BaselineSource::Tree {
+            root,
+            toolchain_version: baseline_version.as_deref(),
+        }
+    } else {
+        BaselineSource::None
+    };
+    let lock = solve_with_baseline_source(
         &root_refs,
         &policy,
-        baseline.as_deref(),
-        optional_string(arguments, "baseline_toolchain_version").as_deref(),
+        baseline,
         &lock_out,
         optional_path(arguments, "sbom_out").as_deref(),
         SolveExtraOut {
             build_list_out: optional_path(arguments, "build_list_out").as_deref(),
             stack_diff_out: optional_path(arguments, "stack_diff_out").as_deref(),
+            build_list_excludes_baseline: optional_bool(arguments, "build_list_excludes_baseline"),
         },
     )
     .map_err(|error| error.to_string())?;

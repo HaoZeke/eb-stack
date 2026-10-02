@@ -30,6 +30,37 @@ pub fn format_build_list(lock: &StackLock, dep_map: &HashMap<String, Vec<String>
     s
 }
 
+/// The build list without the modules `provided` already installs.
+///
+/// A module counts as provided when name, version, toolchain and
+/// versionsuffix all match one in `provided`; a different version of the same
+/// name is still built. The order is that of [`format_build_list`] with the
+/// provided modules taken out, which keeps every remaining dependency ahead of
+/// what needs it.
+pub fn format_build_list_excluding(
+    lock: &StackLock,
+    dep_map: &HashMap<String, Vec<String>>,
+    provided: &StackLock,
+) -> String {
+    let id = |p: &LockPackage| {
+        (
+            p.name.clone(),
+            p.version.clone(),
+            p.toolchain.label(),
+            p.versionsuffix.clone().unwrap_or_default(),
+        )
+    };
+    let have: BTreeSet<_> = provided.packages.iter().map(id).collect();
+    let mut s = String::new();
+    for p in ordered_packages(lock, dep_map) {
+        if !have.contains(&id(p)) && !p.easyconfig_path.is_empty() {
+            s.push_str(&p.easyconfig_path);
+            s.push('\n');
+        }
+    }
+    s
+}
+
 /// Packages in install order (same topology as [`ordered_build_paths`]).
 pub fn ordered_packages<'a>(
     lock: &'a StackLock,

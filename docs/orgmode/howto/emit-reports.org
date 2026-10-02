@@ -34,11 +34,12 @@ eb-stack stack solve \
   $(for f in software-layer/easystacks/software.eessi.io/2026.06/*.yml; do
       echo --baseline-easystack "$f"; done) \
   --baseline-commits-from easybuild-easyconfigs \
-  --build-list-out build.list \
+  --build-list-out site.list --build-list-excludes-baseline \
   --stack-diff-out stack.diff.md
 #+end_src
 
-The ~added~ and ~version-bumped~ rows are then the site layer.
+The ~added~ and ~version-bumped~ rows are then the site layer, and
+~site.list~ holds exactly those modules in build order.
 
 * Read the build list
 

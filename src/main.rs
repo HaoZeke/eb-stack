@@ -344,6 +344,11 @@ enum StackCommand {
         sbom_out: Option<PathBuf>,
         #[arg(long)]
         build_list_out: Option<PathBuf>,
+        /// Leave out of the build list every module the baseline provides
+        /// (same name, version, toolchain and versionsuffix). With an easystack
+        /// baseline this is the site layer.
+        #[arg(long, requires = "build_list_out")]
+        build_list_excludes_baseline: bool,
         #[arg(long)]
         stack_diff_out: Option<PathBuf>,
     },
@@ -1074,6 +1079,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
             lock_out,
             sbom_out,
             build_list_out,
+            build_list_excludes_baseline,
             stack_diff_out,
         } => {
             // A policy is a file when there is one to reuse, and a pair of
@@ -1133,6 +1139,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 SolveExtraOut {
                     build_list_out: build_list_out.as_deref(),
                     stack_diff_out: stack_diff_out.as_deref(),
+                    build_list_excludes_baseline,
                 },
             )?;
             println!(
