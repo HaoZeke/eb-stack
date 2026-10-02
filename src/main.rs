@@ -318,12 +318,16 @@ enum StackCommand {
         policy: Option<PathBuf>,
         /// Target toolchain as `name/version`, e.g. `foss/2026.1`. Used with
         /// --root in place of a policy file.
-        #[arg(long, requires = "roots")]
+        #[arg(long)]
         toolchain: Option<String>,
         /// Application the stack exists to provide. Repeatable. Used with
         /// --toolchain in place of a policy file.
         #[arg(long = "root", requires = "toolchain")]
         roots: Vec<String>,
+        /// Take roots from a Jenkins build list as well: the package name of
+        /// every non-comment line. Repeatable. Used with --toolchain.
+        #[arg(long = "roots-from-build-list", requires = "toolchain")]
+        roots_from_build_list: Vec<PathBuf>,
         #[arg(long)]
         baseline_easyconfigs: Option<PathBuf>,
         #[arg(long)]
@@ -347,8 +351,20 @@ enum StackCommand {
         /// Leave out of the build list every module the baseline provides
         /// (same name, version, toolchain and versionsuffix). With an easystack
         /// baseline this is the site layer.
-        #[arg(long, requires = "build_list_out")]
+        #[arg(long)]
         build_list_excludes_baseline: bool,
+        /// Also write the build list in the Jenkins build-list format:
+        /// filenames with per-line `eb` flags.
+        #[arg(long)]
+        jenkins_build_list_out: Option<PathBuf>,
+        /// Previous Jenkins build list whose per-package site flags (hooks,
+        /// site easyblocks, EULA acceptances) carry over. Repeatable.
+        #[arg(long = "jenkins-flags-from", requires = "jenkins_build_list_out")]
+        jenkins_flags_from: Vec<PathBuf>,
+        /// Systems CUDA modules are restricted to, comma-separated, written as
+        /// `--include-systems` on their lines.
+        #[arg(long, requires = "jenkins_build_list_out", value_delimiter = ',')]
+        jenkins_gpu_systems: Vec<String>,
         #[arg(long)]
         stack_diff_out: Option<PathBuf>,
     },
@@ -1071,7 +1087,8 @@ fn run_stack(command: StackCommand) -> Result<()> {
             easyconfigs,
             policy,
             toolchain,
-            roots,
+            mut roots,
+            roots_from_build_list,
             baseline_easyconfigs,
             baseline_toolchain_version,
             baseline_easystacks,
@@ -1080,8 +1097,25 @@ fn run_stack(command: StackCommand) -> Result<()> {
             sbom_out,
             build_list_out,
             build_list_excludes_baseline,
+            jenkins_build_list_out,
+            jenkins_flags_from,
+            jenkins_gpu_systems,
             stack_diff_out,
         } => {
+            for path in &roots_from_build_list {
+                let text = std::fs::read_to_string(path)
+                    .with_context(|| format!("reading build list {}", path.display()))?;
+                for line in eb_stack::jenkins::parse_build_list(&text) {
+                    match eb_stack::jenkins::package_name(&line.file) {
+                        Some(name) if !roots.iter().any(|r| r == name) => roots.push(name.into()),
+                        Some(_) => {}
+                        None => eprintln!("{}: no package name in {}", path.display(), line.file),
+                    }
+                }
+            }
+            if toolchain.is_some() && roots.is_empty() {
+                bail!("--toolchain needs at least one --root or --roots-from-build-list");
+            }
             // A policy is a file when there is one to reuse, and a pair of
             // flags when there is not. Writing JSON by hand to answer two
             // questions is a step nobody should need for the common case.
@@ -1129,6 +1163,12 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     commits_repo: baseline_commits_from.as_deref(),
                 }
             };
+            let mut jenkins_previous = Vec::new();
+            for path in &jenkins_flags_from {
+                let text = std::fs::read_to_string(path)
+                    .with_context(|| format!("reading build list {}", path.display()))?;
+                jenkins_previous.extend(eb_stack::jenkins::parse_build_list(&text));
+            }
             let roots = easyconfigs.iter().map(PathBuf::as_path).collect::<Vec<_>>();
             let lock = eb_stack::solve_with_baseline_source(
                 &roots,
@@ -1140,6 +1180,11 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     build_list_out: build_list_out.as_deref(),
                     stack_diff_out: stack_diff_out.as_deref(),
                     build_list_excludes_baseline,
+                    jenkins_build_list_out: jenkins_build_list_out.as_deref(),
+                    jenkins: eb_stack::jenkins::JenkinsOptions {
+                        previous: jenkins_previous,
+                        gpu_systems: jenkins_gpu_systems,
+                    },
                 },
             )?;
             println!(

@@ -38,7 +38,7 @@ fn library_solve_writes_build_list_and_stack_diff() {
         SolveExtraOut {
             build_list_out: Some(&build_list_out),
             stack_diff_out: Some(&stack_diff_out),
-            build_list_excludes_baseline: false,
+            ..Default::default()
         },
     )
     .expect("solve");

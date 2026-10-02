@@ -22,6 +22,7 @@ pub use crate::ecosystem::parse_package_index;
 mod foreign;
 pub mod hierarchy;
 pub mod input_hash;
+pub mod jenkins;
 pub mod luarocks;
 mod manifest;
 pub mod mcp;
@@ -309,6 +310,11 @@ pub struct SolveExtraOut<'a> {
     /// Leave the modules the baseline provides out of the build list, so it
     /// holds only what a site layer has to build on top.
     pub build_list_excludes_baseline: bool,
+    /// Where to write the same list in the Jenkins build-list format, when
+    /// one is wanted. Honours `build_list_excludes_baseline` too.
+    pub jenkins_build_list_out: Option<&'a Path>,
+    /// Flags carried into the Jenkins list and the GPU systems for CUDA modules.
+    pub jenkins: jenkins::JenkinsOptions,
 }
 
 fn write_lock_sbom_and_extras(
@@ -328,16 +334,22 @@ fn write_lock_sbom_and_extras(
         write_json_pretty(path, &sbom)?;
     }
 
+    if extra.build_list_excludes_baseline && baseline.is_none() {
+        bail!("excluding the baseline from the build list requires a baseline");
+    }
     if let Some(path) = extra.build_list_out {
-        let text = if extra.build_list_excludes_baseline {
-            let Some(base) = baseline else {
-                bail!("excluding the baseline from the build list requires a baseline");
-            };
-            report::format_build_list_excluding(lock, &dep_map, base)
-        } else {
-            format_build_list(lock, &dep_map)
+        let text = match baseline.filter(|_| extra.build_list_excludes_baseline) {
+            Some(base) => report::format_build_list_excluding(lock, &dep_map, base),
+            None => format_build_list(lock, &dep_map),
         };
         write_text(path, &text)?;
+    }
+    if let Some(path) = extra.jenkins_build_list_out {
+        let provided = baseline.filter(|_| extra.build_list_excludes_baseline);
+        let packages = report::ordered_packages(lock, &dep_map)
+            .into_iter()
+            .filter(|p| provided.is_none_or(|b| !report::provides(b, p)));
+        write_text(path, &jenkins::format_build_list(packages, &extra.jenkins))?;
     }
     if let Some(path) = extra.stack_diff_out {
         let Some(base) = baseline else {

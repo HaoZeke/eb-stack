@@ -119,7 +119,7 @@ fn the_lock_records_the_criteria_that_ran() {
         eb_stack::SolveExtraOut {
             build_list_out: None,
             stack_diff_out: None,
-            build_list_excludes_baseline: false,
+            ..Default::default()
         },
     )
     .expect("a one-package stack solves");

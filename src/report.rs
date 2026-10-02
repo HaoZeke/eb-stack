@@ -42,23 +42,25 @@ pub fn format_build_list_excluding(
     dep_map: &HashMap<String, Vec<String>>,
     provided: &StackLock,
 ) -> String {
-    let id = |p: &LockPackage| {
-        (
-            p.name.clone(),
-            p.version.clone(),
-            p.toolchain.label(),
-            p.versionsuffix.clone().unwrap_or_default(),
-        )
-    };
-    let have: BTreeSet<_> = provided.packages.iter().map(id).collect();
     let mut s = String::new();
     for p in ordered_packages(lock, dep_map) {
-        if !have.contains(&id(p)) && !p.easyconfig_path.is_empty() {
+        if !provides(provided, p) && !p.easyconfig_path.is_empty() {
             s.push_str(&p.easyconfig_path);
             s.push('\n');
         }
     }
     s
+}
+
+/// Whether `provided` holds the same module as `p`: name, version, toolchain
+/// and versionsuffix all equal.
+pub fn provides(provided: &StackLock, p: &LockPackage) -> bool {
+    provided.packages.iter().any(|q| {
+        q.name == p.name
+            && q.version == p.version
+            && q.toolchain.label() == p.toolchain.label()
+            && q.versionsuffix.as_deref().unwrap_or("") == p.versionsuffix.as_deref().unwrap_or("")
+    })
 }
 
 /// Packages in install order (same topology as [`ordered_build_paths`]).

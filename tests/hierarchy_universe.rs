@@ -62,7 +62,7 @@ fn a_build_dependency_at_the_subtoolchain_resolves() {
         eb_stack::SolveExtraOut {
             build_list_out: Some(&build_list),
             stack_diff_out: None,
-            build_list_excludes_baseline: false,
+            ..Default::default()
         },
     )
     .expect("a GCC recipe must be able to build against its own GCCcore layer");
@@ -380,7 +380,7 @@ fn the_build_list_and_the_sbom_carry_both_levels_separately() {
         eb_stack::SolveExtraOut {
             build_list_out: Some(&build_list),
             stack_diff_out: None,
-            build_list_excludes_baseline: false,
+            ..Default::default()
         },
     )
     .expect("both Perls are installable side by side");

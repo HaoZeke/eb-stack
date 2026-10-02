@@ -183,13 +183,16 @@ authored content.
 #+begin_src bash
 eb-stack stack solve \
   --easyconfigs TREE [--easyconfigs OVERLAY]... \
-  --policy POLICY.json \
+  (--policy POLICY.json | --toolchain NAME/VERSION \
+   [--root NAME]... [--roots-from-build-list LIST]...) \
   [--baseline-easyconfigs TREE] \
   [--baseline-toolchain-version VERSION] \
   [--baseline-easystack EASYSTACK.yml]... [--baseline-commits-from EB_REPO] \
   [--lock-out stack.lock.json] \
   [--sbom-out stack.cdx.json] \
-  [--build-list-out build.list [--build-list-excludes-baseline]] \
+  [--build-list-out build.list] [--build-list-excludes-baseline] \
+  [--jenkins-build-list-out next.list [--jenkins-flags-from previous.list]... \
+   [--jenkins-gpu-systems gpu-a,gpu-b]] \
   [--stack-diff-out stack.diff.md]
 
 eb-stack stack sbom --lock stack.lock.json [--out stack.cdx.json]
@@ -211,6 +214,16 @@ software layer already provides that module, and
 ~--build-list-excludes-baseline~ drops those modules (same name, version,
 toolchain and versionsuffix) from the build list, leaving what the site layer
 builds on top in dependency order.
+
+A Jenkins build list is one easyconfig filename per line with optional ~eb~
+flags, ~#~ for comments. ~--roots-from-build-list~ takes the package name of
+every line as a root. ~--jenkins-build-list-out~ writes the solved build order
+in that format; each package keeps the ~--hook~, ~--hooks~,
+~--include-easyblocks~ and ~--accept-eula-for~ flags of its last line in the
+~--jenkins-flags-from~ lists, while flags tied to the old recipe
+(~--from-commit~, ~--from-pr~, ~--ignore-test-failure~, ~--rebuild~) stay
+behind. A module whose name or versionsuffix says CUDA gets
+~--include-systems~ with the ~--jenkins-gpu-systems~ list.
 
 * Target commands
 

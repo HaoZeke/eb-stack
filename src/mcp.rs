@@ -587,6 +587,7 @@ fn stack_solve(arguments: &Value) -> Result<Value, String> {
             build_list_out: optional_path(arguments, "build_list_out").as_deref(),
             stack_diff_out: optional_path(arguments, "stack_diff_out").as_deref(),
             build_list_excludes_baseline: optional_bool(arguments, "build_list_excludes_baseline"),
+            ..Default::default()
         },
     )
     .map_err(|error| error.to_string())?;
