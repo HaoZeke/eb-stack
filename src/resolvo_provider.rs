@@ -37,6 +37,10 @@ pub struct EbProvider {
     /// Names the system level carries at several versions; each is its own
     /// package, because a system dependency pins one build exactly.
     system_multi: HashSet<String>,
+    /// Names whose builddependencies ask for several versions inside the
+    /// generation while runtime dependencies ask for at most one. Each version
+    /// is its own package, keyed by level and version.
+    build_multi: HashSet<String>,
     /// Every qualified key interned for a package name, so a dependency can
     /// fall back to them when the levels below the recipe hold nothing.
     keys_by_name: HashMap<String, Vec<String>>,
@@ -83,6 +87,7 @@ fn package_key(
     version: &str,
     multi_level: &HashSet<String>,
     system_multi: &HashSet<String>,
+    build_multi: &HashSet<String>,
 ) -> String {
     // The system level is the bootstrap layer, and a generation genuinely
     // carries two builds of one name there: binutils 2.40 builds the GCCcore
@@ -92,6 +97,14 @@ fn package_key(
     // and makes the generation unsatisfiable by construction.
     if system_multi.contains(name) && crate::hierarchy::is_system_toolchain(tc) {
         return format!("{name}@system=={version}");
+    }
+    // EasyBuild loads a builddependency only while building the recipe that
+    // names it, so a generation can build ParMETIS with CMake 3.31 and PETSc
+    // with CMake 4.2 and install both. Only a runtime dependency has to agree
+    // across a stack, and build_multi admits a name only when every runtime
+    // reference to it asks for the same version.
+    if build_multi.contains(name) && !crate::hierarchy::is_system_toolchain(tc) {
+        return format!("{name}@{}=={version}", toolchain_label(tc));
     }
     if multi_level.contains(name) {
         format!("{name}@{}", toolchain_label(tc))
@@ -121,6 +134,28 @@ fn keys_for_name<T>(by_key: &HashMap<String, T>, name: &str) -> Vec<String> {
 }
 
 impl EbProvider {
+    /// Toolchain labels a recipe may take an unpinned dependency from: its own
+    /// level and every level under it, lowest first, then its own if the
+    /// hierarchy does not list it.
+    fn admissible_levels(&self, recipe: &Candidate) -> Vec<String> {
+        let recipe_at = self
+            .hierarchy_members
+            .iter()
+            .position(|m| crate::hierarchy::toolchains_match(m, &recipe.toolchain));
+        // The hierarchy is ordered lowest level first, so a recipe may take a
+        // dependency from its own level and anything under it, never above.
+        let admissible: Vec<&crate::domain::Toolchain> = match recipe_at {
+            Some(at) => self.hierarchy_members[..=at].iter().collect(),
+            None => self.hierarchy_members.iter().collect(),
+        };
+        let mut labels: Vec<String> = admissible.into_iter().map(toolchain_label).collect();
+        let own = toolchain_label(&recipe.toolchain);
+        if !labels.contains(&own) {
+            labels.push(own);
+        }
+        labels
+    }
+
     /// Which resolvo package names can satisfy one dependency of one recipe.
     ///
     /// A plain name for a package the generation carries once. For a package
@@ -167,31 +202,43 @@ impl EbProvider {
                 return keys;
             }
         }
+        if self.build_multi.contains(&dep.name) {
+            // One key per level and version. Keep the levels this dependency
+            // may come from; the version is matched against each key's ranks.
+            let levels = match dep.toolchain.as_ref() {
+                Some(tc) => vec![toolchain_label(tc)],
+                None => self.admissible_levels(recipe),
+            };
+            let all = self
+                .keys_by_name
+                .get(&dep.name)
+                .cloned()
+                .unwrap_or_default();
+            let keys: Vec<String> = all
+                .iter()
+                .filter(|key| match key.split_once('@') {
+                    None => true,
+                    Some((_, rest)) => {
+                        let level = rest.split("==").next().unwrap_or(rest);
+                        levels.iter().any(|l| l == level)
+                    }
+                })
+                .cloned()
+                .collect();
+            return if keys.is_empty() { all } else { keys };
+        }
         if !self.multi_level.contains(&dep.name) {
             return vec![dep.name.clone()];
         }
         if let Some(tc) = dep.toolchain.as_ref() {
             return vec![format!("{}@{}", dep.name, toolchain_label(tc))];
         }
-        let recipe_at = self
-            .hierarchy_members
-            .iter()
-            .position(|m| crate::hierarchy::toolchains_match(m, &recipe.toolchain));
-        // The hierarchy is ordered lowest level first, so a recipe may take a
-        // dependency from its own level and anything under it, never above.
-        let admissible: Vec<&crate::domain::Toolchain> = match recipe_at {
-            Some(at) => self.hierarchy_members[..=at].iter().collect(),
-            None => self.hierarchy_members.iter().collect(),
-        };
-        let mut keys: Vec<String> = admissible
+        let keys: Vec<String> = self
+            .admissible_levels(recipe)
             .into_iter()
-            .map(|tc| format!("{}@{}", dep.name, toolchain_label(tc)))
+            .map(|label| format!("{}@{label}", dep.name))
             .filter(|key| self.name_ids.contains_key(key))
             .collect();
-        let own = format!("{}@{}", dep.name, toolchain_label(&recipe.toolchain));
-        if self.name_ids.contains_key(&own) && !keys.contains(&own) {
-            keys.push(own);
-        }
         if keys.is_empty() {
             // Nothing at or below this recipe carries the package. A stack
             // policy can admit a closure from another generation on purpose,
@@ -311,6 +358,29 @@ impl EbProvider {
             .map(|(name, _)| name.clone())
             .collect();
 
+        let mut build_versions: HashMap<String, BTreeSet<String>> = HashMap::new();
+        let mut runtime_versions: HashMap<String, BTreeSet<String>> = HashMap::new();
+        for c in candidates.iter() {
+            for (deps, seen) in [
+                (&c.builddependencies, &mut build_versions),
+                (&c.dependencies, &mut runtime_versions),
+            ] {
+                for d in deps {
+                    let version = d.version_req.trim_start_matches("==").to_string();
+                    seen.entry(d.name.clone()).or_default().insert(version);
+                }
+            }
+        }
+        let build_multi: HashSet<String> = build_versions
+            .iter()
+            .filter(|(name, versions)| {
+                versions.len() > 1
+                    && !system_multi.contains(*name)
+                    && runtime_versions.get(*name).is_none_or(|r| r.len() <= 1)
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, c) in candidates.iter().enumerate() {
             by_name
@@ -320,6 +390,7 @@ impl EbProvider {
                     &c.version,
                     &multi_level,
                     &system_multi,
+                    &build_multi,
                 ))
                 .or_default()
                 .push(i);
@@ -559,6 +630,7 @@ impl EbProvider {
                 &c.version,
                 &multi_level,
                 &system_multi,
+                &build_multi,
             );
             let entry = keys_by_name.entry(c.name.clone()).or_default();
             if !entry.contains(&key) {
@@ -569,6 +641,7 @@ impl EbProvider {
         Ok(Self {
             multi_level,
             system_multi,
+            build_multi,
             keys_by_name,
             hierarchy_members,
             pool,
@@ -1631,6 +1704,69 @@ mod tests {
             .collect();
         binutils.sort();
         assert_eq!(binutils, vec!["2.40", "2.42"]);
+    }
+
+    #[test]
+    fn two_recipes_may_build_with_different_versions_of_one_tool() {
+        // ParMETIS 4.0.3 builds with CMake 3.31 and PETSc with CMake 4.2 in
+        // the same generation. A builddependency is loaded only for the build
+        // that names it, so both CMake modules install side by side.
+        let need = |name: &str, version: &str| DepReq {
+            name: name.into(),
+            version_req: version.into(),
+            versionsuffix: None,
+            toolchain: None,
+        };
+        let building = |mut c: Candidate, tool: &str| {
+            c.builddependencies = vec![need("CMake", tool)];
+            c
+        };
+        let candidates = vec![
+            cand("CMake", "3.31.11", None, "CMake-3.31.11.eb", vec![]),
+            cand("CMake", "4.2.1", None, "CMake-4.2.1.eb", vec![]),
+            building(
+                cand("ParMETIS", "4.0.3", None, "ParMETIS-4.0.3.eb", vec![]),
+                "3.31.11",
+            ),
+            building(
+                cand(
+                    "PETSc",
+                    "3.25.0",
+                    None,
+                    "PETSc-3.25.0.eb",
+                    vec![need("ParMETIS", "4.0.3")],
+                ),
+                "4.2.1",
+            ),
+        ];
+        let selected = solve_with_resolvo(&candidates, &policy(vec!["PETSc"], vec![]), None)
+            .expect("both CMake builds coexist");
+        let mut cmake: Vec<&str> = selected
+            .iter()
+            .filter(|c| c.name == "CMake")
+            .map(|c| c.version.as_str())
+            .collect();
+        cmake.sort();
+        assert_eq!(cmake, vec!["3.31.11", "4.2.1"]);
+    }
+
+    #[test]
+    fn a_runtime_dependency_still_takes_one_version_per_stack() {
+        // Two runtime versions of one library cannot share a stack, whatever
+        // the builddependencies ask for.
+        let need = |name: &str, version: &str| DepReq {
+            name: name.into(),
+            version_req: version.into(),
+            versionsuffix: None,
+            toolchain: None,
+        };
+        let candidates = vec![
+            cand("Eigen", "3.4.1", None, "Eigen-3.4.1.eb", vec![]),
+            cand("Eigen", "5.0.0", None, "Eigen-5.0.0.eb", vec![]),
+            cand("A", "1", None, "A-1.eb", vec![need("Eigen", "3.4.1")]),
+            cand("B", "1", None, "B-1.eb", vec![need("Eigen", "5.0.0")]),
+        ];
+        assert!(solve_with_resolvo(&candidates, &policy(vec!["A", "B"], vec![]), None).is_err());
     }
 
     #[test]
