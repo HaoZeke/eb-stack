@@ -186,6 +186,7 @@ eb-stack stack solve \
   --policy POLICY.json \
   [--baseline-easyconfigs TREE] \
   [--baseline-toolchain-version VERSION] \
+  [--baseline-easystack EASYSTACK.yml]... [--baseline-commits-from EB_REPO] \
   [--lock-out stack.lock.json] \
   [--sbom-out stack.cdx.json] \
   [--build-list-out build.list] \
@@ -197,6 +198,16 @@ eb-stack stack sbom --lock stack.lock.json [--out stack.cdx.json]
 ~stack solve~ is the multi-root EasyBuild stack solver. Package-profile stack
 preferences use the TOML schema documented with the package workflow; whole
 stack solving uses the JSON ~Policy~ schema.
+
+The baseline is either a previous generation (~--baseline-easyconfigs~, by
+default the first ~--easyconfigs~ tree) or what a set of easystacks installs
+(~--baseline-easystack~, repeatable). An easystack baseline is every entry
+plus the closure its recipes pin, read from the ~--easyconfigs~ trees and kept
+to the policy toolchain's hierarchy. An entry pinned with ~from-commit~ is read
+from that commit of ~--baseline-commits-from~ when given, and matched by
+filename otherwise. Entries that name no recipe are listed on standard error.
+Against an EESSI version's easystacks, ~unchanged~ in the stack diff means the
+software layer already provides that module.
 
 * Target commands
 

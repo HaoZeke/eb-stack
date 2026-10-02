@@ -398,21 +398,7 @@ pub fn build_graph(
     roots: &[String],
     choice: Choice,
 ) -> Result<BuildGraph, OrderError> {
-    let mut graph: BuildGraph = DiGraph::new();
-    let mut index: HashMap<ModuleKey, NodeIndex> = HashMap::new();
-    let mut queue: Vec<ModuleKey> = Vec::new();
-    let by_key: BTreeMap<ModuleKey, &Candidate> =
-        candidates.iter().map(|c| (ModuleKey::of(c), c)).collect();
-
-    let node_for = |graph: &mut BuildGraph,
-                    index: &mut HashMap<ModuleKey, NodeIndex>,
-                    key: &ModuleKey|
-     -> NodeIndex {
-        *index
-            .entry(key.clone())
-            .or_insert_with(|| graph.add_node(key.clone()))
-    };
-
+    let mut starts: Vec<ModuleKey> = Vec::new();
     for root in roots {
         let (name, version_req) = match root.split_once("==") {
             Some((name, version)) => (name, format!("=={version}")),
@@ -451,9 +437,40 @@ pub fn build_graph(
                 });
             }
         };
-        let key = ModuleKey::of(start);
-        node_for(&mut graph, &mut index, &key);
-        queue.push(key);
+        starts.push(ModuleKey::of(start));
+    }
+    graph_from_keys(candidates, &starts, choice)
+}
+
+/// The build graph reachable from modules named by their full identity.
+///
+/// [`build_graph`] takes package names and picks one build of each; this takes
+/// the builds themselves, for a caller that already knows which ones it means,
+/// as an easystack does when it names easyconfig files. A key with no
+/// candidate in the tree is a node with no dependencies.
+#[allow(clippy::result_large_err)]
+pub fn graph_from_keys(
+    candidates: &[Candidate],
+    starts: &[ModuleKey],
+    choice: Choice,
+) -> Result<BuildGraph, OrderError> {
+    let mut graph: BuildGraph = DiGraph::new();
+    let mut index: HashMap<ModuleKey, NodeIndex> = HashMap::new();
+    let by_key: BTreeMap<ModuleKey, &Candidate> =
+        candidates.iter().map(|c| (ModuleKey::of(c), c)).collect();
+
+    let node_for = |graph: &mut BuildGraph,
+                    index: &mut HashMap<ModuleKey, NodeIndex>,
+                    key: &ModuleKey|
+     -> NodeIndex {
+        *index
+            .entry(key.clone())
+            .or_insert_with(|| graph.add_node(key.clone()))
+    };
+    let mut queue: Vec<ModuleKey> = Vec::new();
+    for key in starts {
+        node_for(&mut graph, &mut index, key);
+        queue.push(key.clone());
     }
 
     let mut seen: HashSet<ModuleKey> = HashSet::new();

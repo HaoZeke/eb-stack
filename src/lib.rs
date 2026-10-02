@@ -55,7 +55,7 @@ pub use artifact_class::{
 };
 pub use build_order::{build_order, format_order, Choice, ModuleKey, OrderError};
 pub use domain::*;
-pub use easystack::{lock_to_easystack, EasystackOptions};
+pub use easystack::{lock_to_easystack, parse_easystack_entries, EasystackEntry, EasystackOptions};
 pub use eb_maintainer::{
     check_cross_generation_pins, check_dep_toolchain_pins, check_duplicate_upstream,
     check_fat_build, check_maintainer_acceptability, check_maintainer_acceptability_text,
@@ -155,6 +155,7 @@ pub use select::{resolvo_resolve_dep_versions, select_stack, SelectError};
 
 use anyhow::{bail, Context, Result};
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use thiserror::Error;
@@ -422,6 +423,204 @@ pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
     sbom_out: Option<&Path>,
     extra: SolveExtraOut<'_>,
 ) -> Result<StackLock> {
+    let baseline = match baseline_easyconfigs {
+        Some(root) => BaselineSource::Tree {
+            root,
+            toolchain_version: baseline_toolchain_version,
+        },
+        None => BaselineSource::None,
+    };
+    solve_with_baseline_source(
+        easyconfigs_roots,
+        policy_path,
+        baseline,
+        lock_out,
+        sbom_out,
+        extra,
+    )
+}
+
+/// The modules a set of easystacks installs, restricted to one toolchain family.
+///
+/// Every entry is matched by filename against `candidates`; an entry pinned
+/// with `from-commit` is read from that commit of `commits_repo` instead, when
+/// one is given, since the commit is what was built and develop may since have
+/// changed the file. Each matched recipe brings its whole pinned closure, the
+/// way EasyBuild's robot installs it. Modules outside `policy_toolchain`'s
+/// hierarchy are dropped, so an `lfoss` entry does not show up as removed from
+/// a `foss` stack.
+///
+/// Returns the lock and the entries that matched nothing, as `file` or
+/// `file @ commit`.
+pub fn baseline_from_easystacks(
+    easystacks: &[&Path],
+    candidates: &[Candidate],
+    commits_repo: Option<&Path>,
+    policy_toolchain: &Toolchain,
+    hierarchy_members: &[Toolchain],
+) -> Result<(StackLock, Vec<String>)> {
+    let mut entries = Vec::new();
+    for path in easystacks {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("reading easystack {}", path.display()))?;
+        entries.extend(
+            easystack::parse_easystack_entries(&text)
+                .with_context(|| format!("parsing easystack {}", path.display()))?,
+        );
+    }
+    let overlay = match commits_repo {
+        Some(repo) => overlay_from_commits(repo, &entries)?,
+        None => Vec::new(),
+    };
+    let filename = |c: &Candidate| {
+        c.easyconfig_path
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .to_string()
+    };
+    let mut universe: Vec<Candidate> = candidates.to_vec();
+    let mut unresolved = Vec::new();
+    let mut starts = Vec::new();
+    for entry in &entries {
+        let from_overlay = entry.from_commit.as_ref().and_then(|commit| {
+            overlay
+                .iter()
+                .find(|(c, cand)| c == commit && filename(cand) == entry.file)
+                .map(|(_, cand)| cand)
+        });
+        let found = from_overlay.or_else(|| candidates.iter().find(|c| filename(c) == entry.file));
+        match found {
+            Some(cand) => {
+                let key = ModuleKey::of(cand);
+                if from_overlay.is_some() {
+                    universe.retain(|c| ModuleKey::of(c) != key);
+                    universe.push(cand.clone());
+                }
+                starts.push(key);
+            }
+            None => unresolved.push(match &entry.from_commit {
+                Some(commit) => format!("{} @ {}", entry.file, &commit[..commit.len().min(10)]),
+                None => entry.file.clone(),
+            }),
+        }
+    }
+    let graph = build_order::graph_from_keys(&universe, &starts, Choice::Newest)
+        .map_err(|e| anyhow::anyhow!("baseline closure: {e}"))?;
+    let keys: std::collections::BTreeSet<ModuleKey> = graph.node_weights().cloned().collect();
+    let closure: Vec<Candidate> = universe
+        .into_iter()
+        .filter(|c| keys.contains(&ModuleKey::of(c)))
+        .collect();
+    let in_family = filter_toolchain_hierarchy(&closure, policy_toolchain, hierarchy_members);
+    let lock = lock_from_candidates(
+        &in_family,
+        Some(format!(
+            "baseline-from-easystack-{}-{}",
+            policy_toolchain.name, policy_toolchain.version
+        )),
+        "eb_parse_easystack",
+    );
+    Ok((lock, unresolved))
+}
+
+/// Parse the recipes that `from-commit` entries name, each from its commit.
+///
+/// Files are written under a temporary directory one subdirectory per commit
+/// and parsed there; the directory is removed before returning.
+fn overlay_from_commits(
+    repo: &Path,
+    entries: &[easystack::EasystackEntry],
+) -> Result<Vec<(String, Candidate)>> {
+    let git = |args: &[&str]| -> Result<String> {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .with_context(|| format!("running git in {}", repo.display()))?;
+        if !out.status.success() {
+            bail!(
+                "git {} in {}: {}",
+                args.join(" "),
+                repo.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    let mut by_commit: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for e in entries {
+        if let Some(commit) = &e.from_commit {
+            by_commit.entry(commit).or_default().push(&e.file);
+        }
+    }
+    let dir = std::env::temp_dir().join(format!("eb-stack-from-commit-{}", std::process::id()));
+    let mut out = Vec::new();
+    let result = (|| -> Result<()> {
+        for (commit, files) in &by_commit {
+            let listing = git(&[
+                "ls-tree",
+                "-r",
+                "--name-only",
+                commit,
+                "easybuild/easyconfigs",
+            ])?;
+            let root = dir.join(commit);
+            for file in files {
+                let Some(path) = listing.lines().find(|p| p.ends_with(&format!("/{file}"))) else {
+                    continue;
+                };
+                let text = git(&["show", &format!("{commit}:{path}")])?;
+                let dst = root.join(path);
+                std::fs::create_dir_all(dst.parent().expect("a file has a parent"))?;
+                std::fs::write(&dst, text)?;
+            }
+            if root.is_dir() {
+                let tree = parse_easyconfig_tree(&root).map_err(|e| anyhow::anyhow!(e))?;
+                out.extend(tree.candidates.into_iter().map(|c| (commit.to_string(), c)));
+            }
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&dir);
+    result.map(|()| out)
+}
+
+/// What a solve compares its result against.
+#[derive(Debug, Clone, Copy)]
+pub enum BaselineSource<'a> {
+    /// No baseline: the stack diff cannot be written.
+    None,
+    /// The policy family's previous generation in an easyconfigs tree, chosen
+    /// by [`select_baseline_generation`].
+    Tree {
+        /// Tree to read.
+        root: &'a Path,
+        /// Generation to take instead of the nearest lower one.
+        toolchain_version: Option<&'a str>,
+    },
+    /// What a set of easystacks installs: every entry and everything its
+    /// recipe pins, read from the solve's own trees. This is what a software
+    /// layer already ships, so `Unchanged` in the stack diff means "provided".
+    Easystacks {
+        /// Easystack files, as EESSI keeps them per version.
+        files: &'a [&'a Path],
+        /// easybuild-easyconfigs checkout to read `from-commit` entries from.
+        /// Without it those entries are matched by filename in the trees.
+        commits_repo: Option<&'a Path>,
+    },
+}
+
+/// Solve, comparing against the baseline `baseline` names.
+pub fn solve_with_baseline_source(
+    easyconfigs_roots: &[&Path],
+    policy_path: &Path,
+    baseline_source: BaselineSource<'_>,
+    lock_out: &Path,
+    sbom_out: Option<&Path>,
+    extra: SolveExtraOut<'_>,
+) -> Result<StackLock> {
     if easyconfigs_roots.is_empty() {
         bail!("at least one --easyconfigs path is required");
     }
@@ -472,7 +671,34 @@ pub fn solve_from_easyconfigs_with_baseline_version_and_extras(
         candidates: universe_cands.clone(),
     };
 
-    let baseline = if let Some(base_root) = baseline_easyconfigs {
+    let baseline = if let BaselineSource::Easystacks {
+        files,
+        commits_repo,
+    } = baseline_source
+    {
+        let (lock, unresolved) = baseline_from_easystacks(
+            files,
+            &all,
+            commits_repo,
+            &policy.toolchain,
+            &hierarchy_members,
+        )?;
+        if !unresolved.is_empty() {
+            eprintln!(
+                "baseline: {} easystack entr{} name no easyconfig in the trees",
+                unresolved.len(),
+                if unresolved.len() == 1 { "y" } else { "ies" }
+            );
+            for u in &unresolved {
+                eprintln!("  {u}");
+            }
+        }
+        Some(lock)
+    } else if let BaselineSource::Tree {
+        root: base_root,
+        toolchain_version: baseline_toolchain_version,
+    } = baseline_source
+    {
         let base_tree = parse_easyconfig_tree(base_root).map_err(|e| anyhow::anyhow!(e))?;
         let base_all = base_tree.candidates;
         let base_cands =

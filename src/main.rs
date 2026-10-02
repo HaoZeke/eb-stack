@@ -15,8 +15,7 @@ use eb_stack::{
     check_recipe_deps, format_style, format_style_file, inspect_new_package, is_registry_name,
     lint_style, load_json_file, materialize_registry_name, packaging_gate, parse_easyconfig_trees,
     plan_new_package_with, plan_package_bump_with, plan_package_closure_with_sources,
-    resolve_easyconfig_file, resolve_package_catalog_layers,
-    solve_from_easyconfigs_with_baseline_version_and_extras, write_json_pretty,
+    resolve_easyconfig_file, resolve_package_catalog_layers, write_json_pretty,
     write_package_bundle, write_package_closure, BumpPackageRequest, ForeignFormat,
     NewPackageRequest, PackageBundle, PackageCatalogLayer, PackageEmitOptions, SolveExtraOut,
     StackLock, Toolchain, UreqClient,
@@ -329,6 +328,16 @@ enum StackCommand {
         baseline_easyconfigs: Option<PathBuf>,
         #[arg(long)]
         baseline_toolchain_version: Option<String>,
+        /// Compare against what these easystacks install instead of a previous
+        /// generation: each entry and its pinned closure, read from the
+        /// --easyconfigs trees. Repeatable; pass every file of a software
+        /// layer version so `Unchanged` in the stack diff means "provided".
+        #[arg(long = "baseline-easystack", conflicts_with_all = ["baseline_easyconfigs", "baseline_toolchain_version"])]
+        baseline_easystacks: Vec<PathBuf>,
+        /// easybuild-easyconfigs checkout to read `from-commit` entries of the
+        /// baseline easystacks from. Without it they match by filename.
+        #[arg(long, requires = "baseline_easystacks")]
+        baseline_commits_from: Option<PathBuf>,
         #[arg(long, default_value = "stack.lock.json")]
         lock_out: PathBuf,
         #[arg(long)]
@@ -1060,6 +1069,8 @@ fn run_stack(command: StackCommand) -> Result<()> {
             roots,
             baseline_easyconfigs,
             baseline_toolchain_version,
+            baseline_easystacks,
+            baseline_commits_from,
             lock_out,
             sbom_out,
             build_list_out,
@@ -1091,15 +1102,32 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     written_policy
                 }
             };
-            let baseline = baseline_easyconfigs
-                .as_deref()
-                .or_else(|| easyconfigs.first().map(PathBuf::as_path));
+            let stacks = baseline_easystacks
+                .iter()
+                .map(PathBuf::as_path)
+                .collect::<Vec<_>>();
+            let baseline = if stacks.is_empty() {
+                match baseline_easyconfigs
+                    .as_deref()
+                    .or_else(|| easyconfigs.first().map(PathBuf::as_path))
+                {
+                    Some(root) => eb_stack::BaselineSource::Tree {
+                        root,
+                        toolchain_version: baseline_toolchain_version.as_deref(),
+                    },
+                    None => eb_stack::BaselineSource::None,
+                }
+            } else {
+                eb_stack::BaselineSource::Easystacks {
+                    files: &stacks,
+                    commits_repo: baseline_commits_from.as_deref(),
+                }
+            };
             let roots = easyconfigs.iter().map(PathBuf::as_path).collect::<Vec<_>>();
-            let lock = solve_from_easyconfigs_with_baseline_version_and_extras(
+            let lock = eb_stack::solve_with_baseline_source(
                 &roots,
                 &policy,
                 baseline,
-                baseline_toolchain_version.as_deref(),
                 &lock_out,
                 sbom_out.as_deref(),
                 SolveExtraOut {

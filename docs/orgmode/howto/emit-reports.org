@@ -21,8 +21,24 @@ eb-stack stack solve \
   --stack-diff-out stack.diff.md
 #+end_src
 
-~--stack-diff-out~ requires ~--baseline-easyconfigs~ or the solve fails with
-an explicit error instead of skipping the diff without a warning.
+~--stack-diff-out~ requires a baseline or the solve fails with an explicit
+error instead of skipping the diff without a warning.
+
+To diff against what a software layer already ships, pass its easystacks as
+the baseline instead of an older tree:
+
+#+begin_src bash
+eb-stack stack solve \
+  --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs \
+  --toolchain foss/2026.1 --root GROMACS --root QuantumESPRESSO \
+  $(for f in software-layer/easystacks/software.eessi.io/2026.06/*.yml; do
+      echo --baseline-easystack "$f"; done) \
+  --baseline-commits-from easybuild-easyconfigs \
+  --build-list-out build.list \
+  --stack-diff-out stack.diff.md
+#+end_src
+
+The ~added~ and ~version-bumped~ rows are then the site layer.
 
 * Read the build list
 

@@ -110,6 +110,51 @@ fn parse_scalar(raw: &str) -> Value {
     }
 }
 
+/// One entry of an easystack as written: the easyconfig file it names, and the
+/// commit that file comes from when the entry pins one with `from-commit`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EasystackEntry {
+    /// Easyconfig filename. A path in the file (EESSI's per-arch stacks write
+    /// absolute reprod paths) is cut to its basename, which is what EasyBuild
+    /// looks up on the robot path.
+    pub file: String,
+    /// The easybuild-easyconfigs commit given as `from-commit`, if any.
+    pub from_commit: Option<String>,
+}
+
+/// Read the entries of an easystack document, in file order.
+///
+/// Both entry shapes are read: a bare filename, and a single-key mapping from
+/// filename to `options`. Anything under the top-level `easyconfigs` key that
+/// names no `.eb` file is skipped rather than guessed at.
+pub fn parse_easystack_entries(text: &str) -> Result<Vec<EasystackEntry>, serde_yaml::Error> {
+    let doc: Value = serde_yaml::from_str(text)?;
+    let Some(items) = doc.get("easyconfigs").and_then(Value::as_sequence) else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for item in items {
+        let (name, options) = match item {
+            Value::String(name) => (name.as_str(), None),
+            Value::Mapping(map) if map.len() == 1 => {
+                let (key, value) = map.iter().next().expect("one key");
+                let Some(name) = key.as_str() else { continue };
+                (name, value.get("options"))
+            }
+            _ => continue,
+        };
+        let Some(file) = easyconfig_filename(name) else {
+            continue;
+        };
+        let from_commit = options
+            .and_then(|o| o.get("from-commit"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        out.push(EasystackEntry { file, from_commit });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +251,28 @@ mod tests {
         let lock = lock_with(&["", "x/X/X-1.0.eb", "not-an-easyconfig.txt"]);
         let yaml = lock_to_easystack(&lock, &EasystackOptions::new());
         assert_eq!(yaml, "easyconfigs:\n- X-1.0.eb\n");
+    }
+
+    #[test]
+    fn entries_are_read_in_both_shapes_with_their_commit() {
+        let text = "easyconfigs:\n  - GROMACS-2026.0-foss-2026.1.eb\n  - /cvmfs/x/reprod/ELPA-2025.06.002-foss-2026.1.eb\n  - Valgrind-3.26.0-gompi-2026.1.eb:\n      options:\n        from-commit: 0123456789abcdef0123456789abcdef01234567\n";
+        let got = parse_easystack_entries(text).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                EasystackEntry {
+                    file: "GROMACS-2026.0-foss-2026.1.eb".into(),
+                    from_commit: None
+                },
+                EasystackEntry {
+                    file: "ELPA-2025.06.002-foss-2026.1.eb".into(),
+                    from_commit: None
+                },
+                EasystackEntry {
+                    file: "Valgrind-3.26.0-gompi-2026.1.eb".into(),
+                    from_commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
+                },
+            ]
+        );
     }
 }
