@@ -209,63 +209,71 @@ pub struct PackageChange {
 ///
 /// Result is sorted by package name for stable markdown.
 pub fn classify_stack_diff(baseline: &StackLock, solved: &StackLock) -> Vec<PackageChange> {
-    let base_by: BTreeMap<&str, &LockPackage> = baseline
-        .packages
-        .iter()
-        .map(|p| (p.name.as_str(), p))
-        .collect();
-    let sol_by: BTreeMap<&str, &LockPackage> = solved
-        .packages
-        .iter()
-        .map(|p| (p.name.as_str(), p))
-        .collect();
-
+    // A name can carry several modules on either side (CUDA 12.9.1 and 13.3.0,
+    // Java 21 and 25), so each module gets its own row. Identical modules pair
+    // first; what is left of a name pairs in version order, so one bump reads
+    // as one bump, and anything unpaired is added or removed.
+    fn by_name(lock: &StackLock) -> BTreeMap<&str, Vec<&LockPackage>> {
+        let mut m: BTreeMap<&str, Vec<&LockPackage>> = BTreeMap::new();
+        for p in &lock.packages {
+            m.entry(p.name.as_str()).or_default().push(p);
+        }
+        for v in m.values_mut() {
+            v.sort_by(|a, b| crate::version::cmp_version(&a.version, &b.version));
+        }
+        m
+    }
+    fn same_module(a: &LockPackage, b: &LockPackage) -> bool {
+        a.version == b.version
+            && a.toolchain.label() == b.toolchain.label()
+            && a.versionsuffix.as_deref().unwrap_or("") == b.versionsuffix.as_deref().unwrap_or("")
+    }
+    fn row(name: &str, b: Option<&LockPackage>, s: Option<&LockPackage>) -> PackageChange {
+        let kind = match (b, s) {
+            (None, Some(_)) => PackageChangeKind::Added,
+            (Some(_), None) => PackageChangeKind::Removed,
+            (Some(b), Some(s)) if b.version == s.version => PackageChangeKind::Unchanged,
+            _ => PackageChangeKind::VersionBumped,
+        };
+        PackageChange {
+            name: name.to_string(),
+            kind,
+            baseline_version: b.map(|p| p.version.clone()),
+            solved_version: s.map(|p| p.version.clone()),
+            baseline_easyconfig_path: b.map(|p| p.easyconfig_path.clone()),
+            solved_easyconfig_path: s.map(|p| p.easyconfig_path.clone()),
+        }
+    }
+    let base_by = by_name(baseline);
+    let sol_by = by_name(solved);
     let mut names: BTreeSet<&str> = BTreeSet::new();
     names.extend(base_by.keys().copied());
     names.extend(sol_by.keys().copied());
 
-    names
-        .into_iter()
-        .map(|name| {
-            let b = base_by.get(name).copied();
-            let s = sol_by.get(name).copied();
-            match (b, s) {
-                (None, Some(s)) => PackageChange {
-                    name: name.to_string(),
-                    kind: PackageChangeKind::Added,
-                    baseline_version: None,
-                    solved_version: Some(s.version.clone()),
-                    baseline_easyconfig_path: None,
-                    solved_easyconfig_path: Some(s.easyconfig_path.clone()),
-                },
-                (Some(b), None) => PackageChange {
-                    name: name.to_string(),
-                    kind: PackageChangeKind::Removed,
-                    baseline_version: Some(b.version.clone()),
-                    solved_version: None,
-                    baseline_easyconfig_path: Some(b.easyconfig_path.clone()),
-                    solved_easyconfig_path: None,
-                },
-                (Some(b), Some(s)) if b.version == s.version => PackageChange {
-                    name: name.to_string(),
-                    kind: PackageChangeKind::Unchanged,
-                    baseline_version: Some(b.version.clone()),
-                    solved_version: Some(s.version.clone()),
-                    baseline_easyconfig_path: Some(b.easyconfig_path.clone()),
-                    solved_easyconfig_path: Some(s.easyconfig_path.clone()),
-                },
-                (Some(b), Some(s)) => PackageChange {
-                    name: name.to_string(),
-                    kind: PackageChangeKind::VersionBumped,
-                    baseline_version: Some(b.version.clone()),
-                    solved_version: Some(s.version.clone()),
-                    baseline_easyconfig_path: Some(b.easyconfig_path.clone()),
-                    solved_easyconfig_path: Some(s.easyconfig_path.clone()),
-                },
-                (None, None) => unreachable!("name always from one side"),
+    let mut out = Vec::new();
+    for name in names {
+        let mut base: Vec<&LockPackage> = base_by.get(name).cloned().unwrap_or_default();
+        let mut sol: Vec<&LockPackage> = sol_by.get(name).cloned().unwrap_or_default();
+        let mut i = 0;
+        while i < sol.len() {
+            if let Some(j) = base.iter().position(|b| same_module(b, sol[i])) {
+                out.push(row(name, Some(base.remove(j)), Some(sol.remove(i))));
+            } else {
+                i += 1;
             }
-        })
-        .collect()
+        }
+        let paired = base.len().min(sol.len());
+        for k in 0..paired {
+            out.push(row(name, Some(base[k]), Some(sol[k])));
+        }
+        for b in &base[paired..] {
+            out.push(row(name, Some(b), None));
+        }
+        for s in &sol[paired..] {
+            out.push(row(name, None, Some(s)));
+        }
+    }
+    out
 }
 
 /// Human-reviewable markdown comparing baseline lock to solved lock.
@@ -528,5 +536,50 @@ mod tests {
         let lock = lock_of(vec![]);
         let map = HashMap::new();
         assert_eq!(format_build_list(&lock, &map), "");
+    }
+
+    #[test]
+    fn two_modules_of_one_name_get_a_row_each() {
+        use crate::domain::{LockPackage, SolverMeta, StackLock, Toolchain};
+        let p = |v: &str| LockPackage {
+            name: "CUDA".into(),
+            version: v.into(),
+            toolchain: Toolchain {
+                name: "system".into(),
+                version: "system".into(),
+            },
+            versionsuffix: None,
+            easyconfig_path: format!("CUDA-{v}.eb"),
+        };
+        let lock = |ps: Vec<LockPackage>| StackLock {
+            schema_version: 1,
+            toolchain: Toolchain {
+                name: "foss".into(),
+                version: "2026.1".into(),
+            },
+            generation_label: None,
+            packages: ps,
+            solver: SolverMeta {
+                engine: "t".into(),
+                engine_version: "0".into(),
+                timestamp: String::new(),
+                criteria: Vec::new(),
+            },
+        };
+        let rows = classify_stack_diff(
+            &lock(vec![p("13.3.0")]),
+            &lock(vec![p("12.9.1"), p("13.3.0")]),
+        );
+        let kinds: Vec<(Option<String>, PackageChangeKind)> = rows
+            .into_iter()
+            .map(|r| (r.solved_version, r.kind))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                (Some("13.3.0".into()), PackageChangeKind::Unchanged),
+                (Some("12.9.1".into()), PackageChangeKind::Added),
+            ]
+        );
     }
 }
