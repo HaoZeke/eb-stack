@@ -65,7 +65,7 @@ const COPYRIGHT_HEADER: &[&str] = &[
 /// Why a plan owes a software-specific easyblock.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwedEasyblock {
-    /// Class EasyBuild derives from the software name, e.g. `EB_QMCPACK`.
+    /// Class EasyBuild derives from the software name, e.g. `EB_WRF` for `WRF`.
     pub class_name: String,
     /// Build-option differences between profiles, each naming the option and
     /// the profiles that carry it.
@@ -111,7 +111,7 @@ pub fn derived_class(plan: &PackagePlan) -> String {
     encode_class_name(&plan.package.name)
 }
 
-/// File name of the module that holds the derived class, e.g. `qmcpack.py`.
+/// File name of the module that holds the derived class, e.g. `wrf.py`.
 pub fn module_filename(plan: &PackagePlan) -> String {
     let stem = plan
         .package
