@@ -48,6 +48,10 @@ pub struct ResolvedExt {
     pub name: String,
     /// Extension version.
     pub version: String,
+    /// Patch files the entry's options name (`'patches': [...]`). They sit
+    /// beside the easyconfig like its own patches and travel with it.
+    #[serde(default)]
+    pub patches: Vec<String>,
 }
 
 /// Fully resolved easyconfig fields (templates and locals applied).
@@ -1690,6 +1694,7 @@ fn value_to_ext(val: &Value) -> Result<ResolvedExt, String> {
         return Ok(ResolvedExt {
             name: s.clone(),
             version: String::new(),
+            patches: Vec::new(),
         });
     }
     let items = match val {
@@ -1699,9 +1704,35 @@ fn value_to_ext(val: &Value) -> Result<ResolvedExt, String> {
     if items.len() < 2 {
         return Err(format!("exts_list entry too short: {items:?}"));
     }
+    let patches = items
+        .get(2)
+        .and_then(|options| match options {
+            Value::Dict(kvs) => kvs.iter().find(|(k, _)| k == "patches").map(|(_, v)| v),
+            _ => None,
+        })
+        .and_then(|v| value_list_as_slice(Some(v)).ok())
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    Value::Str(s) => Some(s.clone()),
+                    Value::Tuple(xs) | Value::List(xs) => {
+                        xs.first().and_then(|x| x.as_str()).map(str::to_string)
+                    }
+                    Value::Dict(kvs) => kvs
+                        .iter()
+                        .find(|(k, _)| k == "name" || k == "filename")
+                        .and_then(|(_, val)| val.as_str())
+                        .map(str::to_string),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     Ok(ResolvedExt {
         name: items[0].expect_str("ext.name")?,
         version: items[1].expect_str("ext.version")?,
+        patches,
     })
 }
 
@@ -3419,6 +3450,7 @@ mod tests {
             exts_list: vec![ResolvedExt {
                 name: "ext".into(),
                 version: "0.1".into(),
+                patches: Vec::new(),
             }],
             easyconfig_path: "App.eb".into(),
             easyblock: None,

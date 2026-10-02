@@ -1682,7 +1682,39 @@ fn package_plan_from_easyconfig(
                 resolved_source,
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
+    // Patches an extension names in its own options sit beside the recipe as
+    // well. The recipe text keeps referring to them, so the bundle has to carry
+    // the files; the checksum is the file's own, checked again on copy.
+    let mut patches = patches;
+    for extension in &recipe.exts_list {
+        for filename in &extension.patches {
+            if patches
+                .iter()
+                .any(|patch: &PatchArtifact| &patch.filename == filename)
+            {
+                continue;
+            }
+            let Some(resolved_source) = Path::new(&recipe.easyconfig_path)
+                .parent()
+                .map(|directory| directory.join(filename))
+                .filter(|source| source.is_file())
+            else {
+                continue;
+            };
+            let Ok(bytes) = std::fs::read(&resolved_source) else {
+                continue;
+            };
+            patches.push(PatchArtifact {
+                filename: filename.clone(),
+                sha256: Some(sha256_hex(&bytes)),
+                url: None,
+                source: Some(resolved_source.display().to_string()),
+                condition: ConditionExpr::Always,
+                resolved_source: Some(resolved_source),
+            });
+        }
+    }
     let profile = ProductProfile {
         name: "default".into(),
         default: true,

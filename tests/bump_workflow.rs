@@ -1082,3 +1082,56 @@ fn a_system_dependency_named_by_the_versionsuffix_moves_with_the_generation() {
         bundle.easyconfigs[0].text
     );
 }
+
+#[test]
+fn a_patch_an_extension_names_travels_with_the_bundle() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Alpha-1.0-GCCcore-15.2.0.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(temp.path().join("Ext-0.1_fix.patch"), "--- a/x\n+++ b/x\n").expect("patch");
+    fs::write(
+        &source,
+        "easyblock = 'Bundle'\nname = 'Alpha'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic bundle'\n\
+         toolchain = {'name': 'GCCcore', 'version': '15.2.0'}\n\
+         exts_list = [\n    ('Ext', '0.1', {\n        'patches': ['Ext-0.1_fix.patch'],\n\
+         'checksums': ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',\n\
+         'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'],\n    }),\n]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    let toolchain = Toolchain {
+        name: "GCCcore".into(),
+        version: "15.2.0".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: None,
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: Vec::new(),
+    })
+    .expect("the bump solves");
+    let out = temp.path().join("out");
+    let written = write_package_bundle(&bundle, &out).expect("write bundle");
+    assert!(
+        written
+            .patches
+            .iter()
+            .any(|path| path.ends_with("Ext-0.1_fix.patch")),
+        "extension patch left out of the bundle: {:?}",
+        written.patches
+    );
+}
