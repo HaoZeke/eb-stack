@@ -950,14 +950,14 @@ pub fn render(plan: &PackagePlan) -> Result<String, String> {
     }
 
     if has_sanity {
-        let mut froms: Vec<String> = Vec::new();
+        let mut original_names: Vec<String> = Vec::new();
         for rename in &renames {
-            if !froms.contains(&rename.from) {
-                froms.push(rename.from.clone());
+            if !original_names.contains(&rename.from) {
+                original_names.push(rename.from.clone());
             }
         }
         let variable = |from: &str| -> String {
-            if froms.len() == 1 {
+            if original_names.len() == 1 {
                 "binary".to_string()
             } else {
                 format!("binary_{}", identifier(from))
@@ -968,7 +968,7 @@ pub fn render(plan: &PackagePlan) -> Result<String, String> {
             "        \"\"\"Check the files and commands the easyconfigs list, with the variant binary name.\"\"\""
                 .to_string(),
         ];
-        for from in &froms {
+        for from in &original_names {
             let name_variable = variable(from);
             push_string(&mut method, 8, &format!("{name_variable} = "), from, "");
             let mut keyword = "if";
@@ -1000,9 +1000,9 @@ pub fn render(plan: &PackagePlan) -> Result<String, String> {
                 }
                 method.push(format!("            '{key}': ["));
                 for entry in &entries {
-                    let renamed = entry
-                        .strip_prefix("bin/")
-                        .filter(|name| key == "files" && froms.iter().any(|from| from == name));
+                    let renamed = entry.strip_prefix("bin/").filter(|name| {
+                        key == "files" && original_names.iter().any(|from| from == name)
+                    });
                     match renamed {
                         Some(name) => {
                             method.push(format!("                'bin/' + {},", variable(name)))
@@ -1018,7 +1018,7 @@ pub fn render(plan: &PackagePlan) -> Result<String, String> {
             method.push("        custom_commands = [".to_string());
             for command in &sanity_commands {
                 let program = command.split_whitespace().next().unwrap_or("");
-                if froms.iter().any(|from| from == program) {
+                if original_names.iter().any(|from| from == program) {
                     let rest = command
                         .trim_start()
                         .strip_prefix(program)
