@@ -1373,6 +1373,35 @@ pub fn complete_package_bump_with_options(
         })
         .map(|dependency| (dependency.name.clone(), dependency.toolchain.clone()))
         .collect::<HashMap<_, _>>();
+    // The selected build's versionsuffix, where it is not what the recipe
+    // states: ('ANTLR', '2.7.7') at foss-2025b becomes the -Java-21 build at
+    // GCCcore 15.2.0, and a tuple without the suffix names nothing there.
+    let stated_suffixes: HashMap<&str, Option<&str>> = source_recipe
+        .dependencies
+        .iter()
+        .chain(source_recipe.builddependencies.iter())
+        .map(|dependency| {
+            (
+                dependency.name.as_str(),
+                dependency.versionsuffix.as_deref(),
+            )
+        })
+        .collect();
+    let dependency_versionsuffixes = lock
+        .dependencies
+        .iter()
+        .filter_map(|dependency| {
+            let selected = dependency
+                .versionsuffix
+                .as_deref()
+                .filter(|s| !s.is_empty())?;
+            let stated = stated_suffixes
+                .get(dependency.name.as_str())
+                .copied()
+                .flatten();
+            (stated != Some(selected)).then(|| (dependency.name.clone(), selected.to_string()))
+        })
+        .collect::<HashMap<_, _>>();
     let mut result = emit_next_generation_from_path(
         &request.source,
         &EmitParams {
@@ -1380,6 +1409,7 @@ pub fn complete_package_bump_with_options(
             version: request.version.clone(),
             dep_versions: dependency_versions,
             dep_toolchains: dependency_toolchains,
+            dep_versionsuffixes: dependency_versionsuffixes,
             // What the solve itself derived, so the emitter can tell an
             // ordinary dependency inside the generation from one that really
             // does need its toolchain spelled out.

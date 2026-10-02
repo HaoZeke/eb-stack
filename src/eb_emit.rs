@@ -41,6 +41,10 @@ pub struct EmitParams {
     /// Explicit tuples are retargeted, and selections outside the output
     /// hierarchy are made explicit in otherwise implicit tuples.
     pub dep_toolchains: HashMap<String, Toolchain>,
+    /// Solver-selected dependency versionsuffixes keyed by package name, for
+    /// the selections whose suffix differs from what the recipe states: a
+    /// generation may carry `ANTLR` only as its `-Java-21` build.
+    pub dep_versionsuffixes: HashMap<String, String>,
     /// The target toolchain's hierarchy, lowest level first, as the caller
     /// derived it from the tree. A dependency at a level inside this needs no
     /// explicit toolchain, because EasyBuild's own search finds it: `Cython`
@@ -206,20 +210,26 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
     if params.version.is_some() {
         text = rewrite_string_assign(&text, "version", &app_version)?;
     }
-    if !params.dep_versions.is_empty() || !params.dep_toolchains.is_empty() {
+    if !params.dep_versions.is_empty()
+        || !params.dep_toolchains.is_empty()
+        || !params.dep_versionsuffixes.is_empty()
+    {
+        let selections = Selections {
+            versions: &params.dep_versions,
+            toolchains: &params.dep_toolchains,
+            versionsuffixes: &params.dep_versionsuffixes,
+        };
         text = rewrite_dep_list_selections(
             &text,
             "dependencies",
-            &params.dep_versions,
-            &params.dep_toolchains,
+            &selections,
             &params.toolchain,
             &params.hierarchy,
         )?;
         text = rewrite_dep_list_selections(
             &text,
             "builddependencies",
-            &params.dep_versions,
-            &params.dep_toolchains,
+            &selections,
             &params.toolchain,
             &params.hierarchy,
         )?;
@@ -870,11 +880,17 @@ fn list_is_nonempty(src: &str, key: &str) -> bool {
 }
 
 /// Apply solver-selected versions and toolchains inside `key = [ ... ]`.
+/// What the solve selected for each dependency, by package name.
+struct Selections<'a> {
+    versions: &'a HashMap<String, String>,
+    toolchains: &'a HashMap<String, Toolchain>,
+    versionsuffixes: &'a HashMap<String, String>,
+}
+
 fn rewrite_dep_list_selections(
     src: &str,
     key: &str,
-    version_overrides: &HashMap<String, String>,
-    toolchain_overrides: &HashMap<String, Toolchain>,
+    selections: &Selections<'_>,
     target_toolchain: &Toolchain,
     hierarchy: &[Toolchain],
 ) -> Result<String, EmitError> {
@@ -883,13 +899,7 @@ fn rewrite_dep_list_selections(
         return Ok(src.to_string());
     };
     let body = &src[list_open_end..list_close_start];
-    let new_body = rewrite_dep_tuples_in_body(
-        body,
-        version_overrides,
-        toolchain_overrides,
-        target_toolchain,
-        hierarchy,
-    )?;
+    let new_body = rewrite_dep_tuples_in_body(body, selections, target_toolchain, hierarchy)?;
     let mut out = String::with_capacity(src.len() + 32);
     out.push_str(&src[..list_open_end]);
     out.push_str(&new_body);
@@ -1298,21 +1308,14 @@ struct QuotedToken {
 
 fn rewrite_dep_tuples_in_body(
     body: &str,
-    version_overrides: &HashMap<String, String>,
-    toolchain_overrides: &HashMap<String, Toolchain>,
+    selections: &Selections<'_>,
     target_toolchain: &Toolchain,
     hierarchy: &[Toolchain],
 ) -> Result<String, EmitError> {
     let mut rewritten = body.to_string();
     for (start, end) in dependency_tuple_spans(body)?.into_iter().rev() {
         let tuple = &body[start..end];
-        let replacement = rewrite_dependency_tuple(
-            tuple,
-            version_overrides,
-            toolchain_overrides,
-            target_toolchain,
-            hierarchy,
-        )?;
+        let replacement = rewrite_dependency_tuple(tuple, selections, target_toolchain, hierarchy)?;
         if replacement != tuple {
             rewritten.replace_range(start..end, &replacement);
         }
@@ -1378,11 +1381,12 @@ fn dependency_tuple_spans(body: &str) -> Result<Vec<(usize, usize)>, EmitError> 
 
 fn rewrite_dependency_tuple(
     tuple: &str,
-    version_overrides: &HashMap<String, String>,
-    toolchain_overrides: &HashMap<String, Toolchain>,
+    selections: &Selections<'_>,
     target_toolchain: &Toolchain,
     hierarchy: &[Toolchain],
 ) -> Result<String, EmitError> {
+    let version_overrides = selections.versions;
+    let toolchain_overrides = selections.toolchains;
     let (tokens, outer_commas) = dependency_tuple_tokens(tuple)?;
     let top = tokens
         .iter()
@@ -1394,11 +1398,26 @@ fn rewrite_dependency_tuple(
     let name = &tuple[top[0].start..top[0].end];
     let version_override = version_overrides.get(name);
     let toolchain_override = toolchain_overrides.get(name);
-    if version_override.is_none() && toolchain_override.is_none() {
+    let suffix_override = selections.versionsuffixes.get(name);
+    if version_override.is_none() && toolchain_override.is_none() && suffix_override.is_none() {
         return Ok(tuple.to_string());
     }
 
     let mut edits = Vec::new();
+    // A selected build whose versionsuffix the tuple does not state: append it
+    // to a two-element tuple, or replace a literal suffix. A suffix written as
+    // a variable or a template is the recipe's own choice and stays.
+    let mut appended_suffix: Option<&String> = None;
+    if let Some(suffix) = suffix_override {
+        if top.len() == 2 && outer_commas == 1 {
+            appended_suffix = Some(suffix);
+        } else if top.len() >= 3 && top[2].depth == 1 {
+            let stated = &tuple[top[2].start..top[2].end];
+            if !has_unresolved_template(stated) && stated != suffix {
+                edits.push((top[2].start, top[2].end, suffix.clone()));
+            }
+        }
+    }
     if let Some(version) = version_override {
         let stated = &tuple[top[1].start..top[1].end];
         // A version written as a template stays a template. `('Tkinter',
@@ -1429,8 +1448,9 @@ fn rewrite_dependency_tuple(
             }
             let quote = top[0].quote;
             let suffix = if outer_commas == 1 {
+                let versionsuffix = appended_suffix.take().map(String::as_str).unwrap_or("");
                 format!(
-                    ", {quote}{quote}, ({quote}{}{quote}, {quote}{}{quote})",
+                    ", {quote}{versionsuffix}{quote}, ({quote}{}{quote}, {quote}{}{quote})",
                     toolchain.name, toolchain.version
                 )
             } else {
@@ -1441,6 +1461,15 @@ fn rewrite_dependency_tuple(
             };
             edits.push((tuple.len() - 1, tuple.len() - 1, suffix));
         }
+    }
+
+    if let Some(suffix) = appended_suffix {
+        let quote = top[0].quote;
+        edits.push((
+            tuple.len() - 1,
+            tuple.len() - 1,
+            format!(", {quote}{suffix}{quote}"),
+        ));
     }
 
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
@@ -1580,6 +1609,7 @@ builddependencies = [
             version: None,
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: None,
             hierarchy: Vec::new(),
         };
@@ -1618,6 +1648,7 @@ builddependencies = [
             version: Some("2025.0".into()),
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: None,
             hierarchy: Vec::new(),
         };
@@ -1641,6 +1672,7 @@ builddependencies = [
             version: Some("2025.0".into()),
             dep_versions: deps,
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: None,
             hierarchy: Vec::new(),
         };
@@ -1654,6 +1686,32 @@ builddependencies = [
     }
 
     #[test]
+    fn a_selected_versionsuffix_is_written_into_the_tuple() {
+        let source = "name = 'NCO'\nversion = '5.3.9'\n\
+                      toolchain = {'name': 'foss', 'version': '2025b'}\n\
+                      dependencies = [\n    ('ANTLR', '2.7.7'),\n    ('Java', '17', '-old'),\n]\n";
+        let mut suffixes = HashMap::new();
+        suffixes.insert("ANTLR".to_string(), "-Java-21".to_string());
+        suffixes.insert("Java".to_string(), "-new".to_string());
+        let params = EmitParams {
+            toolchain: foss("2026.1"),
+            version: None,
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: suffixes,
+            source_checksum: None,
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(source, &params).expect("emit");
+        assert!(
+            r.text.contains("('ANTLR', '2.7.7', '-Java-21')"),
+            "{}",
+            r.text
+        );
+        assert!(r.text.contains("('Java', '17', '-new')"), "{}", r.text);
+    }
+
+    #[test]
     fn preserves_operator_unless_override_has_one() {
         let mut deps = HashMap::new();
         deps.insert("OpenMPI".into(), "4.1.6".into());
@@ -1663,6 +1721,7 @@ builddependencies = [
             version: None,
             dep_versions: deps,
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: None,
             hierarchy: Vec::new(),
         };
@@ -1684,6 +1743,7 @@ builddependencies = [
             version: None,
             dep_versions: deps,
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: None,
             hierarchy: Vec::new(),
         };
@@ -1720,6 +1780,7 @@ builddependencies = [
             version: Some("6.6.1".into()),
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: None,
             hierarchy: Vec::new(),
         };
@@ -1738,6 +1799,7 @@ builddependencies = [
             version: None,
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: None,
             hierarchy: Vec::new(),
         };
@@ -1760,6 +1822,7 @@ builddependencies = [
             version: None,
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: None,
             hierarchy: Vec::new(),
         };
@@ -1776,6 +1839,7 @@ builddependencies = [
             version: Some("2.0".into()),
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: None,
             hierarchy: Vec::new(),
         };
@@ -1957,6 +2021,7 @@ checksums = [
             version: Some("5.0.7".into()),
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: Some(
                 "119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd".into(),
             ),
@@ -2013,6 +2078,7 @@ exts_list = [
             version: Some("2026.3".into()),
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: Some(
                 "1094b7bbc6a3960223827114626657110b40096cdf9598a727935fc84ebf8aa0".into(),
             ),
@@ -2046,6 +2112,7 @@ exts_list = [
             version: Some("2026.3".into()),
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: Some(
                 "1094b7bbc6a3960223827114626657110b40096cdf9598a727935fc84ebf8aa0".into(),
             ),
@@ -2075,6 +2142,7 @@ exts_list = [
             version: Some("5.0.7".into()),
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: Some(
                 "119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd".into(),
             ),
@@ -2109,6 +2177,7 @@ exts_list = [
             version: Some("5.0.7".into()),
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: Some(
                 "119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd".into(),
             ),
@@ -2135,6 +2204,7 @@ exts_list = [
             version: Some("5.0.7".into()),
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: Some(NEW_SHA.into()),
             hierarchy: Vec::new(),
         }
@@ -2235,6 +2305,7 @@ exts_list = [
             version: Some("5.0.7".into()),
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: None,
             hierarchy: Vec::new(),
         };
@@ -2270,6 +2341,7 @@ exts_list = [
             version: Some("5.1.1".into()),
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: Some(NEW_SHA.into()),
             hierarchy: Vec::new(),
         };
@@ -2331,6 +2403,7 @@ exts_list = [
             version: Some("5.0.7".into()),
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: None,
             hierarchy: Vec::new(),
         };
@@ -2362,6 +2435,7 @@ checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']
             version: Some("1.3.2".into()),
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             hierarchy: Vec::new(),
             source_checksum: None,
         };
@@ -2422,6 +2496,7 @@ moduleclass = 'tools'
             version: None,
             dep_versions: HashMap::new(),
             dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
             source_checksum: None,
             hierarchy: Vec::new(),
         };
