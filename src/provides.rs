@@ -271,6 +271,13 @@ fn provide_from_parent(parent: &Candidate, ext: &ExtEntry) -> Option<Candidate> 
     if ext.name.is_empty() || ext.version.is_empty() {
         return None;
     }
+    // A bundle that lists itself, `(name, version, {...})`, is the recipe and
+    // not a second provider of it. A provide under the parent's own name would
+    // take the parent's slot in the solve and satisfy its own dependency, so
+    // the parent's real dependencies would never be selected.
+    if ext.name == parent.name {
+        return None;
+    }
     Some(Candidate {
         name: ext.name.clone(),
         version: ext.version.clone(),
@@ -336,6 +343,32 @@ mod tests {
         assert_eq!(numpy.version, "2.3.1");
         assert_eq!(numpy.extension_parent_name(), Some("SciPy-bundle"));
         assert_eq!(numpy.dependencies[0].version_req, "==2025.06");
+    }
+
+    #[test]
+    fn bundle_listing_itself_is_not_its_own_provider() {
+        let mut parent = bundle();
+        parent.name = "hatchling".into();
+        parent.version = "1.29.0".into();
+        parent.dependencies.push(DepReq {
+            name: "Python".into(),
+            version_req: "==3.14.2".into(),
+            versionsuffix: None,
+            toolchain: None,
+        });
+        parent.exts_list.push(ExtEntry {
+            name: "hatchling".into(),
+            version: "1.29.0".into(),
+        });
+        let expanded = expand_extension_provides(&[parent]);
+        let named: Vec<&Candidate> = expanded
+            .iter()
+            .filter(|candidate| candidate.name == "hatchling")
+            .collect();
+        assert_eq!(named.len(), 1);
+        assert!(!named[0].is_extension_provide());
+        assert_eq!(named[0].dependencies[0].name, "Python");
+        assert_eq!(expanded.len(), 3);
     }
 
     #[test]
