@@ -1182,11 +1182,24 @@ pub fn prepare_package_bump(
 /// Make each `--dep` override the dependency's own constraint as well.
 /// Within one generation a recipe dependency is pinned to the version the
 /// recipe names, so an override pin alone contradicts it and the solve fails.
+///
+/// A dependency pinned to SYSTEM is kept as written and left out of the solve.
+/// Naming it in `--dep` asks for it to move, so the override also brings it
+/// into the solve: a CUDA build asks for `('CUDA', '12.9.1', '', SYSTEM)` and for
+/// UCX-CUDA under `-CUDA-%(cudaver)s`, and only a solved CUDA keeps the two
+/// on one CUDA version.
 fn apply_dependency_overrides(plan: &mut PackagePlan, overrides: &HashMap<String, String>) {
     for dependency in &mut plan.dependencies {
         let name = dependency.eb_name.as_deref().unwrap_or(&dependency.name);
         if let Some(version) = overrides.get(name) {
             dependency.constraint = Some(format!("=={version}"));
+            if dependency
+                .virtual_capability
+                .as_deref()
+                .is_some_and(|capability| capability.starts_with("external:system:"))
+            {
+                dependency.virtual_capability = None;
+            }
         }
     }
 }

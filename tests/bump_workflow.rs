@@ -938,3 +938,65 @@ fn dep_override_moves_a_same_generation_dependency() {
         .iter()
         .any(|dependency| dependency.name == "LibDep" && dependency.version == "2.0"));
 }
+
+#[test]
+fn dep_override_moves_a_dependency_pinned_to_system() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Alpha-1.0-GCCcore-15.2.0-CUDA-12.9.1.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'Alpha'\nversion = '1.0'\n\
+         versionsuffix = '-CUDA-%(cudaver)s'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+         toolchain = {'name': 'GCCcore', 'version': '15.2.0'}\n\
+         sources = ['alpha-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [('CUDA', '12.9.1', '', SYSTEM)]\nmoduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    for version in ["12.9.1", "13.3.0"] {
+        fs::write(
+            robot.join(format!("CUDA-{version}.eb")),
+            format!(
+                "easyblock = 'Binary'\nname = 'CUDA'\nversion = '{version}'\n\
+                 homepage = 'https://example.invalid/'\ndescription = 'CUDA'\n\
+                 toolchain = SYSTEM\nsources = []\nchecksums = []\nmoduleclass = 'system'\n"
+            ),
+        )
+        .expect("candidate");
+    }
+    let toolchain = Toolchain {
+        name: "GCCcore".into(),
+        version: "15.2.0".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: None,
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::from([("CUDA".to_string(), "13.3.0".to_string())]),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: Vec::new(),
+    })
+    .expect("a --dep override on a SYSTEM dependency solves");
+    let recipe = resolve_easyconfig_str(&bundle.easyconfigs[0].text).expect("parse bumped recipe");
+    assert!(
+        recipe
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.name == "CUDA" && dependency.version == "13.3.0"),
+        "CUDA stayed at its old version: {}",
+        bundle.easyconfigs[0].text
+    );
+}
