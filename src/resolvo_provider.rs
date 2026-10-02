@@ -156,6 +156,29 @@ impl EbProvider {
         labels
     }
 
+    /// Keys of a [`Self::build_multi`] name at the levels this dependency may
+    /// come from, one per version; the version is matched against each key's
+    /// ranks by the caller. System-level keys belong to the bootstrap branch.
+    fn build_multi_keys(&self, recipe: &Candidate, dep: &crate::domain::DepReq) -> Vec<String> {
+        let levels = match dep.toolchain.as_ref() {
+            Some(tc) => vec![toolchain_label(tc)],
+            None => self.admissible_levels(recipe),
+        };
+        self.keys_by_name
+            .get(&dep.name)
+            .into_iter()
+            .flatten()
+            .filter(|key| match key.split_once('@') {
+                None => true,
+                Some((_, rest)) => {
+                    let level = rest.split("==").next().unwrap_or(rest);
+                    level != "system" && levels.iter().any(|l| l == level)
+                }
+            })
+            .cloned()
+            .collect()
+    }
+
     /// Which resolvo package names can satisfy one dependency of one recipe.
     ///
     /// A plain name for a package the generation carries once. For a package
@@ -186,7 +209,10 @@ impl EbProvider {
                 .cloned()
                 .collect();
             keys.sort();
-            if !wants_system && self.multi_level.contains(&dep.name) {
+            if !wants_system && self.build_multi.contains(&dep.name) {
+                // Inside the generation the name is keyed per version too.
+                keys.extend(self.build_multi_keys(recipe, dep));
+            } else if !wants_system && self.multi_level.contains(&dep.name) {
                 // The name also lives inside the generation, and a recipe
                 // there may take either.
                 if let Some(tc) = dep.toolchain.as_ref() {
@@ -203,29 +229,15 @@ impl EbProvider {
             }
         }
         if self.build_multi.contains(&dep.name) {
-            // One key per level and version. Keep the levels this dependency
-            // may come from; the version is matched against each key's ranks.
-            let levels = match dep.toolchain.as_ref() {
-                Some(tc) => vec![toolchain_label(tc)],
-                None => self.admissible_levels(recipe),
+            let keys = self.build_multi_keys(recipe, dep);
+            return if keys.is_empty() {
+                self.keys_by_name
+                    .get(&dep.name)
+                    .cloned()
+                    .unwrap_or_default()
+            } else {
+                keys
             };
-            let all = self
-                .keys_by_name
-                .get(&dep.name)
-                .cloned()
-                .unwrap_or_default();
-            let keys: Vec<String> = all
-                .iter()
-                .filter(|key| match key.split_once('@') {
-                    None => true,
-                    Some((_, rest)) => {
-                        let level = rest.split("==").next().unwrap_or(rest);
-                        levels.iter().any(|l| l == level)
-                    }
-                })
-                .cloned()
-                .collect();
-            return if keys.is_empty() { all } else { keys };
         }
         if !self.multi_level.contains(&dep.name) {
             return vec![dep.name.clone()];
@@ -374,9 +386,7 @@ impl EbProvider {
         let build_multi: HashSet<String> = build_versions
             .iter()
             .filter(|(name, versions)| {
-                versions.len() > 1
-                    && !system_multi.contains(*name)
-                    && runtime_versions.get(*name).is_none_or(|r| r.len() <= 1)
+                versions.len() > 1 && runtime_versions.get(*name).is_none_or(|r| r.len() <= 1)
             })
             .map(|(name, _)| name.clone())
             .collect();
@@ -1721,7 +1731,25 @@ mod tests {
             c.builddependencies = vec![need("CMake", tool)];
             c
         };
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let at_system = |version: &str| {
+            let mut c = cand(
+                "CMake",
+                version,
+                None,
+                &format!("CMake-{version}.eb"),
+                vec![],
+            );
+            c.toolchain = system.clone();
+            c
+        };
+        // A bootstrap pair of CMake at system, as the upstream tree carries.
         let candidates = vec![
+            at_system("3.18.4"),
+            at_system("3.31.8"),
             cand("CMake", "3.31.11", None, "CMake-3.31.11.eb", vec![]),
             cand("CMake", "4.2.1", None, "CMake-4.2.1.eb", vec![]),
             building(
