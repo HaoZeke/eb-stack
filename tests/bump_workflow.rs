@@ -1000,3 +1000,85 @@ fn dep_override_moves_a_dependency_pinned_to_system() {
         bundle.easyconfigs[0].text
     );
 }
+
+#[test]
+fn a_system_dependency_named_by_the_versionsuffix_moves_with_the_generation() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Alpha-1.0-GCCcore-14.3.0-CUDA-12.9.1.eb");
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).expect("robot directory");
+    fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'Alpha'\nversion = '1.0'\n\
+         versionsuffix = '-CUDA-%(cudaver)s'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+         toolchain = {'name': 'GCCcore', 'version': '14.3.0'}\n\
+         sources = ['alpha-1.0.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n\
+         dependencies = [('CUDA', '12.9.1', '', SYSTEM), ('Lib-CUDA', '1.0', versionsuffix)]\n\
+         moduleclass = 'tools'\n",
+    )
+    .expect("source recipe");
+    for version in ["12.9.1", "13.3.0", "13.4.1"] {
+        fs::write(
+            robot.join(format!("CUDA-{version}.eb")),
+            format!(
+                "easyblock = 'Binary'\nname = 'CUDA'\nversion = '{version}'\n\
+                 homepage = 'https://example.invalid/'\ndescription = 'CUDA'\n\
+                 toolchain = SYSTEM\nsources = []\nchecksums = []\nmoduleclass = 'system'\n"
+            ),
+        )
+        .expect("CUDA candidate");
+    }
+    // The generation carries Lib-CUDA for CUDA 13.3.0 only, so a CUDA that
+    // moves to the newest release would leave the recipe unbuildable.
+    fs::write(
+        robot.join("Lib-CUDA-1.0-GCCcore-15.2.0-CUDA-13.3.0.eb"),
+        "easyblock = 'ConfigureMake'\nname = 'Lib-CUDA'\nversion = '1.0'\n\
+         versionsuffix = '-CUDA-%(cudaver)s'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Library'\n\
+         toolchain = {'name': 'GCCcore', 'version': '15.2.0'}\n\
+         sources = []\nchecksums = []\n\
+         dependencies = [('CUDA', '13.3.0', '', SYSTEM)]\nmoduleclass = 'lib'\n",
+    )
+    .expect("Lib-CUDA candidate");
+    fs::write(
+        robot.join("GCCcore-15.2.0.eb"),
+        "easyblock = 'Toolchain'\nname = 'GCCcore'\nversion = '15.2.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'compiler'\n\
+         toolchain = SYSTEM\nsources = []\nchecksums = []\nmoduleclass = 'compiler'\n",
+    )
+    .expect("GCCcore candidate");
+    let toolchain = Toolchain {
+        name: "GCCcore".into(),
+        version: "15.2.0".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source,
+        toolchain: toolchain.clone(),
+        version: None,
+        source_checksum: None,
+        easyconfig_roots: vec![robot],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: Vec::new(),
+    })
+    .expect("the retarget solves");
+    let recipe = resolve_easyconfig_str(&bundle.easyconfigs[0].text).expect("parse bumped recipe");
+    assert!(
+        recipe
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.name == "CUDA" && dependency.version == "13.3.0"),
+        "CUDA did not follow Lib-CUDA: {}",
+        bundle.easyconfigs[0].text
+    );
+}

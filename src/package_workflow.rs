@@ -1634,6 +1634,7 @@ fn package_plan_from_easyconfig(
                     index,
                     toolchain,
                     retarget,
+                    recipe.versionsuffix.as_deref(),
                 )
             }),
     );
@@ -1650,6 +1651,7 @@ fn package_plan_from_easyconfig(
                     runtime_count + index,
                     toolchain,
                     retarget,
+                    recipe.versionsuffix.as_deref(),
                 )
             }),
     );
@@ -1754,11 +1756,22 @@ fn dependency_from_easyconfig(
     index: usize,
     target_toolchain: &Toolchain,
     retarget: bool,
+    versionsuffix: Option<&str>,
 ) -> DependencyIntent {
-    let external = dependency
-        .toolchain
-        .as_ref()
-        .is_some_and(|toolchain| toolchain.name.eq_ignore_ascii_case("system"));
+    // A SYSTEM-pinned dependency is kept as written, unless the recipe's own
+    // versionsuffix names it: `-CUDA-%(cudaver)s` expands to `-CUDA-12.9.1`,
+    // and every `-CUDA-...` dependency then has to match whatever CUDA this
+    // recipe takes. Kept out of the solve, CUDA stays at 12.9.1 while UCX-CUDA
+    // moves to its -CUDA-13.3.0 build, and the recipe names modules that do
+    // not exist.
+    let named_by_suffix = versionsuffix.is_some_and(|suffix| {
+        suffix.contains(&format!("{}-{}", dependency.name, dependency.version))
+    });
+    let external = !named_by_suffix
+        && dependency
+            .toolchain
+            .as_ref()
+            .is_some_and(|toolchain| toolchain.name.eq_ignore_ascii_case("system"));
     DependencyIntent {
         id: format!("easybuild:{index}:{}", dependency.name),
         name: dependency.name.clone(),
