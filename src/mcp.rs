@@ -206,9 +206,9 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_recipe_lint",
-            "Report what upstream checks on an easyconfig, without rewriting it: E999 (not valid Python), the easyconfigs CI lint (F541, W605, W291), the eb --check-contrib pycodestyle codes (E501, E2xx), the easyconfigs test-suite checks, and review conventions (EB_FMT_PERCENT for '...' % x, EB_FMT_CONCAT for '...' + SHLIB_EXT, EB_SHLIB_HARDCODED, ...). clean is false while any error or any in-scope EB_FMT_* finding remains; a review fix is not done while clean is false. f'lib/%(name)s.{SHLIB_EXT}' is correct and not flagged. Scope: a finding with info: true is outside the review scope and does not count. review_lines (1-based lines the review comment is anchored to) are always in scope, and EB_SHLIB_HARDCODED on them counts too. With base (the file before your edit) lines unchanged from base are out of scope unless review_scope is \"file\"; pass review_scope \"file\" when a PR-level comment asks for a style everywhere (\"use f-strings\"). Without base, only untouched '%%(...)s' % X entries are out of scope. Diff-mode errors (EB_SANITY_ENTRY_REMOVED, EB_EASYBLOCK_CHANGED, EB_FMT_TEMPLATE_REMOVED) compare against base, or else against the file as this server first saw it; rebaseline true resets that. EB_DEP_EMPTY_VERSION is an error: look the version up with eb_dep_versions. When eb is on PATH, eb --check-contrib findings are merged.",
+            "Report what upstream checks on an easyconfig, without rewriting it: E999 (not valid Python), the easyconfigs CI lint (F541, W605, W291), the eb --check-contrib pycodestyle codes (E501, E2xx), the easyconfigs test-suite checks, and review conventions (EB_FMT_PERCENT for '...' % x, EB_FMT_CONCAT for '...' + SHLIB_EXT, EB_SHLIB_HARDCODED, ...). clean is false while any error or any in-scope EB_FMT_* finding remains; a review fix is not done while clean is false. f'lib/%(name)s.{SHLIB_EXT}' is correct and not flagged. Scope: a finding with info: true is outside the review scope and does not count. review_lines (1-based lines the review comment is anchored to) are always in scope, and EB_SHLIB_HARDCODED on them counts too; with several recipes pass review_lines_by_recipe ({recipe: [lines]}) instead. EB_SHLIB_HARDCODED also counts on every line under review_scope \"file\" and on any line you edited. With base (the file before your edit) lines unchanged from base are out of scope unless review_scope is \"file\"; pass review_scope \"file\" when a PR-level comment asks for a style everywhere (\"use f-strings\"). Without base, only untouched '%%(...)s' % X entries are out of scope. Diff-mode errors (EB_SANITY_ENTRY_REMOVED, EB_EASYBLOCK_CHANGED, EB_FMT_TEMPLATE_REMOVED) compare against base, or else against the file as this server first saw it; rebaseline true resets that. EB_DEP_EMPTY_VERSION is an error: look the version up with eb_dep_versions. When eb is on PATH, eb --check-contrib findings are merged.",
             &[("recipes", "array")],
-            &[("base", "string"), ("review_lines", "array_int"), ("review_scope", "string"), ("rebaseline", "boolean")],
+            &[("base", "string"), ("review_lines", "array_int"), ("review_lines_by_recipe", "object_int_arrays"), ("review_scope", "string"), ("rebaseline", "boolean")],
         ),
         tool_with_optional(
             "eb_dep_versions",
@@ -313,6 +313,7 @@ fn tool_with_optional(
                 }
                 "array_int" => json!({"type": "array", "items": {"type": "integer", "minimum": 1}}),
                 "object" => json!({"type": "object", "additionalProperties": {"type": "string"}}),
+                "object_int_arrays" => json!({"type": "object", "additionalProperties": {"type": "array", "items": {"type": "integer", "minimum": 1}}}),
                 other => json!({"type": other}),
             };
             ((*name).to_string(), schema)
@@ -758,6 +759,33 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
     // review_scope "file": a PR-level comment asked for the style everywhere,
     // so lines unchanged from base still count (proof v5, PR 27186).
     let file_scope = optional_string(arguments, "review_scope").as_deref() == Some("file");
+    // review_lines_by_recipe: {recipe path: [lines]} for a call that lints
+    // several recipes, each with its own anchors (proof v6: a two-recipe lint
+    // call carried no anchors at all, so a hardcoded .so on an anchored line
+    // never counted).
+    let by_recipe = arguments
+        .get("review_lines_by_recipe")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let lines_for = |path: &Path| -> Vec<usize> {
+        let wanted = snapshot_key(path);
+        by_recipe
+            .iter()
+            .find(|(key, _)| {
+                let key = Path::new(key.as_str());
+                key == path || (wanted.is_some() && snapshot_key(key) == wanted)
+            })
+            .and_then(|(_, lines)| lines.as_array())
+            .map(|lines| {
+                lines
+                    .iter()
+                    .filter_map(Value::as_u64)
+                    .map(|line| line as usize)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| review_lines.clone())
+    };
     let mut baselines = Vec::with_capacity(paths.len());
     let scopes = paths
         .iter()
@@ -778,7 +806,8 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
             RecipeScope {
                 base,
                 scope_to_base,
-                review_lines: review_lines.clone(),
+                review_lines: lines_for(path.as_path()),
+                file_scope,
             }
         })
         .collect::<Vec<_>>();
@@ -802,6 +831,16 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
             finding.severity == Severity::Warning && !is_formatting_code(&finding.code)
         })
         .count();
+    let mut other_codes = all()
+        .filter(|finding| {
+            finding.severity == Severity::Warning
+                && !is_formatting_code(&finding.code)
+                && !crate::eb_style::blocks_clean(finding)
+        })
+        .map(|finding| finding.code.clone())
+        .collect::<Vec<_>>();
+    other_codes.sort();
+    other_codes.dedup();
     let results = report
         .files
         .iter()
@@ -817,6 +856,12 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
         .collect::<Vec<_>>();
     let clean = report.clean();
     let mut summary = lint_summary(clean, errors, formatting, other_warnings);
+    if clean && !other_codes.is_empty() {
+        summary.push_str(&format!(
+            " Not blocking: {}. These still count when the review is about them: an inline comment anchored on that line, a PR-level comment about the same thing, or a review whose subject is that convention (for EB_SHLIB_HARDCODED: shared-library names, SHLIB_EXT or '.so'). Then fix every such line and lint with review_lines or review_scope \"file\".",
+            other_codes.join(", ")
+        ));
+    }
     if info > 0 {
         summary.push_str(&format!(
             " {info} EB_FMT finding(s) are info (outside the review scope: unchanged from the base, or untouched %%-escaped entries) and do not count. Convert them too when the review asks for this change in general (a PR-level comment such as \"use f-strings\") or its comment is anchored on that line: lint again with review_scope \"file\" or with those review_lines."
@@ -849,7 +894,7 @@ pub(crate) fn lint_summary(
     }
     if clean {
         return format!(
-            "clean: no errors and no EB_FMT findings; {other_warnings} other warning(s) (for example EB_SHLIB_HARDCODED) that need a change only if the review asks for one."
+            "clean: no errors and no EB_FMT findings; {other_warnings} other warning(s) that do not block clean on their own."
         );
     }
     let mut parts = Vec::new();

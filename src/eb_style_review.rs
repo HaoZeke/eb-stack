@@ -106,6 +106,7 @@ pub fn lint_recipe_files_against(
         scope_to_base: base_text.is_some(),
         base: base_text,
         review_lines: Vec::new(),
+        file_scope: false,
     };
     lint_recipe_files_inner(paths, &vec![scope; paths.len()], None)
 }
@@ -119,6 +120,8 @@ pub struct RecipeScope {
     pub scope_to_base: bool,
     /// Lines the review is about; `EB_FMT_*` findings there always count.
     pub review_lines: Vec<usize>,
+    /// `review_scope: "file"`: `EB_SHLIB_HARDCODED` counts on every line.
+    pub file_scope: bool,
 }
 
 /// Like [`lint_recipe_files`], with one [`RecipeScope`] per path.
@@ -145,6 +148,7 @@ fn lint_recipe_files_inner(
             base: scope.base.as_deref(),
             scope_to_base: scope.scope_to_base && scope.base.is_some(),
             review_lines: &scope.review_lines,
+            file_scope: scope.file_scope,
         };
         files.push(RecipeLintFile {
             path: path.to_path_buf(),
@@ -184,15 +188,47 @@ pub(super) fn extend_style(text: &str, options: &LintOptions<'_>, out: &mut Vec<
 ///   escapes must become plain `%(...)s`) and maintainers often leave them.
 ///
 /// Error-severity formatting findings (EB_FMT_MISSING_F) always count.
+///
+/// `EB_SHLIB_HARDCODED` counts against clean (`in_review`) on a review line,
+/// on every line under `review_scope: "file"`, and on a line that differs
+/// from the base (the line was edited and still hardcodes `.so`). A file-wide
+/// review scope must not leave a hardcoded `.so` that the line-anchored scope
+/// would have caught.
 pub(super) fn scope_formatting(text: &str, options: &LintOptions<'_>, out: &mut [StyleFinding]) {
     let lines: Vec<&str> = text.lines().collect();
     let base_lines: Option<HashSet<&str>> = match (options.scope_to_base, options.base) {
         (true, Some(base)) => Some(base.lines().map(str::trim).collect()),
         _ => None,
     };
+    let any_base_lines: Option<HashSet<&str>> = options
+        .base
+        .map(|base| base.lines().map(str::trim).collect());
     for finding in out.iter_mut() {
         if options.review_lines.contains(&finding.line) {
             finding.in_review = true;
+        } else if finding.code == "EB_SHLIB_HARDCODED" {
+            let line = finding
+                .line
+                .checked_sub(1)
+                .and_then(|index| lines.get(index))
+                .copied()
+                .unwrap_or("");
+            let edited = any_base_lines
+                .as_ref()
+                .is_some_and(|base| !base.contains(line.trim()));
+            let why = if options.file_scope {
+                Some("review_scope is \"file\"")
+            } else if edited {
+                Some("this line was edited")
+            } else {
+                None
+            };
+            if let Some(why) = why {
+                finding.in_review = true;
+                finding.message.push_str(&format!(
+                    " (counts against clean: {why}; write f'....{{SHLIB_EXT}}' and keep every %(...)s template)"
+                ));
+            }
         }
         if !super::is_formatting_code(&finding.code)
             || finding.severity == Severity::Error
@@ -933,6 +969,7 @@ mixed = f'lib/%(name)s.{SHLIB_EXT}'
             base: None,
             scope_to_base: false,
             review_lines: &[1],
+            file_scope: false,
         };
         extend_style(text, &options, &mut findings);
         let hits: Vec<_> = findings
@@ -947,6 +984,39 @@ mixed = f'lib/%(name)s.{SHLIB_EXT}'
             .filter(|finding| finding.line == 2)
             .collect();
         assert!(super::super::findings_clean(&elsewhere));
+    }
+
+    #[test]
+    fn hardcoded_so_counts_under_file_scope_and_on_edited_lines() {
+        let base = "sanity_check_paths = {'files': ['lib/libfoo.so'], 'dirs': []}\n\
+            postinstallcmds = ['ln -s libfoo1.so %(installdir)s/lib/libfoo.so']\n";
+        let shlib = |text: &str, file_scope: bool| {
+            let mut findings = Vec::new();
+            let options = LintOptions {
+                base: Some(base),
+                file_scope,
+                ..LintOptions::default()
+            };
+            extend_style(text, &options, &mut findings);
+            findings
+        };
+        // Untouched line, no review line, no file scope: reported, does not block.
+        assert!(super::super::findings_clean(&shlib(base, false)));
+        // review_scope "file" must not be weaker than review_lines.
+        assert!(!super::super::findings_clean(&shlib(base, true)));
+        // An edited line that still hardcodes .so blocks clean.
+        let edited = "sanity_check_paths = {'files': ['lib/libfoo.so'], 'dirs': []}\n\
+            postinstallcmds = [f'ln -s libfoo1.{SHLIB_EXT} %(installdir)s/lib/libfoo.so']\n";
+        let findings = shlib(edited, false);
+        assert!(!super::super::findings_clean(&findings), "{findings:?}");
+        assert!(
+            findings.iter().any(|f| f.line == 2 && f.in_review),
+            "{findings:?}"
+        );
+        assert!(
+            findings.iter().any(|f| f.line == 1 && !f.in_review),
+            "{findings:?}"
+        );
     }
 
     #[test]

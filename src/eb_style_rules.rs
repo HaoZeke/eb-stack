@@ -48,6 +48,10 @@ pub struct LintOptions<'a> {
     /// Lines (1-based, in the linted file) the review is about. `EB_FMT_*`
     /// findings there always count against clean.
     pub review_lines: &'a [usize],
+    /// The caller passed `review_scope: "file"`: the review is about the
+    /// whole file, so a review-convention warning such as
+    /// `EB_SHLIB_HARDCODED` counts on every line, not only on `review_lines`.
+    pub file_scope: bool,
 }
 
 /// Python syntax error for `text`, as (line, column, message), or `None`.

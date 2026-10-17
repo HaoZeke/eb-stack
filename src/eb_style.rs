@@ -126,11 +126,13 @@ pub struct StyleFinding {
     /// make the file unclean.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub info: bool,
-    /// True when the finding is on a line in `review_lines`. An
-    /// `EB_SHLIB_HARDCODED` there is what the reviewer asked to change, so it
-    /// blocks clean (proof v5, PR 24213: `'lib/libtcl.so'` on the commented
-    /// line was left because the warning "needs a change only if the review
-    /// asks for one").
+    /// True when the finding is on a line in `review_lines`, or (for
+    /// `EB_SHLIB_HARDCODED`) when the review scope is the whole file or the
+    /// line differs from the base. An `EB_SHLIB_HARDCODED` there is what the
+    /// reviewer asked to change, so it blocks clean (proof v5 and v6: a
+    /// hardcoded `.so` on a commented line was left because the warning
+    /// "needs a change only if the review asks for one", and in v6 because
+    /// `review_scope: "file"` without `review_lines` never counted it).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub in_review: bool,
 }
