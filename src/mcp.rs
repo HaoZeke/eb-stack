@@ -11,7 +11,8 @@ use crate::eb_parse::{
 };
 use crate::eb_style::{
     format_style, format_style_file, is_formatting_code, lint_recipe_files_scoped, lint_style,
-    python_syntax_error, RecipeScope, Severity,
+    python_syntax_error, review_item_findings, review_item_status, RecipeScope, ReviewItem,
+    ReviewItemStatus, Severity,
 };
 use crate::foreign::ForeignFormat;
 use crate::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
@@ -194,9 +195,9 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_recipe_diff",
-            "Show what changed in each recipe since this server first saw it (rebaseline does not reset this), hunk by hunk with the top-level parameters each hunk touches and whether it only changes comments. Call it last, before the final answer, and describe exactly these hunks: a change you describe must have a hunk, and a hunk you cannot justify from the review must be reverted.",
+            "Show what changed in each recipe since this server first saw it (rebaseline does not reset this), hunk by hunk with the top-level parameters each hunk touches and whether it only changes comments. Call it last, before the final answer, and describe exactly these hunks: a change you describe must have a hunk, and a hunk you cannot justify from the review must be reverted. With review_items (as for eb_recipe_lint) each review comment is reported as answered or open: a comment with no matching hunk is either still to do or needs a reason in the final answer (no_change_needed).",
             &[("recipes", "array")],
-            &[],
+            &[("review_items", "array_review_items"), ("no_change_needed", "array")],
         ),
         tool_with_optional(
             "eb_recipe_write",
@@ -218,9 +219,9 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_recipe_lint",
-            "Report what upstream checks on an easyconfig, without rewriting it: E999 (not valid Python), the easyconfigs CI lint (F541, W605, W291), the eb --check-contrib pycodestyle codes (E501, E2xx), the easyconfigs test-suite checks, and review conventions (EB_FMT_PERCENT for '...' % x, EB_FMT_CONCAT for '...' + SHLIB_EXT, EB_SHLIB_HARDCODED, ...). clean is false while any error or any in-scope EB_FMT_* finding remains; a review fix is not done while clean is false. f'lib/%(name)s.{SHLIB_EXT}' is correct and not flagged. Scope: a finding with info: true is outside the review scope and does not count. review_lines (1-based lines the review comment is anchored to) are always in scope, and EB_SHLIB_HARDCODED on them counts too; with several recipes pass review_lines_by_recipe ({recipe: [lines]}) instead. EB_SHLIB_HARDCODED also counts on every line under review_scope \"file\" and on any line you edited. With base (the file before your edit) lines unchanged from base are out of scope unless review_scope is \"file\"; pass review_scope \"file\" when a PR-level comment asks for a style everywhere (\"use f-strings\"). Without base, only untouched '%%(...)s' % X entries are out of scope. Diff-mode errors (EB_SANITY_ENTRY_REMOVED, EB_EASYBLOCK_CHANGED, EB_FMT_TEMPLATE_REMOVED) compare against base, or else against the file as this server first saw it; rebaseline true resets that only when no diff-mode error is outstanding off the review lines. An error the file already had before your edits, on a line the review does not cover, is reported as info (pre-existing) and does not block clean. With review lines, EB_DIFF_OUTSIDE_REVIEW warns about a change far from every review line that is not the reviewed change repeated, and EB_DIFF_SOURCES_CHANGED (blocks clean) about sources, crates, patches or checksums changed when no comment is about them. EB_DEP_EMPTY_VERSION is an error: look the version up with eb_dep_versions. When eb is on PATH, eb --check-contrib findings are merged.",
+            "Report what upstream checks on an easyconfig, without rewriting it: E999 (not valid Python), the easyconfigs CI lint (F541, W605, W291), the eb --check-contrib pycodestyle codes (E501, E2xx), the easyconfigs test-suite checks, and review conventions (EB_FMT_PERCENT for '...' % x, EB_FMT_CONCAT for '...' + SHLIB_EXT, EB_SHLIB_HARDCODED, ...). clean is false while any error or any in-scope EB_FMT_* finding remains; a review fix is not done while clean is false. f'lib/%(name)s.{SHLIB_EXT}' is correct and not flagged. Scope: a finding with info: true is outside the review scope and does not count. review_lines (1-based lines the review comment is anchored to) are always in scope, and EB_SHLIB_HARDCODED on them counts too; with several recipes pass review_lines_by_recipe ({recipe: [lines]}) instead. EB_SHLIB_HARDCODED also counts on every line under review_scope \"file\" and on any line you edited. With base (the file before your edit) lines unchanged from base are out of scope unless review_scope is \"file\"; pass review_scope \"file\" when a PR-level comment asks for a style everywhere (\"use f-strings\"). Without base, only untouched '%%(...)s' % X entries are out of scope. Diff-mode errors (EB_SANITY_ENTRY_REMOVED, EB_EASYBLOCK_CHANGED, EB_FMT_TEMPLATE_REMOVED) compare against base, or else against the file as this server first saw it; rebaseline true resets that only when no diff-mode error is outstanding off the review lines. An error the file already had before your edits, on a line the review does not cover, is reported as info (pre-existing) and does not block clean. With review lines, EB_DIFF_OUTSIDE_REVIEW warns about a change far from every review line that is not the reviewed change repeated, and EB_DIFF_SOURCES_CHANGED (blocks clean) about sources, crates, patches or checksums changed when no comment is about them. EB_DEP_EMPTY_VERSION is an error: look the version up with eb_dep_versions. When eb is on PATH, eb --check-contrib findings are merged. review_items lists every review comment ({id, recipe, line_start, line_end, suggestion, comment}; lines as the review showed them; suggestion null for a prose comment and \"\" for an empty suggestion): each one is reported as answered (a change touches its lines, its suggestion is in the file, or its lines are deleted) or open, and EB_REVIEW_ITEM_OPEN blocks clean while any is open. Put an id in no_change_needed when that comment needs no change (a question already answered, or the file already does it) and say why in the final answer.",
             &[("recipes", "array")],
-            &[("base", "string"), ("review_lines", "array_int"), ("review_lines_by_recipe", "object_int_arrays"), ("review_scope", "string"), ("rebaseline", "boolean")],
+            &[("base", "string"), ("review_lines", "array_int"), ("review_lines_by_recipe", "object_int_arrays"), ("review_scope", "string"), ("rebaseline", "boolean"), ("review_items", "array_review_items"), ("no_change_needed", "array")],
         ),
         tool_with_optional(
             "eb_dep_versions",
@@ -326,6 +327,18 @@ fn tool_with_optional(
                 "array_int" => json!({"type": "array", "items": {"type": "integer", "minimum": 1}}),
                 "object" => json!({"type": "object", "additionalProperties": {"type": "string"}}),
                 "object_int_arrays" => json!({"type": "object", "additionalProperties": {"type": "array", "items": {"type": "integer", "minimum": 1}}}),
+                "array_review_items" => json!({"type": "array", "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "recipe": {"type": "string"},
+                        "line_start": {"type": "integer", "minimum": 1},
+                        "line_end": {"type": "integer", "minimum": 1},
+                        "suggestion": {"type": ["string", "null"]},
+                        "comment": {"type": "string"}
+                    },
+                    "required": ["line_start"]
+                }}),
                 other => json!({"type": other}),
             };
             ((*name).to_string(), schema)
@@ -789,6 +802,114 @@ fn recipe_apply_suggestion(arguments: &Value) -> Result<Value, String> {
     serde_json::to_value(edited).map_err(|error| error.to_string())
 }
 
+/// `review_items` that belong to `path`: items whose `recipe` names it, and
+/// items without a recipe when the call is about one recipe only.
+fn review_items_for(arguments: &Value, path: &Path, single: bool) -> Vec<ReviewItem> {
+    let Some(items) = arguments.get("review_items").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let wanted = snapshot_key(path);
+    items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let line_start = item.get("line_start").and_then(Value::as_u64)? as usize;
+            let belongs = match item
+                .get("recipe")
+                .and_then(Value::as_str)
+                .filter(|recipe| !recipe.is_empty())
+            {
+                Some(recipe) => {
+                    let key = Path::new(recipe);
+                    key == path
+                        || (wanted.is_some() && snapshot_key(key) == wanted)
+                        || (key.components().count() == 1 && key.file_name() == path.file_name())
+                }
+                None => single,
+            };
+            if !belongs {
+                return None;
+            }
+            let id = match item.get("id") {
+                Some(Value::String(id)) if !id.is_empty() => id.clone(),
+                Some(Value::Number(id)) => id.to_string(),
+                _ => format!("item{}", index + 1),
+            };
+            Some(ReviewItem {
+                id,
+                line_start,
+                line_end: item
+                    .get("line_end")
+                    .and_then(Value::as_u64)
+                    .map_or(line_start, |line| line as usize),
+                suggestion: item
+                    .get("suggestion")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                comment: item
+                    .get("comment")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            })
+        })
+        .collect()
+}
+
+/// Ids in `no_change_needed` (strings or numbers).
+fn acknowledged_items(arguments: &Value) -> Vec<String> {
+    arguments
+        .get("no_change_needed")
+        .and_then(Value::as_array)
+        .map(|ids| {
+            ids.iter()
+                .filter_map(|id| match id {
+                    Value::String(id) => Some(id.clone()),
+                    Value::Number(id) => Some(id.to_string()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Review item status of `path` against the file as first seen (never
+/// rebaselined), or nothing when no item belongs to it.
+fn item_statuses(arguments: &Value, path: &Path, single: bool, now: &str) -> Vec<ReviewItemStatus> {
+    let items = review_items_for(arguments, path, single);
+    if items.is_empty() {
+        return Vec::new();
+    }
+    let Some(kept) = pristine(path) else {
+        return Vec::new();
+    };
+    review_item_status(&kept, now, &items, &acknowledged_items(arguments))
+}
+
+/// The summary sentence about review items, empty when none were given.
+fn review_items_note(statuses: &[ReviewItemStatus]) -> String {
+    if statuses.is_empty() {
+        return String::new();
+    }
+    let open = statuses
+        .iter()
+        .filter(|status| status.open)
+        .map(|status| format!("{} ({})", status.id, status.status))
+        .collect::<Vec<_>>();
+    if open.is_empty() {
+        return format!(
+            " All {} review item(s) are answered by a change or marked no_change_needed.",
+            statuses.len()
+        );
+    }
+    format!(
+        " {} of {} review item(s) are not answered: {}. The review fix is not done until each one has its change, or its id is in no_change_needed with the reason in the final answer.",
+        open.len(),
+        statuses.len(),
+        open.join(", ")
+    )
+}
+
 /// `eb_recipe_diff`: what changed in each recipe since this server first saw
 /// it, hunk by hunk, so a final answer can describe exactly that.
 fn recipe_diff(arguments: &Value) -> Result<Value, String> {
@@ -796,6 +917,7 @@ fn recipe_diff(arguments: &Value) -> Result<Value, String> {
     let mut files = Vec::new();
     let mut all_params = std::collections::BTreeSet::new();
     let mut total = 0usize;
+    let mut statuses_all = Vec::new();
     for path in &paths {
         remember_first_seen(path);
         let now = std::fs::read_to_string(resolve_recipe_path(path))
@@ -804,6 +926,7 @@ fn recipe_diff(arguments: &Value) -> Result<Value, String> {
             files.push(json!({"recipe": path, "created": true, "hunks": []}));
             continue;
         };
+        let statuses = item_statuses(arguments, path, paths.len() == 1, &now);
         let hunks = crate::eb_style::hunks(&kept, &now);
         total += hunks.len();
         let rendered = hunks
@@ -826,7 +949,12 @@ fn recipe_diff(arguments: &Value) -> Result<Value, String> {
                 })
             })
             .collect::<Vec<_>>();
-        files.push(json!({"recipe": path, "hunks": rendered}));
+        let mut entry = json!({"recipe": path, "hunks": rendered});
+        if !statuses.is_empty() {
+            entry["review_items"] = json!(statuses);
+        }
+        files.push(entry);
+        statuses_all.extend(statuses);
     }
     let params = all_params.into_iter().collect::<Vec<_>>();
     let summary = if total == 0 {
@@ -837,7 +965,9 @@ fn recipe_diff(arguments: &Value) -> Result<Value, String> {
             if params.is_empty() { "none".to_string() } else { params.join(", ") }
         )
     };
-    Ok(json!({"files": files, "summary": summary, "parameters": params}))
+    let summary = summary + &review_items_note(&statuses_all);
+    let open = statuses_all.iter().filter(|status| status.open).count();
+    Ok(json!({"files": files, "summary": summary, "parameters": params, "open_review_items": open}))
 }
 
 fn recipe_write(arguments: &Value) -> Result<Value, String> {
@@ -1066,6 +1196,18 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
             }
         }
     }
+    // Review items: each comment answered by a change, or still open
+    // (proof v7: a prose comment with no hunk and empty suggestions left
+    // unapplied still ended "clean").
+    let mut statuses_by_file: Vec<Vec<ReviewItemStatus>> = Vec::new();
+    for (index, file) in report.files.iter_mut().enumerate() {
+        let statuses = match (paths.get(index), std::fs::read_to_string(&file.path)) {
+            (Some(path), Ok(now)) => item_statuses(arguments, path, paths.len() == 1, &now),
+            _ => Vec::new(),
+        };
+        file.findings.extend(review_item_findings(&statuses));
+        statuses_by_file.push(statuses);
+    }
     let count = |severity: Severity| {
         report
             .files
@@ -1108,12 +1250,16 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
         .iter()
         .enumerate()
         .map(|(index, file)| {
-            json!({
+            let mut entry = json!({
                 "recipe": file.path,
                 "baseline": baselines.get(index).copied().unwrap_or("none"),
                 "clean": file.clean(),
                 "findings": file.findings,
-            })
+            });
+            if let Some(statuses) = statuses_by_file.get(index).filter(|s| !s.is_empty()) {
+                entry["review_items"] = json!(statuses);
+            }
+            entry
         })
         .collect::<Vec<_>>();
     let clean = report.clean();
@@ -1138,7 +1284,11 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
         summary.push(' ');
         summary.push_str(note);
     }
+    let all_statuses = statuses_by_file.concat();
+    summary.push_str(&review_items_note(&all_statuses));
+    let open_items = all_statuses.iter().filter(|status| status.open).count();
     Ok(json!({
+        "open_review_items": open_items,
         "info": info,
         "preexisting_errors": preexisting,
         "clean": clean,
