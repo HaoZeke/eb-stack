@@ -301,7 +301,9 @@ pub fn diff_scope_findings(base: &str, text: &str, review_lines: &[usize]) -> Ve
 pub struct ReviewItem {
     /// Caller's id for the comment (reported back as given).
     pub id: String,
+    /// 1-based first line of the comment in the file as first seen.
     pub line_start: usize,
+    /// 1-based last line of the comment in the file as first seen.
     pub line_end: usize,
     /// The comment's suggestion block: `None` for a prose comment, `Some("")`
     /// for an empty suggestion (delete the anchored lines).
@@ -313,13 +315,17 @@ pub struct ReviewItem {
 /// Whether the change from the first-seen file answers one review item.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ReviewItemStatus {
+    /// The caller's id for the comment.
     pub id: String,
+    /// 1-based first line of the comment in the file as first seen.
     pub line_start: usize,
+    /// 1-based last line of the comment in the file as first seen.
     pub line_end: usize,
     /// `changed` (a hunk touches the anchored lines), `suggestion_applied`,
     /// `deleted`, `no_change_needed` (acknowledged by the caller), or, while
     /// open: `no_hunk`, `suggestion_missing`, `not_deleted`.
     pub status: &'static str,
+    /// True while the comment still has no matching change.
     pub open: bool,
     /// Suggestion lines the file does not contain yet.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -441,7 +447,7 @@ pub fn review_item_status(
                 }
             };
             let mut open = matches!(status, "no_hunk" | "not_deleted" | "suggestion_missing");
-            if open && acknowledged.iter().any(|id| *id == item.id) {
+            if open && acknowledged.contains(&item.id) {
                 status = "no_change_needed";
                 open = false;
             }
