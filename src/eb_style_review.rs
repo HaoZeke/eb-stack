@@ -191,6 +191,9 @@ pub(super) fn scope_formatting(text: &str, options: &LintOptions<'_>, out: &mut 
         _ => None,
     };
     for finding in out.iter_mut() {
+        if options.review_lines.contains(&finding.line) {
+            finding.in_review = true;
+        }
         if !super::is_formatting_code(&finding.code)
             || finding.severity == Severity::Error
             || options.review_lines.contains(&finding.line)
@@ -480,6 +483,7 @@ fn run_check_contrib(
                 origin: "eb --check-contrib".into(),
                 severity: Severity::Error,
                 info: false,
+                in_review: false,
             },
         });
         return (
@@ -614,6 +618,7 @@ fn parsed_style_line(captures: &regex::Captures<'_>) -> ParsedContrib {
             origin: "eb --check-contrib".into(),
             severity: Severity::Error,
             info: false,
+            in_review: false,
         },
     }
 }
@@ -633,6 +638,7 @@ fn contrib_finding(line: usize, column: usize, message: &str) -> StyleFinding {
         origin: "eb --check-contrib".into(),
         severity: Severity::Error,
         info: false,
+        in_review: false,
     }
 }
 
@@ -918,6 +924,32 @@ mixed = f'lib/%(name)s.{SHLIB_EXT}'
     }
 
     #[test]
+    fn hardcoded_so_on_a_review_line_blocks_clean() {
+        let text = "sanity_check_paths = {'files': ['lib/libtcl.so'], 'dirs': []}\n\
+            postinstallcmds = ['ln -s libtk9.0.so %(installdir)s/lib/libtk.so']\n";
+        let mut findings = Vec::new();
+        let options = LintOptions {
+            file_name: None,
+            base: None,
+            scope_to_base: false,
+            review_lines: &[1],
+        };
+        extend_style(text, &options, &mut findings);
+        let hits: Vec<_> = findings
+            .iter()
+            .filter(|finding| finding.code == "EB_SHLIB_HARDCODED")
+            .collect();
+        assert_eq!(hits.len(), 2, "{findings:?}");
+        assert!(hits[0].in_review && !hits[1].in_review, "{findings:?}");
+        assert!(!super::super::findings_clean(&findings));
+        let elsewhere: Vec<_> = findings
+            .into_iter()
+            .filter(|finding| finding.line == 2)
+            .collect();
+        assert!(super::super::findings_clean(&elsewhere));
+    }
+
+    #[test]
     fn changed_lines_stay_in_scope_with_a_base() {
         let base = "files = ['lib/libfoo.so']\n";
         let text = "files = ['lib/libfoo.%s' % SHLIB_EXT]\n";
@@ -990,6 +1022,7 @@ mixed = f'lib/%(name)s.{SHLIB_EXT}'
             origin: String::new(),
             severity: Severity::Error,
             info: false,
+            in_review: false,
         }];
         let contrib = contrib_finding(3, 10, "W299 trailing whitespace");
         let mut w299 = contrib.clone();

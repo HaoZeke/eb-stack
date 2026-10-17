@@ -82,11 +82,14 @@ pub fn is_formatting_code(code: &str) -> bool {
 /// finding of the formatting family whatever its severity, unless it is
 /// outside the review scope (`info`).
 pub fn blocks_clean(finding: &StyleFinding) -> bool {
-    finding.severity == Severity::Error || (is_formatting_code(&finding.code) && !finding.info)
+    finding.severity == Severity::Error
+        || (is_formatting_code(&finding.code) && !finding.info)
+        || (finding.in_review && finding.code == "EB_SHLIB_HARDCODED")
 }
 
-/// True when no finding blocks clean: no error and no `EB_FMT_*` finding.
-/// Other warnings (`EB_SHLIB_HARDCODED`, `EB_DEP_DUPLICATE`, ...) do not.
+/// True when no finding blocks clean: no error, no in-scope `EB_FMT_*`
+/// finding, and no `EB_SHLIB_HARDCODED` on a review line. Other warnings
+/// (`EB_SHLIB_HARDCODED` elsewhere, `EB_DEP_DUPLICATE`, ...) do not.
 pub fn findings_clean(findings: &[StyleFinding]) -> bool {
     !findings.iter().any(blocks_clean)
 }
@@ -123,6 +126,13 @@ pub struct StyleFinding {
     /// make the file unclean.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub info: bool,
+    /// True when the finding is on a line in `review_lines`. An
+    /// `EB_SHLIB_HARDCODED` there is what the reviewer asked to change, so it
+    /// blocks clean (proof v5, PR 24213: `'lib/libtcl.so'` on the commented
+    /// line was left because the warning "needs a change only if the review
+    /// asks for one").
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub in_review: bool,
 }
 
 /// Result of a format pass.
@@ -159,6 +169,7 @@ impl StyleFinding {
             origin: String::new(),
             severity: Severity::Error,
             info: false,
+            in_review: false,
         }
     }
 }
