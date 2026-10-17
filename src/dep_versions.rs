@@ -346,9 +346,15 @@ mod tests {
     #[test]
     fn subtoolchain_versions_count_for_a_composite_toolchain() {
         // Proof v5, PR 24538: Cython for a foss-2024a recipe lives on
-        // GCCcore-13.3.0; the old answer was "no Cython easyconfig for
-        // foss-2024a ... do not guess a version".
+        // GCCcore-13.3.0 (both 0.29.37 and 3.0.10). The old answer put
+        // 3.0.10 in other_toolchains and said "do not guess", and a trial
+        // then wrote ('Cython', '0').
         let temp = tree();
+        write(
+            temp.path(),
+            "easybuild/easyconfigs/c/Cython/Cython-3.0.10-GCCcore-13.3.0.eb",
+            "name = 'Cython'\nversion = '3.0.10'\ntoolchain = {'name': 'GCCcore', 'version': '13.3.0'}\n",
+        );
         let found =
             dep_versions(&[temp.path().to_path_buf()], "Cython", Some("foss/2024a")).unwrap();
         assert!(found.matching.is_empty());
@@ -357,8 +363,16 @@ mod tests {
             .iter()
             .map(|v| (v.version.as_str(), v.toolchain.as_str()))
             .collect();
-        assert_eq!(versions, [("0.29.37", "GCCcore-13.3.0")]);
-        assert_eq!(found.other_toolchains.len(), 1);
+        assert_eq!(
+            versions,
+            [("0.29.37", "GCCcore-13.3.0"), ("3.0.10", "GCCcore-13.3.0")]
+        );
+        let others: Vec<_> = found
+            .other_toolchains
+            .iter()
+            .map(|v| (v.version.as_str(), v.toolchain.as_str()))
+            .collect();
+        assert_eq!(others, [("3.0.10", "GCCcore-13.2.0")]);
         assert!(found.message.contains("subtoolchain"), "{}", found.message);
         assert!(!found.message.contains("do not guess"), "{}", found.message);
     }
