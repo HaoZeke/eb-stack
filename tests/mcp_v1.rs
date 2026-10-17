@@ -682,6 +682,72 @@ fn mcp_recipe_lint_compares_against_the_file_as_first_seen() {
 }
 
 #[test]
+fn mcp_recipe_lint_file_scope_keeps_preexisting_errors_advisory() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let recipe = temp.path().join("tool.eb");
+    let pre = "easyblock = 'MesonNinja'\nname = 'tool'\nversion_tag = 'v1'\nbuilddependencies = [\n    ('Meson', '1.8.2'),\n]\nsanity_check_commands = ['python -c \"import tool\"']\n";
+    std::fs::write(&recipe, pre).expect("recipe");
+    let first = call(60, "eb_recipe_lint", json!({"recipes": [recipe]}));
+    let body = &first["result"]["structuredContent"];
+    let codes: Vec<&str> = body["results"][0]["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .filter_map(|finding| finding["code"].as_str())
+        .collect();
+    assert!(codes.contains(&"EB_PY_NO_USER_SITE"), "{body}");
+    assert!(codes.contains(&"EB_LOCAL_VAR_NAMING"), "{body}");
+
+    // The review asks for one more build dependency (line 5).
+    std::fs::write(
+        &recipe,
+        pre.replace(
+            "    ('Meson', '1.8.2'),\n",
+            "    ('Meson', '1.8.2'),\n    ('flex', '2.6.4'),\n",
+        ),
+    )
+    .expect("edited");
+    for scope in [json!(null), json!("file")] {
+        let mut arguments = json!({"recipes": [recipe], "review_lines": [5, 6]});
+        if !scope.is_null() {
+            arguments["review_scope"] = scope.clone();
+        }
+        let response = call(61, "eb_recipe_lint", arguments);
+        let body = &response["result"]["structuredContent"];
+        assert_eq!(body["clean"], true, "scope {scope}: {body}");
+        assert!(
+            body["preexisting_errors"].as_u64().unwrap_or(0) >= 2,
+            "scope {scope}: {body}"
+        );
+        for code in ["EB_PY_NO_USER_SITE", "EB_LOCAL_VAR_NAMING"] {
+            let finding = body["results"][0]["findings"]
+                .as_array()
+                .expect("findings")
+                .iter()
+                .find(|finding| finding["code"] == code)
+                .unwrap_or_else(|| panic!("{code} missing: {body}"));
+            assert_eq!(finding["info"], true, "scope {scope}: {body}");
+        }
+        assert_eq!(body["error_free"], false, "scope {scope}: {body}");
+    }
+
+    // Under review_scope "file" a pre-existing EB_FMT finding still counts:
+    // that is what the file scope is for.
+    let fmt = temp.path().join("fmt.eb");
+    let fmt_pre = "name = 'tool'\nfiles = ['lib/libtool.%s' % SHLIB_EXT]\nx = 1\n";
+    std::fs::write(&fmt, fmt_pre).expect("fmt");
+    let _ = call(62, "eb_recipe_lint", json!({"recipes": [fmt]}));
+    std::fs::write(&fmt, fmt_pre.replace("x = 1", "x = 2")).expect("fmt edit");
+    let response = call(
+        63,
+        "eb_recipe_lint",
+        json!({"recipes": [fmt], "review_lines": [3], "review_scope": "file"}),
+    );
+    let body = &response["result"]["structuredContent"];
+    assert_eq!(body["clean"], false, "{body}");
+}
+
+#[test]
 fn mcp_recipe_lint_review_lines_and_base_decide_formatting_scope() {
     let temp = tempfile::tempdir().expect("tempdir");
     let base = temp.path().join("base.eb");
