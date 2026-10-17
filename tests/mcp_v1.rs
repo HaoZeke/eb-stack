@@ -682,6 +682,84 @@ fn mcp_recipe_lint_compares_against_the_file_as_first_seen() {
 }
 
 #[test]
+fn mcp_recipe_lint_and_diff_report_open_review_items() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let recipe = temp.path().join("items.eb");
+    let pre = "easyblock = 'CMakeMake'\nname = 'items'\nconfigopts = '-DBUILD_SHARED_LIBS=ON'\nsanity_check_paths = {\n    'files': ['bin/items'],\n    'dirs': [],\n}\nruntest = 'check'\nmoduleclass = 'tools'\n";
+    std::fs::write(&recipe, pre).expect("recipe");
+    let items = json!([
+        {"id": "pic", "line_start": 3, "suggestion": null,
+         "comment": "should this also pass `-DWITH_PIC=ON`?"},
+        {"id": "lib", "line_start": 5, "suggestion": "    'files': ['bin/items', 'lib/libitems.a'],"},
+        {"id": "runtest", "line_start": 8, "suggestion": ""}
+    ]);
+    let first = call(
+        70,
+        "eb_recipe_lint",
+        json!({"recipes": [recipe], "review_lines": [3, 5, 8], "review_items": items}),
+    );
+    let body = &first["result"]["structuredContent"];
+    assert_eq!(body["clean"], false, "{body}");
+    assert_eq!(body["open_review_items"], 3, "{body}");
+    let statuses = body["results"][0]["review_items"]
+        .as_array()
+        .expect("items");
+    assert_eq!(statuses[0]["status"], "no_hunk", "{body}");
+    assert_eq!(statuses[0]["mentions_absent"][0], "-DWITH_PIC=ON", "{body}");
+    assert_eq!(statuses[1]["status"], "suggestion_missing", "{body}");
+    assert_eq!(statuses[2]["status"], "not_deleted", "{body}");
+
+    // The two suggestions are applied; the question is still open.
+    std::fs::write(
+        &recipe,
+        pre.replace("['bin/items']", "['bin/items', 'lib/libitems.a']")
+            .replace("runtest = 'check'\n", ""),
+    )
+    .expect("edited");
+    let second = call(
+        71,
+        "eb_recipe_lint",
+        json!({"recipes": [recipe], "review_lines": [3, 5, 8], "review_items": items}),
+    );
+    let body = &second["result"]["structuredContent"];
+    assert_eq!(body["open_review_items"], 1, "{body}");
+    assert_eq!(body["clean"], false, "{body}");
+    let codes: Vec<&str> = body["results"][0]["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .filter_map(|finding| finding["code"].as_str())
+        .collect();
+    assert!(codes.contains(&"EB_REVIEW_ITEM_OPEN"), "{body}");
+    assert!(
+        body["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("pic (no_hunk)"),
+        "{body}"
+    );
+
+    let diff = call(
+        72,
+        "eb_recipe_diff",
+        json!({"recipes": [recipe], "review_items": items}),
+    );
+    let body = &diff["result"]["structuredContent"];
+    assert_eq!(body["open_review_items"], 1, "{body}");
+
+    // The question needed no change: acknowledged, the review is answered.
+    let third = call(
+        73,
+        "eb_recipe_lint",
+        json!({"recipes": [recipe], "review_lines": [3, 5, 8], "review_items": items,
+               "no_change_needed": ["pic"]}),
+    );
+    let body = &third["result"]["structuredContent"];
+    assert_eq!(body["open_review_items"], 0, "{body}");
+    assert_eq!(body["clean"], true, "{body}");
+}
+
+#[test]
 fn mcp_recipe_lint_file_scope_keeps_preexisting_errors_advisory() {
     let temp = tempfile::tempdir().expect("tempdir");
     let recipe = temp.path().join("tool.eb");

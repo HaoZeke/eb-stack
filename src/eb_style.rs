@@ -38,7 +38,10 @@ mod review;
 mod rules;
 #[path = "eb_style_vocab.rs"]
 mod vocab;
-pub use diffscope::{diff_scope_findings, hunks, Hunk};
+pub use diffscope::{
+    diff_scope_findings, hunks, review_item_findings, review_item_status, Hunk, ReviewItem,
+    ReviewItemStatus,
+};
 pub use review::{
     lint_recipe_files, lint_recipe_files_against, lint_recipe_files_scoped, lint_recipe_files_with,
     CheckContribReport, RecipeLintFile, RecipeLintReport, RecipeScope,
@@ -71,6 +74,7 @@ pub fn severity_for(code: &str) -> Severity {
         | "EB_SANITY_PATHS_REMOVED"
         | "EB_DIFF_OUTSIDE_REVIEW"
         | "EB_DIFF_SOURCES_CHANGED"
+        | "EB_REVIEW_ITEM_OPEN"
         | "EB_SANITY_CMD_BUILDDIR"
         | "EB_SANITY_CMD_CD_INSTALLDIR" => Severity::Warning,
         _ => Severity::Error,
@@ -104,6 +108,7 @@ pub fn blocks_clean(finding: &StyleFinding) -> bool {
         || (is_formatting_code(&finding.code) && !finding.info)
         || (finding.in_review && REVIEW_COUNTED.contains(&finding.code.as_str()))
         || (finding.code == "EB_DIFF_SOURCES_CHANGED" && !finding.info)
+        || (finding.code == "EB_REVIEW_ITEM_OPEN" && !finding.info)
 }
 
 /// True when no finding blocks clean: no error, no in-scope `EB_FMT_*`
