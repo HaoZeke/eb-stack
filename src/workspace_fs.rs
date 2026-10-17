@@ -1,7 +1,7 @@
 //! Sandboxed reads and edits for recipe workspaces.
 //!
-//! `eb_recipe_read`, `eb_recipe_list`, `eb_recipe_edit`, and `eb_recipe_write`
-//! resolve every path against one workspace root. A `..` component, an absolute
+//! `eb_recipe_read`, `eb_recipe_list`, `eb_recipe_grep`, `eb_recipe_edit`, and
+//! `eb_recipe_write` resolve every path against one workspace root. A `..` component, an absolute
 //! path outside that root, or a symlink whose target leaves the root is rejected
 //! before the file is opened.
 
@@ -66,6 +66,35 @@ pub struct WorkspaceWrite {
     pub created: bool,
     /// Byte length written.
     pub bytes: usize,
+}
+
+/// Default and upper bound for the number of lines [`grep_workspace`] returns.
+pub const MAX_GREP_MATCHES: usize = 200;
+
+/// One matching line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkspaceMatch {
+    /// File path relative to the workspace root.
+    pub path: String,
+    /// 1-based line number.
+    pub line: usize,
+    /// The line, without its newline.
+    pub text: String,
+}
+
+/// Result of searching the workspace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkspaceGrep {
+    /// The pattern searched for.
+    pub pattern: String,
+    /// True when `pattern` was a regular expression, false for literal text.
+    pub regex: bool,
+    /// Matching lines, in path then line order.
+    pub matches: Vec<WorkspaceMatch>,
+    /// Number of UTF-8 text files read.
+    pub files_searched: usize,
+    /// True when the search stopped at the match limit.
+    pub truncated: bool,
 }
 
 /// Workspace root for the recipe file tools.
@@ -141,6 +170,93 @@ pub fn list_workspace(root: &Path, requested: &Path) -> Result<WorkspaceList, St
         path: relative_display(&root, &path, requested),
         entries,
     })
+}
+
+/// Search UTF-8 files under `requested` (a file or directory inside `root`).
+///
+/// `pattern` is literal text unless `regex` is true. Symlinks are not
+/// followed, `.git` is skipped, and files that are not UTF-8 or are larger
+/// than [`MAX_WORKSPACE_FILE_BYTES`] are skipped. At most `max_matches`
+/// lines are returned (default and cap [`MAX_GREP_MATCHES`]).
+pub fn grep_workspace(
+    root: &Path,
+    requested: &Path,
+    pattern: &str,
+    regex: bool,
+    max_matches: Option<usize>,
+) -> Result<WorkspaceGrep, String> {
+    if pattern.is_empty() {
+        return Err("pattern is empty".into());
+    }
+    let matcher = if regex {
+        Some(
+            regex::Regex::new(pattern)
+                .map_err(|error| format!("invalid regular expression {pattern}: {error}"))?,
+        )
+    } else {
+        None
+    };
+    let (root, start) = resolve_inside(root, requested)?;
+    let limit = max_matches
+        .unwrap_or(MAX_GREP_MATCHES)
+        .clamp(1, MAX_GREP_MATCHES);
+    let mut result = WorkspaceGrep {
+        pattern: pattern.to_string(),
+        regex,
+        matches: Vec::new(),
+        files_searched: 0,
+        truncated: false,
+    };
+    let mut pending = vec![start];
+    while let Some(path) = pending.pop() {
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.is_dir() {
+            let Ok(directory) = fs::read_dir(&path) else {
+                continue;
+            };
+            let mut children: Vec<PathBuf> = directory
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| entry.file_name() != ".git")
+                .map(|entry| entry.path())
+                .collect();
+            children.sort();
+            pending.extend(children.into_iter().rev());
+            continue;
+        }
+        if !metadata.is_file() || metadata.len() > MAX_WORKSPACE_FILE_BYTES {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        result.files_searched += 1;
+        let shown = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        for (index, line) in content.lines().enumerate() {
+            let hit = match &matcher {
+                Some(matcher) => matcher.is_match(line),
+                None => line.contains(pattern),
+            };
+            if !hit {
+                continue;
+            }
+            if result.matches.len() == limit {
+                result.truncated = true;
+                return Ok(result);
+            }
+            result.matches.push(WorkspaceMatch {
+                path: shown.clone(),
+                line: index + 1,
+                text: line.to_string(),
+            });
+        }
+    }
+    Ok(result)
 }
 
 /// Replace an exact `old` string in a workspace file.
@@ -404,6 +520,39 @@ mod tests {
         assert_eq!(listing.entries[0].name, "demo.eb");
         assert_eq!(listing.entries[0].kind, "file");
         assert!(!listing.entries[0].escapes);
+    }
+
+    #[test]
+    fn grep_finds_literal_and_regex_matches_inside_the_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path();
+        fs::create_dir_all(root.join("easybuild/easyconfigs/p")).expect("mkdir");
+        fs::create_dir_all(root.join(".git")).expect("git dir");
+        fs::write(root.join(".git/config"), "SHLIB_EXT\n").expect("git file");
+        fs::write(
+            root.join("easybuild/easyconfigs/p/p.eb"),
+            "files = ['lib/libp.%s' % SHLIB_EXT]\nother = f'lib/%(name)s.{SHLIB_EXT}'\n",
+        )
+        .expect("recipe");
+
+        let literal =
+            grep_workspace(root, Path::new("."), "% SHLIB_EXT", false, None).expect("literal grep");
+        assert_eq!(literal.matches.len(), 1, "{literal:?}");
+        assert_eq!(literal.matches[0].line, 1);
+        assert_eq!(literal.matches[0].path, "easybuild/easyconfigs/p/p.eb");
+
+        let regex = grep_workspace(root, Path::new("easybuild"), r"SHLIB_EXT\b", true, None)
+            .expect("regex grep");
+        assert_eq!(regex.matches.len(), 2, "{regex:?}");
+        assert!(!regex.truncated);
+
+        let limited =
+            grep_workspace(root, Path::new("."), "SHLIB_EXT", false, Some(1)).expect("limit");
+        assert_eq!(limited.matches.len(), 1);
+        assert!(limited.truncated);
+
+        assert!(grep_workspace(root, Path::new("../"), "x", false, None).is_err());
+        assert!(grep_workspace(root, Path::new("."), "(", true, None).is_err());
     }
 
     #[test]

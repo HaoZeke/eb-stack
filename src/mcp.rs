@@ -8,7 +8,10 @@ use crate::domain::Toolchain;
 use crate::eb_parse::{
     check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,
 };
-use crate::eb_style::{format_style_file, lint_recipe_files, lint_style};
+use crate::eb_style::{
+    format_style_file, lint_recipe_files, lint_recipe_files_against, lint_style,
+    python_syntax_error, Severity,
+};
 use crate::foreign::ForeignFormat;
 use crate::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
 use crate::package_catalog::{resolve_package_catalog_layers, PackageCatalogLayer};
@@ -21,7 +24,8 @@ use crate::package_workflow::{
 };
 use crate::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use crate::workspace_fs::{
-    configured_workspace_root, edit_workspace, list_workspace, read_workspace, write_workspace,
+    configured_workspace_root, edit_workspace, grep_workspace, list_workspace, read_workspace,
+    write_workspace,
 };
 use crate::{
     load_json_file, lock_to_cyclonedx, solve_with_baseline_source, write_json_pretty,
@@ -188,16 +192,22 @@ fn tool_catalog() -> Vec<Value> {
             &[],
         ),
         tool_with_optional(
+            "eb_recipe_grep",
+            "Search UTF-8 files inside the workspace root for a literal string (or a regular expression when regex is true). path is a file or directory inside the workspace (default the root). Returns path, line, and text per match. Use it to find every occurrence of a pattern a reviewer pointed at before editing.",
+            &[("pattern", "string")],
+            &[("path", "string"), ("regex", "boolean"), ("max_matches", "integer")],
+        ),
+        tool_with_optional(
             "eb_recipe_check",
-            "Check EasyBuild packaging metadata and robot dependency resolution. easyconfigs must contain at least one path.",
+            "Check EasyBuild packaging metadata and robot dependency resolution. A recipe that is not valid Python fails. easyconfigs must contain at least one path: a robot directory such as easybuild/easyconfigs. A .eb file there is accepted and stands for the easyconfigs directory it sits in.",
             &[("recipe", "string"), ("easyconfigs", "array_min1")],
             &[("require_configopts", "array")],
         ),
         tool_with_optional(
             "eb_recipe_lint",
-            "Report EasyBuild reviewer-style findings without rewriting the file: E501 line length, W299 trailing whitespace, F541 f-strings with no placeholders, UP031 leftover printf-style formatting, and EB101 f-strings that interpolate EasyBuild template names such as name or version. When eb is on PATH, also run eb --check-contrib and merge its findings. A missing eb is not itself a failure.",
+            "Report what upstream checks on an easyconfig, without rewriting the file: E999 when it is not valid Python, the easyconfigs CI lint (F541, W605, W291), the pycodestyle codes of eb --check-contrib (E501, E225-E228, E231), the easyconfigs test-suite checks (python -s, sanity_check_paths shape, local_ naming, redefined parameters, checksum count), and review conventions (EB_FMT_PERCENT for '...' % x, EB_FMT_CONCAT for '...' + SHLIB_EXT, EB_FMT_TEMPLATE_VAR, EB_SHLIB_HARDCODED, ...). Each finding has severity error or warning. clean is true when no finding is an error; a review fix is not done while clean is false. An f-string that keeps a template next to a constant, such as f'lib/%(name)s.{SHLIB_EXT}', is correct and is not flagged. Pass base (the file before your edit) to also report templates replaced by Python expressions. When eb is on PATH, also run eb --check-contrib and merge its findings; a missing eb is not itself a failure.",
             &[("recipes", "array")],
-            &[],
+            &[("base", "string")],
         ),
         tool_with_optional(
             "eb_recipe_format",
@@ -322,6 +332,7 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_recipe_edit" => recipe_edit(arguments),
         "eb_recipe_write" => recipe_write(arguments),
         "eb_recipe_check" => recipe_check(arguments),
+        "eb_recipe_grep" => recipe_grep(arguments),
         "eb_recipe_lint" => recipe_lint(arguments),
         "eb_recipe_format" => recipe_format(arguments),
         "eb_stack_solve" => stack_solve(arguments),
@@ -527,9 +538,20 @@ fn package_bump(arguments: &Value) -> Result<Value, String> {
 }
 
 fn recipe_check(arguments: &Value) -> Result<Value, String> {
-    let recipe = resolve_easyconfig_file(&required_path(arguments, "recipe")?)
-        .map_err(|error| error.to_string())?;
-    let roots = path_array(arguments, "easyconfigs")?;
+    let recipe_path = required_path(arguments, "recipe")?;
+    let text = std::fs::read_to_string(&recipe_path)
+        .map_err(|error| format!("read {}: {error}", recipe_path.display()))?;
+    if let Some((line, column, message)) = python_syntax_error(&text) {
+        return Err(format!(
+            "{}:{line}:{column}: {message}. EasyBuild cannot parse this easyconfig; fix the syntax (eb_recipe_lint reports it as E999) before checking it",
+            recipe_path.display()
+        ));
+    }
+    let recipe = resolve_easyconfig_file(&recipe_path).map_err(|error| error.to_string())?;
+    let roots = path_array(arguments, "easyconfigs")?
+        .into_iter()
+        .map(|root| robot_root(&root))
+        .collect::<Result<Vec<_>, _>>()?;
     let root_refs = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
     let tree = parse_easyconfig_trees(&root_refs).map_err(|error| error.to_string())?;
     let check = check_recipe_deps(&recipe, &tree.candidates);
@@ -553,6 +575,53 @@ fn recipe_check(arguments: &Value) -> Result<Value, String> {
         "packaging_errors": packaging_errors,
         "claims": {"resolves": resolves, "builds": false, "binary_verified": false}
     }))
+}
+
+/// A robot root for `eb_recipe_check`. A `.eb` file stands for the
+/// `easyconfigs` directory it sits in (or its own directory when there is
+/// none above it), so agents that pass the recipe itself still get a solve.
+fn robot_root(path: &Path) -> Result<PathBuf, String> {
+    if path.is_dir() {
+        return Ok(path.to_path_buf());
+    }
+    if !path.exists() {
+        return Err(format!(
+            "easyconfigs path {} does not exist; pass a robot directory such as easybuild/easyconfigs",
+            path.display()
+        ));
+    }
+    if path.extension().and_then(|extension| extension.to_str()) != Some("eb") {
+        return Err(format!(
+            "easyconfigs path {} is a file, not a directory; pass a robot directory such as easybuild/easyconfigs",
+            path.display()
+        ));
+    }
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty());
+    let parent = parent.unwrap_or_else(|| Path::new("."));
+    let root = parent
+        .ancestors()
+        .find(|ancestor| ancestor.file_name().and_then(|name| name.to_str()) == Some("easyconfigs"))
+        .unwrap_or(parent);
+    Ok(root.to_path_buf())
+}
+
+fn recipe_grep(arguments: &Value) -> Result<Value, String> {
+    let root = configured_workspace_root()?;
+    let path = optional_path(arguments, "path").unwrap_or_else(|| PathBuf::from("."));
+    let max_matches = arguments
+        .get("max_matches")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize);
+    let found = grep_workspace(
+        &root,
+        &path,
+        &required_string(arguments, "pattern")?,
+        optional_bool(arguments, "regex"),
+        max_matches,
+    )?;
+    serde_json::to_value(found).map_err(|error| error.to_string())
 }
 
 fn recipe_read(arguments: &Value) -> Result<Value, String> {
@@ -592,18 +661,44 @@ fn recipe_write(arguments: &Value) -> Result<Value, String> {
 fn recipe_lint(arguments: &Value) -> Result<Value, String> {
     let paths = recipe_paths(arguments)?;
     let refs = paths.iter().map(PathBuf::as_path).collect::<Vec<_>>();
-    let report = lint_recipe_files(&refs).map_err(|error| error.to_string())?;
+    let report = match optional_path(arguments, "base") {
+        Some(base) => lint_recipe_files_against(&refs, Some(&base)),
+        None => lint_recipe_files(&refs),
+    }
+    .map_err(|error| error.to_string())?;
+    let count = |severity: Severity| {
+        report
+            .files
+            .iter()
+            .flat_map(|file| file.findings.iter())
+            .filter(|finding| finding.severity == severity)
+            .count()
+    };
+    let (errors, warnings) = (count(Severity::Error), count(Severity::Warning));
     let results = report
         .files
         .iter()
         .map(|file| {
             json!({
                 "recipe": file.path,
+                "clean": file.clean(),
                 "findings": file.findings,
             })
         })
         .collect::<Vec<_>>();
+    let clean = report.clean();
+    let summary = if clean && warnings == 0 {
+        "clean: no findings. If nothing else matches what the reviewer asked for, changing nothing is a valid result.".to_string()
+    } else if clean {
+        format!("clean: no errors, {warnings} warning(s). Fix warnings on lines the review is about; leave correct untouched lines alone.")
+    } else {
+        format!("not clean: {errors} error(s), {warnings} warning(s). A review fix is not done while errors remain.")
+    };
     Ok(json!({
+        "clean": clean,
+        "errors": errors,
+        "warnings": warnings,
+        "summary": summary,
         "results": results,
         "check_contrib": report.check_contrib,
     }))
@@ -867,7 +962,8 @@ fn string_array(arguments: &Value, name: &str) -> Result<Vec<String>, String> {
                     .ok_or_else(|| format!("argument {name} must contain strings"))
             })
             .collect(),
-        Some(_) => Err(format!("argument {name} must be an array")),
+        Some(Value::String(value)) => Ok(vec![value.clone()]),
+        Some(_) => Err(format!("argument {name} must be an array of strings")),
     }
 }
 
