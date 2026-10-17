@@ -25,8 +25,8 @@ use crate::package_workflow::{
 };
 use crate::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use crate::workspace_fs::{
-    configured_workspace_root, edit_workspace, grep_workspace, list_workspace, read_workspace,
-    write_workspace,
+    configured_workspace_root, edit_workspace_scoped, grep_workspace, list_workspace,
+    read_workspace, replace_lines_workspace, write_workspace,
 };
 use crate::{
     load_json_file, lock_to_cyclonedx, solve_with_baseline_source, write_json_pretty,
@@ -182,9 +182,21 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_recipe_edit",
-            "Replace an exact literal string in a workspace file. old must be non-empty and different from new. When old matches more than once the file is left unchanged unless replace_all is true. Use replace_all to apply one review change at every occurrence.",
+            "Replace an exact literal string in a workspace file. old must be non-empty and different from new. When old matches more than once the file is left unchanged and the error lists the line and the list entry (component, extension or dependency name) of every match. within names one ('name', ...) entry so only matches inside it change; when two entries share the name, occurrence (1-based) picks one. Without within, occurrence picks the n-th match. Use replace_all only when the review asks for the change at every occurrence; the result's note says when one call changed several different entries.",
             &[("path", "string"), ("old", "string"), ("new", "string")],
-            &[("replace_all", "boolean")],
+            &[("replace_all", "boolean"), ("within", "string"), ("occurrence", "integer")],
+        ),
+        tool_with_optional(
+            "eb_recipe_apply_suggestion",
+            "Apply a review comment's code suggestion to the lines the comment is anchored on, the way GitHub's 'Commit suggestion' does: lines line_start..line_end (1-based; line_end defaults to line_start) are replaced by suggestion, and an empty or missing suggestion deletes them. Pass expect with the anchored lines as the review showed them: when earlier edits moved them, the unique place where they now are is used, and when they are not found nothing is written. Use it for every suggestion block, including empty ones, before any other edit to those lines; then check the result against the rules (R1a) with eb_recipe_lint.",
+            &[("path", "string"), ("line_start", "integer")],
+            &[("line_end", "integer"), ("suggestion", "string"), ("expect", "string")],
+        ),
+        tool_with_optional(
+            "eb_recipe_diff",
+            "Show what changed in each recipe since this server first saw it (rebaseline does not reset this), hunk by hunk with the top-level parameters each hunk touches and whether it only changes comments. Call it last, before the final answer, and describe exactly these hunks: a change you describe must have a hunk, and a hunk you cannot justify from the review must be reverted.",
+            &[("recipes", "array")],
+            &[],
         ),
         tool_with_optional(
             "eb_recipe_write",
@@ -339,6 +351,8 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_recipe_read" => recipe_read(arguments),
         "eb_recipe_list" => recipe_list(arguments),
         "eb_recipe_edit" => recipe_edit(arguments),
+        "eb_recipe_apply_suggestion" => recipe_apply_suggestion(arguments),
+        "eb_recipe_diff" => recipe_diff(arguments),
         "eb_recipe_write" => recipe_write(arguments),
         "eb_recipe_check" => recipe_check(arguments),
         "eb_recipe_grep" => recipe_grep(arguments),
@@ -734,14 +748,96 @@ fn recipe_edit(arguments: &Value) -> Result<Value, String> {
     let root = configured_workspace_root()?;
     let path = required_path(arguments, "path")?;
     remember_first_seen(&path);
-    let edited = edit_workspace(
+    let within = optional_string(arguments, "within").filter(|name| !name.is_empty());
+    let occurrence = arguments
+        .get("occurrence")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize);
+    let edited = edit_workspace_scoped(
         &root,
         &path,
         &required_string(arguments, "old")?,
         &required_string(arguments, "new")?,
         optional_bool(arguments, "replace_all"),
+        within.as_deref(),
+        occurrence,
     )?;
     serde_json::to_value(edited).map_err(|error| error.to_string())
+}
+
+/// `eb_recipe_apply_suggestion`: put a review suggestion on the lines its
+/// comment is anchored to (an empty suggestion deletes them).
+fn recipe_apply_suggestion(arguments: &Value) -> Result<Value, String> {
+    let root = configured_workspace_root()?;
+    let path = required_path(arguments, "path")?;
+    remember_first_seen(&path);
+    let line = |name: &str| {
+        arguments
+            .get(name)
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+            .ok_or_else(|| format!("missing integer argument {name}"))
+    };
+    let start = line("line_start")?;
+    let end = arguments
+        .get("line_end")
+        .and_then(Value::as_u64)
+        .map_or(start, |value| value as usize);
+    let suggestion = optional_string(arguments, "suggestion").unwrap_or_default();
+    let expect = optional_string(arguments, "expect");
+    let edited = replace_lines_workspace(&root, &path, start, end, &suggestion, expect.as_deref())?;
+    serde_json::to_value(edited).map_err(|error| error.to_string())
+}
+
+/// `eb_recipe_diff`: what changed in each recipe since this server first saw
+/// it, hunk by hunk, so a final answer can describe exactly that.
+fn recipe_diff(arguments: &Value) -> Result<Value, String> {
+    let paths = recipe_paths(arguments)?;
+    let mut files = Vec::new();
+    let mut all_params = std::collections::BTreeSet::new();
+    let mut total = 0usize;
+    for path in &paths {
+        remember_first_seen(path);
+        let now = std::fs::read_to_string(resolve_recipe_path(path))
+            .map_err(|error| format!("read {}: {error}", path.display()))?;
+        let Some(kept) = pristine(path) else {
+            files.push(json!({"recipe": path, "created": true, "hunks": []}));
+            continue;
+        };
+        let hunks = crate::eb_style::hunks(&kept, &now);
+        total += hunks.len();
+        let rendered = hunks
+            .iter()
+            .map(|hunk| {
+                all_params.extend(hunk.params.iter().cloned());
+                let mut diff = String::new();
+                for line in &hunk.removed {
+                    diff.push_str(&format!("-{line}\n"));
+                }
+                for line in &hunk.added {
+                    diff.push_str(&format!("+{line}\n"));
+                }
+                json!({
+                    "old_line": hunk.old_start,
+                    "new_line": hunk.new_start,
+                    "parameters": hunk.params,
+                    "comment_only": hunk.comment_only(),
+                    "diff": diff,
+                })
+            })
+            .collect::<Vec<_>>();
+        files.push(json!({"recipe": path, "hunks": rendered}));
+    }
+    let params = all_params.into_iter().collect::<Vec<_>>();
+    let summary = if total == 0 {
+        "no changes since the files were first seen. If the review asked for a change, it is not made yet; if not, say that nothing needed changing.".to_string()
+    } else {
+        format!(
+            "{total} hunk(s), parameters touched: {}. Your final answer must describe these hunks and nothing else: name every hunk, do not claim a change that has no hunk (for example a removal that was already absent, or a value you only meant to change), and do not call a comment-only hunk a change the review asked for. If a hunk is not something the review asked for or needs, revert it first.",
+            if params.is_empty() { "none".to_string() } else { params.join(", ") }
+        )
+    };
+    Ok(json!({"files": files, "summary": summary, "parameters": params}))
 }
 
 fn recipe_write(arguments: &Value) -> Result<Value, String> {

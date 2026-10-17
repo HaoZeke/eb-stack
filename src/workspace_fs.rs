@@ -318,6 +318,402 @@ pub fn edit_workspace(
     })
 }
 
+/// Result of [`edit_workspace_scoped`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkspaceScopedEdit {
+    /// Edited path, relative to the workspace root.
+    pub path: String,
+    /// Number of times `old` was replaced.
+    pub replaced: usize,
+    /// Byte length after the edit.
+    pub bytes: usize,
+    /// 1-based line of each replaced occurrence, in the file before the edit.
+    pub lines: Vec<usize>,
+    /// Name of the list entry (component, extension, dependency tuple) each
+    /// replaced occurrence sits in; empty for top-level text.
+    pub entries: Vec<String>,
+    /// Set when one call changed several different entries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// A `('name', ...)` list entry: byte span and name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EntrySpan {
+    start: usize,
+    end: usize,
+    line: usize,
+    name: String,
+}
+
+/// Tuple entries such as `('foo', '1.0', {...})` in `components`,
+/// `exts_list` or `dependencies`: a line whose first non-blank text is `(`
+/// followed by a quoted name and a comma. The span ends at the matching `)`.
+fn entry_spans(text: &str) -> Vec<EntrySpan> {
+    let mut out = Vec::new();
+    let mut offset = 0usize;
+    for (index, line) in text.split_inclusive('\n').enumerate() {
+        let lead = line.len() - line.trim_start().len();
+        let rest = &line[lead..];
+        if let Some(name) = entry_name(rest) {
+            let start = offset + lead;
+            if let Some(end) = matching_paren(text, start) {
+                out.push(EntrySpan {
+                    start,
+                    end,
+                    line: index + 1,
+                    name,
+                });
+            }
+        }
+        offset += line.len();
+    }
+    out
+}
+
+fn entry_name(rest: &str) -> Option<String> {
+    let inner = rest.strip_prefix('(')?.trim_start();
+    let quote = inner.chars().next().filter(|c| *c == '\'' || *c == '"')?;
+    let body = &inner[1..];
+    let close = body.find(quote)?;
+    let after = body[close + 1..].trim_start();
+    (after.starts_with(',') && close > 0).then(|| body[..close].to_string())
+}
+
+/// Offset just past the `)` matching the `(` at `open`, skipping strings.
+fn matching_paren(text: &str, open: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut depth = 0i32;
+    let mut i = open;
+    let mut quote: Option<u8> = None;
+    while i < bytes.len() {
+        let b = bytes[i];
+        match quote {
+            Some(q) => {
+                if b == b'\\' {
+                    i += 1;
+                } else if b == q {
+                    quote = None;
+                }
+            }
+            None => match b {
+                b'\'' | b'"' => quote = Some(b),
+                b'#' => {
+                    while i < bytes.len() && bytes[i] != b'\n' {
+                        i += 1;
+                    }
+                    continue;
+                }
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i + 1);
+                    }
+                }
+                _ => {}
+            },
+        }
+        i += 1;
+    }
+    None
+}
+
+fn line_of(text: &str, offset: usize) -> usize {
+    text[..offset].matches('\n').count() + 1
+}
+
+/// Innermost entry containing `offset`.
+fn entry_at(spans: &[EntrySpan], offset: usize) -> Option<&EntrySpan> {
+    spans
+        .iter()
+        .filter(|span| span.start <= offset && offset < span.end)
+        .min_by_key(|span| span.end - span.start)
+}
+
+/// Like [`edit_workspace`], but able to address one list entry.
+///
+/// `within` names a `('name', ...)` entry (a component, extension or
+/// dependency); only occurrences of `old` inside it are considered. When two
+/// entries share the name, `occurrence` (1-based) picks one of them, else the
+/// call fails and lists them. Without `within`, `occurrence` picks the n-th
+/// match of `old`. An ambiguous match fails with the line and entry of every
+/// occurrence, so near-identical components cannot be edited by accident; a
+/// `replace_all` that changes several different entries succeeds and says
+/// which ones in `note`.
+pub fn edit_workspace_scoped(
+    root: &Path,
+    requested: &Path,
+    old: &str,
+    new: &str,
+    replace_all: bool,
+    within: Option<&str>,
+    occurrence: Option<usize>,
+) -> Result<WorkspaceScopedEdit, String> {
+    if old.is_empty() {
+        return Err("old string must not be empty".into());
+    }
+    if old == new {
+        return Err("old and new are the same string".into());
+    }
+    let (root, path) = resolve_inside(root, requested)?;
+    if !path.is_file() {
+        return Err(format!("{} is not a file", requested.display()));
+    }
+    let metadata =
+        fs::metadata(&path).map_err(|error| format!("read {}: {error}", requested.display()))?;
+    if metadata.len() > MAX_WORKSPACE_FILE_BYTES {
+        return Err(format!(
+            "{} is larger than {MAX_WORKSPACE_FILE_BYTES} bytes",
+            requested.display()
+        ));
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("read {}: {error}", requested.display()))?;
+    let spans = entry_spans(&content);
+    let mut matches: Vec<usize> = content.match_indices(old).map(|(at, _)| at).collect();
+    let describe = |at: usize| match entry_at(&spans, at) {
+        Some(span) => format!("line {} (in '{}')", line_of(&content, at), span.name),
+        None => format!("line {} (top level)", line_of(&content, at)),
+    };
+    let mut occurrence = occurrence;
+    if let Some(name) = within {
+        let mut named: Vec<&EntrySpan> = spans.iter().filter(|span| span.name == name).collect();
+        if named.is_empty() {
+            named = spans
+                .iter()
+                .filter(|span| span.name.eq_ignore_ascii_case(name))
+                .collect();
+        }
+        let chosen = match (named.len(), occurrence.take()) {
+            (0, _) => {
+                let mut names: Vec<&str> = spans.iter().map(|span| span.name.as_str()).collect();
+                names.dedup();
+                return Err(format!(
+                    "no entry named '{name}' in {}; entries: {}",
+                    requested.display(),
+                    names.join(", ")
+                ));
+            }
+            (1, _) => named[0],
+            (count, Some(k)) if k >= 1 && k <= count => named[k - 1],
+            (count, _) => {
+                let lines: Vec<String> = named.iter().map(|span| span.line.to_string()).collect();
+                return Err(format!(
+                    "'{name}' names {count} entries in {} (lines {}); pass occurrence (1-based) to pick the one the review is about",
+                    requested.display(),
+                    lines.join(", ")
+                ));
+            }
+        };
+        matches.retain(|at| {
+            *at >= chosen.start
+                && *at + old.len() <= chosen.end
+                && entry_at(&spans, *at).is_some_and(|span| span.start >= chosen.start)
+        });
+        if matches.is_empty() {
+            return Err(format!(
+                "old string was not found inside '{name}' (line {}) in {}",
+                chosen.line,
+                requested.display()
+            ));
+        }
+    }
+    if matches.is_empty() {
+        return Err(format!(
+            "old string was not found in {}",
+            requested.display()
+        ));
+    }
+    if let Some(k) = occurrence {
+        if k == 0 || k > matches.len() {
+            return Err(format!(
+                "occurrence {k} is out of range: old string matched {} time(s): {}",
+                matches.len(),
+                matches
+                    .iter()
+                    .map(|at| describe(*at))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        matches = vec![matches[k - 1]];
+    }
+    if matches.len() > 1 && !replace_all {
+        return Err(format!(
+            "old string matched {} times in {}: {}. Pass within with the entry name (and occurrence when names repeat) for the one the review is about, or include more surrounding context; pass replace_all only when the review asks for every occurrence",
+            matches.len(),
+            requested.display(),
+            matches.iter().map(|at| describe(*at)).collect::<Vec<_>>().join(", ")
+        ));
+    }
+    let lines: Vec<usize> = matches.iter().map(|at| line_of(&content, *at)).collect();
+    let entries: Vec<String> = matches
+        .iter()
+        .map(|at| {
+            entry_at(&spans, *at)
+                .map(|span| span.name.clone())
+                .unwrap_or_default()
+        })
+        .collect();
+    let mut updated = String::with_capacity(content.len());
+    let mut last = 0usize;
+    for at in &matches {
+        updated.push_str(&content[last..*at]);
+        updated.push_str(new);
+        last = at + old.len();
+    }
+    updated.push_str(&content[last..]);
+    let mut distinct = entries.clone();
+    distinct.sort();
+    distinct.dedup();
+    let note = (distinct.len() > 1).then(|| {
+        format!(
+            "changed {} different entries ({}); if the review is about one of them, undo the others and pass within",
+            distinct.len(),
+            distinct
+                .iter()
+                .map(|name| if name.is_empty() { "top level".to_string() } else { format!("'{name}'") })
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    });
+    write_file(&path, &updated)
+        .map_err(|error| format!("write {}: {error}", requested.display()))?;
+    Ok(WorkspaceScopedEdit {
+        path: relative_display(&root, &path, requested),
+        replaced: matches.len(),
+        bytes: updated.len(),
+        lines,
+        entries,
+        note,
+    })
+}
+
+/// Result of [`replace_lines_workspace`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkspaceLineEdit {
+    /// Edited path, relative to the workspace root.
+    pub path: String,
+    /// 1-based first and last line that were replaced (before the edit).
+    pub replaced_lines: (usize, usize),
+    /// The lines that were removed.
+    pub removed: Vec<String>,
+    /// Number of lines written in their place (0 deletes them).
+    pub added: usize,
+    /// True when `expect` was found at another place than the given lines
+    /// (earlier edits moved them).
+    pub relocated: bool,
+    /// Byte length after the edit.
+    pub bytes: usize,
+}
+
+/// Replace lines `start..=end` (1-based) with `replacement`, the way GitHub
+/// applies a review suggestion to the lines its comment is anchored on: an
+/// empty `replacement` deletes them. With `expect` (the anchored lines as
+/// the review showed them), the lines must match it ignoring surrounding
+/// whitespace; when they do not, a unique place where they do is used
+/// instead, otherwise the call fails and nothing is written.
+pub fn replace_lines_workspace(
+    root: &Path,
+    requested: &Path,
+    start: usize,
+    end: usize,
+    replacement: &str,
+    expect: Option<&str>,
+) -> Result<WorkspaceLineEdit, String> {
+    if start == 0 || end < start {
+        return Err(format!(
+            "bad line range {start}-{end}: lines are 1-based and end >= start"
+        ));
+    }
+    let (root, path) = resolve_inside(root, requested)?;
+    if !path.is_file() {
+        return Err(format!("{} is not a file", requested.display()));
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("read {}: {error}", requested.display()))?;
+    let lines: Vec<&str> = content.split_inclusive('\n').collect();
+    let norm =
+        |text: &str| -> Vec<String> { text.lines().map(|line| line.trim().to_string()).collect() };
+    let (mut first, mut last) = (start, end);
+    let mut relocated = false;
+    if let Some(expect) = expect.filter(|expect| !expect.trim().is_empty()) {
+        let want = norm(expect.trim_matches('\n'));
+        let have = |from: usize| -> Vec<String> {
+            lines
+                .iter()
+                .skip(from - 1)
+                .take(want.len())
+                .map(|line| line.trim().to_string())
+                .collect()
+        };
+        if end > lines.len() || have(start) != want {
+            let found: Vec<usize> = (1..=lines.len().saturating_sub(want.len()) + 1)
+                .filter(|from| have(*from) == want)
+                .collect();
+            match found.as_slice() {
+                [only] => {
+                    first = *only;
+                    last = *only + want.len() - 1;
+                    relocated = true;
+                }
+                [] => {
+                    return Err(format!(
+                        "lines {start}-{end} of {} do not hold the anchored text, and it was not found elsewhere; re-read the file",
+                        requested.display()
+                    ))
+                }
+                many => {
+                    return Err(format!(
+                        "lines {start}-{end} of {} do not hold the anchored text, which occurs at lines {}; pass the line range of the one the review is about",
+                        requested.display(),
+                        many.iter().map(usize::to_string).collect::<Vec<_>>().join(", ")
+                    ))
+                }
+            }
+        } else {
+            last = start + want.len() - 1;
+        }
+    }
+    if last > lines.len() {
+        return Err(format!(
+            "line range {first}-{last} is past the end of {} ({} lines)",
+            requested.display(),
+            lines.len()
+        ));
+    }
+    let removed: Vec<String> = lines[first - 1..last]
+        .iter()
+        .map(|line| line.trim_end_matches('\n').to_string())
+        .collect();
+    let mut updated = String::with_capacity(content.len() + replacement.len());
+    for line in &lines[..first - 1] {
+        updated.push_str(line);
+    }
+    let body = replacement.trim_end_matches('\n');
+    let added = if body.is_empty() && replacement.trim().is_empty() {
+        0
+    } else {
+        updated.push_str(body);
+        updated.push('\n');
+        body.lines().count()
+    };
+    for line in &lines[last..] {
+        updated.push_str(line);
+    }
+    write_file(&path, &updated)
+        .map_err(|error| format!("write {}: {error}", requested.display()))?;
+    Ok(WorkspaceLineEdit {
+        path: relative_display(&root, &path, requested),
+        replaced_lines: (first, last),
+        removed,
+        added,
+        relocated,
+        bytes: updated.len(),
+    })
+}
+
 /// Create or overwrite a UTF-8 file inside `root`.
 ///
 /// Parent directories must already exist. The call does not follow a symlink
@@ -655,5 +1051,80 @@ mod tests {
                 .content,
             "name = 'ok'\n"
         );
+    }
+
+    #[test]
+    fn scoped_edit_addresses_one_of_two_near_identical_entries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let text = "components = [\n    ('alpha', '1.0', {\n        'skip': True,\n    }),\n    ('beta', '1.0', {\n        'skip': True,\n    }),\n]\n";
+        fs::write(root.join("x.eb"), text).expect("write");
+        let ambiguous = edit_workspace_scoped(
+            root,
+            Path::new("x.eb"),
+            "'skip': True,",
+            "'skip': True,\n        'opt': 1,",
+            false,
+            None,
+            None,
+        )
+        .expect_err("ambiguous");
+        assert!(
+            ambiguous.contains("line 3 (in 'alpha')") && ambiguous.contains("line 6 (in 'beta')"),
+            "{ambiguous}"
+        );
+        let edited = edit_workspace_scoped(
+            root,
+            Path::new("x.eb"),
+            "'skip': True,",
+            "'skip': True,\n        'opt': 1,",
+            false,
+            Some("beta"),
+            None,
+        )
+        .expect("edit");
+        assert_eq!(edited.lines, [6]);
+        assert_eq!(edited.entries, ["beta"]);
+        let after = fs::read_to_string(root.join("x.eb")).expect("read");
+        assert!(
+            after.contains("('beta', '1.0', {\n        'skip': True,\n        'opt': 1,"),
+            "{after}"
+        );
+        assert!(
+            !after.contains("('alpha', '1.0', {\n        'skip': True,\n        'opt'"),
+            "{after}"
+        );
+        let all =
+            edit_workspace_scoped(root, Path::new("x.eb"), "'1.0'", "'2.0'", true, None, None)
+                .expect("all");
+        assert!(
+            all.note
+                .as_deref()
+                .is_some_and(|note| note.contains("2 different entries")),
+            "{all:?}"
+        );
+    }
+
+    #[test]
+    fn line_suggestion_deletes_or_replaces_the_anchored_lines() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        fs::write(root.join("y.eb"), "a = 1\nb = 2\nc = 3\nd = 4\n").expect("write");
+        let deleted = replace_lines_workspace(root, Path::new("y.eb"), 2, 2, "", Some("b = 2"))
+            .expect("delete");
+        assert_eq!(deleted.removed, ["b = 2"]);
+        assert_eq!(
+            fs::read_to_string(root.join("y.eb")).expect("read"),
+            "a = 1\nc = 3\nd = 4\n"
+        );
+        // Anchored text moved up by one line: found and replaced there.
+        let moved = replace_lines_workspace(root, Path::new("y.eb"), 3, 3, "c = 30", Some("c = 3"))
+            .expect("moved");
+        assert!(moved.relocated);
+        assert_eq!(
+            fs::read_to_string(root.join("y.eb")).expect("read"),
+            "a = 1\nc = 30\nd = 4\n"
+        );
+        assert!(replace_lines_workspace(root, Path::new("y.eb"), 1, 1, "", Some("zzz")).is_err());
     }
 }
