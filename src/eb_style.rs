@@ -37,8 +37,8 @@ mod rules;
 #[path = "eb_style_vocab.rs"]
 mod vocab;
 pub use review::{
-    lint_recipe_files, lint_recipe_files_against, lint_recipe_files_with, CheckContribReport,
-    RecipeLintFile, RecipeLintReport,
+    lint_recipe_files, lint_recipe_files_against, lint_recipe_files_scoped, lint_recipe_files_with,
+    CheckContribReport, RecipeLintFile, RecipeLintReport, RecipeScope,
 };
 pub use rules::{python_syntax_error, LintOptions};
 
@@ -65,7 +65,7 @@ pub fn severity_for(code: &str) -> Severity {
         | "EB_FMT_TEMPLATE_REMOVED"
         | "EB_SHLIB_HARDCODED"
         | "EB_DEP_DUPLICATE"
-        | "EB_DEP_EMPTY_VERSION" => Severity::Warning,
+        | "EB_SANITY_PATHS_REMOVED" => Severity::Warning,
         _ => Severity::Error,
     }
 }
@@ -79,9 +79,10 @@ pub fn is_formatting_code(code: &str) -> bool {
 }
 
 /// True when a finding keeps a recipe from being clean: any error, and any
-/// finding of the formatting family whatever its severity.
+/// finding of the formatting family whatever its severity, unless it is
+/// outside the review scope (`info`).
 pub fn blocks_clean(finding: &StyleFinding) -> bool {
-    finding.severity == Severity::Error || is_formatting_code(&finding.code)
+    finding.severity == Severity::Error || (is_formatting_code(&finding.code) && !finding.info)
 }
 
 /// True when no finding blocks clean: no error and no `EB_FMT_*` finding.
@@ -116,6 +117,12 @@ pub struct StyleFinding {
     /// `error` when CI or the test suite fails on it, `warning` for review conventions.
     #[serde(default)]
     pub severity: Severity,
+    /// True for an `EB_FMT_*` finding outside the review scope: a line that
+    /// is unchanged from the base, or (without a base) an untouched
+    /// `%%(...)s`-escaped `%` entry. Reported for information; it does not
+    /// make the file unclean.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub info: bool,
 }
 
 /// Result of a format pass.
@@ -151,6 +158,7 @@ impl StyleFinding {
             mechanical,
             origin: String::new(),
             severity: Severity::Error,
+            info: false,
         }
     }
 }
