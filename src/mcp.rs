@@ -26,8 +26,8 @@ use crate::package_workflow::{
 };
 use crate::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use crate::workspace_fs::{
-    configured_workspace_root, edit_workspace_scoped, grep_workspace, list_workspace,
-    read_workspace, replace_lines_workspace, write_workspace,
+    apply_suggestion_workspace, configured_workspace_root, edit_workspace_scoped, grep_workspace,
+    list_workspace, read_workspace, write_workspace,
 };
 use crate::{
     load_json_file, lock_to_cyclonedx, solve_with_baseline_source, write_json_pretty,
@@ -189,7 +189,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_recipe_apply_suggestion",
-            "Apply a review comment's code suggestion to the lines the comment is anchored on, the way GitHub's 'Commit suggestion' does: lines line_start..line_end (1-based; line_end defaults to line_start) are replaced by suggestion, and an empty or missing suggestion deletes them. Pass expect with the anchored lines as the review showed them: when earlier edits moved them, the unique place where they now are is used, and when they are not found nothing is written. Use it for every suggestion block, including empty ones, before any other edit to those lines; then check the result against the rules (R1a) with eb_recipe_lint.",
+            "Apply a review comment's code suggestion to the lines the comment is anchored on, the way GitHub's 'Commit suggestion' does: lines line_start..line_end (1-based; line_end defaults to line_start) are replaced by suggestion, and an empty or missing suggestion deletes them. Pass expect with the anchored lines as the review showed them: when earlier edits moved them, the unique place where they now are is used, and when they are not found nothing is written. line_start and line_end are the review's numbering: without expect, once the file has changed, the lines it had there when first seen are looked up instead. A suggestion that would leave the file invalid Python is not written. Use it for every suggestion block, including empty ones, before any other edit to those lines; then check the result against the rules (R1a) with eb_recipe_lint.",
             &[("path", "string"), ("line_start", "integer")],
             &[("line_end", "integer"), ("suggestion", "string"), ("expect", "string")],
         ),
@@ -798,7 +798,16 @@ fn recipe_apply_suggestion(arguments: &Value) -> Result<Value, String> {
         .map_or(start, |value| value as usize);
     let suggestion = optional_string(arguments, "suggestion").unwrap_or_default();
     let expect = optional_string(arguments, "expect");
-    let edited = replace_lines_workspace(&root, &path, start, end, &suggestion, expect.as_deref())?;
+    let kept = pristine(&path);
+    let edited = apply_suggestion_workspace(
+        &root,
+        &path,
+        start,
+        end,
+        &suggestion,
+        expect.as_deref(),
+        kept.as_deref(),
+    )?;
     serde_json::to_value(edited).map_err(|error| error.to_string())
 }
 
