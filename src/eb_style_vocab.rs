@@ -185,6 +185,27 @@ pub(super) const TEMPLATE_NAMES: &[&str] = &[
 ];
 
 /// Alternative template names EasyBuild also accepts (`%(build_dir)s` for `%(builddir)s`, ...).
+/// Templates that are not in `eb --avail-easyconfig-templates` but are valid
+/// in easyconfigs: the extension-filter templates (`exts_filter`, from
+/// easybuild/framework/extension.py: `ext_name`, `ext_version`, `src`) and the
+/// ones easyblocks add to `template_values` (easyblocks 5.4.1: CUDA, cuDNN,
+/// Java, ORCA, the editor easyblock, and the numeric-Python easyblocks).
+pub(super) const EASYBLOCK_TEMPLATES: &[&str] = &[
+    "cudaarch",
+    "cudaminver",
+    "cudnnarch",
+    "excluded_tests",
+    "ext_name",
+    "ext_version",
+    "jdkarch",
+    "mapped_arch",
+    "orcaarch",
+    "pytest_filter",
+    "python",
+    "src",
+    "srcdir",
+];
+
 pub(super) const TEMPLATE_ALIASES: &[&str] = &[
     "build_dir",
     "cuda_cc_comma_sep",

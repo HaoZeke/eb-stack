@@ -77,8 +77,8 @@ pub(super) fn extend_rules(text: &str, options: &LintOptions<'_>, out: &mut Vec<
     quote_reuse(&scan, &mut sink);
     missing_fprefix(text, &scan, &names, &mut sink);
     template_vars(text, &scan, &assigns, &mut sink);
-    hardcoded_shlib(text, &scan, &mut sink);
-    unknown_templates(text, &scan, &mut sink);
+    hardcoded_shlib(text, &scan, &assigns, &mut sink);
+    unknown_templates(text, &scan, &assigns, &mut sink);
     let easyblock = easyblock_name(text);
     python_user_site(text, easyblock.as_deref(), file_name, &mut sink);
     redefined_params(text, &mut sink);
@@ -1024,15 +1024,38 @@ fn template_vars(
     }
 }
 
-/// EB_SHLIB_HARDCODED: `.so` at the end of a word in a string.
-fn hardcoded_shlib(text: &str, scan: &Scan, sink: &mut Sink<'_>) {
+/// EB_SHLIB_HARDCODED: `.so` at the end of a word in a string, when the
+/// word is a library path (`lib/` or `lib64/` in it) or the string is part of
+/// `sanity_check_paths`. Build-tree names such as `'bin/7z.so'` in
+/// `files_to_copy` are the file's real name and are left alone.
+fn hardcoded_shlib(
+    text: &str,
+    scan: &Scan,
+    assigns: &BTreeMap<String, Vec<(usize, usize)>>,
+    sink: &mut Sink<'_>,
+) {
+    let sanity = assigns
+        .get("sanity_check_paths")
+        .map(Vec::as_slice)
+        .unwrap_or_default();
     for piece in &scan.pieces {
         let body = piece_text(text, piece);
+        let in_sanity = sanity
+            .iter()
+            .any(|&(start, end)| piece.start >= start && piece.end <= end);
         let hit = body.match_indices(".so").any(|(index, _)| {
-            body[index + 3..]
+            let word_end = body[index + 3..]
                 .chars()
                 .next()
-                .is_none_or(|next| next != '.' && next != '_' && !next.is_alphanumeric())
+                .is_none_or(|next| next != '.' && next != '_' && !next.is_alphanumeric());
+            if !word_end {
+                return false;
+            }
+            let word_start = body[..index]
+                .rfind(|c: char| c.is_whitespace() || matches!(c, '\'' | '"' | ','))
+                .map_or(0, |at| at + 1);
+            let word = &body[word_start..index];
+            in_sanity || shared_library_path(word)
         });
         if hit {
             sink.push(
@@ -1045,19 +1068,43 @@ fn hardcoded_shlib(text: &str, scan: &Scan, sink: &mut Sink<'_>) {
     }
 }
 
+/// True for a path whose directory part is a library directory.
+fn shared_library_path(word: &str) -> bool {
+    word.starts_with("lib/")
+        || word.starts_with("lib64/")
+        || word.contains("/lib/")
+        || word.contains("/lib64/")
+}
+
 static TEMPLATE_REF: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"%\((\w+)\)s").expect("template regex"));
 
 /// EB_TEMPLATE_UNKNOWN: `%(x)s` that EasyBuild does not define.
-fn unknown_templates(text: &str, scan: &Scan, sink: &mut Sink<'_>) {
+fn unknown_templates(
+    text: &str,
+    scan: &Scan,
+    assigns: &BTreeMap<String, Vec<(usize, usize)>>,
+    sink: &mut Sink<'_>,
+) {
     let mut known: Vec<&str> = vocab::TEMPLATE_NAMES
         .iter()
         .chain(vocab::TEMPLATE_ALIASES.iter())
+        .chain(vocab::EASYBLOCK_TEMPLATES.iter())
         .copied()
         .collect();
     known.sort_unstable();
     known.dedup();
+    let local_formats = percent_formatted_spans(text, assigns);
     for piece in &scan.pieces {
+        if percent_formatted_literal(text, piece)
+            || local_formats
+                .iter()
+                .any(|&(start, end)| piece.start >= start && piece.end <= end)
+        {
+            // `'%(key)s' % {...}` and `local_x = '%(key)s'` used as
+            // `local_x % {...}`: the keys belong to Python's own formatting.
+            continue;
+        }
         for captures in TEMPLATE_REF.captures_iter(piece_text(text, piece)) {
             let name = &captures[1];
             if known.binary_search(&name).is_ok() {
@@ -1073,6 +1120,33 @@ fn unknown_templates(text: &str, scan: &Scan, sink: &mut Sink<'_>) {
             );
         }
     }
+}
+
+/// True when a plain string literal is the left operand of `%`.
+fn percent_formatted_literal(text: &str, piece: &Piece) -> bool {
+    if piece.kind != PieceKind::Str {
+        return false;
+    }
+    let rest = text[piece.end..].trim_start_matches(['\'', '"']);
+    let rest = rest.trim_start_matches([' ', '\t']);
+    rest.starts_with('%') && !rest.starts_with("%=")
+}
+
+/// Spans of top-level assignments whose name is later used as `NAME % ...`.
+fn percent_formatted_spans(
+    text: &str,
+    assigns: &BTreeMap<String, Vec<(usize, usize)>>,
+) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    for (name, places) in assigns {
+        let Ok(used) = Regex::new(&format!(r"\b{}\s*%[^=]", regex::escape(name))) else {
+            continue;
+        };
+        if used.is_match(text) {
+            spans.extend(places.iter().copied());
+        }
+    }
+    spans
 }
 
 /// `difflib.get_close_matches(word, candidates, n=1, cutoff=0.6)`.
@@ -1311,6 +1385,7 @@ fn ast_rules(text: &str, suite: &[ast::Stmt], file_name: &str, sink: &mut Sink<'
     }
     sanity_paths_shape(&assigns, sink);
     duplicate_dependencies(&assigns, sink);
+    empty_dependency_versions(&assigns, sink);
     checksum_count(&assigns, file_name, sink);
 }
 
@@ -1335,12 +1410,18 @@ impl FormatVisitor<'_> {
                 } else {
                     ""
                 };
-                let guidance = super::review::percent_guidance(&binop.right);
                 let fragment = super::review::source_fragment(self.text, binop.range);
+                let advice = match percent_rewrite(self.text, value, &binop.left, &binop.right) {
+                    Some(rewrite) => format!("`{fragment}` becomes `{rewrite}`"),
+                    None => format!(
+                        "`{fragment}`: {}",
+                        super::review::percent_guidance(&binop.right)
+                    ),
+                };
                 self.found.push((
                     offset,
                     "EB_FMT_PERCENT",
-                    format!("%-formatting of a string literal; use an f-string instead (e.g. f'lib/libfoo.{{SHLIB_EXT}}') and keep %(...)s templates as they are{hint}. `{fragment}`: {guidance}"),
+                    format!("%-formatting of a string literal; use an f-string instead (e.g. f'lib/libfoo.{{SHLIB_EXT}}') and keep %(...)s templates as they are{hint}. {advice}"),
                 ));
             }
             ast::Operator::Add => {
@@ -1567,6 +1648,130 @@ fn duplicate_dependencies(assigns: &HashMap<&str, Vec<&ast::StmtAssign>>, sink: 
     }
 }
 
+/// EB_DEP_EMPTY_VERSION: a (build)dependency tuple whose version is `''`.
+/// EasyBuild cannot resolve it; the version has to be one that exists for the
+/// toolchain generation (look it up in the robot tree).
+fn empty_dependency_versions(assigns: &HashMap<&str, Vec<&ast::StmtAssign>>, sink: &mut Sink<'_>) {
+    for key in ["dependencies", "builddependencies"] {
+        for statement in assigns.get(key).into_iter().flatten() {
+            let ast::Expr::List(list) = statement.value.as_ref() else {
+                continue;
+            };
+            for element in &list.elts {
+                let ast::Expr::Tuple(tuple) = element else {
+                    continue;
+                };
+                let (Some(name), Some(version)) = (tuple.elts.first(), tuple.elts.get(1)) else {
+                    continue;
+                };
+                let ast::Expr::Constant(name) = name else {
+                    continue;
+                };
+                let ast::Constant::Str(name) = &name.value else {
+                    continue;
+                };
+                let ast::Expr::Constant(version) = version else {
+                    continue;
+                };
+                let ast::Constant::Str(version) = &version.value else {
+                    continue;
+                };
+                if version.trim().is_empty() {
+                    sink.push(
+                        u32::from(element.range().start()) as usize,
+                        "EB_DEP_EMPTY_VERSION",
+                        format!("{key} entry for {name} has an empty version; use a version that exists for this toolchain generation (look it up in the robot tree with eb_recipe_check or the easyconfigs repository) instead of '' or a guess"),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The f-string that replaces `'...%s...' % args`, built from the flagged
+/// expression itself: each `%s` takes the source text of its argument and
+/// `%%` becomes `%` (so `%%(version)s` turns back into the template). `None`
+/// when the rewrite is not mechanical (other conversions, a dict or a name
+/// that may hold a tuple of several values, escapes, or quotes that would
+/// clash).
+pub(super) fn percent_rewrite(
+    text: &str,
+    format: &str,
+    left: &ast::Expr,
+    right: &ast::Expr,
+) -> Option<String> {
+    let source = |expr: &ast::Expr| -> Option<String> {
+        let start = u32::from(expr.range().start()) as usize;
+        let end = u32::from(expr.range().end()) as usize;
+        let raw = text.get(start..end)?;
+        (!raw.contains('\n')).then(|| raw.trim().to_string())
+    };
+    let args: Vec<String> = match right {
+        ast::Expr::Tuple(tuple) => tuple.elts.iter().map(source).collect::<Option<_>>()?,
+        ast::Expr::Dict(_) | ast::Expr::List(_) | ast::Expr::Constant(_) => return None,
+        other => vec![source(other)?],
+    };
+    if format.chars().any(|c| c == '\\' || c.is_control()) {
+        return None;
+    }
+    // Keep the quote the literal was written with when it still fits.
+    let written = text
+        .get(u32::from(left.range().start()) as usize..)
+        .and_then(|rest| rest.chars().find(|c| *c == '\'' || *c == '"'))
+        .unwrap_or('\'');
+    let other = if written == '"' { '\'' } else { '"' };
+    let quote = if !format.contains(written) {
+        written
+    } else if !format.contains(other) {
+        other
+    } else {
+        return None;
+    };
+    if args.iter().any(|arg| arg.contains(quote)) {
+        return None;
+    }
+    let mut out = String::from("f");
+    out.push(quote);
+    let mut next = args.iter();
+    let mut chars = format.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '%' => match chars.next() {
+                Some('%') => out.push('%'),
+                Some('s') => {
+                    out.push('{');
+                    out.push_str(next.next()?);
+                    out.push('}');
+                }
+                _ => return None,
+            },
+            '{' => out.push_str("{{"),
+            '}' => out.push_str("}}"),
+            other => out.push(other),
+        }
+    }
+    if next.next().is_some() {
+        return None;
+    }
+    out.push(quote);
+    Some(out)
+}
+
+/// Number of entries an easyconfig list value holds. Each list or tuple
+/// element counts once, whether it is a string, a dict (`{'name': ...}` or
+/// `{'file': 'sha256'}`), a tuple of alternatives, or `None`; `a + b` adds up.
+fn entry_count(value: &ast::Expr) -> usize {
+    match value {
+        ast::Expr::List(list) => list.elts.len(),
+        ast::Expr::Tuple(tuple) => tuple.elts.len(),
+        ast::Expr::BinOp(binop) if matches!(binop.op, ast::Operator::Add) => {
+            entry_count(&binop.left) + entry_count(&binop.right)
+        }
+        ast::Expr::Constant(constant) if matches!(constant.value, ast::Constant::None) => 0,
+        _ => 1,
+    }
+}
+
 /// EB_CHECKSUM_COUNT: port of `EasyBlock.check_checksums_for` (top level only).
 fn checksum_count(
     assigns: &HashMap<&str, Vec<&ast::StmtAssign>>,
@@ -1574,17 +1779,20 @@ fn checksum_count(
     sink: &mut Sink<'_>,
 ) {
     let count = |key: &str| -> usize {
-        match assigns.get(key).and_then(|statements| statements.last()) {
-            None => 0,
-            Some(statement) => match statement.value.as_ref() {
-                ast::Expr::List(list) => list.elts.len(),
-                ast::Expr::Tuple(tuple) => tuple.elts.len(),
-                _ => 1,
-            },
-        }
+        assigns
+            .get(key)
+            .and_then(|statements| statements.last())
+            .map_or(0, |statement| entry_count(&statement.value))
     };
     let sources = count("sources") + count("data_sources");
-    let patches = count("patches");
+    // Easyblock options that add a patch file with its own checksum, such as
+    // the Python easyblock's patch_ctypes_ld_library_path, count as patches.
+    let extra_patches: usize = assigns
+        .keys()
+        .filter(|key| key.starts_with("patch_"))
+        .map(|key| count(key))
+        .sum();
+    let patches = count("patches") + extra_patches;
     let checksums = count("checksums");
     if sources + patches == 0 || checksums == 0 || sources + patches == checksums {
         return;
@@ -1715,6 +1923,135 @@ mod tests {
         assert_eq!(close_match("cuda__cc_cmake", &known), Some("cuda_cc_cmake"));
         assert_eq!(close_match("zzz", &known), None);
         assert!((sequence_ratio("abcd", "bcde") - 0.75).abs() < 1e-9);
+    }
+
+    fn has(findings: &[StyleFinding], code: &str) -> bool {
+        findings.iter().any(|finding| finding.code == code)
+    }
+
+    #[test]
+    fn extension_filter_and_easyblock_templates_are_known() {
+        let text = "exts_filter = (\"python -s -c 'import %(ext_name)s'\", '')\n\
+                    exts_default_options = {'source_tmpl': '%(ext_name)s-%(ext_version)s.tar.gz'}\n\
+                    sources = ['%(namelower)s-linux-%(cudnnarch)s-%(version)s.tar.xz']\n\
+                    runtest = '%(python)s run_test.py %(excluded_tests)s'\n";
+        let findings = lint(text);
+        assert!(!has(&findings, "EB_TEMPLATE_UNKNOWN"), "{findings:?}");
+        // A real typo is still caught, with a suggestion.
+        let typo = lint("configopts = '-DX=%(cuda__cc_cmake)s'\n");
+        assert!(
+            typo.iter()
+                .any(|finding| finding.code == "EB_TEMPLATE_UNKNOWN"
+                    && finding.message.contains("%(cuda_cc_cmake)s")),
+            "{typo:?}"
+        );
+    }
+
+    #[test]
+    fn python_percent_dict_keys_are_not_templates() {
+        let text = "local_sed = r'sed -i \"s/%(l)s_VERSION/x/\" %(f)s && '\n\
+                    preconfigopts = local_sed % {'l': 'LIBXML2', 'f': 'CMakeLists.txt'}\n\
+                    buildopts = '%(cc)s -O2' % {'cc': 'gcc'}\n";
+        let findings = lint(text);
+        assert!(!has(&findings, "EB_TEMPLATE_UNKNOWN"), "{findings:?}");
+    }
+
+    #[test]
+    fn checksum_count_includes_easyblock_patch_options_and_dict_entries() {
+        let python = "sources = [SOURCE_TGZ]\n\
+                      patch_ctypes_ld_library_path = 'Python-3.11.5-custom-ctypes.patch'\n\
+                      checksums = [\n    {'Python-3.10.8.tgz': 'aa'},\n    {'Python-3.11.5-custom-ctypes.patch': 'bb'},\n]\n";
+        assert!(
+            !has(&lint(python), "EB_CHECKSUM_COUNT"),
+            "{:?}",
+            lint(python)
+        );
+        let mixed = "sources = [SOURCE_TAR_GZ] + [{'filename': 'extra.tar.gz', 'extract_cmd': 'tar xf %s'}]\n\
+                     patches = [('fix.patch', 1), {'name': 'other.patch', 'alt_location': 'x'}]\n\
+                     checksums = ['a', 'b', 'c', ('d', 'e')]\n";
+        assert!(!has(&lint(mixed), "EB_CHECKSUM_COUNT"), "{:?}", lint(mixed));
+        let short = "sources = [SOURCE_TGZ]\npatches = ['fix.patch']\nchecksums = ['a']\n";
+        assert!(has(&lint(short), "EB_CHECKSUM_COUNT"));
+    }
+
+    #[test]
+    fn hardcoded_so_only_for_library_paths_and_sanity_checks() {
+        let build_tree = "files_to_copy = [(['bin/7z', 'bin/7z.so', 'bin/Codecs'], 'libexec')]\n";
+        assert!(
+            !has(&lint(build_tree), "EB_SHLIB_HARDCODED"),
+            "{:?}",
+            lint(build_tree)
+        );
+        let lib_path = "configopts = '-DX_LIBRARIES=$EBROOTX/lib64/libx.so'\n";
+        assert!(has(&lint(lib_path), "EB_SHLIB_HARDCODED"));
+        let in_lib = "postinstallcmds = ['ln -s libfoo.so.1 %(installdir)s/lib/libfoo.so']\n";
+        assert!(has(&lint(in_lib), "EB_SHLIB_HARDCODED"));
+        let sanity = "sanity_check_paths = {\n    'files': ['bin/7z.so'],\n    'dirs': [],\n}\n";
+        assert!(
+            has(&lint(sanity), "EB_SHLIB_HARDCODED"),
+            "{:?}",
+            lint(sanity)
+        );
+        let versioned = "files_to_copy = ['lib/libfoo.so.1']\n";
+        assert!(!has(&lint(versioned), "EB_SHLIB_HARDCODED"));
+    }
+
+    #[test]
+    fn percent_suggestion_is_built_from_the_flagged_expression() {
+        let text = "local_makefile = 'makefile.linux_amd64'\n\
+                    prebuildopts = \"cp %s makefile.linux &&\" % local_makefile\n\
+                    files = ['libexec/7z.%s' % SHLIB_EXT]\n\
+                    sources = ['BEAST.v%%(version)s.Linux.%s.tgz' % local_archs[ARCH]]\n\
+                    versionsuffix = '-%s%s' % (local_a, local_b)\n";
+        let findings = lint(text);
+        let message = |line: usize| {
+            findings
+                .iter()
+                .find(|finding| finding.line == line && finding.code == "EB_FMT_PERCENT")
+                .unwrap_or_else(|| panic!("no EB_FMT_PERCENT on {line}: {findings:?}"))
+                .message
+                .clone()
+        };
+        let prebuild = message(2);
+        assert!(
+            prebuild.contains("becomes `f\"cp {local_makefile} makefile.linux &&\"`"),
+            "{prebuild}"
+        );
+        assert!(!prebuild.contains("7z"), "{prebuild}");
+        assert!(message(3).contains("becomes `f'libexec/7z.{SHLIB_EXT}'`"));
+        assert!(
+            message(4).contains("becomes `f'BEAST.v%(version)s.Linux.{local_archs[ARCH]}.tgz'`")
+        );
+        assert!(message(5).contains("becomes `f'-{local_a}{local_b}'`"));
+    }
+
+    #[test]
+    fn empty_dependency_version_is_flagged() {
+        let text = "builddependencies = [\n    ('binutils', '2.42'),\n    ('Cython', ''),\n]\n";
+        let findings = lint(text);
+        let hits: Vec<_> = findings
+            .iter()
+            .filter(|finding| finding.code == "EB_DEP_EMPTY_VERSION")
+            .collect();
+        assert_eq!(hits.len(), 1, "{findings:?}");
+        assert_eq!(hits[0].line, 3);
+        assert_eq!(hits[0].severity, super::super::Severity::Warning);
+        assert!(hits[0].message.contains("Cython"));
+    }
+
+    #[test]
+    fn formatting_findings_keep_a_file_from_being_clean() {
+        let leftover = lint("files = ['libexec/7z.%s' % SHLIB_EXT]\n");
+        assert!(super::super::findings_error_free(&leftover));
+        assert!(!super::super::findings_clean(&leftover), "{leftover:?}");
+        let other_warning = lint("files_to_copy = ['lib/libfoo.so']\n");
+        assert!(has(&other_warning, "EB_SHLIB_HARDCODED"));
+        assert!(
+            super::super::findings_clean(&other_warning),
+            "{other_warning:?}"
+        );
+        let fixed = lint("files = [f'libexec/7z.{SHLIB_EXT}']\n");
+        assert!(super::super::findings_clean(&fixed), "{fixed:?}");
     }
 
     #[test]

@@ -39,14 +39,14 @@ rules that `src/eb_style_rules.rs` ports. Those scripts are not shipped here.
 | EB_FSTRING_QUOTE_REUSE | error | nested string in an f-string `{}` reusing the outer quote (Python >= 3.12 only) | other quote char | lint_fstring_quote_reuse |
 | EB_FMT_TEMPLATE_VAR | warning | f-string computing a value a template provides: `{name.lower()}` -> %(namelower)s, `{version.split(...)}` / `{version[...]}` -> %(version_major)s etc.; `{name}`/`{version}`/`{versionsuffix}` inside exts_list/components (parent's value, templates resolve per extension) | plain top-level `{name}`/`{version}` (merged precedent tolerates it), locals, SHLIB_EXT | lint_fstring_template |
 | EB_FMT_TEMPLATE_REMOVED | warning, diff mode | template present in the base file replaced by a Python expression (`{name}` for %(name)s, ...) | new lines without a template in base | lint_template_removed |
-| EB_SHLIB_HARDCODED | warning | `.so` at the end of a word in a string | `.so.1`, `.sock`, `{SHLIB_EXT}` | lint_shlib_hardcoded |
+| EB_SHLIB_HARDCODED | warning | `.so` at the end of a word in a library path (`lib/`, `lib64/`) or in sanity_check_paths | `.so.1`, `.sock`, `{SHLIB_EXT}`, build-tree names such as `'bin/7z.so'` in files_to_copy | lint_shlib_hardcoded |
 | EB_PY_NO_USER_SITE | error (test suite) | exact port of test_pr_python_packages regexes; skipped for PythonPackage/PythonBundle/CargoPython* | `python -s -c`, `python -E -s -m` | lint_python_s |
-| EB_TEMPLATE_UNKNOWN | error | `%(x)s` not in `eb --avail-easyconfig-templates` + aliases, with a difflib suggestion | `%(arch)s`, aliases like `%(build_dir)s` | lint_template_unknown |
+| EB_TEMPLATE_UNKNOWN | error | `%(x)s` not in `eb --avail-easyconfig-templates` + aliases, with a difflib suggestion | `%(arch)s`, aliases like `%(build_dir)s`, extension-filter templates (`%(ext_name)s`, `%(ext_version)s`, `%(src)s`), easyblock-added templates (`%(cudnnarch)s`, `%(python)s`, ...), keys of a Python `'...' % {...}` | lint_template_unknown |
 | EB_SANITY_PATHS_SHAPE | error (test suite) | evaluated sanity_check_paths not exactly {files, dirs}, both lists, one non-empty | comprehensions/concatenation that evaluate correctly | lint_sanity_paths_shape (synthetic) |
 | EB_REDEFINED_PARAM | error (test suite) | `^(\w+)\s*=` seen twice (reported on the second) | - | lint_redefined_param (synthetic) |
 | EB_LOCAL_VAR_NAMING | error (test suite) | top-level name that is not a generic parameter, not an extra option of the easyblock, not `local_*`/`_*`/one letter | easyblock extra options (files_to_copy, test_cmd, ...); skip if the easyblock is unknown | lint_local_var_naming (synthetic) |
 | EB_DEP_DUPLICATE | warning | identical tuple twice in (build)dependencies | - | lint_dep_duplicate |
-| EB_CHECKSUM_COUNT | error (check-contrib) | sources+data_sources+patches != checksums (top level), framework message | no checksums at all (not this rule), dict-per-file form with the right count | lint_checksum_count |
+| EB_CHECKSUM_COUNT | error (check-contrib) | sources+data_sources+patches (+ easyblock `patch_*` options such as patch_ctypes_ld_library_path) != checksums (top level), framework message | no checksums at all (not this rule), dict-per-file form with the right count | lint_checksum_count |
 
 ## Templates vs f-strings: the line the precedent draws
 

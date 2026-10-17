@@ -64,13 +64,34 @@ pub fn severity_for(code: &str) -> Severity {
         | "EB_FMT_TEMPLATE_VAR"
         | "EB_FMT_TEMPLATE_REMOVED"
         | "EB_SHLIB_HARDCODED"
-        | "EB_DEP_DUPLICATE" => Severity::Warning,
+        | "EB_DEP_DUPLICATE"
+        | "EB_DEP_EMPTY_VERSION" => Severity::Warning,
         _ => Severity::Error,
     }
 }
 
-/// True when no finding is an error.
+/// True for the string-formatting family (`EB_FMT_*`: `'%s' % x`,
+/// `'...' + SHLIB_EXT`, missing `f`, derived or removed templates). These are
+/// what style reviews ask for, so a leftover one means the fix is not done
+/// even though CI would not fail on it.
+pub fn is_formatting_code(code: &str) -> bool {
+    code.starts_with("EB_FMT_")
+}
+
+/// True when a finding keeps a recipe from being clean: any error, and any
+/// finding of the formatting family whatever its severity.
+pub fn blocks_clean(finding: &StyleFinding) -> bool {
+    finding.severity == Severity::Error || is_formatting_code(&finding.code)
+}
+
+/// True when no finding blocks clean: no error and no `EB_FMT_*` finding.
+/// Other warnings (`EB_SHLIB_HARDCODED`, `EB_DEP_DUPLICATE`, ...) do not.
 pub fn findings_clean(findings: &[StyleFinding]) -> bool {
+    !findings.iter().any(blocks_clean)
+}
+
+/// True when no finding is an error (what upstream CI would fail on).
+pub fn findings_error_free(findings: &[StyleFinding]) -> bool {
     findings
         .iter()
         .all(|finding| finding.severity != Severity::Error)
