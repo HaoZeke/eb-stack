@@ -3,8 +3,8 @@
 //! Primary sources:
 //!
 //! - easybuild-easyconfigs PR #26435 (CHANGES_REQUESTED): cross-generation
-//!   dependency pins ("mixing two different toolchain generations") and
-//!   staged/incomprehensible shell in preconfigopts/postinstallcmds.
+//!   dependency pins that mix toolchain generations, and staged, uncommented
+//!   shell in preconfigopts/postinstallcmds.
 //! - easybuild-easyconfigs PR #26480 review: hard-coded dependency toolchain
 //!   tuples the robot would resolve itself, test suites that exist but are
 //!   disabled or never run, and thin builds where the tree convention is to
@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 pub enum MaintainerSeverity {
     /// Hard reject: same class as the #26435 cross-generation pin.
     Error,
-    /// Strong reject: same class as the #26435 "incomprehensible" shell pipeline.
+    /// Strong reject: same class as the #26435 unreadable shell pipeline.
     Warning,
 }
 
@@ -170,7 +170,7 @@ pub fn check_cross_generation_pins(recipe: &ResolvedEasyconfig) -> Vec<Maintaine
                         parent.version
                     ),
                     Some(
-                        "This is mixing two different toolchain generations, it shouldn't be done"
+                        "easybuild-easyconfigs #26435 review: one recipe must not mix toolchain generations"
                             .to_string(),
                     ),
                 ));
@@ -195,7 +195,7 @@ pub fn check_cross_generation_pins(recipe: &ResolvedEasyconfig) -> Vec<Maintaine
     out
 }
 
-/// Thresholds for "incomprehensible" shell staging in easyconfig parameters.
+/// Thresholds for unreadable shell staging in easyconfig parameters.
 const PRECONFIG_PLUS_EQ_HARD: usize = 4;
 const PRECONFIG_CHARS_HARD: usize = 400;
 const POSTINSTALL_PATCHELF_FORCE: &str = "patchelf --force-rpath";
@@ -234,12 +234,12 @@ pub fn check_shell_monsters(text: &str) -> Vec<MaintainerFinding> {
     if plus_eq >= PRECONFIG_PLUS_EQ_HARD || preconfig_blob.len() >= PRECONFIG_CHARS_HARD {
         let severity_error = plus_eq >= PRECONFIG_PLUS_EQ_HARD || has_cargo_stage;
         let msg = format!(
-            "preconfigopts/preinstallopts shell pipeline looks staged/incomprehensible ({} `+=` lines, {} chars); move staged builds to companion easyconfigs or a patch/easyblock (easybuild-easyconfigs #26435)",
+            "preconfigopts/preinstallopts shell pipeline looks staged/unreadable ({} `+=` lines, {} chars); move staged builds to companion easyconfigs or a patch/easyblock (easybuild-easyconfigs #26435)",
             plus_eq,
             preconfig_blob.len()
         );
         let evidence = Some(
-            "Sorry, but we can never accept this. It's incomprehensible and uncommented (so we don't even know _why_ you are trying to do this)."
+            "easybuild-easyconfigs #26435 review: long, uncommented staged shell in build options is not accepted; reviewers need to see why each step exists"
                 .into(),
         );
         out.push(if severity_error {
@@ -688,7 +688,7 @@ pub fn check_maintainer_acceptability_text(source_text: &str) -> MaintainerRepor
                         "dependency pin for {pkg} uses high-level generation {gen} while recipe is {recipe_ver}"
                     ),
                     Some(
-                        "This is mixing two different toolchain generations, it shouldn't be done"
+                        "easybuild-easyconfigs #26435 review: one recipe must not mix toolchain generations"
                             .into(),
                     ),
                 ));
