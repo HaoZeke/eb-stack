@@ -206,7 +206,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_recipe_lint",
-            "Report what upstream checks on an easyconfig, without rewriting it: E999 (not valid Python), the easyconfigs CI lint (F541, W605, W291), the eb --check-contrib pycodestyle codes (E501, E2xx), the easyconfigs test-suite checks, and review conventions (EB_FMT_PERCENT for '...' % x, EB_FMT_CONCAT for '...' + SHLIB_EXT, EB_SHLIB_HARDCODED, ...). clean is false while any error or any in-scope EB_FMT_* finding remains; a review fix is not done while clean is false. f'lib/%(name)s.{SHLIB_EXT}' is correct and not flagged. Scope: a finding with info: true is outside the review scope and does not count. review_lines (1-based lines the review comment is anchored to) are always in scope, and EB_SHLIB_HARDCODED on them counts too; with several recipes pass review_lines_by_recipe ({recipe: [lines]}) instead. EB_SHLIB_HARDCODED also counts on every line under review_scope \"file\" and on any line you edited. With base (the file before your edit) lines unchanged from base are out of scope unless review_scope is \"file\"; pass review_scope \"file\" when a PR-level comment asks for a style everywhere (\"use f-strings\"). Without base, only untouched '%%(...)s' % X entries are out of scope. Diff-mode errors (EB_SANITY_ENTRY_REMOVED, EB_EASYBLOCK_CHANGED, EB_FMT_TEMPLATE_REMOVED) compare against base, or else against the file as this server first saw it; rebaseline true resets that only when no diff-mode error is outstanding off the review lines. An error the file already had before your edits, on a line the review does not cover, is reported as info (pre-existing) and does not block clean. EB_DEP_EMPTY_VERSION is an error: look the version up with eb_dep_versions. When eb is on PATH, eb --check-contrib findings are merged.",
+            "Report what upstream checks on an easyconfig, without rewriting it: E999 (not valid Python), the easyconfigs CI lint (F541, W605, W291), the eb --check-contrib pycodestyle codes (E501, E2xx), the easyconfigs test-suite checks, and review conventions (EB_FMT_PERCENT for '...' % x, EB_FMT_CONCAT for '...' + SHLIB_EXT, EB_SHLIB_HARDCODED, ...). clean is false while any error or any in-scope EB_FMT_* finding remains; a review fix is not done while clean is false. f'lib/%(name)s.{SHLIB_EXT}' is correct and not flagged. Scope: a finding with info: true is outside the review scope and does not count. review_lines (1-based lines the review comment is anchored to) are always in scope, and EB_SHLIB_HARDCODED on them counts too; with several recipes pass review_lines_by_recipe ({recipe: [lines]}) instead. EB_SHLIB_HARDCODED also counts on every line under review_scope \"file\" and on any line you edited. With base (the file before your edit) lines unchanged from base are out of scope unless review_scope is \"file\"; pass review_scope \"file\" when a PR-level comment asks for a style everywhere (\"use f-strings\"). Without base, only untouched '%%(...)s' % X entries are out of scope. Diff-mode errors (EB_SANITY_ENTRY_REMOVED, EB_EASYBLOCK_CHANGED, EB_FMT_TEMPLATE_REMOVED) compare against base, or else against the file as this server first saw it; rebaseline true resets that only when no diff-mode error is outstanding off the review lines. An error the file already had before your edits, on a line the review does not cover, is reported as info (pre-existing) and does not block clean. With review lines, EB_DIFF_OUTSIDE_REVIEW warns about a change far from every review line that is not the reviewed change repeated, and EB_DIFF_SOURCES_CHANGED (blocks clean) about sources, crates, patches or checksums changed when no comment is about them. EB_DEP_EMPTY_VERSION is an error: look the version up with eb_dep_versions. When eb is on PATH, eb --check-contrib findings are merged.",
             &[("recipes", "array")],
             &[("base", "string"), ("review_lines", "array_int"), ("review_lines_by_recipe", "object_int_arrays"), ("review_scope", "string"), ("rebaseline", "boolean")],
         ),
@@ -865,6 +865,22 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
         })
         .collect::<Vec<_>>();
     let mut report = lint_recipe_files_scoped(&refs, &scopes).map_err(|error| error.to_string())?;
+    // Diff scope against the file as first seen (never rebaselined): hunks
+    // far from every review line that are not the reviewed change repeated.
+    if !file_scope {
+        for (index, file) in report.files.iter_mut().enumerate() {
+            let Some(path) = paths.get(index) else {
+                continue;
+            };
+            let lines = lines_for(path.as_path());
+            let (Some(kept), Ok(now)) = (pristine(path), std::fs::read_to_string(&file.path))
+            else {
+                continue;
+            };
+            file.findings
+                .extend(crate::eb_style::diff_scope_findings(&kept, &now, &lines));
+        }
+    }
     // Pre-existing errors: the same code on the same line text in the
     // baseline. Out of scope unless a review line or review_scope "file"
     // covers it (proof v6: a pre-existing checksum-count error drove the agent
