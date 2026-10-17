@@ -174,7 +174,14 @@ R5. **Find where each comment applies before editing.** An inline comment
     about `easyblock` or any other line higher up in the hunk. A PR-level
     comment ("use f-strings throughout", "please use templates") applies to
     the whole file: fix every matching line, then lint with
-    `review_scope: "file"`. Pass the anchored line numbers as `review_lines`.
+    `review_scope: "file"`. Pass the anchored line numbers as `review_lines`
+    (several recipes in one call: `review_lines_by_recipe`).
+    Apply every suggestion block, empty ones included, with
+    `eb_recipe_apply_suggestion` on the anchored line range and pass the
+    anchored text as `expect`. That is what GitHub's "Commit suggestion" does:
+    the suggestion replaces exactly the lines the comment is on
+    (<https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/incorporating-feedback-in-your-pull-request>).
+    Do not guess the target from the comment's wording.
 R6. **A question about a removal asks you to keep the item.** "Not sure if we
     want to remove X", "why was X dropped?" or "is X still needed?" on a line
     the PR removed means: put X back, unchanged. Only remove something when
@@ -183,6 +190,59 @@ R7. **Leave working string-building alone.** `configopts += '...'` and
     multi-line strings split across adjacent literals are normal easyconfig
     style. Do not merge, reflow or re-wrap a string the review does not
     mention. Use parentheses, not backslashes, if you must split a line.
+R8. **Near-identical entries: the anchor picks the one.** Components,
+    extensions and dependencies often repeat the same lines (one option set
+    the same way in two components). The comment's anchored line decides
+    which entry the change is for. Edit it with `eb_recipe_edit` `within` (the
+    entry's name, plus `occurrence` when names repeat) and read the result's
+    `lines` and `entries`. Use `replace_all` only when the review asks for
+    every occurrence. A `note` in the result means one call changed several
+    entries; undo the ones the review is not about.
+R9. **Leave unrelated findings alone, and never touch downloads to clear
+    one.** An error the file already had, on a line no comment is about, is
+    reported as `info` (pre-existing) and does not block clean. Never delete,
+    add or re-spell `sources`, `crates`, `patches` or `checksums` to make a
+    lint finding go away. EasyBuild checks every download against
+    `checksums`, and the easyconfigs test suite requires a SHA256 for each one
+    (`test_pr_sha256_checksums`; the Cargo easyblocks add one source per
+    `crates` entry). Change them only when the review asks, and then with
+    `eb --inject-checksums` on the EasyBuild host, never by hand
+    (<https://docs.easybuild.io/writing-easyconfig-files/#common_easyconfig_param_sources_checksums>,
+    <https://docs.easybuild.io/writing-easyconfig-files/#inject_checksums>).
+    `EB_DIFF_SOURCES_CHANGED` blocks clean for this reason, and
+    `EB_DIFF_OUTSIDE_REVIEW` warns about any other change far from every
+    review line that is not the reviewed change repeated.
+R10. **Sanity check commands run from an empty temporary directory, after
+    the module is loaded.** EasyBuild creates a fresh `eb-sanity-check-*`
+    directory for them because "using the build or installation directory
+    can produce false positives and polute them with files"
+    (framework `EasyBlock`, <https://github.com/easybuilders/easybuild-framework/blob/aff7fa74990d255909facb0a6cadeb6adec518b7/easybuild/framework/easyblock.py#L4680-L4682>,
+    introduced in <https://github.com/easybuilders/easybuild-framework/pull/4723>).
+    With `eb --sanity-check-only` or `--module-only` every other step is
+    skipped, so `%(builddir)s` and `%(start_dir)s` do not exist
+    (<https://github.com/easybuilders/easybuild-framework/blob/aff7fa74990d255909facb0a6cadeb6adec518b7/easybuild/framework/easyblock.py#L5040-L5041>),
+    and the sanity check must not change the installation
+    (<https://github.com/easybuilders/easybuild-framework/pull/3761>). A
+    command that needs input files copies them from `%(installdir)s` into a
+    fresh directory and runs there: `cd $(mktemp -d) && cp -r
+    %(installdir)s/share/demo . && cd demo && prog`. Lint reports
+    `EB_SANITY_CMD_BUILDDIR` and `EB_SANITY_CMD_CD_INSTALLDIR`; on a review line
+    or a line you edited they block clean. See also
+    <https://docs.easybuild.io/writing-easyconfig-files/#sanity-check>.
+R11. **Moving something keeps it as it is.** When the review asks to move a
+    command or value to another parameter (for example from `runtest` to
+    `sanity_check_commands`), move it unchanged. Do not swap in a different
+    command.
+R12. **A hedged request is still a request.** A concrete proposal with a
+    hedge ("I think", "probably", "if I am right") asks for the change. Add the
+    real entry with a version from `eb_dep_versions` for the recipe's
+    toolchain; a comment saying the dependency might be needed is not the
+    change. If the tree has no easyconfig of it, say so instead of inventing
+    a version.
+R13. **The final answer describes the diff, nothing else.** Before you
+    answer, call `eb_recipe_diff` and describe its hunks. Do not claim a
+    change that has no hunk (a removal that was already absent, a value you
+    meant to change), and revert any hunk you cannot justify from the review.
 
 ### Contribution workflow (EasyBuild CLI is the interface)
 
@@ -290,9 +350,13 @@ a sanity_check_paths entry lost since the file was first seen
 (EB_DEP_EMPTY_VERSION: look the version up with `eb_dep_versions`, never
 guess). Removing the whole sanity_check_paths is only a warning
 (EB_SANITY_PATHS_REMOVED), because a review may ask for exactly that. The
-other warnings (EB_SHLIB_HARDCODED, EB_DEP_DUPLICATE) need a change when the
-review asks for one. A comment anchored on that line, or a PR-level comment
-about the same thing, counts as asking, even when the line is commented out.
+other warnings (EB_SHLIB_HARDCODED, EB_DEP_DUPLICATE, EB_SANITY_CMD_*) need a
+change when the review asks for one. A comment anchored on that line, or a
+PR-level comment about the same thing, counts as asking, even when the line
+is commented out. EB_SHLIB_HARDCODED and EB_SANITY_CMD_* block clean on a
+review line, on a line you edited, and on every line under
+`review_scope: "file"`. Never pass `rebaseline` to clear an error: it is
+refused while a lost sanity entry or a changed easyblock is outstanding.
 
 ## Review-fix workflow
 
@@ -318,7 +382,8 @@ comments, then change the file. Do not stop at the first diff hunk.
    also merges `eb --check-contrib`. A missing `eb` does not clear local
    findings. On the EasyBuild host, still run `eb --check-contrib` before PR
    text. eb-stack lint is not a substitute for that host check.
-5. Show the diff. Do not declare the review fix done while lint reports
+5. Call `eb_recipe_diff` and write the summary from its hunks (R13). Do not
+   declare the review fix done while lint reports
    `clean: false` for a line you edited or a line in `review_lines`. If an
    error says a sanity entry was lost but the new entry is the same path
    written another way (`{name}` for `%(name)s`), say so in the summary
