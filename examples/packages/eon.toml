@@ -21,7 +21,7 @@ source = "patches/eon/eOn-2.16.0_safemath-eigen5-core-guard.patch"
 sanity_check_commands = [
   "eonclient --help",
   "eonclient --version",
-  "python -c \"import eon; print(getattr(eon, '__version__', 'ok'))\"",
+  "python -s -c \"import eon; print(getattr(eon, '__version__', 'ok'))\"",
 ]
 modextrapaths = { PYTHONPATH = "lib/python%(pyshortver)s/site-packages" }
 
