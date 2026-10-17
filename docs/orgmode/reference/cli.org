@@ -12,7 +12,7 @@ written by package commands are deterministic bundle artifacts.
 | ~package plan~ | Materialize profiles, solve with Resolvo, and emit recipes |
 | ~package bump~ | Retarget an EasyBuild recipe and write the same canonical bundle |
 | ~recipe check~ | Validate metadata and robot dependency availability |
-| ~recipe lint~ / ~recipe format~ | Report reviewer-style findings (E501, W299, F541, UP031, EB101, and ~eb --check-contrib~ when ~eb~ is installed) or mechanically wrap E501 lines |
+| ~recipe lint~ / ~recipe format~ | Report upstream CI, test-suite, and review findings (E999, F541, W605, W291, E501, E2xx, ~EB_*~; ~eb --check-contrib~ merged when ~eb~ is installed) or mechanically wrap E501 lines |
 | ~stack solve~ / ~stack sbom~ | Solve a multi-root stack or emit SBOM from a lock |
 | ~target list~ / ~target doctor~ | Resolve layered target configuration and probe it |
 | ~campaign run~ / ~campaign status~ | Execute or inspect a persisted build campaign |
@@ -156,25 +156,34 @@ eb-stack recipe check \
   [--require-configopt FLAG]... \
   [--metadata-only]
 
-eb-stack recipe lint RECIPE.eb [RECIPE.eb ...]
+eb-stack recipe lint RECIPE.eb [RECIPE.eb ...] [--base BEFORE.eb]
 eb-stack recipe format RECIPE.eb [RECIPE.eb ...] [--dry-run]
 eb-stack recipe format RECIPE.eb --out FORMATTED.eb
 #+end_src
 
-~recipe lint~ prints JSON with ~style~ (each finding carries ~path~, ~line~,
-~column~, ~code~, and ~message~), ~check_contrib~, and
-~maintainer_acceptability~. Style codes are E501 (line longer than 120),
-W299 (trailing whitespace, suppressed inside ~description~ / ~examples~ /
-~citing~, matching EasyBuild), F541 (an f-string with no placeholder), UP031
-(leftover printf-style ~'%s' % X~), and EB101 (an f-string that interpolates
-an EasyBuild template name such as ~name~ or ~version~). When ~eb~ is on
-~PATH~, the command also runs ~eb --check-contrib~ and merges those findings
-(~origin~ is ~eb --check-contrib~). A missing ~eb~ is reported in
-~check_contrib~ and does not by itself fail the command. Local findings still
-do. ~recipe format~ only wraps mechanical E501 lines; the other codes stay in
+~recipe lint~ prints JSON with ~clean~, ~style~ (each finding carries
+~path~, ~line~, ~column~, ~code~, ~severity~, and ~message~), ~check_contrib~,
+and ~maintainer_acceptability~. It does not rely on ~eb --check-contrib~.
+Style codes: E999 (not valid Python; the AST rules are skipped); the
+easyconfigs CI lint F541 (f-string with no placeholder), W605 (invalid escape
+sequence), and W291 (trailing whitespace, including inside ~description~);
+the check-contrib pycodestyle codes E501 (longer than 120) and
+E225/E226/E227/E228/E231; the easyconfigs test-suite checks
+~EB_PY_NO_USER_SITE~, ~EB_SANITY_PATHS_SHAPE~, ~EB_LOCAL_VAR_NAMING~,
+~EB_REDEFINED_PARAM~, and ~EB_CHECKSUM_COUNT~; and the review conventions
+~EB_FMT_MISSING_F~, ~EB_FSTRING_QUOTE_REUSE~, ~EB_TEMPLATE_UNKNOWN~ (errors)
+and ~EB_FMT_PERCENT~, ~EB_FMT_CONCAT~, ~EB_FMT_TEMPLATE_VAR~,
+~EB_SHLIB_HARDCODED~, ~EB_DEP_DUPLICATE~ (warnings). With ~--base~, the file
+before the edit, it also reports ~EB_FMT_TEMPLATE_REMOVED~ where a template
+was replaced by a Python expression. ~f'lib/%(name)s.{SHLIB_EXT}'~ is correct
+and not flagged. When ~eb~ is on ~PATH~, the command also runs
+~eb --check-contrib~ and merges those findings (~origin~ is
+~eb --check-contrib~). A missing ~eb~ is reported in ~check_contrib~ and does
+not by itself fail the command. Error-severity findings do; warnings do not. ~recipe format~ only wraps mechanical E501 lines; the other codes stay in
 ~remaining~.
 
-~recipe check~ prints the structured dependency result. It fails when package
+~recipe check~ refuses a recipe that is not valid Python. It prints the
+structured dependency result and fails when package
 metadata, checksum structure, required configuration flags, or robot
 dependencies are invalid. Missing dependencies remain explicit work; the
 command does not create placeholder recipes.
@@ -316,21 +325,27 @@ The stdio server exposes one tool per CLI workflow, plus four sandboxed file
 tools:
 
 - ~eb_package_inspect~, ~eb_package_plan~, ~eb_package_bump~;
-- ~eb_recipe_read~, ~eb_recipe_list~, ~eb_recipe_edit~, ~eb_recipe_write~;
+- ~eb_recipe_read~, ~eb_recipe_list~, ~eb_recipe_edit~, ~eb_recipe_write~,
+  ~eb_recipe_grep~;
 - ~eb_recipe_check~, ~eb_recipe_lint~, ~eb_recipe_format~;
 - ~eb_stack_solve~, ~eb_stack_sbom~;
 - ~eb_target_list~, ~eb_target_doctor~;
 - ~eb_campaign_run~, ~eb_campaign_status~;
 - ~eb_campaign_finding_claim~, ~eb_campaign_finding_resolve~.
 
-~eb_recipe_read~, ~eb_recipe_list~, ~eb_recipe_edit~, and ~eb_recipe_write~
-resolve every path inside that root. A ~..~ component, an absolute path
+~eb_recipe_read~, ~eb_recipe_list~, ~eb_recipe_edit~, ~eb_recipe_write~, and
+~eb_recipe_grep~ resolve every path inside that root. A ~..~ component, an absolute path
 outside the root, or a symlink whose target leaves the root is rejected and
 the file is not opened. ~eb_recipe_edit~ replaces an exact string. If ~old~
 matches more than once, the file is left unchanged unless ~replace_all~ is
-true. ~eb_recipe_write~ does not create parent directories.
+true. ~eb_recipe_write~ does not create parent directories. ~eb_recipe_grep~
+searches for a literal ~pattern~ (a regular expression when ~regex~ is true)
+under ~path~ (default the root), skips ~.git~, does not follow symlinks, and
+returns at most ~max_matches~ (default and limit 200) matches.
 ~eb_recipe_check~ requires ~easyconfigs~ (~minItems~ 1). An empty list
-returns ~argument easyconfigs requires at least one path~.
+returns ~argument easyconfigs requires at least one path~. A ~.eb~ file there
+stands for the ~easyconfigs~ directory it sits in; any other file is an error
+that asks for a robot directory. A recipe that is not valid Python is refused.
 ~eb_recipe_lint~ takes a ~recipes~ path array and returns ~results~ plus
 ~check_contrib~, using the same findings as ~recipe lint~.
 

@@ -88,16 +88,16 @@ eb-stack still owns planning (`package plan`, `recipe check`, fixtures). The
 
 1. **One toolchain generation per PR.** Never mix generations in a
    dependency list. `('PyTorch', '2.9.1', '', ('foss', '2024a'))` inside a
-   foss-2026.1 recipe drew "This is mixing two different toolchain
-   generations, it shouldn't be done" and closed #26435. If the robot tree
+   foss-2026.1 recipe was rejected as a toolchain-generation mix and closed
+   #26435. If the robot tree
    lacks a dependency on the target generation, port that dependency on its
    own generation-consistent recipe or trim the product until the closure is
    single-generation. Compiler-level libraries sit on the `GCCcore-X.Y.Z`
    matching the target generation; that placement stays single-generation.
 2. **A recipe a maintainer cannot read is a recipe they will not merge.**
    Multi-page `preconfigopts` shell pipelines, staged sub-builds,
-   `postinstallcmds` that rewrite rpaths and pkg-config prefixes: "Sorry, but
-   we can never accept this. It's incomprehensible and uncommented." If the
+   `postinstallcmds` that rewrite rpaths and pkg-config prefixes were rejected
+   outright in #26435 as unreadable and uncommented. If the
    build needs a staged component, make that component its own easyconfig
    (readcon-core became a standalone `cargo cinstall` recipe) instead of
    inlining its build.
@@ -351,8 +351,10 @@ Do not delete comments or invent a manual "actually it works" post.
   format`, `recipe lint`, and `recipe check` must pass against the robot
   tree plus the draft overlay before any PR text is drafted.
 - Then run **`eb --check-contrib`** on the EasyBuild host. `recipe lint`
-  reports E501, W299, F541, UP031, and EB101, and merges `eb --check-contrib`
-  when `eb` is on `PATH`. That merge is not a substitute for running the
+  reports the easyconfigs CI lint (F541, W605, W291), the check-contrib
+  pycodestyle codes (E501, E2xx), the test-suite checks and the review
+  conventions (`EB_*`), with an explicit `clean` flag, without relying on
+  `eb --check-contrib`; it merges `eb --check-contrib` when `eb` is on `PATH`. That merge is not a substitute for running the
   contribution check on the host before PR text. A reviewer fix follows
   `skills/easybuild-dos-donts/SKILL.md`: read the whole file, apply every
   requested change (grep every occurrence; `eb_recipe_edit` will not write a

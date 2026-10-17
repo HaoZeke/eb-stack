@@ -1,6 +1,6 @@
 ---
 name: eb-stack-easybuild-dos-donts
-description: Do/don't list for EasyBuild easyconfigs and contributions. Distilled from rejected PR #26435, accepted rework #26480, QMCPACK #26437, and maintainer review practice. Use before drafting recipes, before opening a PR, and when a bot or agent is about to invent flags to make it build.
+description: Do/don't list for EasyBuild easyconfigs and contributions. Distilled from rejected PR #26435, accepted rework #26480, QMCPACK #26437, merged review threads on string formatting and templates (#24391, #25561, #24213, #23528, #24394, #24056 and others), and maintainer review practice. Use before drafting recipes, before opening a PR, when applying review feedback, and when a bot or agent is about to invent flags to make it build.
 ---
 
 # EasyBuild dos and don'ts
@@ -9,9 +9,11 @@ Mechanical enforcement lives in `eb-stack recipe check` / `recipe lint`.
 Hard errors are the two #26435 classes (`EB_MAINT_CROSS_GEN`,
 `EB_MAINT_SHELL_MONSTER`, `EB_MAINT_PATCHELF_RPATH`); warnings are the
 #26480 review classes (`EB_MAINT_THIN_BUILD`, `EB_MAINT_TESTS_OFF`,
-`EB_MAINT_DEP_TOOLCHAIN_PIN`). `recipe lint` also reports the style
-reviewers apply: E501, W299, F541, UP031, and EB101, and it merges
-`eb --check-contrib` when `eb` is on `PATH`. This skill is the human and
+`EB_MAINT_DEP_TOOLCHAIN_PIN`). `recipe lint` also reports what upstream CI,
+the easyconfigs test suite and reviewers check (E999, F541, W605, W291, E501,
+E2xx, `EB_*`; see `fixtures/LINT_FIXTURES.md`), each finding an error or a
+warning, plus a `clean` flag that is false while any error remains. It does
+not rely on `eb --check-contrib`, but merges it when `eb` is on `PATH`. This skill is the human and
 agent contract around those gates plus contribution practice.
 
 ## DO
@@ -46,9 +48,135 @@ agent contract around those gates plus contribution practice.
    recipes per PR) beats cross-generation pins or multi-page staging; within
    one recipe, fat beats thin.
 
+### Strings, templates and f-strings
+
+An easyconfig is Python, run with `exec` when it is parsed. f-strings and
+constants such as `SHLIB_EXT` are evaluated at parse time. `%(name)s`-style
+templates stay as text and EasyBuild fills them in later, per extension,
+per component, per `multi_deps` iteration, and with build-time values such as
+`%(builddir)s` and `%(installdir)s`. A template and a Python variable are not
+interchangeable, even when they print the same thing today.
+
+S1. **Keep EasyBuild templates.** If a line uses `%(name)s`, `%(version)s`,
+    `%(namelower)s`, `%(version_major_minor)s`, `%(pyshortver)s`, ... leave them.
+    Never rewrite them to `{name}` / `{version}`.
+    Crivella, #24391: "`%(name)s` are EB templates. I do not expect it to ever
+    be different from `name` in the EC but i would keep it as such w.r.t other
+    ECs"
+    (https://github.com/easybuilders/easybuild-easyconfigs/pull/24391#discussion_r2473147924).
+S2. **Use a template when one exists, an f-string only when none does.**
+    smoors, #25561: "we should use the easybuild templates when available, and
+    only fall back to f-strings if not available."
+    (https://github.com/easybuilders/easybuild-easyconfigs/pull/25561#issuecomment-4204999497).
+    `f'{name.lower()}'` becomes `'%(namelower)s'`, and `version.split('.')[0]`
+    becomes `%(version_major)s`. The full list is `eb --avail-easyconfig-templates`.
+    `%(arch)s` is a template; `ARCH` is a constant, so use `{ARCH}` in an
+    f-string, not `%(ARCH)s`.
+S3. **Use f-strings for constants and local variables, not `%` or `+`.**
+    Crivella, #24391: "Would keep consistent usage of f-strings  without
+    re-introducing old % formatting."
+    (https://github.com/easybuilders/easybuild-easyconfigs/pull/24391#discussion_r2472841336).
+    Micket, #23349: "might as well modernize the rest of these string
+    interpolations with f-strings as well, to set a new nicer standard going
+    forward."
+    (https://github.com/easybuilders/easybuild-easyconfigs/pull/23349#pullrequestreview-3012493873).
+    Templates can sit inside the f-string:
+
+    ```python
+    # bad
+    'files': ['lib/libfoo.%s' % SHLIB_EXT, 'lib/%(name)s.' + SHLIB_EXT]
+    # good: only the % / + part changes, the templates stay
+    'files': [f'lib/libfoo.{SHLIB_EXT}', f'lib/%(name)s.{SHLIB_EXT}']
+    ```
+
+    `f'lib/%(name)s.{SHLIB_EXT}'` is already correct: keep it exactly as it
+    is. Do not turn its `%(name)s` into `{name}` and do not drop the `f`.
+
+    When you drop the `%` operator, un-escape doubled templates. With `%`,
+    `'BEAST.v%%(version)s.Linux.%s.tgz' % local_archs[ARCH]` needs `%%`; as an
+    f-string it is `f'BEAST.v%(version)s.Linux.{local_archs[ARCH]}.tgz'`
+    (Crivella, #21194,
+    https://github.com/easybuilders/easybuild-easyconfigs/pull/21194#discussion_r2438870296).
+    This is a reviewer preference, not a CI check. Older merged files and even
+    recent review suggestions still use `'%s' % SHLIB_EXT`, so convert what the
+    review asks for and don't churn untouched lines.
+S4. **Only add `f` when there is a `{...}` to fill in.** `f"--with-x=no"` is
+    pyflakes F541, and easyconfigs CI fails on it (`flake8 --select F,W605,W291`
+    on `*.eb`, enabled in #20173).
+S5. **Put `f` on every piece of a split string.** Adjacent literals are joined
+    by Python, but each piece needs its own `f` prefix. If one is missing, the
+    module ships a literal `{SHLIB_EXT}` and no CI check notices (eb-stack lint
+    reports it as `EB_FMT_MISSING_F`). Merged easyconfigs have needed follow-up
+    "Fix missing f-string" commits for exactly this:
+
+    ```python
+    # bad: second piece has no f
+    f'cp lib/libfoo%(version_major)s.{SHLIB_EXT} '
+    '%(installdir)s/lib/libfoo.{SHLIB_EXT}',
+    # good
+    f'cp lib/libfoo%(version_major)s.{SHLIB_EXT} '
+    f'%(installdir)s/lib/libfoo.{SHLIB_EXT}',
+    ```
+S6. **Don't reuse the outer quote inside `{...}`.** `f'{'_'.join(v)}'` parses
+    only on Python 3.12+. EasyBuild supports older Pythons, and CI lints with
+    Python 3.8 without reporting this. Write `f'{"_".join(v)}'` (smoors, #23528,
+    https://github.com/easybuilders/easybuild-easyconfigs/pull/23528#discussion_r2431197952).
+S7. **Inside `exts_list` and `components`, use `%(name)s` / `%(version)s`.**
+    There they resolve to the extension's or component's own values. A Python
+    `{name}` / `{version}` is always the parent's. For build-time paths, always
+    use `%(builddir)s` / `%(installdir)s`, because no Python variable holds them.
+S8. **Plain `{name}` / `{version}` in a new top-level line is tolerated, not
+    preferred.** Merged easyconfigs contain lines such as
+    `f'{name}-{version}-{local_commit}.tar.xz'`, including fixes by maintainers.
+    Don't introduce it when a template fits, and never swap an existing template
+    for it (S1). Note that EB already re-parses the text for
+    `--try-software-version`, so `{version}` does follow the new version.
+S9. **Use `SHLIB_EXT`, never `.so`,** for shared libraries in sanity checks,
+    commands and paths: `f'lib/%(name)s.{SHLIB_EXT}'` (Crivella, #24056:
+    "Generalize dynamic library extension",
+    https://github.com/easybuilders/easybuild-easyconfigs/pull/24056#discussion_r2444693034).
+S10. **Run `python -s`** in `sanity_check_commands`, `postinstallcmds` and
+     similar for non-Python easyblocks: `"python -s -c 'import itk'"`. The test
+     suite fails new files without it. boegel, #24886: "`-s` option should be
+     used (to ignore user `site-packages`)"
+     (https://github.com/easybuilders/easybuild-easyconfigs/pull/24886#discussion_r2622037471).
+     Thyre, #24394: "This will fail the CI otherwise"
+     (https://github.com/easybuilders/easybuild-easyconfigs/pull/24394#discussion_r2472422040).
+S11. **Name local variables `local_*` or `_*`, not both.** Micket, #24587: "we
+     specifically allow for local variables that either start with _ or with
+     local, so it's a bit cake-on-cake to do both here"
+     (https://github.com/easybuilders/easybuild-easyconfigs/pull/24587#discussion_r2535805898).
+
+### Applying review feedback
+
+R1. **Change what the comment is about and nothing else.** A comment on the
+    `%` around `SHLIB_EXT` is not a request to rewrite the templates on the same
+    line. Lines the lint reports clean that the review does not mention stay
+    as they are.
+R1a. **A reviewer's code suggestion is a style hint, not a literal patch.** It
+    shows the direction (for example "use an f-string here"). Apply it to the
+    lines it is about, in the form the rules above require. A suggestion may
+    use a form a rule forbids (`{name}` for `%(name)s`, `%` formatting, a
+    missing bracket); keep the rule and meet the intent.
+R2. **Check a suggestion before you commit it.** #21194's suggestion was missing
+    a closing `]`, and the author committed it verbatim. Re-run the checks below
+    after every edit.
+R3. **Meeting the reviewer's intent another way is fine.** Explain it in the
+    reply. In #25017 the author made `CARGO_HOME` consistent in the direction
+    opposite to the suggestion, and it was merged.
+R4. **Changing nothing is a valid result.** When lint is clean and no line
+    matches what the reviewer asked for (it was already fixed, or the comment
+    is about another file), leave the file unchanged and say so. Do not edit
+    correct lines to have something to show.
+
 ### Contribution workflow (EasyBuild CLI is the interface)
 
-10. `eb --check-contrib` on every easyconfig before PR text.
+10. `eb --check-contrib` on every easyconfig before PR text. It runs pycodestyle
+    (max 120, only W291/E741 ignored, so E226 and other default-ignored codes
+    count) and the SHA256 checksum checks. It does **not** run pyflakes, so it
+    misses F541. Its W299 also exempts the description, while CI's W291 does
+    not. eb-stack lint covers both without needing `eb`. Run the CI lint too:
+    `flake8 --select F,W605,W291 --filename '*.eb'` (with easyconfigs setup.cfg).
 11. `eb --check-github --github-user=<user>` before long builds / uploads.
 12. `eb --from-pr <N> --robot ... --upload-test-report` for evidence.
 13. `eb -D` / `eb -x` as pre-flight before hours of robot time.
@@ -67,12 +195,11 @@ agent contract around those gates plus contribution practice.
 ### The #26435 class (mechanical hard errors)
 
 1. **Don't mix toolchain generations** in one recipe (e.g. PyTorch on
-   foss-2024a inside foss-2026.1). Reviewer: "This is mixing two different
-   toolchain generations, it shouldn't be done."
+   foss-2024a inside foss-2026.1). The #26435 review rejected exactly this.
 2. **Don't stage companion builds in preconfigopts/postinstallcmds** with
    multi-page `+=` shell, cargo cinstall into builddir stage, or
-   `patchelf --force-rpath`. Reviewer: "Sorry, but we can never accept this.
-   It's incomprehensible and uncommented."
+   `patchelf --force-rpath`. The #26435 review rejected this as unreadable
+   and uncommented.
 3. **Don't invent RPATH with patchelf** to pass sanity; use
    `check_readelf_rpath = False` when cargo-c installs lack RPATH (#26480).
 
@@ -120,11 +247,13 @@ a `{placeholder}`.
 
 | Write this | Instead of | Why |
 |---|---|---|
-| `f'libexec/7z.{SHLIB_EXT}'` | `'libexec/7z.%s' % SHLIB_EXT` | `SHLIB_EXT` is a Python constant. Old-style `'%s' % X` is UP031. |
-| `f'cp {local_makefile} makefile.linux &&'` | `"cp %s makefile.linux &&" % local_makefile` | `local_makefile` is a local Python name. |
-| `'export TMPDIR=%(builddir)s/tmp && mkdir -p $TMPDIR && '` | `f'export TMPDIR=%(builddir)s/tmp && mkdir -p $TMPDIR && '` | `%(builddir)s` is not a Python placeholder. The `f` prefix is F541. |
-| `'%(name)s/%(version)s'` | `f'{name}/{version}'` | `{name}` and `{version}` bypass templates (EB101), so `--try-software-version` cannot retarget them. |
-| `f'lib/%(name)s.{SHLIB_EXT}'` | either form alone | Template text stays `%(name)s`. The constant is the only `{placeholder}`. |
+| `f'libexec/foo.{SHLIB_EXT}'` | `'libexec/foo.%s' % SHLIB_EXT` | `SHLIB_EXT` is a Python constant. Old-style `'%s' % X` is EB_FMT_PERCENT. |
+| `f'lib/libfoo.{SHLIB_EXT}'` | `'lib/libfoo.' + SHLIB_EXT` | Concatenating a constant is EB_FMT_CONCAT. |
+| `f'cp {local_file} target &&'` | `"cp %s target &&" % local_file` | `local_file` is a local Python name. |
+| `'cd %(builddir)s/tmp && '` | `f'cd %(builddir)s/tmp && '` | `%(builddir)s` is not a Python placeholder. The `f` prefix is F541. |
+| `'%(name)s/%(version)s'` (kept) | `f'{name}/{version}'` replacing it | Swapping an existing template for a Python value is EB_FMT_TEMPLATE_REMOVED (lint with a base file). Plain new `{name}` at top level is tolerated. |
+| `'%(namelower)s'` | `f'{name.lower()}'` | A template exists for the derived value: EB_FMT_TEMPLATE_VAR. |
+| `f'lib/%(name)s.{SHLIB_EXT}'` | either form alone | Correct as written; keep it. Template text stays `%(name)s`, the constant is the only `{placeholder}`. Lint does not flag it. |
 
 `name.lower()` inside an f-string is `%(namelower)s`. `nameletter.lower()` is
 `%(nameletterlower)s`. A numeric `n % 2` is not formatting. A literal `%s`
@@ -132,7 +261,10 @@ inside a string with no `%` operator (an `extract_cmd` snippet, for example)
 is not formatting either.
 
 `eb --check-contrib` does not run pyflakes, so it will not report F541. eb-stack
-lint does. Clean means no E501, W299, F541, UP031, or EB101.
+lint does. Clean (`"clean": true`) means no error-severity finding. Warnings
+(EB_FMT_PERCENT, EB_FMT_CONCAT, EB_FMT_TEMPLATE_VAR, EB_FMT_TEMPLATE_REMOVED,
+EB_SHLIB_HARDCODED, EB_DEP_DUPLICATE) are reviewer style: fix them on the
+lines the review is about, not across untouched lines.
 
 ## Review-fix workflow
 
@@ -141,24 +273,24 @@ comments, then change the file. Do not stop at the first diff hunk.
 
 1. Read the whole file (`eb_recipe_read`, or the file on disk). Reviewer
    comments name one line; the same pattern is often elsewhere.
-2. Search every occurrence of the requested pattern before editing.
-   `eb_recipe_edit` replaces an exact string. If `old` matches more than once,
+2. Search every occurrence of the requested pattern before editing
+   (`eb_recipe_grep`, or grep on disk). `eb_recipe_edit` replaces an exact string. If `old` matches more than once,
    the tool leaves the file unchanged until `replace_all` is true, or until
    `old` includes enough surrounding text to be unique.
-3. Apply every requested change. On easyconfigs PR #27186 the pre-review
-   `p7zip-17.05-GCCcore-15.2.0.eb` (the proof summary called the version 17.06;
-   the file in the PR is 17.05) had both
-   `"cp %s makefile.linux &&" % local_makefile` and
-   `'libexec/7z.%s' % SHLIB_EXT`. Both become f-strings. On #27187,
-   `libgd-2.3.3` `pretestopts = f'export TMPDIR=%(builddir)s/tmp && ...'`
-   drops the `f` prefix, and `f'lib/%(name)s.{SHLIB_EXT}'` stays as it is.
+3. Apply every requested change, and only those (R1, R1a). If the same
+   pattern the reviewer named appears on several lines, fix each of them. If
+   nothing matches and lint is clean, the result is no change (R4).
 4. Run `eb-stack recipe lint` (MCP `eb_recipe_lint`) and `eb-stack recipe check`
-   (MCP `eb_recipe_check`) with at least one easyconfigs path. Lint must be
-   clean of E501, W299, F541, UP031, and EB101. When `eb` is installed, lint
+   (MCP `eb_recipe_check`) with at least one easyconfigs path (a robot
+   directory; a `.eb` path stands for its easyconfigs directory). Lint must
+   report `clean: true`; pass the pre-edit file as `base` to also catch
+   templates you replaced. A file that is not valid Python is E999 and
+   `recipe check` refuses it. When `eb` is installed, lint
    also merges `eb --check-contrib`. A missing `eb` does not clear local
    findings. On the EasyBuild host, still run `eb --check-contrib` before PR
    text. eb-stack lint is not a substitute for that host check.
-5. Show the diff. Do not declare the review fix done while findings remain.
+5. Show the diff. Do not declare the review fix done while error findings
+   remain.
    Do not comment on the PR. The human owns that surface.
 
 ## Quick pre-PR checklist
@@ -167,6 +299,9 @@ comments, then change the file. Do not stop at the first diff hunk.
 eb-stack recipe lint path/to/*.eb
 eb-stack recipe check --recipe path/to/App.eb --easyconfigs "$ROBOT" --easyconfigs "$OVERLAY"
 eb --check-contrib path/to/*.eb
+flake8 --select F,W605,W291 --filename '*.eb' path/to/   # easyconfigs CI lint (F541, W605, W291)
+grep -nE "python (-c|-m) " path/to/*.eb | grep -v "python -s"   # CI test: needs python -s
+grep -nE "% *SHLIB_EXT|\+ *SHLIB_EXT|\.so['\" ]" path/to/*.eb  # reviewer style: f'...{SHLIB_EXT}'
 eb --check-github --github-user="$GH_USER"
 eb App.eb --robot --dry-run-short
 # after human opens PR:
@@ -181,4 +316,7 @@ eb --from-pr <N> --robot --upload-test-report --github-user="$GH_USER"
 - `skills/eessi-extend/SKILL.md` — EESSI-extend testing and software-layer PRs (separate track)
 - `fixtures/maintainer_reject_26435/` — frozen reject surfaces (hard errors)
 - `fixtures/maintainer_fat_26480/` — frozen fat-build review surfaces (warnings)
+- `fixtures/lint_*/` — one fixture per string/template/CI rule (bad, good,
+  expected.json, README with precedent); `fixtures/LINT_FIXTURES.md` has the
+  rule table, and `tests/lint_fixtures.rs` keeps eb-stack lint in line with it
 - `src/eb_maintainer.rs` — codes `EB_MAINT_*`
