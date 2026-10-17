@@ -1,0 +1,19 @@
+{
+  "rules": [
+    "EB_LOCAL_VAR_NAMING"
+  ],
+  "severity": "error",
+  "enforced_by": [
+    "easyconfigs test suite (local_var_naming_check='error')"
+  ],
+  "base": null,
+  "fixture_kind": "synthetic",
+  "pr": null,
+  "findings": [
+    {
+      "rule": "EB_LOCAL_VAR_NAMING",
+      "line": 34,
+      "message": "'r_srcdir' is not a generic easyconfig parameter; if it is a local variable rename it to 'local_r_srcdir' (unless it is an extra option of the easyblock in use)"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "rules": [
+    "EB_PY_NO_USER_SITE"
+  ],
+  "severity": "error",
+  "enforced_by": [
+    "easyconfigs test suite test_pr_python_packages (new/changed files only)"
+  ],
+  "base": null,
+  "fixture_kind": "real",
+  "pr": "https://github.com/easybuilders/easybuild-easyconfigs/pull/24886",
+  "findings": [
+    {
+      "rule": "EB_PY_NO_USER_SITE",
+      "line": 87,
+      "message": "Python invocation in 'sanity_check_commands = [\"python -c 'import itk'\"]' (line #87) should use the '-s' parameter in bad.eb"
+    }
+  ]
+}

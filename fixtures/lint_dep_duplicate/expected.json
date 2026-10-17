@@ -1,0 +1,19 @@
+{
+  "rules": [
+    "EB_DEP_DUPLICATE"
+  ],
+  "severity": "warning",
+  "enforced_by": [
+    "reviewer"
+  ],
+  "base": null,
+  "fixture_kind": "real",
+  "pr": "https://github.com/easybuilders/easybuild-easyconfigs/pull/24662",
+  "findings": [
+    {
+      "rule": "EB_DEP_DUPLICATE",
+      "line": 30,
+      "message": "duplicate entry ('cairo', '1.18.4') in dependencies (first on line 29)"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "rules": [
+    "EB_SANITY_PATHS_SHAPE"
+  ],
+  "severity": "error",
+  "enforced_by": [
+    "easyconfigs test suite test_sanity_check_paths"
+  ],
+  "base": null,
+  "fixture_kind": "synthetic",
+  "pr": null,
+  "findings": [
+    {
+      "rule": "EB_SANITY_PATHS_SHAPE",
+      "line": 43,
+      "message": "sanity_check_paths must have exactly the keys 'files' and 'dirs', both lists, and at least one of them non-empty"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "rules": [
+    "EB_FMT_MISSING_F"
+  ],
+  "severity": "error",
+  "enforced_by": [
+    "none (reviewer caught it)"
+  ],
+  "base": null,
+  "fixture_kind": "real",
+  "pr": "https://github.com/easybuilders/easybuild-easyconfigs/pull/24213",
+  "findings": [
+    {
+      "rule": "EB_FMT_MISSING_F",
+      "line": 44,
+      "message": "string contains {SHLIB_EXT} but is not an f-string, so it stays literal; add the f prefix"
+    }
+  ]
+}

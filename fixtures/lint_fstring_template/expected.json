@@ -1,0 +1,49 @@
+{
+  "rules": [
+    "EB_FMT_TEMPLATE_VAR"
+  ],
+  "severity": "warning",
+  "enforced_by": [
+    "reviewer style (not CI)"
+  ],
+  "base": null,
+  "fixture_kind": "real",
+  "pr": "https://github.com/easybuilders/easybuild-easyconfigs/pull/25561",
+  "findings": [
+    {
+      "rule": "EB_FMT_TEMPLATE_VAR",
+      "line": 18,
+      "message": "f-string computes `name.lower()`; use the EasyBuild template %(namelower)s instead (templates first, f-strings only for values without a template)"
+    },
+    {
+      "rule": "EB_FMT_TEMPLATE_VAR",
+      "line": 42,
+      "message": "f-string computes `name.lower()`; use the EasyBuild template %(namelower)s instead (templates first, f-strings only for values without a template)"
+    },
+    {
+      "rule": "EB_FMT_TEMPLATE_VAR",
+      "line": 44,
+      "message": "f-string computes `name.lower()`; use the EasyBuild template %(namelower)s instead (templates first, f-strings only for values without a template)"
+    },
+    {
+      "rule": "EB_FMT_TEMPLATE_VAR",
+      "line": 45,
+      "message": "f-string computes `name.lower()`; use the EasyBuild template %(namelower)s instead (templates first, f-strings only for values without a template)"
+    },
+    {
+      "rule": "EB_FMT_TEMPLATE_VAR",
+      "line": 46,
+      "message": "f-string computes `name.lower()`; use the EasyBuild template %(namelower)s instead (templates first, f-strings only for values without a template)"
+    },
+    {
+      "rule": "EB_FMT_TEMPLATE_VAR",
+      "line": 51,
+      "message": "f-string computes `name.lower()`; use the EasyBuild template %(namelower)s instead (templates first, f-strings only for values without a template)"
+    },
+    {
+      "rule": "EB_FMT_TEMPLATE_VAR",
+      "line": 54,
+      "message": "f-string computes `name.lower()`; use the EasyBuild template %(namelower)s instead (templates first, f-strings only for values without a template)"
+    }
+  ]
+}

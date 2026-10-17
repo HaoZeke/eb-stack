@@ -1,0 +1,25 @@
+{
+  "rules": [
+    "W605"
+  ],
+  "severity": "error",
+  "enforced_by": [
+    "easyconfigs CI flake8 (--select W605)",
+    "eb --check-contrib (pycodestyle W605)"
+  ],
+  "base": null,
+  "fixture_kind": "real",
+  "pr": "https://github.com/easybuilders/easybuild-easyconfigs/pull/20800",
+  "findings": [
+    {
+      "rule": "W605",
+      "line": 29,
+      "message": "invalid escape sequence '\\$'"
+    },
+    {
+      "rule": "W605",
+      "line": 30,
+      "message": "invalid escape sequence '\\$'"
+    }
+  ]
+}

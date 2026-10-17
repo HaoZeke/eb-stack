@@ -1,0 +1,19 @@
+{
+  "rules": [
+    "EB_REDEFINED_PARAM"
+  ],
+  "severity": "error",
+  "enforced_by": [
+    "easyconfigs test suite (redefined parameters check)"
+  ],
+  "base": null,
+  "fixture_kind": "synthetic",
+  "pr": null,
+  "findings": [
+    {
+      "rule": "EB_REDEFINED_PARAM",
+      "line": 42,
+      "message": "easyconfig parameter 'start_dir' is defined again (first on line 41); define each parameter once"
+    }
+  ]
+}

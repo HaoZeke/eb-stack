@@ -1,0 +1,19 @@
+{
+  "rules": [
+    "EB_TEMPLATE_UNKNOWN"
+  ],
+  "severity": "error",
+  "enforced_by": [
+    "none before build (EasyBuild fails at template resolution time)"
+  ],
+  "base": null,
+  "fixture_kind": "real",
+  "pr": "https://github.com/easybuilders/easybuild-easyconfigs/pull/24806",
+  "findings": [
+    {
+      "rule": "EB_TEMPLATE_UNKNOWN",
+      "line": 90,
+      "message": "unknown EasyBuild template %(cuda__cc_cmake)s (did you mean %(cuda_cc_cmake)s?)"
+    }
+  ]
+}
