@@ -4,12 +4,13 @@ Frozen surfaces for mechanical maintainer-acceptability checks.
 
 | File | Role |
 |------|------|
-| `eOn-2.16.0-foss-2026.1.eb` | Real rejected PR #26435 head (ocaisa: cross-gen + incomprehensible shell) |
+| `eOn-2.16.0-foss-2026.1.eb` | Real rejected PR #26435 head (review: cross-gen + unreadable staged shell) |
 | `bad_cross_gen.eb` | Minimal cross-generation pin hard error |
 | `bad_shell_monster.eb` | Minimal staged `preconfigopts` / `patchelf` hard warning path |
 | `good_single_gen.eb` | Clean single-generation control |
 
-Reviewer quotes (PR #26435):
+Review findings (PR #26435), as rules:
 
-- "This is mixing two different toolchain generations, it shouldn't be done"
-- "Sorry, but we can never accept this. It's incomprehensible and uncommented"
+- One recipe must not mix toolchain generations.
+- Long, uncommented staged shell in build options is not accepted; move staged
+  builds to their own easyconfig and comment every deviation.
