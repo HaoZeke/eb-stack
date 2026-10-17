@@ -206,9 +206,9 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_recipe_lint",
-            "Report what upstream checks on an easyconfig, without rewriting the file: E999 when it is not valid Python, the easyconfigs CI lint (F541, W605, W291), the pycodestyle codes of eb --check-contrib (E501, E225-E228, E231), the easyconfigs test-suite checks (python -s, sanity_check_paths shape, local_ naming, redefined parameters, checksum count), and review conventions (EB_FMT_PERCENT for '...' % x, EB_FMT_CONCAT for '...' + SHLIB_EXT, EB_FMT_TEMPLATE_VAR, EB_SHLIB_HARDCODED, ...). Each finding has severity error or warning. clean is false while any error or any EB_FMT_* finding (formatting: '%s' % X, '...' + SHLIB_EXT, missing f, derived or removed templates) remains; a review fix is not done while clean is false. error_free reports errors only. An f-string that keeps a template next to a constant, such as f'lib/%(name)s.{SHLIB_EXT}', is correct and is not flagged. Scope: an EB_FMT_* finding on a line outside the review scope is reported with info: true and does not count against clean. Without base, the only out-of-scope lines are untouched '%%(...)s' % X entries. With base (the file before your edit), every line unchanged from base is out of scope. review_lines (1-based line numbers the review comment is about) are always in scope; pass them when the review asks for a change on lines you have not edited yet. Diff-mode errors compare against base, or, when base is not given, against the file as this server first saw it (first read, edit, write, lint or format in this session; rebaseline true resets that to the current file): EB_SANITY_ENTRY_REMOVED, EB_EASYBLOCK_CHANGED, EB_FMT_TEMPLATE_REMOVED, plus the EB_SANITY_PATHS_REMOVED warning. EB_DEP_EMPTY_VERSION is an error: look the version up with eb_dep_versions. When eb is on PATH, also run eb --check-contrib and merge its findings; a missing eb is not itself a failure.",
+            "Report what upstream checks on an easyconfig, without rewriting it: E999 (not valid Python), the easyconfigs CI lint (F541, W605, W291), the eb --check-contrib pycodestyle codes (E501, E2xx), the easyconfigs test-suite checks, and review conventions (EB_FMT_PERCENT for '...' % x, EB_FMT_CONCAT for '...' + SHLIB_EXT, EB_SHLIB_HARDCODED, ...). clean is false while any error or any in-scope EB_FMT_* finding remains; a review fix is not done while clean is false. f'lib/%(name)s.{SHLIB_EXT}' is correct and not flagged. Scope: a finding with info: true is outside the review scope and does not count. review_lines (1-based lines the review comment is anchored to) are always in scope, and EB_SHLIB_HARDCODED on them counts too. With base (the file before your edit) lines unchanged from base are out of scope unless review_scope is \"file\"; pass review_scope \"file\" when a PR-level comment asks for a style everywhere (\"use f-strings\"). Without base, only untouched '%%(...)s' % X entries are out of scope. Diff-mode errors (EB_SANITY_ENTRY_REMOVED, EB_EASYBLOCK_CHANGED, EB_FMT_TEMPLATE_REMOVED) compare against base, or else against the file as this server first saw it; rebaseline true resets that. EB_DEP_EMPTY_VERSION is an error: look the version up with eb_dep_versions. When eb is on PATH, eb --check-contrib findings are merged.",
             &[("recipes", "array")],
-            &[("base", "string"), ("review_lines", "array_int"), ("rebaseline", "boolean")],
+            &[("base", "string"), ("review_lines", "array_int"), ("review_scope", "string"), ("rebaseline", "boolean")],
         ),
         tool_with_optional(
             "eb_dep_versions",
@@ -746,13 +746,18 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let explicit_base = match optional_path(arguments, "base") {
-        Some(base) => Some(
-            std::fs::read_to_string(&base)
-                .map_err(|error| format!("read base {}: {error}", base.display()))?,
-        ),
-        None => None,
-    };
+    // `"base": ""` or `null` means no base (proof v5: "read base : No such file").
+    let explicit_base =
+        match optional_path(arguments, "base").filter(|base| !base.as_os_str().is_empty()) {
+            Some(base) => Some(
+                std::fs::read_to_string(&base)
+                    .map_err(|error| format!("read base {}: {error}", base.display()))?,
+            ),
+            None => None,
+        };
+    // review_scope "file": a PR-level comment asked for the style everywhere,
+    // so lines unchanged from base still count (proof v5, PR 27186).
+    let file_scope = optional_string(arguments, "review_scope").as_deref() == Some("file");
     let mut baselines = Vec::with_capacity(paths.len());
     let scopes = paths
         .iter()
@@ -763,7 +768,7 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
                 remember_first_seen(path);
             }
             let (base, scope_to_base, baseline) = match &explicit_base {
-                Some(text) => (Some(text.clone()), true, "base"),
+                Some(text) => (Some(text.clone()), !file_scope, "base"),
                 None => match first_seen(path) {
                     Some(text) => (Some(text), false, "first seen in this session"),
                     None => (None, false, "none"),
@@ -814,7 +819,7 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
     let mut summary = lint_summary(clean, errors, formatting, other_warnings);
     if info > 0 {
         summary.push_str(&format!(
-            " {info} EB_FMT finding(s) are info (outside the review scope: unchanged from the base, or untouched %%-escaped entries) and do not count; leave them unless the review is about them."
+            " {info} EB_FMT finding(s) are info (outside the review scope: unchanged from the base, or untouched %%-escaped entries) and do not count. Convert them too when the review asks for this change in general (a PR-level comment such as \"use f-strings\") or its comment is anchored on that line: lint again with review_scope \"file\" or with those review_lines."
         ));
     }
     Ok(json!({
