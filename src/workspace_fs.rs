@@ -604,6 +604,10 @@ pub struct WorkspaceLineEdit {
     /// True when `expect` was found at another place than the given lines
     /// (earlier edits moved them).
     pub relocated: bool,
+    /// True when no `expect` was passed and the anchored lines of the file
+    /// as first seen were used as `expect` (the file had changed since).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub expect_from_first_seen: bool,
     /// Byte length after the edit.
     pub bytes: usize,
 }
@@ -710,8 +714,76 @@ pub fn replace_lines_workspace(
         removed,
         added,
         relocated,
+        expect_from_first_seen: false,
         bytes: updated.len(),
     })
+}
+
+/// Lines `start..=end` of `text` joined, when they exist and hold some
+/// content.
+fn anchored_lines(text: &str, start: usize, end: usize) -> Option<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let anchored = lines.get(start.checked_sub(1)?..end)?;
+    anchored
+        .iter()
+        .any(|line| !line.trim().is_empty())
+        .then(|| anchored.join("\n"))
+}
+
+/// [`replace_lines_workspace`] for a review suggestion, with two guards
+/// (proof v7: an empty suggestion applied by line number after an earlier
+/// edit had moved the lines deleted a closing `]`):
+///
+/// - without `expect`, when the file changed since `first_seen` (the file as
+///   the review showed it, whose numbering the suggestion uses), the
+///   anchored lines of `first_seen` are the `expect`, so moved lines are
+///   found where they are now and a stale range writes nothing;
+/// - a write that turns a valid file into invalid Python is undone and
+///   reported as an error.
+pub fn apply_suggestion_workspace(
+    root: &Path,
+    requested: &Path,
+    start: usize,
+    end: usize,
+    replacement: &str,
+    expect: Option<&str>,
+    first_seen: Option<&str>,
+) -> Result<WorkspaceLineEdit, String> {
+    let before = read_workspace(root, requested)?.content;
+    let given = expect.filter(|expect| !expect.trim().is_empty());
+    let derived = match given {
+        Some(_) => None,
+        None => first_seen
+            .filter(|kept| *kept != before)
+            .and_then(|kept| anchored_lines(kept, start, end)),
+    };
+    let mut edit = replace_lines_workspace(
+        root,
+        requested,
+        start,
+        end,
+        replacement,
+        given.or(derived.as_deref()),
+    )
+    .map_err(|error| {
+        if derived.is_some() {
+            format!("{error} (no expect was passed, so lines {start}-{end} of the file as first seen were used: the suggestion's numbering is the review's, not the file's after your edits)")
+        } else {
+            error
+        }
+    })?;
+    edit.expect_from_first_seen = derived.is_some();
+    if crate::eb_style::python_syntax_error(&before).is_none() {
+        let after = read_workspace(root, requested)?.content;
+        if let Some((line, _, message)) = crate::eb_style::python_syntax_error(&after) {
+            write_workspace(root, requested, &before)?;
+            return Err(format!(
+                "not applied: replacing lines {}-{} with the suggestion leaves the file invalid Python (line {line}: {message}), so the file was left as it was. Re-read the file: earlier edits move lines, and a suggestion replaces exactly its anchored lines; pass expect with those lines as the review showed them",
+                edit.replaced_lines.0, edit.replaced_lines.1
+            ));
+        }
+    }
+    Ok(edit)
 }
 
 /// Create or overwrite a UTF-8 file inside `root`.
@@ -1126,5 +1198,42 @@ mod tests {
             "a = 1\nc = 30\nd = 4\n"
         );
         assert!(replace_lines_workspace(root, Path::new("y.eb"), 1, 1, "", Some("zzz")).is_err());
+    }
+
+    #[test]
+    fn suggestion_without_expect_uses_the_first_seen_lines() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let first = "a = [\n    'x',\n    'y',\n]\nb = 1\n";
+        // An earlier edit inserted a line above, so 'y' is now line 4.
+        fs::write(root.join("s.eb"), format!("c = 0\n{first}")).expect("write");
+        let edit = apply_suggestion_workspace(root, Path::new("s.eb"), 3, 3, "", None, Some(first))
+            .expect("apply");
+        assert!(edit.relocated && edit.expect_from_first_seen, "{edit:?}");
+        assert_eq!(
+            fs::read_to_string(root.join("s.eb")).expect("read"),
+            "c = 0\na = [\n    'x',\n]\nb = 1\n"
+        );
+        // Unchanged file: the line numbers are the review's, nothing derived.
+        fs::write(root.join("t.eb"), first).expect("write");
+        let plain =
+            apply_suggestion_workspace(root, Path::new("t.eb"), 5, 5, "b = 2", None, Some(first))
+                .expect("plain");
+        assert!(
+            !plain.expect_from_first_seen && !plain.relocated,
+            "{plain:?}"
+        );
+    }
+
+    #[test]
+    fn suggestion_that_breaks_the_syntax_is_not_written() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let text = "a = [\n    'x',\n]\nb = 1\n";
+        fs::write(root.join("u.eb"), text).expect("write");
+        let error = apply_suggestion_workspace(root, Path::new("u.eb"), 3, 3, "", None, None)
+            .expect_err("closing bracket deleted");
+        assert!(error.contains("invalid Python"), "{error}");
+        assert_eq!(fs::read_to_string(root.join("u.eb")).expect("read"), text);
     }
 }
