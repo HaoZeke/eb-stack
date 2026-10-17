@@ -24,6 +24,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_recipe_list",
         "eb_recipe_edit",
         "eb_recipe_write",
+        "eb_recipe_grep",
         "eb_recipe_check",
         "eb_recipe_lint",
         "eb_recipe_format",
@@ -38,7 +39,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 18, "unexpected MCP tools: {names:?}");
+    assert_eq!(names.len(), 19, "unexpected MCP tools: {names:?}");
 
     let package_bump = response["result"]["tools"]
         .as_array()
@@ -98,6 +99,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         ("eb_recipe_list", vec!["path"]),
         ("eb_recipe_edit", vec!["path", "old", "new"]),
         ("eb_recipe_write", vec!["path", "content"]),
+        ("eb_recipe_grep", vec!["pattern"]),
     ] {
         let tool = response["result"]["tools"]
             .as_array()
@@ -428,6 +430,180 @@ fn mcp_recipe_lint_reports_style_findings() {
         "expected E501 findings: {body}"
     );
     assert!(body.get("check_contrib").is_some(), "{body}");
+    assert_eq!(body["clean"], false, "E501 is an error: {body}");
+    assert_eq!(results[0]["clean"], false, "{body}");
+    assert!(
+        body["summary"].as_str().unwrap_or("").contains("not clean"),
+        "{body}"
+    );
+}
+
+fn call(id: u64, name: &str, arguments: serde_json::Value) -> serde_json::Value {
+    handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/call",
+        "params": {"name": name, "arguments": arguments}
+    }))
+    .expect("tool response")
+}
+
+#[test]
+fn mcp_recipe_lint_reports_syntax_errors_and_a_clean_flag() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let broken = temp.path().join("broken.eb");
+    std::fs::write(
+        &broken,
+        "name = 'x'
+sources = ['f'libexec/7z.{SHLIB_EXT}']
+",
+    )
+    .expect("broken");
+    let response = call(20, "eb_recipe_lint", json!({"recipes": [broken]}));
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let body = &response["result"]["structuredContent"];
+    assert_eq!(body["clean"], false, "{body}");
+    let findings = body["results"][0]["findings"].as_array().expect("findings");
+    assert!(
+        findings.iter().any(|finding| finding["code"] == "E999"),
+        "a file that is not Python must not lint clean: {body}"
+    );
+
+    let good = temp.path().join("good.eb");
+    std::fs::write(
+        &good,
+        "easyblock = 'ConfigureMake'
+name = 'x'
+sanity_check_paths = {
+    'files': [f'lib/%(name)s.{SHLIB_EXT}'],
+    'dirs': [],
+}
+",
+    )
+    .expect("good");
+    // A scalar where an array is expected is accepted.
+    let response = call(21, "eb_recipe_lint", json!({"recipes": good}));
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let body = &response["result"]["structuredContent"];
+    assert_eq!(body["clean"], true, "{body}");
+    assert_eq!(body["errors"], 0, "{body}");
+    assert!(
+        body["summary"]
+            .as_str()
+            .unwrap_or("")
+            .contains("changing nothing is a valid result"),
+        "{body}"
+    );
+
+    let concat = temp.path().join("concat.eb");
+    std::fs::write(
+        &concat,
+        "name = 'x'
+files = ['lib/%(name)s.' + SHLIB_EXT]
+",
+    )
+    .expect("concat");
+    let response = call(22, "eb_recipe_lint", json!({"recipes": [concat]}));
+    let body = &response["result"]["structuredContent"];
+    let findings = body["results"][0]["findings"].as_array().expect("findings");
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding["code"] == "EB_FMT_CONCAT" && finding["severity"] == "warning"),
+        "{body}"
+    );
+}
+
+#[test]
+fn mcp_recipe_lint_base_reports_removed_templates() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let base = temp.path().join("base.eb");
+    let edited = temp.path().join("edited.eb");
+    std::fs::write(
+        &base,
+        "name = 'x'
+files = ['include/%(name)s/%(name)s.h']
+",
+    )
+    .expect("base");
+    std::fs::write(
+        &edited,
+        "name = 'x'
+files = [f'include/{name}/{name}.h']
+",
+    )
+    .expect("edited");
+    let response = call(
+        23,
+        "eb_recipe_lint",
+        json!({"recipes": [edited], "base": base}),
+    );
+    let body = &response["result"]["structuredContent"];
+    let findings = body["results"][0]["findings"].as_array().expect("findings");
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding["code"] == "EB_FMT_TEMPLATE_REMOVED" && finding["line"] == 2),
+        "{body}"
+    );
+}
+
+#[test]
+fn mcp_recipe_check_refuses_unparseable_recipes_and_accepts_an_eb_robot_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let robot = temp.path().join("easybuild/easyconfigs/d/Demo");
+    std::fs::create_dir_all(&robot).expect("robot");
+    let recipe = robot.join("Demo-1.0.eb");
+    std::fs::write(
+        &recipe,
+        "easyblock = 'ConfigureMake'
+name = 'Demo'
+version = '1.0'
+homepage = 'https://example.invalid'
+description = 'demo'
+toolchain = SYSTEM
+moduleclass = 'tools'
+",
+    )
+    .expect("recipe");
+    let response = call(
+        24,
+        "eb_recipe_check",
+        json!({"recipe": recipe, "easyconfigs": [recipe]}),
+    );
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    assert!(!text.contains("Not a directory"), "{response}");
+    assert_eq!(response["result"]["isError"], false, "{response}");
+
+    let broken = robot.join("Broken-1.0.eb");
+    std::fs::write(
+        &broken,
+        "name = 'Broken'
+version = '1.0'
+sources = ['gd-f'{version}'/']
+",
+    )
+    .expect("broken");
+    let response = call(
+        25,
+        "eb_recipe_check",
+        json!({"recipe": broken, "easyconfigs": [temp.path().join("easybuild/easyconfigs")]}),
+    );
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(text.contains("SyntaxError"), "{text}");
+
+    let missing = call(
+        26,
+        "eb_recipe_check",
+        json!({"recipe": recipe, "easyconfigs": [temp.path().join("notes.txt")]}),
+    );
+    assert_eq!(missing["result"]["isError"], true, "{missing}");
 }
 
 #[test]
@@ -553,6 +729,26 @@ fn mcp_recipe_file_tools_stay_inside_the_workspace() {
         .as_str()
         .unwrap_or("");
     assert_eq!(content.matches("f'{SHLIB_EXT}'").count(), 2);
+
+    let grep = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 30,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_recipe_grep",
+            "arguments": {"pattern": "SHLIB_EXT"}
+        }
+    }))
+    .expect("grep");
+    assert_eq!(grep["result"]["isError"], false, "{grep}");
+    let matches = grep["result"]["structuredContent"]["matches"]
+        .as_array()
+        .expect("matches");
+    assert_eq!(matches.len(), 1, "{grep}");
+    assert_eq!(matches[0]["path"], "demo.eb");
+    assert_eq!(matches[0]["line"], 2);
+    let grep_text = grep.to_string();
+    assert!(!grep_text.contains("original-secret"), "{grep_text}");
 
     let escaped = handle_message(&json!({
         "jsonrpc": "2.0",
