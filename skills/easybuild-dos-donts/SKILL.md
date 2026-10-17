@@ -243,6 +243,26 @@ R13. **The final answer describes the diff, nothing else.** Before you
     answer, call `eb_recipe_diff` and describe its hunks. Do not claim a
     change that has no hunk (a removal that was already absent, a value you
     meant to change), and revert any hunk you cannot justify from the review.
+R14. **Answer every review comment.** Each inline comment needs its own
+    change, or a reason in the final answer why none is needed. A question
+    ("should this also set `X=ON`?", "is this flag needed?") that proposes a
+    concrete value asks for it (R12). Pass every comment as `review_items`
+    to `eb_recipe_lint` and `eb_recipe_diff` (`id`, `recipe`, the anchored
+    `line_start`/`line_end` as the review showed them, the `suggestion` block
+    or `null` for prose, `""` for an empty suggestion). `EB_REVIEW_ITEM_OPEN`
+    names a comment with no matching change (`no_hunk`), a suggestion not
+    in the file yet (`suggestion_missing`), or anchored lines an empty
+    suggestion should have deleted (`not_deleted`); it blocks clean. Put an
+    id in `no_change_needed` only when that comment needs no change, and
+    say why in the final answer. Clean lint with an open item is not done.
+R15. **Scope is the review, not the lint report.** Use
+    `review_scope: "file"` only for a PR-level comment about a style
+    everywhere ("use f-strings throughout"); it widens the `EB_FMT_*` scope
+    and nothing else. Errors the file already had on lines no comment is
+    about (`EB_PY_NO_USER_SITE`, `EB_LOCAL_VAR_NAMING`, ...) stay `info`
+    even then: leave those lines alone. A path change the review asked for
+    in `sanity_check_paths` is not a lost entry when the new path is on a
+    review line; keep it.
 
 ### Contribution workflow (EasyBuild CLI is the interface)
 
@@ -342,13 +362,15 @@ EB_FMT_TEMPLATE_VAR, EB_FMT_TEMPLATE_REMOVED): leftover `%` formatting is not
 done on the lines in scope. A finding with `"info": true` is outside the
 scope (an untouched `%%`-escaped entry, or a line unchanged from the `base`
 you passed) and does not count. Pass `review_lines` with the line numbers the
-review is about so those always count. `error_free` reports errors only.
+review is about so those always count, and `review_items` so a comment with
+no matching change keeps clean false (R14). `error_free` reports errors only.
 These are errors: `%%(...)s` inside an f-string (EB_FSTRING_ESCAPED_TEMPLATE),
 a sanity_check_paths entry lost since the file was first seen
 (EB_SANITY_ENTRY_REMOVED), `easyblock` removed or changed
 (EB_EASYBLOCK_CHANGED), and a dependency whose version is `''`, `'0'`, `'x'` or `'TODO'`
 (EB_DEP_EMPTY_VERSION: look the version up with `eb_dep_versions`, never
-guess). Removing the whole sanity_check_paths is only a warning
+guess), and `name = [...],` at top level, whose trailing comma makes the value
+a one-element tuple (EB_PARAM_TUPLE_COMMA). Removing the whole sanity_check_paths is only a warning
 (EB_SANITY_PATHS_REMOVED), because a review may ask for exactly that. The
 other warnings (EB_SHLIB_HARDCODED, EB_DEP_DUPLICATE, EB_SANITY_CMD_*) need a
 change when the review asks for one. A comment anchored on that line, or a
@@ -382,7 +404,8 @@ comments, then change the file. Do not stop at the first diff hunk.
    also merges `eb --check-contrib`. A missing `eb` does not clear local
    findings. On the EasyBuild host, still run `eb --check-contrib` before PR
    text. eb-stack lint is not a substitute for that host check.
-5. Call `eb_recipe_diff` and write the summary from its hunks (R13). Do not
+5. Call `eb_recipe_diff` with the same `review_items` and write the summary
+   from its hunks (R13). Every review item must be answered (R14). Do not
    declare the review fix done while lint reports
    `clean: false` for a line you edited or a line in `review_lines`. If an
    error says a sanity entry was lost but the new entry is the same path
