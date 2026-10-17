@@ -1,6 +1,6 @@
 ---
 name: eb-stack-easybuild-dos-donts
-description: Do/don't list for EasyBuild easyconfigs and contributions. Distilled from rejected PR #26435, accepted rework #26480, QMCPACK #26437, merged review threads on string formatting and templates (#24391, #25561, #24213, #23528, #24394, #24056 and others), and maintainer review practice. Use before drafting recipes, before opening a PR, when applying review feedback, and when a bot or agent is about to invent flags to make it build.
+description: Do/don't list for EasyBuild easyconfigs and contributions. Distilled from rejected PR #26435, accepted rework #26480, QMCPACK #26437, merged review threads on string formatting and templates (#25561, #23349, #23528, #24056, #24886 and others), and maintainer review practice. Use before drafting recipes, before opening a PR, when applying review feedback, and when a bot or agent is about to invent flags to make it build.
 ---
 
 # EasyBuild dos and don'ts
@@ -60,11 +60,10 @@ interchangeable, even when they print the same thing today.
 
 S1. **Keep EasyBuild templates.** If a line uses `%(name)s`, `%(version)s`,
     `%(namelower)s`, `%(version_major_minor)s`, `%(pyshortver)s`, ... leave them.
-    Never rewrite them to `{name}` / `{version}`.
-    Crivella, #24391: "`%(name)s` are EB templates. I do not expect it to ever
-    be different from `name` in the EC but i would keep it as such w.r.t other
-    ECs"
-    (https://github.com/easybuilders/easybuild-easyconfigs/pull/24391#discussion_r2473147924).
+    Never rewrite them to `{name}` / `{version}`. The templates are what keep
+    the file consistent with the rest of the repository and what
+    `--try-software-version` follows
+    (https://docs.easybuild.io/writing-easyconfig-files/#easyconfig_param_templates).
 S2. **Use a template when one exists, an f-string only when none does.**
     smoors, #25561: "we should use the easybuild templates when available, and
     only fall back to f-strings if not available."
@@ -74,9 +73,6 @@ S2. **Use a template when one exists, an f-string only when none does.**
     `%(arch)s` is a template; `ARCH` is a constant, so use `{ARCH}` in an
     f-string, not `%(ARCH)s`.
 S3. **Use f-strings for constants and local variables, not `%` or `+`.**
-    Crivella, #24391: "Would keep consistent usage of f-strings  without
-    re-introducing old % formatting."
-    (https://github.com/easybuilders/easybuild-easyconfigs/pull/24391#discussion_r2472841336).
     Micket, #23349: "might as well modernize the rest of these string
     interpolations with f-strings as well, to set a new nicer standard going
     forward."
@@ -113,8 +109,7 @@ S4. **Only add `f` when there is a `{...}` to fill in.** `f"--with-x=no"` is
 S5. **Put `f` on every piece of a split string.** Adjacent literals are joined
     by Python, but each piece needs its own `f` prefix. If one is missing, the
     module ships a literal `{SHLIB_EXT}` and no CI check notices (eb-stack lint
-    reports it as `EB_FMT_MISSING_F`). Merged easyconfigs have needed follow-up
-    "Fix missing f-string" commits for exactly this:
+    reports it as `EB_FMT_MISSING_F`):
 
     ```python
     # bad: second piece has no f
@@ -147,8 +142,6 @@ S10. **Run `python -s`** in `sanity_check_commands`, `postinstallcmds` and
      suite fails new files without it. boegel, #24886: "`-s` option should be
      used (to ignore user `site-packages`)"
      (https://github.com/easybuilders/easybuild-easyconfigs/pull/24886#discussion_r2622037471).
-     Thyre, #24394: "This will fail the CI otherwise"
-     (https://github.com/easybuilders/easybuild-easyconfigs/pull/24394#discussion_r2472422040).
 S11. **Name local variables `local_*` or `_*`, not both.** Micket, #24587: "we
      specifically allow for local variables that either start with _ or with
      local, so it's a bit cake-on-cake to do both here"
@@ -169,12 +162,27 @@ R2. **Check a suggestion before you commit it.** #21194's suggestion was missing
     a closing `]`, and the author committed it verbatim. Re-run the checks below
     after every edit.
 R3. **Meeting the reviewer's intent another way is fine.** Explain it in the
-    reply. In #25017 the author made `CARGO_HOME` consistent in the direction
-    opposite to the suggestion, and it was merged.
+    reply.
 R4. **Changing nothing is a valid result.** When lint is clean and no line
     matches what the reviewer asked for (it was already fixed, or the comment
     is about another file), leave the file unchanged and say so. Do not edit
     correct lines to have something to show.
+R5. **Find where each comment applies before editing.** An inline comment
+    applies to the line it is anchored on: the last lines of the diff hunk
+    shown under it (the `+` lines at the bottom, or the line range given). An
+    empty ```` ```suggestion ```` block means "delete these lines". It is not
+    about `easyblock` or any other line higher up in the hunk. A PR-level
+    comment ("use f-strings throughout", "please use templates") applies to
+    the whole file: fix every matching line, then lint with
+    `review_scope: "file"`. Pass the anchored line numbers as `review_lines`.
+R6. **A question about a removal asks you to keep the item.** "Not sure if we
+    want to remove X", "why was X dropped?" or "is X still needed?" on a line
+    the PR removed means: put X back, unchanged. Only remove something when
+    the reviewer says to.
+R7. **Leave working string-building alone.** `configopts += '...'` and
+    multi-line strings split across adjacent literals are normal easyconfig
+    style. Do not merge, reflow or re-wrap a string the review does not
+    mention. Use parentheses, not backslashes, if you must split a line.
 
 ### Contribution workflow (EasyBuild CLI is the interface)
 
@@ -283,7 +291,8 @@ a sanity_check_paths entry lost since the file was first seen
 guess). Removing the whole sanity_check_paths is only a warning
 (EB_SANITY_PATHS_REMOVED), because a review may ask for exactly that. The
 other warnings (EB_SHLIB_HARDCODED, EB_DEP_DUPLICATE) need a change when the
-review asks for one.
+review asks for one. A comment anchored on that line, or a PR-level comment
+about the same thing, counts as asking, even when the line is commented out.
 
 ## Review-fix workflow
 
@@ -309,8 +318,12 @@ comments, then change the file. Do not stop at the first diff hunk.
    also merges `eb --check-contrib`. A missing `eb` does not clear local
    findings. On the EasyBuild host, still run `eb --check-contrib` before PR
    text. eb-stack lint is not a substitute for that host check.
-5. Show the diff. Do not declare the review fix done while error findings
-   remain.
+5. Show the diff. Do not declare the review fix done while lint reports
+   `clean: false` for a line you edited or a line in `review_lines`. If an
+   error says a sanity entry was lost but the new entry is the same path
+   written another way (`{name}` for `%(name)s`), say so in the summary
+   instead of reverting the reviewer's change; never pass the current file
+   as `base` to silence it.
    Do not comment on the PR. The human owns that surface.
 
 ## Quick pre-PR checklist
