@@ -1489,6 +1489,58 @@ fn ast_rules(text: &str, suite: &[ast::Stmt], file_name: &str, sink: &mut Sink<'
     duplicate_dependencies(&assigns, sink);
     empty_dependency_versions(&assigns, sink);
     checksum_count(&assigns, file_name, sink);
+    trailing_comma_tuples(text, suite, sink);
+}
+
+/// EB_PARAM_TUPLE_COMMA: `name = [...],` or `name = {...},` at top level. The
+/// trailing comma makes the value a one-element tuple that holds the list or
+/// dict, which EasyBuild then rejects or misreads (proof v7: an edit that
+/// removed the line after a closing `}` left `sanity_check_paths = {...},`).
+/// A parenthesised tuple is written on purpose and is left alone.
+fn trailing_comma_tuples(text: &str, suite: &[ast::Stmt], sink: &mut Sink<'_>) {
+    for statement in suite {
+        let ast::Stmt::Assign(assign) = statement else {
+            continue;
+        };
+        let ast::Expr::Tuple(tuple) = assign.value.as_ref() else {
+            continue;
+        };
+        let [element] = tuple.elts.as_slice() else {
+            continue;
+        };
+        if !matches!(element, ast::Expr::List(_) | ast::Expr::Dict(_)) {
+            continue;
+        }
+        let tuple_start = u32::from(tuple.range().start()) as usize;
+        let element_start = u32::from(element.range().start()) as usize;
+        let after_equals = text
+            .get(..tuple_start)
+            .is_some_and(|head| head.trim_end().ends_with('='));
+        let parenthesised = text
+            .get(tuple_start..element_start)
+            .is_some_and(|gap| gap.contains('('));
+        if !after_equals || parenthesised {
+            continue;
+        }
+        let name = assign
+            .targets
+            .iter()
+            .find_map(|target| match target {
+                ast::Expr::Name(name) => Some(name.id.as_str()),
+                _ => None,
+            })
+            .unwrap_or("value");
+        let kind = if matches!(element, ast::Expr::List(_)) {
+            "list"
+        } else {
+            "dict"
+        };
+        sink.push(
+            u32::from(assign.range().start()) as usize,
+            "EB_PARAM_TUPLE_COMMA",
+            format!("{name} is a one-element tuple holding a {kind}: drop the comma after its closing bracket (an edit probably left it behind)"),
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2739,5 +2791,25 @@ mod tests {
     fn f541_counts_implicit_concatenation_as_one_string() {
         assert!(lint("x = (f'a{SHLIB_EXT}' 'b')\n").is_empty());
         assert_eq!(codes(&lint("x = (f'a' 'b')\n")), [(1, "F541".to_string())]);
+    }
+
+    #[test]
+    fn a_trailing_comma_after_a_top_level_list_or_dict_is_an_error() {
+        let text = "name = 'x'\nsanity_check_paths = {\n    'files': ['bin/x'],\n    'dirs': [],\n},\nbuilddependencies = [('CMake', '3.29.3')],\n";
+        let found = codes(&lint(text));
+        assert!(
+            found.contains(&(2, "EB_PARAM_TUPLE_COMMA".to_string())),
+            "{found:?}"
+        );
+        assert!(
+            found.contains(&(6, "EB_PARAM_TUPLE_COMMA".to_string())),
+            "{found:?}"
+        );
+        let fine = "name = 'x'\nsanity_check_paths = {\n    'files': ['bin/x'],\n    'dirs': [],\n}\npair = ([1], [2])\nkept = ([1],)\nversions = '1', '2'\n";
+        assert!(
+            !has(&lint(fine), "EB_PARAM_TUPLE_COMMA"),
+            "{:?}",
+            codes(&lint(fine))
+        );
     }
 }
