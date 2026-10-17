@@ -9,8 +9,8 @@ use crate::eb_parse::{
     check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,
 };
 use crate::eb_style::{
-    format_style_file, lint_recipe_files, lint_recipe_files_against, lint_style,
-    python_syntax_error, Severity,
+    format_style, format_style_file, is_formatting_code, lint_recipe_files,
+    lint_recipe_files_against, lint_style, python_syntax_error, Severity,
 };
 use crate::foreign::ForeignFormat;
 use crate::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
@@ -205,15 +205,15 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_recipe_lint",
-            "Report what upstream checks on an easyconfig, without rewriting the file: E999 when it is not valid Python, the easyconfigs CI lint (F541, W605, W291), the pycodestyle codes of eb --check-contrib (E501, E225-E228, E231), the easyconfigs test-suite checks (python -s, sanity_check_paths shape, local_ naming, redefined parameters, checksum count), and review conventions (EB_FMT_PERCENT for '...' % x, EB_FMT_CONCAT for '...' + SHLIB_EXT, EB_FMT_TEMPLATE_VAR, EB_SHLIB_HARDCODED, ...). Each finding has severity error or warning. clean is true when no finding is an error; a review fix is not done while clean is false. An f-string that keeps a template next to a constant, such as f'lib/%(name)s.{SHLIB_EXT}', is correct and is not flagged. Pass base (the file before your edit) to also report templates replaced by Python expressions. When eb is on PATH, also run eb --check-contrib and merge its findings; a missing eb is not itself a failure.",
+            "Report what upstream checks on an easyconfig, without rewriting the file: E999 when it is not valid Python, the easyconfigs CI lint (F541, W605, W291), the pycodestyle codes of eb --check-contrib (E501, E225-E228, E231), the easyconfigs test-suite checks (python -s, sanity_check_paths shape, local_ naming, redefined parameters, checksum count), and review conventions (EB_FMT_PERCENT for '...' % x, EB_FMT_CONCAT for '...' + SHLIB_EXT, EB_FMT_TEMPLATE_VAR, EB_SHLIB_HARDCODED, ...). Each finding has severity error or warning. clean is false while any error or any EB_FMT_* finding (formatting: '%s' % X, '...' + SHLIB_EXT, missing f, derived or removed templates) remains; a review fix is not done while clean is false. error_free reports errors only. An f-string that keeps a template next to a constant, such as f'lib/%(name)s.{SHLIB_EXT}', is correct and is not flagged. Pass base (the file before your edit) to also report templates replaced by Python expressions. When eb is on PATH, also run eb --check-contrib and merge its findings; a missing eb is not itself a failure.",
             &[("recipes", "array")],
             &[("base", "string")],
         ),
         tool_with_optional(
             "eb_recipe_format",
-            "Mechanically format EasyBuild E501 findings and report any residual lines.",
+            "Mechanically wrap EasyBuild E501 lines and report any residual lines. Without out, the recipe is rewritten in place. With dry_run true nothing is written and the formatted text is returned. out writes a copy instead: it must be a .eb path inside the workspace whose directory exists; in a review fix, leave out unset so no extra files appear.",
             &[("recipe", "string")],
-            &[("out", "string")],
+            &[("out", "string"), ("dry_run", "boolean")],
         ),
         tool_with_optional(
             "eb_stack_solve",
@@ -675,6 +675,15 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
             .count()
     };
     let (errors, warnings) = (count(Severity::Error), count(Severity::Warning));
+    let all = || report.files.iter().flat_map(|file| file.findings.iter());
+    let formatting = all()
+        .filter(|finding| is_formatting_code(&finding.code))
+        .count();
+    let other_warnings = all()
+        .filter(|finding| {
+            finding.severity == Severity::Warning && !is_formatting_code(&finding.code)
+        })
+        .count();
     let results = report
         .files
         .iter()
@@ -687,31 +696,91 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
         })
         .collect::<Vec<_>>();
     let clean = report.clean();
-    let summary = if clean && warnings == 0 {
-        "clean: no findings. If nothing else matches what the reviewer asked for, changing nothing is a valid result.".to_string()
-    } else if clean {
-        format!("clean: no errors, {warnings} warning(s). Fix warnings on lines the review is about; leave correct untouched lines alone.")
-    } else {
-        format!("not clean: {errors} error(s), {warnings} warning(s). A review fix is not done while errors remain.")
-    };
+    let summary = lint_summary(clean, errors, formatting, other_warnings);
     Ok(json!({
         "clean": clean,
+        "error_free": report.error_free(),
         "errors": errors,
         "warnings": warnings,
+        "formatting": formatting,
         "summary": summary,
         "results": results,
         "check_contrib": report.check_contrib,
     }))
 }
 
+/// The one-line verdict `eb_recipe_lint` returns. `clean` is false while any
+/// error or any `EB_FMT_*` finding remains, so leftover `'%s' % X` formatting
+/// reads as not done.
+pub(crate) fn lint_summary(
+    clean: bool,
+    errors: usize,
+    formatting: usize,
+    other_warnings: usize,
+) -> String {
+    if clean && other_warnings == 0 {
+        return "clean: no findings. If nothing else matches what the reviewer asked for, changing nothing is a valid result.".to_string();
+    }
+    if clean {
+        return format!(
+            "clean: no errors and no EB_FMT findings; {other_warnings} other warning(s) (for example EB_SHLIB_HARDCODED) that need a change only if the review asks for one."
+        );
+    }
+    let mut parts = Vec::new();
+    if errors > 0 {
+        parts.push(format!("{errors} error(s)"));
+    }
+    if formatting > 0 {
+        parts.push(format!(
+            "{formatting} EB_FMT formatting finding(s) (for example '%s' % SHLIB_EXT left over)"
+        ));
+    }
+    if other_warnings > 0 {
+        parts.push(format!("{other_warnings} other warning(s)"));
+    }
+    format!(
+        "not clean: {}. The review fix is not done: fix every error, and in a style or formatting review convert every EB_FMT finding the same way (f-strings for constants and locals, %(...)s templates kept), then lint again.",
+        parts.join(", ")
+    )
+}
+
 fn recipe_format(arguments: &Value) -> Result<Value, String> {
     let recipe = required_path(arguments, "recipe")?;
     let before = std::fs::read_to_string(&recipe).map_err(|error| error.to_string())?;
     let before_findings = lint_style(&before);
-    let result = format_style_file(&recipe, optional_path(arguments, "out").as_deref())
-        .map_err(|error| error.to_string())?;
+    if optional_bool(arguments, "dry_run") {
+        let result = format_style(&before);
+        return Ok(json!({
+            "recipe": recipe,
+            "written": Value::Null,
+            "text": result.text,
+            "before": before_findings,
+            "rewritten": result.lines_rewritten,
+            "remaining": result.remaining
+        }));
+    }
+    let Some(out) = optional_path(arguments, "out") else {
+        let result = format_style_file(&recipe, None).map_err(|error| error.to_string())?;
+        return Ok(json!({
+            "recipe": recipe,
+            "written": recipe,
+            "before": before_findings,
+            "rewritten": result.lines_rewritten,
+            "remaining": result.remaining
+        }));
+    };
+    if out.extension().and_then(|extension| extension.to_str()) != Some("eb") {
+        return Err(format!(
+            "out {} is not a .eb path; omit out to format the recipe in place, or set dry_run to get the text without writing a file",
+            out.display()
+        ));
+    }
+    let result = format_style(&before);
+    let root = configured_workspace_root()?;
+    let written = write_workspace(&root, &out, &result.text)?;
     Ok(json!({
         "recipe": recipe,
+        "written": written.path,
         "before": before_findings,
         "rewritten": result.lines_rewritten,
         "remaining": result.remaining
