@@ -70,7 +70,9 @@ pub fn severity_for(code: &str) -> Severity {
         | "EB_DEP_DUPLICATE"
         | "EB_SANITY_PATHS_REMOVED"
         | "EB_DIFF_OUTSIDE_REVIEW"
-        | "EB_DIFF_SOURCES_CHANGED" => Severity::Warning,
+        | "EB_DIFF_SOURCES_CHANGED"
+        | "EB_SANITY_CMD_BUILDDIR"
+        | "EB_SANITY_CMD_CD_INSTALLDIR" => Severity::Warning,
         _ => Severity::Error,
     }
 }
@@ -83,6 +85,14 @@ pub fn is_formatting_code(code: &str) -> bool {
     code.starts_with("EB_FMT_")
 }
 
+/// Review-convention warnings that block clean when they are on a review
+/// line, under `review_scope: "file"`, or on a line that was edited.
+pub const REVIEW_COUNTED: &[&str] = &[
+    "EB_SHLIB_HARDCODED",
+    "EB_SANITY_CMD_BUILDDIR",
+    "EB_SANITY_CMD_CD_INSTALLDIR",
+];
+
 /// True when a finding keeps a recipe from being clean: any error, and any
 /// finding of the formatting family whatever its severity, unless it is
 /// outside the review scope (`info`). An error is `info` only when the MCP
@@ -92,7 +102,7 @@ pub fn is_formatting_code(code: &str) -> bool {
 pub fn blocks_clean(finding: &StyleFinding) -> bool {
     (finding.severity == Severity::Error && !finding.info)
         || (is_formatting_code(&finding.code) && !finding.info)
-        || (finding.in_review && finding.code == "EB_SHLIB_HARDCODED")
+        || (finding.in_review && REVIEW_COUNTED.contains(&finding.code.as_str()))
         || (finding.code == "EB_DIFF_SOURCES_CHANGED" && !finding.info)
 }
 
