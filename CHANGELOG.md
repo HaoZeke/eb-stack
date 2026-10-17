@@ -30,12 +30,22 @@ All notable changes to this project are documented here.
   `EB_FSTRING_QUOTE_REUSE`, `EB_FMT_TEMPLATE_VAR`, `EB_TEMPLATE_UNKNOWN`,
   `EB_SHLIB_HARDCODED`, `EB_DEP_DUPLICATE`, and `EB_FMT_TEMPLATE_REMOVED`
   with `--base` / `base`). Every finding has a severity (error or warning)
-  and the output has a `clean` flag, false while any error remains; the CLI
-  exits non-zero on errors only. `f'lib/%(name)s.{SHLIB_EXT}'` is correct and
+  and the output has a `clean` flag, false while any error or any `EB_FMT_*`
+  formatting finding remains (`error_free` reports errors only); the CLI
+  exits non-zero on errors only. Each EB_FMT_PERCENT finding shows the
+  f-string built from the flagged expression. `EB_DEP_EMPTY_VERSION` warns on
+  a (build)dependency with version `''`. EB_TEMPLATE_UNKNOWN knows the
+  extension-filter templates (`%(ext_name)s`, `%(ext_version)s`, `%(src)s`)
+  and easyblock-added ones, and skips Python `%`-dict keys; EB_CHECKSUM_COUNT
+  counts easyblock patch options such as `patch_ctypes_ld_library_path`;
+  EB_SHLIB_HARDCODED flags `.so` only in library paths and sanity checks. `f'lib/%(name)s.{SHLIB_EXT}'` is correct and
   is not flagged. When `eb` is on `PATH`, the same command runs
   `eb --check-contrib` and merges its findings. A missing `eb` is not a lint
   failure by itself. `fixtures/lint_*/` holds one bad/good/expected.json
   fixture per rule, enforced by `tests/lint_fixtures.rs`.
+- `eb_recipe_format` rewrites the recipe in place, returns the text with
+  `dry_run`, and writes `out` only as a `.eb` path inside the workspace whose
+  directory exists, so a review fix leaves no stray files.
 - `eb_recipe_grep` searches files inside the workspace root (literal or
   regex) and returns path, line, and text per match.
 - `recipe check` and `eb_recipe_check` fail on a recipe that is not valid

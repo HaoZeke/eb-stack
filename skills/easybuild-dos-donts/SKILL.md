@@ -12,7 +12,8 @@ Hard errors are the two #26435 classes (`EB_MAINT_CROSS_GEN`,
 `EB_MAINT_DEP_TOOLCHAIN_PIN`). `recipe lint` also reports what upstream CI,
 the easyconfigs test suite and reviewers check (E999, F541, W605, W291, E501,
 E2xx, `EB_*`; see `fixtures/LINT_FIXTURES.md`), each finding an error or a
-warning, plus a `clean` flag that is false while any error remains. It does
+warning, plus a `clean` flag that is false while any error or any `EB_FMT_*`
+formatting finding remains. It does
 not rely on `eb --check-contrib`, but merges it when `eb` is on `PATH`. This skill is the human and
 agent contract around those gates plus contribution practice.
 
@@ -97,9 +98,11 @@ S3. **Use f-strings for constants and local variables, not `%` or `+`.**
     f-string it is `f'BEAST.v%(version)s.Linux.{local_archs[ARCH]}.tgz'`
     (Crivella, #21194,
     https://github.com/easybuilders/easybuild-easyconfigs/pull/21194#discussion_r2438870296).
-    This is a reviewer preference, not a CI check. Older merged files and even
-    recent review suggestions still use `'%s' % SHLIB_EXT`, so convert what the
-    review asks for and don't churn untouched lines.
+    This is a reviewer preference, not a CI check, but eb-stack lint counts it:
+    an `EB_FMT_PERCENT` finding keeps `clean` false. When the review asks for
+    f-strings (on one line or in general), convert every `'...' % X` and
+    `'...' + SHLIB_EXT` in the file the same way, not only the line the comment
+    is on. Each finding's message shows the exact replacement.
 S4. **Only add `f` when there is a `{...}` to fill in.** `f"--with-x=no"` is
     pyflakes F541, and easyconfigs CI fails on it (`flake8 --select F,W605,W291`
     on `*.eb`, enabled in #20173).
@@ -261,10 +264,12 @@ inside a string with no `%` operator (an `extract_cmd` snippet, for example)
 is not formatting either.
 
 `eb --check-contrib` does not run pyflakes, so it will not report F541. eb-stack
-lint does. Clean (`"clean": true`) means no error-severity finding. Warnings
-(EB_FMT_PERCENT, EB_FMT_CONCAT, EB_FMT_TEMPLATE_VAR, EB_FMT_TEMPLATE_REMOVED,
-EB_SHLIB_HARDCODED, EB_DEP_DUPLICATE) are reviewer style: fix them on the
-lines the review is about, not across untouched lines.
+lint does. Clean (`"clean": true`) means no error-severity finding and no
+`EB_FMT_*` finding (EB_FMT_PERCENT, EB_FMT_CONCAT, EB_FMT_MISSING_F,
+EB_FMT_TEMPLATE_VAR, EB_FMT_TEMPLATE_REMOVED): leftover `%` formatting is not
+done. `error_free` reports errors only. The other warnings (EB_SHLIB_HARDCODED,
+EB_DEP_DUPLICATE, EB_DEP_EMPTY_VERSION) need a change when the review asks for
+one or the value is wrong; an empty dependency version always is.
 
 ## Review-fix workflow
 

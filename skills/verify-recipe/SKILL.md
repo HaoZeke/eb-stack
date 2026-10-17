@@ -122,7 +122,7 @@ eb-stack recipe check --recipe <recipe.eb> --easyconfigs <robot-tree> [--easycon
 `recipe lint` is the upstream gate, not only E501: E999, the easyconfigs CI
 lint (F541, W605, W291), check-contrib pycodestyle, the test-suite checks,
 and the `EB_*` review conventions. It must report `clean: true` (no error
-findings). EasyBuild values stay `%(name)s`, `%(version)s`, and
+and no `EB_FMT_*` formatting finding). EasyBuild values stay `%(name)s`, `%(version)s`, and
 `%(builddir)s`. An f-string is for a Python constant such as `SHLIB_EXT` or a
 local name, and it always has a placeholder; `f'lib/%(name)s.{SHLIB_EXT}'`
 is correct as written. The table and the
