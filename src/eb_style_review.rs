@@ -36,16 +36,26 @@ pub struct RecipeLintReport {
 }
 
 impl RecipeLintFile {
-    /// True when this file has no error-severity finding.
+    /// True when this file has no error and no `EB_FMT_*` finding.
     pub fn clean(&self) -> bool {
         super::findings_clean(&self.findings)
+    }
+
+    /// True when this file has no error-severity finding.
+    pub fn error_free(&self) -> bool {
+        super::findings_error_free(&self.findings)
     }
 }
 
 impl RecipeLintReport {
-    /// True when no file has an error-severity finding.
+    /// True when no file has an error or an `EB_FMT_*` finding.
     pub fn clean(&self) -> bool {
         self.files.iter().all(RecipeLintFile::clean)
+    }
+
+    /// True when no file has an error-severity finding.
+    pub fn error_free(&self) -> bool {
+        self.files.iter().all(RecipeLintFile::error_free)
     }
 }
 
@@ -167,14 +177,14 @@ pub(super) fn percent_guidance(right: &ast::Expr) -> String {
         .collect::<Vec<_>>();
     if templates.is_empty() && python_names.len() == 1 {
         let name = &python_names[0];
-        format!("use an f-string with a placeholder, for example f'libexec/7z.{{{name}}}'")
+        format!("make the literal an f-string and put {{{name}}} where the %s is")
     } else if python_names.is_empty() && !templates.is_empty() {
         let shown = templates.join(", ");
         format!(
             "write EasyBuild templates such as %(name)s, %(version)s, and %(builddir)s for {shown}. An f-string is for a Python constant such as SHLIB_EXT, and it is not a substitute for those templates"
         )
     } else {
-        "use an f-string for a Python constant or local name (f'libexec/7z.{SHLIB_EXT}') and EasyBuild %(name)s / %(version)s / %(builddir)s templates for values EasyBuild resolves".to_string()
+        "use an f-string for a Python constant or local name (f'lib/libfoo.{SHLIB_EXT}') and EasyBuild %(name)s / %(version)s / %(builddir)s templates for values EasyBuild resolves".to_string()
     }
 }
 
@@ -771,20 +781,44 @@ mixed = f'lib/%(name)s.{SHLIB_EXT}'
         let p7zip_findings = super::super::lint_style(p7zip);
         assert_eq!(codes_on(&p7zip_findings, 26), ["EB_FMT_PERCENT"]);
         assert_eq!(codes_on(&p7zip_findings, 43), ["EB_FMT_PERCENT"]);
-        assert_eq!(codes_on(&p7zip_findings, 39), ["EB_SHLIB_HARDCODED"]);
+        // 'bin/7z.so' in files_to_copy is the build-tree file name, not a
+        // library path, so it is not EB_SHLIB_HARDCODED.
         assert!(
-            p7zip_findings.iter().all(|finding| matches!(
-                finding.code.as_str(),
-                "EB_FMT_PERCENT" | "EB_SHLIB_HARDCODED"
-            )),
+            codes_on(&p7zip_findings, 39).is_empty(),
             "{p7zip_findings:?}"
         );
-        assert!(p7zip_findings
-            .iter()
-            .find(|finding| finding.line == 43)
-            .expect("shlib line")
-            .message
-            .contains("f'libexec/7z.{SHLIB_EXT}'"));
+        assert!(
+            p7zip_findings
+                .iter()
+                .all(|finding| finding.code == "EB_FMT_PERCENT"),
+            "{p7zip_findings:?}"
+        );
+        let message_on = |line: usize| {
+            p7zip_findings
+                .iter()
+                .find(|finding| finding.line == line)
+                .expect("finding")
+                .message
+                .clone()
+        };
+        // Each suggestion is built from its own expression.
+        let prebuild = message_on(26);
+        assert!(
+            prebuild.contains(
+                "becomes `f\"cp {local_makefile} makefile.linux && cp makefile.linux makefile.machine &&\"`"
+            ),
+            "{prebuild}"
+        );
+        assert!(!prebuild.contains("7z."), "{prebuild}");
+        let shlib = message_on(43);
+        assert!(
+            shlib.contains("becomes `f'libexec/7z.{SHLIB_EXT}'`"),
+            "{shlib}"
+        );
+        assert!(!shlib.contains("local_makefile"), "{shlib}");
+        // An EB_FMT finding keeps the file from being clean.
+        assert!(!super::super::findings_clean(&p7zip_findings));
+        assert!(super::super::findings_error_free(&p7zip_findings));
 
         let libgd = include_str!("../fixtures/review_fix/libgd-2.3.3-GCCcore-15.2.0.eb");
         let libgd_findings = super::super::lint_style(libgd);

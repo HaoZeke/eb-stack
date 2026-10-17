@@ -74,10 +74,10 @@ pub use eb_parse::{
     ResolvedDep, ResolvedEasyconfig, ResolvedExt, SkippedEasyconfig, SkippedStatement,
 };
 pub use eb_style::{
-    findings_clean, format_style, format_style_file, lint_recipe_files, lint_recipe_files_against,
-    lint_style, lint_style_with, python_syntax_error, severity_for, CheckContribReport,
-    FormatStyleResult, LintOptions, RecipeLintFile, RecipeLintReport, Severity, StyleError,
-    StyleFinding, EB_MAX_LINE,
+    blocks_clean, findings_clean, findings_error_free, format_style, format_style_file,
+    is_formatting_code, lint_recipe_files, lint_recipe_files_against, lint_style, lint_style_with,
+    python_syntax_error, severity_for, CheckContribReport, FormatStyleResult, LintOptions,
+    RecipeLintFile, RecipeLintReport, Severity, StyleError, StyleFinding, EB_MAX_LINE,
 };
 pub use foreign::{
     detect_foreign_format, parse_foreign_path, parse_foreign_str, ForeignDep, ForeignError,

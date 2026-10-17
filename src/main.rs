@@ -1099,6 +1099,7 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
                     "clean": report.clean(),
+                    "error_free": report.error_free(),
                     "style": style,
                     "check_contrib": report.check_contrib,
                     "maintainer_acceptability": maintainer_all,
