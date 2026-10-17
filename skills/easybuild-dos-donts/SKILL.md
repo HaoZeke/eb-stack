@@ -98,11 +98,15 @@ S3. **Use f-strings for constants and local variables, not `%` or `+`.**
     f-string it is `f'BEAST.v%(version)s.Linux.{local_archs[ARCH]}.tgz'`
     (Crivella, #21194,
     https://github.com/easybuilders/easybuild-easyconfigs/pull/21194#discussion_r2438870296).
-    This is a reviewer preference, not a CI check, but eb-stack lint counts it:
-    an `EB_FMT_PERCENT` finding keeps `clean` false. When the review asks for
-    f-strings (on one line or in general), convert every `'...' % X` and
-    `'...' + SHLIB_EXT` in the file the same way, not only the line the comment
-    is on. Each finding's message shows the exact replacement.
+    This is a reviewer preference, not a CI check, but eb-stack lint counts it
+    on the lines in scope: an in-scope `EB_FMT_PERCENT` finding keeps `clean`
+    false. Convert the lines the review is about (when it asks for f-strings
+    in general, that is every plain `'...' % X` / `'...' + SHLIB_EXT` it
+    covers) and the lines you touch anyway. Leave untouched entries that use
+    `%%(...)s` escapes as they are (lint reports them as `info`); if you do
+    convert one, every `%%(` becomes `%(` and the path must stay the same.
+    Each finding's message shows the exact replacement. Never collapse a
+    sanity entry into another one while converting it.
 S4. **Only add `f` when there is a `{...}` to fill in.** `f"--with-x=no"` is
     pyflakes F541, and easyconfigs CI fails on it (`flake8 --select F,W605,W291`
     on `*.eb`, enabled in #20173).
@@ -267,9 +271,19 @@ is not formatting either.
 lint does. Clean (`"clean": true`) means no error-severity finding and no
 `EB_FMT_*` finding (EB_FMT_PERCENT, EB_FMT_CONCAT, EB_FMT_MISSING_F,
 EB_FMT_TEMPLATE_VAR, EB_FMT_TEMPLATE_REMOVED): leftover `%` formatting is not
-done. `error_free` reports errors only. The other warnings (EB_SHLIB_HARDCODED,
-EB_DEP_DUPLICATE, EB_DEP_EMPTY_VERSION) need a change when the review asks for
-one or the value is wrong; an empty dependency version always is.
+done on the lines in scope. A finding with `"info": true` is outside the
+scope (an untouched `%%`-escaped entry, or a line unchanged from the `base`
+you passed) and does not count. Pass `review_lines` with the line numbers the
+review is about so those always count. `error_free` reports errors only.
+These are errors: `%%(...)s` inside an f-string (EB_FSTRING_ESCAPED_TEMPLATE),
+a sanity_check_paths entry lost since the file was first seen
+(EB_SANITY_ENTRY_REMOVED), `easyblock` removed or changed
+(EB_EASYBLOCK_CHANGED), and a dependency with version `''`
+(EB_DEP_EMPTY_VERSION: look the version up with `eb_dep_versions`, never
+guess). Removing the whole sanity_check_paths is only a warning
+(EB_SANITY_PATHS_REMOVED), because a review may ask for exactly that. The
+other warnings (EB_SHLIB_HARDCODED, EB_DEP_DUPLICATE) need a change when the
+review asks for one.
 
 ## Review-fix workflow
 
@@ -288,8 +302,9 @@ comments, then change the file. Do not stop at the first diff hunk.
 4. Run `eb-stack recipe lint` (MCP `eb_recipe_lint`) and `eb-stack recipe check`
    (MCP `eb_recipe_check`) with at least one easyconfigs path (a robot
    directory; a `.eb` path stands for its easyconfigs directory). Lint must
-   report `clean: true`; pass the pre-edit file as `base` to also catch
-   templates you replaced. A file that is not valid Python is E999 and
+   report `clean: true`. The MCP server compares each file against the
+   version it first saw in the session, so lost sanity entries, a changed
+   easyblock and replaced templates are caught without a `base`. A file that is not valid Python is E999 and
    `recipe check` refuses it. When `eb` is installed, lint
    also merges `eb --check-contrib`. A missing `eb` does not clear local
    findings. On the EasyBuild host, still run `eb --check-contrib` before PR
