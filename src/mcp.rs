@@ -4,13 +4,14 @@ use crate::campaign::{
     claim_finding, resolve_finding, run_campaign, CampaignRequest, CampaignStatus,
     FindingResolution,
 };
+use crate::dep_versions::dep_versions;
 use crate::domain::Toolchain;
 use crate::eb_parse::{
     check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,
 };
 use crate::eb_style::{
-    format_style, format_style_file, is_formatting_code, lint_recipe_files,
-    lint_recipe_files_against, lint_style, python_syntax_error, Severity,
+    format_style, format_style_file, is_formatting_code, lint_recipe_files_scoped, lint_style,
+    python_syntax_error, RecipeScope, Severity,
 };
 use crate::foreign::ForeignFormat;
 use crate::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
@@ -205,9 +206,15 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_recipe_lint",
-            "Report what upstream checks on an easyconfig, without rewriting the file: E999 when it is not valid Python, the easyconfigs CI lint (F541, W605, W291), the pycodestyle codes of eb --check-contrib (E501, E225-E228, E231), the easyconfigs test-suite checks (python -s, sanity_check_paths shape, local_ naming, redefined parameters, checksum count), and review conventions (EB_FMT_PERCENT for '...' % x, EB_FMT_CONCAT for '...' + SHLIB_EXT, EB_FMT_TEMPLATE_VAR, EB_SHLIB_HARDCODED, ...). Each finding has severity error or warning. clean is false while any error or any EB_FMT_* finding (formatting: '%s' % X, '...' + SHLIB_EXT, missing f, derived or removed templates) remains; a review fix is not done while clean is false. error_free reports errors only. An f-string that keeps a template next to a constant, such as f'lib/%(name)s.{SHLIB_EXT}', is correct and is not flagged. Pass base (the file before your edit) to also report templates replaced by Python expressions. When eb is on PATH, also run eb --check-contrib and merge its findings; a missing eb is not itself a failure.",
+            "Report what upstream checks on an easyconfig, without rewriting the file: E999 when it is not valid Python, the easyconfigs CI lint (F541, W605, W291), the pycodestyle codes of eb --check-contrib (E501, E225-E228, E231), the easyconfigs test-suite checks (python -s, sanity_check_paths shape, local_ naming, redefined parameters, checksum count), and review conventions (EB_FMT_PERCENT for '...' % x, EB_FMT_CONCAT for '...' + SHLIB_EXT, EB_FMT_TEMPLATE_VAR, EB_SHLIB_HARDCODED, ...). Each finding has severity error or warning. clean is false while any error or any EB_FMT_* finding (formatting: '%s' % X, '...' + SHLIB_EXT, missing f, derived or removed templates) remains; a review fix is not done while clean is false. error_free reports errors only. An f-string that keeps a template next to a constant, such as f'lib/%(name)s.{SHLIB_EXT}', is correct and is not flagged. Scope: an EB_FMT_* finding on a line outside the review scope is reported with info: true and does not count against clean. Without base, the only out-of-scope lines are untouched '%%(...)s' % X entries. With base (the file before your edit), every line unchanged from base is out of scope. review_lines (1-based line numbers the review comment is about) are always in scope; pass them when the review asks for a change on lines you have not edited yet. Diff-mode errors compare against base, or, when base is not given, against the file as this server first saw it (first read, edit, write, lint or format in this session; rebaseline true resets that to the current file): EB_SANITY_ENTRY_REMOVED, EB_EASYBLOCK_CHANGED, EB_FMT_TEMPLATE_REMOVED, plus the EB_SANITY_PATHS_REMOVED warning. EB_DEP_EMPTY_VERSION is an error: look the version up with eb_dep_versions. When eb is on PATH, also run eb --check-contrib and merge its findings; a missing eb is not itself a failure.",
             &[("recipes", "array")],
-            &[("base", "string")],
+            &[("base", "string"), ("review_lines", "array_int"), ("rebaseline", "boolean")],
+        ),
+        tool_with_optional(
+            "eb_dep_versions",
+            "List the versions of a dependency that have an easyconfig in a local easyconfigs tree, for a toolchain (for example GCCcore-13.3.0, or system) and for other toolchains. easyconfigs are robot directories or .eb files to search (default: the workspace root). Use it instead of guessing a dependency version; if the tree has no easyconfig of it, the result says so, and the version should not be invented.",
+            &[("name", "string")],
+            &[("toolchain", "string"), ("easyconfigs", "array")],
         ),
         tool_with_optional(
             "eb_recipe_format",
@@ -304,6 +311,7 @@ fn tool_with_optional(
                 "array_min1" => {
                     json!({"type": "array", "items": {"type": "string"}, "minItems": 1})
                 }
+                "array_int" => json!({"type": "array", "items": {"type": "integer", "minimum": 1}}),
                 "object" => json!({"type": "object", "additionalProperties": {"type": "string"}}),
                 other => json!({"type": other}),
             };
@@ -333,6 +341,7 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_recipe_write" => recipe_write(arguments),
         "eb_recipe_check" => recipe_check(arguments),
         "eb_recipe_grep" => recipe_grep(arguments),
+        "eb_dep_versions" => dep_versions_tool(arguments),
         "eb_recipe_lint" => recipe_lint(arguments),
         "eb_recipe_format" => recipe_format(arguments),
         "eb_stack_solve" => stack_solve(arguments),
@@ -607,6 +616,17 @@ fn robot_root(path: &Path) -> Result<PathBuf, String> {
     Ok(root.to_path_buf())
 }
 
+fn dep_versions_tool(arguments: &Value) -> Result<Value, String> {
+    let name = required_string(arguments, "name")?;
+    let mut roots = path_array(arguments, "easyconfigs").unwrap_or_default();
+    if roots.is_empty() {
+        roots.push(configured_workspace_root()?);
+    }
+    let toolchain = optional_string(arguments, "toolchain");
+    let found = dep_versions(&roots, &name, toolchain.as_deref())?;
+    serde_json::to_value(found).map_err(|error| error.to_string())
+}
+
 fn recipe_grep(arguments: &Value) -> Result<Value, String> {
     let root = configured_workspace_root()?;
     let path = optional_path(arguments, "path").unwrap_or_else(|| PathBuf::from("."));
@@ -624,9 +644,63 @@ fn recipe_grep(arguments: &Value) -> Result<Value, String> {
     serde_json::to_value(found).map_err(|error| error.to_string())
 }
 
+/// The text of each recipe as this server first saw it, keyed by canonical
+/// path. `None` when the first touch created the file. This is the
+/// pre-edit baseline for diff-mode lint rules when no base is passed.
+static FIRST_SEEN: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, Option<String>>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// `path` as the tools see it: as given when it exists, else under the
+/// workspace root.
+fn resolve_recipe_path(path: &Path) -> PathBuf {
+    if path.is_relative() && !path.exists() {
+        if let Ok(root) = configured_workspace_root() {
+            return root.join(path);
+        }
+    }
+    path.to_path_buf()
+}
+
+fn snapshot_key(path: &Path) -> Option<PathBuf> {
+    let resolved = resolve_recipe_path(path);
+    if let Ok(found) = resolved.canonicalize() {
+        return Some(found);
+    }
+    // Not created yet: key on the canonical directory plus the file name.
+    let parent = resolved.parent()?.canonicalize().ok()?;
+    Some(parent.join(resolved.file_name()?))
+}
+
+/// Record `path`'s current text the first time this server sees it.
+fn remember_first_seen(path: &Path) {
+    let Some(key) = snapshot_key(path) else {
+        return;
+    };
+    let text = std::fs::read_to_string(resolve_recipe_path(path)).ok();
+    if let Ok(mut seen) = FIRST_SEEN.lock() {
+        seen.entry(key).or_insert(text);
+    }
+}
+
+fn first_seen(path: &Path) -> Option<String> {
+    let key = snapshot_key(path)?;
+    FIRST_SEEN.lock().ok()?.get(&key).cloned().flatten()
+}
+
+fn rebaseline(path: &Path) {
+    if let Some(key) = snapshot_key(path) {
+        let text = std::fs::read_to_string(resolve_recipe_path(path)).ok();
+        if let Ok(mut seen) = FIRST_SEEN.lock() {
+            seen.insert(key, text);
+        }
+    }
+}
+
 fn recipe_read(arguments: &Value) -> Result<Value, String> {
     let root = configured_workspace_root()?;
-    let text = read_workspace(&root, &required_path(arguments, "path")?)?;
+    let path = required_path(arguments, "path")?;
+    remember_first_seen(&path);
+    let text = read_workspace(&root, &path)?;
     serde_json::to_value(text).map_err(|error| error.to_string())
 }
 
@@ -638,9 +712,11 @@ fn recipe_list(arguments: &Value) -> Result<Value, String> {
 
 fn recipe_edit(arguments: &Value) -> Result<Value, String> {
     let root = configured_workspace_root()?;
+    let path = required_path(arguments, "path")?;
+    remember_first_seen(&path);
     let edited = edit_workspace(
         &root,
-        &required_path(arguments, "path")?,
+        &path,
         &required_string(arguments, "old")?,
         &required_string(arguments, "new")?,
         optional_bool(arguments, "replace_all"),
@@ -650,22 +726,58 @@ fn recipe_edit(arguments: &Value) -> Result<Value, String> {
 
 fn recipe_write(arguments: &Value) -> Result<Value, String> {
     let root = configured_workspace_root()?;
-    let written = write_workspace(
-        &root,
-        &required_path(arguments, "path")?,
-        &required_string(arguments, "content")?,
-    )?;
+    let path = required_path(arguments, "path")?;
+    remember_first_seen(&path);
+    let written = write_workspace(&root, &path, &required_string(arguments, "content")?)?;
     serde_json::to_value(written).map_err(|error| error.to_string())
 }
 
 fn recipe_lint(arguments: &Value) -> Result<Value, String> {
     let paths = recipe_paths(arguments)?;
     let refs = paths.iter().map(PathBuf::as_path).collect::<Vec<_>>();
-    let report = match optional_path(arguments, "base") {
-        Some(base) => lint_recipe_files_against(&refs, Some(&base)),
-        None => lint_recipe_files(&refs),
-    }
-    .map_err(|error| error.to_string())?;
+    let review_lines = arguments
+        .get("review_lines")
+        .and_then(Value::as_array)
+        .map(|lines| {
+            lines
+                .iter()
+                .filter_map(Value::as_u64)
+                .map(|line| line as usize)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let explicit_base = match optional_path(arguments, "base") {
+        Some(base) => Some(
+            std::fs::read_to_string(&base)
+                .map_err(|error| format!("read base {}: {error}", base.display()))?,
+        ),
+        None => None,
+    };
+    let mut baselines = Vec::with_capacity(paths.len());
+    let scopes = paths
+        .iter()
+        .map(|path| {
+            if optional_bool(arguments, "rebaseline") {
+                rebaseline(path);
+            } else {
+                remember_first_seen(path);
+            }
+            let (base, scope_to_base, baseline) = match &explicit_base {
+                Some(text) => (Some(text.clone()), true, "base"),
+                None => match first_seen(path) {
+                    Some(text) => (Some(text), false, "first seen in this session"),
+                    None => (None, false, "none"),
+                },
+            };
+            baselines.push(baseline);
+            RecipeScope {
+                base,
+                scope_to_base,
+                review_lines: review_lines.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let report = lint_recipe_files_scoped(&refs, &scopes).map_err(|error| error.to_string())?;
     let count = |severity: Severity| {
         report
             .files
@@ -677,8 +789,9 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
     let (errors, warnings) = (count(Severity::Error), count(Severity::Warning));
     let all = || report.files.iter().flat_map(|file| file.findings.iter());
     let formatting = all()
-        .filter(|finding| is_formatting_code(&finding.code))
+        .filter(|finding| is_formatting_code(&finding.code) && !finding.info)
         .count();
+    let info = all().filter(|finding| finding.info).count();
     let other_warnings = all()
         .filter(|finding| {
             finding.severity == Severity::Warning && !is_formatting_code(&finding.code)
@@ -687,17 +800,25 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
     let results = report
         .files
         .iter()
-        .map(|file| {
+        .enumerate()
+        .map(|(index, file)| {
             json!({
                 "recipe": file.path,
+                "baseline": baselines.get(index).copied().unwrap_or("none"),
                 "clean": file.clean(),
                 "findings": file.findings,
             })
         })
         .collect::<Vec<_>>();
     let clean = report.clean();
-    let summary = lint_summary(clean, errors, formatting, other_warnings);
+    let mut summary = lint_summary(clean, errors, formatting, other_warnings);
+    if info > 0 {
+        summary.push_str(&format!(
+            " {info} EB_FMT finding(s) are info (outside the review scope: unchanged from the base, or untouched %%-escaped entries) and do not count; leave them unless the review is about them."
+        ));
+    }
     Ok(json!({
+        "info": info,
         "clean": clean,
         "error_free": report.error_free(),
         "errors": errors,
@@ -746,6 +867,7 @@ pub(crate) fn lint_summary(
 
 fn recipe_format(arguments: &Value) -> Result<Value, String> {
     let recipe = required_path(arguments, "recipe")?;
+    remember_first_seen(&recipe);
     let before = std::fs::read_to_string(&recipe).map_err(|error| error.to_string())?;
     let before_findings = lint_style(&before);
     if optional_bool(arguments, "dry_run") {

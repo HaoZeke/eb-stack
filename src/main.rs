@@ -1183,6 +1183,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
             // A policy is a file when there is one to reuse, and a pair of
             // flags when there is not. Writing JSON by hand to answer two
             // questions is a step nobody should need for the common case.
+            let generated_policy = policy.is_none();
             let written_policy;
             let policy = match policy {
                 Some(path) => path,
@@ -1200,8 +1201,19 @@ fn run_stack(command: StackCommand) -> Result<()> {
                         "roots": roots,
                         "objective": "prefer_newer",
                     });
-                    written_policy = std::env::temp_dir()
-                        .join(format!("eb-stack-policy-{}-{}.json", name, version));
+                    // One path per invocation. A shared name is truncated by
+                    // another `stack solve` for the same toolchain while this
+                    // process is still reading the file.
+                    let stamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|duration| duration.as_nanos())
+                        .unwrap_or(0);
+                    written_policy = std::env::temp_dir().join(format!(
+                        "eb-stack-policy-{}-{}-{}-{stamp}.json",
+                        name,
+                        version,
+                        std::process::id()
+                    ));
                     std::fs::write(&written_policy, serde_json::to_vec_pretty(&policy)?)?;
                     written_policy
                 }
@@ -1248,7 +1260,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 jenkins_previous.extend(eb_stack::jenkins::parse_build_list(&text));
             }
             let roots = easyconfigs.iter().map(PathBuf::as_path).collect::<Vec<_>>();
-            let lock = eb_stack::solve_with_baseline_source(
+            let solved = eb_stack::solve_with_baseline_source(
                 &roots,
                 &policy,
                 baseline,
@@ -1265,7 +1277,11 @@ fn run_stack(command: StackCommand) -> Result<()> {
                         gpu_systems: jenkins_gpu_systems,
                     },
                 },
-            )?;
+            );
+            if generated_policy {
+                let _ = std::fs::remove_file(&policy);
+            }
+            let lock = solved?;
             println!(
                 "lock={} packages={}",
                 lock_out.display(),
