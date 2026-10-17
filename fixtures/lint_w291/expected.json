@@ -1,0 +1,24 @@
+{
+  "rules": [
+    "W291"
+  ],
+  "severity": "error",
+  "enforced_by": [
+    "easyconfigs CI flake8 (--select W291)"
+  ],
+  "base": null,
+  "fixture_kind": "real",
+  "pr": "https://github.com/easybuilders/easybuild-easyconfigs/pull/24311",
+  "findings": [
+    {
+      "rule": "W291",
+      "line": 7,
+      "message": "trailing whitespace"
+    },
+    {
+      "rule": "W291",
+      "line": 8,
+      "message": "trailing whitespace"
+    }
+  ]
+}

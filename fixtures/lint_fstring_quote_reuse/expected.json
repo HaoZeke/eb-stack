@@ -1,0 +1,19 @@
+{
+  "rules": [
+    "EB_FSTRING_QUOTE_REUSE"
+  ],
+  "severity": "error",
+  "enforced_by": [
+    "none in CI (see note)"
+  ],
+  "base": null,
+  "fixture_kind": "real",
+  "pr": "https://github.com/easybuilders/easybuild-easyconfigs/pull/23528",
+  "findings": [
+    {
+      "rule": "EB_FSTRING_QUOTE_REUSE",
+      "line": 18,
+      "message": "string '_' inside an f-string replacement field reuses the enclosing quote '; Python < 3.12 (EasyBuild supports 3.6+, CI lints with 3.8) cannot parse this, use the other quote character"
+    }
+  ]
+}

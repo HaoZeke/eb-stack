@@ -1,0 +1,20 @@
+{
+  "rules": [
+    "EB_CHECKSUM_COUNT"
+  ],
+  "severity": "error",
+  "enforced_by": [
+    "eb --check-contrib (checksum checks)",
+    "easyconfigs test suite"
+  ],
+  "base": null,
+  "fixture_kind": "real",
+  "pr": "https://github.com/easybuilders/easybuild-easyconfigs/pull/24662",
+  "findings": [
+    {
+      "rule": "EB_CHECKSUM_COUNT",
+      "line": 15,
+      "message": "Checksums missing for one or more sources/patches in bad.eb: found 1 sources + 1 patches vs 1 checksums"
+    }
+  ]
+}

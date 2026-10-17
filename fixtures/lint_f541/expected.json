@@ -1,0 +1,19 @@
+{
+  "rules": [
+    "F541"
+  ],
+  "severity": "error",
+  "enforced_by": [
+    "easyconfigs CI flake8 (--select F)"
+  ],
+  "base": null,
+  "fixture_kind": "synthetic",
+  "pr": null,
+  "findings": [
+    {
+      "rule": "F541",
+      "line": 35,
+      "message": "f-string is missing placeholders"
+    }
+  ]
+}

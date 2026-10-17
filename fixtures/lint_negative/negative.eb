@@ -1,0 +1,16 @@
+easyblock = 'ConfigureMake'
+name = 'foo'
+version = '1.0'
+homepage = 'x'
+description = 'x'
+toolchain = SYSTEM
+local_x = 'a'
+sources = [f'%(namelower)s-{version}.tar.gz']
+preconfigopts = 'export X=${PATH} && echo {{local_x}} && ls %(build_dir)s %(arch)s && '
+postinstallcmds = [
+    'ln -s libfoo.so.1 libfoo.sock',
+    "python -E -s -m pip --version",
+    f'cp lib/lib%(name)s.{SHLIB_EXT} x',
+]
+sanity_check_paths = {'files': ['a'] + [f'lib/{x}' for x in 'ab'], 'dirs': []}
+moduleclass = 'lib'

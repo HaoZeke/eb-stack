@@ -1,0 +1,19 @@
+{
+  "rules": [
+    "EB_SHLIB_HARDCODED"
+  ],
+  "severity": "warning",
+  "enforced_by": [
+    "reviewer style (not CI)"
+  ],
+  "base": null,
+  "fixture_kind": "real",
+  "pr": "https://github.com/easybuilders/easybuild-easyconfigs/pull/24056",
+  "findings": [
+    {
+      "rule": "EB_SHLIB_HARDCODED",
+      "line": 44,
+      "message": "hardcoded '.so'; use SHLIB_EXT in an f-string (e.g. f'lib/libfoo.{SHLIB_EXT}')"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "rules": [
+    "EB_FMT_PERCENT"
+  ],
+  "severity": "warning",
+  "enforced_by": [
+    "reviewer style (not CI)"
+  ],
+  "base": null,
+  "fixture_kind": "real bad / derived good",
+  "pr": "https://github.com/easybuilders/easybuild-easyconfigs/pull/22738",
+  "findings": [
+    {
+      "rule": "EB_FMT_PERCENT",
+      "line": 51,
+      "message": "%-formatting of a string literal; use an f-string instead (e.g. f'lib/libfoo.{SHLIB_EXT}') and keep %(...)s templates as they are"
+    }
+  ]
+}

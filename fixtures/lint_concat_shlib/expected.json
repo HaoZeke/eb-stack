@@ -1,0 +1,19 @@
+{
+  "rules": [
+    "EB_FMT_CONCAT"
+  ],
+  "severity": "warning",
+  "enforced_by": [
+    "reviewer style (not CI)"
+  ],
+  "base": null,
+  "fixture_kind": "real",
+  "pr": "https://github.com/easybuilders/easybuild-easyconfigs/pull/24492",
+  "findings": [
+    {
+      "rule": "EB_FMT_CONCAT",
+      "line": 31,
+      "message": "string concatenation with SHLIB_EXT; put it inside the f-string instead (e.g. f'lib/libfoo.{SHLIB_EXT}')"
+    }
+  ]
+}

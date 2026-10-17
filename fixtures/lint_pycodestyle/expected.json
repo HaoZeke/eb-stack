@@ -1,0 +1,25 @@
+{
+  "rules": [
+    "E231",
+    "E226"
+  ],
+  "severity": "error",
+  "enforced_by": [
+    "eb --check-contrib (pycodestyle, ignore list overridden to W291,E741 only)"
+  ],
+  "base": null,
+  "fixture_kind": "synthetic",
+  "pr": null,
+  "findings": [
+    {
+      "rule": "E231",
+      "line": 16,
+      "message": "missing whitespace after ':'"
+    },
+    {
+      "rule": "E226",
+      "line": 37,
+      "message": "missing whitespace around arithmetic operator"
+    }
+  ]
+}

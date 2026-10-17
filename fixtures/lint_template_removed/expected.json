@@ -1,0 +1,19 @@
+{
+  "rules": [
+    "EB_FMT_TEMPLATE_REMOVED"
+  ],
+  "severity": "warning",
+  "enforced_by": [
+    "reviewer style (not CI); diff mode, needs the base file"
+  ],
+  "base": "base.eb",
+  "fixture_kind": "real bad+base / derived good",
+  "pr": "https://github.com/easybuilders/easybuild-easyconfigs/pull/24391",
+  "findings": [
+    {
+      "rule": "EB_FMT_TEMPLATE_REMOVED",
+      "line": 27,
+      "message": "%(name)s template from the base version was replaced by a Python expression; keep the template"
+    }
+  ]
+}
