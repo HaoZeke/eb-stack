@@ -173,7 +173,9 @@ E225/E226/E227/E228/E231; the easyconfigs test-suite checks
 ~EB_REDEFINED_PARAM~, and ~EB_CHECKSUM_COUNT~; and the review conventions
 ~EB_FMT_MISSING_F~, ~EB_FSTRING_QUOTE_REUSE~, ~EB_TEMPLATE_UNKNOWN~ (errors)
 and ~EB_FMT_PERCENT~, ~EB_FMT_CONCAT~, ~EB_FMT_TEMPLATE_VAR~,
-~EB_SHLIB_HARDCODED~, ~EB_DEP_DUPLICATE~ (warnings). With ~--base~, the file
+~EB_SHLIB_HARDCODED~, ~EB_DEP_DUPLICATE~, ~EB_DEP_EMPTY_VERSION~ (warnings).
+~clean~ is false while any error or any ~EB_FMT_*~ finding remains;
+~error_free~ counts errors only. With ~--base~, the file
 before the edit, it also reports ~EB_FMT_TEMPLATE_REMOVED~ where a template
 was replaced by a Python expression. ~f'lib/%(name)s.{SHLIB_EXT}'~ is correct
 and not flagged. When ~eb~ is on ~PATH~, the command also runs
