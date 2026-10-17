@@ -206,7 +206,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_recipe_lint",
-            "Report what upstream checks on an easyconfig, without rewriting it: E999 (not valid Python), the easyconfigs CI lint (F541, W605, W291), the eb --check-contrib pycodestyle codes (E501, E2xx), the easyconfigs test-suite checks, and review conventions (EB_FMT_PERCENT for '...' % x, EB_FMT_CONCAT for '...' + SHLIB_EXT, EB_SHLIB_HARDCODED, ...). clean is false while any error or any in-scope EB_FMT_* finding remains; a review fix is not done while clean is false. f'lib/%(name)s.{SHLIB_EXT}' is correct and not flagged. Scope: a finding with info: true is outside the review scope and does not count. review_lines (1-based lines the review comment is anchored to) are always in scope, and EB_SHLIB_HARDCODED on them counts too; with several recipes pass review_lines_by_recipe ({recipe: [lines]}) instead. EB_SHLIB_HARDCODED also counts on every line under review_scope \"file\" and on any line you edited. With base (the file before your edit) lines unchanged from base are out of scope unless review_scope is \"file\"; pass review_scope \"file\" when a PR-level comment asks for a style everywhere (\"use f-strings\"). Without base, only untouched '%%(...)s' % X entries are out of scope. Diff-mode errors (EB_SANITY_ENTRY_REMOVED, EB_EASYBLOCK_CHANGED, EB_FMT_TEMPLATE_REMOVED) compare against base, or else against the file as this server first saw it; rebaseline true resets that. EB_DEP_EMPTY_VERSION is an error: look the version up with eb_dep_versions. When eb is on PATH, eb --check-contrib findings are merged.",
+            "Report what upstream checks on an easyconfig, without rewriting it: E999 (not valid Python), the easyconfigs CI lint (F541, W605, W291), the eb --check-contrib pycodestyle codes (E501, E2xx), the easyconfigs test-suite checks, and review conventions (EB_FMT_PERCENT for '...' % x, EB_FMT_CONCAT for '...' + SHLIB_EXT, EB_SHLIB_HARDCODED, ...). clean is false while any error or any in-scope EB_FMT_* finding remains; a review fix is not done while clean is false. f'lib/%(name)s.{SHLIB_EXT}' is correct and not flagged. Scope: a finding with info: true is outside the review scope and does not count. review_lines (1-based lines the review comment is anchored to) are always in scope, and EB_SHLIB_HARDCODED on them counts too; with several recipes pass review_lines_by_recipe ({recipe: [lines]}) instead. EB_SHLIB_HARDCODED also counts on every line under review_scope \"file\" and on any line you edited. With base (the file before your edit) lines unchanged from base are out of scope unless review_scope is \"file\"; pass review_scope \"file\" when a PR-level comment asks for a style everywhere (\"use f-strings\"). Without base, only untouched '%%(...)s' % X entries are out of scope. Diff-mode errors (EB_SANITY_ENTRY_REMOVED, EB_EASYBLOCK_CHANGED, EB_FMT_TEMPLATE_REMOVED) compare against base, or else against the file as this server first saw it; rebaseline true resets that only when no diff-mode error is outstanding off the review lines. An error the file already had before your edits, on a line the review does not cover, is reported as info (pre-existing) and does not block clean. EB_DEP_EMPTY_VERSION is an error: look the version up with eb_dep_versions. When eb is on PATH, eb --check-contrib findings are merged.",
             &[("recipes", "array")],
             &[("base", "string"), ("review_lines", "array_int"), ("review_lines_by_recipe", "object_int_arrays"), ("review_scope", "string"), ("rebaseline", "boolean")],
         ),
@@ -678,10 +678,29 @@ fn remember_first_seen(path: &Path) {
         return;
     };
     let text = std::fs::read_to_string(resolve_recipe_path(path)).ok();
+    if let Ok(mut kept) = PRISTINE.lock() {
+        kept.entry(key.clone()).or_insert(text.clone());
+    }
     if let Ok(mut seen) = FIRST_SEEN.lock() {
         seen.entry(key).or_insert(text);
     }
 }
+
+/// The text of each recipe as this server first saw it. Unlike
+/// [`FIRST_SEEN`], `rebaseline` never resets it, so a diff-mode error
+/// (a lost sanity entry, a changed easyblock, a removed template) cannot be
+/// silenced by rebaselining (proof v6: a lost versioned sanity entry was
+/// cleared with `rebaseline: true`).
+static PRISTINE: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, Option<String>>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+fn pristine(path: &Path) -> Option<String> {
+    let key = snapshot_key(path)?;
+    PRISTINE.lock().ok()?.get(&key).cloned().flatten()
+}
+
+/// Diff-mode error codes: they compare the file with its earlier version.
+const DIFF_MODE_ERRORS: &[&str] = &["EB_SANITY_ENTRY_REMOVED", "EB_EASYBLOCK_CHANGED"];
 
 fn first_seen(path: &Path) -> Option<String> {
     let key = snapshot_key(path)?;
@@ -787,13 +806,47 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
             .unwrap_or_else(|| review_lines.clone())
     };
     let mut baselines = Vec::with_capacity(paths.len());
+    let mut notes: Vec<String> = Vec::new();
     let scopes = paths
         .iter()
         .map(|path| {
+            remember_first_seen(path);
             if optional_bool(arguments, "rebaseline") {
-                rebaseline(path);
-            } else {
-                remember_first_seen(path);
+                // Refuse while a diff-mode error against the pristine copy is
+                // outstanding off the review lines: rebaselining would only
+                // hide it.
+                let outstanding = pristine(path)
+                    .and_then(|kept| {
+                        let scope = RecipeScope {
+                            base: Some(kept),
+                            scope_to_base: false,
+                            review_lines: lines_for(path.as_path()),
+                            file_scope: false,
+                        };
+                        lint_recipe_files_scoped(&[path.as_path()], &[scope]).ok()
+                    })
+                    .map(|report| {
+                        report
+                            .files
+                            .iter()
+                            .flat_map(|file| file.findings.iter())
+                            .filter(|finding| {
+                                DIFF_MODE_ERRORS.contains(&finding.code.as_str())
+                                    && !finding.in_review
+                            })
+                            .map(|finding| format!("{} (line {})", finding.code, finding.line))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                if outstanding.is_empty() {
+                    rebaseline(path);
+                } else {
+                    notes.push(format!(
+                        "rebaseline refused for {}: {} still compare(s) against the file as first seen. Restore what was lost (re-spelling an entry must keep the same path and every %(...)s template); if the review explicitly asked for the removal, pass its anchored lines as review_lines.",
+                        path.display(),
+                        outstanding.join(", ")
+                    ));
+                }
             }
             let (base, scope_to_base, baseline) = match &explicit_base {
                 Some(text) => (Some(text.clone()), !file_scope, "base"),
@@ -811,7 +864,81 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
             }
         })
         .collect::<Vec<_>>();
-    let report = lint_recipe_files_scoped(&refs, &scopes).map_err(|error| error.to_string())?;
+    let mut report = lint_recipe_files_scoped(&refs, &scopes).map_err(|error| error.to_string())?;
+    // Pre-existing errors: the same code on the same line text in the
+    // baseline. Out of scope unless a review line or review_scope "file"
+    // covers it (proof v6: a pre-existing checksum-count error drove the agent
+    // to delete checksums or invent sources in a review that never mentioned
+    // them).
+    let mut preexisting = 0usize;
+    if !file_scope {
+        for (index, file) in report.files.iter_mut().enumerate() {
+            let Some(base) = scopes.get(index).and_then(|scope| scope.base.as_deref()) else {
+                continue;
+            };
+            let base_lines: Vec<&str> = base.lines().collect();
+            let base_findings = lint_style(base);
+            // A review whose anchored lines carry no EB_FMT finding (before or
+            // now) is not a formatting review: formatting the file already had
+            // elsewhere is out of its scope too (proof v6: nine pre-existing
+            // '%' findings made "clean" false in a one-option review and the
+            // agent rewrote the whole file).
+            let anchored = paths
+                .get(index)
+                .map(|path| lines_for(path.as_path()))
+                .unwrap_or_default();
+            let formatting_review = anchored.is_empty()
+                || base_findings
+                    .iter()
+                    .chain(file.findings.iter())
+                    .any(|finding| {
+                        is_formatting_code(&finding.code) && anchored.contains(&finding.line)
+                    });
+            let before: std::collections::HashSet<(String, String)> = base_findings
+                .into_iter()
+                .filter(|finding| {
+                    finding.severity == Severity::Error
+                        || (!formatting_review && is_formatting_code(&finding.code))
+                })
+                .map(|finding| {
+                    let text = finding
+                        .line
+                        .checked_sub(1)
+                        .and_then(|i| base_lines.get(i))
+                        .map(|line| line.trim().to_string())
+                        .unwrap_or_default();
+                    (finding.code, text)
+                })
+                .collect();
+            let now = std::fs::read_to_string(&file.path).unwrap_or_default();
+            let now_lines: Vec<&str> = now.lines().collect();
+            for finding in file.findings.iter_mut() {
+                let counted_fmt = !formatting_review && is_formatting_code(&finding.code);
+                if (finding.severity != Severity::Error && !counted_fmt)
+                    || finding.in_review
+                    || finding.info
+                    || DIFF_MODE_ERRORS.contains(&finding.code.as_str())
+                {
+                    continue;
+                }
+                let text = finding
+                    .line
+                    .checked_sub(1)
+                    .and_then(|i| now_lines.get(i))
+                    .map(|line| line.trim().to_string())
+                    .unwrap_or_default();
+                if before.contains(&(finding.code.clone(), text)) {
+                    finding.info = true;
+                    if counted_fmt {
+                        finding.message.push_str(" (info: the file had this before your edits and the review is not about formatting; leave it)");
+                        continue;
+                    }
+                    preexisting += 1;
+                    finding.message.push_str(" (info: pre-existing, the file had this before your edits and the review does not cover the line; leave it unless the review asks. Never delete or invent checksums, sources, crates, patches or sanity entries to clear it)");
+                }
+            }
+        }
+    }
     let count = |severity: Severity| {
         report
             .files
@@ -820,12 +947,20 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
             .filter(|finding| finding.severity == severity)
             .count()
     };
-    let (errors, warnings) = (count(Severity::Error), count(Severity::Warning));
+    let errors = report
+        .files
+        .iter()
+        .flat_map(|file| file.findings.iter())
+        .filter(|finding| finding.severity == Severity::Error && !finding.info)
+        .count();
+    let warnings = count(Severity::Warning);
     let all = || report.files.iter().flat_map(|file| file.findings.iter());
     let formatting = all()
         .filter(|finding| is_formatting_code(&finding.code) && !finding.info)
         .count();
-    let info = all().filter(|finding| finding.info).count();
+    let info = all()
+        .filter(|finding| finding.info && is_formatting_code(&finding.code))
+        .count();
     let other_warnings = all()
         .filter(|finding| {
             finding.severity == Severity::Warning && !is_formatting_code(&finding.code)
@@ -867,8 +1002,18 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
             " {info} EB_FMT finding(s) are info (outside the review scope: unchanged from the base, or untouched %%-escaped entries) and do not count. Convert them too when the review asks for this change in general (a PR-level comment such as \"use f-strings\") or its comment is anchored on that line: lint again with review_scope \"file\" or with those review_lines."
         ));
     }
+    if preexisting > 0 {
+        summary.push_str(&format!(
+            " {preexisting} pre-existing error(s) (info) were already in the file before your edits and are outside the review scope: they do not count, and error_free still reports them."
+        ));
+    }
+    for note in &notes {
+        summary.push(' ');
+        summary.push_str(note);
+    }
     Ok(json!({
         "info": info,
+        "preexisting_errors": preexisting,
         "clean": clean,
         "error_free": report.error_free(),
         "errors": errors,

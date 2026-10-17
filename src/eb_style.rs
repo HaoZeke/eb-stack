@@ -80,9 +80,12 @@ pub fn is_formatting_code(code: &str) -> bool {
 
 /// True when a finding keeps a recipe from being clean: any error, and any
 /// finding of the formatting family whatever its severity, unless it is
-/// outside the review scope (`info`).
+/// outside the review scope (`info`). An error is `info` only when the MCP
+/// lint found the same code on the same line text in the file before the
+/// edits (pre-existing) and no review line or file-wide scope covers it;
+/// `error_free` still reports it.
 pub fn blocks_clean(finding: &StyleFinding) -> bool {
-    finding.severity == Severity::Error
+    (finding.severity == Severity::Error && !finding.info)
         || (is_formatting_code(&finding.code) && !finding.info)
         || (finding.in_review && finding.code == "EB_SHLIB_HARDCODED")
 }
@@ -122,8 +125,9 @@ pub struct StyleFinding {
     pub severity: Severity,
     /// True for an `EB_FMT_*` finding outside the review scope: a line that
     /// is unchanged from the base, or (without a base) an untouched
-    /// `%%(...)s`-escaped `%` entry. Reported for information; it does not
-    /// make the file unclean.
+    /// `%%(...)s`-escaped `%` entry; or for an error that was already in the
+    /// file before the edits (pre-existing, see [`blocks_clean`]). Reported
+    /// for information; it does not make the file unclean.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub info: bool,
     /// True when the finding is on a line in `review_lines`, or (for

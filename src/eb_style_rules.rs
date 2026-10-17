@@ -2093,7 +2093,10 @@ fn checksum_count(
             .and_then(|statements| statements.last())
             .map_or(0, |statement| entry_count(&statement.value))
     };
-    let sources = count("sources") + count("data_sources");
+    // The Cargo easyblocks (Cargo, CargoPythonPackage, CargoPythonBundle)
+    // turn every `crates` entry into a source with its own checksum, so the
+    // checksums list covers sources + crates + patches.
+    let sources = count("sources") + count("data_sources") + count("crates");
     // Easyblock options that add a patch file with its own checksum, such as
     // the Python easyblock's patch_ctypes_ld_library_path, count as patches.
     let extra_patches: usize = assigns
@@ -2281,6 +2284,13 @@ mod tests {
         assert!(!has(&lint(mixed), "EB_CHECKSUM_COUNT"), "{:?}", lint(mixed));
         let short = "sources = [SOURCE_TGZ]\npatches = ['fix.patch']\nchecksums = ['a']\n";
         assert!(has(&lint(short), "EB_CHECKSUM_COUNT"));
+        // Cargo easyblocks add one source per crate.
+        let cargo = "easyblock = 'CargoPythonPackage'\nsources = ['v1.0.tar.gz']\n\
+                     crates = [('a', '1.0'), ('b', '2.0')]\n\
+                     checksums = [{'v1.0.tar.gz': 'x'}, {'a-1.0.tar.gz': 'y'}, {'b-2.0.tar.gz': 'z'}]\n";
+        assert!(!has(&lint(cargo), "EB_CHECKSUM_COUNT"), "{:?}", lint(cargo));
+        let cargo_short = "sources = ['v1.0.tar.gz']\ncrates = [('a', '1.0')]\nchecksums = ['x']\n";
+        assert!(has(&lint(cargo_short), "EB_CHECKSUM_COUNT"));
     }
 
     #[test]
