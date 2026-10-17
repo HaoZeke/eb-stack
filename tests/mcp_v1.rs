@@ -515,6 +515,50 @@ files = ['lib/%(name)s.' + SHLIB_EXT]
 }
 
 #[test]
+fn mcp_recipe_lint_is_not_clean_while_percent_formatting_remains() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let recipe = temp.path().join("p7zip.eb");
+    std::fs::write(
+        &recipe,
+        "name = 'p7zip'\nlocal_makefile = 'makefile.linux_amd64'\nprebuildopts = f'cp {local_makefile} makefile.linux && '\nfiles = ['libexec/7z.%s' % SHLIB_EXT]\n",
+    )
+    .expect("recipe");
+    let response = call(27, "eb_recipe_lint", json!({"recipes": [recipe]}));
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let body = &response["result"]["structuredContent"];
+    assert_eq!(body["errors"], 0, "{body}");
+    assert_eq!(body["error_free"], true, "{body}");
+    assert_eq!(
+        body["clean"], false,
+        "a leftover '%s' % SHLIB_EXT is not done: {body}"
+    );
+    assert_eq!(body["formatting"], 1, "{body}");
+    let summary = body["summary"].as_str().unwrap_or("");
+    assert!(summary.starts_with("not clean"), "{summary}");
+    assert!(summary.contains("EB_FMT"), "{summary}");
+    assert!(
+        !summary.contains("leave correct untouched lines alone"),
+        "{summary}"
+    );
+    let message = body["results"][0]["findings"][0]["message"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        message.contains("becomes `f'libexec/7z.{SHLIB_EXT}'`"),
+        "{message}"
+    );
+
+    std::fs::write(
+        &recipe,
+        "name = 'p7zip'\nlocal_makefile = 'makefile.linux_amd64'\nprebuildopts = f'cp {local_makefile} makefile.linux && '\nfiles = [f'libexec/7z.{SHLIB_EXT}']\n",
+    )
+    .expect("fixed");
+    let response = call(28, "eb_recipe_lint", json!({"recipes": [recipe]}));
+    let body = &response["result"]["structuredContent"];
+    assert_eq!(body["clean"], true, "{body}");
+}
+
+#[test]
 fn mcp_recipe_lint_base_reports_removed_templates() {
     let temp = tempfile::tempdir().expect("tempdir");
     let base = temp.path().join("base.eb");
@@ -749,6 +793,73 @@ fn mcp_recipe_file_tools_stay_inside_the_workspace() {
     assert_eq!(matches[0]["line"], 2);
     let grep_text = grep.to_string();
     assert!(!grep_text.contains("original-secret"), "{grep_text}");
+
+    // eb_recipe_format writes nothing but the requested .eb path.
+    let recipe = temp.path().join("demo.eb");
+    let before_entries = {
+        let mut names: Vec<_> = std::fs::read_dir(temp.path())
+            .expect("read dir")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        names.sort();
+        names
+    };
+    for (id, out) in [
+        (31, "formatted_tcl.txt"),
+        (32, "out"),
+        (33, "missing/dir/copy.eb"),
+    ] {
+        let refused = call(
+            id,
+            "eb_recipe_format",
+            json!({"recipe": recipe, "out": out}),
+        );
+        assert_eq!(refused["result"]["isError"], true, "{out}: {refused}");
+    }
+    let after_refusals = {
+        let mut names: Vec<_> = std::fs::read_dir(temp.path())
+            .expect("read dir")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(
+        before_entries, after_refusals,
+        "no stray files or directories"
+    );
+    let dry = call(
+        34,
+        "eb_recipe_format",
+        json!({"recipe": recipe, "dry_run": true}),
+    );
+    assert_eq!(dry["result"]["isError"], false, "{dry}");
+    assert!(
+        dry["result"]["structuredContent"]["written"].is_null(),
+        "{dry}"
+    );
+    assert!(
+        dry["result"]["structuredContent"]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("name = 'demo'"),
+        "{dry}"
+    );
+    let copy = call(
+        35,
+        "eb_recipe_format",
+        json!({"recipe": recipe, "out": "copy.eb"}),
+    );
+    assert_eq!(copy["result"]["isError"], false, "{copy}");
+    assert_eq!(copy["result"]["structuredContent"]["written"], "copy.eb");
+    assert!(temp.path().join("copy.eb").is_file());
+    std::fs::remove_file(temp.path().join("copy.eb")).expect("remove copy");
+    let escape = call(
+        36,
+        "eb_recipe_format",
+        json!({"recipe": recipe, "out": "../escape.eb"}),
+    );
+    assert_eq!(escape["result"]["isError"], true, "{escape}");
 
     let escaped = handle_message(&json!({
         "jsonrpc": "2.0",
