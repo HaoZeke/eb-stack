@@ -1556,6 +1556,47 @@ fn sanity_entries(text: &str, value: &ast::Expr) -> Option<Vec<(String, String, 
     Some(out)
 }
 
+/// Values that `{name}` / `{version}` and the name and version templates
+/// stand for at top level, taken from the recipe's own `name` and `version`.
+fn name_version_values(assigns: &HashMap<&str, &ast::StmtAssign>) -> Vec<(String, String)> {
+    let get = |key: &str| {
+        assigns
+            .get(key)
+            .and_then(|assign| str_value(&assign.value))
+            .map(str::to_string)
+    };
+    let mut out = Vec::new();
+    if let Some(name) = get("name") {
+        out.push(("{name}".to_string(), name.clone()));
+        out.push(("%(name)s".to_string(), name.clone()));
+        out.push(("%(namelower)s".to_string(), name.to_lowercase()));
+    }
+    if let Some(version) = get("version") {
+        let parts: Vec<&str> = version.split('.').collect();
+        out.push(("{version}".to_string(), version.clone()));
+        out.push(("%(version)s".to_string(), version.clone()));
+        out.push(("%(version_major)s".to_string(), parts[0].to_string()));
+        if parts.len() > 1 {
+            out.push(("%(version_minor)s".to_string(), parts[1].to_string()));
+            out.push((
+                "%(version_major_minor)s".to_string(),
+                format!("{}.{}", parts[0], parts[1]),
+            ));
+        }
+    }
+    out
+}
+
+/// A rendered sanity entry with the name and version spellings replaced by
+/// their values, so equivalent spellings compare equal.
+fn canonical_entry(rendered: &str, values: &[(String, String)]) -> String {
+    let mut out = rendered.to_string();
+    for (spelling, value) in values {
+        out = out.replace(spelling.as_str(), value);
+    }
+    out
+}
+
 /// Diff-mode errors against the base: a sanity_check_paths entry that is
 /// gone (EB_SANITY_ENTRY_REMOVED), the whole parameter gone
 /// (EB_SANITY_PATHS_REMOVED, a warning: dropping a default-equivalent
@@ -1613,11 +1654,18 @@ fn diff_rules(
     ) else {
         return;
     };
+    // Compare the paths the entries stand for, not their spelling: at top
+    // level `f'include/{name}/{name}.h'`, `'include/%(name)s/%(name)s.h'` and
+    // `'include/spdlog/spdlog.h'` are the same file (proof v5, PR 24391: the
+    // reviewer's template suggestion was reported as three lost entries).
+    let old_values = name_version_values(&before);
+    let new_values = name_version_values(&now);
     let mut remaining: Vec<(String, String)> = new_entries
         .into_iter()
-        .map(|(key, rendered, _)| (key, rendered))
+        .map(|(key, rendered, _)| (key, canonical_entry(&rendered, &new_values)))
         .collect();
     for (key, rendered, source) in old_entries {
+        let rendered = canonical_entry(&rendered, &old_values);
         if let Some(at) = remaining
             .iter()
             .position(|(new_key, new_rendered)| *new_key == key && *new_rendered == rendered)
@@ -2374,6 +2422,26 @@ mod tests {
             "{findings:?}"
         );
         assert!(has(&findings, "EB_SANITY_ENTRY_REMOVED"), "{findings:?}");
+    }
+
+    #[test]
+    fn respelling_name_and_version_is_not_a_lost_sanity_entry() {
+        let base = "name = 'spdlog'\nversion = '1.15.3'\n\
+            sanity_check_paths = {\n    \
+            'files': [f'include/{name}/{name}.h', 'lib/libspdlog.a', 'lib/libspdlog.%s' % SHLIB_EXT],\n    \
+            'dirs': [],\n}\n";
+        let suggested = "name = 'spdlog'\nversion = '1.15.3'\n\
+            sanity_check_paths = {\n    \
+            'files': ['include/%(name)s/%(name)s.h', 'lib/lib%(name)s.a', f'lib/lib%(name)s.{SHLIB_EXT}'],\n    \
+            'dirs': [],\n}\n";
+        let findings = lint_against(suggested, base);
+        assert!(!has(&findings, "EB_SANITY_ENTRY_REMOVED"), "{findings:?}");
+        // A really different path still counts.
+        let dropped = suggested.replace("'lib/lib%(name)s.a', ", "");
+        assert!(has(
+            &lint_against(&dropped, base),
+            "EB_SANITY_ENTRY_REMOVED"
+        ));
     }
 
     #[test]
