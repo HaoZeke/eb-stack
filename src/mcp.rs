@@ -1024,6 +1024,11 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
                 .collect();
             let now = std::fs::read_to_string(&file.path).unwrap_or_default();
             let now_lines: Vec<&str> = now.lines().collect();
+            // A plain lint of an unedited file has no review to be outside
+            // of: E501 and E999 still block clean. Demote a pre-existing
+            // error once review lines were given, or once the file differs
+            // from the baseline (the error survived an edit).
+            let demote_errors = !anchored.is_empty() || now != base;
             for finding in file.findings.iter_mut() {
                 let counted_fmt = !formatting_review && is_formatting_code(&finding.code);
                 if (finding.severity != Severity::Error && !counted_fmt)
@@ -1040,6 +1045,9 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
                     .map(|line| line.trim().to_string())
                     .unwrap_or_default();
                 if before.contains(&(finding.code.clone(), text)) {
+                    if finding.severity == Severity::Error && !demote_errors {
+                        continue;
+                    }
                     finding.info = true;
                     if counted_fmt {
                         finding.message.push_str(" (info: the file had this before your edits and the review is not about formatting; leave it)");

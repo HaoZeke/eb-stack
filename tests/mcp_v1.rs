@@ -440,6 +440,29 @@ fn mcp_recipe_lint_reports_style_findings() {
         body["summary"].as_str().unwrap_or("").contains("not clean"),
         "{body}"
     );
+
+    // The review is about another line: this pre-existing E501 is info.
+    let off = call(
+        6,
+        "eb_recipe_lint",
+        json!({"recipes": [recipe], "review_lines": [1]}),
+    );
+    let body = &off["result"]["structuredContent"];
+    assert_eq!(body["clean"], true, "{body}");
+    assert_eq!(body["error_free"], false, "{body}");
+    assert_eq!(body["preexisting_errors"], 1, "{body}");
+    assert_eq!(body["results"][0]["findings"][0]["info"], true, "{body}");
+    // The review covers the long line: it still blocks.
+    let on = call(
+        7,
+        "eb_recipe_lint",
+        json!({"recipes": [recipe], "review_lines": [2]}),
+    );
+    let body = &on["result"]["structuredContent"];
+    assert_eq!(
+        body["clean"], false,
+        "E501 on a review line still blocks: {body}"
+    );
 }
 
 fn call(id: u64, name: &str, arguments: serde_json::Value) -> serde_json::Value {
@@ -634,13 +657,27 @@ fn mcp_recipe_lint_compares_against_the_file_as_first_seen() {
     assert!(codes.contains(&"EB_EASYBLOCK_CHANGED"), "{codes:?}");
     assert!(codes.contains(&"EB_SANITY_ENTRY_REMOVED"), "{codes:?}");
 
-    // rebaseline accepts the current file as the new starting point.
+    // rebaseline is refused while a lost sanity entry or a changed easyblock
+    // is outstanding off the review lines: resetting would only hide it.
     let third = call(
         44,
         "eb_recipe_lint",
         json!({"recipes": [recipe], "rebaseline": true}),
     );
     let body = &third["result"]["structuredContent"];
+    assert_eq!(body["clean"], false, "{body}");
+    let summary = body["summary"].as_str().unwrap_or("");
+    assert!(summary.contains("rebaseline refused"), "{summary}");
+    assert!(summary.contains("EB_SANITY_ENTRY_REMOVED"), "{summary}");
+    assert!(summary.contains("EB_EASYBLOCK_CHANGED"), "{summary}");
+
+    // The review asked for those lines, so rebaseline accepts the file.
+    let fourth = call(
+        45,
+        "eb_recipe_lint",
+        json!({"recipes": [recipe], "rebaseline": true, "review_lines": [1, 2]}),
+    );
+    let body = &fourth["result"]["structuredContent"];
     assert_eq!(body["clean"], true, "{body}");
 }
 
