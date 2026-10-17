@@ -978,12 +978,17 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
         }
     }
     // Pre-existing errors: the same code on the same line text in the
-    // baseline. Out of scope unless a review line or review_scope "file"
-    // covers it (proof v6: a pre-existing checksum-count error drove the agent
-    // to delete checksums or invent sources in a review that never mentioned
-    // them).
+    // baseline. Out of scope unless a review line covers it (proof v6: a
+    // pre-existing checksum-count error drove the agent to delete checksums
+    // or invent sources in a review that never mentioned them).
+    // review_scope "file" widens the formatting scope only (a PR-level "use
+    // f-strings" comment): EB_FMT_* findings still count on every line, but
+    // other errors the file already had stay advisory (proof v7: agents passed
+    // review_scope "file" on two of three lint calls, and a pre-existing
+    // EB_PY_NO_USER_SITE or EB_LOCAL_VAR_NAMING then blocked clean, so they
+    // edited sanity commands and renamed variables no comment was about).
     let mut preexisting = 0usize;
-    if !file_scope {
+    {
         for (index, file) in report.files.iter_mut().enumerate() {
             let Some(base) = scopes.get(index).and_then(|scope| scope.base.as_deref()) else {
                 continue;
@@ -999,7 +1004,8 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
                 .get(index)
                 .map(|path| lines_for(path.as_path()))
                 .unwrap_or_default();
-            let formatting_review = anchored.is_empty()
+            let formatting_review = file_scope
+                || anchored.is_empty()
                 || base_findings
                     .iter()
                     .chain(file.findings.iter())
@@ -1035,6 +1041,7 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
                     || finding.in_review
                     || finding.info
                     || DIFF_MODE_ERRORS.contains(&finding.code.as_str())
+                    || (file_scope && is_formatting_code(&finding.code))
                 {
                     continue;
                 }
@@ -1054,7 +1061,7 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
                         continue;
                     }
                     preexisting += 1;
-                    finding.message.push_str(" (info: pre-existing, the file had this before your edits and the review does not cover the line; leave it unless the review asks. Never delete or invent checksums, sources, crates, patches or sanity entries to clear it)");
+                    finding.message.push_str(" (info: pre-existing, the file had this before your edits and the review does not cover the line; advisory only, leave it unless a review comment is about it. review_scope \"file\" does not make it count. Never delete or invent checksums, sources, crates, patches or sanity entries to clear it)");
                 }
             }
         }
