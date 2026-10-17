@@ -172,6 +172,7 @@ impl Sink<'_> {
             origin: String::new(),
             severity: severity_for(code),
             info: false,
+            in_review: false,
         });
     }
 }
