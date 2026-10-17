@@ -8,7 +8,7 @@ use crate::domain::Toolchain;
 use crate::eb_parse::{
     check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,
 };
-use crate::eb_style::{format_style_file, lint_style};
+use crate::eb_style::{format_style_file, lint_recipe_files, lint_style};
 use crate::foreign::ForeignFormat;
 use crate::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
 use crate::package_catalog::{resolve_package_catalog_layers, PackageCatalogLayer};
@@ -20,6 +20,9 @@ use crate::package_workflow::{
     BumpPackageRequest, NewPackageRequest, PackageBundle, PackageEmitOptions,
 };
 use crate::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
+use crate::workspace_fs::{
+    configured_workspace_root, edit_workspace, list_workspace, read_workspace, write_workspace,
+};
 use crate::{
     load_json_file, lock_to_cyclonedx, solve_with_baseline_source, write_json_pretty,
     BaselineSource, SolveExtraOut, StackLock,
@@ -161,14 +164,38 @@ fn tool_catalog() -> Vec<Value> {
             ],
         ),
         tool_with_optional(
+            "eb_recipe_read",
+            "Read one UTF-8 file inside the workspace root (EB_STACK_WORKSPACE, the directory given to eb-stack mcp --workspace, or the server's current directory). Rejects .., absolute paths outside that root, and symlinks whose target leaves the root.",
+            &[("path", "string")],
+            &[],
+        ),
+        tool_with_optional(
+            "eb_recipe_list",
+            "List one directory inside the workspace root without following symlinks. A symlink whose target leaves the root is reported with escapes set and is not opened.",
+            &[("path", "string")],
+            &[],
+        ),
+        tool_with_optional(
+            "eb_recipe_edit",
+            "Replace an exact literal string in a workspace file. old must be non-empty and different from new. When old matches more than once the file is left unchanged unless replace_all is true. Use replace_all to apply one review change at every occurrence.",
+            &[("path", "string"), ("old", "string"), ("new", "string")],
+            &[("replace_all", "boolean")],
+        ),
+        tool_with_optional(
+            "eb_recipe_write",
+            "Create or overwrite a UTF-8 file inside the workspace root. Parent directories must already exist. Rejects path and symlink escapes, and does not follow a symlink that leaves the workspace.",
+            &[("path", "string"), ("content", "string")],
+            &[],
+        ),
+        tool_with_optional(
             "eb_recipe_check",
-            "Check EasyBuild packaging metadata and robot dependency resolution.",
-            &[("recipe", "string"), ("easyconfigs", "array")],
+            "Check EasyBuild packaging metadata and robot dependency resolution. easyconfigs must contain at least one path.",
+            &[("recipe", "string"), ("easyconfigs", "array_min1")],
             &[("require_configopts", "array")],
         ),
         tool_with_optional(
             "eb_recipe_lint",
-            "Report EasyBuild E501 style findings without rewriting recipes.",
+            "Report EasyBuild reviewer-style findings without rewriting the file: E501 line length, W299 trailing whitespace, F541 f-strings with no placeholders, UP031 leftover printf-style formatting, and EB101 f-strings that interpolate EasyBuild template names such as name or version. When eb is on PATH, also run eb --check-contrib and merge its findings. A missing eb is not itself a failure.",
             &[("recipes", "array")],
             &[],
         ),
@@ -264,6 +291,9 @@ fn tool_with_optional(
         .map(|(name, kind)| {
             let schema = match *kind {
                 "array" => json!({"type": "array", "items": {"type": "string"}}),
+                "array_min1" => {
+                    json!({"type": "array", "items": {"type": "string"}, "minItems": 1})
+                }
                 "object" => json!({"type": "object", "additionalProperties": {"type": "string"}}),
                 other => json!({"type": other}),
             };
@@ -287,6 +317,10 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_package_inspect" => package_inspect(arguments),
         "eb_package_plan" => package_plan(arguments),
         "eb_package_bump" => package_bump(arguments),
+        "eb_recipe_read" => recipe_read(arguments),
+        "eb_recipe_list" => recipe_list(arguments),
+        "eb_recipe_edit" => recipe_edit(arguments),
+        "eb_recipe_write" => recipe_write(arguments),
         "eb_recipe_check" => recipe_check(arguments),
         "eb_recipe_lint" => recipe_lint(arguments),
         "eb_recipe_format" => recipe_format(arguments),
@@ -521,17 +555,58 @@ fn recipe_check(arguments: &Value) -> Result<Value, String> {
     }))
 }
 
+fn recipe_read(arguments: &Value) -> Result<Value, String> {
+    let root = configured_workspace_root()?;
+    let text = read_workspace(&root, &required_path(arguments, "path")?)?;
+    serde_json::to_value(text).map_err(|error| error.to_string())
+}
+
+fn recipe_list(arguments: &Value) -> Result<Value, String> {
+    let root = configured_workspace_root()?;
+    let listing = list_workspace(&root, &required_path(arguments, "path")?)?;
+    serde_json::to_value(listing).map_err(|error| error.to_string())
+}
+
+fn recipe_edit(arguments: &Value) -> Result<Value, String> {
+    let root = configured_workspace_root()?;
+    let edited = edit_workspace(
+        &root,
+        &required_path(arguments, "path")?,
+        &required_string(arguments, "old")?,
+        &required_string(arguments, "new")?,
+        optional_bool(arguments, "replace_all"),
+    )?;
+    serde_json::to_value(edited).map_err(|error| error.to_string())
+}
+
+fn recipe_write(arguments: &Value) -> Result<Value, String> {
+    let root = configured_workspace_root()?;
+    let written = write_workspace(
+        &root,
+        &required_path(arguments, "path")?,
+        &required_string(arguments, "content")?,
+    )?;
+    serde_json::to_value(written).map_err(|error| error.to_string())
+}
+
 fn recipe_lint(arguments: &Value) -> Result<Value, String> {
     let paths = recipe_paths(arguments)?;
-    let mut results = Vec::with_capacity(paths.len());
-    for path in paths {
-        let text = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
-        results.push(json!({
-            "recipe": path,
-            "findings": lint_style(&text),
-        }));
-    }
-    Ok(json!({"results": results}))
+    let refs = paths.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+    let report = lint_recipe_files(&refs).map_err(|error| error.to_string())?;
+    let results = report
+        .files
+        .iter()
+        .map(|file| {
+            json!({
+                "recipe": file.path,
+                "findings": file.findings,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "results": results,
+        "check_contrib": report.check_contrib,
+    }))
 }
 
 fn recipe_format(arguments: &Value) -> Result<Value, String> {

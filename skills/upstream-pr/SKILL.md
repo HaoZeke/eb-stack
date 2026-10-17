@@ -18,7 +18,7 @@ to the project. Do not invent parallel paths.
 
 | Task | Required command | Forbidden substitutes |
 |------|------------------|----------------------|
-| Style + checksum gate | `eb --check-contrib path/to/*.eb` | hand-waving style, only running eb-stack lint |
+| Style + checksum gate | `eb --check-contrib path/to/*.eb` | hand-waving style, treating eb-stack lint as the host contribution check |
 | Prove GitHub integration | `eb --check-github --github-user=<user>` | assuming the token works |
 | Build recipes from a PR | `eb --from-pr <N> --robot ...` | building only local copies while claiming "from PR" |
 | Post a test report | `eb --from-pr <N> --upload-test-report --github-user=<user>` | `gh pr comment`, hand-written SUCCESS, gist API glue, paste of log tails |
@@ -105,11 +105,15 @@ eb-stack still owns planning (`package plan`, `recipe check`, fixtures). The
    and cite tree precedent when one exists. The accepted readcon-core recipe
    carries "same pattern as librsvg-2.61.0-GCCcore-14.3.0.eb with cargo-c" —
    maintainers verify against precedent, not against your reasoning.
-4. **Disclose AI involvement** per https://docs.easybuild.io/policies/ai/:
-   name the tool and model, state the extent of use, in the PR body. One
-   line suffices: the accepted form in #26437 is an `## AI Disclosure`
-   section such as "Build-eval facilitated by gpt-120b and eb-stack."
-   Non-disclosure is discovered, not forgiven.
+4. **Disclose AI involvement** per the EasyBuild AI policy v1.0 (19 April 2026),
+   <https://docs.easybuild.io/policies/ai/>. The contribution statement names
+   three things: the tool, the model, and the extent of the use, and a human
+   stays in the loop. One line is enough, in the shape of the policy's own
+   examples: "I used eb-stack with gpt-oss-120b to edit the easyconfig
+   formatting; I checked the diff and the test report." #26437's
+   "Build-eval facilitated by gpt-120b and eb-stack." names the tool and the
+   model and is thinner than the current policy because it does not state
+   extent. Non-disclosure is discovered, not forgiven.
 5. **Never re-add what develop already has.** Before adding any companion,
    check the robot tree at the target generation. A duplicate of an
    existing recipe reads as not having looked.
@@ -346,8 +350,16 @@ Do not delete comments or invent a manual "actually it works" post.
 - `package plan` / `package bump` emit the conventional `.eb`; `recipe
   format`, `recipe lint`, and `recipe check` must pass against the robot
   tree plus the draft overlay before any PR text is drafted.
-- Then run **`eb --check-contrib`** on the EasyBuild host. eb-stack lint is
-  not a substitute for contribution checks maintainers run.
+- Then run **`eb --check-contrib`** on the EasyBuild host. `recipe lint`
+  reports E501, W299, F541, UP031, and EB101, and merges `eb --check-contrib`
+  when `eb` is on `PATH`. That merge is not a substitute for running the
+  contribution check on the host before PR text. A reviewer fix follows
+  `skills/easybuild-dos-donts/SKILL.md`: read the whole file, apply every
+  requested change (grep every occurrence; `eb_recipe_edit` will not write a
+  repeated match unless `replace_all` is set), run lint and check, and show
+  the diff. EasyBuild templates (`%(name)s`, `%(version)s`, `%(builddir)s`)
+  stay templates. An f-string is only for a Python constant such as
+  `SHLIB_EXT`, and never without a placeholder.
 - The claim ladder constrains the PR wording: `resolves` alone justifies only a
   draft PR; write "built and sanity-checked on <target>" only when a
   campaign established `builds`/`binary-verified` there, and name the

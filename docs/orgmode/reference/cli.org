@@ -12,12 +12,12 @@ written by package commands are deterministic bundle artifacts.
 | ~package plan~ | Materialize profiles, solve with Resolvo, and emit recipes |
 | ~package bump~ | Retarget an EasyBuild recipe and write the same canonical bundle |
 | ~recipe check~ | Validate metadata and robot dependency availability |
-| ~recipe lint~ / ~recipe format~ | Report or mechanically repair EasyBuild E501 findings |
+| ~recipe lint~ / ~recipe format~ | Report reviewer-style findings (E501, W299, F541, UP031, EB101, and ~eb --check-contrib~ when ~eb~ is installed) or mechanically wrap E501 lines |
 | ~stack solve~ / ~stack sbom~ | Solve a multi-root stack or emit SBOM from a lock |
 | ~target list~ / ~target doctor~ | Resolve layered target configuration and probe it |
 | ~campaign run~ / ~campaign status~ | Execute or inspect a persisted build campaign |
 | ~campaign finding ...~ | Claim and resolve typed build findings |
-| ~mcp~ | Serve the same workflows over stdio |
+| ~mcp [--workspace]~ | Serve the same workflows over stdio, with recipe file tools rooted at ~--workspace~ |
 
 * Package commands
 
@@ -161,6 +161,19 @@ eb-stack recipe format RECIPE.eb [RECIPE.eb ...] [--dry-run]
 eb-stack recipe format RECIPE.eb --out FORMATTED.eb
 #+end_src
 
+~recipe lint~ prints JSON with ~style~ (each finding carries ~path~, ~line~,
+~column~, ~code~, and ~message~), ~check_contrib~, and
+~maintainer_acceptability~. Style codes are E501 (line longer than 120),
+W299 (trailing whitespace, suppressed inside ~description~ / ~examples~ /
+~citing~, matching EasyBuild), F541 (an f-string with no placeholder), UP031
+(leftover printf-style ~'%s' % X~), and EB101 (an f-string that interpolates
+an EasyBuild template name such as ~name~ or ~version~). When ~eb~ is on
+~PATH~, the command also runs ~eb --check-contrib~ and merges those findings
+(~origin~ is ~eb --check-contrib~). A missing ~eb~ is reported in
+~check_contrib~ and does not by itself fail the command. Local findings still
+do. ~recipe format~ only wraps mechanical E501 lines; the other codes stay in
+~remaining~.
+
 ~recipe check~ prints the structured dependency result. It fails when package
 metadata, checksum structure, required configuration flags, or robot
 dependencies are invalid. Missing dependencies remain explicit work; the
@@ -292,17 +305,34 @@ state, claim ladder, class/disposition table, and repair protocol.
 * MCP
 
 #+begin_src bash
-eb-stack mcp
+eb-stack mcp [--workspace ROOT]
 #+end_src
 
-The stdio server exposes one tool per CLI workflow:
+~--workspace~ sets ~EB_STACK_WORKSPACE~ for the recipe file tools. When it is
+omitted, an existing ~EB_STACK_WORKSPACE~ is kept, and otherwise the server's
+current directory is the root.
+
+The stdio server exposes one tool per CLI workflow, plus four sandboxed file
+tools:
 
 - ~eb_package_inspect~, ~eb_package_plan~, ~eb_package_bump~;
+- ~eb_recipe_read~, ~eb_recipe_list~, ~eb_recipe_edit~, ~eb_recipe_write~;
 - ~eb_recipe_check~, ~eb_recipe_lint~, ~eb_recipe_format~;
 - ~eb_stack_solve~, ~eb_stack_sbom~;
 - ~eb_target_list~, ~eb_target_doctor~;
 - ~eb_campaign_run~, ~eb_campaign_status~;
 - ~eb_campaign_finding_claim~, ~eb_campaign_finding_resolve~.
+
+~eb_recipe_read~, ~eb_recipe_list~, ~eb_recipe_edit~, and ~eb_recipe_write~
+resolve every path inside that root. A ~..~ component, an absolute path
+outside the root, or a symlink whose target leaves the root is rejected and
+the file is not opened. ~eb_recipe_edit~ replaces an exact string. If ~old~
+matches more than once, the file is left unchanged unless ~replace_all~ is
+true. ~eb_recipe_write~ does not create parent directories.
+~eb_recipe_check~ requires ~easyconfigs~ (~minItems~ 1). An empty list
+returns ~argument easyconfigs requires at least one path~.
+~eb_recipe_lint~ takes a ~recipes~ path array and returns ~results~ plus
+~check_contrib~, using the same findings as ~recipe lint~.
 
 MCP results include the same artifacts, claims, findings, and next actions as
 the CLI. There is no separate compatibility command surface.
@@ -312,4 +342,8 @@ the CLI. There is no separate compatibility command surface.
 ~package_catalogs~, ~package_sources~, ~easybuild_sources~, ~conda_sources~,
 and ~spack_sources~ arrays. ~eb_package_bump~ optionals include ~version~,
 ~source_checksum~, ~dependencies~ (object map), ~hierarchy_fixture~, and
-~stack_policy~. ~eb_recipe_lint~ takes a ~recipes~ path array.
+~stack_policy~. ~eb_recipe_lint~ takes a ~recipes~ path array and returns
+reviewer-style findings plus ~check_contrib~. ~eb_recipe_check~'s
+~easyconfigs~ array has ~minItems~ 1. ~eb_recipe_read~, ~eb_recipe_list~,
+~eb_recipe_edit~, and ~eb_recipe_write~ edit files only inside the workspace
+root.

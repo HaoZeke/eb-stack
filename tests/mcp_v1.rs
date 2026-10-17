@@ -20,6 +20,10 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_package_inspect",
         "eb_package_plan",
         "eb_package_bump",
+        "eb_recipe_read",
+        "eb_recipe_list",
+        "eb_recipe_edit",
+        "eb_recipe_write",
         "eb_recipe_check",
         "eb_recipe_lint",
         "eb_recipe_format",
@@ -34,7 +38,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 14, "unexpected MCP tools: {names:?}");
+    assert_eq!(names.len(), 18, "unexpected MCP tools: {names:?}");
 
     let package_bump = response["result"]["tools"]
         .as_array()
@@ -72,6 +76,52 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     assert_eq!(
         recipe_lint["inputSchema"]["properties"]["recipes"]["type"],
         "array"
+    );
+    assert!(recipe_lint["inputSchema"]["properties"]["recipes"]["minItems"].is_null());
+
+    let recipe_check = response["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "eb_recipe_check")
+        .expect("recipe check schema");
+    assert_eq!(
+        recipe_check["inputSchema"]["properties"]["easyconfigs"]["type"],
+        "array"
+    );
+    assert_eq!(
+        recipe_check["inputSchema"]["properties"]["easyconfigs"]["minItems"],
+        1
+    );
+    for (tool_name, required) in [
+        ("eb_recipe_read", vec!["path"]),
+        ("eb_recipe_list", vec!["path"]),
+        ("eb_recipe_edit", vec!["path", "old", "new"]),
+        ("eb_recipe_write", vec!["path", "content"]),
+    ] {
+        let tool = response["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == tool_name)
+            .unwrap_or_else(|| panic!("missing {tool_name}"));
+        let actual = tool["inputSchema"]["required"]
+            .as_array()
+            .expect("required")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(actual, required, "{tool_name}");
+    }
+    let recipe_edit = response["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "eb_recipe_edit")
+        .expect("recipe edit schema");
+    assert_eq!(
+        recipe_edit["inputSchema"]["properties"]["replace_all"]["type"],
+        "boolean"
     );
 
     let stack_sbom = response["result"]["tools"]
@@ -377,6 +427,189 @@ fn mcp_recipe_lint_reports_style_findings() {
             .unwrap_or(false),
         "expected E501 findings: {body}"
     );
+    assert!(body.get("check_contrib").is_some(), "{body}");
+}
+
+#[test]
+fn mcp_recipe_check_rejects_an_empty_easyconfigs_list() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let recipe = temp.path().join("demo.eb");
+    std::fs::write(
+        &recipe,
+        "name = 'Demo'\nversion = '1.0'\ntoolchain = {'name': 'foss', 'version': '2025b'}\n",
+    )
+    .expect("recipe");
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_recipe_check",
+            "arguments": {
+                "recipe": recipe,
+                "easyconfigs": []
+            }
+        }
+    }))
+    .expect("check response");
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        text.contains("argument easyconfigs requires at least one path"),
+        "{text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn mcp_recipe_file_tools_stay_inside_the_workspace() {
+    use std::sync::Mutex;
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = ENV_LOCK.lock().expect("workspace env lock");
+    let previous = std::env::var_os("EB_STACK_WORKSPACE");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside");
+    std::env::set_var("EB_STACK_WORKSPACE", temp.path());
+    struct Restore(Option<std::ffi::OsString>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(value) => std::env::set_var("EB_STACK_WORKSPACE", value),
+                None => std::env::remove_var("EB_STACK_WORKSPACE"),
+            }
+        }
+    }
+    let _restore = Restore(previous);
+
+    let secret = outside.path().join("secret.txt");
+    std::fs::write(&secret, "original-secret").expect("secret");
+    std::os::unix::fs::symlink(&secret, temp.path().join("leak")).expect("symlink");
+
+    let wrote = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_recipe_write",
+            "arguments": {"path": "demo.eb", "content": "name = 'demo'\nfiles = ['%s' % SHLIB_EXT, '%s' % SHLIB_EXT]\n"}
+        }
+    }))
+    .expect("write");
+    assert_eq!(wrote["result"]["isError"], false, "{wrote}");
+    assert_eq!(wrote["result"]["structuredContent"]["created"], true);
+
+    let ambiguous = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_recipe_edit",
+            "arguments": {
+                "path": "demo.eb",
+                "old": "'%s' % SHLIB_EXT",
+                "new": "f'{SHLIB_EXT}'",
+                "replace_all": false
+            }
+        }
+    }))
+    .expect("edit");
+    assert_eq!(ambiguous["result"]["isError"], true, "{ambiguous}");
+    let edit_error = ambiguous["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(edit_error.contains("replace_all"), "{edit_error}");
+
+    let edited = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_recipe_edit",
+            "arguments": {
+                "path": "demo.eb",
+                "old": "'%s' % SHLIB_EXT",
+                "new": "f'{SHLIB_EXT}'",
+                "replace_all": true
+            }
+        }
+    }))
+    .expect("replace all");
+    assert_eq!(edited["result"]["isError"], false, "{edited}");
+    assert_eq!(edited["result"]["structuredContent"]["replaced"], 2);
+
+    let read = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_recipe_read",
+            "arguments": {"path": "demo.eb"}
+        }
+    }))
+    .expect("read");
+    let content = read["result"]["structuredContent"]["content"]
+        .as_str()
+        .unwrap_or("");
+    assert_eq!(content.matches("f'{SHLIB_EXT}'").count(), 2);
+
+    let escaped = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_recipe_read",
+            "arguments": {"path": "leak"}
+        }
+    }))
+    .expect("leak");
+    assert_eq!(escaped["result"]["isError"], true, "{escaped}");
+    let leak_text = escaped["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(leak_text.contains("symlink escapes"), "{leak_text}");
+    assert!(!leak_text.contains("original-secret"), "{leak_text}");
+    assert_eq!(
+        std::fs::read_to_string(&secret).expect("secret"),
+        "original-secret"
+    );
+
+    let listing = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 12,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_recipe_list",
+            "arguments": {"path": "."}
+        }
+    }))
+    .expect("list");
+    assert_eq!(listing["result"]["isError"], false, "{listing}");
+    let entries = listing["result"]["structuredContent"]["entries"]
+        .as_array()
+        .expect("entries");
+    let leak = entries
+        .iter()
+        .find(|entry| entry["name"] == "leak")
+        .expect("leak entry");
+    assert_eq!(leak["escapes"], true);
+
+    let parent = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 13,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_recipe_read",
+            "arguments": {"path": "../outside.eb"}
+        }
+    }))
+    .expect("parent");
+    assert_eq!(parent["result"]["isError"], true, "{parent}");
+    let parent_text = parent["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(parent_text.contains("escapes"), "{parent_text}");
 }
 
 #[test]

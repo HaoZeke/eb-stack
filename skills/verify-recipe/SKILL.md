@@ -119,6 +119,17 @@ eb-stack recipe lint  <recipe.eb>
 eb-stack recipe check --recipe <recipe.eb> --easyconfigs <robot-tree> [--easyconfigs <another>]
 ```
 
+`recipe lint` is the reviewer style gate, not only E501. It must be clean of
+E501, W299, F541 (an f-string with no `{placeholder}`), UP031 (leftover
+`'%s' % X`), and EB101 (an f-string that interpolates an EasyBuild template
+name such as `name` or `version`). EasyBuild values stay `%(name)s`,
+`%(version)s`, and `%(builddir)s`. An f-string is only for a Python constant
+such as `SHLIB_EXT`, and it always has a placeholder. The table and the
+review-fix steps are in `skills/easybuild-dos-donts/SKILL.md`. After a
+reviewer comment, apply the requested change at every occurrence, run lint
+and check, and show the diff before calling the edit done. `eb_recipe_check`
+requires at least one easyconfigs path.
+
 Two traps in `recipe check`. Mixing robot trees mixes hierarchies: if two trees
 carry the same toolchain at different `GCCcore` generations, the resolver picks
 one and reports dependencies from the other as missing. Check against the tree

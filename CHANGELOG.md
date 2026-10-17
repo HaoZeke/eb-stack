@@ -6,6 +6,22 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- Sandboxed recipe file tools on `eb-stack mcp`: `eb_recipe_read`,
+  `eb_recipe_list`, `eb_recipe_edit` (exact string replace; a repeated match
+  is not written unless `replace_all` is set), and `eb_recipe_write`. Paths
+  stay under `EB_STACK_WORKSPACE` or `eb-stack mcp --workspace` (otherwise
+  the server's current directory). `..`, absolute paths outside that root,
+  and symlinks that leave it are rejected.
+- `recipe lint` and `eb_recipe_lint` report the style EasyBuild reviewers
+  apply: E501, W299, F541 (f-string with no placeholder), UP031 (leftover
+  `'%s' % X`), and EB101 (an f-string that interpolates a template name such
+  as `name` or `version`). When `eb` is on `PATH`, the same command runs
+  `eb --check-contrib` and merges its findings. A missing `eb` is not a
+  lint failure by itself.
+- `eb_recipe_check` requires `easyconfigs` to contain at least one path
+  (`minItems: 1`). An empty list returns
+  `argument easyconfigs requires at least one path`.
+
 - `package plan` and `package bump` raise a `missing-easyblock` residual
   (stage `emit`, severity `judgment`, id `missing-easyblock:<class>`) when a
   package resolves to a generic easyblock and carries variant options that

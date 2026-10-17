@@ -49,6 +49,7 @@ pub mod source_tree;
 mod spack_syntax;
 pub mod target;
 pub mod version;
+pub mod workspace_fs;
 
 pub use artifact_class::{
     classify_foreign, classify_url, declared_version, verify_declared_version, verify_sources,
@@ -73,8 +74,8 @@ pub use eb_parse::{
     ResolvedDep, ResolvedEasyconfig, ResolvedExt, SkippedEasyconfig, SkippedStatement,
 };
 pub use eb_style::{
-    format_style, format_style_file, lint_style, FormatStyleResult, StyleError, StyleFinding,
-    EB_MAX_LINE,
+    format_style, format_style_file, lint_recipe_files, lint_style, CheckContribReport,
+    FormatStyleResult, RecipeLintFile, RecipeLintReport, StyleError, StyleFinding, EB_MAX_LINE,
 };
 pub use foreign::{
     detect_foreign_format, parse_foreign_path, parse_foreign_str, ForeignDep, ForeignError,

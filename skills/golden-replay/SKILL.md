@@ -45,7 +45,9 @@ retarget it to the build host.
 
 The pinned set `package-bump` is the operator contract. Atoms:
 `examples/ljos-packet/package-bump.jsonl`. Instructions card:
-`examples/ljos-packet/package-bump.instructions.md`.
+`examples/ljos-packet/package-bump.instructions.md`. The packet includes the
+review-fix lessons (templates versus f-strings, every occurrence, lint before
+done). They are pack atoms. eb-stack does not write ljos user rules.
 
 ## Claims
 
