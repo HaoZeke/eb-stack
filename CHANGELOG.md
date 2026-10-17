@@ -43,6 +43,18 @@ All notable changes to this project are documented here.
   `eb --check-contrib` and merges its findings. A missing `eb` is not a lint
   failure by itself. `fixtures/lint_*/` holds one bad/good/expected.json
   fixture per rule, enforced by `tests/lint_fixtures.rs`.
+- Formatting findings are scoped. `EB_FMT_*` findings outside the review
+  scope carry `"info": true` and do not count against `clean`: untouched
+  `%%(...)s`-escaped `%` entries, and (with an explicit `base` / `--base`)
+  lines unchanged from the base. `review_lines` keeps named lines in scope.
+- New errors: EB_FSTRING_ESCAPED_TEMPLATE (`%%(...)s` inside an f-string),
+  and in diff mode EB_SANITY_ENTRY_REMOVED and EB_EASYBLOCK_CHANGED, plus the
+  EB_SANITY_PATHS_REMOVED warning. `eb_recipe_lint` uses the file as the
+  server first saw it in the session as the diff base when `base` is not
+  given (`rebaseline` resets it). EB_DEP_EMPTY_VERSION is now an error.
+- `eb_dep_versions` lists the versions of a dependency that have an
+  easyconfig in a local tree, for a toolchain and for other toolchains, and
+  says so (instead of guessing) when there is none or no tree at all.
 - `eb_recipe_format` rewrites the recipe in place, returns the text with
   `dry_run`, and writes `out` only as a `.eb` path inside the workspace whose
   directory exists, so a review fix leaves no stray files.
