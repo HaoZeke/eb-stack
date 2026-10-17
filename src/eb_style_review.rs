@@ -1,7 +1,8 @@
-//! Reviewer-style easyconfig checks used by `lint_style`.
+//! Recipe-file lint: E501, the local rules, and the optional `eb --check-contrib` merge.
 //!
 //! Kept beside the formatter so mechanical wrapping stays about line length.
-//! `line_is_mechanically_fixable` lives in the parent module.
+//! `line_is_mechanically_fixable` lives in the parent module, and the rules
+//! themselves live in `eb_style_rules.rs`.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -9,12 +10,12 @@ use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 
 use regex::Regex;
-use rustpython_parser::ast::{self, Ranged, Visitor};
+use rustpython_parser::ast;
 use rustpython_parser::text_size::TextRange;
-use rustpython_parser::Parse;
 use serde::{Deserialize, Serialize};
 
-use super::{line_is_mechanically_fixable, StyleError, StyleFinding, EB_MAX_LINE};
+use super::rules::{self, LintOptions};
+use super::{line_is_mechanically_fixable, Severity, StyleError, StyleFinding, EB_MAX_LINE};
 
 /// One easyconfig after [`lint_recipe_files`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +33,20 @@ pub struct RecipeLintReport {
     pub files: Vec<RecipeLintFile>,
     /// Whether `eb --check-contrib` ran, and why it did not when it did not.
     pub check_contrib: CheckContribReport,
+}
+
+impl RecipeLintFile {
+    /// True when this file has no error-severity finding.
+    pub fn clean(&self) -> bool {
+        super::findings_clean(&self.findings)
+    }
+}
+
+impl RecipeLintReport {
+    /// True when no file has an error-severity finding.
+    pub fn clean(&self) -> bool {
+        self.files.iter().all(RecipeLintFile::clean)
+    }
 }
 
 /// Outcome of shelling out to `eb --check-contrib`.
@@ -60,13 +75,42 @@ pub fn lint_recipe_files_with(
     paths: &[&Path],
     eb: Option<&Path>,
 ) -> Result<RecipeLintReport, StyleError> {
+    lint_recipe_files_inner(paths, None, eb)
+}
+
+/// Like [`lint_recipe_files`], comparing each recipe against `base` (the
+/// version the change started from), which adds EB_FMT_TEMPLATE_REMOVED.
+pub fn lint_recipe_files_against(
+    paths: &[&Path],
+    base: Option<&Path>,
+) -> Result<RecipeLintReport, StyleError> {
+    lint_recipe_files_inner(paths, base, None)
+}
+
+fn lint_recipe_files_inner(
+    paths: &[&Path],
+    base: Option<&Path>,
+    eb: Option<&Path>,
+) -> Result<RecipeLintReport, StyleError> {
+    let base_text = match base {
+        Some(path) => Some(
+            std::fs::read_to_string(path)
+                .map_err(|error| StyleError::Io(format!("read {}: {error}", path.display())))?,
+        ),
+        None => None,
+    };
     let mut files = Vec::with_capacity(paths.len());
     for path in paths {
         let text = std::fs::read_to_string(path)
             .map_err(|error| StyleError::Io(format!("read {}: {error}", path.display())))?;
+        let file_name = path.file_name().and_then(|name| name.to_str());
+        let options = LintOptions {
+            file_name,
+            base: base_text.as_deref(),
+        };
         files.push(RecipeLintFile {
             path: path.to_path_buf(),
-            findings: super::lint_style(&text),
+            findings: super::lint_style_with(&text, &options),
         });
     }
     let (check_contrib, extra) = run_check_contrib(eb, paths);
@@ -84,203 +128,29 @@ pub fn lint_recipe_files_with(
     })
 }
 
-pub(super) fn extend_style(text: &str, out: &mut Vec<StyleFinding>) {
-    out.extend(physical_findings(text));
-    out.extend(python_style_findings(text));
+pub(super) fn extend_style(text: &str, options: &LintOptions<'_>, out: &mut Vec<StyleFinding>) {
+    out.extend(long_lines(text));
+    rules::extend_rules(text, options, out);
     sort_findings(out);
 }
 
-fn physical_findings(text: &str) -> Vec<StyleFinding> {
+fn long_lines(text: &str) -> Vec<StyleFinding> {
     let mut out = Vec::new();
-    let mut last_key = String::new();
     for (index, line) in text.lines().enumerate() {
-        let line_number = index + 1;
         let len = line.chars().count();
         if len > EB_MAX_LINE {
             out.push(StyleFinding::e501(
-                line_number,
+                index + 1,
                 len,
                 line_is_mechanically_fixable(line),
             ));
-        }
-        if line.trim_start().starts_with('#') {
-            continue;
-        }
-        if let Some(captures) = PARAM_DEF.captures(line) {
-            if let Some(key) = captures.name("key") {
-                last_key = key.as_str().to_string();
-            }
-        }
-        if SUPPRESSED_TRAILING.contains(&last_key.as_str()) {
-            continue;
-        }
-        if let Some(column) = trailing_whitespace_column(line) {
-            out.push(StyleFinding {
-                line: line_number,
-                column,
-                code: "W299".into(),
-                message: "trailing whitespace".into(),
-                mechanical: false,
-                origin: String::new(),
-            });
         }
     }
     out
 }
 
-fn trailing_whitespace_column(line: &str) -> Option<usize> {
-    let trimmed = line.trim_end_matches([' ', '\t']);
-    if trimmed.len() == line.len() {
-        None
-    } else {
-        Some(trimmed.chars().count() + 1)
-    }
-}
-
-fn python_style_findings(text: &str) -> Vec<StyleFinding> {
-    let Ok(suite) = ast::Suite::parse(text, "<easyconfig>") else {
-        return Vec::new();
-    };
-    let mut visitor = StyleVisitor {
-        text,
-        findings: Vec::new(),
-        format_depth: 0,
-        suppress_names: 0,
-    };
-    for statement in suite {
-        visitor.visit_stmt(statement);
-    }
-    visitor.findings
-}
-
-struct StyleVisitor<'a> {
-    text: &'a str,
-    findings: Vec<StyleFinding>,
-    format_depth: u32,
-    suppress_names: u32,
-}
-
-impl Visitor for StyleVisitor<'_> {
-    fn visit_expr(&mut self, node: ast::Expr) {
-        self.note_joined_and_percent(&node);
-        if self.format_depth > 0 {
-            if self.suppress_names == 0 {
-                if let Some(message) = lowercase_template_message(&node) {
-                    let range = node.range();
-                    self.push(range, "EB101", message);
-                    self.suppress_names += 1;
-                    self.generic_visit_expr(node);
-                    self.suppress_names -= 1;
-                    return;
-                }
-            }
-            if self.suppress_names == 0 {
-                if let ast::Expr::Name(name) = &node {
-                    let id = name.id.as_str();
-                    if is_easybuild_template(id) {
-                        let range = name.range;
-                        self.push(range, "EB101", template_name_message(id));
-                    }
-                }
-            }
-        }
-        if matches!(node, ast::Expr::FormattedValue(_)) {
-            self.format_depth += 1;
-            self.generic_visit_expr(node);
-            self.format_depth -= 1;
-            return;
-        }
-        self.generic_visit_expr(node);
-    }
-}
-
-impl StyleVisitor<'_> {
-    fn note_joined_and_percent(&mut self, node: &ast::Expr) {
-        if let ast::Expr::JoinedStr(joined) = node {
-            let has_placeholder = joined
-                .values
-                .iter()
-                .any(|value| matches!(value, ast::Expr::FormattedValue(_)));
-            if !has_placeholder {
-                self.push(
-                    joined.range,
-                    "F541",
-                    "f-string is missing placeholders. Drop the f prefix when the string only contains EasyBuild templates such as %(name)s, %(version)s, or %(builddir)s. An f-string needs a Python placeholder, for example f'libexec/7z.{SHLIB_EXT}'".to_string(),
-                );
-            }
-        }
-        if let ast::Expr::BinOp(binop) = node {
-            if matches!(binop.op, ast::Operator::Mod) && is_string_expr(&binop.left) {
-                let message = percent_message(self.text, binop.range, &binop.right);
-                self.push(binop.range, "UP031", message);
-            }
-        }
-    }
-
-    fn push(&mut self, range: TextRange, code: &str, message: String) {
-        let (line, column) = line_col(self.text, u32::from(range.start()) as usize);
-        self.findings.push(StyleFinding {
-            line,
-            column,
-            code: code.to_string(),
-            message,
-            mechanical: false,
-            origin: String::new(),
-        });
-    }
-}
-
-fn template_name_message(id: &str) -> String {
-    format!(
-        "f-string interpolates EasyBuild template name `{id}`; write %({id})s so EasyBuild can resolve it, including with --try-software-version. An f-string is for a Python constant such as SHLIB_EXT (f'libexec/7z.{{SHLIB_EXT}}')"
-    )
-}
-
-fn lowercase_template_message(expr: &ast::Expr) -> Option<String> {
-    let (receiver, attr) = match expr {
-        ast::Expr::Call(call) => {
-            let ast::Expr::Attribute(attribute) = call.func.as_ref() else {
-                return None;
-            };
-            if !call.args.is_empty() || !call.keywords.is_empty() {
-                return None;
-            }
-            (attribute.value.as_ref(), attribute.attr.as_str())
-        }
-        ast::Expr::Attribute(attribute) => (attribute.value.as_ref(), attribute.attr.as_str()),
-        _ => return None,
-    };
-    if attr != "lower" {
-        return None;
-    }
-    let ast::Expr::Name(name) = receiver else {
-        return None;
-    };
-    match name.id.as_str() {
-        "name" => Some(
-            "f-string lowercases `name` in Python; use the EasyBuild template %(namelower)s"
-                .to_string(),
-        ),
-        "nameletter" => Some(
-            "f-string lowercases `nameletter` in Python; use the EasyBuild template %(nameletterlower)s"
-                .to_string(),
-        ),
-        _ => None,
-    }
-}
-
-fn is_string_expr(expr: &ast::Expr) -> bool {
-    match expr {
-        ast::Expr::Constant(constant) => matches!(constant.value, ast::Constant::Str(_)),
-        ast::Expr::JoinedStr(_) => true,
-        ast::Expr::BinOp(binop) if matches!(binop.op, ast::Operator::Add) => {
-            is_string_expr(&binop.left) && is_string_expr(&binop.right)
-        }
-        _ => false,
-    }
-}
-
-fn percent_message(text: &str, range: TextRange, right: &ast::Expr) -> String {
+/// What to write instead of `'...' % right`, naming the values on the right.
+pub(super) fn percent_guidance(right: &ast::Expr) -> String {
     let mut names = Vec::new();
     collect_names(right, &mut names);
     names.sort();
@@ -295,8 +165,7 @@ fn percent_message(text: &str, range: TextRange, right: &ast::Expr) -> String {
         .filter(|name| !is_easybuild_template(name))
         .cloned()
         .collect::<Vec<_>>();
-    let fragment = source_fragment(text, range);
-    let guidance = if templates.is_empty() && python_names.len() == 1 {
+    if templates.is_empty() && python_names.len() == 1 {
         let name = &python_names[0];
         format!("use an f-string with a placeholder, for example f'libexec/7z.{{{name}}}'")
     } else if python_names.is_empty() && !templates.is_empty() {
@@ -306,8 +175,7 @@ fn percent_message(text: &str, range: TextRange, right: &ast::Expr) -> String {
         )
     } else {
         "use an f-string for a Python constant or local name (f'libexec/7z.{SHLIB_EXT}') and EasyBuild %(name)s / %(version)s / %(builddir)s templates for values EasyBuild resolves".to_string()
-    };
-    format!("leftover printf-style formatting `{fragment}`; {guidance}")
+    }
 }
 
 fn collect_names(expr: &ast::Expr, names: &mut Vec<String>) {
@@ -361,7 +229,7 @@ fn collect_names(expr: &ast::Expr, names: &mut Vec<String>) {
     }
 }
 
-fn source_fragment(text: &str, range: TextRange) -> String {
+pub(super) fn source_fragment(text: &str, range: TextRange) -> String {
     let start = u32::from(range.start()) as usize;
     let end = u32::from(range.end()) as usize;
     let raw = text.get(start..end).unwrap_or("");
@@ -378,23 +246,6 @@ fn source_fragment(text: &str, range: TextRange) -> String {
     }
 }
 
-fn line_col(text: &str, offset: usize) -> (usize, usize) {
-    let mut line = 1usize;
-    let mut column = 1usize;
-    for (index, character) in text.char_indices() {
-        if index >= offset {
-            break;
-        }
-        if character == '\n' {
-            line += 1;
-            column = 1;
-        } else {
-            column += 1;
-        }
-    }
-    (line, column)
-}
-
 fn is_easybuild_template(name: &str) -> bool {
     EASYBUILD_TEMPLATES.contains(name)
 }
@@ -409,11 +260,20 @@ fn sort_findings(findings: &mut [StyleFinding]) {
     });
 }
 
+/// True when a local finding with `local_code` already reports what
+/// `eb --check-contrib` calls `contrib_code`.
+fn same_issue(local_code: &str, contrib_code: &str) -> bool {
+    local_code == contrib_code
+        || (local_code == "W291" && contrib_code == "W299")
+        || (local_code == "EB_CHECKSUM_COUNT" && contrib_code == "EB256")
+}
+
 fn merge_findings(local: &mut Vec<StyleFinding>, extra: Vec<StyleFinding>) {
     for finding in extra {
-        let duplicate = local
-            .iter()
-            .any(|have| have.line == finding.line && have.code == finding.code);
+        let duplicate = local.iter().any(|have| {
+            same_issue(&have.code, &finding.code)
+                && (have.line == finding.line || finding.code == "EB256")
+        });
         if !duplicate {
             local.push(finding);
         }
@@ -530,6 +390,7 @@ fn run_check_contrib(
                 message: detail.clone(),
                 mechanical: false,
                 origin: "eb --check-contrib".into(),
+                severity: Severity::Error,
             },
         });
         return (
@@ -662,6 +523,7 @@ fn parsed_style_line(captures: &regex::Captures<'_>) -> ParsedContrib {
             message,
             mechanical: false,
             origin: "eb --check-contrib".into(),
+            severity: Severity::Error,
         },
     }
 }
@@ -679,6 +541,7 @@ fn contrib_finding(line: usize, column: usize, message: &str) -> StyleFinding {
         message: message.to_string(),
         mechanical: false,
         origin: "eb --check-contrib".into(),
+        severity: Severity::Error,
     }
 }
 
@@ -690,11 +553,6 @@ fn truncate_chars(text: &str, max: usize) -> String {
     }
     out
 }
-
-const SUPPRESSED_TRAILING: &[&str] = &["citing", "description", "examples"];
-
-static PARAM_DEF: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?P<key>[a-z_]+)\s*=").expect("param regex"));
 
 static PYCODESTYLE_LINE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(.+?):(\d+):(\d+):\s*([A-Z]\d+)\s+(.*)$").expect("pycodestyle regex")
@@ -838,8 +696,8 @@ mixed = f'lib/%(name)s.{SHLIB_EXT}'
 copied = f'cp {local_makefile} makefile.linux && '
 ";
         let findings = super::super::lint_style(source);
-        assert_eq!(codes_on(&findings, 1), ["UP031"]);
-        assert_eq!(codes_on(&findings, 2), ["UP031"]);
+        assert_eq!(codes_on(&findings, 1), ["EB_FMT_PERCENT"]);
+        assert_eq!(codes_on(&findings, 2), ["EB_FMT_PERCENT"]);
         assert!(
             findings
                 .iter()
@@ -856,64 +714,69 @@ copied = f'cp {local_makefile} makefile.linux && '
             .message
             .contains("{local_makefile}"));
         assert!(
-            findings.iter().all(|finding| finding.code == "UP031"),
+            findings.iter().all(|finding| finding.code == "EB_FMT_PERCENT"
+                && finding.severity == Severity::Warning),
             "plain templates, literal %s, numeric modulo, and constant f-strings must stay clean: {findings:?}"
         );
     }
 
     #[test]
-    fn flags_placeholderless_fstring_and_template_interpolation() {
+    fn flags_placeholderless_fstring_and_derived_templates() {
         let source = "\
 pretestopts = f'export TMPDIR=%(builddir)s/tmp && mkdir -p $TMPDIR && '
 paths = f'{name}/{version}'
 lower = f'{name.lower()}'
 letter = f'{nameletter.lower()}'
+mixed = f'lib/%(name)s.{SHLIB_EXT}'
 ";
         let findings = super::super::lint_style(source);
         assert_eq!(codes_on(&findings, 1), ["F541"]);
         assert!(findings[0].message.contains("placeholders"), "{findings:?}");
-        assert_eq!(codes_on(&findings, 2), ["EB101", "EB101"]);
-        assert!(findings
-            .iter()
-            .any(|finding| { finding.line == 2 && finding.message.contains("%(name)s") }));
-        assert!(findings
-            .iter()
-            .any(|finding| { finding.line == 2 && finding.message.contains("%(version)s") }));
-        assert_eq!(codes_on(&findings, 3), ["EB101"]);
+        // Plain top-level {name}/{version} is tolerated (merged precedent).
+        assert!(codes_on(&findings, 2).is_empty(), "{findings:?}");
+        assert_eq!(codes_on(&findings, 3), ["EB_FMT_TEMPLATE_VAR"]);
         assert!(findings
             .iter()
             .find(|finding| finding.line == 3)
             .expect("namelower")
             .message
             .contains("%(namelower)s"));
-        assert_eq!(codes_on(&findings, 4), ["EB101"]);
+        assert_eq!(codes_on(&findings, 4), ["EB_FMT_TEMPLATE_VAR"]);
         assert!(findings
             .iter()
             .find(|finding| finding.line == 4)
             .expect("nameletter")
             .message
             .contains("%(nameletterlower)s"));
+        // A template next to a Python constant in one f-string is correct.
+        assert!(codes_on(&findings, 5).is_empty(), "{findings:?}");
     }
 
     #[test]
-    fn suppresses_trailing_whitespace_on_description_blocks() {
-        let source = "description = \"\"\"hello   \nworld   \n\"\"\"\nhomepage = 'https://example.invalid'  \n# comment   \nname = 'x'\n";
+    fn reports_trailing_whitespace_like_ci_flake8() {
+        let source = "description = \"\"\"hello   \nworld   \n\"\"\"\nhomepage = 'https://example.invalid'  \n# comment   \nname = 'x'\n   \n";
         let findings = super::super::lint_style(source);
-        assert_eq!(findings.len(), 1, "{findings:?}");
-        assert_eq!(findings[0].code, "W299");
-        assert_eq!(findings[0].line, 4);
+        let lines: Vec<usize> = findings
+            .iter()
+            .filter(|finding| finding.code == "W291")
+            .map(|finding| finding.line)
+            .collect();
+        assert_eq!(lines, [1, 2, 4, 5], "{findings:?}");
     }
 
     #[test]
     fn proof_fixtures_flag_leftover_percent_and_f541() {
-        // The proof summary called this p7zip 17.06. The easyconfigs file in
-        // PR #27186 is p7zip-17.05 (pre-review 594648897944).
+        // Pre-review p7zip-17.05 easyconfig frozen under fixtures/review_fix.
         let p7zip = include_str!("../fixtures/review_fix/p7zip-17.05-GCCcore-15.2.0.eb");
         let p7zip_findings = super::super::lint_style(p7zip);
-        assert_eq!(codes_on(&p7zip_findings, 26), ["UP031"]);
-        assert_eq!(codes_on(&p7zip_findings, 43), ["UP031"]);
+        assert_eq!(codes_on(&p7zip_findings, 26), ["EB_FMT_PERCENT"]);
+        assert_eq!(codes_on(&p7zip_findings, 43), ["EB_FMT_PERCENT"]);
+        assert_eq!(codes_on(&p7zip_findings, 39), ["EB_SHLIB_HARDCODED"]);
         assert!(
-            p7zip_findings.iter().all(|finding| finding.code == "UP031"),
+            p7zip_findings.iter().all(|finding| matches!(
+                finding.code.as_str(),
+                "EB_FMT_PERCENT" | "EB_SHLIB_HARDCODED"
+            )),
             "{p7zip_findings:?}"
         );
         assert!(p7zip_findings
@@ -929,6 +792,24 @@ letter = f'{nameletter.lower()}'
         assert_eq!(libgd_findings[0].line, 31);
         assert_eq!(libgd_findings[0].code, "F541");
         assert!(libgd_findings.iter().all(|finding| finding.line != 35));
+    }
+
+    #[test]
+    fn check_contrib_trailing_whitespace_and_checksums_dedup_against_local_rules() {
+        let mut local = vec![StyleFinding {
+            line: 3,
+            column: 10,
+            code: "W291".into(),
+            message: "trailing whitespace".into(),
+            mechanical: false,
+            origin: String::new(),
+            severity: Severity::Error,
+        }];
+        let contrib = contrib_finding(3, 10, "W299 trailing whitespace");
+        let mut w299 = contrib.clone();
+        w299.code = "W299".into();
+        merge_findings(&mut local, vec![w299]);
+        assert_eq!(local.len(), 1, "{local:?}");
     }
 
     #[cfg(unix)]

@@ -1,13 +1,20 @@
 //! EasyBuild easyconfig style checks and mechanical line wrapping.
 //!
-//! EasyBuild's `eb --check-contrib` runs pycodestyle with a 120-column limit
-//! and EasyBuild's own trailing-whitespace check, then checks SHA256 checksums.
-//! This module reports that style locally: line length (E501), trailing
-//! whitespace (W299), f-strings with no placeholders (F541), leftover
-//! printf-style `%` formatting (UP031), and f-strings that interpolate
-//! EasyBuild template names such as `name` or `version` (EB101). When `eb` is
-//! on `PATH`, [`lint_recipe_files`] also runs `eb --check-contrib` and merges
-//! its findings.
+//! [`lint_style`] reports what upstream enforces, without needing `eb`:
+//!
+//! - E501 line length (120), the pycodestyle whitespace codes that
+//!   `eb --check-contrib` turns on (E225, E226, E227, E228, E231), and E999
+//!   when the file is not valid Python;
+//! - the easyconfigs CI lint, `flake8 --select F,W605,W291 --filename '*.eb'`
+//!   (F541, W605, W291);
+//! - the easyconfigs test-suite checks and reviewer conventions as `EB_*`
+//!   rules (`python -s`, `sanity_check_paths` shape, local variable naming,
+//!   redefined parameters, `%`/`+` formatting, templates versus f-strings).
+//!
+//! Each finding carries a [`Severity`]. Errors are what CI or the test suite
+//! fails on; warnings are review conventions. When `eb` is on `PATH`,
+//! [`lint_recipe_files`] also runs `eb --check-contrib` and merges its
+//! findings, but the local rules do not depend on it (it never reports F541).
 //!
 //! Product content (which `-D` flags) is residual judgment. **Wrapping** long
 //! string assignments so each physical line is ≤120 is mechanical and must not
@@ -25,12 +32,49 @@ use thiserror::Error;
 
 #[path = "eb_style_review.rs"]
 mod review;
+#[path = "eb_style_rules.rs"]
+mod rules;
+#[path = "eb_style_vocab.rs"]
+mod vocab;
 pub use review::{
-    lint_recipe_files, lint_recipe_files_with, CheckContribReport, RecipeLintFile, RecipeLintReport,
+    lint_recipe_files, lint_recipe_files_against, lint_recipe_files_with, CheckContribReport,
+    RecipeLintFile, RecipeLintReport,
 };
+pub use rules::{python_syntax_error, LintOptions};
 
 /// EasyBuild / pycodestyle easyconfig max line length.
 pub const EB_MAX_LINE: usize = 120;
+
+/// How much a finding matters upstream.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    /// CI, the easyconfigs test suite, or `eb --check-contrib` fails on it.
+    #[default]
+    Error,
+    /// A review convention. Fix it in lines you touch; it does not fail CI.
+    Warning,
+}
+
+/// Severity of a finding code. Unknown codes (including `eb` codes) are errors.
+pub fn severity_for(code: &str) -> Severity {
+    match code {
+        "EB_FMT_PERCENT"
+        | "EB_FMT_CONCAT"
+        | "EB_FMT_TEMPLATE_VAR"
+        | "EB_FMT_TEMPLATE_REMOVED"
+        | "EB_SHLIB_HARDCODED"
+        | "EB_DEP_DUPLICATE" => Severity::Warning,
+        _ => Severity::Error,
+    }
+}
+
+/// True when no finding is an error.
+pub fn findings_clean(findings: &[StyleFinding]) -> bool {
+    findings
+        .iter()
+        .all(|finding| finding.severity != Severity::Error)
+}
 
 /// One style finding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,7 +83,7 @@ pub struct StyleFinding {
     pub line: usize,
     /// 1-based column. For E501 this is [`EB_MAX_LINE`] + 1.
     pub column: usize,
-    /// Style code (`E501`, `W299`, `F541`, `UP031`, `EB101`, or an `eb` code).
+    /// Finding code (`E501`, `W291`, `F541`, `EB_FMT_PERCENT`, ..., or an `eb` code).
     pub code: String,
     /// Human-readable description of the finding.
     pub message: String,
@@ -48,6 +92,9 @@ pub struct StyleFinding {
     /// Empty for eb-stack's own checks. `eb --check-contrib` when merged.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub origin: String,
+    /// `error` when CI or the test suite fails on it, `warning` for review conventions.
+    #[serde(default)]
+    pub severity: Severity,
 }
 
 /// Result of a format pass.
@@ -59,8 +106,8 @@ pub struct FormatStyleResult {
     pub lines_rewritten: usize,
     /// Style findings still present after format.
     ///
-    /// Wrapping only clears mechanical E501 lines. F541, UP031, EB101, W299,
-    /// and long lines the formatter cannot rewrite stay here.
+    /// Wrapping only clears mechanical E501 lines. Every other finding, and
+    /// long lines the formatter cannot rewrite, stay here.
     pub remaining: Vec<StyleFinding>,
 }
 
@@ -82,19 +129,25 @@ impl StyleFinding {
             message: format!("line too long ({len} > {EB_MAX_LINE} characters)"),
             mechanical,
             origin: String::new(),
+            severity: Severity::Error,
         }
     }
 }
 
 /// Lint one easyconfig's text.
 ///
-/// Physical checks cover E501 and W299. When the text parses as Python, the
-/// same pass reports F541, UP031, and EB101. A parse error leaves those three
-/// unreported; line length and trailing whitespace still run. This function
-/// does not invoke `eb`.
+/// Runs every local rule (see the module docs). A file that is not valid
+/// Python gets an E999 finding, and the token-based rules still run on it.
+/// This function does not invoke `eb`.
 pub fn lint_style(text: &str) -> Vec<StyleFinding> {
+    lint_style_with(text, &LintOptions::default())
+}
+
+/// Like [`lint_style`], with a file name for messages and an optional base
+/// version (diff mode, which adds EB_FMT_TEMPLATE_REMOVED).
+pub fn lint_style_with(text: &str, options: &LintOptions<'_>) -> Vec<StyleFinding> {
     let mut out = Vec::new();
-    review::extend_style(text, &mut out);
+    review::extend_style(text, options, &mut out);
     out
 }
 
@@ -138,12 +191,34 @@ pub fn format_style(text: &str) -> FormatStyleResult {
         text_out.clear();
     }
 
-    let remaining = lint_style(&text_out);
+    let mut remaining = lint_style(&text_out);
+    // `format_style` also rewrites one indented list item or dict entry. That
+    // fragment is not a module, so the E999 from its leading indent is not a
+    // finding in the easyconfig it was taken from. A real file has a column-0
+    // line, and its syntax errors stay in `remaining`.
+    if wholly_indented(&text_out) {
+        remaining.retain(|finding| finding.code != "E999");
+    }
     FormatStyleResult {
         text: text_out,
         lines_rewritten: rewritten,
         remaining,
     }
+}
+
+/// True when every non-blank line is indented, as a list item or dict entry is.
+fn wholly_indented(text: &str) -> bool {
+    let mut saw_code = false;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if !line.starts_with([' ', '\t']) {
+            return false;
+        }
+        saw_code = true;
+    }
+    saw_code
 }
 
 /// Format a file in place (or write to `out` if set). Returns the format result.

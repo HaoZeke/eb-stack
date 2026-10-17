@@ -13,8 +13,8 @@ use eb_stack::target::{doctor_target, resolve_target_layers, BuildTarget, Target
 use eb_stack::{
     check_duplicate_upstream, check_maintainer_acceptability, check_maintainer_acceptability_text,
     check_recipe_deps, format_style, format_style_file, inspect_new_package, is_registry_name,
-    lint_recipe_files, load_json_file, materialize_registry_name, packaging_gate,
-    parse_easyconfig_trees, plan_new_package_with, plan_package_bump_with,
+    lint_recipe_files, lint_recipe_files_against, load_json_file, materialize_registry_name,
+    packaging_gate, parse_easyconfig_trees, plan_new_package_with, plan_package_bump_with,
     plan_package_closure_with_sources, resolve_easyconfig_file, resolve_package_catalog_layers,
     write_json_pretty, write_package_bundle, write_package_closure, BumpPackageRequest,
     ForeignFormat, NewPackageRequest, PackageBundle, PackageCatalogLayer, PackageEmitOptions,
@@ -297,10 +297,15 @@ enum RecipeCommand {
         #[arg(long)]
         strict: bool,
     },
-    /// Report EasyBuild reviewer-style findings and merge `eb --check-contrib` when `eb` is installed.
+    /// Report the upstream CI, test-suite, and review rules for easyconfigs, and merge
+    /// `eb --check-contrib` when `eb` is installed. Fails on error-severity findings.
     Lint {
         #[arg(required = true)]
         paths: Vec<PathBuf>,
+        /// The version the change started from; reports templates replaced by
+        /// Python expressions (EB_FMT_TEMPLATE_REMOVED).
+        #[arg(long)]
+        base: Option<PathBuf>,
     },
     /// Mechanically format EasyBuild E501 findings.
     Format {
@@ -924,6 +929,14 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             source_tree,
             strict,
         } => {
+            let recipe_text = std::fs::read_to_string(&recipe)
+                .with_context(|| format!("read {}", recipe.display()))?;
+            if let Some((line, column, message)) = eb_stack::python_syntax_error(&recipe_text) {
+                bail!(
+                    "{}:{line}:{column}: {message}; EasyBuild cannot parse this easyconfig, so fix the syntax before checking it",
+                    recipe.display()
+                );
+            }
             let resolved = if strict {
                 let (resolved, skipped) = eb_stack::resolve_easyconfig_file_reporting(&recipe)
                     .map_err(anyhow::Error::msg)?;
@@ -1045,9 +1058,12 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             }
             Ok(())
         }
-        RecipeCommand::Lint { paths } => {
+        RecipeCommand::Lint { paths, base } => {
             let path_refs = paths.iter().map(PathBuf::as_path).collect::<Vec<_>>();
-            let report = lint_recipe_files(&path_refs)?;
+            let report = match base.as_deref() {
+                Some(base) => lint_recipe_files_against(&path_refs, Some(base))?,
+                None => lint_recipe_files(&path_refs)?,
+            };
             let mut style = Vec::new();
             let mut maintainer_all = Vec::new();
             for file in &report.files {
@@ -1058,6 +1074,7 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
                         "column": finding.column,
                         "code": finding.code,
                         "message": finding.message,
+                        "severity": finding.severity,
                         "mechanical": finding.mechanical,
                     });
                     if !finding.origin.is_empty() {
@@ -1081,6 +1098,7 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
+                    "clean": report.clean(),
                     "style": style,
                     "check_contrib": report.check_contrib,
                     "maintainer_acceptability": maintainer_all,
@@ -1090,11 +1108,16 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
                 .iter()
                 .filter(|v| v.get("severity").and_then(|s| s.as_str()) == Some("error"))
                 .count();
-            if !style.is_empty() || maintainer_errors > 0 {
+            let style_errors = report
+                .files
+                .iter()
+                .flat_map(|file| file.findings.iter())
+                .filter(|finding| finding.severity == eb_stack::Severity::Error)
+                .count();
+            if style_errors > 0 || maintainer_errors > 0 {
                 bail!(
-                    "{} style findings, {} maintainer-acceptability errors",
+                    "{style_errors} style errors ({} findings in total), {maintainer_errors} maintainer-acceptability errors",
                     style.len(),
-                    maintainer_errors
                 );
             }
             Ok(())

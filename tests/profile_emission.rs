@@ -263,7 +263,7 @@ fn typed_easyconfig_parameters_render_as_conventional_python_data() {
     let mut plan = package_plan_from_foreign(&recipe, &toolchain());
     plan.build.easyconfig_parameters = BTreeMap::from([
         (
-            "general_packages".into(),
+            "local_general_packages".into(),
             EasyconfigValue::List(vec![
                 EasyconfigValue::String("ASPHERE".into()),
                 EasyconfigValue::String("KSPACE".into()),
@@ -274,7 +274,7 @@ fn typed_easyconfig_parameters_render_as_conventional_python_data() {
     ]);
     plan.profiles = qmcpack_profiles();
     plan.profiles[0].easyconfig_parameters.insert(
-        "package_extra_cmake_args".into(),
+        "local_package_extra_cmake_args".into(),
         EasyconfigValue::Table(BTreeMap::from([(
             "KSPACE".into(),
             EasyconfigValue::String("-DFFT=FFTW3".into()),
@@ -289,11 +289,11 @@ fn typed_easyconfig_parameters_render_as_conventional_python_data() {
     let text = &emitted[0].text;
 
     assert!(text.contains("build_shared_libs = True"));
-    assert!(text.contains("general_packages = ["));
+    assert!(text.contains("local_general_packages = ["));
     for package in ["ASPHERE", "KSPACE", "MOLECULE"] {
         assert!(text.contains(&format!("    '{package}',")));
     }
-    assert!(text.contains("package_extra_cmake_args = {"));
+    assert!(text.contains("local_package_extra_cmake_args = {"));
     assert!(text.contains("'KSPACE': '-DFFT=FFTW3'"));
     assert!(lint_style(text).is_empty(), "{:?}", lint_style(text));
 }
