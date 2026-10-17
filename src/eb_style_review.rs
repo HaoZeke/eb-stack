@@ -85,22 +85,15 @@ pub fn lint_recipe_files_with(
     paths: &[&Path],
     eb: Option<&Path>,
 ) -> Result<RecipeLintReport, StyleError> {
-    lint_recipe_files_inner(paths, None, eb)
+    lint_recipe_files_inner(paths, &vec![RecipeScope::default(); paths.len()], eb)
 }
 
 /// Like [`lint_recipe_files`], comparing each recipe against `base` (the
-/// version the change started from), which adds EB_FMT_TEMPLATE_REMOVED.
+/// version the change started from). That turns on the diff-mode rules and
+/// scopes `EB_FMT_*` findings to lines that differ from the base.
 pub fn lint_recipe_files_against(
     paths: &[&Path],
     base: Option<&Path>,
-) -> Result<RecipeLintReport, StyleError> {
-    lint_recipe_files_inner(paths, base, None)
-}
-
-fn lint_recipe_files_inner(
-    paths: &[&Path],
-    base: Option<&Path>,
-    eb: Option<&Path>,
 ) -> Result<RecipeLintReport, StyleError> {
     let base_text = match base {
         Some(path) => Some(
@@ -109,14 +102,49 @@ fn lint_recipe_files_inner(
         ),
         None => None,
     };
+    let scope = RecipeScope {
+        scope_to_base: base_text.is_some(),
+        base: base_text,
+        review_lines: Vec::new(),
+    };
+    lint_recipe_files_inner(paths, &vec![scope; paths.len()], None)
+}
+
+/// Per-recipe review scope for [`lint_recipe_files_scoped`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RecipeScope {
+    /// Text of the version the change started from (diff-mode rules).
+    pub base: Option<String>,
+    /// Scope `EB_FMT_*` findings to lines that differ from `base`.
+    pub scope_to_base: bool,
+    /// Lines the review is about; `EB_FMT_*` findings there always count.
+    pub review_lines: Vec<usize>,
+}
+
+/// Like [`lint_recipe_files`], with one [`RecipeScope`] per path.
+pub fn lint_recipe_files_scoped(
+    paths: &[&Path],
+    scopes: &[RecipeScope],
+) -> Result<RecipeLintReport, StyleError> {
+    lint_recipe_files_inner(paths, scopes, None)
+}
+
+fn lint_recipe_files_inner(
+    paths: &[&Path],
+    scopes: &[RecipeScope],
+    eb: Option<&Path>,
+) -> Result<RecipeLintReport, StyleError> {
     let mut files = Vec::with_capacity(paths.len());
-    for path in paths {
+    for (index, path) in paths.iter().enumerate() {
         let text = std::fs::read_to_string(path)
             .map_err(|error| StyleError::Io(format!("read {}: {error}", path.display())))?;
         let file_name = path.file_name().and_then(|name| name.to_str());
+        let scope = scopes.get(index).cloned().unwrap_or_default();
         let options = LintOptions {
             file_name,
-            base: base_text.as_deref(),
+            base: scope.base.as_deref(),
+            scope_to_base: scope.scope_to_base && scope.base.is_some(),
+            review_lines: &scope.review_lines,
         };
         files.push(RecipeLintFile {
             path: path.to_path_buf(),
@@ -141,7 +169,57 @@ fn lint_recipe_files_inner(
 pub(super) fn extend_style(text: &str, options: &LintOptions<'_>, out: &mut Vec<StyleFinding>) {
     out.extend(long_lines(text));
     rules::extend_rules(text, options, out);
+    scope_formatting(text, options, out);
     sort_findings(out);
+}
+
+/// Mark `EB_FMT_*` warnings outside the review scope as `info`, so they are
+/// reported but do not keep the file from being clean.
+///
+/// - A line listed in `review_lines` is always in scope.
+/// - With an explicit base (`scope_to_base`), a line whose text also occurs in
+///   the base is unchanged, so out of scope; changed lines are in scope.
+/// - Otherwise every line is in scope except an `EB_FMT_PERCENT` line that
+///   keeps `%%(...)s` escapes: converting those is easy to get wrong (the
+///   escapes must become plain `%(...)s`) and maintainers often leave them.
+///
+/// Error-severity formatting findings (EB_FMT_MISSING_F) always count.
+pub(super) fn scope_formatting(text: &str, options: &LintOptions<'_>, out: &mut [StyleFinding]) {
+    let lines: Vec<&str> = text.lines().collect();
+    let base_lines: Option<HashSet<&str>> = match (options.scope_to_base, options.base) {
+        (true, Some(base)) => Some(base.lines().map(str::trim).collect()),
+        _ => None,
+    };
+    for finding in out.iter_mut() {
+        if !super::is_formatting_code(&finding.code)
+            || finding.severity == Severity::Error
+            || options.review_lines.contains(&finding.line)
+        {
+            continue;
+        }
+        let line = finding
+            .line
+            .checked_sub(1)
+            .and_then(|index| lines.get(index))
+            .copied()
+            .unwrap_or("");
+        let reason = match &base_lines {
+            Some(base) if base.contains(line.trim()) => {
+                Some("this line is unchanged from the base")
+            }
+            Some(_) => None,
+            None if finding.code == "EB_FMT_PERCENT" && line.contains("%%(") => {
+                Some("this entry keeps %%(...)s escapes")
+            }
+            None => None,
+        };
+        if let Some(reason) = reason {
+            finding.info = true;
+            finding.message.push_str(&format!(
+                " (info: {reason}, so it does not count against clean; convert it only if the review is about this line or you edit it, and then write %(...)s, never %%(...)s, inside the f-string)"
+            ));
+        }
+    }
 }
 
 fn long_lines(text: &str) -> Vec<StyleFinding> {
@@ -401,6 +479,7 @@ fn run_check_contrib(
                 mechanical: false,
                 origin: "eb --check-contrib".into(),
                 severity: Severity::Error,
+                info: false,
             },
         });
         return (
@@ -534,6 +613,7 @@ fn parsed_style_line(captures: &regex::Captures<'_>) -> ParsedContrib {
             mechanical: false,
             origin: "eb --check-contrib".into(),
             severity: Severity::Error,
+            info: false,
         },
     }
 }
@@ -552,6 +632,7 @@ fn contrib_finding(line: usize, column: usize, message: &str) -> StyleFinding {
         mechanical: false,
         origin: "eb --check-contrib".into(),
         severity: Severity::Error,
+        info: false,
     }
 }
 
@@ -774,6 +855,76 @@ mixed = f'lib/%(name)s.{SHLIB_EXT}'
         assert_eq!(lines, [1, 2, 4, 5], "{findings:?}");
     }
 
+    fn scoped(
+        text: &str,
+        base: Option<&str>,
+        scope_to_base: bool,
+        review: &[usize],
+    ) -> Vec<StyleFinding> {
+        super::super::lint_style_with(
+            text,
+            &LintOptions {
+                base,
+                scope_to_base,
+                review_lines: review,
+                ..LintOptions::default()
+            },
+        )
+    }
+
+    #[test]
+    fn untouched_escaped_percent_entries_are_info_without_a_base() {
+        let text = "sanity_check_paths = {\n    'files': ['lib/libtcl%%(version_major)s.%s' % SHLIB_EXT],\n    'dirs': [],\n}\n";
+        let findings = scoped(text, None, false, &[]);
+        let hit = findings
+            .iter()
+            .find(|finding| finding.code == "EB_FMT_PERCENT")
+            .expect("still reported");
+        assert!(hit.info, "{hit:?}");
+        assert!(hit.message.contains("info:"), "{}", hit.message);
+        assert!(super::super::findings_clean(&findings), "{findings:?}");
+        // Named by the review: in scope again.
+        let reviewed = scoped(text, None, false, &[2]);
+        assert!(!super::super::findings_clean(&reviewed), "{reviewed:?}");
+    }
+
+    #[test]
+    fn p7zip_stays_not_clean_without_a_base_or_when_its_lines_are_reviewed() {
+        let pre = include_str!("../fixtures/review_fix/p7zip-17.05-GCCcore-15.2.0.eb");
+        // No base: both '%' lines count (no %% escapes there).
+        let findings = scoped(pre, None, false, &[]);
+        assert!(findings.iter().all(|finding| !finding.info), "{findings:?}");
+        assert!(!super::super::findings_clean(&findings));
+
+        // Only prebuildopts edited, explicit base: the untouched 7z.%s line is
+        // out of scope unless the review names it.
+        let edited = pre.replace(
+            "prebuildopts = \"cp %s makefile.linux && cp makefile.linux makefile.machine &&\" % local_makefile",
+            "prebuildopts = f\"cp {local_makefile} makefile.linux && cp makefile.linux makefile.machine &&\"",
+        );
+        assert_ne!(edited, pre);
+        let unscoped = scoped(&edited, Some(pre), true, &[]);
+        assert!(super::super::findings_clean(&unscoped), "{unscoped:?}");
+        assert!(unscoped
+            .iter()
+            .any(|finding| finding.line == 43 && finding.info));
+        let reviewed = scoped(&edited, Some(pre), true, &[26, 43]);
+        assert!(!super::super::findings_clean(&reviewed), "{reviewed:?}");
+
+        // A base without scope_to_base (the MCP session baseline) does not
+        // scope EB_FMT findings: the leftover still counts.
+        let session = scoped(&edited, Some(pre), false, &[]);
+        assert!(!super::super::findings_clean(&session), "{session:?}");
+    }
+
+    #[test]
+    fn changed_lines_stay_in_scope_with_a_base() {
+        let base = "files = ['lib/libfoo.so']\n";
+        let text = "files = ['lib/libfoo.%s' % SHLIB_EXT]\n";
+        let findings = scoped(text, Some(base), true, &[]);
+        assert!(!super::super::findings_clean(&findings), "{findings:?}");
+    }
+
     #[test]
     fn proof_fixtures_flag_leftover_percent_and_f541() {
         // Pre-review p7zip-17.05 easyconfig frozen under fixtures/review_fix.
@@ -838,6 +989,7 @@ mixed = f'lib/%(name)s.{SHLIB_EXT}'
             mechanical: false,
             origin: String::new(),
             severity: Severity::Error,
+            info: false,
         }];
         let contrib = contrib_finding(3, 10, "W299 trailing whitespace");
         let mut w299 = contrib.clone();

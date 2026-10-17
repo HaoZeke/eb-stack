@@ -25,6 +25,7 @@ fn lint_file(path: &Path, base: Option<&str>) -> Vec<StyleFinding> {
         &LintOptions {
             file_name: name,
             base,
+            ..LintOptions::default()
         },
     )
 }

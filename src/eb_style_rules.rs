@@ -36,8 +36,18 @@ pub struct LintOptions<'a> {
     /// File name used in messages that EasyBuild words with one (`python -s`,
     /// checksum count). Defaults to `<easyconfig>`.
     pub file_name: Option<&'a str>,
-    /// The version the change started from. Turns on EB_FMT_TEMPLATE_REMOVED.
+    /// The version the change started from. Turns on the diff-mode rules:
+    /// EB_FMT_TEMPLATE_REMOVED, EB_SANITY_ENTRY_REMOVED,
+    /// EB_SANITY_PATHS_REMOVED and EB_EASYBLOCK_CHANGED.
     pub base: Option<&'a str>,
+    /// Scope `EB_FMT_*` findings to lines that differ from `base`: findings
+    /// on unchanged lines become `info`. Set when the caller passed the base
+    /// explicitly. Without it (or without a base), only untouched
+    /// `%%(...)s`-escaped `%` entries are `info`.
+    pub scope_to_base: bool,
+    /// Lines (1-based, in the linted file) the review is about. `EB_FMT_*`
+    /// findings there always count against clean.
+    pub review_lines: &'a [usize],
 }
 
 /// Python syntax error for `text`, as (line, column, message), or `None`.
@@ -74,6 +84,7 @@ pub(super) fn extend_rules(text: &str, options: &LintOptions<'_>, out: &mut Vec<
     escape_sequences(&scan, &mut sink);
     missing_whitespace(text, &scan.top, &mut sink);
     fstring_placeholders(&scan, &mut sink);
+    fstring_escaped_templates(text, &scan, &mut sink);
     quote_reuse(&scan, &mut sink);
     missing_fprefix(text, &scan, &names, &mut sink);
     template_vars(text, &scan, &assigns, &mut sink);
@@ -88,7 +99,14 @@ pub(super) fn extend_rules(text: &str, options: &LintOptions<'_>, out: &mut Vec<
     }
 
     match ast::Suite::parse(text, "<easyconfig>") {
-        Ok(suite) => ast_rules(text, &suite, file_name, &mut sink),
+        Ok(suite) => {
+            ast_rules(text, &suite, file_name, &mut sink);
+            if let Some(base) = options.base {
+                if let Ok(base_suite) = ast::Suite::parse(base, "<base>") {
+                    diff_rules(text, &suite, base, &base_suite, &mut sink);
+                }
+            }
+        }
         Err(_) => {
             if let Some((line, column, message)) = python_syntax_error(text) {
                 sink.push_at(line, column, "E999", message);
@@ -153,6 +171,7 @@ impl Sink<'_> {
             mechanical: false,
             origin: String::new(),
             severity: severity_for(code),
+            info: false,
         });
     }
 }
@@ -884,6 +903,26 @@ fn flush_fstring_group(
     group.clear();
 }
 
+/// EB_FSTRING_ESCAPED_TEMPLATE: `%%(...)s` in the literal part of an
+/// f-string. EasyBuild resolves templates with `%`, so `%%` stays a literal
+/// `%` and the template is never filled in (`lib/libtcl%(version_major)s.so`
+/// ends up in the path). Inside an f-string the template is plain `%(...)s`.
+fn fstring_escaped_templates(text: &str, scan: &Scan, sink: &mut Sink<'_>) {
+    for piece in &scan.pieces {
+        if piece.kind != PieceKind::FMiddle {
+            continue;
+        }
+        let body = piece_text(text, piece);
+        if let Some(at) = body.find("%%(") {
+            sink.push(
+                piece.start + at,
+                "EB_FSTRING_ESCAPED_TEMPLATE",
+                "%%(...)s inside an f-string is not a template: EasyBuild leaves a literal %(...)s in the value. The %% escape was only needed with the % operator; write %(...)s in the f-string".into(),
+            );
+        }
+    }
+}
+
 /// F541: f-string without a placeholder (CI flake8). Implicitly concatenated
 /// pieces count as one string, as in Python's AST.
 fn fstring_placeholders(scan: &Scan, sink: &mut Sink<'_>) {
@@ -1387,6 +1426,211 @@ fn ast_rules(text: &str, suite: &[ast::Stmt], file_name: &str, sink: &mut Sink<'
     duplicate_dependencies(&assigns, sink);
     empty_dependency_versions(&assigns, sink);
     checksum_count(&assigns, file_name, sink);
+}
+
+// ---------------------------------------------------------------------------
+// diff mode against the base (pre-edit) file
+
+fn last_assigns(suite: &[ast::Stmt]) -> HashMap<&str, &ast::StmtAssign> {
+    let mut out = HashMap::new();
+    for statement in suite {
+        if let ast::Stmt::Assign(assign) = statement {
+            for target in &assign.targets {
+                if let ast::Expr::Name(name) = target {
+                    out.insert(name.id.as_str(), assign);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn str_value(expr: &ast::Expr) -> Option<&str> {
+    match expr {
+        ast::Expr::Constant(constant) => match &constant.value {
+            ast::Constant::Str(value) => Some(value.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn expr_source<'t>(text: &'t str, expr: &ast::Expr) -> &'t str {
+    let start = u32::from(expr.range().start()) as usize;
+    let end = u32::from(expr.range().end()) as usize;
+    text.get(start..end).unwrap_or("").trim()
+}
+
+/// A sanity_check_paths entry as the path text it stands for, so that
+/// `'lib/x.%s' % SHLIB_EXT`, `'lib/x.' + SHLIB_EXT`, `f'lib/x.{SHLIB_EXT}'`
+/// and `'lib/x.so'` all compare equal. `None` for entries that cannot be
+/// compared without evaluating them (comprehensions, calls, ...).
+fn render_entry(text: &str, expr: &ast::Expr) -> Option<String> {
+    let rendered = match expr {
+        ast::Expr::Constant(_) => str_value(expr)?.to_string(),
+        ast::Expr::Name(name) => format!("{{{}}}", name.id.as_str()),
+        ast::Expr::JoinedStr(joined) => {
+            let mut out = String::new();
+            for value in &joined.values {
+                match value {
+                    ast::Expr::Constant(_) => out.push_str(str_value(value)?),
+                    ast::Expr::FormattedValue(field) => {
+                        out.push('{');
+                        out.push_str(expr_source(text, &field.value));
+                        out.push('}');
+                    }
+                    _ => return None,
+                }
+            }
+            out
+        }
+        ast::Expr::BinOp(binop) => match binop.op {
+            ast::Operator::Add => {
+                format!(
+                    "{}{}",
+                    render_entry(text, &binop.left)?,
+                    render_entry(text, &binop.right)?
+                )
+            }
+            ast::Operator::Mod => {
+                let format = str_value(&binop.left)?;
+                let rewrite = percent_rewrite(text, format, &binop.left, &binop.right)?;
+                // f'...' -> ...
+                rewrite.get(2..rewrite.len().saturating_sub(1))?.to_string()
+            }
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let rendered = rendered.replace("{{", "{").replace("}}", "}");
+    Some(match rendered.strip_suffix(".so") {
+        Some(stem) => format!("{stem}.{{SHLIB_EXT}}"),
+        None => rendered,
+    })
+}
+
+fn list_entries<'e>(expr: &'e ast::Expr, out: &mut Vec<&'e ast::Expr>) -> bool {
+    match expr {
+        ast::Expr::List(list) => {
+            out.extend(list.elts.iter());
+            true
+        }
+        ast::Expr::Tuple(tuple) => {
+            out.extend(tuple.elts.iter());
+            true
+        }
+        ast::Expr::BinOp(binop) if matches!(binop.op, ast::Operator::Add) => {
+            list_entries(&binop.left, out) && list_entries(&binop.right, out)
+        }
+        _ => false,
+    }
+}
+
+/// (key, rendered entry, source text) for each comparable sanity entry.
+fn sanity_entries(text: &str, value: &ast::Expr) -> Option<Vec<(String, String, String)>> {
+    let ast::Expr::Dict(dict) = value else {
+        return None;
+    };
+    let mut out = Vec::new();
+    for (key, value) in dict.keys.iter().zip(&dict.values) {
+        let Some(key) = key.as_ref().and_then(str_value) else {
+            continue;
+        };
+        if key != "files" && key != "dirs" {
+            continue;
+        }
+        let mut entries = Vec::new();
+        if !list_entries(value, &mut entries) {
+            continue;
+        }
+        for entry in entries {
+            if let Some(rendered) = render_entry(text, entry) {
+                out.push((
+                    key.to_string(),
+                    rendered,
+                    expr_source(text, entry).to_string(),
+                ));
+            }
+        }
+    }
+    Some(out)
+}
+
+/// Diff-mode errors against the base: a sanity_check_paths entry that is
+/// gone (EB_SANITY_ENTRY_REMOVED), the whole parameter gone
+/// (EB_SANITY_PATHS_REMOVED, a warning: dropping a default-equivalent
+/// sanity_check_paths is a valid review request), and `easyblock` removed or
+/// changed (EB_EASYBLOCK_CHANGED).
+fn diff_rules(
+    text: &str,
+    suite: &[ast::Stmt],
+    base: &str,
+    base_suite: &[ast::Stmt],
+    sink: &mut Sink<'_>,
+) {
+    let now = last_assigns(suite);
+    let before = last_assigns(base_suite);
+
+    if let Some(old) = before
+        .get("easyblock")
+        .and_then(|assign| str_value(&assign.value))
+    {
+        match now.get("easyblock") {
+            None => sink.push_at(
+                1,
+                1,
+                "EB_EASYBLOCK_CHANGED",
+                format!("easyblock = '{old}' was removed; the easyconfig now builds with a different easyblock. Keep it unless the review explicitly asks to change the easyblock"),
+            ),
+            Some(assign) => {
+                let new = str_value(&assign.value);
+                if new != Some(old) {
+                    sink.push(
+                        u32::from(assign.range.start()) as usize,
+                        "EB_EASYBLOCK_CHANGED",
+                        format!("easyblock changed from '{old}' to {}; keep it unless the review explicitly asks to change the easyblock", expr_source(text, &assign.value)),
+                    );
+                }
+            }
+        }
+    }
+
+    let Some(old_sanity) = before.get("sanity_check_paths") else {
+        return;
+    };
+    let Some(new_sanity) = now.get("sanity_check_paths") else {
+        sink.push_at(
+            1,
+            1,
+            "EB_SANITY_PATHS_REMOVED",
+            "sanity_check_paths was removed. That is right only when the review asks for it (for example because it equals the easyblock's default); otherwise restore it".into(),
+        );
+        return;
+    };
+    let (Some(old_entries), Some(new_entries)) = (
+        sanity_entries(base, &old_sanity.value),
+        sanity_entries(text, &new_sanity.value),
+    ) else {
+        return;
+    };
+    let mut remaining: Vec<(String, String)> = new_entries
+        .into_iter()
+        .map(|(key, rendered, _)| (key, rendered))
+        .collect();
+    for (key, rendered, source) in old_entries {
+        if let Some(at) = remaining
+            .iter()
+            .position(|(new_key, new_rendered)| *new_key == key && *new_rendered == rendered)
+        {
+            remaining.swap_remove(at);
+            continue;
+        }
+        sink.push(
+            u32::from(new_sanity.range.start()) as usize,
+            "EB_SANITY_ENTRY_REMOVED",
+            format!("sanity_check_paths '{key}' lost {source} from the base; converting an entry's formatting must keep the same path. Restore it unless the review asks to drop it"),
+        );
+    }
 }
 
 struct FormatVisitor<'t> {
@@ -2035,7 +2279,8 @@ mod tests {
             .collect();
         assert_eq!(hits.len(), 1, "{findings:?}");
         assert_eq!(hits[0].line, 3);
-        assert_eq!(hits[0].severity, super::super::Severity::Warning);
+        assert_eq!(hits[0].severity, super::super::Severity::Error);
+        assert!(!super::super::findings_error_free(&findings));
         assert!(hits[0].message.contains("Cython"));
     }
 
@@ -2052,6 +2297,111 @@ mod tests {
         );
         let fixed = lint("files = [f'libexec/7z.{SHLIB_EXT}']\n");
         assert!(super::super::findings_clean(&fixed), "{fixed:?}");
+    }
+
+    fn lint_against(text: &str, base: &str) -> Vec<StyleFinding> {
+        let mut out = Vec::new();
+        extend_rules(
+            text,
+            &LintOptions {
+                base: Some(base),
+                ..LintOptions::default()
+            },
+            &mut out,
+        );
+        out
+    }
+
+    const TCL_BASE: &str = "easyblock = 'ConfigureMake'\n\
+        sanity_check_paths = {\n    \
+        'files': ['bin/tclsh', 'lib/libtcl%%(version_major)s.%%(version_minor)s.%s' % SHLIB_EXT, 'lib/libtcl.so'],\n    \
+        'dirs': ['include'],\n}\n";
+
+    #[test]
+    fn escaped_template_inside_an_fstring_is_an_error() {
+        let findings = lint("files = [f'lib/libtcl%%(version_major)s.{SHLIB_EXT}']\n");
+        let hit = findings
+            .iter()
+            .find(|finding| finding.code == "EB_FSTRING_ESCAPED_TEMPLATE")
+            .unwrap_or_else(|| panic!("{findings:?}"));
+        assert_eq!(hit.severity, super::super::Severity::Error);
+        // Plain %%(...)s with the % operator and %(...)s in an f-string are fine.
+        assert!(!has(
+            &lint("files = ['lib/libtcl%%(version_major)s.%s' % SHLIB_EXT]\n"),
+            "EB_FSTRING_ESCAPED_TEMPLATE"
+        ));
+        assert!(!has(
+            &lint("files = [f'lib/libtcl%(version_major)s.{SHLIB_EXT}']\n"),
+            "EB_FSTRING_ESCAPED_TEMPLATE"
+        ));
+    }
+
+    #[test]
+    fn converting_sanity_entries_keeps_them_but_dropping_one_is_an_error() {
+        let converted = "easyblock = 'ConfigureMake'\n\
+            sanity_check_paths = {\n    \
+            'files': ['bin/tclsh', f'lib/libtcl%(version_major)s.%(version_minor)s.{SHLIB_EXT}', f'lib/libtcl.{SHLIB_EXT}'],\n    \
+            'dirs': ['include'],\n}\n";
+        let findings = lint_against(converted, TCL_BASE);
+        assert!(!has(&findings, "EB_SANITY_ENTRY_REMOVED"), "{findings:?}");
+
+        // The collapse seen in proof v4: the versioned library entry is gone.
+        let collapsed = "easyblock = 'ConfigureMake'\n\
+            sanity_check_paths = {\n    \
+            'files': ['bin/tclsh', f'lib/libtcl.{SHLIB_EXT}'],\n    \
+            'dirs': ['include'],\n}\n";
+        let findings = lint_against(collapsed, TCL_BASE);
+        let lost: Vec<_> = findings
+            .iter()
+            .filter(|finding| finding.code == "EB_SANITY_ENTRY_REMOVED")
+            .collect();
+        assert_eq!(lost.len(), 1, "{findings:?}");
+        assert_eq!(lost[0].severity, super::super::Severity::Error);
+        assert!(
+            lost[0].message.contains("libtcl%%(version_major)s"),
+            "{}",
+            lost[0].message
+        );
+
+        // Keeping %% inside the f-string is a different path and an error too.
+        let escaped = converted.replace(
+            "libtcl%(version_major)s.%(version_minor)s",
+            "libtcl%%(version_major)s.%%(version_minor)s",
+        );
+        let findings = lint_against(&escaped, TCL_BASE);
+        assert!(
+            has(&findings, "EB_FSTRING_ESCAPED_TEMPLATE"),
+            "{findings:?}"
+        );
+        assert!(has(&findings, "EB_SANITY_ENTRY_REMOVED"), "{findings:?}");
+    }
+
+    #[test]
+    fn removing_sanity_check_paths_is_a_warning() {
+        let findings = lint_against("easyblock = 'ConfigureMake'\n", TCL_BASE);
+        let hit = findings
+            .iter()
+            .find(|finding| finding.code == "EB_SANITY_PATHS_REMOVED")
+            .unwrap_or_else(|| panic!("{findings:?}"));
+        assert_eq!(hit.severity, super::super::Severity::Warning);
+        assert!(super::super::findings_clean(&findings), "{findings:?}");
+    }
+
+    #[test]
+    fn removing_or_changing_the_easyblock_is_an_error() {
+        let base = "easyblock = 'PythonPackage'\nname = 'x'\n";
+        let removed = lint_against("name = 'x'\n", base);
+        assert!(has(&removed, "EB_EASYBLOCK_CHANGED"), "{removed:?}");
+        let changed = lint_against("easyblock = 'PythonBundle'\nname = 'x'\n", base);
+        let hit = changed
+            .iter()
+            .find(|finding| finding.code == "EB_EASYBLOCK_CHANGED")
+            .unwrap_or_else(|| panic!("{changed:?}"));
+        assert_eq!(hit.line, 1);
+        assert!(hit.message.contains("PythonPackage"));
+        assert!(!has(&lint_against(base, base), "EB_EASYBLOCK_CHANGED"));
+        // Without a base there is nothing to compare.
+        assert!(!has(&lint("name = 'x'\n"), "EB_EASYBLOCK_CHANGED"));
     }
 
     #[test]
