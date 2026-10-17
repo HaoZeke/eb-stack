@@ -6,6 +6,7 @@ pub mod build_order;
 pub mod campaign;
 pub mod cargo;
 pub mod cran;
+pub mod dep_versions;
 pub mod domain;
 pub mod easyblock_skeleton;
 pub mod easystack;

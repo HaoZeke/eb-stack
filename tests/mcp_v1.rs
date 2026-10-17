@@ -25,6 +25,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_recipe_edit",
         "eb_recipe_write",
         "eb_recipe_grep",
+        "eb_dep_versions",
         "eb_recipe_check",
         "eb_recipe_lint",
         "eb_recipe_format",
@@ -39,7 +40,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 19, "unexpected MCP tools: {names:?}");
+    assert_eq!(names.len(), 20, "unexpected MCP tools: {names:?}");
 
     let package_bump = response["result"]["tools"]
         .as_array()
@@ -100,6 +101,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         ("eb_recipe_edit", vec!["path", "old", "new"]),
         ("eb_recipe_write", vec!["path", "content"]),
         ("eb_recipe_grep", vec!["pattern"]),
+        ("eb_dep_versions", vec!["name"]),
     ] {
         let tool = response["result"]["tools"]
             .as_array()
@@ -556,6 +558,126 @@ fn mcp_recipe_lint_is_not_clean_while_percent_formatting_remains() {
     let response = call(28, "eb_recipe_lint", json!({"recipes": [recipe]}));
     let body = &response["result"]["structuredContent"];
     assert_eq!(body["clean"], true, "{body}");
+}
+
+#[test]
+fn mcp_dep_versions_lists_versions_from_a_tree_and_refuses_to_guess() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let dir = temp.path().join("easybuild/easyconfigs/c/Cython");
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(
+        dir.join("Cython-0.29.37-GCCcore-13.3.0.eb"),
+        "name = 'Cython'\nversion = '0.29.37'\ntoolchain = {'name': 'GCCcore', 'version': '13.3.0'}\n",
+    )
+    .expect("ec");
+    std::fs::write(
+        dir.join("Cython-3.0.10-GCCcore-13.2.0.eb"),
+        "name = 'Cython'\nversion = '3.0.10'\ntoolchain = {'name': 'GCCcore', 'version': '13.2.0'}\n",
+    )
+    .expect("ec");
+    let response = call(
+        40,
+        "eb_dep_versions",
+        json!({"name": "Cython", "toolchain": "GCCcore-13.3.0", "easyconfigs": [temp.path().join("easybuild/easyconfigs")]}),
+    );
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let body = &response["result"]["structuredContent"];
+    assert_eq!(body["matching"][0]["version"], "0.29.37", "{body}");
+    assert_eq!(
+        body["other_toolchains"][0]["toolchain"], "GCCcore-13.2.0",
+        "{body}"
+    );
+
+    let empty = tempfile::tempdir().expect("empty");
+    let response = call(
+        41,
+        "eb_dep_versions",
+        json!({"name": "Cython", "easyconfigs": [empty.path()]}),
+    );
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(text.contains("Do not guess"), "{text}");
+}
+
+#[test]
+fn mcp_recipe_lint_compares_against_the_file_as_first_seen() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let recipe = temp.path().join("pkg.eb");
+    let original = "easyblock = 'PythonPackage'\nname = 'pkg'\nsanity_check_paths = {\n    'files': ['bin/pkg', 'lib/libpkg.%s' % SHLIB_EXT],\n    'dirs': [],\n}\n";
+    std::fs::write(&recipe, original).expect("recipe");
+    let first = call(42, "eb_recipe_lint", json!({"recipes": [recipe]}));
+    let body = &first["result"]["structuredContent"];
+    assert_eq!(
+        body["results"][0]["baseline"], "first seen in this session",
+        "{body}"
+    );
+
+    // Drop the easyblock and collapse a sanity entry.
+    std::fs::write(
+        &recipe,
+        "name = 'pkg'\nsanity_check_paths = {\n    'files': [f'lib/libpkg.{SHLIB_EXT}'],\n    'dirs': [],\n}\n",
+    )
+    .expect("edited");
+    let second = call(43, "eb_recipe_lint", json!({"recipes": [recipe]}));
+    let body = &second["result"]["structuredContent"];
+    assert_eq!(body["clean"], false, "{body}");
+    let codes: Vec<&str> = body["results"][0]["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .filter_map(|finding| finding["code"].as_str())
+        .collect();
+    assert!(codes.contains(&"EB_EASYBLOCK_CHANGED"), "{codes:?}");
+    assert!(codes.contains(&"EB_SANITY_ENTRY_REMOVED"), "{codes:?}");
+
+    // rebaseline accepts the current file as the new starting point.
+    let third = call(
+        44,
+        "eb_recipe_lint",
+        json!({"recipes": [recipe], "rebaseline": true}),
+    );
+    let body = &third["result"]["structuredContent"];
+    assert_eq!(body["clean"], true, "{body}");
+}
+
+#[test]
+fn mcp_recipe_lint_review_lines_and_base_decide_formatting_scope() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let base = temp.path().join("base.eb");
+    let recipe = temp.path().join("tool.eb");
+    let pre = "name = 'tool'\nlocal_m = 'm'\nprebuildopts = 'cp %s x &&' % local_m\nfiles = ['libexec/t.%s' % SHLIB_EXT]\n";
+    std::fs::write(&base, pre).expect("base");
+    std::fs::write(
+        &recipe,
+        "name = 'tool'\nlocal_m = 'm'\nprebuildopts = f'cp {local_m} x &&'\nfiles = ['libexec/t.%s' % SHLIB_EXT]\n",
+    )
+    .expect("recipe");
+    // Explicit base: the untouched line 4 is info, so the file is clean.
+    let scoped = call(
+        45,
+        "eb_recipe_lint",
+        json!({"recipes": [recipe], "base": base}),
+    );
+    let body = &scoped["result"]["structuredContent"];
+    assert_eq!(body["clean"], true, "{body}");
+    assert_eq!(body["info"], 1, "{body}");
+    assert_eq!(body["results"][0]["findings"][0]["info"], true, "{body}");
+    // The review is about line 4 too: not clean until it is converted.
+    let reviewed = call(
+        46,
+        "eb_recipe_lint",
+        json!({"recipes": [recipe], "base": base, "review_lines": [3, 4]}),
+    );
+    let body = &reviewed["result"]["structuredContent"];
+    assert_eq!(body["clean"], false, "{body}");
+    // No base given: every unescaped '%' line counts, as for #27186.
+    let other = temp.path().join("fresh.eb");
+    std::fs::write(&other, std::fs::read_to_string(&recipe).unwrap()).expect("fresh");
+    let unscoped = call(47, "eb_recipe_lint", json!({"recipes": [other]}));
+    let body = &unscoped["result"]["structuredContent"];
+    assert_eq!(body["clean"], false, "{body}");
 }
 
 #[test]
