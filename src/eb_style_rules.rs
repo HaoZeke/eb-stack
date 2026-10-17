@@ -1941,9 +1941,21 @@ fn duplicate_dependencies(assigns: &HashMap<&str, Vec<&ast::StmtAssign>>, sink: 
     }
 }
 
-/// EB_DEP_EMPTY_VERSION: a (build)dependency tuple whose version is `''`.
-/// EasyBuild cannot resolve it; the version has to be one that exists for the
-/// toolchain generation (look it up in the robot tree).
+/// A version string that stands in for "I do not know", not a release.
+/// `''` is what the rule was written for; `'0'`, `'x'` and `'TODO'` are the
+/// same failure (proof v5, PR 24538: a trial wrote `('Cython', '0')`).
+fn is_placeholder_version(version: &str) -> bool {
+    let version = version.trim();
+    version.is_empty()
+        || version == "0"
+        || version.eq_ignore_ascii_case("x")
+        || version.eq_ignore_ascii_case("todo")
+}
+
+/// EB_DEP_EMPTY_VERSION: a (build)dependency tuple whose version is `''`,
+/// `'0'`, `'x'` or `'TODO'`. EasyBuild cannot resolve it; the version has to
+/// be one that exists for the toolchain generation (look it up in the robot
+/// tree).
 fn empty_dependency_versions(assigns: &HashMap<&str, Vec<&ast::StmtAssign>>, sink: &mut Sink<'_>) {
     for key in ["dependencies", "builddependencies"] {
         for statement in assigns.get(key).into_iter().flatten() {
@@ -1969,11 +1981,11 @@ fn empty_dependency_versions(assigns: &HashMap<&str, Vec<&ast::StmtAssign>>, sin
                 let ast::Constant::Str(version) = &version.value else {
                     continue;
                 };
-                if version.trim().is_empty() {
+                if is_placeholder_version(version) {
                     sink.push(
                         u32::from(element.range().start()) as usize,
                         "EB_DEP_EMPTY_VERSION",
-                        format!("{key} entry for {name} has an empty version; use a version that exists for this toolchain generation (look it up in the robot tree with eb_recipe_check or the easyconfigs repository) instead of '' or a guess"),
+                        format!("{key} entry for {name} has version '{version}', which is not a real version; use a version that exists for this toolchain generation (look it up with eb_dep_versions) instead of '', '0', 'x' or 'TODO'"),
                     );
                 }
             }
@@ -2331,6 +2343,31 @@ mod tests {
         assert_eq!(hits[0].severity, super::super::Severity::Error);
         assert!(!super::super::findings_error_free(&findings));
         assert!(hits[0].message.contains("Cython"));
+    }
+
+    #[test]
+    fn placeholder_dependency_versions_are_errors() {
+        // 24538 wrote ('Cython', '0') after eb_dep_versions did not list the
+        // GCCcore version. '', '0', 'x' and 'TODO' are the same kind of guess.
+        for version in ["", "0", " 0 ", "x", "X", "TODO", "todo"] {
+            let text = format!("dependencies = [('Cython', '{version}')]\n");
+            let findings = lint(&text);
+            let hits: Vec<_> = findings
+                .iter()
+                .filter(|finding| finding.code == "EB_DEP_EMPTY_VERSION")
+                .collect();
+            assert_eq!(hits.len(), 1, "{version:?} {findings:?}");
+            assert_eq!(hits[0].severity, super::super::Severity::Error);
+            assert!(!super::super::findings_clean(&findings), "{version:?}");
+        }
+        for version in ["0.0", "10", "3.0.10"] {
+            let text = format!("builddependencies = [('Cython', '{version}')]\n");
+            let findings = lint(&text);
+            assert!(
+                !has(&findings, "EB_DEP_EMPTY_VERSION"),
+                "{version:?} {findings:?}"
+            );
+        }
     }
 
     #[test]

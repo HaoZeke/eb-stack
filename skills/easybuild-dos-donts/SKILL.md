@@ -286,7 +286,7 @@ review is about so those always count. `error_free` reports errors only.
 These are errors: `%%(...)s` inside an f-string (EB_FSTRING_ESCAPED_TEMPLATE),
 a sanity_check_paths entry lost since the file was first seen
 (EB_SANITY_ENTRY_REMOVED), `easyblock` removed or changed
-(EB_EASYBLOCK_CHANGED), and a dependency with version `''`
+(EB_EASYBLOCK_CHANGED), and a dependency whose version is `''`, `'0'`, `'x'` or `'TODO'`
 (EB_DEP_EMPTY_VERSION: look the version up with `eb_dep_versions`, never
 guess). Removing the whole sanity_check_paths is only a warning
 (EB_SANITY_PATHS_REMOVED), because a review may ask for exactly that. The

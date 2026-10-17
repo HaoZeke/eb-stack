@@ -47,7 +47,7 @@ rules that `src/eb_style_rules.rs` ports. Those scripts are not shipped here.
 | EB_LOCAL_VAR_NAMING | error (test suite) | top-level name that is not a generic parameter, not an extra option of the easyblock, not `local_*`/`_*`/one letter | easyblock extra options (files_to_copy, test_cmd, ...); skip if the easyblock is unknown | lint_local_var_naming (synthetic) |
 | EB_FSTRING_ESCAPED_TEMPLATE | error (eb-stack) | `%%(...)s` in the literal part of an f-string (EasyBuild leaves a literal `%(...)s`) | `%%(...)s` with the `%` operator | unit tests |
 | EB_SANITY_ENTRY_REMOVED / EB_EASYBLOCK_CHANGED | error, diff mode | a sanity_check_paths entry whose path is gone from the base (formatting changes compare equal); `easyblock` removed or changed | converted entries with the same path | unit tests |
-| EB_DEP_EMPTY_VERSION | error | `('Name', '')` in (build)dependencies | - | unit tests |
+| EB_DEP_EMPTY_VERSION | error | `('Name', '')`, `'0'`, `'x'` or `'TODO'` in (build)dependencies | a real version such as `'3.0.10'` | unit tests |
 | EB_DEP_DUPLICATE | warning | identical tuple twice in (build)dependencies | - | lint_dep_duplicate |
 | EB_CHECKSUM_COUNT | error (check-contrib) | sources+data_sources+patches (+ easyblock `patch_*` options such as patch_ctypes_ld_library_path) != checksums (top level), framework message | no checksums at all (not this rule), dict-per-file form with the right count | lint_checksum_count |
 
