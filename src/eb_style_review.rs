@@ -206,7 +206,7 @@ pub(super) fn scope_formatting(text: &str, options: &LintOptions<'_>, out: &mut 
     for finding in out.iter_mut() {
         if options.review_lines.contains(&finding.line) {
             finding.in_review = true;
-        } else if finding.code == "EB_SHLIB_HARDCODED" {
+        } else if super::REVIEW_COUNTED.contains(&finding.code.as_str()) {
             let line = finding
                 .line
                 .checked_sub(1)
@@ -225,9 +225,9 @@ pub(super) fn scope_formatting(text: &str, options: &LintOptions<'_>, out: &mut 
             };
             if let Some(why) = why {
                 finding.in_review = true;
-                finding.message.push_str(&format!(
-                    " (counts against clean: {why}; write f'....{{SHLIB_EXT}}' and keep every %(...)s template)"
-                ));
+                finding
+                    .message
+                    .push_str(&format!(" (counts against clean: {why})"));
             }
         }
         if !super::is_formatting_code(&finding.code)

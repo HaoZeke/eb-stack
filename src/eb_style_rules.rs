@@ -93,6 +93,7 @@ pub(super) fn extend_rules(text: &str, options: &LintOptions<'_>, out: &mut Vec<
     missing_fprefix(text, &scan, &names, &mut sink);
     template_vars(text, &scan, &assigns, &mut sink);
     hardcoded_shlib(text, &scan, &assigns, &mut sink);
+    sanity_command_dirs(text, &scan, &assigns, &mut sink);
     unknown_templates(text, &scan, &assigns, &mut sink);
     let easyblock = easyblock_name(text);
     python_user_site(text, easyblock.as_deref(), file_name, &mut sink);
@@ -1108,6 +1109,56 @@ fn hardcoded_shlib(
                 "hardcoded '.so'; use SHLIB_EXT in an f-string (e.g. f'lib/libfoo.{SHLIB_EXT}')"
                     .into(),
             );
+        }
+    }
+}
+
+static CD_INSTALLDIR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\bcd\s+["']?(%\(installdir\)s|\$\{?EBROOT\w+\}?)"#).expect("cd regex")
+});
+
+/// EB_SANITY_CMD_BUILDDIR and EB_SANITY_CMD_CD_INSTALLDIR: where a
+/// `sanity_check_commands` entry runs.
+///
+/// EasyBuild runs sanity check commands after loading the generated module,
+/// from a fresh empty temporary directory (`eb-sanity-check-*`), because
+/// "using the build or installation directory can produce false positives and
+/// polute them with files" (framework `EasyBlock._sanity_check_step`). With
+/// `--sanity-check-only` or `--module-only` every other step is skipped, so
+/// `%(builddir)s` and `%(start_dir)s` do not exist, and after a normal build
+/// the build directory is cleaned up. A command that `cd`s into the
+/// installation directory to run something writes its output there. Both
+/// are warnings; on a review line or a line you edited they block clean.
+fn sanity_command_dirs(
+    text: &str,
+    scan: &Scan,
+    assigns: &BTreeMap<String, Vec<(usize, usize)>>,
+    sink: &mut Sink<'_>,
+) {
+    let Some(statements) = assigns.get("sanity_check_commands") else {
+        return;
+    };
+    for &(start, end) in statements {
+        let uses_tmp = text[start..end].contains("mktemp");
+        for piece in scan
+            .pieces
+            .iter()
+            .filter(|piece| piece.start >= start && piece.end <= end)
+        {
+            let body = piece_text(text, piece);
+            if body.contains("%(builddir)s") || body.contains("%(start_dir)s") {
+                sink.push(
+                    piece.start,
+                    "EB_SANITY_CMD_BUILDDIR",
+                    "sanity_check_commands must not depend on the build directory: it does not exist with eb --sanity-check-only or --module-only and is removed after a build. EasyBuild runs each command from an empty temporary directory after loading the module; copy what the command needs from %(installdir)s into a fresh directory (cd $(mktemp -d) && cp -r %(installdir)s/... .) and run it there".into(),
+                );
+            } else if !uses_tmp && CD_INSTALLDIR.is_match(body) {
+                sink.push(
+                    piece.start,
+                    "EB_SANITY_CMD_CD_INSTALLDIR",
+                    "a sanity check command that cds into the installation directory writes its output there (and the installation may be read-only); run it from a fresh temporary directory instead: cd $(mktemp -d) && cp -r %(installdir)s/... . && <command>".into(),
+                );
+            }
         }
     }
 }
@@ -2266,6 +2317,25 @@ mod tests {
                     buildopts = '%(cc)s -O2' % {'cc': 'gcc'}\n";
         let findings = lint(text);
         assert!(!has(&findings, "EB_TEMPLATE_UNKNOWN"), "{findings:?}");
+    }
+
+    #[test]
+    fn sanity_commands_must_not_use_the_build_or_install_dir() {
+        let builddir = "sanity_check_commands = [\n    \"mkdir -p %(builddir)s && cp -a %(installdir)s/ex %(builddir)s && \"\n    \"cd %(builddir)s/ex && prog\",\n]\n";
+        let found = lint(builddir);
+        assert!(has(&found, "EB_SANITY_CMD_BUILDDIR"), "{found:?}");
+        let install = "sanity_check_commands = [\"cd %(installdir)s/ex && prog\"]\n";
+        assert!(has(&lint(install), "EB_SANITY_CMD_CD_INSTALLDIR"));
+        let tmp = "sanity_check_commands = [\"cd $(mktemp -d) && cp -r %(installdir)s/ex . && cd ex && prog\"]\n";
+        assert!(
+            !has(&lint(tmp), "EB_SANITY_CMD_CD_INSTALLDIR"),
+            "{:?}",
+            lint(tmp)
+        );
+        assert!(!has(&lint(tmp), "EB_SANITY_CMD_BUILDDIR"));
+        // Elsewhere %(builddir)s is fine.
+        let other = "preconfigopts = 'cd %(builddir)s && '\n";
+        assert!(!has(&lint(other), "EB_SANITY_CMD_BUILDDIR"));
     }
 
     #[test]
