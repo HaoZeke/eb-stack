@@ -9,6 +9,7 @@ Use the matching public skill and execute it through the requested claim rung:
 | prove an emitted or edited recipe before building it | `skills/verify-recipe/SKILL.md` |
 | upstream easybuild-easyconfigs PR / test report | `skills/upstream-pr/SKILL.md` |
 | EasyBuild do/don't (incl. #26435 class) | `skills/easybuild-dos-donts/SKILL.md` |
+| reviewer comments on an easyconfig | `skills/easybuild-dos-donts/SKILL.md` (review-fix) |
 | build an upstream recipe at a site without forking it | `skills/site-consume/SKILL.md` |
 | EESSI-extend test / EESSI software-layer PR | `skills/eessi-extend/SKILL.md` |
 | generated output needed a hand correction | `skills/tool-repair/SKILL.md` |
@@ -23,7 +24,9 @@ file had to be corrected by hand.
 1. Run `eb-stack package inspect|plan|bump`; do not use removed flat commands.
 2. Treat `package.plan.json` as the canonical build manifest, `package.sbom.cdx.json` as the planned SBOM, and `locks/*.lock.json` as Resolvo evidence.
 3. Emit one `.eb` file per product profile. Keep the default profile unsuffixed and follow neighboring GROMACS/LAMMPS conventions.
-4. Run `eb-stack recipe format|lint|check` on emitted recipes.
+4. Run `eb-stack recipe format|lint|check` on emitted recipes. `recipe lint`
+   reports E501, W299, F541, UP031, and EB101, and merges `eb --check-contrib`
+   when `eb` is installed. `recipe check` needs at least one easyconfigs path.
 5. Run `eb-stack target doctor` before a build campaign.
 6. Run or resume `eb-stack campaign run` on the configured EasyBuild target until the requested claim rung is established.
 7. Use `campaign finding claim|resolve` for OMP coordination. Never edit campaign JSON directly or steal an owned finding.
@@ -31,6 +34,17 @@ file had to be corrected by hand.
    CLI on the build host: `eb --check-contrib`, then
    `eb --from-pr <N> --robot --upload-test-report` (see `skills/upstream-pr/SKILL.md`).
    Do not invent substitutes for contribution checks or test-report upload.
+
+## Review fixes
+
+When an EasyBuild reviewer asks for a recipe change, read the whole file,
+apply that change at every occurrence, run `eb-stack recipe lint` and
+`eb-stack recipe check`, and show the diff. Do not stop after the first hunk.
+EasyBuild template values (`%(name)s`, `%(version)s`, `%(builddir)s`) stay
+templates. An f-string is only for a Python constant such as `SHLIB_EXT`, and
+it always has a placeholder. The table, the citations, and the edit steps are
+in `skills/easybuild-dos-donts/SKILL.md`. Do not declare the fix done while
+lint findings remain, and do not comment on the PR.
 
 ## Non-negotiables
 

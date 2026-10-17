@@ -335,13 +335,22 @@ eb-stack stack solve \
 
 ## MCP
 
-`eb-stack mcp` exposes the same version-one workflows over stdio:
+`eb-stack mcp` exposes the same version-one workflows over stdio.
+`eb-stack mcp --workspace ROOT` (or `EB_STACK_WORKSPACE`) is the root for the
+recipe file tools.
 
 - `eb_package_inspect`, `eb_package_plan`, `eb_package_bump`;
-- `eb_recipe_check`, `eb_recipe_format`, `eb_stack_solve`;
+- `eb_recipe_read`, `eb_recipe_list`, `eb_recipe_edit`, `eb_recipe_write`;
+- `eb_recipe_check`, `eb_recipe_lint`, `eb_recipe_format`;
+- `eb_stack_solve`, `eb_stack_sbom`;
 - `eb_target_list`, `eb_target_doctor`;
 - `eb_campaign_run`, `eb_campaign_status`;
 - `eb_campaign_finding_claim`, `eb_campaign_finding_resolve`.
+
+`eb_recipe_edit` replaces an exact string and does not write a repeated match
+unless `replace_all` is set. `eb_recipe_check` requires at least one
+`easyconfigs` path. `eb_recipe_lint` reports E501, W299, F541, UP031, and
+EB101, and merges `eb --check-contrib` when `eb` is installed.
 
 ## Skills
 

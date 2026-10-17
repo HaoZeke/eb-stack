@@ -365,6 +365,7 @@ dependencies = [
  "petgraph 0.7.1",
  "regex",
  "resolvo",
+ "rustpython-ast",
  "rustpython-parser",
  "serde",
  "serde_json",

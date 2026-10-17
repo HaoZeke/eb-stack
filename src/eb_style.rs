@@ -1,14 +1,21 @@
-//! EasyBuild easyconfig physical-line style (pycodestyle E501, max 120).
+//! EasyBuild easyconfig style checks and mechanical line wrapping.
 //!
-//! EasyBuild's `eb --check-contrib` runs pycodestyle with a 120-column limit.
-//! Product content (which `-D` flags) is residual judgment; **wrapping** long
+//! EasyBuild's `eb --check-contrib` runs pycodestyle with a 120-column limit
+//! and EasyBuild's own trailing-whitespace check, then checks SHA256 checksums.
+//! This module reports that style locally: line length (E501), trailing
+//! whitespace (W299), f-strings with no placeholders (F541), leftover
+//! printf-style `%` formatting (UP031), and f-strings that interpolate
+//! EasyBuild template names such as `name` or `version` (EB101). When `eb` is
+//! on `PATH`, [`lint_recipe_files`] also runs `eb --check-contrib` and merges
+//! its findings.
+//!
+//! Product content (which `-D` flags) is residual judgment. **Wrapping** long
 //! string assignments so each physical line is ≤120 is mechanical and must not
-//! burn residual-agent turns.
-//!
-//! The linter reports physical lines longer than [`EB_MAX_LINE`] (E501). The
-//! formatter rewrites long single-quoted or double-quoted assignments such as
-//! `key = '…'` and `key += "…"` into parenthesized adjacent string literals. It
-//! also wraps long `#` comment lines using the patterns maintainers use by hand.
+//! burn residual-agent turns. The formatter rewrites long single-quoted or
+//! double-quoted assignments such as `key = '…'` and `key += "…"` into
+//! parenthesized adjacent string literals. It also wraps long `#` comment
+//! lines using the patterns maintainers use by hand. It does not rewrite
+//! f-strings or `%` formatting.
 
 use std::fmt;
 use std::path::Path;
@@ -16,22 +23,31 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+#[path = "eb_style_review.rs"]
+mod review;
+pub use review::{
+    lint_recipe_files, lint_recipe_files_with, CheckContribReport, RecipeLintFile, RecipeLintReport,
+};
+
 /// EasyBuild / pycodestyle easyconfig max line length.
 pub const EB_MAX_LINE: usize = 120;
 
-/// One style finding (currently E501 only).
+/// One style finding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StyleFinding {
     /// 1-based line number.
     pub line: usize,
-    /// 1-based column where the line exceeds the limit (usually 121).
+    /// 1-based column. For E501 this is [`EB_MAX_LINE`] + 1.
     pub column: usize,
-    /// pycodestyle code (`E501`).
+    /// Style code (`E501`, `W299`, `F541`, `UP031`, `EB101`, or an `eb` code).
     pub code: String,
     /// Human-readable description of the finding.
     pub message: String,
     /// True when `format_style` can rewrite this line deterministically.
     pub mechanical: bool,
+    /// Empty for eb-stack's own checks. `eb --check-contrib` when merged.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub origin: String,
 }
 
 /// Result of a format pass.
@@ -41,7 +57,10 @@ pub struct FormatStyleResult {
     pub text: String,
     /// Number of physical lines that were rewritten.
     pub lines_rewritten: usize,
-    /// Findings still present after format (non-fixable long lines).
+    /// Style findings still present after format.
+    ///
+    /// Wrapping only clears mechanical E501 lines. F541, UP031, EB101, W299,
+    /// and long lines the formatter cannot rewrite stay here.
     pub remaining: Vec<StyleFinding>,
 }
 
@@ -62,23 +81,20 @@ impl StyleFinding {
             code: "E501".into(),
             message: format!("line too long ({len} > {EB_MAX_LINE} characters)"),
             mechanical,
+            origin: String::new(),
         }
     }
 }
 
-/// Lint every physical line for E501.
+/// Lint one easyconfig's text.
+///
+/// Physical checks cover E501 and W299. When the text parses as Python, the
+/// same pass reports F541, UP031, and EB101. A parse error leaves those three
+/// unreported; line length and trailing whitespace still run. This function
+/// does not invoke `eb`.
 pub fn lint_style(text: &str) -> Vec<StyleFinding> {
     let mut out = Vec::new();
-    for (i, line) in text.lines().enumerate() {
-        let len = line.chars().count();
-        if len > EB_MAX_LINE {
-            out.push(StyleFinding::e501(
-                i + 1,
-                len,
-                line_is_mechanically_fixable(line),
-            ));
-        }
-    }
+    review::extend_style(text, &mut out);
     out
 }
 

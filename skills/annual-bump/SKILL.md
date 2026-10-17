@@ -23,7 +23,10 @@ Use the current checkout on the configured builder. Do not use a stale
 
 Robot trees and `--out-dir` live on that builder. Do not `test -d` those
 paths on this machine. The pinned packset `package-bump` states the same
-contract (`ljos search bump`).
+contract (`ljos search bump`). That pack also carries the review-fix lessons:
+EasyBuild templates versus f-strings, apply a review comment to every
+occurrence, and run `recipe lint` before calling the fix done. Those are pack
+atoms, not `ljos prefer --user` rows.
 
 ## Mechanical contract
 

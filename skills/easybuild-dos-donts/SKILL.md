@@ -9,8 +9,10 @@ Mechanical enforcement lives in `eb-stack recipe check` / `recipe lint`.
 Hard errors are the two #26435 classes (`EB_MAINT_CROSS_GEN`,
 `EB_MAINT_SHELL_MONSTER`, `EB_MAINT_PATCHELF_RPATH`); warnings are the
 #26480 review classes (`EB_MAINT_THIN_BUILD`, `EB_MAINT_TESTS_OFF`,
-`EB_MAINT_DEP_TOOLCHAIN_PIN`). This skill is the human and agent contract
-around those gates plus contribution practice.
+`EB_MAINT_DEP_TOOLCHAIN_PIN`). `recipe lint` also reports the style
+reviewers apply: E501, W299, F541, UP031, and EB101, and it merges
+`eb --check-contrib` when `eb` is on `PATH`. This skill is the human and
+agent contract around those gates plus contribution practice.
 
 ## DO
 
@@ -90,6 +92,74 @@ around those gates plus contribution practice.
     or an existing prefix will do.
 12. **Don't treat `eb --show-config` defaults** as the prefix used by past
     SUCCESS gists.
+
+## Templates versus f-strings
+
+EasyBuild completes string templates from the easyconfig (`name`, `version`,
+`builddir`, and the rest of `--avail-easyconfig-templates`). Constants such
+as `SHLIB_EXT`, `SOURCELOWER_TAR_GZ`, and `GITHUB_SOURCE` are Python names
+from `--avail-easyconfig-constants`, not `%(SHLIB_EXT)s` templates.
+
+Cite the current docs, not a paraphrase of an old recipe:
+
+- Dynamic values, including why `%(version)s` has to stay a template for
+  `--try-software-version`:
+  <https://docs.easybuild.io/writing-easyconfig-files/#easyconfig_param_templates>
+- The template table:
+  <https://docs.easybuild.io/version-specific/easyconfig-templates/>
+- Line length 120 and `eb --check-contrib` (pycodestyle, ignoring W291 and
+  E741, plus EasyBuild's W299 trailing-whitespace check):
+  <https://docs.easybuild.io/code-style/>
+- Contribution checks, including SHA256 checksums:
+  <https://docs.easybuild.io/contributing/>
+
+Write values EasyBuild resolves as templates inside an ordinary string:
+`%(name)s`, `%(version)s`, `%(namelower)s`, `%(builddir)s`, `%(installdir)s`.
+An f-string is only for a Python constant or a local name, and it always has
+a `{placeholder}`.
+
+| Write this | Instead of | Why |
+|---|---|---|
+| `f'libexec/7z.{SHLIB_EXT}'` | `'libexec/7z.%s' % SHLIB_EXT` | `SHLIB_EXT` is a Python constant. Old-style `'%s' % X` is UP031. |
+| `f'cp {local_makefile} makefile.linux &&'` | `"cp %s makefile.linux &&" % local_makefile` | `local_makefile` is a local Python name. |
+| `'export TMPDIR=%(builddir)s/tmp && mkdir -p $TMPDIR && '` | `f'export TMPDIR=%(builddir)s/tmp && mkdir -p $TMPDIR && '` | `%(builddir)s` is not a Python placeholder. The `f` prefix is F541. |
+| `'%(name)s/%(version)s'` | `f'{name}/{version}'` | `{name}` and `{version}` bypass templates (EB101), so `--try-software-version` cannot retarget them. |
+| `f'lib/%(name)s.{SHLIB_EXT}'` | either form alone | Template text stays `%(name)s`. The constant is the only `{placeholder}`. |
+
+`name.lower()` inside an f-string is `%(namelower)s`. `nameletter.lower()` is
+`%(nameletterlower)s`. A numeric `n % 2` is not formatting. A literal `%s`
+inside a string with no `%` operator (an `extract_cmd` snippet, for example)
+is not formatting either.
+
+`eb --check-contrib` does not run pyflakes, so it will not report F541. eb-stack
+lint does. Clean means no E501, W299, F541, UP031, or EB101.
+
+## Review-fix workflow
+
+Use this when a reviewer asks for a change on an existing easyconfig. Read the
+comments, then change the file. Do not stop at the first diff hunk.
+
+1. Read the whole file (`eb_recipe_read`, or the file on disk). Reviewer
+   comments name one line; the same pattern is often elsewhere.
+2. Search every occurrence of the requested pattern before editing.
+   `eb_recipe_edit` replaces an exact string. If `old` matches more than once,
+   the tool leaves the file unchanged until `replace_all` is true, or until
+   `old` includes enough surrounding text to be unique.
+3. Apply every requested change. On easyconfigs PR #27186 the pre-review
+   `p7zip-17.05-GCCcore-15.2.0.eb` (the proof summary called the version 17.06;
+   the file in the PR is 17.05) had both
+   `"cp %s makefile.linux &&" % local_makefile` and
+   `'libexec/7z.%s' % SHLIB_EXT`. Both become f-strings. On #27187,
+   `libgd-2.3.3` `pretestopts = f'export TMPDIR=%(builddir)s/tmp && ...'`
+   drops the `f` prefix, and `f'lib/%(name)s.{SHLIB_EXT}'` stays as it is.
+4. Run `eb-stack recipe lint` (MCP `eb_recipe_lint`) and `eb-stack recipe check`
+   (MCP `eb_recipe_check`) with at least one easyconfigs path. Lint must be
+   clean of E501, W299, F541, UP031, and EB101. When `eb` is installed, lint
+   also merges `eb --check-contrib`. A missing `eb` does not clear local
+   findings. On the EasyBuild host, still run `eb --check-contrib` before PR
+   text. eb-stack lint is not a substitute for that host check.
+5. Show the diff. Do not declare the review fix done while findings remain.
+   Do not comment on the PR. The human owns that surface.
 
 ## Quick pre-PR checklist
 

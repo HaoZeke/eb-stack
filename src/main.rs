@@ -13,12 +13,12 @@ use eb_stack::target::{doctor_target, resolve_target_layers, BuildTarget, Target
 use eb_stack::{
     check_duplicate_upstream, check_maintainer_acceptability, check_maintainer_acceptability_text,
     check_recipe_deps, format_style, format_style_file, inspect_new_package, is_registry_name,
-    lint_style, load_json_file, materialize_registry_name, packaging_gate, parse_easyconfig_trees,
-    plan_new_package_with, plan_package_bump_with, plan_package_closure_with_sources,
-    resolve_easyconfig_file, resolve_package_catalog_layers, write_json_pretty,
-    write_package_bundle, write_package_closure, BumpPackageRequest, ForeignFormat,
-    NewPackageRequest, PackageBundle, PackageCatalogLayer, PackageEmitOptions, SolveExtraOut,
-    StackLock, Toolchain, UreqClient,
+    lint_recipe_files, load_json_file, materialize_registry_name, packaging_gate,
+    parse_easyconfig_trees, plan_new_package_with, plan_package_bump_with,
+    plan_package_closure_with_sources, resolve_easyconfig_file, resolve_package_catalog_layers,
+    write_json_pretty, write_package_bundle, write_package_closure, BumpPackageRequest,
+    ForeignFormat, NewPackageRequest, PackageBundle, PackageCatalogLayer, PackageEmitOptions,
+    SolveExtraOut, StackLock, Toolchain, UreqClient,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -67,7 +67,14 @@ enum Command {
         command: ReproCommand,
     },
     /// Serve the same workflows over MCP stdio.
-    Mcp,
+    Mcp {
+        /// Workspace root for the recipe file tools.
+        ///
+        /// Sets `EB_STACK_WORKSPACE` for this process. When omitted, an existing
+        /// `EB_STACK_WORKSPACE` is kept; otherwise the server uses its current directory.
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -290,7 +297,7 @@ enum RecipeCommand {
         #[arg(long)]
         strict: bool,
     },
-    /// Report EasyBuild E501 style findings.
+    /// Report EasyBuild reviewer-style findings and merge `eb --check-contrib` when `eb` is installed.
     Lint {
         #[arg(required = true)]
         paths: Vec<PathBuf>,
@@ -525,7 +532,10 @@ fn main() -> Result<()> {
         Command::Target { command } => run_target(command),
         Command::Campaign { command } => run_campaign(command),
         Command::Repro { command } => run_repro(command),
-        Command::Mcp => {
+        Command::Mcp { workspace } => {
+            if let Some(workspace) = workspace {
+                std::env::set_var("EB_STACK_WORKSPACE", &workspace);
+            }
             let stdin = std::io::stdin();
             let stdout = std::io::stdout();
             eb_stack::mcp::run_server(stdin.lock(), stdout.lock()).context("MCP stdio server")?;
@@ -1036,16 +1046,31 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             Ok(())
         }
         RecipeCommand::Lint { paths } => {
-            let mut findings = Vec::new();
+            let path_refs = paths.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+            let report = lint_recipe_files(&path_refs)?;
+            let mut style = Vec::new();
             let mut maintainer_all = Vec::new();
-            for path in paths {
-                let text = std::fs::read_to_string(&path)
-                    .with_context(|| format!("read {}", path.display()))?;
-                findings.extend(lint_style(&text));
-                let report = check_maintainer_acceptability_text(&text);
-                for f in report.findings {
+            for file in &report.files {
+                for finding in &file.findings {
+                    let mut item = serde_json::json!({
+                        "path": file.path.display().to_string(),
+                        "line": finding.line,
+                        "column": finding.column,
+                        "code": finding.code,
+                        "message": finding.message,
+                        "mechanical": finding.mechanical,
+                    });
+                    if !finding.origin.is_empty() {
+                        item["origin"] = serde_json::json!(finding.origin);
+                    }
+                    style.push(item);
+                }
+                let text = std::fs::read_to_string(&file.path)
+                    .with_context(|| format!("read {}", file.path.display()))?;
+                let maintainer = check_maintainer_acceptability_text(&text);
+                for f in maintainer.findings {
                     maintainer_all.push(serde_json::json!({
-                        "path": path.display().to_string(),
+                        "path": file.path.display().to_string(),
                         "code": f.code,
                         "severity": f.severity,
                         "message": f.message,
@@ -1056,7 +1081,8 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
-                    "style": findings,
+                    "style": style,
+                    "check_contrib": report.check_contrib,
                     "maintainer_acceptability": maintainer_all,
                 }))?
             );
@@ -1064,10 +1090,10 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
                 .iter()
                 .filter(|v| v.get("severity").and_then(|s| s.as_str()) == Some("error"))
                 .count();
-            if !findings.is_empty() || maintainer_errors > 0 {
+            if !style.is_empty() || maintainer_errors > 0 {
                 bail!(
                     "{} style findings, {} maintainer-acceptability errors",
-                    findings.len(),
+                    style.len(),
                     maintainer_errors
                 );
             }
