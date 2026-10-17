@@ -119,12 +119,13 @@ eb-stack recipe lint  <recipe.eb>
 eb-stack recipe check --recipe <recipe.eb> --easyconfigs <robot-tree> [--easyconfigs <another>]
 ```
 
-`recipe lint` is the reviewer style gate, not only E501. It must be clean of
-E501, W299, F541 (an f-string with no `{placeholder}`), UP031 (leftover
-`'%s' % X`), and EB101 (an f-string that interpolates an EasyBuild template
-name such as `name` or `version`). EasyBuild values stay `%(name)s`,
-`%(version)s`, and `%(builddir)s`. An f-string is only for a Python constant
-such as `SHLIB_EXT`, and it always has a placeholder. The table and the
+`recipe lint` is the upstream gate, not only E501: E999, the easyconfigs CI
+lint (F541, W605, W291), check-contrib pycodestyle, the test-suite checks,
+and the `EB_*` review conventions. It must report `clean: true` (no error
+findings). EasyBuild values stay `%(name)s`, `%(version)s`, and
+`%(builddir)s`. An f-string is for a Python constant such as `SHLIB_EXT` or a
+local name, and it always has a placeholder; `f'lib/%(name)s.{SHLIB_EXT}'`
+is correct as written. The table and the
 review-fix steps are in `skills/easybuild-dos-donts/SKILL.md`. After a
 reviewer comment, apply the requested change at every occurrence, run lint
 and check, and show the diff before calling the edit done. `eb_recipe_check`

@@ -340,7 +340,8 @@ eb-stack stack solve \
 recipe file tools.
 
 - `eb_package_inspect`, `eb_package_plan`, `eb_package_bump`;
-- `eb_recipe_read`, `eb_recipe_list`, `eb_recipe_edit`, `eb_recipe_write`;
+- `eb_recipe_read`, `eb_recipe_list`, `eb_recipe_edit`, `eb_recipe_write`,
+  `eb_recipe_grep`;
 - `eb_recipe_check`, `eb_recipe_lint`, `eb_recipe_format`;
 - `eb_stack_solve`, `eb_stack_sbom`;
 - `eb_target_list`, `eb_target_doctor`;
@@ -349,8 +350,13 @@ recipe file tools.
 
 `eb_recipe_edit` replaces an exact string and does not write a repeated match
 unless `replace_all` is set. `eb_recipe_check` requires at least one
-`easyconfigs` path. `eb_recipe_lint` reports E501, W299, F541, UP031, and
-EB101, and merges `eb --check-contrib` when `eb` is installed.
+`easyconfigs` path (a `.eb` there stands for its easyconfigs directory) and
+refuses a recipe that is not valid Python. `eb_recipe_lint` reports the
+easyconfigs CI lint (F541, W605, W291), the check-contrib pycodestyle codes,
+the easyconfigs test-suite checks and the review conventions (`EB_*`), plus
+E999 for syntax errors, with a `clean` flag; it does not rely on
+`eb --check-contrib` but merges it when `eb` is installed. `eb_recipe_grep`
+searches the workspace.
 
 ## Skills
 

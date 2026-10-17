@@ -25,8 +25,14 @@ file had to be corrected by hand.
 2. Treat `package.plan.json` as the canonical build manifest, `package.sbom.cdx.json` as the planned SBOM, and `locks/*.lock.json` as Resolvo evidence.
 3. Emit one `.eb` file per product profile. Keep the default profile unsuffixed and follow neighboring GROMACS/LAMMPS conventions.
 4. Run `eb-stack recipe format|lint|check` on emitted recipes. `recipe lint`
-   reports E501, W299, F541, UP031, and EB101, and merges `eb --check-contrib`
-   when `eb` is installed. `recipe check` needs at least one easyconfigs path.
+   reports E999 (not valid Python), the easyconfigs CI lint (F541, W605, W291), the
+   check-contrib pycodestyle codes (E501, E225-E228, E231), the easyconfigs
+   test-suite checks (`EB_PY_NO_USER_SITE`, `EB_SANITY_PATHS_SHAPE`,
+   `EB_LOCAL_VAR_NAMING`, `EB_REDEFINED_PARAM`, `EB_CHECKSUM_COUNT`), and review
+   conventions (`EB_FMT_*`, `EB_SHLIB_HARDCODED`, ...), each with a severity and
+   a top-level `clean` flag, without relying on `eb --check-contrib`;
+   it merges `eb --check-contrib` when `eb` is installed. `recipe check` needs
+   at least one easyconfigs path and refuses a recipe that is not valid Python.
 5. Run `eb-stack target doctor` before a build campaign.
 6. Run or resume `eb-stack campaign run` on the configured EasyBuild target until the requested claim rung is established.
 7. Use `campaign finding claim|resolve` for OMP coordination. Never edit campaign JSON directly or steal an owned finding.

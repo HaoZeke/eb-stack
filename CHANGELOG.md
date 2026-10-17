@@ -12,12 +12,28 @@ All notable changes to this project are documented here.
   stay under `EB_STACK_WORKSPACE` or `eb-stack mcp --workspace` (otherwise
   the server's current directory). `..`, absolute paths outside that root,
   and symlinks that leave it are rejected.
-- `recipe lint` and `eb_recipe_lint` report the style EasyBuild reviewers
-  apply: E501, W299, F541 (f-string with no placeholder), UP031 (leftover
-  `'%s' % X`), and EB101 (an f-string that interpolates a template name such
-  as `name` or `version`). When `eb` is on `PATH`, the same command runs
-  `eb --check-contrib` and merges its findings. A missing `eb` is not a
-  lint failure by itself.
+- `recipe lint` and `eb_recipe_lint` report what upstream checks, without
+  relying on `eb --check-contrib` (which never reports F541): E999 for a file
+  that is not valid Python; the easyconfigs CI lint (F541, W605, W291); the
+  check-contrib pycodestyle codes (E501, E225-E228, E231); the easyconfigs
+  test-suite checks (`EB_PY_NO_USER_SITE`, `EB_SANITY_PATHS_SHAPE`,
+  `EB_LOCAL_VAR_NAMING`, `EB_REDEFINED_PARAM`, `EB_CHECKSUM_COUNT`); and
+  review conventions (`EB_FMT_PERCENT`, `EB_FMT_CONCAT`, `EB_FMT_MISSING_F`,
+  `EB_FSTRING_QUOTE_REUSE`, `EB_FMT_TEMPLATE_VAR`, `EB_TEMPLATE_UNKNOWN`,
+  `EB_SHLIB_HARDCODED`, `EB_DEP_DUPLICATE`, and `EB_FMT_TEMPLATE_REMOVED`
+  with `--base` / `base`). Every finding has a severity (error or warning)
+  and the output has a `clean` flag, false while any error remains; the CLI
+  exits non-zero on errors only. `f'lib/%(name)s.{SHLIB_EXT}'` is correct and
+  is not flagged. When `eb` is on `PATH`, the same command runs
+  `eb --check-contrib` and merges its findings. A missing `eb` is not a lint
+  failure by itself. `fixtures/lint_*/` holds one bad/good/expected.json
+  fixture per rule, enforced by `tests/lint_fixtures.rs`.
+- `eb_recipe_grep` searches files inside the workspace root (literal or
+  regex) and returns path, line, and text per match.
+- `recipe check` and `eb_recipe_check` fail on a recipe that is not valid
+  Python. `eb_recipe_check` accepts a `.eb` file in `easyconfigs` as the
+  easyconfigs directory it sits in, and reports a clear error for other
+  non-directory paths.
 - `eb_recipe_check` requires `easyconfigs` to contain at least one path
   (`minItems: 1`). An empty list returns
   `argument easyconfigs requires at least one path`.
