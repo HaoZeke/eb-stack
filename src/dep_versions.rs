@@ -40,6 +40,11 @@ pub struct DepVersions {
     pub toolchain: Option<String>,
     /// Easyconfigs for exactly that toolchain (or all, without a filter).
     pub matching: Vec<DepVersion>,
+    /// Easyconfigs on a subtoolchain of the requested toolchain (for
+    /// `foss-2024a`: `GCCcore-13.3.0`, `GCC-13.3.0`, `gompi-2024a`, ...). A
+    /// dependency of a foss recipe may use any of these; robot finds it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub subtoolchain_matching: Vec<DepVersion>,
     /// Easyconfigs of the same software for other toolchains.
     pub other_toolchains: Vec<DepVersion>,
     /// Number of `.eb` files seen under the roots.
@@ -83,6 +88,33 @@ pub fn normalize_toolchain(spec: &str) -> String {
         [name, version] => format!("{name}-{version}"),
         _ => cleaned,
     }
+}
+
+/// `name-version` (or `system`) of every subtoolchain of `toolchain`, the
+/// toolchain itself included, when eb-stack knows its hierarchy.
+fn hierarchy_members(toolchain: &str) -> Vec<String> {
+    let Some((name, version)) = toolchain.rsplit_once('-') else {
+        return Vec::new();
+    };
+    let parent = crate::domain::Toolchain {
+        name: name.to_string(),
+        version: version.to_string(),
+    };
+    crate::hierarchy::known_hierarchy(&parent)
+        .map(|hierarchy| {
+            hierarchy
+                .members
+                .iter()
+                .map(|member| {
+                    if member.name == "system" {
+                        "system".to_string()
+                    } else {
+                        format!("{}-{}", member.name, member.version)
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn parse_easyconfig(path: &Path, text: &str) -> Option<DepVersion> {
@@ -183,7 +215,9 @@ pub fn dep_versions(
         ));
     }
     let wanted = toolchain.map(normalize_toolchain);
+    let members = wanted.as_deref().map(hierarchy_members).unwrap_or_default();
     let mut matching = BTreeSet::new();
+    let mut sub = BTreeSet::new();
     let mut others = BTreeSet::new();
     for path in files {
         let Ok(text) = std::fs::read_to_string(&path) else {
@@ -201,6 +235,9 @@ pub fn dep_versions(
             continue;
         };
         match &wanted {
+            Some(wanted) if found.toolchain != *wanted && members.contains(&found.toolchain) => {
+                sub.insert(found);
+            }
             Some(wanted) if found.toolchain != *wanted => {
                 others.insert(found);
             }
@@ -210,8 +247,18 @@ pub fn dep_versions(
         }
     }
     let matching: Vec<DepVersion> = matching.into_iter().collect();
+    let subtoolchain_matching: Vec<DepVersion> = sub.into_iter().collect();
     let other_toolchains: Vec<DepVersion> = others.into_iter().collect();
     let message = match (&wanted, matching.is_empty(), other_toolchains.is_empty()) {
+        (Some(toolchain), true, _) if !subtoolchain_matching.is_empty() => format!(
+            "no {name} easyconfig for {toolchain} itself, but {} exist on its subtoolchains (subtoolchain_matching: {}). A dependency of a {toolchain} recipe may use one of these versions: write the plain ('{name}', '<version>') and robot finds it through the subtoolchain",
+            subtoolchain_matching.len(),
+            subtoolchain_matching
+                .iter()
+                .map(|found| format!("{} on {}", found.version, found.toolchain))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         (_, false, _) => format!(
             "{} easyconfig(s) of {name} exist{}; use one of these versions",
             matching.len(),
@@ -231,6 +278,7 @@ pub fn dep_versions(
         name: name.to_string(),
         toolchain: wanted,
         matching,
+        subtoolchain_matching,
         other_toolchains,
         easyconfigs_scanned: scanned,
         roots: searched,
@@ -293,6 +341,26 @@ mod tests {
             "{}",
             found.message
         );
+    }
+
+    #[test]
+    fn subtoolchain_versions_count_for_a_composite_toolchain() {
+        // Proof v5, PR 24538: Cython for a foss-2024a recipe lives on
+        // GCCcore-13.3.0; the old answer was "no Cython easyconfig for
+        // foss-2024a ... do not guess a version".
+        let temp = tree();
+        let found =
+            dep_versions(&[temp.path().to_path_buf()], "Cython", Some("foss/2024a")).unwrap();
+        assert!(found.matching.is_empty());
+        let versions: Vec<_> = found
+            .subtoolchain_matching
+            .iter()
+            .map(|v| (v.version.as_str(), v.toolchain.as_str()))
+            .collect();
+        assert_eq!(versions, [("0.29.37", "GCCcore-13.3.0")]);
+        assert_eq!(found.other_toolchains.len(), 1);
+        assert!(found.message.contains("subtoolchain"), "{}", found.message);
+        assert!(!found.message.contains("do not guess"), "{}", found.message);
     }
 
     #[test]
