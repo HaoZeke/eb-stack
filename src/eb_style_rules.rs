@@ -108,7 +108,14 @@ pub(super) fn extend_rules(text: &str, options: &LintOptions<'_>, out: &mut Vec<
             ast_rules(text, &suite, file_name, &mut sink);
             if let Some(base) = options.base {
                 if let Ok(base_suite) = ast::Suite::parse(base, "<base>") {
-                    diff_rules(text, &suite, base, &base_suite, &mut sink);
+                    diff_rules(
+                        text,
+                        &suite,
+                        base,
+                        &base_suite,
+                        options.review_lines,
+                        &mut sink,
+                    );
                 }
             }
         }
@@ -1582,8 +1589,20 @@ fn list_entries<'e>(expr: &'e ast::Expr, out: &mut Vec<&'e ast::Expr>) -> bool {
     }
 }
 
-/// (key, rendered entry, source text) for each comparable sanity entry.
-fn sanity_entries(text: &str, value: &ast::Expr) -> Option<Vec<(String, String, String)>> {
+/// One comparable `sanity_check_paths` entry.
+struct SanityEntry {
+    /// `files` or `dirs`.
+    key: String,
+    /// The path text the entry stands for (see [`render_entry`]).
+    rendered: String,
+    /// The entry as written.
+    source: String,
+    /// Byte offset of the entry in the text.
+    offset: usize,
+}
+
+/// Each comparable sanity entry, in file order.
+fn sanity_entries(text: &str, value: &ast::Expr) -> Option<Vec<SanityEntry>> {
     let ast::Expr::Dict(dict) = value else {
         return None;
     };
@@ -1601,11 +1620,12 @@ fn sanity_entries(text: &str, value: &ast::Expr) -> Option<Vec<(String, String, 
         }
         for entry in entries {
             if let Some(rendered) = render_entry(text, entry) {
-                out.push((
-                    key.to_string(),
+                out.push(SanityEntry {
+                    key: key.to_string(),
                     rendered,
-                    expr_source(text, entry).to_string(),
-                ));
+                    source: expr_source(text, entry).to_string(),
+                    offset: u32::from(entry.range().start()) as usize,
+                });
             }
         }
     }
@@ -1653,16 +1673,31 @@ fn canonical_entry(rendered: &str, values: &[(String, String)]) -> String {
     out
 }
 
+/// A review line this close to a replacement sanity entry makes the change
+/// of that entry's path one the review asked for.
+const SANITY_REVIEW_NEAR: usize = 1;
+
 /// Diff-mode errors against the base: a sanity_check_paths entry that is
 /// gone (EB_SANITY_ENTRY_REMOVED), the whole parameter gone
 /// (EB_SANITY_PATHS_REMOVED, a warning: dropping a default-equivalent
 /// sanity_check_paths is a valid review request), and `easyblock` removed or
 /// changed (EB_EASYBLOCK_CHANGED).
+///
+/// An entry whose path changed is not a removal when the review asked for
+/// the change: a base entry with no equal entry now, paired with a new entry
+/// under the same key that has no equal entry in the base, is accepted when
+/// that new entry sits on (or next to) a review line, or in the lines that
+/// replaced a review line. Reviewers fix paths in
+/// suggestions (`'libfoo.so'` to `'lib/libfoo.so'`, an empty `''` dir to a
+/// real one); reporting that as a lost entry made agents revert the
+/// requested path (proof v7: every trial of one held-out case wrote the
+/// suggested path, got EB_SANITY_ENTRY_REMOVED, and put the old path back).
 fn diff_rules(
     text: &str,
     suite: &[ast::Stmt],
     base: &str,
     base_suite: &[ast::Stmt],
+    review_lines: &[usize],
     sink: &mut Sink<'_>,
 ) {
     let now = last_assigns(suite);
@@ -1716,23 +1751,64 @@ fn diff_rules(
     // reviewer's template suggestion was reported as three lost entries).
     let old_values = name_version_values(&before);
     let new_values = name_version_values(&now);
-    let mut remaining: Vec<(String, String)> = new_entries
+    // (key, canonical path, offset) of new entries not yet matched.
+    let mut remaining: Vec<(String, String, usize)> = new_entries
         .into_iter()
-        .map(|(key, rendered, _)| (key, canonical_entry(&rendered, &new_values)))
+        .map(|entry| {
+            (
+                entry.key,
+                canonical_entry(&entry.rendered, &new_values),
+                entry.offset,
+            )
+        })
         .collect();
-    for (key, rendered, source) in old_entries {
-        let rendered = canonical_entry(&rendered, &old_values);
+    let mut lost: Vec<(String, String)> = Vec::new();
+    for entry in old_entries {
+        let rendered = canonical_entry(&entry.rendered, &old_values);
+        if let Some(at) = remaining.iter().position(|(new_key, new_rendered, _)| {
+            *new_key == entry.key && *new_rendered == rendered
+        }) {
+            remaining.remove(at);
+            continue;
+        }
+        lost.push((entry.key, entry.source));
+    }
+    let index = sink.index;
+    // Review lines may be in the base's numbering (as the review showed
+    // them) or in the current one: a review line inside a changed region
+    // covers every line that replaced it (a one-line list re-wrapped over
+    // five lines keeps its anchor).
+    let changed = super::diffscope::hunks(base, text);
+    let on_review_line = |offset: usize| {
+        let line = index.line(offset);
+        review_lines.iter().any(|review| {
+            review.abs_diff(line) <= SANITY_REVIEW_NEAR
+                || changed.iter().any(|hunk| {
+                    let new_hi = hunk.new_start + hunk.added.len().saturating_sub(1);
+                    let old_lo = hunk
+                        .old_start
+                        .saturating_sub(usize::from(hunk.removed.is_empty()));
+                    let old_hi = hunk.old_start + hunk.removed.len().saturating_sub(1);
+                    (hunk.new_start..=new_hi).contains(&line)
+                        && ((old_lo..=old_hi).contains(review)
+                            || (hunk.new_start..=new_hi).contains(review))
+                })
+        })
+    };
+    for (key, source) in lost {
+        // The path was changed, not dropped, and the review is about the
+        // line that holds the new path.
         if let Some(at) = remaining
             .iter()
-            .position(|(new_key, new_rendered)| *new_key == key && *new_rendered == rendered)
+            .position(|(new_key, _, offset)| *new_key == key && on_review_line(*offset))
         {
-            remaining.swap_remove(at);
+            remaining.remove(at);
             continue;
         }
         sink.push(
             u32::from(new_sanity.range.start()) as usize,
             "EB_SANITY_ENTRY_REMOVED",
-            format!("sanity_check_paths '{key}' lost {source} from the base; converting an entry's formatting must keep the same path. Restore it unless the review asks to drop it"),
+            format!("sanity_check_paths '{key}' lost {source} from the base; converting an entry's formatting must keep the same path. Restore it unless the review asks to drop it. If the review asked to change this path, keep the new path and pass the line that holds it as review_lines; a path change the review asked for is not a removal"),
         );
     }
 }
@@ -2562,6 +2638,71 @@ mod tests {
         let dropped = suggested.replace("'lib/lib%(name)s.a', ", "");
         assert!(has(
             &lint_against(&dropped, base),
+            "EB_SANITY_ENTRY_REMOVED"
+        ));
+    }
+
+    fn lint_against_review(text: &str, base: &str, review_lines: &[usize]) -> Vec<StyleFinding> {
+        let mut out = Vec::new();
+        extend_rules(
+            text,
+            &LintOptions {
+                base: Some(base),
+                review_lines,
+                ..LintOptions::default()
+            },
+            &mut out,
+        );
+        out
+    }
+
+    #[test]
+    fn a_path_change_on_a_review_line_is_not_a_lost_sanity_entry() {
+        let base = "easyblock = 'CMakeMake'\n\
+            sanity_check_paths = {\n    \
+            'files': ['include/foo.h', f'libfoo-core.{SHLIB_EXT}', f'lib/libfoo-extra.{SHLIB_EXT}'],\n    \
+            'dirs': [''],\n}\n";
+        // The suggestion wraps the list and adds the missing lib/ prefix.
+        let fixed = "easyblock = 'CMakeMake'\n\
+            sanity_check_paths = {\n    \
+            'files': [\n        \
+            'include/foo.h',\n        \
+            f'lib/libfoo-core.{SHLIB_EXT}',\n        \
+            f'lib/libfoo-extra.{SHLIB_EXT}',\n    \
+            ],\n    \
+            'dirs': [''],\n}\n";
+        // Review lines remapped onto the replacement lines (3-8).
+        let findings = lint_against_review(fixed, base, &[3, 4, 5, 6, 7, 8]);
+        assert!(!has(&findings, "EB_SANITY_ENTRY_REMOVED"), "{findings:?}");
+        // Without review lines the change is still reported, with the way out.
+        let findings = lint_against(fixed, base);
+        let hit = findings
+            .iter()
+            .find(|finding| finding.code == "EB_SANITY_ENTRY_REMOVED")
+            .unwrap_or_else(|| panic!("{findings:?}"));
+        assert!(hit.message.contains("not a removal"), "{}", hit.message);
+        // The review line as the review showed it (the one-line list, now
+        // re-wrapped over lines 3-7) covers the lines that replaced it.
+        assert!(!has(
+            &lint_against_review(fixed, base, &[3]),
+            "EB_SANITY_ENTRY_REMOVED"
+        ));
+        // A review line far from the changed entry does not excuse it.
+        assert!(has(
+            &lint_against_review(fixed, base, &[1]),
+            "EB_SANITY_ENTRY_REMOVED"
+        ));
+        // An empty dir replaced by the requested one, on the review line.
+        let dirs = base.replace("'dirs': ['']", "'dirs': ['share/man/man1']");
+        assert!(!has(
+            &lint_against_review(&dirs, base, &[4]),
+            "EB_SANITY_ENTRY_REMOVED"
+        ));
+        // Dropping an entry outright is still an error, review line or not:
+        // nothing new under the same key stands in for it.
+        let dropped = base.replace(", f'libfoo-core.{SHLIB_EXT}'", "");
+        assert!(has(
+            &lint_against_review(&dropped, base, &[3]),
             "EB_SANITY_ENTRY_REMOVED"
         ));
     }
