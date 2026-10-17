@@ -23,6 +23,8 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_recipe_read",
         "eb_recipe_list",
         "eb_recipe_edit",
+        "eb_recipe_apply_suggestion",
+        "eb_recipe_diff",
         "eb_recipe_write",
         "eb_recipe_grep",
         "eb_dep_versions",
@@ -40,7 +42,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 20, "unexpected MCP tools: {names:?}");
+    assert_eq!(names.len(), 22, "unexpected MCP tools: {names:?}");
 
     let package_bump = response["result"]["tools"]
         .as_array()
