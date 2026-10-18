@@ -52,13 +52,29 @@ static METHOD: LazyLock<Regex> =
 static COMMAND: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)running (?:shell )?command:?\s*["'](.+)["']"#).expect("regex")
 });
+/// `eb -x` wraps a long command after the opening quote (`running shell command "./configure`).
+static COMMAND_OPEN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)running (?:shell )?command:?\s*"(.*)$"#).expect("regex"));
+/// EasyBuild 5.4 `--trace` puts the command on the next line:
+/// `Running shell command in <dir>:` / `>> running shell command:`.
+static COMMAND_ANNOUNCE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)running (?:shell )?command\b[^"']*:\s*$"#).expect("regex"));
+static ANSI: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*[A-Za-z]").expect("regex"));
 static ERROR_LINE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(^ERROR:|EasyBuildError|\berror:|undefined reference|cannot find -l|\bFAILED\b|Traceback \(most recent call last\))")
         .expect("regex")
 });
 
+/// Drop ANSI color so step markers match when EasyBuild's rich console is on.
+fn visible(line: &str) -> String {
+    ANSI.replace_all(line, "").into_owned()
+}
+
 /// The step a line starts, when it starts one.
 pub fn step_started(line: &str) -> Option<String> {
+    let line = visible(line);
+    let line = line.as_str();
     if let Some(found) = METHOD.captures(line) {
         return Some(found[1].to_string());
     }
@@ -137,11 +153,73 @@ pub fn error_lines(text: &str, limit: usize) -> Vec<String> {
     out
 }
 
+/// A shell command starting at `lines[index]`, and the index of its last line.
+///
+/// EasyBuild 5.4 prints either a quoted command (`running shell command "make check"`,
+/// sometimes wrapped before the closing quote) or a trace announcement whose next
+/// line is the command (`Running shell command in <dir>:` then `make check`).
+fn command_from(lines: &[String], index: usize) -> Option<(usize, String)> {
+    let line = &lines[index];
+    if let Some(found) = COMMAND.captures(line) {
+        return Some((index, found[1].to_string()));
+    }
+    if let Some(found) = COMMAND_OPEN.captures(line) {
+        let mut parts = vec![found[1].trim().to_string()];
+        let mut end = index;
+        while end + 1 < lines.len() && end - index < 40 {
+            end += 1;
+            let trimmed = lines[end].trim();
+            if command_closed(lines, end) {
+                let body = trimmed.trim_end_matches('"').trim();
+                if !body.is_empty() {
+                    parts.push(body.to_string());
+                }
+                return Some((end, parts.join(" ")));
+            }
+            parts.push(trimmed.to_string());
+        }
+        return None;
+    }
+    if COMMAND_ANNOUNCE.is_match(line) {
+        let cmd = lines.get(index + 1)?.trim();
+        if !cmd.is_empty() && !cmd.starts_with("==") && !cmd.starts_with('[') {
+            return Some((index + 1, cmd.to_string()));
+        }
+    }
+    None
+}
+
+/// The closing quote of a wrapped `eb -x` command: the line ends with `"` and
+/// the next line is the `(in <dir>)` note, a step marker, or a blank line.
+/// A configure flag such as `--with-blas-libs="a b"` also ends in `"` but is
+/// followed by another flag, so it stays inside the command.
+fn command_closed(lines: &[String], index: usize) -> bool {
+    let trimmed = lines[index].trim();
+    if !trimmed.ends_with('"') {
+        return false;
+    }
+    let next = lines
+        .get(index + 1)
+        .map(String::as_str)
+        .unwrap_or("")
+        .trim();
+    next.is_empty() || next.starts_with("(in ") || next.starts_with('[') || next.starts_with("==")
+}
+
 /// Commands EasyBuild reports running, in order.
 pub fn commands_in(text: &str) -> Vec<String> {
-    text.lines()
-        .filter_map(|line| COMMAND.captures(line).map(|found| found[1].to_string()))
-        .collect()
+    let lines: Vec<String> = text.lines().map(visible).collect();
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        if let Some((end, command)) = command_from(&lines, index) {
+            out.push(command);
+            index = end + 1;
+        } else {
+            index += 1;
+        }
+    }
+    out
 }
 
 /// The text of one step (the last span with that name), or `None`.
@@ -171,22 +249,28 @@ pub struct DryRunStep {
 
 /// Group the commands of an `eb -x` run by step.
 pub fn parse_dry_run(text: &str) -> Vec<DryRunStep> {
+    let lines: Vec<String> = text.lines().map(visible).collect();
     let mut out: Vec<DryRunStep> = Vec::new();
     let mut current = "start".to_string();
-    for line in text.lines() {
-        if let Some(step) = step_started(line) {
+    let mut index = 0;
+    while index < lines.len() {
+        if let Some(step) = step_started(&lines[index]) {
             current = step;
+            index += 1;
             continue;
         }
-        if let Some(found) = COMMAND.captures(line) {
+        if let Some((end, command)) = command_from(&lines, index) {
             match out.last_mut() {
-                Some(last) if last.step == current => last.commands.push(found[1].to_string()),
+                Some(last) if last.step == current => last.commands.push(command),
                 _ => out.push(DryRunStep {
                     step: current.clone(),
-                    commands: vec![found[1].to_string()],
+                    commands: vec![command],
                 }),
             }
+            index = end + 1;
+            continue;
         }
+        index += 1;
     }
     out
 }
@@ -474,6 +558,40 @@ ERROR: Shell command failed!\n\
         assert!(steps[0].commands[0].starts_with("./configure"));
         assert_eq!(steps[1].step, "test");
         assert_eq!(steps[1].commands, vec!["make check".to_string()]);
+    }
+
+    #[test]
+    fn easybuild_5_trace_and_wrapped_dry_run_commands() {
+        // Real EasyBuild 5.4.0 `--logtostdout --trace` lines (foss/2026.1 Hypre):
+        // `Running shell command in <dir>:` then a tab and `make check`.
+        let trace = "== testing...\n\
+== 2026-10-18 02:00:25,304 run.py:532 INFO Running shell command in /tmp/src:\n\
+\tmake check\n\
+\u{1b}[2K  >> running shell command:\n\
+        make check\n";
+        let commands = commands_in(trace);
+        assert_eq!(
+            commands,
+            vec!["make check".to_string(), "make check".to_string()]
+        );
+        // `eb -x` wraps the configure command before its closing quote.
+        let dry = "\
+[configure_step method]\n\
+  running shell command \"./configure \n\
+--with-blas-libs=\"flexiblas gfortran\" \n\
+--with-MPI-include=/usr/include\"\n\
+  (in /tmp/src)\n\
+[test_step method]\n\
+  running shell command \"make check\"\n";
+        let steps = parse_dry_run(dry);
+        assert_eq!(steps.len(), 2, "{steps:?}");
+        assert!(
+            steps[0].commands[0].contains("--with-blas-libs=\"flexiblas gfortran\""),
+            "{steps:?}"
+        );
+        assert_eq!(steps[1].commands, vec!["make check".to_string()]);
+        let marked = "\u{1b}[1m[\u{1b}[0mconfigure_step method\u{1b}[1m]\u{1b}[0m";
+        assert_eq!(step_started(marked).as_deref(), Some("configure"));
     }
 
     #[test]
