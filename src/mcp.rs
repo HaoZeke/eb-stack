@@ -243,7 +243,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_module_lint",
-            "Check Python modules that ship with recipes, such as easyblocks (easybuild/easyblocks/<letter>/<name>.py), the way the easyblocks CI does: E999 (not valid Python), E501 at the max-line-length of the nearest [flake8] section (setup.cfg, tox.ini or .flake8; easyblocks use 120), W291/W293 trailing whitespace, W292/W391 end of file, EBM_RUN_CMD (run_cmd/run_cmd_qa, removed in EasyBuild 5) and the EBM_OLD_SUPER warning. When flake8 is on PATH its findings (F401 unused import, F821 undefined name, C4 comprehensions, ...) are merged. Do not use eb_recipe_lint on .py files: its rules are for easyconfigs. base is the module before your edits (default: the module as this server first saw it); an error already there on an unchanged line is info and does not block clean. clean true is necessary but not enough: an easyblock change is done only when eb_easyblock_dry_run shows the commands you intended.",
+            "Check Python modules that ship with recipes, such as easyblocks (easybuild/easyblocks/<letter>/<name>.py), the way the easyblocks CI does: E999 (not valid Python), E501 at the max-line-length of the nearest [flake8] section (setup.cfg, tox.ini or .flake8; easyblocks use 120), W291/W293 trailing whitespace, W292/W391 end of file, EBM_RUN_CMD (run_cmd/run_cmd_qa, removed in EasyBuild 5), the EBM_OLD_SUPER warning, and two warnings on easyconfig values: EBM_CFG_OVERRIDE (self.cfg['key'] set to a fixed value without checking it is unset, which overwrites the easyconfig's value) and EBM_TEST_STEP_OWN_CMD (a test_step with its own command that ignores runtest). Warnings do not block clean; read them before calling a change done. When flake8 is on PATH its findings (F401 unused import, F821 undefined name, C4 comprehensions, ...) are merged. Do not use eb_recipe_lint on .py files: its rules are for easyconfigs. base is the module before your edits (default: the module as this server first saw it); an error already there on an unchanged line is info and does not block clean. clean true is necessary but not enough: an easyblock change is done only when eb_easyblock_dry_run shows the commands you intended.",
             &[("modules", "array_min1")],
             &[("base", "string"), ("flake8", "boolean")],
         ),
@@ -1076,7 +1076,18 @@ fn module_lint(arguments: &Value) -> Result<Value, String> {
                 .count()
         })
         .sum();
-    let summary = if clean {
+    let warnings: usize = results
+        .iter()
+        .map(|file| {
+            file.findings
+                .iter()
+                .filter(|item| item.severity == Severity::Warning && !item.info)
+                .count()
+        })
+        .sum();
+    let summary = if clean && warnings > 0 {
+        format!("clean: no error outside the pre-existing ones, but {warnings} new warning(s) to read first (an EBM_ warning names an easyconfig value the module overwrites or ignores). Check the generated commands with eb_easyblock_dry_run before calling the change done.")
+    } else if clean {
         "clean: no error outside the pre-existing ones. Check the generated commands with eb_easyblock_dry_run before calling the change done.".to_string()
     } else {
         format!("{errors} error(s) to fix before the module is clean")
@@ -1084,6 +1095,7 @@ fn module_lint(arguments: &Value) -> Result<Value, String> {
     Ok(json!({
         "clean": clean,
         "errors": errors,
+        "warnings": warnings,
         "results": results,
         "flake8": reports,
         "summary": summary,

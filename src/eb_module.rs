@@ -154,11 +154,172 @@ fn has_word(text: &str, word: &str) -> bool {
     })
 }
 
+static CFG_ASSIGN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"^\s*self\.cfg\[['"](\w+)['"]\]\s*=\s*(?:'[^']*'|"[^"]*"|-?\d+(?:\.\d+)?|True|False)\s*(?:#.*)?$"#,
+    )
+    .expect("regex")
+});
+static BRANCH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(if|elif)\s+(.*):\s*(?:#.*)?$").expect("regex"));
+static ELSE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*else\s*:\s*(?:#.*)?$").expect("regex"));
+static SCOPE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(?:async\s+)?(?:def|class)\s").expect("regex"));
+
+fn indent_of(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+fn is_comment_or_blank(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.is_empty() || trimmed.starts_with('#')
+}
+
+/// A regex for reading the easyconfig parameter `key` (`self.cfg['key']` or
+/// `self.cfg.get('key', ...)`).
+fn cfg_read(key: &str) -> String {
+    format!(r#"self\.cfg(?:\[\s*['"]{key}['"]\s*\]|\.get\(\s*['"]{key}['"][^)]*\))"#)
+}
+
+/// Whether a condition checks that the parameter `key` is still unset or
+/// has a particular value (`is None`, `not self.cfg[...]`, `== '...'`,
+/// `in (...)`), so the branch leaves a value from the easyconfig alone.
+/// `is not False` is not such a check: every other value is overwritten.
+fn tests_unset(condition: &str, key: &str) -> bool {
+    let read = cfg_read(key);
+    [
+        format!(r#"{read}\s*(?:is\s+None|==\s*None|==\s*['"]|in\s*[(\[])"#),
+        format!(r"\bnot\s+{read}"),
+    ]
+    .iter()
+    .any(|pattern| Regex::new(pattern).is_ok_and(|re| re.is_match(condition)))
+}
+
+/// Whether a condition holds when `key` is set (`if self.cfg['key']:`), so
+/// the `else` branch of it runs only when the parameter is unset.
+fn tests_set(condition: &str, key: &str) -> bool {
+    let read = cfg_read(key);
+    Regex::new(&format!(
+        r"^(?:.*\b(?:and|or)\s+|\(\s*)?{read}\s*(?:$|\)|\s+(?:and|or)\b)"
+    ))
+    .is_ok_and(|re| re.is_match(condition.trim()))
+}
+
+/// Whether the `if`/`elif` chain closed by the `else` at `index` tests that
+/// `key` is set.
+fn else_follows_set_test(lines: &[&str], index: usize, indent: usize, key: &str) -> bool {
+    for line in lines[..index].iter().rev() {
+        if is_comment_or_blank(line) || indent_of(line) > indent {
+            continue;
+        }
+        if indent_of(line) < indent {
+            return false;
+        }
+        let Some(branch) = BRANCH.captures(line) else {
+            return false;
+        };
+        if tests_set(&branch[2], key) {
+            return true;
+        }
+        if &branch[1] == "if" {
+            return false;
+        }
+    }
+    false
+}
+
+/// Whether the assignment to `key` on line `index` sits in a branch that
+/// runs only while the parameter is unset.
+fn assignment_is_guarded(lines: &[&str], index: usize, key: &str) -> bool {
+    let mut current = indent_of(lines[index]);
+    for (back, line) in lines[..index].iter().enumerate().rev() {
+        if is_comment_or_blank(line) || indent_of(line) >= current {
+            continue;
+        }
+        current = indent_of(line);
+        if SCOPE.is_match(line) {
+            return false;
+        }
+        if let Some(branch) = BRANCH.captures(line) {
+            if tests_unset(&branch[2], key) {
+                return true;
+            }
+        } else if ELSE.is_match(line) && else_follows_set_test(lines, back, current, key) {
+            return true;
+        }
+    }
+    false
+}
+
+/// EBM_CFG_OVERRIDE: an easyconfig parameter set to a fixed value outside
+/// a branch that checks it is unset. The easyconfig's value for it is then
+/// overwritten, which an easyblock default must not do.
+fn cfg_override_findings(lines: &[&str]) -> Vec<StyleFinding> {
+    let mut out = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let Some(found) = CFG_ASSIGN.captures(line) else {
+            continue;
+        };
+        let key = &found[1];
+        if !assignment_is_guarded(lines, index, key) {
+            out.push(finding(
+                index + 1,
+                indent_of(line) + 1,
+                "EBM_CFG_OVERRIDE",
+                format!(
+                    "self.cfg['{key}'] is set to a fixed value without checking that it is unset, so a value from the easyconfig is overwritten; set a default only under `if self.cfg['{key}'] is None:` (or the parameter's own unset value) unless the task asks to force it. A check such as `is not False` still overwrites every other value."
+                ),
+                Severity::Warning,
+            ));
+        }
+    }
+    out
+}
+
+/// EBM_TEST_STEP_OWN_CMD: a `test_step` that runs a command of its own but
+/// neither reads the `runtest` parameter nor calls the parent's test step,
+/// so an easyconfig can no longer change the tests or turn them off.
+fn test_step_findings(lines: &[&str]) -> Vec<StyleFinding> {
+    static TEST_STEP: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^(\s*)def\s+test_step\s*\(").expect("regex"));
+    static READS: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"self\.cfg(?:\[\s*['"]runtest['"]|\.get\(\s*['"]runtest['"])"#).expect("regex")
+    });
+    static PARENT: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\bsuper\([^)]*\)\.test_step\(").expect("regex"));
+    let mut out = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let Some(found) = TEST_STEP.captures(line) else {
+            continue;
+        };
+        let indent = found[1].len();
+        let body = lines[index + 1..]
+            .iter()
+            .take_while(|item| item.trim().is_empty() || indent_of(item) > indent)
+            .copied()
+            .collect::<Vec<_>>()
+            .join("\n");
+        if body.contains("run_shell_cmd(") && !READS.is_match(&body) && !PARENT.is_match(&body) {
+            out.push(finding(
+                index + 1,
+                indent + 1,
+                "EBM_TEST_STEP_OWN_CMD",
+                "test_step runs a command of its own but neither reads self.cfg['runtest'] nor calls super().test_step(), so an easyconfig can no longer change the tests or turn them off (runtest = False)".into(),
+                Severity::Warning,
+            ));
+        }
+    }
+    out
+}
+
 /// Native checks on a module's text: E999 (not valid Python), E501 at
 /// `max_line`, W291/W293 (trailing whitespace), W292/W391 (end of file),
 /// EBM_RUN_CMD (`run_cmd`/`run_cmd_qa`, gone in EasyBuild 5) and the
 /// EBM_OLD_SUPER warning (`super(Class, self)`, easybuild-easyblocks#3681
-/// moved every easyblock to `super()`).
+/// moved every easyblock to `super()`), and the EBM_CFG_OVERRIDE and
+/// EBM_TEST_STEP_OWN_CMD warnings (an easyconfig value the easyblock
+/// overwrites or ignores).
 pub fn lint_module_text(text: &str, max_line: usize) -> Vec<StyleFinding> {
     let mut out = Vec::new();
     if let Some((line, column, message)) = python_syntax_error(text) {
@@ -216,6 +377,8 @@ pub fn lint_module_text(text: &str, max_line: usize) -> Vec<StyleFinding> {
             ));
         }
     }
+    out.extend(cfg_override_findings(&lines));
+    out.extend(test_step_findings(&lines));
     if !text.is_empty() && !text.ends_with('\n') {
         out.push(finding(
             lines.len(),
@@ -454,6 +617,53 @@ mod tests {
         assert_eq!(codes(&lint_module_text("x = 1", 120)), vec!["W292"]);
         assert_eq!(codes(&lint_module_text("x = 1\n\n", 120)), vec!["W391"]);
         assert!(lint_module_text("y = run_shell_cmd('ls')\n", 120).is_empty());
+    }
+
+    #[test]
+    fn fixed_parameter_values_need_an_unset_guard() {
+        let text = "class EB_X(Base):\n    def configure_step(self):\n        self.cfg['buildopts'] = 'all'\n        if self.cfg['installopts'] is None:\n            self.cfg['installopts'] = 'x'\n        if self.cfg['maxparallel'] is not False:\n            self.cfg['maxparallel'] = 2\n        if not self.cfg.get('prebuildopts'):\n            self.cfg['prebuildopts'] = 'env'\n        if self.cfg['testopts']:\n            pass\n        else:\n            self.cfg['testopts'] = '-v'\n        self.cfg['pretestopts'] = self.cfg['pretestopts'] or 'y'\n        if self.cfg['preinstallopts'] in (None, ''):\n            self.cfg['preinstallopts'] = 'z'  # default\n";
+        let found = lint_module_text(text, 120);
+        let flagged: Vec<_> = found
+            .iter()
+            .filter(|item| item.code == "EBM_CFG_OVERRIDE")
+            .map(|item| (item.line, item.severity))
+            .collect();
+        assert_eq!(
+            flagged,
+            vec![(3, Severity::Warning), (7, Severity::Warning)],
+            "{found:?}"
+        );
+        assert!(
+            found[0].message.contains("self.cfg['buildopts']"),
+            "{found:?}"
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let module = dir.path().join("m.py");
+        std::fs::write(&module, text).expect("write");
+        let (file, _) = lint_module(&module, text, None, false);
+        assert!(file.clean, "a warning does not block clean: {file:?}");
+    }
+
+    #[test]
+    fn a_test_step_of_its_own_must_read_the_test_parameter() {
+        let own = "class EB_X(Base):\n    def test_step(self):\n        run_shell_cmd('make check')\n\n    def install_step(self):\n        run_shell_cmd('make install')\n";
+        let found = lint_module_text(own, 120);
+        assert_eq!(codes(&found), vec!["EBM_TEST_STEP_OWN_CMD"], "{found:?}");
+        assert_eq!(found[0].line, 2);
+        for good in [
+            own.replace(
+                "run_shell_cmd('make check')",
+                "if self.cfg['runtest']:\n            run_shell_cmd('make %s' % self.cfg['runtest'])",
+            ),
+            own.replace(
+                "run_shell_cmd('make check')",
+                "super().test_step()\n        run_shell_cmd('make extra')",
+            ),
+            own.replace("run_shell_cmd('make check')", "pass"),
+        ] {
+            let found = lint_module_text(&good, 120);
+            assert!(found.is_empty(), "{good}: {found:?}");
+        }
     }
 
     #[test]
