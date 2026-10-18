@@ -25,9 +25,16 @@ code, not by the file looking right.
    the value you use is defined, so you know its exact form (a list of names, a
    comma-separated string of file names, flags with `-l`, ...). Write the fix
    the way the merged easyblock does it, and keep the file name: you will cite it.
+   When a toolchain option (`openmp`, `usempi`, ...) decides which value applies,
+   grep how merged easyblocks read that option (`self.toolchain.options.get(...)`)
+   and choose the value from it the same way.
 
 3. **Edit, then lint.** Edit with `eb_recipe_edit`. Run `eb_module_lint` on the
    module until `clean` is true. Do not run `eb_recipe_lint` on a `.py` file.
+   `clean` ignores warnings, so read them: `EBM_CFG_OVERRIDE` (a parameter set
+   to a fixed value without checking that it is unset) and
+   `EBM_TEST_STEP_OWN_CMD` (a test step that ignores `runtest`) are bugs in a
+   fix unless the task asks to force that value.
 
 4. **Dry-run every case you were asked about.** `eb_easyblock_dry_run` with the
    recipe and your module in `easyblocks`. Do it once per recipe, toolchain and
@@ -35,17 +42,32 @@ code, not by the file looking right.
    separate call. Read the generated commands: the option values must have the
    form the build system expects, and the step you meant to add or change must
    show the command you expect. A Python error in your module shows up here.
+   The result also has `toolchain_options` (the recipe's `toolchainopts`),
+   `threaded_pairs` (variables with a threaded variant) and `notes`: plain and
+   threaded variables are both defined whatever the option says, so compare the
+   commands of the recipe with and without the option, not the environment.
+   When `failure_kind` is `environment`, the recipe cannot be set up where the
+   server runs and no easyblock code ran: say which recipe could not be checked
+   and go on with the others, without changing the code for it.
 
 5. **Build where builds are allowed.** `eb_build_test` runs the real build and
-   reports the test step's commands and output. If it is refused, say that the
-   build is still owed; do not claim it passed. On a failure, read the failing
-   step with `eb_build_log` and fix the cause the log line shows, not a guess.
+   reports the test step's commands and output. Its description and the dry
+   run's `next` say whether builds are on for this server; when they are, build
+   each recipe you were asked about before calling the change done, since only
+   a build shows link errors and test failures. Say that a build is still owed
+   only when `eb_build_test` returned an error, and never claim it passed. On a
+   failure, read the failing step with `eb_build_log` and fix the cause the log
+   line shows, not a guess.
 
 6. **Stay in scope.** Change only the easyblock. Do not hardcode library names,
    versions or paths that the toolchain or dependencies provide. Keep the other
    branches of the code working (for example both the static and the shared
    variant when the easyblock handles both), and let an easyconfig still
-   override any default you add.
+   override any default you add: set it only when the parameter is unset
+   (`if self.cfg['name'] is None:`), and have a test step of your own read
+   `runtest` or call `super().test_step()`. When a value the code needs from the
+   toolchain or a dependency is missing, raise `EasyBuildError` naming it rather
+   than skip it, so the build stops where the cause is.
 
 7. **Describe the diff.** Call `eb_recipe_diff` on the module last. Describe each
    hunk by its `scope` (the method it is in), what it changes, why the report
