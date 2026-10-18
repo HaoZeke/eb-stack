@@ -32,6 +32,8 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_recipe_lint",
         "eb_recipe_format",
         "eb_module_lint",
+        "eb_easyblock_dry_run",
+        "eb_build_log",
         "eb_stack_solve",
         "eb_stack_sbom",
         "eb_target_list",
@@ -43,7 +45,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 23, "unexpected MCP tools: {names:?}");
+    assert_eq!(names.len(), 25, "unexpected MCP tools: {names:?}");
 
     let package_bump = response["result"]["tools"]
         .as_array()
@@ -1331,4 +1333,19 @@ fn mcp_recipe_diff_names_the_python_scope_of_each_hunk() {
     let diff = call(43, "eb_recipe_diff", json!({"recipes": [module]}));
     let hunk = &diff["result"]["structuredContent"]["files"][0]["hunks"][0];
     assert_eq!(hunk["scope"], "EB_xpkg.configure_step", "{diff}");
+}
+
+#[test]
+fn mcp_eb_tools_refuse_paths_outside_the_workspace() {
+    for (id, name, arguments) in [
+        (
+            44,
+            "eb_easyblock_dry_run",
+            json!({"recipe": "../../outside.eb", "easyblocks": ["x.py"]}),
+        ),
+        (45, "eb_build_log", json!({"path": "../../outside.log"})),
+    ] {
+        let response = call(id, name, arguments);
+        assert_eq!(response["result"]["isError"], true, "{name}: {response}");
+    }
 }

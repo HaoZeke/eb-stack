@@ -995,7 +995,9 @@ fn build_failure_evidence(stdout: &str, stderr: &str) -> String {
     evidence
 }
 
-fn easybuild_output_paths(output: &str) -> Vec<PathBuf> {
+/// Files EasyBuild names as `output (stdout + stderr) -> <path>` for a
+/// failed shell command.
+pub(crate) fn easybuild_output_paths(output: &str) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     for line in output.lines() {
         if !line.contains("output (stdout + stderr)") {

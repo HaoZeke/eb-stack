@@ -843,7 +843,9 @@ fn symlink_escapes(root: &Path, path: &Path) -> bool {
     }
 }
 
-fn resolve_inside(root: &Path, requested: &Path) -> Result<(PathBuf, PathBuf), String> {
+/// Resolve `requested` inside `root`: the canonical root and the path,
+/// refusing `..`, absolute paths outside the root and symlinks that leave it.
+pub fn resolve_inside(root: &Path, requested: &Path) -> Result<(PathBuf, PathBuf), String> {
     if requested.as_os_str().is_empty() {
         return Err("path is empty".into());
     }
