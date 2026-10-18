@@ -1318,3 +1318,17 @@ fn mcp_module_lint_checks_an_easyblock_with_the_repository_line_length() {
         "{fixed}"
     );
 }
+
+#[test]
+fn mcp_recipe_diff_names_the_python_scope_of_each_hunk() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let module = temp.path().join("xpkg.py");
+    let before = "class EB_xpkg(Base):\n    def configure_step(self):\n        a = 1\n\n    def install_step(self):\n        b = 2\n";
+    std::fs::write(&module, before).expect("module");
+    let first = call(42, "eb_recipe_diff", json!({"recipes": [module]}));
+    assert_eq!(first["result"]["isError"], false, "{first}");
+    std::fs::write(&module, before.replace("a = 1", "a = 2")).expect("edit");
+    let diff = call(43, "eb_recipe_diff", json!({"recipes": [module]}));
+    let hunk = &diff["result"]["structuredContent"]["files"][0]["hunks"][0];
+    assert_eq!(hunk["scope"], "EB_xpkg.configure_step", "{diff}");
+}
