@@ -310,6 +310,109 @@ pub fn dry_run_environment(
     out
 }
 
+/// The `toolchainopts` of an easyconfig as written
+/// (`toolchainopts = {'pic': True, 'openmp': True}`): option name to the text
+/// of its value. Empty when the recipe sets none. Commented entries are skipped.
+pub fn recipe_toolchain_options(text: &str) -> std::collections::BTreeMap<String, String> {
+    static START: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?m)^toolchainopts\s*=\s*\{").expect("regex"));
+    static ENTRY: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"['"]([A-Za-z_]\w*)['"]\s*:\s*([^,}\n]+)"#).expect("regex"));
+    let mut out = std::collections::BTreeMap::new();
+    let Some(found) = START.find(text) else {
+        return out;
+    };
+    let rest = &text[found.end()..];
+    let body = &rest[..rest.find('}').unwrap_or(rest.len())];
+    for line in body.lines() {
+        let code = line.split('#').next().unwrap_or("");
+        for entry in ENTRY.captures_iter(code) {
+            out.insert(entry[1].to_string(), entry[2].trim().to_string());
+        }
+    }
+    out
+}
+
+/// A build-environment variable and its threaded variant, when their values
+/// differ.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ThreadedPair {
+    /// The plain name (`LIBX`, `X_STATIC_LIBS`).
+    pub plain: String,
+    /// The threaded name (`LIBX_MT`, `X_MT_STATIC_LIBS`, `X_STATIC_LIBS_MT`).
+    pub threaded: String,
+    /// Value of the plain name.
+    pub plain_value: String,
+    /// Value of the threaded name.
+    pub threaded_value: String,
+}
+
+/// The plain/threaded pairs of a build environment. EasyBuild's toolchains
+/// define a threaded variant next to several library variables, with an `MT`
+/// part in the name; which one applies is up to the easyblock, so a dry run
+/// of a recipe with a threaded toolchain option reports both the same way.
+pub fn threaded_pairs(env: &std::collections::BTreeMap<String, String>) -> Vec<ThreadedPair> {
+    let mut out = Vec::new();
+    for (name, value) in env {
+        let parts: Vec<&str> = name.split('_').collect();
+        if parts.len() < 2 || !parts.contains(&"MT") {
+            continue;
+        }
+        let plain = parts
+            .iter()
+            .copied()
+            .filter(|part| *part != "MT")
+            .collect::<Vec<_>>()
+            .join("_");
+        if let Some(plain_value) = env.get(&plain) {
+            if plain_value != value {
+                out.push(ThreadedPair {
+                    plain,
+                    threaded: name.clone(),
+                    plain_value: plain_value.clone(),
+                    threaded_value: value.clone(),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Toolchain options that ask for a threaded build.
+const THREADED_OPTIONS: &[&str] = &["openmp"];
+
+/// What a dry run should tell the agent about threaded variants: `Some` when
+/// the recipe turns a threaded toolchain option on and the environment has
+/// plain/threaded pairs, since the commands then look the same as without the
+/// option unless the easyblock picks the variant itself.
+pub fn threaded_note(
+    options: &std::collections::BTreeMap<String, String>,
+    pairs: &[ThreadedPair],
+) -> Option<String> {
+    let on = THREADED_OPTIONS
+        .iter()
+        .filter(|option| {
+            options
+                .get(**option)
+                .is_some_and(|value| matches!(value.as_str(), "True" | "1"))
+        })
+        .copied()
+        .collect::<Vec<_>>();
+    if on.is_empty() || pairs.is_empty() {
+        return None;
+    }
+    let names = pairs
+        .iter()
+        .take(6)
+        .map(|pair| format!("{} / {}", pair.plain, pair.threaded))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "this recipe sets toolchainopts {}: True. The build environment defines a threaded variant next to plain variables ({names}, ...; see threaded_pairs) whatever the option says, so the option alone does not change what an easyblock reads. If your easyblock takes a value from one of these variables, check that it uses the threaded one when this option is on, the way merged easyblocks decide it from the toolchain options, and compare this dry run with one of the recipe without the option.",
+        on.join(", ")
+    ))
+}
+
 /// What to build: a recipe, the easyblock modules to include, extra robot
 /// paths and `--try-amend` values.
 #[derive(Debug, Clone, Default)]
@@ -592,6 +695,49 @@ ERROR: Shell command failed!\n\
         assert_eq!(steps[1].commands, vec!["make check".to_string()]);
         let marked = "\u{1b}[1m[\u{1b}[0mconfigure_step method\u{1b}[1m]\u{1b}[0m";
         assert_eq!(step_started(marked).as_deref(), Some("configure"));
+    }
+
+    #[test]
+    fn toolchain_options_and_threaded_pairs_are_reported() {
+        let recipe = "name = 'x'\ntoolchain = {'name': 'foss', 'version': '1'}\ntoolchainopts = {\n    'pic': True,\n    # 'usempi': True,\n    \"openmp\": True,\n}\nsources = []\n";
+        let options = recipe_toolchain_options(recipe);
+        assert_eq!(options.get("pic").map(String::as_str), Some("True"));
+        assert_eq!(options.get("openmp").map(String::as_str), Some("True"));
+        assert!(!options.contains_key("usempi"), "{options:?}");
+        assert!(recipe_toolchain_options("name = 'x'\n").is_empty());
+        let one_line = recipe_toolchain_options("toolchainopts = {'pic': True, 'openmp': False}\n");
+        assert_eq!(one_line.get("openmp").map(String::as_str), Some("False"));
+
+        let env: std::collections::BTreeMap<String, String> = [
+            ("LIBX", "-lx"),
+            ("LIBX_MT", "-lx -lthr"),
+            ("X_STATIC_LIBS", "libx.a"),
+            ("X_MT_STATIC_LIBS", "libx.a,libthr.a"),
+            ("Y_STATIC_LIBS", "liby.a"),
+            ("Y_STATIC_LIBS_MT", "liby.a"),
+            ("MT", "1"),
+            ("CFLAGS", "-O2"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+        let pairs = threaded_pairs(&env);
+        let names: Vec<_> = pairs
+            .iter()
+            .map(|pair| (pair.plain.as_str(), pair.threaded.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            vec![("LIBX", "LIBX_MT"), ("X_STATIC_LIBS", "X_MT_STATIC_LIBS")],
+            "equal values and a bare MT are not pairs"
+        );
+        let note = threaded_note(&options, &pairs).expect("openmp is on");
+        assert!(
+            note.contains("openmp") && note.contains("LIBX / LIBX_MT"),
+            "{note}"
+        );
+        assert!(threaded_note(&one_line, &pairs).is_none(), "openmp is off");
+        assert!(threaded_note(&options, &[]).is_none(), "no pairs");
     }
 
     #[test]
