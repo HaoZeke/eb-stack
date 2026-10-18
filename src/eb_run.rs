@@ -153,6 +153,66 @@ pub fn error_lines(text: &str, limit: usize) -> Vec<String> {
     out
 }
 
+/// Split error lines into real errors and the warnings EasyBuild printed
+/// about errors it ignored (`!!! WARNING: ignoring error ...`), which do not
+/// stop a run.
+pub fn split_warnings(lines: Vec<String>) -> (Vec<String>, Vec<String>) {
+    lines.into_iter().partition(|line| {
+        !visible(line)
+            .trim_start_matches(['!', ' '])
+            .starts_with("WARNING")
+    })
+}
+
+/// Where a failed `eb` run went wrong, from its error lines: `environment`
+/// when EasyBuild could not set up the recipe's toolchain or dependencies
+/// here, so no easyblock code ran; `easyblock` when Python failed in a module.
+/// `None` when the lines say neither.
+pub fn failure_kind(errors: &[String]) -> Option<&'static str> {
+    static ENVIRONMENT: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?i)(toolchain\b.*\bnot supported|missing (modules for )?dependencies|irresolvable dependencies|no easyconfig files? found|unknown toolchain|can't find module|module command '.*' failed|no module named easybuild\.toolchains)",
+        )
+        .expect("regex")
+    });
+    static EASYBLOCK: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(Traceback \(most recent call last\)|SyntaxError|IndentationError|invalid syntax|is not defined|has no attribute|unexpected keyword argument|positional argument|import easyblock|easyblocks?/\S+\.py)",
+        )
+        .expect("regex")
+    });
+    let text = errors
+        .iter()
+        .map(|line| visible(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if ENVIRONMENT.is_match(&text) {
+        Some("environment")
+    } else if EASYBLOCK.is_match(&text) {
+        Some("easyblock")
+    } else {
+        None
+    }
+}
+
+/// The summary and `next` of a failed dry run of the given `kind`.
+pub fn failed_dry_run_text(kind: Option<&str>) -> (&'static str, &'static str) {
+    match kind {
+        Some("environment") => (
+            "dry run failed before any easyblock code ran: this recipe's toolchain or dependencies cannot be set up in this environment (see errors). This is not a fault in your easyblock.",
+            "do not change the easyblock for this; say which recipe could not be checked here and why, and check the other recipes",
+        ),
+        Some("easyblock") => (
+            "dry run failed in Python code: the error lines name the module and the problem",
+            "fix the easyblock, lint it, then dry-run again",
+        ),
+        _ => (
+            "dry run failed: the error lines say why (a Python error in the easyblock shows up here)",
+            "fix what the error lines say, then dry-run again",
+        ),
+    }
+}
+
 /// A shell command starting at `lines[index]`, and the index of its last line.
 ///
 /// EasyBuild 5.4 prints either a quoted command (`running shell command "make check"`,
@@ -716,6 +776,38 @@ ERROR: Shell command failed!\n\
         assert_eq!(steps[1].commands, vec!["make check".to_string()]);
         let marked = "\u{1b}[1m[\u{1b}[0mconfigure_step method\u{1b}[1m]\u{1b}[0m";
         assert_eq!(step_started(marked).as_deref(), Some("configure"));
+    }
+
+    #[test]
+    fn failed_runs_tell_the_environment_from_the_easyblock() {
+        let lines = vec![
+            "!!! WARNING: ignoring error Failed to chmod/chown several paths: ['/tmp/x']".to_string(),
+            "\u{1b}[1m!!! WARNING\u{1b}[0m: ignoring error x".to_string(),
+            "ERROR: Toolchain {'name': 'GCCcore', 'version': '1.0'} (required by dep/1-GCCcore-1.0) is not supported in STACK/1".to_string(),
+        ];
+        let (errors, warnings) = split_warnings(lines);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(failure_kind(&errors), Some("environment"));
+        assert_eq!(
+            failure_kind(&["ERROR: Missing modules for dependencies: dep/1".to_string()]),
+            Some("environment")
+        );
+        assert_eq!(
+            failure_kind(&[
+                "ERROR: Failed to process easyconfig x.eb: name 'foo' is not defined".to_string()
+            ]),
+            Some("easyblock")
+        );
+        assert_eq!(
+            failure_kind(&["Traceback (most recent call last):".to_string()]),
+            Some("easyblock")
+        );
+        assert_eq!(failure_kind(&["ERROR: something else".to_string()]), None);
+        assert!(failed_dry_run_text(Some("environment"))
+            .0
+            .contains("not a fault in your easyblock"));
+        assert!(failed_dry_run_text(None).1.contains("dry-run again"));
     }
 
     #[test]
