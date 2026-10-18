@@ -10,8 +10,8 @@ use crate::eb_parse::{
     check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,
 };
 use crate::eb_run::{
-    commands_in, error_lines, parse_dry_run, read_tail, run_eb, split_steps, step_text, tail,
-    EbInvocation,
+    builds_allowed, commands_in, error_lines, parse_dry_run, read_tail, run_eb, split_steps,
+    step_text, tail, EbInvocation, ALLOW_BUILD_ENV,
 };
 use crate::eb_style::{
     format_style, format_style_file, is_formatting_code, lint_recipe_files_scoped, lint_style,
@@ -259,6 +259,12 @@ fn tool_catalog() -> Vec<Value> {
             &[("step", "string"), ("grep", "string"), ("tail", "integer"), ("max_bytes", "integer")],
         ),
         tool_with_optional(
+            "eb_build_test",
+            "Build one recipe for real with your easyblock modules (--include-easyblocks), --rebuild, and return how it ended: exit code, the last step reached, whether the installation completed, the test step's commands and the tail of its output, the error lines, and the log path for eb_build_log. The build directory is kept under .eb-stack/builds/<n>/build, so config.log and test logs can be read with eb_recipe_read. A build takes minutes to hours: get the commands right with eb_easyblock_dry_run first. The server refuses builds unless EB_STACK_ALLOW_BUILD=1 is set where it runs.",
+            &[("recipe", "string"), ("easyblocks", "array_min1")],
+            &[("robot", "array"), ("try_amend", "array"), ("timeout_s", "integer")],
+        ),
+        tool_with_optional(
             "eb_stack_solve",
             "Solve a jointly consistent EasyBuild stack lock and optional reports.",
             &[
@@ -398,6 +404,7 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_module_lint" => module_lint(arguments),
         "eb_easyblock_dry_run" => easyblock_dry_run(arguments),
         "eb_build_log" => build_log(arguments),
+        "eb_build_test" => build_test(arguments),
         "eb_stack_solve" => stack_solve(arguments),
         "eb_stack_sbom" => stack_sbom(arguments),
         "eb_target_list" => target_list(arguments),
@@ -1217,6 +1224,76 @@ fn build_log(arguments: &Value) -> Result<Value, String> {
         "errors": error_lines(&part, 20),
         "nested_outputs": crate::campaign::easybuild_output_paths(&text),
         "start_truncated": start_truncated,
+    }))
+}
+
+/// `eb_build_test`: one real build with workspace easyblocks, refused unless
+/// [`ALLOW_BUILD_ENV`] is `1`.
+fn build_test(arguments: &Value) -> Result<Value, String> {
+    if !builds_allowed() {
+        return Err(format!(
+            "builds are off on this server ({ALLOW_BUILD_ENV}=1 is not set). Use eb_easyblock_dry_run to check the commands your easyblock generates; the build runs where builds are allowed."
+        ));
+    }
+    let root = configured_workspace_root()?;
+    let invocation = eb_invocation(arguments)?.resolved(&root)?;
+    for path in &invocation.easyblocks {
+        remember_first_seen(path);
+    }
+    let dir = eb_run_dir(&root, "builds")?;
+    let output = dir.join("eb.out");
+    let extra = vec![
+        "--rebuild".to_string(),
+        "--logtostdout".to_string(),
+        "--trace".to_string(),
+        "--disable-cleanup-tmpdir".to_string(),
+        format!("--tmpdir={}", dir.join("tmp").display()),
+        format!("--buildpath={}", dir.join("build").display()),
+    ];
+    let run = run_eb(
+        &invocation.args(&extra),
+        timeout_arg(arguments, 7200, 60, 6 * 3600),
+        &output,
+    )?;
+    let (text, start_truncated) = read_tail(&output, 16 * 1024 * 1024)?;
+    let steps = split_steps(&text);
+    let completed = run.exit_code == Some(0)
+        && (text.contains("COMPLETED: Installation ended successfully")
+            || text.contains("Build succeeded for 1 out of 1"));
+    let test = step_text(&text, &steps, "test").map(|lines| {
+        let part = lines.join("\n");
+        json!({
+            "commands": commands_in(&part),
+            "errors": error_lines(&part, 20),
+            "tail": tail(&lines, 80),
+        })
+    });
+    let test_ran = test
+        .as_ref()
+        .and_then(|test| test["commands"].as_array())
+        .is_some_and(|commands| !commands.is_empty());
+    let summary = match (completed, test_ran) {
+        (true, true) => "installed, and the test step ran the commands listed under test",
+        (true, false) => "installed, but the test step ran no command: nothing was tested",
+        (false, _) if run.timed_out => "killed at the time limit",
+        (false, _) => "failed: read errors, then the failing step with eb_build_log",
+    };
+    Ok(json!({
+        "exit_code": run.exit_code,
+        "timed_out": run.timed_out,
+        "seconds": run.seconds,
+        "completed": completed,
+        "last_step": steps.last().map(|span| span.step.clone()),
+        "steps": steps,
+        "log": workspace_relative(&root, &output),
+        "build_dir": workspace_relative(&root, &dir.join("build")),
+        "test": test,
+        "test_ran": test_ran,
+        "errors": error_lines(&text, 20),
+        "nested_outputs": crate::campaign::easybuild_output_paths(&text),
+        "start_truncated": start_truncated,
+        "summary": summary,
+        "claims": {"builds": true, "tests_ran": test_ran},
     }))
 }
 

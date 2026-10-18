@@ -34,6 +34,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_module_lint",
         "eb_easyblock_dry_run",
         "eb_build_log",
+        "eb_build_test",
         "eb_stack_solve",
         "eb_stack_sbom",
         "eb_target_list",
@@ -45,7 +46,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 25, "unexpected MCP tools: {names:?}");
+    assert_eq!(names.len(), 26, "unexpected MCP tools: {names:?}");
 
     let package_bump = response["result"]["tools"]
         .as_array()
@@ -1348,4 +1349,23 @@ fn mcp_eb_tools_refuse_paths_outside_the_workspace() {
         let response = call(id, name, arguments);
         assert_eq!(response["result"]["isError"], true, "{name}: {response}");
     }
+}
+
+#[test]
+fn mcp_build_test_is_refused_unless_builds_are_allowed() {
+    if std::env::var_os("EB_STACK_ALLOW_BUILD").is_some() {
+        return;
+    }
+    let response = call(
+        46,
+        "eb_build_test",
+        json!({"recipe": "x.eb", "easyblocks": ["x.py"]}),
+    );
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    assert!(
+        response
+            .to_string()
+            .contains("EB_STACK_ALLOW_BUILD=1 is not set"),
+        "{response}"
+    );
 }
