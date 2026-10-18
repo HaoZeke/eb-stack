@@ -945,6 +945,9 @@ fn recipe_diff(arguments: &Value) -> Result<Value, String> {
         let statuses = item_statuses(arguments, path, paths.len() == 1, &now);
         let hunks = crate::eb_style::hunks(&kept, &now);
         total += hunks.len();
+        // A Python module has no top-level parameters; name the def or class
+        // each hunk sits in instead, so the answer can say "configure_step".
+        let python = path.extension().and_then(|value| value.to_str()) == Some("py");
         let rendered = hunks
             .iter()
             .map(|hunk| {
@@ -956,10 +959,18 @@ fn recipe_diff(arguments: &Value) -> Result<Value, String> {
                 for line in &hunk.added {
                     diff.push_str(&format!("+{line}\n"));
                 }
+                let scope = python
+                    .then(|| {
+                        crate::eb_module::enclosing_scope(&now, hunk.new_start.max(1)).or_else(
+                            || crate::eb_module::enclosing_scope(&kept, hunk.old_start.max(1)),
+                        )
+                    })
+                    .flatten();
                 json!({
                     "old_line": hunk.old_start,
                     "new_line": hunk.new_start,
                     "parameters": hunk.params,
+                    "scope": scope,
                     "comment_only": hunk.comment_only(),
                     "diff": diff,
                 })
