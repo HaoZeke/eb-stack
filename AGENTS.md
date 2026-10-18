@@ -10,6 +10,7 @@ Use the matching public skill and execute it through the requested claim rung:
 | upstream easybuild-easyconfigs PR / test report | `skills/upstream-pr/SKILL.md` |
 | EasyBuild do/don't (incl. #26435 class) | `skills/easybuild-dos-donts/SKILL.md` |
 | reviewer comments on an easyconfig | `skills/easybuild-dos-donts/SKILL.md` (review-fix) |
+| an easyblock (Python module) is wrong | `skills/easyblock-fix/SKILL.md` |
 | build an upstream recipe at a site without forking it | `skills/site-consume/SKILL.md` |
 | EESSI-extend test / EESSI software-layer PR | `skills/eessi-extend/SKILL.md` |
 | generated output needed a hand correction | `skills/tool-repair/SKILL.md` |

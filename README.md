@@ -343,6 +343,8 @@ recipe file tools.
 - `eb_recipe_read`, `eb_recipe_list`, `eb_recipe_edit`, `eb_recipe_write`,
   `eb_recipe_grep`, `eb_dep_versions`;
 - `eb_recipe_check`, `eb_recipe_lint`, `eb_recipe_format`;
+- `eb_module_lint`, `eb_easyblock_dry_run`, `eb_build_log`, `eb_build_test`
+  (easyblocks; `eb_build_test` only with `EB_STACK_ALLOW_BUILD=1`);
 - `eb_stack_solve`, `eb_stack_sbom`;
 - `eb_target_list`, `eb_target_doctor`;
 - `eb_campaign_run`, `eb_campaign_status`;
@@ -371,6 +373,7 @@ Gate, before anything is built or pushed:
 
 - [Verify recipe](skills/verify-recipe/SKILL.md): prove the checksum, the patches, the extension versions, the configure options and the dependency bounds against the real source, without spending a build.
 - [EasyBuild dos and don'ts](skills/easybuild-dos-donts/SKILL.md): recipe-shape rules and the pre-PR checklist behind `recipe check`.
+- [Easyblock fix](skills/easyblock-fix/SKILL.md): change an easyblock from an issue report, then prove it with the generated commands (`eb -x`) and a build that runs the test step.
 
 Carry:
 
