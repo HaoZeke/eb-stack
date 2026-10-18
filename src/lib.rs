@@ -14,6 +14,7 @@ pub mod eb_easyblock;
 mod eb_emit;
 pub mod eb_engine_export;
 pub mod eb_maintainer;
+pub mod eb_module;
 pub mod eb_parse;
 pub mod eb_style;
 /// EasyBuild's built-in `%(...)s` template constants and their expansions.
