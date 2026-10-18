@@ -31,6 +31,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_recipe_check",
         "eb_recipe_lint",
         "eb_recipe_format",
+        "eb_module_lint",
         "eb_stack_solve",
         "eb_stack_sbom",
         "eb_target_list",
@@ -42,7 +43,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 22, "unexpected MCP tools: {names:?}");
+    assert_eq!(names.len(), 23, "unexpected MCP tools: {names:?}");
 
     let package_bump = response["result"]["tools"]
         .as_array()
@@ -1271,4 +1272,49 @@ fn mcp_stack_sbom_writes_cyclonedx_from_lock() {
     let sbom: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&out).expect("read sbom")).expect("json");
     assert_eq!(sbom["bomFormat"], "CycloneDX");
+}
+
+#[test]
+fn mcp_module_lint_checks_an_easyblock_with_the_repository_line_length() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("setup.cfg"),
+        "[flake8]\nmax-line-length = 120\n",
+    )
+    .expect("setup.cfg");
+    let dir = temp.path().join("easybuild/easyblocks/x");
+    std::fs::create_dir_all(&dir).expect("dirs");
+    let module = dir.join("xpkg.py");
+    let long = format!(
+        "        self.cfg.update('configopts', '{}')\n",
+        "a".repeat(100)
+    );
+    let text = format!(
+        "from easybuild.easyblocks.generic.configuremake import ConfigureMake\n\n\nclass EB_xpkg(ConfigureMake):\n    def configure_step(self):\n{long}        super().configure_step()\n"
+    );
+    std::fs::write(&module, &text).expect("module");
+    let response = call(
+        40,
+        "eb_module_lint",
+        json!({"modules": [module], "flake8": false}),
+    );
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let body = &response["result"]["structuredContent"];
+    assert_eq!(body["results"][0]["max_line_length"], 120, "{body}");
+    assert_eq!(
+        body["clean"], false,
+        "a 140-character line is E501 at 120: {body}"
+    );
+    assert_eq!(body["results"][0]["findings"][0]["code"], "E501", "{body}");
+
+    std::fs::write(&module, text.replace(&long, "        pass\n")).expect("fixed");
+    let fixed = call(
+        41,
+        "eb_module_lint",
+        json!({"modules": [module], "flake8": false}),
+    );
+    assert_eq!(
+        fixed["result"]["structuredContent"]["clean"], true,
+        "{fixed}"
+    );
 }
