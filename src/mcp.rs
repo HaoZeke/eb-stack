@@ -10,9 +10,9 @@ use crate::eb_parse::{
     check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,
 };
 use crate::eb_run::{
-    builds_allowed, commands_in, dry_run_environment, error_lines, parse_dry_run, read_tail,
-    recipe_toolchain_options, run_eb, split_steps, step_text, tail, threaded_note, threaded_pairs,
-    EbInvocation, ALLOW_BUILD_ENV,
+    build_test_description, builds_allowed, commands_in, dry_run_environment, dry_run_next,
+    error_lines, parse_dry_run, read_tail, recipe_toolchain_options, run_eb, split_steps,
+    step_text, tail, threaded_note, threaded_pairs, EbInvocation, ALLOW_BUILD_ENV,
 };
 use crate::eb_style::{
     format_style, format_style_file, is_formatting_code, lint_recipe_files_scoped, lint_style,
@@ -249,7 +249,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_easyblock_dry_run",
-            "Run eb -x (extended dry run: nothing is downloaded or compiled) on a recipe with your easyblock modules passed through --include-easyblocks, and return the commands the easyblock generates, grouped by step (configure, build, test, install, ...), with the error lines. Use it after every easyblock edit to see the configure options, make targets and test command your code produces for each recipe and toolchain you were asked about; a recipe with toolchainopts such as openmp is a separate call. environment lists the build environment the dry run reports (what the toolchain and dependencies define, in the form the easyblock reads it); env_filter keeps only names containing that text. toolchain_options is the recipe's toolchainopts as written, and threaded_pairs lists the variables that have a threaded variant (an MT part in the name) with a different value; notes says when the recipe turns a threaded option on, since the plain and threaded variables are both defined either way. recipe and easyblocks are workspace paths; robot adds easyconfig directories searched before the defaults; try_amend takes name=value easyconfig overrides. The full output is saved under .eb-stack/dry-run/ for eb_build_log.",
+            "Run eb -x (extended dry run: nothing is downloaded or compiled) on a recipe with your easyblock modules passed through --include-easyblocks, and return the commands the easyblock generates, grouped by step (configure, build, test, install, ...), with the error lines. Use it after every easyblock edit to see the configure options, make targets and test command your code produces for each recipe and toolchain you were asked about; a recipe with toolchainopts such as openmp is a separate call. environment lists the build environment the dry run reports (what the toolchain and dependencies define, in the form the easyblock reads it); env_filter keeps only names containing that text. toolchain_options is the recipe's toolchainopts as written, and threaded_pairs lists the variables that have a threaded variant (an MT part in the name) with a different value; notes says when the recipe turns a threaded option on, since the plain and threaded variables are both defined either way. recipe and easyblocks are workspace paths; robot adds easyconfig directories searched before the defaults; try_amend takes name=value easyconfig overrides. The full output is saved under .eb-stack/dry-run/ for eb_build_log. next says what to do after a dry run on this server: build with eb_build_test when builds are on, since a dry run never links or runs the tests.",
             &[("recipe", "string"), ("easyblocks", "array_min1")],
             &[("robot", "array"), ("try_amend", "array"), ("timeout_s", "integer"), ("env_filter", "string")],
         ),
@@ -261,7 +261,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_build_test",
-            "Build one recipe for real with your easyblock modules (--include-easyblocks), --rebuild, and return how it ended: exit code, the last step reached, whether the installation completed, the test step's commands and the tail of its output, the error lines, and the log path for eb_build_log. The build directory is kept under .eb-stack/builds/<n>/build, so config.log and test logs can be read with eb_recipe_read. A build takes minutes to hours: get the commands right with eb_easyblock_dry_run first. The server refuses builds unless EB_STACK_ALLOW_BUILD=1 is set where it runs.",
+            &build_test_description(builds_allowed()),
             &[("recipe", "string"), ("easyblocks", "array_min1")],
             &[("robot", "array"), ("try_amend", "array"), ("timeout_s", "integer")],
         ),
@@ -1168,6 +1168,10 @@ fn easyblock_dry_run(arguments: &Value) -> Result<Value, String> {
     if let Some(note) = threaded_note(&toolchain_options, &pairs) {
         notes.push(note);
     }
+    let next = dry_run_next(
+        builds_allowed(),
+        run.exit_code == Some(0) && !steps.is_empty(),
+    );
     let summary = match (run.exit_code, steps.is_empty()) {
         (Some(0), false) => "dry run finished: check each step's commands against what the task asks for".to_string(),
         (Some(0), true) => "dry run finished but reported no commands: read the output with eb_build_log".to_string(),
@@ -1187,6 +1191,7 @@ fn easyblock_dry_run(arguments: &Value) -> Result<Value, String> {
         "errors": error_lines(&text, 20),
         "tail": tail(&lines, 40),
         "summary": summary,
+        "next": next,
         "claims": {"builds": false, "tests_ran": false},
     }))
 }

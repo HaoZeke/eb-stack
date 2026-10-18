@@ -590,6 +590,27 @@ pub fn builds_allowed() -> bool {
     std::env::var(ALLOW_BUILD_ENV).as_deref() == Ok("1")
 }
 
+/// The `eb_build_test` description on a server where builds are `allowed`
+/// or not, so the tool list itself says whether a build can run here.
+pub fn build_test_description(allowed: bool) -> String {
+    let common = "Build one recipe for real with your easyblock modules (--include-easyblocks), --rebuild, and return how it ended: exit code, the last step reached, whether the installation completed, the test step's commands and the tail of its output, the error lines, and the log path for eb_build_log. The build directory is kept under .eb-stack/builds/<n>/build, so config.log and test logs can be read with eb_recipe_read. A build runs the whole recipe, so get the commands right with eb_easyblock_dry_run first.";
+    if allowed {
+        format!("{common} Builds are on for this server: once the dry run shows the commands you intended, build each recipe you were asked about with this tool before calling the change done. Only a build shows link errors and test failures; a dry run never does.")
+    } else {
+        format!("{common} Builds are off on this server ({ALLOW_BUILD_ENV}=1 is not set), so this tool returns an error; say which builds are still owed.")
+    }
+}
+
+/// The `next` field of a dry run: what to do after it, given whether builds
+/// are `allowed` and whether the dry run `finished`.
+pub fn dry_run_next(allowed: bool, finished: bool) -> &'static str {
+    match (finished, allowed) {
+        (false, _) => "fix what the error lines say, then dry-run again",
+        (true, true) => "builds are on: once these commands match the task, run eb_build_test on each recipe you were asked about; a dry run does not link anything or run the tests",
+        (true, false) => "builds are off on this server: once these commands match the task, say which builds are still owed",
+    }
+}
+
 /// Read the end of a file as text, at most `max_bytes` from its end, so a
 /// large build log stays bounded.
 pub fn read_tail(path: &Path, max_bytes: u64) -> Result<(String, bool), String> {
@@ -695,6 +716,20 @@ ERROR: Shell command failed!\n\
         assert_eq!(steps[1].commands, vec!["make check".to_string()]);
         let marked = "\u{1b}[1m[\u{1b}[0mconfigure_step method\u{1b}[1m]\u{1b}[0m";
         assert_eq!(step_started(marked).as_deref(), Some("configure"));
+    }
+
+    #[test]
+    fn build_tool_text_says_whether_builds_run_here() {
+        let on = build_test_description(true);
+        let off = build_test_description(false);
+        assert!(
+            on.contains("Builds are on") && !on.contains("is not set"),
+            "{on}"
+        );
+        assert!(off.contains("EB_STACK_ALLOW_BUILD=1 is not set"), "{off}");
+        assert!(dry_run_next(true, true).contains("eb_build_test"));
+        assert!(dry_run_next(false, true).contains("still owed"));
+        assert!(!dry_run_next(true, false).contains("eb_build_test"));
     }
 
     #[test]
