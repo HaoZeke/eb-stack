@@ -9,6 +9,10 @@ use crate::domain::Toolchain;
 use crate::eb_parse::{
     check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,
 };
+use crate::eb_run::{
+    commands_in, error_lines, parse_dry_run, read_tail, run_eb, split_steps, step_text, tail,
+    EbInvocation,
+};
 use crate::eb_style::{
     format_style, format_style_file, is_formatting_code, lint_recipe_files_scoped, lint_style,
     python_syntax_error, review_item_findings, review_item_status, RecipeScope, ReviewItem,
@@ -27,7 +31,7 @@ use crate::package_workflow::{
 use crate::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use crate::workspace_fs::{
     apply_suggestion_workspace, configured_workspace_root, edit_workspace_scoped, grep_workspace,
-    list_workspace, read_workspace, write_workspace,
+    list_workspace, read_workspace, resolve_inside, write_workspace,
 };
 use crate::{
     load_json_file, lock_to_cyclonedx, solve_with_baseline_source, write_json_pretty,
@@ -37,6 +41,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Serve MCP over a line-delimited JSON-RPC stream until the reader ends.
 pub fn run_server<R: BufRead, W: Write>(reader: R, mut writer: W) -> std::io::Result<()> {
@@ -242,6 +247,18 @@ fn tool_catalog() -> Vec<Value> {
             &[("base", "string"), ("flake8", "boolean")],
         ),
         tool_with_optional(
+            "eb_easyblock_dry_run",
+            "Run eb -x (extended dry run: nothing is downloaded or compiled) on a recipe with your easyblock modules passed through --include-easyblocks, and return the commands the easyblock generates, grouped by step (configure, build, test, install, ...), with the error lines. Use it after every easyblock edit to see the configure options, make targets and test command your code produces for each recipe and toolchain you were asked about; a recipe with toolchainopts such as openmp is a separate call. recipe and easyblocks are workspace paths; robot adds easyconfig directories searched before the defaults; try_amend takes name=value easyconfig overrides. The full output is saved under .eb-stack/dry-run/ for eb_build_log.",
+            &[("recipe", "string"), ("easyblocks", "array_min1")],
+            &[("robot", "array"), ("try_amend", "array"), ("timeout_s", "integer")],
+        ),
+        tool_with_optional(
+            "eb_build_log",
+            "Read an EasyBuild log or eb output file in the workspace (for example the log an eb_easyblock_dry_run or eb_build_test call returned) by step. Returns the step list with line counts, the last tail lines (default 120) of the whole log or of one step (step: configure, build, test, install, sanitycheck, ...), optionally only lines containing grep, plus the commands and error lines in that part and the per-command output files EasyBuild named. Use it to read why a test or build step failed before changing code again.",
+            &[("path", "string")],
+            &[("step", "string"), ("grep", "string"), ("tail", "integer"), ("max_bytes", "integer")],
+        ),
+        tool_with_optional(
             "eb_stack_solve",
             "Solve a jointly consistent EasyBuild stack lock and optional reports.",
             &[
@@ -379,6 +396,8 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_recipe_lint" => recipe_lint(arguments),
         "eb_recipe_format" => recipe_format(arguments),
         "eb_module_lint" => module_lint(arguments),
+        "eb_easyblock_dry_run" => easyblock_dry_run(arguments),
+        "eb_build_log" => build_log(arguments),
         "eb_stack_solve" => stack_solve(arguments),
         "eb_stack_sbom" => stack_sbom(arguments),
         "eb_target_list" => target_list(arguments),
@@ -1060,6 +1079,144 @@ fn module_lint(arguments: &Value) -> Result<Value, String> {
         "results": results,
         "flake8": reports,
         "summary": summary,
+    }))
+}
+
+/// The recipe, easyblocks, robot paths and overrides of an eb tool call.
+fn eb_invocation(arguments: &Value) -> Result<EbInvocation, String> {
+    Ok(EbInvocation {
+        recipe: required_path(arguments, "recipe")?,
+        easyblocks: path_array(arguments, "easyblocks")?,
+        robot: path_array(arguments, "robot")?,
+        try_amend: string_array(arguments, "try_amend")?,
+    })
+}
+
+/// A fresh numbered directory under `<root>/.eb-stack/<kind>/`.
+fn eb_run_dir(root: &Path, kind: &str) -> Result<PathBuf, String> {
+    let base = root.join(".eb-stack").join(kind);
+    std::fs::create_dir_all(&base)
+        .map_err(|error| format!("create {}: {error}", base.display()))?;
+    let taken = std::fs::read_dir(&base)
+        .map_err(|error| format!("list {}: {error}", base.display()))?
+        .count();
+    let dir = base.join(format!("{:03}", taken + 1));
+    std::fs::create_dir_all(&dir).map_err(|error| format!("create {}: {error}", dir.display()))?;
+    Ok(dir)
+}
+
+fn workspace_relative(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .map(|relative| relative.display().to_string())
+        .unwrap_or_else(|_| path.display().to_string())
+}
+
+fn timeout_arg(arguments: &Value, default: u64, min: u64, max: u64) -> Duration {
+    Duration::from_secs(
+        arguments
+            .get("timeout_s")
+            .and_then(Value::as_u64)
+            .unwrap_or(default)
+            .clamp(min, max),
+    )
+}
+
+/// `eb_easyblock_dry_run`: the commands an easyblock generates, from `eb -x`.
+fn easyblock_dry_run(arguments: &Value) -> Result<Value, String> {
+    let root = configured_workspace_root()?;
+    let invocation = eb_invocation(arguments)?.resolved(&root)?;
+    for path in &invocation.easyblocks {
+        remember_first_seen(path);
+    }
+    let dir = eb_run_dir(&root, "dry-run")?;
+    let output = dir.join("eb.out");
+    let run = run_eb(
+        &invocation.args(&["-x".to_string()]),
+        timeout_arg(arguments, 600, 10, 3600),
+        &output,
+    )?;
+    let (text, _) = read_tail(&output, 4 * 1024 * 1024)?;
+    let lines = text.lines().collect::<Vec<_>>();
+    let steps = parse_dry_run(&text);
+    let summary = match (run.exit_code, steps.is_empty()) {
+        (Some(0), false) => "dry run finished: check each step's commands against what the task asks for".to_string(),
+        (Some(0), true) => "dry run finished but reported no commands: read the output with eb_build_log".to_string(),
+        _ => "dry run failed: the error lines say why (a Python error in the easyblock shows up here)".to_string(),
+    };
+    Ok(json!({
+        "exit_code": run.exit_code,
+        "timed_out": run.timed_out,
+        "seconds": run.seconds,
+        "argv": run.argv,
+        "output": workspace_relative(&root, &output),
+        "steps": steps,
+        "errors": error_lines(&text, 20),
+        "tail": tail(&lines, 40),
+        "summary": summary,
+        "claims": {"builds": false, "tests_ran": false},
+    }))
+}
+
+/// `eb_build_log`: one step of an EasyBuild log, bounded.
+fn build_log(arguments: &Value) -> Result<Value, String> {
+    let root = configured_workspace_root()?;
+    let requested = required_path(arguments, "path")?;
+    let (_, path) = resolve_inside(&root, &requested)?;
+    let max_bytes = arguments
+        .get("max_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(8 * 1024 * 1024)
+        .clamp(1024, 64 * 1024 * 1024);
+    let (text, start_truncated) = read_tail(&path, max_bytes)?;
+    let steps = split_steps(&text);
+    let step = optional_string(arguments, "step").filter(|step| !step.is_empty());
+    let selected = match step.as_deref() {
+        Some(name) => step_text(&text, &steps, name).ok_or_else(|| {
+            format!(
+                "no {name} step in {}; steps: {}",
+                requested.display(),
+                steps
+                    .iter()
+                    .map(|span| span.step.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?,
+        None => text.lines().collect(),
+    };
+    let shown = match optional_string(arguments, "grep").filter(|pattern| !pattern.is_empty()) {
+        Some(pattern) => selected
+            .iter()
+            .copied()
+            .filter(|line| line.contains(pattern.as_str()))
+            .collect::<Vec<_>>(),
+        None => selected.clone(),
+    };
+    let count = arguments
+        .get("tail")
+        .and_then(Value::as_u64)
+        .map_or(120, |value| value as usize)
+        .clamp(1, 600);
+    let mut body = tail(&shown, count);
+    if body.len() > 20_000 {
+        let cut = body.len() - 20_000;
+        let cut = (cut..body.len())
+            .find(|index| body.is_char_boundary(*index))
+            .unwrap_or(cut);
+        body = body[cut..].to_string();
+    }
+    let part = selected.join("\n");
+    Ok(json!({
+        "path": workspace_relative(&root, &path),
+        "steps": steps,
+        "step": step,
+        "lines_selected": selected.len(),
+        "lines_matched": shown.len(),
+        "text": body,
+        "commands": commands_in(&part),
+        "errors": error_lines(&part, 20),
+        "nested_outputs": crate::campaign::easybuild_output_paths(&text),
+        "start_truncated": start_truncated,
     }))
 }
 
