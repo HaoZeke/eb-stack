@@ -191,6 +191,41 @@ pub fn parse_dry_run(text: &str) -> Vec<DryRunStep> {
     out
 }
 
+/// The build environment an `eb -x` run reports (`export NAME="value"` and
+/// `setting environment variable NAME to "value"` lines): what the toolchain
+/// and the loaded dependencies define, in the form the easyblock reads it.
+/// With `filter`, only names containing it (case-insensitive).
+pub fn dry_run_environment(
+    text: &str,
+    filter: Option<&str>,
+) -> std::collections::BTreeMap<String, String> {
+    static EXPORT: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"^\s*(?:export\s+([A-Za-z_]\w*)=["']?(.*?)["']?\s*$|.*setting environment variable ([A-Za-z_]\w*) to ["'](.*)["'])"#)
+            .expect("regex")
+    });
+    let wanted = filter.map(str::to_ascii_uppercase);
+    let mut out = std::collections::BTreeMap::new();
+    for line in text.lines() {
+        let Some(found) = EXPORT.captures(line) else {
+            continue;
+        };
+        let (name, value) = match (found.get(1), found.get(2), found.get(3), found.get(4)) {
+            (Some(name), Some(value), _, _) | (_, _, Some(name), Some(value)) => {
+                (name.as_str(), value.as_str())
+            }
+            _ => continue,
+        };
+        if wanted
+            .as_deref()
+            .is_some_and(|wanted| !name.to_ascii_uppercase().contains(wanted))
+        {
+            continue;
+        }
+        out.insert(name.to_string(), value.to_string());
+    }
+    out
+}
+
 /// What to build: a recipe, the easyblock modules to include, extra robot
 /// paths and `--try-amend` values.
 #[derive(Debug, Clone, Default)]
@@ -439,6 +474,17 @@ ERROR: Shell command failed!\n\
         assert!(steps[0].commands[0].starts_with("./configure"));
         assert_eq!(steps[1].step, "test");
         assert_eq!(steps[1].commands, vec!["make check".to_string()]);
+    }
+
+    #[test]
+    fn dry_run_environment_reads_exports_and_settings() {
+        let text = "  export CC=\"gcc\"\n  export LIBX=\"-lx -ly\"\n  >> setting environment variable X_DIR to '/sw/x/lib'\nnoise\n";
+        let all = dry_run_environment(text, None);
+        assert_eq!(all.len(), 3, "{all:?}");
+        assert_eq!(all["LIBX"], "-lx -ly");
+        assert_eq!(all["X_DIR"], "/sw/x/lib");
+        let some = dry_run_environment(text, Some("libx"));
+        assert_eq!(some.keys().collect::<Vec<_>>(), vec!["LIBX"]);
     }
 
     #[test]

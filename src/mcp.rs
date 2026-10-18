@@ -10,8 +10,8 @@ use crate::eb_parse::{
     check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,
 };
 use crate::eb_run::{
-    builds_allowed, commands_in, error_lines, parse_dry_run, read_tail, run_eb, split_steps,
-    step_text, tail, EbInvocation, ALLOW_BUILD_ENV,
+    builds_allowed, commands_in, dry_run_environment, error_lines, parse_dry_run, read_tail,
+    run_eb, split_steps, step_text, tail, EbInvocation, ALLOW_BUILD_ENV,
 };
 use crate::eb_style::{
     format_style, format_style_file, is_formatting_code, lint_recipe_files_scoped, lint_style,
@@ -248,9 +248,9 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_easyblock_dry_run",
-            "Run eb -x (extended dry run: nothing is downloaded or compiled) on a recipe with your easyblock modules passed through --include-easyblocks, and return the commands the easyblock generates, grouped by step (configure, build, test, install, ...), with the error lines. Use it after every easyblock edit to see the configure options, make targets and test command your code produces for each recipe and toolchain you were asked about; a recipe with toolchainopts such as openmp is a separate call. recipe and easyblocks are workspace paths; robot adds easyconfig directories searched before the defaults; try_amend takes name=value easyconfig overrides. The full output is saved under .eb-stack/dry-run/ for eb_build_log.",
+            "Run eb -x (extended dry run: nothing is downloaded or compiled) on a recipe with your easyblock modules passed through --include-easyblocks, and return the commands the easyblock generates, grouped by step (configure, build, test, install, ...), with the error lines. Use it after every easyblock edit to see the configure options, make targets and test command your code produces for each recipe and toolchain you were asked about; a recipe with toolchainopts such as openmp is a separate call. environment lists the build environment the dry run reports (what the toolchain and dependencies define, in the form the easyblock reads it); env_filter keeps only names containing that text. recipe and easyblocks are workspace paths; robot adds easyconfig directories searched before the defaults; try_amend takes name=value easyconfig overrides. The full output is saved under .eb-stack/dry-run/ for eb_build_log.",
             &[("recipe", "string"), ("easyblocks", "array_min1")],
-            &[("robot", "array"), ("try_amend", "array"), ("timeout_s", "integer")],
+            &[("robot", "array"), ("try_amend", "array"), ("timeout_s", "integer"), ("env_filter", "string")],
         ),
         tool_with_optional(
             "eb_build_log",
@@ -1157,6 +1157,7 @@ fn easyblock_dry_run(arguments: &Value) -> Result<Value, String> {
         "argv": run.argv,
         "output": workspace_relative(&root, &output),
         "steps": steps,
+        "environment": dry_run_environment(&text, optional_string(arguments, "env_filter").as_deref()),
         "errors": error_lines(&text, 20),
         "tail": tail(&lines, 40),
         "summary": summary,
