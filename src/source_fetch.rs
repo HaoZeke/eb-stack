@@ -157,10 +157,16 @@ fn push_fetch_residuals(bundle: &mut PackageBundle, fetched: &[SourceFetch], app
                     "source {} was downloaded but only the first source checksum is rewritten",
                     fetch.filename
                 ),
-                format!("sha256 {digest} from {}", fetch.url.as_deref().unwrap_or("")),
+                format!(
+                    "sha256 {digest} from {}",
+                    fetch.url.as_deref().unwrap_or("")
+                ),
             ),
             None => (
-                format!("source {} could not be downloaded and hashed", fetch.filename),
+                format!(
+                    "source {} could not be downloaded and hashed",
+                    fetch.filename
+                ),
                 fetch.errors.join("; "),
             ),
         };
