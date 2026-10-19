@@ -56,3 +56,63 @@ GROMACS-2024.1-foss-2025a.eb --ignore-test-failure\n",
     assert!(!text.contains("--from-commit"), "{text}");
     assert!(!text.contains("--ignore-test-failure"), "{text}");
 }
+
+#[test]
+fn a_roots_only_list_holds_one_line_per_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("roots.list");
+    let st = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .args(["stack", "solve", "--easyconfigs"])
+        .arg(easyconfigs())
+        .args(["--toolchain", "foss/2025b", "--root", "GROMACS"])
+        .arg("--lock-out")
+        .arg(tmp.path().join("stack.lock.json"))
+        .arg("--jenkins-build-list-out")
+        .arg(&out)
+        .arg("--jenkins-roots-only")
+        .output()
+        .unwrap();
+    assert!(
+        st.status.success(),
+        "{}",
+        String::from_utf8_lossy(&st.stderr)
+    );
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert_eq!(text, "GROMACS-2025.0-foss-2025b.eb\n");
+}
+
+#[test]
+fn sections_regroups_a_list_under_the_previous_headers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let previous = tmp.path().join("previous.list");
+    std::fs::write(
+        &previous,
+        "#### MPI ####\n# OpenMPI-4.1.5-foss-2025a.eb\n#### Chemistry ####\nGROMACS-2024.1-foss-2025a.eb\n",
+    )
+    .unwrap();
+    let list = tmp.path().join("next.list");
+    std::fs::write(
+        &list,
+        "# next generation\n# GROMACS-2025.0-foss-2025b.eb\n# OpenMPI-5.0.10-GCC-15.2.0.eb --hooks=/sw/h.py\n# CP2K-2026.1-foss-2025b.eb\n",
+    )
+    .unwrap();
+    let out = tmp.path().join("grouped.list");
+    let st = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .args(["stack", "sections"])
+        .arg(&list)
+        .arg("--from")
+        .arg(&previous)
+        .arg("--out")
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(
+        st.status.success(),
+        "{}",
+        String::from_utf8_lossy(&st.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&out).unwrap(),
+        "# next generation\n\n#### MPI ####\n# OpenMPI-5.0.10-GCC-15.2.0.eb --hooks=/sw/h.py\n\n#### Chemistry ####\n# GROMACS-2025.0-foss-2025b.eb\n\n#### New in this generation ####\n# CP2K-2026.1-foss-2025b.eb\n"
+    );
+}

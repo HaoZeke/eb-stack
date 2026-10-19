@@ -371,6 +371,10 @@ struct SolveArgs {
     /// `--include-systems` on their lines.
     #[arg(long, requires = "jenkins_build_list_out", value_delimiter = ',')]
     jenkins_gpu_systems: Vec<String>,
+    /// Write only the roots to the Jenkins list, one line per application.
+    /// The pipeline's `eb --robot` builds their dependencies.
+    #[arg(long, requires = "jenkins_build_list_out")]
+    jenkins_roots_only: bool,
     #[arg(long)]
     stack_diff_out: Option<PathBuf>,
 }
@@ -425,6 +429,22 @@ enum StackCommand {
         /// `--option CUDA-12.8.0.eb:accept-eula-for=CUDA`. Repeatable.
         #[arg(long = "option")]
         options: Vec<String>,
+    },
+    /// Regroup a Jenkins build list under the section headers of a previous
+    /// one, so each package sits in the category the site already files it
+    /// under. Entries keep their flags and whether they are commented out.
+    Sections {
+        /// The build list to regroup.
+        list: PathBuf,
+        /// Previous build list whose `#### Title ####` headers, and the
+        /// packages under them, decide where each entry goes.
+        #[arg(long = "from", required = true)]
+        from: PathBuf,
+        /// Header for entries no section of the previous list names.
+        #[arg(long, default_value = "New in this generation")]
+        unfiled: String,
+        #[arg(long)]
+        out: PathBuf,
     },
 }
 
@@ -1114,6 +1134,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 jenkins_build_list_out,
                 jenkins_flags_from,
                 jenkins_gpu_systems,
+                jenkins_roots_only,
                 stack_diff_out,
             } = *args;
             for path in &roots_from_build_list {
@@ -1191,6 +1212,24 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     also_toolchains: &also,
                 }
             };
+            let jenkins_only = if jenkins_roots_only {
+                let policy_roots: Vec<String> = match serde_json::from_slice::<serde_json::Value>(
+                    &std::fs::read(&policy)
+                        .with_context(|| format!("reading policy {}", policy.display()))?,
+                )?
+                .get("roots")
+                .and_then(|r| r.as_array())
+                {
+                    Some(list) => list
+                        .iter()
+                        .filter_map(|r| r.as_str().map(str::to_string))
+                        .collect(),
+                    None => bail!("--jenkins-roots-only needs roots in {}", policy.display()),
+                };
+                Some(policy_roots)
+            } else {
+                None
+            };
             let mut jenkins_previous = Vec::new();
             for path in &jenkins_flags_from {
                 let text = std::fs::read_to_string(path)
@@ -1213,6 +1252,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     jenkins: eb_stack::jenkins::JenkinsOptions {
                         previous: jenkins_previous,
                         gpu_systems: jenkins_gpu_systems,
+                        only: jenkins_only,
                     },
                 },
             )?;
@@ -1286,6 +1326,28 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 );
             }
             println!("order={} builds={}", out.display(), order.len());
+            Ok(())
+        }
+        StackCommand::Sections {
+            list,
+            from,
+            unfiled,
+            out,
+        } => {
+            let previous = std::fs::read_to_string(&from)
+                .with_context(|| format!("reading build list {}", from.display()))?;
+            let text = std::fs::read_to_string(&list)
+                .with_context(|| format!("reading build list {}", list.display()))?;
+            let sections = eb_stack::jenkins::parse_sections(&previous);
+            let grouped = eb_stack::jenkins::group_by_sections(&text, &sections, &unfiled);
+            eb_stack::write_text(&out, &grouped)?;
+            let headers = grouped.lines().filter(|l| l.starts_with("#### ")).count();
+            println!(
+                "list={} sections={} of={}",
+                out.display(),
+                headers,
+                sections.len() + 1
+            );
             Ok(())
         }
         StackCommand::Easystack { lock, out, options } => {
