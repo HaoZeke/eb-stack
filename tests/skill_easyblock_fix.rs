@@ -31,6 +31,9 @@ fn easyblock_fix_skill_names_what_the_server_provides() {
     for name in [
         "EBM_CFG_OVERRIDE",
         "EBM_TEST_STEP_OWN_CMD",
+        "EBM_THREADED_VARIANT",
+        "threaded_findings",
+        "config_log",
         "toolchain_options",
         "threaded_pairs",
         "failure_kind",
