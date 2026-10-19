@@ -180,17 +180,149 @@ pub fn plan_package_bump_fetching(
     };
     let recipe = resolve_easyconfig_str(&emitted.text)
         .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
-    let fetched = fetch_sources(&recipe, client);
+    let mut fetched = fetch_sources(&recipe, client);
     let Some(digest) = fetched.first().and_then(|fetch| fetch.sha256.clone()) else {
         let mut bundle = first;
         push_fetch_residuals(&mut bundle, &fetched, 0);
+        fill_empty_named_checksums(&mut bundle, client, &mut fetched);
         return Ok((bundle, fetched));
     };
     let mut again = request.clone();
     again.source_checksum = Some(digest);
     let mut bundle = plan_package_bump_with(&again, options)?;
     push_fetch_residuals(&mut bundle, &fetched, 1);
+    fill_empty_named_checksums(&mut bundle, client, &mut fetched);
     Ok((bundle, fetched))
+}
+
+/// Download every concrete checksum-dict filename whose digest is empty.
+///
+/// `rewrite_source_checksum` keeps one key per file and clears the ones the
+/// version bump renamed. `--inject-checksums` then hashes each of those
+/// files from the recipe's `source_urls`. Only an empty literal entry is
+/// written; a digest that is already present, or a key that is still a
+/// template, is left alone.
+fn fill_empty_named_checksums(
+    bundle: &mut PackageBundle,
+    client: &dyn RegistryClient,
+    fetched: &mut Vec<SourceFetch>,
+) {
+    let Some(original) = bundle
+        .easyconfigs
+        .first()
+        .map(|easyconfig| easyconfig.text.clone())
+    else {
+        return;
+    };
+    let already: std::collections::HashSet<&str> = fetched
+        .iter()
+        .filter(|fetch| fetch.sha256.is_some())
+        .map(|fetch| fetch.filename.as_str())
+        .collect();
+    let (text, extras) = fetch_empty_named_checksums(&original, client, &already);
+    if let Some(easyconfig) = bundle.easyconfigs.first_mut() {
+        easyconfig.text = text;
+    }
+    for fetch in extras {
+        if fetch.sha256.is_none() {
+            let index = fetched.len();
+            bundle.plan.residuals.push(Residual {
+                id: format!("source:fetch:{index}"),
+                stage: ResidualStage::Normalize,
+                category: "checksum".into(),
+                severity: ResidualSeverity::Blocking,
+                summary: format!(
+                    "source {} could not be downloaded and hashed",
+                    fetch.filename
+                ),
+                evidence: Some(fetch.errors.join("; ")),
+                provenance: None,
+            });
+        }
+        fetched.push(fetch);
+    }
+}
+
+fn fetch_empty_named_checksums(
+    original: &str,
+    client: &dyn RegistryClient,
+    already: &std::collections::HashSet<&str>,
+) -> (String, Vec<SourceFetch>) {
+    let Ok(recipe) = resolve_easyconfig_str(original) else {
+        return (original.to_string(), Vec::new());
+    };
+    let mut text = original.to_string();
+    let mut extras = Vec::new();
+    for (filename, hash) in &recipe.checksums_by_filename {
+        if !hash.is_empty() || filename.contains("%(") || already.contains(filename.as_str()) {
+            continue;
+        }
+        let mut fetch = SourceFetch {
+            filename: filename.clone(),
+            url: None,
+            sha256: None,
+            errors: Vec::new(),
+        };
+        let file = SourceFile {
+            filename: filename.clone(),
+            download_filename: filename.clone(),
+            ..SourceFile::default()
+        };
+        let urls = source_download_urls(&recipe, &file);
+        if urls.is_empty() {
+            fetch
+                .errors
+                .push("no source_urls entry to download from".into());
+        }
+        for url in urls {
+            match client.get(&url) {
+                Ok(bytes) if !bytes.is_empty() => {
+                    let digest = sha256_hex(&bytes);
+                    let updated = replace_empty_named_checksum(&text, filename, &digest);
+                    if updated == text {
+                        fetch
+                            .errors
+                            .push("checksum key is not a literal empty entry in the recipe".into());
+                    } else {
+                        text = updated;
+                        fetch.sha256 = Some(digest);
+                        fetch.url = Some(url);
+                    }
+                    break;
+                }
+                Ok(_) => fetch.errors.push(format!("{url}: empty body")),
+                Err(error) => fetch.errors.push(error.to_string()),
+            }
+        }
+        extras.push(fetch);
+    }
+    (text, extras)
+}
+
+fn replace_empty_named_checksum(text: &str, filename: &str, digest: &str) -> String {
+    // The regex crate has no backreferences, so each quote style is its own
+    // pattern. A key and its empty value may use different quotes.
+    let escaped = regex::escape(filename);
+    let mut text = text.to_string();
+    for key_quote in ['\'', '"'] {
+        for value_quote in ['\'', '"'] {
+            let pattern = format!(
+                r#"(?P<head>{key}{escaped}{key}\s*:\s*){value}{value}"#,
+                key = regex::escape(&key_quote.to_string()),
+                value = regex::escape(&value_quote.to_string()),
+            );
+            let Ok(re) = regex::Regex::new(&pattern) else {
+                continue;
+            };
+            text = re
+                .replace_all(&text, |caps: &regex::Captures| {
+                    let head = caps.name("head").map(|m| m.as_str()).unwrap_or("");
+                    format!("{head}{value_quote}{digest}{value_quote}")
+                })
+                .into_owned();
+        }
+    }
+    text
 }
 
 fn push_fetch_residuals(bundle: &mut PackageBundle, fetched: &[SourceFetch], applied: usize) {
@@ -353,6 +485,39 @@ moduleclass = 'tools'
             fetched[0].errors,
             vec!["no source_urls entry to download from".to_string()]
         );
+    }
+
+    #[test]
+    fn empty_checksum_dict_keys_are_fetched_from_the_recipe_urls() {
+        let text = "\
+name = 'Pkg'
+version = '1.2.3'
+toolchain = SYSTEM
+source_urls = ['https://mirror.example.org/src']
+sources = ['pkg-%(version)s-linux-%(arch)s.tar.gz']
+checksums = [{
+    'pkg-1.2.3-linux-amd64.tar.gz': '',
+    'pkg-1.2.3-linux-arm64.tar.gz': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+}]
+";
+        let mut client = MapClient::default();
+        client.pages.insert(
+            "https://mirror.example.org/src/pkg-1.2.3-linux-amd64.tar.gz".into(),
+            b"aaa".to_vec(),
+        );
+        let (patched, extras) =
+            fetch_empty_named_checksums(text, &client, &std::collections::HashSet::new());
+        assert_eq!(
+            extras[0].sha256.as_deref(),
+            Some("9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0")
+        );
+        assert!(patched.contains(
+            "'pkg-1.2.3-linux-amd64.tar.gz': '9834876dcfb05cb167a5c24953eba58c4ac89b1adf57f28f2f9d09af107ee8f0'"
+        ));
+        // A digest that is already present is not fetched again.
+        assert!(patched.contains(
+            "'pkg-1.2.3-linux-arm64.tar.gz': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'"
+        ));
     }
 
     #[test]

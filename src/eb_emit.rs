@@ -1208,6 +1208,200 @@ fn rewrite_checksum_value(
     )))
 }
 
+struct ChecksumDictPair {
+    /// Index of the first character of the key, inside its quotes.
+    key_start: usize,
+    /// Index just past the last character of the key, still inside its quotes.
+    key_end: usize,
+    /// Start of the value expression, including its own quotes or brackets.
+    value_start: usize,
+    /// End of the value expression, before the separating comma or `}`.
+    value_end: usize,
+}
+
+/// Rewrite every filename key of a checksum dict, and each value on its own.
+///
+/// The stated checksum, when there is one, replaces the first value: that is
+/// the primary source, the same entry `--source-checksum` already names.
+/// Another key whose filename contains the old version is a different file of
+/// the same release, so its digest is cleared rather than reused. A key that
+/// does not mention the version is left as written.
+fn rewrite_checksum_dict(
+    elem: &str,
+    old_version: &str,
+    new_version: &str,
+    new_checksum: Option<&str>,
+) -> Result<(String, bool, Option<String>), EmitError> {
+    let pairs = checksum_dict_pairs(elem)?;
+    if pairs.is_empty() {
+        return Err(EmitError::Rewrite(format!(
+            "malformed source checksum dict entry: no quoted filename key in `{}`",
+            entry_excerpt(elem)
+        )));
+    }
+    let mut out = String::with_capacity(elem.len() + 16);
+    let mut cursor = 0usize;
+    let mut stale = false;
+    let mut note = None;
+    for (index, pair) in pairs.iter().enumerate() {
+        let key = &elem[pair.key_start..pair.key_end];
+        let versioned = key.contains(old_version);
+        let new_key = if versioned {
+            key.replacen(old_version, new_version, 1)
+        } else {
+            key.to_string()
+        };
+        out.push_str(&elem[cursor..pair.key_start]);
+        out.push_str(&new_key);
+        out.push_str(&elem[pair.key_end..pair.value_start]);
+        if index == 0 || versioned {
+            let stated = if index == 0 { new_checksum } else { None };
+            let value = rewrite_checksum_value(&elem[pair.value_start..pair.value_end], stated)?;
+            stale |= value.stale;
+            if note.is_none() {
+                note = value.note;
+            }
+            out.push_str(&value.text);
+        } else {
+            out.push_str(&elem[pair.value_start..pair.value_end]);
+        }
+        cursor = pair.value_end;
+    }
+    out.push_str(&elem[cursor..]);
+    Ok((out, stale, note))
+}
+
+fn checksum_dict_pairs(elem: &str) -> Result<Vec<ChecksumDictPair>, EmitError> {
+    let bytes = elem.as_bytes();
+    let Some(dict_close) = elem.rfind('}') else {
+        return Err(EmitError::Rewrite(format!(
+            "malformed source checksum dict entry: unterminated dict in `{}`",
+            entry_excerpt(elem)
+        )));
+    };
+    let mut i = 1usize;
+    let mut pairs = Vec::new();
+    while i < dict_close {
+        i = skip_ws_and_comments(bytes, i);
+        if i >= dict_close {
+            break;
+        }
+        if bytes[i] == b',' {
+            i += 1;
+            continue;
+        }
+        if bytes[i] != b'\'' && bytes[i] != b'"' {
+            return Err(EmitError::Rewrite(format!(
+                "malformed source checksum dict entry: no quoted filename key in `{}`",
+                entry_excerpt(&elem[i..])
+            )));
+        }
+        let key_quote = bytes[i];
+        let content_start = i + 1;
+        i = content_start;
+        let mut escaped = false;
+        while i < bytes.len() {
+            if escaped {
+                escaped = false;
+            } else if bytes[i] == b'\\' {
+                escaped = true;
+            } else if bytes[i] == key_quote {
+                break;
+            }
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] != key_quote {
+            return Err(EmitError::Rewrite(format!(
+                "malformed source checksum dict entry: unterminated filename key in `{}`",
+                entry_excerpt(elem)
+            )));
+        }
+        let content_end = i;
+        i += 1;
+        i = skip_ws_and_comments(bytes, i);
+        if bytes.get(i) != Some(&b':') {
+            return Err(EmitError::Rewrite(format!(
+                "malformed source checksum dict entry: no `:` after the filename key in `{}`",
+                entry_excerpt(elem)
+            )));
+        }
+        i += 1;
+        i = skip_ws_and_comments(bytes, i);
+        let value_start = i;
+        let value_end = checksum_value_end(bytes, value_start, dict_close);
+        if value_end <= value_start {
+            return Err(EmitError::Rewrite(format!(
+                "malformed source checksum dict entry: no value between `:` and `}}` in `{}`",
+                entry_excerpt(elem)
+            )));
+        }
+        pairs.push(ChecksumDictPair {
+            key_start: content_start,
+            key_end: content_end,
+            value_start,
+            value_end,
+        });
+        i = value_end;
+    }
+    Ok(pairs)
+}
+
+fn skip_ws_and_comments(bytes: &[u8], mut index: usize) -> usize {
+    loop {
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index < bytes.len() && bytes[index] == b'#' {
+            while index < bytes.len() && bytes[index] != b'\n' {
+                index += 1;
+            }
+            continue;
+        }
+        return index;
+    }
+}
+
+/// End of one checksum value: the comma that separates dict pairs, or the
+/// dict's closing brace. Brackets and quotes inside the value do not count.
+fn checksum_value_end(bytes: &[u8], start: usize, dict_close: usize) -> usize {
+    let mut index = start;
+    let mut depth = 0i32;
+    let mut quote: Option<u8> = None;
+    let mut escaped = false;
+    let mut comment = false;
+    while index < dict_close {
+        let byte = bytes[index];
+        if comment {
+            if byte == b'\n' {
+                comment = false;
+            }
+            index += 1;
+            continue;
+        }
+        if let Some(active) = quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == active {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        match byte {
+            b'#' => comment = true,
+            b'\'' | b'"' => quote = Some(byte),
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' if depth > 0 => depth -= 1,
+            b',' | b'}' if depth == 0 => return index,
+            _ => {}
+        }
+        index += 1;
+    }
+    index
+}
+
 /// Outcome of rewriting the source entry of a `checksums` list.
 struct ChecksumRewrite {
     text: String,
@@ -1246,53 +1440,11 @@ fn rewrite_source_checksum(
     let elem = &body[start..elem_end];
 
     let (new_elem, stale, note) = if elem.starts_with('{') {
-        // Dict form: the first quoted string is the artifact filename, and
-        // everything after the colon that follows it is the checksum value,
-        // which may itself be a bare hash, a typed tuple, or a list.
-        let tokens = quoted_tokens(elem);
-        let Some(&(key_start, key_end, key_quote)) = tokens.first() else {
-            return Err(EmitError::Rewrite(format!(
-                "malformed source checksum dict entry: no quoted filename key in `{}`",
-                entry_excerpt(elem)
-            )));
-        };
-        let Some(colon_rel) = elem[key_end..].find(':') else {
-            return Err(EmitError::Rewrite(format!(
-                "malformed source checksum dict entry: no `:` after the filename key in `{}`",
-                entry_excerpt(elem)
-            )));
-        };
-        let value_start = key_end + colon_rel + 1;
-        let Some(brace_rel) = elem.rfind('}') else {
-            return Err(EmitError::Rewrite(format!(
-                "malformed source checksum dict entry: unterminated dict in `{}`",
-                entry_excerpt(elem)
-            )));
-        };
-        if brace_rel < value_start {
-            return Err(EmitError::Rewrite(format!(
-                "malformed source checksum dict entry: no value between `:` and `}}` in `{}`",
-                entry_excerpt(elem)
-            )));
-        }
-
-        let key_str = &elem[key_start + 1..key_end - 1];
-        let new_key = if key_str.contains(old_version) {
-            key_str.replacen(old_version, new_version, 1)
-        } else {
-            key_str.to_string()
-        };
-        let value = rewrite_checksum_value(&elem[value_start..brace_rel], new_checksum)?;
-
-        let mut out = String::with_capacity(elem.len() + 16);
-        out.push_str(&elem[..key_start]);
-        out.push(key_quote);
-        out.push_str(&new_key);
-        out.push(key_quote);
-        out.push_str(&elem[key_end..value_start]);
-        out.push_str(&value.text);
-        out.push_str(&elem[brace_rel..]);
-        (out, value.stale, value.note)
+        // A checksum dict is one filename per key. EasyBuild uses that for
+        // one artifact per architecture (`*-amd64`, `*-arm64`), and each
+        // value is that file's digest. Reading everything after the first
+        // colon as a single value deletes the later keys on a version bump.
+        rewrite_checksum_dict(elem, old_version, new_version, new_checksum)?
     } else {
         // Bare hash, typed tuple, alternatives tuple, or AND-list: no filename
         // key to rename.
@@ -2314,6 +2466,54 @@ exts_list = [
             "warnings: {:?}",
             r.warnings
         );
+    }
+
+    #[test]
+    fn a_checksum_dict_keeps_a_key_per_filename_across_a_version_bump() {
+        let src = "\
+name = 'Pkg'
+version = '1.0.0'
+toolchain = {'name': 'foss', 'version': '2025a'}
+source_urls = ['https://mirror.example.org/src']
+sources = ['pkg-%(version)s-linux-%(arch)s.tar.gz']
+checksums = [{
+    'pkg-1.0.0-linux-amd64.tar.gz': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'pkg-1.0.0-linux-arm64.tar.gz': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    'notes.txt': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+}]
+";
+        let params = EmitParams {
+            toolchain: foss("2025a"),
+            version: Some("1.2.3".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
+            source_checksum: Some(
+                "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".into(),
+            ),
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert!(
+            r.text.contains(
+                "'pkg-1.2.3-linux-amd64.tar.gz': 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'"
+            ),
+            "{}",
+            r.text
+        );
+        assert!(
+            r.text.contains("'pkg-1.2.3-linux-arm64.tar.gz': ''"),
+            "{}",
+            r.text
+        );
+        assert!(
+            r.text.contains(
+                "'notes.txt': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'"
+            ),
+            "{}",
+            r.text
+        );
+        assert!(!r.text.contains("1.0.0"), "{}", r.text);
     }
 
     #[test]
