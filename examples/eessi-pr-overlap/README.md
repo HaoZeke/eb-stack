@@ -27,8 +27,8 @@ the recipes. It does not run `eb`.
   `main`'s copy of the same file.
 - eb-stack looks each entry's easyconfig up on the robot path: the
   easyconfigs that come with the stack's EasyBuild version, read from the
-  mounted stack. For an entry pinned with `from-commit`, the files that commit
-  touched go ahead of the release tree, as in EasyBuild itself.
+  mounted stack. For an entry pinned with `from-commit`, the easyconfigs tree
+  at that commit goes ahead of the release tree, as in EasyBuild itself.
 - The entries are closed over their dependencies, build dependencies and
   toolchains, using the same graph walk as `eb-stack stack order`. An
   installed module is a leaf: the walk stops there, as the robot does,
