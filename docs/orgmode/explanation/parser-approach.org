@@ -17,9 +17,13 @@ dicts, name lookups (including ~local_*~ variables and the ~SYSTEM~
 constant), ~+~ string concatenation, ~%~ string formatting, and the full
 EasyBuild ~TEMPLATE_CONSTANTS~ table (~SOURCE_TAR_GZ~, ~GITHUB_SOURCE~,
 ~PYPI_SOURCE~, and around fifty others -- see ~src/eb_template_constants.rs~).
-Unmodeled statements (~if~, ~for~, ~def~, ~import~, and similar keywords)
-are skipped rather than rejected, so a recipe that uses control flow for a
-field ~eb-stack~ does not need still yields every field it does need.
+Unmodeled statements (~for~, ~def~, ~import~, and similar keywords) are
+skipped rather than rejected, so a recipe that uses control flow for a field
+~eb-stack~ does not need still yields every field it does need. One ~if~ is
+read: ~if ARCH == '<this machine>'~, with the body parsed as easyconfig
+text. ~name.append(...)~ extends a list or tuple that is already assigned, so
+an architecture-specific ~dependencies.append~ is part of the closure on that
+machine. Any other ~if~ is skipped.
 
 * What gets resolved
 
