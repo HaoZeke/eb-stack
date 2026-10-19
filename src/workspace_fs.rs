@@ -719,6 +719,50 @@ pub fn replace_lines_workspace(
     })
 }
 
+/// [`edit_workspace_scoped`] for a Python module (`.py`) that refuses to
+/// turn valid Python into invalid Python: the file is written back as it
+/// was and the error names the line the edit broke. Other files, and a
+/// module that was already invalid, are edited as before.
+pub fn edit_workspace_checked(
+    root: &Path,
+    requested: &Path,
+    old: &str,
+    new: &str,
+    replace_all: bool,
+    within: Option<&str>,
+    occurrence: Option<usize>,
+) -> Result<WorkspaceScopedEdit, String> {
+    let python = requested.extension().and_then(|value| value.to_str()) == Some("py");
+    let before = if python {
+        read_workspace(root, requested)
+            .ok()
+            .map(|text| text.content)
+            .filter(|text| crate::eb_style::python_syntax_error(text).is_none())
+    } else {
+        None
+    };
+    let edited = edit_workspace_scoped(root, requested, old, new, replace_all, within, occurrence)?;
+    let Some(before) = before else {
+        return Ok(edited);
+    };
+    let after = read_workspace(root, requested)?.content;
+    if let Some((line, column, message)) = crate::eb_style::python_syntax_error(&after) {
+        write_workspace(root, requested, &before)?;
+        let shown = after
+            .lines()
+            .nth(line.saturating_sub(1))
+            .unwrap_or("")
+            .chars()
+            .take(160)
+            .collect::<String>();
+        return Err(format!(
+            "not applied: this edit leaves {} invalid Python at line {line}, column {column} ({message}; that line would read `{shown}`), so the file was left as it was. `new` is written exactly as given: it must not carry diff markers (+ or -) or line numbers, and its indentation must match the code around it",
+            requested.display()
+        ));
+    }
+    Ok(edited)
+}
+
 /// Lines `start..=end` of `text` joined, when they exist and hold some
 /// content.
 fn anchored_lines(text: &str, start: usize, end: usize) -> Option<String> {
@@ -1225,6 +1269,46 @@ mod tests {
             !plain.expect_from_first_seen && !plain.relocated,
             "{plain:?}"
         );
+    }
+
+    #[test]
+    fn module_edit_that_breaks_the_syntax_is_not_written() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let text = "def f():\n    x = 1\n    return x\n";
+        fs::write(root.join("m.py"), text).expect("write");
+        let error = edit_workspace_checked(
+            root,
+            Path::new("m.py"),
+            "    x = 1\n",
+            "    x = 1\n+    y = 2\n",
+            false,
+            None,
+            None,
+        )
+        .expect_err("a pasted diff line");
+        assert!(
+            error.contains("invalid Python at line") && error.contains("diff markers"),
+            "{error}"
+        );
+        assert_eq!(fs::read_to_string(root.join("m.py")).expect("read"), text);
+        edit_workspace_checked(
+            root,
+            Path::new("m.py"),
+            "    x = 1\n",
+            "    x = 2\n",
+            false,
+            None,
+            None,
+        )
+        .expect("valid edit");
+        assert!(fs::read_to_string(root.join("m.py"))
+            .expect("read")
+            .contains("x = 2"));
+        // An easyconfig may pass through an invalid state between edits.
+        fs::write(root.join("r.eb"), "a = [\n    'x',\n]\n").expect("recipe");
+        edit_workspace_checked(root, Path::new("r.eb"), "]", ")", false, None, None)
+            .expect("easyconfig edits are not checked");
     }
 
     #[test]

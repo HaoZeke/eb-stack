@@ -33,7 +33,7 @@ use crate::package_workflow::{
 };
 use crate::target::{doctor_target, resolve_target_layers, BuildTarget, TargetConfigLayer};
 use crate::workspace_fs::{
-    apply_suggestion_workspace, configured_workspace_root, edit_workspace_scoped, grep_workspace,
+    apply_suggestion_workspace, configured_workspace_root, edit_workspace_checked, grep_workspace,
     list_workspace, read_workspace, resolve_inside, write_workspace,
 };
 use crate::{
@@ -802,7 +802,9 @@ fn recipe_edit(arguments: &Value) -> Result<Value, String> {
         .get("occurrence")
         .and_then(Value::as_u64)
         .map(|value| value as usize);
-    let edited = edit_workspace_scoped(
+    // A module edit that leaves invalid Python is undone (proof-easyblock r2:
+    // a pasted `+` line shipped after five lint runs).
+    let edited = edit_workspace_checked(
         &root,
         &path,
         &required_string(arguments, "old")?,
