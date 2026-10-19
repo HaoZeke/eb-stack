@@ -91,6 +91,7 @@ fn config() -> OverlapConfig {
         eessi_version: "2026.06".into(),
         installed_source: "x86_64/amd/zen4".into(),
         exclude_paths: vec!["/accel/".into()],
+        include_paths: Vec::new(),
         generated_at: "2026-10-19T12:00:00Z".into(),
     }
 }
@@ -184,6 +185,47 @@ fn a_rebuild_easystack_builds_its_installed_entry_again() {
     let r = record(&records, 104);
     assert_eq!(r.to_build, ["zlib/1.3.1-GCCcore-15.2.0"]);
     assert_eq!(r.already_installed, ["GCCcore/15.2.0"]);
+}
+
+#[test]
+fn include_path_keeps_only_matching_easystacks() {
+    let riscv = "easystacks/software.eessi.io/2026.06/additional_arch/riscv64/generic/eessi-2026.06-eb-5.4.0-2026.1.yml";
+    let inputs = vec![
+        pr(
+            201,
+            vec![change(
+                STACK,
+                Some(BASE),
+                "  - Graphviz-14.0.2-GCCcore-15.2.0.eb\n",
+            )],
+        ),
+        pr(
+            202,
+            vec![change(
+                riscv,
+                Some(BASE),
+                "  - Graphviz-14.0.2-GCCcore-15.2.0.eb\n",
+            )],
+        ),
+    ];
+    let base =
+        parse_easyconfig_trees(&[fixtures().join("release").as_path()]).expect("release tree");
+    let trees = RobotTrees {
+        base: base.candidates,
+        commits: Default::default(),
+    };
+    let installed = parse_installed(
+        &std::fs::read_to_string(fixtures().join("installed.txt")).expect("installed"),
+    );
+    let mut cfg = config();
+    cfg.include_paths = vec!["/additional_arch/riscv64/".into()];
+    let kept: Vec<_> = inputs
+        .iter()
+        .filter_map(|p| pr_record(p, &trees, &installed, &cfg))
+        .collect();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].pr, 202);
+    assert_eq!(kept[0].easystack_files, [riscv]);
 }
 
 #[test]

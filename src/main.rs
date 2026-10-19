@@ -114,6 +114,10 @@ struct PrOverlapArgs {
     /// Skip easystack paths containing this substring. Repeatable.
     #[arg(long = "exclude-path")]
     exclude_paths: Vec<String>,
+    /// Keep only easystack paths containing this substring. Repeatable.
+    /// With none set, every path that survives `--exclude-path` is kept.
+    #[arg(long = "include-path")]
+    include_paths: Vec<String>,
     /// Timestamp to record (RFC 3339); defaults to now, in UTC.
     #[arg(long)]
     generated_at: Option<String>,
@@ -758,6 +762,7 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
         eessi_version: args.eessi_version.clone(),
         installed_source: args.installed_label.clone(),
         exclude_paths: args.exclude_paths.clone(),
+        include_paths: args.include_paths.clone(),
         generated_at: args.generated_at.clone().unwrap_or_else(|| {
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }),
