@@ -62,7 +62,7 @@ The branch `gh_action_pr_dependency_overlap` follows the naming of
 
 | Path | What |
 |---|---|
-| `prs/<N>.toml` | One record per open pull request: number, head sha, timestamp, stack version, installed source, easystack files, `to_build`, `already_installed`, `unresolved`, and the added entries. |
+| `prs/<N>.toml` | One record per open pull request: number, head sha, timestamp, stack version, installed source, easystack files, `to_build` (one sorted line per module), `already_installed`, `unresolved`, and the added entries. |
 | `overlap.toml` | The index: each module more than one pull request would build, mapped to those pull requests, plus the shared modules per pair. |
 | `overlap.md` | The same as a report for reviewers. |
 | `README.md` | Says the branch is data and is never merged. |
@@ -76,6 +76,35 @@ the only writer, and the `concurrency` group lets one run at a time. Each
 pull request has its own file, so a change in one shows up as a one-file
 diff. A run commits only when a build set changed; a timestamp change alone
 is not committed.
+
+## The overlap is a diff of the build sets
+
+Two open pull requests can add different easystack entries and still need the
+same module. The entries name different easyconfigs, so a diff of the
+easystack files is clean. A dependency that sits two steps down the closure
+is not a line in either easystack, so that diff never mentions it.
+
+`prs/<N>.toml` is that pull request's SBOM: the closure of the entries it
+adds, minus every module the deployed stack already has. `to_build` is one
+sorted line per module. The same line in two of those files is a module both
+pull requests would build. Merging every open SBOM into one tree, the way a
+staging merge stacks branches, and listing the duplicate `to_build` lines
+(`sort | uniq -d`) is the same answer `overlap.md` prints.
+
+Two conditions make a duplicate line mean "both would build this":
+
+1. The SBOM lists only what is not installed on the deployed stack. The
+   toolchain is installed for every pull request; if the file listed the
+   whole closure, every file would share it and the duplicates would be noise.
+2. Each SBOM is regenerated against the live installed stack on every cron
+   run. A dependency that has been deployed is on the installed list at the
+   next run, so it leaves `to_build` and the overlap goes with it. A closed
+   or merged pull request is not in that run, and its `prs/<N>.toml` is
+   deleted.
+
+While the line is still in both files, both pull requests would compile that
+module and install it. The build that finishes second overwrites the binary
+the first one installed.
 
 ## Safety
 
