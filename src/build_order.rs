@@ -34,7 +34,7 @@ use crate::domain::{Candidate, DepReq};
 use crate::version::{cmp_version, matches_req};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 /// A module's full identity, which is what makes two builds the same build.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -598,6 +598,146 @@ pub fn graph_from_keys(
         }
     }
     Ok(graph)
+}
+
+/// A requirement the closure walk found no easyconfig for.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct UnresolvedRequirement {
+    /// The module that asked for it.
+    pub from: ModuleKey,
+    /// The requirement as `name version`, or the whole key when the start
+    /// itself has no easyconfig in the tree.
+    pub requirement: String,
+}
+
+/// What a set of starts would make EasyBuild's robot build on a given stack.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InstalledClosure {
+    /// Modules not yet installed, in build order (dependencies first).
+    pub to_build: Vec<ModuleKey>,
+    /// Installed modules the walk reached and stopped at, sorted.
+    pub installed: Vec<ModuleKey>,
+    /// Requirements no easyconfig in the tree satisfies, sorted.
+    pub unresolved: Vec<UnresolvedRequirement>,
+}
+
+/// Close `starts` over the tree the way `eb --robot` does against an
+/// existing install: an installed module is a leaf, because its own
+/// dependencies were installed with it, and everything reachable through
+/// modules that are not installed has to be built.
+///
+/// Unlike [`graph_from_keys`] a requirement nothing satisfies does not abort
+/// the walk. It is recorded and the walk goes on, so one missing recipe in one
+/// pull request does not hide the rest of its build set.
+pub fn closure_against_installed(
+    candidates: &[Candidate],
+    starts: &[ModuleKey],
+    choice: Choice,
+    is_installed: &dyn Fn(&ModuleKey) -> bool,
+) -> InstalledClosure {
+    let mut graph: BuildGraph = DiGraph::new();
+    let mut index: HashMap<ModuleKey, NodeIndex> = HashMap::new();
+    let by_key: BTreeMap<ModuleKey, &Candidate> =
+        candidates.iter().map(|c| (ModuleKey::of(c), c)).collect();
+    let mut installed: BTreeSet<ModuleKey> = BTreeSet::new();
+    let mut unresolved: BTreeSet<UnresolvedRequirement> = BTreeSet::new();
+
+    let mut node_for = |graph: &mut BuildGraph, key: &ModuleKey| -> NodeIndex {
+        *index
+            .entry(key.clone())
+            .or_insert_with(|| graph.add_node(key.clone()))
+    };
+
+    let mut queue: Vec<ModuleKey> = starts.to_vec();
+    let mut seen: HashSet<ModuleKey> = HashSet::new();
+    let mut edges: Vec<(ModuleKey, ModuleKey)> = Vec::new();
+    while let Some(key) = queue.pop() {
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        if is_installed(&key) {
+            installed.insert(key);
+            continue;
+        }
+        node_for(&mut graph, &key);
+        let Some(candidate) = by_key.get(&key) else {
+            unresolved.insert(UnresolvedRequirement {
+                from: key.clone(),
+                requirement: key.to_string(),
+            });
+            continue;
+        };
+        if !crate::hierarchy::is_system_toolchain(&candidate.toolchain) {
+            if let Some(tc) = candidates.iter().find(|c| {
+                c.name == candidate.toolchain.name && c.version == candidate.toolchain.version
+            }) {
+                let tc_key = ModuleKey::of(tc);
+                if tc_key != key {
+                    edges.push((tc_key.clone(), key.clone()));
+                    queue.push(tc_key);
+                }
+            }
+        }
+        let mut deps: Vec<&DepReq> = candidate
+            .dependencies
+            .iter()
+            .chain(candidate.builddependencies.iter())
+            .collect();
+        deps.sort_by(|a, b| {
+            a.name
+                .cmp(&b.name)
+                .then_with(|| a.version_req.cmp(&b.version_req))
+        });
+        for dep in deps {
+            let mut admissible: Vec<&Candidate> =
+                candidates.iter().filter(|c| satisfies(c, dep)).collect();
+            if let Some(best) = admissible
+                .iter()
+                .map(|c| distance(c, candidate, candidates))
+                .min()
+            {
+                admissible.retain(|c| distance(c, candidate, candidates) == best);
+            }
+            match choose(&admissible, choice) {
+                Some(picked) => {
+                    let dep_key = ModuleKey::of(picked);
+                    edges.push((dep_key.clone(), key.clone()));
+                    queue.push(dep_key);
+                }
+                None => {
+                    unresolved.insert(UnresolvedRequirement {
+                        from: key.clone(),
+                        requirement: format!("{} {}", dep.name, dep.version_req)
+                            .trim()
+                            .to_string(),
+                    });
+                }
+            }
+        }
+    }
+    for (from, to) in edges {
+        if installed.contains(&from) || installed.contains(&to) {
+            continue;
+        }
+        let a = node_for(&mut graph, &from);
+        let b = node_for(&mut graph, &to);
+        graph.add_edge(a, b, Edge::Runtime);
+    }
+    // Build order when there is one; a cycle falls back to sorted keys so the
+    // set is still reported, which is what an overlap check needs.
+    let to_build = match petgraph::algo::toposort(&graph, None) {
+        Ok(order) => order.into_iter().map(|n| graph[n].clone()).collect(),
+        Err(_) => {
+            let mut keys: Vec<ModuleKey> = graph.node_weights().cloned().collect();
+            keys.sort();
+            keys
+        }
+    };
+    InstalledClosure {
+        to_build,
+        installed: installed.into_iter().collect(),
+        unresolved: unresolved.into_iter().collect(),
+    }
 }
 
 /// What to build, in the order to build it.
