@@ -62,6 +62,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "stack_policy",
         "package_configs",
         "emit_easyblock",
+        "fetch_checksums",
     ] {
         assert!(
             package_bump["inputSchema"]["properties"]
