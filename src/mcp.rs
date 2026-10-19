@@ -12,8 +12,9 @@ use crate::eb_parse::{
 use crate::eb_run::{
     build_test_description, builds_allowed, commands_in, dry_run_environment, dry_run_next,
     error_lines, failed_dry_run_text, failure_kind, parse_dry_run, read_tail,
-    recipe_toolchain_options, run_eb, split_steps, split_warnings, step_text, tail, threaded_note,
-    threaded_pairs, EbInvocation, ALLOW_BUILD_ENV,
+    recipe_toolchain_options, run_eb, split_steps, split_warnings, step_text, tail,
+    threaded_findings, threaded_findings_text, threaded_note, threaded_pairs, EbInvocation,
+    ALLOW_BUILD_ENV,
 };
 use crate::eb_style::{
     format_style, format_style_file, is_formatting_code, lint_recipe_files_scoped, lint_style,
@@ -1181,7 +1182,24 @@ fn easyblock_dry_run(arguments: &Value) -> Result<Value, String> {
     } else {
         failed_next
     };
+    // A command that still carries a plain value under a threaded option is
+    // a finding, not a note: it decides summary and next (proof-easyblock r2:
+    // a conditional note under a success summary was never acted on).
+    let findings = threaded_findings(&toolchain_options, &pairs, &steps);
+    let threaded_text = if run.exit_code == Some(0) {
+        threaded_findings_text(&toolchain_options, &findings)
+    } else {
+        None
+    };
+    let next = match &threaded_text {
+        Some((_, edit)) => edit.clone(),
+        None => next.to_string(),
+    };
     let summary = match (run.exit_code, steps.is_empty()) {
+        (Some(0), false) if threaded_text.is_some() => threaded_text
+            .as_ref()
+            .map(|(text, _)| text.clone())
+            .unwrap_or_default(),
         (Some(0), false) => {
             "dry run finished: check each step's commands against what the task asks for"
                 .to_string()
@@ -1202,6 +1220,7 @@ fn easyblock_dry_run(arguments: &Value) -> Result<Value, String> {
         "environment": dry_run_environment(&text, optional_string(arguments, "env_filter").as_deref()),
         "toolchain_options": toolchain_options,
         "threaded_pairs": pairs,
+        "threaded_findings": findings,
         "notes": notes,
         "errors": errors,
         "warnings": warnings,

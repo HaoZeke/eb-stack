@@ -441,6 +441,21 @@ pub fn threaded_pairs(env: &std::collections::BTreeMap<String, String>) -> Vec<T
 /// Toolchain options that ask for a threaded build.
 const THREADED_OPTIONS: &[&str] = &["openmp"];
 
+/// The threaded toolchain options a recipe turns on.
+pub fn threaded_options_on(
+    options: &std::collections::BTreeMap<String, String>,
+) -> Vec<&'static str> {
+    THREADED_OPTIONS
+        .iter()
+        .filter(|option| {
+            options
+                .get(**option)
+                .is_some_and(|value| matches!(value.as_str(), "True" | "1"))
+        })
+        .copied()
+        .collect()
+}
+
 /// What a dry run should tell the agent about threaded variants: `Some` when
 /// the recipe turns a threaded toolchain option on and the environment has
 /// plain/threaded pairs, since the commands then look the same as without the
@@ -449,15 +464,7 @@ pub fn threaded_note(
     options: &std::collections::BTreeMap<String, String>,
     pairs: &[ThreadedPair],
 ) -> Option<String> {
-    let on = THREADED_OPTIONS
-        .iter()
-        .filter(|option| {
-            options
-                .get(**option)
-                .is_some_and(|value| matches!(value.as_str(), "True" | "1"))
-        })
-        .copied()
-        .collect::<Vec<_>>();
+    let on = threaded_options_on(options);
     if on.is_empty() || pairs.is_empty() {
         return None;
     }
@@ -471,6 +478,144 @@ pub fn threaded_note(
         "this recipe sets toolchainopts {}: True. The build environment defines a threaded variant next to plain variables ({names}, ...; see threaded_pairs) whatever the option says, so the option alone does not change what an easyblock reads. If your easyblock takes a value from one of these variables, check that it uses the threaded one when this option is on, the way merged easyblocks decide it from the toolchain options, and compare this dry run with one of the recipe without the option.",
         on.join(", ")
     ))
+}
+
+/// A generated command that carries the value of a plain library variable
+/// while the recipe turns a threaded toolchain option on, and lacks what the
+/// threaded variant of that variable adds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ThreadedFinding {
+    /// The step the command runs in.
+    pub step: String,
+    /// The command, at most 300 characters.
+    pub command: String,
+    /// Plain variables whose value the command carries.
+    pub plain: Vec<String>,
+    /// The threaded variable of each entry of `plain`, in the same order.
+    pub threaded: Vec<String>,
+    /// Libraries the threaded variants add that the command does not have.
+    pub missing: Vec<String>,
+}
+
+/// A library as a bare name: `-lfoo`, `libfoo.a`, `libfoo.so.1` and
+/// `/path/libfoo.so` are all `foo`. `None` for anything shorter than two
+/// characters or with characters a library name does not have.
+fn library_token(raw: &str) -> Option<String> {
+    let token =
+        raw.trim_matches(|c: char| matches!(c, '"' | '\'' | ',' | '(' | ')') || c.is_whitespace());
+    let token = token.rsplit('/').next().unwrap_or(token);
+    let token = token.strip_prefix("-l").unwrap_or(token);
+    let token = token.strip_prefix("lib").unwrap_or(token);
+    let token = token.split(".so").next().unwrap_or(token);
+    let token = token.strip_suffix(".a").unwrap_or(token);
+    let named = token
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '.'));
+    (token.len() >= 2 && named && !token.starts_with('-')).then(|| token.to_string())
+}
+
+/// The libraries of a toolchain variable value (`-la -lb`, `liba.a,libb.a`),
+/// in order, each once.
+fn value_libraries(value: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for token in value
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter_map(library_token)
+    {
+        if !out.contains(&token) {
+            out.push(token);
+        }
+    }
+    out
+}
+
+/// Generated commands that use a plain library value where the recipe's
+/// threaded toolchain option asks for the threaded one. A command matches a
+/// pair when it has every library of the plain value and none of the
+/// libraries the threaded value adds. Pairs with the same missing libraries
+/// on the same command make one finding. Empty when no threaded option is on.
+pub fn threaded_findings(
+    options: &std::collections::BTreeMap<String, String>,
+    pairs: &[ThreadedPair],
+    steps: &[DryRunStep],
+) -> Vec<ThreadedFinding> {
+    let mut out: Vec<ThreadedFinding> = Vec::new();
+    if threaded_options_on(options).is_empty() {
+        return out;
+    }
+    for step in steps {
+        for command in &step.commands {
+            let tokens: std::collections::HashSet<String> = command
+                .split(|c: char| {
+                    c.is_whitespace() || matches!(c, '=' | ',' | '"' | '\'' | ':' | ';')
+                })
+                .filter_map(library_token)
+                .collect();
+            let shown: String = command.chars().take(300).collect();
+            for pair in pairs {
+                let plain = value_libraries(&pair.plain_value);
+                let missing: Vec<String> = value_libraries(&pair.threaded_value)
+                    .into_iter()
+                    .filter(|library| !plain.contains(library))
+                    .collect();
+                if plain.is_empty()
+                    || missing.is_empty()
+                    || !plain.iter().all(|library| tokens.contains(library))
+                    || missing.iter().any(|library| tokens.contains(library))
+                {
+                    continue;
+                }
+                match out.iter_mut().find(|found| {
+                    found.step == step.step && found.command == shown && found.missing == missing
+                }) {
+                    Some(found) => {
+                        found.plain.push(pair.plain.clone());
+                        found.threaded.push(pair.threaded.clone());
+                    }
+                    None => out.push(ThreadedFinding {
+                        step: step.step.clone(),
+                        command: shown.clone(),
+                        plain: vec![pair.plain.clone()],
+                        threaded: vec![pair.threaded.clone()],
+                        missing,
+                    }),
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The `summary` and `next` of a finished dry run with threaded findings:
+/// what is wrong in which command, and the edit that fixes it.
+pub fn threaded_findings_text(
+    options: &std::collections::BTreeMap<String, String>,
+    findings: &[ThreadedFinding],
+) -> Option<(String, String)> {
+    let first = findings.first()?;
+    let mut names: Vec<(&String, &String)> = first.plain.iter().zip(&first.threaded).collect();
+    names.sort_by_key(|(plain, _)| (!plain.starts_with("LIB"), plain.len(), plain.to_string()));
+    let shown = names
+        .iter()
+        .take(4)
+        .map(|(plain, threaded)| format!("${plain} -> ${threaded}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let option = threaded_options_on(options).join(", ");
+    let summary = format!(
+        "dry run finished, but the recipe sets toolchainopts {option}: True and {} generated command(s) use a plain library value without the threaded variant's {}. First, in the {} step: {}. Variables with that plain value and their threaded variant: {shown}. See threaded_findings.",
+        findings.len(),
+        first.missing.join(" "),
+        first.step,
+        first.command,
+    );
+    let threaded = names
+        .first()
+        .map_or("the threaded variable", |(_, t)| t.as_str());
+    let next = format!(
+        "edit the easyblock so that it reads the threaded variable (such as {threaded}) when the recipe's {option} toolchain option is on and the plain one when it is off, deciding it from the toolchain options the way merged easyblocks do (grep the easyblocks for _MT); then eb_module_lint, and dry-run this recipe and the recipe without the option again"
+    );
+    Some((summary, next))
 }
 
 /// What to build: a recipe, the easyblock modules to include, extra robot
@@ -865,6 +1010,85 @@ ERROR: Shell command failed!\n\
         );
         assert!(threaded_note(&one_line, &pairs).is_none(), "openmp is off");
         assert!(threaded_note(&options, &[]).is_none(), "no pairs");
+    }
+
+    #[test]
+    fn plain_values_under_a_threaded_option_are_findings() {
+        let env: std::collections::BTreeMap<String, String> = [
+            ("LIBX", "-lfoo -lbar"),
+            ("LIBX_MT", "-lfoo -lbar -lthr"),
+            ("X_STATIC_LIBS", "libfoo.a,libbar.a"),
+            ("X_MT_STATIC_LIBS", "libfoo.a,libbar.a,libthr.a"),
+            ("LIBZ", "-lzz"),
+            ("LIBZ_MT", "-lzz_omp -lzz"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+        let pairs = threaded_pairs(&env);
+        let on = recipe_toolchain_options("toolchainopts = {'openmp': True}\n");
+        let off = recipe_toolchain_options("toolchainopts = {'openmp': False}\n");
+        let plain = vec![
+            DryRunStep {
+                step: "configure".into(),
+                commands: vec![
+                    "./configure --prefix=/sw --with-x-libs=\"foo bar\" --with-x-dirs=/sw/lib"
+                        .into(),
+                ],
+            },
+            DryRunStep {
+                step: "test".into(),
+                commands: vec!["make check".into()],
+            },
+        ];
+        let found = threaded_findings(&on, &pairs, &plain);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].step, "configure");
+        assert_eq!(found[0].plain, vec!["LIBX", "X_STATIC_LIBS"]);
+        assert_eq!(found[0].threaded, vec!["LIBX_MT", "X_MT_STATIC_LIBS"]);
+        assert_eq!(found[0].missing, vec!["thr"]);
+        assert!(
+            threaded_findings(&off, &pairs, &plain).is_empty(),
+            "option off"
+        );
+        let threaded = vec![DryRunStep {
+            step: "configure".into(),
+            commands: vec!["./configure LIBS='-lfoo -lbar -lthr'".into()],
+        }];
+        assert!(
+            threaded_findings(&on, &pairs, &threaded).is_empty(),
+            "the threaded value is used"
+        );
+        let (summary, next) = threaded_findings_text(&on, &found).expect("text");
+        assert!(
+            summary.contains("openmp: True") && summary.contains("$LIBX -> $LIBX_MT"),
+            "{summary}"
+        );
+        assert!(summary.contains("--with-x-libs"), "{summary}");
+        assert!(
+            next.starts_with("edit the easyblock") && next.contains("LIBX_MT"),
+            "{next}"
+        );
+        assert!(threaded_findings_text(&on, &[]).is_none());
+    }
+
+    #[test]
+    fn library_tokens_normalise_link_forms() {
+        for raw in [
+            "-lfoo",
+            "libfoo.a",
+            "libfoo.so",
+            "/sw/lib/libfoo.so.2",
+            "\"foo\",",
+        ] {
+            assert_eq!(library_token(raw).as_deref(), Some("foo"), "{raw}");
+        }
+        assert_eq!(library_token("-O2"), None);
+        assert_eq!(library_token("x"), None);
+        assert_eq!(
+            value_libraries("libfoo.a,libfoo.a,libbar.a"),
+            vec!["foo", "bar"]
+        );
     }
 
     #[test]
