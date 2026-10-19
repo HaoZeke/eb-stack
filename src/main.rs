@@ -80,6 +80,49 @@ enum Command {
     },
     /// Which easyconfigs an easyblock or framework change reaches.
     EasyblockReach(Box<EasyblockReachArgs>),
+    /// Which open software-layer pull requests would build the same modules.
+    ///
+    /// Reads each pull request's easystack changes as data (never runs them),
+    /// closes the added entries over the robot path against an installed
+    /// module list, and writes one TOML record per pull request plus an
+    /// overlap index and a Markdown report. No build and no model.
+    PrOverlap(Box<PrOverlapArgs>),
+}
+
+#[derive(clap::Args, Debug)]
+struct PrOverlapArgs {
+    /// Pull request JSON: one object `{number, head_sha, title, easystacks:
+    /// [{path, base, head}]}` or an array of them. Repeatable.
+    #[arg(long = "pr", required = true)]
+    prs: Vec<PathBuf>,
+    /// Easyconfig tree of the EasyBuild release the stack uses. Repeatable;
+    /// later trees take precedence.
+    #[arg(long, required = true)]
+    easyconfigs: Vec<PathBuf>,
+    /// Easyconfigs for one `from-commit` pin, as `<commit>=<dir>`. Repeatable.
+    #[arg(long = "commit-tree")]
+    commit_trees: Vec<String>,
+    /// Installed modules, one `Name/VersionFull` per line.
+    #[arg(long)]
+    installed: PathBuf,
+    /// Stack version whose easystacks count.
+    #[arg(long, default_value = "2026.06")]
+    eessi_version: String,
+    /// Label for where the installed list came from, e.g. a CPU target.
+    #[arg(long, default_value = "")]
+    installed_label: String,
+    /// Skip easystack paths containing this substring. Repeatable.
+    #[arg(long = "exclude-path")]
+    exclude_paths: Vec<String>,
+    /// Timestamp to record (RFC 3339); defaults to now, in UTC.
+    #[arg(long)]
+    generated_at: Option<String>,
+    /// Repository URL used for links in the Markdown report.
+    #[arg(long, default_value = "https://github.com/EESSI/software-layer")]
+    repo_url: String,
+    /// Output directory: `prs/<N>.toml`, `overlap.toml`, `overlap.md`.
+    #[arg(long, default_value = "pr-overlap")]
+    out_dir: PathBuf,
 }
 
 #[derive(Subcommand, Debug)]
@@ -554,6 +597,7 @@ fn main() -> Result<()> {
         Command::Target { command } => run_target(command),
         Command::Campaign { command } => run_campaign(command),
         Command::Repro { command } => run_repro(command),
+        Command::PrOverlap(args) => run_pr_overlap(*args),
         Command::Mcp { workspace } => {
             if let Some(workspace) = workspace {
                 std::env::set_var("EB_STACK_WORKSPACE", &workspace);
@@ -667,6 +711,87 @@ fn run_easyblock_reach(args: EasyblockReachArgs) -> Result<()> {
         report.installed_count,
         report.reached_classes.len(),
         report.reverse.len(),
+        args.out_dir.display()
+    );
+    Ok(())
+}
+
+fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
+    use eb_stack::pr_overlap::{
+        overlap_index, parse_installed, pr_record, render_markdown, to_toml, OverlapConfig,
+        PrInput, RobotTrees,
+    };
+    let mut prs: Vec<PrInput> = Vec::new();
+    for path in &args.prs {
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        let value: serde_json::Value =
+            serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+        if value.is_array() {
+            prs.extend(serde_json::from_value::<Vec<PrInput>>(value)?);
+        } else {
+            prs.push(serde_json::from_value::<PrInput>(value)?);
+        }
+    }
+    prs.sort_by_key(|p| p.number);
+    prs.dedup_by_key(|p| p.number);
+
+    let trees: Vec<&Path> = args.easyconfigs.iter().map(PathBuf::as_path).collect();
+    let base = parse_easyconfig_trees(&trees).map_err(|e| anyhow::anyhow!(e))?;
+    let mut robot = RobotTrees {
+        base: base.candidates,
+        commits: Default::default(),
+    };
+    for spec in &args.commit_trees {
+        let (commit, dir) = spec
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("--commit-tree wants <commit>=<dir>, got {spec}"))?;
+        let parsed =
+            eb_stack::parse_easyconfig_tree(Path::new(dir)).map_err(|e| anyhow::anyhow!(e))?;
+        robot.commits.insert(commit.to_string(), parsed.candidates);
+    }
+    let installed = parse_installed(
+        &std::fs::read_to_string(&args.installed)
+            .with_context(|| format!("read {}", args.installed.display()))?,
+    );
+    let config = OverlapConfig {
+        eessi_version: args.eessi_version.clone(),
+        installed_source: args.installed_label.clone(),
+        exclude_paths: args.exclude_paths.clone(),
+        generated_at: args.generated_at.clone().unwrap_or_else(|| {
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        }),
+    };
+    let records: Vec<_> = prs
+        .iter()
+        .filter_map(|pr| pr_record(pr, &robot, &installed, &config))
+        .collect();
+    let index = overlap_index(&records, &config);
+
+    let pr_dir = args.out_dir.join("prs");
+    std::fs::create_dir_all(&pr_dir)?;
+    // A closed pull request's record goes with it: the directory holds the
+    // open set of this run and nothing else.
+    for entry in std::fs::read_dir(&pr_dir)? {
+        let path = entry?.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+            std::fs::remove_file(&path)?;
+        }
+    }
+    for record in &records {
+        std::fs::write(pr_dir.join(format!("{}.toml", record.pr)), to_toml(record)?)?;
+    }
+    std::fs::write(args.out_dir.join("overlap.toml"), to_toml(&index)?)?;
+    std::fs::write(
+        args.out_dir.join("overlap.md"),
+        render_markdown(&records, &index, &args.repo_url),
+    )?;
+    println!(
+        "prs={} records={} shared_modules={} skipped_easyconfigs={} out={}",
+        prs.len(),
+        records.len(),
+        index.shared.len(),
+        base.skipped.len(),
         args.out_dir.display()
     );
     Ok(())
