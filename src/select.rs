@@ -255,6 +255,7 @@ pub fn resolvo_resolve_dep_versions(
     };
 
     universe_cands.push(Candidate {
+        easyblock: None,
         name: synthetic.clone(),
         version: root_version.to_string(),
         toolchain: toolchain.clone(),
@@ -436,6 +437,7 @@ mod tests {
         };
         // Leaf has no deps; root links to it only as a build dep.
         let leaf = Candidate {
+            easyblock: None,
             name: "BuildTool".into(),
             version: "2.0".into(),
             toolchain: tc.clone(),
@@ -447,6 +449,7 @@ mod tests {
             moduleclass: None,
         };
         let root = Candidate {
+            easyblock: None,
             name: "App".into(),
             version: "1.0".into(),
             toolchain: tc.clone(),
@@ -498,6 +501,7 @@ mod tests {
             version: "2025b".into(),
         };
         let root = Candidate {
+            easyblock: None,
             name: "App".into(),
             version: "1.0".into(),
             toolchain: tc.clone(),
@@ -756,6 +760,7 @@ mod prefer_installed_tests {
         let candidates: Vec<Candidate> = versions
             .iter()
             .map(|version| Candidate {
+                easyblock: None,
                 name: "Alpha".into(),
                 version: (*version).to_string(),
                 toolchain: toolchain.clone(),

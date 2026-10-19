@@ -21,6 +21,7 @@ fn dep(name: &str, requirement: &str) -> DepReq {
 
 fn candidate(name: &str, version: &str, dependencies: Vec<DepReq>) -> Candidate {
     Candidate {
+        easyblock: None,
         name: name.into(),
         version: version.into(),
         toolchain: toolchain(),

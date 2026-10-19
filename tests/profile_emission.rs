@@ -111,6 +111,7 @@ fn profile_lock(profile: &str, versionsuffix: &str) -> ProfileLock {
 
 fn hdf5_candidate(version: &str) -> Candidate {
     Candidate {
+        easyblock: None,
         name: "HDF5".into(),
         version: version.into(),
         toolchain: toolchain(),
@@ -654,6 +655,7 @@ fn profile_solver_matches_unmapped_foreign_names_to_robot_candidates() {
     dependency.condition = ConditionExpr::Always;
     plan.dependencies = vec![dependency];
     let candidate = Candidate {
+        easyblock: None,
         name: "SomeLib".into(),
         version: "2.1".into(),
         toolchain: toolchain(),
@@ -692,6 +694,7 @@ fn foreign_build_roles_create_easybuild_builddependencies() {
     plan.dependencies
         .retain(|dependency| matches!(dependency.name.as_str(), "boost" | "cmake"));
     let candidate = |name: &str, version: &str| Candidate {
+        easyblock: None,
         name: name.into(),
         version: version.into(),
         toolchain: toolchain(),
@@ -765,6 +768,7 @@ fn stack_pin_admits_a_cross_generation_runtime_closure() {
                      version: &str,
                      candidate_toolchain: Toolchain,
                      dependencies: Vec<DepReq>| Candidate {
+        easyblock: None,
         name: name.into(),
         version: version.into(),
         toolchain: candidate_toolchain.clone(),
@@ -871,6 +875,7 @@ fn profile_solve_scopes_build_dependencies_of_existing_recipes() {
                      version: &str,
                      dependencies: Vec<DepReq>,
                      builddependencies: Vec<DepReq>| Candidate {
+        easyblock: None,
         name: name.into(),
         version: version.into(),
         toolchain: toolchain(),

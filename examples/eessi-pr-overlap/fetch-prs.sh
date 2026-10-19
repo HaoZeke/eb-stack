@@ -12,7 +12,7 @@ set -euo pipefail
 repo=$1
 version=$2
 out=$3
-mkdir -p "$out/prs" "$out/commit-trees"
+mkdir -p "$out/prs" "$out/commit-trees" "$out/easyblocks"
 prefix="easystacks/software.eessi.io/${version}/"
 
 git fetch --quiet --no-tags origin main
@@ -105,5 +105,57 @@ cat "$out"/raw/*/*.head 2>/dev/null \
         continue
       fi
       : >"$dest/.full-easyconfigs"
+    done
+
+# Easyblocks named by include-easyblocks-from-commit. EasyBuild includes only
+# the files that commit touches, and it puts them ahead of the installed
+# easyblocks package. The whole repository at that commit is not the same
+# thing: every class would then look as if the commit had provided it.
+cat "$out"/raw/*/*.head 2>/dev/null \
+  | grep -oE 'include-easyblocks-from-commit:[[:space:]]*[0-9a-f]{40}' \
+  | grep -oE '[0-9a-f]{40}' | sort -u \
+  | while read -r commit; do
+      dest="$out/easyblocks/${commit}"
+      [[ -f "$dest/.touched-files" ]] && continue
+      rm -rf "$dest"
+      mkdir -p "$dest"
+      if ! files=$(gh api "repos/easybuilders/easybuild-easyblocks/commits/${commit}" \
+          --jq '.files[] | select(.status != "removed") | .filename'); then
+        echo "no easyblocks commit ${commit}" >&2
+        rm -rf "$dest"
+        continue
+      fi
+      if [[ -z "$files" ]]; then
+        echo "easyblocks commit ${commit} touches no files" >&2
+        rm -rf "$dest"
+        continue
+      fi
+      ball=$(mktemp)
+      if ! curl -fsSL "https://codeload.github.com/easybuilders/easybuild-easyblocks/tar.gz/${commit}" -o "$ball"; then
+        echo "no easyblocks commit ${commit}" >&2
+        rm -f "$ball"
+        rm -rf "$dest"
+        continue
+      fi
+      top=$(tar -tzf "$ball" | head -n 1 || true)
+      top=${top%%/*}
+      if [[ "$top" != easybuild-easyblocks-* ]]; then
+        echo "no easyblocks commit ${commit}" >&2
+        rm -f "$ball"
+        rm -rf "$dest"
+        continue
+      fi
+      args=()
+      while IFS= read -r file; do
+        [[ -n "$file" ]] && args+=("${top}/${file}")
+      done <<<"$files"
+      if ! tar -xzf "$ball" -C "$dest" --strip-components=1 -- "${args[@]}"; then
+        echo "could not extract easyblocks commit ${commit}" >&2
+        rm -f "$ball"
+        rm -rf "$dest"
+        continue
+      fi
+      rm -f "$ball"
+      : >"$dest/.touched-files"
     done
 ls "$out/prs" | wc -l | xargs echo "pull requests with ${version} easystack changes:"

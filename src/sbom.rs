@@ -735,6 +735,7 @@ mod tests {
             version: "2025b".into(),
         };
         let app = Candidate {
+            easyblock: None,
             name: "App".into(),
             version: "1.0".into(),
             toolchain: tc.clone(),
@@ -756,6 +757,7 @@ mod tests {
             moduleclass: None,
         };
         let lib = Candidate {
+            easyblock: None,
             name: "Lib".into(),
             version: "1.0".into(),
             toolchain: tc.clone(),
@@ -767,6 +769,7 @@ mod tests {
             moduleclass: None,
         };
         let tool = Candidate {
+            easyblock: None,
             name: "Tool".into(),
             version: "1.0".into(),
             toolchain: tc.clone(),

@@ -178,6 +178,7 @@ mod tests {
         fs::write(&app, "name = 'App'\n").unwrap();
         vec![
             Candidate {
+                easyblock: None,
                 name: "Lib".into(),
                 version: "1.0".into(),
                 toolchain: tc("foss", "2026.1"),
@@ -189,6 +190,7 @@ mod tests {
                 moduleclass: None,
             },
             Candidate {
+                easyblock: None,
                 name: "App".into(),
                 version: "2.0".into(),
                 toolchain: tc("foss", "2026.1"),

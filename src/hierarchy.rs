@@ -1385,6 +1385,7 @@ mod tests {
 
     fn cand(name: &str, ver: &str, tc_name: &str, tc_ver: &str, vs: Option<&str>) -> Candidate {
         Candidate {
+            easyblock: None,
             name: name.into(),
             version: ver.into(),
             toolchain: Toolchain {

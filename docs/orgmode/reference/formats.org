@@ -1,5 +1,5 @@
 #+TITLE: Output formats
-#+OPTIONS: toc:t num:t
+#+OPTIONS: toc:t num:t author:nil
 
 * Stack lock (~stack.lock.json~)
 
@@ -210,8 +210,13 @@ overlap report.
 | ~easystack_files~ | Easystack paths that contributed an entry |
 | ~to_build~ | Module names that would be built, sorted, one per line |
 | ~already_installed~ | Installed modules the walk reached and stopped at, sorted |
-| ~unresolved~ | Requirements no easyconfig on the robot path satisfies |
+| ~unresolved~ | Requirements no easyconfig on the robot path satisfies, and ~easyblock <class> missing~ when ~--easyblocks~ was passed and no passed tree defines that class |
+| ~notes~ | Present when the run recorded one: a class supplied by an ~include-easyblocks-from-commit~ tree, a commit an entry names whose tree was not passed, or an ~include-easyblocks-from-pr~. Omitted when empty |
 | ~entries~ | The easystack lines the pull request adds |
+
+A module whose easyblock class is missing is left out of ~to_build~. The
+dependencies of that recipe stay. ~overlap.md~ prints each unresolved item
+as ~- unresolved:~ and each note as ~- note:~.
 
 Each ~[[entries]]~ table has ~easystack~, ~easyconfig~, and, when the entry
 carries them, ~from_commit~ and ~eb_version~. A module name is

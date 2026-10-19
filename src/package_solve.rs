@@ -252,6 +252,7 @@ pub fn solve_package_profile_with_hierarchy(
     }
     scope_cross_generation_pin_closures(&mut universe, stack_policy, &hierarchy);
     universe.push(Candidate {
+        easyblock: None,
         name: synthetic_name.clone(),
         version: plan.package.version.clone(),
         toolchain: plan.build.toolchain.clone(),

@@ -101,15 +101,43 @@ jobs:
       - name: Compute build sets and overlap
         run: |
           set -euo pipefail
+          # `module` only affects this step. EESSI-extend exports
+          # EASYBUILD_FILTER_DEPS for the loaded CPU target; the list is not
+          # copied into this file.
+          source "/cvmfs/software.eessi.io/versions/${EESSI_VERSION}/init/lmod/bash"
+          module load EESSI-extend
+          : "${EASYBUILD_FILTER_DEPS:?EESSI-extend did not set EASYBUILD_FILTER_DEPS}"
+          prefix="/cvmfs/software.eessi.io/versions/${EESSI_VERSION}/software/linux/${CPU_TARGET}"
+          shopt -s nullglob
+          easyblocks=("${prefix}/software/EasyBuild/${EB_VERSION}/lib/python"*/site-packages/easybuild/easyblocks)
+          shopt -u nullglob
+          if [[ ${#easyblocks[@]} -eq 0 ]]; then
+            echo "no easyblocks package for EasyBuild ${EB_VERSION}" >&2
+            exit 1
+          fi
           args=()
-          for f in "$RUNNER_TEMP"/in/prs/*.json; do [[ -e "$f" ]] && args+=(--pr "$f"); done
+          prs=0
+          for f in "$RUNNER_TEMP"/in/prs/*.json; do
+            [[ -e "$f" ]] || continue
+            args+=(--pr "$f")
+            prs=$((prs + 1))
+          done
+          if [[ "$prs" -eq 0 ]]; then
+            echo '[]' > "$RUNNER_TEMP/none.json"
+            args+=(--pr "$RUNNER_TEMP/none.json")
+          fi
           for d in "$RUNNER_TEMP"/in/commit-trees/*/; do
             [[ -d "$d" ]] && args+=(--commit-tree "$(basename "$d")=$d")
           done
-          if [[ ${#args[@]} -eq 0 ]]; then echo '[]' > "$RUNNER_TEMP/none.json"; args=(--pr "$RUNNER_TEMP/none.json"); fi
+          for d in "$RUNNER_TEMP"/in/easyblocks/*/; do
+            [[ -d "$d" ]] && args+=(--easyblocks-commit "$(basename "$d")=$d")
+          done
+          for dir in "${easyblocks[@]}"; do args+=(--easyblocks "$dir"); done
           eb-stack pr-overlap "${args[@]}" \
             --easyconfigs "$ROBOT" \
             --installed "$RUNNER_TEMP/installed.txt" \
+            --installed-modulerc "${prefix}/modules/all" \
+            --filter-deps "$EASYBUILD_FILTER_DEPS" \
             --eessi-version "$EESSI_VERSION" \
             --installed-label "${CPU_TARGET} (EasyBuild ${EB_VERSION})" \
             --exclude-path /accel/ --exclude-path /additional_arch/ \

@@ -1,5 +1,5 @@
 #+TITLE: Command-line reference
-#+OPTIONS: toc:t num:nil
+#+OPTIONS: toc:t num:nil author:nil
 
 ~eb-stack~ has five namespaced command groups, ~pr-overlap~, and an MCP
 server. All paths written by package commands are deterministic bundle
@@ -214,11 +214,13 @@ to the policy toolchain's hierarchy. An entry pinned with ~from-commit~ is read
 from that commit of ~--baseline-commits-from~ when given, and matched by
 filename otherwise. Entries that name no recipe are listed on standard error.
 ~--baseline-also-toolchain~ keeps another family's hierarchy in the baseline,
-such as ~lfoss/2026.1~ beside a ~foss/2026.1~ solve. ~--filter-deps~ drops
-every dependency on the named packages before the solve, as EasyBuild's
-option of that name does; pass EESSI-extend's ~EASYBUILD_FILTER_DEPS~ list when
-solving against an EESSI baseline, or the build list carries modules the
-compat layer already provides.
+such as ~lfoss/2026.1~ beside a ~foss/2026.1~ solve. ~--filter-deps~ drops each named dependency before the solve, together
+with the subtree under it, using EasyBuild's matching: a bare name,
+~name=version~, or ~name=[low:high]~. ~[~ and ~]~ include a limit, the
+opposite bracket excludes it, and an empty side is open. The last spec for
+a name wins. Pass EESSI-extend's ~EASYBUILD_FILTER_DEPS~ list when solving
+against an EESSI baseline, or the build list carries modules the compat
+layer already provides.
 Against an EESSI version's easystacks, ~unchanged~ in the stack diff means the
 software layer already provides that module, and
 ~--build-list-excludes-baseline~ drops those modules (same name, version,
@@ -247,6 +249,10 @@ eb-stack pr-overlap \
   [--installed-label LABEL] \
   [--exclude-path SUBSTR]... \
   [--include-path SUBSTR]... \
+  [--filter-deps SPEC,SPEC...] \
+  [--installed-modulerc PATH]... \
+  [--easyblocks DIR]... \
+  [--easyblocks-commit COMMIT=DIR]... \
   [--generated-at RFC3339] \
   [--repo-url URL] \
   [--out-dir pr-overlap]
@@ -270,6 +276,26 @@ excludes.
 An installed module is a leaf. Entries under a ~rebuilds/~ easystack are
 built even when installed. A requirement no easyconfig satisfies is recorded
 and the rest of the closure is still written.
+
+~--filter-deps~ is comma-separated and uses the same matching as
+~stack solve~. A filtered dependency is dropped before the walk, so the
+modules reachable only through it are never opened. When the flag is omitted
+and ~EASYBUILD_FILTER_DEPS~ is set, that value is used. A non-empty flag
+wins over the environment.
+
+~--installed-modulerc~ is a ~.modulerc.lua~ file or a module tree. A
+~module_version("Name/full", "alias")~ line makes ~Name/alias~ installed
+when ~Name/full~ is on the installed list.
+
+~--easyblocks~ is the installed ~easybuild/easyblocks~ package. Passing any
+root checks every easyblock class. A software-specific class none of the
+roots defines is recorded as ~easyblock <class> missing~ and that module is
+left out of ~to_build~. Its dependencies stay. ~--easyblocks-commit~ is
+~<commit>=<dir>~ for one ~include-easyblocks-from-commit~: the directory is
+the easyblock files that commit touches, which is what EasyBuild includes
+ahead of the installed package. A class found there is counted, and the
+record notes the commit. A commit an entry names whose directory was not
+passed is noted as not provided.
 
 The output directory holds ~prs/<N>.toml~, ~overlap.toml~, and ~overlap.md~.
 See [[file:formats.org][output formats]] for the records. A closed pull

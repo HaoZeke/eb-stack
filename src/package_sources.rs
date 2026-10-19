@@ -1255,6 +1255,7 @@ class Leaflib(Package):
         let root = temp.path().join("robot");
         write(&root.join("broken.eb"), "name =\n");
         let candidate = Candidate {
+            easyblock: None,
             name: "Reusable".into(),
             version: "1.0".into(),
             toolchain: Toolchain {

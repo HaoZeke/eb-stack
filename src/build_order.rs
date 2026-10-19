@@ -862,6 +862,7 @@ mod tests {
 
     fn candidate(name: &str, version: &str, toolchain: Toolchain, deps: Vec<DepReq>) -> Candidate {
         Candidate {
+            easyblock: None,
             name: name.into(),
             version: version.into(),
             toolchain,
