@@ -84,6 +84,24 @@ versions, conventional filename, and source checksum entry. Patches remain
 explicit review work. Omitting the new checksum produces a residual and leaves
 the old digest visible; it never invents one.
 
+To fill the digest without a separate EasyBuild run, pass ~--fetch-checksums~.
+The bump resolves ~sources~ and ~source_urls~ at the new version, downloads
+each entry from those URLs in order, and writes the first source's SHA-256 into
+the recipe and the SBOM, which is what ~eb --inject-checksums~ does on the
+EasyBuild host. A git checkout, a missing URL or a failed download stays empty
+and is listed in ~sources.fetch.json~ and as a ~source:fetch~ residual:
+
+#+begin_src bash
+eb-stack package bump \
+  --source App-1.0-foss-2023b.eb \
+  --toolchain-name foss \
+  --toolchain-version 2024a \
+  --version 1.1 \
+  --fetch-checksums \
+  --easyconfigs /path/to/robot \
+  --out-dir /tmp/app-1.1
+#+end_src
+
 * Check and build
 
 #+begin_src bash
