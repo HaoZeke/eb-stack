@@ -76,6 +76,10 @@ pub struct Candidate {
     /// Bundled extensions (`exts_list`) resolved from the easyconfig.
     #[serde(default)]
     pub exts_list: Vec<ExtEntry>,
+    /// Easyblock class the recipe names. `None` means EasyBuild derives
+    /// `EB_<name>` and refuses to start when that class is not installed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub easyblock: Option<String>,
     /// What the recipe says the module is for. Carried so a regenerated or
     /// retargeted recipe can keep the class the tree already gives a package,
     /// which upstream metadata cannot tell you: archspec and cppy state no

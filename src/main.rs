@@ -118,6 +118,34 @@ struct PrOverlapArgs {
     /// With none set, every path that survives `--exclude-path` is kept.
     #[arg(long = "include-path")]
     include_paths: Vec<String>,
+    /// Dependencies to drop the way EasyBuild's `--filter-deps` drops them.
+    ///
+    /// Comma-separated. A name drops every version and the whole subtree under
+    /// it. `name=version` drops that version. `name=[low:high]` drops a
+    /// version range, with `[`/`]` inclusive and the opposite bracket
+    /// exclusive. When the flag is omitted, `EASYBUILD_FILTER_DEPS` is used
+    /// if it is set.
+    #[arg(long, value_delimiter = ',')]
+    filter_deps: Vec<String>,
+    /// Lmod `.modulerc.lua` file, or a module tree to scan for them.
+    ///
+    /// `module_version("Name/full", "alias")` makes `Name/alias` installed
+    /// when `Name/full` is. Repeatable.
+    #[arg(long = "installed-modulerc")]
+    installed_modulerc: Vec<PathBuf>,
+    /// Installed easyblocks package (`easybuild/easyblocks`). Repeatable.
+    ///
+    /// Passing any root checks every easyblock class. A software-specific
+    /// class none of them defines is `easyblock <class> missing` and is not
+    /// counted as a module to build.
+    #[arg(long = "easyblocks")]
+    easyblocks: Vec<PathBuf>,
+    /// Easyblocks added by one `include-easyblocks-from-commit`, as
+    /// `<commit>=<dir>`. The directory is the easyblock files that commit
+    /// touches, which is what EasyBuild includes ahead of the installed
+    /// package. Repeatable.
+    #[arg(long = "easyblocks-commit")]
+    easyblocks_commits: Vec<String>,
     /// Timestamp to record (RFC 3339); defaults to now, in UTC.
     #[arg(long)]
     generated_at: Option<String>,
@@ -754,10 +782,23 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
             eb_stack::parse_easyconfig_tree(Path::new(dir)).map_err(|e| anyhow::anyhow!(e))?;
         robot.commits.insert(commit.to_string(), parsed.candidates);
     }
-    let installed = parse_installed(
+    let mut installed = parse_installed(
         &std::fs::read_to_string(&args.installed)
             .with_context(|| format!("read {}", args.installed.display()))?,
     );
+    let mut aliases = Vec::new();
+    for path in &args.installed_modulerc {
+        aliases.extend(
+            eb_stack::modulerc::load_modulerc(path)
+                .map_err(|error| anyhow::anyhow!(error))
+                .with_context(|| format!("read modulerc {}", path.display()))?,
+        );
+    }
+    installed = eb_stack::modulerc::apply_modulerc(&installed, &aliases);
+    let filter_specs = eb_stack::dep_filter::specs_from_cli_or_env(&args.filter_deps);
+    let filter_deps = eb_stack::dep_filter::FilterDeps::parse(&filter_specs)
+        .map_err(|error| anyhow::anyhow!("--filter-deps: {error}"))?;
+    let easyblocks = load_easyblock_catalog(&args.easyblocks, &args.easyblocks_commits)?;
     let config = OverlapConfig {
         eessi_version: args.eessi_version.clone(),
         installed_source: args.installed_label.clone(),
@@ -766,6 +807,8 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
         generated_at: args.generated_at.clone().unwrap_or_else(|| {
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }),
+        filter_deps,
+        easyblocks,
     };
     let records: Vec<_> = prs
         .iter()
@@ -803,6 +846,47 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
         args.out_dir.display()
     );
     Ok(())
+}
+
+/// Installed easyblocks plus the files each `include-easyblocks-from-commit`
+/// touches. Checking is on only when an installed package was passed: a
+/// commit directory on its own is not the set of classes EasyBuild ships.
+fn load_easyblock_catalog(
+    roots: &[PathBuf],
+    commit_specs: &[String],
+) -> Result<Option<eb_stack::pr_overlap::EasyblockCatalog>> {
+    use eb_stack::pr_overlap::EasyblockCatalog;
+    use std::collections::BTreeMap;
+    if roots.is_empty() && commit_specs.is_empty() {
+        return Ok(None);
+    }
+    let mut catalog = EasyblockCatalog {
+        check: !roots.is_empty(),
+        ..EasyblockCatalog::default()
+    };
+    if !roots.is_empty() {
+        let paths: Vec<&Path> = roots.iter().map(PathBuf::as_path).collect();
+        let index = eb_stack::eb_easyblock::index_easyblocks(&paths).map_err(anyhow::Error::msg)?;
+        for (class, (path, _)) in index {
+            catalog.base.insert(class, path.display().to_string());
+        }
+    }
+    for spec in commit_specs {
+        let (commit, dir) = spec.split_once('=').ok_or_else(|| {
+            anyhow::anyhow!("--easyblocks-commit wants <commit>=<dir>, got {spec}")
+        })?;
+        if commit.is_empty() || dir.is_empty() {
+            anyhow::bail!("--easyblocks-commit wants <commit>=<dir>, got {spec}");
+        }
+        let index = eb_stack::eb_easyblock::index_easyblocks(&[Path::new(dir)])
+            .map_err(anyhow::Error::msg)?;
+        let mut classes = BTreeMap::new();
+        for (class, (path, _)) in index {
+            classes.insert(class, path.display().to_string());
+        }
+        catalog.commits.insert(commit.to_string(), classes);
+    }
+    Ok(Some(catalog))
 }
 
 fn run_package(command: PackageCommand) -> Result<()> {

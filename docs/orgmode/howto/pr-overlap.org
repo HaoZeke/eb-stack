@@ -1,5 +1,5 @@
 #+TITLE: Find shared builds across open pull requests
-#+OPTIONS: toc:t num:nil
+#+OPTIONS: toc:t num:nil author:nil
 
 Goal: for every open pull request that changes an easystack, write what it
 would build on the current stack, and which of those modules more than one
@@ -14,13 +14,20 @@ From a clone of ~EESSI/software-layer~, with ~gh~ authenticated for public
 reads:
 
 #+begin_src bash
+source /cvmfs/software.eessi.io/versions/2026.06/init/lmod/bash
+module load EESSI-extend
 examples/eessi-pr-overlap/fetch-prs.sh EESSI/software-layer 2026.06 in/
 find "$EESSI_SOFTWARE_PATH/software" -mindepth 2 -maxdepth 2 -type d -printf '%P\n' \
   | sort > installed.txt
 eb-stack pr-overlap --pr in/prs/*.json \
   $(for d in in/commit-trees/*/; do printf -- '--commit-tree %s=%s ' "$(basename "$d")" "$d"; done) \
+  $(for d in in/easyblocks/*/; do printf -- '--easyblocks-commit %s=%s ' "$(basename "$d")" "$d"; done) \
   --easyconfigs /path/to/easybuild/easyconfigs \
-  --installed installed.txt --installed-label x86_64/amd/zen4 \
+  --easyblocks /path/to/easybuild/easyblocks \
+  --installed installed.txt \
+  --installed-modulerc "$EESSI_SOFTWARE_PATH/modules/all" \
+  --filter-deps "$EASYBUILD_FILTER_DEPS" \
+  --installed-label x86_64/amd/zen4 \
   --exclude-path /accel/ --exclude-path /additional_arch/ \
   --out-dir out/
 #+end_src
@@ -29,7 +36,13 @@ eb-stack pr-overlap --pr in/prs/*.json \
 ~examples/eessi-pr-overlap/fetch-prs.sh~. ~--easyconfigs~ is the easyconfigs
 tree shipped with the EasyBuild version the easystack names. For a
 ~from-commit~ pin, ~--commit-tree~ is the whole easyconfigs tree at that
-commit.
+commit. ~module load EESSI-extend~ exports ~EASYBUILD_FILTER_DEPS~ for the
+loaded CPU target. Pass that value to ~--filter-deps~. When the flag is
+omitted and the variable is set, the command reads the variable.
+~--installed-modulerc~ is that prefix's ~modules/all~. ~--easyblocks~ is the
+EasyBuild release's ~easybuild/easyblocks~ package. ~--easyblocks-commit~ is
+the files one ~include-easyblocks-from-commit~ touches, which ~fetch-prs.sh~
+writes under ~in/easyblocks/<commit>/~.
 
 A second pass over an architecture the first pass excluded keeps that
 substring and uses that architecture's installed list. Do not also exclude
@@ -38,12 +51,20 @@ the same substring:
 #+begin_src bash
 eb-stack pr-overlap --pr in/prs/*.json \
   $(for d in in/commit-trees/*/; do printf -- '--commit-tree %s=%s ' "$(basename "$d")" "$d"; done) \
+  $(for d in in/easyblocks/*/; do printf -- '--easyblocks-commit %s=%s ' "$(basename "$d")" "$d"; done) \
   --easyconfigs /path/to/easybuild/easyconfigs \
-  --installed installed-riscv.txt --installed-label riscv64/generic \
+  --easyblocks /path/to/easybuild/easyblocks \
+  --installed installed-riscv.txt \
+  --installed-modulerc /path/to/riscv64/modules/all \
+  --filter-deps "$EASYBUILD_FILTER_DEPS" \
+  --installed-label riscv64/generic \
   --include-path /additional_arch/riscv64/ \
   --exclude-path /accel/ \
   --out-dir out-riscv/
 #+end_src
+
+Load ~EESSI-extend~ on that architecture before reading
+~EASYBUILD_FILTER_DEPS~. The list belongs to the loaded target.
 
 * Read which modules are shared
 
@@ -79,6 +100,11 @@ mounts the stack, writes the three output files, and pushes them to
 ~gh_action_pr_dependency_overlap~ without force. It opens no pull request
 and posts no comment. The publish job commits only when a build set changed.
 A timestamp change alone is not committed.
+
+The compute step loads ~EESSI-extend~ and passes ~$EASYBUILD_FILTER_DEPS~,
+~--installed-modulerc~, ~--easyblocks~, and one ~--easyblocks-commit~ per
+directory ~fetch-prs.sh~ wrote. The filter list is not written into the
+workflow file.
 
 Why the files are regenerated on every run, and why a second build of a
 shared module overwrites the first binary, is covered in

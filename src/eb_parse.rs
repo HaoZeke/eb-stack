@@ -149,6 +149,7 @@ impl ResolvedEasyconfig {
                     version: e.version.clone(),
                 })
                 .collect(),
+            easyblock: self.easyblock.clone(),
             moduleclass: self.moduleclass.clone(),
         }
     }
@@ -3367,6 +3368,7 @@ dependencies = [('Java', '21', '', SYSTEM)]\nmoduleclass = 'devel'\n";
             version: "14.3.0".into(),
         };
         let mk = |name: &str, version: &str, tc: &Toolchain| Candidate {
+            easyblock: None,
             name: name.into(),
             version: version.into(),
             toolchain: tc.clone(),
@@ -3694,6 +3696,7 @@ dependencies = [('Java', '21', '', SYSTEM)]\nmoduleclass = 'devel'\n";
             version: "system".into(),
         };
         let at = |name: &str, version: &str, suffix: Option<&str>, deps: Vec<DepReq>| Candidate {
+            easyblock: None,
             name: name.into(),
             version: version.into(),
             toolchain: system.clone(),
@@ -3724,6 +3727,7 @@ dependencies = [('Java', '21', '', SYSTEM)]\nmoduleclass = 'devel'\n";
             version: "2025b".into(),
         };
         let root = Candidate {
+            easyblock: None,
             name: "Root".into(),
             version: "1.0".into(),
             toolchain: tc.clone(),
@@ -3740,6 +3744,7 @@ dependencies = [('Java', '21', '', SYSTEM)]\nmoduleclass = 'devel'\n";
             moduleclass: None,
         };
         let tool = Candidate {
+            easyblock: None,
             name: "Tool".into(),
             version: "1.0".into(),
             toolchain: tc.clone(),
@@ -4477,6 +4482,7 @@ builddependencies = [
         };
         let upstream = vec![
             Candidate {
+                easyblock: None,
                 name: "Lib".into(),
                 version: "1.0".into(),
                 toolchain: tc.clone(),
@@ -4488,6 +4494,7 @@ builddependencies = [
                 moduleclass: None,
             },
             Candidate {
+                easyblock: None,
                 name: "Keep".into(),
                 version: "2.0".into(),
                 toolchain: tc.clone(),
@@ -4500,6 +4507,7 @@ builddependencies = [
             },
         ];
         let overlay = vec![Candidate {
+            easyblock: None,
             name: "Lib".into(),
             version: "1.0".into(),
             toolchain: tc.clone(),
@@ -4529,6 +4537,7 @@ builddependencies = [
             version: "2024a".into(),
         };
         let candidate = |suffix: Option<&str>, path: &str| Candidate {
+            easyblock: None,
             name: "PyTorch".into(),
             version: "2.9.1".into(),
             toolchain: tc.clone(),
@@ -4659,6 +4668,7 @@ moduleclass = 'tools'
             }),
         };
         let ok = Candidate {
+            easyblock: None,
             name: "quill".into(),
             version: "11.1.0".into(),
             toolchain: Toolchain {
@@ -4710,6 +4720,7 @@ moduleclass = 'tools'
             },
         ];
         let old_capnp = Candidate {
+            easyblock: None,
             name: "CapnProto".into(),
             version: "1.4.0".into(),
             toolchain: Toolchain {
@@ -4724,6 +4735,7 @@ moduleclass = 'tools'
             moduleclass: None,
         };
         let xtb = Candidate {
+            easyblock: None,
             name: "xtb".into(),
             version: "6.7.1".into(),
             toolchain: Toolchain {
@@ -4739,6 +4751,7 @@ moduleclass = 'tools'
         };
         // Minimal foss-2026.1 tree so hierarchy derives with GCCcore-15.2.0.
         let mut foss_def = Candidate {
+            easyblock: None,
             name: "foss".into(),
             version: "2026.1".into(),
             toolchain: Toolchain {
@@ -4823,6 +4836,7 @@ moduleclass = 'tools'
             toolchain: None,
         }];
         let system_only = Candidate {
+            easyblock: None,
             name: "BuildTool".into(),
             version: "3.0".into(),
             toolchain: Toolchain {
@@ -4863,6 +4877,7 @@ moduleclass = 'tools'
             toolchain: None,
         }];
         let universe = vec![Candidate {
+            easyblock: None,
             name: "Wannier90".into(),
             version: "3.1.0".into(),
             // Deliberately an unrelated generation.
@@ -4917,6 +4932,7 @@ moduleclass = 'tools'
             toolchain: None,
         }];
         let universe = vec![Candidate {
+            easyblock: None,
             name: "Python".into(),
             version: "3.12.3".into(),
             toolchain: Toolchain {
@@ -5017,6 +5033,7 @@ toolchain = {'name': 'GCCcore', 'version': '14.3.0'}
             version: v.into(),
         };
         let cand = |name: &str, ver: &str, t: Toolchain| Candidate {
+            easyblock: None,
             name: name.into(),
             version: ver.into(),
             toolchain: t,
@@ -5114,6 +5131,7 @@ mod hierarchy_universe_tests {
 
     fn candidate(name: &str, version: &str, tc_name: &str, tc_version: &str) -> Candidate {
         Candidate {
+            easyblock: None,
             name: name.into(),
             version: version.into(),
             toolchain: Toolchain {

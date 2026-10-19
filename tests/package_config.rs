@@ -487,6 +487,7 @@ roles = ["run"]
         .any(|component| component["name"] == "NumericsRuntime"));
 
     let candidate = Candidate {
+        easyblock: None,
         name: "NumericsRuntime".into(),
         version: "2.4.0".into(),
         toolchain: plan.build.toolchain.clone(),

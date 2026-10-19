@@ -36,7 +36,8 @@ the recipes. It does not run `eb`.
   `rebuilds/` easystack are built even when installed.
 - "Installed" means a `software/<Name>/<VersionFull>` directory exists under
   one reference CPU target of the mounted stack (`x86_64/amd/zen4` by
-  default).
+  default). A `module_version` alias in `.modulerc.lua` counts as that
+  module when the full version it names is one of those directories.
 
 Running the real `eb --dry-run --robot` with the stack mounted
 (`eessi/github-action-eessi`, as `test-software.eessi.io.yml` already does)
@@ -137,16 +138,30 @@ the first one installed.
 ## Running it by hand
 
 ```
+source /cvmfs/software.eessi.io/versions/2026.06/init/lmod/bash
+module load EESSI-extend
 examples/eessi-pr-overlap/fetch-prs.sh EESSI/software-layer 2026.06 in/
 eb-stack pr-overlap --pr in/prs/*.json \
   $(for d in in/commit-trees/*/; do printf -- '--commit-tree %s=%s ' "$(basename "$d")" "$d"; done) \
+  $(for d in in/easyblocks/*/; do printf -- '--easyblocks-commit %s=%s ' "$(basename "$d")" "$d"; done) \
   --easyconfigs /path/to/easybuild-easyconfigs/easybuild/easyconfigs \
-  --installed installed.txt --installed-label x86_64/amd/zen4 \
+  --easyblocks /path/to/easybuild/easyblocks \
+  --installed installed.txt --installed-modulerc /path/to/modules/all \
+  --filter-deps "$EASYBUILD_FILTER_DEPS" \
+  --installed-label x86_64/amd/zen4 \
   --exclude-path /accel/ --exclude-path /additional_arch/ \
   --out-dir out/
 ```
 
 `installed.txt` is `find $EESSI_SOFTWARE_PATH/software -mindepth 2 -maxdepth 2 -type d -printf '%P\n'`.
+`--installed-modulerc` is that prefix's `modules/all`. `--filter-deps` is
+`EASYBUILD_FILTER_DEPS` after `module load EESSI-extend` on the same CPU
+target. `--easyblocks` is the EasyBuild release's `easybuild/easyblocks`
+package. `--easyblocks-commit` is the files one `include-easyblocks-from-commit`
+touches, which `fetch-prs.sh` writes under `in/easyblocks/<commit>/`.
+
+`overlap.md` in this directory is the zen4 report computed `2026-10-19T14:07:20Z`:
+39 pull requests, 18 records, 9 shared modules.
 
 ## Known limits
 
@@ -160,3 +175,13 @@ eb-stack pr-overlap --pr in/prs/*.json \
 - Dependency choice follows eb-stack's nearest-toolchain rule. The dry-run
   check is there to catch any place where that differs from EasyBuild's own
   robot.
+- `--filter-deps` follows EasyBuild: a filtered dependency is dropped with
+  the modules reachable only through it. A bare name filters every version.
+  `name=version` and `name=[low:high]` filter a version, with `[` and `]`
+  inclusive and the opposite bracket exclusive.
+- An alias in `.modulerc.lua` counts as installed only when the full module
+  it points at is installed.
+- A missing easyblock class is an unresolved requirement, and the module is
+  not counted. A class defined by an `include-easyblocks-from-commit` tree
+  that was passed in is counted and noted. The commit tree is the files that
+  commit touches, not the whole easyblocks repository.

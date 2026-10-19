@@ -243,6 +243,7 @@ fn the_build_list_can_leave_out_what_the_baseline_provides() {
 
 fn one(name: &str, tc: &str) -> eb_stack::Candidate {
     eb_stack::Candidate {
+        easyblock: None,
         name: name.into(),
         version: "1.0".into(),
         toolchain: eb_stack::Toolchain {

@@ -21,8 +21,10 @@
 //! this over pull requests from forks.
 
 use crate::build_order::{closure_against_installed, module_name, Choice, ModuleKey};
+use crate::dep_filter::FilterDeps;
 use crate::domain::Candidate;
 use crate::easystack::{parse_easystack_entries, EasystackEntry};
+use crate::eb_easyblock::encode_class_name;
 use crate::eb_parse::merge_candidates_with_precedence;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -77,6 +79,29 @@ pub struct OverlapConfig {
     pub include_paths: Vec<String>,
     /// RFC 3339 timestamp written into every record.
     pub generated_at: String,
+    /// Dependencies dropped the way EasyBuild's `--filter-deps` drops them,
+    /// together with everything reachable only through them.
+    pub filter_deps: FilterDeps,
+    /// Easyblock classes to resolve. `None` skips the check.
+    pub easyblocks: Option<EasyblockCatalog>,
+}
+
+/// Easyblock classes a run can see.
+///
+/// `base` is the installed easyblocks package. `commits` holds the classes
+/// from each `include-easyblocks-from-commit` tree that was passed in.
+/// A class in a commit tree is what `--include-easyblocks-from-commit` adds
+/// ahead of the installed package. `check` is set only when that installed
+/// package was passed in: without it, every derived class would look missing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EasyblockCatalog {
+    /// When true, a class in neither `base` nor the entry's commit trees is
+    /// `easyblock <class> missing` and is not counted as a module to build.
+    pub check: bool,
+    /// Class name to the file that defines it in the installed package.
+    pub base: BTreeMap<String, String>,
+    /// Per commit: class name to the file that defines it.
+    pub commits: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 /// One easystack entry a pull request adds.
@@ -118,8 +143,13 @@ pub struct PrRecord {
     pub to_build: Vec<String>,
     /// Installed modules the closure reached and stopped at, sorted.
     pub already_installed: Vec<String>,
-    /// Requirements no easyconfig on the robot path satisfies.
+    /// Requirements no easyconfig on the robot path satisfies, and easyblock
+    /// classes the run cannot resolve (`easyblock EB_eOn missing`).
     pub unresolved: Vec<String>,
+    /// Easyblocks supplied by a commit or pull request, and commits named by
+    /// an entry whose tree was not passed in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
     /// The easystack entries the pull request adds.
     pub entries: Vec<RecordEntry>,
 }
@@ -203,7 +233,7 @@ pub fn pr_record(
     let mut files = Vec::new();
     // Entries grouped by (from-commit, rebuild), since each group has its own
     // robot path and its own notion of what counts as installed.
-    let mut groups: BTreeMap<(Option<String>, bool), Vec<String>> = BTreeMap::new();
+    let mut groups: BTreeMap<(Option<String>, bool), Vec<Start>> = BTreeMap::new();
     let mut entries = Vec::new();
     for change in &pr.easystacks {
         if eessi_version_of(&change.path).as_deref() != Some(config.eessi_version.as_str()) {
@@ -234,7 +264,11 @@ pub fn pr_record(
             groups
                 .entry((entry.from_commit.clone(), rebuild))
                 .or_default()
-                .push(entry.file.clone());
+                .push(Start {
+                    file: entry.file.clone(),
+                    easyblock_commit: entry.include_easyblocks_from_commit.clone(),
+                    easyblock_pr: entry.include_easyblocks_from_pr.clone(),
+                });
             entries.push(RecordEntry {
                 easystack: change.path.clone(),
                 easyconfig: entry.file,
@@ -250,9 +284,10 @@ pub fn pr_record(
     let mut to_build = BTreeSet::new();
     let mut already = BTreeSet::new();
     let mut unresolved = BTreeSet::new();
-    for ((commit, rebuild), group_files) in &groups {
+    let mut notes = BTreeSet::new();
+    for ((commit, rebuild), group) in &groups {
         let merged;
-        let universe: &[Candidate] = match commit.as_ref().and_then(|c| trees.commits.get(c)) {
+        let raw: &[Candidate] = match commit.as_ref().and_then(|c| trees.commits.get(c)) {
             Some(overlay) => {
                 merged = merge_candidates_with_precedence(&[trees.base.clone(), overlay.clone()]);
                 &merged
@@ -266,12 +301,23 @@ pub fn pr_record(
                 &trees.base
             }
         };
+        let mut filtered: Vec<Candidate>;
+        let universe: &[Candidate] = if config.filter_deps.is_empty() {
+            raw
+        } else {
+            filtered = raw.to_vec();
+            config.filter_deps.apply(&mut filtered);
+            &filtered
+        };
         let mut starts = Vec::new();
-        for file in group_files {
-            match find_start(universe, file) {
-                Some(c) => starts.push(ModuleKey::of(c)),
+        for start in group {
+            match find_start(universe, &start.file) {
+                Some(candidate) => starts.push(ModuleKey::of(candidate)),
                 None => {
-                    unresolved.insert(format!("{file}: no such easyconfig on the robot path"));
+                    unresolved.insert(format!(
+                        "{}: no such easyconfig on the robot path",
+                        start.file
+                    ));
                 }
             }
         }
@@ -283,10 +329,33 @@ pub fn pr_record(
         let is_installed =
             |k: &ModuleKey| !forced.contains(k) && installed.contains(&module_name(k));
         let closure = closure_against_installed(universe, &starts, Choice::Newest, &is_installed);
-        to_build.extend(closure.to_build.iter().map(module_name));
+        let easyblock_commits: BTreeSet<String> = group
+            .iter()
+            .filter_map(|start| start.easyblock_commit.clone())
+            .collect();
+        let kept = retain_resolved_easyblocks(
+            &closure.to_build,
+            universe,
+            config.easyblocks.as_ref(),
+            &easyblock_commits,
+            &mut unresolved,
+        );
+        note_provided_easyblocks(
+            group,
+            &kept,
+            universe,
+            config.easyblocks.as_ref(),
+            &easyblock_commits,
+            &mut notes,
+        );
+        to_build.extend(kept.into_iter().map(|key| module_name(&key)));
         already.extend(closure.installed.iter().map(module_name));
-        for u in closure.unresolved {
-            unresolved.insert(format!("{} needs {}", module_name(&u.from), u.requirement));
+        for requirement in closure.unresolved {
+            unresolved.insert(format!(
+                "{} needs {}",
+                module_name(&requirement.from),
+                requirement.requirement
+            ));
         }
     }
 
@@ -302,8 +371,131 @@ pub fn pr_record(
         to_build: to_build.into_iter().collect(),
         already_installed: already.into_iter().collect(),
         unresolved: unresolved.into_iter().collect(),
+        notes: notes.into_iter().collect(),
         entries,
     })
+}
+
+/// One added easystack line and the easyblock source it names.
+struct Start {
+    file: String,
+    easyblock_commit: Option<String>,
+    easyblock_pr: Option<String>,
+}
+
+fn easyblock_class(candidate: &Candidate) -> String {
+    candidate
+        .easyblock
+        .clone()
+        .unwrap_or_else(|| encode_class_name(&candidate.name))
+}
+
+/// Drop modules whose easyblock class is not in the catalog.
+///
+/// A missing class is `easyblock <class> missing`. The module is not counted
+/// as something the robot would build. Its dependencies stay: EasyBuild lists
+/// those before it stops on the missing class.
+fn retain_resolved_easyblocks(
+    to_build: &[ModuleKey],
+    universe: &[Candidate],
+    catalog: Option<&EasyblockCatalog>,
+    commits: &BTreeSet<String>,
+    unresolved: &mut BTreeSet<String>,
+) -> Vec<ModuleKey> {
+    let Some(catalog) = catalog else {
+        return to_build.to_vec();
+    };
+    if !catalog.check {
+        return to_build.to_vec();
+    }
+    let by_key: BTreeMap<ModuleKey, &Candidate> = universe
+        .iter()
+        .map(|candidate| (ModuleKey::of(candidate), candidate))
+        .collect();
+    to_build
+        .iter()
+        .filter(|key| {
+            let Some(candidate) = by_key.get(key) else {
+                return true;
+            };
+            let class = easyblock_class(candidate);
+            if easyblock_available(&class, catalog, commits) {
+                true
+            } else {
+                unresolved.insert(format!("easyblock {class} missing"));
+                false
+            }
+        })
+        .cloned()
+        .collect()
+}
+
+fn easyblock_available(
+    class: &str,
+    catalog: &EasyblockCatalog,
+    commits: &BTreeSet<String>,
+) -> bool {
+    if catalog.base.contains_key(class) {
+        return true;
+    }
+    commits.iter().any(|commit| {
+        catalog
+            .commits
+            .get(commit)
+            .is_some_and(|index| index.contains_key(class))
+    })
+}
+
+/// Record easyblocks an entry says come from a commit or a pull request.
+///
+/// A class found in a commit tree that was passed in is noted on the module
+/// that needs it. A commit the entry names but this run was not given is
+/// noted as not provided, and does not count as resolving the class.
+fn note_provided_easyblocks(
+    group: &[Start],
+    kept: &[ModuleKey],
+    universe: &[Candidate],
+    catalog: Option<&EasyblockCatalog>,
+    commits: &BTreeSet<String>,
+    notes: &mut BTreeSet<String>,
+) {
+    for start in group {
+        if let Some(pull_request) = &start.easyblock_pr {
+            notes.insert(format!("include-easyblocks-from-pr {pull_request}"));
+        }
+        if let Some(commit) = &start.easyblock_commit {
+            let loaded = catalog.is_some_and(|catalog| catalog.commits.contains_key(commit));
+            if !loaded {
+                notes.insert(format!(
+                    "include-easyblocks-from-commit {commit} not provided"
+                ));
+            }
+        }
+    }
+    let Some(catalog) = catalog else {
+        return;
+    };
+    let by_key: BTreeMap<ModuleKey, &Candidate> = universe
+        .iter()
+        .map(|candidate| (ModuleKey::of(candidate), candidate))
+        .collect();
+    for key in kept {
+        let Some(candidate) = by_key.get(key) else {
+            continue;
+        };
+        let class = easyblock_class(candidate);
+        for commit in commits {
+            let defines = catalog
+                .commits
+                .get(commit)
+                .is_some_and(|index| index.contains_key(&class));
+            if defines {
+                notes.insert(format!(
+                    "easyblock {class} from include-easyblocks-from-commit {commit}"
+                ));
+            }
+        }
+    }
 }
 
 /// Shared to-build modules across records.
@@ -497,6 +689,9 @@ pub fn render_markdown(records: &[PrRecord], index: &OverlapIndex, repo_url: &st
         for u in &r.unresolved {
             out.push_str(&format!("- unresolved: {u}\n"));
         }
+        for note in &r.notes {
+            out.push_str(&format!("- note: {note}\n"));
+        }
         out.push_str("\n<details><summary>To build</summary>\n\n");
         for m in &r.to_build {
             out.push_str(&format!("- `{m}`\n"));
@@ -555,6 +750,7 @@ mod tests {
             to_build: vec!["b/2".into(), "a/1".into()],
             already_installed: Vec::new(),
             unresolved: Vec::new(),
+            notes: Vec::new(),
             entries: Vec::new(),
         };
         let text = record_to_toml(&record).expect("toml");

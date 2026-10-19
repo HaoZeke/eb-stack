@@ -6,6 +6,7 @@ pub mod build_order;
 pub mod campaign;
 pub mod cargo;
 pub mod cran;
+pub mod dep_filter;
 pub mod dep_versions;
 pub mod domain;
 pub mod easyblock_reach;
@@ -32,6 +33,7 @@ pub mod luarocks;
 mod manifest;
 pub mod mcp;
 pub mod miner;
+pub mod modulerc;
 pub mod package;
 pub mod package_catalog;
 pub mod package_closure;
@@ -335,15 +337,18 @@ pub struct SolveExtraOut<'a> {
     pub filter_deps: &'a [String],
 }
 
-/// Drop every runtime and build dependency on a name in `names`.
-pub fn filter_deps(candidates: &mut [Candidate], names: &[String]) {
-    if names.is_empty() {
-        return;
-    }
-    for c in candidates {
-        c.dependencies.retain(|d| !names.contains(&d.name));
-        c.builddependencies.retain(|d| !names.contains(&d.name));
-    }
+/// Drop every runtime and build dependency selected by EasyBuild's
+/// `--filter-deps` rules.
+///
+/// A bare name drops every version. `name=version` and `name=[low:high]`
+/// follow `EasyConfig.dep_is_filtered`, including exclusive range limits.
+/// The dependency is removed before the solve, so its own dependencies are
+/// not pulled in either.
+pub fn filter_deps(candidates: &mut [Candidate], specs: &[String]) -> Result<()> {
+    let filter = dep_filter::FilterDeps::parse(specs)
+        .map_err(|error| anyhow::anyhow!("--filter-deps: {error}"))?;
+    filter.apply(candidates);
+    Ok(())
 }
 
 fn write_lock_sbom_and_extras(
@@ -705,7 +710,7 @@ pub fn solve_with_baseline_source(
         }
     }
     let mut all = tree.candidates;
-    filter_deps(&mut all, extra.filter_deps);
+    filter_deps(&mut all, extra.filter_deps)?;
     // The universe has to carry the subtoolchains as well as the policy
     // toolchain, or a member's own build dependencies read as missing
     // packages. The hierarchy comes from the tree when no fixture knows the

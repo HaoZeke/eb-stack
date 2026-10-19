@@ -306,6 +306,7 @@ mod tests {
 
     fn candidate(name: &str, version: &str, toolchain: (&str, &str), path: &str) -> Candidate {
         Candidate {
+            easyblock: None,
             name: name.into(),
             version: version.into(),
             toolchain: tc(toolchain.0, toolchain.1),

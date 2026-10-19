@@ -279,6 +279,7 @@ fn provide_from_parent(parent: &Candidate, ext: &ExtEntry) -> Option<Candidate> 
         return None;
     }
     Some(Candidate {
+        easyblock: parent.easyblock.clone(),
         name: ext.name.clone(),
         version: ext.version.clone(),
         toolchain: parent.toolchain.clone(),
@@ -310,6 +311,7 @@ mod tests {
 
     fn bundle() -> Candidate {
         Candidate {
+            easyblock: None,
             name: "SciPy-bundle".into(),
             version: "2025.06".into(),
             toolchain: toolchain(),

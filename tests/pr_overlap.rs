@@ -93,6 +93,8 @@ fn config() -> OverlapConfig {
         exclude_paths: vec!["/accel/".into()],
         include_paths: Vec::new(),
         generated_at: "2026-10-19T12:00:00Z".into(),
+        filter_deps: eb_stack::dep_filter::FilterDeps::empty(),
+        easyblocks: None,
     }
 }
 
@@ -293,6 +295,7 @@ fn the_cli_writes_the_same_bytes_twice_and_drops_closed_prs() {
 
     let run = || {
         let status = Command::new(binary)
+            .env_remove("EASYBUILD_FILTER_DEPS")
             .arg("pr-overlap")
             .arg("--pr")
             .arg(&input)
@@ -351,6 +354,7 @@ fn run_overlap(dir: &Path, prs: &[PrInput], installed: &Path, out: &Path) {
     let input = dir.join("prs.json");
     std::fs::write(&input, serde_json::to_string(prs).expect("json")).expect("write prs");
     let status = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .env_remove("EASYBUILD_FILTER_DEPS")
         .arg("pr-overlap")
         .arg("--pr")
         .arg(&input)
@@ -512,5 +516,319 @@ fn a_dependency_two_levels_down_is_the_same_to_build_line() {
         "DeepLib/3.0-GCCcore-15.2.0",
         &["Gamma/1.0-GCCcore-15.2.0", "DeepLib/3.0-GCCcore-15.2.0"],
         &["DeepLib", "MidA", "MidB"],
+    );
+}
+
+fn system() -> eb_stack::Toolchain {
+    eb_stack::Toolchain {
+        name: "system".into(),
+        version: "system".into(),
+    }
+}
+
+fn leaf(name: &str, version: &str, deps: &[(&str, &str)]) -> eb_stack::Candidate {
+    eb_stack::Candidate {
+        name: name.into(),
+        version: version.into(),
+        toolchain: system(),
+        versionsuffix: None,
+        easyconfig_path: format!("{name}-{version}.eb"),
+        dependencies: deps
+            .iter()
+            .map(|(dep, ver)| eb_stack::DepReq {
+                name: (*dep).into(),
+                version_req: format!("=={ver}"),
+                versionsuffix: None,
+                toolchain: None,
+            })
+            .collect(),
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+        easyblock: Some("ConfigureMake".into()),
+        moduleclass: None,
+    }
+}
+
+fn memory_record(
+    universe: Vec<eb_stack::Candidate>,
+    installed: &[&str],
+    filter: &str,
+    easyblocks: Option<eb_stack::pr_overlap::EasyblockCatalog>,
+    added: &str,
+) -> PrRecord {
+    let trees = RobotTrees {
+        base: universe,
+        commits: Default::default(),
+    };
+    let installed = installed
+        .iter()
+        .map(|module| (*module).to_string())
+        .collect();
+    let mut cfg = config();
+    let specs: Vec<String> = filter
+        .split(',')
+        .filter(|spec| !spec.is_empty())
+        .map(str::to_string)
+        .collect();
+    cfg.filter_deps = eb_stack::dep_filter::FilterDeps::parse(&specs).expect("filter");
+    cfg.easyblocks = easyblocks;
+    let input = pr(7, vec![change(STACK, Some("easyconfigs:\n"), added)]);
+    pr_record(&input, &trees, &installed, &cfg).expect("record")
+}
+
+#[test]
+fn filtering_a_dependency_drops_its_whole_subtree() {
+    let universe = vec![
+        leaf("App", "1", &[("flex", "2.6.4")]),
+        leaf("flex", "2.6.4", &[("Bison", "3.8.2")]),
+        leaf("Bison", "3.8.2", &[("M4", "1.4.19")]),
+        leaf("M4", "1.4.19", &[]),
+    ];
+    let open = memory_record(universe.clone(), &[], "", None, "  - App-1.eb\n");
+    assert_eq!(
+        open.to_build,
+        ["App/1", "Bison/3.8.2", "M4/1.4.19", "flex/2.6.4",]
+    );
+    let filtered = memory_record(universe, &[], "flex", None, "  - App-1.eb\n");
+    assert_eq!(filtered.to_build, ["App/1"]);
+    assert!(filtered.already_installed.is_empty());
+    assert!(filtered.unresolved.is_empty(), "{:?}", filtered.unresolved);
+}
+
+#[test]
+fn a_version_range_filters_only_the_versions_inside_it() {
+    let universe = vec![
+        leaf(
+            "App",
+            "1",
+            &[("zlib", "1.2.8"), ("zlib", "1.3"), ("Bison", "3.8.2")],
+        ),
+        leaf("zlib", "1.2.8", &[("M4", "1.4.19")]),
+        leaf("zlib", "1.3", &[]),
+        leaf("Bison", "3.8.2", &[]),
+        leaf("M4", "1.4.19", &[]),
+    ];
+    let filtered = memory_record(universe, &[], "zlib=[1.2:1.2.99]", None, "  - App-1.eb\n");
+    assert_eq!(filtered.to_build, ["App/1", "Bison/3.8.2", "zlib/1.3"]);
+    assert!(filtered.unresolved.is_empty(), "{:?}", filtered.unresolved);
+}
+
+#[test]
+fn a_modulerc_alias_counts_as_installed() {
+    let mut wrapper = leaf("Java", "21", &[("Java", "21.0.8")]);
+    wrapper.easyblock = Some("ModuleRC".into());
+    let universe = vec![
+        leaf("App", "1", &[("Java", "21")]),
+        wrapper,
+        leaf("Java", "21.0.8", &[]),
+    ];
+    let plain = memory_record(
+        universe.clone(),
+        &["Java/21.0.8"],
+        "",
+        None,
+        "  - App-1.eb\n",
+    );
+    assert!(
+        plain.to_build.contains(&"Java/21".to_string()),
+        "{:?}",
+        plain.to_build
+    );
+    assert!(plain
+        .already_installed
+        .iter()
+        .any(|module| module == "Java/21.0.8"));
+
+    let aliases = eb_stack::modulerc::parse_modulerc(r#"module_version("Java/21.0.8", "21")"#);
+    let installed = eb_stack::modulerc::apply_modulerc(
+        &["Java/21.0.8".to_string()].into_iter().collect(),
+        &aliases,
+    );
+    let trees = RobotTrees {
+        base: universe,
+        commits: Default::default(),
+    };
+    let input = pr(
+        7,
+        vec![change(STACK, Some("easyconfigs:\n"), "  - App-1.eb\n")],
+    );
+    let aliased = pr_record(&input, &trees, &installed, &config()).expect("record");
+    assert_eq!(aliased.to_build, ["App/1"]);
+    assert!(aliased
+        .already_installed
+        .iter()
+        .any(|module| module == "Java/21"));
+    assert!(!aliased
+        .to_build
+        .iter()
+        .any(|module| module.starts_with("Java/")));
+}
+
+#[test]
+fn a_modulerc_tree_is_read_from_modules_all() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let java = temp.path().join("modules/all/Java");
+    std::fs::create_dir_all(&java).expect("java dir");
+    std::fs::write(
+        java.join(".modulerc.lua"),
+        "module_version(\"Java/21.0.8\", \"21\")\n",
+    )
+    .expect("modulerc");
+    let aliases =
+        eb_stack::modulerc::load_modulerc(&temp.path().join("modules/all")).expect("load modulerc");
+    assert_eq!(aliases.len(), 1);
+    assert_eq!(aliases[0].alias, "Java/21");
+    assert_eq!(aliases[0].full, "Java/21.0.8");
+}
+
+fn eon_universe() -> Vec<eb_stack::Candidate> {
+    let mut eon = leaf("eOn", "3.6.0", &[("Highway", "1.2.0")]);
+    eon.easyblock = None;
+    vec![eon, leaf("Highway", "1.2.0", &[])]
+}
+
+fn configuremake_catalog() -> eb_stack::pr_overlap::EasyblockCatalog {
+    eb_stack::pr_overlap::EasyblockCatalog {
+        check: true,
+        base: [("ConfigureMake".into(), "configuremake.py".into())]
+            .into_iter()
+            .collect(),
+        commits: Default::default(),
+    }
+}
+
+const EON_COMMIT: &str = "000538462c20e14400f82f8817667407562aa7f7";
+
+#[test]
+fn a_missing_easyblock_is_unresolved_and_not_counted() {
+    let record = memory_record(
+        eon_universe(),
+        &[],
+        "",
+        Some(configuremake_catalog()),
+        "  - eOn-3.6.0.eb\n",
+    );
+    assert_eq!(record.to_build, ["Highway/1.2.0"]);
+    assert_eq!(record.unresolved, ["easyblock EB_eOn missing"]);
+    let md = render_markdown(
+        std::slice::from_ref(&record),
+        &overlap_index(std::slice::from_ref(&record), &config()),
+        "",
+    );
+    assert!(
+        md.contains("- unresolved: easyblock EB_eOn missing"),
+        "{md}"
+    );
+}
+
+#[test]
+fn an_easyblock_from_commit_is_noted_and_counted() {
+    let mut catalog = configuremake_catalog();
+    catalog.commits.insert(
+        EON_COMMIT.into(),
+        [("EB_eOn".into(), "eon.py".into())].into_iter().collect(),
+    );
+    let added = format!(
+        "  - eOn-3.6.0.eb:\n      options:\n        include-easyblocks-from-commit: {EON_COMMIT}\n"
+    );
+    let record = memory_record(eon_universe(), &[], "", Some(catalog), &added);
+    assert_eq!(record.to_build, ["Highway/1.2.0", "eOn/3.6.0"]);
+    assert!(record.unresolved.is_empty(), "{:?}", record.unresolved);
+    assert_eq!(
+        record.notes,
+        [format!(
+            "easyblock EB_eOn from include-easyblocks-from-commit {EON_COMMIT}"
+        )]
+    );
+}
+
+#[test]
+fn a_named_easyblock_commit_that_was_not_provided_stays_missing() {
+    let added = format!(
+        "  - eOn-3.6.0.eb:\n      options:\n        include-easyblocks-from-commit: {EON_COMMIT}\n        include-easyblocks-from-pr: 4240\n"
+    );
+    let record = memory_record(
+        eon_universe(),
+        &[],
+        "",
+        Some(configuremake_catalog()),
+        &added,
+    );
+    assert_eq!(record.to_build, ["Highway/1.2.0"]);
+    assert_eq!(record.unresolved, ["easyblock EB_eOn missing"]);
+    assert_eq!(
+        record.notes,
+        [
+            format!("include-easyblocks-from-commit {EON_COMMIT} not provided"),
+            "include-easyblocks-from-pr 4240".into(),
+        ]
+    );
+}
+
+#[test]
+fn the_cli_filter_deps_flag_and_the_environment_drop_the_same_subtree() {
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let input = temp.path().join("prs.json");
+    let prs = vec![pr(
+        101,
+        vec![change(
+            STACK,
+            Some(BASE),
+            "  - Graphviz-14.0.2-GCCcore-15.2.0.eb\n",
+        )],
+    )];
+    std::fs::write(&input, serde_json::to_string(&prs).expect("json")).expect("write");
+
+    let run = |out: &Path, flag: Option<&str>, env: Option<&str>| {
+        let mut command = Command::new(binary);
+        command
+            .env_remove("EASYBUILD_FILTER_DEPS")
+            .arg("pr-overlap")
+            .arg("--pr")
+            .arg(&input)
+            .arg("--easyconfigs")
+            .arg(fixtures().join("release"))
+            .arg("--installed")
+            .arg(fixtures().join("installed.txt"))
+            .args(["--generated-at", "2026-10-19T12:00:00Z"])
+            .arg("--out-dir")
+            .arg(out);
+        if let Some(list) = flag {
+            command.args(["--filter-deps", list]);
+        }
+        if let Some(list) = env {
+            command.env("EASYBUILD_FILTER_DEPS", list);
+        }
+        let status = command.output().expect("run");
+        assert!(
+            status.status.success(),
+            "{}",
+            String::from_utf8_lossy(&status.stderr)
+        );
+        std::fs::read_to_string(out.join("prs/101.toml")).expect("record")
+    };
+
+    let by_flag = run(&temp.path().join("flag"), Some("libpng"), None);
+    let by_env = run(&temp.path().join("env"), None, Some("libpng"));
+    assert_eq!(by_flag, by_env);
+    assert!(
+        !by_flag.contains("libpng/1.6.50-GCCcore-15.2.0"),
+        "{by_flag}"
+    );
+    assert!(
+        by_flag.contains("freetype/2.14.1-GCCcore-15.2.0"),
+        "{by_flag}"
+    );
+    assert!(
+        by_flag.contains("Graphviz/14.0.2-GCCcore-15.2.0"),
+        "{by_flag}"
+    );
+    assert!(!by_flag.contains("CMake/4.1.2-GCCcore-15.2.0"), "{by_flag}");
+
+    let flag_wins = run(&temp.path().join("wins"), Some("nosuch"), Some("libpng"));
+    assert!(
+        flag_wins.contains("libpng/1.6.50-GCCcore-15.2.0"),
+        "an explicit list replaces the environment:\n{flag_wins}"
     );
 }

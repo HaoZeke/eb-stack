@@ -95,6 +95,22 @@ pub fn easystack_from_paths(paths: &[&str], options: &EasystackOptions) -> Strin
 /// but a numeric-looking one such as a PR number has to stay a number, and a
 /// version-shaped value such as `parallel: "1"` has to stay a string, which is
 /// why the caller's quoting is preserved rather than re-guessed.
+/// Read one easystack option as text. A YAML number (a pull request id)
+/// is rendered in decimal; anything else that is not a string is ignored.
+fn option_string(options: Option<&Value>, key: &str) -> Option<String> {
+    let value = options?.get(key)?;
+    if let Some(text) = value.as_str() {
+        return Some(text.to_string());
+    }
+    if let Some(number) = value.as_i64() {
+        return Some(number.to_string());
+    }
+    if let Some(number) = value.as_u64() {
+        return Some(number.to_string());
+    }
+    None
+}
+
 fn parse_scalar(raw: &str) -> Value {
     let trimmed = raw.trim();
     if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
@@ -120,6 +136,10 @@ pub struct EasystackEntry {
     pub file: String,
     /// The easybuild-easyconfigs commit given as `from-commit`, if any.
     pub from_commit: Option<String>,
+    /// The easybuild-easyblocks commit given as `include-easyblocks-from-commit`.
+    pub include_easyblocks_from_commit: Option<String>,
+    /// The easybuild-easyblocks pull request given as `include-easyblocks-from-pr`.
+    pub include_easyblocks_from_pr: Option<String>,
 }
 
 /// Read the entries of an easystack document, in file order.
@@ -146,11 +166,16 @@ pub fn parse_easystack_entries(text: &str) -> Result<Vec<EasystackEntry>, serde_
         let Some(file) = easyconfig_filename(name) else {
             continue;
         };
-        let from_commit = options
-            .and_then(|o| o.get("from-commit"))
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        out.push(EasystackEntry { file, from_commit });
+        let from_commit = option_string(options, "from-commit");
+        let include_easyblocks_from_commit =
+            option_string(options, "include-easyblocks-from-commit");
+        let include_easyblocks_from_pr = option_string(options, "include-easyblocks-from-pr");
+        out.push(EasystackEntry {
+            file,
+            from_commit,
+            include_easyblocks_from_commit,
+            include_easyblocks_from_pr,
+        });
     }
     Ok(out)
 }
@@ -262,15 +287,21 @@ mod tests {
             vec![
                 EasystackEntry {
                     file: "GROMACS-2026.0-foss-2026.1.eb".into(),
-                    from_commit: None
+                    from_commit: None,
+                    include_easyblocks_from_commit: None,
+                    include_easyblocks_from_pr: None,
                 },
                 EasystackEntry {
                     file: "ELPA-2025.06.002-foss-2026.1.eb".into(),
-                    from_commit: None
+                    from_commit: None,
+                    include_easyblocks_from_commit: None,
+                    include_easyblocks_from_pr: None,
                 },
                 EasystackEntry {
                     file: "Valgrind-3.26.0-gompi-2026.1.eb".into(),
                     from_commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
+                    include_easyblocks_from_commit: None,
+                    include_easyblocks_from_pr: None,
                 },
             ]
         );

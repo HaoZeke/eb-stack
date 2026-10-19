@@ -1451,6 +1451,7 @@ mod tests {
         deps: Vec<DepReq>,
     ) -> Candidate {
         Candidate {
+            easyblock: None,
             name: name.into(),
             version: version.into(),
             toolchain: tc(),
@@ -1677,6 +1678,7 @@ mod tests {
             version: "system".into(),
         };
         let at_system = |name: &str, version: &str, deps: Vec<DepReq>| Candidate {
+            easyblock: None,
             name: name.into(),
             version: version.into(),
             toolchain: system.clone(),

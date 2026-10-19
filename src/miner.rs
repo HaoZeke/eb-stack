@@ -434,6 +434,7 @@ mod tests {
 
     fn backfill_candidate(name: &str, version: &str, toolchain: &Toolchain) -> Candidate {
         Candidate {
+            easyblock: None,
             name: name.into(),
             version: version.into(),
             toolchain: toolchain.clone(),

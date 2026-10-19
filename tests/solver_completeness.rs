@@ -69,6 +69,7 @@ fn universe_for(case_ab: usize, case_bg: usize) -> Universe {
                 _ => Vec::new(),
             };
             candidates.push(Candidate {
+                easyblock: None,
                 name: (*name).to_string(),
                 version: version.to_string(),
                 toolchain: toolchain(),
