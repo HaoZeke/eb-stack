@@ -354,8 +354,36 @@ impl<'a> Parser<'a> {
                 break;
             }
             if self.at_control_keyword() {
+                // `if ARCH == 'x86_64':` is how a recipe adds a dependency for
+                // one architecture. The body is ordinary easyconfig text; only
+                // the guard was unmodeled, which dropped that dependency.
+                if self.enter_true_arch_if() {
+                    continue;
+                }
                 self.skip_compound_or_line();
                 continue;
+            }
+            let append_at = self.pos;
+            match self.try_list_append() {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(message) => {
+                    self.pos = append_at;
+                    let line = self.line_of(append_at);
+                    if !self.skip_one_statement() {
+                        break;
+                    }
+                    let text = std::str::from_utf8(&self.src[append_at..self.pos])
+                        .unwrap_or("<non-utf8 statement>")
+                        .trim()
+                        .to_string();
+                    self.skipped.push(SkippedStatement {
+                        line,
+                        message,
+                        text,
+                    });
+                    continue;
+                }
             }
             let start = self.pos;
             // A statement that failed mid-bracket leaves the counter raised;
@@ -384,6 +412,85 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Enter `if ARCH == '<this host>':` and leave the body to be parsed.
+    ///
+    /// Any other `if` stays unconsumed so [`Self::skip_compound_or_line`] can
+    /// drop it, which is what a guard for a different architecture needs.
+    fn enter_true_arch_if(&mut self) -> bool {
+        let saved = self.pos;
+        let Some(nl) = self.src[self.pos..]
+            .iter()
+            .position(|&c| c == b'\n')
+            .map(|i| self.pos + i)
+        else {
+            return false;
+        };
+        let Ok(line) = std::str::from_utf8(&self.src[self.pos..nl]) else {
+            return false;
+        };
+        let code = line.split('#').next().unwrap_or("").trim();
+        let host = std::env::consts::ARCH;
+        let matches =
+            code == format!("if ARCH == '{host}':") || code == format!("if ARCH == \"{host}\":");
+        if !matches {
+            self.pos = saved;
+            return false;
+        }
+        self.pos = nl + 1;
+        true
+    }
+
+    /// `name.append(value)` on a list or tuple already assigned.
+    ///
+    /// Returns false when the statement is not an append, with the cursor
+    /// unmoved. A malformed append is an error so the tolerant loop can
+    /// record it and move on.
+    fn try_list_append(&mut self) -> Result<bool, String> {
+        let saved = self.pos;
+        let name = match self.parse_ident() {
+            Ok(name) => name,
+            Err(_) => {
+                self.pos = saved;
+                return Ok(false);
+            }
+        };
+        self.skip_ws();
+        if self.peek() != Some(b'.') {
+            self.pos = saved;
+            return Ok(false);
+        }
+        self.pos += 1;
+        self.skip_ws();
+        let method = match self.parse_ident() {
+            Ok(method) => method,
+            Err(_) => {
+                self.pos = saved;
+                return Ok(false);
+            }
+        };
+        if method != "append" {
+            self.pos = saved;
+            return Ok(false);
+        }
+        self.skip_ws();
+        if self.bump() != Some(b'(') {
+            self.pos = saved;
+            return Ok(false);
+        }
+        let arg = self.parse_expr()?;
+        self.skip_ws();
+        if self.bump() != Some(b')') {
+            return Err(self.err(format!("expected ')' after {name}.append")));
+        }
+        match self.env.get_mut(&name) {
+            Some(Value::List(items) | Value::Tuple(items)) => items.push(arg),
+            _ => {
+                return Err(self.err(format!("{name}.append, but {name} is not a list or tuple")));
+            }
+        }
+        Ok(true)
     }
 
     fn at_control_keyword(&self) -> bool {
@@ -3110,6 +3217,41 @@ mod tests {
             .map(|d| d.name.as_str())
             .collect();
         assert_eq!(names, vec!["Python", "SciPy-bundle"]);
+    }
+
+    #[test]
+    fn an_arch_guard_appends_a_dependency_only_for_this_machine() {
+        let host = std::env::consts::ARCH;
+        let other = if host == "aarch64" {
+            "x86_64"
+        } else {
+            "aarch64"
+        };
+        // Spaces after `\n` are the easyconfig indent. A `\` continuation
+        // would strip them, and an unindented body is not a body.
+        let src = format!(
+            "name = 'ParaView'\nversion = '6.1.1'\n\
+             toolchain = {{'name': 'foss', 'version': '2026.1'}}\n\
+             dependencies = [('XZ', '5.8.2')]\n\
+             if ARCH == '{host}':\n    # kept on this machine\n    \
+             dependencies.append(('OSPRay', '2.12.0', '', SYSTEM))\n\
+             if ARCH == '{other}':\n    \
+             dependencies.append(('NotHere', '1.0'))\n\
+             moduleclass = 'vis'\n"
+        );
+        let parsed = resolve_easyconfig_str(&src).expect("parse");
+        let names: Vec<&str> = parsed
+            .dependencies
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["XZ", "OSPRay"]);
+        let tc = parsed.dependencies[1]
+            .toolchain
+            .as_ref()
+            .expect("appended dependency pins SYSTEM");
+        assert_eq!(tc.name, "system");
+        assert_eq!(parsed.moduleclass.as_deref(), Some("vis"));
     }
 
     #[test]
