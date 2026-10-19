@@ -65,18 +65,31 @@ PY
 
 # Easyconfigs for every from-commit pin a head easystack names: the files that
 # commit touched, which EasyBuild puts ahead of its own robot path.
+# `include-easyblocks-from-commit` ends in `from-commit`, so the option name
+# has to be matched on its own. Those commits live in easybuild-easyblocks and
+# are not part of the easyconfig robot path.
 cat "$out"/raw/*/*.head 2>/dev/null \
-  | grep -oE 'from-commit:[[:space:]]*[0-9a-f]{40}' | grep -oE '[0-9a-f]{40}' | sort -u \
+  | grep -oE '(^|[^A-Za-z0-9_-])from-commit:[[:space:]]*[0-9a-f]{40}' \
+  | grep -oE '[0-9a-f]{40}' | sort -u \
   | while read -r commit; do
       dest="$out/commit-trees/${commit}"
       [[ -d "$dest" ]] && continue
       mkdir -p "$dest"
-      gh api "repos/easybuilders/easybuild-easyconfigs/commits/${commit}" \
-        --jq '.files[] | select(.status != "removed") | .filename | select(endswith(".eb"))' \
-        | while read -r path; do
-            mkdir -p "$dest/$(dirname "$path")"
-            curl -fsSL "https://raw.githubusercontent.com/easybuilders/easybuild-easyconfigs/${commit}/${path}" \
-              -o "$dest/${path}"
-          done
+      # A pin that is not an easybuild-easyconfigs commit is recorded by
+      # pr-overlap as unresolved. It must not abort the rest of the fetch.
+      if ! mapfile -t paths < <(gh api "repos/easybuilders/easybuild-easyconfigs/commits/${commit}" \
+        --jq '.files[]? | select(.status != "removed") | .filename | select(endswith(".eb"))'); then
+        echo "no easyconfigs commit ${commit}" >&2
+        continue
+      fi
+      if [[ ${#paths[@]} -eq 0 ]]; then
+        echo "no easyconfig files for from-commit ${commit}" >&2
+        continue
+      fi
+      for path in "${paths[@]}"; do
+        mkdir -p "$dest/$(dirname "$path")"
+        curl -fsSL "https://raw.githubusercontent.com/easybuilders/easybuild-easyconfigs/${commit}/${path}" \
+          -o "$dest/${path}" || echo "missing ${commit}:${path}" >&2
+      done
     done
 ls "$out/prs" | wc -l | xargs echo "pull requests with ${version} easystack changes:"
