@@ -64,7 +64,8 @@ pub struct EmitParams {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmitResult {
     pub text: String,
-    /// EasyBuild filename: `{name}-{version}-{toolchain_name}-{toolchain_version}.eb`
+    /// EasyBuild filename: `{name}-{version}-{toolchain_name}-{toolchain_version}.eb`,
+    /// or `{name}-{version}.eb` for the system toolchain.
     pub filename: String,
     /// Human-readable warnings about content that was not (or could not be)
     /// safely rewritten, e.g. a stale source checksum or an unreviewed patch
@@ -75,6 +76,9 @@ pub struct EmitResult {
 /// Derive the conventional EasyBuild easyconfig basename.
 ///
 /// Shape: `{name}-{version}-{toolchain}-{toolchain_version}{versionsuffix}.eb`.
+/// `det_full_ec_version` drops the toolchain when `is_system_toolchain` is
+/// true, so a system (or the older `dummy`) toolchain is
+/// `{name}-{version}{versionsuffix}.eb` with no `-system-system`.
 /// `versionsuffix` already carries its own leading separator (`-ACC`,
 /// `-CUDA-12.8.0`), so it is appended verbatim; pass `None` when the recipe
 /// declares none. A recipe whose `versionsuffix` still contains an unresolved
@@ -86,14 +90,15 @@ pub fn easyconfig_filename(
     toolchain: &Toolchain,
     versionsuffix: Option<&str>,
 ) -> String {
-    format!(
-        "{}-{}-{}-{}{}.eb",
-        name,
-        version,
-        toolchain.name,
-        toolchain.version,
-        versionsuffix.unwrap_or("")
-    )
+    let suffix = versionsuffix.unwrap_or("");
+    if crate::hierarchy::is_system_toolchain(toolchain) {
+        format!("{name}-{version}{suffix}.eb")
+    } else {
+        format!(
+            "{name}-{version}-{}-{}{suffix}.eb",
+            toolchain.name, toolchain.version
+        )
+    }
 }
 
 /// Whether a raw easyconfig value still holds an EasyBuild `%(key)s` template.
@@ -1773,6 +1778,53 @@ builddependencies = [
             easyconfig_filename("VASP6", "6.6.1", &nvofbf("2025.10"), Some("-ACC")),
             "VASP6-6.6.1-nvofbf-2025.10-ACC.eb"
         );
+    }
+
+    #[test]
+    fn filename_helper_omits_the_system_toolchain() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        assert_eq!(
+            easyconfig_filename("Pkg", "1.2.3", &system, None),
+            "Pkg-1.2.3.eb"
+        );
+        assert_eq!(
+            easyconfig_filename("Pkg", "1.2.3", &system, Some("-extra")),
+            "Pkg-1.2.3-extra.eb"
+        );
+        // `dummy` is the pre-rename spelling of the system toolchain.
+        let dummy = Toolchain {
+            name: "dummy".into(),
+            version: String::new(),
+        };
+        assert_eq!(
+            easyconfig_filename("Pkg", "1.2.3", &dummy, None),
+            "Pkg-1.2.3.eb"
+        );
+    }
+
+    #[test]
+    fn emitted_filename_omits_the_system_toolchain() {
+        let src = "name = 'Pkg'\nversion = '1.0.0'\nversionsuffix = '-extra'\n\
+                   toolchain = SYSTEM\n";
+        let params = EmitParams {
+            toolchain: Toolchain {
+                name: "system".into(),
+                version: "system".into(),
+            },
+            version: Some("1.2.3".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
+            source_checksum: None,
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert_eq!(r.filename, "Pkg-1.2.3-extra.eb");
+        assert!(r.text.contains("toolchain = SYSTEM"));
+        assert!(r.text.contains("versionsuffix = '-extra'"));
     }
 
     /// A recipe carrying `versionsuffix` must be named for it. Emitting
