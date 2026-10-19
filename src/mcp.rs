@@ -175,6 +175,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("stack_policy", "string"),
                 ("package_configs", "array"),
                 ("emit_easyblock", "boolean"),
+                ("fetch_checksums", "boolean"),
             ],
         ),
         tool_with_optional(
@@ -580,21 +581,27 @@ fn package_bump(arguments: &Value) -> Result<Value, String> {
             .then(|| required_path(arguments, "out_dir"))
             .transpose()?,
     };
-    let bundle = plan_package_bump_with(
-        &BumpPackageRequest {
-            source: required_path(arguments, "source")?,
-            toolchain: target,
-            version: optional_string(arguments, "version"),
-            source_checksum: optional_string(arguments, "source_checksum"),
-            easyconfig_roots: path_array(arguments, "easyconfigs")?,
-            hierarchy_fixture: optional_path(arguments, "hierarchy_fixture"),
-            overrides: string_map(arguments, "dependencies")?,
-            stack_policy,
-            strict_patches: false,
-            package_layers: package_layers(arguments)?,
-        },
-        &options,
-    )
+    let request = BumpPackageRequest {
+        source: required_path(arguments, "source")?,
+        toolchain: target,
+        version: optional_string(arguments, "version"),
+        source_checksum: optional_string(arguments, "source_checksum"),
+        easyconfig_roots: path_array(arguments, "easyconfigs")?,
+        hierarchy_fixture: optional_path(arguments, "hierarchy_fixture"),
+        overrides: string_map(arguments, "dependencies")?,
+        stack_policy,
+        strict_patches: false,
+        package_layers: package_layers(arguments)?,
+    };
+    let (bundle, fetched) = if optional_bool(arguments, "fetch_checksums") {
+        crate::source_fetch::plan_package_bump_fetching(
+            &request,
+            &options,
+            &crate::registry::UreqClient,
+        )
+    } else {
+        plan_package_bump_with(&request, &options).map(|bundle| (bundle, Vec::new()))
+    }
     .map_err(|error| error.to_string())?;
     let written = write_package_bundle(&bundle, &required_path(arguments, "out_dir")?)
         .map_err(|error| error.to_string())?;
@@ -606,6 +613,8 @@ fn package_bump(arguments: &Value) -> Result<Value, String> {
         "locks": written.locks,
         "easyconfigs": written.easyconfigs,
         "easyblocks": written.easyblocks,
+        "fetched": fetched,
+        "open": bundle.plan.residuals,
         "claims": {"resolves": true, "builds": false, "binary_verified": false}
     }))
 }

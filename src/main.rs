@@ -206,6 +206,12 @@ struct PackageBumpArgs {
     /// `package plan --emit-easyblock` does.
     #[arg(long = "emit-easyblock")]
     emit_easyblock: bool,
+    /// On a version bump without `--source-checksum`, download the new
+    /// source from the recipe's `source_urls` and write its SHA-256, as
+    /// `eb --inject-checksums` does. Anything that cannot be fetched is left
+    /// empty and reported in `sources.fetch.json` and as a residual.
+    #[arg(long = "fetch-checksums")]
+    fetch_checksums: bool,
     #[arg(long)]
     out_dir: PathBuf,
 }
@@ -678,22 +684,30 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
     let options = PackageEmitOptions {
         easyblock_skeleton_root: args.emit_easyblock.then(|| args.out_dir.clone()),
     };
-    let bundle = plan_package_bump_with(
-        &BumpPackageRequest {
-            source: args.source,
-            toolchain,
-            version: args.version,
-            source_checksum: args.source_checksum,
-            easyconfig_roots: args.easyconfigs,
-            hierarchy_fixture: args.hierarchy_fixture,
-            overrides: parse_dep_overrides(&args.dependencies)?,
-            stack_policy,
-            strict_patches: args.strict_patches,
-            package_layers: load_package_layers(&args.package_configs)?,
-        },
-        &options,
-    )?;
+    let request = BumpPackageRequest {
+        source: args.source,
+        toolchain,
+        version: args.version,
+        source_checksum: args.source_checksum,
+        easyconfig_roots: args.easyconfigs,
+        hierarchy_fixture: args.hierarchy_fixture,
+        overrides: parse_dep_overrides(&args.dependencies)?,
+        stack_policy,
+        strict_patches: args.strict_patches,
+        package_layers: load_package_layers(&args.package_configs)?,
+    };
+    let (bundle, fetched) = if args.fetch_checksums {
+        eb_stack::source_fetch::plan_package_bump_fetching(&request, &options, &UreqClient)?
+    } else {
+        (plan_package_bump_with(&request, &options)?, Vec::new())
+    };
     let written = write_package_bundle(&bundle, &args.out_dir)?;
+    if !fetched.is_empty() {
+        let path = args.out_dir.join("sources.fetch.json");
+        std::fs::write(&path, serde_json::to_string_pretty(&fetched)?)
+            .with_context(|| format!("write {}", path.display()))?;
+        println!("fetch={}", path.display());
+    }
     println!("manifest={}", written.manifest.display());
     println!("sbom={}", written.sbom.display());
     for path in written.locks {
