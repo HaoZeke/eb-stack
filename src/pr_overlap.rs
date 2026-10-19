@@ -71,6 +71,9 @@ pub struct OverlapConfig {
     /// Easystack paths containing any of these substrings are left out
     /// (accelerator or arch-specific stacks the installed list does not cover).
     pub exclude_paths: Vec<String>,
+    /// When non-empty, only easystack paths containing one of these substrings
+    /// are kept. Used to run a second pass over an arch the first pass excluded.
+    pub include_paths: Vec<String>,
     /// RFC 3339 timestamp written into every record.
     pub generated_at: String,
 }
@@ -209,6 +212,14 @@ pub fn pr_record(
             .exclude_paths
             .iter()
             .any(|s| !s.is_empty() && change.path.contains(s.as_str()))
+        {
+            continue;
+        }
+        if !config.include_paths.is_empty()
+            && !config
+                .include_paths
+                .iter()
+                .any(|s| !s.is_empty() && change.path.contains(s.as_str()))
         {
             continue;
         }
