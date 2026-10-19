@@ -313,13 +313,73 @@ fn test_step_findings(lines: &[&str]) -> Vec<StyleFinding> {
     out
 }
 
+/// The threaded variant of a toolchain library variable name, or of a name
+/// pattern: `LIBX` is `LIBX_MT`, `X_STATIC_LIBS` is `X_MT_STATIC_LIBS`, and
+/// the FFT names put `_MT` last (`FFTW_STATIC_LIBS_MT`), as EasyBuild's
+/// toolchains define them.
+fn threaded_variable(plain: &str) -> String {
+    if plain.starts_with("FFT") {
+        return format!("{plain}_MT");
+    }
+    if let Some(stem) = plain.strip_suffix("_STATIC_LIBS") {
+        return format!("{stem}_MT_STATIC_LIBS");
+    }
+    if let Some(stem) = plain.strip_suffix("_SHARED_LIBS") {
+        return format!("{stem}_MT_SHARED_LIBS");
+    }
+    format!("{plain}_MT")
+}
+
+/// EBM_THREADED_VARIANT: the module reads a toolchain library variable that
+/// also has a threaded variant (`LIBBLAS`, `BLAS_STATIC_LIBS`, or a pattern
+/// such as `'LIB%s'`), but no threaded variant and not the toolchain's
+/// `openmp` option anywhere, so a recipe that turns the option on still gets
+/// the plain libraries. One finding, at the first such read.
+fn threaded_variant_findings(text: &str, lines: &[&str]) -> Vec<StyleFinding> {
+    static PLAIN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"['"](LIB(?:BLAS|LAPACK|SCALAPACK|FFT|%s)|(?:BLAS|LAPACK|BLAS_LAPACK|SCALAPACK|FFTW?|%s)_(?:STATIC|SHARED)_LIBS)['"]"#)
+            .expect("regex")
+    });
+    static THREADED: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"_MT\b|_MT_|['"]openmp['"]"#).expect("regex"));
+    if THREADED.is_match(text) {
+        return Vec::new();
+    }
+    for (index, line) in lines.iter().enumerate() {
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
+        let Some(found) = PLAIN.captures(line) else {
+            continue;
+        };
+        let plain = &found[1];
+        let threaded = threaded_variable(plain);
+        return vec![finding(
+            index + 1,
+            found.get(1).map_or(1, |item| item.start()),
+            "EBM_THREADED_VARIANT",
+            format!(
+                "reads the toolchain variable '{plain}', which the toolchain also defines as '{threaded}' with the threading libraries added, but this module never reads a _MT variable or the toolchain's 'openmp' option: a recipe with toolchainopts openmp: True still gets the plain libraries. Choose the variable from the toolchain options the way merged easyblocks do (grep the easyblocks for _MT), then compare dry runs of a recipe with and without the option (threaded_findings)."
+            ),
+            Severity::Warning,
+        )];
+    }
+    Vec::new()
+}
+
+/// Codes about the module as a whole rather than one line: a base that
+/// already had the finding does not make it pre-existing `info`, since the
+/// fix is expected to remove it.
+const MODULE_WIDE: &[&str] = &["EBM_THREADED_VARIANT"];
+
 /// Native checks on a module's text: E999 (not valid Python), E501 at
 /// `max_line`, W291/W293 (trailing whitespace), W292/W391 (end of file),
 /// EBM_RUN_CMD (`run_cmd`/`run_cmd_qa`, gone in EasyBuild 5) and the
 /// EBM_OLD_SUPER warning (`super(Class, self)`, easybuild-easyblocks#3681
 /// moved every easyblock to `super()`), and the EBM_CFG_OVERRIDE and
 /// EBM_TEST_STEP_OWN_CMD warnings (an easyconfig value the easyblock
-/// overwrites or ignores).
+/// overwrites or ignores), and the EBM_THREADED_VARIANT warning (a plain
+/// toolchain library variable read with no threaded choice).
 pub fn lint_module_text(text: &str, max_line: usize) -> Vec<StyleFinding> {
     let mut out = Vec::new();
     if let Some((line, column, message)) = python_syntax_error(text) {
@@ -379,6 +439,7 @@ pub fn lint_module_text(text: &str, max_line: usize) -> Vec<StyleFinding> {
     }
     out.extend(cfg_override_findings(&lines));
     out.extend(test_step_findings(&lines));
+    out.extend(threaded_variant_findings(text, &lines));
     if !text.is_empty() && !text.ends_with('\n') {
         out.push(finding(
             lines.len(),
@@ -570,6 +631,9 @@ pub fn lint_module(
             .collect();
         let lines: Vec<&str> = text.lines().collect();
         for item in &mut findings {
+            if MODULE_WIDE.contains(&item.code.as_str()) {
+                continue;
+            }
             if let Some(line) = lines.get(item.line.wrapping_sub(1)) {
                 if before.contains(&(item.code.clone(), line.to_string())) {
                     item.info = true;
@@ -664,6 +728,57 @@ mod tests {
             let found = lint_module_text(&good, 120);
             assert!(found.is_empty(), "{good}: {found:?}");
         }
+    }
+
+    #[test]
+    fn plain_library_variables_need_a_threaded_choice() {
+        let direct = "import os\n\n\nclass EB_X(Base):\n    def configure_step(self):\n        libs = os.getenv('LIBBLAS')\n        self.cfg.update('configopts', '--with-blas=%s' % libs)\n";
+        let found = lint_module_text(direct, 120);
+        assert_eq!(codes(&found), vec!["EBM_THREADED_VARIANT"], "{found:?}");
+        assert_eq!(found[0].line, 6);
+        assert_eq!(found[0].severity, Severity::Warning);
+        assert!(found[0].message.contains("'LIBBLAS_MT'"), "{found:?}");
+        let pattern = "class EB_X(Base):\n    def configure_step(self):\n        names = '%s_STATIC_LIBS'\n        for dep in ['BLAS', 'LAPACK']:\n            os.getenv(names % dep)\n";
+        let found = lint_module_text(pattern, 120);
+        assert_eq!(codes(&found), vec!["EBM_THREADED_VARIANT"], "{found:?}");
+        assert!(
+            found[0].message.contains("'%s_MT_STATIC_LIBS'"),
+            "{found:?}"
+        );
+        assert_eq!(threaded_variable("LIB%s"), "LIB%s_MT");
+        assert_eq!(threaded_variable("FFTW_STATIC_LIBS"), "FFTW_STATIC_LIBS_MT");
+        assert_eq!(threaded_variable("BLAS_SHARED_LIBS"), "BLAS_MT_SHARED_LIBS");
+        for chosen in [
+            direct.replace(
+                "os.getenv('LIBBLAS')",
+                "os.getenv('LIBBLAS_MT' if self.toolchain.options.get('openmp') else 'LIBBLAS')",
+            ),
+            direct.replace(
+                "os.getenv('LIBBLAS')",
+                "os.getenv('LIBBLAS' + suffix)\n        suffix = '_MT'",
+            ),
+            direct.replace(
+                "libs = os.getenv('LIBBLAS')",
+                "# os.getenv('LIBBLAS')\n        libs = ''",
+            ),
+        ] {
+            let found = lint_module_text(&chosen, 120);
+            assert!(
+                !codes(&found).contains(&"EBM_THREADED_VARIANT"),
+                "{chosen}: {found:?}"
+            );
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let module = dir.path().join("m.py");
+        std::fs::write(&module, direct).expect("write");
+        let (file, _) = lint_module(&module, direct, Some(direct), false);
+        let item = file
+            .findings
+            .iter()
+            .find(|item| item.code == "EBM_THREADED_VARIANT")
+            .expect("finding");
+        assert!(!item.info, "a base with the same read does not hide it");
+        assert!(file.clean, "a warning does not block clean");
     }
 
     #[test]

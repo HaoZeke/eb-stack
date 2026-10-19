@@ -1087,8 +1087,21 @@ fn module_lint(arguments: &Value) -> Result<Value, String> {
                 .count()
         })
         .sum();
+    // Name each warning in the summary: a count alone was read as clean
+    // (proof-easyblock r2).
+    let listed = results
+        .iter()
+        .flat_map(|file| file.findings.iter())
+        .filter(|item| item.severity == Severity::Warning && !item.info)
+        .take(3)
+        .map(|item| {
+            let message: String = item.message.chars().take(240).collect();
+            format!("{} line {}: {message}", item.code, item.line)
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
     let summary = if clean && warnings > 0 {
-        format!("clean: no error outside the pre-existing ones, but {warnings} new warning(s) to read first (an EBM_ warning names an easyconfig value the module overwrites or ignores). Check the generated commands with eb_easyblock_dry_run before calling the change done.")
+        format!("clean: no error outside the pre-existing ones, but {warnings} new warning(s) to fix or justify before calling the change done: {listed}. Then check the generated commands with eb_easyblock_dry_run.")
     } else if clean {
         "clean: no error outside the pre-existing ones. Check the generated commands with eb_easyblock_dry_run before calling the change done.".to_string()
     } else {
