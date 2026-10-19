@@ -29,12 +29,17 @@ code, not by the file looking right.
    grep how merged easyblocks read that option (`self.toolchain.options.get(...)`)
    and choose the value from it the same way.
 
-3. **Edit, then lint.** Edit with `eb_recipe_edit`. Run `eb_module_lint` on the
+3. **Edit, then lint.** Edit with `eb_recipe_edit`; `new` is written exactly as
+   given, so never paste diff markers (`+`, `-`) or line numbers into it. An edit
+   that would leave the module invalid Python is refused and the file stays as
+   it was: re-read the lines and send the edit again. Run `eb_module_lint` on the
    module until `clean` is true. Do not run `eb_recipe_lint` on a `.py` file.
    `clean` ignores warnings, so read them: `EBM_CFG_OVERRIDE` (a parameter set
-   to a fixed value without checking that it is unset) and
-   `EBM_TEST_STEP_OWN_CMD` (a test step that ignores `runtest`) are bugs in a
-   fix unless the task asks to force that value.
+   to a fixed value without checking that it is unset),
+   `EBM_TEST_STEP_OWN_CMD` (a test step that ignores `runtest`) and
+   `EBM_THREADED_VARIANT` (a plain toolchain library variable read with no
+   choice of its threaded variant) are bugs in a fix unless the task asks for
+   that behaviour.
 
 4. **Dry-run every case you were asked about.** `eb_easyblock_dry_run` with the
    recipe and your module in `easyblocks`. Do it once per recipe, toolchain and
@@ -46,6 +51,9 @@ code, not by the file looking right.
    `threaded_pairs` (variables with a threaded variant) and `notes`: plain and
    threaded variables are both defined whatever the option says, so compare the
    commands of the recipe with and without the option, not the environment.
+   When `threaded_findings` is not empty, a command uses a plain value although
+   the recipe turns the threaded option on: do what `next` says (edit the
+   easyblock to choose the threaded variable from the option) before building.
    When `failure_kind` is `environment`, the recipe cannot be set up where the
    server runs and no easyblock code ran: say which recipe could not be checked
    and go on with the others, without changing the code for it.
@@ -57,7 +65,12 @@ code, not by the file looking right.
    a build shows link errors and test failures. Say that a build is still owed
    only when `eb_build_test` returned an error, and never claim it passed. On a
    failure, read the failing step with `eb_build_log` and fix the cause the log
-   line shows, not a guess.
+   line shows, not a guess. A configure failure is explained in config.log, not
+   in the EasyBuild log: read `config_log` in the result (the failed check and
+   its compiler or linker output, with the path of the whole file for
+   `eb_recipe_read`), fix what it shows, and build again. A failed build is not
+   the end of the task: keep fixing and building until it passes or you can
+   name, from a log line, a cause outside the easyblock.
 
 6. **Stay in scope.** Change only the easyblock. Do not hardcode library names,
    versions or paths that the toolchain or dependencies provide. Keep the other
