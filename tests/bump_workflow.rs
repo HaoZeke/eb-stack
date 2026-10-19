@@ -58,6 +58,56 @@ fn easybuild_bump_produces_sbom_resolvo_lock_and_recipe() {
 }
 
 #[test]
+fn bump_sbom_names_the_versions_the_lock_selected() {
+    let toolchain = Toolchain {
+        name: "foss".into(),
+        version: "2024a".into(),
+    };
+    let bundle = plan_package_bump(&BumpPackageRequest {
+        source: fixture("tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb"),
+        toolchain: toolchain.clone(),
+        version: None,
+        source_checksum: None,
+        easyconfig_roots: vec![fixture("tests/repro_fixtures/universe_foss_2024a")],
+        hierarchy_fixture: None,
+        overrides: HashMap::new(),
+        stack_policy: StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "default".into(),
+            toolchain,
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        },
+        strict_patches: false,
+        package_layers: Vec::new(),
+    })
+    .expect("canonical bump");
+    let components = bundle.sbom["components"].as_array().expect("components");
+    let has = |name: &str, version: &str| {
+        components
+            .iter()
+            .any(|component| component["name"] == name && component["version"] == version)
+    };
+    // GROMACS 2023b pins CMake 3.27.6; the 2024a solve selects 3.29.3.
+    assert!(has("CMake", "3.29.3"), "{components:?}");
+    assert!(!has("CMake", "3.27.6"), "{components:?}");
+    for dependency in &bundle.plan.dependencies {
+        let name = dependency.eb_name.as_deref().unwrap_or(&dependency.name);
+        if let Some(locked) = bundle.locks[0]
+            .dependencies
+            .iter()
+            .find(|locked| locked.name.eq_ignore_ascii_case(name))
+        {
+            assert!(
+                has(name, &locked.version),
+                "SBOM has no {name} {} component",
+                locked.version
+            );
+        }
+    }
+}
+
+#[test]
 fn easybuild_bump_does_not_select_newer_system_candidate_for_implicit_dependency() {
     let temp = tempfile::tempdir().expect("tempdir");
     let source = temp.path().join("Alpha-1.0-GCCcore-14.3.0.eb");

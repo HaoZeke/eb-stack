@@ -1572,7 +1572,7 @@ pub fn complete_package_bump_with_options(
             provenance: None,
         });
     }
-    let sbom = package_plan_to_cyclonedx(&plan)
+    let sbom = package_plan_to_cyclonedx(&plan_with_locked_versions(&plan, &lock))
         .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
     Ok(PackageBundle {
         plan,
@@ -1584,6 +1584,32 @@ pub fn complete_package_bump_with_options(
             text: result.text,
         }],
     })
+}
+
+/// The plan as the SBOM should describe it once the solve has run: every
+/// dependency the lock selected carries the selected version.
+///
+/// A bump plan keeps the source recipe's pins as constraints, and drops them
+/// when the toolchain generation moves, so the planned SBOM named the old
+/// generation's versions or `unresolved`. The emitted recipe already uses the
+/// lock; the SBOM written next to it has to say the same thing, the way a
+/// stack SBOM is written from its lock.
+fn plan_with_locked_versions(plan: &PackagePlan, lock: &ProfileLock) -> PackagePlan {
+    let mut plan = plan.clone();
+    for dependency in &mut plan.dependencies {
+        let name = dependency
+            .eb_name
+            .as_deref()
+            .unwrap_or(dependency.name.as_str());
+        if let Some(locked) = lock
+            .dependencies
+            .iter()
+            .find(|locked| locked.name.eq_ignore_ascii_case(name))
+        {
+            dependency.constraint = Some(locked.version.clone());
+        }
+    }
+    plan
 }
 
 /// The whole bump path: read, re-target, solve, emit.
