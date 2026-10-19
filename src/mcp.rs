@@ -10,11 +10,11 @@ use crate::eb_parse::{
     check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,
 };
 use crate::eb_run::{
-    build_test_description, builds_allowed, commands_in, dry_run_environment, dry_run_next,
-    error_lines, failed_dry_run_text, failure_kind, parse_dry_run, read_tail,
-    recipe_toolchain_options, run_eb, split_steps, split_warnings, step_text, tail,
-    threaded_findings, threaded_findings_text, threaded_note, threaded_pairs, EbInvocation,
-    ALLOW_BUILD_ENV,
+    build_test_description, builds_allowed, commands_in, config_log_failure, dry_run_environment,
+    dry_run_next, error_lines, failed_dry_run_text, failure_kind, find_config_log,
+    last_step_in_file, parse_dry_run, read_tail, recipe_toolchain_options, run_eb, split_steps,
+    split_warnings, step_text, tail, threaded_findings, threaded_findings_text, threaded_note,
+    threaded_pairs, EbInvocation, ALLOW_BUILD_ENV,
 };
 use crate::eb_style::{
     format_style, format_style_file, is_formatting_code, lint_recipe_files_scoped, lint_style,
@@ -1258,18 +1258,43 @@ fn build_log(arguments: &Value) -> Result<Value, String> {
     let (text, start_truncated) = read_tail(&path, max_bytes)?;
     let steps = split_steps(&text);
     let step = optional_string(arguments, "step").filter(|step| !step.is_empty());
+    // A step whose output alone is longer than the tail leaves no step marker
+    // in it (proof-easyblock r2: "no build step ...; steps: " on a build that
+    // failed in the build step). The whole file says which step the tail is in.
+    let whole_file_step = if start_truncated && steps.is_empty() {
+        last_step_in_file(&path)
+    } else {
+        None
+    };
+    let mut note = None;
     let selected = match step.as_deref() {
-        Some(name) => step_text(&text, &steps, name).ok_or_else(|| {
-            format!(
-                "no {name} step in {}; steps: {}",
-                requested.display(),
-                steps
+        Some(name) => match step_text(&text, &steps, name) {
+            Some(lines) => lines,
+            None if whole_file_step
+                .as_ref()
+                .is_some_and(|(found, _)| found == name) =>
+            {
+                note = Some(format!(
+                    "the {name} step starts at line {} of the whole log, before the last {max_bytes} bytes read here, so all of them are shown as that step",
+                    whole_file_step.as_ref().map_or(0, |(_, line)| *line)
+                ));
+                text.lines().collect()
+            }
+            None => {
+                let listed = steps
                     .iter()
                     .map(|span| span.step.as_str())
                     .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        })?,
+                    .join(", ");
+                return Err(match &whole_file_step {
+                    Some((found, line)) => format!(
+                        "no {name} step in the last {max_bytes} bytes of {}: they are all inside the {found} step (it starts at line {line} of the whole log). Call again with step \"{found}\", or without step and with grep",
+                        requested.display()
+                    ),
+                    None => format!("no {name} step in {}; steps: {listed}", requested.display()),
+                });
+            }
+        },
         None => text.lines().collect(),
     };
     let shown = match optional_string(arguments, "grep").filter(|pattern| !pattern.is_empty()) {
@@ -1305,6 +1330,8 @@ fn build_log(arguments: &Value) -> Result<Value, String> {
         "errors": error_lines(&part, 20),
         "nested_outputs": crate::campaign::easybuild_output_paths(&text),
         "start_truncated": start_truncated,
+        "whole_log_last_step": whole_file_step.map(|(found, _)| found),
+        "note": note,
     }))
 }
 
@@ -1341,7 +1368,19 @@ fn build_test(arguments: &Value) -> Result<Value, String> {
     let completed = run.exit_code == Some(0)
         && (text.contains("COMPLETED: Installation ended successfully")
             || text.contains("Build succeeded for 1 out of 1"));
-    let test = step_text(&text, &steps, "test").map(|lines| {
+    // No step marker in the tail: the whole file says which step it is in.
+    let whole_file_step = if start_truncated && steps.is_empty() {
+        last_step_in_file(&output).map(|(found, _)| found)
+    } else {
+        None
+    };
+    let last_step = steps
+        .last()
+        .map(|span| span.step.clone())
+        .or_else(|| whole_file_step.clone());
+    let test_lines = step_text(&text, &steps, "test")
+        .or_else(|| (whole_file_step.as_deref() == Some("test")).then(|| text.lines().collect()));
+    let test = test_lines.map(|lines| {
         let part = lines.join("\n");
         json!({
             "commands": commands_in(&part),
@@ -1353,24 +1392,54 @@ fn build_test(arguments: &Value) -> Result<Value, String> {
         .as_ref()
         .and_then(|test| test["commands"].as_array())
         .is_some_and(|commands| !commands.is_empty());
+    // A failed configure says why in config.log, not in the EasyBuild log
+    // (proof-easyblock r2: trials stopped after a configure failure without
+    // reading it).
+    let config_log = if !completed && last_step.as_deref() == Some("configure") {
+        find_config_log(&dir.join("build")).and_then(|found| {
+            let failure = config_log_failure(&std::fs::read_to_string(&found).ok()?)?;
+            Some((workspace_relative(&root, &found), failure))
+        })
+    } else {
+        None
+    };
     let summary = match (completed, test_ran) {
-        (true, true) => "installed, and the test step ran the commands listed under test",
-        (true, false) => "installed, but the test step ran no command: nothing was tested",
-        (false, _) if run.timed_out => "killed at the time limit",
-        (false, _) => "failed: read errors, then the failing step with eb_build_log",
+        (true, true) => {
+            "installed, and the test step ran the commands listed under test".to_string()
+        }
+        (true, false) => {
+            "installed, but the test step ran no command: nothing was tested".to_string()
+        }
+        (false, _) if run.timed_out => "killed at the time limit".to_string(),
+        (false, _) => match (&config_log, last_step.as_deref()) {
+            (Some((found, failure)), _) => format!(
+                "failed in the configure step; config.log ({found}) shows the last failed check, 'checking {}' at its line {}: config_log.excerpt has that check's commands and compiler or linker output. Fix what that output shows, then build again",
+                failure.check, failure.line
+            ),
+            (None, Some(step)) if step != "start" => format!(
+                "failed in the {step} step: read errors (the first lines name the cause), then eb_build_log with step \"{step}\""
+            ),
+            _ => "failed: read errors, then the failing step with eb_build_log".to_string(),
+        },
     };
     Ok(json!({
         "exit_code": run.exit_code,
         "timed_out": run.timed_out,
         "seconds": run.seconds,
         "completed": completed,
-        "last_step": steps.last().map(|span| span.step.clone()),
+        "last_step": last_step,
         "steps": steps,
         "log": workspace_relative(&root, &output),
         "build_dir": workspace_relative(&root, &dir.join("build")),
         "test": test,
         "test_ran": test_ran,
         "errors": error_lines(&text, 20),
+        "config_log": config_log.map(|(found, failure)| json!({
+            "path": found,
+            "check": failure.check,
+            "line": failure.line,
+            "excerpt": failure.excerpt,
+        })),
         "nested_outputs": crate::campaign::easybuild_output_paths(&text),
         "start_truncated": start_truncated,
         "summary": summary,
