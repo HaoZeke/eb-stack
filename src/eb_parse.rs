@@ -104,6 +104,13 @@ pub struct ResolvedEasyconfig {
     /// recipe actually downloads.
     #[serde(default)]
     pub source_urls: Vec<String>,
+    /// Resolved `sources` entries as `(filename, download_filename)`: the name
+    /// EasyBuild saves the artifact under and the name it asks each
+    /// `source_urls` entry for, which differ when the entry is a dict with a
+    /// `download_filename`. A `source_urls` key inside the dict replaces the
+    /// recipe-level list for that entry, as it does in EasyBuild.
+    #[serde(default)]
+    pub source_files: Vec<SourceFile>,
     /// Patch file names from `patches` (tuple/dict entries reduced to the name).
     #[serde(default)]
     pub patch_names: Vec<String>,
@@ -1948,6 +1955,7 @@ fn resolve_easyconfig_str_inner(
     let checksums = opt_str_list_field(&parser.env, "checksums", &templates);
     let sources_count = env_list_len(&parser.env, "sources", &templates);
     let source_urls = env_string_list(&parser.env, "source_urls", &templates);
+    let source_files = source_files_field(&parser.env, &templates);
     let patch_names = patch_names_field(&parser.env, &templates);
     let checksum_entry_keys = checksum_entry_keys_field(&parser.env, &templates);
     let checksums_by_filename = checksums_by_filename_field(&parser.env, &templates);
@@ -1968,6 +1976,7 @@ fn resolve_easyconfig_str_inner(
         checksums,
         sources_count,
         source_urls,
+        source_files,
         patch_names,
         checksum_entry_keys,
         checksums_by_filename,
@@ -2007,6 +2016,72 @@ fn env_list_len(
         .map(|v| apply_templates_value(v, templates))
         .and_then(|v| value_list_as_slice(Some(&v)).ok().map(|l| l.len()))
         .unwrap_or(0)
+}
+
+/// One `sources` entry, resolved against the recipe's templates.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct SourceFile {
+    /// Name the artifact is saved under, which `checksums` is keyed by.
+    pub filename: String,
+    /// Name requested from each source URL; equals `filename` unless the
+    /// entry sets `download_filename`.
+    pub download_filename: String,
+    /// Per-entry `source_urls`, when the dict entry carries its own.
+    pub source_urls: Vec<String>,
+    /// The entry fetches a git checkout (`git_config`), so no download URL
+    /// names it and no tarball digest can be computed ahead of the build.
+    pub git: bool,
+}
+
+/// `sources` as EasyBuild reads it: a plain filename, or a dict with
+/// `filename` and optionally `download_filename`, `source_urls`, `git_config`.
+fn source_files_field(
+    env: &HashMap<String, Value>,
+    templates: &HashMap<String, String>,
+) -> Vec<SourceFile> {
+    let Some(v) = env.get("sources") else {
+        return Vec::new();
+    };
+    let v = apply_templates_value(v, templates);
+    let Ok(items) = value_list_as_slice(Some(&v)) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| match item {
+            Value::Str(s) => Some(SourceFile {
+                filename: s.clone(),
+                download_filename: s.clone(),
+                ..SourceFile::default()
+            }),
+            Value::Dict(kvs) => {
+                let get = |key: &str| {
+                    kvs.iter()
+                        .find(|(k, _)| k == key)
+                        .and_then(|(_, val)| val.as_str())
+                        .map(str::to_string)
+                };
+                let filename = get("filename")?;
+                let urls = kvs
+                    .iter()
+                    .find(|(k, _)| k == "source_urls")
+                    .and_then(|(_, val)| value_list_as_slice(Some(val)).ok())
+                    .map(|xs| {
+                        xs.iter()
+                            .filter_map(|x| x.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(SourceFile {
+                    download_filename: get("download_filename").unwrap_or_else(|| filename.clone()),
+                    filename,
+                    source_urls: urls,
+                    git: kvs.iter().any(|(k, _)| k == "git_config"),
+                })
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Patch names from `patches`: plain string, `(name, level)` tuple/list, or a
@@ -3460,6 +3535,7 @@ mod tests {
             checksums: vec![],
             sources_count: 0,
             source_urls: Vec::new(),
+            source_files: Vec::new(),
             patch_names: vec![],
             checksum_entry_keys: vec![],
             checksums_by_filename: Default::default(),
@@ -4027,6 +4103,7 @@ builddependencies = [
             checksums: vec![],
             sources_count: 0,
             source_urls: Vec::new(),
+            source_files: Vec::new(),
             patch_names: vec![],
             checksum_entry_keys: vec![],
             checksums_by_filename: Default::default(),
