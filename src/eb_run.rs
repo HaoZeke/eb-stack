@@ -798,7 +798,7 @@ pub fn builds_allowed() -> bool {
 /// The `eb_build_test` description on a server where builds are `allowed`
 /// or not, so the tool list itself says whether a build can run here.
 pub fn build_test_description(allowed: bool) -> String {
-    let common = "Build one recipe for real with your easyblock modules (--include-easyblocks), --rebuild, and return how it ended: exit code, the last step reached, whether the installation completed, the test step's commands and the tail of its output, the error lines, and the log path for eb_build_log. The build directory is kept under .eb-stack/builds/<n>/build, so config.log and test logs can be read with eb_recipe_read. A build runs the whole recipe, so get the commands right with eb_easyblock_dry_run first.";
+    let common = "Build one recipe for real with your easyblock modules (--include-easyblocks), --rebuild, and return how it ended: exit code, the last step reached, whether the installation completed, the test step's commands and the tail of its output, the error lines, and the log path for eb_build_log. The build directory is kept under .eb-stack/builds/<n>/build, so config.log and test logs can be read with eb_recipe_read; when configure fails, config_log in the result has the last failed check from config.log with its compiler or linker output. A build runs the whole recipe, so get the commands right with eb_easyblock_dry_run first.";
     if allowed {
         format!("{common} Builds are on for this server: once the dry run shows the commands you intended, build each recipe you were asked about with this tool before calling the change done. Only a build shows link errors and test failures; a dry run never does.")
     } else {
@@ -814,6 +814,136 @@ pub fn dry_run_next(allowed: bool, finished: bool) -> &'static str {
         (true, true) => "builds are on: once these commands match the task, run eb_build_test on each recipe you were asked about; a dry run does not link anything or run the tests",
         (true, false) => "builds are off on this server: once these commands match the task, say which builds are still owed",
     }
+}
+
+/// The last step a log starts and its 1-based line, read line by line over
+/// the whole file. For a log whose tail holds no step marker because one
+/// step's output alone is longer than the tail.
+pub fn last_step_in_file(path: &Path) -> Option<(String, usize)> {
+    use std::io::{BufRead, BufReader};
+    let mut reader = BufReader::new(File::open(path).ok()?);
+    let mut buffer = Vec::new();
+    let mut number = 0;
+    let mut last = None;
+    loop {
+        buffer.clear();
+        match reader.read_until(b'\n', &mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                number += 1;
+                let line = String::from_utf8_lossy(&buffer);
+                if let Some(step) = step_started(line.trim_end_matches(['\n', '\r'])) {
+                    last = Some((step, number));
+                }
+            }
+        }
+    }
+    last
+}
+
+/// The check an autoconf `configure` failed on, from its `config.log`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConfigLogFailure {
+    /// The `checking ...` text of the check.
+    pub check: String,
+    /// 1-based line of the check in config.log.
+    pub line: usize,
+    /// The check's commands and compiler or linker output, at most 40 lines
+    /// (the test program's source is left out), and the `error:` line.
+    pub excerpt: String,
+}
+
+/// The last check in an autoconf `config.log` whose test command failed
+/// (`$? = <non-zero>` or `failed program was:`), before the cache
+/// variables. `None` when no check failed.
+pub fn config_log_failure(text: &str) -> Option<ConfigLogFailure> {
+    static CHECK: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^configure:\d+: checking (.+)$").expect("regex"));
+    static FAILED: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(configure:\d+: \$\? = [1-9]\d*\s*$|configure: failed program was:)")
+            .expect("regex")
+    });
+    static ERROR: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^configure:\d+: error: ").expect("regex"));
+    let lines: Vec<&str> = text.lines().collect();
+    let end = lines
+        .iter()
+        .position(|line| line.starts_with("## ") && line.contains("Cache variables"))
+        .unwrap_or(lines.len());
+    let body = &lines[..end];
+    let starts: Vec<usize> = (0..body.len())
+        .filter(|index| CHECK.is_match(body[*index]))
+        .collect();
+    let mut chosen = None;
+    for (position, start) in starts.iter().enumerate() {
+        let stop = starts.get(position + 1).copied().unwrap_or(body.len());
+        if body[*start..stop].iter().any(|line| FAILED.is_match(line)) {
+            chosen = Some((*start, stop));
+        }
+    }
+    let (start, stop) = chosen?;
+    let mut excerpt = Vec::new();
+    let mut in_source = false;
+    for line in &body[start..stop] {
+        if line.starts_with("configure: failed program was:") {
+            in_source = true;
+            continue;
+        }
+        if in_source && line.starts_with("configure:") {
+            in_source = false;
+        }
+        if in_source {
+            continue;
+        }
+        if line.starts_with("## ") {
+            break;
+        }
+        excerpt.push(line.chars().take(300).collect::<String>());
+        if excerpt.len() == 40 || ERROR.is_match(line) {
+            break;
+        }
+    }
+    if let Some(error) = body[start..].iter().find(|line| ERROR.is_match(line)) {
+        let error = error.chars().take(300).collect::<String>();
+        if !excerpt.contains(&error) {
+            excerpt.push(error);
+        }
+    }
+    Some(ConfigLogFailure {
+        check: CHECK.captures(body[start])?[1].to_string(),
+        line: start + 1,
+        excerpt: excerpt.join("\n"),
+    })
+}
+
+/// The most recently written `config.log` under `dir`, at most six levels
+/// down, without following symlinks.
+pub fn find_config_log(dir: &Path) -> Option<PathBuf> {
+    fn walk(dir: &Path, depth: usize, best: &mut Option<(std::time::SystemTime, PathBuf)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if kind.is_dir() && depth < 6 {
+                walk(&path, depth + 1, best);
+            } else if kind.is_file() && entry.file_name() == "config.log" {
+                let modified = entry
+                    .metadata()
+                    .and_then(|meta| meta.modified())
+                    .unwrap_or(std::time::UNIX_EPOCH);
+                if best.as_ref().is_none_or(|(seen, _)| modified >= *seen) {
+                    *best = Some((modified, path));
+                }
+            }
+        }
+    }
+    let mut best = None;
+    walk(dir, 0, &mut best);
+    best.map(|(_, path)| path)
 }
 
 /// Read the end of a file as text, at most `max_bytes` from its end, so a
@@ -1089,6 +1219,70 @@ ERROR: Shell command failed!\n\
             value_libraries("libfoo.a,libfoo.a,libbar.a"),
             vec!["foo", "bar"]
         );
+    }
+
+    #[test]
+    fn config_log_names_the_last_failed_check() {
+        let log = "## Platform. ##\n\
+configure:2001: checking for gcc\n\
+configure:2010: result: gcc\n\
+configure:2100: checking whether we are cross compiling\n\
+configure:2110: ./conftest\n\
+configure:2113: $? = 0\n\
+configure:2300: checking for library containing deflate\n\
+configure:2310: gcc -o conftest -O2 conftest.c -lz  >&5\n\
+/usr/bin/ld: cannot find -lz: No such file or directory\n\
+collect2: error: ld returned 1 exit status\n\
+configure:2310: $? = 1\n\
+configure: failed program was:\n\
+| /* confdefs.h */\n\
+| int main (void) { return deflate (); }\n\
+configure:2320: result: no\n\
+configure:2400: error: zlib development files not found\n\
+## ---------------- ##\n\
+## Cache variables. ##\n\
+configure:9999: checking never\n\
+configure:9999: $? = 1\n";
+        let found = config_log_failure(log).expect("failed check");
+        assert_eq!(found.check, "for library containing deflate");
+        assert_eq!(found.line, 7);
+        assert!(
+            found.excerpt.contains("cannot find -lz"),
+            "{}",
+            found.excerpt
+        );
+        assert!(!found.excerpt.contains("confdefs.h"), "{}", found.excerpt);
+        assert!(
+            found
+                .excerpt
+                .ends_with("error: zlib development files not found"),
+            "{}",
+            found.excerpt
+        );
+        let passing = "configure:1: checking for gcc\nconfigure:2: $? = 0\n";
+        assert!(config_log_failure(passing).is_none());
+    }
+
+    #[test]
+    fn newest_config_log_and_last_step_of_a_long_log() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let deep = dir.path().join("X/1.0/GCC-1/x-1.0");
+        std::fs::create_dir_all(&deep).expect("dirs");
+        std::fs::write(deep.join("config.log"), "configure:1: checking x\n").expect("log");
+        assert_eq!(
+            find_config_log(dir.path()).as_deref(),
+            Some(deep.join("config.log").as_path())
+        );
+        assert!(find_config_log(&dir.path().join("missing")).is_none());
+        let log = dir.path().join("eb.out");
+        let mut text = String::from("== configuring...\n== building...\n");
+        for index in 0..2000 {
+            text.push_str(&format!("compiling unit {index}\n"));
+        }
+        std::fs::write(&log, &text).expect("eb.out");
+        assert_eq!(last_step_in_file(&log), Some(("build".to_string(), 2)));
+        let (tail_text, cut) = read_tail(&log, 1024).expect("tail");
+        assert!(cut && split_steps(&tail_text).is_empty());
     }
 
     #[test]
