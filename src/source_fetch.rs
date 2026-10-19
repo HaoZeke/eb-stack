@@ -254,18 +254,26 @@ fn fetch_empty_named_checksums(
     let mut text = original.to_string();
     let mut extras = Vec::new();
     for (filename, hash) in &recipe.checksums_by_filename {
-        if !hash.is_empty() || filename.contains("%(") || already.contains(filename.as_str()) {
+        // Dict keys are stored as written. `%(version)s` is still the version
+        // the bump just assigned, so expand it before deciding the file is
+        // not concrete.
+        let concrete = expand_checksum_key(filename, &recipe);
+        if !hash.is_empty()
+            || concrete.contains("%(")
+            || already.contains(concrete.as_str())
+            || already.contains(filename.as_str())
+        {
             continue;
         }
         let mut fetch = SourceFetch {
-            filename: filename.clone(),
+            filename: concrete.clone(),
             url: None,
             sha256: None,
             errors: Vec::new(),
         };
         let file = SourceFile {
-            filename: filename.clone(),
-            download_filename: filename.clone(),
+            filename: concrete.clone(),
+            download_filename: concrete,
             ..SourceFile::default()
         };
         let urls = source_download_urls(&recipe, &file);
@@ -278,11 +286,11 @@ fn fetch_empty_named_checksums(
             match client.get(&url) {
                 Ok(bytes) if !bytes.is_empty() => {
                     let digest = sha256_hex(&bytes);
-                    let updated = replace_empty_named_checksum(&text, filename, &digest);
+                    let updated = replace_empty_named_checksum(&text, &recipe, filename, &digest);
                     if updated == text {
                         fetch
                             .errors
-                            .push("checksum key is not a literal empty entry in the recipe".into());
+                            .push("checksum key is not an empty entry in the recipe".into());
                     } else {
                         text = updated;
                         fetch.sha256 = Some(digest);
@@ -299,10 +307,61 @@ fn fetch_empty_named_checksums(
     (text, extras)
 }
 
-fn replace_empty_named_checksum(text: &str, filename: &str, digest: &str) -> String {
+fn replace_empty_named_checksum(
+    text: &str,
+    recipe: &ResolvedEasyconfig,
+    filename: &str,
+    digest: &str,
+) -> String {
+    // The dict key in the file may still be a template (`go%(version)s...`)
+    // whose resolved form is `filename`. Try the resolved name, then any
+    // empty key that expands to it.
+    let direct = replace_empty_key(text, filename, digest);
+    if direct != text {
+        return direct;
+    }
+    let Some(keys) = empty_checksum_keys(text) else {
+        return text.to_string();
+    };
+    for key in keys {
+        if expand_checksum_key(&key, recipe) == filename {
+            return replace_empty_key(text, &key, digest);
+        }
+    }
+    text.to_string()
+}
+
+/// `%(version)s` / `%(name)s` / `%(namelower)s` as the parser fills them.
+/// Enough to recognize a checksum-dict key; anything still containing `%(`
+/// is not a concrete filename.
+fn expand_checksum_key(key: &str, recipe: &ResolvedEasyconfig) -> String {
+    let namelower = recipe.name.to_ascii_lowercase();
+    let letter = recipe
+        .name
+        .chars()
+        .next()
+        .map(|ch| ch.to_string())
+        .unwrap_or_default();
+    key.replace("%(version)s", &recipe.version)
+        .replace("%(namelower)s", &namelower)
+        .replace("%(nameletter)s", &letter)
+        .replace("%(name)s", &recipe.name)
+        .replace("%(arch)s", std::env::consts::ARCH)
+}
+
+fn empty_checksum_keys(text: &str) -> Option<Vec<String>> {
+    let re = regex::Regex::new(r#"['"](?P<key>[^'"]+)['"]\s*:\s*['"]['"]"#).ok()?;
+    Some(
+        re.captures_iter(text)
+            .filter_map(|caps| caps.name("key").map(|m| m.as_str().to_string()))
+            .collect(),
+    )
+}
+
+fn replace_empty_key(text: &str, key: &str, digest: &str) -> String {
     // The regex crate has no backreferences, so each quote style is its own
     // pattern. A key and its empty value may use different quotes.
-    let escaped = regex::escape(filename);
+    let escaped = regex::escape(key);
     let mut text = text.to_string();
     for key_quote in ['\'', '"'] {
         for value_quote in ['\'', '"'] {
@@ -518,6 +577,36 @@ checksums = [{
         assert!(patched.contains(
             "'pkg-1.2.3-linux-arm64.tar.gz': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'"
         ));
+    }
+
+    #[test]
+    fn an_empty_version_template_key_is_filled_from_the_resolved_filename() {
+        let text = "\
+name = 'Pkg'
+version = '1.2.3'
+toolchain = SYSTEM
+source_urls = ['https://mirror.example.org/src']
+sources = ['pkg-%(version)s-linux-%(arch)s.tar.gz']
+checksums = [{
+    'pkg-%(version)s-linux-amd64.tar.gz': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'pkg-%(version)s-linux-arm64.tar.gz': '',
+}]
+";
+        let mut client = MapClient::default();
+        client.pages.insert(
+            "https://mirror.example.org/src/pkg-1.2.3-linux-arm64.tar.gz".into(),
+            b"bbb".to_vec(),
+        );
+        let (patched, extras) =
+            fetch_empty_named_checksums(text, &client, &std::collections::HashSet::new());
+        assert_eq!(
+            extras[0].sha256.as_deref(),
+            Some("3e744b9dc39389baf0c5a0660589b8402f3dbb49b89b3e75f2c9355852a3c677")
+        );
+        assert!(patched.contains(
+            "'pkg-%(version)s-linux-arm64.tar.gz': '3e744b9dc39389baf0c5a0660589b8402f3dbb49b89b3e75f2c9355852a3c677'"
+        ));
+        assert!(patched.contains("'pkg-%(version)s-linux-amd64.tar.gz': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"));
     }
 
     #[test]

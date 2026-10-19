@@ -1223,9 +1223,9 @@ struct ChecksumDictPair {
 ///
 /// The stated checksum, when there is one, replaces the first value: that is
 /// the primary source, the same entry `--source-checksum` already names.
-/// Another key whose filename contains the old version is a different file of
-/// the same release, so its digest is cleared rather than reused. A key that
-/// does not mention the version is left as written.
+/// Another key whose filename contains the old version, or `%(version)s`, is
+/// a different file of the same release, so its digest is cleared rather than
+/// reused. A key that does not mention the version is left as written.
 fn rewrite_checksum_dict(
     elem: &str,
     old_version: &str,
@@ -1245,7 +1245,10 @@ fn rewrite_checksum_dict(
     let mut note = None;
     for (index, pair) in pairs.iter().enumerate() {
         let key = &elem[pair.key_start..pair.key_end];
-        let versioned = key.contains(old_version);
+        // A literal old version in the filename, or `%(version)s`, both name
+        // the artifact the version bump replaces. The template keeps its
+        // spelling; the assignment `version =` is what changes underneath it.
+        let versioned = key.contains(old_version) || key.contains("%(version)s");
         let new_key = if versioned {
             key.replacen(old_version, new_version, 1)
         } else {
@@ -2514,6 +2517,45 @@ checksums = [{
             r.text
         );
         assert!(!r.text.contains("1.0.0"), "{}", r.text);
+    }
+
+    #[test]
+    fn a_version_template_in_a_later_checksum_key_is_cleared() {
+        let src = "\
+name = 'Pkg'
+version = '1.0.0'
+toolchain = {'name': 'foss', 'version': '2025a'}
+source_urls = ['https://mirror.example.org/src']
+sources = ['pkg-%(version)s-linux-%(arch)s.tar.gz']
+checksums = [{
+    'pkg-%(version)s-linux-amd64.tar.gz': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'pkg-%(version)s-linux-arm64.tar.gz': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+}]
+";
+        let params = EmitParams {
+            toolchain: foss("2025a"),
+            version: Some("1.2.3".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
+            source_checksum: Some(
+                "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".into(),
+            ),
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert!(
+            r.text.contains(
+                "'pkg-%(version)s-linux-amd64.tar.gz': 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'"
+            ),
+            "{}",
+            r.text
+        );
+        assert!(
+            r.text.contains("'pkg-%(version)s-linux-arm64.tar.gz': ''"),
+            "{}",
+            r.text
+        );
     }
 
     #[test]
