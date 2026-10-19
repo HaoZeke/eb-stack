@@ -56,7 +56,10 @@ code, not by the file looking right.
    easyblock to choose the threaded variable from the option) before building.
    When `failure_kind` is `environment`, the recipe cannot be set up where the
    server runs and no easyblock code ran: say which recipe could not be checked
-   and go on with the others, without changing the code for it.
+   and go on with the others, without changing the code for it. When it is
+   `setup`, EasyBuild itself did not start (the first error line is the module
+   system's message): no check ran, so do not change the code for it; quote the
+   error and say which checks are still owed.
 
 5. **Build where builds are allowed.** `eb_build_test` runs the real build and
    reports the test step's commands and output. Its description and the dry

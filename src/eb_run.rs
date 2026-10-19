@@ -65,6 +65,12 @@ static ERROR_LINE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(^ERROR:|EasyBuildError|\berror:|undefined reference|cannot find -l|\bFAILED\b|Traceback \(most recent call last\))")
         .expect("regex")
 });
+/// Lmod's error banner. A module that fails to load (EESSI-extend with a
+/// missing install prefix, for one) prints it before EasyBuild starts, and
+/// wraps the message over the next lines.
+static LMOD_ERROR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"Lmod has detected the following error:?\s*(.*)$").expect("regex")
+});
 
 /// Drop ANSI color so step markers match when EasyBuild's rich console is on.
 fn visible(line: &str) -> String {
@@ -136,20 +142,54 @@ pub fn split_steps(text: &str) -> Vec<LogStep> {
     steps
 }
 
+/// The first Lmod error in `text` as one line, its wrapped message joined:
+/// Lmod ends the message at `While processing the following module(s):` or
+/// a blank line.
+pub fn lmod_error(text: &str) -> Option<String> {
+    let lines = text.lines().map(visible).collect::<Vec<_>>();
+    let index = lines.iter().position(|line| LMOD_ERROR.is_match(line))?;
+    let mut parts = vec![LMOD_ERROR.captures(&lines[index])?[1].trim().to_string()];
+    for line in lines.iter().skip(index + 1).take(8) {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("While processing") {
+            break;
+        }
+        parts.push(line.to_string());
+    }
+    let message = parts
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!message.is_empty()).then(|| {
+        format!("Lmod has detected the following error: {message}")
+            .chars()
+            .take(400)
+            .collect()
+    })
+}
+
 /// Lines of `text` that look like errors, deduplicated, at most `limit`.
+/// An Lmod error comes first, as one line with its wrapped message joined.
 pub fn error_lines(text: &str, limit: usize) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+    let lmod = lmod_error(text);
+    let mut out: Vec<String> = lmod.iter().cloned().collect();
     for line in text.lines() {
+        if out.len() >= limit {
+            break;
+        }
+        // The banner line is already in `out` with its whole message.
+        if lmod.is_some() && LMOD_ERROR.is_match(&visible(line)) {
+            continue;
+        }
         if ERROR_LINE.is_match(line) {
             let line = line.trim().chars().take(400).collect::<String>();
             if !out.contains(&line) {
                 out.push(line);
-                if out.len() == limit {
-                    break;
-                }
             }
         }
     }
+    out.truncate(limit);
     out
 }
 
@@ -164,10 +204,12 @@ pub fn split_warnings(lines: Vec<String>) -> (Vec<String>, Vec<String>) {
     })
 }
 
-/// Where a failed `eb` run went wrong, from its error lines: `environment`
-/// when EasyBuild could not set up the recipe's toolchain or dependencies
-/// here, so no easyblock code ran; `easyblock` when Python failed in a module.
-/// `None` when the lines say neither.
+/// Where a failed `eb` run went wrong, from its error lines: `setup` when
+/// EasyBuild itself never started because a module failed to load (Lmod
+/// printed an error); `environment` when EasyBuild could not set up the
+/// recipe's toolchain or dependencies here, so no easyblock code ran;
+/// `easyblock` when Python failed in a module. `None` when the lines say
+/// none of these.
 pub fn failure_kind(errors: &[String]) -> Option<&'static str> {
     static ENVIRONMENT: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
@@ -186,7 +228,9 @@ pub fn failure_kind(errors: &[String]) -> Option<&'static str> {
         .map(|line| visible(line))
         .collect::<Vec<_>>()
         .join("\n");
-    if ENVIRONMENT.is_match(&text) {
+    if LMOD_ERROR.is_match(&text) {
+        Some("setup")
+    } else if ENVIRONMENT.is_match(&text) {
         Some("environment")
     } else if EASYBLOCK.is_match(&text) {
         Some("easyblock")
@@ -195,19 +239,31 @@ pub fn failure_kind(errors: &[String]) -> Option<&'static str> {
     }
 }
 
-/// The summary and `next` of a failed dry run of the given `kind`.
-pub fn failed_dry_run_text(kind: Option<&str>) -> (&'static str, &'static str) {
+/// The summary and `next` of a failed dry run of the given `kind`, quoting
+/// the first error line when there is one.
+pub fn failed_dry_run_text(kind: Option<&str>, errors: &[String]) -> (String, &'static str) {
+    let first = errors.first().map(String::as_str);
     match kind {
+        Some("setup") => (
+            format!(
+                "dry run failed before EasyBuild started: {}. No easyblock code ran, so this is not a fault in your easyblock.",
+                first.unwrap_or("a module the server loads failed")
+            ),
+            "do not change the easyblock for this; say that EasyBuild could not start on this server, quote the error, and which checks are still owed",
+        ),
         Some("environment") => (
-            "dry run failed before any easyblock code ran: this recipe's toolchain or dependencies cannot be set up in this environment (see errors). This is not a fault in your easyblock.",
+            "dry run failed before any easyblock code ran: this recipe's toolchain or dependencies cannot be set up in this environment (see errors). This is not a fault in your easyblock.".to_string(),
             "do not change the easyblock for this; say which recipe could not be checked here and why, and check the other recipes",
         ),
         Some("easyblock") => (
-            "dry run failed in Python code: the error lines name the module and the problem",
+            "dry run failed in Python code: the error lines name the module and the problem".to_string(),
             "fix the easyblock, lint it, then dry-run again",
         ),
         _ => (
-            "dry run failed: the error lines say why (a Python error in the easyblock shows up here)",
+            match first {
+                Some(line) => format!("dry run failed; the first error line: {line}"),
+                None => "dry run failed and printed no error line: read the output with eb_build_log".to_string(),
+            },
             "fix what the error lines say, then dry-run again",
         ),
     }
@@ -1079,10 +1135,53 @@ ERROR: Shell command failed!\n\
             Some("easyblock")
         );
         assert_eq!(failure_kind(&["ERROR: something else".to_string()]), None);
-        assert!(failed_dry_run_text(Some("environment"))
+        assert!(failed_dry_run_text(Some("environment"), &[])
             .0
             .contains("not a fault in your easyblock"));
-        assert!(failed_dry_run_text(None).1.contains("dry-run again"));
+        assert!(failed_dry_run_text(None, &[]).1.contains("dry-run again"));
+        let other = failed_dry_run_text(None, &["ERROR: something else".to_string()]).0;
+        assert!(other.contains("ERROR: something else"), "{other}");
+        assert!(!other.contains("Python"), "{other}");
+    }
+
+    /// proof-easyblock r3: EESSI-extend refused to load because the
+    /// EESSI_USER_INSTALL directory did not exist, and every dry run said "a
+    /// Python error in the easyblock shows up here". The output below is
+    /// Lmod's, as captured (it wraps the message).
+    #[test]
+    fn a_module_load_error_is_reported_as_setup_with_lmods_message() {
+        let output =
+            "-- Using /tmp/$USER as a temporary working directory for installations, you can\n\
+override this by setting the environment variable WORKING_DIR and reloading the\n\
+module (e.g., /dev/shm is a common option) \n\
+Lmod has detected the following error: The location of EESSI_USER_INSTALL\n\
+(/tmp/cal-logs/missing-parent/nope) does not exist or is not a folder \n\
+While processing the following module(s):\n\
+    Module fullname                 Module Filename\n\
+    ---------------                 ---------------\n\
+    EESSI-extend/2026.06-easybuild  /cvmfs/x/modules/all/EESSI-extend/2026.06-easybuild.lua\n\
+\n\
+eb-wrapper: no EESSI-extend 2026.06\n";
+        let message = "Lmod has detected the following error: The location of EESSI_USER_INSTALL (/tmp/cal-logs/missing-parent/nope) does not exist or is not a folder";
+        assert_eq!(lmod_error(output).as_deref(), Some(message));
+        let (errors, warnings) = split_warnings(error_lines(output, 20));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(errors, vec![message.to_string()]);
+        assert_eq!(failure_kind(&errors), Some("setup"));
+        let (summary, next) = failed_dry_run_text(failure_kind(&errors), &errors);
+        assert!(summary.contains("before EasyBuild started"), "{summary}");
+        assert!(
+            summary
+                .contains("EESSI_USER_INSTALL (/tmp/cal-logs/missing-parent/nope) does not exist"),
+            "{summary}"
+        );
+        assert!(!summary.contains("Python error"), "{summary}");
+        assert!(next.contains("do not change the easyblock"), "{next}");
+        assert_eq!(
+            lmod_error("ERROR: Missing modules for dependencies: dep/1"),
+            None
+        );
+        assert_eq!(error_lines(output, 1), vec![message.to_string()]);
     }
 
     #[test]
