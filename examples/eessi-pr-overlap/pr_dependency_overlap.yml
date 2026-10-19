@@ -1,0 +1,177 @@
+# documentation: https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions
+#
+# DRAFT for EESSI/software-layer (.github/workflows/pr_dependency_overlap.yml).
+# Kept in eb-stack's examples until the EESSI maintainers want it.
+#
+# Records, for every open pull request that changes a 2026.06 easystack, what
+# `eb --easystack <file> --robot` would build on the current stack, and which
+# open pull requests would build the same modules. Reviewers read the result on
+# the data branch instead of working it out by hand.
+#
+# Modelled on update_software_layer_scripts_commit.yml:
+#   - schedule (hourly) plus workflow_dispatch, one run at a time;
+#   - the ephemeral same-repo GITHUB_TOKEN, no PAT, no secrets;
+#   - pushes only to the bot-owned branch gh_action_pr_dependency_overlap,
+#     which must be exempt from the push restriction that covers other branches.
+# Unlike that workflow it never opens a pull request and never comments: the
+# data branch is the whole output, and it is never merged.
+#
+# Fork safety: the workflow runs on the base repository from main's copy of
+# this file. Pull request heads, fork or not, are fetched from
+# refs/pull/N/head as git objects and their easystack files are read as data.
+# Nothing from a pull request is checked out or run, and the job that reads
+# them has a read-only token. Only the publish job can write, and it only
+# commits the files the compute job produced.
+name: PR dependency overlap
+on:
+  schedule:
+    - cron: '23 * * * *'  # hourly, off the top of the hour
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:  # one writer for the data branch, so runs never race
+  group: pr-dependency-overlap
+  cancel-in-progress: true
+env:
+  EESSI_VERSION: '2026.06'
+  # Installed modules are read for one reference CPU target.
+  CPU_TARGET: x86_64/amd/zen4
+  DATA_BRANCH: gh_action_pr_dependency_overlap
+  # Pin the eb-stack release by version AND sha256 of the tarball.
+  # Fill both from the release's sha256.sum once a release carries pr-overlap.
+  EB_STACK_VERSION: 'vX.Y.Z'
+  EB_STACK_SHA256: '0000000000000000000000000000000000000000000000000000000000000000'
+jobs:
+  compute:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read       # fetch main and refs/pull/*/head
+      pull-requests: read  # list open pull requests and their files
+    steps:
+      - name: Check out software-layer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: Mount EESSI CernVM-FS repository
+        uses: eessi/github-action-eessi@v3
+        with:
+          eessi_stack_version: '${{ env.EESSI_VERSION }}'
+
+      - name: Install eb-stack (pinned by sha256)
+        run: |
+          set -euo pipefail
+          tarball=eb_stack-x86_64-unknown-linux-gnu.tar.xz
+          curl -fsSL -o "$tarball" \
+            "https://github.com/HaoZeke/eb-stack/releases/download/${EB_STACK_VERSION}/${tarball}"
+          echo "${EB_STACK_SHA256}  ${tarball}" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/eb-stack"
+          tar -xJf "$tarball" -C "$RUNNER_TEMP/eb-stack" --strip-components=1
+          echo "$RUNNER_TEMP/eb-stack" >> "$GITHUB_PATH"
+
+      - name: Collect open pull requests (read-only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Vendored next to only_latest_easystacks.sh, from eb-stack's
+          # examples/eessi-pr-overlap/fetch-prs.sh.
+          bash .github/workflows/scripts/fetch_pr_easystacks.sh \
+            "${{ github.repository }}" "$EESSI_VERSION" "$RUNNER_TEMP/in"
+
+      - name: Installed modules and robot path from the mounted stack
+        run: |
+          set -euo pipefail
+          sw="/cvmfs/software.eessi.io/versions/${EESSI_VERSION}/software/linux/${CPU_TARGET}/software"
+          # software/<Name>/<VersionFull>/ is one installed module.
+          find "$sw" -mindepth 2 -maxdepth 2 -type d -printf '%P\n' | sort > "$RUNNER_TEMP/installed.txt"
+          wc -l < "$RUNNER_TEMP/installed.txt"
+          # The newest EasyBuild the version's easystacks name is the robot path.
+          eb=$(ls easystacks/software.eessi.io/${EESSI_VERSION}/*.yml \
+                 | sed -n 's/.*-eb-\([0-9.]*[0-9]\)-.*/\1/p' | sort -V | tail -n1)
+          echo "EB_VERSION=$eb" >> "$GITHUB_ENV"
+          robot="$sw/EasyBuild/$eb/easybuild/easyconfigs"
+          if [[ ! -d "$robot" ]]; then
+            git clone --quiet --depth 1 --branch "easybuild-easyconfigs-v${eb}" \
+              https://github.com/easybuilders/easybuild-easyconfigs "$RUNNER_TEMP/easyconfigs"
+            robot="$RUNNER_TEMP/easyconfigs/easybuild/easyconfigs"
+          fi
+          echo "ROBOT=$robot" >> "$GITHUB_ENV"
+
+      - name: Compute build sets and overlap
+        run: |
+          set -euo pipefail
+          args=()
+          for f in "$RUNNER_TEMP"/in/prs/*.json; do [[ -e "$f" ]] && args+=(--pr "$f"); done
+          for d in "$RUNNER_TEMP"/in/commit-trees/*/; do
+            [[ -d "$d" ]] && args+=(--commit-tree "$(basename "$d")=$d")
+          done
+          if [[ ${#args[@]} -eq 0 ]]; then echo '[]' > "$RUNNER_TEMP/none.json"; args=(--pr "$RUNNER_TEMP/none.json"); fi
+          eb-stack pr-overlap "${args[@]}" \
+            --easyconfigs "$ROBOT" \
+            --installed "$RUNNER_TEMP/installed.txt" \
+            --eessi-version "$EESSI_VERSION" \
+            --installed-label "${CPU_TARGET} (EasyBuild ${EB_VERSION})" \
+            --exclude-path /accel/ --exclude-path /additional_arch/ \
+            --repo-url "${{ github.server_url }}/${{ github.repository }}" \
+            --out-dir "$RUNNER_TEMP/out"
+          cat "$RUNNER_TEMP/out/overlap.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr-overlap
+          path: ${{ runner.temp }}/out
+          retention-days: 7
+
+  publish:
+    needs: compute
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write  # push to gh_action_pr_dependency_overlap only; main is protected
+    steps:
+      - name: Check out software-layer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pr-overlap
+          path: ${{ runner.temp }}/out
+
+      - name: Commit to the data branch when a build set changed
+        run: |
+          set -euo pipefail
+          if git fetch --quiet --depth 1 origin "$DATA_BRANCH"; then
+            git checkout -B "$DATA_BRANCH" FETCH_HEAD
+          else
+            git checkout --orphan "$DATA_BRANCH"
+            git rm -rfq .
+          fi
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -r "$RUNNER_TEMP/out/." .
+          cat > README.md <<'MD'
+          # Data branch: never merge
+
+          Written by the `PR dependency overlap` workflow on every run. It holds,
+          per open pull request, what its easystack changes would build on the
+          current stack (`prs/<N>.toml`), the modules several of them would
+          build (`overlap.toml`) and a report for reviewers (`overlap.md`).
+
+          Do not open a pull request from this branch and do not push to it.
+          MD
+          git add -A
+          # Timestamps alone are not news: commit only when a build set moved.
+          changed=$(git diff --cached -U0 | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) ' \
+                      | grep -vE '^[+-](generated_at = |Computed )' || true)
+          if [[ -z "$changed" ]]; then
+            echo "No build set changed; nothing to commit."
+            exit 0
+          fi
+          prs=$(ls prs 2>/dev/null | wc -l)
+          shared=$(grep -c '^"' overlap.toml || true)
+          # No "#N" in the message, so no pull request timeline gets an entry.
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -qm "Update PR dependency overlap: ${prs} pull requests, ${shared} shared modules"
+          git push origin "HEAD:refs/heads/${DATA_BRANCH}"
