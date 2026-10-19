@@ -1,0 +1,18 @@
+easyblock = 'ConfigureMake'
+
+name = 'libpng'
+version = '1.6.50'
+
+homepage = 'https://example.org/libpng'
+description = "Fixture for pr-overlap."
+
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+
+source_urls = ['https://example.org/']
+sources = [SOURCE_TAR_GZ]
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+builddependencies = [('CMake', '4.1.2')]
+dependencies = [('zlib', '1.3.1')]
+
+moduleclass = 'lib'
