@@ -1,8 +1,9 @@
 #+TITLE: Command-line reference
 #+OPTIONS: toc:t num:nil
 
-~eb-stack~ has five namespaced command groups plus an MCP server. All paths
-written by package commands are deterministic bundle artifacts.
+~eb-stack~ has five namespaced command groups, ~pr-overlap~, and an MCP
+server. All paths written by package commands are deterministic bundle
+artifacts.
 
 * Command map
 
@@ -14,6 +15,7 @@ written by package commands are deterministic bundle artifacts.
 | ~recipe check~ | Validate metadata and robot dependency availability |
 | ~recipe lint~ / ~recipe format~ | Report or mechanically repair EasyBuild E501 findings |
 | ~stack solve~ / ~stack sbom~ | Solve a multi-root stack or emit SBOM from a lock |
+| ~pr-overlap~ | Close open pull-request easystack additions against an installed stack and report shared builds |
 | ~target list~ / ~target doctor~ | Resolve layered target configuration and probe it |
 | ~campaign run~ / ~campaign status~ | Execute or inspect a persisted build campaign |
 | ~campaign finding ...~ | Claim and resolve typed build findings |
@@ -232,6 +234,46 @@ in that format; each package keeps the ~--hook~, ~--hooks~,
 (~--from-commit~, ~--from-pr~, ~--ignore-test-failure~, ~--rebuild~) stay
 behind. A module whose name or versionsuffix says CUDA gets
 ~--include-systems~ with the ~--jenkins-gpu-systems~ list.
+
+* ~pr-overlap~
+
+#+begin_src bash
+eb-stack pr-overlap \
+  --pr PR.json [--pr PR.json]... \
+  --easyconfigs TREE [--easyconfigs TREE]... \
+  [--commit-tree COMMIT=DIR]... \
+  --installed installed.txt \
+  [--eessi-version 2026.06] \
+  [--installed-label LABEL] \
+  [--exclude-path SUBSTR]... \
+  [--include-path SUBSTR]... \
+  [--generated-at RFC3339] \
+  [--repo-url URL] \
+  [--out-dir pr-overlap]
+#+end_src
+
+Reads each pull request's easystack changes as data. It does not run the
+pull request and it does not build. For the given ~--eessi-version~ it keeps
+the easystack entries present at head and absent from base, finds those
+easyconfigs on the robot path, and closes them against ~--installed~.
+
+~--easyconfigs~ is the release robot tree. Later trees win on the same
+name, version, toolchain, and versionsuffix. ~--commit-tree~ is the
+easyconfigs tree at one ~from-commit~, and it wins over the release tree for
+entries pinned to that commit.
+
+~--exclude-path~ drops easystack paths that contain the substring.
+~--include-path~, when given, keeps only paths that contain one of the
+substrings. An empty include list keeps every path that survived the
+excludes.
+
+An installed module is a leaf. Entries under a ~rebuilds/~ easystack are
+built even when installed. A requirement no easyconfig satisfies is recorded
+and the rest of the closure is still written.
+
+The output directory holds ~prs/<N>.toml~, ~overlap.toml~, and ~overlap.md~.
+See [[file:formats.org][output formats]] for the records. A closed pull
+request's file is removed: the directory is the open set of this run.
 
 * Target commands
 

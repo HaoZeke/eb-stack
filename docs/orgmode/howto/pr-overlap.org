@@ -1,0 +1,85 @@
+#+TITLE: Find shared builds across open pull requests
+#+OPTIONS: toc:t num:nil
+
+Goal: for every open pull request that changes an easystack, write what it
+would build on the current stack, and which of those modules more than one
+open pull request would build.
+
+The inputs are the pull requests' easystack files, the release easyconfigs,
+and a list of installed modules. Nothing from a pull request is executed.
+
+* Run it on a mounted stack
+
+From a clone of ~EESSI/software-layer~, with ~gh~ authenticated for public
+reads:
+
+#+begin_src bash
+examples/eessi-pr-overlap/fetch-prs.sh EESSI/software-layer 2026.06 in/
+find "$EESSI_SOFTWARE_PATH/software" -mindepth 2 -maxdepth 2 -type d -printf '%P\n' \
+  | sort > installed.txt
+eb-stack pr-overlap --pr in/prs/*.json \
+  $(for d in in/commit-trees/*/; do printf -- '--commit-tree %s=%s ' "$(basename "$d")" "$d"; done) \
+  --easyconfigs /path/to/easybuild/easyconfigs \
+  --installed installed.txt --installed-label x86_64/amd/zen4 \
+  --exclude-path /accel/ --exclude-path /additional_arch/ \
+  --out-dir out/
+#+end_src
+
+~fetch-prs.sh~ lives in this repository at
+~examples/eessi-pr-overlap/fetch-prs.sh~. ~--easyconfigs~ is the easyconfigs
+tree shipped with the EasyBuild version the easystack names. For a
+~from-commit~ pin, ~--commit-tree~ is the whole easyconfigs tree at that
+commit.
+
+A second pass over an architecture the first pass excluded keeps that
+substring and uses that architecture's installed list. Do not also exclude
+the same substring:
+
+#+begin_src bash
+eb-stack pr-overlap --pr in/prs/*.json \
+  $(for d in in/commit-trees/*/; do printf -- '--commit-tree %s=%s ' "$(basename "$d")" "$d"; done) \
+  --easyconfigs /path/to/easybuild/easyconfigs \
+  --installed installed-riscv.txt --installed-label riscv64/generic \
+  --include-path /additional_arch/riscv64/ \
+  --exclude-path /accel/ \
+  --out-dir out-riscv/
+#+end_src
+
+* Read which modules are shared
+
+~out/prs/<N>.toml~ lists ~to_build~ as one sorted line per module.
+Duplicates across those lines are the overlap:
+
+#+begin_src bash
+awk '/^to_build = \[/{f=1; next} f && /^\]/{f=0; next} f' out/prs/*.toml | sort | uniq -d
+#+end_src
+
+~out/overlap.md~ is the same answer as a table. ~out/overlap.toml~ is the
+index. Closed pull requests have no file: each run rewrites ~prs/~ to the
+open set.
+
+* Wire it into CI
+
+The draft workflow is
+~examples/eessi-pr-overlap/pr_dependency_overlap.yml~. It is not installed
+in ~EESSI/software-layer~ from this repository.
+
+On the software-layer repository:
+
+1. Exempt ~gh_action_pr_dependency_overlap~ from the branch push restriction,
+   the same way ~gh_action_update_software_layer_commit_sha~ is exempt, so
+   ~github-actions[bot]~ can push to that one branch. ~main~ stays protected.
+2. Copy ~pr_dependency_overlap.yml~ to ~.github/workflows/~ and
+   ~fetch-prs.sh~ to ~.github/workflows/scripts/fetch_pr_easystacks.sh~.
+3. Set ~EB_STACK_VERSION~ and ~EB_STACK_SHA256~ in the workflow to a release
+   that carries ~pr-overlap~.
+
+The workflow runs on a schedule and on ~workflow_dispatch~, from ~main~. It
+mounts the stack, writes the three output files, and pushes them to
+~gh_action_pr_dependency_overlap~ without force. It opens no pull request
+and posts no comment. The publish job commits only when a build set changed.
+A timestamp change alone is not committed.
+
+Why the files are regenerated on every run, and why a second build of a
+shared module overwrites the first binary, is covered in
+[[file:../explanation/pr-overlap.org][from one easystack line to a build set]].

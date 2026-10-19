@@ -183,3 +183,59 @@ solver selection, not a scan of installed software.
 - From ~eb-stack stack sbom --lock LOCK~ (lock only): ~dependsOn~ is empty
   (unknown edges). The document never invents all-to-all co-stack cycles.
   Empty ~dependsOn~ arrays may be omitted by cyclonedx-bom serialization.
+
+* Pull-request build set (~eb-stack pr-overlap~)
+
+One run writes three files. ~prs/<N>.toml~ is the SBOM for pull request ~N~:
+the closure of the easystack entries it adds, minus modules already
+installed. ~overlap.toml~ is the same build sets intersected. ~overlap.md~ is
+that intersection as a report. Every file starts with the never-merge header.
+
+~to_build~ is one sorted module per line, so the same line in two
+~prs/<N>.toml~ files is a module both pull requests would build.
+~sort | uniq -d~ on those lines, and a staging merge of the files, are the
+overlap report.
+
+** ~prs/<N>.toml~
+
+| Field | Meaning |
+|-
+| ~schema_version~ | ~1~ |
+| ~pr~ | Pull request number |
+| ~head_sha~ | Head commit the record was computed for |
+| ~title~ | Title at that commit, omitted when unknown |
+| ~generated_at~ | RFC 3339 timestamp of the run |
+| ~eessi_version~ | Stack version, from ~--eessi-version~ |
+| ~installed_source~ | Label of the installed list |
+| ~easystack_files~ | Easystack paths that contributed an entry |
+| ~to_build~ | Module names that would be built, sorted, one per line |
+| ~already_installed~ | Installed modules the walk reached and stopped at, sorted |
+| ~unresolved~ | Requirements no easyconfig on the robot path satisfies |
+| ~entries~ | The easystack lines the pull request adds |
+
+Each ~[[entries]]~ table has ~easystack~, ~easyconfig~, and, when the entry
+carries them, ~from_commit~ and ~eb_version~. A module name is
+~name/version[-toolchain]versionsuffix~, with the system toolchain omitted.
+
+A worked record from an open 2026.06 pull request is in
+[[file:../explanation/pr-overlap.org][from one easystack line to a build set]].
+
+** ~overlap.toml~
+
+| Field | Meaning |
+|-
+| ~schema_version~ | ~1~ |
+| ~generated_at~ | Same timestamp as the records |
+| ~eessi_version~ | Stack version |
+| ~installed_source~ | Label of the installed list |
+| ~prs~ | Pull request numbers that received a record, ascending |
+| ~shared~ | Module to the pull requests that would build it, for modules more than one would build |
+| ~pairs~ | Per pull request, the other pull requests it shares modules with, and which modules |
+
+** ~overlap.md~
+
+The same ~shared~ map as a table, then one section per pull request: how
+many modules it builds, which other open pull requests it shares them with,
+and any unresolved requirements. Pull requests are written as ~#N~ text, or
+as links when ~--repo-url~ is set. The file links on GitHub without adding
+an entry to a pull request timeline.
