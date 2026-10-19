@@ -416,6 +416,30 @@ fn distance(candidate: &Candidate, recipe: &Candidate, all: &[Candidate]) -> usi
     usize::MAX
 }
 
+/// Keep the candidates EasyBuild would actually pick a dependency from.
+///
+/// With minimal toolchains off, the robot searches the recipe's own generation
+/// from the parent toolchain downward. A candidate outside that hierarchy is
+/// not a fallback: taking it is how a 2026 root pulls a `gompi-2022a` build
+/// and then the whole older generation. A dependency that names a toolchain
+/// was already limited to that toolchain by [`satisfies`], and that pin is
+/// allowed to point outside the generation.
+fn within_generation<'a>(
+    mut admissible: Vec<&'a Candidate>,
+    recipe: &Candidate,
+    all: &[Candidate],
+    dep: &DepReq,
+) -> Vec<&'a Candidate> {
+    let Some(best) = admissible.iter().map(|c| distance(c, recipe, all)).min() else {
+        return admissible;
+    };
+    if best == usize::MAX && dep.toolchain.is_none() {
+        return Vec::new();
+    }
+    admissible.retain(|c| distance(c, recipe, all) == best);
+    admissible
+}
+
 /// Pick one candidate from those a requirement admits.
 fn choose<'a>(admissible: &[&'a Candidate], choice: Choice) -> Option<&'a Candidate> {
     admissible.iter().copied().max_by(|a, b| {
@@ -563,18 +587,12 @@ pub fn graph_from_keys(
         });
 
         for (dep, kind) in deps {
-            let mut admissible: Vec<&Candidate> =
-                candidates.iter().filter(|c| satisfies(c, dep)).collect();
-            // Nearest generation first, then the choice function decides among
-            // equals. A dependency that pins a toolchain was already narrowed
-            // to that one build by `satisfies`.
-            if let Some(best) = admissible
-                .iter()
-                .map(|c| distance(c, candidate, candidates))
-                .min()
-            {
-                admissible.retain(|c| distance(c, candidate, candidates) == best);
-            }
+            let admissible = within_generation(
+                candidates.iter().filter(|c| satisfies(c, dep)).collect(),
+                candidate,
+                candidates,
+                dep,
+            );
             let Some(picked) = choose(&admissible, choice) else {
                 let mut available: Vec<String> = candidates
                     .iter()
@@ -689,15 +707,12 @@ pub fn closure_against_installed(
                 .then_with(|| a.version_req.cmp(&b.version_req))
         });
         for dep in deps {
-            let mut admissible: Vec<&Candidate> =
-                candidates.iter().filter(|c| satisfies(c, dep)).collect();
-            if let Some(best) = admissible
-                .iter()
-                .map(|c| distance(c, candidate, candidates))
-                .min()
-            {
-                admissible.retain(|c| distance(c, candidate, candidates) == best);
-            }
+            let admissible = within_generation(
+                candidates.iter().filter(|c| satisfies(c, dep)).collect(),
+                candidate,
+                candidates,
+                dep,
+            );
             match choose(&admissible, choice) {
                 Some(picked) => {
                     let dep_key = ModuleKey::of(picked);
@@ -1250,6 +1265,74 @@ mod tests {
         assert!(
             oldest.iter().any(|s| s.starts_with("Lib-2.0")),
             "{oldest:?}"
+        );
+    }
+
+    /// EasyBuild does not satisfy an unpinned dependency from an older
+    /// generation. The only `ParMETIS` in a mixed tree is often `gompi-2022a`;
+    /// walking it pulls that generation's GCCcore chain into a 2026 closure.
+    #[test]
+    fn an_unpinned_dependency_stays_inside_its_generation() {
+        let old_chain = candidate("OldBase", "11.3.0", tc("GCCcore", "11.3.0"), vec![]);
+        let old = candidate(
+            "ParMETIS",
+            "4.0.3",
+            tc("gompi", "2022a"),
+            vec![dep("OldBase", "", None)],
+        );
+        let cmake = candidate("CMake", "4.2.1", tc("GCCcore", "15.2.0"), vec![]);
+        let app = candidate(
+            "App",
+            "1.0",
+            tc("foss", "2026.1"),
+            vec![
+                dep("ParMETIS", "==4.0.3", None),
+                dep("CMake", "==4.2.1", None),
+            ],
+        );
+        let all = vec![app.clone(), old.clone(), old_chain, cmake];
+        let closure =
+            closure_against_installed(&all, &[ModuleKey::of(&app)], Choice::Newest, &|_| false);
+        let built: Vec<String> = closure.to_build.iter().map(ToString::to_string).collect();
+        assert!(
+            built.iter().any(|s| s.starts_with("CMake-4.2.1")),
+            "{built:?}"
+        );
+        assert!(
+            built
+                .iter()
+                .all(|s| !s.contains("ParMETIS") && !s.contains("OldBase")),
+            "{built:?}"
+        );
+        assert!(
+            closure
+                .unresolved
+                .iter()
+                .any(|u| u.requirement.contains("ParMETIS")),
+            "{:?}",
+            closure.unresolved
+        );
+        let err = build_order(&all, &["App".into()], Choice::Newest).unwrap_err();
+        assert!(matches!(err, OrderError::Unsatisfied { .. }), "{err}");
+
+        // A tuple that names the old toolchain is the one way out of the generation.
+        let pinned = candidate(
+            "Pinned",
+            "1.0",
+            tc("foss", "2026.1"),
+            vec![dep("ParMETIS", "==4.0.3", Some(tc("gompi", "2022a")))],
+        );
+        let pinned_all = vec![pinned.clone(), old];
+        let pinned_closure = closure_against_installed(
+            &pinned_all,
+            &[ModuleKey::of(&pinned)],
+            Choice::Newest,
+            &|_| false,
+        );
+        assert!(
+            pinned_closure.to_build.iter().any(|k| k.name == "ParMETIS"),
+            "{:?}",
+            pinned_closure.to_build
         );
     }
 
