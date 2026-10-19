@@ -1412,7 +1412,9 @@ fn build_templates(
             ch.to_ascii_lowercase().to_string(),
         );
     }
-    // Defaults used by GITHUB_*/BITBUCKET_* constants when not set in the recipe.
+    // EasyBuild default.py sets both to `%(namelower)s`. A recipe that assigns
+    // github_account or bitbucket_account replaces these on the final template
+    // map; see apply_forge_account_overrides.
     tv.insert("github_account".into(), namelower.clone());
     tv.insert("bitbucket_account".into(), namelower);
     tv.insert("version".into(), version.to_string());
@@ -1437,6 +1439,36 @@ fn build_templates(
         tv.insert("pyshortver".into(), format!("{}.{}", parts[0], parts[1]));
     }
     tv
+}
+
+/// Copy `github_account` and `bitbucket_account` from the recipe onto the
+/// template map, which is step 3 of EasyBuild's `template_constant_dict`.
+///
+/// `build_templates` installs the `default.py` fallback, `%(namelower)s`.
+/// Leaving that in place when the recipe names an account makes
+/// `GITHUB_SOURCE` download `https://github.com/<namelower>/<name>/archive`
+/// instead of the repository the recipe states. The assigned value can itself
+/// be a template (`%(namelower)s` is the usual spelling of the default), so it
+/// is resolved before it replaces the fallback. An account that still contains
+/// an unresolved `%(...)s` is left alone: a download from the wrong account is
+/// worse than a residual.
+fn apply_forge_account_overrides(
+    templates: &mut HashMap<String, String>,
+    env: &HashMap<String, Value>,
+) {
+    for key in ["github_account", "bitbucket_account"] {
+        let Some(value) = env.get(key) else {
+            continue;
+        };
+        let Ok(raw) = value.expect_str(key) else {
+            continue;
+        };
+        let resolved = apply_templates_str(&raw, templates);
+        if resolved.is_empty() || resolved.contains("%(") {
+            continue;
+        }
+        templates.insert(key.to_string(), resolved);
+    }
 }
 
 /// `%(key)s`, compiled once. The pattern is a literal, so a failure here would
@@ -1916,7 +1948,7 @@ fn resolve_easyconfig_str_inner(
     // the dependency list has to be read before those can be resolved. Only a
     // second pass, and only when the dependencies define something.
     let dep_tv = dependency_version_templates(&[&dependencies, &builddependencies]);
-    let (templates, versionsuffix, dependencies, builddependencies) = if dep_tv.is_empty() {
+    let (mut templates, versionsuffix, dependencies, builddependencies) = if dep_tv.is_empty() {
         (templates, versionsuffix, dependencies, builddependencies)
     } else {
         let mut templates = templates;
@@ -1935,6 +1967,10 @@ fn resolve_easyconfig_str_inner(
         let builddependencies = redo(parser.env.get("builddependencies"))?;
         (templates, versionsuffix, dependencies, builddependencies)
     };
+    // After both build_templates calls. Each one installs the namelower
+    // fallback, so an earlier override would be discarded. Dependency
+    // version templates only extend the map; they do not reset accounts.
+    apply_forge_account_overrides(&mut templates, &parser.env);
 
     // Extensions carry `%(pyver)s` too, so they use the final template set.
     let exts_val = parser
@@ -3836,6 +3872,62 @@ mod tests {
                 .unwrap()
                 .version_req,
             "==2.10.12"
+        );
+    }
+
+    #[test]
+    fn recipe_github_account_replaces_the_namelower_default() {
+        // The assignment sits below source_urls on purpose: templating runs
+        // after the whole file is read, as it does in EasyBuild.
+        let src = r#"
+name = 'Widget'
+version = '1.2.3'
+toolchain = SYSTEM
+sources = [{'filename': 'v%(version)s.tar.gz', 'source_urls': [GITHUB_SOURCE]}]
+source_urls = [GITHUB_LOWER_SOURCE]
+github_account = 'some-org'
+"#;
+        let r = resolve_easyconfig_str(src).expect("resolve");
+        assert_eq!(
+            r.source_urls,
+            vec!["https://github.com/some-org/widget/archive"]
+        );
+        assert_eq!(
+            r.source_files[0].source_urls,
+            vec!["https://github.com/some-org/Widget/archive"]
+        );
+        assert_eq!(r.source_files[0].download_filename, "v1.2.3.tar.gz");
+    }
+
+    #[test]
+    fn github_account_defaults_to_namelower_when_the_recipe_omits_it() {
+        let src = r#"
+name = 'Widget'
+version = '1.2.3'
+toolchain = SYSTEM
+source_urls = [GITHUB_SOURCE]
+sources = [SOURCE_TAR_GZ]
+"#;
+        let r = resolve_easyconfig_str(src).expect("resolve");
+        assert_eq!(
+            r.source_urls,
+            vec!["https://github.com/widget/Widget/archive"]
+        );
+    }
+
+    #[test]
+    fn recipe_bitbucket_account_replaces_the_namelower_default() {
+        let src = r#"
+name = 'Widget'
+version = '1.2.3'
+toolchain = SYSTEM
+source_urls = [BITBUCKET_SOURCE]
+bitbucket_account = '%(namelower)s-team'
+"#;
+        let r = resolve_easyconfig_str(src).expect("resolve");
+        assert_eq!(
+            r.source_urls,
+            vec!["https://bitbucket.org/widget-team/widget/get"]
         );
     }
 
