@@ -34,7 +34,7 @@ eb-stack pr-overlap --pr in/prs/*.json \
 
 ~fetch-prs.sh~ lives in this repository at
 ~examples/eessi-pr-overlap/fetch-prs.sh~. ~--easyconfigs~ is the easyconfigs
-tree shipped with the EasyBuild version the easystack names. For a
+tree that comes with the EasyBuild version the easystack names. For a
 ~from-commit~ pin, ~--commit-tree~ is the whole easyconfigs tree at that
 commit. ~module load EESSI-extend~ exports ~EASYBUILD_FILTER_DEPS~ for the
 loaded CPU target. Pass that value to ~--filter-deps~. When the flag is
@@ -44,8 +44,8 @@ EasyBuild release's ~easybuild/easyblocks~ package. ~--easyblocks-commit~ is
 the files one ~include-easyblocks-from-commit~ touches, which ~fetch-prs.sh~
 writes under ~in/easyblocks/<commit>/~.
 
-A second pass over an architecture the first pass excluded keeps that
-substring and uses that architecture's installed list. Do not also exclude
+For an architecture the zen4 run excluded, keep that substring and use
+that architecture's installed list. Do not also exclude
 the same substring:
 
 #+begin_src bash

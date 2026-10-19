@@ -3,8 +3,8 @@
 
 ~eb-stack pr-overlap~ turns each easystack line a pull request adds into the
 modules that line would build on the installed stack. This page follows open
-EESSI software-layer pull requests 1759, 1728, and 1787 for 2026.06, against
-~/cvmfs/software.eessi.io~ ~x86_64/amd/zen4~, using the easyconfigs shipped
+EESSI software-layer pull requests 1728 and 1787 for 2026.06, against
+~/cvmfs/software.eessi.io~ ~x86_64/amd/zen4~, using the easyconfigs that come
 with EasyBuild 5.4.0. The zen4 run loaded ~EESSI-extend~ and passed that
 module's ~EASYBUILD_FILTER_DEPS~, the ~modules/all~ tree, and the EasyBuild
 5.4.0 easyblocks package. The command writes records. It does not build.
