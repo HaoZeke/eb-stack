@@ -564,8 +564,8 @@ fn main() -> Result<()> {
 
 fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
     use eb_stack::pr_overlap::{
-        overlap_index, parse_installed, pr_record, render_markdown, to_toml, OverlapConfig,
-        PrInput, RobotTrees,
+        overlap_index, parse_installed, pr_record, record_to_toml, render_markdown, to_toml,
+        OverlapConfig, PrInput, RobotTrees,
     };
     let mut prs: Vec<PrInput> = Vec::new();
     for path in &args.prs {
@@ -626,7 +626,10 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
         }
     }
     for record in &records {
-        std::fs::write(pr_dir.join(format!("{}.toml", record.pr)), to_toml(record)?)?;
+        std::fs::write(
+            pr_dir.join(format!("{}.toml", record.pr)),
+            record_to_toml(record)?,
+        )?;
     }
     std::fs::write(args.out_dir.join("overlap.toml"), to_toml(&index)?)?;
     std::fs::write(

@@ -10,7 +10,8 @@
 //! This module answers it from the recipes alone, with no build and no
 //! model. Per pull request it reads the easystack entries the change adds,
 //! finds their easyconfigs on the robot path (the release tree plus, for an
-//! entry pinned with `from-commit`, that commit's files ahead of it), and closes
+//! entry pinned with `from-commit`, the easyconfigs tree at that commit ahead
+//! of it), and closes
 //! them with [`crate::build_order::closure_against_installed`] against the list
 //! of installed modules. An installed module is a leaf, as it is for the robot.
 //! The overlap report is then a set intersection over the to-build sets.
@@ -123,8 +124,8 @@ pub struct PrRecord {
     pub entries: Vec<RecordEntry>,
 }
 
-/// Robot-path trees: the release tree, and per `from-commit` the files of
-/// that commit, which EasyBuild puts ahead of the release tree.
+/// Robot-path trees: the release tree, and per `from-commit` the easyconfigs
+/// tree at that commit, which EasyBuild puts ahead of the release tree.
 #[derive(Debug, Clone, Default)]
 pub struct RobotTrees {
     /// Easyconfigs of the EasyBuild release the stack uses.
@@ -381,6 +382,54 @@ pub fn to_toml<T: Serialize>(value: &T) -> Result<String, toml::ser::Error> {
     Ok(format!("{GENERATED_HEADER}\n{}", toml::to_string(value)?))
 }
 
+/// One pull request's record, with `to_build` as one sorted line per module.
+///
+/// The same line in two `prs/<N>.toml` files is a module both pull requests
+/// would build. `git diff` shows a deploy dropping that line, and
+/// `sort | uniq -d` across the `to_build` lines is the overlap.
+pub fn record_to_toml(record: &PrRecord) -> Result<String, toml::ser::Error> {
+    let mut modules = record.to_build.clone();
+    modules.sort();
+    let mut without = record.clone();
+    without.to_build.clear();
+    let body = expand_to_build(&toml::to_string(&without)?, &modules);
+    Ok(format!("{GENERATED_HEADER}\n{body}"))
+}
+
+/// Replace the empty `to_build` array left by [`record_to_toml`] with one
+/// quoted module per line. Any other empty array is left alone.
+fn expand_to_build(text: &str, modules: &[String]) -> String {
+    let mut out = String::with_capacity(text.len() + modules.len() * 48);
+    let mut replaced = false;
+    for line in text.lines() {
+        if !replaced && line == "to_build = []" {
+            replaced = true;
+            out.push_str(&render_to_build(modules));
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !replaced {
+        out.push_str(&render_to_build(modules));
+    }
+    out
+}
+
+fn render_to_build(modules: &[String]) -> String {
+    if modules.is_empty() {
+        return "to_build = []\n".to_string();
+    }
+    let mut out = String::from("to_build = [\n");
+    for module in modules {
+        out.push_str("  \"");
+        out.push_str(&module.replace('\\', "\\\\").replace('"', "\\\""));
+        out.push_str("\",\n");
+    }
+    out.push_str("]\n");
+    out
+}
+
 /// The overlap report for reviewers, as Markdown.
 ///
 /// Pull requests are written as plain `#N` text inside a file, which links on
@@ -490,6 +539,31 @@ mod tests {
         assert_eq!(added.len(), 1);
         assert_eq!(added[0].file, "B-2.eb");
         assert_eq!(added[0].from_commit.as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn to_build_is_one_sorted_line_per_module() {
+        let record = PrRecord {
+            schema_version: 1,
+            pr: 1,
+            head_sha: "abc".into(),
+            title: None,
+            generated_at: "2026-10-19T12:00:00Z".into(),
+            eessi_version: "2026.06".into(),
+            installed_source: "x86_64/amd/zen4".into(),
+            easystack_files: Vec::new(),
+            to_build: vec!["b/2".into(), "a/1".into()],
+            already_installed: Vec::new(),
+            unresolved: Vec::new(),
+            entries: Vec::new(),
+        };
+        let text = record_to_toml(&record).expect("toml");
+        let a = text.find("  \"a/1\",\n").expect("a on its own line");
+        let b = text.find("  \"b/2\",\n").expect("b on its own line");
+        assert!(a < b, "sorted, got {text}");
+        let back: PrRecord = toml::from_str(&text).expect("parse");
+        assert_eq!(back.to_build, vec!["a/1".to_string(), "b/2".to_string()]);
+        assert_eq!(back.pr, 1);
     }
 
     #[test]

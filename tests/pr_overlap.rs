@@ -190,7 +190,7 @@ fn a_rebuild_easystack_builds_its_installed_entry_again() {
 #[test]
 fn include_path_keeps_only_matching_easystacks() {
     let riscv = "easystacks/software.eessi.io/2026.06/additional_arch/riscv64/generic/eessi-2026.06-eb-5.4.0-2026.1.yml";
-    let inputs = vec![
+    let inputs = [
         pr(
             201,
             vec![change(
@@ -344,5 +344,173 @@ fn the_cli_writes_the_same_bytes_twice_and_drops_closed_prs() {
             "prs/104.toml",
             "prs/106.toml",
         ]
+    );
+}
+
+fn run_overlap(dir: &Path, prs: &[PrInput], installed: &Path, out: &Path) {
+    let input = dir.join("prs.json");
+    std::fs::write(&input, serde_json::to_string(prs).expect("json")).expect("write prs");
+    let status = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .arg("pr-overlap")
+        .arg("--pr")
+        .arg(&input)
+        .arg("--easyconfigs")
+        .arg(fixtures().join("release"))
+        .arg("--installed")
+        .arg(installed)
+        .args(["--installed-label", "x86_64/amd/zen4"])
+        .args(["--exclude-path", "/accel/"])
+        .args(["--generated-at", "2026-10-19T12:00:00Z"])
+        .args(["--repo-url", "https://github.com/EESSI/software-layer"])
+        .arg("--out-dir")
+        .arg(out)
+        .output()
+        .expect("run pr-overlap");
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+}
+
+/// Lines inside every `to_build` array, passed through `sort | uniq -d`.
+fn duplicate_to_build_lines(out: &Path) -> String {
+    let status = Command::new("bash")
+        .arg("-c")
+        .arg(
+            "awk '/^to_build = \\[/{f=1; next} f && /^\\]/{f=0; next} f' prs/*.toml | sort | uniq -d",
+        )
+        .current_dir(out)
+        .output()
+        .expect("uniq");
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    String::from_utf8(status.stdout).expect("utf8")
+}
+
+fn git_diff_no_index(before: &str, after: &str) -> String {
+    let dir = tempfile::tempdir().expect("diffdir");
+    let a = dir.path().join("before.toml");
+    let b = dir.path().join("after.toml");
+    std::fs::write(&a, before).expect("before");
+    std::fs::write(&b, after).expect("after");
+    let status = Command::new("git")
+        .args(["--no-pager", "diff", "--no-index", "--"])
+        .arg(&a)
+        .arg(&b)
+        .output()
+        .expect("git diff");
+    String::from_utf8(status.stdout).expect("utf8")
+}
+
+/// Two pull requests add different easystack lines that both need `shared`,
+/// which is not installed. After the first pull request is deployed and
+/// closed, `shared` leaves the second record and the overlap goes with it.
+fn shared_line_drops_out_after_deploy(
+    a: u64,
+    b: u64,
+    added_a: &str,
+    added_b: &str,
+    shared: &str,
+    deployed: &[&str],
+    absent_from_easystack: &[&str],
+) {
+    for needle in absent_from_easystack {
+        assert!(
+            !added_a.contains(needle) && !added_b.contains(needle),
+            "{needle} is named by an easystack line"
+        );
+    }
+    let temp = tempfile::tempdir().expect("tempdir");
+    let installed = temp.path().join("installed.txt");
+    std::fs::copy(fixtures().join("installed.txt"), &installed).expect("installed");
+    let out = temp.path().join("out");
+    let open = vec![
+        pr(a, vec![change(STACK, Some(BASE), added_a)]),
+        pr(b, vec![change(STACK, Some(BASE), added_b)]),
+    ];
+    run_overlap(temp.path(), &open, &installed, &out);
+
+    let md = std::fs::read_to_string(out.join("overlap.md")).expect("md");
+    assert!(
+        md.contains(&format!("`{shared}`")),
+        "overlap.md should name {shared}: {md}"
+    );
+    assert!(
+        md.contains(&format!("/pull/{a}")) && md.contains(&format!("/pull/{b}")),
+        "{md}"
+    );
+
+    let dups = duplicate_to_build_lines(&out);
+    assert_eq!(dups, format!("  \"{shared}\",\n"), "{dups}");
+
+    let before_b = std::fs::read_to_string(out.join(format!("prs/{b}.toml"))).expect("b");
+    assert!(before_b.contains(&format!("  \"{shared}\",\n")));
+    let rec_b: PrRecord = toml::from_str(&before_b).expect("parse b");
+    assert!(rec_b.to_build.iter().any(|m| m == shared));
+
+    let mut text = std::fs::read_to_string(&installed).expect("read installed");
+    for module in deployed {
+        text.push_str(module);
+        text.push('\n');
+    }
+    std::fs::write(&installed, text).expect("write installed");
+    // A is closed: only B is still open. The previous prs/<A>.toml must go.
+    run_overlap(
+        temp.path(),
+        &[pr(b, vec![change(STACK, Some(BASE), added_b)])],
+        &installed,
+        &out,
+    );
+    assert!(!out.join(format!("prs/{a}.toml")).exists());
+    let after_b = std::fs::read_to_string(out.join(format!("prs/{b}.toml"))).expect("b after");
+    let rec_b: PrRecord = toml::from_str(&after_b).expect("parse b after");
+    assert!(
+        !rec_b.to_build.iter().any(|m| m == shared),
+        "{:?}",
+        rec_b.to_build
+    );
+    assert!(
+        rec_b.already_installed.iter().any(|m| m == shared),
+        "{:?}",
+        rec_b.already_installed
+    );
+    let md = std::fs::read_to_string(out.join("overlap.md")).expect("md after");
+    assert!(md.contains("None."), "{md}");
+    assert!(!md.contains(shared), "{md}");
+
+    let diff = git_diff_no_index(&before_b, &after_b);
+    assert!(
+        diff.contains(&format!("-  \"{shared}\",")),
+        "git diff should drop the shared to_build line:\n{diff}"
+    );
+}
+
+#[test]
+fn two_pull_requests_share_a_to_build_line_until_one_is_deployed() {
+    shared_line_drops_out_after_deploy(
+        301,
+        302,
+        "  - Alpha-1.0-GCCcore-15.2.0.eb\n",
+        "  - Beta-2.0-GCCcore-15.2.0.eb\n",
+        "SharedLib/1.2-GCCcore-15.2.0",
+        &["Alpha/1.0-GCCcore-15.2.0", "SharedLib/1.2-GCCcore-15.2.0"],
+        &["SharedLib"],
+    );
+}
+
+#[test]
+fn a_dependency_two_levels_down_is_the_same_to_build_line() {
+    shared_line_drops_out_after_deploy(
+        401,
+        402,
+        "  - Gamma-1.0-GCCcore-15.2.0.eb\n",
+        "  - Delta-1.0-GCCcore-15.2.0.eb\n",
+        "DeepLib/3.0-GCCcore-15.2.0",
+        &["Gamma/1.0-GCCcore-15.2.0", "DeepLib/3.0-GCCcore-15.2.0"],
+        &["DeepLib", "MidA", "MidB"],
     );
 }
