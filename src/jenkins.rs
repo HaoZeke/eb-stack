@@ -156,6 +156,7 @@ pub fn format_build_list<'a>(
 /// and the entries below it up to the next header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Section {
+    /// The header text without its `#` marks.
     pub title: String,
     /// Package names under the header, commented-out entries included: a
     /// line a site switched off still says where that package belongs.
