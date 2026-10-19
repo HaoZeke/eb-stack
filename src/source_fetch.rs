@@ -7,8 +7,13 @@
 //! which fetches the artifact the recipe names and writes its SHA-256. This
 //! module does the same before emission, so the bumped recipe carries a real
 //! digest and the SBOM's source component carries the same hash. Nothing here
-//! guesses: an entry with no URL, a git checkout, or a failed download stays
-//! unresolved and is reported as a residual with the reason, never filled.
+//! invents a URL. An entry with no URL, a git checkout, or a failed download
+//! stays unresolved and is reported as a residual with the reason, never
+//! filled. The one URL EasyBuild itself supplies is kept: `PythonPackage`
+//! (and an easyblock that takes its `extra_options`, such as
+//! `CargoPythonPackage` or `PythonBundle`) defaults `source_urls` to
+//! `[PYPI_SOURCE]` when the recipe leaves the list unset. That default is
+//! used only for the download. It is not written back into the recipe.
 
 use crate::eb_parse::{resolve_easyconfig_str, ResolvedEasyconfig, SourceFile};
 use crate::package::{Residual, ResidualSeverity, ResidualStage};
@@ -38,12 +43,22 @@ pub struct SourceFetch {
 }
 
 /// The URLs EasyBuild would try for `file`, in order: the entry's own
-/// `source_urls` when the dict sets them, else the recipe's.
+/// `source_urls` when the dict sets them, else the recipe's, else the
+/// easyblock default from [`pypi_default_bases`].
 pub fn source_download_urls(recipe: &ResolvedEasyconfig, file: &SourceFile) -> Vec<String> {
-    let bases = if file.source_urls.is_empty() {
-        &recipe.source_urls
+    let inherited = if file.source_urls.is_empty() && recipe.source_urls.is_empty() {
+        pypi_default_bases(recipe)
     } else {
+        None
+    };
+    let bases: &[String] = if !file.source_urls.is_empty() {
         &file.source_urls
+    } else if !recipe.source_urls.is_empty() {
+        &recipe.source_urls
+    } else if let Some(bases) = inherited.as_ref() {
+        bases
+    } else {
+        &[]
     };
     bases
         .iter()
@@ -56,6 +71,35 @@ pub fn source_download_urls(recipe: &ResolvedEasyconfig, file: &SourceFile) -> V
             }
         })
         .collect()
+}
+
+/// `PythonPackage.extra_options` sets `source_urls` to `[PYPI_SOURCE]` when
+/// the recipe did not. `CargoPythonPackage` calls that first, so a name
+/// ending in `PythonPackage` inherits the same default. `PythonBundle`
+/// calls it too, after `Bundle.extra_options`, which does not set
+/// `source_urls` itself.
+fn pypi_default_bases(recipe: &ResolvedEasyconfig) -> Option<Vec<String>> {
+    let block = recipe.easyblock.as_deref()?;
+    if !(block.ends_with("PythonPackage") || block == "PythonBundle") {
+        return None;
+    }
+    pypi_source_base(&recipe.name).map(|base| vec![base])
+}
+
+/// `PYPI_SOURCE` with `%(nameletter)s` and `%(name)s` filled. The letter is
+/// the first character of the name, not its lowercase form: that is the
+/// template EasyBuild resolves, and PyPI ignores casing in the path.
+fn pypi_source_base(name: &str) -> Option<String> {
+    let pattern = crate::eb_template_constants::EB_TEMPLATE_CONSTANTS
+        .iter()
+        .find(|(key, _)| *key == "PYPI_SOURCE")
+        .map(|(_, value)| *value)?;
+    let letter = name.chars().next()?;
+    Some(
+        pattern
+            .replace("%(nameletter)s", &letter.to_string())
+            .replace("%(name)s", name),
+    )
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -240,6 +284,75 @@ moduleclass = 'tools'
         assert_eq!(fetched[0].errors.len(), 1);
         assert!(fetched[1].sha256.is_none());
         assert!(!fetched[1].errors.is_empty());
+    }
+
+    fn python_recipe(easyblock: &str, source_urls: &str) -> String {
+        format!(
+            "easyblock = '{easyblock}'\n\
+             name = 'Widget'\n\
+             version = '1.2.3'\n\
+             homepage = 'https://example.invalid'\n\
+             description = 'x'\n\
+             toolchain = {{'name': 'GCCcore', 'version': '14.3.0'}}\n\
+             {source_urls}\
+             sources = [SOURCE_TAR_GZ]\n\
+             checksums = ['']\n\
+             moduleclass = 'tools'\n"
+        )
+    }
+
+    #[test]
+    fn a_pythonpackage_with_no_source_urls_downloads_from_pypi_source() {
+        let recipe = resolve_easyconfig_str(&python_recipe("PythonPackage", "")).unwrap();
+        assert!(recipe.source_urls.is_empty());
+        let url = "https://pypi.python.org/packages/source/W/Widget/Widget-1.2.3.tar.gz";
+        assert_eq!(
+            source_download_urls(&recipe, &recipe.source_files[0]),
+            vec![url.to_string()]
+        );
+        let mut client = MapClient::default();
+        client.pages.insert(url.into(), b"xyz".to_vec());
+        let fetched = fetch_sources(&recipe, &client);
+        assert_eq!(
+            fetched[0].sha256.as_deref(),
+            Some("3608bca1e44ea6c4d268eb6db02260269892c0b42b86bbf1e77a6fa16c3c9282")
+        );
+        assert_eq!(fetched[0].url.as_deref(), Some(url));
+    }
+
+    #[test]
+    fn cargo_pythonpackage_and_pythonbundle_inherit_the_pypi_default() {
+        for easyblock in ["CargoPythonPackage", "PythonBundle"] {
+            let recipe = resolve_easyconfig_str(&python_recipe(easyblock, "")).unwrap();
+            assert_eq!(
+                source_download_urls(&recipe, &recipe.source_files[0]),
+                vec!["https://pypi.python.org/packages/source/W/Widget/Widget-1.2.3.tar.gz"]
+            );
+        }
+    }
+
+    #[test]
+    fn an_explicit_source_url_wins_over_the_pythonpackage_default() {
+        let recipe = resolve_easyconfig_str(&python_recipe(
+            "PythonPackage",
+            "source_urls = ['https://mirror.example.org/src']\n",
+        ))
+        .unwrap();
+        assert_eq!(
+            source_download_urls(&recipe, &recipe.source_files[0]),
+            vec!["https://mirror.example.org/src/Widget-1.2.3.tar.gz"]
+        );
+    }
+
+    #[test]
+    fn an_easyblock_without_a_pypi_default_still_has_no_url() {
+        let recipe = resolve_easyconfig_str(&python_recipe("ConfigureMake", "")).unwrap();
+        assert!(source_download_urls(&recipe, &recipe.source_files[0]).is_empty());
+        let fetched = fetch_sources(&recipe, &MapClient::default());
+        assert_eq!(
+            fetched[0].errors,
+            vec!["no source_urls entry to download from".to_string()]
+        );
     }
 
     #[test]
