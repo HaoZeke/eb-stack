@@ -531,6 +531,50 @@ pub fn artifact_facts_for_lock(lock: &StackLock) -> HashMap<String, ArtifactFact
     out
 }
 
+/// Runtime and build-time dependency maps read from the easyconfigs a lock
+/// names, keeping only dependencies that are themselves in the lock.
+///
+/// A lock records what was chosen, not why; the edges live in the recipes. A
+/// solve has them in memory, but an SBOM written later from the lock alone
+/// would otherwise carry no `dependsOn` at all. Unreadable paths contribute
+/// no edges, as in [`artifact_facts_for_lock`].
+pub fn dep_maps_for_lock(
+    lock: &StackLock,
+) -> (HashMap<String, Vec<String>>, HashMap<String, Vec<String>>) {
+    let locked: std::collections::HashSet<&str> =
+        lock.packages.iter().map(|p| p.name.as_str()).collect();
+    let mut runtime = HashMap::new();
+    let mut build = HashMap::new();
+    for package in &lock.packages {
+        let parsed = (!package.easyconfig_path.is_empty())
+            .then(|| {
+                crate::eb_parse::parse_easyconfig_file(std::path::Path::new(
+                    &package.easyconfig_path,
+                ))
+                .ok()
+            })
+            .flatten();
+        let (deps, build_deps) = match parsed {
+            Some(c) => (
+                c.dependencies
+                    .iter()
+                    .map(|d| d.name.clone())
+                    .filter(|n| locked.contains(n.as_str()))
+                    .collect(),
+                c.builddependencies
+                    .iter()
+                    .map(|d| d.name.clone())
+                    .filter(|n| locked.contains(n.as_str()))
+                    .collect(),
+            ),
+            None => (Vec::new(), Vec::new()),
+        };
+        runtime.insert(package.name.clone(), deps);
+        build.insert(package.name.clone(), build_deps);
+    }
+    (runtime, build)
+}
+
 /// JSON document from a lock plus caller-supplied facts.
 pub fn lock_to_cyclonedx_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Value {
     bom_to_json_value(lock_to_bom_with_facts(lock, facts))

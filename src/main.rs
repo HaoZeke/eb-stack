@@ -1382,9 +1382,13 @@ fn run_stack(command: StackCommand) -> Result<()> {
             // names, so read them: without those a component cannot be verified
             // against the bytes it was planned from.
             let artifacts = eb_stack::artifact_facts_for_lock(&lock);
+            // The dependency edges live in the same recipes.
+            let (runtime, build) = eb_stack::dep_maps_for_lock(&lock);
             let sbom = eb_stack::lock_to_cyclonedx_with_facts(
                 &lock,
                 eb_stack::SbomFacts {
+                    runtime_dep_map: Some(&runtime),
+                    build_dep_map: Some(&build),
                     artifacts: Some(&artifacts),
                     ..eb_stack::SbomFacts::default()
                 },
