@@ -167,11 +167,14 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
     let mut components: Vec<Component> = Vec::new();
 
     for p in &lock.packages {
-        let r = bom_ref(&p.name, &p.version, &toolchain_label);
+        // Each module is built with its own toolchain (GCCcore, gompi, system,
+        // ...), not the stack's policy toolchain; its identity says which.
+        let package_toolchain = p.toolchain.label();
+        let r = bom_ref(&p.name, &p.version, &package_toolchain);
         package_refs.insert(p.name.clone(), r.clone());
 
         let mut props = vec![
-            Property::new("easybuild:toolchain", &toolchain_label),
+            Property::new("easybuild:toolchain", &package_toolchain),
             Property::new("easybuild:easyconfig_path", &p.easyconfig_path),
             Property::new("eb_stack:lifecycle", "pre-install-plan"),
         ];
@@ -884,6 +887,31 @@ mod artifact_facts_tests {
 
     fn component(sbom: &Value) -> Value {
         sbom.get("components").unwrap().as_array().unwrap()[0].clone()
+    }
+
+    /// A GCCcore module in a foss stack is a GCCcore module: two stacks that
+    /// share it must name the same component.
+    #[test]
+    fn a_component_carries_its_own_toolchain_not_the_stacks() {
+        let mut lock = one_package_lock();
+        lock.packages[0].toolchain = Toolchain {
+            name: "GCCcore".into(),
+            version: "14.2.0".into(),
+        };
+        let c = component(&bom_to_json_value(lock_to_bom_with_facts(
+            &lock,
+            SbomFacts::default(),
+        )));
+        assert_eq!(
+            c["purl"],
+            "pkg:generic/Example@1.2.3?toolchain=GCCcore-14.2.0"
+        );
+        let props = c["properties"].as_array().unwrap();
+        let toolchain = props
+            .iter()
+            .find(|p| p["name"] == "easybuild:toolchain")
+            .unwrap();
+        assert_eq!(toolchain["value"], "GCCcore-14.2.0");
     }
 
     #[test]
