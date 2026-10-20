@@ -1171,8 +1171,14 @@ fn run_stack(command: StackCommand) -> Result<()> {
                         "roots": roots,
                         "objective": "prefer_newer",
                     });
-                    written_policy = std::env::temp_dir()
-                        .join(format!("eb-stack-policy-{}-{}.json", name, version));
+                    // One file per process: two solves for the same toolchain
+                    // at once must not read each other's roots.
+                    written_policy = std::env::temp_dir().join(format!(
+                        "eb-stack-policy-{}-{}-{}.json",
+                        name,
+                        version,
+                        std::process::id()
+                    ));
                     std::fs::write(&written_policy, serde_json::to_vec_pretty(&policy)?)?;
                     written_policy
                 }
