@@ -729,6 +729,21 @@ impl EbInvocation {
         })
     }
 
+    /// `eb -x` arguments for this invocation, with the temporary files kept
+    /// in `<dir>/tmp`, as [`EbInvocation::args`] gives a real build.
+    /// EasyBuild 5.4.1 can exit 1 after a dry run that succeeded, while it
+    /// removes a temporary log that is already gone (`ERROR: Failed to remove
+    /// log file(s) ... [Errno 2]` after `Build succeeded for 1 out of 1`), and
+    /// a dry run that exits 1 has its findings dropped. Builds already pass
+    /// `--disable-cleanup-tmpdir`; dry runs pass it too.
+    pub fn dry_run_args(&self, dir: &Path) -> Vec<String> {
+        self.args(&[
+            "-x".to_string(),
+            "--disable-cleanup-tmpdir".to_string(),
+            format!("--tmpdir={}", dir.join("tmp").display()),
+        ])
+    }
+
     /// `eb` arguments for this invocation followed by `extra`.
     pub fn args(&self, extra: &[String]) -> Vec<String> {
         let mut args = vec![self.recipe.display().to_string()];
@@ -1524,6 +1539,25 @@ configure:9999: $? = 1\n";
             ..Default::default()
         };
         assert!(option.resolved(root).is_err());
+    }
+
+    #[test]
+    fn a_dry_run_keeps_its_temporary_files_like_a_build() {
+        let invocation = EbInvocation {
+            recipe: "x.eb".into(),
+            ..Default::default()
+        };
+        let args = invocation.dry_run_args(Path::new("/w/.eb-stack/dry-run/001"));
+        assert_eq!(args[0], "x.eb");
+        assert!(args.contains(&"-x".to_string()), "{args:?}");
+        assert!(
+            args.contains(&"--disable-cleanup-tmpdir".to_string()),
+            "{args:?}"
+        );
+        assert!(
+            args.contains(&"--tmpdir=/w/.eb-stack/dry-run/001/tmp".to_string()),
+            "{args:?}"
+        );
     }
 
     #[test]

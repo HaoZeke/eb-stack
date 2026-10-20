@@ -1168,7 +1168,7 @@ fn easyblock_dry_run(arguments: &Value) -> Result<Value, String> {
     let dir = eb_run_dir(&root, "dry-run")?;
     let output = dir.join("eb.out");
     let run = run_eb(
-        &invocation.args(&["-x".to_string()]),
+        &invocation.dry_run_args(&dir),
         timeout_arg(arguments, 600, 10, 3600),
         &output,
     )?;
