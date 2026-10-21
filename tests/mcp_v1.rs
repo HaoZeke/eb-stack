@@ -1,5 +1,8 @@
 use eb_stack::mcp::handle_message;
 use serde_json::json;
+use std::sync::Mutex;
+
+static WORKSPACE_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn mcp_catalog_matches_the_version_one_workflows() {
@@ -482,6 +485,19 @@ fn call(id: u64, name: &str, arguments: serde_json::Value) -> serde_json::Value 
 
 #[test]
 fn mcp_recipe_edit_model_guard_reverts_arm3_field_clobbering() {
+    let _guard = WORKSPACE_ENV_LOCK.lock().expect("workspace env lock");
+    let previous = std::env::var_os("EB_STACK_WORKSPACE");
+    std::env::set_var("EB_STACK_WORKSPACE", env!("CARGO_MANIFEST_DIR"));
+    struct Restore(Option<std::ffi::OsString>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(value) => std::env::set_var("EB_STACK_WORKSPACE", value),
+                None => std::env::remove_var("EB_STACK_WORKSPACE"),
+            }
+        }
+    }
+    let _restore = Restore(previous);
     let temp = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
     let cases = [
         (
@@ -1036,9 +1052,7 @@ fn mcp_recipe_check_rejects_an_empty_easyconfigs_list() {
 #[cfg(unix)]
 #[test]
 fn mcp_recipe_file_tools_stay_inside_the_workspace() {
-    use std::sync::Mutex;
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = ENV_LOCK.lock().expect("workspace env lock");
+    let _guard = WORKSPACE_ENV_LOCK.lock().expect("workspace env lock");
     let previous = std::env::var_os("EB_STACK_WORKSPACE");
     let temp = tempfile::tempdir().expect("tempdir");
     let outside = tempfile::tempdir().expect("outside");
