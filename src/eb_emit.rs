@@ -838,6 +838,15 @@ pub(crate) fn find_list_assignment_span(
     Ok(Some((m.start(), body_end + 1)))
 }
 
+/// Byte range of the body of a top-level `key = [ ... ]`, just after `[` and
+/// at the closing `]`.
+pub(crate) fn easyconfig_list_span(
+    src: &str,
+    key: &str,
+) -> Result<Option<(usize, usize)>, EmitError> {
+    find_list_span(src, key)
+}
+
 fn find_list_span(src: &str, key: &str) -> Result<Option<(usize, usize)>, EmitError> {
     let re_hdr = regex::Regex::new(&format!(r"(?m)^(\s*{}\s*=\s*\[)", regex::escape(key)))
         .map_err(|e| EmitError::Rewrite(e.to_string()))?;
@@ -1322,6 +1331,14 @@ fn checksum_dict_pairs(elem: &str) -> Result<Vec<ChecksumDictPair>, EmitError> {
         let content_end = i;
         i += 1;
         i = skip_ws_and_comments(bytes, i);
+        // A key may be an expression, `'fmt' % local_arch` or `'fmt' % (a, b)`,
+        // which is how a recipe names one file per architecture when the
+        // filename is not a plain `%(...)s` template. The quoted format is
+        // still the filename; the `%` expression stays where it was written.
+        if bytes.get(i) == Some(&b'%') {
+            i = skip_percent_key_expression(bytes, i, dict_close);
+            i = skip_ws_and_comments(bytes, i);
+        }
         if bytes.get(i) != Some(&b':') {
             return Err(EmitError::Rewrite(format!(
                 "malformed source checksum dict entry: no `:` after the filename key in `{}`",
@@ -1347,6 +1364,40 @@ fn checksum_dict_pairs(elem: &str) -> Result<Vec<ChecksumDictPair>, EmitError> {
         i = value_end;
     }
     Ok(pairs)
+}
+
+/// Index of the first byte after `'fmt' % expr`, where `index` points at `%`.
+///
+/// Stops before the `:` that separates the key from its checksum, so the
+/// caller still sees that colon. Parentheses and quotes inside the right-hand
+/// side belong to the expression.
+fn skip_percent_key_expression(bytes: &[u8], mut index: usize, limit: usize) -> usize {
+    let mut depth = 0i32;
+    let mut quote: Option<u8> = None;
+    let mut escaped = false;
+    while index < limit {
+        let byte = bytes[index];
+        if let Some(active) = quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == active {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        match byte {
+            b'\'' | b'"' => quote = Some(byte),
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' if depth > 0 => depth -= 1,
+            b':' if depth == 0 => return index,
+            _ => {}
+        }
+        index += 1;
+    }
+    index
 }
 
 fn skip_ws_and_comments(bytes: &[u8], mut index: usize) -> usize {
@@ -2517,6 +2568,50 @@ checksums = [{
             r.text
         );
         assert!(!r.text.contains("1.0.0"), "{}", r.text);
+    }
+
+    #[test]
+    fn a_percent_formatted_checksum_key_keeps_the_expression() {
+        // The filename is `'pkg-%s.tar.gz' % local_arch`, not a quoted key
+        // followed by a colon. A version bump still renames the format string
+        // and leaves the right-hand side alone.
+        let src = "\
+name = 'Pkg'
+version = '1.0.0'
+toolchain = {'name': 'foss', 'version': '2025a'}
+source_urls = ['https://mirror.example.org/src']
+sources = ['pkg-%(version)s.tar.gz']
+checksums = [{
+    'pkg-1.0.0-%s.tar.gz' % local_arch:
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'other-%s.bin' % local_arch:
+        'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+}]
+";
+        let params = EmitParams {
+            toolchain: foss("2025a"),
+            version: Some("1.2.3".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
+            source_checksum: Some(
+                "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".into(),
+            ),
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert!(
+            r.text.contains(
+                "'pkg-1.2.3-%s.tar.gz' % local_arch:\n        'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'"
+            ),
+            "{}",
+            r.text
+        );
+        assert!(
+            r.text.contains("'other-%s.bin' % local_arch:"),
+            "{}",
+            r.text
+        );
     }
 
     #[test]
