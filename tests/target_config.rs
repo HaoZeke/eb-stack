@@ -86,7 +86,9 @@ mounts = ["/work:/workspace"]
     let image = remote
         .find("registry.example.org/easybuild:rocky9")
         .expect("runtime image");
-    let routed = remote.find("env EASYBUILD_TMPDIR").expect("routed command");
+    let routed = remote
+        .find("EASYBUILD_TMPDIR=/work/easybuild-tmp")
+        .expect("routed command");
     assert!(runtime < capability && capability < image && image < routed);
 }
 
@@ -396,4 +398,97 @@ tmp_root = "/work/tmp"
         "no easyblocks means no option: {:?}",
         plain.args
     );
+}
+
+#[test]
+fn eb_commands_scrub_compiler_wrapper_env_by_default() {
+    let layer = TargetConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[targets]]
+name = "local"
+
+[targets.transport]
+kind = "local"
+
+[targets.executor]
+kind = "direct"
+
+[targets.runtime]
+kind = "host"
+
+[targets.easybuild]
+command = "eb"
+robot_paths = []
+work_root = "/tmp/work"
+tmp_root = "/tmp/tmp"
+
+[targets.easybuild.environment]
+CMAKE_C_COMPILER_LAUNCHER = "sccache"
+RUSTC_WRAPPER = "sccache"
+EB_STACK_MARKER = "kept"
+"#,
+    )
+    .expect("target");
+    let targets = resolve_target_layers(&[layer]).expect("resolve");
+    let command = targets[0].build_command("/tmp/work/bundle/recipe.eb");
+    let joined = std::iter::once(command.program.clone())
+        .chain(command.args.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(joined.contains("-u CMAKE_C_COMPILER_LAUNCHER"), "{joined}");
+    assert!(joined.contains("-u RUSTC_WRAPPER"), "{joined}");
+    assert!(
+        !joined.contains("CMAKE_C_COMPILER_LAUNCHER=sccache"),
+        "{joined}"
+    );
+    assert!(!joined.contains("RUSTC_WRAPPER=sccache"), "{joined}");
+    assert!(joined.contains("EB_STACK_MARKER=kept"), "{joined}");
+}
+
+#[test]
+fn eb_commands_keep_wrapper_env_when_ccache_is_explicitly_requested() {
+    let layer = TargetConfigLayer::from_toml_str(
+        r#"
+schema_version = 1
+
+[[targets]]
+name = "local"
+
+[targets.transport]
+kind = "local"
+
+[targets.executor]
+kind = "direct"
+
+[targets.runtime]
+kind = "host"
+
+[targets.easybuild]
+command = "eb"
+robot_paths = []
+work_root = "/tmp/work"
+tmp_root = "/tmp/tmp"
+
+[targets.easybuild.environment]
+EASYBUILD_USE_CCACHE = "true"
+CMAKE_C_COMPILER_LAUNCHER = "sccache"
+RUSTC_WRAPPER = "sccache"
+"#,
+    )
+    .expect("target");
+    let targets = resolve_target_layers(&[layer]).expect("resolve");
+    let command = targets[0].build_command("/tmp/work/bundle/recipe.eb");
+    let joined = std::iter::once(command.program.clone())
+        .chain(command.args.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        joined.contains("CMAKE_C_COMPILER_LAUNCHER=sccache"),
+        "{joined}"
+    );
+    assert!(joined.contains("RUSTC_WRAPPER=sccache"), "{joined}");
+    assert!(!joined.contains("-u CMAKE_C_COMPILER_LAUNCHER"), "{joined}");
+    assert!(!joined.contains("-u RUSTC_WRAPPER"), "{joined}");
 }
