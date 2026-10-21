@@ -85,6 +85,26 @@ code, not by the file looking right.
    toolchain or a dependency is missing, raise `EasyBuildError` naming it rather
    than skip it, so the build stops where the cause is.
 
+   A test step that runs a threaded BLAS limits both thread counts, the way the
+   OpenBLAS easyblock (`test_step` in `easybuild/easyblocks/o/openblas.py` on
+   easybuild-easyblocks develop, from PR #3936) does: it puts
+   `export OMP_NUM_THREADS={self.cfg.parallel} && ` in front of each test
+   command when `testopts` has `USE_OPENMP=1`, and
+   `export OPENBLAS_NUM_THREADS={self.cfg.parallel} && ` when it has
+   `USE_THREAD=1` (both are in its defaults). Set `OPENBLAS_NUM_THREADS` as well
+   as `OMP_NUM_THREADS`, because the build options decide which one OpenBLAS
+   reads: an OpenMP build takes the count from OpenMP (`num_cpu_avail` in
+   `common_thread.h`), and a pthreads build (`USE_OPENMP=0`) takes
+   `OPENBLAS_NUM_THREADS` first and `OMP_NUM_THREADS` only when that is unset
+   (`blas_get_cpu_number` in `driver/others/memory.c`). An easyconfig can change
+   those options, so one variable alone leaves the other kind of build
+   unlimited. Add each one only when `pretestopts` does not name it, and put it
+   on the command, not in `env.setvar`: `env.setvar` changes the environment of
+   the whole EasyBuild run, and the dry run shows its
+   `export OMP_NUM_THREADS='2'` above the easyconfig's own
+   `export OMP_NUM_THREADS=1 && `. The easyconfig's value still applies to that
+   command, but the easyblock has set a value the easyconfig did not ask for.
+
 7. **Describe the diff.** Call `eb_recipe_diff` on the module last. Describe each
    hunk by its `scope` (the method it is in), what it changes, why the report
    needs it, and the merged easyblock you followed.

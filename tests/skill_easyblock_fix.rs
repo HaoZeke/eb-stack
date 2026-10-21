@@ -46,3 +46,17 @@ fn easyblock_fix_skill_names_what_the_server_provides() {
         "a build is owed only after a refused build"
     );
 }
+
+#[test]
+fn threaded_blas_test_steps_limit_both_counts_and_keep_the_easyconfig_value() {
+    let skill = read("skills/easyblock-fix/SKILL.md");
+    for name in [
+        "OPENBLAS_NUM_THREADS",
+        "OMP_NUM_THREADS",
+        "pretestopts",
+        "env.setvar",
+        "easybuild/easyblocks/o/openblas.py",
+    ] {
+        assert!(skill.contains(name), "the skill does not mention {name}");
+    }
+}
