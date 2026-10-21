@@ -400,6 +400,41 @@ fn campaign_adds_the_staged_bundle_overlay_to_robot_paths() {
 }
 
 #[test]
+fn campaign_fails_fast_when_easybuild_tmpdir_is_not_usable() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipe = bundle.join("easyconfigs/e/eOn/eOn.eb");
+    std::fs::create_dir_all(recipe.parent().unwrap()).expect("recipes");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"eOn","version":"2.16.0"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .expect("lock");
+    write_valid_recipe(&recipe, "eOn", "2.16.0");
+    let missing_tmp = temp.path().join("missing-tmp");
+    let mut build_target = target("true");
+    build_target.easybuild.tmp_root = missing_tmp.display().to_string();
+
+    let state = run_campaign(&CampaignRequest {
+        bundle,
+        target: build_target,
+        state_path: temp.path().join("campaign.json"),
+    })
+    .expect("campaign");
+    assert_eq!(state.status, CampaignStatus::Failed);
+    assert_eq!(state.findings.len(), 1);
+    assert_eq!(state.findings[0].class, BuildFindingClass::Resource);
+    assert_eq!(state.findings[0].stage, "preflight");
+    assert!(state.findings[0].summary.contains("EASYBUILD_TMPDIR"));
+}
+
+#[test]
 fn finding_queue_enforces_ownership_and_records_resolution() {
     let temp = tempfile::tempdir().expect("tempdir");
     let bundle = temp.path().join("bundle");

@@ -1,7 +1,7 @@
 //! Declarative transport, executor, runtime, and EasyBuild workload routing.
 
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::process::Command;
 use thiserror::Error;
@@ -427,14 +427,16 @@ impl BuildTarget {
         additional_robot_paths: &[String],
         easyblocks: &[String],
     ) -> CommandPlan {
+        let scrub_wrappers = self.should_scrub_compiler_wrappers();
         let mut tokens = vec!["env".to_string()];
+        if scrub_wrappers {
+            for name in self.compiler_wrapper_env_unsets() {
+                tokens.push("-u".into());
+                tokens.push(name);
+            }
+        }
         tokens.push(format!("EASYBUILD_TMPDIR={}", self.easybuild.tmp_root));
-        tokens.extend(
-            self.easybuild
-                .environment
-                .iter()
-                .map(|(name, value)| format!("{name}={value}")),
-        );
+        tokens.extend(self.easybuild_env_assignments(scrub_wrappers));
         tokens.push(self.easybuild.command.clone());
         let mut robot_paths = self.easybuild.robot_paths.clone();
         for path in additional_robot_paths {
@@ -455,16 +457,105 @@ impl BuildTarget {
 
     /// The command that runs a verification program on the target.
     pub fn verification_command(&self, program: &str, args: &[String]) -> CommandPlan {
+        let scrub_wrappers = self.should_scrub_compiler_wrappers() && self.is_easybuild_program(program);
         let mut tokens = vec!["env".to_string()];
-        tokens.extend(
-            self.easybuild
-                .environment
-                .iter()
-                .map(|(name, value)| format!("{name}={value}")),
-        );
+        if scrub_wrappers {
+            for name in self.compiler_wrapper_env_unsets() {
+                tokens.push("-u".into());
+                tokens.push(name);
+            }
+        }
+        tokens.extend(self.easybuild_env_assignments(scrub_wrappers));
         tokens.push(program.to_string());
         tokens.extend(args.iter().cloned());
         self.route_tokens(self.runtime_tokens(tokens), true)
+    }
+
+    /// Check that EASYBUILD_TMPDIR exists, is writable, and has free space/inodes.
+    ///
+    /// EasyBuild shells out to compilers and wrappers very early; a broken tmp
+    /// directory then surfaces as opaque configure/compiler failures.
+    pub fn easybuild_tmpdir_preflight_command(&self) -> CommandPlan {
+        let script = r#"set -eu
+tmp="${EB_STACK_TMPDIR:?}"
+if [ ! -d "$tmp" ]; then
+  echo "EASYBUILD_TMPDIR '$tmp' does not exist" >&2
+  exit 40
+fi
+if [ ! -w "$tmp" ]; then
+  echo "EASYBUILD_TMPDIR '$tmp' is not writable" >&2
+  exit 41
+fi
+kb_free="$(df -Pk "$tmp" | awk 'NR==2 {print $4}')"
+inode_free="$(df -Pi "$tmp" | awk 'NR==2 {print $4}')"
+if [ -z "$kb_free" ] || [ "$kb_free" -le 0 ]; then
+  echo "EASYBUILD_TMPDIR '$tmp' has no free space (1K blocks: ${kb_free:-unknown})" >&2
+  exit 42
+fi
+if [ -z "$inode_free" ] || [ "$inode_free" -le 0 ]; then
+  echo "EASYBUILD_TMPDIR '$tmp' has no free inodes (${inode_free:-unknown})" >&2
+  exit 43
+fi
+"#;
+        self.route_tokens(
+            self.runtime_tokens(vec![
+                "env".into(),
+                format!("EB_STACK_TMPDIR={}", self.easybuild.tmp_root),
+                "sh".into(),
+                "-c".into(),
+                script.into(),
+            ]),
+            true,
+        )
+    }
+
+    fn easybuild_env_assignments(&self, scrub_wrappers: bool) -> Vec<String> {
+        self.easybuild
+            .environment
+            .iter()
+            .filter(|(name, _)| !(scrub_wrappers && is_compiler_wrapper_env(name)))
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect()
+    }
+
+    fn should_scrub_compiler_wrappers(&self) -> bool {
+        !self
+            .easybuild
+            .environment
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case("EASYBUILD_USE_CCACHE") && is_truthy(value))
+    }
+
+    fn compiler_wrapper_env_unsets(&self) -> Vec<String> {
+        let mut names: BTreeSet<String> = BTreeSet::new();
+        names.insert("RUSTC_WRAPPER".into());
+        names.insert("CMAKE_C_COMPILER_LAUNCHER".into());
+        names.insert("CMAKE_CXX_COMPILER_LAUNCHER".into());
+        names.insert("CMAKE_CUDA_COMPILER_LAUNCHER".into());
+        for (name, _) in std::env::vars() {
+            if is_compiler_wrapper_env(&name) {
+                names.insert(name);
+            }
+        }
+        for name in self.easybuild.environment.keys() {
+            if is_compiler_wrapper_env(name) {
+                names.insert(name.clone());
+            }
+        }
+        names.into_iter().collect()
+    }
+
+    fn is_easybuild_program(&self, program: &str) -> bool {
+        use std::path::Path;
+        let program_name = Path::new(program)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(program);
+        let easybuild_name = Path::new(&self.easybuild.command)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(self.easybuild.command.as_str());
+        program_name == easybuild_name || program_name == "eb"
     }
 
     fn runtime_tokens(&self, command: Vec<String>) -> Vec<String> {
@@ -713,6 +804,20 @@ fn default_eessi_command() -> String {
 
 fn default_eessi_access() -> String {
     "ro".into()
+}
+
+fn is_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn is_compiler_wrapper_env(name: &str) -> bool {
+    name == "RUSTC_WRAPPER"
+        || name.starts_with("SCCACHE_")
+        || name.starts_with("CCACHE_")
+        || (name.starts_with("CMAKE_") && name.ends_with("_COMPILER_LAUNCHER"))
 }
 
 #[derive(Debug, Error)]
