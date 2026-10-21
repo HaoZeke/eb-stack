@@ -37,15 +37,18 @@ agent contract around those gates plus contribution practice.
    release over an EB patch that fakes green (#26480: "We typically do prefer
    to run unit tests (if they exist) to validate the sanity of the
    installation").
-7. **Keep recipes readable.** Short configopts; prefer Meson/CMake options over
+7. **When native fails but GENERIC passes on bit-exact numeric/image tests, suspect FMA contraction first.**
+   Set `toolchainopts = {'extra_cflags': '-ffp-contract=off'}` (libgd/libgd#278),
+   with merged EasyBuild precedent in MuJoCo easyconfigs.
+8. **Keep recipes readable.** Short configopts; prefer Meson/CMake options over
    shell pipelines.
-8. **Build fat.** Enable every optional feature whose dependencies exist in
+9. **Build fat.** Enable every optional feature whose dependencies exist in
    the generation; author first-time companion easyconfigs for missing deps
    instead of switching features off. Features that are mutually exclusive or
    structurally blocked (BLAS-backed dep in a GCCcore recipe) go to a
    `versionsuffix` variant, with the off-flag justified in a recipe comment
    (#26480: "we typically install packages as 'fat' as possible").
-9. **Trim the product, not the package.** A smaller *product scope* (fewer
+10. **Trim the product, not the package.** A smaller *product scope* (fewer
    recipes per PR) beats cross-generation pins or multi-page staging; within
    one recipe, fat beats thin.
 
@@ -266,24 +269,24 @@ R15. **Scope is the review, not the lint report.** Use
 
 ### Contribution workflow (EasyBuild CLI is the interface)
 
-10. `eb --check-contrib` on every easyconfig before PR text. It runs pycodestyle
+11. `eb --check-contrib` on every easyconfig before PR text. It runs pycodestyle
     (max 120, only W291/E741 ignored, so E226 and other default-ignored codes
     count) and the SHA256 checksum checks. It does **not** run pyflakes, so it
     misses F541. Its W299 also exempts the description, while CI's W291 does
     not. eb-stack lint covers both without needing `eb`. Run the CI lint too:
     `flake8 --select F,W605,W291 --filename '*.eb'` (with easyconfigs setup.cfg).
-11. `eb --check-github --github-user=<user>` before long builds / uploads.
-12. `eb --from-pr <N> --robot ... --upload-test-report` for evidence.
-13. `eb -D` / `eb -x` as pre-flight before hours of robot time.
-14. `eb --inject-checksums` on the EasyBuild host (never invent hashes).
-15. `eb --new-pr` with title `{moduleclass}[toolchain/version] Name vX.Y.Z`.
-16. Reuse an installed foss/GCCcore prefix when a prior SUCCESS gist has one.
+12. `eb --check-github --github-user=<user>` before long builds / uploads.
+13. `eb --from-pr <N> --robot ... --upload-test-report` for evidence.
+14. `eb -D` / `eb -x` as pre-flight before hours of robot time.
+15. `eb --inject-checksums` on the EasyBuild host (never invent hashes).
+16. `eb --new-pr` with title `{moduleclass}[toolchain/version] Name vX.Y.Z`.
+17. Reuse an installed foss/GCCcore prefix when a prior SUCCESS gist has one.
 
 ### Evidence and claims
 
-17. Separate claims: resolves (eb-stack) != builds != binary-verified != SUCCESS report.
-18. Disclose AI in the PR body per EasyBuild policy.
-19. Freeze accepted/rejected PR shapes as fixtures and re-run maintainer checks.
+18. Separate claims: resolves (eb-stack) != builds != binary-verified != SUCCESS report.
+19. Disclose AI in the PR body per EasyBuild policy.
+20. Freeze accepted/rejected PR shapes as fixtures and re-run maintainer checks.
 
 ## DON'T
 
@@ -314,6 +317,8 @@ R15. **Scope is the review, not the lint report.** Use
     or an existing prefix will do.
 12. **Don't treat `eb --show-config` defaults** as the prefix used by past
     SUCCESS gists.
+13. **Don't add `pretestopts` just to export `TMPDIR`.** EasyBuild already sets
+    `TMPDIR`, `TMP`, and `TEMP`; if tests still fail, debug the real cause.
 
 ## Templates versus f-strings
 

@@ -112,6 +112,14 @@ eb-stack package inspect --source path/to/spack/package.py --format spack \
 State the bound and where it came from. "The target generation ships an older
 version" is not evidence that the older version is enough.
 
+### Native-vs-GENERIC test diffs (numeric/image suites)
+
+If bit-exact tests fail under native optarch but pass under `--optarch=GENERIC`,
+suspect FMA contraction before changing dependencies or skipping tests. Prefer
+`toolchainopts = {'extra_cflags': '-ffp-contract=off'}` (libgd/libgd#278,
+merged MuJoCo easyconfigs precedent). Do not add `pretestopts` just to export
+`TMPDIR`: EasyBuild already sets `TMPDIR`, `TMP`, and `TEMP`.
+
 ## Then the cheap mechanical gates
 
 ```sh
