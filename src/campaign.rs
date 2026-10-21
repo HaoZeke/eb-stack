@@ -156,6 +156,9 @@ pub struct BuildFinding {
     /// Attempt number this arose on.
     pub attempt: u32,
     #[serde(default)]
+    /// Build/test metadata so results stay qualified by optarch and hardware.
+    pub execution_context: ExecutionContext,
+    #[serde(default)]
     /// How far it has been taken.
     pub status: FindingStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -179,6 +182,28 @@ pub struct ClaimLadder {
     pub builds: bool,
     /// The declared binaries were run and behaved.
     pub binary_verified: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Build/test metadata required to qualify pass/fail claims.
+pub struct ExecutionContext {
+    /// EasyBuild optarch setting active for this run.
+    pub optarch: String,
+    /// CPU model reported by the build runtime.
+    pub cpu_model: String,
+    /// Architecture reported by the build runtime.
+    pub arch: String,
+}
+
+impl Default for ExecutionContext {
+    fn default() -> Self {
+        Self {
+            optarch: "unknown".into(),
+            cpu_model: "unknown".into(),
+            arch: "unknown".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -215,6 +240,9 @@ pub struct CampaignState {
     pub attempts: u32,
     /// What has been demonstrated so far.
     pub claims: ClaimLadder,
+    #[serde(default)]
+    /// Build/test metadata qualifying recorded outcomes.
+    pub execution_context: ExecutionContext,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     /// Recipe in flight, while one is.
     pub current_recipe: Option<String>,
@@ -279,6 +307,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 builds: false,
                 binary_verified: false,
             },
+            execution_context: ExecutionContext::default(),
             current_recipe: None,
             findings: Vec::new(),
             history: Vec::new(),
@@ -289,6 +318,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
     state.attempts += 1;
     let run_target =
         target_with_fresh_installpath(&request.target, package, version, state.attempts);
+    let execution_context = probe_execution_context(&run_target);
     let attempt_installpath = run_target
         .easybuild
         .environment
@@ -299,6 +329,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
     state.status = CampaignStatus::Running;
     state.claims.builds = false;
     state.claims.binary_verified = false;
+    state.execution_context = execution_context.clone();
     state.history.push(CampaignEvent {
         attempt: state.attempts,
         status: CampaignStatus::Running,
@@ -346,6 +377,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 },
                 exit_code: None,
                 attempt: state.attempts,
+                execution_context: execution_context.clone(),
                 status: FindingStatus::Open,
                 owner: None,
                 resolution: None,
@@ -386,6 +418,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 },
                 exit_code: None,
                 attempt: state.attempts,
+                execution_context: execution_context.clone(),
                 status: FindingStatus::Open,
                 owner: None,
                 resolution: None,
@@ -414,6 +447,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 "",
                 tmpdir_check,
                 &error,
+                &execution_context,
             );
             state.current_recipe = None;
             write_state(&request.state_path, &state)?;
@@ -443,6 +477,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
             command: tmpdir_check,
             exit_code: tmpdir_output.status.code(),
             attempt: state.attempts,
+            execution_context: execution_context.clone(),
             status: FindingStatus::Open,
             owner: None,
             resolution: None,
@@ -505,6 +540,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                     &recipe_text,
                     command,
                     &error,
+                    &execution_context,
                 );
                 state.current_recipe = None;
                 write_state(&request.state_path, &state)?;
@@ -532,6 +568,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 command,
                 exit_code: output.status.code(),
                 attempt: state.attempts,
+                execution_context: execution_context.clone(),
                 status: FindingStatus::Open,
                 owner: None,
                 resolution: None,
@@ -551,7 +588,10 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
             attempt: state.attempts,
             status: CampaignStatus::Running,
             recipe: Some(recipe_text.clone()),
-            detail: "EasyBuild command succeeded".into(),
+            detail: format!(
+                "EasyBuild command succeeded (optarch={}, arch={}, cpu={})",
+                execution_context.optarch, execution_context.arch, execution_context.cpu_model
+            ),
         });
         supersede_findings(&mut state, "build", &recipe_text);
     }
@@ -593,6 +633,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                         &format!("profile:{}", profile.name),
                         command,
                         &error,
+                        &execution_context,
                     );
                     write_state(&request.state_path, &state)?;
                     return Ok(state);
@@ -623,6 +664,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                     command,
                     exit_code: output.status.code(),
                     attempt: state.attempts,
+                    execution_context: execution_context.clone(),
                     status: FindingStatus::Open,
                     owner: None,
                     resolution: None,
@@ -641,7 +683,10 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 attempt: state.attempts,
                 status: CampaignStatus::Running,
                 recipe: Some(format!("profile:{}", profile.name)),
-                detail: format!("binary verification succeeded for module {module}"),
+                detail: format!(
+                    "binary verification succeeded for module {module} (optarch={}, arch={}, cpu={})",
+                    execution_context.optarch, execution_context.arch, execution_context.cpu_model
+                ),
             });
             supersede_findings(&mut state, "verify", &format!("profile:{}", profile.name));
             write_state(&request.state_path, &state)?;
@@ -655,13 +700,55 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         status: CampaignStatus::Completed,
         recipe: None,
         detail: if verification_count > 0 {
-            "all EasyBuild and binary verification commands succeeded".into()
+            format!(
+                "all EasyBuild and binary verification commands succeeded (optarch={}, arch={}, cpu={})",
+                execution_context.optarch, execution_context.arch, execution_context.cpu_model
+            )
         } else {
-            "all EasyBuild commands succeeded; no binary verification commands declared".into()
+            format!(
+                "all EasyBuild commands succeeded; no binary verification commands declared (optarch={}, arch={}, cpu={})",
+                execution_context.optarch, execution_context.arch, execution_context.cpu_model
+            )
         },
     });
     write_state(&request.state_path, &state)?;
     Ok(state)
+}
+
+fn probe_execution_context(target: &BuildTarget) -> ExecutionContext {
+    let optarch = target
+        .easybuild
+        .environment
+        .get("EASYBUILD_OPTARCH")
+        .cloned()
+        .or_else(|| target.easybuild.environment.get("EB_OPTARCH").cloned())
+        .unwrap_or_else(|| "native (EasyBuild default)".into());
+    let mut context = ExecutionContext {
+        optarch,
+        ..ExecutionContext::default()
+    };
+    let command = target.execution_fingerprint_command();
+    let Ok(output) = command.execute() else {
+        return context;
+    };
+    if !output.status.success() {
+        return context;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        if let Some((name, value)) = line.split_once('=') {
+            let value = value.trim();
+            if value.is_empty() {
+                continue;
+            }
+            match name {
+                "arch" => context.arch = value.to_string(),
+                "cpu_model" => context.cpu_model = value.to_string(),
+                _ => {}
+            }
+        }
+    }
+    context
 }
 
 fn target_with_fresh_installpath(
@@ -728,6 +815,7 @@ fn record_interrupted_attempt(state: &mut CampaignState, state_path: &Path) {
         },
         exit_code: None,
         attempt,
+        execution_context: state.execution_context.clone(),
         status: FindingStatus::Superseded,
         owner: None,
         resolution: Some(FindingResolution {
@@ -938,6 +1026,7 @@ fn record_target_command_failure(
     recipe: &str,
     command: CommandPlan,
     error: &TargetError,
+    execution_context: &ExecutionContext,
 ) {
     let class = classify_target_command_failure(target, error);
     state.findings.push(BuildFinding {
@@ -956,6 +1045,7 @@ fn record_target_command_failure(
         command,
         exit_code: None,
         attempt: state.attempts,
+        execution_context: execution_context.clone(),
         status: FindingStatus::Open,
         owner: None,
         resolution: None,

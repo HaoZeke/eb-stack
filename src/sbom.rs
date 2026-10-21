@@ -160,6 +160,34 @@ fn sha256_hash(value: &str) -> Option<Hash> {
     })
 }
 
+/// Build-environment metadata from the current host for SBOM/test qualification.
+pub fn host_build_environment() -> BTreeMap<String, String> {
+    let optarch = std::env::var("EASYBUILD_OPTARCH")
+        .ok()
+        .or_else(|| std::env::var("EB_OPTARCH").ok())
+        .unwrap_or_else(|| "native (EasyBuild default)".into());
+    let arch = std::env::consts::ARCH.to_string();
+    let cpu_model = std::fs::read_to_string("/proc/cpuinfo")
+        .ok()
+        .and_then(|text| {
+            text.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                if name.trim() == "model name" {
+                    Some(value.trim().to_string())
+                } else {
+                    None
+                }
+            })
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "unknown".into());
+    BTreeMap::from([
+        ("easybuild:optarch".into(), optarch),
+        ("easybuild:cpu_model".into(), cpu_model),
+        ("easybuild:arch".into(), arch),
+    ])
+}
+
 /// Build a CycloneDX JSON document from a lock only (no dependency map).
 ///
 /// Without declared edges each component gets an empty `dependsOn` list —
@@ -657,18 +685,22 @@ pub fn resolve_lock_easyconfig(lock_dir: &Path, easyconfig_path: &str) -> PathBu
 /// CycloneDX for a lock, reading edges and checksums from its easyconfigs.
 ///
 /// `lock_file` is the path the lock was read from. Relative recipe paths
-/// resolve through [`resolve_lock_easyconfig`].
+/// resolve through [`resolve_lock_easyconfig`]. The host optarch, CPU model,
+/// and architecture are recorded on the formulation so a generic-optarch
+/// document is not mistaken for a native one.
 pub fn lock_to_cyclonedx_from_recipes(
     lock: &StackLock,
     lock_file: &Path,
 ) -> (Value, SbomReadStats) {
     let read = read_lock_recipes(lock, lock_directory(lock_file));
+    let build_environment = host_build_environment();
     let document = lock_to_cyclonedx_with_facts(
         lock,
         SbomFacts {
             runtime_dep_map: Some(&read.runtime),
             build_dep_map: Some(&read.build),
             artifacts: Some(&read.artifacts),
+            build_environment: Some(&build_environment),
             ..SbomFacts::default()
         },
     );
@@ -1559,5 +1591,58 @@ mod build_environment_tests {
             "{}",
             json["formulation"][0]
         );
+    }
+
+    #[test]
+    fn host_environment_metadata_carries_optarch_cpu_model_and_arch() {
+        let env = host_build_environment();
+        for key in ["easybuild:optarch", "easybuild:cpu_model", "easybuild:arch"] {
+            let value = env.get(key).cloned().unwrap_or_default();
+            assert!(
+                !value.is_empty(),
+                "host build environment should set {key}, got {:?}",
+                env
+            );
+        }
+    }
+
+    #[test]
+    fn stack_sbom_from_recipes_records_the_host_environment() {
+        let toolchain = Toolchain {
+            name: "foss".into(),
+            version: "2026.1".into(),
+        };
+        let lock = StackLock {
+            schema_version: 1,
+            toolchain: toolchain.clone(),
+            generation_label: Some("2026.1".into()),
+            packages: vec![LockPackage {
+                name: "App".into(),
+                version: "1.0".into(),
+                toolchain,
+                versionsuffix: None,
+                easyconfig_path: String::new(),
+            }],
+            solver: SolverMeta {
+                engine: "resolvo".into(),
+                engine_version: "0".into(),
+                timestamp: "2026-08-14T00:00:00Z".into(),
+                criteria: Vec::new(),
+            },
+        };
+        let (json, stats) =
+            lock_to_cyclonedx_from_recipes(&lock, std::path::Path::new("missing.lock.json"));
+        assert_eq!(stats.recipes_unreadable, 1);
+        let props = json["formulation"][0]["properties"]
+            .as_array()
+            .expect("formulation properties");
+        let host = host_build_environment();
+        for key in ["easybuild:optarch", "easybuild:cpu_model", "easybuild:arch"] {
+            let found = props
+                .iter()
+                .find(|property| property["name"] == key)
+                .unwrap_or_else(|| panic!("{key} missing from {props:?}"));
+            assert_eq!(found["value"], host[key]);
+        }
     }
 }
