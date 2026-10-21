@@ -86,7 +86,9 @@ mounts = ["/work:/workspace"]
     let image = remote
         .find("registry.example.org/easybuild:rocky9")
         .expect("runtime image");
-    let routed = remote.find("env EASYBUILD_TMPDIR").expect("routed command");
+    let routed = remote
+        .find("EASYBUILD_TMPDIR=/work/easybuild-tmp")
+        .expect("routed command");
     assert!(runtime < capability && capability < image && image < routed);
 }
 
@@ -367,10 +369,7 @@ EB_STACK_MARKER = "kept"
         .chain(command.args.iter().cloned())
         .collect::<Vec<_>>()
         .join(" ");
-    assert!(
-        joined.contains("-u CMAKE_C_COMPILER_LAUNCHER"),
-        "{joined}"
-    );
+    assert!(joined.contains("-u CMAKE_C_COMPILER_LAUNCHER"), "{joined}");
     assert!(joined.contains("-u RUSTC_WRAPPER"), "{joined}");
     assert!(
         !joined.contains("CMAKE_C_COMPILER_LAUNCHER=sccache"),

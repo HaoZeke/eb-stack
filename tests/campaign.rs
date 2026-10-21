@@ -510,8 +510,7 @@ fn campaign_records_execution_context_on_results() {
     })
     .expect("failed campaign");
     assert_eq!(
-        failed.findings[0].execution_context,
-        failed.execution_context,
+        failed.findings[0].execution_context, failed.execution_context,
         "findings must carry the same qualifying context as the campaign run"
     );
     assert!(!failed.execution_context.arch.is_empty());
@@ -736,7 +735,7 @@ fn executor_spawn_failure_is_persisted_as_a_typed_finding() {
     assert_eq!(state.status, CampaignStatus::Failed);
     assert_eq!(state.findings.len(), 1);
     assert_eq!(state.findings[0].class, BuildFindingClass::Executor);
-    assert_eq!(state.findings[0].stage, "build");
+    assert_eq!(state.findings[0].stage, "preflight");
     assert_eq!(state.findings[0].exit_code, None);
     assert!(state.findings[0].evidence.contains("eb-stack-srun"));
     assert!(state_path.is_file());

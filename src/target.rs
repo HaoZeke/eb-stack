@@ -462,7 +462,8 @@ impl BuildTarget {
 
     /// The command that runs a verification program on the target.
     pub fn verification_command(&self, program: &str, args: &[String]) -> CommandPlan {
-        let scrub_wrappers = self.should_scrub_compiler_wrappers() && self.is_easybuild_program(program);
+        let scrub_wrappers =
+            self.should_scrub_compiler_wrappers() && self.is_easybuild_program(program);
         let mut tokens = vec!["env".to_string()];
         if scrub_wrappers {
             for name in self.compiler_wrapper_env_unsets() {
@@ -540,11 +541,9 @@ printf 'arch=%s\ncpu_model=%s\n' "$arch" "$cpu_model"
     }
 
     fn should_scrub_compiler_wrappers(&self) -> bool {
-        !self
-            .easybuild
-            .environment
-            .iter()
-            .any(|(name, value)| name.eq_ignore_ascii_case("EASYBUILD_USE_CCACHE") && is_truthy(value))
+        !self.easybuild.environment.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("EASYBUILD_USE_CCACHE") && is_truthy(value)
+        })
     }
 
     fn compiler_wrapper_env_unsets(&self) -> Vec<String> {
