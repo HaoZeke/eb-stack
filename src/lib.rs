@@ -65,6 +65,7 @@ pub mod source_fetch;
 pub mod source_tree;
 mod spack_syntax;
 pub mod target;
+pub mod test_selector;
 pub mod version;
 pub mod workflows;
 pub mod workspace_fs;
