@@ -435,6 +435,55 @@ fn campaign_fails_fast_when_easybuild_tmpdir_is_not_usable() {
 }
 
 #[test]
+fn campaign_uses_a_fresh_installpath_per_attempt() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipe = bundle.join("easyconfigs/e/eOn/eOn.eb");
+    std::fs::create_dir_all(recipe.parent().unwrap()).expect("recipes");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"eOn","version":"2.16.0"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .expect("lock");
+    write_valid_recipe(&recipe, "eOn", "2.16.0");
+    let state_path = temp.path().join("campaign.json");
+
+    let first = run_campaign(&CampaignRequest {
+        bundle: bundle.clone(),
+        target: target("false"),
+        state_path: state_path.clone(),
+    })
+    .expect("first attempt");
+    let first_command = &first.findings[0].command.args;
+    assert!(
+        first_command
+            .iter()
+            .any(|arg| arg == "--installpath=/tmp/install-attempts/eOn-2.16.0/attempt-1"),
+        "{first_command:?}"
+    );
+
+    let second = run_campaign(&CampaignRequest {
+        bundle,
+        target: target("false"),
+        state_path,
+    })
+    .expect("second attempt");
+    let second_command = &second.findings[1].command.args;
+    assert!(
+        second_command
+            .iter()
+            .any(|arg| arg == "--installpath=/tmp/install-attempts/eOn-2.16.0/attempt-2"),
+        "{second_command:?}"
+    );
+}
+
+#[test]
 fn finding_queue_enforces_ownership_and_records_resolution() {
     let temp = tempfile::tempdir().expect("tempdir");
     let bundle = temp.path().join("bundle");

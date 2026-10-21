@@ -287,7 +287,15 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
 
     record_interrupted_attempt(&mut state, &request.state_path);
     state.attempts += 1;
-    state.target = request.target.name.clone();
+    let run_target =
+        target_with_fresh_installpath(&request.target, package, version, state.attempts);
+    let attempt_installpath = run_target
+        .easybuild
+        .environment
+        .get("EASYBUILD_INSTALLPATH")
+        .cloned()
+        .unwrap_or_else(|| "<unset>".into());
+    state.target = run_target.name.clone();
     state.status = CampaignStatus::Running;
     state.claims.builds = false;
     state.claims.binary_verified = false;
@@ -295,7 +303,10 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         attempt: state.attempts,
         status: CampaignStatus::Running,
         recipe: None,
-        detail: format!("build evaluation on {}", request.target.name),
+        detail: format!(
+            "build evaluation on {} with fresh installpath {}",
+            run_target.name, attempt_installpath
+        ),
     });
     write_state(&request.state_path, &state)?;
 
@@ -326,7 +337,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 disposition: disposition(class),
                 stage: "preflight".into(),
                 recipe: recipe_text.clone(),
-                target: request.target.name.clone(),
+                target: run_target.name.clone(),
                 summary: "recipe packaging preflight failed".into(),
                 evidence,
                 command: CommandPlan {
@@ -352,7 +363,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         }
     }
 
-    let staged_bundle = match request.target.stage_bundle(&request.bundle) {
+    let staged_bundle = match run_target.stage_bundle(&request.bundle) {
         Ok(path) => path,
         Err(error) => {
             let evidence = error.to_string();
@@ -366,7 +377,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 disposition: FindingDisposition::TargetRepair,
                 stage: "stage".into(),
                 recipe: String::new(),
-                target: request.target.name.clone(),
+                target: run_target.name.clone(),
                 summary: "package bundle staging failed".into(),
                 evidence,
                 command: CommandPlan {
@@ -392,13 +403,13 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         }
     };
 
-    let tmpdir_check = request.target.easybuild_tmpdir_preflight_command();
+    let tmpdir_check = run_target.easybuild_tmpdir_preflight_command();
     let tmpdir_output = match tmpdir_check.execute() {
         Ok(output) => output,
         Err(error) => {
             record_target_command_failure(
                 &mut state,
-                &request.target,
+                &run_target,
                 "preflight",
                 "",
                 tmpdir_check,
@@ -422,7 +433,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
             disposition: FindingDisposition::Retryable,
             stage: "preflight".into(),
             recipe: String::new(),
-            target: request.target.name.clone(),
+            target: run_target.name.clone(),
             summary: "EASYBUILD_TMPDIR preflight failed (missing path, no write access, or no space/inodes)".into(),
             evidence: format!(
                 "stdout:\n{}\nstderr:\n{}",
@@ -479,7 +490,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
             .join("easyconfigs")
             .display()
             .to_string();
-        let command = request.target.build_command_with_overlay(
+        let command = run_target.build_command_with_overlay(
             &staged_recipe.display().to_string(),
             &[staged_overlay],
             &staged_easyblocks,
@@ -489,7 +500,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
             Err(error) => {
                 record_target_command_failure(
                     &mut state,
-                    &request.target,
+                    &run_target,
                     "build",
                     &recipe_text,
                     command,
@@ -515,7 +526,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                 disposition: disposition(class),
                 stage: "build".into(),
                 recipe: recipe_text.clone(),
-                target: request.target.name.clone(),
+                target: run_target.name.clone(),
                 summary: finding_summary(class, output.status.code()),
                 evidence,
                 command,
@@ -571,13 +582,13 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                     expand_verification_token(argument, &module, package, version, &profile)
                 })
                 .collect::<Vec<_>>();
-            let command = request.target.verification_command(&program, &args);
+            let command = run_target.verification_command(&program, &args);
             let output = match command.execute() {
                 Ok(output) => output,
                 Err(error) => {
                     record_target_command_failure(
                         &mut state,
-                        &request.target,
+                        &run_target,
                         "verify",
                         &format!("profile:{}", profile.name),
                         command,
@@ -602,7 +613,7 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
                     disposition: disposition(class),
                     stage: "verify".into(),
                     recipe: format!("profile:{}", profile.name),
-                    target: request.target.name.clone(),
+                    target: run_target.name.clone(),
                     summary: format!(
                         "binary verification failed for profile {} (exit {:?})",
                         profile.name,
@@ -651,6 +662,48 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
     });
     write_state(&request.state_path, &state)?;
     Ok(state)
+}
+
+fn target_with_fresh_installpath(
+    target: &BuildTarget,
+    package: &str,
+    version: &str,
+    attempt: u32,
+) -> BuildTarget {
+    let mut next = target.clone();
+    let installpath = fresh_installpath(&next.easybuild.work_root, package, version, attempt);
+    next.easybuild
+        .environment
+        .insert("EASYBUILD_INSTALLPATH".into(), installpath);
+    next
+}
+
+fn fresh_installpath(work_root: &str, package: &str, version: &str, attempt: u32) -> String {
+    format!(
+        "{work_root}/install-attempts/{}-{}/attempt-{attempt}",
+        sanitize_path_component(package),
+        sanitize_path_component(version)
+    )
+}
+
+fn sanitize_path_component(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    if sanitized.is_empty() {
+        "unknown".into()
+    } else {
+        sanitized
+    }
 }
 
 fn record_interrupted_attempt(state: &mut CampaignState, state_path: &Path) {

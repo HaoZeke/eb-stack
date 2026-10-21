@@ -451,6 +451,11 @@ impl BuildTarget {
             tokens.push(format!("--include-easyblocks={}", easyblocks.join(",")));
         }
         tokens.push(format!("--buildpath={}/build", self.easybuild.work_root));
+        if let Some(installpath) = self.easybuild.environment.get("EASYBUILD_INSTALLPATH") {
+            // Keep installpath explicit on the eb invocation so verification
+            // runs cannot silently reuse an old prefix from ambient defaults.
+            tokens.push(format!("--installpath={installpath}"));
+        }
         tokens.push(recipe.to_string());
         self.route_tokens(self.runtime_tokens(tokens), true)
     }
