@@ -283,6 +283,23 @@ pretestopts = 'export PRTE_MCA_rmaps_default_mapping_policy=:oversubscribe && '
 Do not gut the deterministic suite to hide slot exhaustion. Oversubscribe and
 correct quoting are both required when both apply.
 
+OpenBLAS test threads: the OpenBLAS easyblock (easybuild-easyblocks develop,
+`test_step` in `easybuild/easyblocks/o/openblas.py`, PR #3936) already puts
+`export OMP_NUM_THREADS=N && export OPENBLAS_NUM_THREADS=N && `, with N the
+build's parallelism, in front of `make tests` and `make lapack-test`, and
+leaves out each variable that `pretestopts` names. Do not add either one to an
+OpenBLAS recipe to get that limit. A recipe that needs another value sets both,
+because an OpenMP build of OpenBLAS reads
+`OMP_NUM_THREADS` and a pthreads build (`USE_OPENMP=0`) reads
+`OPENBLAS_NUM_THREADS` first:
+
+```python
+pretestopts = 'export OMP_NUM_THREADS=1 && export OPENBLAS_NUM_THREADS=1 && '
+```
+
+With only `OMP_NUM_THREADS=1` in `pretestopts`, the easyblock still exports
+`OPENBLAS_NUM_THREADS=N`, so a pthreads build runs its tests with N threads.
+
 ## PR lifecycle (after the human opens it)
 
 1. `eb --new-pr` creates the PR; a bot posts a diff against the closest

@@ -59,4 +59,9 @@ fn threaded_blas_test_steps_limit_both_counts_and_keep_the_easyconfig_value() {
     ] {
         assert!(skill.contains(name), "the skill does not mention {name}");
     }
+    let recipes = read("skills/upstream-pr/SKILL.md");
+    assert!(
+        recipes.contains("export OMP_NUM_THREADS=1 && export OPENBLAS_NUM_THREADS=1 && "),
+        "an OpenBLAS recipe that sets a test thread count sets both"
+    );
 }
