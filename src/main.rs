@@ -1390,12 +1390,14 @@ fn run_stack(command: StackCommand) -> Result<()> {
             let artifacts = eb_stack::artifact_facts_for_lock(&lock);
             // The dependency edges live in the same recipes.
             let (runtime, build) = eb_stack::dep_maps_for_lock(&lock);
+            let build_environment = eb_stack::host_build_environment();
             let sbom = eb_stack::lock_to_cyclonedx_with_facts(
                 &lock,
                 eb_stack::SbomFacts {
                     runtime_dep_map: Some(&runtime),
                     build_dep_map: Some(&build),
                     artifacts: Some(&artifacts),
+                    build_environment: Some(&build_environment),
                     ..eb_stack::SbomFacts::default()
                 },
             );

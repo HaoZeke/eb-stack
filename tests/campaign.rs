@@ -278,6 +278,7 @@ fn campaign_resume_records_an_abandoned_running_attempt() {
             builds: false,
             binary_verified: false,
         },
+        execution_context: Default::default(),
         current_recipe: Some(interrupted_recipe.into()),
         findings: Vec::new(),
         history: Vec::new(),
@@ -352,7 +353,7 @@ fn campaign_uses_declared_closure_build_order() {
     let built = state
         .history
         .iter()
-        .filter(|event| event.detail == "EasyBuild command succeeded")
+        .filter(|event| event.detail.starts_with("EasyBuild command succeeded"))
         .filter_map(|event| event.recipe.as_deref())
         .collect::<Vec<_>>();
     assert_eq!(
@@ -481,6 +482,52 @@ fn campaign_uses_a_fresh_installpath_per_attempt() {
             .any(|arg| arg == "--installpath=/tmp/install-attempts/eOn-2.16.0/attempt-2"),
         "{second_command:?}"
     );
+}
+
+#[test]
+fn campaign_records_execution_context_on_results() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipe = bundle.join("easyconfigs/e/eOn/eOn.eb");
+    std::fs::create_dir_all(recipe.parent().unwrap()).expect("recipes");
+    std::fs::create_dir_all(bundle.join("locks")).expect("locks");
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"eOn","version":"2.16.0"}}"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .expect("lock");
+    write_valid_recipe(&recipe, "eOn", "2.16.0");
+
+    let failed = run_campaign(&CampaignRequest {
+        bundle: bundle.clone(),
+        target: target("false"),
+        state_path: temp.path().join("campaign-failed.json"),
+    })
+    .expect("failed campaign");
+    assert_eq!(
+        failed.findings[0].execution_context,
+        failed.execution_context,
+        "findings must carry the same qualifying context as the campaign run"
+    );
+    assert!(!failed.execution_context.arch.is_empty());
+    assert!(!failed.execution_context.cpu_model.is_empty());
+    assert!(!failed.execution_context.optarch.is_empty());
+
+    let completed = run_campaign(&CampaignRequest {
+        bundle,
+        target: target("true"),
+        state_path: temp.path().join("campaign-ok.json"),
+    })
+    .expect("completed campaign");
+    let done = completed.history.last().expect("completion event");
+    assert!(done.detail.contains("optarch="), "{}", done.detail);
+    assert!(done.detail.contains("arch="), "{}", done.detail);
+    assert!(done.detail.contains("cpu="), "{}", done.detail);
 }
 
 #[test]

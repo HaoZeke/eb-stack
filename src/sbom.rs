@@ -100,6 +100,34 @@ fn sha256_hash(value: &str) -> Option<Hash> {
     })
 }
 
+/// Build-environment metadata from the current host for SBOM/test qualification.
+pub fn host_build_environment() -> BTreeMap<String, String> {
+    let optarch = std::env::var("EASYBUILD_OPTARCH")
+        .ok()
+        .or_else(|| std::env::var("EB_OPTARCH").ok())
+        .unwrap_or_else(|| "native (EasyBuild default)".into());
+    let arch = std::env::consts::ARCH.to_string();
+    let cpu_model = std::fs::read_to_string("/proc/cpuinfo")
+        .ok()
+        .and_then(|text| {
+            text.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                if name.trim() == "model name" {
+                    Some(value.trim().to_string())
+                } else {
+                    None
+                }
+            })
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "unknown".into());
+    BTreeMap::from([
+        ("easybuild:optarch".into(), optarch),
+        ("easybuild:cpu_model".into(), cpu_model),
+        ("easybuild:arch".into(), arch),
+    ])
+}
+
 /// Build a CycloneDX JSON document from a lock only (no dependency map).
 ///
 /// Without declared edges each component gets an empty `dependsOn` list —
@@ -1291,5 +1319,18 @@ mod build_environment_tests {
             "{}",
             json["formulation"][0]
         );
+    }
+
+    #[test]
+    fn host_environment_metadata_carries_optarch_cpu_model_and_arch() {
+        let env = host_build_environment();
+        for key in ["easybuild:optarch", "easybuild:cpu_model", "easybuild:arch"] {
+            let value = env.get(key).cloned().unwrap_or_default();
+            assert!(
+                !value.is_empty(),
+                "host build environment should set {key}, got {:?}",
+                env
+            );
+        }
     }
 }

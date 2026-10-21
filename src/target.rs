@@ -514,6 +514,22 @@ fi
         )
     }
 
+    /// Probe the runtime architecture and CPU model on the target.
+    pub fn execution_fingerprint_command(&self) -> CommandPlan {
+        let script = r#"set -eu
+arch="$(uname -m 2>/dev/null || echo unknown)"
+cpu_model="$(awk -F: '/^model name[[:space:]]*:/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}' /proc/cpuinfo 2>/dev/null || true)"
+if [ -z "$cpu_model" ]; then
+  cpu_model="$(uname -p 2>/dev/null || echo unknown)"
+fi
+printf 'arch=%s\ncpu_model=%s\n' "$arch" "$cpu_model"
+"#;
+        self.route_tokens(
+            self.runtime_tokens(vec!["sh".into(), "-c".into(), script.into()]),
+            true,
+        )
+    }
+
     fn easybuild_env_assignments(&self, scrub_wrappers: bool) -> Vec<String> {
         self.easybuild
             .environment
