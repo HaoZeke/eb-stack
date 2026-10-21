@@ -120,6 +120,17 @@ suspect FMA contraction before changing dependencies or skipping tests. Prefer
 merged MuJoCo easyconfigs precedent). Do not add `pretestopts` just to export
 `TMPDIR`: EasyBuild already sets `TMPDIR`, `TMP`, and `TEMP`.
 
+### Intermittent single-test failures
+
+If one test fails on some builds and passes on a plain retry, look for an
+unseeded stochastic input before blaming the toolchain, MPI or the host. Rerun
+the test many times in the build tree and pin a failing seed; a seed that fails
+every time confirms it. Fix it with a source patch that sets the seed, not by
+widening the tolerance. Example: GROMACS `PositionRestraintsTwoCOMs` uses
+v-rescale without `ld-seed` and misses its double-precision tolerance in about
+0.5% of runs; setting `ld-seed = 234262` (the seed from upstream's own test
+data) makes it deterministic.
+
 ## Then the cheap mechanical gates
 
 ```sh
