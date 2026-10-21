@@ -472,6 +472,44 @@ impl BuildTarget {
         self.route_tokens(self.runtime_tokens(tokens), true)
     }
 
+    /// Check that EASYBUILD_TMPDIR exists, is writable, and has free space/inodes.
+    ///
+    /// EasyBuild shells out to compilers and wrappers very early; a broken tmp
+    /// directory then surfaces as opaque configure/compiler failures.
+    pub fn easybuild_tmpdir_preflight_command(&self) -> CommandPlan {
+        let script = r#"set -eu
+tmp="${EB_STACK_TMPDIR:?}"
+if [ ! -d "$tmp" ]; then
+  echo "EASYBUILD_TMPDIR '$tmp' does not exist" >&2
+  exit 40
+fi
+if [ ! -w "$tmp" ]; then
+  echo "EASYBUILD_TMPDIR '$tmp' is not writable" >&2
+  exit 41
+fi
+kb_free="$(df -Pk "$tmp" | awk 'NR==2 {print $4}')"
+inode_free="$(df -Pi "$tmp" | awk 'NR==2 {print $4}')"
+if [ -z "$kb_free" ] || [ "$kb_free" -le 0 ]; then
+  echo "EASYBUILD_TMPDIR '$tmp' has no free space (1K blocks: ${kb_free:-unknown})" >&2
+  exit 42
+fi
+if [ -z "$inode_free" ] || [ "$inode_free" -le 0 ]; then
+  echo "EASYBUILD_TMPDIR '$tmp' has no free inodes (${inode_free:-unknown})" >&2
+  exit 43
+fi
+"#;
+        self.route_tokens(
+            self.runtime_tokens(vec![
+                "env".into(),
+                format!("EB_STACK_TMPDIR={}", self.easybuild.tmp_root),
+                "sh".into(),
+                "-c".into(),
+                script.into(),
+            ]),
+            true,
+        )
+    }
+
     fn easybuild_env_assignments(&self, scrub_wrappers: bool) -> Vec<String> {
         self.easybuild
             .environment

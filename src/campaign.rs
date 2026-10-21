@@ -392,6 +392,68 @@ pub fn run_campaign(request: &CampaignRequest) -> Result<CampaignState, Campaign
         }
     };
 
+    let tmpdir_check = request.target.easybuild_tmpdir_preflight_command();
+    let tmpdir_output = match tmpdir_check.execute() {
+        Ok(output) => output,
+        Err(error) => {
+            record_target_command_failure(
+                &mut state,
+                &request.target,
+                "preflight",
+                "",
+                tmpdir_check,
+                &error,
+            );
+            state.current_recipe = None;
+            write_state(&request.state_path, &state)?;
+            return Ok(state);
+        }
+    };
+    if !tmpdir_output.status.success() {
+        let stdout = String::from_utf8_lossy(&tmpdir_output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&tmpdir_output.stderr).into_owned();
+        state.findings.push(BuildFinding {
+            id: format!(
+                "attempt:{}:finding:{}",
+                state.attempts,
+                state.findings.len() + 1
+            ),
+            class: BuildFindingClass::Resource,
+            disposition: FindingDisposition::Retryable,
+            stage: "preflight".into(),
+            recipe: String::new(),
+            target: request.target.name.clone(),
+            summary: "EASYBUILD_TMPDIR preflight failed (missing path, no write access, or no space/inodes)".into(),
+            evidence: format!(
+                "stdout:\n{}\nstderr:\n{}",
+                stdout.trim_end(),
+                stderr.trim_end()
+            ),
+            command: tmpdir_check,
+            exit_code: tmpdir_output.status.code(),
+            attempt: state.attempts,
+            status: FindingStatus::Open,
+            owner: None,
+            resolution: None,
+        });
+        state.status = CampaignStatus::Failed;
+        state.current_recipe = None;
+        state.history.push(CampaignEvent {
+            attempt: state.attempts,
+            status: CampaignStatus::Failed,
+            recipe: None,
+            detail: "classified EASYBUILD_TMPDIR preflight failure as Resource".into(),
+        });
+        write_state(&request.state_path, &state)?;
+        return Ok(state);
+    }
+    state.history.push(CampaignEvent {
+        attempt: state.attempts,
+        status: CampaignStatus::Running,
+        recipe: None,
+        detail: "EASYBUILD_TMPDIR preflight succeeded".into(),
+    });
+
     // Every easyblock module the bundle ships, at its staged path. A recipe
     // whose class lives here cannot start without them.
     let staged_easyblocks = bundle_easyblocks(&request.bundle)
