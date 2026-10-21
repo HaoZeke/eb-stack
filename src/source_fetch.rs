@@ -40,6 +40,10 @@ pub struct SourceFetch {
     /// Every URL tried and why it failed, or why none could be tried.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
+    /// Body of a successful download. Not part of `sources.fetch.json`; the
+    /// index rewrite reads `Cargo.lock` out of it and then drops it.
+    #[serde(skip)]
+    pub bytes: Option<Vec<u8>>,
 }
 
 /// The URLs EasyBuild would try for `file`, in order: the entry's own
@@ -122,6 +126,7 @@ pub fn fetch_sources(recipe: &ResolvedEasyconfig, client: &dyn RegistryClient) -
                 url: None,
                 sha256: None,
                 errors: Vec::new(),
+                bytes: None,
             };
             if file.git {
                 fetch.errors.push(
@@ -146,6 +151,7 @@ pub fn fetch_sources(recipe: &ResolvedEasyconfig, client: &dyn RegistryClient) -
                     Ok(bytes) if !bytes.is_empty() => {
                         fetch.sha256 = Some(sha256_hex(&bytes));
                         fetch.url = Some(url);
+                        fetch.bytes = Some(bytes);
                         break;
                     }
                     Ok(_) => fetch.errors.push(format!("{url}: empty body")),
@@ -185,6 +191,7 @@ pub fn plan_package_bump_fetching(
         let mut bundle = first;
         push_fetch_residuals(&mut bundle, &fetched, 0);
         fill_empty_named_checksums(&mut bundle, client, &mut fetched);
+        apply_index_rewrites(&mut bundle, request, &fetched, client);
         return Ok((bundle, fetched));
     };
     let mut again = request.clone();
@@ -192,7 +199,49 @@ pub fn plan_package_bump_fetching(
     let mut bundle = plan_package_bump_with(&again, options)?;
     push_fetch_residuals(&mut bundle, &fetched, 1);
     fill_empty_named_checksums(&mut bundle, client, &mut fetched);
+    apply_index_rewrites(&mut bundle, request, &fetched, client);
     Ok((bundle, fetched))
+}
+
+/// Versions, crate lists, and extension checksums an index can decide.
+///
+/// Runs after the version bump has been emitted, so `%(version)s` already
+/// names the new release and a `Cargo.lock` inside the downloaded source is
+/// the lock of that release. A toolchain-only bump never reaches here.
+fn apply_index_rewrites(
+    bundle: &mut PackageBundle,
+    request: &BumpPackageRequest,
+    fetched: &[SourceFetch],
+    client: &dyn RegistryClient,
+) {
+    let Some(easyconfig) = bundle.easyconfigs.first() else {
+        return;
+    };
+    let prior = std::fs::read_to_string(&request.source)
+        .ok()
+        .and_then(|text| resolve_easyconfig_str(&text).ok());
+    let archives = fetched
+        .iter()
+        .filter_map(|fetch| {
+            fetch
+                .bytes
+                .as_deref()
+                .map(|bytes| crate::index_bump::FetchedArchive {
+                    filename: fetch.filename.as_str(),
+                    bytes,
+                })
+        })
+        .collect::<Vec<_>>();
+    let (text, residuals) = crate::index_bump::rewrite_fetched_recipe(
+        &easyconfig.text,
+        prior.as_ref(),
+        &archives,
+        client,
+    );
+    if let Some(easyconfig) = bundle.easyconfigs.first_mut() {
+        easyconfig.text = text;
+    }
+    bundle.plan.residuals.extend(residuals);
 }
 
 /// Download every concrete checksum-dict filename whose digest is empty.
@@ -270,6 +319,7 @@ fn fetch_empty_named_checksums(
             url: None,
             sha256: None,
             errors: Vec::new(),
+            bytes: None,
         };
         let file = SourceFile {
             filename: concrete.clone(),

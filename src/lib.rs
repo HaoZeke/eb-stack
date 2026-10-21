@@ -24,6 +24,7 @@ pub mod ecosystem;
 pub use crate::ecosystem::parse_package_index;
 mod foreign;
 pub mod hierarchy;
+mod index_bump;
 pub mod input_hash;
 pub mod jenkins;
 pub mod luarocks;
