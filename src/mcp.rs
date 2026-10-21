@@ -15,8 +15,8 @@ use crate::eb_parse::{
 use crate::eb_run::{
     build_test_description, builds_allowed, commands_in, config_log_failure, dry_run_environment,
     dry_run_guard, dry_run_next, error_lines, failed_dry_run_text, failure_kind, find_config_log,
-    last_step_in_file, lmod_error, parse_dry_run, read_tail, recipe_toolchain_options, run_eb,
-    run_eb_with, split_steps, split_warnings, step_text, tail, threaded_findings,
+    last_step_in_file, lmod_error, parse_dry_run, read_tail, recipe_toolchain_options, resolve_eb,
+    run_eb_build, run_eb_with, split_steps, split_warnings, step_text, tail, threaded_findings,
     threaded_findings_text, threaded_note, threaded_pairs, EbInvocation, EbRun, ALLOW_BUILD_ENV,
 };
 use crate::eb_style::{
@@ -1896,7 +1896,8 @@ fn build_test(arguments: &Value) -> Result<Value, String> {
         format!("--tmpdir={}", dir.join("tmp").display()),
         format!("--buildpath={}", dir.join("build").display()),
     ];
-    let run = run_eb(
+    let run = run_eb_build(
+        &resolve_eb()?,
         &invocation.args(&extra),
         timeout_arg(arguments, 7200, 60, 6 * 3600),
         &output,

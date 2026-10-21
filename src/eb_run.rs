@@ -71,6 +71,10 @@ static ERROR_LINE: LazyLock<Regex> = LazyLock::new(|| {
 static LMOD_ERROR: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"Lmod has detected the following error:?\s*(.*)$").expect("regex")
 });
+/// EasyBuild 5.4.1 `create_lock` lines. Greedy `.lock` so `.locks` is not the match.
+static CREATED_LOCK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:Creating lock at |Lock created: )(\S+\.lock)").expect("regex")
+});
 
 /// Drop ANSI color so step markers match when EasyBuild's rich console is on.
 fn visible(line: &str) -> String {
@@ -889,6 +893,8 @@ fn run_program_with(
     command
         .args(args)
         .current_dir(cwd)
+        // Unbuffered so a lock line is on disk before SIGKILL.
+        .env("PYTHONUNBUFFERED", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::from(file))
         .stderr(Stdio::from(err));
@@ -1014,6 +1020,65 @@ fn stop_tree(child: &mut std::process::Child) {
     let _ = child.kill();
     signal_all("KILL", &tree);
     let _ = child.wait();
+}
+
+/// Run one build. After a kill, remove empty locks this run created.
+/// `check_lock` (EasyBuild 5.4.1 filetools.py:2159) aborts if a lock was left.
+pub(crate) fn run_eb_build(
+    program: &Path,
+    args: &[String],
+    limit: Duration,
+    output_file: &Path,
+) -> Result<EbRun, String> {
+    let locks = args.iter().rev().find_map(|arg| {
+        let dir = arg.strip_prefix("--installpath=")?;
+        (!dir.is_empty()).then(|| PathBuf::from(dir).join("software").join(".locks"))
+    });
+    let before: Vec<std::ffi::OsString> = locks
+        .as_ref()
+        .and_then(|dir| std::fs::read_dir(dir).ok())
+        .map(|read| read.flatten().map(|entry| entry.file_name()).collect())
+        .unwrap_or_default();
+    let run = run_program(program, args, limit, output_file)?;
+    if !run.timed_out {
+        return Ok(run);
+    }
+    // Names already in `<installpath>/software/.locks`, then paths the log created.
+    let mut paths = Vec::new();
+    if let Some(dir) = &locks {
+        if let Ok(read) = std::fs::read_dir(dir) {
+            paths.extend(read.flatten().map(|entry| entry.path()));
+        }
+    }
+    let mut buf = vec![0_u8; 1024 * 1024];
+    if let Ok(mut file) = File::open(output_file) {
+        if let Ok(n) = std::io::Read::read(&mut file, &mut buf) {
+            let text = String::from_utf8_lossy(&buf[..n]);
+            paths.extend(
+                CREATED_LOCK
+                    .captures_iter(&text)
+                    .map(|cap| PathBuf::from(&cap[1])),
+            );
+        }
+    }
+    for path in paths {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let parent = path.parent().and_then(|dir| dir.file_name());
+        let same = locks
+            .as_ref()
+            .is_some_and(|dir| path.parent() == Some(dir.as_path()));
+        let seen = path
+            .file_name()
+            .is_some_and(|n| before.iter().any(|had| had == n));
+        if name.ends_with(".lock")
+            && parent == Some(std::ffi::OsStr::new(".locks"))
+            && !(same && seen)
+            && std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir())
+        {
+            let _ = std::fs::remove_dir(&path);
+        }
+    }
+    Ok(run)
 }
 
 /// True when this process may start a real build.
@@ -1807,6 +1872,114 @@ configure:9999: $? = 1\n";
         assert!(
             dry_text.starts_with("flag=1\n") && dry_text.contains("/dry-run-guard"),
             "{dry_text}"
+        );
+    }
+
+    /// proof r6: `eb_build_test` killed `eb` at the time limit. The install
+    /// lock stayed, and the retry aborted with `Lock ... already exists`.
+    #[cfg(unix)]
+    #[test]
+    fn a_killed_build_leaves_its_lock_until_the_next_build() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lock = dir.path().join(".locks").join("pkg.lock");
+        std::fs::create_dir_all(lock.parent().expect("parent")).expect("locks");
+        let fake = dir.path().join("eb");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\nlock='{lock}'\n\
+                 if [ -d \"$lock\" ]; then\n\
+                 echo \"Lock $lock already exists, aborting!\"\nexit 1\nfi\n\
+                 mkdir -p \"$lock\"\n\
+                 echo \"Creating lock at $lock...\"\n\
+                 echo \"Lock created: $lock\"\n\
+                 [ \"$1\" = hold ] && sleep 60\nexit 0\n",
+                lock = lock.display()
+            ),
+        )
+        .expect("fake eb");
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let out = dir.path().join("eb.out");
+        let hold = ["hold".to_string()];
+        let go: [String; 0] = [];
+
+        let killed = run_program(&fake, &hold, Duration::from_secs(3), &out).expect("killed");
+        assert!(killed.timed_out && killed.exit_code.is_none(), "{killed:?}");
+        assert!(lock.is_dir(), "a killed build leaves the install lock");
+        let refused = run_program(&fake, &go, Duration::from_secs(3), &out).expect("refused");
+        assert_eq!(refused.exit_code, Some(1), "{refused:?}");
+        let text = std::fs::read_to_string(&out).expect("output");
+        assert!(text.contains("already exists"), "{text}");
+
+        std::fs::remove_dir(&lock).expect("reset");
+        let again = run_eb_build(&fake, &hold, Duration::from_secs(3), &out).expect("tool");
+        assert!(again.timed_out, "{again:?}");
+        assert!(
+            !lock.exists(),
+            "the tool removes the lock after it kills eb"
+        );
+        let retry = run_eb_build(&fake, &go, Duration::from_secs(3), &out).expect("retry");
+        assert_eq!(retry.exit_code, Some(0), "{retry:?}");
+        let retry_text = std::fs::read_to_string(&out).expect("retry output");
+        assert!(!retry_text.contains("already exists"), "{retry_text}");
+    }
+
+    /// A lock that was already there, a non-empty directory, a file, and a
+    /// path outside `.locks` stay. An empty lock this run added does not.
+    #[cfg(unix)]
+    #[test]
+    fn a_killed_build_leaves_preexisting_locks_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("install");
+        let locks = root.join("software").join(".locks");
+        std::fs::create_dir_all(&locks).expect("locks");
+        let held = locks.join("held.lock");
+        let file_lock = locks.join("file.lock");
+        let outside = dir.path().join("outside.lock");
+        std::fs::create_dir(&held).expect("held");
+        std::fs::write(&file_lock, b"not a directory").expect("file");
+        std::fs::create_dir(&outside).expect("outside");
+        let fresh = locks.join("fresh.lock");
+        let logged = locks.join("logged.lock");
+        let filled = locks.join("filled.lock");
+        let fake = dir.path().join("eb");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\n\
+                 mkdir -p '{fresh}' '{logged}' '{filled}'\n\
+                 echo x > '{filled}/pid'\n\
+                 echo 'Creating lock at {logged}...'\n\
+                 echo 'Lock created: {logged}'\n\
+                 echo 'Creating lock at {held}...'\n\
+                 echo 'Creating lock at {outside}...'\n\
+                 sleep 60\n",
+                fresh = fresh.display(),
+                logged = logged.display(),
+                filled = filled.display(),
+                held = held.display(),
+                outside = outside.display(),
+            ),
+        )
+        .expect("fake eb");
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let out = dir.path().join("eb.out");
+        let args = [format!("--installpath={}", root.display())];
+        let run = run_eb_build(&fake, &args, Duration::from_secs(3), &out).expect("run");
+        assert!(run.timed_out, "{run:?}");
+        assert!(held.is_dir(), "a lock that predated the run stays");
+        assert!(file_lock.is_file(), "a file is not a lock directory");
+        assert!(outside.is_dir(), "a path outside .locks stays");
+        assert!(filled.is_dir(), "a non-empty directory stays");
+        assert!(
+            !fresh.exists(),
+            "an empty lock created during the run is removed"
+        );
+        assert!(
+            !logged.exists(),
+            "a lock the output logged as created is removed"
         );
     }
 }
