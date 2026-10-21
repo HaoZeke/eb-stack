@@ -481,6 +481,47 @@ fn call(id: u64, name: &str, arguments: serde_json::Value) -> serde_json::Value 
 }
 
 #[test]
+fn mcp_recipe_edit_model_guard_reverts_arm3_field_clobbering() {
+    let temp = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
+    let cases = [
+        (
+            include_str!("repro_fixtures/model_guard/bracken_deterministic.eb"),
+            include_str!("repro_fixtures/model_guard/bracken_arm3.eb"),
+            "bracken",
+        ),
+        (
+            include_str!("repro_fixtures/model_guard/multiprocess_deterministic.eb"),
+            include_str!("repro_fixtures/model_guard/multiprocess_arm3.eb"),
+            "multiprocess",
+        ),
+    ];
+    for (index, (deterministic, arm3, label)) in cases.iter().enumerate() {
+        let recipe = temp.path().join(format!("{label}.eb"));
+        std::fs::write(&recipe, deterministic).expect("write deterministic fixture");
+        let response = call(
+            10_000 + index as u64,
+            "eb_recipe_edit",
+            json!({
+                "path": recipe,
+                "old": deterministic,
+                "new": arm3,
+                "model_guard": true
+            }),
+        );
+        assert_eq!(response["result"]["isError"], true, "{response}");
+        let message = response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            message.contains("post-model guard reverted this edit"),
+            "{label}: {message}"
+        );
+        let after = std::fs::read_to_string(&recipe).expect("read reverted recipe");
+        assert_eq!(after, *deterministic, "{label}: deterministic file changed");
+    }
+}
+
+#[test]
 fn mcp_recipe_lint_reports_syntax_errors_and_a_clean_flag() {
     let temp = tempfile::tempdir().expect("tempdir");
     let broken = temp.path().join("broken.eb");

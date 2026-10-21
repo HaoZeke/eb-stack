@@ -17,9 +17,9 @@ use crate::eb_run::{
     threaded_note, threaded_pairs, EbInvocation, ALLOW_BUILD_ENV,
 };
 use crate::eb_style::{
-    format_style, format_style_file, is_formatting_code, lint_recipe_files_scoped, lint_style,
-    python_syntax_error, review_item_findings, review_item_status, RecipeScope, ReviewItem,
-    ReviewItemStatus, Severity,
+    format_style, format_style_file, hunks, is_formatting_code, lint_recipe_files_scoped,
+    lint_style, python_syntax_error, review_item_findings, review_item_status,
+    valid_easyconfig_parameters, RecipeScope, ReviewItem, ReviewItemStatus, Severity,
 };
 use crate::foreign::ForeignFormat;
 use crate::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
@@ -41,7 +41,7 @@ use crate::{
     BaselineSource, SolveExtraOut, StackLock,
 };
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -192,15 +192,25 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_recipe_edit",
-            "Replace an exact literal string in a workspace file. old must be non-empty and different from new. When old matches more than once the file is left unchanged and the error lists the line and the list entry (component, extension or dependency name) of every match. within names one ('name', ...) entry so only matches inside it change; when two entries share the name, occurrence (1-based) picks one. Without within, occurrence picks the n-th match. Use replace_all only when the review asks for the change at every occurrence; the result's note says when one call changed several different entries.",
+            "Replace an exact literal string in a workspace file. old must be non-empty and different from new. When old matches more than once the file is left unchanged and the error lists the line and the list entry (component, extension or dependency name) of every match. within names one ('name', ...) entry so only matches inside it change; when two entries share the name, occurrence (1-based) picks one. Without within, occurrence picks the n-th match. Use replace_all only when the review asks for the change at every occurrence; the result's note says when one call changed several different entries. model_guard runs a post-edit gate for deterministic-then-model bump flows: deterministic fields are immutable and newly added top-level names must be valid EasyBuild parameters for the recipe easyblock.",
             &[("path", "string"), ("old", "string"), ("new", "string")],
-            &[("replace_all", "boolean"), ("within", "string"), ("occurrence", "integer")],
+            &[
+                ("replace_all", "boolean"),
+                ("within", "string"),
+                ("occurrence", "integer"),
+                ("model_guard", "boolean"),
+            ],
         ),
         tool_with_optional(
             "eb_recipe_apply_suggestion",
-            "Apply a review comment's code suggestion to the lines the comment is anchored on, the way GitHub's 'Commit suggestion' does: lines line_start..line_end (1-based; line_end defaults to line_start) are replaced by suggestion, and an empty or missing suggestion deletes them. Pass expect with the anchored lines as the review showed them: when earlier edits moved them, the unique place where they now are is used, and when they are not found nothing is written. line_start and line_end are the review's numbering: without expect, once the file has changed, the lines it had there when first seen are looked up instead. A suggestion that would leave the file invalid Python is not written. Use it for every suggestion block, including empty ones, before any other edit to those lines; then check the result against the rules (R1a) with eb_recipe_lint.",
+            "Apply a review comment's code suggestion to the lines the comment is anchored on, the way GitHub's 'Commit suggestion' does: lines line_start..line_end (1-based; line_end defaults to line_start) are replaced by suggestion, and an empty or missing suggestion deletes them. Pass expect with the anchored lines as the review showed them: when earlier edits moved them, the unique place where they now are is used, and when they are not found nothing is written. line_start and line_end are the review's numbering: without expect, once the file has changed, the lines it had there when first seen are looked up instead. A suggestion that would leave the file invalid Python is not written. Use it for every suggestion block, including empty ones, before any other edit to those lines; then check the result against the rules (R1a) with eb_recipe_lint. model_guard runs a post-edit gate for deterministic-then-model bump flows: deterministic fields are immutable and newly added top-level names must be valid EasyBuild parameters for the recipe easyblock.",
             &[("path", "string"), ("line_start", "integer")],
-            &[("line_end", "integer"), ("suggestion", "string"), ("expect", "string")],
+            &[
+                ("line_end", "integer"),
+                ("suggestion", "string"),
+                ("expect", "string"),
+                ("model_guard", "boolean"),
+            ],
         ),
         tool_with_optional(
             "eb_recipe_diff",
@@ -788,6 +798,103 @@ fn rebaseline(path: &Path) {
     }
 }
 
+/// Top-level assignment names (`name = ...` / `name += ...`) in file order.
+fn top_level_assignment_names(text: &str) -> BTreeSet<String> {
+    text.lines()
+        .filter(|line| !line.starts_with([' ', '\t', '#']))
+        .filter_map(|line| {
+            let name: String = line
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if name.is_empty() {
+                return None;
+            }
+            let rest = line[name.len()..].trim_start();
+            (rest.starts_with('=') || rest.starts_with("+=")).then_some(name)
+        })
+        .collect()
+}
+
+/// `easyblock = 'Class'` / `easyblock = "Class"` at top level.
+fn easyblock_name(text: &str) -> Option<String> {
+    text.lines()
+        .filter(|line| !line.starts_with([' ', '\t', '#']))
+        .find_map(|line| {
+            let (name, value) = line.split_once('=')?;
+            if name.trim() != "easyblock" {
+                return None;
+            }
+            let trimmed = value.trim();
+            for quote in ['\'', '"'] {
+                if let Some(body) = trimmed.strip_prefix(quote) {
+                    let end = body.find(quote)?;
+                    let class = body[..end].trim();
+                    return (!class.is_empty()).then_some(class.to_string());
+                }
+            }
+            None
+        })
+}
+
+/// Post-model guard for deterministic bump recipes.
+///
+/// When enabled, an edit is rolled back if it modifies a deterministic field
+/// from the first-seen baseline or introduces a top-level name that is not a
+/// valid EasyBuild parameter for the recipe's easyblock.
+fn enforce_model_guard(root: &Path, path: &Path, baseline: &str) -> Result<(), String> {
+    let after = read_workspace(root, path)?.content;
+    let deterministic = top_level_assignment_names(baseline);
+    let touched = hunks(baseline, &after)
+        .into_iter()
+        .flat_map(|hunk| hunk.params.into_iter())
+        .collect::<BTreeSet<_>>();
+    let mut changed_deterministic = touched
+        .iter()
+        .filter(|name| deterministic.contains(*name))
+        .cloned()
+        .collect::<Vec<_>>();
+    changed_deterministic.sort();
+    changed_deterministic.dedup();
+
+    let current = top_level_assignment_names(&after);
+    let introduced = current
+        .difference(&deterministic)
+        .cloned()
+        .collect::<Vec<_>>();
+    let easyblock = easyblock_name(&after).or_else(|| easyblock_name(baseline));
+    let valid = valid_easyconfig_parameters(easyblock.as_deref());
+    let mut invalid_added = introduced
+        .into_iter()
+        .filter(|name| !valid.contains(name))
+        .collect::<Vec<_>>();
+    invalid_added.sort();
+    invalid_added.dedup();
+
+    if changed_deterministic.is_empty() && invalid_added.is_empty() {
+        return Ok(());
+    }
+
+    write_workspace(root, path, baseline)?;
+    let mut reasons = Vec::new();
+    if !changed_deterministic.is_empty() {
+        reasons.push(format!(
+            "deterministic fields changed: {}",
+            changed_deterministic.join(", ")
+        ));
+    }
+    if !invalid_added.is_empty() {
+        reasons.push(format!(
+            "invalid top-level names added: {}",
+            invalid_added.join(", ")
+        ));
+    }
+    Err(format!(
+        "not applied: post-model guard reverted this edit ({})",
+        reasons.join("; ")
+    ))
+}
+
 fn recipe_read(arguments: &Value) -> Result<Value, String> {
     let root = configured_workspace_root()?;
     let path = required_path(arguments, "path")?;
@@ -806,6 +913,14 @@ fn recipe_edit(arguments: &Value) -> Result<Value, String> {
     let root = configured_workspace_root()?;
     let path = required_path(arguments, "path")?;
     remember_first_seen(&path);
+    let guarded = optional_bool(arguments, "model_guard");
+    let baseline = if guarded { pristine(&path) } else { None };
+    if guarded && baseline.is_none() {
+        return Err(format!(
+            "model_guard needs an existing baseline for {}",
+            path.display()
+        ));
+    }
     let within = optional_string(arguments, "within").filter(|name| !name.is_empty());
     let occurrence = arguments
         .get("occurrence")
@@ -822,6 +937,9 @@ fn recipe_edit(arguments: &Value) -> Result<Value, String> {
         within.as_deref(),
         occurrence,
     )?;
+    if let Some(kept) = baseline.as_deref() {
+        enforce_model_guard(&root, &path, kept)?;
+    }
     serde_json::to_value(edited).map_err(|error| error.to_string())
 }
 
@@ -831,6 +949,14 @@ fn recipe_apply_suggestion(arguments: &Value) -> Result<Value, String> {
     let root = configured_workspace_root()?;
     let path = required_path(arguments, "path")?;
     remember_first_seen(&path);
+    let guarded = optional_bool(arguments, "model_guard");
+    let baseline = if guarded { pristine(&path) } else { None };
+    if guarded && baseline.is_none() {
+        return Err(format!(
+            "model_guard needs an existing baseline for {}",
+            path.display()
+        ));
+    }
     let line = |name: &str| {
         arguments
             .get(name)
@@ -855,6 +981,9 @@ fn recipe_apply_suggestion(arguments: &Value) -> Result<Value, String> {
         expect.as_deref(),
         kept.as_deref(),
     )?;
+    if let Some(kept) = baseline.as_deref() {
+        enforce_model_guard(&root, &path, kept)?;
+    }
     serde_json::to_value(edited).map_err(|error| error.to_string())
 }
 

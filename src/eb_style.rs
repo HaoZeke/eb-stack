@@ -24,6 +24,7 @@
 //! lines using the patterns maintainers use by hand. It does not rewrite
 //! f-strings or `%` formatting.
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 
@@ -96,6 +97,26 @@ pub const REVIEW_COUNTED: &[&str] = &[
     "EB_SANITY_CMD_BUILDDIR",
     "EB_SANITY_CMD_CD_INSTALLDIR",
 ];
+
+/// Valid top-level easyconfig parameter names for one recipe.
+///
+/// This is the generic EasyBuild vocabulary, optionally extended by
+/// generic-easyblock-specific keys when the recipe's easyblock is known.
+pub fn valid_easyconfig_parameters(easyblock: Option<&str>) -> BTreeSet<String> {
+    let mut valid = vocab::DEFAULT_PARAMS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<BTreeSet<_>>();
+    if let Some(block) = easyblock {
+        if let Some((_, extras)) = vocab::GENERIC_EASYBLOCK_EXTRAS
+            .iter()
+            .find(|(name, _)| *name == block)
+        {
+            valid.extend(extras.iter().map(|name| (*name).to_string()));
+        }
+    }
+    valid
+}
 
 /// True when a finding keeps a recipe from being clean: any error, and any
 /// finding of the formatting family whatever its severity, unless it is
