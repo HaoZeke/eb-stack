@@ -241,6 +241,7 @@ A worked record from an open 2026.06 pull request is in
 
 The same ~shared~ map as a table, then one section per pull request: how
 many modules it builds, which other open pull requests it shares them with,
-and any unresolved requirements. Pull requests are written as ~#N~ text, or
-as links when ~--repo-url~ is set. The file links on GitHub without adding
+and any unresolved requirements. Pull requests are written as ~#N~ text when
+~--repo-url~ is empty, and as links otherwise. The flag defaults to
+~https://github.com/EESSI/software-layer~. The file links on GitHub without adding
 an entry to a pull request timeline.

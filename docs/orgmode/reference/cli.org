@@ -392,6 +392,10 @@ The output directory holds ~prs/<N>.toml~, ~overlap.toml~, and ~overlap.md~.
 See [[file:formats.org][output formats]] for the records. A closed pull
 request's file is removed: the directory is the open set of this run.
 
+~--repo-url~ defaults to ~https://github.com/EESSI/software-layer~. The
+report links each pull request there. Pass another URL to link somewhere
+else, or an empty URL to write ~#N~ text.
+
 * Target commands
 
 #+begin_src bash
