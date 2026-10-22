@@ -5,7 +5,7 @@
 //! module reaches the easyblocks that import it, and then their subclasses.
 //! Easyconfig matching is layered on top of this index.
 
-use crate::build_order::{module_name, ModuleKey};
+use crate::build_order::{module_name, reverse_closure, reverse_uses, Choice, ModuleKey};
 use crate::eb_easyblock::encode_class_name;
 use crate::eb_parse::{easyblock_sites, EasyblockSites, ResolvedEasyconfig};
 use rustpython_parser::ast::{self, Stmt};
@@ -184,27 +184,46 @@ fn dotted_name(expr: &ast::Expr) -> Option<String> {
 
 fn assigned_string(stmts: &[Stmt], key: &str) -> Option<String> {
     let mut found = None;
+    collect_assigned(stmts, key, &mut found);
+    found
+}
+
+fn collect_assigned(stmts: &[Stmt], key: &str, found: &mut Option<String>) {
     for stmt in stmts {
-        let body: &[Stmt] = match stmt {
+        let nested: &[Stmt] = match stmt {
             Stmt::FunctionDef(function) => &function.body,
+            Stmt::If(branch) => {
+                collect_assigned(&branch.body, key, found);
+                &branch.orelse
+            }
+            Stmt::With(with) => &with.body,
+            Stmt::For(node) => &node.body,
+            Stmt::While(node) => &node.body,
+            Stmt::Try(node) => {
+                collect_assigned(&node.body, key, found);
+                collect_assigned(&node.orelse, key, found);
+                for handler in &node.handlers {
+                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                    collect_assigned(&handler.body, key, found);
+                }
+                &node.finalbody
+            }
+            Stmt::Assign(assign) => {
+                let mut names = Vec::new();
+                for target in &assign.targets {
+                    subscript_keys(target, &mut names);
+                }
+                if names.iter().any(|name| name == key) {
+                    if let Some(value) = string_constant(&assign.value) {
+                        *found = Some(value);
+                    }
+                }
+                continue;
+            }
             _ => continue,
         };
-        for inner in body {
-            let Stmt::Assign(assign) = inner else {
-                continue;
-            };
-            let mut names = Vec::new();
-            for target in &assign.targets {
-                subscript_keys(target, &mut names);
-            }
-            if names.iter().any(|name| name == key) {
-                if let Some(value) = string_constant(&assign.value) {
-                    found = Some(value);
-                }
-            }
-        }
+        collect_assigned(nested, key, found);
     }
-    found
 }
 
 fn subscript_keys(expr: &ast::Expr, keys: &mut Vec<String>) {
@@ -324,7 +343,7 @@ pub enum ReachError {
     Io(#[from] std::io::Error),
 }
 
-/// What to resolve. Extension and reverse rows are filled by a later pass.
+/// What to resolve.
 #[derive(Debug, Clone)]
 pub struct ReachQuery {
     /// Easyblock and framework roots. Earlier roots win a class name.
@@ -335,6 +354,8 @@ pub struct ReachQuery {
     pub changed: Vec<(PathBuf, String)>,
     /// Installed module names (`name/version[-toolchain]versionsuffix`).
     pub installed: BTreeSet<String>,
+    /// Also list modules that depend on a reached module.
+    pub reverse: bool,
     /// Timestamp stored on the report.
     pub generated_at: String,
 }
@@ -375,8 +396,23 @@ pub struct ReachReport {
     pub installed_count: usize,
     /// One row per matched class on an easyconfig.
     pub hits: Vec<ReachHit>,
+    /// Dependents of a hit. Empty when the query did not ask for them.
+    pub reverse: Vec<ReverseRow>,
     /// Easyconfigs that could not be parsed.
     pub skipped: Vec<String>,
+}
+
+/// A module that uses a reached module and would need a rebuild.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReverseRow {
+    /// Dependent module.
+    pub module: String,
+    /// Easyconfig that installs it, when the tree has one.
+    pub easyconfig: String,
+    /// runtime, builddependency, extension, or toolchain.
+    pub kind: String,
+    /// Intermediate modules, nearest to the reached module first.
+    pub via: String,
 }
 
 /// Which easyconfigs use a reached class, by the `easyblock` line or `EB_<Name>`.
@@ -398,6 +434,9 @@ pub fn reach(query: &ReachQuery) -> Result<ReachReport, ReachError> {
     }
     let mut hits = Vec::new();
     let mut skipped = Vec::new();
+    let mut recipes = Vec::new();
+    let mut by_path: BTreeMap<String, ModuleKey> = BTreeMap::new();
+    let mut by_key: BTreeMap<ModuleKey, String> = BTreeMap::new();
     for path in files {
         let src = std::fs::read_to_string(&path)?;
         let (mut recipe, sites) = match easyblock_sites(&src) {
@@ -408,7 +447,8 @@ pub fn reach(query: &ReachQuery) -> Result<ReachReport, ReachError> {
             }
         };
         recipe.easyconfig_path = path.display().to_string();
-        let module = module_name(&ModuleKey::of(&recipe.to_candidate()));
+        let key = ModuleKey::of(&recipe.to_candidate());
+        let module = module_name(&key);
         push_recipe_hits(
             &index,
             &reached,
@@ -418,6 +458,11 @@ pub fn reach(query: &ReachQuery) -> Result<ReachReport, ReachError> {
             &query.installed,
             &mut hits,
         );
+        by_key
+            .entry(key.clone())
+            .or_insert_with(|| recipe.easyconfig_path.clone());
+        by_path.insert(recipe.easyconfig_path.clone(), key);
+        recipes.push(recipe);
     }
     skipped.sort();
     hits.sort_by(|left, right| left.easyconfig.cmp(&right.easyconfig));
@@ -432,6 +477,11 @@ pub fn reach(query: &ReachQuery) -> Result<ReachReport, ReachError> {
         .map(|hit| hit.module.as_str())
         .collect::<BTreeSet<_>>()
         .len();
+    let reverse = if query.reverse {
+        reverse_rows(&recipes, &by_path, &by_key, &hits)
+    } else {
+        Vec::new()
+    };
     Ok(ReachReport {
         schema_version: REACH_SCHEMA_VERSION,
         generated_at: query.generated_at.clone(),
@@ -441,6 +491,7 @@ pub fn reach(query: &ReachQuery) -> Result<ReachReport, ReachError> {
         easyconfig_count,
         installed_count,
         hits,
+        reverse,
         skipped,
     })
 }
@@ -586,6 +637,42 @@ fn inherited(index: &EasyblockIndex, start: &str, exts: bool) -> Option<String> 
     None
 }
 
+fn reverse_rows(
+    recipes: &[ResolvedEasyconfig],
+    by_path: &BTreeMap<String, ModuleKey>,
+    by_key: &BTreeMap<ModuleKey, String>,
+    hits: &[ReachHit],
+) -> Vec<ReverseRow> {
+    let candidates: Vec<_> = recipes
+        .iter()
+        .map(ResolvedEasyconfig::to_candidate)
+        .collect();
+    let uses = reverse_uses(&candidates, Choice::Newest);
+    let mut starts = Vec::new();
+    let mut seen = HashSet::new();
+    for hit in hits {
+        if let Some(key) = by_path.get(&hit.easyconfig) {
+            if seen.insert(key.clone()) {
+                starts.push(key.clone());
+            }
+        }
+    }
+    reverse_closure(&uses, &starts)
+        .into_iter()
+        .map(|step| ReverseRow {
+            module: module_name(&step.module),
+            easyconfig: by_key.get(&step.module).cloned().unwrap_or_default(),
+            kind: step.kind.to_string(),
+            via: step
+                .via
+                .iter()
+                .map(module_name)
+                .collect::<Vec<_>>()
+                .join(" -> "),
+        })
+        .collect()
+}
+
 fn collect_eb(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), ReachError> {
     if root.is_file() {
         files.push(root.to_path_buf());
@@ -652,12 +739,18 @@ mod tests {
         write(&ecs, "gromacs.eb", &recipe("GROMACS", "2024.1", ""));
         write(&ecs, "zlib.eb", &recipe("zlib", "1.3", "CMakeMake"));
         write(&ecs, "make.eb", &recipe("make", "1", "ConfigureMake"));
+        write(
+            &ecs,
+            "wrapper.eb",
+            "name = 'wrapper'\nversion = '1'\ntoolchain = SYSTEM\ndependencies = [('GROMACS', '2024.1')]\n",
+        );
         let cmake = py.join("easybuild/easyblocks/generic/cmakemake.py");
         let report = reach(&ReachQuery {
             roots: vec![py.clone()],
             easyconfigs: vec![ecs.clone()],
             changed: vec![(cmake.clone(), std::fs::read_to_string(&cmake).unwrap())],
             installed: BTreeSet::from(["zlib/1.3".into()]),
+            reverse: true,
             generated_at: "2026-10-22T00:00:00Z".into(),
         })
         .unwrap();
@@ -686,12 +779,21 @@ mod tests {
             .all(|hit| !hit.easyconfig.ends_with("make.eb")));
         assert_eq!(report.easyconfig_count, 2);
         assert_eq!(report.installed_count, 1);
+        let wrapper = report
+            .reverse
+            .iter()
+            .find(|row| row.module == "wrapper/1")
+            .unwrap();
+        assert_eq!(wrapper.kind, "runtime");
+        assert!(wrapper.via.is_empty());
+        assert!(wrapper.easyconfig.ends_with("wrapper.eb"));
         let tools = py.join("easybuild/tools/filetools.py");
         let via_import = reach(&ReachQuery {
             roots: vec![py],
             easyconfigs: vec![ecs],
             changed: vec![(tools.clone(), std::fs::read_to_string(&tools).unwrap())],
             installed: BTreeSet::new(),
+            reverse: false,
             generated_at: "t".into(),
         })
         .unwrap();
@@ -738,7 +840,7 @@ mod tests {
         write(
             &py,
             "easybuild/easyblocks/generic/pythonbundle.py",
-            "class PythonBundle:\n    def extra_options():\n        extra_vars['default_easyblock'][0] = 'PythonPackage'\n    def __init__(self):\n        self.cfg['exts_defaultclass'] = 'PythonPackage'\nclass CargoPythonBundle(PythonBundle):\n    pass\n",
+            "class PythonBundle:\n    def extra_options():\n        extra_vars['default_easyblock'][0] = 'PythonPackage'\n    def __init__(self):\n        self.cfg['exts_defaultclass'] = 'PythonPackage'\nclass CargoPythonBundle(PythonBundle):\n    pass\nclass TensorFlow:\n    def __init__(self):\n        with self.cfg.disable_templating():\n            self.cfg['exts_defaultclass'] = 'PythonPackage'\n",
         );
         write(
             &py,
@@ -757,6 +859,11 @@ mod tests {
         );
         write(
             &ecs,
+            "tf.eb",
+            "name = 'tf'\nversion = '1'\ntoolchain = SYSTEM\neasyblock = 'TensorFlow'\nexts_list = [('numpy', '1')]\n",
+        );
+        write(
+            &ecs,
             "sub.eb",
             "name = 'sub'\nversion = '1'\ntoolchain = SYSTEM\neasyblock = 'CargoPythonBundle'\nexts_list = [('numpy', '1')]\n",
         );
@@ -771,6 +878,7 @@ mod tests {
             easyconfigs: vec![ecs.clone()],
             changed: vec![(pkg.clone(), std::fs::read_to_string(&pkg).unwrap())],
             installed: BTreeSet::new(),
+            reverse: false,
             generated_at: "t".into(),
         })
         .unwrap();
@@ -790,6 +898,7 @@ mod tests {
             &py_hits,
             "sub.eb exts_defaultclass PythonPackage numpy"
         ));
+        assert!(has(&py_hits, "tf.eb exts_defaultclass PythonPackage numpy"));
         assert!(!has(
             &py_hits,
             "over.eb default_easyblock PythonPackage bare"
@@ -801,6 +910,7 @@ mod tests {
             easyconfigs: vec![ecs],
             changed: vec![(others.clone(), std::fs::read_to_string(&others).unwrap())],
             installed: BTreeSet::new(),
+            reverse: false,
             generated_at: "t".into(),
         })
         .unwrap();
