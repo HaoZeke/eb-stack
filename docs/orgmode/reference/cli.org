@@ -11,6 +11,9 @@ written by package commands are deterministic bundle artifacts.
 | ~package inspect~ | Parse conda-forge, Spack, PyPI, CRAN, Cargo, LuaRocks, or Raku into a manifest and planned SBOM |
 | ~package plan~ | Materialize profiles, solve with Resolvo, and emit recipes |
 | ~package bump~ | Retarget an EasyBuild recipe and write the same canonical bundle |
+| ~recipe easyblock~ | Print the easyblock class name EasyBuild derives for a software name |
+| ~recipe templates~ | Emit template constants and derived-key rules as JSON |
+| ~recipe hierarchy~ | Emit known toolchain hierarchies as JSON |
 | ~recipe check~ | Validate metadata and robot dependency availability |
 | ~recipe lint~ / ~recipe format~ | Report upstream CI, test-suite, and review findings (E999, F541, W605, W291, E501, E2xx, ~EB_*~; ~eb --check-contrib~ merged when ~eb~ is installed) or mechanically wrap E501 lines |
 | ~stack solve~ / ~stack sbom~ | Solve a multi-root stack or emit SBOM from a lock |
@@ -163,18 +166,44 @@ manifest, planned SBOM, profile-lock, residual, and recipe contract.
 * Recipe commands
 
 #+begin_src bash
+eb-stack recipe easyblock NAME
+eb-stack recipe easyblock -- -NAME
+eb-stack recipe easyblock --charmap
+
+eb-stack recipe templates --export
+eb-stack recipe templates --name NAME --version VERSION
+
+eb-stack recipe hierarchy [--export]
+
 eb-stack recipe check \
   --recipe RECIPE.eb \
   --easyconfigs UPSTREAM \
   [--easyconfigs OVERLAY]... \
   [--easyblocks DIR_OR_FILE]... \
   [--require-configopt FLAG]... \
-  [--metadata-only]
+  [--metadata-only] \
+  [--verify-sources \
+     [--seeded-from ECOSYSTEM \
+        [--seeded-source-url URL] \
+        [--seeded-git GIT_REMOTE]] \
+     [--source-tree DIR]] \
+  [--strict]
 
 eb-stack recipe lint RECIPE.eb [RECIPE.eb ...] [--base BEFORE.eb]
 eb-stack recipe format RECIPE.eb [RECIPE.eb ...] [--dry-run]
 eb-stack recipe format RECIPE.eb --out FORMATTED.eb
 #+end_src
+
+~recipe easyblock~ prints the class EasyBuild derives from a software name
+(~EB_~ plus the framework character map). ~--charmap~ prints that map as JSON
+instead. A hyphen-leading name is a name, not an option: pass it directly or
+after ~--~.
+
+~recipe templates --export~ prints the constant table and the derived-key
+rules. With ~--name~ and ~--version~ it prints the values those rules produce
+for that pair, using the lowercased name for the forge-account defaults and
+~system~ for the toolchain. ~recipe hierarchy~ prints the known toolchain
+generations as JSON. ~--export~ is accepted and prints the same table.
 
 ~recipe lint~ prints JSON with ~clean~, ~style~ (each finding carries
 ~path~, ~line~, ~column~, ~code~, ~severity~, and ~message~), ~check_contrib~,
@@ -210,6 +239,17 @@ structured dependency result and fails when package
 metadata, checksum structure, required configuration flags, or robot
 dependencies are invalid. Missing dependencies remain explicit work; the
 command does not create placeholder recipes.
+
+~--require-configopt~ takes the flag as it appears in ~configopts~, dashes
+included (~--require-configopt --with-tests~). ~--strict~ lists every
+statement that failed to parse and fails when that list is not empty.
+~if~, ~for~, ~import~, and the other control keywords stay unreported:
+that is the tolerant skip, not a parse failure.
+~--verify-sources~ classifies each source URL and, with ~--seeded-from~,
+rejects a checksum copied from a different artifact class. ~--seeded-source-url~
+and ~--seeded-git~ require ~--seeded-from~, which itself requires
+~--verify-sources~. ~--source-tree~ compares the version the unpacked tree
+declares with the recipe version.
 
 It also prints ~easyblock_resolution~: the class the recipe resolves to
 (named, or derived from the software name), the file that defines it, its

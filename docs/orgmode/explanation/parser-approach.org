@@ -44,7 +44,10 @@ version already carrying ~==~, ~>=~, ~<=~, ~>~, ~<~, or ~!=~ is used as-is.
 from ~name~/~version~/~versionsuffix~/~toolchain~ (including derived keys
 like ~namelower~, ~version_major_minor~, ~github_account~) plus the static
 ~TEMPLATE_CONSTANTS~ table, applied recursively (bounded) so a constant that
-itself expands to another template still resolves.
+itself expands to another template still resolves. A recipe assignment of
+~github_account~, ~bitbucket_account~, or ~versionprefix~ replaces the derived
+value. Without one, the forge accounts stay at ~namelower~ and ~versionprefix~
+stays unset.
 
 This resolved shape feeds ~recipe check~, ~stack solve~, and the candidate
 universe for ~package bump~ through
