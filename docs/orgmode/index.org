@@ -52,6 +52,8 @@
 
    *What an in-place patch forces EESSI to rebuild?* → :doc:`howto/rebuild-set`
 
+   *Which modules carry a component?* → :doc:`howto/component-reach`
+
    *CLI surface?* → :doc:`reference/cli`
 
    *Bundle schemas?* → :doc:`reference/package-bundles`
@@ -125,6 +127,7 @@
    howto/easyblock-reach
    howto/pr-overlap
    howto/rebuild-set
+   howto/component-reach
 
 .. toctree::
    :maxdepth: 2
@@ -245,7 +248,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [[file:howto/root-priority.org][declare root priority]],
     [[file:howto/easyblock-reach.org][which easyconfigs an easyblock change reaches]],
     [[file:howto/pr-overlap.org][find shared builds across open pull requests]],
-    [[file:howto/rebuild-set.org][what an in-place patch forces EESSI to rebuild]].
+    [[file:howto/rebuild-set.org][what an in-place patch forces EESSI to rebuild]],
+    [[file:howto/component-reach.org][which modules carry a component]].
   - Reference: [[file:reference/cli.org][CLI]],
     [[file:reference/package-bundles.org][package bundles]],
     [[file:reference/targets.org][build targets]],

@@ -21,7 +21,8 @@ All notable changes to this project are documented here.
   `exts_list` extensions, Cargo `crates`, and versioned names in `sources`
   or `patches` all count. A compat-layer file is an input, not an
   easyconfig. The output directory holds `component-reach.toml`,
-  `component-reach.json`, and `component-reach.md`.
+  `component-reach.json`, and `component-reach.md`. See
+  `docs/orgmode/howto/component-reach.org`.
 
 - `eb-stack rebuild-set` reports which installed modules an in-place
   easyconfig patch forces EESSI to rebuild. It closes the deployed
