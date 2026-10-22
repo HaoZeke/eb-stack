@@ -60,7 +60,10 @@ pub use artifact_class::{
     classify_foreign, classify_url, declared_version, verify_declared_version, verify_sources,
     ArtifactClass, DeclaredVersion, FindingLevel, SeededChecksum, SourceFinding,
 };
-pub use build_order::{build_order, format_order, Choice, ModuleKey, OrderError};
+pub use build_order::{
+    build_order, format_order, module_name, reverse_closure, reverse_uses, Choice, ClosureStep,
+    ModuleKey, OrderError, ReverseUse, UseKind,
+};
 pub use domain::*;
 pub use easystack::{lock_to_easystack, parse_easystack_entries, EasystackEntry, EasystackOptions};
 pub use eb_maintainer::{

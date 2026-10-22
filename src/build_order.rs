@@ -34,7 +34,7 @@ use crate::domain::{Candidate, DepReq};
 use crate::version::{cmp_version, matches_req};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 /// A module's full identity, which is what makes two builds the same build.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -99,6 +99,53 @@ impl std::fmt::Display for Edge {
             Self::Toolchain => write!(f, "toolchain"),
         }
     }
+}
+
+/// How one module uses another.
+///
+/// A name in both `dependencies` and `builddependencies` is [`UseKind::Runtime`].
+/// [`UseKind::Toolchain`] is the `toolchain` line, which is not a dependency tuple.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum UseKind {
+    /// Listed in `dependencies`.
+    Runtime,
+    /// Listed in `builddependencies` and not in `dependencies`.
+    BuildOnly,
+    /// This module's name and version appear in the user's `exts_list`.
+    Extension,
+    /// The user is built with this module as its toolchain.
+    Toolchain,
+}
+
+impl std::fmt::Display for UseKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Runtime => write!(f, "runtime"),
+            Self::BuildOnly => write!(f, "builddependency"),
+            Self::Extension => write!(f, "extension"),
+            Self::Toolchain => write!(f, "toolchain"),
+        }
+    }
+}
+
+/// One module that uses another, and the kind of use.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ReverseUse {
+    /// The module that does the using.
+    pub dependent: ModuleKey,
+    /// How it uses the dependency.
+    pub kind: UseKind,
+}
+
+/// A module the reverse walk reached, and the edge that reached it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClosureStep {
+    /// The module that has to be rebuilt when the start changes.
+    pub module: ModuleKey,
+    /// How `module` uses the previous module on the walk.
+    pub kind: UseKind,
+    /// Modules between the start and `module`, nearest to the start first.
+    pub via: Vec<ModuleKey>,
 }
 
 /// The build graph: an edge runs from a dependency to what needs it, so a
@@ -658,6 +705,181 @@ pub fn multi_build_names(order: &[Candidate]) -> BTreeMap<String, Vec<String>> {
     seen
 }
 
+/// The EasyBuild module name of a key: `name/version[-toolchain]versionsuffix`,
+/// the way it appears under `modules/all` and `software/` in an install tree.
+pub fn module_name(key: &ModuleKey) -> String {
+    let toolchain = if key.toolchain == "system" {
+        String::new()
+    } else {
+        format!("-{}", key.toolchain)
+    };
+    format!(
+        "{}/{}{toolchain}{}",
+        key.name, key.version, key.versionsuffix
+    )
+}
+
+fn resolve_use<'a>(
+    dependent: &Candidate,
+    dep: &DepReq,
+    by_name: &HashMap<&str, Vec<&'a Candidate>>,
+    candidates: &'a [Candidate],
+    choice: Choice,
+) -> Option<&'a Candidate> {
+    let named = by_name.get(dep.name.as_str())?;
+    let mut admissible: Vec<&Candidate> = named
+        .iter()
+        .copied()
+        .filter(|candidate| satisfies(candidate, dep))
+        .collect();
+    if admissible.is_empty() {
+        return None;
+    }
+    if let Some(best) = admissible
+        .iter()
+        .map(|candidate| distance(candidate, dependent, candidates))
+        .min()
+    {
+        admissible.retain(|candidate| distance(candidate, dependent, candidates) == best);
+    }
+    choose(&admissible, choice)
+}
+
+fn push_use(
+    out: &mut BTreeMap<ModuleKey, Vec<ReverseUse>>,
+    dependency: ModuleKey,
+    dependent: ModuleKey,
+    kind: UseKind,
+) {
+    if dependency == dependent {
+        return;
+    }
+    let slot = out.entry(dependency).or_default();
+    let edge = ReverseUse { dependent, kind };
+    if !slot.contains(&edge) {
+        slot.push(edge);
+    }
+}
+
+/// Who uses each module, resolved the same way [`graph_from_keys`] resolves a
+/// dependency.
+///
+/// The map's key is the module being used. A pair that has both a runtime
+/// edge and a build edge is recorded once, as [`UseKind::Runtime`]. An
+/// `exts_list` entry is not a dependency tuple, so a bundle whose extension
+/// name and version match a module gets an [`UseKind::Extension`] edge. A
+/// requirement nothing satisfies is left out: one missing recipe must not
+/// hide the rest of the closure.
+pub fn reverse_uses(
+    candidates: &[Candidate],
+    choice: Choice,
+) -> BTreeMap<ModuleKey, Vec<ReverseUse>> {
+    let mut by_name: HashMap<&str, Vec<&Candidate>> = HashMap::new();
+    for candidate in candidates {
+        by_name
+            .entry(candidate.name.as_str())
+            .or_default()
+            .push(candidate);
+    }
+    let mut by_name_version: HashMap<(&str, &str), Vec<ModuleKey>> = HashMap::new();
+    for candidate in candidates {
+        by_name_version
+            .entry((candidate.name.as_str(), candidate.version.as_str()))
+            .or_default()
+            .push(ModuleKey::of(candidate));
+    }
+
+    let mut out: BTreeMap<ModuleKey, Vec<ReverseUse>> = BTreeMap::new();
+    for candidate in candidates {
+        let dependent = ModuleKey::of(candidate);
+        if !crate::hierarchy::is_system_toolchain(&candidate.toolchain) {
+            if let Some(named) = by_name.get(candidate.toolchain.name.as_str()) {
+                if let Some(toolchain) = named
+                    .iter()
+                    .copied()
+                    .find(|item| item.version == candidate.toolchain.version)
+                {
+                    push_use(
+                        &mut out,
+                        ModuleKey::of(toolchain),
+                        dependent.clone(),
+                        UseKind::Toolchain,
+                    );
+                }
+            }
+        }
+        let mut runtime = HashSet::new();
+        for dep in &candidate.dependencies {
+            if let Some(picked) = resolve_use(candidate, dep, &by_name, candidates, choice) {
+                let key = ModuleKey::of(picked);
+                runtime.insert(key.clone());
+                push_use(&mut out, key, dependent.clone(), UseKind::Runtime);
+            }
+        }
+        for dep in &candidate.builddependencies {
+            if let Some(picked) = resolve_use(candidate, dep, &by_name, candidates, choice) {
+                let key = ModuleKey::of(picked);
+                if !runtime.contains(&key) {
+                    push_use(&mut out, key, dependent.clone(), UseKind::BuildOnly);
+                }
+            }
+        }
+        for extension in &candidate.exts_list {
+            if extension.name.is_empty() || extension.version.is_empty() {
+                continue;
+            }
+            let Some(matches) =
+                by_name_version.get(&(extension.name.as_str(), extension.version.as_str()))
+            else {
+                continue;
+            };
+            for key in matches {
+                push_use(&mut out, key.clone(), dependent.clone(), UseKind::Extension);
+            }
+        }
+    }
+    for uses in out.values_mut() {
+        uses.sort();
+    }
+    out
+}
+
+/// Modules that depend on `starts`, directly or through other dependents.
+///
+/// `starts` themselves are not returned: they are the modules the caller
+/// already has. Each other module is reported once, on the shortest walk,
+/// with the edge that reached it.
+pub fn reverse_closure(
+    uses: &BTreeMap<ModuleKey, Vec<ReverseUse>>,
+    starts: &[ModuleKey],
+) -> Vec<ClosureStep> {
+    let mut seen: HashSet<ModuleKey> = starts.iter().cloned().collect();
+    let mut queue: VecDeque<(ModuleKey, UseKind, Vec<ModuleKey>)> = VecDeque::new();
+    for start in starts {
+        if let Some(edges) = uses.get(start) {
+            for edge in edges {
+                queue.push_back((edge.dependent.clone(), edge.kind, Vec::new()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    while let Some((module, kind, via)) = queue.pop_front() {
+        if !seen.insert(module.clone()) {
+            continue;
+        }
+        if let Some(edges) = uses.get(&module) {
+            for edge in edges {
+                let mut next = via.clone();
+                next.push(module.clone());
+                queue.push_back((edge.dependent.clone(), edge.kind, next));
+            }
+        }
+        out.push(ClosureStep { module, kind, via });
+    }
+    out.sort_by(|left, right| left.module.cmp(&right.module));
+    out
+}
+
 /// Index of runtime edges for callers that want the graph rather than the list.
 pub fn runtime_edges(order: &[Candidate]) -> HashMap<String, Vec<String>> {
     let mut edges: HashMap<String, Vec<String>> = HashMap::new();
@@ -673,7 +895,7 @@ pub fn runtime_edges(order: &[Candidate]) -> HashMap<String, Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::Toolchain;
+    use crate::domain::{ExtEntry, Toolchain};
 
     fn tc(name: &str, version: &str) -> Toolchain {
         Toolchain {
@@ -899,5 +1121,74 @@ mod tests {
         ];
         let order = build_order(&all, &["Lib==2.0".into()], Choice::Newest).unwrap();
         assert_eq!(names(&order), vec!["Lib-2.0-foss-2026.1".to_string()]);
+    }
+
+    #[test]
+    fn reverse_closure_follows_runtime_build_extension_and_toolchain() {
+        let foss = tc("foss", "2026.1");
+        let mut tool = candidate("Tool", "1.0", foss.clone(), vec![]);
+        tool.builddependencies = vec![dep("Lib", "==2.0", None)];
+        let mut bundle = candidate("PyBundle", "1.0", foss.clone(), vec![]);
+        bundle.exts_list = vec![ExtEntry {
+            name: "Lib".into(),
+            version: "2.0".into(),
+        }];
+        let all = vec![
+            candidate("foss", "2026.1", tc("GCCcore", "15.2.0"), vec![]),
+            candidate("Lib", "2.0", foss.clone(), vec![]),
+            candidate("App", "1.0", foss.clone(), vec![dep("Lib", "==2.0", None)]),
+            candidate("Mega", "1.0", foss.clone(), vec![dep("App", "==1.0", None)]),
+            tool,
+            bundle,
+            candidate("Other", "1.0", foss, vec![]),
+        ];
+        let uses = reverse_uses(&all, Choice::Newest);
+        let lib = ModuleKey::of(all.iter().find(|c| c.name == "Lib").unwrap());
+        let hit = reverse_closure(&uses, std::slice::from_ref(&lib));
+        let found: Vec<_> = hit.iter().map(|step| step.module.name.as_str()).collect();
+        assert!(found.contains(&"App"), "{found:?}");
+        assert!(found.contains(&"Mega"), "{found:?}");
+        assert!(found.contains(&"Tool"), "{found:?}");
+        assert!(found.contains(&"PyBundle"), "{found:?}");
+        assert!(!found.contains(&"Other"), "{found:?}");
+        assert!(!found.contains(&"foss"), "{found:?}");
+        assert_eq!(
+            hit.iter()
+                .find(|step| step.module.name == "App")
+                .unwrap()
+                .kind,
+            UseKind::Runtime
+        );
+        assert_eq!(
+            hit.iter()
+                .find(|step| step.module.name == "Mega")
+                .unwrap()
+                .via
+                .iter()
+                .map(|key| key.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["App"]
+        );
+        assert_eq!(
+            hit.iter()
+                .find(|step| step.module.name == "Tool")
+                .unwrap()
+                .kind,
+            UseKind::BuildOnly
+        );
+        assert_eq!(
+            hit.iter()
+                .find(|step| step.module.name == "PyBundle")
+                .unwrap()
+                .kind,
+            UseKind::Extension
+        );
+        let foss_key = ModuleKey::of(all.iter().find(|c| c.name == "foss").unwrap());
+        let from_toolchain = reverse_closure(&uses, &[foss_key]);
+        assert!(from_toolchain.iter().any(|step| step.module.name == "Lib"));
+        assert!(from_toolchain
+            .iter()
+            .any(|step| step.module.name == "Lib" && step.kind == UseKind::Toolchain));
+        assert_eq!(module_name(&lib), "Lib/2.0-foss-2026.1");
     }
 }
