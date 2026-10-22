@@ -126,6 +126,22 @@ fn the_source_class_is_reported_even_without_a_seed() {
 }
 
 #[test]
+fn require_configopt_accepts_a_hyphen_leading_flag() {
+    let fx = fixture();
+    let out = check(&fx, &["--require-configopt", "--with-tests"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "a config flag was parsed as an eb-stack option: {stderr}"
+    );
+    let combined = format!("{}{stderr}", String::from_utf8_lossy(&out.stdout));
+    assert!(
+        combined.contains("configopts missing required flag \"--with-tests\""),
+        "{combined}"
+    );
+}
+
+#[test]
 fn the_check_is_unchanged_when_the_flag_is_absent() {
     let fx = fixture();
     let out = check(&fx, &[]);

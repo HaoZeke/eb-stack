@@ -275,7 +275,12 @@ enum RecipeCommand {
         /// a software-specific class found in none of them fails the check.
         #[arg(long = "easyblocks")]
         easyblock_roots: Vec<PathBuf>,
-        #[arg(long = "require-configopt")]
+        /// A configopts flag the recipe must contain.
+        ///
+        /// Hyphen-leading values are allowed: the flag is written the way it
+        /// appears in the recipe, dashes included, and is not itself an
+        /// eb-stack option.
+        #[arg(long = "require-configopt", allow_hyphen_values = true)]
         require_configopts: Vec<String>,
         #[arg(long)]
         metadata_only: bool,
@@ -297,9 +302,10 @@ enum RecipeCommand {
         /// A git remote, when the seeding recipe built from a checkout.
         #[arg(long, requires = "seeded_from")]
         seeded_git: Option<String>,
-        /// Report every statement the parser could not model, with its line,
-        /// and fail if there are any. The parse itself is unchanged: this
-        /// surfaces what tolerant mode silently skips.
+        /// Report every statement that failed to parse, with its line, and
+        /// fail if there are any. Control-flow blocks stay unreported: they
+        /// are the tolerant skip, and listing them would bury the statements
+        /// that actually failed. The parse itself is unchanged.
         #[arg(long)]
         strict: bool,
     },
