@@ -91,7 +91,15 @@ pub fn component_reach(query: &ReachQuery<'_>) -> ReachDocument {
         }
         let module = module_name(&ModuleKey::of(candidate));
         let file = basename(&candidate.easyconfig_path).to_string();
-        for (role, version) in parsed_hits(candidate, query.component, query.version_req) {
+        let text = std::fs::read_to_string(&candidate.easyconfig_path).unwrap_or_default();
+        let mut found = parsed_hits(candidate, query.component, query.version_req);
+        found.extend(list_hits(
+            &text,
+            query.component,
+            query.version_req,
+            &candidate.version,
+        ));
+        for (role, version) in found {
             if role != "dependency" && role != "builddependency" {
                 changed.insert(file.clone());
             }
@@ -109,6 +117,27 @@ pub fn component_reach(query: &ReachQuery<'_>) -> ReachDocument {
                 installed: None,
             });
             notes.push("compat-layer input carries this component and has no rebuild edge".into());
+        }
+    }
+    if let Some(installed) = query.installed {
+        for spec in installed {
+            let Some((name, rest)) = spec.split_once('/') else {
+                continue;
+            };
+            let version = rest.split('-').next().unwrap_or(rest);
+            if same(name, query.component)
+                && version_hits(version, query.version_req)
+                && spec_in_generation(spec, query.generation)
+                && carriers.iter().all(|row| row.module != *spec)
+            {
+                carriers.push(Carrier {
+                    role: "installed".into(),
+                    version: version.into(),
+                    easyconfig: String::new(),
+                    module: spec.clone(),
+                    installed: Some(true),
+                });
+            }
         }
     }
     carriers.sort_by(|a, b| {
@@ -223,6 +252,208 @@ fn in_generation(tc: &Toolchain, generation: &str) -> bool {
         .is_some_and(|hierarchy| hierarchy.contains(tc))
 }
 
+fn list_hits(text: &str, component: &str, req: &str, own: &str) -> Vec<(&'static str, String)> {
+    let mut out = Vec::new();
+    if let Some(body) = field_list(text, "components") {
+        out.extend(pair_hits(&body, "component", component, req, own));
+    }
+    if let Some(body) = field_list(text, "crates") {
+        out.extend(pair_hits(&body, "crate", component, req, own));
+        out.extend(file_hits(&body, "crate", component, req));
+    }
+    for (field, role) in [("sources", "source"), ("patches", "patch")] {
+        if let Some(body) = field_list(text, field) {
+            out.extend(file_hits(&body, role, component, req));
+        }
+    }
+    out
+}
+
+fn pair_hits(
+    body: &str,
+    role: &'static str,
+    component: &str,
+    req: &str,
+    own: &str,
+) -> Vec<(&'static str, String)> {
+    pair_re()
+        .captures_iter(body)
+        .filter_map(|cap| {
+            if !same(&cap[1], component) {
+                return None;
+            }
+            let version = cap.get(2).map(|m| m.as_str()).unwrap_or(own);
+            version_hits(version, req).then(|| (role, version.to_string()))
+        })
+        .collect()
+}
+
+fn file_hits(
+    body: &str,
+    role: &'static str,
+    component: &str,
+    req: &str,
+) -> Vec<(&'static str, String)> {
+    quoted(body)
+        .into_iter()
+        .filter_map(|name| {
+            let version = version_in_filename(&name, component)?;
+            version_hits(&version, req).then_some((role, version))
+        })
+        .collect()
+}
+
+fn pair_re() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(r#"(?s)\(\s*['"]([^'"]+)['"]\s*,\s*(?:['"]([^'"]+)['"]|version\b)"#)
+            .expect("pair pattern")
+    })
+}
+
+fn field_list(text: &str, field: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let needle = field.as_bytes();
+    let mut i = 0;
+    while i + needle.len() <= bytes.len() {
+        if bytes[i..].starts_with(needle) && at_line_start(bytes, i) {
+            let mut j = i + needle.len();
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if bytes.get(j) == Some(&b'=') {
+                j += 1;
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if matches!(bytes.get(j), Some(b'[' | b'(')) {
+                    return Some(take_balanced(&text[j..]));
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn at_line_start(bytes: &[u8], index: usize) -> bool {
+    let mut k = index;
+    while k > 0 && matches!(bytes[k - 1], b' ' | b'\t') {
+        k -= 1;
+    }
+    k == 0 || bytes[k - 1] == b'\n'
+}
+
+fn take_balanced(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::new();
+    let mut depth = 0i32;
+    let mut i = 0;
+    let mut quote = None;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if let Some(q) = quote {
+            out.push(c as char);
+            if c == b'\\' && i + 1 < bytes.len() {
+                out.push(bytes[i + 1] as char);
+                i += 2;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'#' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if c == b'\'' || c == b'"' {
+            quote = Some(c);
+            out.push(c as char);
+            i += 1;
+            continue;
+        }
+        if matches!(c, b'[' | b'(' | b'{') {
+            depth += 1;
+        }
+        out.push(c as char);
+        if matches!(c, b']' | b')' | b'}') {
+            depth -= 1;
+            if depth == 0 {
+                break;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+fn quoted(body: &str) -> Vec<String> {
+    let bytes = body.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\'' || bytes[i] == b'"' {
+            let q = bytes[i];
+            let start = i + 1;
+            i = start;
+            while i < bytes.len() && bytes[i] != q {
+                i += if bytes[i] == b'\\' { 2 } else { 1 };
+            }
+            out.push(body[start..i.min(bytes.len())].to_string());
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+fn version_in_filename(filename: &str, component: &str) -> Option<String> {
+    let file = filename.to_ascii_lowercase();
+    let name = component.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(rel) = file[from..].find(&name) {
+        let idx = from + rel;
+        let end = idx + name.len();
+        let before = idx == 0 || !file.as_bytes()[idx - 1].is_ascii_alphanumeric();
+        if before {
+            let rest = filename[end..].trim_start_matches(['-', '_', '.']);
+            let version: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            let version = version.trim_matches('.').to_string();
+            if version.chars().any(|c| c.is_ascii_digit()) {
+                return Some(version);
+            }
+        }
+        from = end.max(from + 1);
+    }
+    None
+}
+
+fn spec_in_generation(spec: &str, generation: &str) -> bool {
+    if spec.contains(&format!("-{generation}")) {
+        return true;
+    }
+    known_hierarchy(&Toolchain {
+        name: "foss".into(),
+        version: generation.into(),
+    })
+    .is_some_and(|hierarchy| {
+        hierarchy.members.iter().any(|member| {
+            !member.version.is_empty()
+                && !is_system_toolchain(member)
+                && spec.contains(&format!("-{}-{}", member.name, member.version))
+        })
+    })
+}
+
 fn same(left: &str, right: &str) -> bool {
     left.eq_ignore_ascii_case(right)
 }
@@ -245,6 +476,8 @@ mod tests {
         eb("Old-1.0-foss-2025b.eb", "name = 'Old'\nversion = '1.0'\ntoolchain = {'name': 'foss', 'version': '2025b'}\ndependencies = [('cURL', '7.0')]\n");
         eb("Python-bundle-PyPI-2026.04-GCCcore-15.2.0.eb", "name = 'Python-bundle-PyPI'\nversion = '2026.04'\ntoolchain = {'name': 'GCCcore', 'version': '15.2.0'}\nexts_list = [('urllib3', '2.6.3', {})]\n");
         eb("JupyterLab-4.5.8-GCCcore-15.2.0.eb", "name = 'JupyterLab'\nversion = '4.5.8'\ntoolchain = {'name': 'GCCcore', 'version': '15.2.0'}\nexts_list = [('jupyterlab', version, {})]\n");
+        eb("cargo-c.eb", "name = 'cargo-c'\nversion = '0.10'\ntoolchain = {'name': 'GCCcore', 'version': '15.2.0'}\ncrates = [('libz-sys', '1.1.29'), ('zlib-rs', '0.6.4'), {'libz-sys-1.1.29.tar.gz': 'ab'}]\n");
+        eb("X11.eb", "name = 'X11'\nversion = '1'\ntoolchain = {'name': 'GCCcore', 'version': '15.2.0'}\ncomponents = [('libX11', '1.8.12', {'easyblock': 'ConfigureMake'})]\nsources = ['zlib-1.3.1.tar.gz']\npatches = ['curl-8.4.0-fix.patch']\n");
         let parsed = parse_easyconfig_tree(dir.path()).unwrap();
         assert!(parsed.skipped.is_empty(), "{:?}", parsed.skipped);
         let filter = FilterDeps::empty();
@@ -289,5 +522,25 @@ mod tests {
             .carriers
             .iter()
             .any(|row| row.role == "module"));
+        assert!(run("libz-sys")
+            .carriers
+            .iter()
+            .any(|row| row.role == "crate" && row.version == "1.1.29"));
+        assert!(run("zlib-rs")
+            .carriers
+            .iter()
+            .any(|row| row.role == "crate"));
+        assert!(run("libX11")
+            .carriers
+            .iter()
+            .any(|row| row.role == "component" && row.version == "1.8.12"));
+        assert!(run("zlib")
+            .carriers
+            .iter()
+            .any(|row| row.role == "source" && row.version == "1.3.1"));
+        assert!(run("curl")
+            .carriers
+            .iter()
+            .any(|row| row.role == "patch" && row.version == "8.4.0"));
     }
 }
