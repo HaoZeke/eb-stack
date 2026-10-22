@@ -1,0 +1,17 @@
+easyblock = 'ConfigureMake'
+
+name = 'Tool'
+version = '1.0'
+
+homepage = 'https://example.org/Tool'
+description = "Fixture."
+
+toolchain = SYSTEM
+
+source_urls = ['https://example.org/']
+sources = ['Tool-1.0.tar.gz']
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+dependencies = [('Lib', '1.0')]
+
+moduleclass = 'tools'
