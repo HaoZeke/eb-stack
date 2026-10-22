@@ -5,6 +5,7 @@ pub mod artifact_class;
 pub mod build_order;
 pub mod campaign;
 pub mod cargo;
+pub mod component_reach;
 pub mod cran;
 pub mod dep_filter;
 pub mod dep_versions;
