@@ -42,6 +42,7 @@ pub mod pr_overlap;
 pub mod provides;
 pub mod pypi;
 pub mod raku;
+pub mod rebuild_set;
 pub mod registry;
 pub mod report;
 pub mod repro_report;
