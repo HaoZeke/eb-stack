@@ -118,7 +118,7 @@ pub fn handle_message(message: &Value) -> Option<Value> {
 }
 
 fn tool_catalog() -> Vec<Value> {
-    vec![
+    let mut tools = vec![
         tool_with_optional(
             "eb_package_inspect",
             "Parse a conda-forge, Spack, PyPI, or CRAN recipe into a canonical build manifest and planned CycloneDX SBOM.",
@@ -333,7 +333,7 @@ fn tool_catalog() -> Vec<Value> {
             "Claim one open campaign finding for an OMP worker.",
             &[("state", "string"), ("id", "string"), ("owner", "string")],
         ),
-        tool(
+        tool_with_optional(
             "eb_campaign_finding_resolve",
             "Resolve an owned campaign finding with durable action and evidence.",
             &[
@@ -342,10 +342,25 @@ fn tool_catalog() -> Vec<Value> {
                 ("owner", "string"),
                 ("action", "string"),
                 ("evidence", "string"),
-                ("changes", "array"),
             ],
+            &[("changes", "array")],
         ),
-    ]
+    ];
+    if let Some(lint) = tools
+        .iter_mut()
+        .find(|tool| tool["name"] == "eb_recipe_lint")
+    {
+        // The handler accepts `recipes` or a single `recipe`. A flat required
+        // list cannot say that, and marking only `recipes` required rejects a
+        // call the handler runs.
+        lint["inputSchema"]["properties"]["recipe"] = json!({"type": "string"});
+        lint["inputSchema"]["required"] = json!([]);
+        lint["inputSchema"]["anyOf"] = json!([
+            {"required": ["recipes"]},
+            {"required": ["recipe"]}
+        ]);
+    }
+    tools
 }
 
 fn tool(name: &str, description: &str, required: &[(&str, &str)]) -> Value {
@@ -574,7 +589,12 @@ fn load_package_source_roots(arguments: &Value) -> Result<PackageSourceRoots, St
 }
 
 fn package_bump(arguments: &Value) -> Result<Value, String> {
-    let target = toolchain(arguments)?;
+    // The schema and the CLI both require the name. `toolchain` defaults it
+    // for inspect and plan, where the CLI default is foss; bump has no default.
+    let target = Toolchain {
+        name: required_string(arguments, "toolchain_name")?,
+        version: required_string(arguments, "toolchain_version")?,
+    };
     let stack_policy = if let Some(path) = optional_path(arguments, "stack_policy") {
         load_stack_policy(&path)?
     } else {

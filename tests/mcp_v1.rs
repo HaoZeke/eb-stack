@@ -1334,6 +1334,76 @@ fn mcp_stack_sbom_writes_cyclonedx_from_lock() {
 }
 
 #[test]
+fn mcp_schemas_match_the_handlers_for_bump_lint_and_resolve() {
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+    }))
+    .expect("tools/list");
+    let tools = response["result"]["tools"].as_array().expect("tools");
+    let tool = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("missing {name}"))
+    };
+    let lint = tool("eb_recipe_lint");
+    assert!(lint["inputSchema"]["properties"].get("recipe").is_some());
+    assert!(lint["inputSchema"]["required"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        lint["inputSchema"]["anyOf"].as_array().map(Vec::len),
+        Some(2)
+    );
+    let resolve = tool("eb_campaign_finding_resolve");
+    assert!(resolve["inputSchema"]["properties"]
+        .get("changes")
+        .is_some());
+    assert!(
+        !resolve["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|name| name == "changes"),
+        "changes is optional, as --change is"
+    );
+
+    let bump = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_package_bump",
+            "arguments": {"toolchain_version": "2026.1", "source": "x.eb", "easyconfigs": ["."], "out_dir": "/tmp"}
+        }
+    }))
+    .expect("bump");
+    assert_eq!(bump["result"]["isError"], true, "{bump}");
+    assert!(
+        bump["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("toolchain_name"),
+        "{bump}"
+    );
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let recipe = temp.path().join("short.eb");
+    std::fs::write(&recipe, "name = 'tool'\n").expect("recipe");
+    let linted = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {"name": "eb_recipe_lint", "arguments": {"recipe": recipe}}
+    }))
+    .expect("lint");
+    assert_eq!(linted["result"]["isError"], false, "{linted}");
+}
+
+#[test]
 fn mcp_module_lint_checks_an_easyblock_with_the_repository_line_length() {
     let temp = tempfile::tempdir().expect("tempdir");
     std::fs::write(
