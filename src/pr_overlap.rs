@@ -96,6 +96,9 @@ pub struct PrInput {
     #[serde(default)]
     pub easystacks: Vec<EasystackChange>,
     /// Changed easyconfig files (`*.eb`), with base and head text or blob ids.
+    ///
+    /// A later merge-order reads these to see a hunk collision without the
+    /// original JSON.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<FileRevision>,
     /// Changed easyconfig files (`path` ending in `.eb`) to close over the
@@ -1790,8 +1793,8 @@ entries = []
             changed_easyconfigs: changed,
             closure: closure.iter().map(|s| (*s).to_string()).collect(),
             new_modules: new_modules.iter().map(|s| (*s).to_string()).collect(),
-            revisions: Vec::new(),
             reverse_dependents: Vec::new(),
+            revisions: Vec::new(),
         }
     }
 

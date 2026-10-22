@@ -132,3 +132,27 @@ eb-stack pr-overlap --pr prs.json \
 Position 1 in that run is pull request 13, which builds nothing once 11
 has merged, and position 2 is pull request 12, which still builds Graphviz.
 The rule is in [[file:../explanation/pr-overlap.org][Merge order and knock-on]].
+
+* For easybuild-easyconfigs pull requests
+
+4 easyconfigs in ~tests/pr_overlap_easyconfigs_fixtures/~ and 6 pull
+requests cover a shared file, a shared module, and a dependency. The test
+~tests/pr_overlap_easyconfigs.rs~ runs this command, which exited 0:
+
+#+begin_src bash
+/workspace/target/debug/eb-stack pr-overlap \
+  --kind easyconfigs \
+  --pr /tmp/ec-fixture-prs.json \
+  --easyconfigs /workspace/tests/pr_overlap_easyconfigs_fixtures \
+  --generated-at 2026-10-22T00:00:00Z \
+  --repo-url https://github.com/easybuilders/easybuild-easyconfigs \
+  --out-dir /tmp/ec-fixture-out
+#+end_src
+
+~--installed~ is omitted, so ~to_build~ equals ~new_modules~. The JSON is
+the 6 pull requests the test builds. ~--repo-url~ links each pull request
+number in ~overlap.md~.
+
+~examples/easyconfigs-pr-overlap/fetch-prs.sh~ lists open pull requests
+and reads ~.eb~ blobs under ~easybuild/easyconfigs/~. It does not check a
+pull request out. The JSON field is ~easyconfigs~, which ~--pr~ reads.

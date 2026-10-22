@@ -23,6 +23,13 @@ All notable changes to this project are documented here.
   requests as already installed. Two easystack edits at the same insertion
   point, or with the same added entry text, are recorded as conflicts.
   See `docs/orgmode/howto/pr-overlap.org`.
+- `pr-overlap --kind easyconfigs` reads changed `.eb` files, closes them
+  over the base tree, and writes the modules the base tree does not
+  provide. Other pull requests in the same run can satisfy a dependency.
+  The index rows are `same-file`, `same-module`, `shared-new-module`, and
+  `depends-on`. `--installed` is optional for this kind. See
+  `docs/orgmode/howto/pr-overlap.org`.
+
 - `pr-overlap` closes the easystack lines an open pull request adds and
   reports the modules more than one of them would build. `--pr` takes one
   JSON path or several after the same flag, which is what `in/prs/*.json`

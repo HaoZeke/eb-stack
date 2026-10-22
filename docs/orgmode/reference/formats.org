@@ -284,3 +284,33 @@ Each ~[[steps]]~ table:
 With ~--merge-order~, ~overlap.md~ gains a Merge order table: position,
 pull request, build count, saves, and after. Conflicts follow that table
 when any were found. Without the flag the Markdown file is unchanged.
+** Easyconfigs records (schema 2)
+
+~--kind easyconfigs~ writes schema 2. A software-layer record stays schema
+1 and omits the fields below. ~eessi_version~ is omitted when it is empty.
+
+| Field | Meaning |
+|-
+| ~schema_version~ | ~2~ |
+| ~kind~ | ~easyconfigs~ |
+| ~changed_easyconfigs~ | One entry per ~.eb~ path: ~path~, ~status~ (~added~, ~modified~, or ~deleted~), and ~module~ when the file parses |
+| ~closure~ | Every module the changed easyconfigs reach, sorted, including the pull request's own modules |
+| ~new_modules~ | Closure modules the base tree does not provide |
+| ~reverse_dependents~ | Base-tree modules that resolve a dependency to a modified or deleted file of this pull request. Each entry has ~module~ and ~depth~. Depth 1 depends on the file itself |
+| ~to_build~ | Closure minus ~--installed~ when that flag is set; otherwise the same modules as ~new_modules~ |
+
+The other pull requests in the same run are on the robot path while
+resolving, between the base tree and this pull request's own files.
+~new_modules~ is still compared to the base tree alone.
+
+~overlap.toml~ for this kind is schema 2 and adds ~rows~. There are 4
+kinds:
+
+| ~kind~ | When it is written |
+|-
+| ~same-file~ | 2 pull requests change one path. ~path~ is that path. ~prs~ lists the numbers |
+| ~same-module~ | 2 pull requests add easyconfigs for one module. ~module~ is that module |
+| ~shared-new-module~ | One module is in 2 pull requests' ~new_modules~ |
+| ~depends-on~ | Pull request ~to~ reaches a module pull request ~from~ adds, and ~to~ does not also add it. ~modules~ lists those modules |
+
+A software-layer index stays schema 1 and omits ~rows~.

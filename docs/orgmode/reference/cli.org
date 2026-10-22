@@ -390,6 +390,32 @@ ahead of the installed package. A class found there is counted, and the
 record notes the commit. A commit an entry names whose directory was not
 passed is noted as not provided.
 
+~--kind~ selects the pull request shape. ~software-layer~ is the default
+and reads easystack additions. ~easyconfigs~ reads changed ~.eb~ files.
+~--installed~ is required for ~software-layer~. For ~easyconfigs~ it is
+optional: with the flag, ~to_build~ is the closure minus that list; without
+it, ~to_build~ is the modules the base tree does not provide.
+~--eessi-version~ is ignored for ~easyconfigs~ and is omitted from the
+record. ~--repo-url~ defaults to
+~https://github.com/EESSI/software-layer~ for ~software-layer~ and to
+~https://github.com/easybuilders/easybuild-easyconfigs~ for ~easyconfigs~.
+
+This easyconfigs command was run on the fixture tree. It wrote 6 records
+and exited 0:
+
+#+begin_src bash
+/workspace/target/debug/eb-stack pr-overlap \
+  --kind easyconfigs \
+  --pr /tmp/ec-fixture-prs.json \
+  --easyconfigs /workspace/tests/pr_overlap_easyconfigs_fixtures \
+  --generated-at 2026-10-22T00:00:00Z \
+  --repo-url https://github.com/easybuilders/easybuild-easyconfigs \
+  --out-dir /tmp/ec-fixture-out
+#+end_src
+
+The JSON is the 6 pull requests built by
+~tests/pr_overlap_easyconfigs.rs~.
+
 The output directory holds ~prs/<N>.toml~, ~overlap.toml~, and ~overlap.md~.
 See [[file:formats.org][output formats]] for the records. A closed pull
 request's file is removed: the directory is the open set of this run.
