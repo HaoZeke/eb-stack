@@ -1,0 +1,4 @@
+easyconfigs:
+  - NewLib-2.0-GCCcore-15.2.0.eb:
+      options:
+        from-commit: abcdef

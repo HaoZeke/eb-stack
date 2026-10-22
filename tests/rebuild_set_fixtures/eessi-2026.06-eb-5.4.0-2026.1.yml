@@ -1,0 +1,10 @@
+easyconfigs:
+  - zlib-1.3.1-GCCcore-15.2.0.eb
+  - libpng-1.6.50-GCCcore-15.2.0.eb
+  - CMake-4.1.2-GCCcore-15.2.0.eb
+  - Graphviz-14.0.2-GCCcore-15.2.0.eb
+  - AppStatic-1.0-GCCcore-15.2.0.eb
+  - Bundle-1.0-GCCcore-15.2.0.eb
+  - PyApp-1.0-GCCcore-15.2.0.eb
+  - Both-1.0-GCCcore-15.2.0.eb
+  - Hidden-1.0-GCCcore-15.2.0.eb
