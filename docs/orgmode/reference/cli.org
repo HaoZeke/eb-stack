@@ -46,6 +46,7 @@ eb-stack package plan \
   --toolchain-version 2026.1 \
   [--package-config PACKAGE.toml]... \
   [--source-checksum SHA256]... \
+  [--package-index FILE] \
   --easyconfigs UPSTREAM \
   [--easyconfigs OVERLAY]... \
   --stack-policy STACK.toml \
@@ -72,6 +73,10 @@ only a VCS commit, repeat ~--source-checksum~ once for every source artifact in
 manifest order. The values replace the positional source checksums in both the
 manifest/SBOM and every emitted recipe. Planning fails before emission when
 the count, shape, or completeness is invalid.
+
+~--package-index FILE~ supplies a version for a dependency that states none.
+The file is either a CRAN ~PACKAGES~ index or a ~name==version~ list, one pin
+per line. A range is not a version and supplies nothing.
 
 When a direct dependency has no compatible robot candidate, optional closure
 inputs close the hole without inventing versions:
@@ -120,14 +125,24 @@ eb-stack package bump \
   [--easyconfigs OVERLAY]... \
   [--hierarchy-fixture HIERARCHY.json] \
   [--stack-policy STACK.toml] \
+  [--package-config PACKAGE.toml]... \
+  [--strict-patches] \
+  [--emit-easyblock] \
   --out-dir BUNDLE
 #+end_src
 
 A bump writes the same manifest, planned SBOM, profile lock, and recipe layout
-as a new package. ~--dep~ becomes a locked Resolvo override. Without
-~--stack-policy~, the solver uses an unconstrained policy for the requested
-toolchain. A changed package version without ~--source-checksum~ produces a
-visible residual because source bytes cannot be inferred safely.
+as a new package. ~--dep~ becomes a locked Resolvo override. The solve fails
+when that name is not in the robot tree. A name the recipe does not depend on
+stays out of the emitted dependency list, and the lock records the pin outcome.
+Without ~--stack-policy~, the solver uses an unconstrained policy for the
+requested toolchain. A changed package version without ~--source-checksum~
+clears the old digest and produces a visible residual, because source bytes
+cannot be inferred safely. ~--package-config~ is repeatable and applies after
+the source recipe is parsed, as it does for ~package plan~. ~--strict-patches~
+fails the bump when a patch's fate across a version change cannot be decided
+from the tree; without it the patch is carried and a ~patch-decision~ residual
+records the review flag. ~--emit-easyblock~ is the same flag as on ~package plan~.
 
 * Bundle layout
 
