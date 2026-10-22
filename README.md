@@ -341,7 +341,8 @@ recipe file tools.
 
 - `eb_package_inspect`, `eb_package_plan`, `eb_package_bump`;
 - `eb_recipe_read`, `eb_recipe_list`, `eb_recipe_edit`, `eb_recipe_write`,
-  `eb_recipe_grep`, `eb_dep_versions`;
+  `eb_recipe_grep`, `eb_recipe_apply_suggestion`, `eb_recipe_diff`,
+  `eb_dep_versions`;
 - `eb_recipe_check`, `eb_recipe_lint`, `eb_recipe_format`;
 - `eb_module_lint`, `eb_easyblock_dry_run`, `eb_build_log`, `eb_build_test`
   (easyblocks; `eb_build_test` only with `EB_STACK_ALLOW_BUILD=1`);

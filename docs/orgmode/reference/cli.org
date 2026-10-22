@@ -329,12 +329,13 @@ eb-stack mcp [--workspace ROOT]
 omitted, an existing ~EB_STACK_WORKSPACE~ is kept, and otherwise the server's
 current directory is the root.
 
-The stdio server exposes one tool per CLI workflow, plus four sandboxed file
+The stdio server exposes one tool per CLI workflow, plus sandboxed recipe
 tools:
 
 - ~eb_package_inspect~, ~eb_package_plan~, ~eb_package_bump~;
 - ~eb_recipe_read~, ~eb_recipe_list~, ~eb_recipe_edit~, ~eb_recipe_write~,
-  ~eb_recipe_grep~, ~eb_dep_versions~;
+  ~eb_recipe_grep~, ~eb_recipe_apply_suggestion~, ~eb_recipe_diff~,
+  ~eb_dep_versions~;
 - ~eb_recipe_check~, ~eb_recipe_lint~, ~eb_recipe_format~;
 - ~eb_module_lint~, ~eb_easyblock_dry_run~, ~eb_build_log~, ~eb_build_test~
   (easyblocks; ~eb_build_test~ only with ~EB_STACK_ALLOW_BUILD=1~);
@@ -365,10 +366,14 @@ the CLI. There is no separate compatibility command surface.
 ~eb_package_plan~ accepts the CLI's repeated source-checksum input as a
 ~source_checksums~ string array, and the catalog / source-root inputs as
 ~package_catalogs~, ~package_sources~, ~easybuild_sources~, ~conda_sources~,
-and ~spack_sources~ arrays. ~eb_package_bump~ optionals include ~version~,
-~source_checksum~, ~dependencies~ (object map), ~hierarchy_fixture~, and
-~stack_policy~. ~eb_recipe_lint~ takes a ~recipes~ path array and returns
-reviewer-style findings plus ~check_contrib~. ~eb_recipe_check~'s
+~spack_sources~, and ~cargo_sources~ arrays. ~emit_easyblock~ asks for an
+easyblock skeleton in the bundle and does not combine with package-closure
+planning. ~eb_package_bump~ optionals include ~version~,
+~source_checksum~, ~dependencies~ (object map), ~hierarchy_fixture~,
+~stack_policy~, and ~emit_easyblock~. ~toolchain_name~ is required.
+~eb_recipe_lint~ takes a ~recipes~ path array, or a single ~recipe~ path, and returns
+reviewer-style findings plus ~check_contrib~. ~eb_campaign_finding_resolve~
+takes ~changes~ as an optional path array. ~eb_recipe_check~'s
 ~easyconfigs~ array has ~minItems~ 1. ~eb_recipe_read~, ~eb_recipe_list~,
 ~eb_recipe_edit~, and ~eb_recipe_write~ edit files only inside the workspace
 root.
