@@ -800,7 +800,17 @@ pub fn resolve_eb() -> Result<PathBuf, String> {
 /// root of an easyblocks checkout would import that checkout's `easybuild`
 /// package instead of the installed framework.
 pub fn run_eb(args: &[String], limit: Duration, output_file: &Path) -> Result<EbRun, String> {
-    let program = resolve_eb()?;
+    run_program(&resolve_eb()?, args, limit, output_file)
+}
+
+/// [`run_eb`] with the program given. At the limit, every process the
+/// program started goes with it (`stop_tree`).
+pub fn run_program(
+    program: &Path,
+    args: &[String],
+    limit: Duration,
+    output_file: &Path,
+) -> Result<EbRun, String> {
     let file = File::create(output_file)
         .map_err(|error| format!("create {}: {error}", output_file.display()))?;
     let err = file
@@ -811,7 +821,7 @@ pub fn run_eb(args: &[String], limit: Duration, output_file: &Path) -> Result<Eb
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let mut child = Command::new(&program)
+    let mut child = Command::new(program)
         .args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())
@@ -829,8 +839,7 @@ pub fn run_eb(args: &[String], limit: Duration, output_file: &Path) -> Result<Eb
         }
         if started.elapsed() >= limit {
             timed_out = true;
-            let _ = child.kill();
-            let _ = child.wait();
+            stop_tree(&mut child);
             break None;
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -844,6 +853,84 @@ pub fn run_eb(args: &[String], limit: Duration, output_file: &Path) -> Result<Eb
         seconds: started.elapsed().as_secs(),
         output_file: output_file.to_path_buf(),
     })
+}
+
+/// The parent process id in a `/proc/<pid>/stat` line. The command name
+/// before it is in parentheses and may itself hold spaces or `)`, so the
+/// fields are counted from the last `)`: state, then the parent id.
+fn stat_parent(stat: &str) -> Option<u32> {
+    let rest = &stat[stat.rfind(')')? + 1..];
+    rest.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// Every process below `root`, by parent id, from `/proc` (Linux; empty
+/// elsewhere). A wrapper can move its children out of the process group
+/// eb-stack started (GNU `timeout` calls `setpgid`), so the tree is followed
+/// by parent id, not by group.
+fn descendants(root: u32) -> Vec<u32> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    let parents: Vec<(u32, u32)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let pid = entry.file_name().to_str()?.parse::<u32>().ok()?;
+            let stat = std::fs::read_to_string(entry.path().join("stat")).ok()?;
+            Some((pid, stat_parent(&stat)?))
+        })
+        .collect();
+    let mut found = vec![root];
+    let mut index = 0;
+    while index < found.len() {
+        let parent = found[index];
+        for (pid, ppid) in &parents {
+            if *ppid == parent && !found.contains(pid) {
+                found.push(*pid);
+            }
+        }
+        index += 1;
+    }
+    found.remove(0);
+    found
+}
+
+/// Send `signal` (a name `kill -s` takes) to `pids` with the system `kill`.
+fn signal_all(signal: &str, pids: &[u32]) {
+    if pids.is_empty() {
+        return;
+    }
+    let _ = Command::new("kill")
+        .arg("-s")
+        .arg(signal)
+        .args(pids.iter().map(u32::to_string))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// Stop `child` and every process below it. Killing only the child leaves
+/// its children running: in proof-easyblock r4 a model build stopped at its
+/// 600 s limit left the harness wrapper's `timeout --kill-after=60 2700` with
+/// parent 1, still compiling. The tree is stopped first (SIGSTOP), so nothing
+/// in it can start another process while it is collected again, then every
+/// process in it and the child get SIGKILL.
+fn stop_tree(child: &mut std::process::Child) {
+    let mut tree: Vec<u32> = Vec::new();
+    for _ in 0..5 {
+        let found: Vec<u32> = descendants(child.id())
+            .into_iter()
+            .filter(|pid| !tree.contains(pid))
+            .collect();
+        if found.is_empty() {
+            break;
+        }
+        signal_all("STOP", &found);
+        tree.extend(found);
+    }
+    let _ = child.kill();
+    signal_all("KILL", &tree);
+    let _ = child.wait();
 }
 
 /// True when this process may start a real build.
@@ -1462,6 +1549,54 @@ configure:9999: $? = 1\n";
             ..Default::default()
         };
         assert!(option.resolved(root).is_err());
+    }
+
+    #[test]
+    fn the_parent_id_is_read_after_the_command_name() {
+        assert_eq!(stat_parent("4242 (python3) S 17 4242 4242 0 -1"), Some(17));
+        assert_eq!(stat_parent("7 (a) b (c)) R 3 7 7 0 -1"), Some(3));
+        assert_eq!(stat_parent("garbage"), None);
+    }
+
+    /// proof-easyblock r4: a build stopped at the model's limit left the
+    /// wrapper's `timeout` (which moves itself to its own process group)
+    /// running with parent 1. The stop must reach below such a wrapper.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_run_stopped_at_its_limit_takes_the_processes_it_started_with_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake = dir.path().join("eb");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ntimeout 120 sh -c 'echo $$ > \"$0\"; exec sleep 120' \"$1\"\n",
+        )
+        .expect("fake eb");
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let pidfile = dir.path().join("grandchild.pid");
+        let out = dir.path().join("out.txt");
+        let run = run_program(
+            &fake,
+            &[pidfile.display().to_string()],
+            Duration::from_millis(1500),
+            &out,
+        )
+        .expect("run");
+        assert!(run.timed_out && run.exit_code.is_none());
+        let pid = std::fs::read_to_string(&pidfile).expect("the grandchild wrote its pid");
+        let stat = Path::new("/proc").join(pid.trim()).join("stat");
+        let gone = (0..50).any(|_| {
+            let alive = std::fs::read_to_string(&stat).is_ok_and(|text| {
+                text.rfind(')')
+                    .and_then(|end| text[end + 1..].split_whitespace().next())
+                    .is_some_and(|state| state != "Z" && state != "X")
+            });
+            if alive {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            !alive
+        });
+        assert!(gone, "process {} still runs after the limit", pid.trim());
     }
 
     #[cfg(unix)]
