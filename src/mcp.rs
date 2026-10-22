@@ -6,8 +6,10 @@ use crate::campaign::{
 };
 use crate::dep_versions::dep_versions;
 use crate::domain::Toolchain;
+use crate::eb_easyblock::{encode_class_name, index_easyblocks, EASYBLOCK_CLASS_PREFIX};
 use crate::eb_parse::{
     check_recipe_deps, packaging_gate, parse_easyconfig_trees, resolve_easyconfig_file,
+    resolve_easyconfig_file_reporting,
 };
 use crate::eb_run::{
     build_test_description, builds_allowed, commands_in, config_log_failure, dry_run_environment,
@@ -232,9 +234,19 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_recipe_check",
-            "Check EasyBuild packaging metadata and robot dependency resolution. A recipe that is not valid Python fails. easyconfigs must contain at least one path: a robot directory such as easybuild/easyconfigs. A .eb file there is accepted and stands for the easyconfigs directory it sits in.",
+            "Check a recipe the way `recipe check` does: strict parse, sources, maintainer, easyblock, packaging, and robot dependencies. A recipe that is not valid Python fails. easyconfigs must contain at least one path: a robot directory such as easybuild/easyconfigs. A .eb file there is accepted and stands for the easyconfigs directory it sits in.",
             &[("recipe", "string"), ("easyconfigs", "array_min1")],
-            &[("require_configopts", "array")],
+            &[
+                ("require_configopts", "array"),
+                ("easyblocks", "array"),
+                ("metadata_only", "boolean"),
+                ("verify_sources", "boolean"),
+                ("seeded_from", "string"),
+                ("seeded_source_url", "string"),
+                ("seeded_git", "string"),
+                ("source_tree", "string"),
+                ("strict", "boolean"),
+            ],
         ),
         tool_with_optional(
             "eb_recipe_lint",
@@ -649,43 +661,193 @@ fn package_bump(arguments: &Value) -> Result<Value, String> {
     }))
 }
 
+/// Same easyblock search as `recipe check`: the bundle `easyblocks/` beside
+/// `easyconfigs/` first, then the named roots. A named root makes that set
+/// complete, so a missing `EB_` class is the same error the CLI bails with.
+fn resolve_easyblock(
+    recipe: &Path,
+    name: &str,
+    easyblock: Option<&str>,
+    explicit_roots: &[PathBuf],
+) -> Result<(Value, Option<String>), String> {
+    let derived = easyblock.is_none();
+    let class = easyblock
+        .map(str::to_string)
+        .unwrap_or_else(|| encode_class_name(name));
+    let bundle_root = recipe
+        .ancestors()
+        .find(|ancestor| {
+            ancestor
+                .file_name()
+                .is_some_and(|name| name == "easyconfigs")
+        })
+        .and_then(|easyconfigs| easyconfigs.parent())
+        .map(|bundle| bundle.join("easyblocks"))
+        .filter(|easyblocks| easyblocks.is_dir());
+    let mut roots = Vec::new();
+    if let Some(bundle) = bundle_root.as_deref() {
+        roots.push(bundle);
+    }
+    roots.extend(explicit_roots.iter().map(PathBuf::as_path));
+    let index = index_easyblocks(&roots)?;
+    let found = index.get(&class);
+    let missing = if found.is_none()
+        && !explicit_roots.is_empty()
+        && class.starts_with(EASYBLOCK_CLASS_PREFIX)
+    {
+        Some(format!(
+            "No software-specific easyblock '{class}' found for {name}: none of the easyblock roots defines it"
+        ))
+    } else {
+        None
+    };
+    let resolution = json!({
+        "class": class,
+        "derived_from_name": derived,
+        "defined_in": found.map(|(path, _)| path.display().to_string()),
+        "bases": found.map(|(_, class)| class.bases.clone()),
+        "extra_options": found.map(|(_, class)| class.extra_options.clone()),
+        "searched": roots.iter().map(|root| root.display().to_string()).collect::<Vec<_>>(),
+    });
+    Ok((resolution, missing))
+}
+
 fn recipe_check(arguments: &Value) -> Result<Value, String> {
-    let recipe_path = required_path(arguments, "recipe")?;
-    let text = std::fs::read_to_string(&recipe_path)
-        .map_err(|error| format!("read {}: {error}", recipe_path.display()))?;
-    if let Some((line, column, message)) = python_syntax_error(&text) {
+    let path = required_path(arguments, "recipe")?;
+    let source_text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    if let Some((line, column, message)) = python_syntax_error(&source_text) {
         return Err(format!(
             "{}:{line}:{column}: {message}. EasyBuild cannot parse this easyconfig; fix the syntax (eb_recipe_lint reports it as E999) before checking it",
-            recipe_path.display()
+            path.display()
         ));
     }
-    let recipe = resolve_easyconfig_file(&recipe_path).map_err(|error| error.to_string())?;
-    let roots = path_array(arguments, "easyconfigs")?
+    let easyconfigs = path_array(arguments, "easyconfigs")?
         .into_iter()
         .map(|root| robot_root(&root))
         .collect::<Result<Vec<_>, _>>()?;
-    let root_refs = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
-    let tree = parse_easyconfig_trees(&root_refs).map_err(|error| error.to_string())?;
-    let check = check_recipe_deps(&recipe, &tree.candidates);
+    if optional_string(arguments, "seeded_source_url").is_some()
+        && optional_string(arguments, "seeded_from").is_none()
+    {
+        return Err("seeded_source_url requires seeded_from".into());
+    }
+    if optional_string(arguments, "seeded_git").is_some()
+        && optional_string(arguments, "seeded_from").is_none()
+    {
+        return Err("seeded_git requires seeded_from".into());
+    }
+    let verify_sources = optional_bool(arguments, "verify_sources");
+    if !verify_sources
+        && (optional_string(arguments, "seeded_from").is_some()
+            || optional_path(arguments, "source_tree").is_some())
+    {
+        return Err("seeded_from and source_tree require verify_sources".into());
+    }
+    let strict = optional_bool(arguments, "strict");
+    let (recipe, skipped) = if strict {
+        resolve_easyconfig_file_reporting(&path).map_err(|error| error.to_string())?
+    } else {
+        (
+            resolve_easyconfig_file(&path).map_err(|error| error.to_string())?,
+            Vec::new(),
+        )
+    };
+    let mut sources = Vec::new();
+    let mut source_findings = Vec::new();
+    let mut declared_version = Value::Null;
+    if verify_sources {
+        let seed = optional_string(arguments, "seeded_from").map(|origin| crate::SeededChecksum {
+            origin,
+            source_url: optional_string(arguments, "seeded_source_url"),
+            git: optional_string(arguments, "seeded_git"),
+            sha256: recipe.checksums.first().cloned(),
+        });
+        let mut findings = crate::verify_sources(&recipe.source_urls, seed.as_ref());
+        if let Some(tree) = optional_path(arguments, "source_tree") {
+            let declared = crate::declared_version(&tree);
+            if let Some(found) = declared.as_ref() {
+                declared_version = json!({"value": found.value, "source": found.source});
+            }
+            findings.extend(crate::verify_declared_version(
+                &recipe.version,
+                declared.as_ref(),
+            ));
+        }
+        for url in &recipe.source_urls {
+            sources.push(json!({
+                "class": crate::classify_url(url).to_string(),
+                "url": url,
+            }));
+        }
+        source_findings = findings.iter().map(|finding| finding.to_string()).collect();
+    }
     let required_options = string_array(arguments, "require_configopts")?;
     let option_refs = required_options
         .iter()
         .map(String::as_str)
         .collect::<Vec<_>>();
     let packaging = packaging_gate(&recipe, &option_refs);
-    // An empty `missing` list earns the resolves claim only when the matches
-    // behind it were filtered by a real toolchain hierarchy. Without one they
-    // ignore toolchain and can pair the recipe with another generation, which
-    // is the shape the CLI refuses to call a resolve. The claim ladder is the
-    // whole point of this surface, so it does not get to be laxer.
-    let resolves = check.ok() && check.toolchain_verified() && packaging.is_ok();
+    let maintainer = crate::check_maintainer_acceptability(&recipe, &source_text);
+    let easyblock_paths = string_array(arguments, "easyblocks")?
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    let (easyblock_resolution, easyblock_error) = resolve_easyblock(
+        &path,
+        &recipe.name,
+        recipe.easyblock.as_deref(),
+        &easyblock_paths,
+    )?;
+    let metadata_only = optional_bool(arguments, "metadata_only");
+    let mut dep_ok = true;
+    let mut toolchain_verified = true;
+    let mut duplicate_error = None;
+    let dependency_check = if metadata_only {
+        Value::Null
+    } else {
+        let root_refs = easyconfigs.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+        let tree = parse_easyconfig_trees(&root_refs).map_err(|error| error.to_string())?;
+        if let Some(dup) = crate::check_duplicate_upstream(&recipe, &tree.candidates)
+            .into_iter()
+            .find(|finding| finding.is_error())
+        {
+            duplicate_error = Some(format!("{}: {}", dup.code, dup.message));
+        }
+        let check = check_recipe_deps(&recipe, &tree.candidates);
+        dep_ok = check.ok();
+        toolchain_verified = check.toolchain_verified();
+        serde_json::to_value(&check).map_err(|error| error.to_string())?
+    };
     let packaging_errors = packaging.err().unwrap_or_default();
+    let source_failed = source_findings
+        .iter()
+        .any(|line: &String| line.starts_with("[err]"));
+    // A clean dependency list is a resolve only with a real toolchain
+    // hierarchy, and only after the maintainer, easyblock, source, and strict
+    // gates the CLI bails on. metadata_only stops before the robot tree, as
+    // `recipe check --metadata-only` does.
+    let resolves = packaging_errors.is_empty()
+        && maintainer.ok_for_upstream()
+        && easyblock_error.is_none()
+        && !source_failed
+        && !(strict && !skipped.is_empty())
+        && duplicate_error.is_none()
+        && (metadata_only || (dep_ok && toolchain_verified));
+    let skipped_text: Vec<String> = skipped.iter().map(ToString::to_string).collect();
     Ok(json!({
         "recipe": recipe.easyconfig_path,
         "resolves": resolves,
-        "dependency_check": check,
+        "dependency_check": dependency_check,
         "packaging_errors": packaging_errors,
-        "claims": {"resolves": resolves, "builds": false, "binary_verified": false}
+        "claims": {"resolves": resolves, "builds": false, "binary_verified": false},
+        "strict": if strict { json!({"skipped": skipped_text}) } else { Value::Null },
+        "sources": sources,
+        "source_findings": source_findings,
+        "declared_version": declared_version,
+        "maintainer_acceptability": maintainer,
+        "easyblock_resolution": easyblock_resolution,
+        "easyblock_error": easyblock_error,
+        "duplicate_error": duplicate_error,
     }))
 }
 
