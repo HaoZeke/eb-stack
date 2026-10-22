@@ -813,8 +813,8 @@ fn installed_modules(
 
 fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
     use eb_stack::pr_overlap::{
-        easyconfig_record, overlap_index, pr_record, record_to_toml, render_markdown, to_toml,
-        OverlapConfig, PrInput, RobotTrees,
+        easyconfig_record_seeing, overlap_index, pr_record, record_to_toml, render_markdown,
+        to_toml, OverlapConfig, PrInput, RobotTrees,
     };
     if args.kind == OverlapKind::SoftwareLayer && args.installed.is_none() {
         eprint!("{INSTALLED_REQUIRED}");
@@ -876,7 +876,14 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
     let records: Vec<_> = if easyconfigs {
         let installed = installed.as_ref();
         prs.iter()
-            .filter_map(|pr| easyconfig_record(pr, &robot.base, installed, &config))
+            .filter_map(|pr| {
+                let others: Vec<_> = prs
+                    .iter()
+                    .filter(|other| other.number != pr.number)
+                    .flat_map(|other| other.easyconfigs.iter().cloned())
+                    .collect();
+                easyconfig_record_seeing(pr, &robot.base, &others, installed, &config)
+            })
             .collect()
     } else {
         let installed = installed

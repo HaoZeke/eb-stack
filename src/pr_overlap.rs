@@ -534,6 +534,23 @@ fn module_of(candidate: &Candidate) -> String {
     module_name(&ModuleKey::of(candidate))
 }
 
+/// Parsed head text of easyconfig changes. Deleted files contribute nothing.
+fn head_candidates(changes: &[FileChange]) -> Vec<Candidate> {
+    let mut out = Vec::new();
+    for change in changes {
+        if !change.path.ends_with(".eb") {
+            continue;
+        }
+        let Some(text) = change.head.as_deref() else {
+            continue;
+        };
+        if let Ok(candidate) = candidate_from_text(&change.path, text) {
+            out.push(candidate);
+        }
+    }
+    out
+}
+
 struct EasyconfigOverlay {
     tree: Vec<Candidate>,
     changed: Vec<ChangedEasyconfig>,
@@ -686,10 +703,35 @@ pub fn easyconfig_record(
     installed: Option<&BTreeSet<String>>,
     config: &OverlapConfig,
 ) -> Option<PrRecord> {
+    easyconfig_record_seeing(pr, base, &[], installed, config)
+}
+
+/// Like [`easyconfig_record`], and other open pull requests' easyconfig files
+/// are visible while resolving.
+///
+/// Those files sit above the base tree and under this pull request's own
+/// files. A module only they provide is still new: `new_modules` is compared
+/// to `base` alone. One pull request on its own passes an empty slice, which
+/// is [`easyconfig_record`].
+pub fn easyconfig_record_seeing(
+    pr: &PrInput,
+    base: &[Candidate],
+    other_easyconfigs: &[FileChange],
+    installed: Option<&BTreeSet<String>>,
+    config: &OverlapConfig,
+) -> Option<PrRecord> {
     if pr.easyconfigs.is_empty() {
         return None;
     }
-    let overlay = overlay_easyconfigs(base, &pr.easyconfigs);
+    let merged;
+    let under: &[Candidate] = if other_easyconfigs.is_empty() {
+        base
+    } else {
+        merged =
+            merge_candidates_with_precedence(&[base.to_vec(), head_candidates(other_easyconfigs)]);
+        &merged
+    };
+    let overlay = overlay_easyconfigs(under, &pr.easyconfigs);
     let mut universe = overlay.tree.clone();
     if !config.filter_deps.is_empty() {
         config.filter_deps.apply(&mut universe);
@@ -1841,5 +1883,52 @@ entries = []
         assert!(md.contains("## depends-on\n\n| From | To | Modules |"));
         assert!(md.contains("| #5 | #6 | `Dep/1.0` |"));
         assert!(!md.contains("Shared builds between open pull requests"));
+    }
+
+    #[test]
+    fn another_pull_request_provides_a_new_dependency() {
+        let dep = FileChange {
+            path: "d/Dep/Dep-1.0.eb".into(),
+            base: None,
+            head: Some(eb("Dep", "1.0", None)),
+            base_blob: None,
+            head_blob: None,
+        };
+        let app = PrInput {
+            number: 2,
+            head_sha: "2".repeat(40),
+            title: None,
+            easystacks: Vec::new(),
+            files: Vec::new(),
+            easyconfigs: vec![FileChange {
+                path: "a/App/App-1.0.eb".into(),
+                base: None,
+                head: Some(eb("App", "1.0", Some(("Dep", "1.0")))),
+                base_blob: None,
+                head_blob: None,
+            }],
+        };
+        let alone = easyconfig_record(&app, &[], None, &ec_config()).unwrap();
+        assert!(alone.unresolved.iter().any(|item| item.contains("Dep")));
+        let seen =
+            easyconfig_record_seeing(&app, &[], std::slice::from_ref(&dep), None, &ec_config())
+                .unwrap();
+        assert!(seen.closure.iter().any(|item| item == "Dep/1.0"));
+        assert!(seen.new_modules.iter().any(|item| item == "Dep/1.0"));
+        assert!(seen.unresolved.is_empty());
+        let provider = PrInput {
+            number: 1,
+            head_sha: "1".repeat(40),
+            title: None,
+            easystacks: Vec::new(),
+            files: Vec::new(),
+            easyconfigs: vec![dep],
+        };
+        let added = easyconfig_record(&provider, &[], None, &ec_config()).unwrap();
+        let index = overlap_index(&[added, seen], &ec_config());
+        assert!(index
+            .rows
+            .iter()
+            .any(|row| row.kind == "shared-new-module" && row.module == "Dep/1.0"));
     }
 }
