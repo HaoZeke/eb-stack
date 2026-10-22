@@ -1831,7 +1831,7 @@ impl std::fmt::Display for SkippedStatement {
 pub fn resolve_easyconfig_str_reporting(
     src: &str,
 ) -> Result<(ResolvedEasyconfig, Vec<SkippedStatement>), ParseError> {
-    resolve_easyconfig_str_inner(src)
+    resolve_easyconfig_str_inner(src).map(|(recipe, skipped, _)| (recipe, skipped))
 }
 
 /// As [`resolve_easyconfig_file`], also returning the skipped statements.
@@ -1854,12 +1854,45 @@ pub fn resolve_easyconfig_file_reporting(
 /// recipe still resolves. Use [`resolve_easyconfig_str_reporting`] when you
 /// need to know what was skipped.
 pub fn resolve_easyconfig_str(src: &str) -> Result<ResolvedEasyconfig, ParseError> {
-    resolve_easyconfig_str_inner(src).map(|(resolved, _skipped)| resolved)
+    resolve_easyconfig_str_inner(src).map(|(resolved, _, _)| resolved)
+}
+
+/// An extension or bundle component, and the easyblock it names itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedEasyblock {
+    /// Extension or component name.
+    pub name: String,
+    /// `easyblock` in the entry's dict. Absent when the entry names none.
+    pub class_name: Option<String>,
+}
+
+/// Easyblock choices a recipe makes beyond the top-level `easyblock` line.
+///
+/// Extensions and bundle components carry their own class, or inherit one from
+/// `exts_defaultclass`, `exts_classmap`, or `default_easyblock`. The top-level
+/// class stays on [`ResolvedEasyconfig::easyblock`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EasyblockSites {
+    /// `exts_defaultclass`, when the easyconfig sets one.
+    pub exts_defaultclass: Option<String>,
+    /// `default_easyblock` for components that name no class of their own.
+    pub default_easyblock: Option<String>,
+    /// `exts_classmap`: extension name to easyblock class.
+    pub exts_classmap: BTreeMap<String, String>,
+    /// One row per `exts_list` entry that parsed.
+    pub extensions: Vec<NamedEasyblock>,
+    /// One row per `components` entry that parsed.
+    pub components: Vec<NamedEasyblock>,
+}
+
+/// The recipe plus the easyblock each extension and component resolves to.
+pub fn easyblock_sites(src: &str) -> Result<(ResolvedEasyconfig, EasyblockSites), ParseError> {
+    resolve_easyconfig_str_inner(src).map(|(recipe, _, sites)| (recipe, sites))
 }
 
 fn resolve_easyconfig_str_inner(
     src: &str,
-) -> Result<(ResolvedEasyconfig, Vec<SkippedStatement>), ParseError> {
+) -> Result<(ResolvedEasyconfig, Vec<SkippedStatement>, EasyblockSites), ParseError> {
     let cleaned = strip_comments(src);
     let mut parser = Parser::new(&cleaned);
     parser
@@ -2029,7 +2062,80 @@ fn resolve_easyconfig_str_inner(
         checksum_entry_keys,
         checksums_by_filename,
     };
-    Ok((resolved, parser.skipped))
+    let sites = easyblock_sites_from(&parser.env, &templates);
+    Ok((resolved, parser.skipped, sites))
+}
+
+fn easyblock_sites_from(
+    env: &HashMap<String, Value>,
+    templates: &HashMap<String, String>,
+) -> EasyblockSites {
+    let exts = env
+        .get("exts_list")
+        .map(|value| apply_templates_value(value, templates));
+    let components = env
+        .get("components")
+        .map(|value| apply_templates_value(value, templates));
+    EasyblockSites {
+        exts_defaultclass: opt_str_field(env, "exts_defaultclass", templates),
+        default_easyblock: opt_str_field(env, "default_easyblock", templates),
+        exts_classmap: string_map_field(env, "exts_classmap", templates),
+        extensions: named_easyblocks(exts.as_ref()),
+        components: named_easyblocks(components.as_ref()),
+    }
+}
+
+fn named_easyblocks(value: Option<&Value>) -> Vec<NamedEasyblock> {
+    let Ok(items) = value_list_as_slice(value) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| match item {
+            Value::Str(name) if !name.is_empty() => Some(NamedEasyblock {
+                name: name.clone(),
+                class_name: None,
+            }),
+            Value::Tuple(fields) | Value::List(fields) if !fields.is_empty() => {
+                let name = fields[0].as_str()?.to_string();
+                if name.is_empty() {
+                    return None;
+                }
+                Some(NamedEasyblock {
+                    name,
+                    class_name: fields.get(2).and_then(dict_easyblock),
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn dict_easyblock(value: &Value) -> Option<String> {
+    let Value::Dict(entries) = value else {
+        return None;
+    };
+    entries
+        .iter()
+        .find(|(key, _)| key == "easyblock")
+        .and_then(|(_, class)| class.as_str().map(str::to_string))
+}
+
+fn string_map_field(
+    env: &HashMap<String, Value>,
+    key: &str,
+    templates: &HashMap<String, String>,
+) -> BTreeMap<String, String> {
+    let Some(raw) = env.get(key) else {
+        return BTreeMap::new();
+    };
+    let Value::Dict(entries) = apply_templates_value(raw, templates) else {
+        return BTreeMap::new();
+    };
+    entries
+        .into_iter()
+        .filter_map(|(name, class)| class.as_str().map(|class| (name, class.to_string())))
+        .collect()
 }
 
 /// Length of a list-valued field after template expansion (0 when absent or
@@ -4332,6 +4438,47 @@ builddependencies = [
             checksum_entry_keys: vec![],
             checksums_by_filename: Default::default(),
         }
+    }
+
+    #[test]
+    fn easyblock_sites_keep_extension_and_component_classes() {
+        let src = r#"
+name = 'BundleApp'
+version = '1.0'
+homepage = 'https://example.invalid'
+description = 'bundle'
+toolchain = {'name': 'foss', 'version': '2026.1'}
+easyblock = 'PythonBundle'
+exts_defaultclass = 'PythonPackage'
+exts_classmap = {'special': 'Cargo'}
+exts_list = [
+    ('plain', '1.0'),
+    ('custom', '2.0', {'easyblock': 'PerlModule'}),
+]
+default_easyblock = 'ConfigureMake'
+components = [
+    ('zlib', '1.2', {'easyblock': 'CMakeMake'}),
+    ('bare', '0.1'),
+]
+moduleclass = 'tools'
+"#;
+        let (recipe, sites) = easyblock_sites(src).expect("parse");
+        assert_eq!(recipe.easyblock.as_deref(), Some("PythonBundle"));
+        assert_eq!(sites.exts_defaultclass.as_deref(), Some("PythonPackage"));
+        assert_eq!(sites.default_easyblock.as_deref(), Some("ConfigureMake"));
+        assert_eq!(
+            sites.exts_classmap.get("special").map(String::as_str),
+            Some("Cargo")
+        );
+        assert_eq!(sites.extensions.len(), 2);
+        assert_eq!(sites.extensions[0].class_name, None);
+        assert_eq!(
+            sites.extensions[1].class_name.as_deref(),
+            Some("PerlModule")
+        );
+        assert_eq!(sites.components[0].class_name.as_deref(), Some("CMakeMake"));
+        assert_eq!(sites.components[1].name, "bare");
+        assert_eq!(sites.components[1].class_name, None);
     }
 
     #[test]
