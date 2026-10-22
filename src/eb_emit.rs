@@ -2717,6 +2717,42 @@ checksums = [{
     }
 
     #[test]
+    fn a_percent_expression_checksum_key_still_bumps() {
+        // `'fmt' % expr` is a filename key. The colon does not sit immediately
+        // after the quotes, and a version bump must still rename the format.
+        let src = "\
+name = 'Pkg'
+version = '1.0.0'
+toolchain = {'name': 'foss', 'version': '2025a'}
+source_urls = ['https://mirror.example.org/src']
+sources = ['pkg-%(version)s.tar.gz']
+checksums = [{
+    'pkg-1.0.0-%s.tar.gz' % local_arch:
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+}]
+";
+        let params = EmitParams {
+            toolchain: foss("2025a"),
+            version: Some("1.2.3".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
+            source_checksum: Some(
+                "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".into(),
+            ),
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert!(
+            r.text.contains(
+                "'pkg-1.2.3-%s.tar.gz' % local_arch:\n        'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'"
+            ),
+            "{}",
+            r.text
+        );
+    }
+
+    #[test]
     fn every_documented_shape_bumps_without_erroring() {
         // The bug this pins: one unsupported shape made `bump` exit non-zero and
         // emit nothing, which leaves a maintainer with no file to review.
