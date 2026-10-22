@@ -7,7 +7,7 @@
 
 use crate::build_order::{module_name, ModuleKey};
 use crate::eb_easyblock::encode_class_name;
-use crate::eb_parse::easyblock_sites;
+use crate::eb_parse::{easyblock_sites, EasyblockSites, ResolvedEasyconfig};
 use rustpython_parser::ast::{self, Stmt};
 use rustpython_parser::Parse;
 use serde::{Deserialize, Serialize};
@@ -339,7 +339,7 @@ pub struct ReachQuery {
     pub generated_at: String,
 }
 
-/// One easyconfig whose top-level easyblock is in the reached set.
+/// One place an easyconfig uses a reached class.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReachHit {
     /// Easyconfig path.
@@ -348,8 +348,10 @@ pub struct ReachHit {
     pub module: String,
     /// Easyblock class that matched.
     pub class_name: String,
-    /// `easyblock` when the recipe names one, otherwise `implied`.
+    /// `easyblock`, `implied`, `extension`, `exts_defaultclass`, `exts_classmap`, `component`, or `default_easyblock`.
     pub via: String,
+    /// Extension or component name. Empty for the recipe's own class.
+    pub detail: String,
     /// True when `module` is in the installed set.
     pub installed: bool,
 }
@@ -371,7 +373,7 @@ pub struct ReachReport {
     pub easyconfig_count: usize,
     /// Distinct installed modules in `hits`.
     pub installed_count: usize,
-    /// One row per reached easyconfig.
+    /// One row per matched class on an easyconfig.
     pub hits: Vec<ReachHit>,
     /// Easyconfigs that could not be parsed.
     pub skipped: Vec<String>,
@@ -398,7 +400,7 @@ pub fn reach(query: &ReachQuery) -> Result<ReachReport, ReachError> {
     let mut skipped = Vec::new();
     for path in files {
         let src = std::fs::read_to_string(&path)?;
-        let (mut recipe, _) = match easyblock_sites(&src) {
+        let (mut recipe, sites) = match easyblock_sites(&src) {
             Ok(pair) => pair,
             Err(error) => {
                 skipped.push(format!("{}: {error}", path.display()));
@@ -406,23 +408,16 @@ pub fn reach(query: &ReachQuery) -> Result<ReachReport, ReachError> {
             }
         };
         recipe.easyconfig_path = path.display().to_string();
-        let named = recipe.easyblock.is_some();
-        let class_name = recipe
-            .easyblock
-            .clone()
-            .unwrap_or_else(|| encode_class_name(&recipe.name));
-        if !reached.contains(&class_name) {
-            continue;
-        }
-        let key = ModuleKey::of(&recipe.to_candidate());
-        let module = module_name(&key);
-        hits.push(ReachHit {
-            easyconfig: recipe.easyconfig_path,
-            module: module.clone(),
-            class_name,
-            via: if named { "easyblock" } else { "implied" }.to_string(),
-            installed: query.installed.contains(&module),
-        });
+        let module = module_name(&ModuleKey::of(&recipe.to_candidate()));
+        push_recipe_hits(
+            &index,
+            &reached,
+            &recipe,
+            &sites,
+            &module,
+            &query.installed,
+            &mut hits,
+        );
     }
     skipped.sort();
     hits.sort_by(|left, right| left.easyconfig.cmp(&right.easyconfig));
@@ -448,6 +443,147 @@ pub fn reach(query: &ReachQuery) -> Result<ReachReport, ReachError> {
         hits,
         skipped,
     })
+}
+
+fn push_recipe_hits(
+    index: &EasyblockIndex,
+    reached: &BTreeSet<String>,
+    recipe: &ResolvedEasyconfig,
+    sites: &EasyblockSites,
+    module: &str,
+    installed: &BTreeSet<String>,
+    hits: &mut Vec<ReachHit>,
+) {
+    let top = recipe
+        .easyblock
+        .clone()
+        .unwrap_or_else(|| encode_class_name(&recipe.name));
+    let via = if recipe.easyblock.is_some() {
+        "easyblock"
+    } else {
+        "implied"
+    };
+    consider(reached, hits, recipe, module, installed, (&top, via, ""));
+    let imposed_ext = inherited(index, &top, true);
+    for ext in &sites.extensions {
+        let classmap = sites.exts_classmap.get(&ext.name).map(String::as_str);
+        let fallback = imposed_ext
+            .as_deref()
+            .or(sites.exts_defaultclass.as_deref());
+        if let Some((class, via)) = resolve_site(
+            index,
+            ext.class_name.as_deref(),
+            &ext.name,
+            fallback,
+            ("extension", "exts_defaultclass"),
+            classmap,
+        ) {
+            consider(
+                reached,
+                hits,
+                recipe,
+                module,
+                installed,
+                (&class, via, &ext.name),
+            );
+        }
+    }
+    let imposed_comp = inherited(index, &top, false);
+    for comp in &sites.components {
+        let fallback = sites
+            .default_easyblock
+            .as_deref()
+            .or(imposed_comp.as_deref());
+        if let Some((class, via)) = resolve_site(
+            index,
+            comp.class_name.as_deref(),
+            &comp.name,
+            fallback,
+            ("component", "default_easyblock"),
+            None,
+        ) {
+            consider(
+                reached,
+                hits,
+                recipe,
+                module,
+                installed,
+                (&class, via, &comp.name),
+            );
+        }
+    }
+}
+
+fn consider(
+    reached: &BTreeSet<String>,
+    hits: &mut Vec<ReachHit>,
+    recipe: &ResolvedEasyconfig,
+    module: &str,
+    installed: &BTreeSet<String>,
+    site: (&str, &str, &str),
+) {
+    let (class_name, via, detail) = site;
+    if !reached.contains(class_name) {
+        return;
+    }
+    hits.push(ReachHit {
+        easyconfig: recipe.easyconfig_path.clone(),
+        module: module.to_string(),
+        class_name: class_name.to_string(),
+        via: via.to_string(),
+        detail: detail.to_string(),
+        installed: installed.contains(module),
+    });
+}
+
+fn resolve_site(
+    index: &EasyblockIndex,
+    explicit: Option<&str>,
+    name: &str,
+    fallback: Option<&str>,
+    vias: (&'static str, &'static str),
+    classmap: Option<&str>,
+) -> Option<(String, &'static str)> {
+    if let Some(class) = explicit {
+        return Some((class.to_string(), vias.0));
+    }
+    let implied = encode_class_name(name);
+    if index.classes.contains_key(&implied) {
+        return Some((implied, "implied"));
+    }
+    classmap
+        .map(|class| (class.to_string(), "exts_classmap"))
+        .or_else(|| fallback.map(|class| (class.to_string(), vias.1)))
+}
+
+fn inherited(index: &EasyblockIndex, start: &str, exts: bool) -> Option<String> {
+    let mut stack = vec![start.to_string()];
+    let mut seen = HashSet::new();
+    while let Some(name) = stack.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let Some(fact) = index.classes.get(&name) else {
+            continue;
+        };
+        let value = if exts {
+            fact.exts_default.clone()
+        } else {
+            fact.component_default.clone()
+        };
+        if let Some(value) = value {
+            return Some(value);
+        }
+        for base in fact.bases.iter().rev() {
+            let short = base.rsplit('.').next().unwrap_or(base);
+            if index.classes.contains_key(base) {
+                stack.push(base.clone());
+            } else if short != base && index.classes.contains_key(short) {
+                stack.push(short.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn collect_eb(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), ReachError> {
@@ -571,5 +707,118 @@ mod tests {
             .hits
             .iter()
             .all(|hit| !hit.easyconfig.ends_with("make.eb")));
+    }
+
+    fn has(report: &ReachReport, spec: &str) -> bool {
+        let mut parts = spec.split(' ');
+        let (file, via, class_name, detail) = (
+            parts.next().unwrap(),
+            parts.next().unwrap(),
+            parts.next().unwrap(),
+            parts.next().unwrap(),
+        );
+        report.hits.iter().any(|hit| {
+            hit.easyconfig.ends_with(file)
+                && hit.via == via
+                && hit.class_name == class_name
+                && hit.detail == detail
+        })
+    }
+
+    #[test]
+    fn extensions_and_components_use_class_and_easyconfig_defaults() {
+        let root = tempfile::tempdir().unwrap();
+        let py = root.path().join("py");
+        let ecs = root.path().join("eb");
+        write(
+            &py,
+            "easybuild/easyblocks/generic/pythonpackage.py",
+            "class PythonPackage:\n    pass\n",
+        );
+        write(
+            &py,
+            "easybuild/easyblocks/generic/pythonbundle.py",
+            "class PythonBundle:\n    def extra_options():\n        extra_vars['default_easyblock'][0] = 'PythonPackage'\n    def __init__(self):\n        self.cfg['exts_defaultclass'] = 'PythonPackage'\nclass CargoPythonBundle(PythonBundle):\n    pass\n",
+        );
+        write(
+            &py,
+            "easybuild/easyblocks/generic/others.py",
+            "class Bundle:\n    pass\nclass OctavePackage:\n    pass\nclass Cargo:\n    pass\nclass ConfigureMake:\n    pass\nclass CMakeMake(ConfigureMake):\n    pass\nclass EB_Zlib:\n    pass\n",
+        );
+        write(
+            &ecs,
+            "bundle.eb",
+            "name = 'bundle'\nversion = '1'\ntoolchain = SYSTEM\neasyblock = 'PythonBundle'\nexts_list = [\n    ('numpy', '1.26'),\n    ('special', '1.0', {'easyblock': 'Cargo'}),\n]\ncomponents = [\n    ('zlib', '1.3', {'easyblock': 'CMakeMake'}),\n    ('bare', '0.1'),\n]\n",
+        );
+        write(
+            &ecs,
+            "over.eb",
+            "name = 'over'\nversion = '1'\ntoolchain = SYSTEM\neasyblock = 'PythonBundle'\nexts_defaultclass = 'PerlModule'\ndefault_easyblock = 'ConfigureMake'\nexts_list = [('numpy', '1')]\ncomponents = [('bare', '1')]\n",
+        );
+        write(
+            &ecs,
+            "sub.eb",
+            "name = 'sub'\nversion = '1'\ntoolchain = SYSTEM\neasyblock = 'CargoPythonBundle'\nexts_list = [('numpy', '1')]\n",
+        );
+        write(
+            &ecs,
+            "octave.eb",
+            "name = 'octave'\nversion = '1'\ntoolchain = SYSTEM\neasyblock = 'Bundle'\nexts_defaultclass = 'OctavePackage'\nexts_classmap = {'special': 'Cargo'}\ndefault_easyblock = 'ConfigureMake'\nexts_list = [\n    ('plain', '1'),\n    ('special', '1'),\n    ('Zlib', '1'),\n]\ncomponents = [('zlib', '1')]\n",
+        );
+        let pkg = py.join("easybuild/easyblocks/generic/pythonpackage.py");
+        let py_hits = reach(&ReachQuery {
+            roots: vec![py.clone()],
+            easyconfigs: vec![ecs.clone()],
+            changed: vec![(pkg.clone(), std::fs::read_to_string(&pkg).unwrap())],
+            installed: BTreeSet::new(),
+            generated_at: "t".into(),
+        })
+        .unwrap();
+        assert!(has(
+            &py_hits,
+            "bundle.eb exts_defaultclass PythonPackage numpy"
+        ));
+        assert!(has(
+            &py_hits,
+            "bundle.eb default_easyblock PythonPackage bare"
+        ));
+        assert!(has(
+            &py_hits,
+            "over.eb exts_defaultclass PythonPackage numpy"
+        ));
+        assert!(has(
+            &py_hits,
+            "sub.eb exts_defaultclass PythonPackage numpy"
+        ));
+        assert!(!has(
+            &py_hits,
+            "over.eb default_easyblock PythonPackage bare"
+        ));
+        assert!(!has(&py_hits, "bundle.eb extension Cargo special"));
+        let others = py.join("easybuild/easyblocks/generic/others.py");
+        let other_hits = reach(&ReachQuery {
+            roots: vec![py],
+            easyconfigs: vec![ecs],
+            changed: vec![(others.clone(), std::fs::read_to_string(&others).unwrap())],
+            installed: BTreeSet::new(),
+            generated_at: "t".into(),
+        })
+        .unwrap();
+        assert!(has(
+            &other_hits,
+            "octave.eb exts_defaultclass OctavePackage plain"
+        ));
+        assert!(has(&other_hits, "octave.eb exts_classmap Cargo special"));
+        assert!(has(&other_hits, "octave.eb implied EB_Zlib Zlib"));
+        assert!(has(
+            &other_hits,
+            "octave.eb default_easyblock ConfigureMake zlib"
+        ));
+        assert!(has(&other_hits, "bundle.eb component CMakeMake zlib"));
+        assert!(has(&other_hits, "bundle.eb extension Cargo special"));
+        assert!(has(
+            &other_hits,
+            "over.eb default_easyblock ConfigureMake bare"
+        ));
     }
 }
