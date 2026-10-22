@@ -47,6 +47,33 @@ pub struct EasystackChange {
     /// File text at the PR head; absent for a file the PR deletes.
     #[serde(default)]
     pub head: Option<String>,
+    /// Git blob id of `base`, when the fetch recorded it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_blob: Option<String>,
+    /// Git blob id of `head`, when the fetch recorded it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_blob: Option<String>,
+}
+
+/// One changed file stored on a record: path, kind, and base/head text or blob.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileRevision {
+    /// Path in the software-layer repository, or an easyconfig filename.
+    pub path: String,
+    /// `easystack` or `easyconfig`.
+    pub kind: String,
+    /// Git blob id of the base text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_blob: Option<String>,
+    /// Git blob id of the head text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_blob: Option<String>,
+    /// Base text. Absent when the fetch stored only a blob id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// Head text. Absent when the fetch stored only a blob id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
 }
 
 /// One pull request as read from the forge: identity plus easystack changes.
@@ -59,9 +86,12 @@ pub struct PrInput {
     /// Title, for the report.
     #[serde(default)]
     pub title: Option<String>,
-    /// Changed easystack files. Other changed files are not needed.
+    /// Changed easystack files.
     #[serde(default)]
     pub easystacks: Vec<EasystackChange>,
+    /// Changed easyconfig files (`*.eb`), with base and head text or blob ids.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<FileRevision>,
 }
 
 /// Settings shared by every record of one run.
@@ -152,6 +182,11 @@ pub struct PrRecord {
     pub notes: Vec<String>,
     /// The easystack entries the pull request adds.
     pub entries: Vec<RecordEntry>,
+    /// Easystack and easyconfig files this pull request changes. Base and head
+    /// text, or their blob ids, are what a later merge-order uses to see a
+    /// hunk collision without the original JSON.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub revisions: Vec<FileRevision>,
 }
 
 /// Robot-path trees: the release tree, and per `from-commit` the easyconfigs
@@ -222,6 +257,51 @@ fn find_start<'a>(universe: &'a [Candidate], file: &str) -> Option<&'a Candidate
         .find(|c| c.easyconfig_path.rsplit('/').next() == Some(file))
 }
 
+fn stack_kept(path: &str, config: &OverlapConfig) -> bool {
+    if eessi_version_of(path).as_deref() != Some(config.eessi_version.as_str()) {
+        return false;
+    }
+    if config
+        .exclude_paths
+        .iter()
+        .any(|s| !s.is_empty() && path.contains(s.as_str()))
+    {
+        return false;
+    }
+    config.include_paths.is_empty()
+        || config
+            .include_paths
+            .iter()
+            .any(|s| !s.is_empty() && path.contains(s.as_str()))
+}
+
+/// Easystack revisions for this stack version, then easyconfig files.
+///
+/// Conflict detection reads these later, so the text or blob has to be here
+/// even when the closure itself is already stored.
+pub fn file_revisions(pr: &PrInput, config: &OverlapConfig) -> Vec<FileRevision> {
+    let mut out: Vec<FileRevision> = pr
+        .easystacks
+        .iter()
+        .filter(|change| stack_kept(&change.path, config))
+        .map(|change| FileRevision {
+            path: change.path.clone(),
+            kind: "easystack".into(),
+            base_blob: change.base_blob.clone(),
+            head_blob: change.head_blob.clone(),
+            base: change.base.clone(),
+            head: change.head.clone(),
+        })
+        .collect();
+    out.extend(
+        pr.files
+            .iter()
+            .filter(|file| file.kind == "easyconfig")
+            .cloned(),
+    );
+    out
+}
+
 /// The record for one pull request, or `None` when it changes no easystack of
 /// the configured version.
 pub fn pr_record(
@@ -235,23 +315,9 @@ pub fn pr_record(
     // robot path and its own notion of what counts as installed.
     let mut groups: BTreeMap<(Option<String>, bool), Vec<Start>> = BTreeMap::new();
     let mut entries = Vec::new();
+    let revisions = file_revisions(pr, config);
     for change in &pr.easystacks {
-        if eessi_version_of(&change.path).as_deref() != Some(config.eessi_version.as_str()) {
-            continue;
-        }
-        if config
-            .exclude_paths
-            .iter()
-            .any(|s| !s.is_empty() && change.path.contains(s.as_str()))
-        {
-            continue;
-        }
-        if !config.include_paths.is_empty()
-            && !config
-                .include_paths
-                .iter()
-                .any(|s| !s.is_empty() && change.path.contains(s.as_str()))
-        {
+        if !stack_kept(&change.path, config) {
             continue;
         }
         let added = added_entries(change);
@@ -373,6 +439,7 @@ pub fn pr_record(
         unresolved: unresolved.into_iter().collect(),
         notes: notes.into_iter().collect(),
         entries,
+        revisions,
     })
 }
 
@@ -729,6 +796,8 @@ mod tests {
                 "easyconfigs:\n  - A-1.eb\n  - B-2.eb:\n      options:\n        from-commit: abc\n"
                     .into(),
             ),
+            base_blob: None,
+            head_blob: None,
         };
         let added = added_entries(&change);
         assert_eq!(added.len(), 1);
@@ -752,6 +821,7 @@ mod tests {
             unresolved: Vec::new(),
             notes: Vec::new(),
             entries: Vec::new(),
+            revisions: Vec::new(),
         };
         let text = record_to_toml(&record).expect("toml");
         let a = text.find("  \"a/1\",\n").expect("a on its own line");

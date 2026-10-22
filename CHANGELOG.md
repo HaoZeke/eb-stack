@@ -14,6 +14,32 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `pr-overlap` stores each changed easystack and easyconfig on the
+  record (`revisions`: path, kind, base and head text or blob ids).
+  `--merge-order` reads easystack hunk collisions from that text.
+- `pr-overlap --merge-order` writes `merge-order.toml` and appends a Merge
+  order table to `overlap.md`. The order builds each shared module once.
+  `--merged N` repeats, implies `--merge-order`, and treats those pull
+  requests as already installed. Two easystack edits at the same insertion
+  point, or with the same added entry text, are recorded as conflicts.
+  See `docs/orgmode/howto/pr-overlap.org`.
+- `pr-overlap` closes the easystack lines an open pull request adds and
+  reports the modules more than one of them would build. `--pr` takes one
+  JSON path or several after the same flag, which is what `in/prs/*.json`
+  expands to. `--include-path` keeps one architecture's easystacks,
+  `--filter-deps` drops dependencies the way EasyBuild does, and an alias
+  in `.modulerc.lua` counts as installed when the module it names is.
+  A missing easyblock class is recorded and is not counted as a module to
+  build. See `docs/orgmode/howto/pr-overlap.org`.
+- `eb-stack easyblock-reach` reports which easyconfigs and installed
+  modules a changed easyblock or framework module reaches. Inputs are
+  `--file`, a `--range` in a local clone, or `--pr` fetched as
+  `refs/pull/<n>/head`. Matching covers the `easyblock` line, the implied
+  `EB_<Name>` class, subclasses parsed from the Python class statement,
+  extension classes (`exts_defaultclass`, `exts_classmap`, per-extension
+  `easyblock`), and bundle components. `--reverse` adds the
+  reverse-dependency closure. Output is `reach.toml`, `reach.json`, and
+  `reach.md`. See `docs/orgmode/howto/easyblock-reach.org`.
 - Sandboxed recipe file tools on `eb-stack mcp`: `eb_recipe_read`,
   `eb_recipe_list`, `eb_recipe_edit` (exact string replace; a repeated match
   is not written unless `replace_all` is set), and `eb_recipe_write`. Paths
@@ -67,30 +93,6 @@ All notable changes to this project are documented here.
 - `eb_recipe_check` requires `easyconfigs` to contain at least one path
   (`minItems: 1`). An empty list returns
   `argument easyconfigs requires at least one path`.
-- `pr-overlap --merge-order` writes `merge-order.toml` and appends a Merge
-  order table to `overlap.md`. The order builds each shared module once.
-  `--merged N` repeats, implies `--merge-order`, and treats those pull
-  requests as already installed. Two easystack edits at the same insertion
-  point, or with the same added entry text, are recorded as conflicts.
-  See `docs/orgmode/howto/pr-overlap.org`.
-- `pr-overlap` closes the easystack lines an open pull request adds and
-  reports the modules more than one of them would build. `--pr` takes one
-  JSON path or several after the same flag, which is what `in/prs/*.json`
-  expands to. `--include-path` keeps one architecture's easystacks,
-  `--filter-deps` drops dependencies the way EasyBuild does, and an alias
-  in `.modulerc.lua` counts as installed when the module it names is.
-  A missing easyblock class is recorded and is not counted as a module to
-  build. See `docs/orgmode/howto/pr-overlap.org`.
-
-- `eb-stack easyblock-reach` reports which easyconfigs and installed
-  modules a changed easyblock or framework module reaches. Inputs are
-  `--file`, a `--range` in a local clone, or `--pr` fetched as
-  `refs/pull/<n>/head`. Matching covers the `easyblock` line, the implied
-  `EB_<Name>` class, subclasses parsed from the Python class statement,
-  extension classes (`exts_defaultclass`, `exts_classmap`, per-extension
-  `easyblock`), and bundle components. `--reverse` adds the
-  reverse-dependency closure. Output is `reach.toml`, `reach.json`, and
-  `reach.md`. See `docs/orgmode/howto/easyblock-reach.org`.
 
 - `package plan` and `package bump` raise a `missing-easyblock` residual
   (stage `emit`, severity `judgment`, id `missing-easyblock:<class>`) when a

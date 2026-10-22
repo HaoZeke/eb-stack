@@ -4,7 +4,10 @@
 # commits as git objects and reads blobs out of them. Nothing from a pull
 # request is checked out or executed.
 #
-# Usage: fetch-prs.sh <owner/repo> <eessi-version> <out-dir>
+# Usage: fetch-prs.sh <owner/repo> <eessi-version> <out-dir> [pr-numbers]
+# pr-numbers is an optional file of pull request numbers, one per line (or
+# comma-separated). Without it, every open pull request is read. Closed
+# numbers still resolve: GitHub keeps refs/pull/N/head.
 # Needs: gh (authenticated with any read token), git, python3, curl.
 # Run inside a clone of the repository whose `origin` is <owner/repo>.
 set -euo pipefail
@@ -12,12 +15,36 @@ set -euo pipefail
 repo=$1
 version=$2
 out=$3
+list=${4:-}
 mkdir -p "$out/prs" "$out/commit-trees" "$out/easyblocks"
 prefix="easystacks/software.eessi.io/${version}/"
 
 git fetch --quiet --no-tags origin main
-gh pr list --repo "$repo" --state open --limit 500 \
-  --json number,headRefOid,title >"$out/open.json"
+if [[ -n "$list" ]]; then
+  python3 - "$list" <<'PY' >"$out/numbers.txt"
+import sys
+text = open(sys.argv[1]).read().replace(",", "\n")
+for line in text.splitlines():
+    line = line.strip()
+    if line:
+        print(line)
+PY
+  : >"$out/listed.tsv"
+  while read -r number; do
+    gh api --method GET "repos/${repo}/pulls/${number}" --jq '[.number, .head.sha, .title] | @tsv'
+  done <"$out/numbers.txt" >>"$out/listed.tsv"
+  python3 - "$out/listed.tsv" "$out/open.json" <<'PY'
+import json, sys
+rows = []
+for line in open(sys.argv[1]):
+    number, sha, title = line.rstrip("\n").split("\t", 2)
+    rows.append({"number": int(number), "headRefOid": sha, "title": title})
+json.dump(rows, open(sys.argv[2], "w"))
+PY
+else
+  gh pr list --repo "$repo" --state open --limit 500 \
+    --json number,headRefOid,title >"$out/open.json"
+fi
 
 python3 - "$out/open.json" <<'PY' | while read -r number sha; do
 import json, sys
@@ -25,8 +52,13 @@ for pr in json.load(open(sys.argv[1])):
     print(pr["number"], pr["headRefOid"])
 PY
   # Changed files, from the API so no diff of fork history is needed.
-  mapfile -t files < <(gh api --paginate "repos/${repo}/pulls/${number}/files" \
-    --jq ".[] | select(.filename | startswith(\"${prefix}\")) | select(.filename | endswith(\".yml\")) | .filename")
+  mapfile -t files < <(gh api --method GET --paginate "repos/${repo}/pulls/${number}/files" \
+    --jq '.[] | .filename' | while IFS= read -r name; do
+      case "$name" in
+        *.eb) printf '%s\n' "$name" ;;
+        "${prefix}"*.yml) printf '%s\n' "$name" ;;
+      esac
+    done)
   [[ ${#files[@]} -eq 0 ]] && continue
   # GitHub keeps every pull request head, fork or not, at refs/pull/N/head.
   git fetch --quiet --no-tags --depth=1 origin "refs/pull/${number}/head:refs/remotes/pr/${number}"
@@ -36,6 +68,8 @@ PY
   for f in "${files[@]}"; do
     git show "origin/main:${f}" >"$dir/${i}.base" 2>/dev/null || rm -f "$dir/${i}.base"
     git show "refs/remotes/pr/${number}:${f}" >"$dir/${i}.head" 2>/dev/null || rm -f "$dir/${i}.head"
+    git rev-parse "origin/main:${f}" >"$dir/${i}.base_blob" 2>/dev/null || rm -f "$dir/${i}.base_blob"
+    git rev-parse "refs/remotes/pr/${number}:${f}" >"$dir/${i}.head_blob" 2>/dev/null || rm -f "$dir/${i}.head_blob"
     printf '%s\n' "$f" >"$dir/${i}.path"
     i=$((i + 1))
   done
@@ -52,14 +86,24 @@ for number in sorted(os.listdir(raw) if os.path.isdir(raw) else [], key=int):
     d = f"{raw}/{number}"
     def read(p):
         return open(p).read() if os.path.exists(p) else None
-    stacks = []
+    stacks, extras = [], []
     i = 0
     while os.path.exists(f"{d}/{i}.path"):
-        stacks.append({"path": read(f"{d}/{i}.path").strip(),
-                       "base": read(f"{d}/{i}.base"), "head": read(f"{d}/{i}.head")})
+        path = read(f"{d}/{i}.path").strip()
+        entry = {"path": path, "base": read(f"{d}/{i}.base"), "head": read(f"{d}/{i}.head")}
+        base_blob, head_blob = read(f"{d}/{i}.base_blob"), read(f"{d}/{i}.head_blob")
+        if base_blob:
+            entry["base_blob"] = base_blob.strip()
+        if head_blob:
+            entry["head_blob"] = head_blob.strip()
+        if path.endswith(".eb"):
+            entry["kind"] = "easyconfig"
+            extras.append(entry)
+        else:
+            stacks.append(entry)
         i += 1
     doc = {"number": int(number), "head_sha": read(f"{d}/head_sha").strip(),
-           "title": titles.get(int(number)), "easystacks": stacks}
+           "title": titles.get(int(number)), "easystacks": stacks, "files": extras}
     json.dump(doc, open(f"{out}/prs/{number}.json", "w"), indent=1, sort_keys=True)
 PY
 
@@ -119,7 +163,7 @@ cat "$out"/raw/*/*.head 2>/dev/null \
       [[ -f "$dest/.touched-files" ]] && continue
       rm -rf "$dest"
       mkdir -p "$dest"
-      if ! files=$(gh api "repos/easybuilders/easybuild-easyblocks/commits/${commit}" \
+      if ! files=$(gh api --method GET "repos/easybuilders/easybuild-easyblocks/commits/${commit}" \
           --jq '.files[] | select(.status != "removed") | .filename'); then
         echo "no easyblocks commit ${commit}" >&2
         rm -rf "$dest"

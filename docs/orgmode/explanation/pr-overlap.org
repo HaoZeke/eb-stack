@@ -478,4 +478,6 @@ For each easystack path changed by 2 or more pull requests, the insertion
 point is the 0-based index of the base line before the first added line,
 from a line LCS of base and head. The point is -1 when the added lines
 start at the top of the file. The same point is ~same-insertion~. Identical
-added lines are ~same-entry~.
+added lines are ~same-entry~. The record keeps that base and head text, or
+the blob ids, on ~revisions~, and the merge order reads the collisions from
+the record.

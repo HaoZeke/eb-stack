@@ -854,7 +854,7 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
             anyhow::bail!("--merged {number}: no pull request with that number");
         }
         let mut order = eb_stack::merge_order::plan(&records, &index, &args.merged);
-        order.conflicts = eb_stack::merge_order::easystack_conflicts(&prs);
+        order.conflicts = eb_stack::merge_order::conflicts_from_records(&records);
         std::fs::write(args.out_dir.join("merge-order.toml"), to_toml(&order)?)?;
         let mut md = std::fs::read_to_string(args.out_dir.join("overlap.md"))?;
         md.push_str(&eb_stack::merge_order::render_section(

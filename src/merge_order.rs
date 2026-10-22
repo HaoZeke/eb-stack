@@ -198,16 +198,46 @@ pub fn unknown_merged(inputs: &[u64], merged: &[u64]) -> Option<u64> {
 /// the base line before the first added line, or -1 when the addition starts
 /// at the top of the file. Identical added lines are `same-entry`.
 pub fn easystack_conflicts(prs: &[PrInput]) -> Vec<EasystackConflict> {
+    let edits: Vec<(u64, String, String, String)> = prs
+        .iter()
+        .flat_map(|pr| {
+            pr.easystacks.iter().map(|change| {
+                (
+                    pr.number,
+                    change.path.clone(),
+                    change.base.clone().unwrap_or_default(),
+                    change.head.clone().unwrap_or_default(),
+                )
+            })
+        })
+        .collect();
+    conflicts_from_edits(&edits)
+}
+
+/// Same collisions, read from the text stored on each record.
+pub fn conflicts_from_records(records: &[PrRecord]) -> Vec<EasystackConflict> {
+    let edits: Vec<(u64, String, String, String)> = records
+        .iter()
+        .flat_map(|record| {
+            record.revisions.iter().filter(|rev| rev.kind == "easystack").map(|rev| {
+                (
+                    record.pr,
+                    rev.path.clone(),
+                    rev.base.clone().unwrap_or_default(),
+                    rev.head.clone().unwrap_or_default(),
+                )
+            })
+        })
+        .collect();
+    conflicts_from_edits(&edits)
+}
+
+fn conflicts_from_edits(edits: &[(u64, String, String, String)]) -> Vec<EasystackConflict> {
     let mut by_path: BTreeMap<String, Vec<(u64, i64, String)>> = BTreeMap::new();
-    for pr in prs {
-        for change in &pr.easystacks {
-            let (point, added) = first_insertion(
-                change.base.as_deref().unwrap_or(""),
-                change.head.as_deref().unwrap_or(""),
-            );
-            if !added.is_empty() {
-                by_path.entry(change.path.clone()).or_default().push((pr.number, point, added));
-            }
+    for (pr, path, base, head) in edits {
+        let (point, added) = first_insertion(base, head);
+        if !added.is_empty() {
+            by_path.entry(path.clone()).or_default().push((*pr, point, added));
         }
     }
     let mut out = Vec::new();
@@ -346,6 +376,7 @@ mod tests {
             already_installed: Vec::new(),
             unresolved: Vec::new(),
             notes: Vec::new(),
+            revisions: Vec::new(),
             entries: asked.iter().map(|file| RecordEntry {
                 easystack: "s.yml".into(),
                 easyconfig: (*file).to_string(),
@@ -461,10 +492,13 @@ mod tests {
             number: n,
             head_sha: "h".into(),
             title: None,
+            files: Vec::new(),
             easystacks: vec![EasystackChange {
                 path: "s.yml".into(),
                 base: Some("a\nb\nc\n".into()),
                 head: Some(head.into()),
+                base_blob: None,
+                head_blob: None,
             }],
         };
         let found = easystack_conflicts(&[
@@ -479,6 +513,22 @@ mod tests {
         assert_eq!(found[1].prs, [1, 2, 3]);
         let top = easystack_conflicts(&[pr(4, "Z\na\nb\nc\n"), pr(5, "Z\na\nb\nc\n")]);
         assert!(top.iter().any(|c| c.kind == "same-insertion" && c.prs == [4, 5]));
+        let mut stored = [
+            rec(1, &[], &[]),
+            rec(2, &[], &[]),
+            rec(3, &[], &[]),
+        ];
+        for (record, head) in stored.iter_mut().zip(["a\nb\nX\nc\n", "a\nb\nY\nc\n", "a\nb\nX\nc\n"]) {
+            record.revisions.push(crate::pr_overlap::FileRevision {
+                path: "s.yml".into(),
+                kind: "easystack".into(),
+                base_blob: Some("b".into()),
+                head_blob: Some("h".into()),
+                base: Some("a\nb\nc\n".into()),
+                head: Some(head.into()),
+            });
+        }
+        assert_eq!(conflicts_from_records(&stored), found);
         let section = render_section(&order(&[rec(10, &["D/1"], &["D-1.eb"])]), "");
         assert!(section.contains("| Position | PR | Builds | Saves | After |"));
         assert!(section.contains("| 1 | #10 | 1 |  |  |"));

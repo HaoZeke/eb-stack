@@ -25,6 +25,8 @@ fn change(path: &str, base: Option<&str>, added: &str) -> EasystackChange {
         path: path.into(),
         base: base.map(str::to_string),
         head: Some(head),
+        base_blob: None,
+        head_blob: None,
     }
 }
 
@@ -34,6 +36,7 @@ fn pr(number: u64, easystacks: Vec<EasystackChange>) -> PrInput {
         head_sha: format!("{number:0>40}"),
         title: Some(format!("PR {number}")),
         easystacks,
+        files: Vec::new(),
     }
 }
 
