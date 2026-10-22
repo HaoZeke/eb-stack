@@ -23,6 +23,7 @@ pub use crate::ecosystem::parse_package_index;
 mod foreign;
 pub mod hierarchy;
 pub mod input_hash;
+mod install_prefix;
 pub mod jenkins;
 pub mod luarocks;
 mod manifest;

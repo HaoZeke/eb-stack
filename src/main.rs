@@ -198,6 +198,13 @@ struct RebuildSetArgs {
     /// Timestamp to record (RFC 3339); defaults to now, in UTC.
     #[arg(long)]
     generated_at: Option<String>,
+    /// Installed EESSI prefix (`$EESSI_SOFTWARE_PATH`).
+    ///
+    /// Static archives are read from `<prefix>/software/<name>/<version>/lib*/`.
+    /// A patched module with no `*.a` there cannot have been linked
+    /// statically, so a builddependency-only dependent is no-rebuild.
+    #[arg(long)]
+    prefix: Option<PathBuf>,
     /// Output directory: `rebuild-set.json`, `rebuild-set.md`, `rebuilds/`.
     #[arg(long, default_value = "rebuild-set")]
     out_dir: PathBuf,
@@ -755,6 +762,7 @@ fn run_rebuild_set(args: RebuildSetArgs) -> Result<()> {
         generated_at: args.generated_at.unwrap_or_else(|| {
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }),
+        prefix: args.prefix,
     })
     .map_err(|error| anyhow::anyhow!(error))?;
 

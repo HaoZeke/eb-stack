@@ -138,7 +138,7 @@ fn the_cli_writes_the_rebuild_set_and_drops_a_stale_easystack() {
         .1
         .as_str();
     let value: serde_json::Value = serde_json::from_str(json).expect("parse json");
-    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["schema_version"], 2);
     assert_eq!(value["generated_at"], "2026-10-22T12:00:00Z");
     assert_eq!(value["installed_source"], "x86_64/amd/zen4");
     assert_eq!(value["missing"], serde_json::json!(["Absent-1.0.eb"]));
