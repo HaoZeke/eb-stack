@@ -177,8 +177,65 @@ fn from_commit_easyconfigs_sit_ahead_of_the_release_tree() {
 
     let r = record(&records, 106);
     assert!(r.to_build.is_empty());
-    assert_eq!(r.unresolved.len(), 2, "{:?}", r.unresolved);
-    assert!(r.unresolved.iter().any(|u| u.contains("from-commit def")));
+    assert_eq!(
+        r.unresolved,
+        ["Absent-2.0-GCCcore-15.2.0.eb: no such easyconfig on the robot path"]
+    );
+    assert_eq!(
+        r.notes,
+        ["from-commit def: no easyconfigs given for this commit, release tree used"]
+    );
+}
+
+#[test]
+fn a_from_commit_without_a_tree_is_a_note_and_uses_the_release_recipe() {
+    let base =
+        parse_easyconfig_trees(&[fixtures().join("release").as_path()]).expect("release tree");
+    let trees = RobotTrees {
+        base: base.candidates,
+        commits: Default::default(),
+    };
+    let installed = parse_installed(
+        &std::fs::read_to_string(fixtures().join("installed.txt")).expect("installed"),
+    );
+    let input = pr(
+        107,
+        vec![change(
+            STACK,
+            Some(BASE),
+            "  - Graphviz-14.0.2-GCCcore-15.2.0.eb:\n      options:\n        from-commit: missing\n",
+        )],
+    );
+    let record = pr_record(&input, &trees, &installed, &config()).expect("record");
+    assert!(
+        record
+            .to_build
+            .iter()
+            .any(|module| module == "Graphviz/14.0.2-GCCcore-15.2.0"),
+        "{:?}",
+        record.to_build
+    );
+    assert!(
+        record.unresolved.is_empty(),
+        "the release recipe was used: {:?}",
+        record.unresolved
+    );
+    assert_eq!(
+        record.notes,
+        ["from-commit missing: no easyconfigs given for this commit, release tree used"]
+    );
+    let md = render_markdown(
+        std::slice::from_ref(&record),
+        &overlap_index(std::slice::from_ref(&record), &config()),
+        "",
+    );
+    assert!(
+        md.contains(
+            "- note: from-commit missing: no easyconfigs given for this commit, release tree used"
+        ),
+        "{md}"
+    );
+    assert!(!md.contains("- unresolved: from-commit"), "{md}");
 }
 
 #[test]

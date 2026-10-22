@@ -294,7 +294,7 @@ pub fn pr_record(
             }
             None => {
                 if let Some(c) = commit {
-                    unresolved.insert(format!(
+                    notes.insert(format!(
                         "from-commit {c}: no easyconfigs given for this commit, release tree used"
                     ));
                 }
