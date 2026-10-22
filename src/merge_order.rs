@@ -381,6 +381,7 @@ mod tests {
             changed_easyconfigs: Vec::new(),
             closure: Vec::new(),
             new_modules: Vec::new(),
+            reverse_dependents: Vec::new(),
             entries: asked.iter().map(|file| RecordEntry {
                 easystack: "s.yml".into(),
                 easyconfig: (*file).to_string(),

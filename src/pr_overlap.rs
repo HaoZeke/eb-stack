@@ -159,6 +159,16 @@ pub struct RecordEntry {
     pub eb_version: Option<String>,
 }
 
+/// A base-tree module that resolves a dependency to a file this pull request
+/// modifies or deletes. `depth` 1 is direct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ReverseDependent {
+    /// Module name, `name/version[-toolchain]versionsuffix`.
+    pub module: String,
+    /// Shortest dependency distance from a changed file.
+    pub depth: u32,
+}
+
 /// One easyconfig a pull request adds, changes, or deletes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangedEasyconfig {
@@ -224,6 +234,10 @@ pub struct PrRecord {
     /// Closure modules the base tree alone does not provide, sorted.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub new_modules: Vec<String>,
+    /// Base-tree modules that depend on a file this pull request modifies
+    /// or deletes, nearest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reverse_dependents: Vec<ReverseDependent>,
 }
 
 /// Robot-path trees: the release tree, and per `from-commit` the easyconfigs
@@ -481,6 +495,7 @@ pub fn pr_record(
         changed_easyconfigs: Vec::new(),
         closure: Vec::new(),
         new_modules: Vec::new(),
+        reverse_dependents: Vec::new(),
     })
 }
 
@@ -595,6 +610,74 @@ fn overlay_easyconfigs(base: &[Candidate], changes: &[FileChange]) -> Easyconfig
     }
 }
 
+fn direct_dependencies(universe: &[Candidate], candidate: &Candidate) -> Vec<ModuleKey> {
+    let start = ModuleKey::of(candidate);
+    closure_against_installed(
+        universe,
+        std::slice::from_ref(&start),
+        Choice::Newest,
+        &|key| key != &start,
+    )
+    .installed
+}
+
+/// Base-tree modules whose resolved dependency is a modified or deleted file,
+/// direct and transitive. Depth 1 depends on the file itself.
+fn reverse_dependents(base: &[Candidate], changed: &[ChangedEasyconfig]) -> Vec<ReverseDependent> {
+    let targets: BTreeSet<ModuleKey> = base
+        .iter()
+        .filter(|candidate| {
+            changed.iter().any(|change| {
+                matches!(change.status.as_str(), "modified" | "deleted")
+                    && paths_match(&candidate.easyconfig_path, &change.path)
+            })
+        })
+        .map(ModuleKey::of)
+        .collect();
+    if targets.is_empty() {
+        return Vec::new();
+    }
+    let mut reverse: BTreeMap<ModuleKey, BTreeSet<ModuleKey>> = BTreeMap::new();
+    let mut names: BTreeMap<ModuleKey, String> = BTreeMap::new();
+    for candidate in base {
+        let key = ModuleKey::of(candidate);
+        names.insert(key.clone(), module_name(&key));
+        for dep in direct_dependencies(base, candidate) {
+            reverse.entry(dep).or_default().insert(key.clone());
+        }
+    }
+    let mut depth_of: BTreeMap<ModuleKey, u32> = BTreeMap::new();
+    let mut queue: Vec<(ModuleKey, u32)> = targets.iter().cloned().map(|key| (key, 0)).collect();
+    let mut head = 0;
+    while head < queue.len() {
+        let (key, depth) = queue[head].clone();
+        head += 1;
+        let Some(dependents) = reverse.get(&key) else {
+            continue;
+        };
+        for dependent in dependents {
+            if targets.contains(dependent) || depth_of.contains_key(dependent) {
+                continue;
+            }
+            let next = depth + 1;
+            depth_of.insert(dependent.clone(), next);
+            queue.push((dependent.clone(), next));
+        }
+    }
+    let mut out: Vec<ReverseDependent> = depth_of
+        .into_iter()
+        .map(|(key, depth)| ReverseDependent {
+            module: names
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| module_name(&key)),
+            depth,
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 /// The record for one easyconfigs pull request, or `None` when it carries no
 /// easyconfig changes.
 pub fn easyconfig_record(
@@ -667,10 +750,11 @@ pub fn easyconfig_record(
         notes: overlay.notes.into_iter().collect(),
         entries: Vec::new(),
         kind: "easyconfigs".to_string(),
-        changed_easyconfigs: overlay.changed,
+        changed_easyconfigs: overlay.changed.clone(),
         closure: reached,
         new_modules,
         revisions: file_revisions(pr, config),
+        reverse_dependents: reverse_dependents(base, &overlay.changed),
     })
 }
 
@@ -796,6 +880,31 @@ fn note_provided_easyblocks(
     }
 }
 
+/// One overlap between easyconfigs pull requests.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OverlapRow {
+    /// `same-file`, `same-module`, `shared-new-module`, or `depends-on`.
+    pub kind: String,
+    /// Pull requests that share a path or a module, ascending.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prs: Vec<u64>,
+    /// Path two pull requests both change. Empty for the other kinds.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub path: String,
+    /// Module two pull requests both add, or both list as new.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub module: String,
+    /// Pull request that adds the module, for `depends-on`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<u64>,
+    /// Pull request whose closure contains that module, for `depends-on`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<u64>,
+    /// Modules `to` takes from `from`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modules: Vec<String>,
+}
+
 /// Shared to-build modules across records.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OverlapIndex {
@@ -816,6 +925,10 @@ pub struct OverlapIndex {
     /// Per pull request: the other pull requests it shares modules with, and
     /// which modules, keyed by the pull request number as a string.
     pub pairs: BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    /// Typed overlap rows for an easyconfigs run. Empty, and omitted, for a
+    /// software-layer run, which keeps the schema 1 field set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<OverlapRow>,
 }
 
 /// Intersect the to-build sets of every record.
@@ -849,8 +962,13 @@ pub fn overlap_index(records: &[PrRecord], config: &OverlapConfig) -> OverlapInd
     let mut prs: Vec<u64> = records.iter().map(|r| r.pr).collect();
     prs.sort_unstable();
     prs.dedup();
+    let easyconfigs = records.iter().any(|record| record.kind == "easyconfigs");
     OverlapIndex {
-        schema_version: PR_OVERLAP_SCHEMA_VERSION,
+        schema_version: if easyconfigs {
+            EASYCONFIG_PR_SCHEMA_VERSION
+        } else {
+            PR_OVERLAP_SCHEMA_VERSION
+        },
         generated_at: config.generated_at.clone(),
         eessi_version: config.eessi_version.clone(),
         installed_source: config.installed_source.clone(),
@@ -865,7 +983,107 @@ pub fn overlap_index(records: &[PrRecord], config: &OverlapConfig) -> OverlapInd
                 )
             })
             .collect(),
+        rows: if easyconfigs {
+            easyconfig_rows(records)
+        } else {
+            Vec::new()
+        },
     }
+}
+
+fn push_grouped(
+    rows: &mut Vec<OverlapRow>,
+    kind: &str,
+    groups: BTreeMap<String, BTreeSet<u64>>,
+    path: bool,
+) {
+    for (key, prs) in groups {
+        if prs.len() < 2 {
+            continue;
+        }
+        let mut row = OverlapRow {
+            kind: kind.to_string(),
+            prs: prs.into_iter().collect(),
+            path: String::new(),
+            module: String::new(),
+            from: None,
+            to: None,
+            modules: Vec::new(),
+        };
+        if path {
+            row.path = key;
+        } else {
+            row.module = key;
+        }
+        rows.push(row);
+    }
+}
+
+/// Typed overlap rows for easyconfigs pull requests.
+fn easyconfig_rows(records: &[PrRecord]) -> Vec<OverlapRow> {
+    let mut by_path: BTreeMap<String, BTreeSet<u64>> = BTreeMap::new();
+    let mut by_added: BTreeMap<String, BTreeSet<u64>> = BTreeMap::new();
+    let mut by_new: BTreeMap<String, BTreeSet<u64>> = BTreeMap::new();
+    for record in records {
+        for change in &record.changed_easyconfigs {
+            by_path
+                .entry(change.path.clone())
+                .or_default()
+                .insert(record.pr);
+            if change.status == "added" {
+                if let Some(module) = &change.module {
+                    by_added
+                        .entry(module.clone())
+                        .or_default()
+                        .insert(record.pr);
+                }
+            }
+        }
+        for module in &record.new_modules {
+            by_new.entry(module.clone()).or_default().insert(record.pr);
+        }
+    }
+    let mut rows = Vec::new();
+    push_grouped(&mut rows, "same-file", by_path, true);
+    push_grouped(&mut rows, "same-module", by_added, false);
+    push_grouped(&mut rows, "shared-new-module", by_new, false);
+    let adds = |record: &PrRecord, module: &str| {
+        record
+            .changed_easyconfigs
+            .iter()
+            .any(|change| change.status == "added" && change.module.as_deref() == Some(module))
+    };
+    for left in records {
+        for right in records {
+            if left.pr == right.pr {
+                continue;
+            }
+            let mut modules: Vec<String> = left
+                .changed_easyconfigs
+                .iter()
+                .filter(|change| change.status == "added")
+                .filter_map(|change| change.module.clone())
+                .filter(|module| {
+                    right.closure.iter().any(|item| item == module) && !adds(right, module)
+                })
+                .collect();
+            modules.sort();
+            modules.dedup();
+            if modules.is_empty() {
+                continue;
+            }
+            rows.push(OverlapRow {
+                kind: "depends-on".to_string(),
+                prs: Vec::new(),
+                path: String::new(),
+                module: String::new(),
+                from: Some(left.pr),
+                to: Some(right.pr),
+                modules,
+            });
+        }
+    }
+    rows
 }
 
 /// A record or index as TOML, with the generated-file header.
@@ -1060,6 +1278,7 @@ mod tests {
             changed_easyconfigs: Vec::new(),
             closure: Vec::new(),
             new_modules: Vec::new(),
+            reverse_dependents: Vec::new(),
         };
         let text = record_to_toml(&record).expect("toml");
         let a = text.find("  \"a/1\",\n").expect("a on its own line");
@@ -1263,5 +1482,64 @@ entries = []
         assert!(!back.contains("changed_easyconfigs"));
         assert!(!back.contains("new_modules"));
         assert!(back.contains("schema_version = 1"));
+        assert!(record.reverse_dependents.is_empty());
+    }
+
+    fn sys_cand(name: &str, deps: &[(&str, &str)]) -> Candidate {
+        Candidate {
+            name: name.into(),
+            version: "1.0".into(),
+            toolchain: crate::domain::Toolchain {
+                name: "system".into(),
+                version: "system".into(),
+            },
+            versionsuffix: None,
+            easyconfig_path: format!("{name}.eb"),
+            dependencies: deps
+                .iter()
+                .map(|(dep, version)| crate::domain::DepReq {
+                    name: (*dep).into(),
+                    version_req: format!("=={version}"),
+                    versionsuffix: None,
+                    toolchain: None,
+                })
+                .collect(),
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+            easyblock: Some("ConfigureMake".into()),
+            moduleclass: None,
+        }
+    }
+
+    #[test]
+    fn reverse_dependents_mark_depth_one_and_two() {
+        let base = vec![
+            sys_cand("Lib", &[]),
+            sys_cand("Tool", &[("Lib", "1.0")]),
+            sys_cand("Wrap", &[("Tool", "1.0")]),
+            sys_cand("App", &[("Lib", "1.0")]),
+        ];
+        let changed = vec![ChangedEasyconfig {
+            path: "Lib.eb".into(),
+            status: "modified".into(),
+            module: Some("Lib/1.0".into()),
+        }];
+        assert_eq!(
+            reverse_dependents(&base, &changed),
+            vec![
+                ReverseDependent {
+                    module: "App/1.0".into(),
+                    depth: 1,
+                },
+                ReverseDependent {
+                    module: "Tool/1.0".into(),
+                    depth: 1,
+                },
+                ReverseDependent {
+                    module: "Wrap/1.0".into(),
+                    depth: 2,
+                },
+            ]
+        );
     }
 }
