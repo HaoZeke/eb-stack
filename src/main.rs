@@ -89,6 +89,14 @@ enum Command {
     /// those files overlaid. Writes one TOML record per pull request plus an
     /// overlap index and a Markdown report. No build and no model.
     PrOverlap(Box<PrOverlapArgs>),
+    /// Which installed modules an in-place easyconfig patch forces a rebuild of.
+    ///
+    /// Resolves the deployed easystacks, then the installed reverse dependents
+    /// of each changed easyconfig. Classification uses the easyconfig graph
+    /// only: a runtime dependency needs no rebuild, a builddependency only
+    /// needs review, and the patched easyconfig or a bundle that ships it as
+    /// an extension must be rebuilt.
+    RebuildSet(Box<RebuildSetArgs>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -198,6 +206,56 @@ struct PrOverlapArgs {
     repo_url: Option<String>,
     /// Output directory: `prs/<N>.toml`, `overlap.toml`, `overlap.md`.
     #[arg(long, default_value = "pr-overlap")]
+    out_dir: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+struct RebuildSetArgs {
+    /// Patched easyconfig filename. Repeatable. A value that is a file and
+    /// does not end in `.eb` is read as a list, one filename per line.
+    #[arg(long = "changed", required = true)]
+    changed: Vec<String>,
+    /// Deployed easystack. Repeatable. `from-commit` is resolved with
+    /// `--commit-tree`, the same way as `pr-overlap`.
+    #[arg(long = "easystack", required = true)]
+    easystacks: Vec<PathBuf>,
+    /// Easyconfig tree of the EasyBuild release the stack uses. Repeatable;
+    /// later trees take precedence.
+    #[arg(long, required = true)]
+    easyconfigs: Vec<PathBuf>,
+    /// Easyconfigs for one `from-commit` pin, as `<commit>=<dir>`. Repeatable.
+    #[arg(long = "commit-tree")]
+    commit_trees: Vec<String>,
+    /// Installed modules, one `Name/VersionFull` per line.
+    #[arg(long)]
+    installed: PathBuf,
+    /// Label for where the installed list came from, for example a CPU target.
+    #[arg(long, default_value = "")]
+    installed_label: String,
+    /// Dependencies to drop the way EasyBuild's `--filter-deps` drops them.
+    ///
+    /// Comma-separated, same matching as `pr-overlap`. When the flag is
+    /// omitted, `EASYBUILD_FILTER_DEPS` is used if it is set.
+    #[arg(long, value_delimiter = ',')]
+    filter_deps: Vec<String>,
+    /// Lmod `.modulerc.lua` file, or a module tree to scan for them. Repeatable.
+    #[arg(long = "installed-modulerc")]
+    installed_modulerc: Vec<PathBuf>,
+    /// Installed easyblocks package (`easybuild/easyblocks`). Repeatable.
+    ///
+    /// A missing class is recorded and left in the set: the module is already
+    /// installed.
+    #[arg(long = "easyblocks")]
+    easyblocks: Vec<PathBuf>,
+    /// Easyblocks added by one `include-easyblocks-from-commit`, as
+    /// `<commit>=<dir>`. Repeatable.
+    #[arg(long = "easyblocks-commit")]
+    easyblocks_commits: Vec<String>,
+    /// Timestamp to record (RFC 3339); defaults to now, in UTC.
+    #[arg(long)]
+    generated_at: Option<String>,
+    /// Output directory: `rebuild-set.json`, `rebuild-set.md`, `rebuilds/`.
+    #[arg(long, default_value = "rebuild-set")]
     out_dir: PathBuf,
 }
 
@@ -674,6 +732,7 @@ fn main() -> Result<()> {
         Command::Campaign { command } => run_campaign(command),
         Command::Repro { command } => run_repro(command),
         Command::PrOverlap(args) => run_pr_overlap(*args),
+        Command::RebuildSet(args) => run_rebuild_set(*args),
         Command::Mcp { workspace } => {
             if let Some(workspace) = workspace {
                 std::env::set_var("EB_STACK_WORKSPACE", &workspace);
@@ -814,7 +873,7 @@ fn installed_modules(
 fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
     use eb_stack::pr_overlap::{
         easyconfig_record_seeing, overlap_index, pr_record, record_to_toml, render_markdown,
-        to_toml, OverlapConfig, PrInput, RobotTrees,
+        to_toml, OverlapConfig, PrInput,
     };
     if args.kind == OverlapKind::SoftwareLayer && args.installed.is_none() {
         eprint!("{INSTALLED_REQUIRED}");
@@ -835,20 +894,7 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
     prs.sort_by_key(|p| p.number);
     prs.dedup_by_key(|p| p.number);
 
-    let trees: Vec<&Path> = args.easyconfigs.iter().map(PathBuf::as_path).collect();
-    let base = parse_easyconfig_trees(&trees).map_err(|e| anyhow::anyhow!(e))?;
-    let mut robot = RobotTrees {
-        base: base.candidates,
-        commits: Default::default(),
-    };
-    for spec in &args.commit_trees {
-        let (commit, dir) = spec
-            .split_once('=')
-            .ok_or_else(|| anyhow::anyhow!("--commit-tree wants <commit>=<dir>, got {spec}"))?;
-        let parsed =
-            eb_stack::parse_easyconfig_tree(Path::new(dir)).map_err(|e| anyhow::anyhow!(e))?;
-        robot.commits.insert(commit.to_string(), parsed.candidates);
-    }
+    let (robot, skipped_easyconfigs) = load_robot_trees(&args.easyconfigs, &args.commit_trees)?;
     let installed = match &args.installed {
         Some(path) => Some(installed_modules(path, &args.installed_modulerc)?),
         None => None,
@@ -942,10 +988,159 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
         prs.len(),
         records.len(),
         index.shared.len(),
-        base.skipped.len(),
+        skipped_easyconfigs,
         args.out_dir.display()
     );
     Ok(())
+}
+
+fn run_rebuild_set(args: RebuildSetArgs) -> Result<()> {
+    use eb_stack::rebuild_set::{
+        rebuild_easystacks, rebuild_set, render_markdown, RebuildQuery, StackEasystack,
+    };
+    let changed = read_changed_names(&args.changed)?;
+    let (robot, skipped_easyconfigs) = load_robot_trees(&args.easyconfigs, &args.commit_trees)?;
+    let installed = load_installed_modules(&args.installed, &args.installed_modulerc)?;
+    let filter_specs = eb_stack::dep_filter::specs_from_cli_or_env(&args.filter_deps);
+    let filter_deps = eb_stack::dep_filter::FilterDeps::parse(&filter_specs)
+        .map_err(|error| anyhow::anyhow!("--filter-deps: {error}"))?;
+    let easyblocks = load_easyblock_catalog(&args.easyblocks, &args.easyblocks_commits)?;
+    let mut easystacks = Vec::new();
+    for path in &args.easystacks {
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        easystacks.push(StackEasystack {
+            path: path.display().to_string(),
+            text,
+        });
+    }
+    let document = rebuild_set(&RebuildQuery {
+        base: robot.base,
+        commits: robot.commits,
+        easystacks,
+        changed,
+        installed,
+        filter_deps,
+        easyblocks,
+        installed_source: args.installed_label,
+        generated_at: args.generated_at.unwrap_or_else(|| {
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        }),
+    })
+    .map_err(|error| anyhow::anyhow!(error))?;
+
+    std::fs::create_dir_all(&args.out_dir)?;
+    write_json_pretty(&args.out_dir.join("rebuild-set.json"), &document)?;
+    std::fs::write(
+        args.out_dir.join("rebuild-set.md"),
+        render_markdown(&document),
+    )?;
+    let rebuild_dir = args.out_dir.join("rebuilds");
+    std::fs::create_dir_all(&rebuild_dir)?;
+    for entry in std::fs::read_dir(&rebuild_dir)? {
+        let path = entry?.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("yml") {
+            std::fs::remove_file(&path)?;
+        }
+    }
+    let stacks = rebuild_easystacks(&document);
+    for stack in &stacks {
+        std::fs::write(rebuild_dir.join(&stack.filename), &stack.body)?;
+    }
+    println!(
+        "changed={} rows={} must-rebuild={} review={} no-rebuild={} missing={} easystacks={} skipped_easyconfigs={} out={}",
+        document.changed.len(),
+        document.rows.len(),
+        document.counts.must_rebuild,
+        document.counts.review,
+        document.counts.no_rebuild,
+        document.missing.len(),
+        stacks.len(),
+        skipped_easyconfigs,
+        args.out_dir.display()
+    );
+    Ok(())
+}
+
+/// Release easyconfigs plus one tree per `--commit-tree`. The count is how
+/// many easyconfigs the parser skipped.
+fn load_robot_trees(
+    easyconfigs: &[PathBuf],
+    commit_trees: &[String],
+) -> Result<(eb_stack::pr_overlap::RobotTrees, usize)> {
+    use eb_stack::pr_overlap::RobotTrees;
+    let trees: Vec<&Path> = easyconfigs.iter().map(PathBuf::as_path).collect();
+    let base = parse_easyconfig_trees(&trees).map_err(|error| anyhow::anyhow!(error))?;
+    let skipped = base.skipped.len();
+    let mut robot = RobotTrees {
+        base: base.candidates,
+        commits: Default::default(),
+    };
+    for spec in commit_trees {
+        let (commit, dir) = spec
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("--commit-tree wants <commit>=<dir>, got {spec}"))?;
+        if commit.is_empty() || dir.is_empty() {
+            anyhow::bail!("--commit-tree wants <commit>=<dir>, got {spec}");
+        }
+        let parsed = eb_stack::parse_easyconfig_tree(Path::new(dir))
+            .map_err(|error| anyhow::anyhow!(error))?;
+        robot.commits.insert(commit.to_string(), parsed.candidates);
+    }
+    Ok((robot, skipped))
+}
+
+/// Installed modules, with `module_version` aliases from the modulerc files.
+fn load_installed_modules(
+    installed: &Path,
+    modulerc: &[PathBuf],
+) -> Result<std::collections::BTreeSet<String>> {
+    let mut modules = eb_stack::pr_overlap::parse_installed(
+        &std::fs::read_to_string(installed)
+            .with_context(|| format!("read {}", installed.display()))?,
+    );
+    let mut aliases = Vec::new();
+    for path in modulerc {
+        aliases.extend(
+            eb_stack::modulerc::load_modulerc(path)
+                .map_err(|error| anyhow::anyhow!(error))
+                .with_context(|| format!("read modulerc {}", path.display()))?,
+        );
+    }
+    modules = eb_stack::modulerc::apply_modulerc(&modules, &aliases);
+    Ok(modules)
+}
+
+/// `--changed` values. A path to a non-`.eb` file is a list of filenames.
+fn read_changed_names(values: &[String]) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for value in values {
+        let path = Path::new(value);
+        let as_list = path.is_file() && path.extension().and_then(|ext| ext.to_str()) != Some("eb");
+        if as_list {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("read {}", path.display()))?;
+            for line in text.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                out.push(line.rsplit(['/', '\\']).next().unwrap_or(line).to_string());
+            }
+        } else {
+            out.push(
+                value
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .unwrap_or(value)
+                    .to_string(),
+            );
+        }
+    }
+    if out.is_empty() {
+        anyhow::bail!("--changed named no easyconfig");
+    }
+    Ok(out)
 }
 
 /// Installed easyblocks plus the files each `include-easyblocks-from-commit`
