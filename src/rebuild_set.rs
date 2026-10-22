@@ -211,6 +211,9 @@ struct ModuleInfo {
     filename: String,
     easyblock: String,
     eb_versions: BTreeSet<String>,
+    /// `include-easyblocks-from-commit` values named by a group that reached
+    /// this module. A class in another group's commit catalog does not count.
+    easyblock_commits: BTreeSet<String>,
 }
 
 struct Deployed {
@@ -222,6 +225,7 @@ struct Deployed {
 
 struct Root {
     file: String,
+    easyblock_commit: Option<String>,
 }
 
 /// Close the deployed easystacks and classify `query.changed`.
@@ -243,7 +247,7 @@ pub fn rebuild_set(query: &RebuildQuery) -> Result<RebuildDocument, RebuildError
     if let Some(catalog) = &query.easyblocks {
         if catalog.check {
             for info in modules.values() {
-                if !easyblock_known(catalog, &info.easyblock) {
+                if !easyblock_known(catalog, &info.easyblock, &info.easyblock_commits) {
                     notes.insert(format!("easyblock {} missing", info.easyblock));
                 }
             }
@@ -492,7 +496,10 @@ fn deployed_graph(query: &RebuildQuery) -> Result<Deployed, RebuildError> {
             groups
                 .entry((entry.from_commit.clone(), eb_version.clone()))
                 .or_default()
-                .push(Root { file: entry.file });
+                .push(Root {
+                    file: entry.file,
+                    easyblock_commit: entry.include_easyblocks_from_commit,
+                });
         }
     }
 
@@ -514,6 +521,10 @@ fn deployed_graph(query: &RebuildQuery) -> Result<Deployed, RebuildError> {
             None => query.base.clone(),
         };
         query.filter_deps.apply(&mut universe);
+        let easyblock_commits: BTreeSet<String> = roots
+            .iter()
+            .filter_map(|root| root.easyblock_commit.clone())
+            .collect();
         let by_file = index_filenames(&universe);
         let mut starts = Vec::new();
         for root in roots {
@@ -561,6 +572,8 @@ fn deployed_graph(query: &RebuildQuery) -> Result<Deployed, RebuildError> {
             if let Some(version) = eb_version {
                 info.eb_versions.insert(version.clone());
             }
+            info.easyblock_commits
+                .extend(easyblock_commits.iter().cloned());
         }
     }
     Ok(Deployed {
@@ -583,14 +596,16 @@ fn basename(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
-fn easyblock_known(catalog: &EasyblockCatalog, class: &str) -> bool {
+fn easyblock_known(catalog: &EasyblockCatalog, class: &str, commits: &BTreeSet<String>) -> bool {
     if catalog.base.contains_key(class) {
         return true;
     }
-    catalog
-        .commits
-        .values()
-        .any(|index| index.contains_key(class))
+    commits.iter().any(|commit| {
+        catalog
+            .commits
+            .get(commit)
+            .is_some_and(|index| index.contains_key(class))
+    })
 }
 
 #[derive(Default)]

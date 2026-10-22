@@ -327,6 +327,100 @@ fn filter_deps_drops_dependency_tuples_and_keeps_the_extension() {
 }
 
 #[test]
+fn an_easyblock_commit_catalog_counts_only_for_the_group_that_named_it() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let out = temp.path().join("out");
+    let commit = "abcdef";
+    let classes = temp.path().join("easyblocks/c");
+    std::fs::create_dir_all(&classes).expect("classes");
+    std::fs::write(
+        classes.join("configuremake.py"),
+        "class ConfigureMake(object):\n    pass\n",
+    )
+    .expect("class");
+
+    let plain = temp.path().join("eessi-2026.06-eb-5.4.0-plain.yml");
+    std::fs::write(&plain, "easyconfigs:\n  - zlib-1.3.1-GCCcore-15.2.0.eb\n").expect("plain");
+    let other = temp.path().join("side-eb-9.9.9.yml");
+    std::fs::write(
+        &other,
+        format!(
+            "easyconfigs:\n  - GCCcore-15.2.0.eb:\n      options:\n        include-easyblocks-from-commit: {commit}\n"
+        ),
+    )
+    .expect("other");
+
+    let shared = vec![
+        "--changed".to_string(),
+        "zlib-1.3.1-GCCcore-15.2.0.eb".to_string(),
+        "--easyconfigs".to_string(),
+        fixtures().join("release").display().to_string(),
+        "--installed".to_string(),
+        fixtures().join("installed.txt").display().to_string(),
+        "--easyblocks".to_string(),
+        fixtures().join("easyblocks").display().to_string(),
+        "--easyblocks-commit".to_string(),
+        format!("{commit}={}", temp.path().join("easyblocks").display()),
+        "--generated-at".to_string(),
+        "2026-10-22T12:00:00Z".to_string(),
+    ];
+
+    let mut unnamed = shared.clone();
+    unnamed.extend([
+        "--easystack".to_string(),
+        plain.display().to_string(),
+        "--easystack".to_string(),
+        other.display().to_string(),
+    ]);
+    let borrowed: Vec<&str> = unnamed.iter().map(String::as_str).collect();
+    let json = json_of(&invoke(&borrowed, &out));
+    let notes = notes_of(&json);
+    assert!(
+        notes
+            .iter()
+            .any(|note| note == "easyblock ConfigureMake missing"),
+        "a commit catalog another group named must not resolve zlib: {notes:?}"
+    );
+    assert!(
+        json["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .any(|row| row["dependent"] == "zlib/1.3.1-GCCcore-15.2.0"),
+        "zlib stays in the set"
+    );
+
+    let named = temp.path().join("eessi-2026.06-eb-5.4.0-named.yml");
+    std::fs::write(
+        &named,
+        format!(
+            "easyconfigs:\n  - zlib-1.3.1-GCCcore-15.2.0.eb:\n      options:\n        include-easyblocks-from-commit: {commit}\n"
+        ),
+    )
+    .expect("named");
+    let mut named_args = shared;
+    named_args.extend(["--easystack".to_string(), named.display().to_string()]);
+    let borrowed: Vec<&str> = named_args.iter().map(String::as_str).collect();
+    let json = json_of(&invoke(&borrowed, &out));
+    let notes = notes_of(&json);
+    assert!(
+        notes
+            .iter()
+            .all(|note| note != "easyblock ConfigureMake missing"),
+        "the group that named the commit keeps the class: {notes:?}"
+    );
+}
+
+fn notes_of(json: &serde_json::Value) -> Vec<String> {
+    json["notes"]
+        .as_array()
+        .expect("notes")
+        .iter()
+        .map(|note| note.as_str().expect("note").to_string())
+        .collect()
+}
+
+#[test]
 fn a_changed_list_of_only_comments_is_refused() {
     let temp = tempfile::tempdir().expect("tempdir");
     let list = temp.path().join("changed.txt");
