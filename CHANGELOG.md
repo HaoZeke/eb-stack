@@ -14,6 +14,17 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `eb-stack rebuild-set` reports which installed modules an in-place
+  easyconfig patch forces EESSI to rebuild. It closes the deployed
+  easystacks, walks the installed reverse dependents, and classifies each
+  one from the easyconfig graph: `no-rebuild` for a runtime dependency,
+  `review` for a builddependency only, and `must-rebuild` for the patched
+  easyconfig and for a bundle that ships it as an extension. The output
+  directory holds `rebuild-set.json`, `rebuild-set.md`, and one
+  `rebuilds/<YYYYMMDD>-eb-<version>-cve-patches.yml` per EasyBuild version
+  containing class `must-rebuild` only. See
+  `docs/orgmode/howto/rebuild-set.org`.
+
 - `pr-overlap` stores each changed easystack and easyconfig on the
   record (`revisions`: path, kind, base and head text or blob ids).
   `--merge-order` reads easystack hunk collisions from that text.

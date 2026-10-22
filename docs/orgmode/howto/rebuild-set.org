@@ -1,0 +1,65 @@
+#+TITLE: What an in-place patch forces EESSI to rebuild
+#+OPTIONS: toc:t num:nil author:nil
+
+Goal: the patched easyconfigs keep their filenames and versions. Report
+which installed modules must be rebuilt, which need a review, and which
+link the patched package as a shared library.
+
+* Run it on a mounted stack
+
+From a clone of ~EESSI/software-layer~, with the 2026.06 stack mounted:
+
+#+begin_src bash
+source /cvmfs/software.eessi.io/versions/2026.06/init/lmod/bash
+module load EESSI-extend
+find "$EESSI_SOFTWARE_PATH/software" -mindepth 2 -maxdepth 2 -type d -printf '%P\n' \
+  | sort > installed.txt
+eb-stack rebuild-set \
+  --changed changed.txt \
+  --easystack easystacks/software.eessi.io/2026.06/*.yml \
+  --easystack easystacks/software.eessi.io/2026.06/rebuilds/*.yml \
+  $(for d in commit-trees/*/; do printf -- '--commit-tree %s=%s ' "$(basename "$d")" "$d"; done) \
+  --easyconfigs /path/to/easybuild/easyconfigs \
+  --easyblocks /path/to/easybuild/easyblocks \
+  --installed installed.txt \
+  --installed-modulerc "$EESSI_SOFTWARE_PATH/modules/all" \
+  --filter-deps "$EASYBUILD_FILTER_DEPS" \
+  --installed-label x86_64/amd/zen4 \
+  --out-dir out/
+#+end_src
+
+~--changed~ is an easyconfig filename, repeated, or a file that is not an
+~.eb~: one filename per line, blank lines and ~#~ comments skipped.
+~--easystack~ is each deployed easystack. A ~from-commit~ pin is resolved
+with ~--commit-tree~, the same way as ~pr-overlap~. Pass the CPU
+easystacks for the target you are asking about, and leave out ~accel/~
+and ~additional_arch/~ unless that is the stack you mounted.
+
+~--easyconfigs~ is the easyconfigs tree of the EasyBuild release the
+stack uses. ~--filter-deps~ drops dependency tuples before the walk, with
+the same matching as ~pr-overlap~. It does not remove an extension from a
+bundle's ~exts_list~. When the flag is omitted and ~EASYBUILD_FILTER_DEPS~
+is set, the command reads the variable. ~--installed-modulerc~ is that
+prefix's ~modules/all~. ~--easyblocks~ is the EasyBuild release's
+~easybuild/easyblocks~ package. A missing class is recorded. The module
+stays in the set, because it is already installed.
+
+* Read the three files
+
+~out/rebuild-set.md~ is the table: changed easyconfig, dependent, edge
+kind, class, and reason, then the counts. A changed filename that is not
+in the deployed graph is listed and has no row. ~out/rebuild-set.json~ is
+the same document.
+
+~out/rebuilds/<YYYYMMDD>-eb-<version>-cve-patches.yml~ lists class
+must-rebuild only, with ~rebuild: true~. The date is taken from
+~--generated-at~ (or from the current UTC time). One file per EasyBuild
+version named by the easystack filenames. A second run replaces the
+~rebuilds/*.yml~ files from the previous run.
+
+A later ~--check-static <prefix>~ could inspect installed binaries. This
+command does not.
+
+Why a runtime dependency needs no rebuild, and why a bundle extension
+does, is covered in
+[[file:../explanation/rebuild-set.org][what an in-place patch forces a rebuild of]].

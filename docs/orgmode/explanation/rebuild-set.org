@@ -1,0 +1,65 @@
+#+TITLE: What an in-place patch forces a rebuild of
+#+OPTIONS: toc:t num:nil author:nil
+
+The patch keeps the easyconfig filename and the version. ~eb-stack
+rebuild-set~ closes the deployed easystacks and walks backward from each
+patched easyconfig through the installed modules.
+
+The walk uses the easyconfig graph only. It does not guess how a binary
+was linked. The commands are in
+[[file:../howto/rebuild-set.org][what an in-place patch forces EESSI to rebuild]].
+The output fields are in [[file:../reference/formats.org][output formats]].
+
+* Three classes
+
+- ~no-rebuild~. Some path from the patched module is made of runtime
+  dependencies. The dependent links the patched package as a shared
+  library. Replacing that library does not require a rebuild.
+- ~review~. Every path uses a builddependency. The dependent may have
+  linked the package statically or embedded it. The graph cannot say
+  which, and the reason says so.
+- ~must-rebuild~. The row is the patched easyconfig, or a bundle whose
+  ~exts_list~ names that package and version. The extension is installed
+  as part of the bundle.
+
+The strongest class wins: must-rebuild, then review, then no-rebuild. A
+runtime path beats a builddependency path, so a module listed in both
+~dependencies~ and ~builddependencies~ is no-rebuild.
+
+An extension makes that bundle must-rebuild. It does not force the same
+class on modules that depend on the bundle. Those modules are classified
+by their own edges. A runtime dependency on the bundle is no-rebuild, and
+the reason names the bundle.
+
+A toolchain edge is indexed and not classified. Patching a compiler is
+outside these three classes.
+
+* What counts as installed
+
+The reverse walk visits installed modules only. It does not continue
+through a module that is not installed, so a dependent that is reachable
+only through an uninstalled intermediate is left out. The patched
+easyconfig itself is must-rebuild when it is in the deployed graph, even
+when that module is not installed.
+
+~--filter-deps~ drops ~dependencies~ and ~builddependencies~ tuples before
+the walk. It leaves ~exts_list~ in place. A filtered package that a bundle
+ships as an extension still marks that bundle must-rebuild.
+
+A missing easyblock class is a note. The module stays in the set, because
+it is already installed. A ~from-commit~ whose tree was not passed is a
+note, and the release tree is used for that pin.
+
+* Example
+
+Patch ~zlib-1.3.1-GCCcore-15.2.0.eb~. ~libpng~ depends on zlib, so libpng
+is no-rebuild. ~Graphviz~ depends on libpng, so Graphviz is no-rebuild
+through libpng. ~CMake~ lists zlib only as a builddependency, so CMake is
+review. A bundle whose ~exts_list~ names zlib 1.3.1 is must-rebuild. An
+application that depends on that bundle at runtime is no-rebuild.
+
+The rebuild easystack contains zlib and the bundle, each with
+~rebuild: true~. It does not contain libpng.
+
+A later ~--check-static <prefix>~ could read the installed binaries and
+move a review row. This report does not.
