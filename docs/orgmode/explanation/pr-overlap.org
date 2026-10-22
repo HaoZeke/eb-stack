@@ -266,7 +266,7 @@ eb_version = "5.4.0"
 both pull requests would build:
 
 #+begin_src bash
-awk '/^to_build = \[/{f=1; next} f && /^\]/{f=0; next} f' \
+awk '/^to_build = \[\]/{next} /^to_build = \[/{f=1; next} f && /^\]/{f=0; next} f' \
   /tmp/out-fix/prs/1728.toml /tmp/out-fix/prs/1787.toml | sort | uniq -d
 #+end_src
 

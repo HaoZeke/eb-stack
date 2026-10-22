@@ -72,7 +72,7 @@ Load ~EESSI-extend~ on that architecture before reading
 Duplicates across those lines are the overlap:
 
 #+begin_src bash
-awk '/^to_build = \[/{f=1; next} f && /^\]/{f=0; next} f' out/prs/*.toml | sort | uniq -d
+awk '/^to_build = \[\]/{next} /^to_build = \[/{f=1; next} f && /^\]/{f=0; next} f' out/prs/*.toml | sort | uniq -d
 #+end_src
 
 ~out/overlap.md~ is the same answer as a table. ~out/overlap.toml~ is the
