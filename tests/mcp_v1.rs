@@ -137,6 +137,33 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         recipe_edit["inputSchema"]["properties"]["replace_all"]["type"],
         "boolean"
     );
+    for optional in [
+        "easyblocks",
+        "metadata_only",
+        "verify_sources",
+        "seeded_from",
+        "seeded_source_url",
+        "seeded_git",
+        "source_tree",
+        "strict",
+    ] {
+        assert!(
+            recipe_check["inputSchema"]["properties"]
+                .get(optional)
+                .is_some(),
+            "check schema missing {optional}"
+        );
+    }
+    let recipe_format = response["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "eb_recipe_format")
+        .expect("recipe format schema");
+    assert_eq!(
+        recipe_format["inputSchema"]["properties"]["dry_run"]["type"],
+        "boolean"
+    );
 
     let stack_sbom = response["result"]["tools"]
         .as_array()
@@ -1533,4 +1560,179 @@ fn mcp_dry_run_without_easybuild_is_an_environment_failure() {
             .contains("not a fault in your easyblock"),
         "{body}"
     );
+}
+
+fn json_after(text: &str, label: &str) -> serde_json::Value {
+    let start = text
+        .find(label)
+        .unwrap_or_else(|| panic!("missing {label}\n{text}"))
+        + label.len();
+    serde_json::Deserializer::from_str(&text[start..])
+        .into_iter::<serde_json::Value>()
+        .next()
+        .unwrap_or_else(|| panic!("no json after {label}"))
+        .unwrap_or_else(|error| panic!("{label}: {error}"))
+}
+
+fn source_classes(text: &str) -> Vec<serde_json::Value> {
+    text.lines()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("source_class=")?;
+            let (class, url) = rest.split_once(" url=")?;
+            Some(json!({"class": class, "url": url}))
+        })
+        .collect()
+}
+
+fn bracket_findings(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|line| line.starts_with("[err] ") || line.starts_with("[warn] "))
+        .map(str::to_string)
+        .collect()
+}
+
+fn mcp_tool(id: i64, name: &str, arguments: serde_json::Value) -> serde_json::Value {
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/call",
+        "params": {"name": name, "arguments": arguments}
+    }))
+    .expect("mcp response");
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    response["result"]["structuredContent"].clone()
+}
+
+#[test]
+fn mcp_recipe_findings_match_the_cli_on_hardcases_and_eon() {
+    let bin = env!("CARGO_BIN_EXE_eb-stack");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let recipes = [
+        "fixtures/parser_hardcases/easyconfigs/builddeps_only.eb",
+        "fixtures/parser_hardcases/easyconfigs/local_vars.eb",
+        "fixtures/parser_hardcases/easyconfigs/multi_element_deps.eb",
+        "fixtures/parser_hardcases/easyconfigs/system_toolchain.eb",
+        "fixtures/parser_hardcases/easyconfigs/templates_version.eb",
+        "fixtures/eon_core_rgpot/easyconfigs/e/eOn/eOn-2.17.10-foss-2026.1.eb",
+    ];
+    for (index, rel) in recipes.iter().enumerate() {
+        let path = root.join(rel);
+        let recipe = path.to_str().expect("utf8 recipe path");
+        let easyconfigs = path
+            .ancestors()
+            .find(|ancestor| {
+                ancestor
+                    .file_name()
+                    .is_some_and(|name| name == "easyconfigs")
+            })
+            .expect("easyconfigs directory")
+            .to_str()
+            .expect("utf8 easyconfigs path");
+        let output = std::process::Command::new(bin)
+            .args([
+                "recipe",
+                "check",
+                "--recipe",
+                recipe,
+                "--easyconfigs",
+                easyconfigs,
+                "--metadata-only",
+                "--strict",
+                "--verify-sources",
+            ])
+            .output()
+            .expect("recipe check");
+        let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+        let body = mcp_tool(
+            20 + index as i64,
+            "eb_recipe_check",
+            json!({
+                "recipe": recipe,
+                "easyconfigs": [easyconfigs],
+                "metadata_only": true,
+                "strict": true,
+                "verify_sources": true,
+            }),
+        );
+        assert!(
+            stdout.contains("strict: every statement parsed"),
+            "{rel}\n{stdout}"
+        );
+        assert_eq!(
+            body["strict"]["skipped"].as_array().map(Vec::len),
+            Some(0),
+            "{rel}"
+        );
+        assert_eq!(
+            body["maintainer_acceptability"],
+            json_after(&stdout, "maintainer_acceptability="),
+            "{rel}\n{stdout}"
+        );
+        assert_eq!(
+            body["easyblock_resolution"],
+            json_after(&stdout, "easyblock_resolution="),
+            "{rel}\n{stdout}"
+        );
+        assert_eq!(
+            body["sources"],
+            json!(source_classes(&stdout)),
+            "{rel}\n{stdout}"
+        );
+        assert_eq!(
+            body["source_findings"],
+            json!(bracket_findings(&stdout)),
+            "{rel}\n{stdout}"
+        );
+        assert_eq!(
+            rel.contains("eOn"),
+            stdout.contains("TheochemUI/eOn/archive"),
+            "{rel}\n{stdout}"
+        );
+
+        let lint = std::process::Command::new(bin)
+            .args(["recipe", "lint", recipe])
+            .output()
+            .expect("recipe lint");
+        let cli_lint: serde_json::Value = serde_json::from_slice(&lint.stdout).expect("lint json");
+        let mcp_lint = mcp_tool(
+            40 + index as i64,
+            "eb_recipe_lint",
+            json!({"recipes": [recipe]}),
+        );
+        assert_eq!(
+            mcp_lint["results"][0]["findings"], cli_lint["style"],
+            "{rel}"
+        );
+        assert_eq!(
+            mcp_lint["results"][0]["maintainer_acceptability"],
+            cli_lint["maintainer_acceptability"],
+            "{rel}"
+        );
+
+        let before = std::fs::read(recipe).expect("recipe bytes");
+        let formatted = std::process::Command::new(bin)
+            .args(["recipe", "format", "--dry-run", recipe])
+            .output()
+            .expect("recipe format");
+        let format_out = String::from_utf8(formatted.stdout).expect("utf8 format");
+        let line = format_out.lines().next().expect("format summary");
+        let (_, rest) = line.split_once("rewritten=").expect("rewritten");
+        let (rewritten, remaining) = rest.split_once(" remaining=").expect("remaining");
+        let mcp_format = mcp_tool(
+            60 + index as i64,
+            "eb_recipe_format",
+            json!({"recipe": recipe, "dry_run": true}),
+        );
+        assert_eq!(
+            mcp_format["rewritten"].as_u64(),
+            rewritten.parse().ok(),
+            "{rel} {line}"
+        );
+        assert_eq!(
+            mcp_format["remaining"].as_array().map(Vec::len),
+            remaining.trim().parse::<usize>().ok(),
+            "{rel} {line}"
+        );
+        assert_eq!(std::fs::read(recipe).expect("reread"), before, "{rel}");
+    }
 }
