@@ -81,8 +81,8 @@ eb-stack package bump \
 
 The emitter updates the package version, target toolchain, selected dependency
 versions, conventional filename, and source checksum entry. Patches remain
-explicit review work. Omitting the new checksum produces a residual and leaves
-the old digest visible; it never invents one.
+explicit review work. Omitting the new checksum clears the old digest to an
+empty string and records a residual. The bump never invents a digest.
 
 To fill the digest without a separate EasyBuild run, pass ~--fetch-checksums~.
 The bump resolves ~sources~ and ~source_urls~ at the new version, downloads
