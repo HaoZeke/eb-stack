@@ -350,6 +350,41 @@ fn the_cli_writes_the_same_bytes_twice_and_drops_closed_prs() {
     );
 }
 
+#[test]
+fn one_pr_flag_takes_every_path_a_glob_expands_to() {
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let all = prs();
+    let first = temp.path().join("101.json");
+    let second = temp.path().join("102.json");
+    std::fs::write(&first, serde_json::to_string(&all[0]).expect("json")).expect("write");
+    std::fs::write(&second, serde_json::to_string(&all[1]).expect("json")).expect("write");
+    let out = temp.path().join("out");
+    let status = Command::new(binary)
+        .env_remove("EASYBUILD_FILTER_DEPS")
+        .arg("pr-overlap")
+        .arg("--pr")
+        .arg(&first)
+        .arg(&second)
+        .arg("--easyconfigs")
+        .arg(fixtures().join("release"))
+        .arg("--installed")
+        .arg(fixtures().join("installed.txt"))
+        .args(["--installed-label", "x86_64/amd/zen4"])
+        .args(["--generated-at", "2026-10-19T12:00:00Z"])
+        .arg("--out-dir")
+        .arg(&out)
+        .output()
+        .expect("run pr-overlap");
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    assert!(out.join("prs/101.toml").is_file());
+    assert!(out.join("prs/102.toml").is_file());
+}
+
 fn run_overlap(dir: &Path, prs: &[PrInput], installed: &Path, out: &Path) {
     let input = dir.join("prs.json");
     std::fs::write(&input, serde_json::to_string(prs).expect("json")).expect("write prs");

@@ -92,8 +92,11 @@ enum Command {
 #[derive(clap::Args, Debug)]
 struct PrOverlapArgs {
     /// Pull request JSON: one object `{number, head_sha, title, easystacks:
-    /// [{path, base, head}]}` or an array of them. Repeatable.
-    #[arg(long = "pr", required = true)]
+    /// [{path, base, head}]}` or an array of them.
+    ///
+    /// Repeat the flag, or pass several paths after one flag. A shell glob
+    /// `in/prs/*.json` is the second form.
+    #[arg(long = "pr", required = true, num_args = 1..)]
     prs: Vec<PathBuf>,
     /// Easyconfig tree of the EasyBuild release the stack uses. Repeatable;
     /// later trees take precedence.

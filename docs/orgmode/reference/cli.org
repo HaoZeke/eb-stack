@@ -330,7 +330,7 @@ dependencies to ~eb --robot~.
 
 #+begin_src bash
 eb-stack pr-overlap \
-  --pr PR.json [--pr PR.json]... \
+  --pr PR.json [PR.json...] [--pr PR.json]... \
   --easyconfigs TREE [--easyconfigs TREE]... \
   [--commit-tree COMMIT=DIR]... \
   --installed installed.txt \
@@ -348,7 +348,9 @@ eb-stack pr-overlap \
 #+end_src
 
 Reads each pull request's easystack changes as data. It does not run the
-pull request and it does not build. For the given ~--eessi-version~ it keeps
+pull request and it does not build. Several JSON paths may follow one
+~--pr~, which is what a glob of the per-pull-request files expands to.
+For the given ~--eessi-version~ it keeps
 the easystack entries present at head and absent from base, finds those
 easyconfigs on the robot path, and closes them against ~--installed~.
 

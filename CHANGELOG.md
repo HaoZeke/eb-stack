@@ -67,6 +67,15 @@ All notable changes to this project are documented here.
 - `eb_recipe_check` requires `easyconfigs` to contain at least one path
   (`minItems: 1`). An empty list returns
   `argument easyconfigs requires at least one path`.
+- `pr-overlap` closes the easystack lines an open pull request adds and
+  reports the modules more than one of them would build. `--pr` takes one
+  JSON path or several after the same flag, which is what `in/prs/*.json`
+  expands to. `--include-path` keeps one architecture's easystacks,
+  `--filter-deps` drops dependencies the way EasyBuild does, and an alias
+  in `.modulerc.lua` counts as installed when the module it names is.
+  A missing easyblock class is recorded and is not counted as a module to
+  build. See `docs/orgmode/howto/pr-overlap.org`.
+
 - `eb-stack easyblock-reach` reports which easyconfigs and installed
   modules a changed easyblock or framework module reaches. Inputs are
   `--file`, a `--range` in a local clone, or `--pr` fetched as
