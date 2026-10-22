@@ -43,7 +43,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use thiserror::Error;
 
 /// Schema of [`RebuildDocument`]. Bumped when a field changes meaning.
-pub const REBUILD_SET_SCHEMA_VERSION: u32 = 2;
+pub const REBUILD_SET_SCHEMA_VERSION: u32 = 3;
 
 /// Class for a runtime dependency, direct or through other runtime dependencies.
 pub const CLASS_NO_REBUILD: &str = "no-rebuild";
@@ -172,7 +172,9 @@ pub struct RebuildDocument {
     pub notes: Vec<String>,
     /// Row counts.
     pub counts: RebuildCounts,
-    /// One row per patched easyconfig and installed reverse dependent.
+    /// Installed reverse dependents. A review dependent is one row, and
+    /// `changed` lists every patched easyconfig that put it there. The other
+    /// classes stay one row per edge.
     pub rows: Vec<RebuildRow>,
 }
 
@@ -266,6 +268,7 @@ pub fn rebuild_set(query: &RebuildQuery) -> Result<RebuildDocument, RebuildError
     if let Some(prefix) = &query.prefix {
         crate::install_prefix::apply_static_archives(&mut rows, prefix, &mut notes)?;
     }
+    rows = collapse_review(rows);
 
     let counts = RebuildCounts {
         no_rebuild: rows
@@ -689,6 +692,80 @@ fn newest_version(versions: &BTreeSet<String>) -> Option<String> {
         .iter()
         .max_by(|left, right| cmp_version(left, right))
         .cloned()
+}
+
+/// One review row per dependent. A single edge is left as it is.
+fn collapse_review(rows: Vec<RebuildRow>) -> Vec<RebuildRow> {
+    let mut grouped: BTreeMap<String, Vec<RebuildRow>> = BTreeMap::new();
+    let mut rest = Vec::new();
+    for row in rows {
+        if row.class == CLASS_REVIEW {
+            grouped.entry(row.dependent.clone()).or_default().push(row);
+        } else {
+            rest.push(row);
+        }
+    }
+    for mut group in grouped.into_values() {
+        if group.len() == 1 {
+            rest.push(group.pop().expect("review row"));
+            continue;
+        }
+        rest.push(merge_review(group));
+    }
+    rest.sort_by(|left, right| {
+        left.changed
+            .cmp(&right.changed)
+            .then_with(|| left.dependent.cmp(&right.dependent))
+            .then_with(|| left.edge_kind.cmp(&right.edge_kind))
+    });
+    rest.dedup();
+    rest
+}
+
+fn merge_review(mut group: Vec<RebuildRow>) -> RebuildRow {
+    group.sort_by(|left, right| left.changed.cmp(&right.changed));
+    let changed: Vec<String> = group.iter().map(|row| row.changed.clone()).collect();
+    let named_archives = group
+        .iter()
+        .all(|row| row.reason.contains("static archives:"));
+    let reason = if named_archives {
+        let parts: Vec<String> = group
+            .iter()
+            .map(|row| {
+                let archives = row
+                    .reason
+                    .split("static archives:")
+                    .nth(1)
+                    .unwrap_or("")
+                    .trim();
+                format!("{} ({archives})", row.changed)
+            })
+            .collect();
+        format!("builddependency only of {}", parts.join(", "))
+    } else {
+        format!(
+            "builddependency only of {}; it may have linked the patched package statically or embedded it",
+            changed.join(", ")
+        )
+    };
+    let versions: BTreeSet<String> = group
+        .iter()
+        .filter_map(|row| row.eb_version.clone())
+        .collect();
+    let dependent_easyconfig = group
+        .iter()
+        .find(|row| !row.dependent_easyconfig.is_empty())
+        .map(|row| row.dependent_easyconfig.clone())
+        .unwrap_or_default();
+    RebuildRow {
+        changed: changed.join(", "),
+        dependent: group[0].dependent.clone(),
+        dependent_easyconfig,
+        edge_kind: "builddependency".to_string(),
+        class: CLASS_REVIEW.to_string(),
+        reason,
+        eb_version: newest_version(&versions),
+    }
 }
 
 fn reason_runtime(via: &[String]) -> String {
@@ -1118,6 +1195,65 @@ mod tests {
             error.to_string().contains("no software directory"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn one_dependent_reviews_each_patched_archive_once() {
+        let gcc = tc("GCCcore", "15.2.0");
+        let all = vec![
+            cand(
+                "GCCcore",
+                "15.2.0",
+                tc("system", "system"),
+                vec![],
+                vec![],
+                vec![],
+            ),
+            cand("LibA", "1.0", gcc.clone(), vec![], vec![], vec![]),
+            cand("LibB", "1.0", gcc.clone(), vec![], vec![], vec![]),
+            cand(
+                "App",
+                "1.0",
+                gcc,
+                vec![],
+                vec![dep("LibA", "1.0"), dep("LibB", "1.0")],
+                vec![],
+            ),
+        ];
+        let prefix = tempfile::tempdir().expect("prefix");
+        for (name, archive) in [("LibA", "liba.a"), ("LibB", "libb.a")] {
+            let lib = prefix
+                .path()
+                .join(format!("software/{name}/1.0-GCCcore-15.2.0/lib"));
+            std::fs::create_dir_all(&lib).expect("lib");
+            std::fs::write(lib.join(archive), b"!<arch>\n").expect("archive");
+        }
+        let mut built = query(&[]);
+        built.base = all.clone();
+        built.installed = installed(&all);
+        built.easystacks = vec![easystack(&all)];
+        built.changed = vec![
+            "LibA-1.0-GCCcore-15.2.0.eb".into(),
+            "LibB-1.0-GCCcore-15.2.0.eb".into(),
+        ];
+        built.prefix = Some(prefix.path().to_path_buf());
+        let document = rebuild_set(&built).expect("rebuild set");
+        let reviews: Vec<_> = document
+            .rows
+            .iter()
+            .filter(|row| row.class == CLASS_REVIEW)
+            .collect();
+        assert_eq!(reviews.len(), 1, "{:?}", document.rows);
+        assert_eq!(reviews[0].dependent, "App/1.0-GCCcore-15.2.0");
+        assert_eq!(
+            reviews[0].changed,
+            "LibA-1.0-GCCcore-15.2.0.eb, LibB-1.0-GCCcore-15.2.0.eb"
+        );
+        assert_eq!(
+            reviews[0].reason,
+            "builddependency only of LibA-1.0-GCCcore-15.2.0.eb (liba.a), LibB-1.0-GCCcore-15.2.0.eb (libb.a)"
+        );
+        assert_eq!(document.counts.review, 1);
     }
 
     #[test]
