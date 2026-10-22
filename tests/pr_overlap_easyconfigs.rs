@@ -104,7 +104,16 @@ fn the_cli_matches_the_easyconfig_fixture() {
         String::from_utf8_lossy(&status.stderr)
     );
     let expected = dir.join("expected");
-    for name in ["overlap.toml", "prs/1.toml", "prs/5.toml", "prs/6.toml"] {
+    for name in [
+        "overlap.md",
+        "overlap.toml",
+        "prs/1.toml",
+        "prs/2.toml",
+        "prs/3.toml",
+        "prs/4.toml",
+        "prs/5.toml",
+        "prs/6.toml",
+    ] {
         let got = std::fs::read_to_string(out.join(name)).unwrap();
         let want = std::fs::read_to_string(expected.join(name)).unwrap();
         assert_eq!(got, want, "{name}");
