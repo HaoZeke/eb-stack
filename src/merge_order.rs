@@ -377,6 +377,10 @@ mod tests {
             unresolved: Vec::new(),
             notes: Vec::new(),
             revisions: Vec::new(),
+            kind: String::new(),
+            changed_easyconfigs: Vec::new(),
+            closure: Vec::new(),
+            new_modules: Vec::new(),
             entries: asked.iter().map(|file| RecordEntry {
                 easystack: "s.yml".into(),
                 easyconfig: (*file).to_string(),
@@ -493,6 +497,7 @@ mod tests {
             head_sha: "h".into(),
             title: None,
             files: Vec::new(),
+            easyconfigs: Vec::new(),
             easystacks: vec![EasystackChange {
                 path: "s.yml".into(),
                 base: Some("a\nb\nc\n".into()),

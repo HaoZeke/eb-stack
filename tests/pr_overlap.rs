@@ -37,6 +37,7 @@ fn pr(number: u64, easystacks: Vec<EasystackChange>) -> PrInput {
         title: Some(format!("PR {number}")),
         easystacks,
         files: Vec::new(),
+        easyconfigs: Vec::new(),
     }
 }
 
