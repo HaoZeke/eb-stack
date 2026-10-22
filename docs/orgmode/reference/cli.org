@@ -239,7 +239,7 @@ eb-stack stack solve \
   [--sbom-out stack.cdx.json] \
   [--build-list-out build.list] [--build-list-excludes-baseline] \
   [--jenkins-build-list-out next.list [--jenkins-flags-from previous.list]... \
-   [--jenkins-gpu-systems gpu-a,gpu-b]] \
+   [--jenkins-gpu-systems gpu-a,gpu-b] [--jenkins-roots-only]] \
   [--stack-diff-out stack.diff.md]
 
 eb-stack stack sbom --lock stack.lock.json [--out stack.cdx.json]
@@ -277,6 +277,8 @@ in that format; each package keeps the ~--hook~, ~--hooks~,
 (~--from-commit~, ~--from-pr~, ~--ignore-test-failure~, ~--rebuild~) stay
 behind. A module whose name or versionsuffix says CUDA gets
 ~--include-systems~ with the ~--jenkins-gpu-systems~ list.
+~--jenkins-roots-only~ writes one line per root application and leaves the
+dependencies to ~eb --robot~.
 
 * Target commands
 
