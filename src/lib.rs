@@ -8,6 +8,7 @@ pub mod cargo;
 pub mod cran;
 pub mod dep_versions;
 pub mod domain;
+pub mod easyblock_reach;
 pub mod easyblock_skeleton;
 pub mod easystack;
 pub mod eb_easyblock;
