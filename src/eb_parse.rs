@@ -1413,8 +1413,8 @@ fn build_templates(
         );
     }
     // EasyBuild default.py sets both to `%(namelower)s`. A recipe that assigns
-    // github_account or bitbucket_account replaces these on the final template
-    // map; see apply_forge_account_overrides.
+    // github_account, bitbucket_account, or versionprefix replaces these on
+    // the final template map; see overlay_config_templates.
     tv.insert("github_account".into(), namelower.clone());
     tv.insert("bitbucket_account".into(), namelower);
     tv.insert("version".into(), version.to_string());
@@ -1441,21 +1441,22 @@ fn build_templates(
     tv
 }
 
-/// Copy `github_account` and `bitbucket_account` from the recipe onto the
-/// template map, which is step 3 of EasyBuild's `template_constant_dict`.
+/// Copy forge accounts and `versionprefix` from the recipe onto the template map.
 ///
-/// `build_templates` installs the `default.py` fallback, `%(namelower)s`.
+/// This is step 3 of EasyBuild's `template_constant_dict`
+/// (`TEMPLATE_NAMES_CONFIG`). `build_templates` installs the `default.py`
+/// fallback `%(namelower)s` for `github_account` and `bitbucket_account`.
 /// Leaving that in place when the recipe names an account makes
 /// `GITHUB_SOURCE` download `https://github.com/<namelower>/<name>/archive`
 /// instead of the repository the recipe states. The assigned value can itself
 /// be a template (`%(namelower)s` is the usual spelling of the default), so it
-/// is resolved before it replaces the fallback. An account that still contains
-/// an unresolved `%(...)s` is left alone: a download from the wrong account is
-/// worse than a residual.
-fn apply_forge_account_overrides(
-    templates: &mut HashMap<String, String>,
-    env: &HashMap<String, Value>,
-) {
+/// is resolved before it replaces the fallback. An account that is empty or
+/// still contains an unresolved `%(...)s` is left alone: a download from the
+/// wrong account is worse than the namelower fallback.
+///
+/// `versionprefix` has an empty framework default, so it is inserted only when
+/// the recipe sets it.
+fn overlay_config_templates(templates: &mut HashMap<String, String>, env: &HashMap<String, Value>) {
     for key in ["github_account", "bitbucket_account"] {
         let Some(value) = env.get(key) else {
             continue;
@@ -1469,10 +1470,13 @@ fn apply_forge_account_overrides(
         }
         templates.insert(key.to_string(), resolved);
     }
+    if let Some(value) = env.get("versionprefix") {
+        if let Ok(raw) = value.expect_str("versionprefix") {
+            let resolved = apply_templates_str(&raw, templates);
+            templates.insert("versionprefix".to_string(), resolved);
+        }
+    }
 }
-
-/// `%(key)s`, compiled once. The pattern is a literal, so a failure here would
-/// be a build-time defect rather than anything a recipe can cause.
 /// Dependency names that define version templates, and the prefix each uses.
 ///
 /// A recipe writes `versionsuffix = '-Python-%(pyver)s'` and
@@ -1521,6 +1525,8 @@ fn dependency_version_templates(deps: &[&[ResolvedDep]]) -> HashMap<String, Stri
     tv
 }
 
+/// `%(key)s`, compiled once. The pattern is a literal, so a failure here would
+/// be a build-time defect rather than anything a recipe can cause.
 fn template_pattern() -> &'static regex::Regex {
     static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     PATTERN.get_or_init(|| {
@@ -1889,19 +1895,25 @@ fn resolve_easyconfig_str_inner(
         .map_err(|e| ParseError::Parse("<string>".into(), e))?;
 
     let vs_for_templates = versionsuffix_raw.clone().unwrap_or_default();
-    let templates = build_templates(&name, &version, &vs_for_templates, &toolchain);
+    let mut templates = build_templates(&name, &version, &vs_for_templates, &toolchain);
+    // The defaults in build_templates are what EasyBuild uses when the recipe
+    // leaves the parameter unset. An assignment has to win, or GITHUB_SOURCE
+    // points at the lowercased software name instead of the account the recipe
+    // named.
+    overlay_config_templates(&mut templates, &parser.env);
 
     // Apply templates to fields that may contain %(…)s (including nested deps/exts).
     let name = apply_templates_str(&name, &templates);
     let version = apply_templates_str(&version, &templates);
     let versionsuffix = versionsuffix_raw.map(|s| apply_templates_str(&s, &templates));
     // Rebuild templates if name/version changed (rare for name/version themselves).
-    let templates = build_templates(
+    let mut templates = build_templates(
         &name,
         &version,
         versionsuffix.as_deref().unwrap_or(""),
         &toolchain,
     );
+    overlay_config_templates(&mut templates, &parser.env);
 
     let deps_val = parser
         .env
@@ -1970,7 +1982,7 @@ fn resolve_easyconfig_str_inner(
     // After both build_templates calls. Each one installs the namelower
     // fallback, so an earlier override would be discarded. Dependency
     // version templates only extend the map; they do not reset accounts.
-    apply_forge_account_overrides(&mut templates, &parser.env);
+    overlay_config_templates(&mut templates, &parser.env);
 
     // Extensions carry `%(pyver)s` too, so they use the final template set.
     let exts_val = parser
@@ -3989,6 +4001,34 @@ sources = [SOURCE_TAR_GZ]
     }
 
     #[test]
+    fn an_explicit_forge_account_replaces_the_lowercased_name() {
+        // eOn's recipe names TheochemUI. Leaving github_account at "eon" makes
+        // GITHUB_SOURCE a different archive than the one the checksum belongs to.
+        let src = r#"
+name = 'eOn'
+version = '2.17.10'
+toolchain = {'name': 'foss', 'version': '2026.1'}
+github_account = 'TheochemUI'
+bitbucket_account = '%(namelower)s'
+versionprefix = 'v'
+source_urls = [GITHUB_SOURCE, BITBUCKET_SOURCE]
+homepage = 'https://example.invalid/%(github_account)s/%(versionprefix)s%(version)s'
+"#;
+        let resolved = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(
+            resolved.source_urls,
+            vec![
+                "https://github.com/TheochemUI/eOn/archive".to_string(),
+                "https://bitbucket.org/eon/eon/get".to_string(),
+            ]
+        );
+        assert_eq!(
+            resolved.homepage.as_deref(),
+            Some("https://example.invalid/TheochemUI/v2.17.10")
+        );
+    }
+
+    #[test]
     fn recipe_bitbucket_account_replaces_the_namelower_default() {
         let src = r#"
 name = 'Widget'
@@ -4002,6 +4042,25 @@ bitbucket_account = '%(namelower)s-team'
             r.source_urls,
             vec!["https://bitbucket.org/widget-team/widget/get"]
         );
+    }
+
+    #[test]
+    fn forge_accounts_default_to_the_lowercased_name() {
+        let src = r#"
+name = 'eOn'
+version = '1'
+toolchain = SYSTEM
+source_urls = [GITHUB_SOURCE, BITBUCKET_SOURCE]
+"#;
+        let resolved = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(
+            resolved.source_urls,
+            vec![
+                "https://github.com/eon/eOn/archive".to_string(),
+                "https://bitbucket.org/eon/eon/get".to_string(),
+            ]
+        );
+        assert_eq!(resolved.homepage, None);
     }
 
     #[test]
