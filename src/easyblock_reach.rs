@@ -769,6 +769,98 @@ pub fn write_report(report: &ReachReport, dir: &Path) -> Result<(), ReachError> 
     Ok(())
 }
 
+/// Read Python sources from explicit paths.
+pub fn read_sources(paths: &[PathBuf]) -> Result<Vec<(PathBuf, String)>, ReachError> {
+    paths
+        .iter()
+        .map(|path| {
+            let source = std::fs::read_to_string(path)?;
+            Ok((path.clone(), source))
+        })
+        .collect()
+}
+
+/// A commit range or a pull request in a local clone.
+#[derive(Debug, Clone)]
+pub struct DiffRequest {
+    /// Easyblocks or framework clone.
+    pub repo: PathBuf,
+    /// Passed to `git diff --name-only`, for example `base..HEAD`.
+    pub range: Option<String>,
+    /// Fetch `refs/pull/<n>/head` and diff it against the merge-base with `base`.
+    pub pr: Option<u64>,
+    /// Remote `git fetch` reads. `.` is this clone.
+    pub remote: String,
+    /// Branch the pull request is based on. Default `develop` at the CLI.
+    pub base: String,
+}
+
+/// Python files a range or pull request changes, new side, or the base if deleted.
+pub fn diff_sources(request: &DiffRequest) -> Result<Vec<(PathBuf, String)>, ReachError> {
+    if request.remote.starts_with('-') {
+        return Err(ReachError::Message("remote must not start with -".into()));
+    }
+    let spec = if let Some(pr) = request.pr {
+        let fetch_ref = format!("refs/pull/{pr}/head");
+        git(
+            &request.repo,
+            &[
+                "fetch",
+                &request.remote,
+                &format!("{fetch_ref}:{fetch_ref}"),
+            ],
+        )?;
+        let base = git(&request.repo, &["merge-base", &request.base, &fetch_ref])?;
+        format!("{}..{fetch_ref}", base.trim())
+    } else if let Some(range) = &request.range {
+        if range.starts_with('-') {
+            return Err(ReachError::Message("range must not start with -".into()));
+        }
+        range.clone()
+    } else {
+        return Err(ReachError::Message(
+            "pass a commit range or a pull request".into(),
+        ));
+    };
+    let (left, right) = split_range(&spec)?;
+    let names = git(
+        &request.repo,
+        &["diff", "--name-only", "--diff-filter=ACMRD", &spec],
+    )?;
+    let mut out = Vec::new();
+    for name in names.lines().filter(|line| line.ends_with(".py")) {
+        let source = git(&request.repo, &["show", &format!("{right}:{name}")])
+            .or_else(|_| git(&request.repo, &["show", &format!("{left}:{name}")]))?;
+        out.push((request.repo.join(name), source));
+    }
+    Ok(out)
+}
+
+fn split_range(spec: &str) -> Result<(&str, &str), ReachError> {
+    if let Some((left, right)) = spec.split_once("...") {
+        return Ok((left, right));
+    }
+    spec.split_once("..")
+        .ok_or_else(|| ReachError::Message(format!("range {spec} must be A..B or A...B")))
+}
+
+fn git(repo: &Path, args: &[&str]) -> Result<String, ReachError> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .map_err(|error| ReachError::Message(format!("git: {error}")))?;
+    if !output.status.success() {
+        return Err(ReachError::Message(format!(
+            "git {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 /// Installed module names, one per line. Blank lines and `#` comments are ignored.
 pub fn parse_installed(text: &str) -> BTreeSet<String> {
     text.lines()
@@ -1062,5 +1154,76 @@ mod tests {
         assert!(dir.path().join("reach.md").is_file());
         let installed = parse_installed("# comment\n\nzlib/1.3\n");
         assert_eq!(installed, BTreeSet::from(["zlib/1.3".into()]));
+    }
+
+    fn git_ok(dir: &std::path::Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .arg("-c")
+            .arg("user.email=reach@example.com")
+            .arg("-c")
+            .arg("user.name=reach")
+            .arg("-c")
+            .arg("commit.gpgsign=false")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn range_and_pull_request_read_the_new_side() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path();
+        git_ok(repo, &["init", "-b", "develop"]);
+        let rel = "easybuild/easyblocks/generic/cmakemake.py";
+        write(repo, rel, "class CMakeMake:\n    pass\n");
+        git_ok(repo, &["add", rel]);
+        git_ok(repo, &["commit", "-m", "base"]);
+        write(
+            repo,
+            rel,
+            "class CMakeMake:\n    pass\nclass EB_GROMACS(CMakeMake):\n    pass\n",
+        );
+        git_ok(repo, &["add", rel]);
+        git_ok(repo, &["commit", "-m", "head"]);
+        let changed = diff_sources(&DiffRequest {
+            repo: repo.to_path_buf(),
+            range: Some("HEAD~1..HEAD".into()),
+            pr: None,
+            remote: ".".into(),
+            base: "develop".into(),
+        })
+        .unwrap();
+        assert_eq!(changed.len(), 1);
+        assert!(changed[0].1.contains("EB_GROMACS"));
+        git_ok(repo, &["update-ref", "refs/pull/7/head", "HEAD"]);
+        git_ok(repo, &["reset", "--hard", "HEAD~1"]);
+        let from_pr = diff_sources(&DiffRequest {
+            repo: repo.to_path_buf(),
+            range: None,
+            pr: Some(7),
+            remote: ".".into(),
+            base: "develop".into(),
+        })
+        .unwrap();
+        assert!(from_pr[0].1.contains("EB_GROMACS"));
+        std::fs::remove_file(repo.join(rel)).unwrap();
+        git_ok(repo, &["add", "-A"]);
+        git_ok(repo, &["commit", "-m", "drop"]);
+        let deleted = diff_sources(&DiffRequest {
+            repo: repo.to_path_buf(),
+            range: Some("HEAD~1..HEAD".into()),
+            pr: None,
+            remote: ".".into(),
+            base: "develop".into(),
+        })
+        .unwrap();
+        assert!(deleted[0].1.contains("class CMakeMake"));
     }
 }
