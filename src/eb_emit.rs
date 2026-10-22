@@ -2667,6 +2667,56 @@ checksums = [{
     }
 
     #[test]
+    fn a_checksum_dict_keeps_an_empty_key_across_a_version_bump() {
+        // One key per file. Reading the whole dict after the first colon as a
+        // single value deletes the later keys, including an empty digest.
+        let src = "\
+name = 'Pkg'
+version = '1.0.0'
+toolchain = {'name': 'foss', 'version': '2025a'}
+source_urls = ['https://mirror.example.org/src']
+sources = ['pkg-%(version)s-linux-%(arch)s.tar.gz']
+checksums = [{
+    'pkg-1.0.0-linux-amd64.tar.gz': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'pkg-1.0.0-linux-arm64.tar.gz': '',
+    'notes.txt': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+}]
+";
+        let params = EmitParams {
+            toolchain: foss("2025a"),
+            version: Some("1.2.3".into()),
+            dep_versions: HashMap::new(),
+            dep_toolchains: HashMap::new(),
+            dep_versionsuffixes: HashMap::new(),
+            source_checksum: Some(
+                "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".into(),
+            ),
+            hierarchy: Vec::new(),
+        };
+        let r = emit_next_generation(src, &params).expect("emit");
+        assert!(
+            r.text.contains(
+                "'pkg-1.2.3-linux-amd64.tar.gz': 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'"
+            ),
+            "{}",
+            r.text
+        );
+        assert!(
+            r.text.contains("'pkg-1.2.3-linux-arm64.tar.gz': ''"),
+            "{}",
+            r.text
+        );
+        assert!(
+            r.text.contains(
+                "'notes.txt': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'"
+            ),
+            "{}",
+            r.text
+        );
+        assert!(!r.text.contains("1.0.0"), "{}", r.text);
+    }
+
+    #[test]
     fn every_documented_shape_bumps_without_erroring() {
         // The bug this pins: one unsupported shape made `bump` exit non-zero and
         // emit nothing, which leaves a maintainer with no file to review.
