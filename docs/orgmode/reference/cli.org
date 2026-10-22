@@ -414,11 +414,17 @@ returns at most ~max_matches~ (default and limit 200) matches.
 returns ~argument easyconfigs requires at least one path~. A ~.eb~ file there
 stands for the ~easyconfigs~ directory it sits in; any other file is an error
 that asks for a robot directory. A recipe that is not valid Python is refused.
-~eb_recipe_lint~ takes a ~recipes~ path array and returns ~results~ plus
-~check_contrib~, using the same findings as ~recipe lint~.
+It also takes ~easyblocks~, ~metadata_only~, ~verify_sources~, ~seeded_from~,
+~seeded_source_url~, ~seeded_git~, ~source_tree~, and ~strict~, and returns
+maintainer acceptability, easyblock resolution, strict skips, and source
+classes. ~eb_recipe_lint~ takes a ~recipes~ path array and returns ~results~
+plus ~check_contrib~, using the same findings as ~recipe lint~.
+~eb_recipe_format~ takes ~recipe~, ~out~, and ~dry_run~, and a dry run does
+not write.
 
-MCP results include the same artifacts, claims, findings, and next actions as
-the CLI. There is no separate compatibility command surface.
+The recipe tools run the same checks as the CLI. MCP results include the same
+artifacts, claims, findings, and next actions as the CLI. There is no separate
+compatibility command surface.
 
 ~eb_package_plan~ accepts the CLI's repeated source-checksum input as a
 ~source_checksums~ string array, and the catalog / source-root inputs as
