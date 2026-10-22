@@ -1736,3 +1736,228 @@ fn mcp_recipe_findings_match_the_cli_on_hardcases_and_eon() {
         assert_eq!(std::fs::read(recipe).expect("reread"), before, "{rel}");
     }
 }
+
+fn cli_long_flags(help: &str) -> Vec<String> {
+    let mut flags = Vec::new();
+    let mut options = false;
+    for line in help.lines() {
+        if line == "Options:" {
+            options = true;
+            continue;
+        }
+        if !options || line.trim().is_empty() {
+            continue;
+        }
+        let trimmed = line.trim();
+        let Some(start) = trimmed.find("--") else {
+            continue;
+        };
+        let before = &trimmed[..start];
+        if !(before.is_empty() || before.ends_with(", ")) {
+            continue;
+        }
+        let name = trimmed[start + 2..]
+            .split(|c: char| c.is_whitespace() || c == '=')
+            .next()
+            .unwrap_or("");
+        if !name.is_empty() && name != "help" {
+            flags.push(name.to_string());
+        }
+    }
+    flags
+}
+
+#[test]
+fn mcp_schemas_cover_cli_flags() {
+    let bin = env!("CARGO_BIN_EXE_eb-stack");
+    let catalog = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {}
+    }))
+    .expect("tools/list");
+    let tools = catalog["result"]["tools"].as_array().expect("tools");
+    let commands = [
+        ("eb_package_inspect", "package inspect"),
+        ("eb_package_plan", "package plan"),
+        ("eb_package_bump", "package bump"),
+        ("eb_recipe_check", "recipe check"),
+        ("eb_recipe_lint", "recipe lint"),
+        ("eb_recipe_format", "recipe format"),
+        ("eb_stack_solve", "stack solve"),
+        ("eb_stack_sbom", "stack sbom"),
+        ("eb_target_list", "target list"),
+        ("eb_target_doctor", "target doctor"),
+        ("eb_campaign_run", "campaign run"),
+        ("eb_campaign_status", "campaign status"),
+        ("eb_campaign_finding_claim", "campaign finding claim"),
+        ("eb_campaign_finding_resolve", "campaign finding resolve"),
+    ];
+    // These tools edit files or run EasyBuild. They are not a CLI subcommand,
+    // so they have no `--help` flag list to mirror. A tool in neither list
+    // is unmapped and fails the audit.
+    let mcp_only = [
+        "eb_recipe_read",
+        "eb_recipe_list",
+        "eb_recipe_edit",
+        "eb_recipe_write",
+        "eb_recipe_grep",
+        "eb_recipe_apply_suggestion",
+        "eb_recipe_diff",
+        "eb_dep_versions",
+        "eb_module_lint",
+        "eb_easyblock_dry_run",
+        "eb_build_log",
+        "eb_build_test",
+    ];
+    let allow = [
+        (
+            "eb_package_inspect",
+            "package-config",
+            "repeatable flag, schema key package_configs",
+        ),
+        (
+            "eb_package_plan",
+            "package-catalog",
+            "repeatable flag, schema key package_catalogs",
+        ),
+        (
+            "eb_package_plan",
+            "package-config",
+            "repeatable flag, schema key package_configs",
+        ),
+        (
+            "eb_package_plan",
+            "package-index",
+            "versions come from catalogs and source roots",
+        ),
+        (
+            "eb_package_plan",
+            "source-checksum",
+            "repeatable flag, schema key source_checksums",
+        ),
+        (
+            "eb_package_plan",
+            "cargo-source",
+            "repeatable flag, schema key cargo_sources",
+        ),
+        (
+            "eb_package_plan",
+            "conda-source",
+            "repeatable flag, schema key conda_sources",
+        ),
+        (
+            "eb_package_plan",
+            "easybuild-source",
+            "repeatable flag, schema key easybuild_sources",
+        ),
+        (
+            "eb_package_plan",
+            "spack-source",
+            "repeatable flag, schema key spack_sources",
+        ),
+        (
+            "eb_package_bump",
+            "dep",
+            "repeatable NAME=VERSION flag, schema key dependencies",
+        ),
+        (
+            "eb_package_bump",
+            "package-config",
+            "repeatable flag, schema key package_configs",
+        ),
+        (
+            "eb_package_bump",
+            "strict-patches",
+            "bump keeps strict_patches off",
+        ),
+        (
+            "eb_recipe_check",
+            "require-configopt",
+            "repeatable flag, schema key require_configopts",
+        ),
+        (
+            "eb_target_list",
+            "config",
+            "repeatable flag, schema key configs",
+        ),
+        (
+            "eb_target_doctor",
+            "config",
+            "repeatable flag, schema key configs",
+        ),
+        (
+            "eb_campaign_run",
+            "config",
+            "repeatable flag, schema key configs",
+        ),
+        (
+            "eb_campaign_finding_resolve",
+            "change",
+            "repeatable flag, schema key changes",
+        ),
+    ];
+    assert!(allow.iter().all(|(_, _, reason)| !reason.is_empty()));
+    let names = tools
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect::<Vec<_>>();
+    for name in &names {
+        let mirrors_cli = commands.iter().any(|(tool, _)| tool == name);
+        let only = mcp_only.contains(name);
+        assert!(
+            mirrors_cli || only,
+            "unmapped MCP tool {name}; add it to the CLI map or to mcp_only"
+        );
+    }
+    for (tool, _) in commands {
+        assert!(
+            names.contains(&tool),
+            "CLI mirror missing from the catalog: {tool}"
+        );
+    }
+    for tool in mcp_only {
+        assert!(names.contains(&tool), "MCP-only tool dropped: {tool}");
+    }
+    let mut used = vec![false; allow.len()];
+    for (name, argv) in commands {
+        assert!(names.contains(&name), "missing tool {name}");
+        let schema = tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("schema {name}"));
+        let properties = schema["inputSchema"]["properties"]
+            .as_object()
+            .unwrap_or_else(|| panic!("properties {name}"));
+        let help = std::process::Command::new(bin)
+            .args(argv.split_whitespace())
+            .arg("--help")
+            .output()
+            .unwrap_or_else(|error| panic!("{name} help: {error}"));
+        let text = String::from_utf8(help.stdout).expect("utf8 help");
+        for flag in cli_long_flags(&text) {
+            let snake = flag.replace('-', "_");
+            if properties.contains_key(&snake) {
+                continue;
+            }
+            let Some(index) = allow
+                .iter()
+                .position(|(tool, named, _)| *tool == name && *named == flag)
+            else {
+                panic!("{name} has no schema property for --{flag}");
+            };
+            used[index] = true;
+        }
+    }
+    let unused = allow
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !used[*index])
+        .map(|(_, (_, flag, _))| *flag)
+        .collect::<Vec<_>>();
+    assert!(
+        unused.is_empty(),
+        "allowlist entries no flag uses: {unused:?}"
+    );
+}

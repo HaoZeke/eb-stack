@@ -2088,12 +2088,53 @@ fn recipe_lint(arguments: &Value) -> Result<Value, String> {
         .iter()
         .enumerate()
         .map(|(index, file)| {
+            let findings = file
+                .findings
+                .iter()
+                .map(|finding| {
+                    let mut item = json!({
+                        "path": file.path.display().to_string(),
+                        "line": finding.line,
+                        "column": finding.column,
+                        "code": finding.code,
+                        "message": finding.message,
+                        "severity": finding.severity,
+                        "mechanical": finding.mechanical,
+                    });
+                    if !finding.origin.is_empty() {
+                        item["origin"] = json!(finding.origin);
+                    }
+                    if finding.info {
+                        item["info"] = json!(true);
+                    }
+                    if finding.in_review {
+                        item["in_review"] = json!(true);
+                    }
+                    item
+                })
+                .collect::<Vec<_>>();
             let mut entry = json!({
                 "recipe": file.path,
                 "baseline": baselines.get(index).copied().unwrap_or("none"),
                 "clean": file.clean(),
-                "findings": file.findings,
+                "findings": findings,
             });
+            if let Ok(text) = std::fs::read_to_string(&file.path) {
+                let maintainer = crate::check_maintainer_acceptability_text(&text);
+                entry["maintainer_acceptability"] = json!(maintainer
+                    .findings
+                    .into_iter()
+                    .map(|finding| {
+                        json!({
+                            "path": file.path.display().to_string(),
+                            "code": finding.code,
+                            "severity": finding.severity,
+                            "message": finding.message,
+                            "evidence": finding.evidence,
+                        })
+                    })
+                    .collect::<Vec<_>>());
+            }
             if let Some(statuses) = statuses_by_file.get(index).filter(|s| !s.is_empty()) {
                 entry["review_items"] = json!(statuses);
             }
