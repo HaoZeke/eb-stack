@@ -20,8 +20,13 @@
 //!   is installed as part of the bundle.
 //!
 //! A toolchain edge is not one of these uses. Patching a compiler is outside
-//! these three classes. A later `--check-static <prefix>` could read
-//! installed binaries. This module does not.
+//! these three classes.
+//!
+//! When [`RebuildQuery::prefix`] is set, a builddependency-only row is
+//! checked against the patched module's install directory. No `lib*/*.a`
+//! file means the dependent cannot have linked that module statically, and
+//! the row is no-rebuild. Archives that are there keep the row in review
+//! and are named in the reason. `--check-static` is still a separate pass.
 
 use crate::build_order::{
     module_name, reachable_graph, reverse_index, Choice, ModuleKey, ReverseUse, UseKind,
@@ -38,7 +43,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use thiserror::Error;
 
 /// Schema of [`RebuildDocument`]. Bumped when a field changes meaning.
-pub const REBUILD_SET_SCHEMA_VERSION: u32 = 1;
+pub const REBUILD_SET_SCHEMA_VERSION: u32 = 2;
 
 /// Class for a runtime dependency, direct or through other runtime dependencies.
 pub const CLASS_NO_REBUILD: &str = "no-rebuild";
@@ -59,6 +64,12 @@ pub enum RebuildError {
         path: String,
         /// Parser error.
         message: String,
+    },
+    /// `--prefix` is not an installed EESSI prefix.
+    #[error("{path} has no software directory")]
+    Prefix {
+        /// Path that was passed in.
+        path: String,
     },
 }
 
@@ -95,6 +106,9 @@ pub struct RebuildQuery {
     pub installed_source: String,
     /// RFC 3339 timestamp recorded in the report.
     pub generated_at: String,
+    /// Installed EESSI prefix (`$EESSI_SOFTWARE_PATH`). Static archives are
+    /// read from `<prefix>/software/<name>/<version>/lib*/*.a`.
+    pub prefix: Option<std::path::PathBuf>,
 }
 
 /// One row of the rebuild table.
@@ -140,6 +154,10 @@ pub struct RebuildDocument {
     pub generated_at: String,
     /// Where the installed list came from.
     pub installed_source: String,
+    /// Installed prefix the archive check read. Omitted when `--prefix` was
+    /// not passed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
     /// Easystack paths that were read.
     pub easystacks: Vec<String>,
     /// Patched easyconfig filenames, sorted.
@@ -245,6 +263,9 @@ pub fn rebuild_set(query: &RebuildQuery) -> Result<RebuildDocument, RebuildError
             .then_with(|| left.edge_kind.cmp(&right.edge_kind))
     });
     rows.dedup();
+    if let Some(prefix) = &query.prefix {
+        crate::install_prefix::apply_static_archives(&mut rows, prefix, &mut notes)?;
+    }
 
     let counts = RebuildCounts {
         no_rebuild: rows
@@ -268,6 +289,7 @@ pub fn rebuild_set(query: &RebuildQuery) -> Result<RebuildDocument, RebuildError
         schema_version: REBUILD_SET_SCHEMA_VERSION,
         generated_at: query.generated_at.clone(),
         installed_source: query.installed_source.clone(),
+        prefix: query.prefix.as_ref().map(|path| path.display().to_string()),
         easystacks,
         changed,
         missing,
@@ -286,12 +308,22 @@ pub fn render_markdown(document: &RebuildDocument) -> String {
         "Computed {} against the modules installed for `{}`.\n\n",
         document.generated_at, document.installed_source
     ));
-    out.push_str(
-        "Classes follow the easyconfig graph only. A runtime dependency needs no rebuild: \
-         it links the patched package as a shared library. A builddependency only needs \
-         review: it may have linked the package statically or embedded it. The patched \
-         easyconfig, and a bundle that ships it as an extension, must be rebuilt.\n\n",
-    );
+    if document.prefix.is_some() {
+        out.push_str(
+            "Classes start from the easyconfig graph. A runtime dependency needs no rebuild: \
+             it links the patched package as a shared library. A builddependency only stays \
+             in review when the patched module has a static archive under `lib*/`; otherwise \
+             it is no-rebuild, because there is nothing to link statically. The patched \
+             easyconfig, and a bundle that ships it as an extension, must be rebuilt.\n\n",
+        );
+    } else {
+        out.push_str(
+            "Classes follow the easyconfig graph only. A runtime dependency needs no rebuild: \
+             it links the patched package as a shared library. A builddependency only needs \
+             review: it may have linked the package statically or embedded it. The patched \
+             easyconfig, and a bundle that ships it as an extension, must be rebuilt.\n\n",
+        );
+    }
     out.push_str(&format!(
         "{} must-rebuild, {} review, {} no-rebuild.\n\n",
         document.counts.must_rebuild, document.counts.review, document.counts.no_rebuild
@@ -861,6 +893,7 @@ mod tests {
             easyblocks: None,
             installed_source: "x86_64/amd/zen4".into(),
             generated_at: "2026-10-22T12:00:00Z".into(),
+            prefix: None,
         }
     }
 
@@ -1003,6 +1036,88 @@ mod tests {
         assert_eq!(document.missing, ["Absent-1.0.eb"]);
         assert!(document.rows.is_empty());
         assert!(rebuild_easystacks(&document).is_empty());
+    }
+
+    #[test]
+    fn a_builddependency_without_a_static_archive_needs_no_rebuild() {
+        let prefix = tempfile::tempdir().expect("prefix");
+        let lib = prefix.path().join("software/zlib/1.3.1-GCCcore-15.2.0/lib");
+        std::fs::create_dir_all(&lib).expect("lib");
+        let mut query = query(&["zlib-1.3.1-GCCcore-15.2.0.eb"]);
+        query.prefix = Some(prefix.path().to_path_buf());
+        let document = rebuild_set(&query).expect("rebuild set");
+        assert_eq!(
+            row(&document, "CMake/4.1.2-GCCcore-15.2.0").class,
+            CLASS_NO_REBUILD
+        );
+        assert_eq!(
+            row(&document, "CMake/4.1.2-GCCcore-15.2.0").reason,
+            "no static archive installed"
+        );
+        assert_eq!(
+            row(&document, "AppStatic/1.0-GCCcore-15.2.0").reason,
+            "no static archive installed"
+        );
+        assert_eq!(
+            row(&document, "libpng/1.6.50-GCCcore-15.2.0").class,
+            CLASS_NO_REBUILD
+        );
+        assert!(!row(&document, "libpng/1.6.50-GCCcore-15.2.0")
+            .reason
+            .contains("static archive"));
+    }
+
+    #[test]
+    fn a_static_archive_keeps_the_builddependency_in_review() {
+        let prefix = tempfile::tempdir().expect("prefix");
+        let root = prefix.path().join("software/zlib/1.3.1-GCCcore-15.2.0");
+        std::fs::create_dir_all(root.join("lib")).expect("lib");
+        std::fs::write(root.join("lib/libz.a"), b"!<arch>\n").expect("archive");
+        std::os::unix::fs::symlink("lib", root.join("lib64")).expect("lib64");
+        let mut query = query(&["zlib-1.3.1-GCCcore-15.2.0.eb"]);
+        query.prefix = Some(prefix.path().to_path_buf());
+        let document = rebuild_set(&query).expect("rebuild set");
+        let cmake = row(&document, "CMake/4.1.2-GCCcore-15.2.0");
+        assert_eq!(cmake.class, CLASS_REVIEW);
+        assert_eq!(
+            cmake.reason,
+            "builddependency only; static archives: libz.a"
+        );
+        let app = row(&document, "AppStatic/1.0-GCCcore-15.2.0");
+        assert_eq!(app.class, CLASS_REVIEW);
+        assert_eq!(
+            app.reason,
+            "builddependency only, through libpng/1.6.50-GCCcore-15.2.0; static archives: libz.a"
+        );
+    }
+
+    #[test]
+    fn a_missing_install_directory_is_a_note_and_stays_in_review() {
+        let prefix = tempfile::tempdir().expect("prefix");
+        std::fs::create_dir(prefix.path().join("software")).expect("software");
+        let mut query = query(&["zlib-1.3.1-GCCcore-15.2.0.eb"]);
+        query.prefix = Some(prefix.path().to_path_buf());
+        let document = rebuild_set(&query).expect("rebuild set");
+        assert_eq!(
+            row(&document, "CMake/4.1.2-GCCcore-15.2.0").class,
+            CLASS_REVIEW
+        );
+        assert!(document
+            .notes
+            .iter()
+            .any(|note| note == "zlib/1.3.1-GCCcore-15.2.0: install directory not found"));
+    }
+
+    #[test]
+    fn a_prefix_without_a_software_directory_is_refused() {
+        let prefix = tempfile::tempdir().expect("prefix");
+        let mut query = query(&["zlib-1.3.1-GCCcore-15.2.0.eb"]);
+        query.prefix = Some(prefix.path().to_path_buf());
+        let error = rebuild_set(&query).expect_err("prefix");
+        assert!(
+            error.to_string().contains("no software directory"),
+            "{error}"
+        );
     }
 
     #[test]

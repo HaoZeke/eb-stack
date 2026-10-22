@@ -28,6 +28,7 @@ mod foreign;
 pub mod hierarchy;
 mod index_bump;
 pub mod input_hash;
+mod install_prefix;
 pub mod jenkins;
 pub mod luarocks;
 mod manifest;
