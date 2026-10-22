@@ -6,6 +6,9 @@ use eb_stack::campaign::{
     claim_finding, resolve_finding, run_campaign as execute_campaign, CampaignRequest,
     CampaignStatus, FindingResolution,
 };
+use eb_stack::easyblock_reach::{
+    diff_sources, parse_installed, reach, read_sources, write_report, DiffRequest, ReachQuery,
+};
 use eb_stack::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
 use eb_stack::package_config::PackageConfigLayer;
 use eb_stack::package_sources::{PackageSourceRoots, SourceRootKind};
@@ -75,6 +78,8 @@ enum Command {
         #[arg(long)]
         workspace: Option<PathBuf>,
     },
+    /// Which easyconfigs an easyblock or framework change reaches.
+    EasyblockReach(Box<EasyblockReachArgs>),
 }
 
 #[derive(Subcommand, Debug)]
@@ -558,7 +563,113 @@ fn main() -> Result<()> {
             eb_stack::mcp::run_server(stdin.lock(), stdout.lock()).context("MCP stdio server")?;
             Ok(())
         }
+        Command::EasyblockReach(args) => run_easyblock_reach(*args),
     }
+}
+
+#[derive(clap::Args, Debug)]
+struct EasyblockReachArgs {
+    /// Easyblock trees. Earlier roots win a class name.
+    #[arg(long)]
+    easyblocks: Vec<PathBuf>,
+    /// Framework trees, indexed the same way as easyblocks.
+    #[arg(long)]
+    framework: Vec<PathBuf>,
+    /// Easyconfig files or trees.
+    #[arg(long)]
+    easyconfigs: Vec<PathBuf>,
+    /// A changed Python file. Repeat for each file.
+    #[arg(long)]
+    file: Vec<PathBuf>,
+    /// Commit range passed to `git diff --name-only`, for example `base..HEAD`.
+    #[arg(long)]
+    range: Option<String>,
+    /// Pull request number. Fetched as `refs/pull/<n>/head`.
+    #[arg(long)]
+    pr: Option<u64>,
+    /// Remote to fetch the pull request from.
+    #[arg(long, default_value = "origin")]
+    remote: String,
+    /// Base branch for the pull request merge-base.
+    #[arg(long, default_value = "develop")]
+    base: String,
+    /// Clone `git` reads. Defaults to the first `--easyblocks` path.
+    #[arg(long)]
+    repo: Option<PathBuf>,
+    /// Installed module names, one per line.
+    #[arg(long)]
+    installed: Option<PathBuf>,
+    /// Also list modules that depend on a reached module.
+    #[arg(long)]
+    reverse: bool,
+    /// RFC 3339 timestamp stored in the report. Defaults to now.
+    #[arg(long)]
+    generated_at: Option<String>,
+    /// Directory for `reach.toml`, `reach.json`, and `reach.md`.
+    #[arg(long, default_value = "easyblock-reach")]
+    out_dir: PathBuf,
+}
+
+fn run_easyblock_reach(args: EasyblockReachArgs) -> Result<()> {
+    if args.file.is_empty() && args.range.is_none() && args.pr.is_none() {
+        bail!("pass --file, --range, or --pr");
+    }
+    if args.easyblocks.is_empty() && args.framework.is_empty() {
+        bail!("pass --easyblocks or --framework");
+    }
+    if args.easyconfigs.is_empty() {
+        bail!("pass --easyconfigs");
+    }
+    let mut changed = read_sources(&args.file).context("read --file")?;
+    if args.range.is_some() || args.pr.is_some() {
+        let repo = args
+            .repo
+            .clone()
+            .or_else(|| args.easyblocks.first().cloned())
+            .context("--repo or --easyblocks is the clone to diff")?;
+        changed.extend(
+            diff_sources(&DiffRequest {
+                repo,
+                range: args.range.clone(),
+                pr: args.pr,
+                remote: args.remote.clone(),
+                base: args.base.clone(),
+            })
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+            .context("diff")?,
+        );
+    }
+    let installed = match &args.installed {
+        Some(path) => parse_installed(
+            &std::fs::read_to_string(path).with_context(|| path.display().to_string())?,
+        ),
+        None => Default::default(),
+    };
+    let mut roots = args.easyblocks.clone();
+    roots.extend(args.framework.iter().cloned());
+    let generated_at = args
+        .generated_at
+        .clone()
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let report = reach(&ReachQuery {
+        roots,
+        easyconfigs: args.easyconfigs.clone(),
+        changed,
+        installed,
+        reverse: args.reverse,
+        generated_at,
+    })
+    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    write_report(&report, &args.out_dir).map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    println!(
+        "easyconfigs={} installed={} classes={} reverse={} out={}",
+        report.easyconfig_count,
+        report.installed_count,
+        report.reached_classes.len(),
+        report.reverse.len(),
+        args.out_dir.display()
+    );
+    Ok(())
 }
 
 fn run_package(command: PackageCommand) -> Result<()> {
