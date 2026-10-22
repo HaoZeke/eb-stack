@@ -109,3 +109,26 @@ workflow file.
 Why the files are regenerated on every run, and why a second build of a
 shared module overwrites the first binary, is covered in
 [[file:../explanation/pr-overlap.org][from one easystack line to a build set]].
+
+* Order the merges
+
+~--merge-order~ writes ~out/merge-order.toml~ and appends a table to
+~out/overlap.md~. ~--merged 11~ below treats pull request 11 as already
+installed, then orders the other two. The three JSON objects are pull
+requests 11 and 13 adding ~freetype-2.14.1-GCCcore-15.2.0.eb~, and pull
+request 12 adding ~Graphviz-14.0.2-GCCcore-15.2.0.eb~, on the 2026.06
+easystack from the fixture test.
+
+#+begin_src bash
+eb-stack pr-overlap --pr prs.json \
+  --easyconfigs tests/pr_overlap_fixtures/release \
+  --installed tests/pr_overlap_fixtures/installed.txt \
+  --installed-label x86_64/amd/zen4 \
+  --generated-at 2026-10-22T00:00:00Z \
+  --merge-order --merged 11 \
+  --out-dir out
+#+end_src
+
+Position 1 in that run is pull request 13, which builds nothing once 11
+has merged, and position 2 is pull request 12, which still builds Graphviz.
+The rule is in [[file:../explanation/pr-overlap.org][Merge order and knock-on]].

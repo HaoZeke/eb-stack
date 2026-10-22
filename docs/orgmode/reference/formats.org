@@ -245,3 +245,36 @@ and any unresolved requirements. Pull requests are written as ~#N~ text when
 ~--repo-url~ is empty, and as links otherwise. The flag defaults to
 ~https://github.com/EESSI/software-layer~. The file links on GitHub without adding
 an entry to a pull request timeline.
+
+** ~merge-order.toml~
+
+Written only with ~--merge-order~ (or ~--merged~, which turns that flag
+on). The same never-merge header. Schema ~1~.
+
+| Field | Meaning |
+|-
+| ~schema_version~ | ~1~ |
+| ~generated_at~ | Same timestamp as the overlap index |
+| ~installed_source~ | Label of the installed list |
+| ~merged~ | ~--merged~ numbers, ascending. Empty when the flag is absent |
+| ~steps~ | One step per pull request that is not in ~merged~ |
+| ~cycles~ | Strongly connected sets. Each set is sorted, and the sets are sorted |
+| ~conflicts~ | Easystack paths edited by two or more pull requests in a colliding way |
+
+Each ~[[steps]]~ table:
+
+| Field | Meaning |
+|-
+| ~position~ | 1-based index in ~steps~ |
+| ~pr~ | Pull request number |
+| ~after~ | Direct predecessors in the binding graph, ascending |
+| ~builds~ | Residual ~to_build~ once every earlier step has merged, sorted |
+| ~saves~ | Later pull requests, and the modules they no longer build |
+| ~reason~ | Why this pull request was picked |
+
+~saves~ is ~[[steps.saves]]~ with ~pr~ and ~modules~. A conflict has
+~easystack~, ~prs~, and ~kind~. ~kind~ is ~same-insertion~ or ~same-entry~.
+
+With ~--merge-order~, ~overlap.md~ gains a Merge order table: position,
+pull request, build count, saves, and after. Conflicts follow that table
+when any were found. Without the flag the Markdown file is unchanged.

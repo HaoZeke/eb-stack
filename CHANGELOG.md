@@ -67,6 +67,12 @@ All notable changes to this project are documented here.
 - `eb_recipe_check` requires `easyconfigs` to contain at least one path
   (`minItems: 1`). An empty list returns
   `argument easyconfigs requires at least one path`.
+- `pr-overlap --merge-order` writes `merge-order.toml` and appends a Merge
+  order table to `overlap.md`. The order builds each shared module once.
+  `--merged N` repeats, implies `--merge-order`, and treats those pull
+  requests as already installed. Two easystack edits at the same insertion
+  point, or with the same added entry text, are recorded as conflicts.
+  See `docs/orgmode/howto/pr-overlap.org`.
 - `pr-overlap` closes the easystack lines an open pull request adds and
   reports the modules more than one of them would build. `--pr` takes one
   JSON path or several after the same flag, which is what `in/prs/*.json`

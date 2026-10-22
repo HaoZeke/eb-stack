@@ -343,6 +343,8 @@ eb-stack pr-overlap \
   [--easyblocks DIR]... \
   [--easyblocks-commit COMMIT=DIR]... \
   [--generated-at RFC3339] \
+  [--merge-order] \
+  [--merged N]... \
   [--repo-url URL] \
   [--out-dir pr-overlap]
 #+end_src
@@ -395,6 +397,27 @@ request's file is removed: the directory is the open set of this run.
 ~--repo-url~ defaults to ~https://github.com/EESSI/software-layer~. The
 report links each pull request there. Pass another URL to link somewhere
 else, or an empty URL to write ~#N~ text.
+~--merge-order~ also writes ~merge-order.toml~ and appends a Merge order
+table to ~overlap.md~. Without the flag, ~prs/~, ~overlap.toml~, and
+~overlap.md~ are unchanged. ~--merged N~ repeats and implies
+~--merge-order~. N has to be a number in the ~--pr~ input. This run
+names a missing one:
+
+#+begin_src bash
+eb-stack pr-overlap --pr prs.json \
+  --easyconfigs tests/pr_overlap_fixtures/release \
+  --installed tests/pr_overlap_fixtures/installed.txt \
+  --installed-label x86_64/amd/zen4 \
+  --generated-at 2026-10-22T00:00:00Z \
+  --merge-order --merged 11 --merged 999 \
+  --out-dir out
+#+end_src
+
+The error is ~--merged 999: no pull request with that number~. The same
+command with only ~--merged 11~ treats pull request 11 as already
+installed and orders the rest. Pull requests 11 and 13 add
+~freetype-2.14.1-GCCcore-15.2.0.eb~. Pull request 12 adds
+~Graphviz-14.0.2-GCCcore-15.2.0.eb~, which reaches freetype.
 
 * Target commands
 

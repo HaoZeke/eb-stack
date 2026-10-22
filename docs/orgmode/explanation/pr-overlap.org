@@ -452,3 +452,30 @@ Computed ~2026-10-19T14:10:51Z~. Its ~overlap.md~ prints:
 and does not list ~eOn/3.6.0-foss-2026.1~ in ~to_build~. The dependencies of
 that recipe stay in ~to_build~. The report says the class is missing. It
 does not invent a successful dry run.
+
+* Merge order and knock-on
+
+1. Edge A -> B when a module in B's ~to_build~ is an easystack entry A adds
+   (A asks for it by name; B only reaches it). Edges both ways form a cycle.
+2. Among pull requests with no remaining incoming edge, pick the one whose
+   residual build set is smallest, then the lowest pull request number.
+3. After picking, add its residual builds to the installed set and recompute
+   residuals for the rest. ~saves~ is that difference.
+4. A strongly connected component is reported in ~cycles~. Edges inside it
+   are dropped, and rule 2 orders its pull requests with every other pull
+   request that has no remaining incoming edge.
+
+The module an entry asks for is the easyconfig filename with the package
+name and the rest split by ~/~, the same ~name/version[-toolchain]versionsuffix~
+string ~to_build~ uses. ~Lib-1.0-GCCcore-15.2.0.eb~ asks for
+~Lib/1.0-GCCcore-15.2.0~.
+
+~--merged~ numbers are not steps. Their ~to_build~ modules count as
+installed before rule 2 runs. A number that is not in the ~--pr~ input is
+an error, and the message names that number.
+
+For each easystack path changed by 2 or more pull requests, the insertion
+point is the 0-based index of the base line before the first added line,
+from a line LCS of base and head. The point is -1 when the added lines
+start at the top of the file. The same point is ~same-insertion~. Identical
+added lines are ~same-entry~.
