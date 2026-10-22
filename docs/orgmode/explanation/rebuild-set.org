@@ -3,7 +3,10 @@
 
 The patch keeps the easyconfig filename and the version. ~eb-stack
 rebuild-set~ closes the deployed easystacks and walks backward from each
-patched easyconfig through the installed modules.
+patched easyconfig through the installed modules. The closure is everything
+that depends on the patched module within its toolchain generation. An
+unpinned dependency is resolved inside the dependent's own generation, so
+a module built with another generation is not a row.
 
 The walk starts from the easyconfig graph. ~--prefix~ and ~--check-static~
 then read the installed files. The commands are in

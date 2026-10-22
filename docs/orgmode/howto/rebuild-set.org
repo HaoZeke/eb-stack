@@ -3,7 +3,9 @@
 
 Goal: the patched easyconfigs keep their filenames and versions. Report
 which installed modules must be rebuilt, which need a review, and which
-link the patched package as a shared library.
+link the patched package as a shared library. The set is the rebuild
+closure: every installed module that depends on the patched one within
+its toolchain generation, and no module from another generation.
 
 * Run it on a mounted stack
 

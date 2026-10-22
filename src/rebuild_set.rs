@@ -1139,6 +1139,43 @@ mod tests {
     }
 
     #[test]
+    fn the_closure_stays_inside_the_patched_modules_generation() {
+        let mut all = stack();
+        all.push(cand(
+            "SameGen",
+            "1.0",
+            tc("foss", "2026.1"),
+            vec![dep("zlib", "1.3.1")],
+            vec![],
+            vec![],
+        ));
+        all.push(cand(
+            "OtherGen",
+            "1.0",
+            tc("foss", "2025b"),
+            vec![dep("zlib", "1.3.1")],
+            vec![],
+            vec![],
+        ));
+        let mut query = query(&["zlib-1.3.1-GCCcore-15.2.0.eb"]);
+        query.installed = installed(&all);
+        query.easystacks = vec![easystack(&all)];
+        query.base = all;
+        let document = rebuild_set(&query).expect("rebuild set");
+        let same = row(&document, "SameGen/1.0-foss-2026.1");
+        assert_eq!(same.class, CLASS_NO_REBUILD);
+        assert_eq!(same.edge_kind, "runtime");
+        assert!(
+            !document
+                .rows
+                .iter()
+                .any(|row| row.dependent.starts_with("OtherGen/")),
+            "another generation is not a dependent: {:?}",
+            document.rows
+        );
+    }
+
+    #[test]
     fn a_filtered_dependency_is_not_a_reverse_edge() {
         let mut query = query(&["zlib-1.3.1-GCCcore-15.2.0.eb"]);
         query.filter_deps = FilterDeps::parse(&["zlib".to_string()]).expect("filter");

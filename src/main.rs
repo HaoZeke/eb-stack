@@ -91,11 +91,12 @@ enum Command {
     PrOverlap(Box<PrOverlapArgs>),
     /// Which installed modules an in-place easyconfig patch forces a rebuild of.
     ///
-    /// Resolves the deployed easystacks, then the installed reverse dependents
-    /// of each changed easyconfig. Classification uses the easyconfig graph
-    /// only: a runtime dependency needs no rebuild, a builddependency only
-    /// needs review, and the patched easyconfig or a bundle that ships it as
-    /// an extension must be rebuilt.
+    /// The closure is everything that depends on the patched module within
+    /// its toolchain generation. Resolves the deployed easystacks, then the
+    /// installed reverse dependents of each changed easyconfig. Classification
+    /// uses the easyconfig graph only: a runtime dependency needs no rebuild,
+    /// a builddependency only needs review, and the patched easyconfig or a
+    /// bundle that ships it as an extension must be rebuilt.
     RebuildSet(Box<RebuildSetArgs>),
 }
 
