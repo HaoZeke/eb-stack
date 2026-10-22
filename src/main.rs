@@ -152,6 +152,9 @@ struct PrOverlapArgs {
     /// Timestamp to record (RFC 3339); defaults to now, in UTC.
     #[arg(long)]
     generated_at: Option<String>,
+    /// Write `merge-order.toml`: an order that builds each shared module once.
+    #[arg(long)]
+    merge_order: bool,
     /// Repository URL used for links in the Markdown report.
     #[arg(long, default_value = "https://github.com/EESSI/software-layer")]
     repo_url: String,
@@ -840,6 +843,10 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
         args.out_dir.join("overlap.md"),
         render_markdown(&records, &index, &args.repo_url),
     )?;
+    if args.merge_order {
+        let order = eb_stack::merge_order::plan(&records, &index);
+        std::fs::write(args.out_dir.join("merge-order.toml"), to_toml(&order)?)?;
+    }
     println!(
         "prs={} records={} shared_modules={} skipped_easyconfigs={} out={}",
         prs.len(),

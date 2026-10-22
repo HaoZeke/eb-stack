@@ -32,6 +32,8 @@ pub mod jenkins;
 pub mod luarocks;
 mod manifest;
 pub mod mcp;
+#[rustfmt::skip]
+pub mod merge_order;
 pub mod miner;
 pub mod modulerc;
 pub mod package;
