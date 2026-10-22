@@ -333,6 +333,24 @@ eb-stack stack solve \
   --stack-diff-out stack.diff.md
 ```
 
+## See which easyconfigs an easyblock change reaches
+
+```sh
+eb-stack easyblock-reach \
+  --easyblocks ~/src/easybuild-easyblocks \
+  --easyconfigs ~/src/easybuild-easyconfigs \
+  --file ~/src/easybuild-easyblocks/easybuild/easyblocks/generic/cmakemake.py \
+  --reverse \
+  --out-dir /tmp/cmakemake-reach
+```
+
+A change to `CMakeMake` reaches recipes that name it, recipes whose
+`EB_<Name>` class subclasses it (GROMACS does), and extensions or bundle
+components that resolve to it. `--range A..B` and `--pr N` read the
+changed Python from a local clone (`refs/pull/N/head` for a pull request).
+`--reverse` adds modules that depend on a reached module. The report is
+`reach.toml`, `reach.json`, and `reach.md`.
+
 ## MCP
 
 `eb-stack mcp` exposes the same version-one workflows over stdio.

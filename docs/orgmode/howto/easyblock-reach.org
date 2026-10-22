@@ -1,0 +1,72 @@
+#+TITLE: Which easyconfigs an easyblock change reaches
+#+OPTIONS: toc:t num:nil
+
+A change to an easyblock, generic or software-specific, or to a framework
+module an easyblock imports, reaches the easyconfigs that use that class.
+The class may be the ~easyblock~ line, the implied ~EB_<Name>~ class, a
+subclass, an extension class, or a bundle component class.
+
+* One changed file
+
+#+begin_src bash
+eb-stack easyblock-reach \
+  --easyblocks ~/src/easybuild-easyblocks \
+  --easyconfigs ~/src/easybuild-easyconfigs \
+  --file ~/src/easybuild-easyblocks/easybuild/easyblocks/generic/cmakemake.py \
+  --installed modules.txt \
+  --reverse \
+  --out-dir /tmp/cmakemake-reach
+#+end_src
+
+~modules.txt~ lists installed modules, one per line:
+~name/version[-toolchain]versionsuffix~. Blank lines and ~#~ comments are
+ignored.
+
+The command writes ~reach.toml~, ~reach.json~, and ~reach.md~. The TOML
+file starts with the generated-file header. The markdown opens with the
+same warning as an HTML comment. Neither is a file to merge.
+
+* A commit range or a pull request
+
+#+begin_src bash
+eb-stack easyblock-reach \
+  --easyblocks ~/src/easybuild-easyblocks \
+  --easyconfigs ~/src/easybuild-easyconfigs \
+  --range origin/develop..HEAD
+
+eb-stack easyblock-reach \
+  --easyblocks ~/src/easybuild-easyblocks \
+  --framework ~/src/easybuild-framework \
+  --easyconfigs ~/src/easybuild-easyconfigs \
+  --pr 5000 \
+  --repo ~/src/easybuild-easyblocks \
+  --base develop
+#+end_src
+
+~--range~ is passed to ~git diff --name-only~. ~--pr~ fetches
+~refs/pull/<n>/head~ and diffs it against the merge-base with ~--base~
+(default ~develop~). ~--repo~ is the clone ~git~ reads; it defaults to the
+first ~--easyblocks~ path. The class hierarchy is the working tree. A
+deleted file is read from the base so its class is still seen.
+
+* What counts as a use
+
+- the ~easyblock~ line
+- no ~easyblock~ line: ~EB_<Name>~ derived from the software name
+- a subclass, read from the Python ~class~ statement, so ~EB_GROMACS(CMakeMake)~
+  is reached by a change to ~CMakeMake~
+- an extension's own ~easyblock~, else ~EB_<extname>~ when that class
+  exists, else ~exts_classmap~, else ~exts_defaultclass~
+- a component's own ~easyblock~, else ~EB_<name>~ when that class exists,
+  else ~default_easyblock~
+
+A class that assigns ~exts_defaultclass~ overwrites the easyconfig.
+~PythonBundle~ assigns ~PythonPackage~, including from inside ~with~.
+For a component, ~default_easyblock~ in the easyconfig wins over the class.
+
+A framework module reaches the easyblocks that import it, then their
+subclasses. Imports are not followed past that.
+
+~--reverse~ lists modules that depend on a reached module and would need a
+rebuild: runtime, builddependency, extension, or toolchain. Reached modules
+are not listed again.

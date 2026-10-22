@@ -67,6 +67,15 @@ All notable changes to this project are documented here.
 - `eb_recipe_check` requires `easyconfigs` to contain at least one path
   (`minItems: 1`). An empty list returns
   `argument easyconfigs requires at least one path`.
+- `eb-stack easyblock-reach` reports which easyconfigs and installed
+  modules a changed easyblock or framework module reaches. Inputs are
+  `--file`, a `--range` in a local clone, or `--pr` fetched as
+  `refs/pull/<n>/head`. Matching covers the `easyblock` line, the implied
+  `EB_<Name>` class, subclasses parsed from the Python class statement,
+  extension classes (`exts_defaultclass`, `exts_classmap`, per-extension
+  `easyblock`), and bundle components. `--reverse` adds the
+  reverse-dependency closure. Output is `reach.toml`, `reach.json`, and
+  `reach.md`. See `docs/orgmode/howto/easyblock-reach.org`.
 
 - `package plan` and `package bump` raise a `missing-easyblock` residual
   (stage `emit`, severity `judgment`, id `missing-easyblock:<class>`) when a

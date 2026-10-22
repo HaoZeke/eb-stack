@@ -1,8 +1,9 @@
 #+TITLE: Command-line reference
 #+OPTIONS: toc:t num:nil
 
-~eb-stack~ has five namespaced command groups plus an MCP server. All paths
-written by package commands are deterministic bundle artifacts.
+~eb-stack~ has five namespaced command groups, ~easyblock-reach~, and an
+MCP server. All paths written by package commands are deterministic bundle
+artifacts.
 
 * Command map
 
@@ -21,6 +22,7 @@ written by package commands are deterministic bundle artifacts.
 | ~campaign run~ / ~campaign status~ | Execute or inspect a persisted build campaign |
 | ~campaign finding ...~ | Claim and resolve typed build findings |
 | ~mcp [--workspace]~ | Serve the same workflows over stdio, with recipe file tools rooted at ~--workspace~ |
+| ~easyblock-reach~ | Report easyconfigs and installed modules reached by an easyblock or framework change |
 
 * Package commands
 
@@ -375,6 +377,27 @@ independently.
 
 See [[file:campaigns.org][campaign state and typed findings]] for the serialized
 state, claim ladder, class/disposition table, and repair protocol.
+
+* ~easyblock-reach~
+
+#+begin_src bash
+eb-stack easyblock-reach \
+  --easyblocks EASYBLOCKS \
+  [--framework FRAMEWORK]... \
+  --easyconfigs EASYCONFIGS \
+  [--file PATH]... \
+  [--range A..B | --pr N] \
+  [--remote origin] [--base develop] [--repo CLONE] \
+  [--installed MODULES.txt] [--reverse] \
+  [--generated-at RFC3339] \
+  [--out-dir easyblock-reach]
+#+end_src
+
+Pass at least one of ~--file~, ~--range~, and ~--pr~, and at least one of
+~--easyblocks~ and ~--framework~. ~--range~ and ~--pr~ read Python files
+from the clone (~--repo~, or the first ~--easyblocks~ path). The report is
+~reach.toml~, ~reach.json~, and ~reach.md~. See
+[[file:../howto/easyblock-reach.org][which easyconfigs an easyblock change reaches]].
 
 * MCP
 
