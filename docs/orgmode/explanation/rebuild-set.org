@@ -5,8 +5,8 @@ The patch keeps the easyconfig filename and the version. ~eb-stack
 rebuild-set~ closes the deployed easystacks and walks backward from each
 patched easyconfig through the installed modules.
 
-The walk uses the easyconfig graph only. It does not guess how a binary
-was linked. The commands are in
+The walk starts from the easyconfig graph. ~--prefix~ and ~--check-static~
+then read the installed files. The commands are in
 [[file:../howto/rebuild-set.org][what an in-place patch forces EESSI to rebuild]].
 The output fields are in [[file:../reference/formats.org][output formats]].
 
@@ -33,6 +33,45 @@ the reason names the bundle.
 
 A toolchain edge is indexed and not classified. Patching a compiler is
 outside these three classes.
+
+A review dependent is reported once. The changed column lists every
+patched easyconfig that put it there. When ~--prefix~ found static
+archives, the reason names them. The other classes stay one row per edge.
+
+* Installed archives
+
+~--prefix~ is the installed EESSI prefix. The install directory of
+~Name/version~ is ~software/Name/version~. A static archive is a ~*.a~
+file directly under a ~lib*~ directory there.
+
+A patched module whose directory exists and contains no such file cannot
+have been linked statically. A builddependency-only dependent of that
+module is no-rebuild, and the reason is ~no static archive installed~.
+Archives that are there keep the row in review, and the reason names
+them. A missing install directory is a note. The row stays in review. A
+prefix with no ~software~ directory is an error.
+
+* Defined symbols
+
+~--check-static~ is off unless it is passed, and it needs ~--prefix~. It
+reads defined dynamic symbols of each remaining review dependent and
+compares them with the exports of the patched libraries that put the row
+in review. The exports come from ~lib*/*.so~ and ~lib*/*.so.*~, skipping
+symlinks. When that set is empty, they come from the global and weak
+defined symbols in the ~*.a~ members. Version suffixes (~@@VERS~ and
+~@VERS~) are stripped before the comparison.
+
+A hit means the dependent defines an export of the patched library, which
+is what a static link copies in. The row becomes must-rebuild, and the
+reason names the file and the symbols. No hit, and a readable export set,
+is no-rebuild. An empty export set stays in review. A missing install
+directory of the dependent is a note, and the row stays in review.
+
+The scan can go wrong. It sees dynamic symbols only, so a hidden, local,
+or inlined static link is a false no-rebuild. A short name shared with
+another library is a false must-rebuild. Scripts, bytecode, and libraries
+opened with dlopen are invisible. A static archive shows that a static
+link was possible, not that it happened.
 
 * What counts as installed
 
@@ -61,5 +100,8 @@ application that depends on that bundle at runtime is no-rebuild.
 The rebuild easystack contains zlib and the bundle, each with
 ~rebuild: true~. It does not contain libpng.
 
-A later ~--check-static <prefix>~ could read the installed binaries and
-move a review row. This report does not.
+With ~--prefix~, the CMake row stays in review only when the installed
+zlib ships a static archive, and the reason names that archive. With
+~--check-static~, CMake is must-rebuild when one of its installed ELF
+files defines an export of that archive, and no-rebuild when none of
+them does.

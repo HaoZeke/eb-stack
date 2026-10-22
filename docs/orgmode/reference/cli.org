@@ -460,12 +460,14 @@ eb-stack rebuild-set \
   [--easyblocks DIR]... \
   [--easyblocks-commit COMMIT=DIR]... \
   [--generated-at RFC3339] \
+  [--prefix "$EESSI_SOFTWARE_PATH"] \
+  [--check-static] \
   [--out-dir rebuild-set]
 #+end_src
 
 Resolves the deployed easystacks and the installed reverse dependents of
 each patched easyconfig. The patch keeps the filename and the version.
-Classification uses the easyconfig graph only.
+Classification starts from the easyconfig graph.
 
 ~--changed~ is an easyconfig filename. Repeat it, or pass a file that does
 not end in ~.eb~: one filename per line, blank lines and ~#~ comments
@@ -482,14 +484,26 @@ module stays, because it is already installed.
 A runtime dependency is ~no-rebuild~. A dependent reached only through
 builddependencies is ~review~. The patched easyconfig, and a bundle whose
 ~exts_list~ names that package and version, are ~must-rebuild~. A toolchain
-edge is not classified. See
+edge is not classified. A review dependent is one row, and ~changed~ lists
+every patched easyconfig that put it there. See
 [[file:../explanation/rebuild-set.org][what an in-place patch forces a rebuild of]].
+
+~--prefix~ reads ~software/<name>/<version>/lib*/*.a~. No static archive
+makes a builddependency-only dependent no-rebuild, with the reason ~no
+static archive installed~. Archives that are installed keep the row in
+review and are named. A missing install directory is a note.
+
+~--check-static~ needs ~--prefix~. It compares defined dynamic symbols of
+the remaining review dependents with the patched library's exports. A hit
+is must-rebuild. No hit is no-rebuild. An empty export set stays in
+review. The scan sees dynamic symbols only, so a hidden or inlined static
+link is a false no-rebuild, and a short name shared with another library
+is a false must-rebuild.
 
 The output directory holds ~rebuild-set.json~, ~rebuild-set.md~, and
 ~rebuilds/<YYYYMMDD>-eb-<version>-cve-patches.yml~. The easystack contains
-class ~must-rebuild~ only. A second run replaces the ~rebuilds/*.yml~
-files. A later ~--check-static <prefix>~ could inspect installed binaries.
-This command does not.
+class ~must-rebuild~ only, including a dependent that ~--check-static~
+promoted. A second run replaces the ~rebuilds/*.yml~ files.
 
 * Target commands
 

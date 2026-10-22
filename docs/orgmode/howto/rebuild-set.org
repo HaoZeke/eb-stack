@@ -25,6 +25,8 @@ eb-stack rebuild-set \
   --installed-modulerc "$EESSI_SOFTWARE_PATH/modules/all" \
   --filter-deps "$EASYBUILD_FILTER_DEPS" \
   --installed-label x86_64/amd/zen4 \
+  --prefix "$EESSI_SOFTWARE_PATH" \
+  --check-static \
   --out-dir out/
 #+end_src
 
@@ -57,8 +59,29 @@ must-rebuild only, with ~rebuild: true~. The date is taken from
 version named by the easystack filenames. A second run replaces the
 ~rebuilds/*.yml~ files from the previous run.
 
-A later ~--check-static <prefix>~ could inspect installed binaries. This
-command does not.
+~--prefix~ is ~$EESSI_SOFTWARE_PATH~. For each patched module the command
+reads ~software/<name>/<version>/lib*/*.a~. A patched module that ships
+no static archive cannot have been linked statically, so a
+builddependency-only dependent is no-rebuild and the reason is ~no static
+archive installed~. Archives that are installed keep the row in review
+and are named. A missing install directory is a note, and the row stays
+in review. A prefix with no ~software~ directory is an error.
+
+A review dependent is one row. The changed column lists every patched
+easyconfig that put it there.
+
+~--check-static~ needs ~--prefix~. For each remaining review dependent it
+reads defined dynamic symbols, the names ~nm -D --defined-only~ prints,
+from the installed ELF files. The patched library's names come from its
+shared objects, or from the archive members when it ships no shared
+object. A hit is must-rebuild. No hit is no-rebuild. An empty export set
+stays in review, because there was nothing to look for.
+
+The symbol scan can go wrong. It sees dynamic symbols only, so a hidden,
+local, or inlined static link is a false no-rebuild. A short name shared
+with another library is a false must-rebuild. Scripts, bytecode, and
+libraries opened with dlopen are invisible. A static archive shows that a
+static link was possible, not that it happened.
 
 Why a runtime dependency needs no rebuild, and why a bundle extension
 does, is covered in

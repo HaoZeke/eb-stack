@@ -23,7 +23,12 @@ All notable changes to this project are documented here.
   directory holds `rebuild-set.json`, `rebuild-set.md`, and one
   `rebuilds/<YYYYMMDD>-eb-<version>-cve-patches.yml` per EasyBuild version
   containing class `must-rebuild` only. See
-  `docs/orgmode/howto/rebuild-set.org`.
+  `docs/orgmode/howto/rebuild-set.org`. `--prefix` reads `lib*/*.a`
+  from the installed prefix: a patched module with no static archive is
+  no-rebuild for a builddependency-only dependent, and a review dependent
+  is one row. `--check-static` compares defined dynamic symbols of the
+  remaining review dependents with the patched library's exports and is
+  off unless it is passed.
 
 - `pr-overlap` stores each changed easystack and easyconfig on the
   record (`revisions`: path, kind, base and head text or blob ids).
