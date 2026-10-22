@@ -13,7 +13,7 @@
 //!    request that has no remaining incoming edge.
 
 use crate::jenkins::package_name;
-use crate::pr_overlap::{OverlapIndex, PrRecord};
+use crate::pr_overlap::{OverlapIndex, PrInput, PrRecord};
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::DiGraph;
 use petgraph::visit::EdgeRef;
@@ -73,13 +73,24 @@ pub fn entry_module(file: &str) -> Option<String> {
     Some(format!("{name}/{rest}"))
 }
 
-/// Order `records`. `index` supplies the timestamp and the installed-list label.
-pub fn plan(records: &[PrRecord], index: &OverlapIndex) -> MergeOrder {
-    let asked: BTreeMap<u64, BTreeSet<String>> = records.iter().map(|record| {
+/// Order `records`. `merged` pull requests are already installed: their
+/// `to_build` modules seed the residual, and they are not steps.
+/// `index` supplies the timestamp and the installed-list label.
+pub fn plan(records: &[PrRecord], index: &OverlapIndex, merged: &[u64]) -> MergeOrder {
+    let mut merged_ids: Vec<u64> = merged.to_vec();
+    merged_ids.sort_unstable();
+    merged_ids.dedup();
+    let merged_set: BTreeSet<u64> = merged_ids.iter().copied().collect();
+    let mut installed: BTreeSet<String> = BTreeSet::new();
+    for record in records.iter().filter(|r| merged_set.contains(&r.pr)) {
+        installed.extend(record.to_build.iter().cloned());
+    }
+    let active: Vec<&PrRecord> = records.iter().filter(|r| !merged_set.contains(&r.pr)).collect();
+    let asked: BTreeMap<u64, BTreeSet<String>> = active.iter().map(|record| {
         let set = record.entries.iter().filter_map(|e| entry_module(&e.easyconfig)).collect();
         (record.pr, set)
     }).collect();
-    let builds: BTreeMap<u64, BTreeSet<String>> = records
+    let builds: BTreeMap<u64, BTreeSet<String>> = active
         .iter()
         .map(|record| (record.pr, record.to_build.iter().cloned().collect()))
         .collect();
@@ -122,7 +133,6 @@ pub fn plan(records: &[PrRecord], index: &OverlapIndex) -> MergeOrder {
         }
     }
     let original = open.clone();
-    let mut installed: BTreeSet<String> = BTreeSet::new();
     let mut remaining: BTreeSet<u64> = open.keys().copied().collect();
     let mut steps = Vec::new();
     while !remaining.is_empty() {
@@ -171,11 +181,149 @@ pub fn plan(records: &[PrRecord], index: &OverlapIndex) -> MergeOrder {
         schema_version: MERGE_ORDER_SCHEMA_VERSION,
         generated_at: index.generated_at.clone(),
         installed_source: index.installed_source.clone(),
-        merged: Vec::new(),
+        merged: merged_ids,
         steps,
         cycles,
         conflicts: Vec::new(),
     }
+}
+
+/// The first `--merged` number that is not one of `inputs`, if any.
+pub fn unknown_merged(inputs: &[u64], merged: &[u64]) -> Option<u64> {
+    let known: BTreeSet<u64> = inputs.iter().copied().collect();
+    merged.iter().copied().find(|n| !known.contains(n))
+}
+
+/// Collisions on one easystack. The insertion point is the 0-based index of
+/// the base line before the first added line, or -1 when the addition starts
+/// at the top of the file. Identical added lines are `same-entry`.
+pub fn easystack_conflicts(prs: &[PrInput]) -> Vec<EasystackConflict> {
+    let mut by_path: BTreeMap<String, Vec<(u64, i64, String)>> = BTreeMap::new();
+    for pr in prs {
+        for change in &pr.easystacks {
+            let (point, added) = first_insertion(
+                change.base.as_deref().unwrap_or(""),
+                change.head.as_deref().unwrap_or(""),
+            );
+            if !added.is_empty() {
+                by_path.entry(change.path.clone()).or_default().push((pr.number, point, added));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (path, rows) in &by_path {
+        if rows.iter().map(|row| row.0).collect::<BTreeSet<_>>().len() < 2 {
+            continue;
+        }
+        let mut by_point: BTreeMap<i64, BTreeSet<u64>> = BTreeMap::new();
+        let mut by_text: BTreeMap<&str, BTreeSet<u64>> = BTreeMap::new();
+        for (pr, point, added) in rows {
+            by_point.entry(*point).or_default().insert(*pr);
+            by_text.entry(added.as_str()).or_default().insert(*pr);
+        }
+        for group in by_point.values().filter(|g| g.len() >= 2) {
+            out.push(EasystackConflict {
+                easystack: path.clone(),
+                prs: group.iter().copied().collect(),
+                kind: "same-insertion".into(),
+            });
+        }
+        for group in by_text.values().filter(|g| g.len() >= 2) {
+            out.push(EasystackConflict {
+                easystack: path.clone(),
+                prs: group.iter().copied().collect(),
+                kind: "same-entry".into(),
+            });
+        }
+    }
+    out.sort_by(|a, b| (&a.easystack, &a.kind, &a.prs).cmp(&(&b.easystack, &b.kind, &b.prs)));
+    out
+}
+
+fn first_insertion(base: &str, head: &str) -> (i64, String) {
+    let b: Vec<&str> = base.lines().collect();
+    let h: Vec<&str> = head.lines().collect();
+    let (n, m) = (b.len(), h.len());
+    let mut dp = vec![vec![0usize; m + 1]; n + 1];
+    for i in 1..=n {
+        for j in 1..=m {
+            dp[i][j] = if b[i - 1] == h[j - 1] {
+                dp[i - 1][j - 1] + 1
+            } else {
+                dp[i - 1][j].max(dp[i][j - 1])
+            };
+        }
+    }
+    let (mut i, mut j) = (n, m);
+    let mut added = Vec::new();
+    let mut point = -1i64;
+    while i > 0 || j > 0 {
+        if i > 0 && j > 0 && b[i - 1] == h[j - 1] && dp[i][j] == dp[i - 1][j - 1] + 1 {
+            i -= 1;
+            j -= 1;
+        } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
+            point = i as i64 - 1;
+            added.push(h[j - 1]);
+            j -= 1;
+        } else {
+            i -= 1;
+        }
+    }
+    added.reverse();
+    (point, added.join("\n"))
+}
+
+/// Markdown table appended to `overlap.md` when `--merge-order` is set.
+pub fn render_section(order: &MergeOrder, repo_url: &str) -> String {
+    let link = |n: u64| -> String {
+        if repo_url.is_empty() {
+            format!("#{n}")
+        } else {
+            format!("[#{n}]({}/pull/{n})", repo_url.trim_end_matches('/'))
+        }
+    };
+    let mut out = String::from(
+        "## Merge order\n\n| Position | PR | Builds | Saves | After |\n|---|---|---|---|---|\n",
+    );
+    for step in &order.steps {
+        let saves = step
+            .saves
+            .iter()
+            .map(|saved| {
+                let mods = saved.modules.iter().map(|m| format!("`{m}`")).collect::<Vec<_>>().join(", ");
+                format!("{} ({mods})", link(saved.pr))
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let after = step.after.iter().copied().map(link).collect::<Vec<_>>().join(", ");
+        out.push_str(&format!(
+            "| {} | {} | {} | {saves} | {after} |\n",
+            step.position,
+            link(step.pr),
+            step.builds.len()
+        ));
+    }
+    out.push('\n');
+    if !order.merged.is_empty() {
+        let list = order.merged.iter().copied().map(link).collect::<Vec<_>>().join(", ");
+        out.push_str(&format!("Treated as merged: {list}.\n\n"));
+    }
+    if !order.cycles.is_empty() {
+        for cycle in &order.cycles {
+            let list = cycle.iter().copied().map(link).collect::<Vec<_>>().join(", ");
+            out.push_str(&format!("Cycle: {list}.\n"));
+        }
+        out.push('\n');
+    }
+    if !order.conflicts.is_empty() {
+        out.push_str("| Easystack | Pull requests | Kind |\n|---|---|---|\n");
+        for conflict in &order.conflicts {
+            let prs = conflict.prs.iter().copied().map(link).collect::<Vec<_>>().join(", ");
+            out.push_str(&format!("| `{}` | {prs} | {} |\n", conflict.easystack, conflict.kind));
+        }
+        out.push('\n');
+    }
+    out
 }
 
 #[cfg(test)]
@@ -216,7 +364,7 @@ mod tests {
             generated_at: "2026-10-22T00:00:00Z".into(),
             filter_deps: FilterDeps::empty(),
             easyblocks: None,
-        }))
+        }), &[])
     }
 
     fn builds(order: &MergeOrder) -> Vec<(u64, Vec<String>)> {
@@ -278,5 +426,61 @@ mod tests {
         ]);
         assert_eq!(builds(&both), vec![(4, vec![shared.into()]), (8, vec!["Extra/1".into()])]);
         assert!(both.steps[0].after.is_empty(), "both ask for the module, so there is no edge");
+    }
+
+    #[test]
+    fn merged_pull_requests_shrink_the_residual_and_are_not_steps() {
+        let lib = "Lib/1.0-GCCcore-15.2.0";
+        let mid = "Mid/1.0-GCCcore-15.2.0";
+        let app = "App/2.0-GCCcore-15.2.0";
+        let records = [
+            rec(1, &[lib], &["Lib-1.0-GCCcore-15.2.0.eb"]),
+            rec(2, &[mid, lib], &["Mid-1.0-GCCcore-15.2.0.eb"]),
+            rec(3, &[app, mid, lib], &["App-2.0-GCCcore-15.2.0.eb"]),
+        ];
+        let index = overlap_index(&records, &OverlapConfig {
+            eessi_version: "2026.06".into(),
+            installed_source: "x86_64/amd/zen4".into(),
+            exclude_paths: Vec::new(),
+            include_paths: Vec::new(),
+            generated_at: "2026-10-22T00:00:00Z".into(),
+            filter_deps: FilterDeps::empty(),
+            easyblocks: None,
+        });
+        let order = plan(&records, &index, &[1]);
+        assert_eq!(order.merged, [1]);
+        assert_eq!(builds(&order), vec![(2, vec![mid.into()]), (3, vec![app.into()])]);
+        assert_eq!(unknown_merged(&[1, 2, 3], &[9]), Some(9));
+        assert_eq!(unknown_merged(&[1, 2], &[]), None);
+    }
+
+    #[test]
+    fn same_insertion_point_and_same_added_text_are_conflicts() {
+        use crate::pr_overlap::EasystackChange;
+        let pr = |n: u64, head: &str| PrInput {
+            number: n,
+            head_sha: "h".into(),
+            title: None,
+            easystacks: vec![EasystackChange {
+                path: "s.yml".into(),
+                base: Some("a\nb\nc\n".into()),
+                head: Some(head.into()),
+            }],
+        };
+        let found = easystack_conflicts(&[
+            pr(1, "a\nb\nX\nc\n"),
+            pr(2, "a\nb\nY\nc\n"),
+            pr(3, "a\nb\nX\nc\n"),
+        ]);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].kind, "same-entry");
+        assert_eq!(found[0].prs, [1, 3]);
+        assert_eq!(found[1].kind, "same-insertion");
+        assert_eq!(found[1].prs, [1, 2, 3]);
+        let top = easystack_conflicts(&[pr(4, "Z\na\nb\nc\n"), pr(5, "Z\na\nb\nc\n")]);
+        assert!(top.iter().any(|c| c.kind == "same-insertion" && c.prs == [4, 5]));
+        let section = render_section(&order(&[rec(10, &["D/1"], &["D-1.eb"])]), "");
+        assert!(section.contains("| Position | PR | Builds | Saves | After |"));
+        assert!(section.contains("| 1 | #10 | 1 |  |  |"));
     }
 }

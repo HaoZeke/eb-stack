@@ -155,6 +155,9 @@ struct PrOverlapArgs {
     /// Write `merge-order.toml`: an order that builds each shared module once.
     #[arg(long)]
     merge_order: bool,
+    /// Pull request already merged. Repeat the flag. Implies `--merge-order`.
+    #[arg(long)]
+    merged: Vec<u64>,
     /// Repository URL used for links in the Markdown report.
     #[arg(long, default_value = "https://github.com/EESSI/software-layer")]
     repo_url: String,
@@ -843,9 +846,22 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
         args.out_dir.join("overlap.md"),
         render_markdown(&records, &index, &args.repo_url),
     )?;
-    if args.merge_order {
-        let order = eb_stack::merge_order::plan(&records, &index);
+    if args.merge_order || !args.merged.is_empty() {
+        if let Some(number) = eb_stack::merge_order::unknown_merged(
+            &prs.iter().map(|pr| pr.number).collect::<Vec<_>>(),
+            &args.merged,
+        ) {
+            anyhow::bail!("--merged {number}: no pull request with that number");
+        }
+        let mut order = eb_stack::merge_order::plan(&records, &index, &args.merged);
+        order.conflicts = eb_stack::merge_order::easystack_conflicts(&prs);
         std::fs::write(args.out_dir.join("merge-order.toml"), to_toml(&order)?)?;
+        let mut md = std::fs::read_to_string(args.out_dir.join("overlap.md"))?;
+        md.push_str(&eb_stack::merge_order::render_section(
+            &order,
+            &args.repo_url,
+        ));
+        std::fs::write(args.out_dir.join("overlap.md"), md)?;
     }
     println!(
         "prs={} records={} shared_modules={} skipped_easyconfigs={} out={}",
