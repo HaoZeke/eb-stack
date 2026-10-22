@@ -1495,3 +1495,42 @@ fn mcp_build_test_is_refused_unless_builds_are_allowed() {
         "{response}"
     );
 }
+
+#[test]
+fn mcp_dry_run_without_easybuild_is_an_environment_failure() {
+    let _guard = WORKSPACE_ENV_LOCK.lock().expect("workspace env lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(temp.path().join("demo.eb"), "name = 'demo'\n").expect("recipe");
+    std::fs::write(
+        temp.path().join("mod.py"),
+        "class EB_Demo(object):\n    pass\n",
+    )
+    .expect("module");
+    let previous_eb = std::env::var_os("EB_STACK_EB");
+    let previous_root = std::env::var_os("EB_STACK_WORKSPACE");
+    std::env::set_var("EB_STACK_EB", temp.path().join("missing-eb"));
+    std::env::set_var("EB_STACK_WORKSPACE", temp.path());
+    let response = call(
+        91,
+        "eb_easyblock_dry_run",
+        json!({"recipe": "demo.eb", "easyblocks": ["mod.py"]}),
+    );
+    match previous_eb {
+        Some(value) => std::env::set_var("EB_STACK_EB", value),
+        None => std::env::remove_var("EB_STACK_EB"),
+    }
+    match previous_root {
+        Some(value) => std::env::set_var("EB_STACK_WORKSPACE", value),
+        None => std::env::remove_var("EB_STACK_WORKSPACE"),
+    }
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let body = &response["result"]["structuredContent"];
+    assert_eq!(body["failure_kind"], "environment", "{body}");
+    assert!(
+        body["summary"]
+            .as_str()
+            .unwrap_or("")
+            .contains("not a fault in your easyblock"),
+        "{body}"
+    );
+}

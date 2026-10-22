@@ -14,7 +14,7 @@ use crate::eb_run::{
     dry_run_next, error_lines, failed_dry_run_text, failure_kind, find_config_log,
     last_step_in_file, lmod_error, parse_dry_run, read_tail, recipe_toolchain_options, run_eb,
     split_steps, split_warnings, step_text, tail, threaded_findings, threaded_findings_text,
-    threaded_note, threaded_pairs, EbInvocation, ALLOW_BUILD_ENV,
+    threaded_note, threaded_pairs, EbInvocation, EbRun, ALLOW_BUILD_ENV,
 };
 use crate::eb_style::{
     format_style, format_style_file, hunks, is_formatting_code, lint_recipe_files_scoped,
@@ -1282,7 +1282,10 @@ fn eb_invocation(arguments: &Value) -> Result<EbInvocation, String> {
     Ok(EbInvocation {
         recipe: required_path(arguments, "recipe")?,
         easyblocks: path_array(arguments, "easyblocks")?,
-        robot: path_array(arguments, "robot")?,
+        robot: string_array(arguments, "robot")?
+            .into_iter()
+            .map(PathBuf::from)
+            .collect(),
         try_amend: string_array(arguments, "try_amend")?,
     })
 }
@@ -1316,6 +1319,29 @@ fn timeout_arg(arguments: &Value, default: u64, min: u64, max: u64) -> Duration 
     )
 }
 
+/// A missing `eb` binary is an environment failure: no easyblock code ran.
+///
+/// `run_eb` returns that as a tool error. Write it where the dry-run parser
+/// reads errors so `failure_kind` can classify it with every other environment
+/// failure instead of leaving the caller with an unclassified tool error.
+fn run_eb_or_absent(args: &[String], limit: Duration, output: &Path) -> Result<EbRun, String> {
+    match run_eb(args, limit, output) {
+        Ok(run) => Ok(run),
+        Err(error) if error.contains("eb is not on PATH") || error.contains("EB_STACK_EB=") => {
+            std::fs::write(output, format!("ERROR: {error}\n"))
+                .map_err(|err| format!("write {}: {err}", output.display()))?;
+            Ok(EbRun {
+                argv: vec!["eb".into()],
+                exit_code: Some(127),
+                timed_out: false,
+                seconds: 0,
+                output_file: output.to_path_buf(),
+            })
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// `eb_easyblock_dry_run`: the commands an easyblock generates, from `eb -x`.
 fn easyblock_dry_run(arguments: &Value) -> Result<Value, String> {
     let root = configured_workspace_root()?;
@@ -1325,7 +1351,7 @@ fn easyblock_dry_run(arguments: &Value) -> Result<Value, String> {
     }
     let dir = eb_run_dir(&root, "dry-run")?;
     let output = dir.join("eb.out");
-    let run = run_eb(
+    let run = run_eb_or_absent(
         &invocation.args(&["-x".to_string()]),
         timeout_arg(arguments, 600, 10, 3600),
         &output,

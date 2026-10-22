@@ -62,7 +62,7 @@ static COMMAND_ANNOUNCE: LazyLock<Regex> =
 static ANSI: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*[A-Za-z]").expect("regex"));
 static ERROR_LINE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(^ERROR:|EasyBuildError|\berror:|undefined reference|cannot find -l|\bFAILED\b|Traceback \(most recent call last\))")
+    Regex::new(r"(^ERROR:|EasyBuildError|\berror:|undefined reference|cannot find -l|\bFAILED\b|Traceback \(most recent call last\)|ModuleNotFoundError|ImportError:)")
         .expect("regex")
 });
 /// Lmod's error banner. A module that fails to load (EESSI-extend with a
@@ -213,7 +213,7 @@ pub fn split_warnings(lines: Vec<String>) -> (Vec<String>, Vec<String>) {
 pub fn failure_kind(errors: &[String]) -> Option<&'static str> {
     static ENVIRONMENT: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
-            r"(?i)(toolchain\b.*\bnot supported|missing (modules for )?dependencies|irresolvable dependencies|no easyconfig files? found|unknown toolchain|can't find module|module command '.*' failed|no module named easybuild\.toolchains)",
+            r#"(?i)(toolchain\b.*\bnot supported|missing (modules for )?dependencies|irresolvable dependencies|no easyconfig files? found|unknown toolchain|can't find module|module command '.*' failed|no module named easybuild\.toolchains|eb is not on path|eb_stack_eb=|no module named 'easybuild'|no module named "easybuild")"#
         )
         .expect("regex")
     });
@@ -1133,6 +1133,31 @@ ERROR: Shell command failed!\n\
         assert_eq!(
             failure_kind(&["Traceback (most recent call last):".to_string()]),
             Some("easyblock")
+        );
+        assert_eq!(
+            failure_kind(&error_lines(
+                "Traceback (most recent call last):\nModuleNotFoundError: No module named 'easybuild'\n",
+                20,
+            )),
+            Some("environment")
+        );
+        assert_eq!(
+            failure_kind(&error_lines(
+                "Traceback (most recent call last):\nModuleNotFoundError: No module named 'easybuild.easyblocks.hypre'\n",
+                20,
+            )),
+            Some("easyblock")
+        );
+        assert_eq!(
+            failure_kind(&[
+                "ERROR: eb is not on PATH; load an EasyBuild module where eb-stack runs"
+                    .to_string()
+            ]),
+            Some("environment")
+        );
+        assert_eq!(
+            failure_kind(&["ERROR: EB_STACK_EB=/tmp/missing-eb is not a file".to_string()]),
+            Some("environment")
         );
         assert_eq!(failure_kind(&["ERROR: something else".to_string()]), None);
         assert!(failed_dry_run_text(Some("environment"), &[])
