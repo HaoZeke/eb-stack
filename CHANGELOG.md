@@ -14,6 +14,15 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `eb-stack component-reach` lists every easyconfig and installed module
+  that carries a component at a version or version range, inside one
+  toolchain generation, and feeds the recipes that contain it into the
+  rebuild closure. Dependencies, builddependencies, bundle components,
+  `exts_list` extensions, Cargo `crates`, and versioned names in `sources`
+  or `patches` all count. A compat-layer file is an input, not an
+  easyconfig. The output directory holds `component-reach.toml`,
+  `component-reach.json`, and `component-reach.md`.
+
 - `eb-stack rebuild-set` reports which installed modules an in-place
   easyconfig patch forces EESSI to rebuild. It closes the deployed
   easystacks, walks the installed reverse dependents, and classifies each

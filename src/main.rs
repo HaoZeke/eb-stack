@@ -98,6 +98,8 @@ enum Command {
     /// a builddependency only needs review, and the patched easyconfig or a
     /// bundle that ships it as an extension must be rebuilt.
     RebuildSet(Box<RebuildSetArgs>),
+    /// List what carries a component in one generation, then the rebuild closure.
+    ComponentReach(Box<ComponentReachArgs>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -274,6 +276,40 @@ struct RebuildSetArgs {
     check_static: bool,
     /// Output directory: `rebuild-set.json`, `rebuild-set.md`, `rebuilds/`.
     #[arg(long, default_value = "rebuild-set")]
+    out_dir: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+struct ComponentReachArgs {
+    /// Component name. ASCII case is ignored, so `curl` matches `cURL`.
+    #[arg(long)]
+    component: String,
+    /// Exact version, `*`, or a requirement such as `>=8,<9`.
+    #[arg(long)]
+    version: String,
+    /// Toolchain generation, for example `2026.1`.
+    #[arg(long)]
+    generation: String,
+    /// Easyconfig tree. Repeatable; later trees take precedence.
+    #[arg(long, required = true)]
+    easyconfigs: Vec<PathBuf>,
+    /// Installed modules, one `Name/version-toolchain` per line.
+    #[arg(long)]
+    installed: Option<PathBuf>,
+    /// Deployed easystack. Repeatable. With none, the generation is the stack.
+    #[arg(long = "easystack")]
+    easystacks: Vec<PathBuf>,
+    /// Compat-layer components, `name version` or `name==version` per line.
+    #[arg(long)]
+    compat_layer: Option<PathBuf>,
+    /// Dependencies to drop before the closure, EasyBuild `--filter-deps`.
+    #[arg(long, value_delimiter = ',')]
+    filter_deps: Vec<String>,
+    /// Timestamp to record (RFC 3339); defaults to now, in UTC.
+    #[arg(long)]
+    generated_at: Option<String>,
+    /// Output directory: `component-reach.toml`, `.json`, and `.md`.
+    #[arg(long, default_value = "component-reach")]
     out_dir: PathBuf,
 }
 
@@ -749,8 +785,6 @@ fn main() -> Result<()> {
         Command::Target { command } => run_target(command),
         Command::Campaign { command } => run_campaign(command),
         Command::Repro { command } => run_repro(command),
-        Command::PrOverlap(args) => run_pr_overlap(*args),
-        Command::RebuildSet(args) => run_rebuild_set(*args),
         Command::Mcp { workspace } => {
             if let Some(workspace) = workspace {
                 std::env::set_var("EB_STACK_WORKSPACE", &workspace);
@@ -761,6 +795,9 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::EasyblockReach(args) => run_easyblock_reach(*args),
+        Command::PrOverlap(args) => run_pr_overlap(*args),
+        Command::RebuildSet(args) => run_rebuild_set(*args),
+        Command::ComponentReach(args) => run_component_reach(*args),
     }
 }
 
@@ -869,25 +906,6 @@ fn run_easyblock_reach(args: EasyblockReachArgs) -> Result<()> {
     Ok(())
 }
 
-fn installed_modules(
-    path: &Path,
-    modulerc: &[PathBuf],
-) -> Result<std::collections::BTreeSet<String>> {
-    use eb_stack::pr_overlap::parse_installed;
-    let installed = parse_installed(
-        &std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?,
-    );
-    let mut aliases = Vec::new();
-    for path in modulerc {
-        aliases.extend(
-            eb_stack::modulerc::load_modulerc(path)
-                .map_err(|error| anyhow::anyhow!(error))
-                .with_context(|| format!("read modulerc {}", path.display()))?,
-        );
-    }
-    Ok(eb_stack::modulerc::apply_modulerc(&installed, &aliases))
-}
-
 fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
     use eb_stack::pr_overlap::{
         easyconfig_record_seeing, overlap_index, pr_record, record_to_toml, render_markdown,
@@ -914,7 +932,7 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
 
     let (robot, skipped_easyconfigs) = load_robot_trees(&args.easyconfigs, &args.commit_trees)?;
     let installed = match &args.installed {
-        Some(path) => Some(installed_modules(path, &args.installed_modulerc)?),
+        Some(path) => Some(load_installed_modules(path, &args.installed_modulerc)?),
         None => None,
     };
     let filter_specs = eb_stack::dep_filter::specs_from_cli_or_env(&args.filter_deps);
@@ -1077,6 +1095,88 @@ fn run_rebuild_set(args: RebuildSetArgs) -> Result<()> {
         document.missing.len(),
         stacks.len(),
         skipped_easyconfigs,
+        args.out_dir.display()
+    );
+    Ok(())
+}
+
+fn run_component_reach(args: ComponentReachArgs) -> Result<()> {
+    use eb_stack::component_reach::{
+        component_reach, parse_compat_layer, render_markdown, to_toml, ReachQuery,
+    };
+    use eb_stack::pr_overlap::parse_installed;
+    use eb_stack::rebuild_set::StackEasystack;
+    let trees: Vec<&Path> = args.easyconfigs.iter().map(PathBuf::as_path).collect();
+    let parsed = parse_easyconfig_trees(&trees).map_err(|error| anyhow::anyhow!(error))?;
+    let installed = args
+        .installed
+        .as_ref()
+        .map(|path| {
+            std::fs::read_to_string(path)
+                .map(|text| parse_installed(&text))
+                .with_context(|| format!("read {}", path.display()))
+        })
+        .transpose()?;
+    let mut easystacks = Vec::new();
+    for path in &args.easystacks {
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        easystacks.push(StackEasystack {
+            path: path.display().to_string(),
+            text,
+        });
+    }
+    let compat_text = args
+        .compat_layer
+        .as_ref()
+        .map(|path| {
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let compat = parse_compat_layer(&compat_text);
+    let specs = eb_stack::dep_filter::specs_from_cli_or_env(&args.filter_deps);
+    let filter = eb_stack::dep_filter::FilterDeps::parse(&specs)
+        .map_err(|error| anyhow::anyhow!("--filter-deps: {error}"))?;
+    let generated_at = args
+        .generated_at
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    let mut document = component_reach(&ReachQuery {
+        candidates: &parsed.candidates,
+        component: &args.component,
+        version_req: &args.version,
+        generation: &args.generation,
+        installed: installed.as_ref(),
+        easystacks: &easystacks,
+        compat: &compat,
+        filter_deps: &filter,
+        generated_at: &generated_at,
+    });
+    if !parsed.skipped.is_empty() {
+        document
+            .notes
+            .push(format!("{} easyconfigs skipped", parsed.skipped.len()));
+    }
+    std::fs::create_dir_all(&args.out_dir)?;
+    std::fs::write(
+        args.out_dir.join("component-reach.toml"),
+        to_toml(&document)?,
+    )?;
+    write_json_pretty(&args.out_dir.join("component-reach.json"), &document)?;
+    std::fs::write(
+        args.out_dir.join("component-reach.md"),
+        render_markdown(&document),
+    )?;
+    println!(
+        "component={} version={} generation={} carriers={} changed={} must-rebuild={} review={} no-rebuild={} out={}",
+        document.component,
+        document.version_req,
+        document.generation,
+        document.carriers.len(),
+        document.changed.len(),
+        document.closure_counts.must_rebuild,
+        document.closure_counts.review,
+        document.closure_counts.no_rebuild,
         args.out_dir.display()
     );
     Ok(())
