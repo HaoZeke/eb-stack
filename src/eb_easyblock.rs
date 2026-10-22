@@ -50,6 +50,12 @@ pub const STRING_ENCODING_CHARMAP: &[(char, &str)] = &[
     ('?', "_question_"),
     ('@', "_atsign_"),
     ('[', "_leftbracket_"),
+    // filetools.py spells these two keys as the raw strings r'\'' and r'\\'.
+    // A raw string keeps the backslash, so the dict keys are the two-character
+    // sequences \' and \\ and encode_string's per-character lookup never hits
+    // them. The characters the entries name are still what a class name has to
+    // escape, so the table here uses those single characters. No software name
+    // in easybuild-easyconfigs v5.4.1 or develop contains either one.
     ('\'', "_apostrophe_"),
     ('\\', "_backslash_"),
     (']', "_rightbracket_"),
