@@ -1,9 +1,9 @@
 #+TITLE: Command-line reference
 #+OPTIONS: toc:t num:nil author:nil
 
-~eb-stack~ has five namespaced command groups, ~pr-overlap~, and an MCP
-server. All paths written by package commands are deterministic bundle
-artifacts.
+~eb-stack~ has five namespaced command groups, ~pr-overlap~,
+~rebuild-set~, and an MCP server. All paths written by package commands
+are deterministic bundle artifacts.
 
 * Command map
 
@@ -16,6 +16,7 @@ artifacts.
 | ~recipe lint~ / ~recipe format~ | Report or mechanically repair EasyBuild E501 findings |
 | ~stack solve~ / ~stack sbom~ | Solve a multi-root stack or emit SBOM from a lock |
 | ~pr-overlap~ | Close open pull-request easystack additions against an installed stack and report shared builds |
+| ~rebuild-set~ | Classify the installed reverse dependents of easyconfigs patched in place |
 | ~target list~ / ~target doctor~ | Resolve layered target configuration and probe it |
 | ~campaign run~ / ~campaign status~ | Execute or inspect a persisted build campaign |
 | ~campaign finding ...~ | Claim and resolve typed build findings |
@@ -300,6 +301,52 @@ passed is noted as not provided.
 The output directory holds ~prs/<N>.toml~, ~overlap.toml~, and ~overlap.md~.
 See [[file:formats.org][output formats]] for the records. A closed pull
 request's file is removed: the directory is the open set of this run.
+
+* ~rebuild-set~
+
+#+begin_src bash
+eb-stack rebuild-set \
+  --changed FILE.eb [--changed FILE.eb]... \
+  --easystack STACK.yml [--easystack STACK.yml]... \
+  --easyconfigs TREE [--easyconfigs TREE]... \
+  [--commit-tree COMMIT=DIR]... \
+  --installed installed.txt \
+  [--installed-label LABEL] \
+  [--filter-deps SPEC,SPEC...] \
+  [--installed-modulerc PATH]... \
+  [--easyblocks DIR]... \
+  [--easyblocks-commit COMMIT=DIR]... \
+  [--generated-at RFC3339] \
+  [--out-dir rebuild-set]
+#+end_src
+
+Resolves the deployed easystacks and the installed reverse dependents of
+each patched easyconfig. The patch keeps the filename and the version.
+Classification uses the easyconfig graph only.
+
+~--changed~ is an easyconfig filename. Repeat it, or pass a file that does
+not end in ~.eb~: one filename per line, blank lines and ~#~ comments
+skipped. The basename is what is matched. A filename that is not in the
+deployed graph is listed under ~missing~ and has no row.
+
+~--easystack~ is a deployed easystack, repeated. Every entry is a root.
+~--easyconfigs~, ~--commit-tree~, ~--installed~, ~--filter-deps~,
+~--installed-modulerc~, ~--easyblocks~, and ~--easyblocks-commit~ mean the
+same as for ~pr-overlap~. ~--filter-deps~ drops dependency tuples and does
+not strip ~exts_list~. A missing easyblock class is recorded and the
+module stays, because it is already installed.
+
+A runtime dependency is ~no-rebuild~. A dependent reached only through
+builddependencies is ~review~. The patched easyconfig, and a bundle whose
+~exts_list~ names that package and version, are ~must-rebuild~. A toolchain
+edge is not classified. See
+[[file:../explanation/rebuild-set.org][what an in-place patch forces a rebuild of]].
+
+The output directory holds ~rebuild-set.json~, ~rebuild-set.md~, and
+~rebuilds/<YYYYMMDD>-eb-<version>-cve-patches.yml~. The easystack contains
+class ~must-rebuild~ only. A second run replaces the ~rebuilds/*.yml~
+files. A later ~--check-static <prefix>~ could inspect installed binaries.
+This command does not.
 
 * Target commands
 

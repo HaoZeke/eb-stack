@@ -50,6 +50,8 @@
 
    *Shared builds across open pull requests?* → :doc:`howto/pr-overlap`
 
+   *What an in-place patch forces EESSI to rebuild?* → :doc:`howto/rebuild-set`
+
    *CLI surface?* → :doc:`reference/cli`
 
    *Bundle schemas?* → :doc:`reference/package-bundles`
@@ -121,6 +123,7 @@
    howto/bump-recipe
    howto/root-priority
    howto/pr-overlap
+   howto/rebuild-set
 
 .. toctree::
    :maxdepth: 2
@@ -144,6 +147,7 @@
    explanation/parser-approach
    explanation/fidelity
    explanation/pr-overlap
+   explanation/rebuild-set
 
 .. toctree::
    :maxdepth: 1
@@ -238,7 +242,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [[file:howto/emit-reports.org][emit a build list and stack diff]],
     [[file:howto/bump-recipe.org][bump a recipe]],
     [[file:howto/root-priority.org][declare root priority]],
-    [[file:howto/pr-overlap.org][find shared builds across open pull requests]].
+    [[file:howto/pr-overlap.org][find shared builds across open pull requests]],
+    [[file:howto/rebuild-set.org][what an in-place patch forces EESSI to rebuild]].
   - Reference: [[file:reference/cli.org][CLI]],
     [[file:reference/package-bundles.org][package bundles]],
     [[file:reference/targets.org][build targets]],
@@ -250,7 +255,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [[file:explanation/parser-approach.org][the parser approach]],
     [[file:explanation/fidelity.org][reproduction fidelity and limitations]],
     [[file:explanation/lifecycle.org][from recipe to installed stack]],
-    [[file:explanation/pr-overlap.org][from one easystack line to a build set]].
+    [[file:explanation/pr-overlap.org][from one easystack line to a build set]],
+    [[file:explanation/rebuild-set.org][what an in-place patch forces a rebuild of]].
   - Project: [[file:contributing.org][contributing]], [[file:changelog.org][changelog]].
 
 * Citation

@@ -6,6 +6,17 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `eb-stack rebuild-set` reports which installed modules an in-place
+  easyconfig patch forces EESSI to rebuild. It closes the deployed
+  easystacks, walks the installed reverse dependents, and classifies each
+  one from the easyconfig graph: `no-rebuild` for a runtime dependency,
+  `review` for a builddependency only, and `must-rebuild` for the patched
+  easyconfig and for a bundle that ships it as an extension. The output
+  directory holds `rebuild-set.json`, `rebuild-set.md`, and one
+  `rebuilds/<YYYYMMDD>-eb-<version>-cve-patches.yml` per EasyBuild version
+  containing class `must-rebuild` only. See
+  `docs/orgmode/howto/rebuild-set.org`.
+
 - `package plan` and `package bump` raise a `missing-easyblock` residual
   (stage `emit`, severity `judgment`, id `missing-easyblock:<class>`) when a
   package resolves to a generic easyblock and carries variant options that
