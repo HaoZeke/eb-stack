@@ -5,7 +5,7 @@ use eb_stack::build_order::{closure_against_installed, module_name, Choice, Modu
 use eb_stack::dep_filter::FilterDeps;
 use eb_stack::domain::Candidate;
 use eb_stack::pr_overlap::{
-    overlap_index, pr_record, OverlapConfig, PrInput, PrRecord, RobotTrees,
+    file_revisions, overlap_index, pr_record, OverlapConfig, PrInput, PrRecord, RobotTrees,
 };
 use eb_stack::{merge_order, parse_easyconfig_tree};
 use std::collections::{BTreeMap, BTreeSet};
@@ -36,6 +36,16 @@ fn real_trees_build_each_module_in_one_step() {
 #[test]
 #[ignore]
 fn zen4_records_from_2026_10_22() {
+    zen4_order(false);
+}
+
+#[test]
+#[ignore]
+fn zen4_hunk_conflicts_from_fetched_revisions() {
+    zen4_order(true);
+}
+
+fn zen4_order(with_revisions: bool) {
     let dir = std::env::var("EB_STACK_ZEN4").expect("EB_STACK_ZEN4");
     let mut records = Vec::new();
     for entry in std::fs::read_dir(Path::new(&dir).join("prs")).expect("prs") {
@@ -47,8 +57,44 @@ fn zen4_records_from_2026_10_22() {
     }
     records.sort_by_key(|r| r.pr);
     let config = config();
+    if with_revisions {
+        let fetched = std::env::var("EB_STACK_ZEN4_PRS").expect("EB_STACK_ZEN4_PRS");
+        let mut inputs = Vec::new();
+        for entry in std::fs::read_dir(&fetched).expect("fetched") {
+            let path = entry.expect("entry").path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("json");
+            inputs.push(
+                serde_json::from_str::<PrInput>(&text)
+                    .unwrap_or_else(|e| panic!("{}: {e}", path.display())),
+            );
+        }
+        for record in &mut records {
+            let Some(pr) = inputs.iter().find(|pr| pr.number == record.pr) else {
+                panic!("no fetch for {}", record.pr);
+            };
+            record.revisions = file_revisions(pr, &config);
+            assert!(
+                record.revisions.iter().any(|rev| rev.kind == "easystack"),
+                "pr {} stored no easystack revision",
+                record.pr
+            );
+            println!(
+                "pr {} record_head {} fetch_head {} revisions {}",
+                record.pr,
+                record.head_sha,
+                pr.head_sha,
+                record.revisions.len()
+            );
+        }
+    }
     let index = overlap_index(&records, &config);
-    let order = merge_order::plan(&records, &index, &[]);
+    let mut order = merge_order::plan(&records, &index, &[]);
+    if with_revisions {
+        order.conflicts = merge_order::conflicts_from_records(&records);
+    }
     let again = merge_order::plan(&records, &index, &[]);
     assert_eq!(order.steps, again.steps);
     assert_once(&records, &order);
@@ -56,11 +102,42 @@ fn zen4_records_from_2026_10_22() {
         "{}",
         merge_order::render_section(&order, "https://github.com/EESSI/software-layer")
     );
+    for conflict in &order.conflicts {
+        let positions: Vec<(usize, u64)> = order
+            .steps
+            .iter()
+            .filter(|step| conflict.prs.contains(&step.pr))
+            .map(|step| (step.position, step.pr))
+            .collect();
+        println!(
+            "conflict {} {} prs {:?} positions {:?}",
+            conflict.kind, conflict.easystack, conflict.prs, positions
+        );
+    }
+    if with_revisions {
+        if let Ok(dest) = std::env::var("EB_STACK_ZEN4_OUT") {
+            let prs = Path::new(&dest).join("prs");
+            std::fs::create_dir_all(&prs).expect("out");
+            for record in &records {
+                std::fs::write(
+                    prs.join(format!("{}.toml", record.pr)),
+                    eb_stack::pr_overlap::record_to_toml(record).expect("toml"),
+                )
+                .expect("write");
+            }
+            std::fs::write(
+                Path::new(&dest).join("merge-order.toml"),
+                eb_stack::pr_overlap::to_toml(&order).expect("order"),
+            )
+            .expect("order");
+        }
+    }
     println!(
-        "zen4 prs={} steps={} union={}",
+        "zen4 prs={} steps={} union={} conflicts={}",
         records.len(),
         order.steps.len(),
-        order.steps.iter().map(|s| s.builds.len()).sum::<usize>()
+        order.steps.iter().map(|s| s.builds.len()).sum::<usize>(),
+        order.conflicts.len()
     );
 }
 
