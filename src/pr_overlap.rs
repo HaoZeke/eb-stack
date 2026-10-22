@@ -1003,6 +1003,8 @@ pub fn render_markdown(records: &[PrRecord], index: &OverlapIndex, repo_url: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::Candidate;
+    use std::collections::BTreeSet;
 
     #[test]
     fn versions_come_from_the_easystack_path() {
@@ -1074,6 +1076,164 @@ mod tests {
         assert!(set.contains("zlib/1.3.1-GCCcore-15.2.0"));
         assert!(set.contains("GCCcore/15.2.0"));
         assert_eq!(set.len(), 2);
+    }
+
+    fn eb(name: &str, version: &str, dep: Option<(&str, &str)>) -> String {
+        let deps = match dep {
+            Some((dep_name, dep_version)) => {
+                format!("dependencies = [('{dep_name}', '{dep_version}')]\n")
+            }
+            None => String::new(),
+        };
+        format!(
+            "easyblock = 'ConfigureMake'\n\
+name = '{name}'\n\
+version = '{version}'\n\
+homepage = 'https://example.org'\n\
+description = 'x'\n\
+toolchain = SYSTEM\n\
+source_urls = ['https://example.org/']\n\
+sources = ['{name}-{version}.tar.gz']\n\
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']\n\
+{deps}\
+moduleclass = 'lib'\n"
+        )
+    }
+
+    fn parsed(path: &str, text: &str) -> Candidate {
+        let mut resolved = crate::eb_parse::resolve_easyconfig_str(text).expect("parse");
+        resolved.easyconfig_path = path.to_string();
+        resolved.to_candidate()
+    }
+
+    fn ec_config() -> OverlapConfig {
+        OverlapConfig {
+            eessi_version: "2026.06".into(),
+            installed_source: String::new(),
+            exclude_paths: Vec::new(),
+            include_paths: Vec::new(),
+            generated_at: "2026-10-22T00:00:00Z".into(),
+            filter_deps: crate::dep_filter::FilterDeps::empty(),
+            easyblocks: None,
+        }
+    }
+
+    #[test]
+    fn head_text_replaces_the_base_file_of_the_same_module() {
+        let path = "easybuild/easyconfigs/f/Foo/Foo-1.0.eb";
+        let base = vec![
+            parsed(path, &eb("Foo", "1.0", Some(("Bar", "1.0")))),
+            parsed(
+                "easybuild/easyconfigs/b/Bar/Bar-1.0.eb",
+                &eb("Bar", "1.0", None),
+            ),
+            parsed(
+                "easybuild/easyconfigs/z/Baz/Baz-1.0.eb",
+                &eb("Baz", "1.0", None),
+            ),
+        ];
+        let changes = vec![FileChange {
+            path: path.into(),
+            base: Some(eb("Foo", "1.0", Some(("Bar", "1.0")))),
+            head: Some(eb("Foo", "1.0", Some(("Baz", "1.0")))),
+            base_blob: None,
+            head_blob: None,
+        }];
+        let overlay = overlay_easyconfigs(&base, &changes);
+        let foo = overlay.tree.iter().find(|c| c.name == "Foo").expect("Foo");
+        assert_eq!(foo.dependencies.len(), 1);
+        assert_eq!(foo.dependencies[0].name, "Baz");
+        assert_eq!(overlay.changed[0].status, "modified");
+        assert_eq!(overlay.changed[0].module.as_deref(), Some("Foo/1.0"));
+    }
+
+    #[test]
+    fn a_deleted_easyconfig_is_removed_from_the_overlay() {
+        let bar = "easybuild/easyconfigs/b/Bar/Bar-1.0.eb";
+        let base = vec![
+            parsed(
+                "easybuild/easyconfigs/f/Foo/Foo-1.0.eb",
+                &eb("Foo", "1.0", Some(("Bar", "1.0"))),
+            ),
+            parsed(bar, &eb("Bar", "1.0", None)),
+        ];
+        let changes = vec![FileChange {
+            path: bar.into(),
+            base: Some(eb("Bar", "1.0", None)),
+            head: None,
+            base_blob: None,
+            head_blob: None,
+        }];
+        let overlay = overlay_easyconfigs(&base, &changes);
+        assert!(overlay.tree.iter().all(|c| c.name != "Bar"));
+        assert_eq!(overlay.changed[0].status, "deleted");
+        assert_eq!(overlay.changed[0].module.as_deref(), Some("Bar/1.0"));
+        let record = easyconfig_record(
+            &PrInput {
+                number: 9,
+                head_sha: "abc".into(),
+                title: None,
+                easystacks: Vec::new(),
+                files: Vec::new(),
+                easyconfigs: changes,
+            },
+            &base,
+            None,
+            &ec_config(),
+        )
+        .expect("record");
+        assert!(record.closure.is_empty());
+        assert!(record.new_modules.is_empty());
+    }
+
+    #[test]
+    fn an_added_easyconfig_closes_over_the_base_tree() {
+        let bar = parsed(
+            "easybuild/easyconfigs/b/Bar/Bar-1.0.eb",
+            &eb("Bar", "1.0", None),
+        );
+        let base = vec![bar];
+        let foo = "easybuild/easyconfigs/f/Foo/Foo-1.0.eb";
+        let changes = vec![
+            FileChange {
+                path: foo.into(),
+                base: None,
+                head: Some(eb("Foo", "1.0", Some(("Bar", "1.0")))),
+                base_blob: None,
+                head_blob: None,
+            },
+            FileChange {
+                path: "README.md".into(),
+                base: None,
+                head: Some("notes\n".into()),
+                base_blob: None,
+                head_blob: None,
+            },
+        ];
+        let input = PrInput {
+            number: 12,
+            head_sha: "def".into(),
+            title: Some("add Foo".into()),
+            easystacks: Vec::new(),
+            files: Vec::new(),
+            easyconfigs: changes,
+        };
+        let record = easyconfig_record(&input, &base, None, &ec_config()).expect("record");
+        assert_eq!(record.schema_version, 2);
+        assert_eq!(record.kind, "easyconfigs");
+        assert_eq!(record.eessi_version, "");
+        assert_eq!(record.closure, ["Bar/1.0", "Foo/1.0"]);
+        assert_eq!(record.new_modules, ["Foo/1.0"]);
+        assert_eq!(record.to_build, record.new_modules);
+        assert_eq!(record.notes, ["ignored README.md: not an easyconfig"]);
+        assert_eq!(record.changed_easyconfigs[0].status, "added");
+
+        let installed = BTreeSet::from(["Bar/1.0".to_string()]);
+        let recorded =
+            easyconfig_record(&input, &base, Some(&installed), &ec_config()).expect("record");
+        assert_eq!(recorded.to_build, ["Foo/1.0"]);
+        assert_eq!(recorded.already_installed, ["Bar/1.0"]);
+        assert_eq!(recorded.closure, ["Bar/1.0", "Foo/1.0"]);
     }
 
     #[test]

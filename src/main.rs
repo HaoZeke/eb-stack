@@ -80,24 +80,51 @@ enum Command {
     },
     /// Which easyconfigs an easyblock or framework change reaches.
     EasyblockReach(Box<EasyblockReachArgs>),
-    /// Which open software-layer pull requests would build the same modules.
+    /// Which open pull requests would build the same modules.
     ///
-    /// Reads each pull request's easystack changes as data (never runs them),
-    /// closes the added entries over the robot path against an installed
-    /// module list, and writes one TOML record per pull request plus an
+    /// Reads each pull request's changes as data (never runs them). For a
+    /// software-layer pull request, closes the added easystack entries over
+    /// the robot path against an installed module list. For an easyconfigs
+    /// pull request, closes the changed easyconfigs over the base tree with
+    /// those files overlaid. Writes one TOML record per pull request plus an
     /// overlap index and a Markdown report. No build and no model.
     PrOverlap(Box<PrOverlapArgs>),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum OverlapKind {
+    /// Easystack additions on a software-layer pull request.
+    #[value(name = "software-layer")]
+    SoftwareLayer,
+    /// Easyconfig files on an easybuild-easyconfigs pull request.
+    #[value(name = "easyconfigs")]
+    Easyconfigs,
+}
+
+/// The error clap printed when `--installed` was a required flag.
+const INSTALLED_REQUIRED: &str = "\
+error: the following required arguments were not provided:
+  --installed <INSTALLED>
+
+Usage: eb-stack pr-overlap --pr <PRS>... --easyconfigs <EASYCONFIGS> --installed <INSTALLED>
+
+For more information, try '--help'.
+";
+
 #[derive(clap::Args, Debug)]
 struct PrOverlapArgs {
     /// Pull request JSON: one object `{number, head_sha, title, easystacks:
-    /// [{path, base, head}]}` or an array of them.
+    /// [{path, base, head}], easyconfigs: [{path, base, head}]}` or an array
+    /// of them.
     ///
     /// Repeat the flag, or pass several paths after one flag. A shell glob
     /// `in/prs/*.json` is the second form.
     #[arg(long = "pr", required = true, num_args = 1..)]
     prs: Vec<PathBuf>,
+    /// `software-layer` (the default) reads easystack additions. `easyconfigs`
+    /// reads changed `.eb` files.
+    #[arg(long, value_enum, default_value = "software-layer")]
+    kind: OverlapKind,
     /// Easyconfig tree of the EasyBuild release the stack uses. Repeatable;
     /// later trees take precedence.
     #[arg(long, required = true)]
@@ -106,9 +133,13 @@ struct PrOverlapArgs {
     #[arg(long = "commit-tree")]
     commit_trees: Vec<String>,
     /// Installed modules, one `Name/VersionFull` per line.
+    ///
+    /// Required for `--kind software-layer`. For `--kind easyconfigs`,
+    /// `to_build` is the closure minus this list when the flag is set, and
+    /// the new modules when it is absent.
     #[arg(long)]
-    installed: PathBuf,
-    /// Stack version whose easystacks count.
+    installed: Option<PathBuf>,
+    /// Stack version whose easystacks count. Ignored for `--kind easyconfigs`.
     #[arg(long, default_value = "2026.06")]
     eessi_version: String,
     /// Label for where the installed list came from, e.g. a CPU target.
@@ -159,8 +190,12 @@ struct PrOverlapArgs {
     #[arg(long)]
     merged: Vec<u64>,
     /// Repository URL used for links in the Markdown report.
-    #[arg(long, default_value = "https://github.com/EESSI/software-layer")]
-    repo_url: String,
+    ///
+    /// Defaults to `https://github.com/EESSI/software-layer`, or to
+    /// `https://github.com/easybuilders/easybuild-easyconfigs` for
+    /// `--kind easyconfigs`.
+    #[arg(long)]
+    repo_url: Option<String>,
     /// Output directory: `prs/<N>.toml`, `overlap.toml`, `overlap.md`.
     #[arg(long, default_value = "pr-overlap")]
     out_dir: PathBuf,
@@ -757,11 +792,34 @@ fn run_easyblock_reach(args: EasyblockReachArgs) -> Result<()> {
     Ok(())
 }
 
+fn installed_modules(
+    path: &Path,
+    modulerc: &[PathBuf],
+) -> Result<std::collections::BTreeSet<String>> {
+    use eb_stack::pr_overlap::parse_installed;
+    let installed = parse_installed(
+        &std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?,
+    );
+    let mut aliases = Vec::new();
+    for path in modulerc {
+        aliases.extend(
+            eb_stack::modulerc::load_modulerc(path)
+                .map_err(|error| anyhow::anyhow!(error))
+                .with_context(|| format!("read modulerc {}", path.display()))?,
+        );
+    }
+    Ok(eb_stack::modulerc::apply_modulerc(&installed, &aliases))
+}
+
 fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
     use eb_stack::pr_overlap::{
-        overlap_index, parse_installed, pr_record, record_to_toml, render_markdown, to_toml,
+        easyconfig_record, overlap_index, pr_record, record_to_toml, render_markdown, to_toml,
         OverlapConfig, PrInput, RobotTrees,
     };
+    if args.kind == OverlapKind::SoftwareLayer && args.installed.is_none() {
+        eprint!("{INSTALLED_REQUIRED}");
+        std::process::exit(2);
+    }
     let mut prs: Vec<PrInput> = Vec::new();
     for path in &args.prs {
         let text =
@@ -791,25 +849,21 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
             eb_stack::parse_easyconfig_tree(Path::new(dir)).map_err(|e| anyhow::anyhow!(e))?;
         robot.commits.insert(commit.to_string(), parsed.candidates);
     }
-    let mut installed = parse_installed(
-        &std::fs::read_to_string(&args.installed)
-            .with_context(|| format!("read {}", args.installed.display()))?,
-    );
-    let mut aliases = Vec::new();
-    for path in &args.installed_modulerc {
-        aliases.extend(
-            eb_stack::modulerc::load_modulerc(path)
-                .map_err(|error| anyhow::anyhow!(error))
-                .with_context(|| format!("read modulerc {}", path.display()))?,
-        );
-    }
-    installed = eb_stack::modulerc::apply_modulerc(&installed, &aliases);
+    let installed = match &args.installed {
+        Some(path) => Some(installed_modules(path, &args.installed_modulerc)?),
+        None => None,
+    };
     let filter_specs = eb_stack::dep_filter::specs_from_cli_or_env(&args.filter_deps);
     let filter_deps = eb_stack::dep_filter::FilterDeps::parse(&filter_specs)
         .map_err(|error| anyhow::anyhow!("--filter-deps: {error}"))?;
     let easyblocks = load_easyblock_catalog(&args.easyblocks, &args.easyblocks_commits)?;
+    let easyconfigs = args.kind == OverlapKind::Easyconfigs;
     let config = OverlapConfig {
-        eessi_version: args.eessi_version.clone(),
+        eessi_version: if easyconfigs {
+            String::new()
+        } else {
+            args.eessi_version.clone()
+        },
         installed_source: args.installed_label.clone(),
         exclude_paths: args.exclude_paths.clone(),
         include_paths: args.include_paths.clone(),
@@ -819,11 +873,27 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
         filter_deps,
         easyblocks,
     };
-    let records: Vec<_> = prs
-        .iter()
-        .filter_map(|pr| pr_record(pr, &robot, &installed, &config))
-        .collect();
+    let records: Vec<_> = if easyconfigs {
+        let installed = installed.as_ref();
+        prs.iter()
+            .filter_map(|pr| easyconfig_record(pr, &robot.base, installed, &config))
+            .collect()
+    } else {
+        let installed = installed
+            .as_ref()
+            .expect("software-layer checks --installed");
+        prs.iter()
+            .filter_map(|pr| pr_record(pr, &robot, installed, &config))
+            .collect()
+    };
     let index = overlap_index(&records, &config);
+    let repo_url = args.repo_url.clone().unwrap_or_else(|| {
+        if easyconfigs {
+            "https://github.com/easybuilders/easybuild-easyconfigs".to_string()
+        } else {
+            "https://github.com/EESSI/software-layer".to_string()
+        }
+    });
 
     let pr_dir = args.out_dir.join("prs");
     std::fs::create_dir_all(&pr_dir)?;
@@ -844,7 +914,7 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
     std::fs::write(args.out_dir.join("overlap.toml"), to_toml(&index)?)?;
     std::fs::write(
         args.out_dir.join("overlap.md"),
-        render_markdown(&records, &index, &args.repo_url),
+        render_markdown(&records, &index, &repo_url),
     )?;
     if args.merge_order || !args.merged.is_empty() {
         if let Some(number) = eb_stack::merge_order::unknown_merged(
@@ -857,10 +927,7 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
         order.conflicts = eb_stack::merge_order::conflicts_from_records(&records);
         std::fs::write(args.out_dir.join("merge-order.toml"), to_toml(&order)?)?;
         let mut md = std::fs::read_to_string(args.out_dir.join("overlap.md"))?;
-        md.push_str(&eb_stack::merge_order::render_section(
-            &order,
-            &args.repo_url,
-        ));
+        md.push_str(&eb_stack::merge_order::render_section(&order, &repo_url));
         std::fs::write(args.out_dir.join("overlap.md"), md)?;
     }
     println!(

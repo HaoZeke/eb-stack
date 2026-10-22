@@ -345,6 +345,23 @@ fn the_markdown_report_says_who_shares_what() {
 }
 
 #[test]
+fn software_layer_still_requires_the_installed_list() {
+    let status = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .args(["pr-overlap", "--pr", "x.json", "--easyconfigs", "tree"])
+        .output()
+        .expect("run");
+    assert_eq!(status.status.code(), Some(2));
+    let err = String::from_utf8(status.stderr).expect("utf8");
+    assert_eq!(
+        err,
+        "error: the following required arguments were not provided:\n  \
+--installed <INSTALLED>\n\n\
+Usage: eb-stack pr-overlap --pr <PRS>... --easyconfigs <EASYCONFIGS> --installed <INSTALLED>\n\n\
+For more information, try '--help'.\n"
+    );
+}
+
+#[test]
 fn the_cli_writes_the_same_bytes_twice_and_drops_closed_prs() {
     let binary = env!("CARGO_BIN_EXE_eb-stack");
     let temp = tempfile::tempdir().expect("tempdir");
