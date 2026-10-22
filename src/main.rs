@@ -205,6 +205,16 @@ struct RebuildSetArgs {
     /// statically, so a builddependency-only dependent is no-rebuild.
     #[arg(long)]
     prefix: Option<PathBuf>,
+    /// Compare defined dynamic symbols of the remaining review dependents
+    /// with the patched library's exports. Requires `--prefix`.
+    ///
+    /// A dependent that defines one of those exports is must-rebuild. A
+    /// dependent that defines none is no-rebuild. An empty export set stays
+    /// in review. The scan sees dynamic symbols only: a hidden or inlined
+    /// static link is a false no-rebuild, and a short name shared with
+    /// another library is a false must-rebuild.
+    #[arg(long)]
+    check_static: bool,
     /// Output directory: `rebuild-set.json`, `rebuild-set.md`, `rebuilds/`.
     #[arg(long, default_value = "rebuild-set")]
     out_dir: PathBuf,
@@ -763,6 +773,7 @@ fn run_rebuild_set(args: RebuildSetArgs) -> Result<()> {
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }),
         prefix: args.prefix,
+        check_static: args.check_static,
     })
     .map_err(|error| anyhow::anyhow!(error))?;
 

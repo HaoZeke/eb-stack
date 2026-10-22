@@ -26,7 +26,12 @@
 //! checked against the patched module's install directory. No `lib*/*.a`
 //! file means the dependent cannot have linked that module statically, and
 //! the row is no-rebuild. Archives that are there keep the row in review
-//! and are named in the reason. `--check-static` is still a separate pass.
+//! and are named in the reason.
+//!
+//! [`RebuildQuery::check_static`] then reads defined dynamic symbols of
+//! each remaining review dependent. A symbol that the patched library
+//! also exports is must-rebuild. No such symbol is no-rebuild. The scan
+//! sees dynamic symbols only.
 
 use crate::build_order::{
     module_name, reachable_graph, reverse_index, Choice, ModuleKey, ReverseUse, UseKind,
@@ -43,7 +48,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use thiserror::Error;
 
 /// Schema of [`RebuildDocument`]. Bumped when a field changes meaning.
-pub const REBUILD_SET_SCHEMA_VERSION: u32 = 3;
+pub const REBUILD_SET_SCHEMA_VERSION: u32 = 4;
 
 /// Class for a runtime dependency, direct or through other runtime dependencies.
 pub const CLASS_NO_REBUILD: &str = "no-rebuild";
@@ -71,6 +76,9 @@ pub enum RebuildError {
         /// Path that was passed in.
         path: String,
     },
+    /// `--check-static` was set without `--prefix`.
+    #[error("--check-static needs --prefix")]
+    CheckStaticNeedsPrefix,
 }
 
 /// One deployed easystack file.
@@ -109,6 +117,12 @@ pub struct RebuildQuery {
     /// Installed EESSI prefix (`$EESSI_SOFTWARE_PATH`). Static archives are
     /// read from `<prefix>/software/<name>/<version>/lib*/*.a`.
     pub prefix: Option<std::path::PathBuf>,
+    /// Read defined dynamic symbols of the remaining review dependents.
+    ///
+    /// Requires [`Self::prefix`]. A dependent that defines an export of a
+    /// patched library is must-rebuild. A dependent that defines none of
+    /// them is no-rebuild.
+    pub check_static: bool,
 }
 
 /// One row of the rebuild table.
@@ -158,6 +172,9 @@ pub struct RebuildDocument {
     /// not passed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<String>,
+    /// Whether defined dynamic symbols were compared. False when
+    /// `--check-static` was not passed.
+    pub symbols_checked: bool,
     /// Easystack paths that were read.
     pub easystacks: Vec<String>,
     /// Patched easyconfig filenames, sorted.
@@ -269,6 +286,18 @@ pub fn rebuild_set(query: &RebuildQuery) -> Result<RebuildDocument, RebuildError
         crate::install_prefix::apply_static_archives(&mut rows, prefix, &mut notes)?;
     }
     rows = collapse_review(rows);
+    if query.check_static {
+        let Some(prefix) = &query.prefix else {
+            return Err(RebuildError::CheckStaticNeedsPrefix);
+        };
+        crate::install_prefix::apply_symbol_check(&mut rows, prefix, &mut notes);
+        rows.sort_by(|left, right| {
+            left.changed
+                .cmp(&right.changed)
+                .then_with(|| left.dependent.cmp(&right.dependent))
+                .then_with(|| left.edge_kind.cmp(&right.edge_kind))
+        });
+    }
 
     let counts = RebuildCounts {
         no_rebuild: rows
@@ -293,6 +322,7 @@ pub fn rebuild_set(query: &RebuildQuery) -> Result<RebuildDocument, RebuildError
         generated_at: query.generated_at.clone(),
         installed_source: query.installed_source.clone(),
         prefix: query.prefix.as_ref().map(|path| path.display().to_string()),
+        symbols_checked: query.check_static,
         easystacks,
         changed,
         missing,
@@ -319,6 +349,13 @@ pub fn render_markdown(document: &RebuildDocument) -> String {
              it is no-rebuild, because there is nothing to link statically. The patched \
              easyconfig, and a bundle that ships it as an extension, must be rebuilt.\n\n",
         );
+        if document.symbols_checked {
+            out.push_str(
+                "`--check-static` then read defined dynamic symbols. A review dependent that \
+                 defines an export of the patched library must be rebuilt. One that defines \
+                 none is no-rebuild.\n\n",
+            );
+        }
     } else {
         out.push_str(
             "Classes follow the easyconfig graph only. A runtime dependency needs no rebuild: \
@@ -356,8 +393,25 @@ pub fn render_markdown(document: &RebuildDocument) -> String {
             escape_cell(&row.reason),
         ));
     }
+    if document.symbols_checked {
+        out.push_str(
+            "\n`--check-static` compared defined dynamic symbols of each remaining review \
+             dependent with the patched library's exports. A hit is must-rebuild. No hit is \
+             no-rebuild.\n\n",
+        );
+    } else {
+        out.push_str(
+            "\n`--check-static` was not used. It compares defined dynamic symbols of each \
+             remaining review dependent with the patched library's exports. A hit is \
+             must-rebuild. No hit is no-rebuild.\n\n",
+        );
+    }
     out.push_str(
-        "\nA later `--check-static <prefix>` could inspect installed binaries. This report does not.\n",
+        "That comparison can go wrong. It sees dynamic symbols only, so a hidden, local, or \
+         inlined static link is reported as no-rebuild. A short name shared with another \
+         library is reported as must-rebuild. An empty export set stays in review. Scripts, \
+         bytecode, and libraries opened with dlopen are invisible. A static archive shows \
+         that a static link was possible, not that it happened.\n",
     );
     out
 }
@@ -397,7 +451,8 @@ pub fn rebuild_easystacks(document: &RebuildDocument) -> Vec<RebuildEasystack> {
 fn render_easystack(files: &BTreeSet<String>) -> String {
     let mut body = String::from(
         "# In-place patches, same filename and version.\n\
-         # Class must-rebuild only: the patched easyconfig, and a bundle that ships it as an extension.\n\
+         # Class must-rebuild only: the patched easyconfig, a bundle that ships it as an extension,\n\
+         # and, when --check-static was used, a dependent that defines an export of the patched library.\n\
          # Generated by `eb-stack rebuild-set`.\n\
          easyconfigs:\n",
     );
@@ -971,6 +1026,7 @@ mod tests {
             installed_source: "x86_64/amd/zen4".into(),
             generated_at: "2026-10-22T12:00:00Z".into(),
             prefix: None,
+            check_static: false,
         }
     }
 
@@ -1254,6 +1310,164 @@ mod tests {
             "builddependency only of LibA-1.0-GCCcore-15.2.0.eb (liba.a), LibB-1.0-GCCcore-15.2.0.eb (libb.a)"
         );
         assert_eq!(document.counts.review, 1);
+    }
+
+    fn compile(dir: &std::path::Path, args: &[&str]) {
+        let output = std::process::Command::new("gcc")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("gcc");
+        assert!(
+            output.status.success(),
+            "gcc {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn shared_object(dir: &std::path::Path, name: &str, source: &str) {
+        let src_name = format!("{name}.c");
+        std::fs::write(dir.join(&src_name), source).expect("source");
+        compile(dir, &["-shared", "-fPIC", "-o", name, &src_name]);
+    }
+
+    fn static_archive(dir: &std::path::Path, name: &str, source: &str) {
+        let src_name = format!("{name}.c");
+        let obj_name = format!("{name}.o");
+        std::fs::write(dir.join(&src_name), source).expect("source");
+        compile(dir, &["-c", "-fPIC", "-o", &obj_name, &src_name]);
+        let output = std::process::Command::new("ar")
+            .args(["rcs", name, &obj_name])
+            .current_dir(dir)
+            .output()
+            .expect("ar");
+        assert!(
+            output.status.success(),
+            "ar {name}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn defined_symbols_of_the_patched_library_force_a_rebuild() {
+        let prefix = tempfile::tempdir().expect("prefix");
+        let zlib_lib = prefix.path().join("software/zlib/1.3.1-GCCcore-15.2.0/lib");
+        let app_bin = prefix
+            .path()
+            .join("software/AppStatic/1.0-GCCcore-15.2.0/bin");
+        let cmake_bin = prefix
+            .path()
+            .join("software/CMake/4.1.2-GCCcore-15.2.0/bin");
+        std::fs::create_dir_all(&zlib_lib).expect("zlib lib");
+        std::fs::create_dir_all(&app_bin).expect("app bin");
+        std::fs::create_dir_all(&cmake_bin).expect("cmake bin");
+        std::fs::write(zlib_lib.join("libz.a"), b"!<arch>\n").expect("archive");
+        shared_object(&zlib_lib, "libz.so", "void compress(void) {}\n");
+        shared_object(&app_bin, "app.so", "void compress(void) {}\n");
+        shared_object(&cmake_bin, "cmake.so", "void other(void) {}\n");
+        let mut built = query(&["zlib-1.3.1-GCCcore-15.2.0.eb"]);
+        built.prefix = Some(prefix.path().to_path_buf());
+        built.check_static = true;
+        let document = rebuild_set(&built).expect("rebuild set");
+        assert!(document.symbols_checked);
+        let app = row(&document, "AppStatic/1.0-GCCcore-15.2.0");
+        assert_eq!(app.class, CLASS_MUST_REBUILD);
+        assert_eq!(app.edge_kind, "builddependency");
+        assert!(app.reason.contains("compress"), "{}", app.reason);
+        assert!(
+            app.reason.contains("zlib-1.3.1-GCCcore-15.2.0.eb"),
+            "{}",
+            app.reason
+        );
+        let cmake = row(&document, "CMake/4.1.2-GCCcore-15.2.0");
+        assert_eq!(cmake.class, CLASS_NO_REBUILD);
+        assert!(
+            cmake.reason.contains("no defined dynamic symbol"),
+            "{}",
+            cmake.reason
+        );
+        assert!(cmake.reason.contains("libz.a"), "{}", cmake.reason);
+        let zlib = row(&document, "zlib/1.3.1-GCCcore-15.2.0");
+        assert_eq!(zlib.class, CLASS_MUST_REBUILD);
+        assert_eq!(zlib.edge_kind, "changed");
+        let body: String = rebuild_easystacks(&document)
+            .iter()
+            .map(|stack| stack.body.clone())
+            .collect();
+        assert!(body.contains("AppStatic-1.0-GCCcore-15.2.0.eb"));
+        assert!(body.contains("zlib-1.3.1-GCCcore-15.2.0.eb"));
+        assert!(!body.contains("CMake"));
+    }
+
+    #[test]
+    fn an_archive_member_supplies_exports_when_no_shared_object_is_installed() {
+        let prefix = tempfile::tempdir().expect("prefix");
+        let zlib_lib = prefix.path().join("software/zlib/1.3.1-GCCcore-15.2.0/lib");
+        let app_bin = prefix
+            .path()
+            .join("software/AppStatic/1.0-GCCcore-15.2.0/bin");
+        let cmake_bin = prefix
+            .path()
+            .join("software/CMake/4.1.2-GCCcore-15.2.0/bin");
+        std::fs::create_dir_all(&zlib_lib).expect("zlib lib");
+        std::fs::create_dir_all(&app_bin).expect("app bin");
+        std::fs::create_dir_all(&cmake_bin).expect("cmake bin");
+        static_archive(&zlib_lib, "libz.a", "void compress(void) {}\n");
+        shared_object(&app_bin, "app.so", "void compress(void) {}\n");
+        shared_object(&cmake_bin, "cmake.so", "void other(void) {}\n");
+        let mut built = query(&["zlib-1.3.1-GCCcore-15.2.0.eb"]);
+        built.prefix = Some(prefix.path().to_path_buf());
+        built.check_static = true;
+        let document = rebuild_set(&built).expect("rebuild set");
+        assert_eq!(
+            row(&document, "AppStatic/1.0-GCCcore-15.2.0").class,
+            CLASS_MUST_REBUILD
+        );
+        assert_eq!(
+            row(&document, "CMake/4.1.2-GCCcore-15.2.0").class,
+            CLASS_NO_REBUILD
+        );
+    }
+
+    #[test]
+    fn an_empty_export_set_stays_in_review() {
+        let prefix = tempfile::tempdir().expect("prefix");
+        let zlib_lib = prefix.path().join("software/zlib/1.3.1-GCCcore-15.2.0/lib");
+        std::fs::create_dir_all(&zlib_lib).expect("zlib lib");
+        std::fs::create_dir_all(
+            prefix
+                .path()
+                .join("software/CMake/4.1.2-GCCcore-15.2.0/bin"),
+        )
+        .expect("cmake");
+        std::fs::write(zlib_lib.join("libz.a"), b"!<arch>\n").expect("archive");
+        let mut built = query(&["zlib-1.3.1-GCCcore-15.2.0.eb"]);
+        built.prefix = Some(prefix.path().to_path_buf());
+        built.check_static = true;
+        let document = rebuild_set(&built).expect("rebuild set");
+        let cmake = row(&document, "CMake/4.1.2-GCCcore-15.2.0");
+        assert_eq!(cmake.class, CLASS_REVIEW);
+        assert!(
+            cmake
+                .reason
+                .contains("no exported symbols read for zlib-1.3.1-GCCcore-15.2.0.eb"),
+            "{}",
+            cmake.reason
+        );
+        let app = row(&document, "AppStatic/1.0-GCCcore-15.2.0");
+        assert_eq!(app.class, CLASS_REVIEW);
+        assert!(document
+            .notes
+            .iter()
+            .any(|note| { note == "AppStatic/1.0-GCCcore-15.2.0: install directory not found" }));
+    }
+
+    #[test]
+    fn check_static_without_a_prefix_is_refused() {
+        let mut built = query(&["zlib-1.3.1-GCCcore-15.2.0.eb"]);
+        built.check_static = true;
+        let error = rebuild_set(&built).expect_err("prefix");
+        assert_eq!(error.to_string(), "--check-static needs --prefix");
     }
 
     #[test]
