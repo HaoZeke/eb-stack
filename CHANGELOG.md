@@ -4,6 +4,14 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+### Security
+
+- `rustls-webpki` 0.103.13 -> 0.103.16 and `webpki-roots` 1.0.9 -> 1.0.10.
+  0.103.16 rejects certificate paths that contain the distrusted eMudhra
+  emSign intermediate public keys. 1.0.10 removes `emSign ECC Root CA - G3`
+  from the bundled root store. The 0.26.11 compatibility crate re-exports
+  that store, so the lock resolves it to 1.0.10.
+
 ### Added
 
 - `package plan` and `package bump` raise a `missing-easyblock` residual
