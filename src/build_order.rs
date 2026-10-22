@@ -103,17 +103,21 @@ impl std::fmt::Display for Edge {
 
 /// How one module uses another.
 ///
-/// A name in both `dependencies` and `builddependencies` is [`UseKind::Runtime`].
-/// [`UseKind::Toolchain`] is the `toolchain` line, which is not a dependency tuple.
+/// A module listed in both `dependencies` and `builddependencies` is
+/// [`UseKind::Runtime`]. The runtime edge is the shared-library link, so
+/// "builddependency only" means the runtime list does not name it.
+/// [`UseKind::Toolchain`] is the `toolchain` line. The resolver records it
+/// because the build needs the toolchain first. It is not a link to a
+/// patched library.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum UseKind {
     /// Listed in `dependencies`.
     Runtime,
     /// Listed in `builddependencies` and not in `dependencies`.
     BuildOnly,
-    /// This module's name and version appear in the user's `exts_list`.
+    /// This module's name and version appear in the bundle's `exts_list`.
     Extension,
-    /// The user is built with this module as its toolchain.
+    /// The dependent is built with this module as its toolchain.
     Toolchain,
 }
 
@@ -440,6 +444,39 @@ fn within_generation<'a>(
     admissible
 }
 
+fn index_by_name(candidates: &[Candidate]) -> HashMap<&str, Vec<&Candidate>> {
+    let mut by_name: HashMap<&str, Vec<&Candidate>> = HashMap::new();
+    for candidate in candidates {
+        by_name
+            .entry(candidate.name.as_str())
+            .or_default()
+            .push(candidate);
+    }
+    by_name
+}
+
+/// The candidate [`graph_from_keys`] would pick for one dependency tuple.
+fn resolve_dep<'a>(
+    by_name: &HashMap<&str, Vec<&'a Candidate>>,
+    recipe: &Candidate,
+    dep: &DepReq,
+    choice: Choice,
+    all: &'a [Candidate],
+) -> Option<&'a Candidate> {
+    let named = by_name.get(dep.name.as_str())?;
+    let admissible = within_generation(
+        named
+            .iter()
+            .copied()
+            .filter(|c| satisfies(c, dep))
+            .collect(),
+        recipe,
+        all,
+        dep,
+    );
+    choose(&admissible, choice)
+}
+
 /// Pick one candidate from those a requirement admits.
 fn choose<'a>(admissible: &[&'a Candidate], choice: Choice) -> Option<&'a Candidate> {
     admissible.iter().copied().max_by(|a, b| {
@@ -529,6 +566,7 @@ pub fn graph_from_keys(
     let mut index: HashMap<ModuleKey, NodeIndex> = HashMap::new();
     let by_key: BTreeMap<ModuleKey, &Candidate> =
         candidates.iter().map(|c| (ModuleKey::of(c), c)).collect();
+    let by_name = index_by_name(candidates);
 
     let node_for = |graph: &mut BuildGraph,
                     index: &mut HashMap<ModuleKey, NodeIndex>,
@@ -587,13 +625,7 @@ pub fn graph_from_keys(
         });
 
         for (dep, kind) in deps {
-            let admissible = within_generation(
-                candidates.iter().filter(|c| satisfies(c, dep)).collect(),
-                candidate,
-                candidates,
-                dep,
-            );
-            let Some(picked) = choose(&admissible, choice) else {
+            let Some(picked) = resolve_dep(&by_name, candidate, dep, choice, candidates) else {
                 let mut available: Vec<String> = candidates
                     .iter()
                     .filter(|c| c.name == dep.name)
@@ -616,6 +648,206 @@ pub fn graph_from_keys(
         }
     }
     Ok(graph)
+}
+
+/// The build graph reachable from `starts`, including modules that are already
+/// installed.
+///
+/// [`graph_from_keys`] returns on the first requirement nothing satisfies. A
+/// deployed stack still has a graph when one recipe names a dependency the
+/// tree cannot fill: that requirement is recorded and the walk continues.
+/// Edge kinds are kept. Nothing here is treated as installed. The caller
+/// decides which of these modules are on the machine.
+pub fn reachable_graph(
+    candidates: &[Candidate],
+    starts: &[ModuleKey],
+    choice: Choice,
+) -> (BuildGraph, Vec<UnresolvedRequirement>) {
+    let mut graph: BuildGraph = DiGraph::new();
+    let mut index: HashMap<ModuleKey, NodeIndex> = HashMap::new();
+    let by_key: BTreeMap<ModuleKey, &Candidate> =
+        candidates.iter().map(|c| (ModuleKey::of(c), c)).collect();
+    let by_name = index_by_name(candidates);
+    let mut unresolved: BTreeSet<UnresolvedRequirement> = BTreeSet::new();
+
+    let mut node_for = |graph: &mut BuildGraph, key: &ModuleKey| -> NodeIndex {
+        *index
+            .entry(key.clone())
+            .or_insert_with(|| graph.add_node(key.clone()))
+    };
+
+    let mut queue: Vec<ModuleKey> = Vec::new();
+    for key in starts {
+        if by_key.contains_key(key) {
+            node_for(&mut graph, key);
+            queue.push(key.clone());
+        } else {
+            unresolved.insert(UnresolvedRequirement {
+                from: key.clone(),
+                requirement: key.to_string(),
+            });
+        }
+    }
+
+    let mut seen: HashSet<ModuleKey> = HashSet::new();
+    while let Some(key) = queue.pop() {
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        let Some(candidate) = by_key.get(&key) else {
+            continue;
+        };
+        let dependent = node_for(&mut graph, &key);
+        if !crate::hierarchy::is_system_toolchain(&candidate.toolchain) {
+            if let Some(toolchain) =
+                by_name
+                    .get(candidate.toolchain.name.as_str())
+                    .and_then(|named| {
+                        named
+                            .iter()
+                            .copied()
+                            .find(|item| item.version == candidate.toolchain.version)
+                    })
+            {
+                let toolchain_key = ModuleKey::of(toolchain);
+                if toolchain_key != key {
+                    let node = node_for(&mut graph, &toolchain_key);
+                    graph.add_edge(node, dependent, Edge::Toolchain);
+                    queue.push(toolchain_key);
+                }
+            }
+        }
+        let mut deps: Vec<(&DepReq, Edge)> = candidate
+            .dependencies
+            .iter()
+            .map(|dep| (dep, Edge::Runtime))
+            .chain(
+                candidate
+                    .builddependencies
+                    .iter()
+                    .map(|dep| (dep, Edge::Build)),
+            )
+            .collect();
+        deps.sort_by(|(left, _), (right, _)| {
+            left.name
+                .cmp(&right.name)
+                .then_with(|| left.version_req.cmp(&right.version_req))
+        });
+        for (dep, kind) in deps {
+            match resolve_dep(&by_name, candidate, dep, choice, candidates) {
+                Some(picked) => {
+                    let dep_key = ModuleKey::of(picked);
+                    let node = node_for(&mut graph, &dep_key);
+                    graph.add_edge(node, dependent, kind);
+                    queue.push(dep_key);
+                }
+                None => {
+                    unresolved.insert(UnresolvedRequirement {
+                        from: key.clone(),
+                        requirement: format!("{} {}", dep.name, dep.version_req)
+                            .trim()
+                            .to_string(),
+                    });
+                }
+            }
+        }
+    }
+    (graph, unresolved.into_iter().collect())
+}
+
+/// Who uses each module in `graph`.
+///
+/// Edges in the graph run from a dependency to the module that needs it, so
+/// the reverse of that edge is one entry here. A pair that has both a runtime
+/// edge and a build edge is recorded once, as [`UseKind::Runtime`]. A
+/// builddependency with no runtime edge is [`UseKind::BuildOnly`].
+///
+/// `exts_list` is not a dependency tuple, so it is not a graph edge. A bundle
+/// whose extension name and version match a module in the graph gets an
+/// [`UseKind::Extension`] entry from that module to the bundle. The toolchain
+/// is the bundle's: an extension is built as part of the bundle.
+pub fn reverse_index(
+    graph: &BuildGraph,
+    candidates: &[Candidate],
+) -> BTreeMap<ModuleKey, Vec<ReverseUse>> {
+    let mut flags: BTreeMap<(ModuleKey, ModuleKey), (bool, bool, bool)> = BTreeMap::new();
+    for edge in graph.edge_references() {
+        let dependency = graph[edge.source()].clone();
+        let dependent = graph[edge.target()].clone();
+        let slot = flags.entry((dependency, dependent)).or_default();
+        match edge.weight() {
+            Edge::Runtime => slot.0 = true,
+            Edge::Build => slot.1 = true,
+            Edge::Toolchain => slot.2 = true,
+        }
+    }
+
+    let mut out: BTreeMap<ModuleKey, Vec<ReverseUse>> = BTreeMap::new();
+    for node in graph.node_weights() {
+        out.entry(node.clone()).or_default();
+    }
+    for ((dependency, dependent), (runtime, build, toolchain)) in flags {
+        let slot = out.entry(dependency).or_default();
+        if runtime {
+            slot.push(ReverseUse {
+                dependent: dependent.clone(),
+                kind: UseKind::Runtime,
+            });
+        } else if build {
+            slot.push(ReverseUse {
+                dependent: dependent.clone(),
+                kind: UseKind::BuildOnly,
+            });
+        }
+        if toolchain {
+            slot.push(ReverseUse {
+                dependent,
+                kind: UseKind::Toolchain,
+            });
+        }
+    }
+
+    let nodes: BTreeSet<ModuleKey> = graph.node_weights().cloned().collect();
+    let mut by_name_version: BTreeMap<(&str, &str), Vec<ModuleKey>> = BTreeMap::new();
+    for candidate in candidates {
+        let key = ModuleKey::of(candidate);
+        if nodes.contains(&key) {
+            by_name_version
+                .entry((candidate.name.as_str(), candidate.version.as_str()))
+                .or_default()
+                .push(key);
+        }
+    }
+    for candidate in candidates {
+        let bundle = ModuleKey::of(candidate);
+        if !nodes.contains(&bundle) {
+            continue;
+        }
+        for extension in &candidate.exts_list {
+            if extension.name.is_empty() || extension.version.is_empty() {
+                continue;
+            }
+            let Some(matches) =
+                by_name_version.get(&(extension.name.as_str(), extension.version.as_str()))
+            else {
+                continue;
+            };
+            for key in matches {
+                if key == &bundle {
+                    continue;
+                }
+                out.entry(key.clone()).or_default().push(ReverseUse {
+                    dependent: bundle.clone(),
+                    kind: UseKind::Extension,
+                });
+            }
+        }
+    }
+    for uses in out.values_mut() {
+        uses.sort();
+        uses.dedup();
+    }
+    out
 }
 
 /// A requirement the closure walk found no easyconfig for.
@@ -657,6 +889,7 @@ pub fn closure_against_installed(
     let mut index: HashMap<ModuleKey, NodeIndex> = HashMap::new();
     let by_key: BTreeMap<ModuleKey, &Candidate> =
         candidates.iter().map(|c| (ModuleKey::of(c), c)).collect();
+    let by_name = index_by_name(candidates);
     let mut installed: BTreeSet<ModuleKey> = BTreeSet::new();
     let mut unresolved: BTreeSet<UnresolvedRequirement> = BTreeSet::new();
 
@@ -707,13 +940,7 @@ pub fn closure_against_installed(
                 .then_with(|| a.version_req.cmp(&b.version_req))
         });
         for dep in deps {
-            let admissible = within_generation(
-                candidates.iter().filter(|c| satisfies(c, dep)).collect(),
-                candidate,
-                candidates,
-                dep,
-            );
-            match choose(&admissible, choice) {
+            match resolve_dep(&by_name, candidate, dep, choice, candidates) {
                 Some(picked) => {
                     let dep_key = ModuleKey::of(picked);
                     edges.push((dep_key.clone(), key.clone()));
@@ -1414,5 +1641,77 @@ mod tests {
             .iter()
             .any(|step| step.module.name == "Lib" && step.kind == UseKind::Toolchain));
         assert_eq!(module_name(&lib), "Lib/2.0-foss-2026.1");
+    }
+
+    #[test]
+    fn the_reverse_index_keeps_runtime_build_extension_and_toolchain() {
+        let gcc = candidate("GCCcore", "15.2.0", tc("system", "system"), vec![]);
+        let zlib = candidate("zlib", "1.3.1", tc("GCCcore", "15.2.0"), vec![]);
+        let mut linked = candidate(
+            "Linked",
+            "1.0",
+            tc("GCCcore", "15.2.0"),
+            vec![dep("zlib", "==1.3.1", None)],
+        );
+        linked.builddependencies.push(dep("zlib", "==1.3.1", None));
+        let mut built = candidate("Built", "1.0", tc("GCCcore", "15.2.0"), vec![]);
+        built.builddependencies.push(dep("zlib", "==1.3.1", None));
+        let mut bundle = candidate("Bundle", "1.0", tc("GCCcore", "15.2.0"), vec![]);
+        bundle.exts_list.push(ExtEntry {
+            name: "zlib".into(),
+            version: "1.3.1".into(),
+        });
+        let all = vec![gcc, zlib.clone(), linked, built, bundle];
+        let (graph, unresolved) = reachable_graph(
+            &all,
+            &[
+                ModuleKey::of(&all[2]),
+                ModuleKey::of(&all[3]),
+                ModuleKey::of(&all[4]),
+            ],
+            Choice::Newest,
+        );
+        assert!(unresolved.is_empty(), "{unresolved:?}");
+        let reverse = reverse_index(&graph, &all);
+        let uses = &reverse[&ModuleKey::of(&zlib)];
+        let kinds: BTreeMap<String, UseKind> = uses
+            .iter()
+            .map(|use_| (use_.dependent.name.clone(), use_.kind))
+            .collect();
+        assert_eq!(
+            kinds.get("Linked"),
+            Some(&UseKind::Runtime),
+            "a runtime edge wins over a build edge: {kinds:?}"
+        );
+        assert_eq!(kinds.get("Built"), Some(&UseKind::BuildOnly), "{kinds:?}");
+        assert_eq!(kinds.get("Bundle"), Some(&UseKind::Extension), "{kinds:?}");
+        assert!(
+            !kinds.contains_key("GCCcore"),
+            "the toolchain is not a user of zlib: {kinds:?}"
+        );
+        let toolchain_users = &reverse[&ModuleKey::of(&all[0])];
+        assert!(
+            toolchain_users
+                .iter()
+                .any(|use_| use_.dependent.name == "zlib" && use_.kind == UseKind::Toolchain),
+            "{toolchain_users:?}"
+        );
+    }
+
+    #[test]
+    fn a_missing_dependency_does_not_stop_the_reachable_graph() {
+        let app = candidate(
+            "App",
+            "1.0",
+            tc("GCCcore", "15.2.0"),
+            vec![dep("Missing", "==1", None), dep("Lib", "==1", None)],
+        );
+        let lib = candidate("Lib", "1", tc("GCCcore", "15.2.0"), vec![]);
+        let (graph, unresolved) =
+            reachable_graph(&[app.clone(), lib], &[ModuleKey::of(&app)], Choice::Newest);
+        assert!(graph.node_weights().any(|key| key.name == "Lib"));
+        assert!(unresolved
+            .iter()
+            .any(|item| item.requirement.contains("Missing")));
     }
 }
