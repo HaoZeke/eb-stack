@@ -32,12 +32,8 @@ impl RegistryClient for MapClient {
     }
 }
 
-/// User-Agent curl sends. Cloudflare in front of mpich.org answers 403 to
-/// `eb-stack/...` and to an empty agent, and 200 to this one.
+/// curl's User-Agent. mpich.org answers 403 to anything else.
 const HTTP_USER_AGENT: &str = "curl/8.5.0";
-
-/// How many redirects to follow. curl's default is higher; ten covers a
-/// release asset that moves once or twice.
 const HTTP_REDIRECTS: u32 = 10;
 
 /// Live HTTPS client. Not used by the default test gate.
@@ -320,14 +316,10 @@ mod tests {
         assert!(!is_registry_name(Path::new("fixtures/pypi.json")));
     }
 
-    /// mpich.org's Cloudflare answers 403 unless the agent looks like curl,
-    /// and a release URL may 302 before the bytes. Both have to work or a
-    /// checksum fetch stops with an empty digest.
     #[test]
     fn get_sends_a_curl_user_agent_and_follows_redirects() {
         use std::io::{Read, Write};
         use std::net::TcpListener;
-
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
         let server = std::thread::spawn(move || {
@@ -336,32 +328,26 @@ mod tests {
                 let mut buf = [0_u8; 4096];
                 let mut n = 0;
                 while n < buf.len() && !buf[..n].windows(4).any(|w| w == b"\r\n\r\n") {
-                    let read = sock.read(&mut buf[n..]).expect("read");
-                    if read == 0 {
-                        break;
+                    match sock.read(&mut buf[n..]).expect("read") {
+                        0 => break,
+                        read => n += read,
                     }
-                    n += read;
                 }
                 let req = String::from_utf8_lossy(&buf[..n]);
-                assert!(
-                    req.contains("User-Agent: curl/8.5.0"),
-                    "missing curl user agent: {req}"
-                );
-                if req
+                assert!(req.contains("User-Agent: curl/8.5.0"), "{req}");
+                let resp = if req
                     .lines()
                     .next()
                     .is_some_and(|line| line.contains(" /src "))
                 {
-                    let resp = format!(
-                        "HTTP/1.0 302 Found\r\nLocation: http://127.0.0.1:{port}/final\r\nContent-Length: 0\r\n\r\n"
-                    );
-                    sock.write_all(resp.as_bytes()).expect("write");
+                    format!(
+                        "HTTP/1.0 302 Found\r\nLocation: http://127.0.0.1:{port}/final\r\n\
+                         Content-Length: 0\r\n\r\n"
+                    )
                 } else {
-                    let body = b"mpich-bytes";
-                    let resp = format!("HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
-                    sock.write_all(resp.as_bytes()).expect("write");
-                    sock.write_all(body).expect("body");
-                }
+                    "HTTP/1.0 200 OK\r\nContent-Length: 11\r\n\r\nmpich-bytes".into()
+                };
+                sock.write_all(resp.as_bytes()).expect("write");
             }
         });
         let body = UreqClient

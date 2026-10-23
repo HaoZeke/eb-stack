@@ -735,7 +735,8 @@ impl EbInvocation {
     /// removes a temporary log that is already gone (`ERROR: Failed to remove
     /// log file(s) ... [Errno 2]` after `Build succeeded for 1 out of 1`), and
     /// a dry run that exits 1 has its findings dropped. Builds already pass
-    /// `--disable-cleanup-tmpdir`; dry runs pass it too.
+    /// `--disable-cleanup-tmpdir`; dry runs pass it too. OpenMPI's own
+    /// removal of `$TMPDIR` is refused by [`dry_run_guard`], not by this flag.
     pub fn dry_run_args(&self, dir: &Path) -> Vec<String> {
         self.args(&[
             "-x".to_string(),
@@ -839,6 +840,13 @@ pub fn run_eb(args: &[String], limit: Duration, output_file: &Path) -> Result<Eb
     run_eb_with(args, limit, output_file, &[])
 }
 
+fn is_dry_run_guard_dir(entry: &str) -> bool {
+    Path::new(entry.trim_end_matches('/'))
+        .file_name()
+        .and_then(|name| name.to_str())
+        == Some("dry-run-guard")
+}
+
 /// [`run_eb`], with extra environment for the child process.
 pub fn run_eb_with(
     args: &[String],
@@ -884,6 +892,20 @@ fn run_program_with(
         .stdin(Stdio::null())
         .stdout(Stdio::from(file))
         .stderr(Stdio::from(err));
+    // A real build passes no extra_env, so a leaked guard never reaches it.
+    command.env_remove("EB_STACK_KEEP_SESSION_TMP");
+    if let Ok(pythonpath) = std::env::var("PYTHONPATH") {
+        let kept = pythonpath
+            .split(':')
+            .filter(|entry| !entry.is_empty() && !is_dry_run_guard_dir(entry))
+            .collect::<Vec<_>>()
+            .join(":");
+        if kept.is_empty() {
+            command.env_remove("PYTHONPATH");
+        } else {
+            command.env("PYTHONPATH", kept);
+        }
+    }
     for (key, value) in extra_env {
         command.env(key, value);
     }
@@ -1173,6 +1195,9 @@ pub fn read_tail(path: &Path, max_bytes: u64) -> Result<(String, bool), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static EB_BIN: Mutex<()> = Mutex::new(());
 
     const LOG: &str = "== temporary log file in case of crash /tmp/eb-1/easybuild.log\n\
 == configuring...\n\
@@ -1683,6 +1708,7 @@ configure:9999: $? = 1\n";
     #[test]
     fn run_eb_captures_output_and_stops_at_the_limit() {
         use std::os::unix::fs::PermissionsExt;
+        let _lock = EB_BIN.lock().expect("lock");
         let dir = tempfile::tempdir().expect("tempdir");
         let fake = dir.path().join("eb");
         std::fs::write(
@@ -1700,11 +1726,11 @@ configure:9999: $? = 1\n";
         assert!(!skipped && text.contains("args: a b") && text.contains("oops"));
         let cwd = dir.path().canonicalize().expect("canonical");
         assert!(text.contains(&format!("cwd: {}", cwd.display())), "{text}");
-        // The script writes its lines and then sleeps 5s. A 300ms limit
+        // The script writes its lines and then sleeps 5s. A short limit
         // expired before those writes when the rest of the suite was
-        // running, so the file was still empty. Two seconds still ends
+        // running, so the file was still empty. Three seconds still ends
         // the sleep and leaves the written lines to tail.
-        let slow = run_eb(&["slow".into()], Duration::from_secs(2), &out).expect("slow");
+        let slow = run_eb(&["slow".into()], Duration::from_secs(3), &out).expect("slow");
         assert!(slow.timed_out && slow.exit_code.is_none());
         std::env::remove_var("EB_STACK_EB");
         let (end, skipped) = read_tail(&out, 4).expect("short tail");
@@ -1713,6 +1739,7 @@ configure:9999: $? = 1\n";
 
     #[test]
     fn dry_run_guard_keeps_the_session_directory() {
+        let _lock = EB_BIN.lock().expect("lock");
         let dir = tempfile::tempdir().expect("tempdir");
         let env = dry_run_guard(dir.path()).expect("guard");
         assert!(env
@@ -1723,18 +1750,7 @@ configure:9999: $? = 1\n";
         std::fs::create_dir_all(&session).expect("session");
         std::fs::write(session.join("keep"), "x").expect("marker");
         std::fs::create_dir_all(&other).expect("other");
-        let script = "import os, shutil, sys\n\
-session, other = sys.argv[1], sys.argv[2]\n\
-os.environ['TMPDIR'] = session\n\
-shutil.rmtree(session)\n\
-shutil.rmtree(other)\n\
-assert os.path.isfile(os.path.join(session, 'keep'))\n\
-assert not os.path.isdir(other)\n\
-os.environ['TMPDIR'] = None\n\
-assert os.environ['TMPDIR'] == session\n\
-os.environ.pop('EB_STACK_KEEP_SESSION_TMP')\n\
-shutil.rmtree(session)\n\
-assert not os.path.isdir(session)\n";
+        let script = "import os,shutil,sys\nsession,other=sys.argv[1],sys.argv[2]\nos.environ['TMPDIR']=session\nshutil.rmtree(session)\nshutil.rmtree(other)\nassert os.path.isfile(os.path.join(session,'keep'))\nassert not os.path.isdir(other)\nos.environ['TMPDIR']=None\nassert os.environ['TMPDIR']==session\nos.environ.pop('EB_STACK_KEEP_SESSION_TMP')\nshutil.rmtree(session)\nassert not os.path.isdir(session)\n";
         let status = Command::new("python3")
             .args([
                 "-c",
@@ -1746,5 +1762,51 @@ assert not os.path.isdir(session)\n";
             .status()
             .expect("python3");
         assert!(status.success(), "guard failed: {status}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_invocation_does_not_load_the_dry_run_guard() {
+        use std::os::unix::fs::PermissionsExt;
+        let _lock = EB_BIN.lock().expect("lock");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake = dir.path().join("eb");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nprintf 'flag=%s\\npath=%s\\n' \"$EB_STACK_KEEP_SESSION_TMP\" \"$PYTHONPATH\"\n",
+        )
+        .expect("fake eb");
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        std::env::remove_var("PYTHONPATH");
+        let guard = dry_run_guard(dir.path()).expect("guard");
+        let leaked = &guard
+            .iter()
+            .find(|(key, _)| key == "PYTHONPATH")
+            .expect("path")
+            .1;
+        std::env::set_var("EB_STACK_EB", &fake);
+        std::env::set_var("EB_STACK_KEEP_SESSION_TMP", "1");
+        std::env::set_var("PYTHONPATH", format!("{leaked}:/tmp/not-dry-run-guard"));
+        let build_out = dir.path().join("build.txt");
+        let dry_out = dir.path().join("dry.txt");
+        let build = run_eb(&["build".into()], Duration::from_secs(5), &build_out).expect("build");
+        let dry =
+            run_eb_with(&["-x".into()], Duration::from_secs(5), &dry_out, &guard).expect("dry");
+        std::env::remove_var("EB_STACK_EB");
+        std::env::remove_var("EB_STACK_KEEP_SESSION_TMP");
+        std::env::remove_var("PYTHONPATH");
+        let build_text = std::fs::read_to_string(&build_out).expect("build out");
+        let dry_text = std::fs::read_to_string(&dry_out).expect("dry out");
+        assert_eq!((build.exit_code, dry.exit_code), (Some(0), Some(0)));
+        assert!(
+            build_text.starts_with("flag=\n")
+                && build_text.contains("path=/tmp/not-dry-run-guard\n")
+                && !build_text.contains("/dry-run-guard"),
+            "{build_text}"
+        );
+        assert!(
+            dry_text.starts_with("flag=1\n") && dry_text.contains("/dry-run-guard"),
+            "{dry_text}"
+        );
     }
 }
