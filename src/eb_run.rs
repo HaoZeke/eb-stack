@@ -775,6 +775,27 @@ impl EbInvocation {
     }
 }
 
+const DRY_RUN_GUARD_PY: &str = include_str!("dry_run_guard.py");
+
+/// `sitecustomize` so OpenMPI.cleanup does not remove the `eb -x` session directory.
+pub fn dry_run_guard(dir: &Path) -> Result<Vec<(String, String)>, String> {
+    let guard_dir = dir.join("dry-run-guard");
+    std::fs::create_dir_all(&guard_dir)
+        .map_err(|error| format!("create {}: {error}", guard_dir.display()))?;
+    let script = guard_dir.join("sitecustomize.py");
+    std::fs::write(&script, DRY_RUN_GUARD_PY)
+        .map_err(|error| format!("write {}: {error}", script.display()))?;
+    let mut pythonpath = guard_dir.display().to_string();
+    if let Some(existing) = std::env::var_os("PYTHONPATH").filter(|value| !value.is_empty()) {
+        let existing = existing.to_string_lossy();
+        pythonpath = format!("{pythonpath}:{existing}");
+    }
+    Ok(vec![
+        ("PYTHONPATH".to_string(), pythonpath),
+        ("EB_STACK_KEEP_SESSION_TMP".to_string(), "1".to_string()),
+    ])
+}
+
 /// How one `eb` run ended.
 #[derive(Debug, Clone, Serialize)]
 pub struct EbRun {
@@ -815,7 +836,17 @@ pub fn resolve_eb() -> Result<PathBuf, String> {
 /// root of an easyblocks checkout would import that checkout's `easybuild`
 /// package instead of the installed framework.
 pub fn run_eb(args: &[String], limit: Duration, output_file: &Path) -> Result<EbRun, String> {
-    run_program(&resolve_eb()?, args, limit, output_file)
+    run_eb_with(args, limit, output_file, &[])
+}
+
+/// [`run_eb`], with extra environment for the child process.
+pub fn run_eb_with(
+    args: &[String],
+    limit: Duration,
+    output_file: &Path,
+    extra_env: &[(String, String)],
+) -> Result<EbRun, String> {
+    run_program_with(&resolve_eb()?, args, limit, output_file, extra_env)
 }
 
 /// [`run_eb`] with the program given. At the limit, every process the
@@ -825,6 +856,16 @@ pub fn run_program(
     args: &[String],
     limit: Duration,
     output_file: &Path,
+) -> Result<EbRun, String> {
+    run_program_with(program, args, limit, output_file, &[])
+}
+
+fn run_program_with(
+    program: &Path,
+    args: &[String],
+    limit: Duration,
+    output_file: &Path,
+    extra_env: &[(String, String)],
 ) -> Result<EbRun, String> {
     let file = File::create(output_file)
         .map_err(|error| format!("create {}: {error}", output_file.display()))?;
@@ -836,12 +877,17 @@ pub fn run_program(
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::from(file))
-        .stderr(Stdio::from(err))
+        .stderr(Stdio::from(err));
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+    let mut child = command
         .spawn()
         .map_err(|error| format!("start {}: {error}", program.display()))?;
     let mut timed_out = false;
@@ -1663,5 +1709,42 @@ configure:9999: $? = 1\n";
         std::env::remove_var("EB_STACK_EB");
         let (end, skipped) = read_tail(&out, 4).expect("short tail");
         assert!(skipped && end.len() <= 4);
+    }
+
+    #[test]
+    fn dry_run_guard_keeps_the_session_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env = dry_run_guard(dir.path()).expect("guard");
+        assert!(env
+            .iter()
+            .any(|(key, value)| key == "EB_STACK_KEEP_SESSION_TMP" && value == "1"));
+        let session = dir.path().join("eb-session");
+        let other = dir.path().join("other");
+        std::fs::create_dir_all(&session).expect("session");
+        std::fs::write(session.join("keep"), "x").expect("marker");
+        std::fs::create_dir_all(&other).expect("other");
+        let script = "import os, shutil, sys\n\
+session, other = sys.argv[1], sys.argv[2]\n\
+os.environ['TMPDIR'] = session\n\
+shutil.rmtree(session)\n\
+shutil.rmtree(other)\n\
+assert os.path.isfile(os.path.join(session, 'keep'))\n\
+assert not os.path.isdir(other)\n\
+os.environ['TMPDIR'] = None\n\
+assert os.environ['TMPDIR'] == session\n\
+os.environ.pop('EB_STACK_KEEP_SESSION_TMP')\n\
+shutil.rmtree(session)\n\
+assert not os.path.isdir(session)\n";
+        let status = Command::new("python3")
+            .args([
+                "-c",
+                script,
+                &session.display().to_string(),
+                &other.display().to_string(),
+            ])
+            .envs(env)
+            .status()
+            .expect("python3");
+        assert!(status.success(), "guard failed: {status}");
     }
 }

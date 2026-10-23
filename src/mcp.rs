@@ -11,10 +11,10 @@ use crate::eb_parse::{
 };
 use crate::eb_run::{
     build_test_description, builds_allowed, commands_in, config_log_failure, dry_run_environment,
-    dry_run_next, error_lines, failed_dry_run_text, failure_kind, find_config_log,
+    dry_run_guard, dry_run_next, error_lines, failed_dry_run_text, failure_kind, find_config_log,
     last_step_in_file, lmod_error, parse_dry_run, read_tail, recipe_toolchain_options, run_eb,
-    split_steps, split_warnings, step_text, tail, threaded_findings, threaded_findings_text,
-    threaded_note, threaded_pairs, EbInvocation, EbRun, ALLOW_BUILD_ENV,
+    run_eb_with, split_steps, split_warnings, step_text, tail, threaded_findings,
+    threaded_findings_text, threaded_note, threaded_pairs, EbInvocation, EbRun, ALLOW_BUILD_ENV,
 };
 use crate::eb_style::{
     format_style, format_style_file, hunks, is_formatting_code, lint_recipe_files_scoped,
@@ -1324,8 +1324,13 @@ fn timeout_arg(arguments: &Value, default: u64, min: u64, max: u64) -> Duration 
 /// `run_eb` returns that as a tool error. Write it where the dry-run parser
 /// reads errors so `failure_kind` can classify it with every other environment
 /// failure instead of leaving the caller with an unclassified tool error.
-fn run_eb_or_absent(args: &[String], limit: Duration, output: &Path) -> Result<EbRun, String> {
-    match run_eb(args, limit, output) {
+fn run_eb_or_absent_with(
+    args: &[String],
+    limit: Duration,
+    output: &Path,
+    extra_env: &[(String, String)],
+) -> Result<EbRun, String> {
+    match run_eb_with(args, limit, output, extra_env) {
         Ok(run) => Ok(run),
         Err(error) if error.contains("eb is not on PATH") || error.contains("EB_STACK_EB=") => {
             std::fs::write(output, format!("ERROR: {error}\n"))
@@ -1351,10 +1356,12 @@ fn easyblock_dry_run(arguments: &Value) -> Result<Value, String> {
     }
     let dir = eb_run_dir(&root, "dry-run")?;
     let output = dir.join("eb.out");
-    let run = run_eb_or_absent(
+    let guard = dry_run_guard(&dir)?;
+    let run = run_eb_or_absent_with(
         &invocation.dry_run_args(&dir),
         timeout_arg(arguments, 600, 10, 3600),
         &output,
+        &guard,
     )?;
     let (text, _) = read_tail(&output, 4 * 1024 * 1024)?;
     let lines = text.lines().collect::<Vec<_>>();
