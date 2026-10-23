@@ -2949,10 +2949,114 @@ pub fn validate_lock_deps(lock: &StackLock, cands: &[Candidate]) -> Result<(), S
     Ok(())
 }
 
+/// EasyBuild PR / commit subject for `ecs`, in `det_pr_title` shape.
+///
+/// `{moduleclass}[toolchain/version] Name vX`, then ` w/ ` and the
+/// versionsuffix with its leading `-` dropped and the remaining `-` turned
+/// into spaces. `versionsuffix` is the resolved value: `%(javaver)s` has
+/// already become the Java dependency's version, so a Bazel recipe is
+/// `w/ Java 21` rather than `w/ Java %(javaver)s`.
+pub fn pr_title(ecs: &[ResolvedEasyconfig]) -> String {
+    fn label(items: &[String]) -> String {
+        let mut unique = Vec::new();
+        for item in items {
+            if !unique.iter().any(|seen: &String| seen == item) {
+                unique.push(item.clone());
+            }
+        }
+        let max = unique
+            .iter()
+            .map(|item| items.iter().filter(|candidate| *candidate == item).count())
+            .max()
+            .unwrap_or(0);
+        let mut counted: Vec<(usize, &str)> = unique
+            .iter()
+            .map(|item| {
+                (
+                    items.iter().filter(|candidate| *candidate == item).count(),
+                    item.as_str(),
+                )
+            })
+            .collect();
+        counted.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(right.1)));
+        counted
+            .into_iter()
+            .filter(|(count, _)| *count == max)
+            .map(|(_, item)| item)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    let classes = ecs
+        .iter()
+        .map(|ec| ec.moduleclass.clone().unwrap_or_default())
+        .collect::<Vec<_>>();
+    let toolchains = ecs
+        .iter()
+        .map(|ec| format!("{}/{}", ec.toolchain.name, ec.toolchain.version))
+        .collect::<Vec<_>>();
+    let mut names = Vec::new();
+    for ec in ecs {
+        let name = format!("{} v{}", ec.name, ec.version);
+        if !names.iter().any(|seen: &String| seen == &name) {
+            names.push(name);
+        }
+    }
+    if names.len() > 3 {
+        names.truncate(3);
+        names.push("...".into());
+    }
+    let mut title = format!(
+        "{}[{}] {}",
+        label(&classes),
+        label(&toolchains),
+        names.join(", ")
+    );
+    let mut suffixes = Vec::new();
+    for ec in ecs {
+        let Some(suffix) = ec
+            .versionsuffix
+            .as_deref()
+            .filter(|suffix| !suffix.is_empty())
+        else {
+            continue;
+        };
+        let suffix = suffix.trim_start_matches('-').replace('-', " ");
+        if !suffixes.iter().any(|seen: &String| seen == &suffix) {
+            suffixes.push(suffix);
+        }
+    }
+    suffixes.sort();
+    if !suffixes.is_empty() {
+        if suffixes.len() > 2 {
+            suffixes.truncate(2);
+            suffixes.push("...".into());
+        }
+        title.push_str(" w/ ");
+        title.push_str(&suffixes.join(", "));
+    }
+    title
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn pr_title_expands_a_versionsuffix_template() {
+        let src = "name = 'Bazel'\nversion = '7.7.1'\n\
+                   versionsuffix = '-Java-%(javaver)s'\n\
+                   toolchain = {'name': 'GCCcore', 'version': '15.2.0'}\n\
+                   dependencies = [('Java', '21', '', SYSTEM)]\n\
+                   moduleclass = 'devel'\n";
+        let recipe = resolve_easyconfig_str(src).expect("parse");
+        assert_eq!(recipe.versionsuffix.as_deref(), Some("-Java-21"));
+        assert_eq!(
+            pr_title(std::slice::from_ref(&recipe)),
+            "devel[GCCcore/15.2.0] Bazel v7.7.1 w/ Java 21"
+        );
+    }
 
     fn fixture_eb_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/gromacs_2025_to_next/easyconfigs")
