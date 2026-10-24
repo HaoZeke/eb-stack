@@ -14,6 +14,15 @@ All notable changes to this project are documented here.
 
 ### Documentation
 
+- Keep each command span on one line on the dependency-closure page, and
+  put the remaining actors next to their verbs.
+
+- Record the dependency-closure page against the commands. The examples
+  directory contains the checksum recipe, both pull-request files, the curl
+  recipes, the easyblock tree, and `Tool-1.0.eb`. A test reruns every
+  command on the page and diffs the output. The stack document and the
+  package-plan document keep a build-only dependency off `dependsOn`.
+
 - Tighten the dependency-closure page. Spell out SBOM, CVE, and MCP on
   first use, and rewrite the sentences a prose review flagged.
   Command lines and recorded output are unchanged.

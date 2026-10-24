@@ -54,7 +54,7 @@
 
    *Which modules carry a component?* → :doc:`howto/component-reach`
 
-   *What else does one change reach?* → :doc:`explanation/sbom-blast-radius`
+   *Dependency closure of one change?* → :doc:`explanation/sbom-blast-radius`
 
    *CLI surface?* → :doc:`reference/cli`
 
