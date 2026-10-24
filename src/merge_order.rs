@@ -3,7 +3,8 @@
 //! Order open pull requests so a shared module is built once.
 //!
 //! 1. Edge A -> B when a module in B's `to_build` is an easystack entry A adds
-//!    (A asks for it by name; B only reaches it). Edges both ways form a cycle.
+//!    (A asks for it by name; B only reaches it), or when a `depends-on` row
+//!    names A as `from` and B as `to`. Edges both ways form a cycle.
 //! 2. Among pull requests with no remaining incoming edge, pick the one whose
 //!    residual build set is smallest, then the lowest pull request number.
 //! 3. After picking, add its residual builds to the installed set and recompute
@@ -106,6 +107,23 @@ pub fn plan(records: &[PrRecord], index: &OverlapIndex, merged: &[u64]) -> Merge
             if reaches {
                 graph.add_edge(node[&from], node[&to], ());
             }
+        }
+    }
+    for row in index.rows.iter().filter(|row| row.kind == "depends-on") {
+        let (Some(from), Some(to)) = (row.from, row.to) else {
+            continue;
+        };
+        if from == to {
+            continue;
+        }
+        let (Some(&from_node), Some(&to_node)) = (node.get(&from), node.get(&to)) else {
+            continue;
+        };
+        let present = graph
+            .edges(from_node)
+            .any(|edge| edge.target() == to_node);
+        if !present {
+            graph.add_edge(from_node, to_node, ());
         }
     }
     let mut cycles = Vec::new();
@@ -225,8 +243,8 @@ pub struct MergeEffect {
     pub shrinks: Vec<String>,
     /// Modules of a depends-on edge from the merged pull request to this one.
     ///
-    /// The edge is the same one [`plan`] draws: the merged pull request asks
-    /// for the module by name, and this one only reaches it.
+    /// The edge is the same one [`plan`] draws: an easystack entry the
+    /// provider asks for, or a `depends-on` row from the provider.
     pub resolves: Vec<String>,
 }
 
@@ -254,23 +272,51 @@ fn resolves_modules(provider: &PrRecord, dependent: &PrRecord) -> Vec<String> {
     modules
 }
 
+fn depends_on_modules(index: &OverlapIndex, from: u64, to: u64) -> Vec<String> {
+    let mut modules: Vec<String> = index
+        .rows
+        .iter()
+        .filter(|row| row.kind == "depends-on" && row.from == Some(from) && row.to == Some(to))
+        .flat_map(|row| row.modules.iter().cloned())
+        .collect();
+    modules.sort();
+    modules.dedup();
+    modules
+}
+
 /// Pull requests a merge of `pr` changes. `None` when `pr` is not a record.
 ///
 /// `merged` pull requests are already installed. Their `to_build` is
 /// removed from both sides before the intersection, and they are omitted
 /// from `affected`. That is the same installed set [`plan`] uses.
-pub fn impact(records: &[PrRecord], pr: u64, merged: &[u64]) -> Option<MergeImpact> {
+///
+/// A `depends-on` row whose `to` is this pull request names modules the
+/// other pull request builds. Closing over that head puts them in
+/// `to_build` here, but merging this pull request does not install them,
+/// so they are not a shrink of the provider.
+pub fn impact(
+    records: &[PrRecord],
+    index: &OverlapIndex,
+    pr: u64,
+    merged: &[u64],
+) -> Option<MergeImpact> {
     let given = records.iter().find(|record| record.pr == pr)?;
     let merged_set: BTreeSet<u64> = merged.iter().copied().collect();
     let mut installed: BTreeSet<&str> = BTreeSet::new();
     for record in records.iter().filter(|record| merged_set.contains(&record.pr)) {
         installed.extend(record.to_build.iter().map(String::as_str));
     }
+    let inherited: BTreeSet<&str> = index
+        .rows
+        .iter()
+        .filter(|row| row.kind == "depends-on" && row.to == Some(pr))
+        .flat_map(|row| row.modules.iter().map(String::as_str))
+        .collect();
     let built: BTreeSet<&str> = given
         .to_build
         .iter()
         .map(String::as_str)
-        .filter(|module| !installed.contains(module))
+        .filter(|module| !installed.contains(module) && !inherited.contains(module))
         .collect();
     let mut affected = Vec::new();
     for other in records {
@@ -284,7 +330,13 @@ pub fn impact(records: &[PrRecord], pr: u64, merged: &[u64]) -> Option<MergeImpa
             .cloned()
             .collect();
         shrinks.sort();
-        let resolves = resolves_modules(given, other);
+        let mut resolves = resolves_modules(given, other);
+        for module in depends_on_modules(index, given.pr, other.pr) {
+            if !resolves.iter().any(|have| have == &module) {
+                resolves.push(module);
+            }
+        }
+        resolves.sort();
         if shrinks.is_empty() && resolves.is_empty() {
             continue;
         }
@@ -303,6 +355,7 @@ pub fn impact(records: &[PrRecord], pr: u64, merged: &[u64]) -> Option<MergeImpa
 /// The first unknown number is `Err`.
 pub fn impact_report(
     records: &[PrRecord],
+    index: &OverlapIndex,
     numbers: &[u64],
     generated_at: &str,
     merged: &[u64],
@@ -312,7 +365,7 @@ pub fn impact_report(
     numbers.dedup();
     let mut impacts = Vec::new();
     for number in numbers {
-        let Some(one) = impact(records, number, merged) else {
+        let Some(one) = impact(records, index, number, merged) else {
             return Err(number);
         };
         impacts.push(one);
@@ -521,16 +574,23 @@ mod tests {
         }
     }
 
+    fn index_of(records: &[PrRecord]) -> OverlapIndex {
+        overlap_index(
+            records,
+            &OverlapConfig {
+                eessi_version: "2026.06".into(),
+                installed_source: "x86_64/amd/zen4".into(),
+                exclude_paths: Vec::new(),
+                include_paths: Vec::new(),
+                generated_at: "2026-10-22T00:00:00Z".into(),
+                filter_deps: FilterDeps::empty(),
+                easyblocks: None,
+            },
+        )
+    }
+
     fn order(records: &[PrRecord]) -> MergeOrder {
-        plan(records, &overlap_index(records, &OverlapConfig {
-            eessi_version: "2026.06".into(),
-            installed_source: "x86_64/amd/zen4".into(),
-            exclude_paths: Vec::new(),
-            include_paths: Vec::new(),
-            generated_at: "2026-10-22T00:00:00Z".into(),
-            filter_deps: FilterDeps::empty(),
-            easyblocks: None,
-        }), &[])
+        plan(records, &index_of(records), &[])
     }
 
     fn builds(order: &MergeOrder) -> Vec<(u64, Vec<String>)> {
@@ -604,7 +664,8 @@ mod tests {
             rec(2, &[mid, lib], &["Mid-1.0-GCCcore-15.2.0.eb"]),
             rec(3, &[app, mid, lib], &["App-2.0-GCCcore-15.2.0.eb"]),
         ];
-        let hit = impact(&records, 1, &[]).expect("pr 1");
+        let index = index_of(&records);
+        let hit = impact(&records, &index, 1, &[]).expect("pr 1");
         assert_eq!(
             hit.affected.iter().map(|effect| effect.pr).collect::<Vec<_>>(),
             [2, 3]
@@ -612,7 +673,7 @@ mod tests {
         assert_eq!(hit.affected[0].shrinks, [lib]);
         assert_eq!(hit.affected[0].resolves, [lib]);
         assert_eq!(hit.affected[1].resolves, [lib]);
-        let mid_hit = impact(&records, 2, &[]).expect("pr 2");
+        let mid_hit = impact(&records, &index, 2, &[]).expect("pr 2");
         let on_3 = mid_hit
             .affected
             .iter()
@@ -627,13 +688,13 @@ mod tests {
             .expect("pr 1");
         assert!(on_1.resolves.is_empty());
         assert_eq!(on_1.shrinks, [lib]);
-        assert!(impact(&records, 9, &[]).is_none());
-        let report = impact_report(&records, &[2, 1], "t", &[]).expect("report");
+        assert!(impact(&records, &index, 9, &[]).is_none());
+        let report = impact_report(&records, &index, &[2, 1], "t", &[]).expect("report");
         assert_eq!(
             report.impacts.iter().map(|item| item.pr).collect::<Vec<_>>(),
             [1, 2]
         );
-        assert_eq!(impact_report(&records, &[9], "t", &[]), Err(9));
+        assert_eq!(impact_report(&records, &index, &[9], "t", &[]), Err(9));
     }
 
     #[test]

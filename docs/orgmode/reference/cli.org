@@ -580,8 +580,9 @@ that is also passed to ~--merged~ is an error:
 ~--impact N: already listed in --merged~. Modules those merged pull
 requests build are already installed, so they do not appear in ~shrinks~
 and those pull requests are not listed under ~affected~. For
-~--kind easyconfigs~ the records have no easystack entries, so ~resolves~
-stays empty. The recorded easyconfigs run is
+~--kind easyconfigs~, ~resolves~ lists the modules on a ~depends-on~
+row from that pull request, and ~after~ in ~merge-order.toml~ lists the
+pull request that adds them. The recorded easyconfigs run is
 [[file:../howto/easyconfigs-pr-overlap.org][close open easybuild-easyconfigs pull requests]].
 
 * ~rebuild-set~

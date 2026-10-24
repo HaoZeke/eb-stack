@@ -204,3 +204,57 @@ fn impact_honours_merged_the_way_merge_order_does() {
         "{err}"
     );
 }
+
+/// Easyconfigs edges come from overlap `depends-on` rows.
+#[test]
+fn easyconfigs_merge_order_and_impact_follow_depends_on_rows() {
+    let temp = tempfile::tempdir().expect("temp");
+    let out = temp.path().join("out");
+    let status = run_easy(&out, &["--merge-order", "--impact", "7"]);
+    let err = String::from_utf8_lossy(&status.stderr);
+    assert!(status.status.success(), "{err}");
+    let order: eb_stack::merge_order::MergeOrder =
+        toml::from_str(&std::fs::read_to_string(out.join("merge-order.toml")).unwrap()).unwrap();
+    let step = order
+        .steps
+        .iter()
+        .find(|step| step.pr == 8)
+        .expect("PR 8 step");
+    assert_eq!(step.after, vec![7], "PR 8 should follow the depends-on row");
+    let report: eb_stack::merge_order::MergeImpactReport =
+        toml::from_str(&std::fs::read_to_string(out.join("merge-impact.toml")).unwrap()).unwrap();
+    let impact = report
+        .impacts
+        .iter()
+        .find(|impact| impact.pr == 7)
+        .expect("impact 7");
+    let on_8 = impact
+        .affected
+        .iter()
+        .find(|effect| effect.pr == 8)
+        .expect("PR 8 affected");
+    assert_eq!(on_8.resolves, vec!["Need/1.0".to_string()]);
+
+    // `--impact 8` must not say that merging 8 shrinks 7 by Need/1.0.
+    // Need exists only in PR 7. PR 8's closure contains it because the
+    // record is closed over PR 7's head.
+    let alone = run_easy(&temp.path().join("impact-8"), &["--impact", "8"]);
+    let err = String::from_utf8_lossy(&alone.stderr);
+    assert!(alone.status.success(), "{err}");
+    let report: eb_stack::merge_order::MergeImpactReport = toml::from_str(
+        &std::fs::read_to_string(temp.path().join("impact-8").join("merge-impact.toml")).unwrap(),
+    )
+    .unwrap();
+    let impact = report
+        .impacts
+        .iter()
+        .find(|impact| impact.pr == 8)
+        .expect("impact 8");
+    assert!(
+        impact.affected.iter().all(|effect| {
+            effect.pr != 7 && effect.shrinks.iter().all(|module| module != "Need/1.0")
+        }),
+        "PR 8 does not build Need/1.0: {:?}",
+        impact.affected
+    );
+}

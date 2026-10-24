@@ -425,9 +425,12 @@ table:
 | ~resolves~ | Modules of a depends-on edge from the named pull request. It asks for the module by name, and the other only reaches it. Both asking is not an edge |
 
 An unknown number is an error before the file is written:
-~--impact N: no pull request with that number~. Easyconfigs records have
-no easystack entries, so ~resolves~ is empty for that kind and ~shrinks~
-is still the shared ~to_build~.
+~--impact N: no pull request with that number~. For an easyconfigs run,
+~resolves~ lists the modules on a ~depends-on~ row from the named pull
+request. ~shrinks~ is the shared ~to_build~ that remains after ~--merged~
+modules are removed. Modules from a ~depends-on~ row into the pull
+request are excluded from ~shrinks~. A software-layer ~resolves~ list is
+the modules the named pull request asks for by easystack entry.
 
 ** Easyconfigs records (schema 2)
 

@@ -540,13 +540,18 @@ fn run_pr_overlap_inner(
                 )));
             }
         }
-        let report =
-            merge_order::impact_report(&records, &args.impact, &config.generated_at, &args.merged)
-                .map_err(|number| {
-                    usage(format!(
-                        "--impact {number}: no pull request with that number"
-                    ))
-                })?;
+        let report = merge_order::impact_report(
+            &records,
+            &index,
+            &args.impact,
+            &config.generated_at,
+            &args.merged,
+        )
+        .map_err(|number| {
+            usage(format!(
+                "--impact {number}: no pull request with that number"
+            ))
+        })?;
         std::fs::write(args.out_dir.join("merge-impact.toml"), to_toml(&report)?)?;
     }
     Ok(PrOverlapRun {
