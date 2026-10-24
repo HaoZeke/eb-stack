@@ -421,8 +421,11 @@ fn tool_catalog() -> Vec<Value> {
                 ("easyconfigs", "array"),
             ],
             &[
+                ("purl", "string"),
+                ("cve", "string"),
                 ("installed", "string"),
                 ("easystack", "array"),
+                ("easystack_url", "array"),
                 ("compat_layer", "string"),
                 ("filter_deps", "array"),
                 ("generated_at", "string"),
@@ -2617,12 +2620,15 @@ fn rebuild_set_tool(arguments: &Value) -> Result<Value, String> {
 fn component_reach_tool(arguments: &Value) -> Result<Value, String> {
     let report =
         crate::site_commands::run_component_reach(&crate::site_commands::ComponentReachRequest {
-            component: required_string(arguments, "component")?,
-            version: required_string(arguments, "version")?,
+            component: optional_string(arguments, "component"),
+            version: optional_string(arguments, "version"),
+            purl: optional_string(arguments, "purl"),
+            cve: optional_string(arguments, "cve"),
             generation: required_string(arguments, "generation")?,
             easyconfigs: path_array(arguments, "easyconfigs")?,
             installed: optional_path(arguments, "installed"),
             easystacks: optional_paths(arguments, "easystack")?,
+            easystack_urls: string_array(arguments, "easystack_url")?,
             compat_layer: optional_path(arguments, "compat_layer"),
             filter_deps: filter_dep_specs(arguments)?,
             generated_at: optional_string(arguments, "generated_at"),

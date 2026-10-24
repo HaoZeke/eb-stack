@@ -1,0 +1,4 @@
+name = 'git'
+version = '2'
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+dependencies = [('cURL', '8.17.0')]

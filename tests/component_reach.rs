@@ -57,3 +57,167 @@ fn the_cli_writes_toml_json_and_markdown() {
     assert!(md.contains("| Easyconfig | Module | Role | Version | Installed |"));
     assert!(Path::new(&out.join("component-reach.md")).is_file());
 }
+
+#[test]
+fn the_cli_accepts_a_purl() {
+    let dir = tempfile::tempdir().expect("temp");
+    let root = dir.path();
+    std::fs::write(
+        root.join("cURL.eb"),
+        "name = 'cURL'\nversion = '8.17.0'\ntoolchain = {'name': 'GCCcore', 'version': '15.2.0'}\n",
+    )
+    .unwrap();
+    let out = root.join("out");
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .env_remove("EASYBUILD_FILTER_DEPS")
+        .args([
+            "component-reach",
+            "--purl",
+            "pkg:generic/curl@8.17.0",
+            "--generation",
+            "2026.1",
+            "--easyconfigs",
+        ])
+        .arg(root)
+        .args(["--generated-at", "2026-10-24T00:00:00Z", "--out-dir"])
+        .arg(&out)
+        .output()
+        .expect("run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(out.join("component-reach.json")).unwrap())
+            .unwrap();
+    assert_eq!(json["component"], "curl");
+    assert_eq!(json["purl"], "pkg:generic/curl@8.17.0");
+    assert_eq!(json["carriers"][0]["role"], "module");
+}
+
+#[test]
+fn cargo_and_npm_purls_do_not_match_the_curl_recipe() {
+    let dir = tempfile::tempdir().expect("temp");
+    let root = dir.path();
+    std::fs::write(
+        root.join("cURL.eb"),
+        "name = 'cURL'\nversion = '8.17.0'\ntoolchain = {'name': 'GCCcore', 'version': '15.2.0'}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("cargo-curl.eb"),
+        "name = 'cargo-curl'\nversion = '0.1'\neasyblock = 'Cargo'\ntoolchain = {'name': 'GCCcore', 'version': '15.2.0'}\ncrates = [('curl', '8.17.0')]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("npm-bundle.eb"),
+        "name = 'npm-bundle'\nversion = '1'\neasyblock = 'Bundle'\nexts_defaultclass = 'NpmPackage'\ntoolchain = {'name': 'GCCcore', 'version': '15.2.0'}\nexts_list = [('curl', '8.17.0', {})]\n",
+    )
+    .unwrap();
+    let cargo = reach_purl(root, "pkg:cargo/curl@8.17.0");
+    let files: Vec<_> = cargo["carriers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["easyconfig"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !files.iter().any(|file| file == "cURL.eb"),
+        "cargo purl matched the cURL recipe: {files:?}"
+    );
+    assert!(
+        files.iter().any(|file| file == "cargo-curl.eb"),
+        "cargo purl missed the crate: {files:?}"
+    );
+    let npm = reach_purl(root, "pkg:npm/curl@8.17.0");
+    let files: Vec<_> = npm["carriers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["easyconfig"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !files.iter().any(|file| file == "cURL.eb"),
+        "npm purl matched the cURL recipe: {files:?}"
+    );
+    assert!(
+        files.iter().any(|file| file == "npm-bundle.eb"),
+        "npm purl missed the extension: {files:?}"
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .env_remove("EASYBUILD_FILTER_DEPS")
+        .args([
+            "component-reach",
+            "--purl",
+            "pkg:gem/curl@8.17.0",
+            "--generation",
+            "2026.1",
+            "--easyconfigs",
+        ])
+        .arg(root)
+        .args(["--generated-at", "2026-10-24T00:00:00Z", "--out-dir"])
+        .arg(root.join("gem-out"))
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no carrier model"),
+        "stderr should name the missing model: {stderr}"
+    );
+}
+
+fn reach_purl(root: &Path, purl: &str) -> serde_json::Value {
+    let out = root.join(purl.replace([':', '/', '@'], "_"));
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .env_remove("EASYBUILD_FILTER_DEPS")
+        .args([
+            "component-reach",
+            "--purl",
+            purl,
+            "--generation",
+            "2026.1",
+            "--easyconfigs",
+        ])
+        .arg(root)
+        .args(["--generated-at", "2026-10-24T00:00:00Z", "--out-dir"])
+        .arg(&out)
+        .output()
+        .expect("run");
+    assert!(
+        output.status.success(),
+        "{purl}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_str(&std::fs::read_to_string(out.join("component-reach.json")).unwrap())
+        .unwrap()
+}
+
+/// A purl type with no carrier model is a usage error and writes nothing.
+#[test]
+fn an_unsupported_purl_type_creates_no_output_directory() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let out_dir = tmp.path().join("reach");
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .args([
+            "component-reach",
+            "--purl",
+            "pkg:deb/debian/curl@8.17.0",
+            "--generation",
+            "2026.1",
+            "--easyconfigs",
+            "tests/component_reach_fixtures",
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("purl type deb has no carrier model"),
+        "{stderr}"
+    );
+    assert!(!out_dir.exists(), "left {}", out_dir.display());
+}

@@ -38,6 +38,7 @@ pub mod mcp;
 pub mod merge_order;
 pub mod miner;
 pub mod modulerc;
+pub mod osv;
 pub mod package;
 pub mod package_catalog;
 pub mod package_closure;

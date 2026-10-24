@@ -608,12 +608,12 @@ promoted. A second run replaces the ~rebuilds/*.yml~ files.
 
 #+begin_src bash
 eb-stack component-reach \
-  --component NAME \
-  --version VER \
+  (--component NAME --version VER | --purl PKG:TYPE/NAME@VER | --cve CVE-ID) \
   --generation 2026.1 \
   --easyconfigs TREE [--easyconfigs TREE]... \
   [--installed installed.txt] \
   [--easystack STACK.yml]... \
+  [--easystack-url https://.../STACK.yml]... \
   [--compat-layer FILE] \
   [--filter-deps SPEC,SPEC...] \
   [--generated-at RFC3339] \
@@ -621,24 +621,36 @@ eb-stack component-reach \
 #+end_src
 
 Lists every easyconfig and installed module in one toolchain generation
-that carries ~--component~ at ~--version~, then feeds the recipes that
-contain it into the rebuild closure. See
+that carries a component, then feeds the recipes that contain it into
+the rebuild closure. See
 [[file:../howto/component-reach.org][which modules carry a component]].
 
-~--version~ is an exact version, ~*~, or a requirement such as ~>=8,<9~.
+Pass ~--component~ and ~--version~, or ~--purl~, or ~--cve~. ~--version~
+is an exact version, ~*~, or a requirement such as ~>=8,<9~. With
+~--purl~ it replaces the version in the URL. ~--cve~ resolves the id
+through OSV, follows GHSA, RUSTSEC, PYSEC, and GO aliases when the CVE
+record has only a git range, and keeps named version tags such as
+~libXpm-3.5.17~. Several affected packages are written as one document
+with ~kind~ ~cve~.
+
 Names match with ASCII case folded, on a whole token. A recipe is in the
 generation when its toolchain version equals ~--generation~, or when the
 toolchain is a non-system member of the known foss hierarchy for that
 generation.
 
 A hit is a dependency or builddependency tuple, a bundle ~components~
-entry, an ~exts_list~ extension, a Cargo crate (a ~crates~ tuple or a
-filename such as ~libz-sys-1.1.29.tar.gz~), or a versioned name in
-~sources~ or ~patches~. A ~+name-version~ fragment inside a crate
-version counts as that vendored version. A dependency or builddependency
-is a carrier and
+entry, an ~exts_list~ extension, a Cargo crate (a ~crates~ tuple, a
+filename such as ~libz-sys-1.1.29.tar.gz~, or a checksum key such as
+~rustls-webpki-0.102.8.tar.gz~), a Python wheel (~.whl~ in ~sources~,
+~checksums~, an ~exts_list~ source, or ~source_tmpl~), or a versioned
+name in ~sources~ or ~patches~. A ~+name-version~ fragment inside a crate
+version counts as that vendored version. The recipe's own tarball is not
+a crate it carries. A dependency or builddependency is a carrier and
 is not a patched root. The other roles are: the recipe contains the
 component, and its filename is a changed input of the closure.
+
+~--easystack-url~ repeats and must be ~https://~. It is read the same
+way as ~--easystack~.
 
 ~--compat-layer~ is ~name version~ or ~name==version~ per line, ~#~
 comments skipped. The compat layer is not an easyconfig, so a hit has an

@@ -6,6 +6,8 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `component-reach` rejects a purl type with no carrier model before
+  it creates `--out-dir`.
 - Recipe lint modules live under `src/eb_style/` so `sphinx-rustdocgen`
   can open them. A `#[path]` attribute is joined onto the parent file
   and the generator then fails to read the module.
@@ -139,6 +141,15 @@ All notable changes to this project are documented here.
   GCC `8.2.0-2.31.1` for version 8.2.0 with versionsuffix `-2.31.1`, and
   binutils 2.26 with versionsuffix `-GCCcore-5.4.0` for the build at
   GCCcore-5.4.0.
+- `component-reach` honours the purl type. `pkg:cargo/curl` and
+  `pkg:npm/curl` do not match the cURL easyconfig. A purl type with no
+  carrier model exits 2.
+- An Open Source Vulnerabilities (OSV) range that is not SEMVER or
+  ECOSYSTEM, or an event that does not parse, is reported. A package
+  whose ranges were all unparsed counts as review.
+- A Common Vulnerabilities and Exposures (CVE) `component-reach` run
+  sums closure counts into the summary. `changed`, `must-rebuild`,
+  `review`, and `no-rebuild` come from the carriers.
 
 ### Security
 
@@ -245,6 +256,13 @@ All notable changes to this project are documented here.
   crate. A compat-layer file is an input, not an easyconfig. The output
   directory contains `component-reach.toml`, `component-reach.json`, and
   `component-reach.md`. See `docs/orgmode/howto/component-reach.org`.
+  `--purl` takes a package URL such as `pkg:cargo/rustls-webpki@0.102.8`.
+  `--cve` resolves an OSV id, follows GitHub Security Advisory
+  (GHSA), RUSTSEC, PYSEC, and GO aliases when the CVE record has
+  only a git range, and keeps named
+  version tags such as `libXpm-3.5.17`. Several affected packages are
+  one document with `kind` `cve`. `--easystack-url` reads a deployed
+  easystack over https.
 
 - `eb-stack rebuild-set` reports which installed modules an in-place
   easyconfig patch forces EESSI to rebuild. It closes the deployed

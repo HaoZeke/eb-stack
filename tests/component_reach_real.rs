@@ -111,6 +111,10 @@ fn known_components_in_generation_2026_1() {
                 compat: &[],
                 filter_deps: &filter,
                 generated_at: "2026-10-22T12:00:00Z",
+                also_reqs: &[],
+                exact_versions: &[],
+                purl: None,
+                ecosystem: None,
             });
             for (file, role, version) in *hits {
                 assert!(

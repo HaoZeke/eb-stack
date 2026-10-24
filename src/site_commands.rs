@@ -3,7 +3,7 @@
 //! The MCP tools call these same functions. A second copy of the orchestration
 //! would let the two surfaces drift.
 
-use crate::component_reach::{self, parse_compat_layer};
+use crate::component_reach::parse_compat_layer;
 use crate::dep_filter::{self, FilterDeps};
 use crate::easyblock_reach::{self, diff_sources, reach, read_sources, write_report, DiffRequest};
 use crate::merge_order;
@@ -12,6 +12,14 @@ use crate::rebuild_set::{self, StackEasystack};
 use crate::{parse_easyconfig_tree, parse_easyconfig_trees, write_json_pretty};
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct CommandUsage(String);
+
+fn usage(message: impl Into<String>) -> anyhow::Error {
+    CommandUsage(message.into()).into()
+}
 
 /// Which pull-request records `pr-overlap` closes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,10 +183,14 @@ impl RebuildSetRun {
 
 /// Inputs of `eb-stack component-reach`.
 pub struct ComponentReachRequest {
-    /// Component name. ASCII case is ignored.
-    pub component: String,
+    /// Component name. ASCII case is ignored. One of this, `purl`, or `cve`.
+    pub component: Option<String>,
     /// Exact version, `*`, or a requirement such as `>=8,<9`.
-    pub version: String,
+    pub version: Option<String>,
+    /// Package URL. Replaces `component`.
+    pub purl: Option<String>,
+    /// CVE id, or another OSV id. Versions come from OSV.
+    pub cve: Option<String>,
     /// Toolchain generation, for example `2026.1`.
     pub generation: String,
     /// Easyconfig trees.
@@ -187,6 +199,8 @@ pub struct ComponentReachRequest {
     pub installed: Option<PathBuf>,
     /// Deployed easystacks. With none, the generation is the stack.
     pub easystacks: Vec<PathBuf>,
+    /// Deployed easystacks fetched over HTTPS.
+    pub easystack_urls: Vec<String>,
     /// Compat-layer components, `name version` per line.
     pub compat_layer: Option<PathBuf>,
     /// Dependency specs to drop before the closure.
@@ -217,11 +231,33 @@ pub struct ComponentReachRun {
     pub no_rebuild: usize,
     /// Directory the report was written to.
     pub out_dir: PathBuf,
+    /// The document written under `out_dir`. A CVE run is the CVE document.
+    pub document: serde_json::Value,
 }
 
 impl ComponentReachRun {
     /// The line `eb-stack component-reach` prints.
     pub fn summary(&self) -> String {
+        if let Some(cve) = self.document.get("cve").and_then(|value| value.as_str()) {
+            let packages = self
+                .document
+                .get("results")
+                .and_then(|value| value.as_array())
+                .map(Vec::len)
+                .unwrap_or(0);
+            return format!(
+                "cve={} packages={} generation={} carriers={} changed={} must-rebuild={} review={} no-rebuild={} out={}",
+                cve,
+                packages,
+                self.generation,
+                self.carriers,
+                self.changed,
+                self.must_rebuild,
+                self.review,
+                self.no_rebuild,
+                self.out_dir.display()
+            );
+        }
         format!(
             "component={} version={} generation={} carriers={} changed={} must-rebuild={} review={} no-rebuild={} out={}",
             self.component,
@@ -482,8 +518,47 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
     })
 }
 
+/// Closure totals of one CVE reach document.
+fn cve_closure_totals(
+    document: &crate::component_reach::CveReachDocument,
+) -> (usize, usize, usize, usize) {
+    let changed = document.results.iter().map(|item| item.changed.len()).sum();
+    let must_rebuild = document
+        .results
+        .iter()
+        .map(|item| item.closure_counts.must_rebuild)
+        .sum();
+    let mut review: usize = document
+        .results
+        .iter()
+        .map(|item| item.closure_counts.review)
+        .sum();
+    let no_rebuild = document
+        .results
+        .iter()
+        .map(|item| item.closure_counts.no_rebuild)
+        .sum();
+    if review == 0 && must_rebuild == 0 && no_rebuild == 0 && !document.unresolved.is_empty() {
+        review = 1;
+    }
+    (changed, must_rebuild, review, no_rebuild)
+}
+
 /// Write the component-reach report.
 pub fn run_component_reach(args: &ComponentReachRequest) -> Result<ComponentReachRun> {
+    run_component_reach_with(args, &crate::registry::UreqClient)
+}
+
+fn run_component_reach_with(
+    args: &ComponentReachRequest,
+    client: &dyn crate::registry::RegistryClient,
+) -> Result<ComponentReachRun> {
+    use crate::component_reach::{
+        component_reach, cve_reach, cve_to_toml, fetch_easystack_urls, render_cve_markdown,
+        render_markdown, to_toml, ReachQuery, ReachScope,
+    };
+    use crate::osv::{parse_purl, resolve_vulnerability};
+
     let trees: Vec<&Path> = args.easyconfigs.iter().map(PathBuf::as_path).collect();
     let parsed = parse_easyconfig_trees(&trees).map_err(anyhow::Error::msg)?;
     let installed = args
@@ -504,6 +579,9 @@ pub fn run_component_reach(args: &ComponentReachRequest) -> Result<ComponentReac
             text,
         });
     }
+    easystacks.extend(
+        fetch_easystack_urls(&args.easystack_urls, client).map_err(|error| anyhow!(error))?,
+    );
     let compat_text = args
         .compat_layer
         .as_ref()
@@ -519,10 +597,103 @@ pub fn run_component_reach(args: &ComponentReachRequest) -> Result<ComponentReac
         .generated_at
         .clone()
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    let mut document = component_reach::component_reach(&component_reach::ReachQuery {
+    let skipped = if parsed.skipped.is_empty() {
+        None
+    } else {
+        Some(format!("{} easyconfigs skipped", parsed.skipped.len()))
+    };
+    // A purl the carrier model does not know is a usage error. Reject it
+    // before any output directory is created.
+    if let Some(purl) = &args.purl {
+        let parsed = parse_purl(purl).map_err(|error| anyhow!(error))?;
+        if !crate::component_reach::purl_carrier_known(&parsed.kind) {
+            return Err(usage(format!(
+                "purl type {} has no carrier model",
+                parsed.kind
+            )));
+        }
+    }
+    std::fs::create_dir_all(&args.out_dir)?;
+    if let Some(cve) = &args.cve {
+        let resolution = resolve_vulnerability(cve, client).map_err(|error| anyhow!(error))?;
+        let mut notes = resolution.notes;
+        if let Some(skipped) = skipped {
+            notes.push(skipped);
+        }
+        let document = cve_reach(
+            &resolution.id,
+            &resolution.components,
+            &notes,
+            &resolution.unresolved,
+            &ReachScope {
+                candidates: &parsed.candidates,
+                generation: &args.generation,
+                installed: installed.as_ref(),
+                easystacks: &easystacks,
+                compat: &compat,
+                filter_deps: &filter,
+                generated_at: &generated_at,
+            },
+        );
+        std::fs::write(
+            args.out_dir.join("component-reach.toml"),
+            cve_to_toml(&document)?,
+        )?;
+        write_json_pretty(&args.out_dir.join("component-reach.json"), &document)?;
+        std::fs::write(
+            args.out_dir.join("component-reach.md"),
+            render_cve_markdown(&document),
+        )?;
+        let carriers: usize = document
+            .results
+            .iter()
+            .map(|item| item.carriers.len())
+            .sum();
+        return Ok(ComponentReachRun {
+            component: String::new(),
+            version: String::new(),
+            generation: document.generation.clone(),
+            carriers,
+            changed: cve_closure_totals(&document).0,
+            must_rebuild: cve_closure_totals(&document).1,
+            review: cve_closure_totals(&document).2,
+            no_rebuild: cve_closure_totals(&document).3,
+            out_dir: args.out_dir.clone(),
+            document: serde_json::to_value(&document)?,
+        });
+    }
+    let (component, version_req, purl, ecosystem) = if let Some(purl) = &args.purl {
+        let parsed = parse_purl(purl).map_err(|error| anyhow!(error))?;
+        let version = args
+            .version
+            .clone()
+            .or(parsed.version)
+            .ok_or_else(|| anyhow!("purl has no version; pass --version"))?;
+        (
+            parsed.name,
+            version,
+            Some(purl.clone()),
+            Some(parsed.ecosystem),
+        )
+    } else {
+        let component = args
+            .component
+            .clone()
+            .ok_or_else(|| anyhow!("pass --component, --purl, or --cve"))?;
+        let version = args
+            .version
+            .clone()
+            .ok_or_else(|| anyhow!("--version is required with --component"))?;
+        (component, version, None, None)
+    };
+    let mut document = component_reach(&ReachQuery {
         candidates: &parsed.candidates,
-        component: &args.component,
-        version_req: &args.version,
+        component: &component,
+        version_req: &version_req,
+        also_reqs: &[],
+        exact_versions: &[],
+        purl: purl.as_deref(),
+        ecosystem: ecosystem.as_deref(),
         generation: &args.generation,
         installed: installed.as_ref(),
         easystacks: &easystacks,
@@ -530,31 +701,29 @@ pub fn run_component_reach(args: &ComponentReachRequest) -> Result<ComponentReac
         filter_deps: &filter,
         generated_at: &generated_at,
     });
-    if !parsed.skipped.is_empty() {
-        document
-            .notes
-            .push(format!("{} easyconfigs skipped", parsed.skipped.len()));
+    if let Some(skipped) = skipped {
+        document.notes.push(skipped);
     }
-    std::fs::create_dir_all(&args.out_dir)?;
     std::fs::write(
         args.out_dir.join("component-reach.toml"),
-        component_reach::to_toml(&document)?,
+        to_toml(&document)?,
     )?;
     write_json_pretty(&args.out_dir.join("component-reach.json"), &document)?;
     std::fs::write(
         args.out_dir.join("component-reach.md"),
-        component_reach::render_markdown(&document),
+        render_markdown(&document),
     )?;
     Ok(ComponentReachRun {
-        component: document.component,
-        version: document.version_req,
-        generation: document.generation,
+        component: document.component.clone(),
+        version: document.version_req.clone(),
+        generation: document.generation.clone(),
         carriers: document.carriers.len(),
         changed: document.changed.len(),
         must_rebuild: document.closure_counts.must_rebuild,
         review: document.closure_counts.review,
         no_rebuild: document.closure_counts.no_rebuild,
         out_dir: args.out_dir.clone(),
+        document: serde_json::to_value(&document)?,
     })
 }
 
@@ -733,4 +902,68 @@ fn load_easyblock_catalog(
         catalog.commits.insert(commit.to_string(), classes);
     }
     Ok(Some(catalog))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry::MapClient;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn a_cve_summary_sums_the_closure() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("cURL.eb"),
+            "name = 'cURL'\nversion = '8.17.0'\ntoolchain = {'name': 'GCCcore', 'version': '15.2.0'}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("git.eb"),
+            "name = 'git'\nversion = '2'\ntoolchain = {'name': 'GCCcore', 'version': '15.2.0'}\ndependencies = [('cURL', '8.17.0')]\n",
+        )
+        .unwrap();
+        let mut pages = BTreeMap::new();
+        pages.insert(
+            "https://api.osv.dev/v1/vulns/CVE-2024-0001".into(),
+            br#"{"id":"CVE-2024-0001","affected":[{"package":{"ecosystem":"generic","name":"curl","purl":"pkg:generic/curl"},"versions":["8.17.0"]}]}"#
+                .to_vec(),
+        );
+        let out = root.join("out");
+        let report = run_component_reach_with(
+            &ComponentReachRequest {
+                component: None,
+                version: None,
+                purl: None,
+                cve: Some("CVE-2024-0001".into()),
+                generation: "2026.1".into(),
+                easyconfigs: vec![root.to_path_buf()],
+                installed: None,
+                easystacks: Vec::new(),
+                easystack_urls: Vec::new(),
+                compat_layer: None,
+                filter_deps: Vec::new(),
+                generated_at: Some("2026-10-24T00:00:00Z".into()),
+                out_dir: out,
+            },
+            &MapClient { pages },
+        )
+        .unwrap();
+        assert!(report.carriers >= 1, "carriers {}", report.carriers);
+        assert!(
+            report.must_rebuild >= 1,
+            "must_rebuild {} summary {}",
+            report.must_rebuild,
+            report.summary()
+        );
+        assert!(report.changed >= 1, "changed {}", report.changed);
+        let summary = report.summary();
+        assert!(
+            summary.contains("must-rebuild=1")
+                || summary.contains(&format!("must-rebuild={}", report.must_rebuild)),
+            "{summary}"
+        );
+        assert!(!summary.contains("must-rebuild=0"), "{summary}");
+    }
 }

@@ -280,11 +280,22 @@ struct RebuildSetArgs {
 #[derive(clap::Args, Debug)]
 struct ComponentReachArgs {
     /// Component name. ASCII case is ignored, so `curl` matches `cURL`.
-    #[arg(long)]
-    component: String,
+    ///
+    /// Pass this, `--purl`, or `--cve`.
+    #[arg(long, required_unless_present_any = ["purl", "cve"], conflicts_with = "cve")]
+    component: Option<String>,
     /// Exact version, `*`, or a requirement such as `>=8,<9`.
+    ///
+    /// Required with `--component`. With `--purl`, it replaces the version
+    /// in the URL. Ignored with `--cve`, which takes versions from OSV.
     #[arg(long)]
-    version: String,
+    version: Option<String>,
+    /// Package URL, for example `pkg:cargo/rustls-webpki@0.102.8`.
+    #[arg(long, conflicts_with_all = ["component", "cve"])]
+    purl: Option<String>,
+    /// CVE id, or another OSV id. Affected packages come from OSV.
+    #[arg(long, conflicts_with_all = ["component", "purl", "version"])]
+    cve: Option<String>,
     /// Toolchain generation, for example `2026.1`.
     #[arg(long)]
     generation: String,
@@ -297,6 +308,9 @@ struct ComponentReachArgs {
     /// Deployed easystack. Repeatable. With none, the generation is the stack.
     #[arg(long = "easystack")]
     easystacks: Vec<PathBuf>,
+    /// Deployed easystack fetched over HTTPS. Repeatable.
+    #[arg(long = "easystack-url")]
+    easystack_urls: Vec<String>,
     /// Compat-layer components, `name version` or `name==version` per line.
     #[arg(long)]
     compat_layer: Option<PathBuf>,
@@ -927,10 +941,13 @@ fn run_component_reach(args: ComponentReachArgs) -> Result<()> {
         &eb_stack::site_commands::ComponentReachRequest {
             component: args.component,
             version: args.version,
+            purl: args.purl,
+            cve: args.cve,
             generation: args.generation,
             easyconfigs: args.easyconfigs,
             installed: args.installed,
             easystacks: args.easystacks,
+            easystack_urls: args.easystack_urls,
             compat_layer: args.compat_layer,
             filter_deps: args.filter_deps,
             generated_at: args.generated_at,
