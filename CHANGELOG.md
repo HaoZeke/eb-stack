@@ -236,6 +236,11 @@ All notable changes to this project are documented here.
   angle brackets is left as a single backtick, and a letter glued to a
   closing backtick is not an end-string.
 
+- `docs/orgmode/howto/easyconfigs-pr-overlap.org` records that easyconfigs
+  run: the four pull requests, the develop commit, and the shared
+  Mathematica module. `--impact` is documented on the software-layer
+  how-to, the CLI page, the format page, and the merge-order explanation.
+
 ### Added
 
 - The `eb_component_reach` schema lists `osv_cache`, which the CLI

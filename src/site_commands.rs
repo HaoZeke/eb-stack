@@ -96,7 +96,7 @@ pub struct PrOverlapRequest {
     pub kind: OverlapKind,
     /// Easyconfig trees, later ones taking precedence.
     pub easyconfigs: Vec<PathBuf>,
-    /// `<commit>=<dir>` pins.
+    /// Commit=directory trees for from-commit pins.
     pub commit_trees: Vec<String>,
     /// Installed modules, one `Name/VersionFull` per line.
     pub installed: Option<PathBuf>,
@@ -114,7 +114,7 @@ pub struct PrOverlapRequest {
     pub installed_modulerc: Vec<PathBuf>,
     /// Installed easyblocks package roots.
     pub easyblocks: Vec<PathBuf>,
-    /// `<commit>=<dir>` easyblock overlays.
+    /// Commit=directory for one include-easyblocks-from-commit.
     pub easyblocks_commits: Vec<String>,
     /// RFC 3339 timestamp. `None` means now, in UTC.
     pub generated_at: Option<String>,
@@ -172,7 +172,7 @@ pub struct RebuildSetRequest {
     pub easystacks: Vec<PathBuf>,
     /// Easyconfig trees, later ones taking precedence.
     pub easyconfigs: Vec<PathBuf>,
-    /// `<commit>=<dir>` pins.
+    /// Commit=directory trees for from-commit pins.
     pub commit_trees: Vec<String>,
     /// Installed modules, one `Name/VersionFull` per line.
     pub installed: PathBuf,
@@ -184,7 +184,7 @@ pub struct RebuildSetRequest {
     pub installed_modulerc: Vec<PathBuf>,
     /// Installed easyblocks package roots.
     pub easyblocks: Vec<PathBuf>,
-    /// `<commit>=<dir>` easyblock overlays.
+    /// Commit=directory for one include-easyblocks-from-commit.
     pub easyblocks_commits: Vec<String>,
     /// RFC 3339 timestamp. `None` means now, in UTC.
     pub generated_at: Option<String>,

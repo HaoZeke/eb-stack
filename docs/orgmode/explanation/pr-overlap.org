@@ -474,6 +474,16 @@ string ~to_build~ uses. ~Lib-1.0-GCCcore-15.2.0.eb~ asks for
 installed before rule 2 runs. A number that is not in the ~--pr~ input is
 an error, and the message names that number.
 
+~--impact N~ answers a narrower question than the sequence. It treats only
+N's ~to_build~ as newly installed, and it does not walk the earlier steps
+of the order. Another pull request is listed when its ~to_build~ shrinks
+by a module N also builds, or when a depends-on edge from N resolves: N
+asks for the module by name, and the other only reaches it. Both asking
+for the module is not an edge, the same rule as step 1. On the freetype
+fixture, merging 11 shrinks 12 and 13 by freetype and libpng, and the
+freetype edge resolves for 12 only. 13 asks for freetype itself. A number
+that is not in the input is an error, and the message names that number.
+
 For each easystack path changed by 2 or more pull requests, the insertion
 point is the 0-based index of the base line before the first added line,
 from a line LCS of base and head. The point is -1 when the added lines

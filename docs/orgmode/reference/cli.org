@@ -457,6 +457,7 @@ eb-stack pr-overlap \
   [--generated-at RFC3339] \
   [--merge-order] \
   [--merged N]... \
+  [--impact N]... \
   [--repo-url URL] \
   [--out-dir pr-overlap]
 #+end_src
@@ -852,7 +853,8 @@ plus sandboxed recipe and easyblock tools:
 - ~eb_target_list~, ~eb_target_doctor~;
 - ~eb_campaign_run~, ~eb_campaign_status~;
 - ~eb_campaign_finding_claim~, ~eb_campaign_finding_resolve~;
-- ~eb_pr_overlap~ (~kind~ ~software-layer~ or ~easyconfigs~),
+- ~eb_pr_overlap~ (the same writer as ~pr-overlap~, including
+  ~--kind easyconfigs~, a merge order, and ~--impact~),
   ~eb_rebuild_set~, ~eb_component_reach~, ~eb_easyblock_reach~.
 
 ~eb_recipe_read~, ~eb_recipe_list~, ~eb_recipe_edit~, ~eb_recipe_write~, and

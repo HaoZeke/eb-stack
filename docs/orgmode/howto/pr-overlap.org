@@ -134,6 +134,17 @@ easystack from the fixture test.
 The merge-order command is the one in [[*Run it on the fixture][Run it on the fixture]].
 The rule is in [[file:../explanation/pr-overlap.org][Merge order and knock-on]].
 
+* What one merge changes
+
+~--impact 11~ writes ~out/merge-impact.toml~ and does not write
+~merge-order.toml~. It is the effect of merging 11 on its own, not the
+residual after earlier steps of ~--merge-order~. Pull request 12 shrinks
+by ~freetype/2.14.1-GCCcore-15.2.0~ and ~libpng/1.6.50-GCCcore-15.2.0~, and
+the depends-on edge for freetype resolves, because 11 asks for freetype
+and 12 only reaches it. Pull request 13 shrinks by the same two modules.
+Both 11 and 13 ask for freetype, so that edge does not resolve.
+~--impact 999~ exits with ~--impact 999: no pull request with that number~.
+
 * For easybuild-easyconfigs pull requests
 
 4 easyconfigs in ~tests/pr_overlap_easyconfigs_fixtures/~ and 8 pull
@@ -162,3 +173,7 @@ number in ~overlap.md~.
 ~examples/easyconfigs-pr-overlap/fetch-prs.sh~ lists open pull requests
 and reads ~.eb~ blobs under ~easybuild/easyconfigs/~. It does not check a
 pull request out. The JSON field is ~easyconfigs~, which ~--pr~ reads.
+
+Four open pull requests recorded on 2026-10-24, closed against develop
+~981d2123~, are in
+[[file:easyconfigs-pr-overlap.org][close open easybuild-easyconfigs pull requests]].
