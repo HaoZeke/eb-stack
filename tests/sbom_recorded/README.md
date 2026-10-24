@@ -11,7 +11,9 @@ easybuild-easyconfigs `develop` at
 `scripts/fetch-upstream-trees.sh` checks out.
 
 - `cbc/` is the foss-2025b closure of `Cbc-2.10.12` plus the foss-2025a
-  counterparts of Cbc, Cgl, Clp, and MUMPS. 55 easyconfigs.
+  counterparts of Cbc, Cgl, Clp, and MUMPS. A bare dependency is the
+  GCCcore recipe EasyBuild selects, and a SYSTEM recipe is present only
+  where a tuple or a SYSTEM parent names it. 66 easyconfigs.
 - `gromacs/` is `GROMACS-2024.4-foss-2023b.eb`, the six dependencies a
   foss-2025b bump selects, and the four patch files that recipe names.
 - `quarto/` is `quarto-1.8.26.eb`.

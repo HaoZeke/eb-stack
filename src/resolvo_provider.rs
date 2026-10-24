@@ -31,16 +31,6 @@ pub struct EbProvider {
     name_ids: HashMap<String, NameId>,
     /// package name -> sorted (rank ascending, candidate_idx)
     ranks: HashMap<String, Vec<(u32, usize)>>,
-    /// Names a generation carries at more than one toolchain level, whose
-    /// resolvo package name is qualified so the levels are separate variables.
-    multi_level: HashSet<String>,
-    /// Names the system level carries at several versions; each is its own
-    /// package, because a system dependency pins one build exactly.
-    system_multi: HashSet<String>,
-    /// Names whose builddependencies ask for several versions inside the
-    /// generation while runtime dependencies ask for at most one. Each version
-    /// is its own package, keyed by level and version.
-    build_multi: HashSet<String>,
     /// Every qualified key interned for a package name, so a dependency can
     /// fall back to them when the levels below the recipe hold nothing.
     keys_by_name: HashMap<String, Vec<String>>,
@@ -61,6 +51,10 @@ pub struct EbProvider {
     /// the order `sort_candidates` applies and the order the lock records come
     /// from one place and cannot drift apart.
     criteria: Vec<crate::domain::Criterion>,
+    /// Package planning admits a name that exists only at SYSTEM (Java, CUDA)
+    /// and then emits an explicit SYSTEM tuple. `stack solve` does not: a bare
+    /// tuple agrees with `recipe check` and stays unresolved.
+    curated_toolchains: bool,
     interned: Mutex<HashMap<(NameId, u32), SolvableId>>,
 }
 
@@ -156,111 +150,139 @@ impl EbProvider {
         labels
     }
 
-    /// Keys of a [`Self::build_multi`] name at the levels this dependency may
-    /// come from, one per version; the version is matched against each key's
-    /// ranks by the caller. System-level keys belong to the bootstrap branch.
-    fn build_multi_keys(&self, recipe: &Candidate, dep: &crate::domain::DepReq) -> Vec<String> {
-        let levels = match dep.toolchain.as_ref() {
-            Some(tc) => vec![toolchain_label(tc)],
-            None => self.admissible_levels(recipe),
-        };
-        self.keys_by_name
-            .get(&dep.name)
-            .into_iter()
-            .flatten()
-            .filter(|key| match key.split_once('@') {
-                None => true,
-                Some((_, rest)) => {
-                    let level = rest.split("==").next().unwrap_or(rest);
-                    level != "system" && levels.iter().any(|l| l == level)
+    /// The toolchain label encoded in a qualified package key, if it has one.
+    fn key_level<'a>(name: &str, key: &'a str) -> Option<&'a str> {
+        let rest = key.strip_prefix(name)?.strip_prefix('@')?;
+        Some(rest.split("==").next().unwrap_or(rest))
+    }
+
+    /// Whether `key` has a candidate that satisfies `dep`'s version and suffix.
+    fn version_hits(&self, key: &str, dep: &crate::domain::DepReq) -> bool {
+        self.range_matching(
+            key,
+            &dep.version_req,
+            dep.toolchain.as_ref(),
+            dep.versionsuffix.as_deref(),
+        ) != Ranges::empty()
+    }
+
+    fn plain_key_at_level(&self, name: &str, level: &str) -> bool {
+        self.ranks.get(name).is_some_and(|ranked| {
+            ranked
+                .iter()
+                .any(|(_, index)| toolchain_label(&self.candidates[*index].toolchain) == level)
+        })
+    }
+
+    /// Qualified and plain keys for `dep` whose candidates sit at `level`.
+    fn keys_at_level(&self, dep: &crate::domain::DepReq, level: &str) -> Vec<String> {
+        let mut keys = Vec::new();
+        if let Some(all) = self.keys_by_name.get(&dep.name) {
+            for key in all {
+                if Self::key_level(&dep.name, key) == Some(level) && self.version_hits(key, dep) {
+                    keys.push(key.clone());
                 }
-            })
-            .cloned()
-            .collect()
+            }
+        }
+        if self.name_ids.contains_key(&dep.name)
+            && self.plain_key_at_level(&dep.name, level)
+            && self.version_hits(&dep.name, dep)
+        {
+            keys.push(dep.name.clone());
+        }
+        keys
     }
 
     /// Which resolvo package names can satisfy one dependency of one recipe.
     ///
-    /// A plain name for a package the generation carries once. For a package
-    /// carried at several levels: the level the dependency pins, or, when it
-    /// pins none, every level at or below the recipe's own, which is the range
-    /// EasyBuild's minimal-toolchain search may pick from.
+    /// A tuple that names a toolchain asks for that level and no other,
+    /// including an explicit SYSTEM fourth element. A tuple that names none
+    /// inherits the parent (`_parse_dependency` in framework 5.4.1). The
+    /// search then walks `get_toolchain_hierarchy` parent-first and keeps the
+    /// first easyconfig, which is `robot_find_subtoolchain_for_dep` with
+    /// `parent_first=True`. SYSTEM is in that hierarchy only when
+    /// `add_system_to_minimal_toolchains` is set, and that option defaults to
+    /// false, so a bare tuple reaches SYSTEM only when the parent recipe is
+    /// itself SYSTEM. A name that also exists at GCCcore is not a fallback
+    /// to the bootstrap recipe.
     fn dependency_keys(&self, recipe: &Candidate, dep: &crate::domain::DepReq) -> Vec<String> {
-        // A system-level bootstrap package is asked for by exact version, so
-        // the dependency names one build and no other. Without an exact
-        // version any of them will do, and the union says so.
-        if self.system_multi.contains(&dep.name) {
-            let system_at = |version: &str| format!("{}@system=={version}", dep.name);
-            let wants_system = dep
-                .toolchain
-                .as_ref()
-                .is_some_and(crate::hierarchy::is_system_toolchain)
-                || crate::hierarchy::is_system_toolchain(&recipe.toolchain);
-            if let Some(pinned) = dep.version_req.strip_prefix("==") {
-                let key = system_at(pinned);
-                if self.name_ids.contains_key(&key) {
-                    return vec![key];
-                }
+        if let Some(toolchain) = dep.toolchain.as_ref() {
+            return self.keys_at_level(dep, &toolchain_label(toolchain));
+        }
+        if crate::hierarchy::is_system_toolchain(&recipe.toolchain) {
+            return self.keys_at_level(dep, "system");
+        }
+        let mut levels = self.admissible_levels(recipe);
+        levels.reverse();
+        for level in levels {
+            if level == "system" {
+                continue;
             }
-            let mut keys: Vec<String> = self
-                .name_ids
-                .keys()
-                .filter(|key| key.starts_with(&format!("{}@system==", dep.name)))
-                .cloned()
-                .collect();
-            keys.sort();
-            if !wants_system && self.build_multi.contains(&dep.name) {
-                // Inside the generation the name is keyed per version too.
-                keys.extend(self.build_multi_keys(recipe, dep));
-            } else if !wants_system && self.multi_level.contains(&dep.name) {
-                // The name also lives inside the generation, and a recipe
-                // there may take either.
-                if let Some(tc) = dep.toolchain.as_ref() {
-                    keys.push(format!("{}@{}", dep.name, toolchain_label(tc)));
-                } else {
-                    let own = format!("{}@{}", dep.name, toolchain_label(&recipe.toolchain));
-                    if self.name_ids.contains_key(&own) {
-                        keys.push(own);
-                    }
-                }
-            }
+            let keys = self.keys_at_level(dep, &level);
             if !keys.is_empty() {
                 return keys;
             }
         }
-        if self.build_multi.contains(&dep.name) {
-            let keys = self.build_multi_keys(recipe, dep);
-            return if keys.is_empty() {
-                self.keys_by_name
-                    .get(&dep.name)
-                    .cloned()
-                    .unwrap_or_default()
-            } else {
-                keys
-            };
+        // Nothing in this hierarchy has the version. A stack policy may still
+        // name a build from another generation. That set excludes SYSTEM:
+        // the bootstrap recipe is not the cross-generation fallback.
+        let other = self.non_system_keys(dep);
+        if !other.is_empty() {
+            return other;
         }
-        if !self.multi_level.contains(&dep.name) {
-            return vec![dep.name.clone()];
+        // Package planning admits Java and CUDA, which are published only at
+        // SYSTEM, and the emitted tuple names SYSTEM. `stack solve` leaves
+        // the bare tuple unresolved so it agrees with `recipe check`.
+        if self.curated_toolchains && !self.has_non_system_candidate(&dep.name) {
+            return self.keys_at_level(dep, "system");
         }
-        if let Some(tc) = dep.toolchain.as_ref() {
-            return vec![format!("{}@{}", dep.name, toolchain_label(tc))];
-        }
-        let keys: Vec<String> = self
-            .admissible_levels(recipe)
-            .into_iter()
-            .map(|label| format!("{}@{label}", dep.name))
-            .filter(|key| self.name_ids.contains_key(key))
-            .collect();
-        if keys.is_empty() {
-            // Nothing at or below this recipe carries the package. A stack
-            // policy can admit a closure from another generation on purpose,
-            // and refusing it here would turn a deliberate cross-generation
-            // pin into an unresolved dependency.
-            if let Some(all) = self.keys_by_name.get(&dep.name) {
-                return all.clone();
+        Vec::new()
+    }
+
+    fn has_non_system_candidate(&self, name: &str) -> bool {
+        self.keys_by_name.get(name).is_some_and(|keys| {
+            keys.iter().any(|key| {
+                if Self::key_level(name, key) == Some("system") {
+                    return false;
+                }
+                if key == name {
+                    self.plain_has_non_system(name)
+                } else {
+                    true
+                }
+            })
+        })
+    }
+
+    /// Keys for `dep` whose candidates are not the SYSTEM bootstrap.
+    fn non_system_keys(&self, dep: &crate::domain::DepReq) -> Vec<String> {
+        let Some(all) = self.keys_by_name.get(&dep.name) else {
+            return Vec::new();
+        };
+        let mut keys = Vec::new();
+        for key in all {
+            if Self::key_level(&dep.name, key) == Some("system") {
+                continue;
+            }
+            if key == &dep.name
+                && self.plain_key_at_level(&dep.name, "system")
+                && !self.plain_has_non_system(&dep.name)
+            {
+                continue;
+            }
+            if self.version_hits(key, dep) {
+                keys.push(key.clone());
             }
         }
         keys
+    }
+
+    fn plain_has_non_system(&self, name: &str) -> bool {
+        self.ranks.get(name).is_some_and(|ranked| {
+            ranked.iter().any(|(_, index)| {
+                !crate::hierarchy::is_system_toolchain(&self.candidates[*index].toolchain)
+            })
+        })
     }
 
     /// Build a provider from a candidate set and a policy.
@@ -649,9 +671,6 @@ impl EbProvider {
         }
 
         Ok(Self {
-            multi_level,
-            system_multi,
-            build_multi,
             keys_by_name,
             hierarchy_members,
             pool,
@@ -664,6 +683,7 @@ impl EbProvider {
             locked_ranks,
             excluded_ranks,
             criteria: policy.criteria(),
+            curated_toolchains,
             interned: Mutex::new(HashMap::new()),
         })
     }
@@ -976,11 +996,10 @@ impl DependencyProvider for EbProvider {
                     .intern_string(format!("missing dependency package {}", d.name));
                 return Dependencies::Unknown(reason);
             }
-            // One key is the ordinary case. Several means the dependency named
-            // no toolchain and the generation carries the package at more than
-            // one level, so any of them satisfies it and the requirement is
-            // their union, which is how EasyBuild's minimal-toolchain search
-            // behaves: it takes whichever level is available, not a fixed one.
+            // One key is the ordinary case. Several means this level carries
+            // more than one build that satisfies the tuple. dependency_keys
+            // already kept the parent-first hit, so the union is not a search
+            // across the rest of the hierarchy.
             let mut sets = Vec::new();
             for key in &keys {
                 let Some(&dep_name_id) = self.name_ids.get(key) else {
@@ -998,26 +1017,31 @@ impl DependencyProvider for EbProvider {
                 sets.push(self.pool.intern_version_set(dep_name_id, range));
             }
             if sets.is_empty() {
-                // No level at or below this recipe carries a matching version.
-                // A stack policy can admit a closure from another generation on
-                // purpose, so widen to every level the universe holds for this
-                // name before calling the dependency unresolved.
-                if let Some(all) = self.keys_by_name.get(&d.name) {
-                    for key in all {
-                        if keys.contains(key) {
-                            continue;
-                        }
-                        let Some(&dep_name_id) = self.name_ids.get(key) else {
-                            continue;
-                        };
-                        let range = self.range_matching(
-                            key,
-                            &d.version_req,
-                            d.toolchain.as_ref(),
-                            d.versionsuffix.as_deref(),
-                        );
-                        if range != Ranges::empty() {
-                            sets.push(self.pool.intern_version_set(dep_name_id, range));
+                // A tuple that names a toolchain may point outside this
+                // generation: a stack policy admits that closure on purpose.
+                // A bare tuple does not. Its search already walked the
+                // hierarchy and left SYSTEM out, and widening here would put
+                // the bootstrap recipe back under a dependency that did not
+                // ask for it.
+                let named_toolchain = d.toolchain.is_some();
+                if named_toolchain {
+                    if let Some(all) = self.keys_by_name.get(&d.name) {
+                        for key in all {
+                            if keys.contains(key) {
+                                continue;
+                            }
+                            let Some(&dep_name_id) = self.name_ids.get(key) else {
+                                continue;
+                            };
+                            let range = self.range_matching(
+                                key,
+                                &d.version_req,
+                                d.toolchain.as_ref(),
+                                d.versionsuffix.as_deref(),
+                            );
+                            if range != Ranges::empty() {
+                                sets.push(self.pool.intern_version_set(dep_name_id, range));
+                            }
                         }
                     }
                 }

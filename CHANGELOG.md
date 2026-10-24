@@ -6,6 +6,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `stack solve` does not resolve a bare dependency tuple to a SYSTEM
+  recipe. A stack whose only candidate is at SYSTEM is rejected unless
+  the tuple names SYSTEM or the recipe itself is SYSTEM.
 - A closure SBOM keys each component, its checksums and its dependency
   entry by name, version, versionsuffix and toolchain. Two versions of
   one name keep their own edges and hashes.
