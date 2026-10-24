@@ -69,7 +69,10 @@ A class that assigns ~exts_defaultclass~ overwrites the easyconfig.
 For a component, ~default_easyblock~ in the easyconfig wins over the class.
 
 A framework module reaches the easyblocks that import it, then their
-subclasses. Imports are not followed past that.
+subclasses. Imports inside `easybuild.framework` and `easybuild.tools`
+are followed to the end of that graph. An easyblock that imports any
+module on that path is reached. An easyblock that only imports another
+easyblock is not, unless it subclasses a reached class.
 
 ~--reverse~ lists modules that depend on a reached module and would need a
 rebuild: runtime, builddependency, extension, or toolchain. Reached modules

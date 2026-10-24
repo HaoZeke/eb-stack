@@ -21,6 +21,11 @@ All notable changes to this project are documented here.
 - `eb-stack pr-overlap --kind easyconfigs` counts `depends-on` only when
   the added module is new to the base tree. An added file for a module
   the base already provides is not a dependency of another pull request.
+- `eb-stack easyblock-reach` follows imports through
+  `easybuild.framework` and `easybuild.tools`. A change to `tools/run.py`
+  reaches an easyblock that imports `tools/filetools.py` when that module
+  imports `tools/run.py`. An easyblock that only imports another easyblock
+  is not reached that way.
 - A foreign package plan locks a generation member instead of the
   SYSTEM bootstrap of the same name when both are in the robot, which is
   the module `recipe check` accepts.

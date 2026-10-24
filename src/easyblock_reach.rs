@@ -6,6 +6,9 @@
 //! delegates to `EB_QuantumESPRESSOcmake(CMakeMake)`. A module-level name
 //! bound to a class (`Legacy = CMakeMake`) is that class. A framework module
 //! reaches the easyblocks that import it, and then their subclasses.
+//! Imports among `easybuild.framework` and `easybuild.tools` are followed
+//! transitively, so a change to `tools/run.py` reaches an easyblock that
+//! imports `tools/filetools.py` when that module imports `tools/run.py`.
 //! Easyconfig matching is layered on top of this index.
 
 use crate::build_order::{module_name, reverse_closure, reverse_uses, Choice, ModuleKey};
@@ -39,6 +42,8 @@ pub struct EasyblockIndex {
     pub classes: BTreeMap<String, ClassFact>,
     /// Python module to the classes defined in files that import it.
     pub importers: BTreeMap<String, BTreeSet<String>>,
+    /// Python module to the modules that import it.
+    pub module_importers: BTreeMap<String, BTreeSet<String>>,
     /// Nested class to the class whose body defines it.
     pub enclosing: BTreeMap<String, String>,
     /// Module-level name bound to a different class (`Legacy = CMakeMake`).
@@ -80,6 +85,11 @@ pub fn index_roots(roots: &[PathBuf]) -> Result<EasyblockIndex, String> {
         if let Some(module) = module.as_deref() {
             for imported in parsed.imports {
                 if imported != module {
+                    index
+                        .module_importers
+                        .entry(imported.clone())
+                        .or_default()
+                        .insert(module.to_string());
                     index
                         .importers
                         .entry(imported)
@@ -137,6 +147,10 @@ pub struct ClassReach {
 }
 
 /// Classes a changed file defines, classes that import its module, and subclasses.
+///
+/// A change under `easybuild.framework` or `easybuild.tools` also reaches
+/// classes that import a framework or tools module which itself imports the
+/// changed module, through any number of those packages.
 pub fn affected_classes(
     index: &EasyblockIndex,
     path: &Path,
@@ -145,9 +159,11 @@ pub fn affected_classes(
     let module = python_module(path);
     let parsed = read_python(source, &path.display().to_string(), module.as_deref())?;
     let mut changed: BTreeSet<String> = parsed.classes.into_iter().map(|(name, _)| name).collect();
-    if let Some(module) = module {
-        if let Some(users) = index.importers.get(&module) {
-            changed.extend(users.iter().cloned());
+    if let Some(module) = module.as_deref() {
+        for name in framework_import_closure(index, module) {
+            if let Some(users) = index.importers.get(&name) {
+                changed.extend(users.iter().cloned());
+            }
         }
     }
     let mut reached = changed.clone();
@@ -156,6 +172,34 @@ pub fn affected_classes(
     }
     close_reached(index, &mut reached);
     Ok(ClassReach { changed, reached })
+}
+
+/// `start` plus every `easybuild.framework` or `easybuild.tools` module that
+/// imports it, directly or through other modules in those two packages.
+fn framework_import_closure(index: &EasyblockIndex, start: &str) -> BTreeSet<String> {
+    let mut reached = BTreeSet::new();
+    let mut stack = vec![start.to_string()];
+    while let Some(module) = stack.pop() {
+        if !reached.insert(module.clone()) {
+            continue;
+        }
+        let Some(importers) = index.module_importers.get(&module) else {
+            continue;
+        };
+        for importer in importers {
+            if is_framework_tools(importer) {
+                stack.push(importer.clone());
+            }
+        }
+    }
+    reached
+}
+
+fn is_framework_tools(module: &str) -> bool {
+    module == "easybuild.framework"
+        || module.starts_with("easybuild.framework.")
+        || module == "easybuild.tools"
+        || module.starts_with("easybuild.tools.")
 }
 
 /// Nested classes and module-level aliases are the same easyblock at runtime.
@@ -1378,6 +1422,66 @@ mod tests {
             .hits
             .iter()
             .any(|hit| { hit.easyconfig.ends_with("py.eb") && hit.class_name == "PythonPackage" }));
+        assert!(report
+            .hits
+            .iter()
+            .all(|hit| !hit.easyconfig.ends_with("plain.eb")));
+    }
+
+    #[test]
+    fn a_two_hop_framework_import_reaches_the_easyblock() {
+        let root = tempfile::tempdir().unwrap();
+        let py = root.path().join("py");
+        let ecs = root.path().join("eb");
+        write(
+            &py,
+            "easybuild/tools/run.py",
+            "def run_cmd():\n    return None\n",
+        );
+        write(
+            &py,
+            "easybuild/tools/filetools.py",
+            "from easybuild.tools.run import run_cmd\ndef read_file():\n    return run_cmd()\n",
+        );
+        write(
+            &py,
+            "easybuild/easyblocks/generic/cmakemake.py",
+            "from easybuild.tools.filetools import read_file\nclass CMakeMake:\n    pass\n",
+        );
+        write(
+            &py,
+            "easybuild/easyblocks/generic/other.py",
+            "from easybuild.easyblocks.generic.cmakemake import CMakeMake\nclass Other:\n    pass\n",
+        );
+        write(
+            &py,
+            "easybuild/easyblocks/generic/tarball.py",
+            "class Tarball:\n    pass\n",
+        );
+        write(&ecs, "cmake.eb", &recipe("cmake", "1", "CMakeMake"));
+        write(&ecs, "other.eb", &recipe("other", "1", "Other"));
+        write(&ecs, "plain.eb", &recipe("plain", "1", "Tarball"));
+        let run = py.join("easybuild/tools/run.py");
+        let report = reach(&ReachQuery {
+            roots: vec![py],
+            easyconfigs: vec![ecs],
+            changed: vec![(run.clone(), std::fs::read_to_string(&run).unwrap())],
+            installed: BTreeSet::new(),
+            reverse: false,
+            generated_at: "t".into(),
+        })
+        .unwrap();
+        assert!(
+            report.hits.iter().any(|hit| {
+                hit.easyconfig.ends_with("cmake.eb") && hit.class_name == "CMakeMake"
+            }),
+            "{:?}",
+            report.hits
+        );
+        assert!(report
+            .hits
+            .iter()
+            .all(|hit| !hit.easyconfig.ends_with("other.eb")));
         assert!(report
             .hits
             .iter()
