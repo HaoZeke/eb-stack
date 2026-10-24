@@ -173,6 +173,7 @@ jobs:
             --test pr_overlap_easyconfigs_open \
             --test pypi_cran_extend \
             --test rebuild_set \
+            --test recipe_commands \
             --test repro_scoring \
             --test ring0_ingest_repro \
             --test sbom_from_lock \

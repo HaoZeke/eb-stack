@@ -1,0 +1,137 @@
+{
+  "charmap": [
+    {
+      "from": " ",
+      "to": "_space_"
+    },
+    {
+      "from": "!",
+      "to": "_exclamation_"
+    },
+    {
+      "from": "\"",
+      "to": "_quotation_"
+    },
+    {
+      "from": "#",
+      "to": "_hash_"
+    },
+    {
+      "from": "$",
+      "to": "_dollar_"
+    },
+    {
+      "from": "%",
+      "to": "_percent_"
+    },
+    {
+      "from": "&",
+      "to": "_ampersand_"
+    },
+    {
+      "from": "(",
+      "to": "_leftparen_"
+    },
+    {
+      "from": ")",
+      "to": "_rightparen_"
+    },
+    {
+      "from": "*",
+      "to": "_asterisk_"
+    },
+    {
+      "from": "+",
+      "to": "_plus_"
+    },
+    {
+      "from": ",",
+      "to": "_comma_"
+    },
+    {
+      "from": "-",
+      "to": "_minus_"
+    },
+    {
+      "from": ".",
+      "to": "_period_"
+    },
+    {
+      "from": "/",
+      "to": "_slash_"
+    },
+    {
+      "from": ":",
+      "to": "_colon_"
+    },
+    {
+      "from": ";",
+      "to": "_semicolon_"
+    },
+    {
+      "from": "<",
+      "to": "_lessthan_"
+    },
+    {
+      "from": "=",
+      "to": "_equals_"
+    },
+    {
+      "from": ">",
+      "to": "_greaterthan_"
+    },
+    {
+      "from": "?",
+      "to": "_question_"
+    },
+    {
+      "from": "@",
+      "to": "_atsign_"
+    },
+    {
+      "from": "[",
+      "to": "_leftbracket_"
+    },
+    {
+      "from": "\\'",
+      "to": "_apostrophe_"
+    },
+    {
+      "from": "\\\\",
+      "to": "_backslash_"
+    },
+    {
+      "from": "]",
+      "to": "_rightbracket_"
+    },
+    {
+      "from": "^",
+      "to": "_circumflex_"
+    },
+    {
+      "from": "_",
+      "to": "_underscore_"
+    },
+    {
+      "from": "`",
+      "to": "_backquote_"
+    },
+    {
+      "from": "{",
+      "to": "_leftcurly_"
+    },
+    {
+      "from": "|",
+      "to": "_verticalbar_"
+    },
+    {
+      "from": "}",
+      "to": "_rightcurly_"
+    },
+    {
+      "from": "~",
+      "to": "_tilde_"
+    }
+  ],
+  "prefix": "EB_"
+}
