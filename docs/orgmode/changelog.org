@@ -1,8 +1,8 @@
 #+TITLE: Changelog
 #+OPTIONS: toc:nil num:nil
 
-The project has no tagged public release. Cargo, CITATION, and Sphinx report
-development version *0.3.0*. The complete change list lives in
+The tagged release is 0.3.0. Cargo, CITATION, and Sphinx still report
+*0.3.0*. Changes since that tag are the Unreleased section of
 [[https://github.com/HaoZeke/eb-stack/blob/main/CHANGELOG.md][CHANGELOG.md]].
 
 The version-one design provides:
@@ -15,7 +15,10 @@ The version-one design provides:
 - layered target routing and persisted typed build campaigns;
 - independent resolves, builds, and binary-verified claims;
 - matching CLI, MCP (including recipe lint and stack SBOM), new-package
-  skill, and annual-bump skill workflows.
+  skill, and annual-bump skill workflows;
+- graph ordering, easystack emission, and Jenkins section regrouping;
+- a reproduction scoreboard summary;
+- easyblock dry-run, module lint, and build tools on the MCP server.
 
 The scaffold/compatibility command surface is removed rather than maintained
 alongside the canonical workflow.

@@ -45,6 +45,44 @@ All notable changes to this project are documented here.
   `eb_pr_overlap` takes `kind` `software-layer` or `easyconfigs`.
   The reports written under `out_dir` match the CLI byte for byte.
 
+- `package bump --fetch-checksums` downloads each `sources` entry from the
+  recipe's `source_urls` when the version changed and `--source-checksum`
+  was omitted, and writes the SHA-256 into the recipe and the SBOM. A git
+  checkout, a missing URL, or a failed download stays empty. The attempts
+  are `sources.fetch.json` and a `source:fetch` residual.
+
+- `eb-stack stack order` sequences every pinned build a set of roots needs.
+  A name the generation builds twice stays twice. `--oldest` takes the
+  oldest admissible version of an unpinned requirement. `--easystack-out`
+  writes that sequence as an easystack. `--hashes-out` writes one sha256
+  per module over the easyconfig and the hashes of what it needs.
+
+- `eb-stack stack easystack` writes a lock as the YAML `eb --easystack`
+  reads. `--option <file.eb>:<option>=<value>` sets a per-file `eb` option,
+  spelled without the leading dashes.
+
+- `eb-stack stack sections` regroups a Jenkins build list under the
+  `#### Title ####` headers of a previous list. Entries keep their flags
+  and whether they are commented out. `--unfiled` names the header for
+  packages the previous list does not file.
+
+- Packages on that Jenkins build list still need a reproduction score.
+  `eb-stack repro summary` reads the per-case JSON under `--scores` and
+  prints the scoreboard table: case, pull request, `EXACT` / `SEMANTIC` /
+  `MATERIAL`, allowance, and residual lines. `--json` prints the case
+  records. `--ratchet` checks the run against the committed allowance
+  counts and exits nonzero when they disagree.
+
+- MCP easyblock tools: `eb_module_lint` (E999, E501, whitespace,
+  `EBM_RUN_CMD`, `EBM_OLD_SUPER`, `EBM_CFG_OVERRIDE`,
+  `EBM_TEST_STEP_OWN_CMD`, `EBM_THREADED_VARIANT`), `eb_easyblock_dry_run`
+  (`eb -x`, per-step commands, toolchain options, threaded findings, and
+  `failure_kind` of `setup`, `environment`, or `easyblock`), `eb_build_log`,
+  and `eb_build_test` (only when `EB_STACK_ALLOW_BUILD=1`).
+  `eb_recipe_apply_suggestion` puts a review suggestion on the anchored
+  lines. `eb_recipe_diff` reports each hunk with the top-level name it
+  touches.
+
 - `eb-stack component-reach` lists every easyconfig and installed module
   that carries a component at a version or version range, inside one
   toolchain generation, and feeds the recipes that contain it into the
