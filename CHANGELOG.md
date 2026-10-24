@@ -492,6 +492,10 @@ All notable changes to this project are documented here.
 
 ### Changed
 
+- `--help` for every command includes an example, and every flag has a
+  description. Defaults the command applies are shown there.
+- Help examples name `zlib`. Production source does not name a package
+  the solver used to special-case.
 - The stack docs match the commands: build-list order and versions, the
   stack-diff labels and punctuation, `solver.criteria`, lock-SBOM
   `dependsOn` edges, policy hierarchy membership, and `stack order`,

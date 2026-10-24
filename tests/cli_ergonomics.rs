@@ -13,6 +13,136 @@ fn output(args: &[&str]) -> std::process::Output {
     bin().args(args).output().expect("run eb-stack")
 }
 
+fn help_text(args: &[String]) -> String {
+    let mut full: Vec<&str> = args.iter().map(String::as_str).collect();
+    full.push("--help");
+    let result = output(&full);
+    assert!(
+        result.status.success(),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    String::from_utf8(result.stdout).expect("utf8")
+}
+
+/// Subcommands a person runs. `help` is not one of them.
+fn leaves() -> Vec<Vec<String>> {
+    let mut found = Vec::new();
+    let mut queue = vec![Vec::new()];
+    while let Some(prefix) = queue.pop() {
+        let text = help_text(&prefix);
+        let mut commands = Vec::new();
+        let mut in_commands = false;
+        for line in text.lines() {
+            if line.trim() == "Commands:" {
+                in_commands = true;
+                continue;
+            }
+            if !in_commands {
+                continue;
+            }
+            if line.trim().is_empty() {
+                if !commands.is_empty() {
+                    break;
+                }
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("  ") {
+                if rest.starts_with(' ') || rest.starts_with('-') {
+                    continue;
+                }
+                if let Some(name) = rest.split_whitespace().next() {
+                    if name != "help" {
+                        commands.push(name.to_string());
+                    }
+                }
+            } else if !commands.is_empty() {
+                break;
+            }
+        }
+        if commands.is_empty() {
+            found.push(prefix);
+        } else {
+            for name in commands {
+                let mut next = prefix.clone();
+                next.push(name);
+                queue.push(next);
+            }
+        }
+    }
+    found
+}
+
+fn flag_is_described(lines: &[&str], index: usize) -> bool {
+    let line = lines[index];
+    let trimmed = line.trim();
+    if trimmed.starts_with("-h,") || trimmed == "--help" {
+        return true;
+    }
+    // A one-line form puts the description after the flag and its value.
+    let after_flag = trimmed
+        .split_once(' ')
+        .map(|(_, rest)| rest.trim())
+        .unwrap_or("");
+    let after_value = after_flag
+        .strip_prefix('<')
+        .and_then(|rest| rest.split_once('>').map(|(_, tail)| tail.trim()))
+        .or_else(|| {
+            after_flag
+                .strip_prefix('[')
+                .and_then(|rest| rest.split_once(']').map(|(_, tail)| tail.trim()))
+        })
+        .unwrap_or(after_flag);
+    if !after_value.is_empty() && !after_value.starts_with('[') && !after_value.starts_with('<') {
+        return true;
+    }
+    let mut next = index + 1;
+    while next < lines.len() && lines[next].trim().is_empty() {
+        next += 1;
+    }
+    let Some(following) = lines.get(next) else {
+        return false;
+    };
+    let following_trim = following.trim();
+    if following_trim.starts_with("[default:") && following_trim.ends_with(']') {
+        return false;
+    }
+    following.starts_with("          ")
+        && !following_trim.is_empty()
+        && !following_trim.starts_with("--")
+        && !following_trim.starts_with("-h,")
+}
+
+#[test]
+fn every_command_help_has_an_example_and_describes_every_flag() {
+    let commands = leaves();
+    assert!(
+        commands.len() >= 20,
+        "walked too few commands: {commands:?}"
+    );
+    for command in commands {
+        let text = help_text(&command);
+        assert!(
+            text.contains("Examples:"),
+            "{} --help has no example:\n{text}",
+            command.join(" ")
+        );
+        let lines: Vec<&str> = text.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            let is_flag = trimmed.starts_with("--") || trimmed.starts_with("-h,");
+            if !is_flag {
+                continue;
+            }
+            assert!(
+                flag_is_described(&lines, index),
+                "{} flag has no description:\n{line}\n{text}",
+                command.join(" ")
+            );
+        }
+    }
+}
+
 #[test]
 fn a_failure_names_the_problem_and_prints_no_backtrace() {
     let missing = output(&[

@@ -57,7 +57,8 @@ fn is_usage(error: &anyhow::Error) -> bool {
 #[command(
     name = "eb-stack",
     version,
-    about = "Canonical SBOM, build-manifest, Resolvo, EasyBuild, and campaign workflows"
+    about = "Canonical SBOM, build-manifest, Resolvo, EasyBuild, and campaign workflows",
+    after_long_help = "Exit status is 0 when the command finished, 1 when the work failed, and 2 when the command line was rejected.\n\nA directory of artifacts is --out-dir. A single output file is --out.\n\nExamples:\n  eb-stack package inspect --source recipe.yaml --format conda-forge --toolchain-version 2026.1 --out-dir bundle\n  eb-stack --help"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -67,37 +68,54 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Parse, solve, and emit package artifacts.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack package inspect --source recipe.yaml --format conda-forge --toolchain-version 2026.1 --out-dir bundle"
+    )]
     Package {
         #[command(subcommand)]
         command: PackageCommand,
     },
     /// Check and format EasyBuild recipes.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack recipe lint recipe.eb\n  eb-stack recipe check --recipe recipe.eb --easyconfigs easyconfigs/"
+    )]
     Recipe {
         #[command(subcommand)]
         command: RecipeCommand,
     },
     /// Solve EasyBuild stack locks and SBOMs.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack solve --easyconfigs easyconfigs/ --toolchain foss/2026.1 --root zlib"
+    )]
     Stack {
         #[command(subcommand)]
         command: StackCommand,
     },
     /// Inspect declarative build targets.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack target list --config target.toml\n  eb-stack target doctor --config target.toml --target local"
+    )]
     Target {
         #[command(subcommand)]
         command: TargetCommand,
     },
     /// Run and inspect persisted build campaigns.
+    #[command(after_long_help = "Examples:\n  eb-stack campaign status --state campaign.json")]
     Campaign {
         #[command(subcommand)]
         command: CampaignCommand,
     },
     /// Read the reproduction grind's score artifacts.
+    #[command(after_long_help = "Examples:\n  eb-stack repro summary --scores scores/")]
     Repro {
         #[command(subcommand)]
         command: ReproCommand,
     },
     /// Serve each CLI workflow over stdio, including pr-overlap, rebuild-set,
     /// component-reach, and easyblock-reach.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack mcp --workspace .\n\nThe server reads JSON-RPC on stdin and writes it on stdout. --workspace sets EB_STACK_WORKSPACE for the recipe file tools. When it is omitted, an existing EB_STACK_WORKSPACE is kept; otherwise the server uses its current directory."
+    )]
     Mcp {
         /// Workspace root for the recipe file tools.
         ///
@@ -107,6 +125,9 @@ enum Command {
         workspace: Option<PathBuf>,
     },
     /// Which easyconfigs an easyblock or framework change reaches.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack easyblock-reach --easyblocks easybuild/easyblocks --easyconfigs easyconfigs/ --file easybuild/easyblocks/generic/cmakemake.py"
+    )]
     EasyblockReach(Box<EasyblockReachArgs>),
     /// Which open pull requests would build the same modules.
     ///
@@ -116,6 +137,9 @@ enum Command {
     /// pull request, closes the changed easyconfigs over the base tree with
     /// those files overlaid. Writes one TOML record per pull request plus an
     /// overlap index and a Markdown report. No build and no model.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack pr-overlap --pr pr.json --easyconfigs easyconfigs/ --installed installed.txt"
+    )]
     PrOverlap(Box<PrOverlapArgs>),
     /// Which installed modules an in-place easyconfig patch forces a rebuild of.
     ///
@@ -125,8 +149,14 @@ enum Command {
     /// uses the easyconfig graph only: a runtime dependency needs no rebuild,
     /// a builddependency only needs review, and the patched easyconfig or a
     /// bundle that ships it as an extension must be rebuilt.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack rebuild-set --changed zlib-1.3.1-GCCcore-15.2.0.eb --easystack stack.yml --easyconfigs easyconfigs/ --installed installed.txt"
+    )]
     RebuildSet(Box<RebuildSetArgs>),
     /// List what carries a component in one generation, then the rebuild closure.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack component-reach --component curl --version '>=8,<9' --generation 2026.1 --easyconfigs easyconfigs/"
+    )]
     ComponentReach(Box<ComponentReachArgs>),
 }
 
@@ -369,6 +399,9 @@ enum ReproCommand {
     /// also holds the run to the committed allowance counts and exits
     /// nonzero on any disagreement, which is the same gate the suite
     /// applies per case.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack repro summary --scores scores/\n  eb-stack repro summary --scores scores/ --ratchet tests/repro_ratchet.json --json"
+    )]
     Summary {
         /// Directory of per-case score artifacts.
         #[arg(long)]
@@ -385,25 +418,40 @@ enum ReproCommand {
 #[derive(Subcommand, Debug)]
 enum PackageCommand {
     /// Parse a foreign recipe into a canonical build manifest and planned SBOM.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack package inspect --source recipe.yaml --format conda-forge --toolchain-version 2026.1 --out-dir bundle"
+    )]
     Inspect(PackageInspectArgs),
     /// Resolve every declared profile and emit a canonical artifact bundle.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack package plan --source recipe.yaml --format conda-forge --toolchain-version 2026.1 --easyconfigs easyconfigs/ --stack-policy stack.toml --out-dir bundle"
+    )]
     Plan(PackagePlanArgs),
     /// Retarget an existing EasyBuild recipe using hierarchy + Resolvo selection.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack package bump --source zlib-1.3.1-foss-2023b.eb --toolchain-name foss --toolchain-version 2024a --easyconfigs easyconfigs/ --out-dir bundle"
+    )]
     Bump(PackageBumpArgs),
 }
 
 #[derive(clap::Args, Debug)]
 struct PackageInspectArgs {
+    /// Foreign recipe file, or a registry name when `--format` is `pypi`, `cran`, or `cargo`.
     #[arg(long)]
     source: PathBuf,
+    /// Recipe language. `auto` detects a file. `conda`, `crates`, `crates.io`, `lua`, and `perl6` are accepted spellings.
     #[arg(long, default_value = "auto")]
     format: String,
+    /// Toolchain name recorded on the manifest. Defaults to `foss`.
     #[arg(long, default_value = "foss")]
     toolchain_name: String,
+    /// Toolchain version recorded on the manifest, for example `2026.1`.
     #[arg(long)]
     toolchain_version: String,
+    /// Package-config TOML. Repeatable. Later layers override earlier ones.
     #[arg(long = "package-config")]
     package_configs: Vec<PathBuf>,
+    /// Directory for `package.plan.json` and `package.sbom.cdx.json`.
     #[arg(long)]
     out_dir: PathBuf,
 }
@@ -412,8 +460,10 @@ struct PackageInspectArgs {
 struct PackagePlanArgs {
     #[command(flatten)]
     inspect: PackageInspectArgs,
+    /// Easyconfig tree used as the robot. Repeatable; later trees win on one identity.
     #[arg(long, required = true)]
     easyconfigs: Vec<PathBuf>,
+    /// Stack policy TOML, or JSON when the path ends in `.json`.
     #[arg(long)]
     stack_policy: PathBuf,
     /// Positional SHA-256 override; repeat once for every source artifact.
@@ -461,28 +511,38 @@ struct PackagePlanArgs {
 
 #[derive(clap::Args, Debug)]
 struct PackageBumpArgs {
+    /// Easyconfig to retarget.
     #[arg(long)]
     source: PathBuf,
+    /// Toolchain name of the retargeted recipe.
     #[arg(long)]
     toolchain_name: String,
+    /// Toolchain version of the retargeted recipe, for example `2024a`.
     #[arg(long)]
     toolchain_version: String,
+    /// Package version to write. Absent, the recipe version is kept.
     #[arg(long)]
     version: Option<String>,
+    /// SHA-256 of the new source. One value. `package plan` repeats this flag, once per artifact.
     #[arg(long)]
     source_checksum: Option<String>,
+    /// Locked dependency pin, `NAME=VERSION`. Repeatable. A name the recipe does not depend on stays out of the recipe.
     #[arg(long = "dep", value_name = "NAME=VERSION")]
     dependencies: Vec<String>,
+    /// Easyconfig tree used as the robot. Repeatable; later trees win on one identity.
     #[arg(long, required = true)]
     easyconfigs: Vec<PathBuf>,
+    /// Toolchain hierarchy JSON, instead of the hierarchies this build knows.
     #[arg(long)]
     hierarchy_fixture: Option<PathBuf>,
+    /// Stack policy TOML, or JSON when the path ends in `.json`. Absent, the toolchain is unconstrained.
     #[arg(long)]
     stack_policy: Option<PathBuf>,
     /// Fail when a patch's fate across the version bump cannot be decided
     /// from tree evidence, instead of carrying it with a review flag.
     #[arg(long)]
     strict_patches: bool,
+    /// Package-config TOML applied after the source recipe is parsed. Repeatable.
     #[arg(long = "package-config")]
     package_configs: Vec<PathBuf>,
     /// Render an easyblock skeleton for the package into the bundle, as
@@ -495,6 +555,7 @@ struct PackageBumpArgs {
     /// empty and reported in `sources.fetch.json` and as a residual.
     #[arg(long = "fetch-checksums")]
     fetch_checksums: bool,
+    /// Directory for the manifest, planned SBOM, locks, and recipes.
     #[arg(long)]
     out_dir: PathBuf,
 }
@@ -507,6 +568,9 @@ enum RecipeCommand {
     /// one exists, because there is no default: EasyBuild derives this name,
     /// tries to import it, and stops when it cannot. So this answers whether a
     /// recipe is relying on something that has to be there.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack recipe easyblock zlib\n  eb-stack recipe easyblock --charmap"
+    )]
     Easyblock {
         /// Software name, spelled as the easyconfig's `name`.
         ///
@@ -526,6 +590,9 @@ enum RecipeCommand {
     /// for that pair. A consumer that cannot run the parser still resolves
     /// `%(version)s` and friends by applying these rules, which is why the
     /// rule vocabulary is closed.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack recipe templates --export\n  eb-stack recipe templates --name zlib --version 1.3.1"
+    )]
     Templates {
         /// Software name, as the easyconfig spells `name`.
         #[arg(long, allow_hyphen_values = true)]
@@ -541,15 +608,23 @@ enum RecipeCommand {
     ///
     /// `members` keeps the framework's order, most minimal subtoolchain first,
     /// so a consumer reads it rather than sorting it.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack recipe hierarchy\n  eb-stack recipe hierarchy --export"
+    )]
     Hierarchy {
         /// Emit the whole table.
         #[arg(long)]
         export: bool,
     },
     /// Resolve a recipe and verify package metadata plus robot dependencies.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack recipe check --recipe recipe.eb --easyconfigs easyconfigs/ --metadata-only"
+    )]
     Check {
+        /// Easyconfig to check.
         #[arg(long)]
         recipe: PathBuf,
+        /// Easyconfig tree used as the robot. Repeatable; later trees win. A `.eb` file stands for the directory it sits in.
         #[arg(long, required = true)]
         easyconfigs: Vec<PathBuf>,
         /// Easyblock modules, as directories or files, to resolve the recipe's
@@ -565,6 +640,7 @@ enum RecipeCommand {
         /// eb-stack option.
         #[arg(long = "require-configopt", allow_hyphen_values = true)]
         require_configopts: Vec<String>,
+        /// Stop after metadata, checksums, and required config flags. Do not walk the robot.
         #[arg(long)]
         metadata_only: bool,
         /// Classify the source URLs and verify a seeded checksum came from the
@@ -594,7 +670,11 @@ enum RecipeCommand {
     },
     /// Report the upstream CI, test-suite, and review rules for easyconfigs, and merge
     /// `eb --check-contrib` when `eb` is installed. Fails on error-severity findings.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack recipe lint recipe.eb\n  eb-stack recipe lint recipe.eb --base recipe.eb.orig"
+    )]
     Lint {
+        /// Easyconfig files to lint.
         #[arg(required = true)]
         paths: Vec<PathBuf>,
         /// The version the change started from; reports templates replaced by
@@ -603,11 +683,17 @@ enum RecipeCommand {
         base: Option<PathBuf>,
     },
     /// Mechanically format EasyBuild E501 findings.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack recipe format recipe.eb\n  eb-stack recipe format recipe.eb --out formatted.eb\n  eb-stack recipe format recipe.eb --dry-run"
+    )]
     Format {
+        /// Easyconfig files to format. With `--out`, exactly one path.
         #[arg(required = true)]
         paths: Vec<PathBuf>,
+        /// Write the formatted recipe here instead of replacing the input. Requires one path.
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Print what would change and do not write.
         #[arg(long)]
         dry_run: bool,
     },
@@ -615,6 +701,7 @@ enum RecipeCommand {
 
 #[derive(clap::Args, Debug)]
 struct SolveArgs {
+    /// Easyconfig tree to solve. Repeatable; later trees win on one identity.
     #[arg(long, required = true)]
     easyconfigs: Vec<PathBuf>,
     /// Policy file. Omit it and pass --toolchain and --root instead, which
@@ -633,8 +720,10 @@ struct SolveArgs {
     /// every non-comment line. Repeatable. Used with --toolchain.
     #[arg(long = "roots-from-build-list", requires = "toolchain")]
     roots_from_build_list: Vec<PathBuf>,
+    /// Previous-generation easyconfig tree. Absent, the first `--easyconfigs` tree is the baseline.
     #[arg(long)]
     baseline_easyconfigs: Option<PathBuf>,
+    /// Toolchain version to treat as the baseline inside that tree. Absent, the newest generation below the target.
     #[arg(long)]
     baseline_toolchain_version: Option<String>,
     /// Compare against what these easystacks install instead of a previous
@@ -655,10 +744,13 @@ struct SolveArgs {
     /// `name/version` (e.g. `lfoss/2026.1`). Repeatable.
     #[arg(long = "baseline-also-toolchain", requires = "baseline_easystacks")]
     baseline_also_toolchains: Vec<String>,
+    /// Lock file to write. A single file, so this is `--lock-out` rather than `--out-dir`.
     #[arg(long, default_value = "stack.lock.json")]
     lock_out: PathBuf,
+    /// CycloneDX file to write beside the lock. Absent, no SBOM is written.
     #[arg(long)]
     sbom_out: Option<PathBuf>,
+    /// Build list to write, one module per line, in dependency order.
     #[arg(long)]
     build_list_out: Option<PathBuf>,
     /// Leave out of the build list every module the baseline provides
@@ -682,6 +774,7 @@ struct SolveArgs {
     /// The pipeline's `eb --robot` builds their dependencies.
     #[arg(long, requires = "jenkins_build_list_out")]
     jenkins_roots_only: bool,
+    /// Markdown diff of this solve against the baseline.
     #[arg(long)]
     stack_diff_out: Option<PathBuf>,
 }
@@ -689,11 +782,19 @@ struct SolveArgs {
 #[derive(Subcommand, Debug)]
 enum StackCommand {
     /// Parse EasyBuild trees and solve a jointly consistent stack.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack solve --easyconfigs easyconfigs/ --toolchain foss/2026.1 --root zlib --lock-out stack.lock.json"
+    )]
     Solve(Box<SolveArgs>),
     /// Emit CycloneDX from an existing stack lock.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack sbom --lock stack.lock.json --out stack.cdx.json"
+    )]
     Sbom {
+        /// Stack lock JSON written by `stack solve`.
         #[arg(long)]
         lock: PathBuf,
+        /// CycloneDX file to write. A single file, so this is `--out` rather than `--out-dir`.
         #[arg(long, default_value = "stack.cdx.json")]
         out: PathBuf,
     },
@@ -703,12 +804,17 @@ enum StackCommand {
     /// what the recipes pin and sequences them, so a generation that carries
     /// two builds of one name gets both, in an order that respects every
     /// dependency.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack order --easyconfigs easyconfigs/ --root 'zlib==1.3.1'"
+    )]
     Order {
+        /// Easyconfig tree the roots are closed over. Repeatable; later trees win.
         #[arg(long, required = true)]
         easyconfigs: Vec<PathBuf>,
         /// Package to build, optionally pinned as `name==version`. Repeatable.
         #[arg(long = "root", required = true)]
         roots: Vec<String>,
+        /// Build-order file to write, one module per line.
         #[arg(long, default_value = "build-order.txt")]
         out: PathBuf,
         /// Take the oldest admissible version of an unpinned requirement
@@ -726,9 +832,14 @@ enum StackCommand {
     },
     /// Write the lock as an EasyBuild easystack, the format `eb --easystack`
     /// consumes and EESSI's software layer is built from.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack easystack --lock stack.lock.json --out stack.yml"
+    )]
     Easystack {
+        /// Stack lock JSON written by `stack solve`.
         #[arg(long)]
         lock: PathBuf,
+        /// Easystack YAML to write.
         #[arg(long, default_value = "stack.yml")]
         out: PathBuf,
         /// Per-easyconfig `eb` option, as `<file.eb>:<option>=<value>`, with
@@ -740,6 +851,9 @@ enum StackCommand {
     /// Regroup a Jenkins build list under the section headers of a previous
     /// one, so each package sits in the category the site already files it
     /// under. Entries keep their flags and whether they are commented out.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack sections next.list --from previous.list --out grouped.list"
+    )]
     Sections {
         /// The build list to regroup.
         list: PathBuf,
@@ -750,6 +864,7 @@ enum StackCommand {
         /// Header for entries no section of the previous list names.
         #[arg(long, default_value = "New in this generation")]
         unfiled: String,
+        /// Grouped build list to write.
         #[arg(long)]
         out: PathBuf,
     },
@@ -758,14 +873,23 @@ enum StackCommand {
 #[derive(Subcommand, Debug)]
 enum TargetCommand {
     /// List targets from layered public TOML configuration.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack target list --config base.toml --config site.toml"
+    )]
     List {
+        /// Target-config TOML. Repeatable. Later files override earlier ones.
         #[arg(long = "config", required = true)]
         configs: Vec<PathBuf>,
     },
     /// Validate transport, executor, runtime, and EasyBuild workload routing.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack target doctor --config target.toml --target local"
+    )]
     Doctor {
+        /// Target-config TOML. Repeatable. Later files override earlier ones.
         #[arg(long = "config", required = true)]
         configs: Vec<PathBuf>,
+        /// Target name to probe, as declared in the config.
         #[arg(long)]
         target: String,
     },
@@ -774,22 +898,34 @@ enum TargetCommand {
 #[derive(Subcommand, Debug)]
 enum CampaignCommand {
     /// Start or resume a persisted package build campaign.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack campaign run --bundle bundle/ --config target.toml --target local --state campaign.json"
+    )]
     Run {
+        /// Package bundle directory written by `package plan` or `package bump`.
         #[arg(long)]
         bundle: PathBuf,
+        /// Target-config TOML. Repeatable. Later files override earlier ones.
         #[arg(long = "config", required = true)]
         configs: Vec<PathBuf>,
+        /// Target name to build on, as declared in the config.
         #[arg(long)]
         target: String,
+        /// Campaign state JSON. Created on the first run and resumed after that.
         #[arg(long)]
         state: PathBuf,
     },
     /// Print persisted campaign state and claim ladder.
+    #[command(after_long_help = "Examples:\n  eb-stack campaign status --state campaign.json")]
     Status {
+        /// Campaign state JSON written by `campaign run`.
         #[arg(long)]
         state: PathBuf,
     },
     /// Coordinate typed finding repair across campaign workers.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack campaign finding claim --state campaign.json --id FINDING --owner worker-a"
+    )]
     Finding {
         #[command(subcommand)]
         command: CampaignFindingCommand,
@@ -799,26 +935,41 @@ enum CampaignCommand {
 #[derive(Subcommand, Debug)]
 enum CampaignFindingCommand {
     /// Claim an open finding for one worker.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack campaign finding claim --state campaign.json --id FINDING --owner worker-a"
+    )]
     Claim {
+        /// Campaign state JSON written by `campaign run`.
         #[arg(long)]
         state: PathBuf,
+        /// Finding identifier, as stored in the state file.
         #[arg(long)]
         id: String,
+        /// Worker name that will own the claim.
         #[arg(long)]
         owner: String,
     },
     /// Resolve a claimed finding with durable evidence.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack campaign finding resolve --state campaign.json --id FINDING --owner worker-a --action 'pinned the dep' --evidence 'lock updated' --change recipe.eb"
+    )]
     Resolve {
+        /// Campaign state JSON written by `campaign run`.
         #[arg(long)]
         state: PathBuf,
+        /// Finding identifier, as stored in the state file.
         #[arg(long)]
         id: String,
+        /// Worker name that owns the claim.
         #[arg(long)]
         owner: String,
+        /// What was done to the recipe or the target.
         #[arg(long)]
         action: String,
+        /// Why that action is enough to close the finding.
         #[arg(long)]
         evidence: String,
+        /// File the action changed. Repeatable.
         #[arg(long = "change")]
         changes: Vec<String>,
     },
