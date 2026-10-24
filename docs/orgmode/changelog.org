@@ -14,8 +14,9 @@ The version-one design provides:
 - in-solver stack pin fallback and candidate exclusions;
 - layered target routing and persisted typed build campaigns;
 - independent resolves, builds, and binary-verified claims;
-- matching CLI, MCP (including recipe lint and stack SBOM), new-package
-  skill, and annual-bump skill workflows;
+- matching CLI, Model Context Protocol (MCP), new-package skill, and
+  annual-bump skill workflows, with recipe lint and the stack software
+  bill of materials (SBOM) among the MCP tools;
 - graph ordering, easystack emission, and Jenkins section regrouping;
 - a reproduction scoreboard summary;
 - easyblock dry-run, module lint, and build tools on the MCP server.

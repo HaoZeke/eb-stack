@@ -197,7 +197,7 @@ All notable changes to this project are documented here.
   dependency on it pins a version exactly: binutils 2.40 builds the GCCcore
   that builds binutils 2.42, and EasyBuild installs both. `foss-2025a` locks
   63 packages.
-- Every easyconfig upstream ships now parses: 0 skipped of some 20,600,
+- Every easyconfig upstream publishes now parses: 0 skipped of some 20,600,
   down from 91. The forms that were being lost, each of which dropped a
   whole recipe rather than one field: `version[2:]` and `patchlevels[0]`,
   a dependency list written with braces (a set, which EasyBuild iterates
@@ -403,8 +403,8 @@ All notable changes to this project are documented here.
   easystacks, walks the installed reverse dependents, and classifies each
   one from the easyconfig graph: `no-rebuild` for a runtime dependency,
   `review` for a builddependency only, and `must-rebuild` for the patched
-  easyconfig and for a bundle that ships it as an extension. The output
-  directory holds `rebuild-set.json`, `rebuild-set.md`, and one
+  easyconfig and for a bundle that includes it as an extension. The output
+  directory contains `rebuild-set.json`, `rebuild-set.md`, and one
   `rebuilds/<YYYYMMDD>-eb-<version>-cve-patches.yml` per EasyBuild version
   containing class `must-rebuild` only. See
   `docs/orgmode/howto/rebuild-set.org`. `--prefix` reads `lib*/*.a`
@@ -432,7 +432,7 @@ All notable changes to this project are documented here.
 
 - `pr-overlap` closes the easystack lines an open pull request adds and
   reports the modules more than one of them would build. `--pr` takes one
-  JSON path or several after the same flag, which is what `in/prs/*.json`
+  JSON path or several after the same flag, matching what `in/prs/*.json`
   expands to. `--include-path` keeps one architecture's easystacks,
   `--filter-deps` drops dependencies the way EasyBuild does, and an alias
   in `.modulerc.lua` counts as installed when the module it names is.
@@ -475,7 +475,7 @@ All notable changes to this project are documented here.
   EB_SHLIB_HARDCODED flags `.so` only in library paths and sanity checks. `f'lib/%(name)s.{SHLIB_EXT}'` is correct and
   is not flagged. When `eb` is on `PATH`, the same command runs
   `eb --check-contrib` and merges its findings. A missing `eb` is not a lint
-  failure by itself. `fixtures/lint_*/` holds one bad/good/expected.json
+  failure by itself. `fixtures/lint_*/` contains one bad/good/expected.json
   fixture per rule, enforced by `tests/lint_fixtures.rs`.
 - Formatting findings are scoped. `EB_FMT_*` findings outside the review
   scope carry `"info": true` and do not count against `clean`: untouched
@@ -508,13 +508,13 @@ All notable changes to this project are documented here.
   differ between profiles, hand-written test or sanity parameters, or a
   binary name that follows the profiles. `--emit-easyblock` (MCP argument
   `emit_easyblock`) renders an easyblock skeleton to
-  `easyblocks/<letter>/<module>.py`, ships it with the recipes, and moves the
+  `easyblocks/<letter>/<module>.py`, includes it with the recipes, and moves the
   variant options out of the emitted easyconfigs. See "When a package owes an
   easyblock" in `docs/orgmode/reference/package-bundles.org`.
 
 - Overlay planning treats existing robot modules as leaves: a `Python`
-  easyconfig that names `binutils` no longer makes `package plan --format
-  pypi` unsatisfiable. `--easyconfigs` is the solve robot only; it does
+  easyconfig that names `binutils` no longer makes `package plan --format pypi`
+  unsatisfiable. `--easyconfigs` is the solve robot only; it does
   not start package-closure discovery.
 
 - `kind = "eessi"` target runtime: `eessi_container.sh --mode exec` is
@@ -528,11 +528,12 @@ All notable changes to this project are documented here.
   missing easyconfig. Profile locks collapse the provide to the parent so
   emitted recipes depend on the bundle, not on a fake `numpy` module.
   Planning `numpy` / `scipy` / `torch` as a PyPI root against a robot
-  that already ships them is an empty delta. Without that provider the
+  that already includes them is an empty delta. Without that provider the
   plan refuses a pip overlay instead of emitting a `PythonBundle`.
   Warehouse `requires_dist: null` (live numpy JSON) parses as no extras.
   A leftover such as `eon-akmc` whose other PyPI deps are not in the
-  robot keeps those names in `exts_list` instead of failing SAT.
+  robot keeps those names in `exts_list` instead of failing the
+  Boolean satisfiability (SAT) solve.
 - `--format cargo` reads `Cargo.toml` or crates.io JSON. PyO3/maturin
   crates emit `PythonPackage` with implicit `Rust`, `maturin`, and
   `binutils`; other crates emit `Crate`. Host Cargo wrappers
@@ -588,7 +589,7 @@ All notable changes to this project are documented here.
   scientific Python / R providers.
 - `package plan` generates a recipe with the structure upstream writes.
   Pointed at a PyPI package at `GCCcore-14.2.0`, the emitted file is
-  byte-identical in shape to upstream's own recipes: `PythonPackage` rather
+  identical in shape to upstream's own recipes: `PythonPackage` rather
   than a one-entry bundle, `sources = [SOURCE_TAR_GZ]`, a `binutils` build
   dependency, short lists inline, a one-line description in one pair of quotes,
   and no empty dependency fields.
