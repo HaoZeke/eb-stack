@@ -144,8 +144,8 @@ examples/eessi-pr-overlap/fetch-prs.sh EESSI/software-layer 2026.06 in/
 eb-stack pr-overlap --pr in/prs/*.json \
   $(for d in in/commit-trees/*/; do printf -- '--commit-tree %s=%s ' "$(basename "$d")" "$d"; done) \
   $(for d in in/easyblocks/*/; do printf -- '--easyblocks-commit %s=%s ' "$(basename "$d")" "$d"; done) \
-  --easyconfigs /path/to/easybuild-easyconfigs/easybuild/easyconfigs \
-  --easyblocks /path/to/easybuild/easyblocks \
+  --easyconfigs "$EB_EASYCONFIGS" \
+  --easyblocks "$EB_EASYBLOCKS" \
   --installed installed.txt --installed-modulerc /path/to/modules/all \
   --filter-deps "$EASYBUILD_FILTER_DEPS" \
   --installed-label x86_64/amd/zen4 \

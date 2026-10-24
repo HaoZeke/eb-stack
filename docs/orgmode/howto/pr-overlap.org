@@ -11,7 +11,8 @@ and a list of installed modules. Nothing from a pull request is executed.
 * Run it on a mounted stack
 
 From a clone of ~EESSI/software-layer~, with ~gh~ authenticated for public
-reads:
+reads. ~EB_EASYCONFIGS~ and ~EB_EASYBLOCKS~ come from
+~scripts/fetch-upstream-trees.sh~:
 
 #+begin_src bash
 source /cvmfs/software.eessi.io/versions/2026.06/init/lmod/bash
@@ -22,8 +23,8 @@ find "$EESSI_SOFTWARE_PATH/software" -mindepth 2 -maxdepth 2 -type d -printf '%P
 eb-stack pr-overlap --pr in/prs/*.json \
   $(for d in in/commit-trees/*/; do printf -- '--commit-tree %s=%s ' "$(basename "$d")" "$d"; done) \
   $(for d in in/easyblocks/*/; do printf -- '--easyblocks-commit %s=%s ' "$(basename "$d")" "$d"; done) \
-  --easyconfigs /path/to/easybuild/easyconfigs \
-  --easyblocks /path/to/easybuild/easyblocks \
+  --easyconfigs "$EB_EASYCONFIGS" \
+  --easyblocks "$EB_EASYBLOCKS" \
   --installed installed.txt \
   --installed-modulerc "$EESSI_SOFTWARE_PATH/modules/all" \
   --filter-deps "$EASYBUILD_FILTER_DEPS" \
@@ -52,8 +53,8 @@ the same substring:
 eb-stack pr-overlap --pr in/prs/*.json \
   $(for d in in/commit-trees/*/; do printf -- '--commit-tree %s=%s ' "$(basename "$d")" "$d"; done) \
   $(for d in in/easyblocks/*/; do printf -- '--easyblocks-commit %s=%s ' "$(basename "$d")" "$d"; done) \
-  --easyconfigs /path/to/easybuild/easyconfigs \
-  --easyblocks /path/to/easybuild/easyblocks \
+  --easyconfigs "$EB_EASYCONFIGS" \
+  --easyblocks "$EB_EASYBLOCKS" \
   --installed installed-riscv.txt \
   --installed-modulerc /path/to/riscv64/modules/all \
   --filter-deps "$EASYBUILD_FILTER_DEPS" \

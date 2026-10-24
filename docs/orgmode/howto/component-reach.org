@@ -7,12 +7,14 @@ the recipes that contain it into the rebuild closure.
 
 * Run it
 
+~EB_EASYCONFIGS~ comes from ~scripts/fetch-upstream-trees.sh~.
+
 #+begin_src bash
 eb-stack component-reach \
   --component curl \
   --version '>=8,<9' \
   --generation 2026.1 \
-  --easyconfigs /path/to/easybuild/easyconfigs \
+  --easyconfigs "$EB_EASYCONFIGS" \
   --installed installed.txt \
   --easystack easystacks/software.eessi.io/2026.06/*.yml \
   --compat-layer compat.txt \

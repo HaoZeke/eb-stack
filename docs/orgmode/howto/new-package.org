@@ -234,7 +234,16 @@ the profile lock.
 
 * Plan the complete bundle
 
+~scripts/fetch-upstream-trees.sh~ creates a checkout of the pinned easybuilders
+trees and writes ~env.sh~. Source it so ~EB_EASYCONFIGS~ is the
+~easybuild/easyconfigs~ directory of easybuild-easyconfigs develop.
+
 #+begin_src bash
+scripts/fetch-upstream-trees.sh
+set -a
+source "${EB_UPSTREAM_CACHE:-$HOME/.cache/eb-stack/upstream}/env.sh"
+set +a
+
 eb-stack package plan \
   --source fixtures/foreign_ingest/conda_eon/recipe.yaml \
   --format conda-forge \
@@ -242,11 +251,24 @@ eb-stack package plan \
   --toolchain-version 2026.1 \
   --package-config examples/packages/common.toml \
   --package-config examples/packages/eon.toml \
-  --easyconfigs /path/to/easybuild-easyconfigs/easybuild/easyconfigs \
+  --easyconfigs "$EB_EASYCONFIGS" \
   --easyconfigs fixtures/eon_core_rgpot/easyconfigs \
   --stack-policy examples/stacks/eon-foss-2026.1.toml \
   --out-dir /tmp/eon
 #+end_src
+
+Against easybuild-easyconfigs develop ~981d2123dd~ that prints:
+
+#+begin_example
+closure_plan=/tmp/eon/closure.plan.json
+closure_sbom=/tmp/eon/closure.sbom.cdx.json
+build_order=/tmp/eon/build-order.json
+manifest=/tmp/eon/package.plan.json
+sbom=/tmp/eon/package.sbom.cdx.json
+lock=/tmp/eon/locks/default.lock.json
+easyconfig=/tmp/eon/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb
+patch=/tmp/eon/easyconfigs/e/eOn/eOn-2.16.0_safemath-eigen5-core-guard.patch
+#+end_example
 
 The command must produce a manifest, SBOM, one lock per requested profile,
 one recipe per profile, and, because ~--easyconfigs~ is a discovery root,
@@ -259,9 +281,15 @@ eb-stack recipe format /tmp/eon/easyconfigs/e/eOn/*.eb
 eb-stack recipe lint /tmp/eon/easyconfigs/e/eOn/*.eb
 eb-stack recipe check \
   --recipe /tmp/eon/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb \
-  --easyconfigs /path/to/easybuild-easyconfigs/easybuild/easyconfigs \
+  --easyconfigs "$EB_EASYCONFIGS" \
+  --easyconfigs fixtures/eon_core_rgpot/easyconfigs \
   --easyconfigs /tmp/eon/easyconfigs
 #+end_src
+
+~recipe format~ prints ~rewritten=0 remaining=0~. ~recipe lint~ reports
+~clean: true~ with one maintainer warning, ~EB_MAINT_TESTS_OFF~.
+~recipe check~ ends with ~recipe resolves~. The locked build tools on
+this tree are ~CMake-4.2.1~ and ~pkgconf-2.5.1~, both ~GCCcore-15.2.0~.
 
 Missing robot dependencies are real package work. Close them with ordered
 source roots and optional catalog overrides rather than inventing placeholders
@@ -279,7 +307,7 @@ eb-stack package plan \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
   --source-checksum SHA256 \
-  --easyconfigs /path/to/robot \
+  --easyconfigs "$EB_EASYCONFIGS" \
   --stack-policy stacks/site.toml \
   --package-sources examples/package-sources/local-roots.toml \
   --out-dir work/closed-root
@@ -313,7 +341,7 @@ eb-stack package plan \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
   --source-checksum SHA256 \
-  --easyconfigs /path/to/robot \
+  --easyconfigs "$EB_EASYCONFIGS" \
   --stack-policy stacks/site.toml \
   --package-catalog examples/package-catalog/mixed-providers.toml \
   --out-dir work/closed-root

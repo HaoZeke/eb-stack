@@ -208,6 +208,10 @@ assets are verified and copied beside every emitted recipe. Checksum-addressed
 remote patches retain their exact URL in `patches`; EasyBuild downloads and
 verifies them during the build.
 
+`scripts/fetch-upstream-trees.sh` creates a checkout of the pinned easybuilders trees.
+Source the `env.sh` it writes so `$EB_EASYCONFIGS` is the develop
+`easybuild/easyconfigs` directory.
+
 ```sh
 eb-stack package plan \
   --source fixtures/foreign_ingest/conda_eon/recipe.yaml \
@@ -218,10 +222,31 @@ eb-stack package plan \
   --package-config examples/packages/eon.toml \
   --package-catalog examples/package-catalog/eon.toml \
   --package-sources examples/package-sources/eon-companions.toml \
-  --easyconfigs /path/to/easybuild-easyconfigs/easybuild/easyconfigs \
+  --easyconfigs "$EB_EASYCONFIGS" \
   --easyconfigs fixtures/eon_foss_2026_1/easyconfigs \
   --stack-policy examples/stacks/eon-foss-2026.1.toml \
   --out-dir /tmp/eon
+```
+
+Against easybuild-easyconfigs develop `981d2123dd` that prints:
+
+```text
+closure_plan=/tmp/eon/closure.plan.json
+closure_sbom=/tmp/eon/closure.sbom.cdx.json
+build_order=/tmp/eon/build-order.json
+manifest=/tmp/eon/package.plan.json
+sbom=/tmp/eon/package.sbom.cdx.json
+lock=/tmp/eon/locks/default.lock.json
+easyconfig=/tmp/eon/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb
+patch=/tmp/eon/easyconfigs/e/eOn/eOn-2.16.0_safemath-eigen5-core-guard.patch
+companion_manifest=/tmp/eon/packages/readcon-core-0.13.1-GCCcore-15.2.0/package.plan.json
+companion_sbom=/tmp/eon/packages/readcon-core-0.13.1-GCCcore-15.2.0/package.sbom.cdx.json
+companion_lock=/tmp/eon/packages/readcon-core-0.13.1-GCCcore-15.2.0/locks/default.lock.json
+easyconfig=/tmp/eon/easyconfigs/r/readcon-core/readcon-core-0.13.1-GCCcore-15.2.0.eb
+companion_manifest=/tmp/eon/packages/rgpot-2.5.3-GCCcore-15.2.0/package.plan.json
+companion_sbom=/tmp/eon/packages/rgpot-2.5.3-GCCcore-15.2.0/package.sbom.cdx.json
+companion_lock=/tmp/eon/packages/rgpot-2.5.3-GCCcore-15.2.0/locks/default.lock.json
+easyconfig=/tmp/eon/easyconfigs/r/rgpot/rgpot-2.5.3-GCCcore-15.2.0.eb
 ```
 
 Because `--easyconfigs` is also a discovery root, that plan writes

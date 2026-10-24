@@ -125,12 +125,13 @@ cargo test --locked \
 * Real-tree parser scale
 
 ~tests/real_tree_scale.rs~ walks an unfiltered EasyBuild checkout when
-~EB_EASYCONFIGS~ points at one. It requires more than 1,000 recipes, asserts at
+~EB_EASYCONFIGS~ points at one. ~scripts/fetch-upstream-trees.sh~ writes that
+variable into ~env.sh~. The test requires more than 1,000 recipes, asserts at
 least 90% restricted-DSL coverage, and exercises canonical GROMACS, numba, and
 nglview bumps against that live candidate universe:
 
 #+begin_src bash
-EB_EASYCONFIGS=/path/to/easybuild-easyconfigs/easybuild/easyconfigs \
+EB_EASYCONFIGS="$EB_EASYCONFIGS" \
   cargo test --locked --test real_tree_scale -- --nocapture
 #+end_src
 
@@ -190,7 +191,7 @@ normalizing a recipe leaves the resolved easyconfig identical, over the
 checked-in fixtures always and over the robot tree when one is present.
 
 #+begin_src bash
-EB_EASYCONFIGS=/path/to/easybuild-easyconfigs/easybuild/easyconfigs \
+EB_EASYCONFIGS="$EB_EASYCONFIGS" \
   EB_REQUIRE_EASYCONFIGS=1 \
   cargo test --locked --test repro_scoring -- --nocapture
 #+end_src

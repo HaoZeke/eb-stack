@@ -9,7 +9,9 @@ its toolchain generation, and no module from another generation.
 
 * Run it on a mounted stack
 
-From a clone of ~EESSI/software-layer~, with the 2026.06 stack mounted:
+From a clone of ~EESSI/software-layer~, with the 2026.06 stack mounted.
+~EB_EASYCONFIGS~ and ~EB_EASYBLOCKS~ come from
+~scripts/fetch-upstream-trees.sh~:
 
 #+begin_src bash
 source /cvmfs/software.eessi.io/versions/2026.06/init/lmod/bash
@@ -21,8 +23,8 @@ eb-stack rebuild-set \
   --easystack easystacks/software.eessi.io/2026.06/*.yml \
   --easystack easystacks/software.eessi.io/2026.06/rebuilds/*.yml \
   $(for d in commit-trees/*/; do printf -- '--commit-tree %s=%s ' "$(basename "$d")" "$d"; done) \
-  --easyconfigs /path/to/easybuild/easyconfigs \
-  --easyblocks /path/to/easybuild/easyblocks \
+  --easyconfigs "$EB_EASYCONFIGS" \
+  --easyblocks "$EB_EASYBLOCKS" \
   --installed installed.txt \
   --installed-modulerc "$EESSI_SOFTWARE_PATH/modules/all" \
   --filter-deps "$EASYBUILD_FILTER_DEPS" \

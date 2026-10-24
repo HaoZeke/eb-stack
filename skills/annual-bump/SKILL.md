@@ -54,7 +54,7 @@ eb-stack package bump \
   --source GROMACS-2024.4-foss-2023b.eb \
   --toolchain-name foss \
   --toolchain-version 2024a \
-  --easyconfigs /path/to/easybuild-easyconfigs/easybuild/easyconfigs \
+  --easyconfigs "$EB_EASYCONFIGS" \
   --stack-policy stacks/site.toml \
   --out-dir work/gromacs-2024a
 ```

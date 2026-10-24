@@ -162,7 +162,11 @@ mkdir -p \
   /tmp/eb-stack/sources \
   /tmp/eb-stack/bundles
 
-rsync -a /path/to/easybuild-easyconfigs/easybuild/easyconfigs/ \
+scripts/fetch-upstream-trees.sh
+set -a
+source "${EB_UPSTREAM_CACHE:-$HOME/.cache/eb-stack/upstream}/env.sh"
+set +a
+rsync -a "$EB_EASYCONFIGS"/ \
   /tmp/eb-stack/robot/
 #+end_src
 

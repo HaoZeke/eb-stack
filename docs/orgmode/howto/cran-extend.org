@@ -25,10 +25,16 @@ eb-stack package inspect \
   --out-dir /tmp/jsonlite-inspect
 #+end_src
 
-~package.plan.json~ has ~origin = cran~ and ~easyblock = RPackage~.
-Plan emits ~easyblock = Bundle~ with ~exts_defaultclass = RPackage~.
+Inspect's ~package.plan.json~ has ~origin = cran~ and ~easyblock = RPackage~.
+A plan that still has to emit the package uses ~easyblock = Bundle~ with
+~exts_defaultclass = RPackage~.
 
 * Plan
+
+Source ~env.sh~ from ~scripts/fetch-upstream-trees.sh~ first.
+The checksum below is SHA-256 of ~jsonlite_1.8.8.tar.gz~ from the CRAN
+archive (the current ~src/contrib~ URL in the fixture no longer serves
+that tarball).
 
 #+begin_src bash
 eb-stack package plan \
@@ -36,15 +42,26 @@ eb-stack package plan \
   --format cran \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  --easyconfigs /cvmfs/software.eessi.io/versions/2025.06/software/linux/x86_64/amd/zen4/software/EasyBuild/5.3.0/easybuild/easyconfigs \
+  --easyconfigs "$EB_EASYCONFIGS" \
   --stack-policy examples/stacks/eessi-r-extras.toml \
-  --source-checksum <sha256-of-the-tarball> \
+  --source-checksum 7de21316984c3ba3d7423d12f43d1c30c716007c5e39bf07e11885e0ceb0caa4 \
   --out-dir /tmp/jsonlite
 #+end_src
 
-DESCRIPTION files rarely carry a SHA-256. Pass ~--source-checksum~ for
-the tarball, or use a JSON document that already includes one. Plan
-refuses to emit a buildable bundle without it.
+Against easybuild-easyconfigs develop ~981d2123dd~ the command prints
+the closure and manifest paths and does not emit a recipe. The manifest
+residual is:
+
+#+begin_example
+jsonlite 1.8.8 is already provided by R 4.6.1 (jsonlite 2.0.0); do not emit a pip overlay
+#+end_example
+
+The evidence path is ~r/R/R-4.6.1-gfbf-2026.1.eb~. DESCRIPTION files
+rarely carry a SHA-256. Pass ~--source-checksum~ for the tarball, or use
+a JSON document that already includes one. Plan refuses to emit a
+buildable bundle without it. When the robot does not already provide
+the package, plan emits ~easyblock = Bundle~ with
+~exts_defaultclass = RPackage~.
 
 * Install with the eessi-extend target
 

@@ -177,7 +177,8 @@ eb-stack package inspect \
   --out-dir work/qmcpack-inspect
 ```
 
-Produce the buildable bundle:
+`scripts/fetch-upstream-trees.sh` writes `env.sh`. `$EB_EASYCONFIGS` is the
+develop `easybuild/easyconfigs` directory. Produce the buildable bundle:
 
 ```sh
 eb-stack package plan \
@@ -188,7 +189,7 @@ eb-stack package plan \
   --package-config examples/packages/common.toml \
   --package-config examples/packages/qmcpack.toml \
   --source-checksum SHA256 \
-  --easyconfigs /path/to/easybuild-easyconfigs/easybuild/easyconfigs \
+  --easyconfigs "$EB_EASYCONFIGS" \
   --easyconfigs /path/to/site-overlay \
   --stack-policy stacks/site.toml \
   --out-dir work/qmcpack

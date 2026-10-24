@@ -42,21 +42,34 @@ package; later specs are additional run dependencies.
 
 * Plan
 
+Source ~env.sh~ from ~scripts/fetch-upstream-trees.sh~ first.
+~EB_EASYCONFIGS~ is the develop easyconfigs tree.
+
 #+begin_src bash
 eb-stack package plan \
   --source fixtures/foreign_ingest/pypi_bs4/pypi.json \
   --format pypi \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  --easyconfigs /cvmfs/software.eessi.io/versions/2025.06/software/linux/x86_64/amd/zen4/software/EasyBuild/5.3.0/easybuild/easyconfigs \
+  --easyconfigs "$EB_EASYCONFIGS" \
   --stack-policy examples/stacks/eessi-python-extras.toml \
   --out-dir /tmp/bs4
 #+end_src
 
-The lock collapses ~soupsieve~ (when the EESSI ~Python-bundle-PyPI~
-provides it) to that bundle. The emitted recipe for this single package
-is a ~PythonPackage~. It depends on ~Python~ and ~Python-bundle-PyPI~
-and has no ~exts_list~.
+Against easybuild-easyconfigs develop ~981d2123dd~ the command prints
+the closure and manifest paths and does not emit a recipe. The manifest
+residual is:
+
+#+begin_example
+beautifulsoup4 4.12.3 is already provided by BeautifulSoup 4.14.3 (beautifulsoup4 4.14.3); do not emit a pip overlay
+#+end_example
+
+The evidence path is ~b/BeautifulSoup/BeautifulSoup-4.14.3-GCCcore-15.2.0.eb~.
+The extra-only ~lxml~ requirement stays a parse residual. When the robot
+does not already provide the package, the lock collapses ~soupsieve~
+(when ~Python-bundle-PyPI~ provides it) to that bundle, and the emitted
+recipe is a ~PythonPackage~ depending on ~Python~ and ~Python-bundle-PyPI~
+with no ~exts_list~.
 
 Asking for ~numpy~ (or ~scipy~, or ~torch~ / ~PyTorch~) against a robot
 that already ships the provider produces an empty delta and an
