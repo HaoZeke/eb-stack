@@ -37,6 +37,12 @@ All notable changes to this project are documented here.
   reaches an easyblock that imports `tools/filetools.py` when that module
   imports `tools/run.py`. An easyblock that only imports another easyblock
   is not reached that way.
+- `EB_CHECKSUM_COUNT` counts `postinstallpatches` with the other patches,
+  and counts sources a file appends in a loop or builds with a
+  comprehension. A length that is only known after the file runs, including
+  a branch on `ARCH`, is left alone. libtool, Geant4-data, Quantum
+  ESPRESSO, glslang and the model recipes were reported as missing
+  checksums they have.
 - `recipe lint` no longer reports `EB_TEMPLATE_UNKNOWN` for an even run of
   `%` in front of `(name)s`. EasyBuild preserves `%%(source)s` so the
   easyblock can format it; STREAM's `cmds_map` is that pattern.

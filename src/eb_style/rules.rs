@@ -1502,7 +1502,7 @@ fn ast_rules(text: &str, suite: &[ast::Stmt], file_name: &str, sink: &mut Sink<'
     sanity_paths_shape(&assigns, sink);
     duplicate_dependencies(&assigns, sink);
     empty_dependency_versions(&assigns, sink);
-    checksum_count(&assigns, file_name, sink);
+    checksum_count(&assigns, suite, file_name, sink);
     trailing_comma_tuples(text, suite, sink);
 }
 
@@ -2259,46 +2259,233 @@ pub(super) fn percent_rewrite(
     Some(out)
 }
 
-/// Number of entries an easyconfig list value holds. Each list or tuple
-/// element counts once, whether it is a string, a dict (`{'name': ...}` or
-/// `{'file': 'sha256'}`), a tuple of alternatives, or `None`; `a + b` adds up.
-fn entry_count(value: &ast::Expr) -> usize {
+/// Number of entries an easyconfig list value holds, when that number can
+/// be read without running the file.
+///
+/// Each list or tuple element counts once, whether it is a string, a dict
+/// (`{'name': ...}` or `{'file': 'sha256'}`), a tuple of alternatives, or
+/// `None`. `a + b` adds up. A comprehension over a list counts that list.
+/// Anything whose length is only known after the file runs is `None`, so the
+/// checksum check stays quiet instead of reporting a mismatch that is not
+/// there.
+fn entry_count(
+    value: &ast::Expr,
+    assigns: &HashMap<&str, Vec<&ast::StmtAssign>>,
+    seen: &mut Vec<String>,
+) -> Option<usize> {
     match value {
-        ast::Expr::List(list) => list.elts.len(),
-        ast::Expr::Tuple(tuple) => tuple.elts.len(),
-        ast::Expr::BinOp(binop) if matches!(binop.op, ast::Operator::Add) => {
-            entry_count(&binop.left) + entry_count(&binop.right)
+        ast::Expr::List(list) => {
+            if list
+                .elts
+                .iter()
+                .any(|element| matches!(element, ast::Expr::Starred(_)))
+            {
+                None
+            } else {
+                Some(list.elts.len())
+            }
         }
-        ast::Expr::Constant(constant) if matches!(constant.value, ast::Constant::None) => 0,
-        _ => 1,
+        ast::Expr::Tuple(tuple) => {
+            if tuple
+                .elts
+                .iter()
+                .any(|element| matches!(element, ast::Expr::Starred(_)))
+            {
+                None
+            } else {
+                Some(tuple.elts.len())
+            }
+        }
+        ast::Expr::ListComp(comp) => comprehension_len(&comp.generators, assigns, seen),
+        ast::Expr::SetComp(comp) => comprehension_len(&comp.generators, assigns, seen),
+        ast::Expr::GeneratorExp(comp) => comprehension_len(&comp.generators, assigns, seen),
+        ast::Expr::BinOp(binop) if matches!(binop.op, ast::Operator::Add) => Some(
+            entry_count(&binop.left, assigns, seen)? + entry_count(&binop.right, assigns, seen)?,
+        ),
+        ast::Expr::Constant(constant) if matches!(constant.value, ast::Constant::None) => Some(0),
+        ast::Expr::BinOp(_)
+        | ast::Expr::Constant(_)
+        | ast::Expr::Dict(_)
+        | ast::Expr::JoinedStr(_)
+        | ast::Expr::Attribute(_)
+        | ast::Expr::Subscript(_) => Some(1),
+        ast::Expr::Name(name) => {
+            let id = name.id.as_str();
+            if seen.iter().any(|seen_name| seen_name == id) {
+                return None;
+            }
+            if let Some(statement) = assigns.get(id).and_then(|statements| statements.last()) {
+                seen.push(id.to_string());
+                return entry_count(&statement.value, assigns, seen);
+            }
+            Some(1)
+        }
+        _ => None,
     }
+}
+
+fn comprehension_len(
+    generators: &[ast::Comprehension],
+    assigns: &HashMap<&str, Vec<&ast::StmtAssign>>,
+    seen: &mut Vec<String>,
+) -> Option<usize> {
+    if generators.len() != 1 || !generators[0].ifs.is_empty() {
+        return None;
+    }
+    entry_count(&generators[0].iter, assigns, seen)
+}
+
+/// Entries appended or extended onto `name` after its assignment.
+///
+/// `None` when a loop bound or a branch makes the number unknowable.
+fn added_entries(
+    statements: &[ast::Stmt],
+    name: &str,
+    assigns: &HashMap<&str, Vec<&ast::StmtAssign>>,
+) -> Option<usize> {
+    let mut extra = 0usize;
+    for statement in statements {
+        match statement {
+            ast::Stmt::Expr(expr) => {
+                extra += list_method_added(expr.value.as_ref(), name, assigns)?;
+            }
+            ast::Stmt::AugAssign(aug) => {
+                if expr_name(aug.target.as_ref()) == Some(name) {
+                    extra += entry_count(aug.value.as_ref(), assigns, &mut vec![name.to_string()])?;
+                }
+            }
+            ast::Stmt::For(for_stmt) => {
+                let per_iter = added_entries(&for_stmt.body, name, assigns)?;
+                if per_iter > 0 {
+                    // Iterating the list being extended has no finite length
+                    // we can read off the file.
+                    if expr_name(for_stmt.iter.as_ref()) == Some(name) {
+                        return None;
+                    }
+                    let bound = entry_count(for_stmt.iter.as_ref(), assigns, &mut Vec::new())?;
+                    extra = extra.checked_add(bound.checked_mul(per_iter)?)?;
+                }
+                extra += added_entries(&for_stmt.orelse, name, assigns)?;
+            }
+            ast::Stmt::With(with_stmt) => {
+                extra += added_entries(&with_stmt.body, name, assigns)?;
+            }
+            ast::Stmt::If(if_stmt) => {
+                let body = added_entries(&if_stmt.body, name, assigns)?;
+                let orelse = added_entries(&if_stmt.orelse, name, assigns)?;
+                if body > 0 || orelse > 0 {
+                    return None;
+                }
+            }
+            ast::Stmt::While(while_stmt) => {
+                let body = added_entries(&while_stmt.body, name, assigns)?;
+                let orelse = added_entries(&while_stmt.orelse, name, assigns)?;
+                if body > 0 || orelse > 0 {
+                    return None;
+                }
+            }
+            ast::Stmt::Try(try_stmt) => {
+                let body = added_entries(&try_stmt.body, name, assigns)?;
+                let orelse = added_entries(&try_stmt.orelse, name, assigns)?;
+                let finalbody = added_entries(&try_stmt.finalbody, name, assigns)?;
+                let mut handler = 0usize;
+                for handler_stmt in &try_stmt.handlers {
+                    let ast::ExceptHandler::ExceptHandler(handler_stmt) = handler_stmt;
+                    handler += added_entries(&handler_stmt.body, name, assigns)?;
+                }
+                if body > 0 || orelse > 0 || finalbody > 0 || handler > 0 {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(extra)
+}
+
+fn expr_name(expr: &ast::Expr) -> Option<&str> {
+    match expr {
+        ast::Expr::Name(name) => Some(name.id.as_str()),
+        _ => None,
+    }
+}
+
+/// How many entries one call adds to `name`, or 0 when the call is not a
+/// list method on that name.
+fn list_method_added(
+    expr: &ast::Expr,
+    name: &str,
+    assigns: &HashMap<&str, Vec<&ast::StmtAssign>>,
+) -> Option<usize> {
+    let ast::Expr::Call(call) = expr else {
+        return Some(0);
+    };
+    let ast::Expr::Attribute(attr) = call.func.as_ref() else {
+        return Some(0);
+    };
+    if expr_name(attr.value.as_ref()) != Some(name) {
+        return Some(0);
+    }
+    match attr.attr.as_str() {
+        "append" | "insert" => Some(1),
+        "extend" => {
+            let argument = call.args.first()?;
+            entry_count(argument, assigns, &mut vec![name.to_string()])
+        }
+        _ => Some(0),
+    }
+}
+
+fn counted_parameter(
+    name: &str,
+    assigns: &HashMap<&str, Vec<&ast::StmtAssign>>,
+    suite: &[ast::Stmt],
+) -> Option<usize> {
+    let static_count = match assigns.get(name).and_then(|statements| statements.last()) {
+        Some(statement) => entry_count(&statement.value, assigns, &mut vec![name.to_string()])?,
+        None => 0,
+    };
+    Some(static_count + added_entries(suite, name, assigns)?)
 }
 
 /// EB_CHECKSUM_COUNT: port of `EasyBlock.check_checksums_for` (top level only).
 fn checksum_count(
     assigns: &HashMap<&str, Vec<&ast::StmtAssign>>,
+    suite: &[ast::Stmt],
     file_name: &str,
     sink: &mut Sink<'_>,
 ) {
-    let count = |key: &str| -> usize {
-        assigns
-            .get(key)
-            .and_then(|statements| statements.last())
-            .map_or(0, |statement| entry_count(&statement.value))
-    };
+    let count = |key: &str| counted_parameter(key, assigns, suite);
     // The Cargo easyblocks (Cargo, CargoPythonPackage, CargoPythonBundle)
     // turn every `crates` entry into a source with its own checksum, so the
     // checksums list covers sources + crates + patches.
-    let sources = count("sources") + count("data_sources") + count("crates");
+    let Some(sources) = (|| Some(count("sources")? + count("data_sources")? + count("crates")?))()
+    else {
+        return;
+    };
     // Easyblock options that add a patch file with its own checksum, such as
     // the Python easyblock's patch_ctypes_ld_library_path, count as patches.
-    let extra_patches: usize = assigns
+    // postinstallpatches is what check_checksums_for adds to patches.
+    let mut patches = 0usize;
+    for key in ["patches", "postinstallpatches", "post_install_patches"] {
+        match count(key) {
+            Some(found) => patches += found,
+            None => return,
+        }
+    }
+    for key in assigns
         .keys()
+        .copied()
         .filter(|key| key.starts_with("patch_"))
-        .map(|key| count(key))
-        .sum();
-    let patches = count("patches") + extra_patches;
-    let checksums = count("checksums");
+    {
+        match count(key) {
+            Some(found) => patches += found,
+            None => return,
+        }
+    }
+    let Some(checksums) = count("checksums") else {
+        return;
+    };
     if sources + patches == 0 || checksums == 0 || sources + patches == checksums {
         return;
     }
@@ -2520,6 +2707,54 @@ mod tests {
         assert!(!has(&lint(cargo), "EB_CHECKSUM_COUNT"), "{:?}", lint(cargo));
         let cargo_short = "sources = ['v1.0.tar.gz']\ncrates = [('a', '1.0')]\nchecksums = ['x']\n";
         assert!(has(&lint(cargo_short), "EB_CHECKSUM_COUNT"));
+    }
+
+    #[test]
+    fn checksums_follow_postinstall_patches_and_runtime_sources() {
+        let postinstall = "sources = [SOURCELOWER_TAR_GZ]\n\
+                           postinstallpatches = ['libtool-fix.patch']\n\
+                           checksums = [\n    {'libtool.tar.gz': 'aa'},\n    {'libtool-fix.patch': 'bb'},\n]\n";
+        let looped = "local_repos = ['lapack', 'mbd']\n\
+                      sources = [{'filename': 'q-e.tar.gz'}]\n\
+                      for local_name in local_repos:\n    \
+                          sources.append({'filename': local_name + '.tar.xz'})\n\
+                      patches = ['fix.patch']\n\
+                      checksums = ['main', 'lapack', 'mbd', 'fix']\n";
+        let generated = "local_sets = [('G4NDL', '4.7'), ('G4EMLOW', '8.2')]\n\
+                         sources = ['%s.tar.gz' % pair[0] for pair in local_sets]\n\
+                         checksums = [{'G4NDL.tar.gz': 'aa'}, {'G4EMLOW.tar.gz': 'bb'}]\n";
+        // A call has no length we can read. Guessing would flag a file whose
+        // checksums match what the loop actually appends.
+        let unknown = "sources = ['a.tar.gz']\n\
+                       for local_x in local_make():\n    \
+                           sources.append(local_x)\n\
+                       checksums = ['aa', 'bb', 'cc']\n";
+        // The comprehension refers to the name it is defining. There is no
+        // length to read, and the walk must stop.
+        let recursive = "sources = [name for name in sources]\n\
+                         checksums = ['aa', 'bb']\n";
+        // nvImageCodec adds the extra tarballs only for the architectures
+        // that download them. The checksum list matches that branch, so the
+        // static 1-vs-3 count is not a mismatch to report.
+        let branched = "sources = ['v.tar.gz']\n\
+                        checksums = ['aa', 'bb', 'cc']\n\
+                        if ARCH in ['x86_64', 'aarch64']:\n    \
+                            sources += ['jpeg.tar.xz', 'tiff.tar.xz']\n";
+        for text in [postinstall, looped, generated, unknown, recursive, branched] {
+            let findings = lint(text);
+            assert!(!has(&findings, "E999"), "{findings:?}");
+            assert!(!has(&findings, "EB_CHECKSUM_COUNT"), "{findings:?}");
+        }
+        // A branch that does not touch the lists still leaves a real mismatch.
+        let unrelated = "sources = ['v.tar.gz']\n\
+                         checksums = ['aa', 'bb', 'cc']\n\
+                         if ARCH == 'x86_64':\n    \
+                             local_note = 1\n";
+        assert!(
+            has(&lint(unrelated), "EB_CHECKSUM_COUNT"),
+            "{:?}",
+            lint(unrelated)
+        );
     }
 
     #[test]
