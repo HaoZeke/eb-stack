@@ -710,6 +710,7 @@ static EASYBUILD_TEMPLATES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         "builddir",
         "cuda_cc_cmake",
         "cuda_cc_comma_sep",
+        "cuda_cc_gencode",
         "cuda_cc_nvhpc",
         "cuda_cc_semicolon_sep",
         "cuda_cc_space_sep",
@@ -724,6 +725,7 @@ static EASYBUILD_TEMPLATES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         "cuda_sm_space_sep",
         "cuda_ver",
         "cudamajver",
+        "cudaminver",
         "cudashortver",
         "cudaver",
         "github_account",
@@ -733,6 +735,7 @@ static EASYBUILD_TEMPLATES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         "java_short_ver",
         "java_ver",
         "javamajver",
+        "javaminver",
         "javashortver",
         "javaver",
         "module_name",
@@ -749,18 +752,21 @@ static EASYBUILD_TEMPLATES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         "perl_short_ver",
         "perl_ver",
         "perlmajver",
+        "perlminver",
         "perlshortver",
         "perlver",
         "py_maj_ver",
         "py_short_ver",
         "py_ver",
         "pymajver",
+        "pyminver",
         "pyshortver",
         "pyver",
         "r_maj_ver",
         "r_short_ver",
         "r_ver",
         "rmajver",
+        "rminver",
         "rpath_enabled",
         "rshortver",
         "rver",
@@ -810,6 +816,13 @@ mod tests {
         assert!(is_easybuild_template("version"));
         assert!(is_easybuild_template("builddir"));
         assert!(is_easybuild_template("namelower"));
+        assert!(is_easybuild_template("pyminver"));
+        assert!(is_easybuild_template("javaminver"));
+        assert!(is_easybuild_template("perlminver"));
+        assert!(is_easybuild_template("rminver"));
+        assert!(is_easybuild_template("cudaminver"));
+        assert!(is_easybuild_template("cuda_cc_gencode"));
+        assert!(is_easybuild_template("ver_maj"));
         assert!(!is_easybuild_template("SHLIB_EXT"));
         assert!(!is_easybuild_template("SOURCELOWER_TAR_GZ"));
         assert!(!is_easybuild_template("GITHUB_SOURCE"));

@@ -2640,6 +2640,24 @@ mod tests {
     }
 
     #[test]
+    fn framework_minver_aliases_and_gencode_are_known_templates() {
+        // Triton writes %(pyminver)s. EasyBuild defines it from the Python
+        // dependency, along with the other *minver names, cuda_cc_gencode,
+        // and the version aliases in ALTERNATIVE_EASYCONFIG_TEMPLATES.
+        let text = "versionsuffix = '-py%(pyminver)s'\n\
+                    local_java = '%(javaminver)s'\n\
+                    local_perl = '%(perlminver)s'\n\
+                    local_r = '%(rminver)s'\n\
+                    configopts = '%(cuda_cc_gencode)s'\n\
+                    sources = ['v%(ver_maj)s.%(ver_maj_min)s.%(ver_min)s.%(ver_min_patch)s.%(ver_patch)s%(version_prefix)s%(version_suffix)s.tar.gz']\n";
+        assert!(!has(&lint(text), "EB_TEMPLATE_UNKNOWN"), "{:?}", lint(text));
+        assert!(has(
+            &lint("sources = ['%(not_a_real_template)s.tar.gz']\n"),
+            "EB_TEMPLATE_UNKNOWN"
+        ));
+    }
+
+    #[test]
     fn python_percent_dict_keys_are_not_templates() {
         let text = "local_sed = r'sed -i \"s/%(l)s_VERSION/x/\" %(f)s && '\n\
                     preconfigopts = local_sed % {'l': 'LIBXML2', 'f': 'CMakeLists.txt'}\n\

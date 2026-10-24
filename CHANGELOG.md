@@ -37,6 +37,12 @@ All notable changes to this project are documented here.
   reaches an easyblock that imports `tools/filetools.py` when that module
   imports `tools/run.py`. An easyblock that only imports another easyblock
   is not reached that way.
+- `recipe lint` accepts the template names EasyBuild defines: the
+  `*minver` forms (`pyminver`, `javaminver`, `perlminver`, `rminver`),
+  `cuda_cc_gencode`, and the version aliases (`ver_maj`, `ver_maj_min`,
+  `ver_min`, `ver_min_patch`, `ver_patch`, `version_prefix`,
+  `version_suffix`). Triton was reported as `EB_TEMPLATE_UNKNOWN` for
+  `%(pyminver)s`.
 - `EB_CHECKSUM_COUNT` counts `postinstallpatches` with the other patches,
   and counts sources a file appends in a loop or builds with a
   comprehension. A length that is only known after the file runs, including
