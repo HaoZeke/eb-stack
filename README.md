@@ -390,16 +390,19 @@ recipe file tools.
 - `eb_recipe_read`, `eb_recipe_list`, `eb_recipe_edit`, `eb_recipe_write`,
   `eb_recipe_grep`, `eb_recipe_apply_suggestion`, `eb_recipe_diff`,
   `eb_dep_versions`;
+- `eb_recipe_easyblock`, `eb_recipe_templates`, `eb_recipe_hierarchy`;
 - `eb_recipe_check`, `eb_recipe_lint`, `eb_recipe_format`;
 - `eb_module_lint`, `eb_easyblock_dry_run`, `eb_build_log`, `eb_build_test`
   (easyblocks; `eb_build_test` only with `EB_STACK_ALLOW_BUILD=1`);
-- `eb_stack_solve`, `eb_stack_sbom`;
+- `eb_stack_solve`, `eb_stack_sbom`, `eb_stack_order`,
+  `eb_stack_easystack`, `eb_stack_sections`;
 - `eb_component_reach` (same query as `component-reach`, including a purl or a CVE id);
 - `eb_target_list`, `eb_target_doctor`;
 - `eb_campaign_run`, `eb_campaign_status`;
 - `eb_campaign_finding_claim`, `eb_campaign_finding_resolve`;
 - `eb_pr_overlap` (`kind` `software-layer` or `easyconfigs`),
-  `eb_rebuild_set`, `eb_component_reach`, `eb_easyblock_reach`.
+  `eb_rebuild_set`, `eb_easyblock_reach`;
+- `eb_repro_summary`.
 
 `eb_recipe_edit` replaces an exact string and does not write a repeated match
 unless `replace_all` is set. `eb_recipe_check` requires at least one

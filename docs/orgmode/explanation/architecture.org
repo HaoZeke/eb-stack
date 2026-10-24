@@ -44,19 +44,22 @@ digraph S {
   edge  [fontname="Jost", fontsize=10, color="#004D40"];
 
   package  [label="package\ninspect · plan · bump", fillcolor="#F1DB4B"];
-  recipe   [label="recipe\ncheck · lint · format"];
-  stack    [label="stack\nsolve · sbom"];
+  recipe   [label="recipe\neasyblock · templates · hierarchy\ncheck · lint · format"];
+  stack    [label="stack\nsolve · sbom · order\neasystack · sections"];
   target   [label="target\nlist · doctor"];
   campaign [label="campaign\nrun · status · finding", fillcolor="#FF655D", fontcolor="white"];
+  repro    [label="repro\nsummary"];
   mcp      [label="mcp stdio\neb_* tools", fillcolor="#004D40", fontcolor="white"];
 
   package -> recipe -> stack;
   stack -> target -> campaign;
+  campaign -> repro;
   package -> mcp [style=dashed];
   recipe -> mcp [style=dashed];
   stack -> mcp [style=dashed];
   target -> mcp [style=dashed];
   campaign -> mcp [style=dashed];
+  repro -> mcp [style=dashed];
 }
 #+end_src
 

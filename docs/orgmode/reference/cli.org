@@ -881,16 +881,19 @@ plus sandboxed recipe and easyblock tools:
 - ~eb_recipe_read~, ~eb_recipe_list~, ~eb_recipe_edit~, ~eb_recipe_write~,
   ~eb_recipe_grep~, ~eb_recipe_apply_suggestion~, ~eb_recipe_diff~,
   ~eb_dep_versions~;
+- ~eb_recipe_easyblock~, ~eb_recipe_templates~, ~eb_recipe_hierarchy~;
 - ~eb_recipe_check~, ~eb_recipe_lint~, ~eb_recipe_format~;
 - ~eb_module_lint~, ~eb_easyblock_dry_run~, ~eb_build_log~, ~eb_build_test~
   (easyblocks; ~eb_build_test~ only with ~EB_STACK_ALLOW_BUILD=1~);
-- ~eb_stack_solve~, ~eb_stack_sbom~;
+- ~eb_stack_solve~, ~eb_stack_sbom~, ~eb_stack_order~,
+  ~eb_stack_easystack~, ~eb_stack_sections~;
 - ~eb_target_list~, ~eb_target_doctor~;
 - ~eb_campaign_run~, ~eb_campaign_status~;
 - ~eb_campaign_finding_claim~, ~eb_campaign_finding_resolve~;
 - ~eb_pr_overlap~ (the same writer as ~pr-overlap~, including
   ~--kind easyconfigs~, a merge order, and ~--impact~),
-  ~eb_rebuild_set~, ~eb_component_reach~, ~eb_easyblock_reach~.
+  ~eb_rebuild_set~, ~eb_component_reach~, ~eb_easyblock_reach~;
+- ~eb_repro_summary~.
 
 ~eb_recipe_read~, ~eb_recipe_list~, ~eb_recipe_edit~, ~eb_recipe_write~, and
 ~eb_recipe_grep~ resolve every path inside that root. A ~..~ component, an
@@ -913,6 +916,22 @@ acceptability, easyblock resolution, strict skips, and source classes.
 ~check_contrib~, using the same findings and maintainer-acceptability as
 ~recipe lint~. ~eb_recipe_format~ takes ~recipe~, ~out~, and ~dry_run~, and a
 dry run does not write.
+
+~eb_recipe_easyblock~ takes ~name~ and ~charmap~. ~charmap~ true prints the
+encoding table; a name prints the derived class. ~eb_recipe_templates~
+takes ~name~, ~version~, and ~export~. ~export~ true prints the constant
+table and the derived-key rules. ~eb_recipe_hierarchy~ takes ~export~.
+The plain call prints the fixture generations. ~export~ true adds the
+synthetic GCC-family rule, the same split as ~recipe hierarchy --export~.
+~eb_stack_order~ requires ~easyconfigs~ and ~root~, and takes ~out~,
+~oldest~, ~easystack_out~, ~hashes_out~, and ~filter_deps~.
+~filter_deps~ drops the same dependencies ~--filter-deps~ drops.
+~eb_stack_easystack~ requires ~lock~ and takes ~out~ and ~option~, each
+option a ~<file.eb>:<option>=<value>~ string. ~eb_stack_sections~ requires
+~list~, ~from~, and ~out~, and takes ~unfiled~. ~eb_repro_summary~
+requires ~scores~ and takes ~ratchet~ and ~json~. Each of these tools
+calls the same runner as the command of that name, and the text it
+returns is that command's stdout.
 
 The recipe tools run the same checks as the CLI. MCP results include the same
 artifacts, claims, findings, and next actions as the CLI. There is no separate
