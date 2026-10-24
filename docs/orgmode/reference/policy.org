@@ -46,7 +46,7 @@ noted below.
 - ~pins~ :: Optional array of ~{"name": string, "version_req": string}~.
   Restricts a package to candidates whose version matches the requirement
   string (grammar below). A pin on a package with no matching candidate
-  fails the solve at policy-construction time, before any SAT solving
+  fails the solve at policy-construction time, before any Boolean satisfiability (SAT) solving
   happens.
 - ~forbid~ :: Optional array of strings. Each entry matches either a full
   ~easyconfig_path~ or a bare package ~name~; matching candidates are

@@ -21,7 +21,7 @@ BUNDLE/
   packages/<name>-<version>-<toolchain>/
 #+end_src
 
-~package inspect~ writes only the plan and planned SBOM. ~package plan~ and
+~package inspect~ writes only the plan and planned Software Bill of Materials (SBOM). ~package plan~ and
 ~package bump~ also write one lock and one EasyBuild recipe for every requested
 profile. A campaign requires at least one lock and recipe.
 
@@ -43,7 +43,7 @@ unknown fields are rejected by the Rust model.
 |-
 | ~origin~ | ~conda-forge~, ~spack~, ~easy-build~, ~pypi~, ~cran~, ~cargo~, ~luarocks~, or ~raku~ |
 | ~package~ | Normalized name, version, homepage, description, and license |
-| ~sources~ | URLs, filenames, SHA-256 values, VCS identities, staging directories, and provenance |
+| ~sources~ | URLs, filenames, SHA-256 values, version control system (VCS) identities, staging directories, and provenance |
 | ~dependencies~ | Names, constraints, optional explicit EasyBuild toolchains, roles, structured conditions, virtual capabilities, and provenance |
 | ~rules~ | Preserved conflicts and requirements |
 | ~build~ | Toolchain, easyblock, build systems, configuration options, checksummed patches, typed easyconfig parameters, and module class |
@@ -69,7 +69,7 @@ An implicit tuple omits ~toolchain~ and may select the minimum non-SYSTEM
 member of the target hierarchy. SYSTEM is eligible only when the source tuple
 or parent recipe selects it explicitly.
 
-Parser notes are diagnostics, not a work queue. Canonical planning never
+Parser notes are diagnostics. Canonical planning never
 searches note text for words such as ~dynamic~ or ~residual~. A successfully
 materialized ~url_for_version~, for example, may remain visible as a note but
 does not create residual work. Anything that needs mechanical repair or
@@ -171,7 +171,7 @@ and emitted independently:
 - the default profile has an empty versionsuffix and an unsuffixed recipe;
 - a non-default profile declares its complete versionsuffix, such as
   ~-complex~;
-- MPI and OpenMP toolchain options alone do not create a separate recipe name;
+- Message Passing Interface (MPI) and OpenMP toolchain options alone do not create a separate recipe name;
 - a feature or ABI variant that users load independently gets its own profile,
   lock, and ~.eb~ file.
 
@@ -186,7 +186,7 @@ easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1-complex.eb
 
 * Resolvo profile lock
 
-~locks/<profile>.lock.json~ records the actual SAT selection used to render
+~locks/<profile>.lock.json~ records the actual Boolean satisfiability (SAT) selection used to render
 that recipe:
 
 #+begin_src json
@@ -252,7 +252,7 @@ eb-stack recipe check \
   --easyconfigs BUNDLE/easyconfigs
 #+end_src
 
-* Easyblocks shipped with the recipe
+* Easyblocks included with the recipe
 
 Some software cannot be described by an easyconfig alone. SeisSol's
 ~HOST_ARCH~ sets the vector width of the kernels its code generators emit, so
@@ -280,7 +280,7 @@ parameters the easyblock derives itself, such as ~sanity_check_paths~,
 profile, so the emitted recipe carries none of them. Planning and bumping verify each module against its
 SHA-256, parse it (without importing it), and record the classes it defines,
 with their bases and ~extra_options~ keys, under ~build.easyblocks~ in the
-plan. Planning fails when no shipped module defines the class the recipe
+plan. Planning fails when no included module defines the class the recipe
 resolves to: the class named by ~build.easyblock~, or the class EasyBuild
 derives from the software name when none is named.
 
@@ -299,11 +299,11 @@ and recipe. See [[file:campaigns.org][campaign state and findings]] for the buil
 * When a package owes an easyblock
 
 A package that carries variant logic as data repeats that logic in every
-recipe. A software-specific easyblock holds it once, and the easyconfigs lean
+recipe. A software-specific easyblock keeps it once, and the easyconfigs lean
 on it. ~package plan~ and ~package bump~ decide whether a package owes one
 when its recipe resolves to a generic easyblock: ~build.easyblock~ names none
 or a class other than the one EasyBuild derives from the software name, and no
-shipped module defines the derived class. Any one of three triggers applies:
+included module defines the derived class. Any one of three triggers applies:
 
 1. Two or more profiles whose ~config_options~ differ from each other, after
    the build-level options. A variant switch such as QMCPACK's
@@ -321,7 +321,7 @@ summary names the derived class. The evidence lists the profile option
 differences, the parameters, and the binary names that would move into it.
 
 ~--emit-easyblock~ on ~package plan~ and ~package bump~ (the ~emit_easyblock~
-argument of the MCP tools) renders a skeleton instead of leaving the residual:
+argument of the Model Context Protocol (MCP) tools) renders a skeleton instead of leaving the residual:
 
 #+begin_src bash
 eb-stack package plan --emit-easyblock \
@@ -357,7 +357,7 @@ parameters, so the skeleton and the recipes agree until a human moves them.
 
 The module is a starting point. Its docstring says so, it has not been built,
 and a human completes and reviews it before release. The rendered text
-parses with the same reader that checks shipped modules, keeps lines within
+parses with the same reader that checks included modules, keeps lines within
 120 characters, and carries the EasyBuild copyright header.
 ~examples/packages/easyblocks/qmcpack.py~ shows a finished easyblock of this
 shape. ~package bump --emit-easyblock~ writes the module and updates the plan

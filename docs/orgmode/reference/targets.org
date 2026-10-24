@@ -3,7 +3,7 @@
 
 A target routes one EasyBuild workload through four independent layers:
 transport, executor, runtime, and EasyBuild settings. Target configuration is
-public TOML; site hostnames, paths, credentials, scheduler sizing, and private
+public TOML files; site hostnames, paths, credentials, scheduler sizing, and private
 images belong in a later site file.
 
 * Layering model
@@ -70,10 +70,10 @@ root, temporary root, install prefix, and source cache referenced by the
 workload must be visible inside the container.
 
 The ~eessi~ runtime is the install backend for site/user/project overlays.
-It launches ~eessi_container.sh --mode exec~, fuse-mounts CVMFS inside the
-image, and does not use the host CVMFS client. Plan ~package plan --format
-pypi|cran~ on the host: the host ~eb-stack~ binary need not run in the
-Debian 12 image. ~scripts/eessi-extend-eb.sh~ sources EESSI, loads
+It launches ~eessi_container.sh --mode exec~, fuse-mounts CernVM File System (CVMFS) inside the
+image, and does not use the host CVMFS client. Plan ~package plan --format pypi|cran~
+on the host: the host ~eb-stack~ binary need not run in the
+Debian 12 image. ~scripts/eessi-extend-eb.sh~ sources the European Environment for Scientific Software Installations (EESSI) init script, loads
 ~EESSI-extend~, and execs ~eb~. See ~examples/targets/eessi-extend.toml~.
 Set exactly one of ~EESSI_USER_INSTALL~, ~EESSI_PROJECT_INSTALL~,
 ~EESSI_SITE_INSTALL~, or ~EESSI_CVMFS_INSTALL~ in
@@ -189,7 +189,7 @@ eb-stack campaign run \
   --state /tmp/eb-stack/bundles/eon.campaign.json
 #+end_src
 
-The example enables the explicit EasyBuild and MPI root-container guards,
+The example enables the explicit EasyBuild and Message Passing Interface (MPI) root-container guards,
 ~TAR_OPTIONS=--no-same-owner~, and MPI yield-on-idle settings needed when test
 suites oversubscribe the available cores. These settings keep the real build
 and tests enabled; they do not bypass checks. Its conservative

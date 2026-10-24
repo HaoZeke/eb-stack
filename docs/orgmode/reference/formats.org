@@ -36,8 +36,8 @@
   entry is a ~LockPackage~: ~name~, ~version~, its own ~toolchain~, optional
   ~versionsuffix~, and the ~easyconfig_path~ it came from.
 - ~solver~ :: ~engine~ is always ~"resolvo_cdcl_sat"~. ~engine_version~
-  embeds the crate version. ~timestamp~ is RFC 3339, UTC, second precision.
-  ~criteria~ is the CUDF list the solve applied, in order. A policy that
+  embeds the crate version. ~timestamp~ is RFC 3339 in Coordinated Universal Time (UTC), second precision.
+  ~criteria~ is the Common Upgradeability Description Format (CUDF) list the solve applied, in order. A policy that
   sets neither ~criteria~ nor ~prefer_installed~ records ~["-notuptodate"]~.
   ~prefer_installed~ records ~["-changed", "-notuptodate"]~. An explicit
   ~criteria~ list is recorded as written. See the
@@ -140,14 +140,14 @@ classified once: ~unchanged~ (same version both sides), ~added~ (solved
 only), ~removed~ (baseline only), or ~version-bumped~ (present both sides,
 different version). Sections are sorted by package name.
 
-* Planned SBOM (~--sbom-out~, CycloneDX 1.5)
+* Planned Software Bill of Materials (SBOM) (~--sbom-out~, CycloneDX 1.5)
 
 Documents are built with the official [[https://crates.io/crates/cyclonedx-bom][cyclonedx-bom]]
 crate (same models as cargo-cyclonedx), serialized as CycloneDX 1.5 JSON.
 
 Opt-in: ~--sbom-out~ has no default filename. Omit it and ~stack solve~ writes
-only the lock (and any requested build list / stack diff). ~eb-stack stack
-sbom --lock LOCK~ defaults to ~stack.cdx.json~ because that command's sole
+only the lock (and any requested build list / stack diff). ~eb-stack stack sbom --lock LOCK~
+defaults to ~stack.cdx.json~ because that command's sole
 purpose is SBOM emission.
 
 #+begin_src json
@@ -193,7 +193,7 @@ purpose is SBOM emission.
 #+end_src
 
 Each component's ~bom-ref~ / ~purl~ is a synthetic ~pkg:generic/~ reference
-(EasyBuild has no dedicated PURL type) embedding name, version, and
+(EasyBuild has no dedicated Package URL (purl) type) embedding name, version, and
 toolchain. Metadata ~lifecycles: pre-build~ and
 ~eb_stack:lifecycle: pre-install-plan~ mark a *planned* inventory from the
 solver selection, not a scan of installed software.

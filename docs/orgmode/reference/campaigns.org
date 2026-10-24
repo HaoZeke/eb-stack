@@ -95,7 +95,7 @@ The three booleans are independent claims:
    declared command succeeds.
 
 A completed campaign with no verification commands has ~builds: true~ and
-~binary_verified: false~. A planned SBOM never implies either build claim.
+~binary_verified: false~. A planned Software Bill of Materials (SBOM) never implies either build claim.
 
 * Finding schema
 
@@ -191,11 +191,11 @@ class-to-artifact troubleshooting table. The protocol is:
 5. Change the layer supported by the evidence.
 6. Run the nearest mechanical check: recipe lint/check, target doctor, or the
    isolated build command.
-7. Resolve the finding with concrete evidence and changed paths.
+7. Resolve the finding with evidence and changed paths.
 8. Rerun the full campaign state until every requested recipe and verification
    command succeeds.
 
-Hermes owns this end-to-end loop. OMP workers use finding ownership to divide
+Hermes owns this whole loop. OMP workers use finding ownership to divide
 residual diagnosis without racing on the state file. The executable procedures
 are [[https://github.com/HaoZeke/eb-stack/blob/main/skills/new-package/SKILL.md][new package]]
 and [[https://github.com/HaoZeke/eb-stack/blob/main/skills/annual-bump/SKILL.md][annual bump]].

@@ -95,7 +95,7 @@ one conventional ~.eb~ file. The default profile has no suffix; non-default
 profiles use their declared ~versionsuffix~.
 
 Every emitted source needs a SHA-256 checksum. When a foreign recipe provides
-only a VCS commit, repeat ~--source-checksum~ once for every source artifact in
+only a version control system (VCS) commit, repeat ~--source-checksum~ once for every source artifact in
 manifest order. The values replace the positional source checksums in both the
 manifest/SBOM and every emitted recipe. Planning fails before emission when
 the count, shape, or completeness is invalid.
@@ -139,7 +139,7 @@ ingest: a JSON array of Warehouse objects, or later ~requirements.txt~
 lines. Resolvo then takes the robot module when ~--easyconfigs~ provides
 it. Do not hand-edit the emitted recipe for those names. A PEP 518
 ~build_system~ object with ~build-backend = mesonpy~ is the mesonpy hint:
-listed ~requires~ become SAT build deps, and the emitter writes
+listed ~requires~ become build deps in the Boolean satisfiability (SAT) solve, and the emitter writes
 ~wrap_mode=default~ plus the shared cargo-on-EESSI isolation prelude
 (host wrappers off, ~LINKER=${CC:-gcc}~, compat ~ld~ from ~uname -m~).
 Hatchling stays a ~Python-bundle-PyPI~ module when the robot provides
@@ -256,7 +256,7 @@ GCC-family rule.
 ~path~, ~line~, ~column~, ~code~, ~severity~, ~message~, and, when set,
 ~info~ and ~in_review~), ~check_contrib~,
 and ~maintainer_acceptability~. It does not rely on ~eb --check-contrib~.
-Style codes: E999 (not valid Python; the AST rules are skipped); the
+Style codes: E999 (not valid Python; the syntax-tree rules are skipped); the
 easyconfigs CI lint F541 (f-string with no placeholder), W605 (invalid escape
 sequence), and W291 (trailing whitespace, including inside ~description~);
 the check-contrib pycodestyle codes E501 (longer than 120) and
@@ -376,7 +376,7 @@ with the subtree under it, using EasyBuild's matching: a bare name,
 ~name=version~, or ~name=[low:high]~. ~[~ and ~]~ include a limit, the
 opposite bracket excludes it, and an empty side is open. The last spec for
 a name wins. Pass EESSI-extend's ~EASYBUILD_FILTER_DEPS~ list when solving
-against an EESSI baseline, or the build list carries modules the compat
+against a European Environment for Scientific Software Installations (EESSI) baseline, or the build list carries modules the compat
 layer already provides.
 Against an EESSI version's easystacks, ~unchanged~ in the stack diff means the
 software layer already provides that module, and
@@ -484,7 +484,7 @@ eb-stack pr-overlap \
 
 Reads each pull request's easystack changes as data. It does not run the
 pull request and it does not build. Several JSON paths may follow one
-~--pr~, which is what a glob of the per-pull-request files expands to.
+~--pr~, matching what a glob of the per-pull-request files expands to.
 For the given ~--eessi-version~ it keeps
 the easystack entries present at head and absent from base, finds those
 easyconfigs on the robot path, and closes them against ~--installed~.
@@ -518,7 +518,7 @@ root checks every easyblock class. A software-specific class none of the
 roots defines is recorded as ~easyblock <class> missing~ and that module is
 left out of ~to_build~. Its dependencies stay. ~--easyblocks-commit~ is
 ~<commit>=<dir>~ for one ~include-easyblocks-from-commit~: the directory is
-the easyblock files that commit touches, which is what EasyBuild includes
+the easyblock files that commit touches, matching what EasyBuild includes
 ahead of the installed package. A class found there is counted, and the
 record notes the commit. A commit an entry names whose directory was not
 passed is noted as not provided.
@@ -560,7 +560,7 @@ The JSON is the four open pull requests recorded under
 ~tests/pr_overlap_easyconfigs_open/~. 22823 and 24575 share
 ~Mathematica/14.2.1~.
 
-The output directory holds ~prs/<N>.toml~, ~overlap.toml~, and ~overlap.md~.
+The output directory contains ~prs/<N>.toml~, ~overlap.toml~, and ~overlap.md~.
 See [[file:formats.org][output formats]] for the records. A closed pull
 request's file is removed: the directory is the open set of this run.
 
@@ -673,7 +673,7 @@ review. The scan sees dynamic symbols only, so a hidden or inlined static
 link is a false no-rebuild, and a short name shared with another library
 is a false must-rebuild.
 
-The output directory holds ~rebuild-set.json~, ~rebuild-set.md~, and
+The output directory contains ~rebuild-set.json~, ~rebuild-set.md~, and
 ~rebuilds/<YYYYMMDD>-eb-<version>-cve-patches.yml~. The easystack contains
 class ~must-rebuild~ only, including a dependent that ~--check-static~
 promoted. A second run replaces the ~rebuilds/*.yml~ files.
@@ -716,7 +716,7 @@ review. Several affected packages are written as one document with
 ~kind~ ~cve~. The summary line includes ~changed~, ~must-rebuild~,
 ~review~, and ~no-rebuild~.
 
-Names match with ASCII case folded, on a whole token. A recipe is in the
+Names match ignoring ASCII letter case, on a whole token. A recipe is in the
 generation when its toolchain version equals ~--generation~, or when the
 toolchain is a non-system member of the known foss hierarchy for that
 generation.
@@ -746,7 +746,7 @@ With no ~--installed~, every module in the generation is treated as
 installed. Pass both to visit only a mounted prefix. The closure classes
 are the same as ~rebuild-set~, and they stay inside the generation.
 
-The output directory holds ~component-reach.toml~, ~component-reach.json~,
+The output directory contains ~component-reach.toml~, ~component-reach.json~,
 and ~component-reach.md~. The TOML file starts with
 ~# Generated by `eb-stack component-reach`.~
 
@@ -906,7 +906,7 @@ string. If ~old~ matches more than once, the file is left unchanged unless
 follow symlinks, and returns at most ~max_matches~ (default and limit 200)
 matches. ~eb_recipe_check~ requires ~easyconfigs~ (~minItems~ 1). An empty
 list returns ~argument easyconfigs requires at least one path~. A ~.eb~ file
-there stands for the ~easyconfigs~ directory it sits in; any other file is an
+there means the ~easyconfigs~ directory it sits in; any other file is an
 error that asks for a robot directory. A recipe that is not valid Python is
 refused. It also takes ~recipe~, ~require_configopts~, ~easyblocks~,
 ~metadata_only~, ~verify_sources~, ~seeded_from~, ~seeded_source_url~,
