@@ -187,6 +187,64 @@ fn cli_bump_resolvo_bundle_is_deterministic() {
     }
 }
 
+#[test]
+fn cli_bump_lock_records_recipe_filenames_for_a_relative_robot() {
+    let bin = env!("CARGO_BIN_EXE_eb-stack");
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb");
+    let relative = PathBuf::from("tests/repro_fixtures/universe_foss_2024a");
+    let absolute = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(&relative);
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    let mut paths = Vec::new();
+    for (label, robot) in [("relative", &relative), ("absolute", &absolute)] {
+        let out = tmp.path().join(label);
+        let status = Command::new(bin)
+            .args([
+                "package",
+                "bump",
+                "--source",
+                src.to_str().unwrap(),
+                "--toolchain-name",
+                "foss",
+                "--toolchain-version",
+                "2024a",
+                "--easyconfigs",
+                robot.to_str().unwrap(),
+                "--out-dir",
+                out.to_str().unwrap(),
+            ])
+            .status()
+            .expect("spawn");
+        assert!(status.success(), "{label} bump failed");
+        let lock: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(out.join("locks/default.lock.json")).expect("lock"),
+        )
+        .expect("lock json");
+        let recorded: Vec<String> = lock["dependencies"]
+            .as_array()
+            .expect("dependencies")
+            .iter()
+            .map(|dep| dep["easyconfig_path"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            recorded.iter().all(|path| !path.contains('/')),
+            "{label} lock kept a robot prefix: {recorded:?}"
+        );
+        assert!(
+            recorded
+                .iter()
+                .any(|path| path == "CMake-3.29.3-GCCcore-13.3.0.eb"),
+            "{label}: {recorded:?}"
+        );
+        paths.push(recorded);
+    }
+    assert_eq!(
+        paths[0], paths[1],
+        "relative and absolute robot roots must serialize the same lock paths"
+    );
+}
+
 fn hierarchy_universe() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/hierarchy_resolve/easyconfigs")
 }

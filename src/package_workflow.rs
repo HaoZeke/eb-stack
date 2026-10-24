@@ -2084,10 +2084,11 @@ fn portable_profile_lock(lock: &ProfileLock) -> ProfileLock {
 }
 
 fn portable_easyconfig_path(path: &str) -> String {
+    // A relative robot root is still a checkout prefix. Keep the standard
+    // `easybuild/easyconfigs/` suffix when the tree has one, and otherwise
+    // only the recipe filename, so a lock does not record where the tree
+    // was mounted.
     let path = Path::new(path);
-    if !path.is_absolute() {
-        return relative_posix(path);
-    }
     let components = path
         .components()
         .filter_map(|component| match component {
@@ -2103,7 +2104,7 @@ fn portable_easyconfig_path(path: &str) -> String {
     }
     path.file_name()
         .map(|filename| filename.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string())
+        .unwrap_or_default()
 }
 
 /// Reject path segments that would escape the bundle layout.
@@ -2422,4 +2423,40 @@ pub enum PackageWorkflowError {
         /// Root it had to stay within.
         root: PathBuf,
     },
+}
+
+#[cfg(test)]
+mod portable_path_tests {
+    use super::portable_easyconfig_path;
+
+    #[test]
+    fn lock_paths_drop_the_checkout_prefix_and_keep_a_standard_robot_suffix() {
+        assert_eq!(
+            portable_easyconfig_path(
+                "tests/repro_fixtures/universe_foss_2024a/CMake-3.29.3-GCCcore-13.3.0.eb"
+            ),
+            "CMake-3.29.3-GCCcore-13.3.0.eb"
+        );
+        assert_eq!(
+            portable_easyconfig_path(
+                "/work/easybuild/easyconfigs/h/HDF5/HDF5-1.14.3-foss-2024a.eb"
+            ),
+            "easybuild/easyconfigs/h/HDF5/HDF5-1.14.3-foss-2024a.eb"
+        );
+        assert_eq!(
+            portable_easyconfig_path(
+                "vendor/easybuild/easyconfigs/h/HDF5/HDF5-1.14.3-foss-2024a.eb"
+            ),
+            "easybuild/easyconfigs/h/HDF5/HDF5-1.14.3-foss-2024a.eb"
+        );
+        assert_eq!(
+            portable_easyconfig_path("/tmp/overlay/Lib-1.0.eb"),
+            "Lib-1.0.eb"
+        );
+        assert_eq!(
+            portable_easyconfig_path("/opt/robot/SciPy-bundle.eb#ext:numpy"),
+            "SciPy-bundle.eb#ext:numpy"
+        );
+        assert_eq!(portable_easyconfig_path(""), "");
+    }
 }

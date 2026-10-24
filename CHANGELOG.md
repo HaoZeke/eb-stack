@@ -12,6 +12,9 @@ All notable changes to this project are documented here.
 - `target doctor` reports a probe that cannot be started as a failed check
   and still prints the other three layers. A missing `podman` or
   `eessi_container.sh` used to abort the report before any check was shown.
+- Profile locks keep a standard robot path from `easybuild/easyconfigs/`
+  and otherwise only the recipe filename. A relative `--easyconfigs` path
+  no longer records the checkout prefix.
 - `eb-stack easyblock-reach` keeps an `easyblock` key on a `components` or
   `exts_list` assignment the parser had to skip. GFE's component list is a
   comprehension plus a tuple, and that tuple names `CMakeMake`.
