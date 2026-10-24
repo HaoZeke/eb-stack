@@ -8,7 +8,8 @@
 //! candidate was never loaded.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn write(dir: &Path, name: &str, body: &str) {
     let path = dir.join(name);
@@ -438,4 +439,194 @@ fn the_build_list_and_the_sbom_carry_both_levels_separately() {
         perl_components, 2,
         "two modules must be two components, got {perl_components}: {doc}"
     );
+}
+
+fn repo() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn eb_stack(args: &[&str], dir: &Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .current_dir(repo())
+        .env_remove("EASYBUILD_FILTER_DEPS")
+        .args(args)
+        .env("TMPDIR", dir)
+        .output()
+        .expect("run eb-stack")
+}
+
+/// The closure page's `stack solve` command, written under a temp directory.
+fn page_solve(easyconfigs: &str) -> (tempfile::TempDir, serde_json::Value, serde_json::Value) {
+    let tmp = tempfile::tempdir().expect("temp");
+    let lock = tmp.path().join("stack.lock.json");
+    let sbom = tmp.path().join("stack.cdx.json");
+    let out = eb_stack(
+        &[
+            "stack",
+            "solve",
+            "--easyconfigs",
+            easyconfigs,
+            "--toolchain",
+            "foss/2025b",
+            "--root",
+            "Cbc",
+            "--lock-out",
+            lock.to_str().unwrap(),
+            "--sbom-out",
+            sbom.to_str().unwrap(),
+        ],
+        tmp.path(),
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lock: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&lock).unwrap()).unwrap();
+    let sbom: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sbom).unwrap()).unwrap();
+    (tmp, lock, sbom)
+}
+
+/// `recipe check` and `stack solve` follow the same SYSTEM rule.
+///
+/// A bare tuple under foss-2025b does not take a SYSTEM recipe (framework
+/// v5.4.1 `_finalize_dependencies` and `get_toolchain_hierarchy`). On a tree
+/// that only has that SYSTEM recipe, both commands reject the dependency.
+/// The recorded Cbc slice carries the GCCcore recipes the search selects, so
+/// both commands accept Cbc and the edges are those GCCcore builds.
+#[test]
+fn stack_solve_and_recipe_check_agree_on_the_cbc_slice() {
+    let only_system = tempfile::tempdir().expect("temp");
+    let zlib_dir = only_system.path().join("easybuild/easyconfigs/z/zlib");
+    let app_dir = only_system.path().join("easybuild/easyconfigs/a/App");
+    std::fs::create_dir_all(&zlib_dir).unwrap();
+    std::fs::create_dir_all(&app_dir).unwrap();
+    std::fs::write(
+        zlib_dir.join("zlib-1.3.1.eb"),
+        "name = 'zlib'\nversion = '1.3.1'\ntoolchain = SYSTEM\n",
+    )
+    .unwrap();
+    std::fs::write(
+        app_dir.join("App-1.0-foss-2025b.eb"),
+        "name = 'App'\nversion = '1.0'\n\
+         toolchain = {'name': 'foss', 'version': '2025b'}\n\
+         dependencies = [('zlib', '1.3.1')]\n",
+    )
+    .unwrap();
+    let tree = only_system.path().to_str().unwrap();
+    let app = app_dir.join("App-1.0-foss-2025b.eb");
+    let check_system = eb_stack(
+        &[
+            "recipe",
+            "check",
+            "--recipe",
+            app.to_str().unwrap(),
+            "--easyconfigs",
+            tree,
+        ],
+        only_system.path(),
+    );
+    assert!(
+        !check_system.status.success(),
+        "recipe check accepted a bare zlib tuple against only the SYSTEM recipe"
+    );
+    let system_lock = only_system.path().join("stack.lock.json");
+    let solve_system = eb_stack(
+        &[
+            "stack",
+            "solve",
+            "--easyconfigs",
+            tree,
+            "--toolchain",
+            "foss/2025b",
+            "--root",
+            "App",
+            "--lock-out",
+            system_lock.to_str().unwrap(),
+        ],
+        only_system.path(),
+    );
+    assert!(
+        !solve_system.status.success(),
+        "stack solve locked a bare zlib tuple that recipe check rejects:\n{}",
+        String::from_utf8_lossy(&solve_system.stdout)
+    );
+
+    let tmp = tempfile::tempdir().expect("temp");
+    let check = eb_stack(
+        &[
+            "recipe",
+            "check",
+            "--recipe",
+            "tests/sbom_recorded/cbc/easybuild/easyconfigs/c/Cbc/Cbc-2.10.12-foss-2025b.eb",
+            "--easyconfigs",
+            "tests/sbom_recorded/cbc",
+        ],
+        tmp.path(),
+    );
+    assert!(
+        check.status.success(),
+        "recipe check rejected the recorded Cbc closure:\n{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let (_solve_tmp, _lock, sbom) = page_solve("tests/sbom_recorded/cbc");
+    let cbc = sbom["dependencies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["ref"].as_str().unwrap().starts_with("pkg:generic/Cbc@"))
+        .expect("Cbc entry");
+    let refs: Vec<&str> = cbc["dependsOn"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r.as_str())
+        .collect();
+    for want in [
+        "pkg:generic/zlib@1.3.1?toolchain=GCCcore-14.3.0",
+        "pkg:generic/bzip2@1.0.8?toolchain=GCCcore-14.3.0",
+    ] {
+        assert!(
+            refs.contains(&want),
+            "Cbc dependsOn {refs:?}, missing {want}"
+        );
+    }
+    assert!(
+        refs.iter().all(|r| {
+            let system = r.contains("toolchain=system-system");
+            let named = r.contains("/zlib@") || r.contains("/bzip2@");
+            !(system && named)
+        }),
+        "Cbc took a SYSTEM zlib or bzip2: {refs:?}"
+    );
+}
+
+/// On the pinned develop tree EasyBuild takes zlib 1.3.1 and bzip2 1.0.8 at
+/// GCCcore-14.3.0 for Cbc (first hit of the parent-first subtoolchain search).
+#[test]
+#[ignore = "needs EB_EASYCONFIGS_DEVELOP from scripts/fetch-upstream-trees.sh"]
+fn cbc_on_develop_takes_gcccore_zlib_and_bzip2() {
+    let develop = std::env::var("EB_EASYCONFIGS_DEVELOP").expect("EB_EASYCONFIGS_DEVELOP");
+    let (_tmp, _lock, sbom) = page_solve(&develop);
+    let cbc = sbom["dependencies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["ref"].as_str().unwrap().starts_with("pkg:generic/Cbc@"))
+        .expect("Cbc entry")
+        .clone();
+    let refs: Vec<String> = cbc["dependsOn"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r.as_str().unwrap().to_string())
+        .collect();
+    for want in [
+        "pkg:generic/zlib@1.3.1?toolchain=GCCcore-14.3.0",
+        "pkg:generic/bzip2@1.0.8?toolchain=GCCcore-14.3.0",
+    ] {
+        assert!(refs.iter().any(|r| r == want), "Cbc dependsOn {refs:?}");
+    }
 }

@@ -445,6 +445,37 @@ fn rust_modules_use_files_the_api_generator_can_open() {
     walk(&root().join("src"));
 }
 
+/// `repair-campaign.org` quotes the doctor error the binary prints.
+#[test]
+fn the_repair_howto_quotes_the_doctor_error_it_prints() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let out = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .current_dir(root())
+        .args([
+            "target",
+            "doctor",
+            "--config",
+            "examples/targets/missing-easybuild.toml",
+            "--target",
+            "missing-eb",
+        ])
+        .env("TMPDIR", tmp.path())
+        .output()
+        .expect("run eb-stack");
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let page =
+        std::fs::read_to_string(root().join("docs/orgmode/howto/repair-campaign.org")).unwrap();
+    let quoted = page
+        .split("#+begin_example\n")
+        .nth(1)
+        .and_then(|rest| rest.split("#+end_example").next())
+        .unwrap()
+        .trim()
+        .to_string();
+    assert!(stderr.contains(&quoted), "page: {quoted}\nstderr: {stderr}");
+}
+
 fn run_to(args: &[&str], out: &Path) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_eb-stack"))
         .current_dir(root())
