@@ -224,8 +224,6 @@ pkg:generic/Cbc@2.10.12?toolchain=foss-2025b
   pkg:generic/Osi@0.108.11?toolchain=GCC-14.3.0
   pkg:generic/Clp@1.17.10?toolchain=foss-2025b
   pkg:generic/Cgl@0.60.9?toolchain=foss-2025b
-  pkg:generic/bzip2@1.0.8?toolchain=system-system
-  pkg:generic/zlib@1.2.11?toolchain=system-system
 #+end_src
 
 Cbc depends on METIS, MUMPS, CoinUtils, Osi, Clp, Cgl, bzip2, and zlib.

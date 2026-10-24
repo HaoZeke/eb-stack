@@ -44,7 +44,8 @@ const IDENTITY_SEP: char = '\u{1f}';
 /// Lock identity: name, version, versionsuffix, toolchain.
 ///
 /// A generation installs more than one version of one name. Keying a
-/// checksum by the name alone writes one version's bytes onto the other.
+/// component, its checksum or its dependency entry by the name alone writes
+/// one version's bytes onto the other and repeats a single `bom-ref`.
 fn lock_identity(name: &str, version: &str, versionsuffix: &str, toolchain_label: &str) -> String {
     format!(
         "{name}{IDENTITY_SEP}{version}{IDENTITY_SEP}{versionsuffix}{IDENTITY_SEP}{toolchain_label}"
@@ -58,6 +59,37 @@ fn package_identity(package: &crate::domain::LockPackage) -> String {
         package.versionsuffix.as_deref().unwrap_or(""),
         &package.toolchain.label(),
     )
+}
+
+fn identity_name(key: &str) -> &str {
+    key.split(IDENTITY_SEP).next().unwrap_or(key)
+}
+
+/// The component `token` names.
+///
+/// `token` is a lock identity, or a bare package name from a caller that
+/// still keys a single-version map by name. A bare name is used only when
+/// the lock carries one component of that name; two versions must not share
+/// an edge.
+fn component_ref(refs: &HashMap<String, String>, token: &str) -> Option<String> {
+    if let Some(found) = refs.get(token) {
+        return Some(found.clone());
+    }
+    let mut matched = refs.iter().filter(|(key, _)| identity_name(key) == token);
+    let (_, first) = matched.next()?;
+    if matched.next().is_some() {
+        None
+    } else {
+        Some(first.clone())
+    }
+}
+
+fn mapped<'a, T>(
+    map: &'a HashMap<String, T>,
+    package: &crate::domain::LockPackage,
+) -> Option<&'a T> {
+    map.get(&package_identity(package))
+        .or_else(|| map.get(&package.name))
 }
 
 /// What an easyconfig states about the artifact one component builds from.
@@ -84,10 +116,13 @@ pub struct ArtifactFacts {
 /// per field.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SbomFacts<'a> {
-    /// Runtime edges, name to names, which become the `dependencies` graph.
+    /// Runtime edges, which become the `dependencies` graph. Keyed by lock
+    /// identity. A map keyed by package name still works when that name occurs
+    /// once in the lock.
     pub runtime_dep_map: Option<&'a HashMap<String, Vec<String>>>,
     /// Build edges, kept as a property because CycloneDX `dependencies` does
-    /// not distinguish build from runtime in 1.5.
+    /// not distinguish build from runtime in 1.5. Same key as
+    /// [`Self::runtime_dep_map`].
     pub build_dep_map: Option<&'a HashMap<String, Vec<String>>>,
     /// Per-package artifact facts. Keyed by lock identity, or by package name
     /// when the lock carries one version of that name.
@@ -189,14 +224,20 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
     } = facts;
     let toolchain_label = lock.toolchain.label();
     let mut package_refs: HashMap<String, String> = HashMap::new();
-    let mut components: Vec<Component> = Vec::new();
-
     for p in &lock.packages {
         // Each module is built with its own toolchain (GCCcore, gompi, system,
         // ...), not the stack's policy toolchain; its identity says which.
+        let r = bom_ref(&p.name, &p.version, &p.toolchain.label());
+        package_refs.insert(package_identity(p), r);
+    }
+    let mut components: Vec<Component> = Vec::new();
+
+    for p in &lock.packages {
         let package_toolchain = p.toolchain.label();
-        let r = bom_ref(&p.name, &p.version, &package_toolchain);
-        package_refs.insert(p.name.clone(), r.clone());
+        let r = package_refs
+            .get(&package_identity(p))
+            .expect("every locked package was just keyed")
+            .clone();
 
         let mut props = vec![
             Property::new("easybuild:toolchain", &package_toolchain),
@@ -209,11 +250,11 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
             }
         }
         if let Some(bmap) = build_dep_map {
-            if let Some(bdeps) = bmap.get(&p.name) {
+            if let Some(bdeps) = mapped(bmap, p) {
                 if !bdeps.is_empty() {
                     let joined = bdeps
                         .iter()
-                        .filter_map(|n| package_refs.get(n).cloned().or_else(|| Some(n.clone())))
+                        .filter_map(|token| component_ref(&package_refs, token))
                         .collect::<Vec<_>>()
                         .join(",");
                     props.push(Property::new("eb_stack:buildDependsOn", &joined));
@@ -225,9 +266,7 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
         let mut component = Component::new(Classification::Library, &p.name, &p.version, Some(r));
         component.purl = Purl::from_str(&purl_str).ok();
 
-        if let Some(facts) =
-            artifacts.and_then(|m| m.get(&package_identity(p)).or_else(|| m.get(&p.name)))
-        {
+        if let Some(facts) = artifacts.and_then(|m| mapped(m, p)) {
             let hashes: Vec<Hash> = facts
                 .checksums
                 .iter()
@@ -273,16 +312,22 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
 
     let mut deps: Vec<Dependency> = Vec::new();
     for p in &lock.packages {
-        let r = package_refs.get(&p.name).cloned().unwrap();
-        let depends_on: Vec<String> = if let Some(map) = runtime_dep_map {
-            map.get(&p.name)
-                .into_iter()
-                .flatten()
-                .filter_map(|dep_name| package_refs.get(dep_name).cloned())
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let r = package_refs
+            .get(&package_identity(p))
+            .expect("every locked package was just keyed")
+            .clone();
+        let mut depends_on: Vec<String> = Vec::new();
+        if let Some(map) = runtime_dep_map {
+            for token in mapped(map, p).into_iter().flatten() {
+                if let Some(dep_ref) = component_ref(&package_refs, token) {
+                    // A recipe that names one dependency twice would repeat
+                    // the ref. CycloneDX 1.5 requires the items to be unique.
+                    if !depends_on.contains(&dep_ref) {
+                        depends_on.push(dep_ref);
+                    }
+                }
+            }
+        }
         deps.push(Dependency {
             dependency_ref: r,
             dependencies: depends_on,
@@ -377,18 +422,18 @@ fn build_formula(
     let mut task_edges: Vec<Dependency> = Vec::new();
 
     for package in &lock.packages {
-        let Some(package_ref) = package_refs.get(&package.name) else {
+        let Some(package_ref) = package_refs.get(&package_identity(package)) else {
             continue;
         };
         let uid = input_hashes
-            .and_then(|m| m.get(&package.name).cloned())
+            .and_then(|m| mapped(m, package).cloned())
             .unwrap_or_else(|| package_ref.clone());
 
         let mut inputs: Vec<Input> = Vec::new();
         let mut edges: Vec<String> = Vec::new();
         for map in [runtime_dep_map, build_dep_map].into_iter().flatten() {
-            for dep_name in map.get(&package.name).into_iter().flatten() {
-                if let Some(dep_ref) = package_refs.get(dep_name) {
+            for dep_name in mapped(map, package).into_iter().flatten() {
+                if let Some(dep_ref) = component_ref(package_refs, dep_name) {
                     // A task consumes the component its dependency produced,
                     // which is what ties the how back to the what.
                     inputs.push(Input {
@@ -399,7 +444,7 @@ fn build_formula(
                         target: None,
                         properties: None,
                     });
-                    edges.push(task_ref(dep_ref));
+                    edges.push(task_ref(&dep_ref));
                 }
             }
         }
@@ -616,17 +661,107 @@ fn lock_directory(lock_file: &Path) -> &Path {
     }
 }
 
-fn read_lock_recipes(lock: &StackLock, lock_dir: &Path) -> LockRecipeRead {
-    let locked: std::collections::HashSet<&str> = lock
+/// The locked package a dependency tuple names.
+///
+/// Version and versionsuffix come from the tuple. An explicit toolchain pin
+/// selects that level. A bare tuple inherits the parent and then walks the
+/// hierarchy parent-first, leaving SYSTEM out unless the parent is SYSTEM.
+/// That is the same rule `stack solve` uses, so the edge names the version
+/// the recipe wrote down rather than whichever package shared the name.
+fn resolve_locked_dep<'a>(
+    lock: &'a StackLock,
+    parent: &crate::domain::LockPackage,
+    dep: &crate::domain::DepReq,
+) -> Option<&'a crate::domain::LockPackage> {
+    let matches: Vec<&crate::domain::LockPackage> = lock
         .packages
         .iter()
-        .map(|package| package.name.as_str())
+        .filter(|package| {
+            package.name == dep.name
+                && crate::version::matches_req(&package.version, &dep.version_req)
+                && package.versionsuffix.as_deref().unwrap_or("")
+                    == dep.versionsuffix.as_deref().unwrap_or("")
+        })
         .collect();
+    if let Some(toolchain) = dep.toolchain.as_ref() {
+        return matches
+            .into_iter()
+            .find(|package| crate::hierarchy::toolchains_match(&package.toolchain, toolchain));
+    }
+    if crate::hierarchy::is_system_toolchain(&parent.toolchain) {
+        return matches
+            .into_iter()
+            .find(|package| crate::hierarchy::is_system_toolchain(&package.toolchain));
+    }
+    let non_system: Vec<&crate::domain::LockPackage> = matches
+        .into_iter()
+        .filter(|package| !crate::hierarchy::is_system_toolchain(&package.toolchain))
+        .collect();
+    for level in search_levels(lock, parent) {
+        if let Some(found) = non_system
+            .iter()
+            .copied()
+            .find(|package| crate::hierarchy::toolchains_match(&package.toolchain, &level))
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Levels a bare dependency of `parent` may come from, parent first.
+///
+/// The stack hierarchy is what a foss solve actually searches: a gompi
+/// recipe is a member, and its bare dependency may sit at GCCcore. SYSTEM
+/// is dropped. `add_system_to_minimal_toolchains` defaults to false.
+fn search_levels(
+    lock: &StackLock,
+    parent: &crate::domain::LockPackage,
+) -> Vec<crate::domain::Toolchain> {
+    let below =
+        |hierarchy: crate::hierarchy::ToolchainHierarchy| -> Option<Vec<crate::domain::Toolchain>> {
+            let at = hierarchy
+                .members
+                .iter()
+                .position(|level| crate::hierarchy::toolchains_match(level, &parent.toolchain))?;
+            Some(
+                hierarchy.members[..=at]
+                    .iter()
+                    .rev()
+                    .filter(|level| !crate::hierarchy::is_system_toolchain(level))
+                    .cloned()
+                    .collect(),
+            )
+        };
+    for toolchain in [&lock.toolchain, &parent.toolchain] {
+        if let Ok(hierarchy) = crate::hierarchy::hierarchy_for(toolchain, None) {
+            if let Some(levels) = below(hierarchy) {
+                if !levels.is_empty() {
+                    return levels;
+                }
+            }
+        }
+    }
+    vec![parent.toolchain.clone()]
+}
+
+fn locked_dep_identities(
+    lock: &StackLock,
+    parent: &crate::domain::LockPackage,
+    deps: &[crate::domain::DepReq],
+) -> Vec<String> {
+    deps.iter()
+        .filter_map(|dep| resolve_locked_dep(lock, parent, dep).map(package_identity))
+        .collect()
+}
+
+fn read_lock_recipes(lock: &StackLock, lock_dir: &Path) -> LockRecipeRead {
     let mut artifacts = HashMap::new();
     let mut runtime = HashMap::new();
     let mut build = HashMap::new();
     let mut stats = SbomReadStats::default();
     for package in &lock.packages {
+        let key = package_identity(package);
         let Some(resolved) = (!package.easyconfig_path.is_empty())
             .then(|| {
                 crate::eb_parse::resolve_easyconfig_file(&resolve_lock_easyconfig(
@@ -638,15 +773,15 @@ fn read_lock_recipes(lock: &StackLock, lock_dir: &Path) -> LockRecipeRead {
             .flatten()
         else {
             stats.recipes_unreadable += 1;
-            runtime.insert(package.name.clone(), Vec::new());
-            build.insert(package.name.clone(), Vec::new());
+            runtime.insert(key.clone(), Vec::new());
+            build.insert(key, Vec::new());
             continue;
         };
         stats.recipes_read += 1;
         if !resolved.checksums.is_empty() || !resolved.source_urls.is_empty() {
             stats.with_artifact_facts += 1;
             artifacts.insert(
-                package_identity(package),
+                key.clone(),
                 ArtifactFacts {
                     checksums: resolved.checksums.clone(),
                     source_urls: resolved.source_urls.clone(),
@@ -656,22 +791,12 @@ fn read_lock_recipes(lock: &StackLock, lock_dir: &Path) -> LockRecipeRead {
         }
         let candidate = resolved.to_candidate();
         runtime.insert(
-            package.name.clone(),
-            candidate
-                .dependencies
-                .iter()
-                .map(|dep| dep.name.clone())
-                .filter(|name| locked.contains(name.as_str()))
-                .collect(),
+            key.clone(),
+            locked_dep_identities(lock, package, &candidate.dependencies),
         );
         build.insert(
-            package.name.clone(),
-            candidate
-                .builddependencies
-                .iter()
-                .map(|dep| dep.name.clone())
-                .filter(|name| locked.contains(name.as_str()))
-                .collect(),
+            key,
+            locked_dep_identities(lock, package, &candidate.builddependencies),
         );
     }
     LockRecipeRead {

@@ -6,6 +6,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A closure SBOM keys each component, its checksums and its dependency
+  entry by name, version, versionsuffix and toolchain. Two versions of
+  one name keep their own edges and hashes.
 - A missing `--lock` names that path once.
 - `component-reach` rejects a purl type with no carrier model before
   it creates `--out-dir`.
