@@ -26,8 +26,10 @@ use crate::domain::Candidate;
 use crate::easystack::{parse_easystack_entries, EasystackEntry};
 use crate::eb_easyblock::encode_class_name;
 use crate::eb_parse::merge_candidates_with_precedence;
+use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Read;
 
 /// Schema of an easyconfigs pull-request record. A software-layer record stays
 /// at [`PR_OVERLAP_SCHEMA_VERSION`] so an existing file is unchanged.
@@ -537,23 +539,6 @@ fn module_of(candidate: &Candidate) -> String {
     module_name(&ModuleKey::of(candidate))
 }
 
-/// Parsed head text of easyconfig changes. Deleted files contribute nothing.
-fn head_candidates(changes: &[FileChange]) -> Vec<Candidate> {
-    let mut out = Vec::new();
-    for change in changes {
-        if !change.path.ends_with(".eb") {
-            continue;
-        }
-        let Some(text) = change.head.as_deref() else {
-            continue;
-        };
-        if let Ok(candidate) = candidate_from_text(&change.path, text) {
-            out.push(candidate);
-        }
-    }
-    out
-}
-
 struct EasyconfigOverlay {
     tree: Vec<Candidate>,
     changed: Vec<ChangedEasyconfig>,
@@ -713,7 +698,8 @@ pub fn easyconfig_record(
 /// are visible while resolving.
 ///
 /// Those files sit above the base tree and under this pull request's own
-/// files. A module only they provide is still new: `new_modules` is compared
+/// files. Added and modified files replace base text, and a deleted file is
+/// removed. A module only they provide is still new: `new_modules` is compared
 /// to `base` alone. One pull request on its own passes an empty slice, which
 /// is [`easyconfig_record`].
 pub fn easyconfig_record_seeing(
@@ -726,14 +712,13 @@ pub fn easyconfig_record_seeing(
     if pr.easyconfigs.is_empty() {
         return None;
     }
-    let merged;
-    let under: &[Candidate] = if other_easyconfigs.is_empty() {
-        base
+    // Same overlay as this pull request: deletions come off the base tree.
+    let under_owned = if other_easyconfigs.is_empty() {
+        None
     } else {
-        merged =
-            merge_candidates_with_precedence(&[base.to_vec(), head_candidates(other_easyconfigs)]);
-        &merged
+        Some(overlay_easyconfigs(base, other_easyconfigs).tree)
     };
+    let under = under_owned.as_deref().unwrap_or(base);
     let overlay = overlay_easyconfigs(under, &pr.easyconfigs);
     let mut universe = overlay.tree.clone();
     if !config.filter_deps.is_empty() {
@@ -1446,6 +1431,418 @@ pub fn render_markdown(records: &[PrRecord], index: &OverlapIndex, repo_url: &st
     out
 }
 
+/// HTTP status and body. A 404 is [`Ok`]: a missing base file is data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpResponse {
+    /// Status code.
+    pub status: u16,
+    /// Response body.
+    pub body: Vec<u8>,
+}
+
+/// GET used to read pull requests. The live client is [`UreqGet`].
+pub trait HttpGet {
+    /// Fetch `url`. A transport failure is `Err`. An HTTP error status is [`Ok`].
+    fn get(&self, url: &str) -> Result<HttpResponse, String>;
+}
+
+/// Live HTTPS client. The default test gate does not construct it.
+#[derive(Debug, Default)]
+pub struct UreqGet;
+
+impl HttpGet for UreqGet {
+    fn get(&self, url: &str) -> Result<HttpResponse, String> {
+        let agent = ureq::AgentBuilder::new().redirects(10).build();
+        let mut request = agent.get(url).set("User-Agent", "eb-stack");
+        if url.starts_with("https://api.github.com/") {
+            request = request.set("Accept", "application/vnd.github+json");
+        }
+        let response = match request.call() {
+            Ok(response) => response,
+            Err(ureq::Error::Status(_, response)) => response,
+            Err(error) => return Err(error.to_string()),
+        };
+        let status = response.status();
+        let mut body = Vec::new();
+        response
+            .into_reader()
+            .read_to_end(&mut body)
+            .map_err(|error| error.to_string())?;
+        Ok(HttpResponse { status, body })
+    }
+}
+
+/// Which open easyconfigs pull requests to read, and where to stop.
+#[derive(Debug, Clone)]
+pub struct OpenEasyconfigQuery {
+    /// `owner/name`.
+    pub repo: String,
+    /// Git ref for the base text of a changed file. `develop` when empty.
+    pub base_ref: String,
+    /// Stop after this many open-list pages. `None` reads every page.
+    pub max_pages: Option<usize>,
+    /// Stop after this many pull requests that change an easyconfig.
+    pub max_prs: Option<usize>,
+    /// Stop after this many easyconfig files on one pull request.
+    pub max_files: Option<usize>,
+    /// Items per GitHub page. `None` is 100, the GitHub maximum.
+    pub page_size: Option<usize>,
+}
+
+impl OpenEasyconfigQuery {
+    /// Read every open pull request of `repo` against `develop`.
+    pub fn new(repo: impl Into<String>) -> Self {
+        Self {
+            repo: repo.into(),
+            base_ref: "develop".into(),
+            max_pages: None,
+            max_prs: None,
+            max_files: None,
+            page_size: None,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ListedPull {
+    number: u64,
+    title: Option<String>,
+    head: ListedHead,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListedHead {
+    sha: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListedFile {
+    filename: String,
+    #[serde(default)]
+    previous_filename: Option<String>,
+    status: String,
+}
+
+fn check_token(label: &str, value: &str) -> anyhow::Result<()> {
+    let ok = !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if ok {
+        Ok(())
+    } else {
+        bail!("{label} wants letters, digits, '-', '_' or '.', got {value}");
+    }
+}
+
+/// A git ref, including a one-level name such as `develop` and a branch
+/// such as `release/2026.1`.
+///
+/// The structural rules are `git check-ref-format --allow-onelevel`: no
+/// empty or dot-leading component, no `..`, no `//`, no trailing slash or
+/// dot, and no `@{`. Each component stays in the same character set as a
+/// repository name, so the ref can be placed in a raw GitHub URL.
+fn check_git_ref(label: &str, value: &str) -> anyhow::Result<()> {
+    let bad = || anyhow::anyhow!("{label} is not a git ref, got {value}");
+    if value.is_empty()
+        || value == "@"
+        || value.starts_with('/')
+        || value.ends_with('/')
+        || value.ends_with('.')
+        || value.contains("..")
+        || value.contains("//")
+        || value.contains("@{")
+        || value.contains('\\')
+    {
+        return Err(bad());
+    }
+    if value
+        .chars()
+        .any(|c| c.is_ascii_control() || matches!(c, ' ' | '~' | '^' | ':' | '?' | '*' | '['))
+    {
+        return Err(bad());
+    }
+    for segment in value.split('/') {
+        let token = !segment.is_empty()
+            && !segment.starts_with('.')
+            && !segment.ends_with('.')
+            && !segment.ends_with(".lock")
+            && segment
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        if !token {
+            return Err(bad());
+        }
+    }
+    Ok(())
+}
+
+fn check_repo(repo: &str) -> anyhow::Result<()> {
+    let mut parts = repo.split('/');
+    let owner = parts.next().unwrap_or("");
+    let name = parts.next().unwrap_or("");
+    if name.is_empty() || parts.next().is_some() {
+        bail!("repo wants owner/name, got {repo}");
+    }
+    check_token("repo owner", owner)?;
+    check_token("repo name", name)?;
+    Ok(())
+}
+
+fn encode_segment(segment: &str) -> String {
+    let mut out = String::new();
+    for byte in segment.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+fn encode_path(path: &str) -> String {
+    path.split('/')
+        .map(encode_segment)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn safe_repo_path(path: &str) -> bool {
+    !path.starts_with('/')
+        && !path
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+}
+
+fn easyconfig_path(path: &str) -> bool {
+    path.ends_with(".eb") && path.contains("easybuild/easyconfigs/") && safe_repo_path(path)
+}
+
+fn http_call(http: &dyn HttpGet, url: &str) -> anyhow::Result<HttpResponse> {
+    http.get(url)
+        .map_err(|error| anyhow::anyhow!("{url}: {error}"))
+}
+
+fn into_text(response: HttpResponse, url: &str) -> anyhow::Result<String> {
+    String::from_utf8(response.body).with_context(|| format!("{url}: body is not utf-8"))
+}
+
+fn get_json(http: &dyn HttpGet, url: &str) -> anyhow::Result<serde_json::Value> {
+    let response = http_call(http, url)?;
+    let status = response.status;
+    let text = into_text(response, url)?;
+    if status != 200 {
+        bail!("{url}: HTTP {status}: {text}");
+    }
+    serde_json::from_str(&text).with_context(|| format!("parse {url}"))
+}
+
+fn get_raw(http: &dyn HttpGet, url: &str) -> anyhow::Result<Option<String>> {
+    let response = http_call(http, url)?;
+    if response.status == 404 {
+        return Ok(None);
+    }
+    let status = response.status;
+    let text = into_text(response, url)?;
+    if status != 200 {
+        bail!("{url}: HTTP {status}: {text}");
+    }
+    Ok(Some(text))
+}
+
+fn raw_url(repo: &str, rev: &str, path: &str) -> String {
+    format!(
+        "https://raw.githubusercontent.com/{repo}/{rev}/{}",
+        encode_path(path)
+    )
+}
+
+fn page_size_of(query: &OpenEasyconfigQuery) -> anyhow::Result<usize> {
+    let page_size = query.page_size.unwrap_or(100);
+    if !(1..=100).contains(&page_size) {
+        bail!("page_size wants 1..=100, got {page_size}");
+    }
+    Ok(page_size)
+}
+
+fn list_open_pulls(
+    http: &dyn HttpGet,
+    query: &OpenEasyconfigQuery,
+    page_size: usize,
+) -> anyhow::Result<Vec<ListedPull>> {
+    let mut page = 1usize;
+    let mut pulls = Vec::new();
+    loop {
+        if query.max_pages.is_some_and(|max| page > max) {
+            break;
+        }
+        let url = format!(
+            "https://api.github.com/repos/{}/pulls?state=open&per_page={page_size}&page={page}",
+            query.repo
+        );
+        let value = get_json(http, &url)?;
+        let batch: Vec<ListedPull> =
+            serde_json::from_value(value).with_context(|| format!("parse {url}"))?;
+        let len = batch.len();
+        pulls.extend(batch);
+        if len < page_size {
+            break;
+        }
+        page += 1;
+    }
+    Ok(pulls)
+}
+
+fn list_pull_files(
+    http: &dyn HttpGet,
+    repo: &str,
+    number: u64,
+    page_size: usize,
+) -> anyhow::Result<Vec<ListedFile>> {
+    let mut page = 1usize;
+    let mut files = Vec::new();
+    loop {
+        if page > 20 {
+            bail!("pull request {number}: file list did not end");
+        }
+        let url = format!(
+            "https://api.github.com/repos/{repo}/pulls/{number}/files?per_page={page_size}&page={page}"
+        );
+        let value = get_json(http, &url)?;
+        let batch: Vec<ListedFile> =
+            serde_json::from_value(value).with_context(|| format!("parse {url}"))?;
+        let len = batch.len();
+        files.extend(batch);
+        if len < page_size {
+            break;
+        }
+        page += 1;
+    }
+    Ok(files)
+}
+
+fn push_easyconfig(
+    out: &mut Vec<FileChange>,
+    path: String,
+    base: Option<String>,
+    head: Option<String>,
+) {
+    if out.iter().any(|change| change.path == path) {
+        return;
+    }
+    out.push(FileChange {
+        path,
+        base,
+        head,
+        base_blob: None,
+        head_blob: None,
+    });
+}
+
+fn fetch_one_pull(
+    http: &dyn HttpGet,
+    query: &OpenEasyconfigQuery,
+    pull: &ListedPull,
+    page_size: usize,
+) -> anyhow::Result<Option<PrInput>> {
+    check_token("head sha", &pull.head.sha)?;
+    let files = list_pull_files(http, &query.repo, pull.number, page_size)?;
+    let base_ref = if query.base_ref.is_empty() {
+        "develop"
+    } else {
+        query.base_ref.as_str()
+    };
+    let mut easyconfigs = Vec::new();
+    for file in files {
+        if !easyconfig_path(&file.filename) {
+            continue;
+        }
+        if query.max_files.is_some_and(|max| easyconfigs.len() >= max) {
+            break;
+        }
+        let base = get_raw(http, &raw_url(&query.repo, base_ref, &file.filename))?;
+        let head = if file.status == "removed" {
+            None
+        } else {
+            get_raw(http, &raw_url(&query.repo, &pull.head.sha, &file.filename))?
+        };
+        if base.is_none() && head.is_none() {
+            bail!(
+                "pull request {}: {} has no base or head text",
+                pull.number,
+                file.filename
+            );
+        }
+        push_easyconfig(&mut easyconfigs, file.filename.clone(), base, head);
+        let Some(previous) = file.previous_filename.as_deref() else {
+            continue;
+        };
+        if previous == file.filename || !easyconfig_path(previous) {
+            continue;
+        }
+        if query.max_files.is_some_and(|max| easyconfigs.len() >= max) {
+            break;
+        }
+        if let Some(text) = get_raw(http, &raw_url(&query.repo, base_ref, previous))? {
+            push_easyconfig(&mut easyconfigs, previous.to_string(), Some(text), None);
+        }
+    }
+    if easyconfigs.is_empty() {
+        return Ok(None);
+    }
+    easyconfigs.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(Some(PrInput {
+        number: pull.number,
+        head_sha: pull.head.sha.clone(),
+        title: pull.title.clone(),
+        easystacks: Vec::new(),
+        files: Vec::new(),
+        easyconfigs,
+    }))
+}
+
+/// Reject a repository or base ref that cannot be placed in a GitHub URL.
+///
+/// An empty or absent base ref means `develop` and is not checked. This does
+/// not open a connection.
+pub fn validate_open_easyconfig_query(repo: &str, base_ref: Option<&str>) -> anyhow::Result<()> {
+    check_repo(repo)?;
+    if let Some(base_ref) = base_ref.filter(|base_ref| !base_ref.is_empty()) {
+        check_git_ref("base ref", base_ref)?;
+    }
+    Ok(())
+}
+
+/// Read open easyconfigs pull requests over HTTPS.
+///
+/// The open list and the changed-file list come from
+/// `https://api.github.com`. Head text is
+/// `https://raw.githubusercontent.com/<repo>/<sha>/<path>`. Base text is the
+/// same URL with [`OpenEasyconfigQuery::base_ref`]. A 404 on the base means
+/// the file was added. No token is sent. The file text is data: nothing from
+/// a pull request is executed.
+pub fn fetch_open_easyconfig_prs(
+    http: &dyn HttpGet,
+    query: &OpenEasyconfigQuery,
+) -> anyhow::Result<Vec<PrInput>> {
+    validate_open_easyconfig_query(&query.repo, Some(query.base_ref.as_str()))?;
+    let page_size = page_size_of(query)?;
+    let pulls = list_open_pulls(http, query, page_size)?;
+    let mut prs = Vec::new();
+    for pull in &pulls {
+        if query.max_prs.is_some_and(|max| prs.len() >= max) {
+            break;
+        }
+        if let Some(pr) = fetch_one_pull(http, query, pull, page_size)? {
+            prs.push(pr);
+        }
+    }
+    prs.sort_by_key(|pr| pr.number);
+    Ok(prs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1975,5 +2372,51 @@ entries = []
             .rows
             .iter()
             .any(|row| row.kind == "shared-new-module" && row.module == "Dep/1.0"));
+    }
+
+    #[test]
+    fn other_pull_request_deletions_are_visible_when_resolving() {
+        let dep_path = "easybuild/easyconfigs/d/Dep/Dep-1.0.eb";
+        let app_path = "easybuild/easyconfigs/a/App/App-1.0.eb";
+        let base = vec![parsed(dep_path, &eb("Dep", "1.0", None))];
+        let app = PrInput {
+            number: 7,
+            head_sha: "7".repeat(40),
+            title: None,
+            easystacks: Vec::new(),
+            files: Vec::new(),
+            easyconfigs: vec![FileChange {
+                path: app_path.into(),
+                base: None,
+                head: Some(eb("App", "1.0", Some(("Dep", "1.0")))),
+                base_blob: None,
+                head_blob: None,
+            }],
+        };
+        let other_delete = FileChange {
+            path: dep_path.into(),
+            base: Some(eb("Dep", "1.0", None)),
+            head: None,
+            base_blob: None,
+            head_blob: None,
+        };
+        let record = easyconfig_record_seeing(
+            &app,
+            &base,
+            std::slice::from_ref(&other_delete),
+            None,
+            &ec_config(),
+        )
+        .expect("record");
+        assert!(
+            record.unresolved.iter().any(|item| item.contains("Dep")),
+            "expected unresolved Dep after deletion, got {:?}",
+            record.unresolved
+        );
+        assert!(
+            !record.closure.iter().any(|module| module == "Dep/1.0"),
+            "deleted dependency should not stay in closure: {:?}",
+            record.closure
+        );
     }
 }

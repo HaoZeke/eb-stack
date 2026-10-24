@@ -188,8 +188,21 @@ struct PrOverlapArgs {
     ///
     /// Repeat the flag, or pass several paths after one flag. A shell glob
     /// `in/prs/*.json` is the second form.
-    #[arg(long = "pr", required = true, num_args = 1..)]
+    #[arg(long = "pr", num_args = 1.., required_unless_present = "open")]
     prs: Vec<PathBuf>,
+    /// Read open easyconfigs pull requests from `OWNER/NAME` over HTTPS.
+    ///
+    /// Requires `--kind easyconfigs`. Those pull requests are added to any
+    /// `--pr` files. No token is sent. A repository that is not `owner/name`
+    /// is an error before a request is sent.
+    #[arg(long)]
+    open: Option<String>,
+    /// Git ref for the base text of files read by `--open`.
+    ///
+    /// Defaults to `develop`. A branch such as `release/2026.1` is a valid
+    /// ref. A ref git would reject is an error before a request is sent.
+    #[arg(long = "base-ref")]
+    base_ref: Option<String>,
     /// `software-layer` (the default) reads easystack additions. `easyconfigs`
     /// reads changed `.eb` files.
     #[arg(long, value_enum, default_value = "software-layer")]
@@ -1140,6 +1153,8 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
             impact: args.impact,
             repo_url: args.repo_url,
             out_dir: args.out_dir,
+            open_repo: args.open,
+            base_ref: args.base_ref,
         }) {
             Ok(report) => report,
             Err(eb_stack::site_commands::PrOverlapError::InstalledRequired) => {

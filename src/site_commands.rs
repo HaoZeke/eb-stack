@@ -128,6 +128,12 @@ pub struct PrOverlapRequest {
     pub repo_url: Option<String>,
     /// Directory for `prs/`, `overlap.toml`, and `overlap.md`.
     pub out_dir: PathBuf,
+    /// `owner/name` whose open easyconfigs pull requests are fetched.
+    ///
+    /// `None` reads only [`Self::prs`]. Set only with [`OverlapKind::Easyconfigs`].
+    pub open_repo: Option<String>,
+    /// Git ref for the base text of [`Self::open_repo`]. `None` is `develop`.
+    pub base_ref: Option<String>,
 }
 
 /// Counts `pr-overlap` prints on its one summary line.
@@ -385,16 +391,36 @@ impl EasyblockReachRun {
 /// Write the pull-request overlap report.
 ///
 /// The `pr-overlap` command and the `eb_pr_overlap` MCP tool both call this,
-/// so a flag means the same thing in both places.
+/// so a flag means the same thing in both places. `--open` uses [`pr_overlap::UreqGet`].
 pub fn run_pr_overlap(args: &PrOverlapRequest) -> Result<PrOverlapRun, PrOverlapError> {
+    run_pr_overlap_with(args, &pr_overlap::UreqGet)
+}
+
+/// [`run_pr_overlap`] with the client that reads `--open`.
+pub fn run_pr_overlap_with(
+    args: &PrOverlapRequest,
+    http: &dyn pr_overlap::HttpGet,
+) -> Result<PrOverlapRun, PrOverlapError> {
+    if args.open_repo.is_some() && args.kind != OverlapKind::Easyconfigs {
+        return Err(PrOverlapError::Failed(usage(
+            "--open needs --kind easyconfigs",
+        )));
+    }
     if args.kind == OverlapKind::SoftwareLayer && args.installed.is_none() {
         return Err(PrOverlapError::InstalledRequired);
     }
-    run_pr_overlap_inner(args).map_err(PrOverlapError::Failed)
+    run_pr_overlap_inner(args, http).map_err(PrOverlapError::Failed)
 }
 
-fn run_pr_overlap_inner(args: &PrOverlapRequest) -> Result<PrOverlapRun> {
+fn run_pr_overlap_inner(
+    args: &PrOverlapRequest,
+    http: &dyn pr_overlap::HttpGet,
+) -> Result<PrOverlapRun> {
     use pr_overlap::{record_to_toml, render_markdown, to_toml, PrInput};
+    if let Some(repo) = &args.open_repo {
+        pr_overlap::validate_open_easyconfig_query(repo, args.base_ref.as_deref())
+            .map_err(usage)?;
+    }
     let mut prs: Vec<PrInput> = Vec::new();
     for path in &args.prs {
         let text = std::fs::read_to_string(path)
@@ -408,6 +434,13 @@ fn run_pr_overlap_inner(args: &PrOverlapRequest) -> Result<PrOverlapRun> {
         }
         .with_context(|| format!("--pr {}: pull request record", path.display()))?;
         prs.extend(inputs);
+    }
+    if let Some(repo) = &args.open_repo {
+        let mut query = pr_overlap::OpenEasyconfigQuery::new(repo);
+        if let Some(base_ref) = args.base_ref.as_deref().filter(|base| !base.is_empty()) {
+            query.base_ref = base_ref.to_string();
+        }
+        prs.extend(pr_overlap::fetch_open_easyconfig_prs(http, &query)?);
     }
     prs.sort_by_key(|pr| pr.number);
     prs.dedup_by_key(|pr| pr.number);

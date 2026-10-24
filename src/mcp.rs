@@ -387,9 +387,10 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_pr_overlap",
-            "Close open pull requests and report shared modules, using the same writer as `eb-stack pr-overlap`. kind software-layer reads easystack additions against an installed list. kind easyconfigs reads changed .eb files and closes them over the base tree, including modules shared with other open pull requests. merge_order writes a merge order. impact names, for each given pull request, the others whose build set shrinks or whose depends-on edge from it resolves.",
-            &[("pr", "array"), ("easyconfigs", "array")],
+            "Close open pull requests and report shared modules, using the same writer as `eb-stack pr-overlap`. kind software-layer reads easystack additions against an installed list. kind easyconfigs reads changed .eb files and closes them over the base tree, including modules shared with other open pull requests. merge_order writes a merge order. impact names, for each given pull request, the others whose build set shrinks or whose depends-on edge from it resolves. open reads open easyconfigs pull requests from owner/name over HTTPS and needs kind easyconfigs. base_ref is the git ref for their base text.",
+            &[("easyconfigs", "array")],
             &[
+                ("pr", "array"),
                 ("kind", "string"),
                 ("commit_tree", "array"),
                 ("installed", "string"),
@@ -407,6 +408,8 @@ fn tool_catalog() -> Vec<Value> {
                 ("impact", "array_int"),
                 ("repo_url", "string"),
                 ("out_dir", "string"),
+                ("open", "string"),
+                ("base_ref", "string"),
             ],
         ),
         tool_with_optional(
@@ -2583,8 +2586,14 @@ fn pr_overlap(arguments: &Value) -> Result<Value, String> {
             ))
         }
     };
+    let open_repo = optional_string(arguments, "open");
+    let prs = if open_repo.is_some() && arguments.get("pr").is_none() {
+        Vec::new()
+    } else {
+        path_array(arguments, "pr")?
+    };
     let report = crate::site_commands::run_pr_overlap(&crate::site_commands::PrOverlapRequest {
-        prs: path_array(arguments, "pr")?,
+        prs,
         kind,
         easyconfigs: path_array(arguments, "easyconfigs")?,
         commit_trees: string_array(arguments, "commit_tree")?,
@@ -2604,6 +2613,8 @@ fn pr_overlap(arguments: &Value) -> Result<Value, String> {
         impact: u64_array(arguments, "impact")?,
         repo_url: optional_string(arguments, "repo_url"),
         out_dir: optional_path(arguments, "out_dir").unwrap_or_else(|| PathBuf::from("pr-overlap")),
+        open_repo,
+        base_ref: optional_string(arguments, "base_ref"),
     })
     .map_err(|error| match error {
         crate::site_commands::PrOverlapError::InstalledRequired => {

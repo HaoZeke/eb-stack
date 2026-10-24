@@ -441,6 +441,8 @@ previous list's section count plus the unfiled header.
 #+begin_src bash
 eb-stack pr-overlap \
   --pr PR.json [PR.json...] [--pr PR.json]... \
+  [--open OWNER/NAME] \
+  [--base-ref REF] \
   --easyconfigs TREE [--easyconfigs TREE]... \
   [--commit-tree COMMIT=DIR]... \
   --installed installed.txt \

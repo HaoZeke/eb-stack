@@ -200,6 +200,11 @@ All notable changes to this project are documented here.
 
 ### Documentation
 
+- The easyconfigs overlap how-to names `pr-overlap --open` as the command
+  that fetches pull requests, and its merge-order heading names the
+  easyconfigs depends-on edges. `fetch-prs.sh` is the collector for a
+  clone that already has `gh` and git.
+
 - The PyPI and Comprehensive R Archive Network (CRAN) how-tos describe
   the easyblocks the planners emit. A CRAN plan keeps
   `easyblock = RPackage` and emits a `Bundle` recipe. The command map
@@ -288,6 +293,15 @@ All notable changes to this project are documented here.
   `eb_recipe_apply_suggestion` puts a review suggestion on the anchored
   lines. `eb_recipe_diff` reports each hunk with the top-level name it
   touches.
+
+- `pr-overlap --kind easyconfigs --open OWNER/NAME` reads the open pull
+  requests of that repository over HTTPS from the public GitHub API and
+  adds them to any `--pr` files. `--base-ref` is the git ref for their
+  base text and defaults to `develop`. `eb_pr_overlap` takes the same
+  `open` and `base_ref` arguments. Head text comes from
+  `raw.githubusercontent.com` at the head commit. A 404 on the base ref
+  means the file was added. No token is sent, and nothing from a pull
+  request is executed.
 
 - `eb-stack component-reach` lists every easyconfig and installed module
   that carries a component at a version or version range, inside one
@@ -523,6 +537,13 @@ All notable changes to this project are documented here.
   year of easybuild-easyconfigs, materialised with `git archive`. Sampled
   roots that order successfully across 26 commits from 2014 to 2026:
   312/312.
+
+### Tests
+
+- `tests/pr_overlap_easyconfigs_open` replays four open easybuild-easyconfigs
+  pull requests (22823, 24575, 27131, 27215) against develop `981d2123`. The
+  overlap files match the run on the full tree. The ignored test
+  `live_github_open_easyconfigs_pull_request` reads the public GitHub API.
 
 ### Changed
 
