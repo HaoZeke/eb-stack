@@ -4,6 +4,86 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- A foreign package plan locks a generation member instead of the
+  SYSTEM bootstrap of the same name when both are in the robot, which is
+  the module `recipe check` accepts.
+- Recipe lint modules live under `src/eb_style/` so `sphinx-rustdocgen`
+  can open them. A `#[path]` attribute is joined onto the parent file
+  and the generator then fails to read the module.
+- `package plan` against an overlay that is not a full robot names the
+  missing package, the trees it scanned, and `--easyconfigs` or
+  `--easybuild-source` with an upstream easybuild-easyconfigs tree from
+  `scripts/fetch-upstream-trees.sh`.
+- An unknown `criteria` entry fails the solve. It used to be dropped, so a
+  typo such as `-newest` solved with no optimisation criterion at all and
+  the lock recorded an empty list.
+- `stack-diff-out` with no baseline names `--baseline-easyconfigs` and
+  `--baseline-easystack`. The previous text told the caller to pass
+  `--baseline`, which the command line does not accept.
+- `eb_campaign_run` reports a failed campaign as a tool error. The CLI
+  exits 1 after printing the state. The MCP result now sets `isError`
+  and returns that same state.
+- A package-plan SBOM keeps a build-only, host-only, or test-only
+  dependency off `dependsOn`. Those refs are
+  `eb_stack:buildDependsOn` on the root, the same convention a stack
+  SBOM uses. A dependency with no role, or with a run role, stays on
+  `dependsOn`.
+- `stack solve --sbom-out` reads dependency edges and source checksums
+  from the easyconfigs the lock names, the same document `stack sbom`
+  writes for that lock.
+- A relative `easyconfig_path` in a stack lock is the recipe beside the
+  lock file when that file exists, and otherwise the same path against
+  the process directory. `stack sbom` and `eb_stack_sbom` share that
+  lookup and report `recipes_read`, `recipes_unreadable`, and
+  `with_artifact_facts`.
+- `eb_stack_sbom` reads dependency edges and source checksums from the
+  easyconfigs a lock names, the same way `eb-stack stack sbom` does. A
+  runtime dependency is a CycloneDX `dependsOn` edge. A builddependency
+  is `eb_stack:buildDependsOn`. An unreadable path still contributes
+  nothing, and the document does not invent edges between every package.
+- A `pyproject.toml` was never parsed: `text.parse::<toml::Value>()` reads a
+  TOML value rather than a document, so every build requirement a project
+  states was dropped in silence, and an sdist's own top directory hid the
+  file from the lookup as well. With the data flowing, `setuptools`, `pip`
+  and `wheel` are recognised as coming with the Python module, a backend and
+  its module are one name (`poetry-core` is built by `poetry`), and a build
+  requirement the tree carries no module for is dropped with a residual
+  rather than kept as a dependency nothing can satisfy.
+- `stack solve` against the upstream tree no longer reports a foss generation
+  as unsatisfiable. A name the system level carries at several versions is one
+  package per version, because that level is the bootstrap layer and every
+  dependency on it pins a version exactly: binutils 2.40 builds the GCCcore
+  that builds binutils 2.42, and EasyBuild installs both. `foss-2025a` locks
+  63 packages.
+- Every easyconfig upstream ships now parses: 0 skipped of some 20,600,
+  down from 91. The forms that were being lost, each of which dropped a
+  whole recipe rather than one field: `version[2:]` and `patchlevels[0]`,
+  a dependency list written with braces (a set, which EasyBuild iterates
+  and builds), `[...] + local_extra`, a bare `ARCH`, an arch-specific
+  dependency version (`{'arch=x86_64': ...}`, nine recipes and the `Java`
+  wrappers), and the string methods `split` / `join` / `replace` / `lower`
+  / `upper` / `strip`.
+- A `versionsuffix` that was assigned and could not be read is refused, on
+  the rule already covering dependency lists: the suffix is part of the
+  module name, so reading it as absent gives the recipe an identity it will
+  not install under.
+- Recipes are read the way a robot path actually writes them: a `#` inside
+  a multi-line `description` is no longer a comment (Doxygen names C#, and
+  the closing `"""` was going with it), f-string versions are read, `%%`
+  collapses when a recipe formats a template through `%`, `%(pyver)s` and
+  its CUDA / R / Java / Perl siblings come from the dependency rather than
+  from the recipe's own version, and `('gettext', '0.19.8.1', '', True)`
+  means the system toolchain. Skipped easyconfigs across upstream fall from
+  91 to 43 of some 20,600.
+- The system toolchain is recognised under its former name, `dummy`, which
+  1374 recipes in a 2019 tree still use.
+- A dependency that names a module rather than a bare version resolves:
+  GCC `8.2.0-2.31.1` for version 8.2.0 with versionsuffix `-2.31.1`, and
+  binutils 2.26 with versionsuffix `-GCCcore-5.4.0` for the build at
+  GCCcore-5.4.0.
+
 ### Security
 
 - `rustls-webpki` 0.103.13 -> 0.103.16 and `webpki-roots` 1.0.9 -> 1.0.10.
@@ -306,6 +386,11 @@ All notable changes to this project are documented here.
   upstream's own class is a judgement: `einops` is `math` and `fonttools`
   `devel`, and neither follows from the metadata.
 
+- `tests/property` backtests the ordering properties against one commit per
+  year of easybuild-easyconfigs, materialised with `git archive`. Sampled
+  roots that order successfully across 26 commits from 2014 to 2026:
+  312/312.
+
 ### Changed
 
 - The stack docs match the commands: build-list order and versions, the
@@ -317,93 +402,6 @@ All notable changes to this project are documented here.
   `PythonPackage` and depends on the bundle that already provides a
   requirement. A Cargo.toml with no crate tarball is refused at plan
   time; the crates.io JSON is what plan emits from.
-
-### Fixed
-
-- A foreign package plan locks a generation member instead of the
-  SYSTEM bootstrap of the same name when both are in the robot, which is
-  the module `recipe check` accepts.
-- Recipe lint modules live under `src/eb_style/` so `sphinx-rustdocgen`
-  can open them. A `#[path]` attribute is joined onto the parent file
-  and the generator then fails to read the module.
-- `package plan` against an overlay that is not a full robot names the
-  missing package, the trees it scanned, and `--easyconfigs` or
-  `--easybuild-source` with an upstream easybuild-easyconfigs tree from
-  `scripts/fetch-upstream-trees.sh`.
-- An unknown `criteria` entry fails the solve. It used to be dropped, so a
-  typo such as `-newest` solved with no optimisation criterion at all and
-  the lock recorded an empty list.
-- `stack-diff-out` with no baseline names `--baseline-easyconfigs` and
-  `--baseline-easystack`. The previous text told the caller to pass
-  `--baseline`, which the command line does not accept.
-- `eb_campaign_run` reports a failed campaign as a tool error. The CLI
-  exits 1 after printing the state. The MCP result now sets `isError`
-  and returns that same state.
-- A package-plan SBOM keeps a build-only, host-only, or test-only
-  dependency off `dependsOn`. Those refs are
-  `eb_stack:buildDependsOn` on the root, the same convention a stack
-  SBOM uses. A dependency with no role, or with a run role, stays on
-  `dependsOn`.
-- `stack solve --sbom-out` reads dependency edges and source checksums
-  from the easyconfigs the lock names, the same document `stack sbom`
-  writes for that lock.
-- A relative `easyconfig_path` in a stack lock is the recipe beside the
-  lock file when that file exists, and otherwise the same path against
-  the process directory. `stack sbom` and `eb_stack_sbom` share that
-  lookup and report `recipes_read`, `recipes_unreadable`, and
-  `with_artifact_facts`.
-- `eb_stack_sbom` reads dependency edges and source checksums from the
-  easyconfigs a lock names, the same way `eb-stack stack sbom` does. A
-  runtime dependency is a CycloneDX `dependsOn` edge. A builddependency
-  is `eb_stack:buildDependsOn`. An unreadable path still contributes
-  nothing, and the document does not invent edges between every package.
-- A `pyproject.toml` was never parsed: `text.parse::<toml::Value>()` reads a
-  TOML value rather than a document, so every build requirement a project
-  states was dropped in silence, and an sdist's own top directory hid the
-  file from the lookup as well. With the data flowing, `setuptools`, `pip`
-  and `wheel` are recognised as coming with the Python module, a backend and
-  its module are one name (`poetry-core` is built by `poetry`), and a build
-  requirement the tree carries no module for is dropped with a residual
-  rather than kept as a dependency nothing can satisfy.
-- `stack solve` against the upstream tree no longer reports a foss generation
-  as unsatisfiable. A name the system level carries at several versions is one
-  package per version, because that level is the bootstrap layer and every
-  dependency on it pins a version exactly: binutils 2.40 builds the GCCcore
-  that builds binutils 2.42, and EasyBuild installs both. `foss-2025a` locks
-  63 packages.
-- Every easyconfig upstream ships now parses: 0 skipped of some 20,600,
-  down from 91. The forms that were being lost, each of which dropped a
-  whole recipe rather than one field: `version[2:]` and `patchlevels[0]`,
-  a dependency list written with braces (a set, which EasyBuild iterates
-  and builds), `[...] + local_extra`, a bare `ARCH`, an arch-specific
-  dependency version (`{'arch=x86_64': ...}`, nine recipes and the `Java`
-  wrappers), and the string methods `split` / `join` / `replace` / `lower`
-  / `upper` / `strip`.
-- A `versionsuffix` that was assigned and could not be read is refused, on
-  the rule already covering dependency lists: the suffix is part of the
-  module name, so reading it as absent gives the recipe an identity it will
-  not install under.
-- Recipes are read the way a robot path actually writes them: a `#` inside
-  a multi-line `description` is no longer a comment (Doxygen names C#, and
-  the closing `"""` was going with it), f-string versions are read, `%%`
-  collapses when a recipe formats a template through `%`, `%(pyver)s` and
-  its CUDA / R / Java / Perl siblings come from the dependency rather than
-  from the recipe's own version, and `('gettext', '0.19.8.1', '', True)`
-  means the system toolchain. Skipped easyconfigs across upstream fall from
-  91 to 43 of some 20,600.
-- The system toolchain is recognised under its former name, `dummy`, which
-  1374 recipes in a 2019 tree still use.
-- A dependency that names a module rather than a bare version resolves:
-  GCC `8.2.0-2.31.1` for version 8.2.0 with versionsuffix `-2.31.1`, and
-  binutils 2.26 with versionsuffix `-GCCcore-5.4.0` for the build at
-  GCCcore-5.4.0.
-
-### Added
-
-- `tests/property` backtests the ordering properties against one commit per
-  year of easybuild-easyconfigs, materialised with `git archive`. Sampled
-  roots that order successfully across 26 commits from 2014 to 2026:
-  312/312.
 
 ## 0.3.0 - 2026-07-21
 
