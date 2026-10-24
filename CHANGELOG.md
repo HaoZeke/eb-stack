@@ -29,6 +29,8 @@ All notable changes to this project are documented here.
 - The build list and stack diff in `docs/orgmode/howto/emit-reports.org`
   are the files `stack solve` writes for the GROMACS fixture, including
   Python and OpenMPI 5.0.3.
+- An easystack baseline uses the same toolchain label as the solved lock
+  (`foss-2025b`), not `baseline-from-easystack-foss-2025b`.
 - Recipe lint modules live under `src/eb_style/` so `sphinx-rustdocgen`
   can open them. A `#[path]` attribute is joined onto the parent file
   and the generator then fails to read the module.

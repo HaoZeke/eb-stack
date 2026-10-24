@@ -95,7 +95,7 @@ Markdown, meant to be pasted directly into a pull request:
 #+begin_src markdown
 # Stack diff
 
-Baseline (`baseline-from-eb-foss-2025a`) → solved (`foss-2025b`).
+Baseline (`foss-2025a`) → solved (`foss-2025b`).
 
 ## Summary
 

@@ -595,7 +595,7 @@ pub fn baseline_from_easystacks(
     let lock = lock_from_candidates(
         &in_family,
         Some(format!(
-            "baseline-from-easystack-{}-{}",
+            "{}-{}",
             policy_toolchain.name, policy_toolchain.version
         )),
         "eb_parse_easystack",

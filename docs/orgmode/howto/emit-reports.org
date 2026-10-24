@@ -113,8 +113,8 @@ Baseline (`foss-2025a`) → solved (`foss-2025b`).
 - Solved: `3.12.3` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/Python-3.12.3-foss-2025b.eb`
 #+end_src
 
-A tree baseline is labelled with its toolchain (`foss-2025a`). An easystack
-baseline is labelled ~baseline-from-easystack-<toolchain>~. Paste the file
+A tree baseline and an easystack baseline are both labelled with the
+toolchain (`foss-2025a`, `foss-2025b`). Paste the file
 body directly into a pull request description; every line names a real
 version and a real easyconfig path.
 

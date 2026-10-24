@@ -42,7 +42,10 @@ fn solve(dir: &Path, extra: &[&str]) -> (std::process::Output, StackLock, StackL
     // The diff names the baseline's versions; rebuild the baseline lock from the
     // library so the comparison is on data, not on markdown.
     let md = std::fs::read_to_string(&diff).unwrap();
-    assert!(md.contains("baseline-from-easystack-foss-2025b"), "{md}");
+    assert!(
+        md.contains("Baseline (`foss-2025b`)") && !md.contains("baseline-from-easystack"),
+        "{md}"
+    );
     let stacks: Vec<PathBuf> = extra
         .windows(2)
         .filter(|w| w[0] == "--baseline-easystack")
