@@ -117,7 +117,10 @@ packages under ~packages/~, a shared ~easyconfigs/~ overlay, topological
 ~build-order.json~, and ~closure.sbom.cdx.json~. See
 [[file:package-bundles.org][package bundles]] and the new-package how-to.
 
-~--format cargo~ reads ~Cargo.toml~ or crates.io JSON. A PyPI leftover
+~--format cargo~ reads ~Cargo.toml~ or crates.io JSON. A ~Cargo.toml~ names
+no crate tarball, so plan stops with ~foreign package plan has no source
+artifacts~. The crates.io JSON carries the checksum, and that is what plan
+emits from. A PyPI leftover
 whose run dependency is a PyO3 crate is closed by ~--cargo-source~, not
 by a pip extra. Extra site packages that Warehouse omits belong in the
 ingest: a JSON array of Warehouse objects, or later ~requirements.txt~

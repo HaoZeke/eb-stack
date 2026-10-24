@@ -309,7 +309,8 @@ All notable changes to this project are documented here.
 - Package plan docs list the closure files every `--easyconfigs` plan
   writes. CRAN inspect records `RPackage`. A single PyPI plan emits
   `PythonPackage` and depends on the bundle that already provides a
-  requirement.
+  requirement. A Cargo.toml with no crate tarball is refused at plan
+  time; the crates.io JSON is what plan emits from.
 
 ### Fixed
 
