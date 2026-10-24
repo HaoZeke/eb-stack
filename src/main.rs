@@ -866,6 +866,12 @@ enum StackCommand {
         /// hashes are the same plan, and a changed hash is a rebuild.
         #[arg(long)]
         hashes_out: Option<PathBuf>,
+        /// Dependency names to drop from every recipe, as EasyBuild's
+        /// --filter-deps (comma-separated). EESSI-extend sets this list.
+        /// Absent, `EASYBUILD_FILTER_DEPS` is read, the same way `stack solve`
+        /// reads it.
+        #[arg(long, value_delimiter = ',')]
+        filter_deps: Vec<String>,
     },
     /// Write the lock as an EasyBuild easystack, the format `eb --easystack`
     /// consumes and EESSI's software layer is built from.
@@ -2114,6 +2120,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
             oldest,
             easystack_out,
             hashes_out,
+            filter_deps,
         } => {
             let trees: Vec<&Path> = easyconfigs.iter().map(PathBuf::as_path).collect();
             let parsed = eb_stack::parse_easyconfig_trees(&trees).map_err(|error| {
@@ -2129,7 +2136,13 @@ fn run_stack(command: StackCommand) -> Result<()> {
             } else {
                 eb_stack::Choice::Newest
             };
-            let order = eb_stack::build_order(&parsed.candidates, &roots, choice)
+            // Same filter `stack solve` applies: the flag, or
+            // EASYBUILD_FILTER_DEPS when the flag is absent. Dropping the
+            // dependency here keeps its own dependencies out of the order.
+            let mut candidates = parsed.candidates;
+            let specs = eb_stack::dep_filter::specs_from_cli_or_env(&filter_deps);
+            eb_stack::filter_deps(&mut candidates, &specs)?;
+            let order = eb_stack::build_order(&candidates, &roots, choice)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             std::fs::write(&out, eb_stack::format_order(&order))?;
             let multi = eb_stack::build_order::multi_build_names(&order);
@@ -2151,7 +2164,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 println!("easystack={}", path.display());
             }
             if let Some(path) = hashes_out.as_deref() {
-                let graph = eb_stack::build_order::build_graph(&parsed.candidates, &roots, choice)
+                let graph = eb_stack::build_order::build_graph(&candidates, &roots, choice)
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 let sequence: Vec<eb_stack::ModuleKey> =
                     order.iter().map(eb_stack::ModuleKey::of).collect();

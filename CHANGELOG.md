@@ -6,6 +6,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `stack order` reads `EASYBUILD_FILTER_DEPS` when `--filter-deps` is
+  omitted, and the flag wins when it is passed. The filtered dependency
+  and the dependencies it would have pulled stay out of the order.
 - `stack order`, `pr-overlap`, `rebuild-set` and the reach commands do
   not resolve a bare dependency tuple to a SYSTEM recipe. An explicit
   SYSTEM tuple still does, matching `stack solve` and `recipe check`.

@@ -332,6 +332,7 @@ eb-stack stack sbom --lock /tmp/stack.lock.json [--out /tmp/stack.cdx.json]
 eb-stack stack order \
   --easyconfigs TREE [--easyconfigs OVERLAY]... \
   --root NAME [--root NAME==VERSION]... \
+  [--filter-deps NAME,NAME...] \
   [--out /tmp/build-order.txt] \
   [--oldest] \
   [--easystack-out /tmp/order.yml] \
@@ -394,7 +395,10 @@ named in the lock and restores their runtime ~dependsOn~ edges.
 
 ~stack order~ sequences the recipes the roots pin. It does not pick one
 version per name, so two builds of one name both appear and stdout reports
-~multiple builds of NAME~. ~--oldest~ takes the oldest admissible version of
+~multiple builds of NAME~. ~--filter-deps~ drops each named dependency
+before that order is built, together with the subtree under it, using the
+same matching as ~stack solve~. When the flag is absent the command reads
+~EASYBUILD_FILTER_DEPS~. ~--oldest~ takes the oldest admissible version of
 an unpinned requirement. ~--easystack-out~ writes that build order.
 ~--hashes-out~ writes one ~hash  name-version-toolchain~ line per module.
 ~stack easystack~ writes the lock, which is sorted by package name, as the

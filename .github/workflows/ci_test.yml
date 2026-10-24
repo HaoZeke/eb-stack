@@ -180,6 +180,7 @@ jobs:
             --test sbom_schema \
             --test skill_easyblock_fix \
             --test solver_completeness \
+            --test stack_order_filter \
             -- --nocapture
 
   cli-smoke:
