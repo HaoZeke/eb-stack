@@ -347,74 +347,6 @@ fn a_failure_names_the_problem_and_prints_no_backtrace() {
 }
 
 #[test]
-fn a_missing_recipe_names_the_argument_once() {
-    let missing = "/nope.eb";
-    let check = output(&[
-        "recipe",
-        "check",
-        "--recipe",
-        missing,
-        "--easyconfigs",
-        "/nope-tree",
-    ]);
-    let stderr = String::from_utf8(check.stderr).expect("utf8");
-    assert_eq!(check.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("--recipe"), "{stderr}");
-    assert_eq!(stderr.matches(missing).count(), 1, "{stderr}");
-
-    for extra in [Vec::<&str>::new(), vec!["--dry-run"]] {
-        let mut args = vec!["recipe", "format", missing];
-        args.extend(extra);
-        let formatted = output(&args);
-        let stderr = String::from_utf8(formatted.stderr).expect("utf8");
-        assert_eq!(formatted.status.code(), Some(1), "{args:?}\n{stderr}");
-        assert!(stderr.contains("recipe"), "{stderr}");
-        assert_eq!(stderr.matches(missing).count(), 1, "{stderr}");
-        assert!(!stderr.contains("io: read"), "{stderr}");
-    }
-}
-
-#[test]
-fn a_missing_lock_names_the_path_once() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let lock = temp.path().join("nope.lock.json");
-    let lock = lock.to_str().unwrap();
-    let sbom_out = temp.path().join("out.cdx.json");
-    let easy_out = temp.path().join("out.yml");
-    for args in [
-        vec![
-            "stack",
-            "sbom",
-            "--lock",
-            lock,
-            "--out",
-            sbom_out.to_str().unwrap(),
-        ],
-        vec![
-            "stack",
-            "easystack",
-            "--lock",
-            lock,
-            "--out",
-            easy_out.to_str().unwrap(),
-        ],
-    ] {
-        let result = output(&args);
-        let stderr = String::from_utf8(result.stderr).expect("utf8");
-        assert_eq!(result.status.code(), Some(1), "{args:?}\n{stderr}");
-        assert!(stderr.contains("--lock"), "{stderr}");
-        assert_eq!(
-            stderr.matches(lock).count(),
-            1,
-            "the lock path is named once: {stderr}"
-        );
-        assert!(!stderr.contains("read "), "{stderr}");
-    }
-    assert!(!sbom_out.exists());
-    assert!(!easy_out.exists());
-}
-
-#[test]
 fn an_empty_toolchain_name_is_rejected() {
     let temp = tempfile::tempdir().expect("tempdir");
     let source = temp.path().join("recipe.yaml");
@@ -489,6 +421,97 @@ fn inspect_with_a_lone_toolchain_version_uses_foss() {
         serde_json::json!({"name": "foss", "version": "2026.1"}),
         "0.3.0 filled a missing --toolchain-name with foss"
     );
+}
+
+#[test]
+fn an_io_error_is_printed_once() {
+    let result = output(&[
+        "stack",
+        "solve",
+        "--easyconfigs",
+        "/nope-tree",
+        "--toolchain",
+        "foss/2026.1",
+        "--root",
+        "zlib",
+    ]);
+    let stderr = String::from_utf8(result.stderr).expect("utf8");
+    assert_eq!(result.status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        stderr.matches("(os error 2)").count(),
+        1,
+        "the operating-system error is printed once: {stderr}"
+    );
+    assert!(stderr.contains("--easyconfigs /nope-tree"), "{stderr}");
+    assert!(stderr.contains("IO /nope-tree:"), "{stderr}");
+}
+
+#[test]
+fn a_missing_recipe_names_the_argument_once() {
+    let missing = "/nope.eb";
+    let check = output(&[
+        "recipe",
+        "check",
+        "--recipe",
+        missing,
+        "--easyconfigs",
+        "/nope-tree",
+    ]);
+    let stderr = String::from_utf8(check.stderr).expect("utf8");
+    assert_eq!(check.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("--recipe"), "{stderr}");
+    assert_eq!(stderr.matches(missing).count(), 1, "{stderr}");
+
+    for extra in [Vec::<&str>::new(), vec!["--dry-run"]] {
+        let mut args = vec!["recipe", "format", missing];
+        args.extend(extra);
+        let formatted = output(&args);
+        let stderr = String::from_utf8(formatted.stderr).expect("utf8");
+        assert_eq!(formatted.status.code(), Some(1), "{args:?}\n{stderr}");
+        assert!(stderr.contains("recipe"), "{stderr}");
+        assert_eq!(stderr.matches(missing).count(), 1, "{stderr}");
+        assert!(!stderr.contains("io: read"), "{stderr}");
+    }
+}
+
+#[test]
+fn a_missing_lock_names_the_path_once() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let lock = temp.path().join("nope.lock.json");
+    let lock = lock.to_str().unwrap();
+    let sbom_out = temp.path().join("out.cdx.json");
+    let easy_out = temp.path().join("out.yml");
+    for args in [
+        vec![
+            "stack",
+            "sbom",
+            "--lock",
+            lock,
+            "--out",
+            sbom_out.to_str().unwrap(),
+        ],
+        vec![
+            "stack",
+            "easystack",
+            "--lock",
+            lock,
+            "--out",
+            easy_out.to_str().unwrap(),
+        ],
+    ] {
+        let result = output(&args);
+        let stderr = String::from_utf8(result.stderr).expect("utf8");
+        assert_eq!(result.status.code(), Some(1), "{args:?}\n{stderr}");
+        assert!(stderr.contains("--lock"), "{stderr}");
+        assert_eq!(
+            stderr.matches(lock).count(),
+            1,
+            "the lock path is named once: {stderr}"
+        );
+        assert!(!stderr.contains("read "), "{stderr}");
+    }
+    assert!(!sbom_out.exists());
+    assert!(!easy_out.exists());
 }
 
 fn assert_names_flag(args: &[&str], flag: &str, path: &str) {

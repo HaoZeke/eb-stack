@@ -56,7 +56,10 @@ struct HierarchyFixture {
 pub enum HierarchyError {
     #[error("IO {0}: {1}")]
     /// A hierarchy file could not be read.
-    Io(String, #[source] std::io::Error),
+    ///
+    /// The operating-system error is part of the message. It is not also
+    /// a source, or `{:#}` prints that text a second time.
+    Io(String, std::io::Error),
     #[error("parse hierarchy fixture {0}: {1}")]
     /// A hierarchy file could not be understood.
     Parse(String, String),

@@ -17,6 +17,8 @@ All notable changes to this project are documented here.
 - A closure SBOM keys each component, its checksums and its dependency
   entry by name, version, versionsuffix and toolchain. Two versions of
   one name keep their own edges and hashes.
+- An unreadable easyconfig tree prints its operating-system error
+  once.
 - `campaign finding claim` removes its lock guard when the claim
   ends, including when the state file is missing.
 - `--merged N` exits 2 when pull request N has no overlap record,

@@ -19,7 +19,10 @@ use thiserror::Error;
 pub enum ParseError {
     #[error("IO {0}: {1}")]
     /// The file could not be read.
-    Io(String, #[source] std::io::Error),
+    ///
+    /// The operating-system error is part of the message. It is not also
+    /// a source, or `{:#}` prints that text a second time.
+    Io(String, std::io::Error),
     #[error("parse {0}: {1}")]
     /// The file could not be understood. Carries the path and the reason,
     /// including a line number where the failure was positional.
