@@ -78,6 +78,23 @@ fn the_cli_matches_the_easyconfig_fixture() {
             None,
             &head("App", Some(("Dep", "1.0")), "Head."),
         ),
+        pr(
+            7,
+            "add Need",
+            "n/Need/Need-1.0.eb",
+            None,
+            &head("Need", None, "Head."),
+        ),
+        pr(
+            8,
+            "add User",
+            "u/User/User-1.0.eb",
+            None,
+            &head("User", Some(("Need", "1.0")), "Head.").replace(
+                "dependencies = [('Need', '1.0')]\n\n",
+                "dependencies = [('Dep', '1.0'), ('Need', '1.0')]\n\n",
+            ),
+        ),
     ];
     let temp = tempfile::tempdir().unwrap();
     let input = temp.path().join("prs.json");
@@ -113,6 +130,8 @@ fn the_cli_matches_the_easyconfig_fixture() {
         "prs/4.toml",
         "prs/5.toml",
         "prs/6.toml",
+        "prs/7.toml",
+        "prs/8.toml",
     ] {
         let got = std::fs::read_to_string(out.join(name)).unwrap();
         let want = std::fs::read_to_string(expected.join(name)).unwrap();

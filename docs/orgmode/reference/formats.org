@@ -426,7 +426,7 @@ kinds:
 | ~same-file~ | 2 pull requests change one path. ~path~ is that path. ~prs~ lists the numbers |
 | ~same-module~ | 2 pull requests add easyconfigs for one module. ~module~ is that module |
 | ~shared-new-module~ | One module is in 2 pull requests' ~new_modules~ |
-| ~depends-on~ | Pull request ~to~ reaches a module pull request ~from~ adds, and ~to~ does not also add it. ~modules~ lists those modules |
+| ~depends-on~ | Pull request ~to~ reaches a module pull request ~from~ adds, ~to~ does not also add it, and the module is in ~from~'s ~new_modules~. A file ~from~ adds for a module the base tree already provides is not a dependency. ~modules~ lists those modules |
 
 A software-layer index stays schema 1 and omits ~rows~.
 

@@ -18,6 +18,9 @@ All notable changes to this project are documented here.
   `EB_QuantumESPRESSO`, so a change to `CMakeMake` lists that class and
   the QuantumESPRESSO easyconfigs. A framework module still reaches the
   easyblocks that import it and their subclasses.
+- `eb-stack pr-overlap --kind easyconfigs` counts `depends-on` only when
+  the added module is new to the base tree. An added file for a module
+  the base already provides is not a dependency of another pull request.
 - A foreign package plan locks a generation member instead of the
   SYSTEM bootstrap of the same name when both are in the robot, which is
   the module `recipe check` accepts.

@@ -4,9 +4,10 @@
 schema_version = 2
 generated_at = "2026-10-22T00:00:00Z"
 installed_source = ""
-prs = [1, 2, 3, 4, 5, 6]
+prs = [1, 2, 3, 4, 5, 6, 7, 8]
 
 [shared]
+"Need/1.0" = [7, 8]
 "New/1.0" = [3, 4]
 
 [pairs.3]
@@ -14,6 +15,12 @@ prs = [1, 2, 3, 4, 5, 6]
 
 [pairs.4]
 3 = ["New/1.0"]
+
+[pairs.7]
+8 = ["Need/1.0"]
+
+[pairs.8]
+7 = ["Need/1.0"]
 
 [[rows]]
 kind = "same-file"
@@ -32,11 +39,16 @@ module = "New/1.0"
 
 [[rows]]
 kind = "shared-new-module"
+prs = [7, 8]
+module = "Need/1.0"
+
+[[rows]]
+kind = "shared-new-module"
 prs = [3, 4]
 module = "New/1.0"
 
 [[rows]]
 kind = "depends-on"
-from = 5
-to = 6
-modules = ["Dep/1.0"]
+from = 7
+to = 8
+modules = ["Need/1.0"]

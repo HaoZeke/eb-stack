@@ -1109,7 +1109,9 @@ fn easyconfig_rows(records: &[PrRecord]) -> Vec<OverlapRow> {
                 .filter(|change| change.status == "added")
                 .filter_map(|change| change.module.clone())
                 .filter(|module| {
-                    right.closure.iter().any(|item| item == module) && !adds(right, module)
+                    left.new_modules.iter().any(|item| item == module)
+                        && right.closure.iter().any(|item| item == module)
+                        && !adds(right, module)
                 })
                 .collect();
             modules.sort();
@@ -1886,6 +1888,46 @@ entries = []
         assert!(md.contains("## depends-on\n\n| From | To | Modules |"));
         assert!(md.contains("| #5 | #6 | `Dep/1.0` |"));
         assert!(!md.contains("Shared builds between open pull requests"));
+    }
+
+    #[test]
+    fn an_added_file_for_a_base_module_is_not_depends_on() {
+        let records = vec![
+            ec_row(
+                5,
+                vec![changed("contrib/Dep-1.0.eb", "added", Some("Dep/1.0"))],
+                &["Dep/1.0"],
+                &[],
+            ),
+            ec_row(
+                6,
+                vec![changed("a/App/App-1.0.eb", "added", Some("App/1.0"))],
+                &["App/1.0", "Dep/1.0"],
+                &["App/1.0"],
+            ),
+            ec_row(
+                7,
+                vec![changed("n/Need/Need-1.0.eb", "added", Some("Need/1.0"))],
+                &["Need/1.0"],
+                &["Need/1.0"],
+            ),
+            ec_row(
+                8,
+                vec![changed("u/User/User-1.0.eb", "added", Some("User/1.0"))],
+                &["Dep/1.0", "Need/1.0", "User/1.0"],
+                &["Need/1.0", "User/1.0"],
+            ),
+        ];
+        let index = overlap_index(&records, &ec_config());
+        let depends: Vec<_> = index
+            .rows
+            .iter()
+            .filter(|row| row.kind == "depends-on")
+            .collect();
+        assert_eq!(depends.len(), 1, "{depends:?}");
+        assert_eq!(depends[0].from, Some(7));
+        assert_eq!(depends[0].to, Some(8));
+        assert_eq!(depends[0].modules, vec!["Need/1.0".to_string()]);
     }
 
     #[test]
