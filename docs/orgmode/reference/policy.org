@@ -27,8 +27,10 @@ noted below.
 * Fields
 
 - ~toolchain~ :: ~{"name": string, "version": string}~. Required. Selects
-  which candidates from the parsed tree participate: only easyconfigs whose
-  own ~toolchain~ matches exactly are eligible.
+  which candidates from the parsed tree participate: the policy toolchain,
+  every member of its hierarchy, and ~SYSTEM~. A recipe at ~GCC~ takes CMake
+  from ~GCCcore~ and a licence file from ~SYSTEM~, so an exact match on the
+  policy toolchain alone cannot satisfy its own dependencies.
 - ~roots~ :: Array of package names. Required, non-empty. Every dependency
   (runtime *and* build-time) a root needs co-selects automatically; the
   solve fails if any named root has no candidate at all.
@@ -49,16 +51,28 @@ noted below.
 - ~forbid~ :: Optional array of strings. Each entry matches either a full
   ~easyconfig_path~ or a bare package ~name~; matching candidates are
   excluded from the universe entirely before solving.
+- ~prefer_installed~ :: Optional bool, default false. When true, a package
+  present in the baseline stays at that version unless a pin, a forbid, or
+  ~require_upgrade~ says otherwise. The derived criteria are then
+  ~["-changed", "-notuptodate"]~: staying put outranks moving to newest.
 - ~objective~ :: Optional string, default ~"prefer_newer"~. The only
-  objective eb-stack 0.2.0 supports: among jointly feasible assignments, prefer the
-  newest version of each root (in priority order), then the newest version
-  of every other co-selected package.
+  objective the solver implements: among jointly feasible assignments,
+  prefer the newest version of each root (in priority order), then the
+  newest version of every other co-selected package.
+- ~criteria~ :: Optional array of Common Upgradeability Description Format (CUDF) criterion names, in precedence
+  order. Empty means derive them: ~["-notuptodate"]~ by default, or
+  ~["-changed", "-notuptodate"]~ when ~prefer_installed~ is true. An
+  explicit list wins. Known names are ~-changed~ (minimise packages moved
+  off the baseline version) and ~-notuptodate~ (minimise packages held
+  below the newest candidate). Any other name fails the solve. The applied
+  list is recorded on the lock as ~solver.criteria~.
 - ~require_upgrade~ :: Optional ~{"name": string, "relative_to_baseline":
-  bool}~. When ~relative_to_baseline~ is true, the named package's solved
-  version must be strictly newer than its version in the baseline lock (see
-  ~--baseline-easyconfigs~ / ~--baseline~). No baseline, or no baseline entry
-  for that package, fails the solve with an explicit error instead of
-  skipping the requirement without a warning.
+  bool}~, or an array of those objects. When ~relative_to_baseline~ is
+  true, the named package's solved version must be strictly newer than its
+  version in the baseline lock (~--baseline-easyconfigs~ or
+  ~--baseline-easystack~). No baseline, or no baseline entry for that
+  package, fails the solve with an explicit error instead of skipping the
+  requirement without a warning.
 
 * version_req grammar
 

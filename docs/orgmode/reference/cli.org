@@ -362,7 +362,20 @@ in that format; each package keeps the ~--hook~, ~--hooks~,
 behind. A module whose name or versionsuffix says CUDA gets
 ~--include-systems~ with the ~--jenkins-gpu-systems~ list.
 ~--jenkins-roots-only~ writes one line per root application and leaves the
-dependencies to ~eb --robot~.
+dependencies to ~eb --robot~. ~stack sbom --lock~ re-reads the easyconfigs
+named in the lock and restores their runtime ~dependsOn~ edges.
+
+~stack order~ sequences the recipes the roots pin. It does not pick one
+version per name, so two builds of one name both appear and stdout reports
+~multiple builds of NAME~. ~--oldest~ takes the oldest admissible version of
+an unpinned requirement. ~--easystack-out~ writes that build order.
+~--hashes-out~ writes one ~hash  name-version-toolchain~ line per module.
+~stack easystack~ writes the lock, which is sorted by package name, as the
+easystack ~eb --easystack~ consumes. ~--option~ is
+~<file.eb>:<option>=<value>~. ~stack sections~ regroups a Jenkins list under
+the ~#### Title ####~ headers of a previous list. Commented entries stay
+commented. A name no previous section files goes under ~--unfiled~, whose
+default is ~New in this generation~.
 
 ~stack order~ keeps every build the recipes pin. A name the generation
 builds twice stays twice, in an order that respects every dependency.

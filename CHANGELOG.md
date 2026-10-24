@@ -300,6 +300,13 @@ All notable changes to this project are documented here.
   upstream's own class is a judgement: `einops` is `math` and `fonttools`
   `devel`, and neither follows from the metadata.
 
+### Changed
+
+- The stack docs match the commands: build-list order and versions, the
+  stack-diff labels and punctuation, `solver.criteria`, lock-SBOM
+  `dependsOn` edges, policy hierarchy membership, and `stack order`,
+  `stack easystack`, and `stack sections`.
+
 ### Fixed
 
 - Recipe lint modules live under `src/eb_style/` so `sphinx-rustdocgen`

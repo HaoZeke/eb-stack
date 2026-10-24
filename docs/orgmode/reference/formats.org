@@ -17,15 +17,16 @@
       "easyconfig_path": "foss-2025b/GROMACS-2025.0-foss-2025b.eb"
     }
   ],
-  "solver": {
+    "solver": {
     "engine": "resolvo_cdcl_sat",
     "engine_version": "resolvo+eb_stack-0.3.0",
-    "timestamp": "2026-01-01T00:00:00Z"
+    "timestamp": "2026-01-01T00:00:00Z",
+    "criteria": ["-notuptodate"]
   }
 }
 #+end_src
 
-- ~schema_version~ :: ~1~ as of eb-stack 0.2.0.
+- ~schema_version~ :: ~1~.
 - ~toolchain~ :: The policy's target toolchain (not necessarily every
   package's own toolchain field, though in practice they match).
 - ~generation_label~ :: Optional human label, e.g. ~"foss-2025b"~ when
@@ -36,6 +37,11 @@
   ~versionsuffix~, and the ~easyconfig_path~ it came from.
 - ~solver~ :: ~engine~ is always ~"resolvo_cdcl_sat"~. ~engine_version~
   embeds the crate version. ~timestamp~ is RFC 3339, UTC, second precision.
+  ~criteria~ is the CUDF list the solve applied, in order. A policy that
+  sets neither ~criteria~ nor ~prefer_installed~ records ~["-notuptodate"]~.
+  ~prefer_installed~ records ~["-changed", "-notuptodate"]~. An explicit
+  ~criteria~ list is recorded as written. See the
+  [[file:policy.org][policy reference]].
 
 * Internal candidate universe
 
@@ -51,7 +57,7 @@
       "versionsuffix": null,
       "easyconfig_path": "foss-2025b/GROMACS-2025.0-foss-2025b.eb",
       "dependencies": [
-        {"name": "OpenMPI", "version_req": ">=4.1.6"}
+        {"name": "OpenMPI", "version_req": "5.0.3"}
       ],
       "builddependencies": []
     }
@@ -69,10 +75,11 @@ the version-one CLI builds it from repeatable ~--easyconfigs~ paths.
 Plain text, one easyconfig path per line, trailing newline, no blank lines:
 
 #+begin_src text
-foss-2025b/OpenBLAS-0.3.27-foss-2025b.eb
-foss-2025b/OpenMPI-4.1.6-foss-2025b.eb
-foss-2025b/FFTW-3.3.10-foss-2025b.eb
-foss-2025b/GROMACS-2025.0-foss-2025b.eb
+fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/FFTW-3.3.10-foss-2025b.eb
+fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/OpenBLAS-0.3.27-foss-2025b.eb
+fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/OpenMPI-5.0.3-foss-2025b.eb
+fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/Python-3.12.3-foss-2025b.eb
+fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/GROMACS-2025.0-foss-2025b.eb
 #+end_src
 
 Order is a topological sort over the co-selected stack: a dependency's path
@@ -88,27 +95,44 @@ Markdown, meant to be pasted directly into a pull request:
 #+begin_src markdown
 # Stack diff
 
-Baseline (`foss-2025a`) -> solved (`foss-2025b`).
+Baseline (`baseline-from-eb-foss-2025a`) → solved (`foss-2025b`).
 
 ## Summary
 
-- **unchanged**: 1
+- **unchanged**: 2
 - **added**: 0
 - **removed**: 0
 - **version-bumped**: 3
 
 ## Packages
 
-### FFTW -- unchanged
+### FFTW — unchanged
 
-- Baseline: `3.3.10` -- `foss-2025a/FFTW-3.3.10-foss-2025a.eb`
-- Solved: `3.3.10` -- `foss-2025b/FFTW-3.3.10-foss-2025b.eb`
+- Baseline: `3.3.10` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025a/FFTW-3.3.10-foss-2025a.eb`
+- Solved: `3.3.10` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/FFTW-3.3.10-foss-2025b.eb`
 
-### GROMACS -- version-bumped
+### GROMACS — version-bumped
 
-- Baseline: `2024.1` -- `foss-2025a/GROMACS-2024.1-foss-2025a.eb`
-- Solved: `2025.0` -- `foss-2025b/GROMACS-2025.0-foss-2025b.eb`
-- Change: `2024.1` -> `2025.0`
+- Baseline: `2024.1` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025a/GROMACS-2024.1-foss-2025a.eb`
+- Solved: `2025.0` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/GROMACS-2025.0-foss-2025b.eb`
+- Change: `2024.1` → `2025.0`
+
+### OpenBLAS — version-bumped
+
+- Baseline: `0.3.23` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025a/OpenBLAS-0.3.23-foss-2025a.eb`
+- Solved: `0.3.27` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/OpenBLAS-0.3.27-foss-2025b.eb`
+- Change: `0.3.23` → `0.3.27`
+
+### OpenMPI — version-bumped
+
+- Baseline: `4.1.5` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025a/OpenMPI-4.1.5-foss-2025a.eb`
+- Solved: `5.0.3` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/OpenMPI-5.0.3-foss-2025b.eb`
+- Change: `4.1.5` → `5.0.3`
+
+### Python — unchanged
+
+- Baseline: `3.12.3` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025a/Python-3.12.3-foss-2025a.eb`
+- Solved: `3.12.3` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/Python-3.12.3-foss-2025b.eb`
 #+end_src
 
 Every package present in either the baseline or the solved lock is
@@ -163,7 +187,7 @@ purpose is SBOM emission.
     }
   ],
   "dependencies": [
-    {"ref": "pkg:generic/GROMACS@2025.0?toolchain=foss-2025b", "dependsOn": ["pkg:generic/OpenMPI@4.1.6?toolchain=foss-2025b"]}
+    {"ref": "pkg:generic/GROMACS@2025.0?toolchain=foss-2025b", "dependsOn": ["pkg:generic/Python@3.12.3?toolchain=foss-2025b", "pkg:generic/OpenBLAS@0.3.27?toolchain=foss-2025b", "pkg:generic/OpenMPI@5.0.3?toolchain=foss-2025b", "pkg:generic/FFTW@3.3.10?toolchain=foss-2025b"]}
   ]
 }
 #+end_src

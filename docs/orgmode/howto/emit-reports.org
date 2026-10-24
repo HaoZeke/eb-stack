@@ -21,8 +21,11 @@ eb-stack stack solve \
   --stack-diff-out stack.diff.md
 #+end_src
 
-~--stack-diff-out~ requires a baseline or the solve fails with an explicit
-error instead of skipping the diff without a warning.
+~--stack-diff-out~ needs a baseline lock. Omit ~--baseline-easyconfigs~ and
+the first ~--easyconfigs~ tree is that baseline. Pass ~--baseline-easystack~
+to diff against what those easystacks install. A caller that can form no
+baseline fails and names ~--baseline-easyconfigs~ or ~--baseline-easystack~.
+There is no ~--baseline~ flag.
 
 To diff against what a software layer already ships, pass its easystacks as
 the baseline instead of an older tree:
@@ -52,10 +55,11 @@ them (a topological sort over the co-selected stack, ties broken by package
 name for a deterministic order):
 
 #+begin_src text
-fixtures/.../foss-2025b/OpenBLAS-0.3.27-foss-2025b.eb
-fixtures/.../foss-2025b/OpenMPI-4.1.6-foss-2025b.eb
-fixtures/.../foss-2025b/FFTW-3.3.10-foss-2025b.eb
-fixtures/.../foss-2025b/GROMACS-2025.0-foss-2025b.eb
+fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/FFTW-3.3.10-foss-2025b.eb
+fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/OpenBLAS-0.3.27-foss-2025b.eb
+fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/OpenMPI-5.0.3-foss-2025b.eb
+fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/Python-3.12.3-foss-2025b.eb
+fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/GROMACS-2025.0-foss-2025b.eb
 #+end_src
 
 Feed this straight into a sequential build pipeline: ~xargs -n1 eb build~,
@@ -69,32 +73,35 @@ Every co-selected package is classified against the baseline lock as
 #+begin_src markdown
 # Stack diff
 
-Baseline (`foss-2025a`) -> solved (`foss-2025b`).
+Baseline (`baseline-from-eb-foss-2025a`) → solved (`foss-2025b`).
 
 ## Summary
 
-- **unchanged**: 1
+- **unchanged**: 2
 - **added**: 0
 - **removed**: 0
 - **version-bumped**: 3
 
 ## Packages
 
-### FFTW -- unchanged
+### FFTW — unchanged
 
-- Baseline: `3.3.10` -- `.../FFTW-3.3.10-foss-2025a.eb`
-- Solved: `3.3.10` -- `.../FFTW-3.3.10-foss-2025b.eb`
+- Baseline: `3.3.10` — `fixtures/.../foss-2025a/FFTW-3.3.10-foss-2025a.eb`
+- Solved: `3.3.10` — `fixtures/.../foss-2025b/FFTW-3.3.10-foss-2025b.eb`
 
-### GROMACS -- version-bumped
+### GROMACS — version-bumped
 
-- Baseline: `2024.1` -- `.../GROMACS-2024.1-foss-2025a.eb`
-- Solved: `2025.0` -- `.../GROMACS-2025.0-foss-2025b.eb`
-- Change: `2024.1` -> `2025.0`
+- Baseline: `2024.1` — `fixtures/.../foss-2025a/GROMACS-2024.1-foss-2025a.eb`
+- Solved: `2025.0` — `fixtures/.../foss-2025b/GROMACS-2025.0-foss-2025b.eb`
+- Change: `2024.1` → `2025.0`
 #+end_src
 
-Paste the file body directly into a pull request description; every line
-names a real version and a real easyconfig path, not an internal solver
-identifier.
+The rest of the file is the same shape: OpenBLAS ~0.3.23~ → ~0.3.27~,
+OpenMPI ~4.1.5~ → ~5.0.3~, and Python ~3.12.3~ unchanged. A tree baseline is
+labelled ~baseline-from-eb-<toolchain>~. An easystack baseline is labelled
+~baseline-from-easystack-<toolchain>~. Paste the file body directly into a
+pull request description; every line names a real version and a real
+easyconfig path, not an internal solver identifier.
 
 * Next steps
 
