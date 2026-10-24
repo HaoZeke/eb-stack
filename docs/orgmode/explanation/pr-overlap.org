@@ -263,20 +263,122 @@ eb_version = "5.4.0"
 #+end_src
 
 ~to_build~ is one sorted line per module, so a duplicate line is a module
-both pull requests would build:
+both pull requests would build. This checkout records that check on
+~tests/pr_overlap_layer~, pull requests 1585 and 1728:
 
 #+begin_src bash
+eb-stack pr-overlap --pr tests/pr_overlap_layer/prs.json \
+  --easyconfigs tests/pr_overlap_layer \
+  --installed tests/pr_overlap_layer/installed.txt \
+  --installed-label none \
+  --generated-at 2026-10-24T00:00:00Z \
+  --repo-url https://github.com/EESSI/software-layer \
+  --eessi-version 2026.06 \
+  --out-dir /tmp/pr-overlap-recorded
 awk '/^to_build = \[\]/{next} /^to_build = \[/{f=1; next} f && /^\]/{f=0; next} f' \
-  /tmp/out-fix/prs/1728.toml /tmp/out-fix/prs/1787.toml | sort | uniq -d
+  /tmp/pr-overlap-recorded/prs/*.toml | sort | uniq -d
 #+end_src
 
 #+begin_src text
-  "PLUMED/2.10.0-foss-2026.1",
+prs=2 records=2 shared_modules=91 skipped_easyconfigs=0 out=/tmp/pr-overlap-recorded
+  "AOCL-BLAS/5.2-GCC-15.2.0",
+  "Autoconf/2.72",
+  "Autoconf/2.72-GCCcore-15.2.0",
+  "Automake/1.18.1",
+  "Automake/1.18.1-GCCcore-15.2.0",
+  "Autotools/20250626",
+  "Autotools/20250626-GCCcore-15.2.0",
+  "BeautifulSoup/4.14.3-GCCcore-15.2.0",
+  "binutils/2.45",
+  "binutils/2.45-GCCcore-15.2.0",
+  "Bison/3.8.2",
+  "Bison/3.8.2-GCCcore-15.2.0",
+  "BLIS/2.0-GCC-15.2.0",
+  "Boost/1.90.0-GCCcore-15.2.0",
+  "build/1.4.4-GCCcore-15.2.0",
+  "bzip2/1.0.8-GCCcore-15.2.0",
+  "Catch2/2.13.10-GCCcore-15.2.0",
+  "cffi/2.0.0-GCCcore-15.2.0",
+  "CMake/4.2.1-GCCcore-15.2.0",
+  "coverage/7.13.5-GCCcore-15.2.0",
+  "cryptography/47.0.0-GCCcore-15.2.0",
+  "cURL/8.17.0-GCCcore-15.2.0",
+  "Cython/3.2.4-GCCcore-15.2.0",
+  "dulwich/1.2.0-GCCcore-15.2.0",
+  "Eigen/5.0.0-GCCcore-15.2.0",
+  "FFTW/3.3.10-GCC-15.2.0",
+  "flex/2.6.4",
+  "flex/2.6.4-GCCcore-15.2.0",
+  "FlexiBLAS/3.5.0-GCC-15.2.0",
+  "GCC/15.2.0",
+  "GCCcore/15.2.0",
+  "gettext/0.26-GCCcore-15.2.0",
+  "gfbf/2026.1",
+  "gzip/1.14-GCCcore-15.2.0",
+  "hatchling/1.29.0-GCCcore-15.2.0",
+  "help2man/1.49.3-GCCcore-15.2.0",
+  "hypothesis/6.153.2-GCCcore-15.2.0",
+  "ICU/78.3-GCCcore-15.2.0",
+  "libarchive/3.8.5-GCCcore-15.2.0",
+  "libffi/3.5.2-GCCcore-15.2.0",
+  "libiconv/1.18-GCCcore-15.2.0",
+  "libidn2/2.3.8-GCCcore-15.2.0",
+  "libpsl/0.21.5-GCCcore-15.2.0",
+  "libreadline/8.3-GCCcore-15.2.0",
+  "libtommath/1.3.0-GCCcore-15.2.0",
+  "libtool/2.5.4",
+  "libtool/2.5.4-GCCcore-15.2.0",
+  "libunistring/1.4.1-GCCcore-15.2.0",
+  "libxml2/2.15.1-GCCcore-15.2.0",
+  "libyaml/0.2.5-GCCcore-15.2.0",
+  "lz4/1.10.0-GCCcore-15.2.0",
+  "M4/1.4.19",
+  "M4/1.4.20",
+  "M4/1.4.20-GCCcore-15.2.0",
+  "M4/1.4.21",
+  "make/4.4.1-GCCcore-15.2.0",
+  "maturin/1.13.1-GCCcore-15.2.0",
+  "Meson/1.10.2-GCCcore-15.2.0",
+  "meson-python/0.19.0-GCCcore-15.2.0",
+  "ncurses/6.6-GCCcore-15.2.0",
+  "Ninja/1.13.2-GCCcore-15.2.0",
+  "OpenBLAS/0.3.32-GCC-15.2.0",
+  "OpenSSL/3",
+  "patchelf/0.18.0-GCCcore-15.2.0",
+  "Perl/5.42.0",
+  "Perl/5.42.0-GCCcore-15.2.0",
+  "pkgconf/2.5.1",
+  "pkgconf/2.5.1-GCCcore-15.2.0",
+  "poetry/2.3.4-GCCcore-15.2.0",
+  "psutil/7.2.1-GCCcore-15.2.0",
+  "pybind11/3.0.4-GCCcore-15.2.0",
+  "Pygments/2.20.0-GCCcore-15.2.0",
+  "Python/3.14.2-GCCcore-15.2.0",
+  "Python-bundle-PyPI/2026.04-GCCcore-15.2.0",
+  "PyYAML/6.0.3-GCCcore-15.2.0",
+  "rpds-py/0.30.0-GCCcore-15.2.0",
+  "Rust/1.94.1-GCCcore-15.2.0",
+  "scikit-build-core/0.12.2-GCCcore-15.2.0",
+  "SciPy-bundle/2026.05-gfbf-2026.1",
+  "setuptools-rust/1.12.1-GCCcore-15.2.0",
+  "spin/0.18-GCCcore-15.2.0",
+  "SQLite/3.51.1-GCCcore-15.2.0",
+  "Tcl/9.0.3-GCCcore-15.2.0",
+  "tibs/0.5.7-GCCcore-15.2.0",
+  "UnZip/6.0-GCCcore-15.2.0",
+  "virtualenv/21.3.0-GCCcore-15.2.0",
+  "watchfiles/1.1.1-GCCcore-15.2.0",
+  "XZ/5.8.2-GCCcore-15.2.0",
+  "zlib/1.3.1",
+  "zlib/2.3.2-GCCcore-15.2.0",
+  "zstd/1.5.7-GCCcore-15.2.0",
 #+end_src
 
-That is the only shared line between these two files. The same PLUMED row in
-the zen4 ~overlap.md~, which also includes pull request 1777, and the two
-other rows checked against ~eb --dry-run~ on the same stack:
+The first line is the overlap summary. The 91 lines under it are the
+modules both recorded pull requests would build. The zen4 ~overlap.md~
+names the same PLUMED module on a different installed list, and also
+includes pull request 1777, plus the two other rows checked against
+~eb --dry-run~ on that stack:
 
 #+begin_src text
 | `MPC/1.4.1-GCCcore-15.2.0` | [#1771](https://github.com/EESSI/software-layer/pull/1771), [#1775](https://github.com/EESSI/software-layer/pull/1775) |
