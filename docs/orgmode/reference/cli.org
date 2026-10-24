@@ -858,10 +858,15 @@ planning. ~eb_package_plan~ also takes ~package_index~, a CRAN
 ~--package-index~. ~eb_package_bump~ optionals include ~version~,
 ~source_checksum~, ~dependencies~ (object map), ~hierarchy_fixture~,
 ~stack_policy~, ~package_configs~, ~emit_easyblock~, ~fetch_checksums~,
-and ~strict_patches~. ~toolchain_name~ is required. ~strict_patches~
-fails the bump when a patch's fate cannot be decided, as
-~--strict-patches~ does. ~fetch_checksums~ downloads the new source and
-writes its SHA-256, as ~--fetch-checksums~ does.
+~strict_patches~, and ~toolchain~ (~name/version~). ~toolchain_name~ and
+~toolchain_version~ are required when ~toolchain~ is absent.
+~strict_patches~ fails the bump when a patch's fate cannot be decided,
+as ~--strict-patches~ does. ~fetch_checksums~ downloads the new source
+and writes its SHA-256, as ~--fetch-checksums~ does.
+~eb_package_inspect~ and ~eb_package_plan~ take that same ~toolchain~
+spelling, and default a missing ~toolchain_name~ to ~foss~.
+~eb_stack_solve~ reads the policy file as ~stack_policy~. ~policy~ is
+that argument as well.
 ~eb_recipe_lint~ takes a ~recipes~ path array, or a single ~recipe~ path, and returns
 reviewer-style findings plus ~check_contrib~. ~eb_campaign_finding_resolve~
 takes ~changes~ as an optional path array. ~eb_recipe_check~'s

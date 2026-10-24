@@ -94,6 +94,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "emit_easyblock",
         "fetch_checksums",
         "strict_patches",
+        "toolchain",
     ] {
         assert!(
             package_bump["inputSchema"]["properties"]
@@ -1673,6 +1674,123 @@ fn mcp_plan_reads_versions_from_a_package_index() {
     assert!(
         recipe.contains("('processx', '3.8.4'"),
         "the index version must reach the recipe:\n{recipe}"
+    );
+}
+
+#[test]
+fn mcp_toolchain_and_stack_policy_match_the_cli_names() {
+    let listed = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {}
+    }))
+    .expect("tools/list");
+    let tools = listed["result"]["tools"].as_array().expect("tools");
+    let properties = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("missing {name}"))["inputSchema"]["properties"]
+            .clone()
+    };
+    assert!(properties("eb_package_inspect").get("toolchain").is_some());
+    assert!(properties("eb_package_plan").get("toolchain").is_some());
+    assert!(properties("eb_package_bump").get("toolchain").is_some());
+    let solve = properties("eb_stack_solve");
+    assert!(solve.get("stack_policy").is_some());
+    assert!(solve.get("policy").is_none(), "{solve}");
+
+    let bad = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_package_inspect",
+            "arguments": {"source": "recipe.yaml", "out_dir": "bundle", "toolchain": "foss"}
+        }
+    }))
+    .expect("inspect");
+    assert_eq!(bad["result"]["isError"], true, "{bad}");
+    let text = bad["result"]["content"][0]["text"].as_str().unwrap_or("");
+    assert!(text.contains("toolchain foss:"), "{text}");
+
+    let missing = "/no/such/stack-policy.toml";
+    for key in ["stack_policy", "policy"] {
+        let mut arguments = json!({"easyconfigs": ["easyconfigs"]});
+        arguments[key] = json!(missing);
+        let response = handle_message(&json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "eb_stack_solve",
+                "arguments": arguments
+            }
+        }))
+        .expect("solve");
+        assert_eq!(response["result"]["isError"], true, "{key} {response}");
+        let text = response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("");
+        assert!(
+            text.contains(key) && text.contains(missing),
+            "{key}: {text}"
+        );
+    }
+}
+
+/// `policy` is the retired spelling of `stack_policy`. The CLI warns and
+/// still reads the file; the tool does the same.
+#[test]
+fn mcp_policy_is_warned_like_the_cli_alias() {
+    let missing = "/nope-policy.json";
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_stack_solve",
+            "arguments": {"easyconfigs": ["easyconfigs"], "policy": missing}
+        }
+    }))
+    .expect("solve");
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        text.contains("warning: policy is accepted for compatibility. Use stack_policy."),
+        "{text}"
+    );
+    assert!(
+        text.contains("policy /nope-policy.json: not a file"),
+        "{text}"
+    );
+
+    let both = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_stack_solve",
+            "arguments": {
+                "easyconfigs": ["easyconfigs"],
+                "policy": missing,
+                "stack_policy": missing
+            }
+        }
+    }))
+    .expect("both");
+    assert_eq!(both["result"]["isError"], true, "{both}");
+    let text = both["result"]["content"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        text.contains("stack_policy and policy are the same argument; pass stack_policy"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("accepted for compatibility"),
+        "passing both names is a rejection, not the alias warning: {text}"
     );
 }
 

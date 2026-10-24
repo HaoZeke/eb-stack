@@ -9,9 +9,12 @@ All notable changes to this project are documented here.
 - A missing `--lock` names that path once.
 - `component-reach` rejects a purl type with no carrier model before
   it creates `--out-dir`.
-- An empty `--toolchain-name` is a usage error. 0.3.0 kept the empty
-  name: inspect wrote a manifest with no toolchain name, and bump
-  failed later on toolchain `-<version>`.
+- An empty `--toolchain-name`, or an empty `toolchain_name` in a
+  Model Context Protocol (MCP) call, is a usage error. 0.3.0 kept the
+  empty name: inspect wrote a manifest with no toolchain name, and
+  bump failed later on toolchain `-<version>`.
+- MCP `policy` warns and is still read, the same way the CLI treats
+  `--policy`. `stack_policy` is the spelling to pass.
 - Recipe lint modules live under `src/eb_style/` so `sphinx-rustdocgen`
   can open them. A `#[path]` attribute is joined onto the parent file
   and the generator then fails to read the module.
@@ -504,6 +507,9 @@ All notable changes to this project are documented here.
   `stack solve` uses, in place of `--toolchain-name` and
   `--toolchain-version`. An empty `--toolchain-version` is kept: a
   SYSTEM recipe has one. Omitting the version is still rejected.
+- MCP package tools accept `toolchain` as `name/version`. `eb_stack_solve`
+  reads the policy file as `stack_policy`. `policy` is that argument as
+  well.
 - Help examples name `zlib`. Production source does not name a package
   the solver used to special-case.
 - The stack docs match the commands: build-list order and versions, the

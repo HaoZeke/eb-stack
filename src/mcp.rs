@@ -124,14 +124,11 @@ fn tool_catalog() -> Vec<Value> {
         tool_with_optional(
             "eb_package_inspect",
             "Parse a conda-forge, Spack, PyPI, CRAN, Cargo, LuaRocks, or Raku recipe into a canonical build manifest and planned CycloneDX SBOM.",
-            &[
-                ("source", "string"),
-                ("toolchain_version", "string"),
-                ("out_dir", "string"),
-            ],
+            &[("source", "string"), ("out_dir", "string")],
             &[
                 ("format", "string"),
                 ("toolchain_name", "string"),
+                ("toolchain_version", "string"),
                 ("toolchain", "string"),
                 ("package_configs", "array"),
             ],
@@ -141,7 +138,6 @@ fn tool_catalog() -> Vec<Value> {
             "Resolve package profiles with Resolvo and emit manifest, SBOM, profile locks, and EasyBuild recipes.",
             &[
                 ("source", "string"),
-                ("toolchain_version", "string"),
                 ("easyconfigs", "array"),
                 ("stack_policy", "string"),
                 ("out_dir", "string"),
@@ -149,6 +145,7 @@ fn tool_catalog() -> Vec<Value> {
             &[
                 ("format", "string"),
                 ("toolchain_name", "string"),
+                ("toolchain_version", "string"),
                 ("toolchain", "string"),
                 ("package_configs", "array"),
                 ("source_checksums", "array"),
@@ -167,12 +164,12 @@ fn tool_catalog() -> Vec<Value> {
             "Retarget an EasyBuild recipe and emit its canonical SBOM, Resolvo lock, and recipe bundle.",
             &[
                 ("source", "string"),
-                ("toolchain_name", "string"),
-                ("toolchain_version", "string"),
                 ("easyconfigs", "array"),
                 ("out_dir", "string"),
             ],
             &[
+                ("toolchain_name", "string"),
+                ("toolchain_version", "string"),
                 ("toolchain", "string"),
                 ("version", "string"),
                 ("source_checksum", "string"),
@@ -300,7 +297,6 @@ fn tool_catalog() -> Vec<Value> {
             "Solve a jointly consistent EasyBuild stack lock with the same inputs as `stack solve`.",
             &[("easyconfigs", "array")],
             &[
-                ("policy", "string"),
                 ("stack_policy", "string"),
                 ("toolchain", "string"),
                 ("root", "array"),
@@ -467,6 +463,24 @@ fn tool_catalog() -> Vec<Value> {
             {"required": ["recipes"]},
             {"required": ["recipe"]}
         ]);
+    }
+    // Every package tool needs a toolchain. `toolchain` is the spelling the
+    // schema lists; the retired split fields still satisfy the handler, so a
+    // flat required list would reject a call it runs.
+    for (name, split) in [
+        ("eb_package_inspect", json!(["toolchain_version"])),
+        ("eb_package_plan", json!(["toolchain_version"])),
+        (
+            "eb_package_bump",
+            json!(["toolchain_name", "toolchain_version"]),
+        ),
+    ] {
+        if let Some(tool) = tools.iter_mut().find(|tool| tool["name"] == name) {
+            tool["inputSchema"]["anyOf"] = json!([
+                {"required": ["toolchain"]},
+                {"required": split}
+            ]);
+        }
     }
     tools
 }
@@ -701,12 +715,8 @@ fn load_package_source_roots(arguments: &Value) -> Result<PackageSourceRoots, St
 }
 
 fn package_bump(arguments: &Value) -> Result<Value, String> {
-    // The schema and the CLI both require the name. `toolchain` defaults it
-    // for inspect and plan, where the CLI default is foss; bump has no default.
-    let target = Toolchain {
-        name: required_string(arguments, "toolchain_name")?,
-        version: required_string(arguments, "toolchain_version")?,
-    };
+    // Bump has no foss default. Inspect and plan do, which is `toolchain`.
+    let target = resolve_mcp_toolchain(arguments, false)?;
     let stack_policy = if let Some(path) = optional_path(arguments, "stack_policy") {
         load_stack_policy(&path)?
     } else {
@@ -2368,151 +2378,174 @@ fn stack_solve(arguments: &Value) -> Result<Value, String> {
         }
     }
     let toolchain = optional_string(arguments, "toolchain");
-    let policy_arg = optional_path(arguments, "policy");
-    if policy_arg.is_some() && (toolchain.is_some() || !roots.is_empty() || !list_paths.is_empty())
-    {
-        return Err("pass policy or toolchain and root, not both".into());
-    }
-    if toolchain.is_none() && policy_arg.is_none() {
-        return Err("pass policy, or toolchain as name/version with root".into());
-    }
-    if toolchain.is_some() && roots.is_empty() {
-        return Err("toolchain needs at least one root or roots_from_build_list".into());
-    }
-    let generated;
-    let policy = if let Some(path) = policy_arg {
-        path
-    } else {
-        let spec = toolchain.as_deref().expect("toolchain checked above");
-        let (name, version) = spec
-            .split_once('/')
-            .ok_or_else(|| "toolchain wants name/version, for example foss/2026.1".to_string())?;
-        generated = std::env::temp_dir().join(format!(
-            "eb-stack-policy-{name}-{version}-{}.json",
-            std::process::id()
-        ));
-        let body = json!({
-            "toolchain": {"name": name, "version": version},
-            "roots": roots,
-            "objective": "prefer_newer",
-        });
-        std::fs::write(
-            &generated,
-            serde_json::to_vec_pretty(&body).map_err(|error| error.to_string())?,
+    let (policy_arg, policy_key, warning) = stack_policy_argument(arguments)?;
+    let result = (move || -> Result<Value, String> {
+        if policy_arg.is_some()
+            && (toolchain.is_some() || !roots.is_empty() || !list_paths.is_empty())
+        {
+            return Err("pass stack_policy, or toolchain and root, not both".into());
+        }
+        if toolchain.is_none() && policy_arg.is_none() {
+            return Err("pass stack_policy, or toolchain as name/version with root".into());
+        }
+        if let Some(path) = policy_arg.as_deref() {
+            if !path.is_file() {
+                return Err(format!("{policy_key} {}: not a file", path.display()));
+            }
+        }
+        if toolchain.is_some() && roots.is_empty() {
+            return Err("toolchain needs at least one root or roots_from_build_list".into());
+        }
+        let generated;
+        let policy = if let Some(path) = policy_arg {
+            path
+        } else {
+            let Some(spec) = toolchain.as_deref() else {
+                return Err("pass stack_policy, or toolchain as name/version with root".into());
+            };
+            let Some((name, version)) = spec.split_once('/') else {
+                return Err(format!(
+                    "toolchain {spec}: expected name/version, for example foss/2026.1"
+                ));
+            };
+            if name.is_empty() || version.is_empty() || version.contains('/') {
+                return Err(format!(
+                    "toolchain {spec}: expected name/version, for example foss/2026.1"
+                ));
+            }
+            generated = std::env::temp_dir().join(format!(
+                "eb-stack-policy-{name}-{version}-{}.json",
+                std::process::id()
+            ));
+            let body = json!({
+                "toolchain": {"name": name, "version": version},
+                "roots": roots,
+                "objective": "prefer_newer",
+            });
+            std::fs::write(
+                &generated,
+                serde_json::to_vec_pretty(&body).map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+            generated
+        };
+        let stacks = string_array(arguments, "baseline_easystack")?
+            .into_iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>();
+        let baseline_tree = optional_path(arguments, "baseline_easyconfigs");
+        let baseline_version = optional_string(arguments, "baseline_toolchain_version");
+        if !stacks.is_empty() && (baseline_tree.is_some() || baseline_version.is_some()) {
+            return Err(
+                "baseline_easystack conflicts with baseline_easyconfigs and baseline_toolchain_version"
+                    .into(),
+            );
+        }
+        let commits_from = optional_path(arguments, "baseline_commits_from");
+        if commits_from.is_some() && stacks.is_empty() {
+            return Err("baseline_commits_from requires baseline_easystack".into());
+        }
+        let also_specs = string_array(arguments, "baseline_also_toolchain")?;
+        if !also_specs.is_empty() && stacks.is_empty() {
+            return Err("baseline_also_toolchain requires baseline_easystack".into());
+        }
+        let also = also_specs
+            .iter()
+            .map(|spec| {
+                let (name, version) = spec.split_once('/').ok_or_else(|| {
+                    format!("baseline_also_toolchain wants name/version, got {spec}")
+                })?;
+                Ok(Toolchain {
+                    name: name.into(),
+                    version: version.into(),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let stack_refs = stacks.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+        let baseline = if stacks.is_empty() {
+            match baseline_tree
+                .as_deref()
+                .or_else(|| easyconfigs.first().map(PathBuf::as_path))
+            {
+                Some(root) => BaselineSource::Tree {
+                    root,
+                    toolchain_version: baseline_version.as_deref(),
+                },
+                None => BaselineSource::None,
+            }
+        } else {
+            BaselineSource::Easystacks {
+                files: &stack_refs,
+                commits_repo: commits_from.as_deref(),
+                also_toolchains: &also,
+            }
+        };
+        let filter_deps = string_array(arguments, "filter_deps")?;
+        let jenkins_out = optional_path(arguments, "jenkins_build_list_out");
+        let flags_from = string_array(arguments, "jenkins_flags_from")?;
+        let gpu_systems = string_array(arguments, "jenkins_gpu_systems")?;
+        let roots_only = optional_bool(arguments, "jenkins_roots_only");
+        if jenkins_out.is_none()
+            && (!flags_from.is_empty() || !gpu_systems.is_empty() || roots_only)
+        {
+            return Err(
+                "jenkins_flags_from, jenkins_gpu_systems, and jenkins_roots_only require jenkins_build_list_out"
+                    .into(),
+            );
+        }
+        let mut previous = Vec::new();
+        for path in &flags_from {
+            let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+            previous.extend(crate::jenkins::parse_build_list(&text));
+        }
+        let only = if roots_only {
+            let value: Value = load_json_file(&policy).map_err(|error| error.to_string())?;
+            let list = value
+                .get("roots")
+                .and_then(Value::as_array)
+                .ok_or_else(|| format!("jenkins_roots_only needs roots in {}", policy.display()))?;
+            Some(
+                list.iter()
+                    .filter_map(|root| root.as_str().map(str::to_string))
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        let lock_out = optional_path(arguments, "lock_out")
+            .unwrap_or_else(|| PathBuf::from("stack.lock.json"));
+        let root_refs = easyconfigs.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+        let lock = solve_with_baseline_source(
+            &root_refs,
+            &policy,
+            baseline,
+            &lock_out,
+            optional_path(arguments, "sbom_out").as_deref(),
+            SolveExtraOut {
+                build_list_out: optional_path(arguments, "build_list_out").as_deref(),
+                stack_diff_out: optional_path(arguments, "stack_diff_out").as_deref(),
+                build_list_excludes_baseline: optional_bool(
+                    arguments,
+                    "build_list_excludes_baseline",
+                ),
+                filter_deps: &filter_deps,
+                jenkins_build_list_out: jenkins_out.as_deref(),
+                jenkins: crate::jenkins::JenkinsOptions {
+                    previous,
+                    gpu_systems,
+                    only,
+                },
+            },
         )
         .map_err(|error| error.to_string())?;
-        generated
-    };
-    let stacks = string_array(arguments, "baseline_easystack")?
-        .into_iter()
-        .map(PathBuf::from)
-        .collect::<Vec<_>>();
-    let baseline_tree = optional_path(arguments, "baseline_easyconfigs");
-    let baseline_version = optional_string(arguments, "baseline_toolchain_version");
-    if !stacks.is_empty() && (baseline_tree.is_some() || baseline_version.is_some()) {
-        return Err(
-            "baseline_easystack conflicts with baseline_easyconfigs and baseline_toolchain_version"
-                .into(),
-        );
-    }
-    let commits_from = optional_path(arguments, "baseline_commits_from");
-    if commits_from.is_some() && stacks.is_empty() {
-        return Err("baseline_commits_from requires baseline_easystack".into());
-    }
-    let also_specs = string_array(arguments, "baseline_also_toolchain")?;
-    if !also_specs.is_empty() && stacks.is_empty() {
-        return Err("baseline_also_toolchain requires baseline_easystack".into());
-    }
-    let also = also_specs
-        .iter()
-        .map(|spec| {
-            let (name, version) = spec
-                .split_once('/')
-                .ok_or_else(|| format!("baseline_also_toolchain wants name/version, got {spec}"))?;
-            Ok(Toolchain {
-                name: name.into(),
-                version: version.into(),
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let stack_refs = stacks.iter().map(PathBuf::as_path).collect::<Vec<_>>();
-    let baseline = if stacks.is_empty() {
-        match baseline_tree
-            .as_deref()
-            .or_else(|| easyconfigs.first().map(PathBuf::as_path))
-        {
-            Some(root) => BaselineSource::Tree {
-                root,
-                toolchain_version: baseline_version.as_deref(),
-            },
-            None => BaselineSource::None,
-        }
-    } else {
-        BaselineSource::Easystacks {
-            files: &stack_refs,
-            commits_repo: commits_from.as_deref(),
-            also_toolchains: &also,
-        }
-    };
-    let filter_deps = string_array(arguments, "filter_deps")?;
-    let jenkins_out = optional_path(arguments, "jenkins_build_list_out");
-    let flags_from = string_array(arguments, "jenkins_flags_from")?;
-    let gpu_systems = string_array(arguments, "jenkins_gpu_systems")?;
-    let roots_only = optional_bool(arguments, "jenkins_roots_only");
-    if jenkins_out.is_none() && (!flags_from.is_empty() || !gpu_systems.is_empty() || roots_only) {
-        return Err(
-            "jenkins_flags_from, jenkins_gpu_systems, and jenkins_roots_only require jenkins_build_list_out"
-                .into(),
-        );
-    }
-    let mut previous = Vec::new();
-    for path in &flags_from {
-        let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
-        previous.extend(crate::jenkins::parse_build_list(&text));
-    }
-    let only = if roots_only {
-        let value: Value = load_json_file(&policy).map_err(|error| error.to_string())?;
-        let list = value
-            .get("roots")
-            .and_then(Value::as_array)
-            .ok_or_else(|| format!("jenkins_roots_only needs roots in {}", policy.display()))?;
-        Some(
-            list.iter()
-                .filter_map(|root| root.as_str().map(str::to_string))
-                .collect(),
-        )
-    } else {
-        None
-    };
-    let lock_out =
-        optional_path(arguments, "lock_out").unwrap_or_else(|| PathBuf::from("stack.lock.json"));
-    let root_refs = easyconfigs.iter().map(PathBuf::as_path).collect::<Vec<_>>();
-    let lock = solve_with_baseline_source(
-        &root_refs,
-        &policy,
-        baseline,
-        &lock_out,
-        optional_path(arguments, "sbom_out").as_deref(),
-        SolveExtraOut {
-            build_list_out: optional_path(arguments, "build_list_out").as_deref(),
-            stack_diff_out: optional_path(arguments, "stack_diff_out").as_deref(),
-            build_list_excludes_baseline: optional_bool(arguments, "build_list_excludes_baseline"),
-            filter_deps: &filter_deps,
-            jenkins_build_list_out: jenkins_out.as_deref(),
-            jenkins: crate::jenkins::JenkinsOptions {
-                previous,
-                gpu_systems,
-                only,
-            },
-        },
-    )
-    .map_err(|error| error.to_string())?;
-    Ok(json!({
-        "lock": lock_out,
-        "packages": lock.packages.len(),
-        "solver": lock.solver.engine,
-        "claims": {"resolves": true, "builds": false, "binary_verified": false}
-    }))
+        Ok(json!({
+            "lock": lock_out,
+            "packages": lock.packages.len(),
+            "solver": lock.solver.engine,
+            "claims": {"resolves": true, "builds": false, "binary_verified": false}
+        }))
+    })();
+    with_policy_warning(warning, result)
 }
 
 fn stack_sbom(arguments: &Value) -> Result<Value, String> {
@@ -2774,10 +2807,94 @@ fn load_stack_policy(path: &Path) -> Result<StackPolicy, String> {
 }
 
 fn toolchain(arguments: &Value) -> Result<Toolchain, String> {
-    Ok(Toolchain {
-        name: optional_string(arguments, "toolchain_name").unwrap_or_else(|| "foss".into()),
-        version: required_string(arguments, "toolchain_version")?,
-    })
+    resolve_mcp_toolchain(arguments, true)
+}
+
+/// `name/version` in `toolchain`, or the split fields.
+///
+/// Inspect and plan default a missing name to `foss`. Bump does not.
+/// An empty `toolchain_version` is kept: a SYSTEM recipe has one.
+fn resolve_mcp_toolchain(arguments: &Value, default_name: bool) -> Result<Toolchain, String> {
+    let spec = optional_string(arguments, "toolchain");
+    let name = optional_string(arguments, "toolchain_name");
+    let version = optional_string(arguments, "toolchain_version");
+    if let Some(spec) = spec {
+        if name.is_some() || version.is_some() {
+            return Err("toolchain cannot be used with toolchain_name or toolchain_version".into());
+        }
+        let Some((parsed_name, parsed_version)) = spec.split_once('/') else {
+            return Err(format!(
+                "toolchain {spec}: expected name/version, for example foss/2026.1"
+            ));
+        };
+        if parsed_name.is_empty() || parsed_version.is_empty() || parsed_version.contains('/') {
+            return Err(format!(
+                "toolchain {spec}: expected name/version, for example foss/2026.1"
+            ));
+        }
+        return Ok(Toolchain {
+            name: parsed_name.into(),
+            version: parsed_version.into(),
+        });
+    }
+    if name.as_deref().is_some_and(|name| name.is_empty()) {
+        return Err("toolchain_name must not be empty".into());
+    }
+    match (name, version) {
+        (Some(name), Some(version)) => Ok(Toolchain { name, version }),
+        (None, Some(version)) if default_name => Ok(Toolchain {
+            name: "foss".into(),
+            version,
+        }),
+        _ if default_name => {
+            Err("toolchain_version is required, or pass toolchain as name/version".into())
+        }
+        _ => Err(
+            "toolchain_name and toolchain_version are required, or pass toolchain as name/version"
+                .into(),
+        ),
+    }
+}
+
+/// `stack_policy` is the argument `stack solve --stack-policy` takes.
+/// `policy` is that same argument.
+/// `stack_policy` is the argument `stack solve --stack-policy` takes.
+/// `policy` is that same argument, kept and warned about.
+const POLICY_ALIAS_WARNING: &str =
+    "warning: policy is accepted for compatibility. Use stack_policy.";
+
+fn stack_policy_argument(
+    arguments: &Value,
+) -> Result<(Option<PathBuf>, &'static str, Option<&'static str>), String> {
+    let stack_policy = optional_path(arguments, "stack_policy");
+    let policy = optional_path(arguments, "policy");
+    match (stack_policy, policy) {
+        (Some(_), Some(_)) => {
+            Err("stack_policy and policy are the same argument; pass stack_policy".into())
+        }
+        (Some(path), None) => Ok((Some(path), "stack_policy", None)),
+        (None, Some(path)) => Ok((Some(path), "policy", Some(POLICY_ALIAS_WARNING))),
+        (None, None) => Ok((None, "stack_policy", None)),
+    }
+}
+
+/// Surface the retired `policy` spelling on both a tool error and a success.
+fn with_policy_warning(
+    warning: Option<&str>,
+    result: Result<Value, String>,
+) -> Result<Value, String> {
+    let Some(warning) = warning else {
+        return result;
+    };
+    match result {
+        Ok(mut value) => {
+            if let Some(object) = value.as_object_mut() {
+                object.insert("warning".to_string(), Value::String(warning.to_string()));
+            }
+            Ok(value)
+        }
+        Err(message) => Err(format!("{warning}\n{message}")),
+    }
 }
 
 fn foreign_format(arguments: &Value) -> Result<Option<ForeignFormat>, String> {
