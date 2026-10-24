@@ -104,6 +104,9 @@ pub enum SelectError {
     /// The requested set has no simultaneously satisfiable solution.
     #[error("unsatisfiable stack: {0}")]
     Unsat(String),
+    /// A named optimisation criterion is not one the solver implements.
+    #[error("{0}")]
+    InvalidCriteria(String),
 }
 
 /// Select a stack using **resolvo** (CDCL SAT) over EasyBuild-derived candidates.
@@ -112,6 +115,9 @@ pub fn select_stack(
     policy: &Policy,
     baseline: Option<&StackLock>,
 ) -> Result<StackLock, SelectError> {
+    policy
+        .validate_criteria()
+        .map_err(SelectError::InvalidCriteria)?;
     let selected = solve_with_resolvo(&universe.candidates, policy, baseline).map_err(|e| {
         let el = e.to_lowercase();
         if el.contains("unsatisfiable") || el.contains("unsat") {

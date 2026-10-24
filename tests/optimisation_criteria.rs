@@ -135,3 +135,40 @@ fn the_lock_records_the_criteria_that_ran() {
         serde_json::from_str(&fs::read_to_string(&lock_out).unwrap()).unwrap();
     assert_eq!(on_disk.solver.criteria, lock.solver.criteria);
 }
+
+/// A typo in `criteria` has to fail the solve. Dropping it leaves the lock
+/// with an empty list, which is a different objective from the one written.
+#[test]
+fn an_unknown_criterion_fails_the_solve() {
+    use std::fs;
+    let dir = tempfile::tempdir().unwrap();
+    let recipe = dir.path().join("z/Zlib/Zlib-1.3.1-GCCcore-15.2.0.eb");
+    fs::create_dir_all(recipe.parent().unwrap()).unwrap();
+    fs::write(
+        &recipe,
+        "easyblock = 'ConfigureMake'\nname = 'Zlib'\nversion = '1.3.1'\n\
+         homepage = 'https://example.invalid/'\n\
+         description = \"fixture\"\n\
+         toolchain = {'name': 'GCCcore', 'version': '15.2.0'}\n\
+         moduleclass = 'lib'\n",
+    )
+    .unwrap();
+    let policy_path = dir.path().join("policy.json");
+    fs::write(
+        &policy_path,
+        r#"{"toolchain": {"name": "GCCcore", "version": "15.2.0"},
+            "roots": ["Zlib"], "criteria": ["-newest"]}"#,
+    )
+    .unwrap();
+    let err = eb_stack::solve_from_easyconfigs(
+        &[dir.path()],
+        &policy_path,
+        None,
+        &dir.path().join("lock.json"),
+        None,
+    )
+    .expect_err("unknown criterion");
+    let msg = err.to_string();
+    assert!(msg.contains("unknown optimisation criterion"), "{msg}");
+    assert!(msg.contains("-newest"), "{msg}");
+}

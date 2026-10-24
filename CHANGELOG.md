@@ -305,6 +305,9 @@ All notable changes to this project are documented here.
 - Recipe lint modules live under `src/eb_style/` so `sphinx-rustdocgen`
   can open them. A `#[path]` attribute is joined onto the parent file
   and the generator then fails to read the module.
+- An unknown `criteria` entry fails the solve. It used to be dropped, so a
+  typo such as `-newest` solved with no optimisation criterion at all and
+  the lock recorded an empty list.
 - `stack-diff-out` with no baseline names `--baseline-easyconfigs` and
   `--baseline-easystack`. The previous text told the caller to pass
   `--baseline`, which the command line does not accept.
