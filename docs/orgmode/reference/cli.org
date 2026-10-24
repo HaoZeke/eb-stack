@@ -24,7 +24,7 @@ written by package commands are deterministic bundle artifacts.
 | ~target list~ / ~target doctor~ | Resolve layered target configuration and probe it |
 | ~campaign run~ / ~campaign status~ | Execute or inspect a persisted build campaign |
 | ~campaign finding ...~ | Claim and resolve typed build findings |
-| ~mcp [--workspace]~ | Serve the same workflows over stdio, with recipe file tools rooted at ~--workspace~ |
+| ~mcp [--workspace]~ | Serve each CLI workflow over stdio, including ~pr-overlap~, ~rebuild-set~, ~component-reach~, and ~easyblock-reach~, with recipe file tools rooted at ~--workspace~ |
 | ~easyblock-reach~ | Report easyconfigs and installed modules reached by an easyblock or framework change |
 
 * Package commands
@@ -654,8 +654,8 @@ eb-stack mcp [--workspace ROOT]
 omitted, an existing ~EB_STACK_WORKSPACE~ is kept, and otherwise the server's
 current directory is the root.
 
-The stdio server exposes one tool per CLI workflow, plus sandboxed recipe
-tools:
+The stdio server exposes one MCP tool for each of these CLI workflows,
+plus sandboxed recipe and easyblock tools:
 
 - ~eb_package_inspect~, ~eb_package_plan~, ~eb_package_bump~;
 - ~eb_recipe_read~, ~eb_recipe_list~, ~eb_recipe_edit~, ~eb_recipe_write~,
@@ -667,7 +667,9 @@ tools:
 - ~eb_stack_solve~, ~eb_stack_sbom~;
 - ~eb_target_list~, ~eb_target_doctor~;
 - ~eb_campaign_run~, ~eb_campaign_status~;
-- ~eb_campaign_finding_claim~, ~eb_campaign_finding_resolve~.
+- ~eb_campaign_finding_claim~, ~eb_campaign_finding_resolve~;
+- ~eb_pr_overlap~ (~kind~ ~software-layer~ or ~easyconfigs~),
+  ~eb_rebuild_set~, ~eb_component_reach~, ~eb_easyblock_reach~.
 
 ~eb_recipe_read~, ~eb_recipe_list~, ~eb_recipe_edit~, ~eb_recipe_write~, and
 ~eb_recipe_grep~ resolve every path inside that root. A ~..~ component, an

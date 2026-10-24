@@ -66,7 +66,8 @@ enum Command {
         #[command(subcommand)]
         command: ReproCommand,
     },
-    /// Serve the same workflows over MCP stdio.
+    /// Serve each CLI workflow over stdio, including pr-overlap, rebuild-set,
+    /// component-reach, and easyblock-reach.
     Mcp {
         /// Workspace root for the recipe file tools.
         ///

@@ -355,7 +355,8 @@ changed Python from a local clone (`refs/pull/N/head` for a pull request).
 
 ## MCP
 
-`eb-stack mcp` exposes the same version-one workflows over stdio.
+`eb-stack mcp` exposes the version-one workflows as Model Context Protocol (MCP) tools over stdio, and one tool
+for `pr-overlap`, `rebuild-set`, `component-reach`, and `easyblock-reach`.
 `eb-stack mcp --workspace ROOT` (or `EB_STACK_WORKSPACE`) is the root for the
 recipe file tools.
 
@@ -369,7 +370,9 @@ recipe file tools.
 - `eb_stack_solve`, `eb_stack_sbom`;
 - `eb_target_list`, `eb_target_doctor`;
 - `eb_campaign_run`, `eb_campaign_status`;
-- `eb_campaign_finding_claim`, `eb_campaign_finding_resolve`.
+- `eb_campaign_finding_claim`, `eb_campaign_finding_resolve`;
+- `eb_pr_overlap` (`kind` `software-layer` or `easyconfigs`),
+  `eb_rebuild_set`, `eb_component_reach`, `eb_easyblock_reach`.
 
 `eb_recipe_edit` replaces an exact string and does not write a repeated match
 unless `replace_all` is set. `eb_recipe_check` requires at least one
