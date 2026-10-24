@@ -160,8 +160,9 @@ target. `--easyblocks` is the EasyBuild release's `easybuild/easyblocks`
 package. `--easyblocks-commit` is the files one `include-easyblocks-from-commit`
 touches, which `fetch-prs.sh` writes under `in/easyblocks/<commit>/`.
 
-`overlap.md` in this directory is the zen4 report computed `2026-10-19T14:07:20Z`:
-39 pull requests, 18 records, 9 shared modules.
+`overlap.md` in this directory is the zen4 report computed `2026-10-24T10:33:59Z`:
+28 open pull requests, 20 records, 10 shared modules. The installed list is
+the zen4 software tree on a cvmfs mount of `software.eessi.io` (327 modules).
 
 ## Known limits
 

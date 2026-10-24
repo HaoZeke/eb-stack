@@ -420,6 +420,10 @@ All notable changes to this project are documented here.
   requirement. A Cargo.toml with no crate tarball is refused at plan
   time; the crates.io JSON is what plan emits from.
 
+- The checked-in zen4 overlap report is the 2026-10-24 cvmfs run: 28 open
+  pull requests, 20 easystack records, 10 shared modules. Closed pull
+  request 1728 is gone and 1692's head is `655310721787`.
+
 ## 0.3.0 - 2026-07-21
 
 First public release: package plan/bump/campaign CLI, Resolvo locks, CycloneDX
