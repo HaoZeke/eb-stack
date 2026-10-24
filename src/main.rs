@@ -1480,6 +1480,12 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
                     if !finding.origin.is_empty() {
                         item["origin"] = serde_json::json!(finding.origin);
                     }
+                    if finding.info {
+                        item["info"] = serde_json::json!(true);
+                    }
+                    if finding.in_review {
+                        item["in_review"] = serde_json::json!(true);
+                    }
                     style.push(item);
                 }
                 let text = std::fs::read_to_string(&file.path)

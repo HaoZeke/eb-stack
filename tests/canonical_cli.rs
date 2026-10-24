@@ -2,6 +2,36 @@ use std::path::PathBuf;
 use std::process::Command;
 
 #[test]
+fn recipe_lint_json_marks_escaped_percent_entries_as_info() {
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let recipe = temp.path().join("escaped.eb");
+    std::fs::write(
+        &recipe,
+        "postinstallcmds = ['echo %s \"%%(installdir)s\"' % local_path]\n",
+    )
+    .expect("write recipe");
+    let output = Command::new(binary)
+        .args(["recipe", "lint", recipe.to_str().expect("utf8 path")])
+        .output()
+        .expect("recipe lint");
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let body: serde_json::Value = serde_json::from_str(&stdout).expect(&stdout);
+    let style = body["style"].as_array().expect("style");
+    let percent = style
+        .iter()
+        .find(|item| item["code"] == "EB_FMT_PERCENT")
+        .unwrap_or_else(|| panic!("no EB_FMT_PERCENT: {stdout}"));
+    assert_eq!(percent["info"], true, "{percent}");
+    assert_eq!(body["clean"], true, "{body}");
+    assert!(
+        output.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn command_surface_is_namespaced_without_flat_legacy_aliases() {
     let binary = env!("CARGO_BIN_EXE_eb-stack");
     let help = Command::new(binary)

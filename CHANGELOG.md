@@ -37,6 +37,10 @@ All notable changes to this project are documented here.
   reaches an easyblock that imports `tools/filetools.py` when that module
   imports `tools/run.py`. An easyblock that only imports another easyblock
   is not reached that way.
+- `recipe lint` JSON includes `info` and `in_review` when a finding sets
+  them, the same fields `eb_recipe_lint` already returned. An
+  `EB_FMT_PERCENT` hit on a `%%(...)s` escape is info and does not count
+  against `clean`.
 - `recipe lint` accepts the template names EasyBuild defines: the
   `*minver` forms (`pyminver`, `javaminver`, `perlminver`, `rminver`),
   `cuda_cc_gencode`, and the version aliases (`ver_maj`, `ver_maj_min`,
