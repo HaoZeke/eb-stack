@@ -1,6 +1,6 @@
 ---
 name: eb-stack-annual-bump
-description: Retarget an existing EasyBuild easyconfig to a new toolchain or application version using a canonical EasyBuild-origin manifest, CycloneDX SBOM, Resolvo dependency lock, stack-policy fallback, deterministic recipe emission, and the persisted Hermes/OMP remote build campaign. Use for annual stack rebuilds and package version bumps.
+description: Retarget an existing EasyBuild easyconfig to a new toolchain or application version using a canonical EasyBuild-origin manifest, CycloneDX software bill of materials (SBOM), Resolvo dependency lock, stack-policy fallback, deterministic recipe emission, and the persisted Hermes/OMP remote build campaign. Use for annual stack rebuilds and package version bumps.
 ---
 
 # Bump an EasyBuild package
@@ -72,8 +72,12 @@ version dropped. See `examples/packages/seissol.toml` and
 A version bump without `--source-checksum` clears the old digest to `''` and
 clears `local_commit_id` / a literal `git_config` commit hash. That is
 required: the previous tarball's hash is not a claim about the new artifact.
-Fill the digest with `eb --inject-checksums` on the EasyBuild host. Do not
-copy a conda-forge or Spack checksum onto a different artifact class
+Pass `--fetch-checksums` to download each `sources` entry from the recipe's
+`source_urls`. The download writes the SHA-256 into the recipe and the software bill of materials (SBOM).
+A git checkout, a missing URL, or a failed download stays empty and is listed in
+`sources.fetch.json` and as a `source:fetch` residual. On an EasyBuild host,
+`eb --inject-checksums` downloads the same artifact. A checksum copied from
+conda-forge or Spack belongs to that artifact class
 (`skills/verify-recipe/SKILL.md`).
 
 A dependency with no candidate on the target generation after a version bump
