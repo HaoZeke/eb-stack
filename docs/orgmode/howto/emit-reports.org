@@ -1,9 +1,9 @@
 #+TITLE: Emit a build list and stack diff
 #+OPTIONS: toc:nil num:nil
 
-Goal: alongside ~stack.lock.json~, get an install-ordered build list for a
+Goal: alongside the lock, get an install-ordered build list for a
 build pipeline and a markdown diff you can paste straight into a pull
-request.
+request. The commands below write those files under ~/tmp~.
 
 * Add the two flags to solve
 
@@ -15,10 +15,10 @@ eb-stack stack solve \
   --easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
   --stack-policy fixtures/gromacs_2025_to_next/policies/prefer_newer.json \
   --baseline-easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
-  --lock-out stack.lock.json \
-  --sbom-out stack.cdx.json \
-  --build-list-out build.list \
-  --stack-diff-out stack.diff.md
+  --lock-out /tmp/emit-stack.lock.json \
+  --sbom-out /tmp/emit-stack.cdx.json \
+  --build-list-out /tmp/emit-build.list \
+  --stack-diff-out /tmp/emit-stack.diff.md
 #+end_src
 
 ~--stack-diff-out~ needs a baseline lock. Omit ~--baseline-easyconfigs~ and
@@ -58,7 +58,7 @@ OpenBLAS 0.3.24 to 0.3.27, OpenMPI 4.1.6 to 5.0.3).
 * Read the build list
 
 #+begin_src text
-cat build.list
+cat /tmp/emit-build.list
 #+end_src
 
 One easyconfig path per line, dependencies before the packages that need

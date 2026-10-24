@@ -200,6 +200,9 @@ All notable changes to this project are documented here.
 
 ### Documentation
 
+- Walkthrough commands write build lists, locks, SBOMs, diffs, order
+  files, and hash files under `/tmp`.
+
 - The pull-request how-to runs on recorded software-layer pull requests
   1585 and 1728 and on the recorded open easyconfigs pull requests.
   The reference example uses those same files.

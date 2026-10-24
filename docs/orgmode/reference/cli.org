@@ -320,25 +320,25 @@ eb-stack stack solve \
   [--baseline-easystack EASYSTACK.yml]... [--baseline-commits-from EB_REPO] \
   [--baseline-also-toolchain NAME/VERSION]... \
   [--filter-deps NAME,NAME...] \
-  [--lock-out stack.lock.json] \
-  [--sbom-out stack.cdx.json] \
-  [--build-list-out build.list] [--build-list-excludes-baseline] \
-  [--jenkins-build-list-out next.list [--jenkins-flags-from previous.list]... \
+  [--lock-out /tmp/stack.lock.json] \
+  [--sbom-out /tmp/stack.cdx.json] \
+  [--build-list-out /tmp/build.list] [--build-list-excludes-baseline] \
+  [--jenkins-build-list-out /tmp/next.list [--jenkins-flags-from /tmp/previous.list]... \
    [--jenkins-gpu-systems gpu-a,gpu-b] [--jenkins-roots-only]] \
-  [--stack-diff-out stack.diff.md]
+  [--stack-diff-out /tmp/stack.diff.md]
 
-eb-stack stack sbom --lock stack.lock.json [--out stack.cdx.json]
+eb-stack stack sbom --lock /tmp/stack.lock.json [--out /tmp/stack.cdx.json]
 
 eb-stack stack order \
   --easyconfigs TREE [--easyconfigs OVERLAY]... \
   --root NAME [--root NAME==VERSION]... \
-  [--out build-order.txt] \
+  [--out /tmp/build-order.txt] \
   [--oldest] \
-  [--easystack-out order.yml] \
-  [--hashes-out hashes.txt]
+  [--easystack-out /tmp/order.yml] \
+  [--hashes-out /tmp/hashes.txt]
 
 eb-stack stack easystack \
-  --lock stack.lock.json \
+  --lock /tmp/stack.lock.json \
   [--out stack.yml] \
   [--option FILE.eb:OPTION=VALUE]...
 
@@ -456,7 +456,7 @@ eb-stack pr-overlap \
   [--merged N]... \
   [--impact N]... \
   [--repo-url URL] \
-  [--out-dir pr-overlap]
+  [--out-dir /tmp/pr-overlap]
 #+end_src
 
 Reads each pull request's easystack changes as data. It does not run the
@@ -603,7 +603,7 @@ eb-stack rebuild-set \
   [--generated-at RFC3339] \
   [--prefix "$EESSI_SOFTWARE_PATH"] \
   [--check-static] \
-  [--out-dir rebuild-set]
+  [--out-dir /tmp/rebuild-set]
 #+end_src
 
 Resolves the deployed easystacks and the installed reverse dependents of
@@ -662,7 +662,7 @@ eb-stack component-reach \
   [--compat-layer FILE] \
   [--filter-deps SPEC,SPEC...] \
   [--generated-at RFC3339] \
-  [--out-dir component-reach]
+  [--out-dir /tmp/component-reach]
 #+end_src
 
 Lists every easyconfig and installed module in one toolchain generation
@@ -822,7 +822,7 @@ eb-stack easyblock-reach \
   [--remote origin] [--base develop] [--repo CLONE] \
   [--installed MODULES.txt] [--reverse] \
   [--generated-at RFC3339] \
-  [--out-dir easyblock-reach]
+  [--out-dir /tmp/easyblock-reach]
 #+end_src
 
 Pass at least one of ~--file~, ~--range~, and ~--pr~, and at least one of

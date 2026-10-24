@@ -28,10 +28,10 @@ eb-stack stack solve \
   --easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
   --stack-policy fixtures/gromacs_2025_to_next/policies/prefer_newer.json \
   --baseline-easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
-  --lock-out stack.lock.json \
-  --sbom-out stack.cdx.json \
-  --build-list-out build.list \
-  --stack-diff-out stack.diff.md
+  --lock-out /tmp/solve-lock.lock.json \
+  --sbom-out /tmp/solve-lock.cdx.json \
+  --build-list-out /tmp/solve-build.list \
+  --stack-diff-out /tmp/solve-stack.diff.md
 #+end_src
 
 ~--easyconfigs~ is repeatable. Later paths override earlier paths for the same
@@ -53,7 +53,7 @@ candidate graph.
 * Emit an SBOM from an existing lock
 
 #+begin_src bash
-eb-stack stack sbom --lock stack.lock.json --out stack.cdx.json
+eb-stack stack sbom --lock /tmp/solve-lock.lock.json --out /tmp/solve-lock.cdx.json
 #+end_src
 
 ~stack sbom~, the Software Bill of Materials (SBOM) command, reads runtime and build edges, checksums, and source URLs
@@ -72,9 +72,9 @@ in dependency order:
 eb-stack stack order \
   --easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
   --root GROMACS --root 'OpenBLAS==0.3.27' \
-  --out build-order.txt \
-  --easystack-out order.yml \
-  --hashes-out hashes.txt
+  --out /tmp/build-order.txt \
+  --easystack-out /tmp/order.yml \
+  --hashes-out /tmp/hashes.txt
 #+end_src
 
 ~--oldest~ selects the oldest admissible version of an unpinned

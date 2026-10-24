@@ -29,7 +29,7 @@ eb-stack pr-overlap --kind easyconfigs \
   --easyconfigs tests/pr_overlap_easyconfigs_open/tree \
   --generated-at 2026-10-24T00:00:00Z \
   --repo-url https://github.com/easybuilders/easybuild-easyconfigs \
-  --out-dir out
+  --out-dir /tmp/ec-open-out
 #+end_src
 
 The command printed ~prs=4 records=4 shared_modules=1 skipped_easyconfigs=0~

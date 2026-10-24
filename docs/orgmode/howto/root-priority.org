@@ -65,7 +65,7 @@ lets you avoid.
 eb-stack stack solve \
   --easyconfigs fixtures/two_root_openmpi_conflict/easyconfigs \
   --stack-policy fixtures/two_root_openmpi_conflict/policies/priority_gromacs_roots_lammps_first.json \
-  --lock-out stack.lock.json --sbom-out stack.cdx.json
+  --lock-out /tmp/root-priority.lock.json --sbom-out /tmp/root-priority.cdx.json
 # GROMACS 2025.0 (kept: prioritized)
 # LAMMPS 2023.08 (yielded: not prioritized)
 # OpenMPI 4.1.6 (forced by GROMACS's exact pin)
