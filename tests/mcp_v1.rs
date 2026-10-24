@@ -1361,6 +1361,127 @@ fn mcp_stack_sbom_writes_cyclonedx_from_lock() {
 }
 
 #[test]
+fn mcp_stack_sbom_reads_dependency_edges_from_the_lock_recipes() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let zlib = temp.path().join("zlib.eb");
+    let cmake = temp.path().join("cmake.eb");
+    let app = temp.path().join("app.eb");
+    std::fs::write(
+        &zlib,
+        "name = 'zlib'\nversion = '1.3.1'\n\
+         toolchain = {'name': 'foss', 'version': '2026.1'}\n\
+         sources = ['zlib-1.3.1.tar.gz']\n\
+         checksums = ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']\n",
+    )
+    .expect("zlib");
+    std::fs::write(
+        &cmake,
+        "name = 'CMake'\nversion = '3.29.3'\n\
+         toolchain = {'name': 'foss', 'version': '2026.1'}\n",
+    )
+    .expect("cmake");
+    std::fs::write(
+        &app,
+        "name = 'App'\nversion = '1.0'\n\
+         toolchain = {'name': 'foss', 'version': '2026.1'}\n\
+         dependencies = [('zlib', '1.3.1')]\n\
+         builddependencies = [('CMake', '3.29.3')]\n",
+    )
+    .expect("app");
+    let lock_path = temp.path().join("stack.lock.json");
+    let out = temp.path().join("stack.cdx.json");
+    let package = |name: &str, version: &str, path: &std::path::Path| {
+        json!({
+            "name": name,
+            "version": version,
+            "toolchain": {"name": "foss", "version": "2026.1"},
+            "versionsuffix": null,
+            "easyconfig_path": path,
+        })
+    };
+    std::fs::write(
+        &lock_path,
+        serde_json::to_string(&json!({
+            "schema_version": 1,
+            "toolchain": {"name": "foss", "version": "2026.1"},
+            "packages": [
+                package("zlib", "1.3.1", &zlib),
+                package("CMake", "3.29.3", &cmake),
+                package("App", "1.0", &app),
+            ],
+            "solver": {
+                "engine": "resolvo",
+                "engine_version": "0",
+                "timestamp": "2026-01-01T00:00:00Z"
+            }
+        }))
+        .expect("lock json"),
+    )
+    .expect("lock");
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_stack_sbom",
+            "arguments": {"lock": lock_path, "out": out}
+        }
+    }))
+    .expect("sbom response");
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let sbom: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&out).expect("read sbom")).expect("json");
+    let app_ref = sbom["dependencies"]
+        .as_array()
+        .expect("dependencies")
+        .iter()
+        .find(|entry| entry["ref"].as_str().unwrap_or("").contains("App@1.0"))
+        .expect("App dependency entry");
+    let depends = app_ref["dependsOn"].as_array().expect("dependsOn");
+    assert!(
+        depends
+            .iter()
+            .any(|edge| edge.as_str().unwrap_or("").contains("zlib@1.3.1")),
+        "{depends:?}"
+    );
+    assert!(
+        depends
+            .iter()
+            .all(|edge| !edge.as_str().unwrap_or("").contains("CMake")),
+        "a builddependency is not a runtime edge: {depends:?}"
+    );
+    let app_component = sbom["components"]
+        .as_array()
+        .expect("components")
+        .iter()
+        .find(|component| component["name"] == "App")
+        .expect("App component");
+    let build = app_component["properties"]
+        .as_array()
+        .expect("properties")
+        .iter()
+        .find(|property| property["name"] == "eb_stack:buildDependsOn")
+        .expect("build edge");
+    assert!(
+        build["value"]
+            .as_str()
+            .unwrap_or("")
+            .contains("CMake@3.29.3"),
+        "{build}"
+    );
+    let zlib_component = sbom["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|component| component["name"] == "zlib")
+        .expect("zlib component");
+    assert_eq!(
+        zlib_component["hashes"][0]["content"],
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
+}
+
+#[test]
 fn mcp_schemas_match_the_handlers_for_bump_lint_and_resolve() {
     let response = handle_message(&json!({
         "jsonrpc": "2.0",

@@ -39,8 +39,9 @@ use crate::workspace_fs::{
     list_workspace, read_workspace, resolve_inside, write_workspace,
 };
 use crate::{
-    load_json_file, lock_to_cyclonedx, solve_with_baseline_source, write_json_pretty,
-    BaselineSource, SolveExtraOut, StackLock,
+    artifact_facts_for_lock, dep_maps_for_lock, load_json_file, lock_to_cyclonedx_with_facts,
+    solve_with_baseline_source, write_json_pretty, BaselineSource, SbomFacts, SolveExtraOut,
+    StackLock,
 };
 use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap};
@@ -318,7 +319,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_sbom",
-            "Emit CycloneDX from an existing stack lock.",
+            "Emit CycloneDX from an existing stack lock, reading dependency edges and source checksums from the easyconfigs the lock names.",
             &[("lock", "string")],
             &[("out", "string")],
         ),
@@ -2426,7 +2427,19 @@ fn stack_sbom(arguments: &Value) -> Result<Value, String> {
     let lock_path = required_path(arguments, "lock")?;
     let out = optional_path(arguments, "out").unwrap_or_else(|| PathBuf::from("stack.cdx.json"));
     let lock: StackLock = load_json_file(&lock_path).map_err(|error| error.to_string())?;
-    let sbom = lock_to_cyclonedx(&lock);
+    // The same facts `stack sbom` reads: a lock names the recipes, and the
+    // edges and checksums live there. An unreadable path contributes nothing.
+    let artifacts = artifact_facts_for_lock(&lock);
+    let (runtime, build) = dep_maps_for_lock(&lock);
+    let sbom = lock_to_cyclonedx_with_facts(
+        &lock,
+        SbomFacts {
+            runtime_dep_map: Some(&runtime),
+            build_dep_map: Some(&build),
+            artifacts: Some(&artifacts),
+            ..SbomFacts::default()
+        },
+    );
     write_json_pretty(&out, &sbom).map_err(|error| error.to_string())?;
     let components = sbom
         .get("components")

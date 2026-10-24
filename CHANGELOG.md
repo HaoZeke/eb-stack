@@ -233,6 +233,11 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `eb_stack_sbom` reads dependency edges and source checksums from the
+  easyconfigs a lock names, the same way `eb-stack stack sbom` does. A
+  runtime dependency is a CycloneDX `dependsOn` edge. A builddependency
+  is `eb_stack:buildDependsOn`. An unreadable path still contributes
+  nothing, and the document does not invent edges between every package.
 - A `pyproject.toml` was never parsed: `text.parse::<toml::Value>()` reads a
   TOML value rather than a document, so every build requirement a project
   states was dropped in silence, and an sdist's own top directory hid the
