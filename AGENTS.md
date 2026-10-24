@@ -66,14 +66,22 @@ lint findings remain, and do not comment on the PR.
 
 ```text
 package  inspect | plan | bump
-recipe   check | lint | format
-stack    solve | sbom
+recipe   easyblock | templates | hierarchy | check | lint | format
+stack    solve | sbom | order | easystack | sections
 target   list | doctor
 campaign run | status | finding claim | finding resolve
+repro    summary
+easyblock-reach
+pr-overlap
+rebuild-set
+component-reach
 mcp
 ```
 
-The MCP catalog mirrors these workflows with `eb_`-prefixed typed tools.
+The Model Context Protocol (MCP) catalog mirrors the package, recipe, stack, target, and campaign
+workflows with `eb_`-prefixed tools. Easyblock dry-run, module lint, build
+log, and build test tools are MCP-only. `eb_build_test` runs only when
+`EB_STACK_ALLOW_BUILD=1`.
 
 ## Tests
 
