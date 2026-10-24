@@ -13,12 +13,24 @@ use crate::{parse_easyconfig_tree, parse_easyconfig_trees, write_json_pretty};
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-struct CommandUsage(String);
+/// A rejected command line. The CLI exits 2 when this is the cause.
+#[derive(Debug)]
+pub struct CommandUsage {
+    message: String,
+}
 
-fn usage(message: impl Into<String>) -> anyhow::Error {
-    CommandUsage(message.into()).into()
+impl std::fmt::Display for CommandUsage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for CommandUsage {}
+
+fn usage(message: impl std::fmt::Display) -> anyhow::Error {
+    anyhow::Error::new(CommandUsage {
+        message: message.to_string(),
+    })
 }
 
 /// Which pull-request records `pr-overlap` closes.
@@ -364,8 +376,8 @@ fn run_pr_overlap_inner(args: &PrOverlapRequest) -> Result<PrOverlapRun> {
         None => None,
     };
     let filter_specs = dep_filter::specs_from_cli_or_env(&args.filter_deps);
-    let filter_deps =
-        FilterDeps::parse(&filter_specs).map_err(|error| anyhow!("--filter-deps: {error}"))?;
+    let filter_deps = FilterDeps::parse(&filter_specs)
+        .map_err(|error| usage(format!("--filter-deps: {error}")))?;
     let easyblocks = load_easyblock_catalog(&args.easyblocks, &args.easyblocks_commits)?;
     let easyconfigs = args.kind == OverlapKind::Easyconfigs;
     let config = OverlapConfig {
@@ -436,7 +448,9 @@ fn run_pr_overlap_inner(args: &PrOverlapRequest) -> Result<PrOverlapRun> {
             &prs.iter().map(|pr| pr.number).collect::<Vec<_>>(),
             &args.merged,
         ) {
-            anyhow::bail!("--merged {number}: no pull request with that number");
+            return Err(usage(format!(
+                "--merged {number}: no pull request with that number"
+            )));
         }
         let mut order = merge_order::plan(&records, &index, &args.merged);
         order.conflicts = merge_order::conflicts_from_records(&records);
@@ -460,8 +474,8 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
     let (robot, skipped_easyconfigs) = load_robot_trees(&args.easyconfigs, &args.commit_trees)?;
     let installed = load_installed_modules(&args.installed, &args.installed_modulerc)?;
     let filter_specs = dep_filter::specs_from_cli_or_env(&args.filter_deps);
-    let filter_deps =
-        FilterDeps::parse(&filter_specs).map_err(|error| anyhow!("--filter-deps: {error}"))?;
+    let filter_deps = FilterDeps::parse(&filter_specs)
+        .map_err(|error| usage(format!("--filter-deps: {error}")))?;
     let easyblocks = load_easyblock_catalog(&args.easyblocks, &args.easyblocks_commits)?;
     let mut easystacks = Vec::new();
     for path in &args.easystacks {
@@ -487,7 +501,10 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
         prefix: args.prefix.clone(),
         check_static: args.check_static,
     })
-    .map_err(anyhow::Error::msg)?;
+    .map_err(|error| match error {
+        rebuild_set::RebuildError::CheckStaticNeedsPrefix => usage("--check-static needs --prefix"),
+        other => anyhow!(other),
+    })?;
 
     std::fs::create_dir_all(&args.out_dir)?;
     write_json_pretty(&args.out_dir.join("rebuild-set.json"), &document)?;
@@ -599,7 +616,8 @@ fn run_component_reach_with(
         .unwrap_or_default();
     let compat = parse_compat_layer(&compat_text);
     let specs = dep_filter::specs_from_cli_or_env(&args.filter_deps);
-    let filter = FilterDeps::parse(&specs).map_err(|error| anyhow!("--filter-deps: {error}"))?;
+    let filter =
+        FilterDeps::parse(&specs).map_err(|error| usage(format!("--filter-deps: {error}")))?;
     let generated_at = args
         .generated_at
         .clone()
@@ -675,7 +693,7 @@ fn run_component_reach_with(
             .version
             .clone()
             .or(parsed.version)
-            .ok_or_else(|| anyhow!("purl has no version; pass --version"))?;
+            .ok_or_else(|| usage("purl has no version; pass --version"))?;
         (
             parsed.name,
             version,
@@ -686,11 +704,11 @@ fn run_component_reach_with(
         let component = args
             .component
             .clone()
-            .ok_or_else(|| anyhow!("pass --component, --purl, or --cve"))?;
+            .ok_or_else(|| usage("pass --component, --purl, or --cve"))?;
         let version = args
             .version
             .clone()
-            .ok_or_else(|| anyhow!("--version is required with --component"))?;
+            .ok_or_else(|| usage("--version is required with --component"))?;
         (component, version, None, None)
     };
     let mut document = component_reach(&ReachQuery {
@@ -737,13 +755,13 @@ fn run_component_reach_with(
 /// Write the easyblock-reach report.
 pub fn run_easyblock_reach(args: &EasyblockReachRequest) -> Result<EasyblockReachRun> {
     if args.file.is_empty() && args.range.is_none() && args.pr.is_none() {
-        anyhow::bail!("pass --file, --range, or --pr");
+        return Err(usage("pass --file, --range, or --pr"));
     }
     if args.easyblocks.is_empty() && args.framework.is_empty() {
-        anyhow::bail!("pass --easyblocks or --framework");
+        return Err(usage("pass --easyblocks or --framework"));
     }
     if args.easyconfigs.is_empty() {
-        anyhow::bail!("pass --easyconfigs");
+        return Err(usage("pass --easyconfigs"));
     }
     let mut changed = read_sources(&args.file).context("read --file")?;
     if args.range.is_some() || args.pr.is_some() {
@@ -810,9 +828,11 @@ fn load_robot_trees(
     for spec in commit_trees {
         let (commit, dir) = spec
             .split_once('=')
-            .ok_or_else(|| anyhow!("--commit-tree wants <commit>=<dir>, got {spec}"))?;
+            .ok_or_else(|| usage(format!("--commit-tree wants <commit>=<dir>, got {spec}")))?;
         if commit.is_empty() || dir.is_empty() {
-            anyhow::bail!("--commit-tree wants <commit>=<dir>, got {spec}");
+            return Err(usage(format!(
+                "--commit-tree wants <commit>=<dir>, got {spec}"
+            )));
         }
         let parsed = parse_easyconfig_tree(Path::new(dir)).map_err(anyhow::Error::msg)?;
         robot.commits.insert(commit.to_string(), parsed.candidates);
@@ -868,7 +888,7 @@ fn read_changed_names(values: &[String]) -> Result<Vec<String>> {
         }
     }
     if out.is_empty() {
-        anyhow::bail!("--changed named no easyconfig");
+        return Err(usage("--changed named no easyconfig"));
     }
     Ok(out)
 }
@@ -894,11 +914,15 @@ fn load_easyblock_catalog(
         }
     }
     for spec in commit_specs {
-        let (commit, dir) = spec
-            .split_once('=')
-            .ok_or_else(|| anyhow!("--easyblocks-commit wants <commit>=<dir>, got {spec}"))?;
+        let (commit, dir) = spec.split_once('=').ok_or_else(|| {
+            usage(format!(
+                "--easyblocks-commit wants <commit>=<dir>, got {spec}"
+            ))
+        })?;
         if commit.is_empty() || dir.is_empty() {
-            anyhow::bail!("--easyblocks-commit wants <commit>=<dir>, got {spec}");
+            return Err(usage(format!(
+                "--easyblocks-commit wants <commit>=<dir>, got {spec}"
+            )));
         }
         let index =
             crate::eb_easyblock::index_easyblocks(&[Path::new(dir)]).map_err(anyhow::Error::msg)?;

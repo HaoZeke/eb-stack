@@ -21,7 +21,37 @@ use eb_stack::{
     SolveExtraOut, StackLock, Toolchain, UreqClient,
 };
 use std::collections::HashMap;
+use std::error::Error;
 use std::path::{Path, PathBuf};
+
+/// The command line was rejected before the work started.
+///
+/// Exit status is 2, the same status clap uses for a missing flag. A missing
+/// file, a parse failure, or a check that failed is status 1 instead.
+#[derive(Debug)]
+struct Usage {
+    message: String,
+}
+
+impl std::fmt::Display for Usage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl Error for Usage {}
+
+fn usage(message: impl std::fmt::Display) -> anyhow::Error {
+    anyhow::Error::new(Usage {
+        message: message.to_string(),
+    })
+}
+
+fn is_usage(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.is::<Usage>() || cause.is::<eb_stack::site_commands::CommandUsage>())
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -799,7 +829,9 @@ fn main() {
         // Display, not Debug: Debug appends a stack backtrace, which is a
         // compiler trace and not the reason the command failed.
         eprintln!("error: {error:#}");
-        std::process::exit(1);
+        // 2 is a rejected command line. 1 is work that was attempted and failed.
+        let code = if is_usage(&error) { 2 } else { 1 };
+        std::process::exit(code);
     }
 }
 
@@ -1017,7 +1049,9 @@ fn run_package(command: PackageCommand) -> Result<()> {
                 stack_policy,
             };
             if use_closure && args.emit_easyblock {
-                anyhow::bail!("--emit-easyblock does not combine with package-closure planning");
+                return Err(usage(
+                    "--emit-easyblock does not combine with package-closure planning",
+                ));
             }
             let options = PackageEmitOptions {
                 easyblock_skeleton_root: args.emit_easyblock.then(|| args.inspect.out_dir.clone()),
@@ -1256,7 +1290,7 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
                     }))?
                 );
             } else {
-                let name = name.context("a software name, or --charmap")?;
+                let name = name.ok_or_else(|| usage("a software name, or --charmap"))?;
                 println!("{}", encode_class_name(&name));
             }
             Ok(())
@@ -1271,8 +1305,8 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&template_spec())?);
                 return Ok(());
             }
-            let name = name.context("--name, or --export")?;
-            let version = version.context("--version, or --export")?;
+            let name = name.ok_or_else(|| usage("--name, or --export"))?;
+            let version = version.ok_or_else(|| usage("--version, or --export"))?;
             // Resolved here by the same rules the spec publishes, so a
             // cross-check comparing a consumer against this output is
             // comparing against the rules and not against a second list.
@@ -1567,7 +1601,7 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             dry_run,
         } => {
             if out.is_some() && paths.len() != 1 {
-                bail!("--out requires exactly one recipe path");
+                return Err(usage("--out requires exactly one recipe path"));
             }
             for (index, path) in paths.iter().enumerate() {
                 let destination = out.as_deref().filter(|_| index == 0);
@@ -1637,7 +1671,9 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 }
             }
             if toolchain.is_some() && roots.is_empty() {
-                bail!("--toolchain needs at least one --root or --roots-from-build-list");
+                return Err(usage(
+                    "--toolchain needs at least one --root or --roots-from-build-list",
+                ));
             }
             // A policy is a file when there is one to reuse, and a pair of
             // flags when there is not. Writing JSON by hand to answer two
@@ -1651,9 +1687,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                         .as_deref()
                         .and_then(|t| t.split_once('/'))
                         .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "--toolchain wants name/version, for example foss/2026.1"
-                            )
+                            usage("--toolchain wants name/version, for example foss/2026.1")
                         })?;
                     let policy = serde_json::json!({
                         "toolchain": {"name": name, "version": version},
@@ -1690,7 +1724,9 @@ fn run_stack(command: StackCommand) -> Result<()> {
                             version: version.into(),
                         })
                         .ok_or_else(|| {
-                            anyhow::anyhow!("--baseline-also-toolchain wants name/version, got {t}")
+                            usage(format!(
+                                "--baseline-also-toolchain wants name/version, got {t}"
+                            ))
                         })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -1859,10 +1895,14 @@ fn run_stack(command: StackCommand) -> Result<()> {
             let mut parsed = eb_stack::EasystackOptions::new();
             for spec in &options {
                 let (file, rest) = spec.split_once(':').ok_or_else(|| {
-                    anyhow::anyhow!("--option wants <file.eb>:<option>=<value>, got {spec}")
+                    usage(format!(
+                        "--option wants <file.eb>:<option>=<value>, got {spec}"
+                    ))
                 })?;
                 let (key, value) = rest.split_once('=').ok_or_else(|| {
-                    anyhow::anyhow!("--option wants <file.eb>:<option>=<value>, got {spec}")
+                    usage(format!(
+                        "--option wants <file.eb>:<option>=<value>, got {spec}"
+                    ))
                 })?;
                 parsed
                     .entry(file.to_string())
@@ -2047,17 +2087,22 @@ fn resolve_ingest_source(
     }
     if !is_registry_name(source) {
         bail!(
-            "source {} is not a file or a registry name",
+            "--source {}: not a file or a registry name",
             source.display()
         );
     }
     let format = format.ok_or_else(|| {
-        anyhow::anyhow!("--format pypi|cran|cargo is required when --source is a registry name")
+        usage("--format pypi, cran, or cargo is required when --source is a registry name")
     })?;
     let name = source
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| anyhow::anyhow!("invalid registry name {}", source.display()))?;
+        .ok_or_else(|| {
+            usage(format!(
+                "--source {}: invalid registry name",
+                source.display()
+            ))
+        })?;
     let ingest = materialize_registry_name(name, format, &UreqClient, &out_dir.join("ingest"))
         .with_context(|| format!("fetch {name} as {}", format.as_str()))?;
     Ok(ingest.dump)
@@ -2073,9 +2118,9 @@ fn parse_format(value: &str) -> Result<Option<ForeignFormat>> {
         "cargo" | "crates" | "crates.io" => Ok(Some(ForeignFormat::Cargo)),
         "luarocks" | "lua" => Ok(Some(ForeignFormat::Luarocks)),
         "raku" | "perl6" => Ok(Some(ForeignFormat::Raku)),
-        _ => {
-            bail!("--format must be auto, conda-forge, spack, pypi, cran, cargo, luarocks, or raku")
-        }
+        _ => Err(usage(format!(
+            "--format {value}: expected auto, conda-forge, spack, pypi, cran, cargo, luarocks, or raku"
+        ))),
     }
 }
 
@@ -2125,10 +2170,12 @@ fn parse_dep_overrides(values: &[String]) -> Result<HashMap<String, String>> {
     let mut dependencies = HashMap::new();
     for value in values {
         let Some((name, version)) = value.split_once('=') else {
-            bail!("--dep expects NAME=VERSION, got {value:?}");
+            return Err(usage(format!("--dep expects NAME=VERSION, got {value:?}")));
         };
         if name.trim().is_empty() || version.trim().is_empty() {
-            bail!("--dep expects non-empty NAME=VERSION, got {value:?}");
+            return Err(usage(format!(
+                "--dep expects non-empty NAME=VERSION, got {value:?}"
+            )));
         }
         dependencies.insert(name.trim().to_string(), version.trim().to_string());
     }

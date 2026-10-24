@@ -7,6 +7,16 @@
 ~--version~ prints the crate version. All paths written by package commands
 are deterministic bundle artifacts.
 
+* Exit status
+
+| Code | When |
+|-
+| 0 | The command finished the work it was asked to do |
+| 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
+| 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
+
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed.
+
 * Command map
 
 | Command | Purpose |

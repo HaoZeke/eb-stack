@@ -160,7 +160,7 @@ fn cargo_and_npm_purls_do_not_match_the_curl_recipe() {
         .arg(root.join("gem-out"))
         .output()
         .expect("run");
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("no carrier model"),
@@ -214,7 +214,7 @@ fn an_unsupported_purl_type_creates_no_output_directory() {
         .output()
         .expect("run");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(
         stderr.contains("purl type deb has no carrier model"),
         "{stderr}"

@@ -13,6 +13,9 @@ All notable changes to this project are documented here.
   and the generator then fails to read the module.
 - `eb-stack` prints a failure as `error:` and the cause chain. A missing
   file or a rejected value no longer appends a stack backtrace.
+- A rejected flag or flag combination exits 2. A missing file, a parse
+  failure, or a failed check exits 1. See the exit status table in
+  `docs/orgmode/reference/cli.org`.
 - `target doctor` reports a probe that cannot be started as a failed check
   and still prints the other three layers. A missing `podman` or
   `eessi_container.sh` used to abort the report before any check was shown.
