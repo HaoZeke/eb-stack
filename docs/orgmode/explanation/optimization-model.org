@@ -1,7 +1,7 @@
 #+TITLE: The optimization model
 #+OPTIONS: toc:t num:nil
 
-~eb-stack~ uses [[https://github.com/mamba-org/resolvo][resolvo]], a CDCL SAT
+~eb-stack~ uses [[https://github.com/mamba-org/resolvo][resolvo]], a conflict-driven clause learning (CDCL) Boolean satisfiability (SAT)
 solver, as its feasibility core. CDCL SAT answers one question well: *does a
 consistent assignment exist* under the requirements given. It does not, by
 itself, answer *which* consistent assignment is best when more than one
@@ -45,7 +45,7 @@ fixture solved both ways.
 ~solve_with_resolvo~ (in ~resolvo_provider.rs~) resolves the ambiguity with
 sequential lexicographic maximization over
 ~Policy::effective_root_priority~: fix the highest-priority root's version
-first, keep it fixed, move to the next root, and so on.
+first, keep it fixed, move to the next root.
 
 #+begin_src dot :file ../images/optimization-loop.svg :exports results
 digraph G {
@@ -77,7 +77,7 @@ candidate version pinned as an exact requirement alongside every
 higher-priority root's already-fixed version. The first version that keeps
 the whole trial feasible is kept; the loop never backtracks past a
 higher-priority root once fixed. After every root has a fixed version, one
-final solve with all root pins in place produces the lock -- non-root,
+final solve with all root pins in place produces the lock: non-root,
 non-priority packages still prefer newer via resolvo's own
 ~sort_candidates~ heuristic, since nothing forces them to a specific
 version.
@@ -86,7 +86,7 @@ This priority layer is deliberately *not* a joint, whole-stack optimum: it is a
 lexicographic optimum over the declared priority order. That is a stronger
 guarantee than plain SAT feasibility, and it is enough to make multi-root
 outcomes depend only on the policy (including ~root_priority~) and the
-candidate set -- never on incidental candidate list order or map iteration
+candidate set, never on incidental candidate list order or map iteration
 order. It is not a claim that the result maximizes some single scalar
 objective across every co-selected package simultaneously; a true
 multi-objective optimum would need a different (and considerably more
@@ -95,7 +95,7 @@ expensive) formulation on top of the same SAT core.
 * What this guarantees in practice
 
 - Single-root policies: priority reduces to one root, so this is "newest
-  feasible version of the root plus newest feasible everything else" --
+  feasible version of the root plus newest feasible everything else":
   the common case, and the fast path.
 - Multi-root policies with no shared-dependency conflict: every root gets
   its newest version; the priority order never has to break a tie.

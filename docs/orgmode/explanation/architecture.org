@@ -34,7 +34,7 @@ digraph P {
 
 * Command surface
 
-CLI namespaces and matching MCP tools share one workflow graph:
+CLI namespaces and matching Model Context Protocol (MCP) tools share one workflow graph:
 
 #+begin_src dot :file ../images/command-surface.svg :exports results
 digraph S {
@@ -67,8 +67,8 @@ digraph S {
 
 The conda adapter expands a restricted template subset, parses classic and v1
 recipe shapes, preserves multi-source entries, and represents selectors as
-structured conditions. The Spack adapter statically reads package DSL calls;
-it does not execute Python. A Python AST evaluator handles literal assignments,
+structured conditions. The Spack adapter statically reads package domain-specific language (DSL) calls;
+it does not execute Python. A Python abstract syntax tree (AST) evaluator handles literal assignments,
 collections, bounded loops, static conditionals, formatting, and nested
 ~with when(...)~ scopes. It preserves versions, dependencies and roles,
 variants, conflicts, requirements, source metadata, and source spans.
@@ -101,7 +101,7 @@ contains package metadata, provenance-bearing sources and dependencies,
 structured conditions/rules, EasyBuild build intent, product profiles, output
 requests, and residuals.
 
-The planned SBOM is derived from this model. It is marked pre-build and remains
+The planned Software Bill of Materials (SBOM) is derived from this model. It is marked pre-build and remains
 separate from installed/binary evidence.
 
 * Product profiles
@@ -112,7 +112,7 @@ variables, versionsuffix components, toolchain options, configuration options,
 and verification commands.
 
 The emission invariant is one profile lock and one conventional ~.eb~ file per
-requested profile. The default CPU/MPI/OpenMP product is unsuffixed unless the
+requested profile. The default CPU product, with Message Passing Interface (MPI) and OpenMP, is unsuffixed unless the
 site explicitly defines a distinct loadable variant.
 
 * Resolvo boundary

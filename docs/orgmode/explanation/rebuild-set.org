@@ -10,7 +10,7 @@ a module built with another generation is not a row.
 
 The walk starts from the easyconfig graph. ~--prefix~ and ~--check-static~
 then read the installed files. The commands are in
-[[file:../howto/rebuild-set.org][what an in-place patch forces EESSI to rebuild]].
+[[file:../howto/rebuild-set.org][what an in-place patch forces the European Environment for Scientific Software Installations (EESSI) to rebuild]].
 The output fields are in [[file:../reference/formats.org][output formats]].
 
 * Three classes
@@ -43,7 +43,7 @@ archives, the reason names them. The other classes stay one row per edge.
 
 * Installed archives
 
-~--prefix~ is the installed EESSI prefix. The install directory of
+~--prefix~ is the installed prefix of EESSI. The install directory of
 ~Name/version~ is ~software/Name/version~. A static archive is a ~*.a~
 file directly under a ~lib*~ directory there.
 
@@ -105,6 +105,6 @@ The rebuild easystack contains zlib and the bundle, each with
 
 With ~--prefix~, the CMake row stays in review only when the installed
 zlib provides a static archive, and the reason names that archive. With
-~--check-static~, CMake is must-rebuild when one of its installed ELF
+~--check-static~, CMake is must-rebuild when one of its installed Executable and Linkable Format (ELF)
 files defines an export of that archive, and no-rebuild when none of
 them does.

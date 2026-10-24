@@ -10,7 +10,7 @@ compatibility assumption.
 
 | Evidence | What it proves | What it does not prove |
 |-
-| Parser and package fixtures | Input facts survive normalization into the package plan and planned SBOM | The selected package compiles |
+| Parser and package fixtures | Input facts survive normalization into the package plan and planned Software Bill of Materials (SBOM) | The selected package compiles |
 | Resolvo profile lock | One dependency selection satisfies the declared constraints, pins, exclusions, and EasyBuild hierarchy | The selected versions are ABI-compatible in a real build |
 | Emitted-recipe regression | The rendered ~.eb~ text and bundle layout match a frozen expected result | Upstream source bytes, patches, compilers, tests, or sanity succeed |
 | Campaign state | EasyBuild and declared verification commands ran on one named target | The same recipe builds on a different target or runtime ABI |
@@ -127,7 +127,7 @@ cargo test --locked \
 ~tests/real_tree_scale.rs~ walks an unfiltered EasyBuild checkout when
 ~EB_EASYCONFIGS~ points at one. ~scripts/fetch-upstream-trees.sh~ writes that
 variable into ~env.sh~. The test requires more than 1,000 recipes, asserts at
-least 90% restricted-DSL coverage, and exercises canonical GROMACS, numba, and
+least 90% coverage of the restricted domain-specific language (DSL), and exercises canonical GROMACS, numba, and
 nglview bumps against that live candidate universe:
 
 #+begin_src bash
@@ -148,7 +148,7 @@ places each file on one of three rungs:
 
 | Score | Means |
 |-
-| ~EXACT~ | Byte-identical to the merged file. |
+| ~EXACT~ | The same bytes as the merged file. |
 | ~SEMANTIC~ | Differs only in ways that cannot change the build. |
 | ~MATERIAL~ | A real difference in what would be built. |
 

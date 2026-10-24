@@ -26,7 +26,7 @@ digraph C {
 
 A package resolves when every requested profile has:
 
-- a validated canonical manifest and planned SBOM;
+- a validated canonical manifest and planned Software Bill of Materials (SBOM);
 - a jointly feasible Resolvo lock under the selected hierarchy and stack policy;
 - a deterministic EasyBuild recipe generated from that lock.
 
@@ -52,7 +52,7 @@ profile.
 A package is binary-verified when all verification commands declared by its
 profiles succeed after the EasyBuild recipes build. These commands can load the
 module, invoke binaries, inspect versions/features, or perform site-specific
-RPATH/link checks.
+run-time search path (RPATH)/link checks.
 
 A campaign with no verification commands may establish *builds* but leaves
 *binary-verified* false.

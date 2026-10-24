@@ -3,7 +3,7 @@
 
 ~eb-stack pr-overlap~ turns each easystack line a pull request adds into the
 modules that line would build on the installed stack. This page follows open
-EESSI software-layer pull requests 1728 and 1787 for 2026.06, against
+European Environment for Scientific Software Installations (EESSI) software-layer pull requests 1728 and 1787 for 2026.06, against
 ~/cvmfs/software.eessi.io~ ~x86_64/amd/zen4~, using the easyconfigs that come
 with EasyBuild 5.4.0. The zen4 run loaded ~EESSI-extend~ and passed that
 module's ~EASYBUILD_FILTER_DEPS~, the ~modules/all~ tree, and the EasyBuild
@@ -588,7 +588,7 @@ that is not in the input is an error, and the message names that number.
 
 For each easystack path changed by 2 or more pull requests, the insertion
 point is the 0-based index of the base line before the first added line,
-from a line LCS of base and head. The point is -1 when the added lines
+from a line longest common subsequence (LCS) of base and head. The point is -1 when the added lines
 start at the top of the file. The same point is ~same-insertion~. Identical
 added lines are ~same-entry~. The record keeps that base and head text, or
 the blob ids, on ~revisions~, and the merge order reads the collisions from

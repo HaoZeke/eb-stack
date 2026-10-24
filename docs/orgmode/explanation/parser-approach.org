@@ -5,18 +5,18 @@
 
 An EasyBuild easyconfig (~*.eb~) is, syntactically, a Python source file.
 EasyBuild's own framework loads it by executing it and reading the resulting
-module namespace. That gives EasyBuild full fidelity -- conditionals,
-computed values, imports, templating via ~%(version)s~-style substitution --
+module namespace. That gives EasyBuild full fidelity (conditionals,
+computed values, imports, templating via ~%(version)s~-style substitution)
 at the cost of needing a Python interpreter and the EasyBuild framework
 installed, and of executing arbitrary code from every recipe it reads.
 
 ~eb_parse~ (~src/eb_parse.rs~) does not run a Python interpreter. It
-evaluates easyconfigs as a *restricted Python-like DSL* with its own small
+evaluates easyconfigs as a *restricted Python-like domain-specific language (DSL)* with its own small
 recursive-descent parser: string/int/bool/~None~ literals, lists, tuples,
 dicts, name lookups (including ~local_*~ variables and the ~SYSTEM~
 constant), ~+~ string concatenation, ~%~ string formatting, and the full
 EasyBuild ~TEMPLATE_CONSTANTS~ table (~SOURCE_TAR_GZ~, ~GITHUB_SOURCE~,
-~PYPI_SOURCE~, and around fifty others -- see ~src/eb_template_constants.rs~).
+~PYPI_SOURCE~, and around fifty others: see ~src/eb_template_constants.rs~).
 Unmodeled statements (~for~, ~def~, ~import~, and similar keywords) are
 skipped rather than rejected, so a recipe that uses control flow for a field
 ~eb-stack~ does not need still yields every field it does need. One ~if~ is
@@ -41,7 +41,7 @@ evaluates the whole assignment namespace, then extracts and template-expands:
   trailing options dict
 
 A bare dependency version (~'4.1.5'~) maps to an *exact* solver requirement
-(~==4.1.5~) -- EasyBuild's own default dependency semantics -- while a
+(~==4.1.5~), EasyBuild's own default dependency semantics, while a
 version already carrying ~==~, ~>=~, ~<=~, ~>~, ~<~, or ~!=~ is used as-is.
 
 ~%(key)s~ templates are resolved against a per-recipe template table built
@@ -65,9 +65,9 @@ text-rewrite decision path. See [[file:architecture.org][architecture]].
 
 * Correctness is checked against EasyBuild's own parser
 
-~fixtures/parser_hardcases/~ holds small easyconfigs exercising the
-constructs above -- template substitution, ~local_*~ variables, the
-~SYSTEM~ toolchain, multi-element dependency tuples, ~exts_list~ -- paired
+~fixtures/parser_hardcases/~ contains small easyconfigs exercising the
+constructs above (template substitution, ~local_*~ variables, the
+~SYSTEM~ toolchain, multi-element dependency tuples, ~exts_list~) paired
 with golden JSON under ~fixtures/parser_hardcases/resolved/~ produced by
 ~scripts/resolve_easyconfig_eb.py~, which drives EasyBuild's real
 ~EasyConfigParser~ (requires an EasyBuild install; not run by ~cargo
@@ -78,7 +78,7 @@ EasyBuild itself would produce fails a test.
 * Unparseable files are skipped, not fatal
 
 Real easyconfig trees are large (annual EasyBuild checkouts run to five
-figures of ~.eb~ files) and not every file in a checkout parses -- some use
+figures of ~.eb~ files) and not every file in a checkout parses: some use
 constructs outside the restricted DSL (inline ~if~/~for~, multi-statement
 ~configopts~ built from several ~+=~ lines with embedded control flow,
 computed values). ~parse_easyconfig_tree~ walks the whole directory and
@@ -91,7 +91,7 @@ distinguishable to the operator reading the output.
 
 Coverage against a real, unfiltered ~easybuilders/easybuild-easyconfigs~
 checkout (tens of thousands of files, every toolchain generation from
-~2021a~ onward) stays above 90% -- see
+~2021a~ onward) stays above 90%: see
 [[file:fidelity.org][reproduction fidelity and limitations]] for the exact
 number and what the remaining unparsed files look like.
 
@@ -99,14 +99,14 @@ number and what the remaining unparsed files look like.
 
 Two more general options exist and were deliberately not taken:
 
-- *Evaluate the file with a real Python interpreter*, optionally driving
+- *Evaluate the file with a Python interpreter*, optionally driving
   EasyBuild's own ~EasyConfig~ class for full parity with what EasyBuild
   itself would parse. This gives ground-truth fidelity, including
   computed and templated fields no restricted evaluator will ever handle,
   at the cost of pulling a Python runtime (and, for true parity, an
   EasyBuild install) into a Rust CLI's dependency chain, and of executing
   recipe code ~eb-stack~ did not author.
-- *A full PEG or hand-written grammar* for the easyconfig DSL (the
+- *A full Parsing Expression Grammar (PEG) or hand-written grammar* for the easyconfig DSL (the
   ~pest~/~chumsky~/~nom~/~lalrpop~ family). This stays native and
   dependency-free like the current approach, but is strictly more
   implementation effort to track EasyBuild's own syntax evolution, for a
@@ -118,7 +118,7 @@ real assignment/expression evaluation (not a text-scraping regex layer) for
 every construct the solver and the emit path need, without a Python
 runtime and without evaluating arbitrary code. It does not (and is not
 meant to) handle a field whose value depends on control flow, a function
-call, or an import -- those recipes fail that one field's extraction and
+call, or an import: those recipes fail that one field's extraction and
 the file is skipped, not miscounted as present with a wrong value.
 
 * Version comparison is EasyBuild-shaped, not semver
