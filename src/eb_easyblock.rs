@@ -22,50 +22,48 @@
 /// `EASYBLOCK_CLASS_PREFIX` in `easybuild.tools.filetools`.
 pub const EASYBLOCK_CLASS_PREFIX: &str = "EB_";
 
-/// Per-character substitutions applied to a software name.
+/// Substitutions applied to a software name.
 ///
-/// `STRING_ENCODING_CHARMAP` in `easybuild.tools.filetools`. Characters absent
-/// from this table are passed through, so letters and digits survive intact.
-pub const STRING_ENCODING_CHARMAP: &[(char, &str)] = &[
-    (' ', "_space_"),
-    ('!', "_exclamation_"),
-    ('"', "_quotation_"),
-    ('#', "_hash_"),
-    ('$', "_dollar_"),
-    ('%', "_percent_"),
-    ('&', "_ampersand_"),
-    ('(', "_leftparen_"),
-    (')', "_rightparen_"),
-    ('*', "_asterisk_"),
-    ('+', "_plus_"),
-    (',', "_comma_"),
-    ('-', "_minus_"),
-    ('.', "_period_"),
-    ('/', "_slash_"),
-    (':', "_colon_"),
-    (';', "_semicolon_"),
-    ('<', "_lessthan_"),
-    ('=', "_equals_"),
-    ('>', "_greaterthan_"),
-    ('?', "_question_"),
-    ('@', "_atsign_"),
-    ('[', "_leftbracket_"),
-    // filetools.py spells these two keys as the raw strings r'\'' and r'\\'.
-    // A raw string keeps the backslash, so the dict keys are the two-character
-    // sequences \' and \\ and encode_string's per-character lookup never hits
-    // them. The characters the entries name are still what a class name has to
-    // escape, so the table here uses those single characters. No software name
-    // in easybuild-easyconfigs v5.4.1 or develop contains either one.
-    ('\'', "_apostrophe_"),
-    ('\\', "_backslash_"),
-    (']', "_rightbracket_"),
-    ('^', "_circumflex_"),
-    ('_', "_underscore_"),
-    ('`', "_backquote_"),
-    ('{', "_leftcurly_"),
-    ('|', "_verticalbar_"),
-    ('}', "_rightcurly_"),
-    ('~', "_tilde_"),
+/// `STRING_ENCODING_CHARMAP` in `easybuild.tools.filetools`. The keys are the
+/// dict keys as Python stores them. `r'\''` and `r'\\'` are the two-character
+/// strings `\'` and `\\`, not the apostrophe and the backslash.
+/// `encode_string` looks each character up on its own, so those two keys are
+/// never selected and `'` and `\` pass through. Characters absent from this
+/// table pass through as well, so letters and digits survive intact.
+pub const STRING_ENCODING_CHARMAP: &[(&str, &str)] = &[
+    (" ", "_space_"),
+    ("!", "_exclamation_"),
+    ("\"", "_quotation_"),
+    ("#", "_hash_"),
+    ("$", "_dollar_"),
+    ("%", "_percent_"),
+    ("&", "_ampersand_"),
+    ("(", "_leftparen_"),
+    (")", "_rightparen_"),
+    ("*", "_asterisk_"),
+    ("+", "_plus_"),
+    (",", "_comma_"),
+    ("-", "_minus_"),
+    (".", "_period_"),
+    ("/", "_slash_"),
+    (":", "_colon_"),
+    (";", "_semicolon_"),
+    ("<", "_lessthan_"),
+    ("=", "_equals_"),
+    (">", "_greaterthan_"),
+    ("?", "_question_"),
+    ("@", "_atsign_"),
+    ("[", "_leftbracket_"),
+    ("\\'", "_apostrophe_"),
+    ("\\\\", "_backslash_"),
+    ("]", "_rightbracket_"),
+    ("^", "_circumflex_"),
+    ("_", "_underscore_"),
+    ("`", "_backquote_"),
+    ("{", "_leftcurly_"),
+    ("|", "_verticalbar_"),
+    ("}", "_rightcurly_"),
+    ("~", "_tilde_"),
 ];
 
 /// How many substitutions the table carries, for a coverage assertion.
@@ -79,7 +77,10 @@ pub fn encode_string(name: &str) -> String {
         .map(|c| {
             STRING_ENCODING_CHARMAP
                 .iter()
-                .find(|(from, _)| *from == c)
+                .find(|(from, _)| {
+                    let mut chars = from.chars();
+                    chars.next() == Some(c) && chars.next().is_none()
+                })
                 .map(|(_, to)| (*to).to_string())
                 .unwrap_or_else(|| c.to_string())
         })
@@ -111,7 +112,7 @@ pub fn decode_class_name(class_name: &str) -> String {
 /// Longest-match first, because `_underscore_` and `_` share a prefix and
 /// taking the shorter one first would strand the rest of the token.
 pub fn decode_string(encoded: &str) -> String {
-    let mut by_length: Vec<&(char, &str)> = STRING_ENCODING_CHARMAP.iter().collect();
+    let mut by_length: Vec<&(&str, &str)> = STRING_ENCODING_CHARMAP.iter().collect();
     by_length.sort_by_key(|(_, to)| std::cmp::Reverse(to.len()));
 
     let mut out = String::with_capacity(encoded.len());
@@ -119,7 +120,7 @@ pub fn decode_string(encoded: &str) -> String {
     'outer: while !rest.is_empty() {
         for (from, to) in &by_length {
             if let Some(tail) = rest.strip_prefix(*to) {
-                out.push(*from);
+                out.push_str(from);
                 rest = tail;
                 continue 'outer;
             }
@@ -402,11 +403,29 @@ class _Helper(object):
 
     #[test]
     fn charmap_has_no_duplicate_sources() {
-        let mut seen: Vec<char> = STRING_ENCODING_CHARMAP.iter().map(|(c, _)| *c).collect();
+        let mut seen: Vec<&str> = STRING_ENCODING_CHARMAP.iter().map(|(c, _)| *c).collect();
         seen.sort_unstable();
         let before = seen.len();
         seen.dedup();
         assert_eq!(before, seen.len(), "a character is mapped twice");
+    }
+
+    #[test]
+    fn apostrophe_and_backslash_match_the_framework_map() {
+        // filetools.py stores r'\'' and r'\\' , which are two characters each.
+        // encode_string looks up one character at a time, so ' and \ pass
+        // through. decode_string writes the dict key back, not the character
+        // the token's name suggests.
+        assert_eq!(encode_string("a'b"), "a'b");
+        assert_eq!(encode_string("a\\b"), "a\\b");
+        assert!(STRING_ENCODING_CHARMAP
+            .iter()
+            .any(|(from, to)| *from == "\\'" && *to == "_apostrophe_"));
+        assert!(STRING_ENCODING_CHARMAP
+            .iter()
+            .any(|(from, to)| *from == "\\\\" && *to == "_backslash_"));
+        assert_eq!(decode_string("_apostrophe_"), "\\'");
+        assert_eq!(decode_string("_backslash_"), "\\\\");
     }
 
     #[test]

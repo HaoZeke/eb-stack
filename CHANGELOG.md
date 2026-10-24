@@ -37,6 +37,11 @@ All notable changes to this project are documented here.
   reaches an easyblock that imports `tools/filetools.py` when that module
   imports `tools/run.py`. An easyblock that only imports another easyblock
   is not reached that way.
+- `recipe easyblock` uses the framework character map. The `filetools`
+  keys written `r'\''` and `r'\\'` are the two-character strings `\'` and
+  `\\`, and `encode_string` looks up one character at a time, so `'` and
+  `\` pass through. Decoding `_apostrophe_` and `_backslash_` writes those
+  keys back.
 - `recipe lint` JSON includes `info` and `in_review` when a finding sets
   them, the same fields `eb_recipe_lint` already returned. An
   `EB_FMT_PERCENT` hit on a `%%(...)s` escape is info and does not count
