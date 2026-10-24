@@ -41,16 +41,9 @@ claim/resolve operations, failure classification, and ~run_campaign~.
 
 * Generated API pages
 
-The crate pages are generated from Rust source:
+The crate pages are generated from Rust source. The documentation build
+appends them to this page.
 
 #+begin_src bash
 pixi run -e docs gen-rust-api
 #+end_src
-
-#+begin_export rst
-.. toctree::
-   :maxdepth: 2
-
-   ../crates/eb_stack/lib
-   ../crates/eb_stack/main
-#+end_export

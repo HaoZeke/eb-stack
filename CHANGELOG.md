@@ -512,6 +512,7 @@ All notable changes to this project are documented here.
   well.
 - Help examples name `zlib`. Production source does not name a package
   the solver used to special-case.
+- The Rust API toctree is added once, by the Sphinx build.
 - The stack docs match the commands: build-list order and versions, the
   stack-diff labels and punctuation, `solver.criteria`, lock-SBOM
   `dependsOn` edges, policy hierarchy membership, and `stack order`,
