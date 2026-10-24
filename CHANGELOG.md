@@ -200,6 +200,11 @@ All notable changes to this project are documented here.
 
 ### Documentation
 
+- Reference and explanation pages use the same checkout checks as the
+  tutorial and how-tos. Bash examples name files that exist in this
+  tree or under `/tmp`, and the pages drop the wording those checks
+  reject.
+
 - Walkthrough commands write build lists, locks, SBOMs, diffs, order
   files, and hash files under `/tmp`.
 

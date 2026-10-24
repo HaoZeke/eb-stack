@@ -724,9 +724,12 @@ and ~component-reach.md~. The TOML file starts with
 * Target commands
 
 #+begin_src bash
-eb-stack target list --config examples/targets/base.toml --config examples/targets/site.example.toml
+eb-stack target list \
+  --config examples/targets/base.toml \
+  --config examples/targets/site.example.toml
 eb-stack target doctor \
-  --config examples/targets/base.toml --config examples/targets/site.example.toml \
+  --config examples/targets/base.toml \
+  --config examples/targets/site.example.toml \
   --target NAME
 #+end_src
 
@@ -749,7 +752,8 @@ replacement semantics, ABI isolation, and the runnable local Podman target.
 #+begin_src bash
 eb-stack campaign run \
   --bundle BUNDLE \
-  --config examples/targets/base.toml --config examples/targets/site.example.toml \
+  --config examples/targets/base.toml \
+  --config examples/targets/site.example.toml \
   --target NAME \
   --state /tmp/campaign.json
 
