@@ -127,8 +127,6 @@ fn tool_catalog() -> Vec<Value> {
             &[("source", "string"), ("out_dir", "string")],
             &[
                 ("format", "string"),
-                ("toolchain_name", "string"),
-                ("toolchain_version", "string"),
                 ("toolchain", "string"),
                 ("package_configs", "array"),
             ],
@@ -144,8 +142,6 @@ fn tool_catalog() -> Vec<Value> {
             ],
             &[
                 ("format", "string"),
-                ("toolchain_name", "string"),
-                ("toolchain_version", "string"),
                 ("toolchain", "string"),
                 ("package_configs", "array"),
                 ("source_checksums", "array"),
@@ -168,8 +164,6 @@ fn tool_catalog() -> Vec<Value> {
                 ("out_dir", "string"),
             ],
             &[
-                ("toolchain_name", "string"),
-                ("toolchain_version", "string"),
                 ("toolchain", "string"),
                 ("version", "string"),
                 ("source_checksum", "string"),

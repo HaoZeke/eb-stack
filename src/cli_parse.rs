@@ -41,7 +41,8 @@ pub fn usage(message: impl Display) -> anyhow::Error {
 
 /// `name/version` in `spec`, or the split name and version fields.
 ///
-/// `default_name` fills a missing name with `foss`. Bump on MCP does not.
+/// `default_name` fills a missing name with `foss`. Bump does not, on the
+/// CLI or on MCP.
 /// An empty name is a usage error, not a missing name, so it does not
 /// become `foss`. An empty version is kept: a SYSTEM recipe has one.
 /// `flag` is `--toolchain` on the CLI and `toolchain` on MCP. Passing

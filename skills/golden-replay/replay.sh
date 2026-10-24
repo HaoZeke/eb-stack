@@ -66,14 +66,14 @@ pspamm=${found[4]}
 
 "$wrap" package bump \
   --source "$asagi" \
-  --toolchain-name foss --toolchain-version 2025a \
+  --toolchain foss/2025a \
   --package-config "$remote_cfg/asagi.toml" \
   --easyconfigs "$robot" \
   --out-dir "$remote_out"
 
 "$wrap" package bump \
   --source "$easi" \
-  --toolchain-name foss --toolchain-version 2025a \
+  --toolchain foss/2025a \
   --version 1.7.0 \
   --package-config "$remote_cfg/easi.toml" \
   --easyconfigs "$robot" --easyconfigs "$overlay" \
@@ -81,7 +81,7 @@ pspamm=${found[4]}
 
 "$wrap" package plan \
   --source "$pspamm" \
-  --toolchain-name gfbf --toolchain-version 2025a \
+  --toolchain gfbf/2025a \
   --package-config "$remote_cfg/pspamm.toml" \
   --easyconfigs "$robot" --easyconfigs "$overlay" \
   --stack-policy "$remote_cfg/gfbf-2025a.toml" \
@@ -90,7 +90,7 @@ pspamm=${found[4]}
 
 "$wrap" package bump \
   --source "$seissol" \
-  --toolchain-name foss --toolchain-version 2025a \
+  --toolchain foss/2025a \
   --version 1.3.2 \
   --source-checksum a0dd4f33d7d72c4a5eb6f01f0a96bc410af20c95a496e5cf1532ee8a20561612 \
   --package-config "$remote_cfg/seissol.toml" \

@@ -552,6 +552,10 @@ All notable changes to this project are documented here.
 
 ### Changed
 
+- Package commands, `stack solve`, the MCP tools, and
+  `skills/golden-replay/replay.sh` pass `--toolchain name/version` and
+  `--stack-policy`. The older spellings stay accepted, are omitted
+  from `--help`, and the CLI warns on the split toolchain flags.
 - The CLI and the MCP tools share one usage error, one toolchain
   parser, and one foreign-format parser.
 - `--toolchain system` and `--toolchain SYSTEM` select the SYSTEM
@@ -559,14 +563,13 @@ All notable changes to this project are documented here.
 - `--help` for every command includes an example, and every flag has a
   description. Defaults the command applies are shown there.
 - `stack solve` reads the policy file with `--stack-policy`, the same flag
-  as `package plan` and `package bump`. `--policy` is that flag as well.
-  Package commands accept `--toolchain name/version`, the spelling
-  `stack solve` uses, in place of `--toolchain-name` and
-  `--toolchain-version`. An empty `--toolchain-version` is kept: a
-  SYSTEM recipe has one. Omitting the version is still rejected.
+  as `package plan` and `package bump`. Package commands take
+  `--toolchain name/version`, the spelling `stack solve` uses. An empty
+  version is kept: a SYSTEM recipe has one. A command line without a
+  toolchain version is still rejected. Inspect and plan accept a lone
+  `--toolchain-version` and use `foss`. Bump does not.
 - MCP package tools accept `toolchain` as `name/version`. `eb_stack_solve`
-  reads the policy file as `stack_policy`. `policy` is that argument as
-  well.
+  reads the policy file as `stack_policy`.
 - Help examples name `zlib`. Production source does not name a package
   the solver used to special-case.
 - The Rust API toctree is added once, by the Sphinx build.

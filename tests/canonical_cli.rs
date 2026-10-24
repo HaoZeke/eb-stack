@@ -147,10 +147,8 @@ mode = "preferred"
             source.to_str().unwrap(),
             "--format",
             "conda-forge",
-            "--toolchain-name",
-            "foss",
-            "--toolchain-version",
-            "2026.1",
+            "--toolchain",
+            "foss/2026.1",
             "--package-config",
             package_config.to_str().unwrap(),
             "--source-checksum",
@@ -235,10 +233,8 @@ version = "2026.1"
             source.to_str().unwrap(),
             "--format",
             "conda-forge",
-            "--toolchain-name",
-            "foss",
-            "--toolchain-version",
-            "2026.1",
+            "--toolchain",
+            "foss/2026.1",
             "--easyconfigs",
             robot.to_str().unwrap(),
             "--stack-policy",
@@ -333,10 +329,8 @@ version = "2026.1"
             root_source.to_str().unwrap(),
             "--format",
             "conda-forge",
-            "--toolchain-name",
-            "foss",
-            "--toolchain-version",
-            "2026.1",
+            "--toolchain",
+            "foss/2026.1",
             "--easyconfigs",
             robot.to_str().unwrap(),
             "--stack-policy",
@@ -411,10 +405,8 @@ fn package_bump_cli_writes_an_sbom_resolvo_bundle() {
             "bump",
             "--source",
             source.to_str().unwrap(),
-            "--toolchain-name",
-            "foss",
-            "--toolchain-version",
-            "2024a",
+            "--toolchain",
+            "foss/2024a",
             "--easyconfigs",
             robot.to_str().unwrap(),
             "--out-dir",
@@ -448,10 +440,8 @@ fn overlay_plan_without_cmake_names_an_upstream_easyconfigs_tree() {
         .args([
             "--format",
             "conda-forge",
-            "--toolchain-name",
-            "foss",
-            "--toolchain-version",
-            "2026.1",
+            "--toolchain",
+            "foss/2026.1",
             "--package-config",
         ])
         .arg(root.join("examples/packages/common.toml"))
@@ -524,8 +514,13 @@ requirements:
     let result = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
         .args(["package", "plan", "--source"])
         .arg(&source)
-        .args(["--format", "conda-forge", "--toolchain-name", "foss"])
-        .args(["--toolchain-version", "2026.1", "--package-config"])
+        .args([
+            "--format",
+            "conda-forge",
+            "--toolchain",
+            "foss/2026.1",
+            "--package-config",
+        ])
         .arg(root.join("examples/packages/common.toml"))
         .arg("--easyconfigs")
         .arg(&robot)

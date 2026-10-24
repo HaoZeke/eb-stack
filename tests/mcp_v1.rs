@@ -375,8 +375,7 @@ version = "2026.1"
             "arguments": {
                 "source": root,
                 "format": "conda-forge",
-                "toolchain_name": "foss",
-                "toolchain_version": "2026.1",
+                "toolchain": "foss/2026.1",
                 "easyconfigs": [robot],
                 "stack_policy": stack,
                 "package_catalogs": [catalog],
@@ -450,8 +449,7 @@ version = "2026.1"
             "arguments": {
                 "source": root,
                 "format": "conda-forge",
-                "toolchain_name": "foss",
-                "toolchain_version": "2026.1",
+                "toolchain": "foss/2026.1",
                 "easyconfigs": [robot],
                 "stack_policy": stack,
                 "out_dir": output
@@ -1614,8 +1612,7 @@ fn mcp_bump_strict_patches_rejects_an_undecided_patch() {
         "eb_package_bump",
         json!({
             "source": source,
-            "toolchain_name": "GCCcore",
-            "toolchain_version": "15.2.0",
+            "toolchain": "GCCcore/15.2.0",
             "version": "2.0",
             "easyconfigs": [robot],
             "strict_patches": true,
@@ -1656,8 +1653,7 @@ fn mcp_plan_reads_versions_from_a_package_index() {
         json!({
             "source": root.join("fixtures/foreign_ingest/cran_unpinned/cran.json"),
             "format": "cran",
-            "toolchain_name": "foss",
-            "toolchain_version": "2026.1",
+            "toolchain": "foss/2026.1",
             "source_checksums": ["dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"],
             "easyconfigs": [root.join("fixtures/foreign_ingest/cran_bundle/robot")],
             "stack_policy": stack,
@@ -1748,29 +1744,56 @@ fn mcp_toolchain_and_stack_policy_match_the_cli_names() {
         );
     }
 
-    let missing = "/no/such/stack-policy.toml";
-    for key in ["stack_policy", "policy"] {
-        let mut arguments = json!({"easyconfigs": ["easyconfigs"]});
-        arguments[key] = json!(missing);
-        let response = handle_message(&json!({
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {
-                "name": "eb_stack_solve",
-                "arguments": arguments
+    let lone = temp.path().join("lone-version");
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_package_inspect",
+            "arguments": {
+                "source": source,
+                "format": "conda-forge",
+                "toolchain_version": "2026.1",
+                "out_dir": lone,
             }
-        }))
-        .expect("solve");
-        assert_eq!(response["result"]["isError"], true, "{key} {response}");
-        let text = response["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap_or("");
-        assert!(
-            text.contains(key) && text.contains(missing),
-            "{key}: {text}"
-        );
-    }
+        }
+    }))
+    .expect("inspect lone version");
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let plan: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(lone.join("package.plan.json")).expect("plan"),
+    )
+    .expect("plan json");
+    assert_eq!(
+        plan["build"]["toolchain"],
+        json!({"name": "foss", "version": "2026.1"}),
+        "0.3.0 filled a missing toolchain_name with foss"
+    );
+
+    let missing = "/no/such/stack-policy.toml";
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_stack_solve",
+            "arguments": {"easyconfigs": ["easyconfigs"], "stack_policy": missing}
+        }
+    }))
+    .expect("solve");
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        text.contains("stack_policy") && text.contains(missing),
+        "{text}"
+    );
+    assert!(
+        !text.contains("accepted for compatibility"),
+        "stack_policy is the current spelling and is not warned: {text}"
+    );
 }
 
 /// `policy` is the retired spelling of `stack_policy`. The CLI warns and
@@ -2409,59 +2432,6 @@ fn mcp_schemas_cover_cli_flags() {
     );
 }
 
-/// The CLI accepts `--osv-cache`. The tool schema has to list it too.
-#[test]
-fn mcp_component_reach_lists_osv_cache() {
-    let listed = handle_message(&json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/list",
-        "params": {}
-    }))
-    .expect("tools/list");
-    let tools = listed["result"]["tools"].as_array().expect("tools");
-    let reach = tools
-        .iter()
-        .find(|tool| tool["name"] == "eb_component_reach")
-        .expect("eb_component_reach");
-    assert_eq!(
-        reach["inputSchema"]["properties"]["osv_cache"]["type"], "string",
-        "{reach}"
-    );
-    let required = reach["inputSchema"]["required"]
-        .as_array()
-        .expect("required");
-    assert!(
-        required.iter().all(|item| item != "osv_cache"),
-        "osv_cache is optional: {required:?}"
-    );
-
-    let response = handle_message(&json!({
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/call",
-        "params": {
-            "name": "eb_component_reach",
-            "arguments": {
-                "generation": "2026.1",
-                "easyconfigs": ["/nope-tree"],
-                "component": "curl",
-                "version": "8.17.0",
-                "osv_cache": "/nope-osv"
-            }
-        }
-    }))
-    .expect("call");
-    assert_eq!(response["result"]["isError"], true, "{response}");
-    let text = response["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap_or("");
-    assert!(
-        text.contains("--osv-cache") && text.contains("/nope-osv"),
-        "{text}"
-    );
-}
-
 #[test]
 fn mcp_pr_overlap_writes_the_same_files_as_the_command() {
     let _guard = WORKSPACE_ENV_LOCK.lock().expect("lock");
@@ -2600,6 +2570,59 @@ fn mcp_pr_overlap_writes_the_same_files_as_the_command() {
     if let Some(previous) = previous {
         std::env::set_var("EASYBUILD_FILTER_DEPS", previous);
     }
+}
+
+/// The CLI accepts `--osv-cache`. The tool schema has to list it too.
+#[test]
+fn mcp_component_reach_lists_osv_cache() {
+    let listed = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {}
+    }))
+    .expect("tools/list");
+    let tools = listed["result"]["tools"].as_array().expect("tools");
+    let reach = tools
+        .iter()
+        .find(|tool| tool["name"] == "eb_component_reach")
+        .expect("eb_component_reach");
+    assert_eq!(
+        reach["inputSchema"]["properties"]["osv_cache"]["type"], "string",
+        "{reach}"
+    );
+    let required = reach["inputSchema"]["required"]
+        .as_array()
+        .expect("required");
+    assert!(
+        required.iter().all(|item| item != "osv_cache"),
+        "osv_cache is optional: {required:?}"
+    );
+
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_component_reach",
+            "arguments": {
+                "generation": "2026.1",
+                "easyconfigs": ["/nope-tree"],
+                "component": "curl",
+                "version": "8.17.0",
+                "osv_cache": "/nope-osv"
+            }
+        }
+    }))
+    .expect("call");
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        text.contains("--osv-cache") && text.contains("/nope-osv"),
+        "{text}"
+    );
 }
 
 /// `merged` and `impact` are arrays on the CLI. A bare number is not one.

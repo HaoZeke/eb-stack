@@ -443,13 +443,13 @@ struct PackageInspectArgs {
     /// Recipe language. `auto` detects a file. `conda`, `crates`, `crates.io`, `lua`, and `perl6` are accepted spellings.
     #[arg(long, default_value = "auto")]
     format: String,
-    /// Toolchain name recorded on the manifest. Defaults to `foss`.
-    #[arg(long, default_value = "foss")]
-    toolchain_name: String,
-    /// Toolchain version recorded on the manifest, for example `2026.1`.
+    /// Accepted for compatibility. Hidden. Prefer `--toolchain name/version`.
+    #[arg(long, hide = true)]
+    toolchain_name: Option<String>,
+    /// Accepted for compatibility. Hidden. Prefer `--toolchain name/version`.
     ///
-    /// Required unless `--toolchain` is set.
-    #[arg(long, required_unless_present = "toolchain_spec")]
+    /// An empty version is kept.
+    #[arg(long, hide = true)]
     toolchain_version: Option<String>,
     /// Target toolchain as `name/version` (`foss/2026.1`) or `system`.
     ///
@@ -459,6 +459,7 @@ struct PackageInspectArgs {
     #[arg(
         long = "toolchain",
         value_name = "NAME/VERSION",
+        required_unless_present_any = ["toolchain_name", "toolchain_version"],
         conflicts_with_all = ["toolchain_name", "toolchain_version"]
     )]
     toolchain_spec: Option<String>,
@@ -528,15 +529,13 @@ struct PackageBumpArgs {
     /// Easyconfig to retarget.
     #[arg(long)]
     source: PathBuf,
-    /// Toolchain name of the retargeted recipe.
-    ///
-    /// Required unless `--toolchain` is set.
-    #[arg(long, required_unless_present = "toolchain_spec")]
+    /// Accepted for compatibility. Hidden. Prefer `--toolchain name/version`.
+    #[arg(long, hide = true)]
     toolchain_name: Option<String>,
-    /// Toolchain version of the retargeted recipe, for example `2024a`.
+    /// Accepted for compatibility. Hidden. Prefer `--toolchain name/version`.
     ///
-    /// Required unless `--toolchain` is set.
-    #[arg(long, required_unless_present = "toolchain_spec")]
+    /// An empty version is kept.
+    #[arg(long, hide = true)]
     toolchain_version: Option<String>,
     /// Target toolchain as `name/version` (`foss/2024a`) or `system`.
     ///
@@ -546,6 +545,7 @@ struct PackageBumpArgs {
     #[arg(
         long = "toolchain",
         value_name = "NAME/VERSION",
+        required_unless_present_any = ["toolchain_name", "toolchain_version"],
         conflicts_with_all = ["toolchain_name", "toolchain_version"]
     )]
     toolchain_spec: Option<String>,
@@ -735,7 +735,7 @@ struct SolveArgs {
     easyconfigs: Vec<PathBuf>,
     /// Stack policy TOML or JSON. The same file `package plan --stack-policy` reads.
     ///
-    /// Omit it and pass `--toolchain` and `--root` instead. `--policy` is the same flag.
+    /// Omit it and pass `--toolchain` and `--root` instead.
     #[arg(
         long = "stack-policy",
         alias = "policy",
@@ -1013,6 +1013,10 @@ enum CampaignFindingCommand {
 }
 
 fn main() {
+    // A rejected command line exits in clap, before any compatibility
+    // warning. The warning is only for a spelling this subcommand accepts.
+    let matches = <Cli as clap::CommandFactory>::command().get_matches();
+    warn_retired_spellings(&matches);
     if let Err(error) = dispatch() {
         // Display, not Debug: Debug appends a stack backtrace, which is a
         // compiler trace and not the reason the command failed.
@@ -1020,6 +1024,68 @@ fn main() {
         // 2 is a rejected command line. 1 is work that was attempted and failed.
         let code = if is_usage(&error) { 2 } else { 1 };
         std::process::exit(code);
+    }
+}
+
+/// Warn when a hidden compatibility spelling was the one clap accepted.
+fn warn_retired_spellings(matches: &clap::ArgMatches) {
+    if let Some(("package", package)) = matches.subcommand() {
+        if let Some((name, args)) = package.subcommand() {
+            if (name == "inspect" || name == "plan" || name == "bump")
+                && split_toolchain_resolves(args, name != "bump")
+            {
+                warn_toolchain_flag(args, "toolchain_name", "--toolchain-name");
+                warn_toolchain_flag(args, "toolchain_version", "--toolchain-version");
+            }
+        }
+    }
+    if let Some(("stack", stack)) = matches.subcommand() {
+        if stack.subcommand().is_some_and(|(name, _)| name == "solve") {
+            warn_policy_alias();
+        }
+    }
+}
+
+/// A split pair the command will reject is not accepted, so it is not warned.
+fn split_toolchain_resolves(args: &clap::ArgMatches, default_name: bool) -> bool {
+    let name = args.get_one::<String>("toolchain_name").map(String::as_str);
+    let version = args
+        .get_one::<String>("toolchain_version")
+        .map(String::as_str);
+    eb_stack::cli_parse::resolve_toolchain(name, version, None, default_name, "--toolchain").is_ok()
+}
+
+fn warn_toolchain_flag(args: &clap::ArgMatches, id: &str, flag: &str) {
+    if args.value_source(id) == Some(clap::parser::ValueSource::CommandLine) {
+        eprintln!("warning: {flag} is accepted for compatibility. Use --toolchain name/version.");
+    }
+}
+
+fn warn_policy_alias() {
+    let mut seen_stack = false;
+    let mut seen_solve = false;
+    for argument in std::env::args().skip(1) {
+        if argument == "--" {
+            break;
+        }
+        if !seen_stack {
+            if argument == "stack" {
+                seen_stack = true;
+            }
+            continue;
+        }
+        if !seen_solve {
+            if argument == "solve" {
+                seen_solve = true;
+            }
+            continue;
+        }
+        let flag = argument
+            .split_once('=')
+            .map_or(argument.as_str(), |(name, _)| name);
+        if flag == "--policy" {
+            eprintln!("warning: --policy is accepted for compatibility. Use --stack-policy.");
+        }
     }
 }
 
@@ -1200,9 +1266,10 @@ fn run_package(command: PackageCommand) -> Result<()> {
     match command {
         PackageCommand::Inspect(args) => {
             let toolchain = resolve_toolchain(
-                Some(args.toolchain_name.as_str()),
+                args.toolchain_name.as_deref(),
                 args.toolchain_version.as_deref(),
                 args.toolchain_spec.as_deref(),
+                true,
             )?;
             let layers = load_package_layers(&args.package_configs)?;
             let format = parse_format(&args.format)?;
@@ -1223,9 +1290,10 @@ fn run_package(command: PackageCommand) -> Result<()> {
         }
         PackageCommand::Plan(args) => {
             let toolchain = resolve_toolchain(
-                Some(args.inspect.toolchain_name.as_str()),
+                args.inspect.toolchain_name.as_deref(),
                 args.inspect.toolchain_version.as_deref(),
                 args.inspect.toolchain_spec.as_deref(),
+                true,
             )?;
             let stack_policy = load_stack_policy(&args.stack_policy)?;
             let source_roots = load_package_source_roots(&args)?;
@@ -1327,6 +1395,7 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
         args.toolchain_name.as_deref(),
         args.toolchain_version.as_deref(),
         args.toolchain_spec.as_deref(),
+        false,
     )?;
     // Usage is exit 2. A missing recipe is exit 1, so a bad `--dep` is
     // reported before the source file is read.
@@ -2428,15 +2497,15 @@ fn resolve_toolchain(
     name: Option<&str>,
     version: Option<&str>,
     spec: Option<&str>,
+    default_name: bool,
 ) -> Result<Toolchain> {
-    // Clap rejects combining --toolchain with the split flags. Inspect still
-    // carries the foss default on the name, and that default is not a second
-    // argument.
+    // Clap rejects combining --toolchain with the split flags. Inspect and
+    // plan default a missing name to foss. Bump does not, the same as MCP.
     let (name, version) = if spec.is_some() {
         (None, None)
     } else {
         (name, version)
     };
-    eb_stack::cli_parse::resolve_toolchain(name, version, spec, true, "--toolchain")
+    eb_stack::cli_parse::resolve_toolchain(name, version, spec, default_name, "--toolchain")
         .map_err(anyhow::Error::from)
 }

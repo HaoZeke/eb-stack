@@ -19,20 +19,18 @@ fn toolchain_and_stack_policy_use_one_name_across_commands() {
     let tree = temp.path().join("tree");
     std::fs::create_dir(&tree).expect("tree");
     let missing = temp.path().join("no-policy.toml");
-    for flag in ["--stack-policy", "--policy"] {
-        assert_status(
-            &[
-                "stack",
-                "solve",
-                "--easyconfigs",
-                tree.to_str().unwrap(),
-                flag,
-                missing.to_str().unwrap(),
-            ],
-            1,
+    assert_status(
+        &[
+            "stack",
+            "solve",
+            "--easyconfigs",
+            tree.to_str().unwrap(),
+            "--stack-policy",
             missing.to_str().unwrap(),
-        );
-    }
+        ],
+        1,
+        missing.to_str().unwrap(),
+    );
 
     let source = temp.path().join("recipe.yaml");
     std::fs::write(
@@ -74,24 +72,6 @@ fn toolchain_and_stack_policy_use_one_name_across_commands() {
         ],
         2,
         "--toolchain foss:",
-    );
-    let both = output(&[
-        "package",
-        "inspect",
-        "--source",
-        source.to_str().unwrap(),
-        "--toolchain",
-        "foss/2026.1",
-        "--toolchain-version",
-        "2025a",
-        "--out-dir",
-        temp.path().join("both").to_str().unwrap(),
-    ]);
-    assert_eq!(both.status.code(), Some(2));
-    let stderr = String::from_utf8(both.stderr).expect("utf8");
-    assert!(
-        stderr.contains("--toolchain") && stderr.contains("cannot be used with"),
-        "{stderr}"
     );
 }
 
@@ -298,8 +278,8 @@ fn a_failure_names_the_problem_and_prints_no_backtrace() {
         "inspect",
         "--source",
         "/no/such/recipe.yaml",
-        "--toolchain-version",
-        "2026.1",
+        "--toolchain",
+        "foss/2026.1",
         "--out-dir",
         "/tmp/eb-stack-cli-ergonomics-out",
     ]);
@@ -436,8 +416,51 @@ fn an_empty_toolchain_name_is_rejected() {
         stderr.contains("--toolchain-name must not be empty"),
         "{stderr}"
     );
+    assert!(
+        !stderr.contains("accepted for compatibility"),
+        "an empty name is rejected, so it is not accepted:\n{stderr}"
+    );
     assert!(result.stdout.is_empty(), "{stderr}");
     assert!(!out.exists(), "left {}", out.display());
+}
+
+#[test]
+fn inspect_with_a_lone_toolchain_version_uses_foss() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("recipe.yaml");
+    std::fs::write(
+        &source,
+        "package:\n  name: eon\n  version: 1.0.0\nsource:\n  url: https://example.invalid/eon.tar.gz\n  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+    )
+    .expect("recipe");
+    let out = temp.path().join("out");
+    let result = output(&[
+        "package",
+        "inspect",
+        "--source",
+        source.to_str().unwrap(),
+        "--format",
+        "conda-forge",
+        "--toolchain-version",
+        "2026.1",
+        "--out-dir",
+        out.to_str().unwrap(),
+    ]);
+    let stderr = String::from_utf8(result.stderr).expect("utf8");
+    assert_eq!(result.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("--toolchain-version is accepted for compatibility"),
+        "{stderr}"
+    );
+    let plan: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join("package.plan.json")).expect("plan"),
+    )
+    .expect("plan json");
+    assert_eq!(
+        plan["build"]["toolchain"],
+        serde_json::json!({"name": "foss", "version": "2026.1"}),
+        "0.3.0 filled a missing --toolchain-name with foss"
+    );
 }
 
 fn assert_names_flag(args: &[&str], flag: &str, path: &str) {
@@ -483,8 +506,8 @@ fn a_rejected_command_line_exits_2_and_a_failed_check_exits_1() {
             "recipe.yaml",
             "--format",
             "nope",
-            "--toolchain-version",
-            "2026.1",
+            "--toolchain",
+            "foss/2026.1",
             "--out-dir",
             "out",
         ],
@@ -521,10 +544,8 @@ fn a_rejected_command_line_exits_2_and_a_failed_check_exits_1() {
             "bump",
             "--source",
             "recipe.eb",
-            "--toolchain-name",
-            "foss",
-            "--toolchain-version",
-            "2026.1",
+            "--toolchain",
+            "foss/2026.1",
             "--easyconfigs",
             "tree",
             "--dep",
@@ -752,5 +773,151 @@ fn a_bad_input_names_the_flag_the_path_and_the_value() {
         ],
         1,
         out_dir.to_str().unwrap(),
+    );
+}
+
+#[test]
+fn a_command_that_rejects_a_retired_spelling_does_not_call_it_accepted() {
+    for args in [
+        &["stack", "order", "--toolchain-version", "2025b"][..],
+        &["package", "plan", "--policy", "p.toml"],
+        &["recipe", "check", "--policy", "p.toml"],
+        &["component-reach", "--toolchain-name", "foss"],
+    ] {
+        let result = output(args);
+        let stderr = String::from_utf8(result.stderr).expect("utf8");
+        assert_eq!(result.status.code(), Some(2), "{args:?}:\n{stderr}");
+        assert!(
+            !stderr.contains("accepted for compatibility"),
+            "{args:?} rejects the flag, so it is not accepted:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn a_value_spelled_like_a_retired_flag_does_not_warn() {
+    let result = output(&["recipe", "easyblock", "--policy"]);
+    let stderr = String::from_utf8(result.stderr).expect("utf8");
+    assert!(result.status.success(), "{stderr}");
+    assert!(
+        !stderr.contains("accepted for compatibility"),
+        "--policy is the software name here, not a flag:\n{stderr}"
+    );
+}
+
+#[test]
+fn a_missing_toolchain_names_the_toolchain_flag() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("recipe.yaml");
+    std::fs::write(&source, "package:\n  name: eon\n").expect("recipe");
+    let out = temp.path().join("out");
+    let tree = temp.path().join("tree");
+    std::fs::create_dir(&tree).expect("tree");
+    let recipe = temp.path().join("zlib.eb");
+    std::fs::write(&recipe, "name = 'zlib'\n").expect("recipe");
+
+    let source = source.to_str().unwrap();
+    let out = out.to_str().unwrap();
+    let tree = tree.to_str().unwrap();
+    let recipe = recipe.to_str().unwrap();
+    let cases: [&[&str]; 2] = [
+        &["package", "inspect", "--source", source, "--out-dir", out],
+        &[
+            "package",
+            "bump",
+            "--source",
+            recipe,
+            "--easyconfigs",
+            tree,
+            "--out-dir",
+            out,
+        ],
+    ];
+    for args in cases {
+        let result = output(args);
+        let stderr = String::from_utf8(result.stderr).expect("utf8");
+        assert_eq!(result.status.code(), Some(2), "{args:?}:\n{stderr}");
+        assert!(
+            stderr.contains("--toolchain"),
+            "the required flag is --toolchain:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("--toolchain-name") && !stderr.contains("--toolchain-version"),
+            "a missing toolchain must not name the hidden flags:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("accepted for compatibility"),
+            "clap rejects the command before any warning:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn bump_needs_a_toolchain_name_and_warns_only_on_an_accepted_pair() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = root.join("tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb");
+    let tree = root.join("tests/repro_fixtures/universe_foss_2024a");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bump = |out: &Path, split: &[&str]| {
+        let mut args = vec![
+            "package",
+            "bump",
+            "--source",
+            source.to_str().unwrap(),
+            "--easyconfigs",
+            tree.to_str().unwrap(),
+            "--out-dir",
+            out.to_str().unwrap(),
+        ];
+        args.extend_from_slice(split);
+        let result = output(&args);
+        let stderr = String::from_utf8(result.stderr).expect("utf8");
+        (result.status.code(), stderr)
+    };
+
+    let out = temp.path().join("version-only");
+    let (code, stderr) = bump(&out, &["--toolchain-version", "2024a"]);
+    assert_eq!(code, Some(2), "bump has no foss default:\n{stderr}");
+    assert!(
+        stderr.contains("--toolchain-name and --toolchain-version are required"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("accepted for compatibility"),
+        "a rejected pair is not accepted:\n{stderr}"
+    );
+    assert!(!out.exists(), "left {}", out.display());
+
+    let out = temp.path().join("pair");
+    let (code, stderr) = bump(
+        &out,
+        &["--toolchain-name", "foss", "--toolchain-version", "2024a"],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(
+        stderr.contains("warning: --toolchain-name is accepted for compatibility")
+            && stderr.contains("warning: --toolchain-version is accepted for compatibility"),
+        "an accepted pair is warned:\n{stderr}"
+    );
+
+    let result = output(&[
+        "package",
+        "inspect",
+        "--source",
+        source.to_str().unwrap(),
+        "--toolchain-name",
+        "foss",
+        "--out-dir",
+        temp.path().join("name-only").to_str().unwrap(),
+    ]);
+    let stderr = String::from_utf8(result.stderr).expect("utf8");
+    assert_eq!(result.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("--toolchain-version is required"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("accepted for compatibility"),
+        "a rejected name is not accepted:\n{stderr}"
     );
 }

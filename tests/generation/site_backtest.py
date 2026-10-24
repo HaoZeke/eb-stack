@@ -97,11 +97,13 @@ def _bump(binary: str, recipe: pathlib.Path, trees: list[pathlib.Path], work: pa
         f'version = "{parsed.toolchain_version or "system"}"\n'
     )
     out = work / "out"
+    name = parsed.toolchain_name
+    version = parsed.toolchain_version or "system"
+    spec = "system" if name.lower() == "system" else f"{name}/{version}"
     command = [
         binary, "package", "bump",
         "--source", str(recipe),
-        "--toolchain-name", parsed.toolchain_name,
-        "--toolchain-version", parsed.toolchain_version or "system",
+        "--toolchain", spec,
         "--stack-policy", str(policy),
         "--out-dir", str(out),
     ]

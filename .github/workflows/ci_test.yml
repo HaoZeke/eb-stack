@@ -161,8 +161,7 @@ jobs:
           "$BIN" --version
           "$BIN" package bump \
             --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
-            --toolchain-name foss \
-            --toolchain-version 2024a \
+            --toolchain foss/2024a \
             --easyconfigs tests/repro_fixtures/universe_foss_2024a \
             --out-dir "$OUT"
           RECIPE="$OUT/easyconfigs/g/GROMACS/GROMACS-2024.4-foss-2024a.eb"

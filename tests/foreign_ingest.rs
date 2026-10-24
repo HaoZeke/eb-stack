@@ -627,8 +627,8 @@ fn inspect_cli_writes_manifest_sbom_and_embedded_residuals() {
                 root().join(source).to_str().unwrap(),
                 "--format",
                 format,
-                "--toolchain-version",
-                "2026.1",
+                "--toolchain",
+                "foss/2026.1",
                 "--out-dir",
                 output.to_str().unwrap(),
             ])
