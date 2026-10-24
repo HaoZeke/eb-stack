@@ -264,6 +264,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `eb_campaign_run` reports a failed campaign as a tool error. The CLI
+  exits 1 after printing the state. The MCP result now sets `isError`
+  and returns that same state.
 - A package-plan SBOM keeps a build-only, host-only, or test-only
   dependency off `dependsOn`. Those refs are
   `eb_stack:buildDependsOn` on the root, the same convention a stack

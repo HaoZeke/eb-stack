@@ -611,3 +611,101 @@ fn mcp_stdio_easyblock_reach_matches_the_cli() {
     assert_eq!(files_under(&cli_out), files_under(&mcp_out));
     assert!(mcp_out.join("reach.json").is_file());
 }
+#[test]
+fn mcp_stdio_campaign_run_failure_is_a_tool_error() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let bundle = temp.path().join("bundle");
+    let recipes = bundle.join("easyconfigs/e/eOn");
+    std::fs::create_dir_all(&recipes).unwrap();
+    std::fs::create_dir_all(bundle.join("locks")).unwrap();
+    std::fs::write(
+        bundle.join("package.plan.json"),
+        r#"{"package":{"name":"eOn","version":"2.16.0"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        bundle.join("locks/default.lock.json"),
+        r#"{"profile":"default","solver":"resolvo"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        recipes.join("eOn-2.16.0-foss-2026.1.eb"),
+        "name = 'eOn'\nversion = '2.16.0'\ntoolchain = SYSTEM\nsources = ['source.tar.gz']\nchecksums = ['deadbeef']\nmoduleclass = 'tools'\n",
+    )
+    .unwrap();
+    let config = temp.path().join("targets.toml");
+    std::fs::write(
+        &config,
+        r#"
+schema_version = 1
+[[targets]]
+name = "test-builder"
+[targets.transport]
+kind = "local"
+[targets.executor]
+kind = "direct"
+[targets.runtime]
+kind = "host"
+[targets.easybuild]
+command = "false"
+robot_paths = ["/tmp"]
+work_root = "/tmp"
+tmp_root = "/tmp"
+"#,
+    )
+    .unwrap();
+    let cli_state = temp.path().join("cli-campaign.json");
+    let mcp_state = temp.path().join("mcp-campaign.json");
+    let output = cli(&[
+        "campaign",
+        "run",
+        "--bundle",
+        bundle.to_str().unwrap(),
+        "--config",
+        config.to_str().unwrap(),
+        "--target",
+        "test-builder",
+        "--state",
+        cli_state.to_str().unwrap(),
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("campaign build failed with typed findings in its state file"),
+        "{stderr}"
+    );
+    let cli_body: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("cli state json");
+
+    let mut client = McpClient::spawn(temp.path());
+    client.handshake();
+    let response = client.call(
+        "eb_campaign_run",
+        json!({
+            "bundle": bundle,
+            "configs": [config],
+            "target": "test-builder",
+            "state": mcp_state,
+        }),
+    );
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .expect("error text");
+    let (message, body) = text.split_once('\n').expect("message and state");
+    assert_eq!(
+        message,
+        "campaign build failed with typed findings in its state file"
+    );
+    let mcp_body: serde_json::Value = serde_json::from_str(body).expect("mcp state");
+    assert_eq!(mcp_body["status"], cli_body["status"]);
+    assert_eq!(mcp_body["claims"], cli_body["claims"]);
+    assert_eq!(
+        mcp_body["findings"][0]["class"],
+        cli_body["findings"][0]["class"]
+    );
+    assert_eq!(mcp_body["status"], "failed");
+    let on_disk: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&mcp_state).unwrap()).unwrap();
+    assert_eq!(on_disk["status"], "failed");
+}

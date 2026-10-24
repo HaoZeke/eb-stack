@@ -2698,8 +2698,14 @@ fn campaign_run(arguments: &Value) -> Result<Value, String> {
         state_path: required_path(arguments, "state")?,
     })
     .map_err(|error| error.to_string())?;
+    if state.status == CampaignStatus::Failed {
+        let body = serde_json::to_string_pretty(&state).unwrap_or_default();
+        return Err(format!(
+            "campaign build failed with typed findings in its state file\n{body}"
+        ));
+    }
     Ok(json!({
-        "ok": state.status != CampaignStatus::Failed,
+        "ok": true,
         "state": state,
     }))
 }
