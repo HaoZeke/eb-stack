@@ -30,10 +30,34 @@ use cyclonedx_bom::prelude::*;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 fn bom_ref(name: &str, version: &str, toolchain_label: &str) -> String {
     format!("pkg:generic/{name}@{version}?toolchain={toolchain_label}")
+}
+
+/// Separates the four lock-identity fields. Names, versions and suffixes do
+/// not contain it, so a key cannot be read as a different package.
+const IDENTITY_SEP: char = '\u{1f}';
+
+/// Lock identity: name, version, versionsuffix, toolchain.
+///
+/// A generation installs more than one version of one name. Keying a
+/// checksum by the name alone writes one version's bytes onto the other.
+fn lock_identity(name: &str, version: &str, versionsuffix: &str, toolchain_label: &str) -> String {
+    format!(
+        "{name}{IDENTITY_SEP}{version}{IDENTITY_SEP}{versionsuffix}{IDENTITY_SEP}{toolchain_label}"
+    )
+}
+
+fn package_identity(package: &crate::domain::LockPackage) -> String {
+    lock_identity(
+        &package.name,
+        &package.version,
+        package.versionsuffix.as_deref().unwrap_or(""),
+        &package.toolchain.label(),
+    )
 }
 
 /// What an easyconfig states about the artifact one component builds from.
@@ -65,7 +89,8 @@ pub struct SbomFacts<'a> {
     /// Build edges, kept as a property because CycloneDX `dependencies` does
     /// not distinguish build from runtime in 1.5.
     pub build_dep_map: Option<&'a HashMap<String, Vec<String>>>,
-    /// Per-package artifact facts, keyed by package name.
+    /// Per-package artifact facts. Keyed by lock identity, or by package name
+    /// when the lock carries one version of that name.
     pub artifacts: Option<&'a HashMap<String, ArtifactFacts>>,
     /// Requirements the plan could not resolve. Their presence is what makes
     /// the document's `compositions` say `incomplete` rather than `complete`.
@@ -200,7 +225,9 @@ pub fn lock_to_bom_with_facts(lock: &StackLock, facts: SbomFacts<'_>) -> Bom {
         let mut component = Component::new(Classification::Library, &p.name, &p.version, Some(r));
         component.purl = Purl::from_str(&purl_str).ok();
 
-        if let Some(facts) = artifacts.and_then(|m| m.get(&p.name)) {
+        if let Some(facts) =
+            artifacts.and_then(|m| m.get(&package_identity(p)).or_else(|| m.get(&p.name)))
+        {
             let hashes: Vec<Hash> = facts
                 .checksums
                 .iter()
@@ -506,29 +533,7 @@ fn compositions_statement(stack_ref: &str, unresolved: Option<&[String]>) -> Com
 /// failing the document, since an SBOM missing one component's hashes is worth
 /// more than no SBOM, and the count of what was read is reported to the caller.
 pub fn artifact_facts_for_lock(lock: &StackLock) -> HashMap<String, ArtifactFacts> {
-    let mut out = HashMap::new();
-    for package in &lock.packages {
-        if package.easyconfig_path.is_empty() {
-            continue;
-        }
-        let Ok(resolved) = crate::eb_parse::resolve_easyconfig_file(std::path::Path::new(
-            &package.easyconfig_path,
-        )) else {
-            continue;
-        };
-        if resolved.checksums.is_empty() && resolved.source_urls.is_empty() {
-            continue;
-        }
-        out.insert(
-            package.name.clone(),
-            ArtifactFacts {
-                checksums: resolved.checksums.clone(),
-                source_urls: resolved.source_urls.clone(),
-                patches: Vec::new(),
-            },
-        );
-    }
-    out
+    read_lock_recipes(lock, std::path::Path::new(".")).artifacts
 }
 
 /// Runtime and build-time dependency maps read from the easyconfigs a lock
@@ -541,38 +546,140 @@ pub fn artifact_facts_for_lock(lock: &StackLock) -> HashMap<String, ArtifactFact
 pub fn dep_maps_for_lock(
     lock: &StackLock,
 ) -> (HashMap<String, Vec<String>>, HashMap<String, Vec<String>>) {
-    let locked: std::collections::HashSet<&str> =
-        lock.packages.iter().map(|p| p.name.as_str()).collect();
+    let read = read_lock_recipes(lock, std::path::Path::new("."));
+    (read.runtime, read.build)
+}
+
+/// How many recipes a lock SBOM could read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SbomReadStats {
+    /// Easyconfigs that parsed.
+    pub recipes_read: usize,
+    /// Paths that were missing, empty, or not an easyconfig.
+    pub recipes_unreadable: usize,
+    /// Parsed recipes that stated a checksum or a source URL.
+    pub with_artifact_facts: usize,
+}
+
+/// Where a lock's `easyconfig_path` is on disk.
+///
+/// An absolute path is used as written. A relative path is the file next to
+/// the lock when that file exists, and otherwise the path against the
+/// process directory. A solve run from the repository root still finds
+/// `fixtures/...` paths; a later `stack sbom` whose working directory is
+/// elsewhere still finds paths stored relative to the lock.
+pub fn resolve_lock_easyconfig(lock_dir: &Path, easyconfig_path: &str) -> PathBuf {
+    let path = std::path::Path::new(easyconfig_path);
+    if easyconfig_path.is_empty() || path.is_absolute() {
+        return path.to_path_buf();
+    }
+    let beside_lock = lock_dir.join(path);
+    if beside_lock.is_file() {
+        beside_lock
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// CycloneDX for a lock, reading edges and checksums from its easyconfigs.
+///
+/// `lock_file` is the path the lock was read from. Relative recipe paths
+/// resolve through [`resolve_lock_easyconfig`].
+pub fn lock_to_cyclonedx_from_recipes(
+    lock: &StackLock,
+    lock_file: &Path,
+) -> (Value, SbomReadStats) {
+    let read = read_lock_recipes(lock, lock_directory(lock_file));
+    let document = lock_to_cyclonedx_with_facts(
+        lock,
+        SbomFacts {
+            runtime_dep_map: Some(&read.runtime),
+            build_dep_map: Some(&read.build),
+            artifacts: Some(&read.artifacts),
+            ..SbomFacts::default()
+        },
+    );
+    (document, read.stats)
+}
+
+struct LockRecipeRead {
+    artifacts: HashMap<String, ArtifactFacts>,
+    runtime: HashMap<String, Vec<String>>,
+    build: HashMap<String, Vec<String>>,
+    stats: SbomReadStats,
+}
+
+fn lock_directory(lock_file: &Path) -> &Path {
+    match lock_file.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => std::path::Path::new("."),
+    }
+}
+
+fn read_lock_recipes(lock: &StackLock, lock_dir: &Path) -> LockRecipeRead {
+    let locked: std::collections::HashSet<&str> = lock
+        .packages
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect();
+    let mut artifacts = HashMap::new();
     let mut runtime = HashMap::new();
     let mut build = HashMap::new();
+    let mut stats = SbomReadStats::default();
     for package in &lock.packages {
-        let parsed = (!package.easyconfig_path.is_empty())
+        let Some(resolved) = (!package.easyconfig_path.is_empty())
             .then(|| {
-                crate::eb_parse::parse_easyconfig_file(std::path::Path::new(
+                crate::eb_parse::resolve_easyconfig_file(&resolve_lock_easyconfig(
+                    lock_dir,
                     &package.easyconfig_path,
                 ))
                 .ok()
             })
-            .flatten();
-        let (deps, build_deps) = match parsed {
-            Some(c) => (
-                c.dependencies
-                    .iter()
-                    .map(|d| d.name.clone())
-                    .filter(|n| locked.contains(n.as_str()))
-                    .collect(),
-                c.builddependencies
-                    .iter()
-                    .map(|d| d.name.clone())
-                    .filter(|n| locked.contains(n.as_str()))
-                    .collect(),
-            ),
-            None => (Vec::new(), Vec::new()),
+            .flatten()
+        else {
+            stats.recipes_unreadable += 1;
+            runtime.insert(package.name.clone(), Vec::new());
+            build.insert(package.name.clone(), Vec::new());
+            continue;
         };
-        runtime.insert(package.name.clone(), deps);
-        build.insert(package.name.clone(), build_deps);
+        stats.recipes_read += 1;
+        if !resolved.checksums.is_empty() || !resolved.source_urls.is_empty() {
+            stats.with_artifact_facts += 1;
+            artifacts.insert(
+                package_identity(package),
+                ArtifactFacts {
+                    checksums: resolved.checksums.clone(),
+                    source_urls: resolved.source_urls.clone(),
+                    patches: Vec::new(),
+                },
+            );
+        }
+        let candidate = resolved.to_candidate();
+        runtime.insert(
+            package.name.clone(),
+            candidate
+                .dependencies
+                .iter()
+                .map(|dep| dep.name.clone())
+                .filter(|name| locked.contains(name.as_str()))
+                .collect(),
+        );
+        build.insert(
+            package.name.clone(),
+            candidate
+                .builddependencies
+                .iter()
+                .map(|dep| dep.name.clone())
+                .filter(|name| locked.contains(name.as_str()))
+                .collect(),
+        );
     }
-    (runtime, build)
+    LockRecipeRead {
+        artifacts,
+        runtime,
+        build,
+        stats,
+    }
 }
 
 /// JSON document from a lock plus caller-supplied facts.

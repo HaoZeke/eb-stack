@@ -1429,6 +1429,11 @@ fn mcp_stack_sbom_reads_dependency_edges_from_the_lock_recipes() {
     }))
     .expect("sbom response");
     assert_eq!(response["result"]["isError"], false, "{response}");
+    let structured = &response["result"]["structuredContent"];
+    assert_eq!(structured["components"], 3);
+    assert_eq!(structured["recipes_read"], 3);
+    assert_eq!(structured["recipes_unreadable"], 0);
+    assert_eq!(structured["with_artifact_facts"], 1);
     let sbom: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&out).expect("read sbom")).expect("json");
     let app_ref = sbom["dependencies"]

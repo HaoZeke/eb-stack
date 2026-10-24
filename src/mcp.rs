@@ -39,9 +39,8 @@ use crate::workspace_fs::{
     list_workspace, read_workspace, resolve_inside, write_workspace,
 };
 use crate::{
-    artifact_facts_for_lock, dep_maps_for_lock, load_json_file, lock_to_cyclonedx_with_facts,
-    solve_with_baseline_source, write_json_pretty, BaselineSource, SbomFacts, SolveExtraOut,
-    StackLock,
+    load_json_file, lock_to_cyclonedx_from_recipes, solve_with_baseline_source, write_json_pretty,
+    BaselineSource, SolveExtraOut, StackLock,
 };
 use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap};
@@ -2427,19 +2426,7 @@ fn stack_sbom(arguments: &Value) -> Result<Value, String> {
     let lock_path = required_path(arguments, "lock")?;
     let out = optional_path(arguments, "out").unwrap_or_else(|| PathBuf::from("stack.cdx.json"));
     let lock: StackLock = load_json_file(&lock_path).map_err(|error| error.to_string())?;
-    // The same facts `stack sbom` reads: a lock names the recipes, and the
-    // edges and checksums live there. An unreadable path contributes nothing.
-    let artifacts = artifact_facts_for_lock(&lock);
-    let (runtime, build) = dep_maps_for_lock(&lock);
-    let sbom = lock_to_cyclonedx_with_facts(
-        &lock,
-        SbomFacts {
-            runtime_dep_map: Some(&runtime),
-            build_dep_map: Some(&build),
-            artifacts: Some(&artifacts),
-            ..SbomFacts::default()
-        },
-    );
+    let (sbom, stats) = lock_to_cyclonedx_from_recipes(&lock, &lock_path);
     write_json_pretty(&out, &sbom).map_err(|error| error.to_string())?;
     let components = sbom
         .get("components")
@@ -2447,9 +2434,12 @@ fn stack_sbom(arguments: &Value) -> Result<Value, String> {
         .map(Vec::len)
         .unwrap_or(0);
     Ok(json!({
+        "components": components,
         "lock": lock_path,
         "out": out,
-        "components": components,
+        "recipes_read": stats.recipes_read,
+        "recipes_unreadable": stats.recipes_unreadable,
+        "with_artifact_facts": stats.with_artifact_facts,
     }))
 }
 

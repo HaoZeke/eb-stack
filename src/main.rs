@@ -2206,28 +2206,16 @@ fn run_stack(command: StackCommand) -> Result<()> {
             Ok(())
         }
         StackCommand::Sbom { lock, out } => {
-            let lock: StackLock = load_json_file(&lock)?;
-            // The checksums and source URLs live in the easyconfigs the lock
-            // names, so read them: without those a component cannot be verified
-            // against the bytes it was planned from.
-            let artifacts = eb_stack::artifact_facts_for_lock(&lock);
-            // The dependency edges live in the same recipes.
-            let (runtime, build) = eb_stack::dep_maps_for_lock(&lock);
-            let sbom = eb_stack::lock_to_cyclonedx_with_facts(
-                &lock,
-                eb_stack::SbomFacts {
-                    runtime_dep_map: Some(&runtime),
-                    build_dep_map: Some(&build),
-                    artifacts: Some(&artifacts),
-                    ..eb_stack::SbomFacts::default()
-                },
-            );
+            let loaded: StackLock = load_json_file(&lock)?;
+            let (sbom, stats) = eb_stack::lock_to_cyclonedx_from_recipes(&loaded, &lock);
             write_json_pretty(&out, &sbom)?;
             println!(
-                "sbom={} components={} with_artifact_facts={}",
+                "sbom={} components={} recipes_read={} recipes_unreadable={} with_artifact_facts={}",
                 out.display(),
-                lock.packages.len(),
-                artifacts.len()
+                loaded.packages.len(),
+                stats.recipes_read,
+                stats.recipes_unreadable,
+                stats.with_artifact_facts
             );
             Ok(())
         }
