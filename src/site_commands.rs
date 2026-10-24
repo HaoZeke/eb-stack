@@ -497,6 +497,51 @@ fn run_pr_overlap_inner(
         }
     });
 
+    // Reject a bad --merged or --impact before any file is created or removed.
+    let write_order = args.merge_order || !args.merged.is_empty();
+    if write_order {
+        let inputs: Vec<u64> = prs.iter().map(|pr| pr.number).collect();
+        if let Some(number) = merge_order::unknown_merged(&inputs, &args.merged) {
+            return Err(usage(format!(
+                "--merged {number}: no pull request with that number"
+            )));
+        }
+    }
+    if !args.impact.is_empty() {
+        for number in &args.impact {
+            if args.merged.contains(number) {
+                return Err(usage(format!(
+                    "--impact {number}: already listed in --merged"
+                )));
+            }
+        }
+    }
+    let order = if write_order {
+        let mut order = merge_order::plan(&records, &index, &args.merged);
+        order.conflicts = merge_order::conflicts_from_records(&records);
+        Some(order)
+    } else {
+        None
+    };
+    let impact = if args.impact.is_empty() {
+        None
+    } else {
+        Some(
+            merge_order::impact_report(
+                &records,
+                &index,
+                &args.impact,
+                &config.generated_at,
+                &args.merged,
+            )
+            .map_err(|number| {
+                usage(format!(
+                    "--impact {number}: no pull request with that number"
+                ))
+            })?,
+        )
+    };
+
     let pr_dir = args.out_dir.join("prs");
     std::fs::create_dir_all(&pr_dir)?;
     for entry in std::fs::read_dir(&pr_dir)? {
@@ -512,47 +557,16 @@ fn run_pr_overlap_inner(
         )?;
     }
     std::fs::write(args.out_dir.join("overlap.toml"), to_toml(&index)?)?;
-    std::fs::write(
-        args.out_dir.join("overlap.md"),
-        render_markdown(&records, &index, &repo_url),
-    )?;
-    if args.merge_order || !args.merged.is_empty() {
-        if let Some(number) = merge_order::unknown_merged(
-            &prs.iter().map(|pr| pr.number).collect::<Vec<_>>(),
-            &args.merged,
-        ) {
-            return Err(usage(format!(
-                "--merged {number}: no pull request with that number"
-            )));
-        }
-        let mut order = merge_order::plan(&records, &index, &args.merged);
-        order.conflicts = merge_order::conflicts_from_records(&records);
-        std::fs::write(args.out_dir.join("merge-order.toml"), to_toml(&order)?)?;
-        let mut markdown = std::fs::read_to_string(args.out_dir.join("overlap.md"))?;
-        markdown.push_str(&merge_order::render_section(&order, &repo_url));
-        std::fs::write(args.out_dir.join("overlap.md"), markdown)?;
+    let mut markdown = render_markdown(&records, &index, &repo_url);
+    if let Some(order) = &order {
+        markdown.push_str(&merge_order::render_section(order, &repo_url));
     }
-    if !args.impact.is_empty() {
-        for number in &args.impact {
-            if args.merged.contains(number) {
-                return Err(usage(format!(
-                    "--impact {number}: already listed in --merged"
-                )));
-            }
-        }
-        let report = merge_order::impact_report(
-            &records,
-            &index,
-            &args.impact,
-            &config.generated_at,
-            &args.merged,
-        )
-        .map_err(|number| {
-            usage(format!(
-                "--impact {number}: no pull request with that number"
-            ))
-        })?;
-        std::fs::write(args.out_dir.join("merge-impact.toml"), to_toml(&report)?)?;
+    std::fs::write(args.out_dir.join("overlap.md"), markdown)?;
+    if let Some(order) = &order {
+        std::fs::write(args.out_dir.join("merge-order.toml"), to_toml(order)?)?;
+    }
+    if let Some(report) = &impact {
+        std::fs::write(args.out_dir.join("merge-impact.toml"), to_toml(report)?)?;
     }
     Ok(PrOverlapRun {
         prs: prs.len(),

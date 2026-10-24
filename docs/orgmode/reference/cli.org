@@ -563,7 +563,9 @@ eb-stack pr-overlap --pr prs.json \
   --out-dir out
 #+end_src
 
-The error is ~--merged 999: no pull request with that number~. The same
+The error is ~--merged 999: no pull request with that number~. A rejected
+~--merged~ or ~--impact~ does not create the output directory and does not
+change files already in it. The same
 command with only ~--merged 11~ treats pull request 11 as already
 installed and orders the rest. Pull requests 11 and 13 add
 ~freetype-2.14.1-GCCcore-15.2.0.eb~. Pull request 12 adds

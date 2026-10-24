@@ -425,7 +425,9 @@ table:
 | ~resolves~ | Modules of a depends-on edge from the named pull request. It asks for the module by name, and the other only reaches it. Both asking is not an edge |
 
 An unknown number is an error before the file is written:
-~--impact N: no pull request with that number~. For an easyconfigs run,
+~--impact N: no pull request with that number~. An unknown ~--merged~
+number is the same kind of error. Neither one creates the output
+directory or deletes files already in it. For an easyconfigs run,
 ~resolves~ lists the modules on a ~depends-on~ row from the named pull
 request. ~shrinks~ is the shared ~to_build~ that remains after ~--merged~
 modules are removed. Modules from a ~depends-on~ row into the pull

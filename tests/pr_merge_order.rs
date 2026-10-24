@@ -206,3 +206,44 @@ fn merge_order_toml_is_exact_and_the_old_files_do_not_change() {
         "{err}"
     );
 }
+
+#[test]
+fn rejected_merged_and_impact_leave_the_output_untouched() {
+    let bin = env!("CARGO_BIN_EXE_eb-stack");
+    let temp = tempfile::tempdir().expect("temp");
+    let input = temp.path().join("prs.json");
+    std::fs::write(&input, prs_json()).expect("write json");
+
+    let fresh = temp.path().join("fresh");
+    let bad = run(bin, &input, &fresh, &["--impact", "999"]);
+    assert_eq!(bad.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&bad.stderr);
+    assert!(
+        err.contains("--impact 999: no pull request with that number"),
+        "{err}"
+    );
+    let fresh_files = if fresh.exists() {
+        std::fs::read_dir(&fresh).unwrap().count()
+    } else {
+        0
+    };
+    assert_eq!(
+        fresh_files, 0,
+        "fresh --out-dir was written on a usage error"
+    );
+
+    let kept = temp.path().join("kept");
+    let ok = run(bin, &input, &kept, &[]);
+    assert!(
+        ok.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    let marker = kept.join("prs").join("99.toml");
+    std::fs::write(&marker, "keep\n").unwrap();
+    let before = std::fs::read(kept.join("overlap.toml")).unwrap();
+    let bad = run(bin, &input, &kept, &["--merged", "999"]);
+    assert_eq!(bad.status.code(), Some(2));
+    assert_eq!(std::fs::read_to_string(&marker).unwrap(), "keep\n");
+    assert_eq!(std::fs::read(kept.join("overlap.toml")).unwrap(), before);
+}
