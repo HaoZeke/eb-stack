@@ -17,10 +17,13 @@ eb-stack component-reach \
   --easyconfigs "$EB_EASYCONFIGS" \
   --installed installed.txt \
   --easystack easystacks/software.eessi.io/2026.06/*.yml \
+  --easystack-url https://raw.githubusercontent.com/EESSI/software-layer/main/easystacks/software.eessi.io/2025.06/zen5/easystack-001-eb-5.2.0.yml \
   --compat-layer compat.txt \
   --filter-deps "$EASYBUILD_FILTER_DEPS" \
   --out-dir out/
 #+end_src
+
+Pass one of ~--component~, ~--purl~, or ~--cve~.
 
 ~--component~ is the name. ASCII case is ignored, so ~curl~ matches
 ~cURL~ and ~jupyterlab~ matches ~JupyterLab~. The match is a whole token,
@@ -28,12 +31,36 @@ so ~jupyterlab~ does not match ~jupyterlab-server~ and ~curl~ does not
 match ~libcurl~.
 
 ~--version~ is an exact version, ~*~ for any version, or a requirement
-such as ~>=8,<9~. ~--generation~ is the toolchain generation, for example
-~2026.1~. A recipe is in that generation when its toolchain version is
+such as ~>=8,<9~. It is required with ~--component~. With ~--purl~ it
+replaces the version in the URL. ~--cve~ does not take ~--version~: the
+versions come from Open Source Vulnerabilities (OSV).
+
+~--purl~ is a package URL, for example
+~pkg:cargo/rustls-webpki@0.102.8~ or ~pkg:pypi/urllib3@2.5.0~. The type
+and the name are kept. A version in the URL is the requirement unless
+~--version~ is also passed.
+
+~--cve~ is a CVE id or another OSV id. The record is fetched from
+~https://api.osv.dev/v1/vulns/<id>~. A CVE record often has only a git
+range and no package. Advisory aliases (~GHSA-~, ~RUSTSEC-~, ~PYSEC-~,
+~GO-~) are followed, up to eight. Named tags such as ~libXpm-3.5.17~
+become exact versions. Git tags such as ~XORG-6_8_0~ do not. Each
+affected package is searched on its own, and a version matches when any
+of that package's requirements match or when it is one of the exact
+versions. The three output files are then one document with ~kind~ set
+to ~cve~, and ~results~ holds one reach document per package.
+
+~--generation~ is the toolchain generation, for example ~2026.1~ or
+~2025a~. A recipe is in that generation when its toolchain version is
 that string, or when its toolchain is a member of the known foss
 hierarchy for that generation. ~GCCcore-15.2.0~ and ~GCC-15.2.0~ belong
-to ~2026.1~. A system toolchain does not. A module built with another
-generation is not a row.
+to ~2026.1~. ~GCCcore-14.2.0~ belongs to ~2025a~, ~GCCcore-14.3.0~ to
+~2025b~, and ~GCCcore-13.3.0~ to ~2024a~. A system toolchain does not. A
+module built with another generation is not a row.
+
+~--easystack-url~ repeats. The URL must be ~https://~. The body is an
+easystack, read the same way as ~--easystack~. Local files and URLs are
+one stack.
 
 * What carries it
 
@@ -43,7 +70,12 @@ generation is not a row.
 - a Python, R, or Perl extension in ~exts_list~;
 - a Cargo crate, from a ~crates~ tuple or from a filename such as
   ~libz-sys-1.1.29.tar.gz~, including a vendored ~+name-version~ fragment
-  such as ~0.4.89+curl-8.20.0~;
+  such as ~0.4.89+curl-8.20.0~. A Cargo recipe also matches a crate that
+  appears only as a checksum key, such as ~rustls-webpki-0.102.8.tar.gz~.
+  The recipe's own tarball is not that crate;
+- a Python wheel: a ~.whl~ filename in ~sources~ or ~checksums~, an
+  ~exts_list~ entry whose source is a wheel (~pastel~), or a top-level
+  ~source_tmpl~ that names a wheel (~cleo~). The role is ~wheel~;
 - a vendored or bundled filename in ~sources~ or ~patches~ whose name
   contains the component and a version;
 - a line in ~--compat-layer~, ~name version~ or ~name==version~, ~#~

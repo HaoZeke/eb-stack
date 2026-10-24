@@ -496,7 +496,11 @@ One run writes ~component-reach.toml~, ~component-reach.json~, and
 | ~schema_version~ | ~1~ |
 | ~generated_at~ | RFC 3339 timestamp of the run |
 | ~component~ | Name that was asked for |
-| ~version_req~ | Exact version, ~*~, or a requirement |
+| ~version_req~ | Exact version, ~*~, or a requirement. Empty when the match is only ~versions~ |
+| ~version_reqs~ | Present when more than one requirement was OR-ed. Any one of them matches |
+| ~versions~ | Exact versions from a Common Vulnerabilities and Exposures (CVE) record, present when the list is not empty |
+| ~purl~ | Package URL, when the query was a purl or a resolved CVE |
+| ~ecosystem~ | Ecosystem from the purl or the Open Source Vulnerabilities (OSV) record |
 | ~generation~ | Toolchain generation |
 | ~carriers~ | Easyconfigs and modules that carry it |
 | ~changed~ | Filenames that contain it, fed to the closure |
@@ -505,10 +509,20 @@ One run writes ~component-reach.toml~, ~component-reach.json~, and
 | ~missing~ | Changed filenames absent from the closure graph |
 | ~notes~ | A compat-layer hit, or a note the closure recorded |
 
+~version_reqs~, ~versions~, ~purl~, and ~ecosystem~ are omitted when
+empty, so a ~--component~ run stays the same shape as before.
+
 Each carrier has ~role~ (~module~, ~dependency~, ~builddependency~,
-~component~, ~extension~, ~crate~, ~source~, ~patch~, ~compat-layer~, or
-~installed~), ~version~, ~easyconfig~ (empty for compat-layer and
-installed-only rows), ~module~, and ~installed~ when a list was passed.
+~component~, ~extension~, ~crate~, ~wheel~, ~source~, ~patch~,
+~compat-layer~, or ~installed~), ~version~, ~easyconfig~ (empty for
+compat-layer and installed-only rows), ~module~, and ~installed~ when a
+list was passed.
+
+A ~--cve~ run writes the same three filenames with a different document.
+~kind~ is ~cve~. ~cve~ is the id. ~resolved~ is the packages OSV named
+(~ecosystem~, ~name~, ~purl~, ~version_reqs~, ~versions~). ~results~ is
+one component-reach document per package. ~notes~ contains alias fetches
+that failed. Schema version stays ~1~.
 
 A closure row has the rebuild-set fields ~changed~, ~dependent~,
 ~dependent_easyconfig~, ~edge_kind~, ~class~, ~reason~, and ~eb_version~
