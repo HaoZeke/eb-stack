@@ -237,10 +237,14 @@ All notable changes to this project are documented here.
   toolchain generation, and feeds the recipes that contain it into the
   rebuild closure. Dependencies, builddependencies, bundle components,
   `exts_list` extensions, Cargo `crates`, and versioned names in `sources`
-  or `patches` all count. A compat-layer file is an input, not an
-  easyconfig. The output directory holds `component-reach.toml`,
-  `component-reach.json`, and `component-reach.md`. See
-  `docs/orgmode/howto/component-reach.org`.
+  or `patches` all count. A Python wheel is its own row: a `.whl` filename
+  in `sources` or `checksums`, an `exts_list` entry whose source is a
+  wheel, or a top-level `source_tmpl` that names a wheel. A Cargo recipe
+  also matches a crate that appears only as a checksum key such as
+  `rustls-webpki-0.102.8.tar.gz`; the recipe's own tarball is not that
+  crate. A compat-layer file is an input, not an easyconfig. The output
+  directory contains `component-reach.toml`, `component-reach.json`, and
+  `component-reach.md`. See `docs/orgmode/howto/component-reach.org`.
 
 - `eb-stack rebuild-set` reports which installed modules an in-place
   easyconfig patch forces EESSI to rebuild. It closes the deployed

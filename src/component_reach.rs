@@ -97,6 +97,7 @@ pub fn component_reach(query: &ReachQuery<'_>) -> ReachDocument {
             &text,
             query.component,
             query.version_req,
+            &candidate.name,
             &candidate.version,
         ));
         for (role, version) in found {
@@ -371,7 +372,13 @@ fn in_generation(tc: &Toolchain, generation: &str) -> bool {
         .is_some_and(|hierarchy| hierarchy.contains(tc))
 }
 
-fn list_hits(text: &str, component: &str, req: &str, own: &str) -> Vec<(&'static str, String)> {
+fn list_hits(
+    text: &str,
+    component: &str,
+    req: &str,
+    own_name: &str,
+    own: &str,
+) -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
     if let Some(body) = field_list(text, "components") {
         out.extend(pair_hits(&body, "component", component, req, own));
@@ -380,12 +387,128 @@ fn list_hits(text: &str, component: &str, req: &str, own: &str) -> Vec<(&'static
         out.extend(pair_hits(&body, "crate", component, req, own));
         out.extend(file_hits(&body, "crate", component, req));
     }
+    // A Cargo recipe often names a vendored crate only as a checksum key
+    // (`rustls-webpki-0.102.8.tar.gz`). The recipe's own tarball is not a
+    // crate it carries. A `.whl` key is a wheel in any recipe.
+    if let Some(body) = field_list(text, "checksums") {
+        let cargo = field_list(text, "crates").is_some();
+        for (role, version) in file_hits(&body, "crate", component, req) {
+            if role == "wheel" || (cargo && !(same(component, own_name) && version == own)) {
+                out.push((role, version));
+            }
+        }
+    }
+    if let Some(body) = field_list(text, "exts_list") {
+        out.extend(wheel_ext_hits(&body, component, req));
+    }
     for (field, role) in [("sources", "source"), ("patches", "patch")] {
         if let Some(body) = field_list(text, field) {
             out.extend(file_hits(&body, role, component, req));
         }
     }
+    if let Some(value) = assignment_string(text, "source_tmpl") {
+        if value.contains(".whl") && same(own_name, component) && version_hits(own, req) {
+            out.push(("wheel", own.to_string()));
+        }
+    }
     out
+}
+
+/// An `exts_list` entry installed from a wheel. The tuple names the
+/// distribution; the wheel template often does not repeat that name.
+fn wheel_ext_hits(body: &str, component: &str, req: &str) -> Vec<(&'static str, String)> {
+    top_tuples(body)
+        .into_iter()
+        .filter(|tuple| tuple.contains(".whl"))
+        .filter_map(|tuple| {
+            let cap = pair_re().captures(&tuple)?;
+            if !same(&cap[1], component) {
+                return None;
+            }
+            let version = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+            (!version.is_empty() && version_hits(version, req))
+                .then(|| ("wheel", version.to_string()))
+        })
+        .collect()
+}
+
+fn top_tuples(body: &str) -> Vec<String> {
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    let mut depth = 0i32;
+    let mut quote = None;
+    let mut out = Vec::new();
+    while i < bytes.len() {
+        let c = bytes[i];
+        if let Some(q) = quote {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'#' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if c == b'\'' || c == b'"' {
+            quote = Some(c);
+            i += 1;
+            continue;
+        }
+        if c == b'(' && depth == 1 {
+            let chunk = take_balanced(&body[i..]);
+            let len = chunk.len().max(1);
+            out.push(chunk);
+            i += len;
+            continue;
+        }
+        if matches!(c, b'[' | b'(' | b'{') {
+            depth += 1;
+        }
+        if matches!(c, b']' | b')' | b'}') {
+            depth -= 1;
+        }
+        i += 1;
+    }
+    out
+}
+
+fn assignment_string(text: &str, field: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let needle = field.as_bytes();
+    let mut i = 0;
+    while i + needle.len() <= bytes.len() {
+        if bytes[i..].starts_with(needle) && at_line_start(bytes, i) {
+            let mut j = i + needle.len();
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if bytes.get(j) == Some(&b'=') {
+                j += 1;
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if matches!(bytes.get(j), Some(b'\'' | b'"')) {
+                    let q = bytes[j];
+                    let start = j + 1;
+                    let mut k = start;
+                    while k < bytes.len() && bytes[k] != q {
+                        k += if bytes[k] == b'\\' { 2 } else { 1 };
+                    }
+                    return Some(text[start..k.min(bytes.len())].to_string());
+                }
+            }
+        }
+        i += 1;
+    }
+    None
 }
 
 fn pair_hits(
@@ -417,6 +540,11 @@ fn file_hits(
         .into_iter()
         .filter_map(|name| {
             let version = version_in_filename(&name, component)?;
+            let role = if name.ends_with(".whl") {
+                "wheel"
+            } else {
+                role
+            };
             version_hits(&version, req).then_some((role, version))
         })
         .collect()
@@ -671,5 +799,87 @@ mod tests {
             .carriers
             .iter()
             .any(|row| row.role == "patch" && row.version == "8.4.0"));
+    }
+
+    #[test]
+    fn wheels_and_checksum_crates_are_carriers() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = "\
+name = 'uv'\n\
+version = '0.10.9'\n\
+toolchain = {'name': 'GCCcore', 'version': '14.3.0'}\n\
+source_tmpl = '%(name)s-%(version)s.tar.gz'\n\
+crates = [('libz-sys', '1.1.29')]\n\
+checksums = [\n\
+    'aaaaaaaa',\n\
+    {'uv-0.10.9.tar.gz': 'bb'},\n\
+    {'rustls-webpki-0.102.8.tar.gz': 'cc'},\n\
+]\n\
+exts_list = [\n\
+    ('pastel', '0.2.1', {\n\
+        'sources': ['%(name)s-%(version)s-py3-none-any.whl'],\n\
+    }),\n\
+    ('urllib3', '2.5.0', {\n\
+        'checksums': ['dd'],\n\
+    }),\n\
+]\n\
+sources = ['pillow-10.4.0-cp311-cp311-manylinux.whl']\n\
+";
+        std::fs::write(dir.path().join("uv.eb"), body).unwrap();
+        let wheel = "\
+name = 'cleo'\n\
+version = '2.1.0'\n\
+toolchain = {'name': 'GCCcore', 'version': '14.3.0'}\n\
+source_tmpl = '%(name)s-%(version)s-py3-none-any.whl'\n\
+";
+        std::fs::write(dir.path().join("cleo.eb"), wheel).unwrap();
+        let parsed = parse_easyconfig_tree(dir.path()).unwrap();
+        let filter = FilterDeps::empty();
+        let run = |name: &str| {
+            component_reach(&ReachQuery {
+                candidates: &parsed.candidates,
+                component: name,
+                version_req: "*",
+                generation: "2025b",
+                installed: None,
+                easystacks: &[],
+                compat: &[],
+                filter_deps: &filter,
+                generated_at: "2026-10-24T00:00:00Z",
+            })
+        };
+        let webpki = run("rustls-webpki");
+        assert!(
+            webpki
+                .carriers
+                .iter()
+                .any(|row| row.role == "crate" && row.version == "0.102.8"),
+            "{:?}",
+            webpki.carriers
+        );
+        assert!(webpki.changed.iter().any(|name| name == "uv.eb"));
+        let uv = run("uv");
+        assert!(uv.carriers.iter().any(|row| row.role == "module"));
+        assert!(uv.carriers.iter().all(|row| row.role != "crate"));
+        assert!(run("pastel")
+            .carriers
+            .iter()
+            .any(|row| row.role == "wheel" && row.version == "0.2.1"));
+        assert!(run("urllib3")
+            .carriers
+            .iter()
+            .any(|row| row.role == "extension"));
+        assert!(run("urllib3")
+            .carriers
+            .iter()
+            .all(|row| row.role != "wheel"));
+        assert!(run("pillow")
+            .carriers
+            .iter()
+            .any(|row| row.role == "wheel" && row.version == "10.4.0"));
+        assert!(run("cleo")
+            .carriers
+            .iter()
+            .any(|row| row.role == "wheel" && row.version == "2.1.0"));
     }
 }
