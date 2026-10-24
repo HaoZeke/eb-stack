@@ -6,11 +6,13 @@
 //!   `SOURCELOWER_TAR_GZ` when they match the package identity;
 //! - dependency tuples omit the toolchain when the lock identity sits on the
 //!   package toolchain or a hierarchy member (GCCcore/gompi under foss, …);
-//! - cross-generation pins keep an explicit four-element tuple.
+//! - a dependency locked at SYSTEM under a compiler toolchain is written
+//!   `('', SYSTEM)`, because a bare tuple inherits the parent toolchain;
+//! - other cross-generation pins keep an explicit four-element tuple.
 
 use crate::domain::Toolchain;
 use crate::eb_parse::easyconfig_basename;
-use crate::hierarchy::{hierarchy_for, hierarchy_member_rank};
+use crate::hierarchy::{hierarchy_for, hierarchy_member_rank, is_system_toolchain};
 use crate::package::{
     is_easyconfig_parameter_name, materialize_profile, EasyconfigValue, PackagePlan,
     ProfileEnvironment, ProfileLock,
@@ -906,16 +908,26 @@ fn render_dependency(
     package_toolchain: &Toolchain,
 ) -> String {
     // Conventional easyconfigs omit the toolchain when EasyBuild can resolve it
-    // through the package hierarchy (e.g. Boost on GCCcore under foss). Keep an
-    // explicit identity only for cross-generation or out-of-hierarchy pins.
+    // through the package hierarchy (e.g. Boost on GCCcore under foss). A SYSTEM
+    // lock under a compiler toolchain is the constant `SYSTEM`, not a bare tuple
+    // and not `('system', 'system')`.
     if dependency_requires_explicit_toolchain(dependency, package_toolchain) {
+        let versionsuffix = dependency.versionsuffix.as_deref().unwrap_or("");
+        let toolchain = if is_system_toolchain(&dependency.toolchain) {
+            "SYSTEM".to_string()
+        } else {
+            format!(
+                "('{}', '{}')",
+                escape_single(&dependency.toolchain.name),
+                escape_single(&dependency.toolchain.version),
+            )
+        };
         return format!(
-            "('{}', '{}', '{}', ('{}', '{}'))",
+            "('{}', '{}', '{}', {})",
             escape_single(&dependency.name),
             escape_single(&dependency.version),
-            escape_single(dependency.versionsuffix.as_deref().unwrap_or("")),
-            escape_single(&dependency.toolchain.name),
-            escape_single(&dependency.toolchain.version),
+            escape_single(versionsuffix),
+            toolchain,
         );
     }
     match dependency.versionsuffix.as_deref() {
@@ -937,6 +949,15 @@ fn dependency_requires_explicit_toolchain(
     dependency: &crate::package::LockedDependency,
     package_toolchain: &Toolchain,
 ) -> bool {
+    // `_parse_dependency` (easybuild-framework v5.4.1, easyconfig.py) copies
+    // the parent toolchain when the tuple does not name one. SYSTEM is part
+    // of `get_toolchain_hierarchy` only when `add_system_to_minimal_toolchains`
+    // is enabled, and that option defaults to false (config.py). A SYSTEM lock
+    // under a compiler toolchain therefore has to be written out, or `eb --robot`
+    // looks for a build with the parent toolchain and misses the SYSTEM recipe.
+    if is_system_toolchain(&dependency.toolchain) && !is_system_toolchain(package_toolchain) {
+        return true;
+    }
     if dependency.toolchain == *package_toolchain {
         return false;
     }

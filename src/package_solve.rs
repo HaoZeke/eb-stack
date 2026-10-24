@@ -1,13 +1,13 @@
 //! Resolvo-backed lock generation for a materialized package profile.
 
-use crate::domain::{Candidate, DepReq, Policy};
+use crate::domain::{Candidate, DepReq, Policy, Toolchain};
 use crate::hierarchy::{
     filter_candidates_in_hierarchy, hierarchy_for_with_tree, is_system_toolchain, toolchains_match,
     ToolchainHierarchy,
 };
 use crate::package::{
-    materialize_profile, DependencyRole, LockedDependency, PackageOrigin, PackagePlan,
-    ProfileEnvironment, ProfileLock, StackPolicy, PROFILE_LOCK_SCHEMA_VERSION,
+    materialize_profile, DependencyRole, LockedDependency, PackagePlan, ProfileEnvironment,
+    ProfileLock, StackPolicy, PROFILE_LOCK_SCHEMA_VERSION,
 };
 use crate::provides::{expand_extension_provides, resolve_extension_provider};
 use crate::resolvo_provider::solve_curated_with_stack_policy;
@@ -83,6 +83,14 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
 
     let mut holes = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
+    let target_is_system = is_system_toolchain(&plan.build.toolchain);
+    // A SYSTEM recipe stands in for a generation dependency only when the
+    // same name also exists at a compiler level. Java and CUDA do not.
+    let leveled_names = admitted
+        .iter()
+        .filter(|candidate| !is_system_toolchain(&candidate.toolchain))
+        .map(|candidate| candidate.name.as_str())
+        .collect::<HashSet<_>>();
     for dependency in &materialized.dependencies {
         if dependency.solver_excluded || dependency.virtual_capability.is_some() {
             continue;
@@ -107,9 +115,12 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
                     .toolchain
                     .as_ref()
                     .is_none_or(|toolchain| toolchains_match(&candidate.toolchain, toolchain))
-                && !(plan.origin == PackageOrigin::EasyBuild
-                    && dependency.toolchain.is_none()
-                    && is_system_toolchain(&candidate.toolchain))
+                && !system_bootstrap_stands_in(
+                    target_is_system,
+                    dependency.toolchain.as_ref(),
+                    &candidate.toolchain,
+                    leveled_names.contains(candidate.name.as_str()),
+                )
         });
         if !has_compatible {
             holes.push(UnsatisfiedDirectDependency {
@@ -120,6 +131,31 @@ pub fn unsatisfied_direct_dependencies_with_hierarchy(
         }
     }
     Ok(holes)
+}
+
+/// Whether `candidate` is a SYSTEM bootstrap recipe standing in for a
+/// dependency that asked for a version in the target generation.
+///
+/// EasyBuild's `robot_find_subtoolchain_for_dep` (framework 5.4.1) walks the
+/// hierarchy and keeps the first easyconfig. `get_toolchain_hierarchy`
+/// includes SYSTEM only when `add_system_to_minimal_toolchains` is enabled
+/// (`easyconfig.py`); that option defaults to false (`config.py`). A GCCcore
+/// CMake therefore stands in for the SYSTEM bootstrap of the same name. A
+/// name with no candidate above SYSTEM is not a bootstrap stand-in: Java and
+/// CUDA are published only there. A dependency that names the SYSTEM constant
+/// (`{'name': 'system', 'version': 'system'}`, or `True`) is asking for that
+/// recipe. One that omits a toolchain inherits the parent toolchain instead
+/// (`_parse_dependency`), so the emitted tuple has to name SYSTEM.
+fn system_bootstrap_stands_in(
+    target_is_system: bool,
+    dependency_toolchain: Option<&Toolchain>,
+    candidate_toolchain: &Toolchain,
+    name_also_at_compiler_level: bool,
+) -> bool {
+    !target_is_system
+        && is_system_toolchain(candidate_toolchain)
+        && dependency_toolchain.is_none_or(|toolchain| !is_system_toolchain(toolchain))
+        && name_also_at_compiler_level
 }
 
 fn package_identities_match(left: &str, right: &str) -> bool {
@@ -158,7 +194,7 @@ pub fn solve_package_profile_with_hierarchy(
         .map_err(|error| ProfileSolveError::Materialize(error.to_string()))?;
     let synthetic_name = format!("__package_profile__{}__{}", plan.package.name, profile_name);
     let mut direct_roles: BTreeMap<String, bool> = BTreeMap::new();
-    let mut implicit_easybuild_dependencies = HashSet::new();
+    let mut system_requested_names = HashSet::new();
     let mut runtime_dependencies = Vec::new();
     let mut build_dependencies = Vec::new();
     for dependency in &materialized.dependencies {
@@ -178,8 +214,12 @@ pub fn solve_package_profile_with_hierarchy(
             .entry(name.clone())
             .and_modify(|existing| *existing &= build_only)
             .or_insert(build_only);
-        if plan.origin == PackageOrigin::EasyBuild && dependency.toolchain.is_none() {
-            implicit_easybuild_dependencies.insert(name.clone());
+        if dependency
+            .toolchain
+            .as_ref()
+            .is_some_and(is_system_toolchain)
+        {
+            system_requested_names.insert(name.clone());
         }
         let requirement = DepReq {
             name: name.clone(),
@@ -217,13 +257,18 @@ pub fn solve_package_profile_with_hierarchy(
                 .extension_parent_name()
                 .is_none_or(|parent| parent != own)
     });
-    // A dependency written without a toolchain means "at my own level", so
-    // for a recipe inside a generation the system-level build of that name is
-    // the bootstrap one and must not stand in for it. A recipe that is itself
-    // at the system toolchain has no other level to take it from: GCCcore
-    // 14.2.0 is built at SYSTEM and needs the SYSTEM M4, and dropping those
-    // candidates leaves the compilers unbuildable, which is most of what a
-    // site builds first.
+    // A dependency written without a toolchain inherits the parent toolchain
+    // (`_parse_dependency` in framework 5.4.1). The subtoolchain search
+    // includes SYSTEM only when `add_system_to_minimal_toolchains` is
+    // enabled, and that option defaults to false, so the SYSTEM build is the
+    // bootstrap recipe (CMake 3.18.4, pkgconf 1.8.0) only when the same name
+    // also exists at a compiler level. Java and CUDA are published only at
+    // SYSTEM. The plan can lock that candidate; the emitted tuple has to
+    // name SYSTEM, or EasyBuild looks for a build with this recipe's
+    // toolchain. A dependency that names SYSTEM still sees the bootstrap
+    // build: GCCcore 14.2.0 is built at SYSTEM and needs the SYSTEM M4. A
+    // package that is itself built at SYSTEM has no other level to take its
+    // tools from.
     let target_is_system = is_system_toolchain(&plan.build.toolchain);
     let leveled_names = original_candidates
         .iter()
@@ -231,16 +276,10 @@ pub fn solve_package_profile_with_hierarchy(
         .map(|candidate| candidate.name.clone())
         .collect::<HashSet<_>>();
     original_candidates.retain(|candidate| {
-        if target_is_system || !is_system_toolchain(&candidate.toolchain) {
-            return true;
-        }
-        // A generation member stands in for the SYSTEM bootstrap of the same
-        // name. recipe check refuses that SYSTEM module for an implicit
-        // dependency, so the lock must not emit it either.
-        if leveled_names.contains(&candidate.name) {
-            return false;
-        }
-        !implicit_easybuild_dependencies.contains(&candidate.name)
+        target_is_system
+            || !is_system_toolchain(&candidate.toolchain)
+            || system_requested_names.contains(&candidate.name)
+            || !leveled_names.contains(&candidate.name)
     });
     let mut universe = original_candidates.clone();
     for candidate in &mut universe {

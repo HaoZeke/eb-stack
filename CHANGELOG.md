@@ -15,6 +15,14 @@ All notable changes to this project are documented here.
   bump failed later on toolchain `-<version>`.
 - MCP `policy` warns and is still read, the same way the CLI treats
   `--policy`. `stack_policy` is the spelling to pass.
+- A foreign package plan no longer treats a SYSTEM bootstrap recipe
+  (`CMake-3.18.4`, `pkgconf-1.8.0`) as the dependency for a generation
+  that already has that tool on GCCcore. A dependency that names the
+  SYSTEM toolchain still uses the bootstrap recipe. A name that exists
+  only at SYSTEM, such as Java or CUDA, still resolves there, and the
+  emitted recipe writes it `('Java', '17', '', SYSTEM)`. 0.3.0 wrote
+  `('Java', '17')`, which EasyBuild reads as a build with the recipe's
+  own toolchain.
 - Recipe lint modules live under `src/eb_style/` so `sphinx-rustdocgen`
   can open them. A `#[path]` attribute is joined onto the parent file
   and the generator then fails to read the module.
@@ -84,9 +92,6 @@ All notable changes to this project are documented here.
 - `recipe lint` no longer reports `EB_TEMPLATE_UNKNOWN` for an even run of
   `%` in front of `(name)s`. EasyBuild preserves `%%(source)s` so the
   easyblock can format it; STREAM's `cmds_map` is that pattern.
-- A foreign package plan locks a generation member instead of the
-  SYSTEM bootstrap of the same name when both are in the robot, which is
-  the module `recipe check` accepts.
 - `package plan` against an overlay that is not a full robot names the
   missing package, the trees it scanned, and `--easyconfigs` or
   `--easybuild-source` with an upstream easybuild-easyconfigs tree from

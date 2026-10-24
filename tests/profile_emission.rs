@@ -4,9 +4,9 @@ use eb_stack::package::{
     StackPolicy, PROFILE_LOCK_SCHEMA_VERSION, STACK_POLICY_SCHEMA_VERSION,
 };
 use eb_stack::{
-    emit_profile_easyconfigs, lint_style, package_plan_from_foreign, parse_foreign_path,
-    parse_foreign_str, resolve_easyconfig_str, solve_package_profile, Candidate, DepReq,
-    ForeignFormat, Toolchain,
+    check_recipe_deps, emit_profile_easyconfigs, lint_style, package_plan_from_foreign,
+    parse_foreign_path, parse_foreign_str, resolve_easyconfig_str, solve_package_profile,
+    Candidate, DepReq, ForeignFormat, Toolchain,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -933,4 +933,277 @@ fn profile_solve_scopes_build_dependencies_of_existing_recipes() {
         .dependencies
         .iter()
         .any(|dependency| dependency.name == "git"));
+}
+
+#[test]
+fn foreign_plan_does_not_take_the_system_bootstrap_tool() {
+    let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+    let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+    plan.profiles = qmcpack_profiles();
+    let mut dependency = plan
+        .dependencies
+        .iter()
+        .find(|dependency| dependency.name == "hdf5")
+        .expect("dependency template")
+        .clone();
+    dependency.id = "cmake".into();
+    dependency.name = "CMake".into();
+    dependency.eb_name = Some("CMake".into());
+    dependency.constraint = None;
+    dependency.toolchain = None;
+    dependency.condition = ConditionExpr::Always;
+    plan.dependencies = vec![dependency];
+    let system = Toolchain {
+        name: "system".into(),
+        version: "system".into(),
+    };
+    let gcccore = Toolchain {
+        name: "GCCcore".into(),
+        version: "15.2.0".into(),
+    };
+    let cmake = |version: &str, toolchain: Toolchain| Candidate {
+        easyblock: None,
+        name: "CMake".into(),
+        version: version.into(),
+        toolchain,
+        versionsuffix: None,
+        easyconfig_path: format!("CMake-{version}.eb"),
+        dependencies: Vec::new(),
+        builddependencies: Vec::new(),
+        exts_list: Vec::new(),
+        moduleclass: None,
+    };
+    let stack = StackPolicy {
+        schema_version: STACK_POLICY_SCHEMA_VERSION,
+        name: "test".into(),
+        toolchain: toolchain(),
+        pins: Vec::new(),
+        exclusions: Vec::new(),
+    };
+    let lock = solve_package_profile(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &[cmake("3.18.4", system), cmake("4.2.1", gcccore.clone())],
+        &stack,
+    )
+    .expect("generation cmake, not the bootstrap recipe");
+    assert_eq!(lock.dependencies.len(), 1);
+    assert_eq!(lock.dependencies[0].version, "4.2.1");
+    assert_eq!(lock.dependencies[0].toolchain.name, "GCCcore");
+    assert_eq!(lock.dependencies[0].toolchain.version, "15.2.0");
+
+    // A dependency that names SYSTEM still uses the bootstrap recipe.
+    plan.dependencies[0].toolchain = Some(Toolchain {
+        name: "system".into(),
+        version: "system".into(),
+    });
+    plan.dependencies[0].constraint = Some("==3.18.4".into());
+    let lock = solve_package_profile(
+        &plan,
+        "default",
+        &ProfileEnvironment::default(),
+        &[
+            cmake(
+                "3.18.4",
+                Toolchain {
+                    name: "system".into(),
+                    version: "system".into(),
+                },
+            ),
+            cmake("4.2.1", gcccore),
+        ],
+        &stack,
+    )
+    .expect("explicit SYSTEM dependency");
+    assert_eq!(lock.dependencies[0].version, "3.18.4");
+    assert_eq!(lock.dependencies[0].toolchain.name, "system");
+}
+
+/// A foss plan whose only dependency is Java, with no toolchain, and whose
+/// only candidate is Java/17 at SYSTEM.
+///
+/// EasyBuild publishes Java and CUDA only at the SYSTEM toolchain. The plan
+/// locks that candidate, and the emitted recipe names SYSTEM. A bare tuple
+/// would inherit foss, which is not where those recipes live.
+#[test]
+fn foreign_plan_keeps_a_system_only_dependency() {
+    for (name, version, versionsuffix) in [("Java", "17", None), ("CUDA", "12.6", Some("-toolkit"))]
+    {
+        let recipe = parse_foreign_path(&fixture(), Some(ForeignFormat::Spack)).expect("parse");
+        let mut plan = package_plan_from_foreign(&recipe, &toolchain());
+        plan.profiles = qmcpack_profiles();
+        let mut dependency = plan
+            .dependencies
+            .iter()
+            .find(|dependency| dependency.name == "hdf5")
+            .expect("dependency template")
+            .clone();
+        dependency.id = name.to_ascii_lowercase();
+        dependency.name = name.into();
+        dependency.eb_name = Some(name.into());
+        dependency.constraint = None;
+        dependency.toolchain = None;
+        dependency.condition = ConditionExpr::Always;
+        plan.dependencies = vec![dependency];
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let candidate = Candidate {
+            easyblock: None,
+            name: name.into(),
+            version: version.into(),
+            toolchain: system,
+            versionsuffix: versionsuffix.map(str::to_string),
+            easyconfig_path: format!("{name}-{version}.eb"),
+            dependencies: Vec::new(),
+            builddependencies: Vec::new(),
+            exts_list: Vec::new(),
+            moduleclass: None,
+        };
+        let stack = StackPolicy {
+            schema_version: STACK_POLICY_SCHEMA_VERSION,
+            name: "test".into(),
+            toolchain: toolchain(),
+            pins: Vec::new(),
+            exclusions: Vec::new(),
+        };
+        let candidates = [candidate];
+        let holes = eb_stack::unsatisfied_direct_dependencies(
+            &plan,
+            "default",
+            &ProfileEnvironment::default(),
+            &candidates,
+            &stack,
+        )
+        .expect("hole check");
+        assert!(
+            holes.is_empty(),
+            "{name} at SYSTEM is a real dependency, not a hole: {holes:?}"
+        );
+        let lock = solve_package_profile(
+            &plan,
+            "default",
+            &ProfileEnvironment::default(),
+            &candidates,
+            &stack,
+        )
+        .unwrap_or_else(|error| panic!("{name}/{}-system: {error}", version));
+        assert_eq!(lock.dependencies.len(), 1, "{name}");
+        assert_eq!(lock.dependencies[0].name, name);
+        assert_eq!(lock.dependencies[0].version, version);
+        assert_eq!(lock.dependencies[0].toolchain.name, "system");
+        assert_eq!(lock.dependencies[0].versionsuffix.as_deref(), versionsuffix);
+        let emitted = emit_profile_easyconfigs(&plan, &[lock]).expect("emit");
+        let text = &emitted[0].text;
+        let tuple = match versionsuffix {
+            Some(suffix) => format!("('{name}', '{version}', '{suffix}', SYSTEM)"),
+            None => format!("('{name}', '{version}', '', SYSTEM)"),
+        };
+        assert!(
+            text.contains(&tuple),
+            "{name} must name SYSTEM the way upstream does:\n{text}"
+        );
+        assert!(
+            !text.contains(&format!("('{name}', '{version}')"))
+                && !text.contains(&format!("('{name}', '{version}', '', ('system'")),
+            "bare or spelled-out system tuple:\n{text}"
+        );
+        let resolved = resolve_easyconfig_str(text).expect("parse emitted recipe");
+        let check = check_recipe_deps(&resolved, &candidates);
+        assert!(
+            check.ok() && check.toolchain_verified(),
+            "{name} locked at SYSTEM must resolve the way eb --robot does: {:?}",
+            check.missing
+        );
+        let bare_tuple = match versionsuffix {
+            Some(suffix) => format!("('{name}', '{version}', '{suffix}')"),
+            None => format!("('{name}', '{version}')"),
+        };
+        let bare = format!(
+            "name = 'App'\nversion = '1'\ntoolchain = {{'name': 'foss', 'version': '2026.1'}}\n\
+             dependencies = [{bare_tuple}]\n"
+        );
+        let bare = resolve_easyconfig_str(&bare).expect("parse bare tuple");
+        let missed = check_recipe_deps(&bare, &candidates);
+        assert!(
+            !missed.ok(),
+            "a bare {name} tuple inherits foss and must not take the SYSTEM recipe"
+        );
+    }
+
+    // OpenCV 4.12.0 is a foss recipe. Its Java and CUDA lines are the spelling
+    // easybuild-easyconfigs uses for a compiler toolchain.
+    let upstream = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/lint_template_unknown/good.eb"),
+    )
+    .expect("upstream OpenCV recipe");
+    assert!(upstream.contains("toolchain = {'name': 'foss', 'version': '2025b'}"));
+    assert!(upstream.contains("('Java', '21', '', SYSTEM)"));
+    assert!(upstream.contains("('CUDA', '12.9.1', '', SYSTEM)"));
+    assert!(upstream.contains("('ant', '1.10.14', '-Java-%(javaver)s', SYSTEM)"));
+}
+
+/// easybuild-easyconfigs v5.4.1: a compiler-toolchain recipe that depends on
+/// Java writes `('', SYSTEM)`, and a bare `('Java', '17')` is only used when
+/// the recipe itself is `toolchain = SYSTEM`.
+#[test]
+#[ignore = "needs EB_EASYCONFIGS_541 from scripts/fetch-upstream-trees.sh"]
+fn upstream_compiler_recipes_pin_java_at_system() {
+    let root = std::env::var("EB_EASYCONFIGS_541")
+        .expect("EB_EASYCONFIGS_541 is unset; source env.sh from scripts/fetch-upstream-trees.sh");
+    let easyconfigs = PathBuf::from(root).join("easybuild/easyconfigs");
+    assert!(easyconfigs.is_dir(), "missing {}", easyconfigs.display());
+    let mut stack = vec![easyconfigs];
+    let mut compiler_pinned = 0usize;
+    let mut bare_on_compiler = Vec::new();
+    while let Some(dir) = stack.pop() {
+        for entry in
+            std::fs::read_dir(&dir).unwrap_or_else(|error| panic!("{}: {error}", dir.display()))
+        {
+            let path = entry.expect("dirent").path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("eb") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            if !text.contains("('Java'") {
+                continue;
+            }
+            let toolchain_line = text
+                .lines()
+                .find(|line| line.trim_start().starts_with("toolchain ="))
+                .unwrap_or("");
+            let parent_is_system = toolchain_line.trim() == "toolchain = SYSTEM";
+            if parent_is_system {
+                continue;
+            }
+            let bare_java = ["('Java', '11')", "('Java', '17')", "('Java', '21')"]
+                .iter()
+                .any(|needle| text.contains(needle));
+            if bare_java {
+                bare_on_compiler.push(path.display().to_string());
+                continue;
+            }
+            let pins_system = text.contains(", '', SYSTEM)")
+                || text.contains(", SYSTEM)")
+                || text.contains(", SYSTEM],");
+            if pins_system {
+                compiler_pinned += 1;
+            }
+        }
+    }
+    assert!(
+        compiler_pinned > 0,
+        "v5.4.1 has no compiler-toolchain recipe that pins Java at SYSTEM"
+    );
+    assert!(
+        bare_on_compiler.is_empty(),
+        "compiler-toolchain recipes use a bare Java tuple: {bare_on_compiler:?}"
+    );
 }
