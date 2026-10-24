@@ -797,8 +797,11 @@ pub fn solve_with_baseline_source(
         }
         Some(lock_from_candidates(
             &base_cands,
+            // Same shape as the solved lock's label (`foss-2025b`), so the
+            // stack diff names the baseline generation rather than an
+            // internal id.
             Some(format!(
-                "baseline-from-eb-{}-{}",
+                "{}-{}",
                 base_cands[0].toolchain.name, base_cands[0].toolchain.version
             )),
             "eb_parse_baseline",

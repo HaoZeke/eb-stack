@@ -23,6 +23,9 @@ All notable changes to this project are documented here.
   emitted recipe writes it `('Java', '17', '', SYSTEM)`. 0.3.0 wrote
   `('Java', '17')`, which EasyBuild reads as a build with the recipe's
   own toolchain.
+- `stack solve` labels a baseline parsed from easyconfigs with that
+  baseline's toolchain (`foss-2025a`), the same shape as the solved
+  generation label.
 - Recipe lint modules live under `src/eb_style/` so `sphinx-rustdocgen`
   can open them. A `#[path]` attribute is joined onto the parent file
   and the generator then fails to read the module.
