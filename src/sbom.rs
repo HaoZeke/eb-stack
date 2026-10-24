@@ -52,7 +52,7 @@ fn lock_identity(name: &str, version: &str, versionsuffix: &str, toolchain_label
     )
 }
 
-fn package_identity(package: &crate::domain::LockPackage) -> String {
+pub(crate) fn package_identity(package: &crate::domain::LockPackage) -> String {
     lock_identity(
         &package.name,
         &package.version,
@@ -593,6 +593,27 @@ pub fn dep_maps_for_lock(
 ) -> (HashMap<String, Vec<String>>, HashMap<String, Vec<String>>) {
     let read = read_lock_recipes(lock, std::path::Path::new("."));
     (read.runtime, read.build)
+}
+
+/// Runtime and build edges for every locked module, keyed by lock identity.
+///
+/// Each tuple is resolved with [`resolve_locked_dep`], the same walk the
+/// SBOM uses, so a build list ordered on this map puts every dependency
+/// before the module that needs it and keeps two versions of one name.
+/// `lock_file` is the path the lock was written to; relative recipe paths
+/// resolve the way [`lock_to_cyclonedx_from_recipes`] resolves them.
+pub fn closure_edges_for_lock(lock: &StackLock, lock_file: &Path) -> HashMap<String, Vec<String>> {
+    let read = read_lock_recipes(lock, lock_directory(lock_file));
+    let mut edges = read.runtime;
+    for (key, deps) in read.build {
+        let slot = edges.entry(key).or_default();
+        for dep in deps {
+            if !slot.contains(&dep) {
+                slot.push(dep);
+            }
+        }
+    }
+    edges
 }
 
 /// How many recipes a lock SBOM could read.

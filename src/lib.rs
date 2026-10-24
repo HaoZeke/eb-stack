@@ -366,13 +366,11 @@ pub fn filter_deps(candidates: &mut [Candidate], specs: &[String]) -> Result<()>
 fn write_lock_sbom_and_extras(
     lock: &StackLock,
     baseline: Option<&StackLock>,
-    universe: &Universe,
     lock_out: &Path,
     sbom_out: Option<&Path>,
     extra: SolveExtraOut<'_>,
 ) -> Result<()> {
     write_json_pretty(lock_out, lock)?;
-    let dep_map = dep_map_from_universe(lock, universe);
     // SBOM is opt-in: only write when the caller supplies an output path.
     // The document is the one `stack sbom` writes from this lock: edges and
     // checksums come from the easyconfigs, not from the in-memory universe.
@@ -384,19 +382,25 @@ fn write_lock_sbom_and_extras(
     if extra.build_list_excludes_baseline && baseline.is_none() {
         bail!("excluding the baseline from the build list requires a baseline");
     }
-    if let Some(path) = extra.build_list_out {
-        let text = match baseline.filter(|_| extra.build_list_excludes_baseline) {
-            Some(base) => report::format_build_list_excluding(lock, &dep_map, base),
-            None => format_build_list(lock, &dep_map),
-        };
-        write_text(path, &text)?;
-    }
-    if let Some(path) = extra.jenkins_build_list_out {
-        let provided = baseline.filter(|_| extra.build_list_excludes_baseline);
-        let packages = report::ordered_packages(lock, &dep_map)
-            .into_iter()
-            .filter(|p| provided.is_none_or(|b| !report::provides(b, p)));
-        write_text(path, &jenkins::format_build_list(packages, &extra.jenkins))?;
+    if extra.build_list_out.is_some() || extra.jenkins_build_list_out.is_some() {
+        // The same edges the SBOM just wrote: lock identity, runtime and
+        // build. A name-keyed map drops the second version of one name and
+        // cannot say which build a tuple needs.
+        let edges = sbom::closure_edges_for_lock(lock, lock_out);
+        if let Some(path) = extra.build_list_out {
+            let text = match baseline.filter(|_| extra.build_list_excludes_baseline) {
+                Some(base) => report::format_build_list_excluding(lock, &edges, base),
+                None => format_build_list(lock, &edges),
+            };
+            write_text(path, &text)?;
+        }
+        if let Some(path) = extra.jenkins_build_list_out {
+            let provided = baseline.filter(|_| extra.build_list_excludes_baseline);
+            let packages = report::ordered_packages(lock, &edges)
+                .into_iter()
+                .filter(|p| provided.is_none_or(|b| !report::provides(b, p)));
+            write_text(path, &jenkins::format_build_list(packages, &extra.jenkins))?;
+        }
     }
     if let Some(path) = extra.stack_diff_out {
         let Some(base) = baseline else {
@@ -825,14 +829,7 @@ pub fn solve_with_baseline_source(
         anyhow::anyhow!("{e}{hint}{constraints}")
     })?;
     validate_lock_deps(&lock, &universe.candidates).map_err(|e| anyhow::anyhow!(e))?;
-    write_lock_sbom_and_extras(
-        &lock,
-        baseline.as_ref(),
-        &universe,
-        lock_out,
-        sbom_out,
-        extra,
-    )?;
+    write_lock_sbom_and_extras(&lock, baseline.as_ref(), lock_out, sbom_out, extra)?;
     Ok(lock)
 }
 

@@ -6,6 +6,10 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- The build list names every locked module, including two versions of
+  one name at one toolchain, and lists runtime and build dependencies
+  first. It is keyed by name, version, versionsuffix and toolchain,
+  the same identity as the closure SBOM.
 - `--merged` and `--impact` say a pull request has no record when it
   is in the input but changes no easyconfig and no easystack. A
   number that is not in the input is still reported as unknown.

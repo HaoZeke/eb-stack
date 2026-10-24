@@ -6,9 +6,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Return co-selected easyconfig paths in dependency order (deps before apps).
 ///
-/// Edges come from `dep_map` (package name → co-stack dependency names). Only
-/// dependencies that are also co-selected participate. Tie-break is stable by
-/// package name so the order is deterministic.
+/// `dep_map` keys are lock identities (name, version, versionsuffix,
+/// toolchain), or a package name when the lock has one module of that name.
+/// Values are the same kind of token and cover runtime and build edges.
+/// Only dependencies that are also co-selected participate. Ties break by
+/// lock identity, which starts with the package name, so the order is
+/// deterministic.
 pub fn ordered_build_paths(
     lock: &StackLock,
     dep_map: &HashMap<String, Vec<String>>,
@@ -68,34 +71,46 @@ pub fn ordered_packages<'a>(
     lock: &'a StackLock,
     dep_map: &HashMap<String, Vec<String>>,
 ) -> Vec<&'a LockPackage> {
-    // Nodes are modules, not names. A generation legitimately carries one name
-    // at two toolchain levels, Perl at SYSTEM for the bootstrap and Perl at
-    // GCCcore for the generation, and EasyBuild installs both. Keying the sort
-    // by name alone collapsed them into one node, so the build list emitted one
-    // easyconfig for two modules and a plan could not build its own generation.
-    fn module_key(p: &LockPackage) -> String {
-        format!(
-            "{}@{}{}",
-            p.name,
-            p.toolchain.label(),
-            p.versionsuffix.clone().unwrap_or_default()
-        )
+    // Nodes are lock identities: name, version, versionsuffix, toolchain.
+    // Two builds of one name at one level, M4 1.4.19 beside M4 1.4.21, are
+    // two modules. Keying by name and toolchain kept one and dropped the other.
+    let by_key: BTreeMap<String, &LockPackage> = lock
+        .packages
+        .iter()
+        .map(|package| (crate::sbom::package_identity(package), package))
+        .collect();
+    let mut name_count: BTreeMap<&str, usize> = BTreeMap::new();
+    for package in &lock.packages {
+        *name_count.entry(package.name.as_str()).or_default() += 1;
     }
-
-    let by_key: BTreeMap<String, &LockPackage> =
-        lock.packages.iter().map(|p| (module_key(p), p)).collect();
     let selected: BTreeSet<String> = by_key.keys().cloned().collect();
-    // dep_map speaks in names, because a recipe names a dependency without
-    // saying which level answers it. A name therefore constrains every selected
-    // module carrying it. That is conservative where a generation holds two:
-    // the dependent waits for both rather than for the one it will link. It
-    // never orders a package before something it needs, and it never drops one,
-    // which is what keying by name did.
-    let keys_for_name: BTreeMap<&str, Vec<String>> =
-        lock.packages.iter().fold(BTreeMap::new(), |mut acc, p| {
-            acc.entry(p.name.as_str()).or_default().push(module_key(p));
-            acc
-        });
+
+    // An identity-keyed map names the build a tuple resolved to. A name-keyed
+    // map is only unambiguous when the lock has one module of that name.
+    let tokens_of = |package: &LockPackage| -> &[String] {
+        let identity = crate::sbom::package_identity(package);
+        if let Some(edges) = dep_map.get(&identity) {
+            return edges.as_slice();
+        }
+        if name_count.get(package.name.as_str()).copied() == Some(1) {
+            if let Some(edges) = dep_map.get(&package.name) {
+                return edges.as_slice();
+            }
+        }
+        &[]
+    };
+    let resolve = |token: &str| -> Option<&LockPackage> {
+        if let Some(package) = by_key.get(token) {
+            return Some(*package);
+        }
+        if name_count.get(token).copied() == Some(1) {
+            return by_key
+                .values()
+                .copied()
+                .find(|package| package.name == token);
+        }
+        None
+    };
 
     let mut in_degree: BTreeMap<&str, usize> = BTreeMap::new();
     let mut dependents: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
@@ -106,12 +121,14 @@ pub fn ordered_packages<'a>(
     for key in &selected {
         let package = by_key[key];
         let mut co_deps: BTreeSet<&str> = BTreeSet::new();
-        for dep_name in dep_map.get(&package.name).into_iter().flatten() {
-            for dep_key in keys_for_name.get(dep_name.as_str()).into_iter().flatten() {
-                if dep_key != key && selected.contains(dep_key) {
-                    let interned = selected.get(dep_key).expect("just checked").as_str();
-                    co_deps.insert(interned);
-                }
+        for token in tokens_of(package) {
+            let Some(dep) = resolve(token) else {
+                continue;
+            };
+            let dep_key = crate::sbom::package_identity(dep);
+            if dep_key != *key && selected.contains(&dep_key) {
+                let interned = selected.get(&dep_key).expect("just checked").as_str();
+                co_deps.insert(interned);
             }
         }
         let interned_key = selected.get(key).expect("iterating selected").as_str();
