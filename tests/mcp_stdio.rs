@@ -1,11 +1,14 @@
 //! The MCP server over a real stdio JSON-RPC client.
 //!
 //! `eb_stack_sbom` has to write the same CycloneDX document as `stack sbom`,
-//! including checksums and source URLs.
+//! including checksums and source URLs. The overlap and reach tools have to
+//! write the same report files as the CLI, on the repository fixtures.
 
+use eb_stack::pr_overlap::{EasystackChange, FileChange, PrInput};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 
 struct McpClient {
@@ -90,12 +93,58 @@ impl Drop for McpClient {
     }
 }
 
+fn root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn files_under(dir: &Path) -> BTreeMap<String, String> {
+    let mut files = BTreeMap::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        for entry in std::fs::read_dir(&current).expect("read out") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                let rel = path.strip_prefix(dir).unwrap().display().to_string();
+                files.insert(rel, std::fs::read_to_string(&path).expect("read file"));
+            }
+        }
+    }
+    files
+}
+
 fn cli(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_eb-stack"))
         .args(args)
         .env_remove("EASYBUILD_FILTER_DEPS")
         .output()
         .expect("cli")
+}
+
+fn counts(line: &str) -> &str {
+    line.rsplit_once(" out=")
+        .map(|(head, _)| head)
+        .unwrap_or(line)
+}
+
+fn assert_same_summary(output: &std::process::Output, response: &serde_json::Value) {
+    assert!(
+        output.status.success(),
+        "cli stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let summary = response["result"]["structuredContent"]["summary"]
+        .as_str()
+        .expect("summary");
+    let cli_line = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        counts(summary),
+        counts(cli_line.trim()),
+        "summary {summary} vs {}",
+        cli_line.trim()
+    );
 }
 
 fn recipe(name: &str, version: &str, checksum: &str, deps: &str) -> String {
@@ -256,4 +305,309 @@ fn mcp_stdio_stack_sbom_matches_the_cli() {
             .any(|edge| edge.starts_with("pkg:generic/libpng@")),
         "zlib dependsOn libpng: {edges:?}"
     );
+}
+
+#[test]
+fn mcp_stdio_catalog_lists_the_overlap_and_reach_tools() {
+    let mut client = McpClient::spawn(&root());
+    client.handshake();
+    let listed = client.request("tools/list", json!({}));
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    for expected in [
+        "eb_pr_overlap",
+        "eb_rebuild_set",
+        "eb_component_reach",
+        "eb_easyblock_reach",
+        "eb_stack_sbom",
+    ] {
+        assert!(names.contains(&expected), "missing {expected}: {names:?}");
+    }
+    assert_eq!(names.len(), 30, "{names:?}");
+}
+
+fn software_layer_prs() -> Vec<PrInput> {
+    const STACK: &str = "easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.0-2026.1.yml";
+    const BASE: &str = "easyconfigs:\n  - zlib-1.3.1-GCCcore-15.2.0.eb\n";
+    let change = |path: &str, added: &str| EasystackChange {
+        path: path.into(),
+        base: Some(BASE.into()),
+        head: Some(format!("{BASE}{added}")),
+        base_blob: None,
+        head_blob: None,
+    };
+    vec![
+        PrInput {
+            number: 101,
+            head_sha: format!("{:0>40}", 101),
+            title: Some("PR 101".into()),
+            easystacks: vec![change(STACK, "  - Graphviz-14.0.2-GCCcore-15.2.0.eb\n")],
+            files: Vec::new(),
+            easyconfigs: Vec::new(),
+        },
+        PrInput {
+            number: 102,
+            head_sha: format!("{:0>40}", 102),
+            title: Some("PR 102".into()),
+            easystacks: vec![change(STACK, "  - gnuplot-6.0.3-GCCcore-15.2.0.eb\n")],
+            files: Vec::new(),
+            easyconfigs: Vec::new(),
+        },
+    ]
+}
+
+#[test]
+fn mcp_stdio_pr_overlap_software_layer_matches_the_cli() {
+    let fixtures = root().join("tests/pr_overlap_fixtures");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let input = temp.path().join("prs.json");
+    std::fs::write(
+        &input,
+        serde_json::to_string(&software_layer_prs()).expect("json"),
+    )
+    .expect("write prs");
+    let cli_out = temp.path().join("cli");
+    let mcp_out = temp.path().join("mcp");
+    let output = cli(&[
+        "pr-overlap",
+        "--pr",
+        input.to_str().unwrap(),
+        "--easyconfigs",
+        fixtures.join("release").to_str().unwrap(),
+        "--installed",
+        fixtures.join("installed.txt").to_str().unwrap(),
+        "--installed-label",
+        "x86_64/amd/zen4",
+        "--exclude-path",
+        "/accel/",
+        "--generated-at",
+        "2026-10-19T12:00:00Z",
+        "--out-dir",
+        cli_out.to_str().unwrap(),
+    ]);
+    let mut client = McpClient::spawn(temp.path());
+    client.handshake();
+    let response = client.call(
+        "eb_pr_overlap",
+        json!({
+            "pr": [input],
+            "kind": "software-layer",
+            "easyconfigs": [fixtures.join("release")],
+            "installed": fixtures.join("installed.txt"),
+            "installed_label": "x86_64/amd/zen4",
+            "exclude_path": ["/accel/"],
+            "generated_at": "2026-10-19T12:00:00Z",
+            "out_dir": mcp_out,
+        }),
+    );
+    assert_same_summary(&output, &response);
+    assert_eq!(files_under(&cli_out), files_under(&mcp_out));
+    assert!(mcp_out.join("prs/101.toml").is_file());
+    assert!(mcp_out.join("overlap.md").is_file());
+}
+
+#[test]
+fn mcp_stdio_pr_overlap_easyconfigs_matches_the_cli() {
+    let fixtures = root().join("tests/pr_overlap_easyconfigs_fixtures");
+    let lib = std::fs::read_to_string(fixtures.join("l/Lib/Lib-1.0.eb")).unwrap();
+    let prs = vec![PrInput {
+        number: 1,
+        head_sha: "1".repeat(40),
+        title: Some("edit Lib".into()),
+        easystacks: Vec::new(),
+        files: Vec::new(),
+        easyconfigs: vec![FileChange {
+            path: "l/Lib/Lib-1.0.eb".into(),
+            base: Some(lib.clone()),
+            head: Some(lib.replace("Fixture.", "Head.")),
+            base_blob: None,
+            head_blob: None,
+        }],
+    }];
+    let temp = tempfile::tempdir().expect("tempdir");
+    let input = temp.path().join("prs.json");
+    std::fs::write(&input, serde_json::to_string(&prs).unwrap()).unwrap();
+    let cli_out = temp.path().join("cli");
+    let mcp_out = temp.path().join("mcp");
+    let output = cli(&[
+        "pr-overlap",
+        "--kind",
+        "easyconfigs",
+        "--pr",
+        input.to_str().unwrap(),
+        "--easyconfigs",
+        fixtures.to_str().unwrap(),
+        "--generated-at",
+        "2026-10-22T00:00:00Z",
+        "--repo-url",
+        "https://github.com/easybuilders/easybuild-easyconfigs",
+        "--out-dir",
+        cli_out.to_str().unwrap(),
+    ]);
+    let mut client = McpClient::spawn(temp.path());
+    client.handshake();
+    let response = client.call(
+        "eb_pr_overlap",
+        json!({
+            "pr": [input],
+            "kind": "easyconfigs",
+            "easyconfigs": [fixtures],
+            "generated_at": "2026-10-22T00:00:00Z",
+            "repo_url": "https://github.com/easybuilders/easybuild-easyconfigs",
+            "out_dir": mcp_out,
+        }),
+    );
+    assert_same_summary(&output, &response);
+    assert_eq!(files_under(&cli_out), files_under(&mcp_out));
+}
+
+#[test]
+fn mcp_stdio_rebuild_set_matches_the_cli() {
+    let fixtures = root().join("tests/rebuild_set_fixtures");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cli_out = temp.path().join("cli");
+    let mcp_out = temp.path().join("mcp");
+    let changed = fixtures.join("changed.txt");
+    let installed = fixtures.join("installed.txt");
+    let release = fixtures.join("release");
+    let stack = fixtures.join("eessi-2026.06-eb-5.4.0-2026.1.yml");
+    let output = cli(&[
+        "rebuild-set",
+        "--easyconfigs",
+        release.to_str().unwrap(),
+        "--installed",
+        installed.to_str().unwrap(),
+        "--installed-label",
+        "x86_64/amd/zen4",
+        "--generated-at",
+        "2026-10-22T12:00:00Z",
+        "--changed",
+        changed.to_str().unwrap(),
+        "--easystack",
+        stack.to_str().unwrap(),
+        "--out-dir",
+        cli_out.to_str().unwrap(),
+    ]);
+    let mut client = McpClient::spawn(temp.path());
+    client.handshake();
+    let response = client.call(
+        "eb_rebuild_set",
+        json!({
+            "easyconfigs": [release],
+            "installed": installed,
+            "installed_label": "x86_64/amd/zen4",
+            "generated_at": "2026-10-22T12:00:00Z",
+            "changed": [changed],
+            "easystack": [stack],
+            "out_dir": mcp_out,
+        }),
+    );
+    assert_same_summary(&output, &response);
+    assert_eq!(files_under(&cli_out), files_under(&mcp_out));
+    assert!(mcp_out.join("rebuild-set.json").is_file());
+}
+
+#[test]
+fn mcp_stdio_component_reach_matches_the_cli() {
+    let fixtures = root().join("tests/rebuild_set_fixtures");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cli_out = temp.path().join("cli");
+    let mcp_out = temp.path().join("mcp");
+    let release = fixtures.join("release");
+    let stack = fixtures.join("eessi-2026.06-eb-5.4.0-2026.1.yml");
+    let output = cli(&[
+        "component-reach",
+        "--component",
+        "zlib",
+        "--version",
+        "1.3.1",
+        "--generation",
+        "2026.1",
+        "--easyconfigs",
+        release.to_str().unwrap(),
+        "--easystack",
+        stack.to_str().unwrap(),
+        "--generated-at",
+        "2026-10-22T12:00:00Z",
+        "--out-dir",
+        cli_out.to_str().unwrap(),
+    ]);
+    let mut client = McpClient::spawn(temp.path());
+    client.handshake();
+    let response = client.call(
+        "eb_component_reach",
+        json!({
+            "component": "zlib",
+            "version": "1.3.1",
+            "generation": "2026.1",
+            "easyconfigs": [release],
+            "easystack": [stack],
+            "generated_at": "2026-10-22T12:00:00Z",
+            "out_dir": mcp_out,
+        }),
+    );
+    assert_same_summary(&output, &response);
+    assert_eq!(files_under(&cli_out), files_under(&mcp_out));
+}
+
+#[test]
+fn mcp_stdio_easyblock_reach_matches_the_cli() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let py = temp.path().join("py");
+    let ecs = temp.path().join("eb");
+    let write = |root: &Path, rel: &str, text: &str| {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    write(
+        &py,
+        "easybuild/easyblocks/generic/configuremake.py",
+        "class ConfigureMake:\n    pass\n",
+    );
+    write(
+        &py,
+        "easybuild/easyblocks/generic/cmakemake.py",
+        "class CMakeMake(ConfigureMake):\n    pass\n",
+    );
+    write(
+        &ecs,
+        "zlib.eb",
+        "name = 'zlib'\nversion = '1.3'\ntoolchain = SYSTEM\neasyblock = 'CMakeMake'\n",
+    );
+    let changed = py.join("easybuild/easyblocks/generic/cmakemake.py");
+    let cli_out = temp.path().join("cli");
+    let mcp_out = temp.path().join("mcp");
+    let output = cli(&[
+        "easyblock-reach",
+        "--easyblocks",
+        py.to_str().unwrap(),
+        "--easyconfigs",
+        ecs.to_str().unwrap(),
+        "--file",
+        changed.to_str().unwrap(),
+        "--generated-at",
+        "2026-10-22T00:00:00Z",
+        "--out-dir",
+        cli_out.to_str().unwrap(),
+    ]);
+    let mut client = McpClient::spawn(temp.path());
+    client.handshake();
+    let response = client.call(
+        "eb_easyblock_reach",
+        json!({
+            "easyblocks": [py],
+            "easyconfigs": [ecs],
+            "file": [changed],
+            "generated_at": "2026-10-22T00:00:00Z",
+            "out_dir": mcp_out,
+        }),
+    );
+    assert_same_summary(&output, &response);
+    assert_eq!(files_under(&cli_out), files_under(&mcp_out));
+    assert!(mcp_out.join("reach.json").is_file());
 }

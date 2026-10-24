@@ -46,10 +46,14 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_campaign_status",
         "eb_campaign_finding_claim",
         "eb_campaign_finding_resolve",
+        "eb_pr_overlap",
+        "eb_rebuild_set",
+        "eb_component_reach",
+        "eb_easyblock_reach",
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 26, "unexpected MCP tools: {names:?}");
+    assert_eq!(names.len(), 30, "unexpected MCP tools: {names:?}");
 
     let package_bump = response["result"]["tools"]
         .as_array()
@@ -1919,6 +1923,10 @@ fn mcp_schemas_cover_cli_flags() {
         ("eb_campaign_status", "campaign status"),
         ("eb_campaign_finding_claim", "campaign finding claim"),
         ("eb_campaign_finding_resolve", "campaign finding resolve"),
+        ("eb_pr_overlap", "pr-overlap"),
+        ("eb_rebuild_set", "rebuild-set"),
+        ("eb_component_reach", "component-reach"),
+        ("eb_easyblock_reach", "easyblock-reach"),
     ];
     // These tools edit files or run EasyBuild. They are not a CLI subcommand,
     // so they have no `--help` flag list to mirror. A tool in neither list

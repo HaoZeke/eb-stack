@@ -40,6 +40,11 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `eb_pr_overlap`, `eb_rebuild_set`, `eb_component_reach`, and
+  `eb_easyblock_reach` call the same runners as the CLI commands.
+  `eb_pr_overlap` takes `kind` `software-layer` or `easyconfigs`.
+  The reports written under `out_dir` match the CLI byte for byte.
+
 - `eb-stack component-reach` lists every easyconfig and installed module
   that carries a component at a version or version range, inside one
   toolchain generation, and feeds the recipes that contain it into the

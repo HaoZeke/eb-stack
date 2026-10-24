@@ -1,4 +1,4 @@
-//! MCP stdio surface for the version-one package, recipe, stack, target, and campaign workflows.
+//! MCP stdio surface for the version-one workflows and the overlap and reach commands.
 
 use crate::campaign::{
     claim_finding, resolve_finding, run_campaign, CampaignRequest, CampaignStatus,
@@ -364,6 +364,88 @@ fn tool_catalog() -> Vec<Value> {
             ],
             &[("changes", "array")],
         ),
+        tool_with_optional(
+            "eb_pr_overlap",
+            "Close open pull requests against an installed stack and report shared builds. kind is software-layer (the default) or easyconfigs.",
+            &[("pr", "array"), ("easyconfigs", "array")],
+            &[
+                ("kind", "string"),
+                ("commit_tree", "array"),
+                ("installed", "string"),
+                ("eessi_version", "string"),
+                ("installed_label", "string"),
+                ("exclude_path", "array"),
+                ("include_path", "array"),
+                ("filter_deps", "array"),
+                ("installed_modulerc", "array"),
+                ("easyblocks", "array"),
+                ("easyblocks_commit", "array"),
+                ("generated_at", "string"),
+                ("merge_order", "boolean"),
+                ("merged", "array_int"),
+                ("repo_url", "string"),
+                ("out_dir", "string"),
+            ],
+        ),
+        tool_with_optional(
+            "eb_rebuild_set",
+            "Classify the installed reverse dependents of easyconfigs patched in place.",
+            &[
+                ("changed", "array"),
+                ("easystack", "array"),
+                ("easyconfigs", "array"),
+                ("installed", "string"),
+            ],
+            &[
+                ("commit_tree", "array"),
+                ("installed_label", "string"),
+                ("filter_deps", "array"),
+                ("installed_modulerc", "array"),
+                ("easyblocks", "array"),
+                ("easyblocks_commit", "array"),
+                ("generated_at", "string"),
+                ("prefix", "string"),
+                ("check_static", "boolean"),
+                ("out_dir", "string"),
+            ],
+        ),
+        tool_with_optional(
+            "eb_component_reach",
+            "List who carries a component in one toolchain generation and close their rebuild set.",
+            &[
+                ("component", "string"),
+                ("version", "string"),
+                ("generation", "string"),
+                ("easyconfigs", "array"),
+            ],
+            &[
+                ("installed", "string"),
+                ("easystack", "array"),
+                ("compat_layer", "string"),
+                ("filter_deps", "array"),
+                ("generated_at", "string"),
+                ("out_dir", "string"),
+            ],
+        ),
+        tool_with_optional(
+            "eb_easyblock_reach",
+            "Report easyconfigs and installed modules reached by an easyblock or framework change.",
+            &[("easyconfigs", "array")],
+            &[
+                ("easyblocks", "array"),
+                ("framework", "array"),
+                ("file", "array"),
+                ("range", "string"),
+                ("pr", "integer"),
+                ("remote", "string"),
+                ("base", "string"),
+                ("repo", "string"),
+                ("installed", "string"),
+                ("reverse", "boolean"),
+                ("generated_at", "string"),
+                ("out_dir", "string"),
+            ],
+        ),
     ];
     if let Some(lint) = tools
         .iter_mut()
@@ -461,6 +543,10 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_campaign_status" => campaign_status(arguments),
         "eb_campaign_finding_claim" => campaign_finding_claim(arguments),
         "eb_campaign_finding_resolve" => campaign_finding_resolve(arguments),
+        "eb_pr_overlap" => pr_overlap(arguments),
+        "eb_rebuild_set" => rebuild_set_tool(arguments),
+        "eb_component_reach" => component_reach_tool(arguments),
+        "eb_easyblock_reach" => easyblock_reach_tool(arguments),
         _ => Err(format!("unknown tool: {name}")),
     }
 }
@@ -2443,6 +2529,148 @@ fn stack_sbom(arguments: &Value) -> Result<Value, String> {
     }))
 }
 
+fn pr_overlap(arguments: &Value) -> Result<Value, String> {
+    let kind = match optional_string(arguments, "kind")
+        .as_deref()
+        .unwrap_or("software-layer")
+    {
+        "software-layer" => crate::site_commands::OverlapKind::SoftwareLayer,
+        "easyconfigs" => crate::site_commands::OverlapKind::Easyconfigs,
+        other => {
+            return Err(format!(
+                "kind must be software-layer or easyconfigs, got {other}"
+            ))
+        }
+    };
+    let report = crate::site_commands::run_pr_overlap(&crate::site_commands::PrOverlapRequest {
+        prs: path_array(arguments, "pr")?,
+        kind,
+        easyconfigs: path_array(arguments, "easyconfigs")?,
+        commit_trees: string_array(arguments, "commit_tree")?,
+        installed: optional_path(arguments, "installed"),
+        eessi_version: optional_string(arguments, "eessi_version")
+            .unwrap_or_else(|| "2026.06".to_string()),
+        installed_label: optional_string(arguments, "installed_label").unwrap_or_default(),
+        exclude_paths: string_array(arguments, "exclude_path")?,
+        include_paths: string_array(arguments, "include_path")?,
+        filter_deps: filter_dep_specs(arguments)?,
+        installed_modulerc: optional_paths(arguments, "installed_modulerc")?,
+        easyblocks: optional_paths(arguments, "easyblocks")?,
+        easyblocks_commits: string_array(arguments, "easyblocks_commit")?,
+        generated_at: optional_string(arguments, "generated_at"),
+        merge_order: optional_bool(arguments, "merge_order"),
+        merged: u64_array(arguments, "merged")?,
+        repo_url: optional_string(arguments, "repo_url"),
+        out_dir: optional_path(arguments, "out_dir").unwrap_or_else(|| PathBuf::from("pr-overlap")),
+    })
+    .map_err(|error| match error {
+        crate::site_commands::PrOverlapError::InstalledRequired => {
+            "software-layer pr-overlap requires installed".to_string()
+        }
+        crate::site_commands::PrOverlapError::Failed(error) => error.to_string(),
+    })?;
+    Ok(json!({
+        "prs": report.prs,
+        "records": report.records,
+        "shared_modules": report.shared_modules,
+        "skipped_easyconfigs": report.skipped_easyconfigs,
+        "out": report.out_dir,
+        "summary": report.summary(),
+    }))
+}
+
+fn rebuild_set_tool(arguments: &Value) -> Result<Value, String> {
+    let report = crate::site_commands::run_rebuild_set(&crate::site_commands::RebuildSetRequest {
+        changed: string_array(arguments, "changed")?,
+        easystacks: path_array(arguments, "easystack")?,
+        easyconfigs: path_array(arguments, "easyconfigs")?,
+        commit_trees: string_array(arguments, "commit_tree")?,
+        installed: required_path(arguments, "installed")?,
+        installed_label: optional_string(arguments, "installed_label").unwrap_or_default(),
+        filter_deps: filter_dep_specs(arguments)?,
+        installed_modulerc: optional_paths(arguments, "installed_modulerc")?,
+        easyblocks: optional_paths(arguments, "easyblocks")?,
+        easyblocks_commits: string_array(arguments, "easyblocks_commit")?,
+        generated_at: optional_string(arguments, "generated_at"),
+        prefix: optional_path(arguments, "prefix"),
+        check_static: optional_bool(arguments, "check_static"),
+        out_dir: optional_path(arguments, "out_dir")
+            .unwrap_or_else(|| PathBuf::from("rebuild-set")),
+    })
+    .map_err(|error| error.to_string())?;
+    Ok(json!({
+        "changed": report.changed,
+        "rows": report.rows,
+        "must_rebuild": report.must_rebuild,
+        "review": report.review,
+        "no_rebuild": report.no_rebuild,
+        "missing": report.missing,
+        "easystacks": report.easystacks,
+        "skipped_easyconfigs": report.skipped_easyconfigs,
+        "out": report.out_dir,
+        "summary": report.summary(),
+    }))
+}
+
+fn component_reach_tool(arguments: &Value) -> Result<Value, String> {
+    let report =
+        crate::site_commands::run_component_reach(&crate::site_commands::ComponentReachRequest {
+            component: required_string(arguments, "component")?,
+            version: required_string(arguments, "version")?,
+            generation: required_string(arguments, "generation")?,
+            easyconfigs: path_array(arguments, "easyconfigs")?,
+            installed: optional_path(arguments, "installed"),
+            easystacks: optional_paths(arguments, "easystack")?,
+            compat_layer: optional_path(arguments, "compat_layer"),
+            filter_deps: filter_dep_specs(arguments)?,
+            generated_at: optional_string(arguments, "generated_at"),
+            out_dir: optional_path(arguments, "out_dir")
+                .unwrap_or_else(|| PathBuf::from("component-reach")),
+        })
+        .map_err(|error| error.to_string())?;
+    Ok(json!({
+        "component": report.component,
+        "version": report.version,
+        "generation": report.generation,
+        "carriers": report.carriers,
+        "changed": report.changed,
+        "must_rebuild": report.must_rebuild,
+        "review": report.review,
+        "no_rebuild": report.no_rebuild,
+        "out": report.out_dir,
+        "summary": report.summary(),
+    }))
+}
+
+fn easyblock_reach_tool(arguments: &Value) -> Result<Value, String> {
+    let report =
+        crate::site_commands::run_easyblock_reach(&crate::site_commands::EasyblockReachRequest {
+            easyblocks: optional_paths(arguments, "easyblocks")?,
+            framework: optional_paths(arguments, "framework")?,
+            easyconfigs: optional_paths(arguments, "easyconfigs")?,
+            file: optional_paths(arguments, "file")?,
+            range: optional_string(arguments, "range"),
+            pr: optional_u64(arguments, "pr")?,
+            remote: optional_string(arguments, "remote").unwrap_or_else(|| "origin".to_string()),
+            base: optional_string(arguments, "base").unwrap_or_else(|| "develop".to_string()),
+            repo: optional_path(arguments, "repo"),
+            installed: optional_path(arguments, "installed"),
+            reverse: optional_bool(arguments, "reverse"),
+            generated_at: optional_string(arguments, "generated_at"),
+            out_dir: optional_path(arguments, "out_dir")
+                .unwrap_or_else(|| PathBuf::from("easyblock-reach")),
+        })
+        .map_err(|error| error.to_string())?;
+    Ok(json!({
+        "easyconfigs": report.easyconfigs,
+        "installed": report.installed,
+        "classes": report.classes,
+        "reverse": report.reverse,
+        "out": report.out_dir,
+        "summary": report.summary(),
+    }))
+}
+
 fn target_list(arguments: &Value) -> Result<Value, String> {
     serde_json::to_value(load_targets(arguments)?).map_err(|error| error.to_string())
 }
@@ -2584,6 +2812,52 @@ fn required_path(arguments: &Value, name: &str) -> Result<PathBuf, String> {
 
 fn optional_path(arguments: &Value, name: &str) -> Option<PathBuf> {
     optional_string(arguments, name).map(PathBuf::from)
+}
+
+fn optional_paths(arguments: &Value, name: &str) -> Result<Vec<PathBuf>, String> {
+    Ok(string_array(arguments, name)?
+        .into_iter()
+        .map(PathBuf::from)
+        .collect())
+}
+
+fn optional_u64(arguments: &Value, name: &str) -> Result<Option<u64>, String> {
+    match arguments.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| format!("argument {name} must be an integer")),
+    }
+}
+
+fn u64_array(arguments: &Value, name: &str) -> Result<Vec<u64>, String> {
+    match arguments.get(name) {
+        None => Ok(Vec::new()),
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| {
+                value
+                    .as_u64()
+                    .ok_or_else(|| format!("argument {name} must contain integers"))
+            })
+            .collect(),
+        Some(_) => Err(format!("argument {name} must be an array of integers")),
+    }
+}
+
+/// `--filter-deps` tokens. A comma inside one value splits the way the CLI flag does.
+fn filter_dep_specs(arguments: &Value) -> Result<Vec<String>, String> {
+    let mut specs = Vec::new();
+    for value in string_array(arguments, "filter_deps")? {
+        for spec in value.split(',') {
+            let spec = spec.trim();
+            if !spec.is_empty() {
+                specs.push(spec.to_string());
+            }
+        }
+    }
+    Ok(specs)
 }
 
 fn path_array(arguments: &Value, name: &str) -> Result<Vec<PathBuf>, String> {
