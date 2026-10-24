@@ -1,4 +1,5 @@
-//! MCP stdio surface for the version-one workflows and the overlap and reach commands.
+//! MCP stdio surface. Each CLI workflow is a tool here, and so are the
+//! sandboxed recipe and easyblock tools.
 
 use crate::campaign::{
     claim_finding, resolve_finding, run_campaign, CampaignRequest, CampaignStatus,
@@ -229,6 +230,28 @@ fn tool_catalog() -> Vec<Value> {
             &[("path", "string"), ("regex", "boolean"), ("max_matches", "integer")],
         ),
         tool_with_optional(
+            "eb_recipe_easyblock",
+            "Print the easyblock class name EasyBuild derives for a software name, or the encoding table when charmap is true. Same result as `recipe easyblock`.",
+            &[],
+            &[("name", "string"), ("charmap", "boolean")],
+        ),
+        tool_with_optional(
+            "eb_recipe_templates",
+            "Emit template constants and derived-key rules, or the values name and version resolve. Same result as `recipe templates`.",
+            &[],
+            &[
+                ("name", "string"),
+                ("version", "string"),
+                ("export", "boolean"),
+            ],
+        ),
+        tool_with_optional(
+            "eb_recipe_hierarchy",
+            "Emit the known toolchain hierarchies as JSON. Same table as `recipe hierarchy`.",
+            &[],
+            &[("export", "boolean")],
+        ),
+        tool_with_optional(
             "eb_recipe_check",
             "Check a recipe the way `recipe check` does: strict parse, sources, maintainer, easyblock, packaging, and robot dependencies. A recipe that is not valid Python fails. easyconfigs must contain at least one path: a robot directory such as easybuild/easyconfigs. A .eb file there is accepted and stands for the easyconfigs directory it sits in.",
             &[("recipe", "string"), ("easyconfigs", "array_min1")],
@@ -317,6 +340,30 @@ fn tool_catalog() -> Vec<Value> {
             "Emit CycloneDX from an existing stack lock, reading dependency edges and source checksums from the easyconfigs the lock names.",
             &[("lock", "string")],
             &[("out", "string")],
+        ),
+        tool_with_optional(
+            "eb_stack_order",
+            "Order every pinned build a set of roots needs, and write the same order, easystack, and hash files as `stack order`.",
+            &[("easyconfigs", "array"), ("root", "array")],
+            &[
+                ("out", "string"),
+                ("oldest", "boolean"),
+                ("easystack_out", "string"),
+                ("hashes_out", "string"),
+                ("filter_deps", "array"),
+            ],
+        ),
+        tool_with_optional(
+            "eb_stack_easystack",
+            "Write a stack lock as the YAML `eb --easystack` reads, with the same per-file options as `stack easystack`.",
+            &[("lock", "string")],
+            &[("out", "string"), ("option", "array")],
+        ),
+        tool_with_optional(
+            "eb_stack_sections",
+            "Regroup a Jenkins build list under the section headers of a previous list, as `stack sections` does.",
+            &[("list", "string"), ("from", "string"), ("out", "string")],
+            &[("unfiled", "string")],
         ),
         tool_with_optional(
             "eb_component_reach",
@@ -447,6 +494,12 @@ fn tool_catalog() -> Vec<Value> {
                 ("out_dir", "string"),
             ],
         ),
+        tool_with_optional(
+            "eb_repro_summary",
+            "Summarize reproduction case scores and, with ratchet, check them against the committed allowance counts. Same scoreboard as `repro summary`.",
+            &[("scores", "string")],
+            &[("ratchet", "string"), ("json", "boolean")],
+        ),
     ];
     if let Some(lint) = tools
         .iter_mut()
@@ -547,6 +600,9 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_recipe_write" => recipe_write(arguments),
         "eb_recipe_check" => recipe_check(arguments),
         "eb_recipe_grep" => recipe_grep(arguments),
+        "eb_recipe_easyblock" => recipe_easyblock_tool(arguments),
+        "eb_recipe_templates" => recipe_templates_tool(arguments),
+        "eb_recipe_hierarchy" => recipe_hierarchy_tool(arguments),
         "eb_dep_versions" => dep_versions_tool(arguments),
         "eb_recipe_lint" => recipe_lint(arguments),
         "eb_recipe_format" => recipe_format(arguments),
@@ -556,6 +612,9 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_build_test" => build_test(arguments),
         "eb_stack_solve" => stack_solve(arguments),
         "eb_stack_sbom" => stack_sbom(arguments),
+        "eb_stack_order" => stack_order_tool(arguments),
+        "eb_stack_easystack" => stack_easystack_tool(arguments),
+        "eb_stack_sections" => stack_sections_tool(arguments),
         "eb_target_list" => target_list(arguments),
         "eb_target_doctor" => target_doctor(arguments),
         "eb_campaign_run" => campaign_run(arguments),
@@ -566,6 +625,7 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_rebuild_set" => rebuild_set_tool(arguments),
         "eb_component_reach" => component_reach_tool(arguments),
         "eb_easyblock_reach" => easyblock_reach_tool(arguments),
+        "eb_repro_summary" => repro_summary_tool(arguments),
         _ => Err(format!("unknown tool: {name}")),
     }
 }
@@ -2573,6 +2633,136 @@ fn stack_sbom(arguments: &Value) -> Result<Value, String> {
         "recipes_read": stats.recipes_read,
         "recipes_unreadable": stats.recipes_unreadable,
         "with_artifact_facts": stats.with_artifact_facts,
+    }))
+}
+
+fn workflow_error(error: anyhow::Error) -> String {
+    format!("{error:#}")
+}
+
+fn recipe_easyblock_tool(arguments: &Value) -> Result<Value, String> {
+    let name = optional_string(arguments, "name");
+    let report =
+        crate::workflows::recipe_easyblock(name.as_deref(), optional_bool(arguments, "charmap"))
+            .map_err(workflow_error)?;
+    Ok(json!({
+        "text": report.stdout,
+        "class_name": report.class_name,
+        "charmap": report.charmap,
+    }))
+}
+
+fn recipe_templates_tool(arguments: &Value) -> Result<Value, String> {
+    let name = optional_string(arguments, "name");
+    let version = optional_string(arguments, "version");
+    let report = crate::workflows::recipe_templates(
+        name.as_deref(),
+        version.as_deref(),
+        optional_bool(arguments, "export"),
+    )
+    .map_err(workflow_error)?;
+    Ok(json!({
+        "text": report.stdout,
+        "document": report.document,
+    }))
+}
+
+fn recipe_hierarchy_tool(arguments: &Value) -> Result<Value, String> {
+    let report = crate::workflows::recipe_hierarchy(optional_bool(arguments, "export"))
+        .map_err(workflow_error)?;
+    Ok(json!({
+        "text": report.stdout,
+        "document": report.document,
+    }))
+}
+
+fn stack_order_tool(arguments: &Value) -> Result<Value, String> {
+    let roots = string_array(arguments, "root")?;
+    if roots.is_empty() {
+        return Err("argument root requires at least one value".into());
+    }
+    let report = crate::workflows::stack_order(&crate::workflows::StackOrderRequest {
+        easyconfigs: path_array(arguments, "easyconfigs")?,
+        roots,
+        out: optional_path(arguments, "out")
+            .unwrap_or_else(|| PathBuf::from(crate::workflows::STACK_ORDER_OUT)),
+        oldest: optional_bool(arguments, "oldest"),
+        easystack_out: optional_path(arguments, "easystack_out"),
+        hashes_out: optional_path(arguments, "hashes_out"),
+        filter_deps: filter_dep_specs(arguments)?,
+    })
+    .map_err(workflow_error)?;
+    let multiple = report
+        .multiple
+        .iter()
+        .map(|(name, builds)| json!({"name": name, "builds": builds}))
+        .collect::<Vec<_>>();
+    let hashes = report.hashes.as_ref().map(|hashes| {
+        json!({
+            "path": hashes.path,
+            "modules": hashes.modules,
+            "incomplete": hashes.incomplete,
+        })
+    });
+    Ok(json!({
+        "text": report.stdout,
+        "out": report.out,
+        "builds": report.builds,
+        "multiple": multiple,
+        "easystack": report.easystack,
+        "hashes": hashes,
+    }))
+}
+
+fn stack_easystack_tool(arguments: &Value) -> Result<Value, String> {
+    let report = crate::workflows::stack_easystack(&crate::workflows::StackEasystackRequest {
+        lock: required_path(arguments, "lock")?,
+        out: optional_path(arguments, "out")
+            .unwrap_or_else(|| PathBuf::from(crate::workflows::STACK_EASYSTACK_OUT)),
+        options: string_array(arguments, "option")?,
+    })
+    .map_err(workflow_error)?;
+    Ok(json!({
+        "text": report.stdout,
+        "out": report.out,
+        "entries": report.entries,
+        "packages": report.packages,
+    }))
+}
+
+fn stack_sections_tool(arguments: &Value) -> Result<Value, String> {
+    let report = crate::workflows::stack_sections(&crate::workflows::StackSectionsRequest {
+        list: required_path(arguments, "list")?,
+        from: required_path(arguments, "from")?,
+        unfiled: optional_string(arguments, "unfiled")
+            .unwrap_or_else(|| crate::workflows::STACK_SECTIONS_UNFILED.to_string()),
+        out: required_path(arguments, "out")?,
+    })
+    .map_err(workflow_error)?;
+    Ok(json!({
+        "text": report.stdout,
+        "out": report.out,
+        "sections": report.sections,
+        "of": report.of,
+    }))
+}
+
+fn repro_summary_tool(arguments: &Value) -> Result<Value, String> {
+    let report = crate::workflows::repro_summary(&crate::workflows::ReproSummaryRequest {
+        scores: required_path(arguments, "scores")?,
+        ratchet: optional_path(arguments, "ratchet"),
+        json: optional_bool(arguments, "json"),
+    })
+    .map_err(workflow_error)?;
+    if !report.violations.is_empty() {
+        let mut message = format!("{} ratchet violation(s)", report.violations.len());
+        for violation in &report.violations {
+            message.push_str(&format!("\nratchet: {violation}"));
+        }
+        return Err(message);
+    }
+    Ok(json!({
+        "text": report.stdout(),
     }))
 }
 

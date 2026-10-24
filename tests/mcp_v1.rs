@@ -30,6 +30,9 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_recipe_diff",
         "eb_recipe_write",
         "eb_recipe_grep",
+        "eb_recipe_easyblock",
+        "eb_recipe_templates",
+        "eb_recipe_hierarchy",
         "eb_dep_versions",
         "eb_recipe_check",
         "eb_recipe_lint",
@@ -40,6 +43,9 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_build_test",
         "eb_stack_solve",
         "eb_stack_sbom",
+        "eb_stack_order",
+        "eb_stack_easystack",
+        "eb_stack_sections",
         "eb_component_reach",
         "eb_target_list",
         "eb_target_doctor",
@@ -51,10 +57,11 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_rebuild_set",
         "eb_component_reach",
         "eb_easyblock_reach",
+        "eb_repro_summary",
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 30, "unexpected MCP tools: {names:?}");
+    assert_eq!(names.len(), 37, "unexpected MCP tools: {names:?}");
 
     let inspect = response["result"]["tools"]
         .as_array()
@@ -2418,11 +2425,18 @@ fn mcp_schemas_cover_cli_flags() {
         ("eb_package_inspect", "package inspect"),
         ("eb_package_plan", "package plan"),
         ("eb_package_bump", "package bump"),
+        ("eb_recipe_easyblock", "recipe easyblock"),
+        ("eb_recipe_templates", "recipe templates"),
+        ("eb_recipe_hierarchy", "recipe hierarchy"),
         ("eb_recipe_check", "recipe check"),
         ("eb_recipe_lint", "recipe lint"),
         ("eb_recipe_format", "recipe format"),
         ("eb_stack_solve", "stack solve"),
         ("eb_stack_sbom", "stack sbom"),
+        ("eb_stack_order", "stack order"),
+        ("eb_stack_easystack", "stack easystack"),
+        ("eb_stack_sections", "stack sections"),
+        ("eb_repro_summary", "repro summary"),
         ("eb_component_reach", "component-reach"),
         ("eb_target_list", "target list"),
         ("eb_target_doctor", "target doctor"),
@@ -2865,4 +2879,769 @@ fn mcp_pr_overlap_rejects_a_scalar_merged_or_impact() {
         text.contains("argument impact must be an array of integers"),
         "{text}"
     );
+}
+
+fn eb_output(args: &[&str]) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .args(args)
+        .output()
+        .expect("eb-stack")
+}
+
+fn cli_stdout(args: &[&str]) -> String {
+    let output = eb_output(args);
+    assert!(
+        output.status.success(),
+        "status {}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("utf8 stdout")
+}
+
+/// The text after the CLI's `error: ` prefix. MCP returns that same text.
+fn cli_error(args: &[&str]) -> String {
+    let output = eb_output(args);
+    assert!(!output.status.success(), "expected a failing command");
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+    stderr
+        .strip_prefix("error: ")
+        .unwrap_or(&stderr)
+        .trim_end()
+        .to_string()
+}
+
+fn mcp_error_text(id: u64, name: &str, arguments: serde_json::Value) -> String {
+    let response = call(id, name, arguments);
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("")
+        .to_string()
+}
+
+fn tool_schema(name: &str) -> serde_json::Value {
+    let listed = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {}
+    }))
+    .expect("tools/list");
+    listed["result"]["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .find(|tool| tool["name"] == name)
+        .unwrap_or_else(|| panic!("missing {name}"))
+        .clone()
+}
+
+fn assert_schema(name: &str, required: &[&str], properties: &[(&str, &str)]) {
+    let schema = tool_schema(name);
+    let got = schema["inputSchema"]["required"]
+        .as_array()
+        .unwrap_or_else(|| panic!("required {name}"));
+    let got_names = got
+        .iter()
+        .map(|item| item.as_str().unwrap_or(""))
+        .collect::<Vec<_>>();
+    assert_eq!(got_names, required, "{name} required");
+    for (property, kind) in properties {
+        assert_eq!(
+            schema["inputSchema"]["properties"][property]["type"].as_str(),
+            Some(*kind),
+            "{name}.{property}"
+        );
+    }
+}
+
+fn swap_paths(text: &str, from: &std::path::Path, to: &str) -> String {
+    text.replace(&from.display().to_string(), to)
+}
+
+fn help_subcommands(text: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut commands = false;
+    for line in text.lines() {
+        if line == "Commands:" {
+            commands = true;
+            continue;
+        }
+        if !commands {
+            continue;
+        }
+        if line.trim().is_empty() {
+            if !names.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if !line.starts_with("  ") || line.starts_with("   ") {
+            if !line.starts_with(' ') {
+                break;
+            }
+            continue;
+        }
+        let name = line.split_whitespace().next().unwrap_or("");
+        if !name.is_empty() && name != "help" {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
+fn cli_leaves() -> Vec<Vec<String>> {
+    let bin = env!("CARGO_BIN_EXE_eb-stack");
+    let mut leaves = Vec::new();
+    let mut queue = vec![Vec::<String>::new()];
+    while let Some(args) = queue.pop() {
+        let output = std::process::Command::new(bin)
+            .args(&args)
+            .arg("--help")
+            .output()
+            .expect("help");
+        assert!(
+            output.status.success(),
+            "help {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8(output.stdout).expect("utf8 help");
+        let subs = help_subcommands(&text);
+        if subs.is_empty() {
+            leaves.push(args);
+        } else {
+            for name in subs {
+                let mut next = args.clone();
+                next.push(name);
+                queue.push(next);
+            }
+        }
+    }
+    leaves.sort();
+    leaves
+}
+
+#[test]
+fn mcp_recipe_easyblock_matches_the_cli() {
+    assert_schema(
+        "eb_recipe_easyblock",
+        &[],
+        &[("name", "string"), ("charmap", "boolean")],
+    );
+    let stdout = cli_stdout(&["recipe", "easyblock", "zlib"]);
+    let body = mcp_tool(101, "eb_recipe_easyblock", json!({"name": "zlib"}));
+    assert_eq!(body["text"], stdout);
+    assert_eq!(body["class_name"], "EB_zlib");
+    assert!(body["charmap"].is_null());
+
+    let table = cli_stdout(&["recipe", "easyblock", "--charmap"]);
+    let named = cli_stdout(&["recipe", "easyblock", "zlib", "--charmap"]);
+    assert_eq!(table, named);
+    let body = mcp_tool(
+        102,
+        "eb_recipe_easyblock",
+        json!({"name": "zlib", "charmap": true}),
+    );
+    assert_eq!(body["text"], table);
+    assert_eq!(
+        body["charmap"],
+        serde_json::from_str::<serde_json::Value>(table.trim()).unwrap()
+    );
+    assert!(body["class_name"].is_null());
+}
+
+#[test]
+fn mcp_recipe_templates_matches_the_cli() {
+    assert_schema(
+        "eb_recipe_templates",
+        &[],
+        &[
+            ("name", "string"),
+            ("version", "string"),
+            ("export", "boolean"),
+        ],
+    );
+    let exported = cli_stdout(&["recipe", "templates", "--export"]);
+    let body = mcp_tool(111, "eb_recipe_templates", json!({"export": true}));
+    assert_eq!(body["text"], exported);
+    assert_eq!(
+        body["document"],
+        serde_json::from_str::<serde_json::Value>(exported.trim()).unwrap()
+    );
+
+    let resolved = cli_stdout(&[
+        "recipe",
+        "templates",
+        "--name",
+        "zlib",
+        "--version",
+        "1.3.1",
+    ]);
+    let body = mcp_tool(
+        112,
+        "eb_recipe_templates",
+        json!({"name": "zlib", "version": "1.3.1"}),
+    );
+    assert_eq!(body["text"], resolved);
+    assert_eq!(
+        body["document"],
+        serde_json::from_str::<serde_json::Value>(resolved.trim()).unwrap()
+    );
+    assert!(resolved.contains("\"arch\""));
+    assert!(resolved.contains("\"version_major\""));
+
+    let cli = cli_error(&["recipe", "templates"]);
+    let mcp = mcp_error_text(113, "eb_recipe_templates", json!({}));
+    assert_eq!(mcp, cli);
+    assert!(mcp.contains("--name, or --export"), "{mcp}");
+}
+
+#[test]
+fn mcp_recipe_hierarchy_matches_the_cli() {
+    assert_schema("eb_recipe_hierarchy", &[], &[("export", "boolean")]);
+    let plain = cli_stdout(&["recipe", "hierarchy"]);
+    let exported = cli_stdout(&["recipe", "hierarchy", "--export"]);
+    assert_ne!(plain, exported);
+    assert!(plain.contains("\"generations\""), "{plain}");
+    assert!(!plain.contains("\"synthetic\""), "{plain}");
+    assert!(exported.contains("\"synthetic\""), "{exported}");
+    let body = mcp_tool(121, "eb_recipe_hierarchy", json!({}));
+    let flagged = mcp_tool(122, "eb_recipe_hierarchy", json!({"export": true}));
+    assert_eq!(body["text"], plain);
+    assert_eq!(flagged["text"], exported);
+    assert_ne!(body["document"], flagged["document"]);
+    assert_eq!(
+        body["document"],
+        serde_json::from_str::<serde_json::Value>(plain.trim()).unwrap()
+    );
+}
+
+#[test]
+fn mcp_stack_order_matches_the_cli() {
+    assert_schema(
+        "eb_stack_order",
+        &["easyconfigs", "root"],
+        &[
+            ("easyconfigs", "array"),
+            ("root", "array"),
+            ("out", "string"),
+            ("oldest", "boolean"),
+            ("easystack_out", "string"),
+            ("hashes_out", "string"),
+            ("filter_deps", "array"),
+        ],
+    );
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let trees = root.join("fixtures/gromacs_2025_to_next/easyconfigs");
+    let trees = trees.to_str().expect("utf8");
+    let temp = tempfile::tempdir().expect("temp");
+    let cli_order = temp.path().join("cli-order.txt");
+    let cli_stack = temp.path().join("cli-stack.yml");
+    let cli_hashes = temp.path().join("cli-hashes.txt");
+    let mcp_order = temp.path().join("mcp-order.txt");
+    let mcp_stack = temp.path().join("mcp-stack.yml");
+    let mcp_hashes = temp.path().join("mcp-hashes.txt");
+    let stdout = cli_stdout(&[
+        "stack",
+        "order",
+        "--easyconfigs",
+        trees,
+        "--root",
+        "GROMACS",
+        "--root",
+        "OpenBLAS==0.3.27",
+        "--out",
+        cli_order.to_str().unwrap(),
+        "--easystack-out",
+        cli_stack.to_str().unwrap(),
+        "--hashes-out",
+        cli_hashes.to_str().unwrap(),
+    ]);
+    let body = mcp_tool(
+        131,
+        "eb_stack_order",
+        json!({
+            "easyconfigs": [trees],
+            "root": ["GROMACS", "OpenBLAS==0.3.27"],
+            "out": mcp_order,
+            "easystack_out": mcp_stack,
+            "hashes_out": mcp_hashes,
+        }),
+    );
+    let cli_norm = swap_paths(&stdout, &cli_hashes, "HASHES");
+    let cli_norm = swap_paths(&cli_norm, &cli_stack, "EASY");
+    let cli_norm = swap_paths(&cli_norm, &cli_order, "ORDER");
+    let mcp_text = body["text"].as_str().unwrap_or("");
+    let mcp_norm = swap_paths(mcp_text, &mcp_hashes, "HASHES");
+    let mcp_norm = swap_paths(&mcp_norm, &mcp_stack, "EASY");
+    let mcp_norm = swap_paths(&mcp_norm, &mcp_order, "ORDER");
+    assert_eq!(mcp_norm, cli_norm);
+    assert_eq!(body["builds"], 5);
+    assert_eq!(
+        std::fs::read(&cli_order).unwrap(),
+        std::fs::read(&mcp_order).unwrap()
+    );
+    assert_eq!(
+        std::fs::read(&cli_stack).unwrap(),
+        std::fs::read(&mcp_stack).unwrap()
+    );
+    assert_eq!(
+        std::fs::read(&cli_hashes).unwrap(),
+        std::fs::read(&mcp_hashes).unwrap()
+    );
+    assert!(stdout.contains("builds=5"));
+    assert!(stdout.contains("modules=5"));
+    assert!(stdout.contains("incomplete=0"));
+    assert!(!stdout.contains("multiple builds"));
+
+    let cli_old = temp.path().join("cli-oldest.txt");
+    let mcp_old = temp.path().join("mcp-oldest.txt");
+    let old_stdout = cli_stdout(&[
+        "stack",
+        "order",
+        "--easyconfigs",
+        trees,
+        "--root",
+        "GROMACS",
+        "--root",
+        "OpenBLAS==0.3.27",
+        "--oldest",
+        "--out",
+        cli_old.to_str().unwrap(),
+    ]);
+    let old = mcp_tool(
+        132,
+        "eb_stack_order",
+        json!({
+            "easyconfigs": [trees],
+            "root": ["GROMACS", "OpenBLAS==0.3.27"],
+            "oldest": true,
+            "out": mcp_old,
+        }),
+    );
+    assert_eq!(
+        swap_paths(old["text"].as_str().unwrap_or(""), &mcp_old, "ORDER"),
+        swap_paths(&old_stdout, &cli_old, "ORDER")
+    );
+    assert_eq!(
+        std::fs::read(&cli_old).unwrap(),
+        std::fs::read(&mcp_old).unwrap()
+    );
+    let oldest_builds = old_stdout
+        .lines()
+        .rev()
+        .find_map(|line| line.rsplit(" builds=").next())
+        .expect("builds")
+        .trim()
+        .parse::<u64>()
+        .expect("builds count");
+    assert_eq!(old["builds"], oldest_builds);
+    assert!(oldest_builds >= 5, "{old_stdout}");
+
+    let cli_filtered = temp.path().join("cli-filtered.txt");
+    let mcp_filtered = temp.path().join("mcp-filtered.txt");
+    let filtered_stdout = cli_stdout(&[
+        "stack",
+        "order",
+        "--easyconfigs",
+        trees,
+        "--root",
+        "GROMACS",
+        "--filter-deps",
+        "OpenBLAS",
+        "--out",
+        cli_filtered.to_str().unwrap(),
+    ]);
+    let filtered = mcp_tool(
+        134,
+        "eb_stack_order",
+        json!({
+            "easyconfigs": [trees],
+            "root": ["GROMACS"],
+            "filter_deps": ["OpenBLAS"],
+            "out": mcp_filtered,
+        }),
+    );
+    assert_eq!(
+        swap_paths(
+            filtered["text"].as_str().unwrap_or(""),
+            &mcp_filtered,
+            "ORDER"
+        ),
+        swap_paths(&filtered_stdout, &cli_filtered, "ORDER")
+    );
+    assert_eq!(
+        std::fs::read(&cli_filtered).unwrap(),
+        std::fs::read(&mcp_filtered).unwrap()
+    );
+    let filtered_text = std::fs::read_to_string(&mcp_filtered).unwrap();
+    assert!(!filtered_text.contains("OpenBLAS-"), "{filtered_text}");
+    assert!(filtered_text.contains("GROMACS-"), "{filtered_text}");
+
+    let missing = mcp_error_text(
+        133,
+        "eb_stack_order",
+        json!({"easyconfigs": [trees], "root": []}),
+    );
+    assert_eq!(missing, "argument root requires at least one value");
+}
+
+#[test]
+fn mcp_stack_easystack_matches_the_cli() {
+    assert_schema(
+        "eb_stack_easystack",
+        &["lock"],
+        &[("lock", "string"), ("out", "string"), ("option", "array")],
+    );
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let lock = root.join("fixtures/gromacs_2025_to_next/expected_prefer_newer.lock.json");
+    let lock = lock.to_str().expect("utf8");
+    let temp = tempfile::tempdir().expect("temp");
+    let cli_out = temp.path().join("cli.yml");
+    let mcp_out = temp.path().join("mcp.yml");
+    let option = "FFTW-3.3.10-foss-2025b.eb:from-pr=24804";
+    let stdout = cli_stdout(&[
+        "stack",
+        "easystack",
+        "--lock",
+        lock,
+        "--out",
+        cli_out.to_str().unwrap(),
+        "--option",
+        option,
+    ]);
+    let body = mcp_tool(
+        141,
+        "eb_stack_easystack",
+        json!({"lock": lock, "out": mcp_out, "option": [option]}),
+    );
+    assert_eq!(
+        swap_paths(body["text"].as_str().unwrap_or(""), &mcp_out, "OUT"),
+        swap_paths(&stdout, &cli_out, "OUT")
+    );
+    assert_eq!(body["entries"], 5);
+    assert_eq!(body["packages"], 5);
+    let cli_yaml = std::fs::read(&cli_out).unwrap();
+    let mcp_yaml = std::fs::read(&mcp_out).unwrap();
+    assert_eq!(cli_yaml, mcp_yaml);
+    let yaml = String::from_utf8(mcp_yaml).unwrap();
+    assert!(yaml.contains("from-pr: 24804"), "{yaml}");
+
+    let bad = temp.path().join("bad.yml");
+    let cli = cli_error(&[
+        "stack",
+        "easystack",
+        "--lock",
+        lock,
+        "--out",
+        bad.to_str().unwrap(),
+        "--option",
+        "nope",
+    ]);
+    let mcp = mcp_error_text(
+        142,
+        "eb_stack_easystack",
+        json!({"lock": lock, "out": bad, "option": ["nope"]}),
+    );
+    assert_eq!(mcp, cli);
+    assert!(
+        mcp.contains("--option wants <file.eb>:<option>=<value>, got nope"),
+        "{mcp}"
+    );
+}
+
+#[test]
+fn mcp_stack_sections_matches_the_cli() {
+    assert_schema(
+        "eb_stack_sections",
+        &["list", "from", "out"],
+        &[
+            ("list", "string"),
+            ("from", "string"),
+            ("out", "string"),
+            ("unfiled", "string"),
+        ],
+    );
+    let temp = tempfile::tempdir().expect("temp");
+    let previous = temp.path().join("previous.list");
+    std::fs::write(
+        &previous,
+        "#### MPI ####\n# OpenMPI-4.1.5-foss-2025a.eb\n#### Chemistry ####\nGROMACS-2024.1-foss-2025a.eb\n",
+    )
+    .unwrap();
+    let list = temp.path().join("next.list");
+    std::fs::write(
+        &list,
+        "# next generation\n# GROMACS-2025.0-foss-2025b.eb\n# OpenMPI-5.0.10-GCC-15.2.0.eb --hooks=/sw/h.py\n# CP2K-2026.1-foss-2025b.eb\n",
+    )
+    .unwrap();
+    let cli_out = temp.path().join("cli.list");
+    let mcp_out = temp.path().join("mcp.list");
+    let stdout = cli_stdout(&[
+        "stack",
+        "sections",
+        list.to_str().unwrap(),
+        "--from",
+        previous.to_str().unwrap(),
+        "--out",
+        cli_out.to_str().unwrap(),
+    ]);
+    let body = mcp_tool(
+        151,
+        "eb_stack_sections",
+        json!({"list": list, "from": previous, "out": mcp_out}),
+    );
+    assert_eq!(
+        swap_paths(body["text"].as_str().unwrap_or(""), &mcp_out, "OUT"),
+        swap_paths(&stdout, &cli_out, "OUT")
+    );
+    assert_eq!(body["sections"], 3);
+    assert_eq!(body["of"], 3);
+    let grouped = std::fs::read(&cli_out).unwrap();
+    assert_eq!(grouped, std::fs::read(&mcp_out).unwrap());
+    assert_eq!(
+        String::from_utf8(grouped).unwrap(),
+        "# next generation\n\n#### MPI ####\n# OpenMPI-5.0.10-GCC-15.2.0.eb --hooks=/sw/h.py\n\n#### Chemistry ####\n# GROMACS-2025.0-foss-2025b.eb\n\n#### New in this generation ####\n# CP2K-2026.1-foss-2025b.eb\n"
+    );
+
+    let cli_later = temp.path().join("cli-later.list");
+    let mcp_later = temp.path().join("mcp-later.list");
+    let later = cli_stdout(&[
+        "stack",
+        "sections",
+        list.to_str().unwrap(),
+        "--from",
+        previous.to_str().unwrap(),
+        "--unfiled",
+        "Later",
+        "--out",
+        cli_later.to_str().unwrap(),
+    ]);
+    let body = mcp_tool(
+        152,
+        "eb_stack_sections",
+        json!({
+            "list": list,
+            "from": previous,
+            "out": mcp_later,
+            "unfiled": "Later",
+        }),
+    );
+    assert_eq!(
+        swap_paths(body["text"].as_str().unwrap_or(""), &mcp_later, "OUT"),
+        swap_paths(&later, &cli_later, "OUT")
+    );
+    assert_eq!(
+        std::fs::read(&cli_later).unwrap(),
+        std::fs::read(&mcp_later).unwrap()
+    );
+    assert!(std::fs::read_to_string(&mcp_later)
+        .unwrap()
+        .contains("#### Later ####"));
+}
+
+#[test]
+fn mcp_repro_summary_matches_the_cli() {
+    use eb_stack::{write_case_score, ReproCaseScore, ReproRatchet, ReproScore};
+    assert_schema(
+        "eb_repro_summary",
+        &["scores"],
+        &[
+            ("scores", "string"),
+            ("ratchet", "string"),
+            ("json", "boolean"),
+        ],
+    );
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ratchet_path = root.join("tests/repro_ratchet.json");
+    let ratchet = ReproRatchet::read(&ratchet_path).expect("ratchet");
+    let scores = tempfile::tempdir().expect("scores");
+    for (case, count) in &ratchet.cases {
+        let allowance = (0..*count).map(|index| format!("line {index}")).collect();
+        write_case_score(
+            scores.path(),
+            &ReproCaseScore {
+                case: case.clone(),
+                pull_request: None,
+                source: "source.eb".into(),
+                target: "target.eb".into(),
+                score: ReproScore::Exact,
+                allowance,
+                stale_allowance: Vec::new(),
+                residual_lines: 0,
+            },
+        )
+        .expect("seed score");
+    }
+    let scores_arg = scores.path().to_str().unwrap();
+    let ratchet_arg = ratchet_path.to_str().unwrap();
+    let table = cli_stdout(&["repro", "summary", "--scores", scores_arg]);
+    let body = mcp_tool(161, "eb_repro_summary", json!({"scores": scores_arg}));
+    assert_eq!(body["text"], table);
+
+    let held = cli_stdout(&[
+        "repro",
+        "summary",
+        "--scores",
+        scores_arg,
+        "--ratchet",
+        ratchet_arg,
+    ]);
+    let body = mcp_tool(
+        162,
+        "eb_repro_summary",
+        json!({"scores": scores_arg, "ratchet": ratchet_arg}),
+    );
+    assert_eq!(body["text"], held);
+    assert!(held.contains("ratchet:"));
+    assert!(held.contains("cases hold"));
+
+    let as_json = cli_stdout(&["repro", "summary", "--scores", scores_arg, "--json"]);
+    let body = mcp_tool(
+        163,
+        "eb_repro_summary",
+        json!({"scores": scores_arg, "json": true}),
+    );
+    assert_eq!(body["text"], as_json);
+
+    let pair = tempfile::tempdir().expect("pair");
+    let seed = |case: &str, allowance: Vec<String>, score: ReproScore| {
+        write_case_score(
+            pair.path(),
+            &ReproCaseScore {
+                case: case.into(),
+                pull_request: None,
+                source: "source.eb".into(),
+                target: "target.eb".into(),
+                score,
+                allowance,
+                stale_allowance: Vec::new(),
+                residual_lines: 0,
+            },
+        )
+        .expect("seed");
+    };
+    seed(
+        "reproduces_gromacs",
+        vec!["    ('pybind11', '2.12.0'),".into()],
+        ReproScore::Exact,
+    );
+    seed("reproduces_scafacos", Vec::new(), ReproScore::Semantic);
+    let ratchet_dir = tempfile::tempdir().expect("ratchet");
+    let low = ratchet_dir.path().join("low.json");
+    std::fs::write(
+        &low,
+        r#"{"note":"test","cases":{"reproduces_gromacs":0,"reproduces_scafacos":0},"total":0}"#,
+    )
+    .unwrap();
+    let failed = eb_output(&[
+        "repro",
+        "summary",
+        "--scores",
+        pair.path().to_str().unwrap(),
+        "--ratchet",
+        low.to_str().unwrap(),
+    ]);
+    assert_eq!(failed.status.code(), Some(1));
+    let cli_out = String::from_utf8(failed.stdout).unwrap();
+    let cli_err = String::from_utf8(failed.stderr).unwrap();
+    let mcp = mcp_error_text(
+        164,
+        "eb_repro_summary",
+        json!({"scores": pair.path(), "ratchet": low}),
+    );
+    assert!(
+        cli_out.contains("| reproduces_gromacs | - | EXACT | 1 | 0 |"),
+        "{cli_out}"
+    );
+    for text in [&cli_err, &mcp] {
+        assert!(
+            text.contains("allowance grew to 1, ratchet records 0"),
+            "{text}"
+        );
+        assert!(text.contains("1 ratchet violation"), "{text}");
+        assert!(text.contains("ratchet:"), "{text}");
+    }
+}
+
+#[test]
+fn every_cli_subcommand_has_an_mcp_tool() {
+    let mapped = [
+        ("eb_package_inspect", &["package", "inspect"][..]),
+        ("eb_package_plan", &["package", "plan"]),
+        ("eb_package_bump", &["package", "bump"]),
+        ("eb_recipe_easyblock", &["recipe", "easyblock"]),
+        ("eb_recipe_templates", &["recipe", "templates"]),
+        ("eb_recipe_hierarchy", &["recipe", "hierarchy"]),
+        ("eb_recipe_check", &["recipe", "check"]),
+        ("eb_recipe_lint", &["recipe", "lint"]),
+        ("eb_recipe_format", &["recipe", "format"]),
+        ("eb_stack_solve", &["stack", "solve"]),
+        ("eb_stack_sbom", &["stack", "sbom"]),
+        ("eb_stack_order", &["stack", "order"]),
+        ("eb_stack_easystack", &["stack", "easystack"]),
+        ("eb_stack_sections", &["stack", "sections"]),
+        ("eb_target_list", &["target", "list"]),
+        ("eb_target_doctor", &["target", "doctor"]),
+        ("eb_campaign_run", &["campaign", "run"]),
+        ("eb_campaign_status", &["campaign", "status"]),
+        (
+            "eb_campaign_finding_claim",
+            &["campaign", "finding", "claim"],
+        ),
+        (
+            "eb_campaign_finding_resolve",
+            &["campaign", "finding", "resolve"],
+        ),
+        ("eb_repro_summary", &["repro", "summary"]),
+        ("eb_pr_overlap", &["pr-overlap"]),
+        ("eb_rebuild_set", &["rebuild-set"]),
+        ("eb_component_reach", &["component-reach"]),
+        ("eb_easyblock_reach", &["easyblock-reach"]),
+    ];
+    let listed = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {}
+    }))
+    .expect("tools/list");
+    let names = listed["result"]["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect::<Vec<_>>();
+    let leaves = cli_leaves();
+    // `mcp` is the server that publishes this catalog.
+    assert!(
+        leaves.iter().any(|path| path.as_slice() == ["mcp"]),
+        "help did not list mcp: {leaves:?}"
+    );
+    for (tool, path) in mapped {
+        let rendered = path.join(" ");
+        assert!(
+            leaves.iter().any(|leaf| {
+                leaf.len() == path.len() && leaf.iter().zip(path.iter()).all(|(a, b)| a == b)
+            }),
+            "mapped path {rendered} is not a CLI subcommand"
+        );
+        let derived = format!("eb_{}", path.join("_").replace('-', "_"));
+        assert_eq!(tool, derived, "{rendered}");
+        assert!(
+            names.contains(&tool),
+            "CLI subcommand {rendered} has no MCP tool"
+        );
+    }
+    for leaf in &leaves {
+        if leaf.as_slice() == ["mcp"] {
+            continue;
+        }
+        let rendered = leaf.join(" ");
+        let listed = mapped.iter().any(|(_, path)| {
+            leaf.len() == path.len() && leaf.iter().zip(path.iter()).all(|(a, b)| a == b)
+        });
+        assert!(listed, "CLI subcommand {rendered} has no MCP tool");
+    }
 }

@@ -324,10 +324,17 @@ fn mcp_stdio_catalog_lists_the_overlap_and_reach_tools() {
         "eb_component_reach",
         "eb_easyblock_reach",
         "eb_stack_sbom",
+        "eb_stack_order",
+        "eb_stack_easystack",
+        "eb_stack_sections",
+        "eb_recipe_easyblock",
+        "eb_recipe_templates",
+        "eb_recipe_hierarchy",
+        "eb_repro_summary",
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 30, "{names:?}");
+    assert_eq!(names.len(), 37, "{names:?}");
 }
 
 fn software_layer_prs() -> Vec<PrInput> {

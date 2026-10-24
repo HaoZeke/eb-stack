@@ -317,6 +317,12 @@ All notable changes to this project are documented here.
   every week, on a push that changes the pinned tree list in that
   script, and by hand.
 
+- `eb_stack_order`, `eb_stack_easystack`, `eb_stack_sections`,
+  `eb_repro_summary`, `eb_recipe_easyblock`, `eb_recipe_templates`, and
+  `eb_recipe_hierarchy` call the same runners as the CLI commands. Each
+  tool's schema lists that command's flags. A test fails when a CLI
+  subcommand has no MCP tool.
+
 - `eb_pr_overlap`, `eb_rebuild_set`, `eb_component_reach`, and
   `eb_easyblock_reach` call the same runners as the CLI commands.
   `eb_pr_overlap` takes `kind` `software-layer` or `easyconfigs`,
