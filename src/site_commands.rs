@@ -334,7 +334,7 @@ pub struct EasyblockReachRequest {
     pub file: Vec<PathBuf>,
     /// `git diff --name-only` range, for example `base..HEAD`.
     pub range: Option<String>,
-    /// Pull request number, fetched as `refs/pull/<n>/head`.
+    /// Pull request number, fetched as `refs/pull/N/head`.
     pub pr: Option<u64>,
     /// Remote to fetch the pull request from.
     pub remote: String,

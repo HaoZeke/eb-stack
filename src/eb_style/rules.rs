@@ -1133,8 +1133,8 @@ static CD_INSTALLDIR: LazyLock<Regex> = LazyLock::new(|| {
 /// polute them with files" (framework `EasyBlock._sanity_check_step`). With
 /// `--sanity-check-only` or `--module-only` every other step is skipped, so
 /// `%(builddir)s` and `%(start_dir)s` do not exist, and after a normal build
-/// the build directory is cleaned up. A command that `cd`s into the
-/// installation directory to run something writes its output there. Both
+/// the build directory is cleaned up. A command that changes into the
+/// installation directory with `cd` writes its output there. Both
 /// are warnings; on a review line or a line you edited they block clean.
 fn sanity_command_dirs(
     text: &str,

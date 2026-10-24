@@ -1059,7 +1059,7 @@ struct EasyblockReachArgs {
     /// Commit range passed to `git diff --name-only`, for example `base..HEAD`.
     #[arg(long)]
     range: Option<String>,
-    /// Pull request number. Fetched as `refs/pull/<n>/head`.
+    /// Pull request number. Fetched as `refs/pull/N/head`.
     #[arg(long)]
     pr: Option<u64>,
     /// Remote to fetch the pull request from.

@@ -33,7 +33,8 @@ All notable changes to this project are documented here.
   (`foss-2025b`), not `baseline-from-easystack-foss-2025b`.
 - Recipe lint modules live under `src/eb_style/` so `sphinx-rustdocgen`
   can open them. A `#[path]` attribute is joined onto the parent file
-  and the generator then fails to read the module.
+  and the generator then fails to read the module. A pull-request ref
+  is written `refs/pull/N/head`.
 - `eb-stack` prints a failure as `error:` and the cause chain. A missing
   file or a rejected value no longer appends a stack backtrace.
 - A rejected flag or flag combination exits 2. A missing file, a parse

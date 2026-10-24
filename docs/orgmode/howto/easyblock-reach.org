@@ -44,7 +44,7 @@ eb-stack easyblock-reach \
 #+end_src
 
 ~--range~ is passed to ~git diff --name-only~. ~--pr~ fetches
-~refs/pull/<n>/head~ and diffs it against the merge-base with ~--base~
+~refs/pull/N/head~ and diffs it against the merge-base with ~--base~
 (default ~develop~). ~--repo~ is the clone ~git~ reads; it defaults to the
 first ~--easyblocks~ path. The class hierarchy is the working tree. A
 deleted file is read from the base so its class is still seen.
