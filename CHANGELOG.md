@@ -18,6 +18,8 @@ All notable changes to this project are documented here.
 - Campaign finding summaries name the failure class and the numeric exit
   status. A command that exits 1 reads as exit 1, and a probe that never
   starts reads as having no exit status.
+- `eb_package_plan` reads `package_index`, and `eb_package_bump` honors
+  `strict_patches`. Both flags already existed on the command line.
 - `eb-stack easyblock-reach` keeps an `easyblock` key on a `components` or
   `exts_list` assignment the parser had to skip. GFE's component list is a
   comprehension plus a tuple, and that tuple names `CMakeMake`.

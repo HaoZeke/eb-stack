@@ -150,6 +150,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("toolchain_name", "string"),
                 ("package_configs", "array"),
                 ("source_checksums", "array"),
+                ("package_index", "string"),
                 ("package_catalogs", "array"),
                 ("package_sources", "array"),
                 ("easybuild_sources", "array"),
@@ -178,6 +179,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("package_configs", "array"),
                 ("emit_easyblock", "boolean"),
                 ("fetch_checksums", "boolean"),
+                ("strict_patches", "boolean"),
             ],
         ),
         tool_with_optional(
@@ -586,7 +588,7 @@ fn package_plan(arguments: &Value) -> Result<Value, String> {
         toolchain: toolchain(arguments)?,
         source_checksums: string_array(arguments, "source_checksums")?,
         package_layers: package_layers(arguments)?,
-        package_index: Default::default(),
+        package_index: package_index(arguments)?,
         easyconfig_roots: path_array(arguments, "easyconfigs")?,
         stack_policy,
     };
@@ -725,7 +727,7 @@ fn package_bump(arguments: &Value) -> Result<Value, String> {
         hierarchy_fixture: optional_path(arguments, "hierarchy_fixture"),
         overrides: string_map(arguments, "dependencies")?,
         stack_policy,
-        strict_patches: false,
+        strict_patches: optional_bool(arguments, "strict_patches"),
         package_layers: package_layers(arguments)?,
     };
     let (bundle, fetched) = if optional_bool(arguments, "fetch_checksums") {
@@ -2796,6 +2798,17 @@ fn required_string(arguments: &Value, name: &str) -> Result<String, String> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| format!("missing string argument {name}"))
+}
+
+fn package_index(
+    arguments: &Value,
+) -> Result<std::collections::BTreeMap<String, crate::ecosystem::IndexEntry>, String> {
+    let Some(path) = optional_path(arguments, "package_index") else {
+        return Ok(Default::default());
+    };
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("read package index {}: {error}", path.display()))?;
+    Ok(crate::parse_package_index(&text))
 }
 
 fn optional_bool(arguments: &Value, name: &str) -> bool {

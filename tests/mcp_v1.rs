@@ -92,6 +92,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "package_configs",
         "emit_easyblock",
         "fetch_checksums",
+        "strict_patches",
     ] {
         assert!(
             package_bump["inputSchema"]["properties"]
@@ -1583,6 +1584,98 @@ fn mcp_schemas_match_the_handlers_for_bump_lint_and_resolve() {
 }
 
 #[test]
+fn mcp_bump_strict_patches_rejects_an_undecided_patch() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("Gamma-1.0-GCCcore-14.3.0.eb");
+    let robot = temp.path().join("robot");
+    std::fs::create_dir_all(&robot).expect("robot");
+    std::fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'Gamma'\nversion = '1.0'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+         toolchain = {'name': 'GCCcore', 'version': '14.3.0'}\n\
+         sources = ['gamma-1.0.tar.gz']\n\
+         checksums = ['cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc']\n\
+         patches = ['Gamma-1.0_fix.patch']\nmoduleclass = 'tools'\n",
+    )
+    .expect("source");
+    std::fs::write(
+        robot.join("Unrelated-9.9-GCCcore-15.2.0.eb"),
+        "easyblock = 'ConfigureMake'\nname = 'Unrelated'\nversion = '9.9'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Filler'\n\
+         toolchain = {'name': 'GCCcore', 'version': '15.2.0'}\n\
+         sources = []\nchecksums = []\nmoduleclass = 'tools'\n",
+    )
+    .expect("filler");
+    let response = call(
+        71,
+        "eb_package_bump",
+        json!({
+            "source": source,
+            "toolchain_name": "GCCcore",
+            "toolchain_version": "15.2.0",
+            "version": "2.0",
+            "easyconfigs": [robot],
+            "strict_patches": true,
+            "out_dir": temp.path().join("out"),
+        }),
+    );
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        text.contains("Gamma-1.0_fix.patch"),
+        "strict_patches must fail the bump: {text}"
+    );
+}
+
+#[test]
+fn mcp_plan_reads_versions_from_a_package_index() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let temp = tempfile::tempdir().expect("tempdir");
+    let index = temp.path().join("PACKAGES");
+    std::fs::write(
+        &index,
+        "Package: processx\nVersion: 3.8.4\nMD5sum: 1111111111111111111111111111abcd\n\n\
+         Package: rmarkdown\nVersion: 2.27\nMD5sum: 2222222222222222222222222222abcd\n",
+    )
+    .expect("index");
+    let stack = temp.path().join("stack.toml");
+    std::fs::write(
+        &stack,
+        "schema_version = 1\nname = \"test\"\n[toolchain]\nname = \"foss\"\nversion = \"2026.1\"\n",
+    )
+    .expect("stack");
+    let output = temp.path().join("out");
+    let response = call(
+        72,
+        "eb_package_plan",
+        json!({
+            "source": root.join("fixtures/foreign_ingest/cran_unpinned/cran.json"),
+            "format": "cran",
+            "toolchain_name": "foss",
+            "toolchain_version": "2026.1",
+            "source_checksums": ["dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"],
+            "easyconfigs": [root.join("fixtures/foreign_ingest/cran_bundle/robot")],
+            "stack_policy": stack,
+            "package_index": index,
+            "out_dir": output,
+        }),
+    );
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let easyconfigs = response["result"]["structuredContent"]["easyconfigs"]
+        .as_array()
+        .expect("easyconfigs");
+    assert!(!easyconfigs.is_empty(), "{response}");
+    let recipe = std::fs::read_to_string(easyconfigs[0].as_str().expect("path")).expect("recipe");
+    assert!(
+        recipe.contains("('processx', '3.8.4'"),
+        "the index version must reach the recipe:\n{recipe}"
+    );
+}
+
+#[test]
 fn mcp_module_lint_checks_an_easyblock_with_the_repository_line_length() {
     let temp = tempfile::tempdir().expect("tempdir");
     std::fs::write(
@@ -1985,11 +2078,6 @@ fn mcp_schemas_cover_cli_flags() {
         ),
         (
             "eb_package_plan",
-            "package-index",
-            "versions come from catalogs and source roots",
-        ),
-        (
-            "eb_package_plan",
             "source-checksum",
             "repeatable flag, schema key source_checksums",
         ),
@@ -2022,11 +2110,6 @@ fn mcp_schemas_cover_cli_flags() {
             "eb_package_bump",
             "package-config",
             "repeatable flag, schema key package_configs",
-        ),
-        (
-            "eb_package_bump",
-            "strict-patches",
-            "bump keeps strict_patches off",
         ),
         (
             "eb_recipe_check",
