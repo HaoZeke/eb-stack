@@ -1,15 +1,17 @@
 #+TITLE: Command-line reference
 #+OPTIONS: toc:t num:nil author:nil
 
-~eb-stack~ has five namespaced command groups, ~easyblock-reach~,
-~pr-overlap~, ~rebuild-set~, ~component-reach~, and an MCP server. All paths
-written by package commands are deterministic bundle artifacts.
+~eb-stack~ has six namespaced command groups (~package~, ~recipe~,
+~stack~, ~target~, ~campaign~, ~repro~), four reports (~easyblock-reach~,
+~pr-overlap~, ~rebuild-set~, ~component-reach~), and a Model Context Protocol (MCP) server.
+~--version~ prints the crate version. All paths written by package commands
+are deterministic bundle artifacts.
 
 * Command map
 
 | Command | Purpose |
 |-
-| ~package inspect~ | Parse conda-forge, Spack, PyPI, CRAN, Cargo, LuaRocks, or Raku into a manifest and planned SBOM |
+| ~package inspect~ | Parse conda-forge, Spack, PyPI, Comprehensive R Archive Network (CRAN), Cargo, LuaRocks, or Raku into a manifest and planned software bill of materials (SBOM) |
 | ~package plan~ | Materialize profiles, solve with Resolvo, and emit recipes |
 | ~package bump~ | Retarget an EasyBuild recipe and write the same canonical bundle |
 | ~recipe easyblock~ | Print the easyblock class name EasyBuild derives for a software name |
@@ -18,6 +20,10 @@ written by package commands are deterministic bundle artifacts.
 | ~recipe check~ | Validate metadata and robot dependency availability |
 | ~recipe lint~ / ~recipe format~ | Report upstream CI, test-suite, and review findings (E999, F541, W605, W291, E501, E2xx, ~EB_*~; ~eb --check-contrib~ merged when ~eb~ is installed) or mechanically wrap E501 lines |
 | ~stack solve~ / ~stack sbom~ | Solve a multi-root stack or emit SBOM from a lock |
+| ~stack order~ | Sequence every pinned build a set of roots needs |
+| ~stack easystack~ | Write a lock as the YAML ~eb --easystack~ reads |
+| ~stack sections~ | Regroup a Jenkins build list under a previous list's headers |
+| ~repro summary~ | Print a reproduction scoreboard from collected case scores |
 | ~pr-overlap~ | Close open pull-request easystack additions against an installed stack and report shared builds |
 | ~rebuild-set~ | Classify the installed reverse dependents of easyconfigs patched in place |
 | ~component-reach~ | List who carries a component in one generation and close their rebuild set |
@@ -136,6 +142,7 @@ eb-stack package bump \
   [--package-config PACKAGE.toml]... \
   [--strict-patches] \
   [--emit-easyblock] \
+  [--fetch-checksums] \
   --out-dir BUNDLE
 #+end_src
 
@@ -151,6 +158,13 @@ the source recipe is parsed, as it does for ~package plan~. ~--strict-patches~
 fails the bump when a patch's fate across a version change cannot be decided
 from the tree; without it the patch is carried and a ~patch-decision~ residual
 records the review flag. ~--emit-easyblock~ is the same flag as on ~package plan~.
+~--fetch-checksums~ downloads each ~sources~ entry from the recipe's
+~source_urls~ when the version changed and ~--source-checksum~ was omitted,
+and writes that SHA-256 into the recipe and the SBOM. A git checkout, a
+missing URL, or a failed download stays empty. The attempts are
+~sources.fetch.json~ (one object per source: ~filename~, ~url~, ~sha256~,
+~errors~) and a ~source:fetch~ residual. See
+[[file:formats.org][output formats]].
 
 * Bundle layout
 
@@ -288,6 +302,23 @@ eb-stack stack solve \
   [--stack-diff-out stack.diff.md]
 
 eb-stack stack sbom --lock stack.lock.json [--out stack.cdx.json]
+
+eb-stack stack order \
+  --easyconfigs TREE [--easyconfigs OVERLAY]... \
+  --root NAME [--root NAME==VERSION]... \
+  [--out build-order.txt] \
+  [--oldest] \
+  [--easystack-out order.yml] \
+  [--hashes-out hashes.txt]
+
+eb-stack stack easystack \
+  --lock stack.lock.json \
+  [--out stack.yml] \
+  [--option FILE.eb:OPTION=VALUE]...
+
+eb-stack stack sections \
+  LIST --from PREVIOUS.list --out GROUPED.list \
+  [--unfiled "New in this generation"]
 #+end_src
 
 ~stack sbom~ reads the easyconfigs the lock names. A runtime dependency
@@ -332,6 +363,35 @@ behind. A module whose name or versionsuffix says CUDA gets
 ~--include-systems~ with the ~--jenkins-gpu-systems~ list.
 ~--jenkins-roots-only~ writes one line per root application and leaves the
 dependencies to ~eb --robot~.
+
+~stack order~ keeps every build the recipes pin. A name the generation
+builds twice stays twice, in an order that respects every dependency.
+~stack solve~ picks one version of that name; this command does not.
+~--root~ repeats, and ~name==version~ pins one build. ~--oldest~ takes the
+oldest admissible version of an unpinned requirement. The default is the
+newest. ~--out~ is one easyconfig path per line (default
+~build-order.txt~). ~--easystack-out~ writes that same sequence as an
+easystack. ~--hashes-out~ writes one line per module, ~<sha256>  <module>~,
+a digest of the easyconfig and of the hashes of everything it needs. A
+module whose recipe could not be read is still listed, and the stdout line
+~incomplete=~ counts those. Stdout ends with ~order=<path> builds=<N>~.
+A name with two builds also prints ~multiple builds of <name>:~.
+
+~stack easystack~ writes ~easyconfigs:~ as a YAML list of filenames, in
+lock order. ~--option~ repeats. The option is spelled as on the ~eb~
+command line without its dashes, for example
+~--option CUDA-12.8.0.eb:accept-eula-for=CUDA~. A file with options is a
+mapping; a file without them is a string. Stdout is
+~easystack=<path> entries=<N> of=<packages>~.
+
+Those filenames stay in lock order. ~stack sections~ reads ~LIST~ and
+regroups its entries under the
+~#### Title ####~ headers of ~--from~. Each entry keeps its flags and
+whether it is commented out. Packages no section of ~--from~ names go
+under ~--unfiled~ (default ~New in this generation~), last. The comment
+block before the first entry of ~LIST~ stays on top. Stdout is
+~list=<path> sections=<written> of=<previous+1>~. The ~of~ count is the
+previous list's section count plus the unfiled header.
 
 * ~pr-overlap~
 
@@ -622,6 +682,39 @@ independently.
 
 See [[file:campaigns.org][campaign state and typed findings]] for the serialized
 state, claim ladder, class/disposition table, and repair protocol.
+
+* ~repro summary~
+
+#+begin_src bash
+eb-stack repro summary \
+  --scores DIR \
+  [--ratchet ratchet.json] \
+  [--json]
+#+end_src
+
+Reads every ~*.json~ case score the reproduction suite wrote under
+~--scores~ (the directory ~EB_REPRO_SCORES~ points at when the suite runs)
+and prints the scoreboard table:
+
+#+begin_src text
+| Case | PR | Score | Allowance | Residual |
+|---+---+---+---+---|
+| reproduces_gromacs | - | EXACT | 1 | 0 |
+
+2 cases: 1 EXACT, 1 SEMANTIC, 0 MATERIAL; allowance total 1
+#+end_src
+
+~Score~ is ~EXACT~, ~SEMANTIC~, or ~MATERIAL~. ~Allowance~ is how many
+hand-added lines the case still forgives. ~Residual~ is the raw diff lines
+left after that allowance. A pull request number prints as ~#N~; a case
+with none prints ~-~. ~--json~ prints the case records instead of the
+table: ~case~, ~pull_request~, ~source~, ~target~, ~score~, ~allowance~,
+~stale_allowance~, ~residual_lines~. ~--ratchet~ reads
+~{"note", "cases", "total"}~. ~--ratchet~ exits nonzero when a case's
+allowance disagrees with the committed count, when a case is missing from
+the file, or when ~total~ is not the sum of ~cases~. A matching run also prints
+~ratchet: <N> cases hold at <total>~. An empty ~--scores~ directory is an
+error. See [[file:../explanation/fidelity.org][reproduction fidelity]].
 
 * ~easyblock-reach~
 

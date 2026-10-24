@@ -190,6 +190,90 @@ solver selection, not a scan of installed software.
   ~eb_stack_sbom~ report how many recipes were read. Empty ~dependsOn~
   arrays may be omitted by cyclonedx-bom serialization.
 
+* Build order (~stack order --out~)
+
+One easyconfig path per line, in dependency order. A generation that
+builds one name twice lists both paths. ~--oldest~ changes which unpinned
+version is chosen; it does not change the file shape.
+
+Stdout names a repeated build as ~multiple builds of <name>: <ver-tc>, ...~
+and ends with ~order=<path> builds=<N>~.
+
+* Input hashes (~--hashes-out~)
+
+One line per module, two spaces between the fields, the same layout as
+~sha256sum~:
+
+#+begin_src text
+0123abcd...  GROMACS-2025.0-foss-2025b
+#+end_src
+
+The digest covers the easyconfig bytes and the hashes of everything that
+module needs (~eb-stack-input-v1~). A recipe that cannot be read still
+gets a line. Stdout reports ~incomplete=~ as how many of those lines are
+not a complete closure.
+
+* Easystack (~stack easystack~, ~--easystack-out~)
+
+YAML with one ~easyconfigs~ list. A filename with no options is a string.
+A filename with ~--option~ values is a mapping:
+
+#+begin_src yaml
+easyconfigs:
+- OpenMPI-5.0.7-GCC-14.2.0.eb
+- CUDA-12.8.0.eb:
+    options:
+      accept-eula-for: CUDA
+#+end_src
+
+~stack order --easystack-out~ writes the build sequence. ~stack easystack~
+writes lock order, which is sorted by package name.
+
+* Jenkins sections (~stack sections~)
+
+The same build-list lines as the input, regrouped under ~#### Title ####~
+headers taken from ~--from~. Commented-out lines stay commented out.
+Packages the previous list does not name go under the ~--unfiled~ header.
+
+* Source fetch (~sources.fetch.json~)
+
+Written by ~package bump --fetch-checksums~ when at least one source was
+considered. A JSON array:
+
+#+begin_src json
+[
+  {
+    "filename": "app-1.1.tar.gz",
+    "url": "https://example.invalid/app-1.1.tar.gz",
+    "sha256": "0123abcd",
+    "errors": []
+  }
+]
+#+end_src
+
+~url~ and ~sha256~ are omitted when there is nothing to report. ~errors~
+is omitted when the download succeeded. The downloaded bytes are not
+stored in this file.
+
+* Reproduction scores (~repro summary~)
+
+~--scores~ is a directory of one ~<case>.json~ per case. ~--json~ prints
+that array. Each object has ~case~, ~pull_request~ (a number or null),
+~source~, ~target~, ~score~ (~EXACT~, ~SEMANTIC~, or ~MATERIAL~),
+~allowance~ (lines forgiven), ~stale_allowance~, and ~residual_lines~.
+A stale entry is ~{"kind": "absent_from_target", "line": "..."}~ or
+~{"kind": "already_emitted", "line": "..."}~.
+
+The table form is fixed:
+
+#+begin_src text
+| Case | PR | Score | Allowance | Residual |
+|---+---+---+---+---|
+#+end_src
+
+~--ratchet~ reads ~note~, ~cases~ (case name to allowance count), and
+~total~. ~total~ has to equal the sum of ~cases~.
+
 * Pull-request build set (~eb-stack pr-overlap~)
 
 One run writes three files. ~prs/<N>.toml~ is the SBOM for pull request ~N~:

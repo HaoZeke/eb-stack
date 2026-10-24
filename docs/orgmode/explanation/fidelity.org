@@ -151,6 +151,12 @@ places each file on one of three rungs:
 | ~SEMANTIC~ | Differs only in ways that cannot change the build. |
 | ~MATERIAL~ | A real difference in what would be built. |
 
+The reproduction rungs are what ~eb-stack repro summary --scores DIR~
+prints from the per-case JSON the suite writes. ~--json~ prints the records. ~--ratchet FILE~
+compares each case's allowance with the committed counts and exits
+nonzero on a disagreement. The columns are case, pull request, score,
+allowance (hand-added lines still forgiven), and residual diff lines.
+
 Two rungs used on the scoreboard have no place in this function, because
 they are decided before any comparison: ~ERROR~ (no file was produced)
 and ~excluded~ (the file was never a scoreable bump, such as a toolchain
@@ -203,8 +209,9 @@ EB_EASYCONFIGS=/path/to/easybuild-easyconfigs/easybuild/easyconfigs \
   candidate and records that outcome. A ~locked~ pin makes incompatibility
   unsatisfiable. Neither mode claims that the candidate builds.
 - *Application-version changes:* source URLs and checksums cannot be inferred
-  safely. Supply ~--source-checksum~; patches and source-layout changes remain
-  visible residual work.
+  from the old recipe. Supply ~--source-checksum~, or ~--fetch-checksums~ to
+  download the artifact the recipe's ~source_urls~ name and hash those bytes.
+  Patches and source-layout changes remain visible residual work.
 - *Maintainer additions:* a source recipe cannot reveal a dependency, patch,
   easyblock change, or configuration rule introduced only in the target
   recipe. Add that authored package knowledge, re-plan, and retain it in the

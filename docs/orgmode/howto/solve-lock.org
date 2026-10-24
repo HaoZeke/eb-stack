@@ -56,8 +56,30 @@ candidate graph.
 eb-stack stack sbom --lock stack.lock.json --out stack.cdx.json
 #+end_src
 
-A lock-only SBOM cannot reconstruct dependency edges and does not invent them.
-Use ~--sbom-out~ during ~stack solve~ when the full candidate graph is available.
+~stack sbom~, the Software Bill of Materials (SBOM) command, reads runtime and build edges, checksums, and source URLs
+back from the easyconfigs the lock names. A dependency counts only when
+that name is also in the lock. A path that cannot be read contributes
+nothing for that component. ~--sbom-out~ during ~stack solve~ writes the
+same document while the candidate graph is still in memory.
+
+* Order every pinned build
+
+~stack solve~ picks one version of each name. ~stack order~ keeps every
+pinned build, and a name can stay twice. ~stack order~ writes the builds
+in dependency order:
+
+#+begin_src bash
+eb-stack stack order \
+  --easyconfigs /path/to/easyconfigs \
+  --root GROMACS --root 'OpenBLAS==0.3.27' \
+  --out build-order.txt \
+  --easystack-out order.yml \
+  --hashes-out hashes.txt
+#+end_src
+
+~--oldest~ selects the oldest admissible version of an unpinned
+requirement. The hash file is one ~<sha256>  <module>~ line per build.
+See [[file:../reference/cli.org][the CLI reference]].
 
 See [[file:../reference/policy.org][the policy reference]] and
 [[file:../reference/formats.org][the format reference]].
