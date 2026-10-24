@@ -1670,7 +1670,7 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             strict,
         } => {
             let recipe_text = std::fs::read_to_string(&recipe)
-                .with_context(|| format!("read {}", recipe.display()))?;
+                .with_context(|| format!("--recipe {}", recipe.display()))?;
             if let Some((line, column, message)) = eb_stack::python_syntax_error(&recipe_text) {
                 bail!(
                     "{}:{line}:{column}: {message}; EasyBuild cannot parse this easyconfig, so fix the syntax before checking it",
@@ -1735,7 +1735,7 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
                 }
             }
             let source_text = std::fs::read_to_string(&recipe)
-                .with_context(|| format!("read {}", recipe.display()))?;
+                .with_context(|| format!("--recipe {}", recipe.display()))?;
             let required = require_configopts
                 .iter()
                 .map(String::as_str)
@@ -1891,10 +1891,11 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
                 return Err(usage("--out requires exactly one recipe path"));
             }
             for (index, path) in paths.iter().enumerate() {
+                std::fs::metadata(path).with_context(|| format!("recipe {}", path.display()))?;
                 let destination = out.as_deref().filter(|_| index == 0);
                 let result = if dry_run {
                     let text = std::fs::read_to_string(path)
-                        .with_context(|| format!("read {}", path.display()))?;
+                        .with_context(|| format!("recipe {}", path.display()))?;
                     format_style(&text)
                 } else {
                     format_style_file(path, destination)?

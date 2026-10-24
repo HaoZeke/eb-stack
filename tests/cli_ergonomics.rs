@@ -347,6 +347,34 @@ fn a_failure_names_the_problem_and_prints_no_backtrace() {
 }
 
 #[test]
+fn a_missing_recipe_names_the_argument_once() {
+    let missing = "/nope.eb";
+    let check = output(&[
+        "recipe",
+        "check",
+        "--recipe",
+        missing,
+        "--easyconfigs",
+        "/nope-tree",
+    ]);
+    let stderr = String::from_utf8(check.stderr).expect("utf8");
+    assert_eq!(check.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("--recipe"), "{stderr}");
+    assert_eq!(stderr.matches(missing).count(), 1, "{stderr}");
+
+    for extra in [Vec::<&str>::new(), vec!["--dry-run"]] {
+        let mut args = vec!["recipe", "format", missing];
+        args.extend(extra);
+        let formatted = output(&args);
+        let stderr = String::from_utf8(formatted.stderr).expect("utf8");
+        assert_eq!(formatted.status.code(), Some(1), "{args:?}\n{stderr}");
+        assert!(stderr.contains("recipe"), "{stderr}");
+        assert_eq!(stderr.matches(missing).count(), 1, "{stderr}");
+        assert!(!stderr.contains("io: read"), "{stderr}");
+    }
+}
+
+#[test]
 fn a_missing_lock_names_the_path_once() {
     let temp = tempfile::tempdir().expect("tempdir");
     let lock = temp.path().join("nope.lock.json");

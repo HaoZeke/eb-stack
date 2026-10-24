@@ -14,6 +14,8 @@ All notable changes to this project are documented here.
 - A closure SBOM keys each component, its checksums and its dependency
   entry by name, version, versionsuffix and toolchain. Two versions of
   one name keep their own edges and hashes.
+- `recipe check --recipe` and `recipe format` name the recipe when
+  the file cannot be read.
 - `recipe check` says a bare dependency tuple does not reach SYSTEM,
   and suggests `('Name', 'version', '', SYSTEM)`, instead of listing
   SYSTEM as a hierarchy member or a generation.

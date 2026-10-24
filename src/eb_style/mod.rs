@@ -308,7 +308,7 @@ fn wholly_indented(text: &str) -> bool {
 /// Format a file in place (or write to `out` if set). Returns the format result.
 pub fn format_style_file(path: &Path, out: Option<&Path>) -> Result<FormatStyleResult, StyleError> {
     let text = std::fs::read_to_string(path)
-        .map_err(|e| StyleError::Io(format!("read {}: {e}", path.display())))?;
+        .map_err(|e| StyleError::Io(format!("recipe {}: {e}", path.display())))?;
     let result = format_style(&text);
     let dest = out.unwrap_or(path);
     if let Some(parent) = dest.parent() {
