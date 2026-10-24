@@ -20,8 +20,7 @@ dependency on the EasyBuild ~R~ module. Packages already listed in
 eb-stack package inspect \
   --source fixtures/foreign_ingest/cran_jsonlite/DESCRIPTION \
   --format cran \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --out-dir /tmp/jsonlite-inspect
 #+end_src
 
@@ -46,8 +45,7 @@ plan prints the closure and does not emit a recipe.
 eb-stack package plan \
   --source fixtures/foreign_ingest/cran_jsonlite/cran.json \
   --format cran \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --easyconfigs fixtures/foreign_ingest/cran_jsonlite/robot \
   --stack-policy examples/stacks/eessi-r-extras.toml \
   --source-checksum bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
@@ -98,8 +96,7 @@ That is what this fixture prints:
 eb-stack package plan \
   --source fixtures/foreign_ingest/cran_unpinned/cran.json \
   --format cran \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --easyconfigs fixtures/foreign_ingest/cran_bundle/robot \
   --stack-policy examples/stacks/eessi-r-extras.toml \
   --source-checksum dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd \
@@ -123,7 +120,7 @@ EOF
 eb-stack package plan \
   --source fixtures/foreign_ingest/cran_unpinned/cran.json \
   --format cran \
-  --toolchain-name foss --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --easyconfigs fixtures/foreign_ingest/cran_bundle/robot \
   --stack-policy examples/stacks/eessi-r-extras.toml \
   --package-index /tmp/PACKAGES \

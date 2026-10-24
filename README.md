@@ -100,8 +100,7 @@ tree:
 eb-stack package inspect \
   --source fixtures/foreign_ingest/conda_eon/recipe.yaml \
   --format conda-forge \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --package-config examples/packages/common.toml \
   --package-config examples/packages/eon.toml \
   --out-dir /tmp/eon-inspect
@@ -135,8 +134,7 @@ The source manual lives in `docs/orgmode/`; the documentation workflow exports R
 ```sh
 eb-stack package bump \
   --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
-  --toolchain-name foss \
-  --toolchain-version 2024a \
+  --toolchain foss/2024a \
   --easyconfigs tests/repro_fixtures/universe_foss_2024a \
   --out-dir /tmp/gromacs-2024a
 ```
@@ -217,8 +215,7 @@ Source the `env.sh` it writes so `$EB_EASYCONFIGS` is the develop
 eb-stack package plan \
   --source fixtures/foreign_ingest/conda_eon/recipe.yaml \
   --format conda-forge \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --package-config examples/packages/common.toml \
   --package-config examples/packages/eon.toml \
   --package-catalog examples/package-catalog/eon.toml \
@@ -276,8 +273,7 @@ Inspect without solving or emitting recipes:
 eb-stack package inspect \
   --source fixtures/foreign_ingest/spack_qmcpack/package.py \
   --format spack \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --package-config examples/packages/common.toml \
   --package-config examples/packages/qmcpack.toml \
   --out-dir /tmp/qmcpack-inspect
@@ -357,7 +353,7 @@ retry supersedes the matching open finding.
 ```sh
 eb-stack stack solve \
   --easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
-  --policy fixtures/gromacs_2025_to_next/policies/prefer_newer.json \
+  --stack-policy fixtures/gromacs_2025_to_next/policies/prefer_newer.json \
   --baseline-easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
   --lock-out stack.lock.json \
   --sbom-out stack.cdx.json \

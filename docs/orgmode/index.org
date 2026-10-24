@@ -220,8 +220,7 @@ eb-stack --version
 eb-stack package inspect \
   --source fixtures/foreign_ingest/conda_eon/recipe.yaml \
   --format conda-forge \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --package-config examples/packages/common.toml \
   --package-config examples/packages/eon.toml \
   --out-dir /tmp/eon-inspect

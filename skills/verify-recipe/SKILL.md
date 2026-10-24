@@ -106,7 +106,7 @@ bound:
 rg -n 'find_package\([A-Za-z0-9_]+ [0-9]' CMakeLists.txt
 rg -n 'requires-python|dependencies' pyproject.toml
 eb-stack package inspect --source path/to/spack/package.py --format spack \
-  --toolchain-version 2025b --out-dir /tmp/foreign   # constraints with provenance
+  --toolchain foss/2025b --out-dir /tmp/foreign   # constraints with provenance
 ```
 
 State the bound and where it came from. "The target generation ships an older

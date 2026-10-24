@@ -58,7 +58,7 @@ fn is_usage(error: &anyhow::Error) -> bool {
     name = "eb-stack",
     version,
     about = "Canonical SBOM, build-manifest, Resolvo, EasyBuild, and campaign workflows",
-    after_long_help = "Exit status is 0 when the command finished, 1 when the work failed, and 2 when the command line was rejected.\n\nA directory of artifacts is --out-dir. A single output file is --out.\n\nExamples:\n  eb-stack package inspect --source recipe.yaml --format conda-forge --toolchain-version 2026.1 --out-dir bundle\n  eb-stack --help"
+    after_long_help = "Exit status is 0 when the command finished, 1 when the work failed, and 2 when the command line was rejected.\n\nA directory of artifacts is --out-dir. A single output file is --out.\n\nExamples:\n  eb-stack package inspect --source recipe.yaml --format conda-forge --toolchain foss/2026.1 --out-dir bundle\n  eb-stack --help"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -69,7 +69,7 @@ struct Cli {
 enum Command {
     /// Parse, solve, and emit package artifacts.
     #[command(
-        after_long_help = "Examples:\n  eb-stack package inspect --source recipe.yaml --format conda-forge --toolchain-version 2026.1 --out-dir bundle"
+        after_long_help = "Examples:\n  eb-stack package inspect --source recipe.yaml --format conda-forge --toolchain foss/2026.1 --out-dir bundle"
     )]
     Package {
         #[command(subcommand)]
@@ -419,17 +419,17 @@ enum ReproCommand {
 enum PackageCommand {
     /// Parse a foreign recipe into a canonical build manifest and planned SBOM.
     #[command(
-        after_long_help = "Examples:\n  eb-stack package inspect --source recipe.yaml --format conda-forge --toolchain-version 2026.1 --out-dir bundle"
+        after_long_help = "Examples:\n  eb-stack package inspect --source recipe.yaml --format conda-forge --toolchain foss/2026.1 --out-dir bundle"
     )]
     Inspect(PackageInspectArgs),
     /// Resolve every declared profile and emit a canonical artifact bundle.
     #[command(
-        after_long_help = "Examples:\n  eb-stack package plan --source recipe.yaml --format conda-forge --toolchain-version 2026.1 --easyconfigs easyconfigs/ --stack-policy stack.toml --out-dir bundle"
+        after_long_help = "Examples:\n  eb-stack package plan --source recipe.yaml --format conda-forge --toolchain foss/2026.1 --easyconfigs easyconfigs/ --stack-policy stack.toml --out-dir bundle"
     )]
     Plan(PackagePlanArgs),
     /// Retarget an existing EasyBuild recipe using hierarchy + Resolvo selection.
     #[command(
-        after_long_help = "Examples:\n  eb-stack package bump --source zlib-1.3.1-foss-2023b.eb --toolchain-name foss --toolchain-version 2024a --easyconfigs easyconfigs/ --out-dir bundle"
+        after_long_help = "Examples:\n  eb-stack package bump --source zlib-1.3.1-foss-2023b.eb --toolchain foss/2024a --easyconfigs easyconfigs/ --out-dir bundle"
     )]
     Bump(PackageBumpArgs),
 }

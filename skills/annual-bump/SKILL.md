@@ -52,8 +52,7 @@ Dropping the floor is the fallback, not the answer. The real lower bound lives i
 ```sh
 eb-stack package bump \
   --source GROMACS-2024.4-foss-2023b.eb \
-  --toolchain-name foss \
-  --toolchain-version 2024a \
+  --toolchain foss/2024a \
   --easyconfigs "$EB_EASYCONFIGS" \
   --stack-policy stacks/site.toml \
   --out-dir work/gromacs-2024a
@@ -152,8 +151,7 @@ Use repeatable `--dep NAME=VERSION` only for a package-specific hard override. I
 ```sh
 eb-stack package bump \
   --source GROMACS-2024.4-foss-2023b.eb \
-  --toolchain-name foss \
-  --toolchain-version 2024a \
+  --toolchain foss/2024a \
   --version 2025.0 \
   --source-checksum SHA256 \
   --easyconfigs /path/to/robot \
@@ -182,7 +180,7 @@ For a multi-package stack, solve the full candidate set separately:
 eb-stack stack solve \
   --easyconfigs work/overlay \
   --easyconfigs /path/to/robot \
-  --policy policy.json \
+  --stack-policy policy.json \
   --baseline-easyconfigs /path/to/old-generation \
   --baseline-toolchain-version 2023b \
   --lock-out work/stack.lock.json \

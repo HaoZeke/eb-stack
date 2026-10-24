@@ -10,8 +10,7 @@ rewrite API.
 #+begin_src bash
 eb-stack package bump \
   --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
-  --toolchain-name foss \
-  --toolchain-version 2024a \
+  --toolchain foss/2024a \
   --easyconfigs tests/repro_fixtures/universe_foss_2024a \
   --out-dir /tmp/eb-stack/bundles/gromacs-2024a
 #+end_src
@@ -40,8 +39,7 @@ locked solver input. This fixture's universe already selects Python
 #+begin_src bash
 eb-stack package bump \
   --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
-  --toolchain-name foss \
-  --toolchain-version 2024a \
+  --toolchain foss/2024a \
   --easyconfigs tests/repro_fixtures/universe_foss_2024a \
   --dep Python=3.12.3 \
   --out-dir /tmp/eb-stack/bundles/gromacs-dep
@@ -60,8 +58,7 @@ generation before solving.
 #+begin_src bash
 eb-stack package bump \
   --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
-  --toolchain-name foss \
-  --toolchain-version 2024a \
+  --toolchain foss/2024a \
   --version 2024.5 \
   --easyconfigs tests/repro_fixtures/universe_foss_2024a \
   --out-dir /tmp/eb-stack/bundles/gromacs-2024.5
@@ -82,8 +79,7 @@ and is listed in ~sources.fetch.json~ and as a ~source:fetch~ residual:
 #+begin_src bash
 eb-stack package bump \
   --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
-  --toolchain-name foss \
-  --toolchain-version 2024a \
+  --toolchain foss/2024a \
   --version 2024.5 \
   --fetch-checksums \
   --easyconfigs tests/repro_fixtures/universe_foss_2024a \

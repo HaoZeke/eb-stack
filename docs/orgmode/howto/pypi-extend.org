@@ -30,8 +30,7 @@ Inspect does not need a robot. Plan does.
 eb-stack package inspect \
   --source fixtures/foreign_ingest/pypi_bs4/pypi.json \
   --format pypi \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --out-dir /tmp/bs4-inspect
 #+end_src
 
@@ -50,8 +49,7 @@ Source ~env.sh~ from ~scripts/fetch-upstream-trees.sh~ first.
 eb-stack package plan \
   --source fixtures/foreign_ingest/pypi_bs4/pypi.json \
   --format pypi \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --easyconfigs fixtures/foreign_ingest/pypi_bs4/robot \
   --stack-policy examples/stacks/eessi-python-extras.toml \
   --out-dir /tmp/eb-stack/bundles/bs4
@@ -80,8 +78,7 @@ The extra-only ~lxml~ requirement stays a parse residual.
 eb-stack package plan \
   --source fixtures/foreign_ingest/pypi_numpy/numpy.json \
   --format pypi \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --easyconfigs fixtures/foreign_ingest/pypi_numpy/robot \
   --stack-policy examples/stacks/eessi-python-extras.toml \
   --out-dir /tmp/eb-stack/bundles/numpy

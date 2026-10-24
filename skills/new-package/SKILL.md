@@ -170,8 +170,7 @@ Inspect first when evaluating parser output:
 eb-stack package inspect \
   --source path/to/recipe.yaml \
   --format conda-forge \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --package-config examples/packages/common.toml \
   --package-config examples/packages/qmcpack.toml \
   --out-dir work/qmcpack-inspect
@@ -184,8 +183,7 @@ develop `easybuild/easyconfigs` directory. Produce the buildable bundle:
 eb-stack package plan \
   --source path/to/package.py \
   --format spack \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --package-config examples/packages/common.toml \
   --package-config examples/packages/qmcpack.toml \
   --source-checksum SHA256 \
@@ -217,8 +215,7 @@ configure ordered local source roots (no per-package catalog required):
 eb-stack package plan \
   --source path/to/recipe.yaml \
   --format conda-forge \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --source-checksum SHA256 \
   --easyconfigs /path/to/robot \
   --stack-policy stacks/site.toml \
@@ -237,8 +234,7 @@ Optional catalog layers remain ordered overrides with repeatable `--package-cata
 eb-stack package plan \
   --source path/to/recipe.yaml \
   --format conda-forge \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --source-checksum SHA256 \
   --easyconfigs /path/to/robot \
   --stack-policy stacks/site.toml \

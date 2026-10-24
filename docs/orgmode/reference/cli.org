@@ -19,7 +19,7 @@ A rejected value names the flag and the value. A missing file names the flag and
 
 ~--help~ for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is ~--out-dir~. A single output file is ~--out~ (~--lock-out~ for the lock ~stack solve~ writes). ~--installed~, ~--easyconfigs~, ~--filter-deps~, and ~--generated-at~ use those names on every command that takes them.
 
-Package commands take the toolchain as ~--toolchain-name~ and ~--toolchain-version~, or as ~--toolchain name/version~, which is the spelling ~stack solve~ uses. The two forms are not combined. ~--toolchain-name~ defaults to ~foss~ on ~package inspect~ and ~package plan~.
+Package commands take the toolchain as ~--toolchain name/version~, the spelling ~stack solve~ uses. ~--toolchain-name~ and ~--toolchain-version~ are that flag as well. The two forms are not combined. ~--toolchain-name~ defaults to ~foss~ on ~package inspect~ and ~package plan~. An empty version stays on the split flags: ~--toolchain~ wants both a name and a version.
 
 * Command map
 
@@ -57,8 +57,7 @@ The toolchain is ~--toolchain~ name/version, or the split flags ~--toolchain-nam
 eb-stack package inspect \
   --source PATH \
   --format auto|conda-forge|spack|pypi|cran|cargo|luarocks|raku \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   [--package-config PACKAGE.toml]... \
   --out-dir BUNDLE
 #+end_src
@@ -72,8 +71,7 @@ profiles or emit recipes, so it establishes no claim-ladder rung.
 eb-stack package plan \
   --source PATH \
   --format auto|conda-forge|spack|pypi|cran|cargo|luarocks|raku \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   [--package-config PACKAGE.toml]... \
   [--source-checksum DIGEST]... \
   [--package-index FILE] \
@@ -154,8 +152,7 @@ it. See [[file:../howto/pypi-extend.org][site Python extras]].
 #+begin_src bash
 eb-stack package bump \
   --source RECIPE.eb \
-  --toolchain-name foss \
-  --toolchain-version 2024a \
+  --toolchain foss/2024a \
   [--version VERSION] \
   [--source-checksum DIGEST] \
   [--dep NAME=VERSION]... \

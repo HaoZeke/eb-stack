@@ -327,7 +327,7 @@ argument of the MCP tools) renders a skeleton instead of leaving the residual:
 eb-stack package plan --emit-easyblock \
   --source fixtures/foreign_ingest/spack_qmcpack/package.py \
   --package-config examples/packages/qmcpack.toml \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --easyconfigs tests/repro_fixtures/universe_foss_2024a \
   --stack-policy policy.toml \
   --out-dir BUNDLE

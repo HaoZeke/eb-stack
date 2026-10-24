@@ -55,8 +55,7 @@ eb-stack target doctor \
 eb-stack package inspect \
   --source fixtures/foreign_ingest/conda_eon/recipe.yaml \
   --format conda-forge \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --package-config examples/packages/common.toml \
   --package-config examples/packages/eon.toml \
   --out-dir /tmp/eon-inspect
@@ -81,8 +80,7 @@ the requested pre-build inventory and never claims installed evidence.
 eb-stack package plan \
   --source fixtures/foreign_ingest/conda_eon/recipe.yaml \
   --format conda-forge \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --package-config examples/packages/common.toml \
   --package-config examples/packages/eon.toml \
   --easyconfigs "$ROBOT" \
@@ -213,8 +211,7 @@ Replace the source and package-config arguments:
 eb-stack package plan \
   --source fixtures/foreign_ingest/spack_qmcpack/package.py \
   --format spack \
-  --toolchain-name foss \
-  --toolchain-version 2026.1 \
+  --toolchain foss/2026.1 \
   --package-config examples/packages/common.toml \
   --package-config examples/packages/qmcpack.toml \
   --source-checksum 511d5f368db002f2f77504619e1ada8d4a3034200d25feef6773d12a6ed6d18e \
