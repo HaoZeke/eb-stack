@@ -6,6 +6,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `stack order`, `pr-overlap`, `rebuild-set` and the reach commands do
+  not resolve a bare dependency tuple to a SYSTEM recipe. An explicit
+  SYSTEM tuple still does, matching `stack solve` and `recipe check`.
 - The build list names every locked module, including two versions of
   one name at one toolchain, and lists runtime and build dependencies
   first. It is keyed by name, version, versionsuffix and toolchain,

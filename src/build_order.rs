@@ -391,11 +391,12 @@ fn satisfies(candidate: &Candidate, dep: &DepReq) -> bool {
 /// How far a candidate sits from the recipe that needs it.
 ///
 /// EasyBuild resolves an unpinned dependency inside the recipe's own
-/// generation, taking the lowest level that has it, and only a tuple that
-/// names a toolchain reaches outside. Without that discipline a closure walks
-/// into whatever generation happens to hold the newest matching version, which
-/// is how a 2026 root ends up pulling a GCCcore-11.3.0 bootstrap chain and
-/// closing a cycle that does not exist within either generation.
+/// generation, parent first: the nearest level that has it, not the lowest.
+/// A tuple that names a toolchain may reach outside that generation.
+/// Without that discipline a closure walks into whatever generation happens
+/// to hold the newest matching version, which is how a 2026 root ends up
+/// pulling a GCCcore-11.3.0 bootstrap chain and closing a cycle that does
+/// not exist within either generation.
 fn distance(candidate: &Candidate, recipe: &Candidate, all: &[Candidate]) -> usize {
     if crate::hierarchy::toolchains_match(&candidate.toolchain, &recipe.toolchain) {
         return 0;
@@ -423,7 +424,12 @@ fn distance(candidate: &Candidate, recipe: &Candidate, all: &[Candidate]) -> usi
 /// Keep the candidates EasyBuild would actually pick a dependency from.
 ///
 /// With minimal toolchains off, the robot searches the recipe's own generation
-/// from the parent toolchain downward. A candidate outside that hierarchy is
+/// from the parent toolchain downward. A bare tuple does not reach SYSTEM
+/// unless the recipe itself is SYSTEM; an explicit `SYSTEM` element does,
+/// because [`satisfies`] already kept only that toolchain. That is the same
+/// rule as [`crate::resolvo_provider::EbProvider`]'s dependency keys, so
+/// `stack order`, pr-overlap, rebuild-set and the reach commands agree with
+/// `stack solve` and `recipe check`. A candidate outside the hierarchy is
 /// not a fallback: taking it is how a 2026 root pulls a `gompi-2022a` build
 /// and then the whole older generation. A dependency that names a toolchain
 /// was already limited to that toolchain by [`satisfies`], and that pin is
@@ -434,6 +440,9 @@ fn within_generation<'a>(
     all: &[Candidate],
     dep: &DepReq,
 ) -> Vec<&'a Candidate> {
+    if dep.toolchain.is_none() && !crate::hierarchy::is_system_toolchain(&recipe.toolchain) {
+        admissible.retain(|candidate| !crate::hierarchy::is_system_toolchain(&candidate.toolchain));
+    }
     let Some(best) = admissible.iter().map(|c| distance(c, recipe, all)).min() else {
         return admissible;
     };
@@ -1423,6 +1432,42 @@ mod tests {
         assert!(shown.contains("2026.3"), "{shown}");
         assert!(shown.contains("2025.0"), "{shown}");
         assert!(!shown.contains("no package named"), "{shown}");
+    }
+
+    /// A bare tuple inherits the parent toolchain. SYSTEM is not a fallback,
+    /// which is what `stack solve` and `recipe check` already refuse.
+    #[test]
+    fn a_bare_tuple_does_not_resolve_to_system() {
+        let system = tc("system", "system");
+        let all = vec![
+            candidate("zlib", "1.3.1", system.clone(), vec![]),
+            candidate(
+                "App",
+                "1.0",
+                tc("foss", "2025b"),
+                vec![dep("zlib", "1.3.1", None)],
+            ),
+        ];
+        let err = build_order(&all, &["App".into()], Choice::Newest).unwrap_err();
+        assert!(
+            matches!(err, OrderError::Unsatisfied { .. }),
+            "bare zlib resolved to SYSTEM: {err}"
+        );
+
+        let pinned = vec![
+            candidate("zlib", "1.3.1", system.clone(), vec![]),
+            candidate(
+                "App",
+                "1.0",
+                tc("foss", "2025b"),
+                vec![dep("zlib", "1.3.1", Some(system))],
+            ),
+        ];
+        let order = build_order(&pinned, &["App".into()], Choice::Newest).expect("explicit SYSTEM");
+        assert!(
+            order.iter().any(|candidate| candidate.name == "zlib"),
+            "an explicit SYSTEM tuple must still select the SYSTEM recipe"
+        );
     }
 
     #[test]
