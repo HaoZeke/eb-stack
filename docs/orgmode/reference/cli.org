@@ -548,8 +548,8 @@ else, or an empty URL to write ~#N~ text.
 ~--merge-order~ also writes ~merge-order.toml~ and appends a Merge order
 table to ~overlap.md~. Without the flag, ~prs/~, ~overlap.toml~, and
 ~overlap.md~ are unchanged. ~--merged N~ repeats and implies
-~--merge-order~. N has to be a number in the ~--pr~ input. This run
-names a missing one:
+~--merge-order~. N has to be a number in the ~--pr~ input that
+produced a record. This run names a missing one:
 
 #+begin_src bash
 eb-stack pr-overlap --pr tests/pr_overlap_layer/prs.json \
@@ -561,7 +561,10 @@ eb-stack pr-overlap --pr tests/pr_overlap_layer/prs.json \
   --out-dir /tmp/pr-overlap-out
 #+end_src
 
-The error is ~--merged 999: no pull request with that number~. A rejected
+The error is ~--merged 999: no pull request with that number~. A number
+that is in the input but changes no easyconfig and no easystack is
+~--merged N: pull request N has no record (no easyconfigs or easystack change)~.
+A rejected
 ~--merged~ or ~--impact~ does not create the output directory and does not
 change files already in it. The same
 command with only ~--merged 1585~ treats pull request 1585 as already
@@ -571,8 +574,11 @@ installed and orders the rest. Pull request 1585 adds
 ~easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.0-2026.1.yml~.
 
 ~--impact N~ writes ~merge-impact.toml~. Repeat the flag. N has to be a
-number in the ~--pr~ input, or the error is
-~--impact 999: no pull request with that number~. The file is the effect
+number in the ~--pr~ input that produced a record. A number that is not
+in the input is ~--impact 999: no pull request with that number~. A pull
+request that is in the input but has no record is
+~--impact N: pull request N has no record (no easyconfigs or easystack change)~.
+The file is the effect
 of merging that pull request alone: other pull requests whose ~to_build~
 shrinks, and depends-on edges from it that resolve. It is not the residual
 after earlier steps of ~--merge-order~, and it does not write

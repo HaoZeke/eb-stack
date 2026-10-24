@@ -258,3 +258,49 @@ fn easyconfigs_merge_order_and_impact_follow_depends_on_rows() {
         impact.affected
     );
 }
+
+/// A pull request with no easyconfigs is in the input and has no record.
+/// `--merged` and `--impact` both reject it before writing.
+#[test]
+fn merged_and_impact_reject_the_same_recordless_pull_request() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let mut prs: Vec<serde_json::Value> =
+        serde_json::from_str(&std::fs::read_to_string(fixtures().join("prs.json")).unwrap())
+            .unwrap();
+    prs.push(serde_json::json!({
+        "number": 9,
+        "head_sha": "9".repeat(40),
+        "title": "empty",
+        "easyconfigs": []
+    }));
+    let input = tmp.path().join("prs.json");
+    std::fs::write(&input, serde_json::to_string(&prs).unwrap()).unwrap();
+    for flag in ["--merged", "--impact"] {
+        let out_dir = tmp.path().join(flag.trim_start_matches('-'));
+        let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+            .env_remove("EASYBUILD_FILTER_DEPS")
+            .args(["pr-overlap", "--kind", "easyconfigs", "--pr"])
+            .arg(&input)
+            .arg("--easyconfigs")
+            .arg(fixtures())
+            .args([
+                "--generated-at",
+                "2026-10-24T00:00:00Z",
+                flag,
+                "9",
+                "--out-dir",
+            ])
+            .arg(&out_dir)
+            .output()
+            .expect("run pr-overlap");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{flag} {stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "{flag} 9: pull request 9 has no record (no easyconfigs or easystack change)"
+            )),
+            "{stderr}"
+        );
+        assert!(!out_dir.exists(), "{flag} left {}", out_dir.display());
+    }
+}

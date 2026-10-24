@@ -159,6 +159,8 @@ Position 1 is 1585 (91 modules). Position 2 is 1728 (18 modules), and
 write ~merge-order.toml~. It is the effect of merging N on its own, not
 the residual after earlier steps of ~--merge-order~. A number that is not
 in the input exits with ~--impact N: no pull request with that number~.
+A pull request that is in the input but changes nothing exits with
+~--impact N: pull request N has no record (no easyconfigs or easystack change)~.
 The recorded command above does not pass ~--impact~.
 
 * For easybuild-easyconfigs pull requests

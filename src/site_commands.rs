@@ -17,6 +17,21 @@ fn usage(message: impl std::fmt::Display) -> anyhow::Error {
     crate::cli_parse::usage(message)
 }
 
+/// Why `--merged` or `--impact` rejected `number`.
+///
+/// A number absent from the `--pr` input was never submitted. A number that
+/// is in the input but produced no record changed no easyconfig and no
+/// easystack, which is a different mistake.
+fn rejected_pull_request(flag: &str, number: u64, input: &[u64]) -> String {
+    if input.contains(&number) {
+        format!(
+            "{flag} {number}: pull request {number} has no record (no easyconfigs or easystack change)"
+        )
+    } else {
+        format!("{flag} {number}: no pull request with that number")
+    }
+}
+
 /// `--generated-at` is stored as given. An absent flag is the current UTC time.
 fn generated_at(value: Option<String>, seconds: bool) -> Result<String> {
     let Some(text) = value else {
@@ -481,13 +496,19 @@ fn run_pr_overlap_inner(
         }
     });
 
-    // Reject a bad --merged or --impact before any file is created or removed.
+    // Reject a --merged number that produced no record before any file is
+    // created. --impact already requires a record; --merged matches it.
+    // A number in the input with no record is a different error from a
+    // number the input never contained.
+    let input_numbers: Vec<u64> = prs.iter().map(|pr| pr.number).collect();
     let write_order = args.merge_order || !args.merged.is_empty();
     if write_order {
-        let inputs: Vec<u64> = prs.iter().map(|pr| pr.number).collect();
-        if let Some(number) = merge_order::unknown_merged(&inputs, &args.merged) {
-            return Err(usage(format!(
-                "--merged {number}: no pull request with that number"
+        let recorded: Vec<u64> = records.iter().map(|record| record.pr).collect();
+        if let Some(number) = merge_order::unknown_merged(&recorded, &args.merged) {
+            return Err(usage(rejected_pull_request(
+                "--merged",
+                number,
+                &input_numbers,
             )));
         }
     }
@@ -518,11 +539,7 @@ fn run_pr_overlap_inner(
                 &config.generated_at,
                 &args.merged,
             )
-            .map_err(|number| {
-                usage(format!(
-                    "--impact {number}: no pull request with that number"
-                ))
-            })?,
+            .map_err(|number| usage(rejected_pull_request("--impact", number, &input_numbers)))?,
         )
     };
 
@@ -674,6 +691,17 @@ fn run_component_reach_with(
     };
     use crate::osv::{parse_purl, resolve_vulnerability};
 
+    // A purl the carrier model does not know is a usage error. Reject it
+    // before any output directory is created.
+    if let Some(purl) = &args.purl {
+        let parsed = parse_purl(purl).map_err(|error| anyhow!(error))?;
+        if !crate::component_reach::purl_carrier_known(&parsed.kind) {
+            return Err(usage(format!(
+                "purl type {} has no carrier model",
+                parsed.kind
+            )));
+        }
+    }
     if let Some(version) = &args.version {
         require_version_req(version)?;
     }
@@ -722,17 +750,6 @@ fn run_component_reach_with(
     } else {
         Some(format!("{} easyconfigs skipped", parsed.skipped.len()))
     };
-    // A purl the carrier model does not know is a usage error. Reject it
-    // before any output directory is created.
-    if let Some(purl) = &args.purl {
-        let parsed = parse_purl(purl).map_err(|error| anyhow!(error))?;
-        if !crate::component_reach::purl_carrier_known(&parsed.kind) {
-            return Err(usage(format!(
-                "purl type {} has no carrier model",
-                parsed.kind
-            )));
-        }
-    }
     std::fs::create_dir_all(&args.out_dir)?;
     if let Some(cve) = &args.cve {
         let resolution = resolve_vulnerability(cve, client).map_err(|error| anyhow!(error))?;

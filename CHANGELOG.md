@@ -6,6 +6,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `--merged` and `--impact` say a pull request has no record when it
+  is in the input but changes no easyconfig and no easystack. A
+  number that is not in the input is still reported as unknown.
 - `stack solve` names the SYSTEM tuple when a dependency exists only
   there, the same hint `recipe check` prints.
 - `stack solve` does not resolve a bare dependency tuple to a SYSTEM
@@ -14,6 +17,8 @@ All notable changes to this project are documented here.
 - A closure SBOM keys each component, its checksums and its dependency
   entry by name, version, versionsuffix and toolchain. Two versions of
   one name keep their own edges and hashes.
+- `--merged N` exits 2 when pull request N has no overlap record,
+  the same rejection `--impact` already used, and writes no output.
 - `recipe check --recipe` and `recipe format` name the recipe when
   the file cannot be read.
 - `recipe check` says a bare dependency tuple does not reach SYSTEM,
