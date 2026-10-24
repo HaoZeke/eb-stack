@@ -1209,6 +1209,20 @@ fn unknown_templates(
         }
         for captures in TEMPLATE_REF.captures_iter(piece_text(text, piece)) {
             let name = &captures[1];
+            // EasyBuild keeps a template only when an odd run of '%' precedes
+            // `(name)s`. `%%(source)s` is the even case: templating leaves it
+            // as `%(source)s` for the easyblock's own formatting (CmdCp
+            // `cmds_map`), so it is not an unknown EasyBuild template.
+            let matched = captures.get(0).expect("template regex has a match");
+            let mut percents = 1usize;
+            let mut index = piece.start + matched.start();
+            while index > 0 && text.as_bytes()[index - 1] == b'%' {
+                percents += 1;
+                index -= 1;
+            }
+            if percents.is_multiple_of(2) {
+                continue;
+            }
             if known.binary_search(&name).is_ok() {
                 continue;
             }
@@ -2445,6 +2459,23 @@ mod tests {
                     buildopts = '%(cc)s -O2' % {'cc': 'gcc'}\n";
         let findings = lint(text);
         assert!(!has(&findings, "EB_TEMPLATE_UNKNOWN"), "{findings:?}");
+    }
+
+    #[test]
+    fn escaped_percent_templates_are_not_easybuild_templates() {
+        // STREAM writes %%(source)s so CmdCp can fill `source` itself.
+        // An even run of '%' is preserved; an odd run is still a template.
+        let escaped = "local_cmds = \"$CC $CFLAGS %%(source)s -o stream\"\n\
+                       cmds_map = [('stream.c', local_cmds)]\n";
+        assert!(
+            !has(&lint(escaped), "EB_TEMPLATE_UNKNOWN"),
+            "{:?}",
+            lint(escaped)
+        );
+        let odd = "sources = ['%%%(not_a_real_template)s.tar.gz']\n";
+        assert!(has(&lint(odd), "EB_TEMPLATE_UNKNOWN"), "{:?}", lint(odd));
+        let plain = "sources = ['%(not_a_real_template)s.tar.gz']\n";
+        assert!(has(&lint(plain), "EB_TEMPLATE_UNKNOWN"));
     }
 
     #[test]

@@ -37,6 +37,9 @@ All notable changes to this project are documented here.
   reaches an easyblock that imports `tools/filetools.py` when that module
   imports `tools/run.py`. An easyblock that only imports another easyblock
   is not reached that way.
+- `recipe lint` no longer reports `EB_TEMPLATE_UNKNOWN` for an even run of
+  `%` in front of `(name)s`. EasyBuild preserves `%%(source)s` so the
+  easyblock can format it; STREAM's `cmds_map` is that pattern.
 - A foreign package plan locks a generation member instead of the
   SYSTEM bootstrap of the same name when both are in the robot, which is
   the module `recipe check` accepts.
