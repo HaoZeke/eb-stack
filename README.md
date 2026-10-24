@@ -7,7 +7,7 @@
 
 **Turn foreign and EasyBuild recipes into resolved, build-evaluated package bundles.**
 
-`eb-stack` parses conda-forge, Spack, PyPI, CRAN, Cargo, LuaRocks, Raku, and EasyBuild recipes into one canonical package plan. It emits a planned CycloneDX SBOM, solves each product profile with Resolvo, writes one conventional `.eb` file per installable variant, and drives the recipes through a persisted remote build campaign.
+`eb-stack` parses conda-forge, Spack, PyPI, Comprehensive R Archive Network (CRAN), Cargo, LuaRocks, Raku, and EasyBuild recipes into one canonical package plan. It emits a planned CycloneDX Software Bill of Materials (SBOM), solves each product profile with Resolvo, writes one conventional `.eb` file per installable variant, and drives the recipes through a persisted remote build campaign.
 
 [![CI](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_test.yml/badge.svg)](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_test.yml)
 [![Docs](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_docs.yml/badge.svg)](https://github.com/HaoZeke/eb-stack/actions/workflows/ci_docs.yml)
@@ -47,9 +47,9 @@ New packages and bumps use the same artifacts. A bump is an EasyBuild-origin pla
 
 Report these claims independently:
 
-1. **resolves** — every requested profile has a Resolvo lock and emitted recipe;
-2. **builds** — every emitted recipe completes through EasyBuild on the configured target;
-3. **binary-verified** — every declared profile verification command succeeds.
+1. **resolves**: every requested profile has a Resolvo lock and emitted recipe;
+2. **builds**: every emitted recipe completes through EasyBuild on the configured target;
+3. **binary-verified**: every declared profile verification command succeeds.
 
 `package inspect` establishes none of them. `package plan` and `package bump` can establish only `resolves`. `campaign run` owns the other two.
 
@@ -139,9 +139,9 @@ eb-stack package bump \
   --out-dir /tmp/gromacs-2024a
 ```
 
-The output recipe is `/tmp/gromacs-2024a/easyconfigs/g/GROMACS/GROMACS-2024.4-foss-2024a.eb`; the same directory contains its manifest, SBOM, and `default` profile lock. Repeat `--easyconfigs` for overlays and use `--stack-policy` for EESSI or site preferences. `preferred` pins may fall back inside Resolvo; `locked` pins may not.
+The output recipe is `/tmp/gromacs-2024a/easyconfigs/g/GROMACS/GROMACS-2024.4-foss-2024a.eb`; the same directory contains its manifest, SBOM, and `default` profile lock. Repeat `--easyconfigs` for overlays and use `--stack-policy` for European Environment for Scientific Software Installations (EESSI) or site preferences. `preferred` pins may fall back inside Resolvo; `locked` pins may not.
 
-Known maintainer fixtures cover GROMACS, ScaFaCoS, MDTraj, Fiona, PuLP, and numba across `foss-2023b` → `foss-2024a`.
+Known maintainer fixtures cover GROMACS, ScaFaCoS, MDTraj, Fiona, PuLP, and numba across `foss-2023b` to `foss-2024a`.
 
 ## Plan a new package
 
@@ -149,15 +149,15 @@ Package policy is public, layered TOML. Parsers preserve foreign names and
 syntax without package-name branches; Resolvo matches case/punctuation-equivalent
 robot names mechanically. Explicit ecosystem aliases, EasyBuild metadata,
 build policy, and independently installable profiles live in package config.
-Each profile emits one `.eb` file; MPI/OpenMP toolchain options alone do not
+Each profile emits one `.eb` file; Message Passing Interface (MPI) and OpenMP toolchain options alone do not
 require a suffix.
 
 Profiles can declare `platform` and `architecture` target context. Foreign
 selectors are evaluated against those values before dependency solving, so a
 target-specific dependency becomes a real Resolvo requirement instead of
-silently disappearing when planning runs on another host.
+disappearing with no message when planning runs on another host.
 
-The Spack adapter parses Python into an AST without importing the recipe. It
+The Spack adapter parses Python into an abstract syntax tree (AST) without importing the recipe. It
 statically evaluates literal data, bounded loops, formatting, and `when`
 scopes; unsupported runtime expressions become source-located residuals rather
 than guessed dependencies.
@@ -251,7 +251,7 @@ Because `--easyconfigs` is also a discovery root, that plan writes
 `closure.plan.json`, `closure.sbom.cdx.json`, and `build-order.json` next to
 the manifest, even when no companion recipe was required.
 
-The shipped eOn package policy is **core + `with_rgpot`**: Fortran/CuH2
+The included eOn package policy is **core + `with_rgpot`**: Fortran/CuH2
 client, readcon-core, and in-process RGPOT (engines dlopen at runtime). Fat
 metatomic/xTB/serve are off by default; conda host deps for those names are
 excluded from the solve. The stack policy only prefers Eigen 5 for the
@@ -260,7 +260,7 @@ safemath patch path. Historical full-product fixtures under
 snapshots of the old feedstock-parity surface.
 
 Use `--format spack`, `examples/packages/common.toml`, and
-`examples/packages/qmcpack.toml` for QMCPACK’s
+`examples/packages/qmcpack.toml` for QMCPACK's
 `package.py`. Its Spack version is pinned by commit rather than archive hash,
 so planning also needs
 `--source-checksum 511d5f368db002f2f77504619e1ada8d4a3034200d25feef6773d12a6ed6d18e`.
@@ -294,7 +294,7 @@ Checksums are positional: sources first, then patches. Missing dependency output
 
 ## Configure and run builds
 
-Targets are layered as transport → executor → runtime → EasyBuild workload:
+Targets are layered as transport to executor to runtime to EasyBuild workload:
 
 ```sh
 eb-stack target list --config examples/targets/base.toml --config ~/.config/eb-stack/site.toml
@@ -406,7 +406,7 @@ recipe file tools.
 
 `eb_recipe_edit` replaces an exact string and does not write a repeated match
 unless `replace_all` is set. `eb_recipe_check` requires at least one
-`easyconfigs` path (a `.eb` there stands for its easyconfigs directory) and
+`easyconfigs` path (a `.eb` there means its easyconfigs directory) and
 refuses a recipe that is not valid Python. `eb_recipe_lint` reports the
 easyconfigs CI lint (F541, W605, W291), the check-contrib pycodestyle codes,
 the easyconfigs test-suite checks and the review conventions (`EB_*`), plus
@@ -416,12 +416,12 @@ searches the workspace.
 
 ## Skills
 
-Two produce recipes, two gate them, three carry them somewhere, one repairs the generator.
+Two produce recipes, three gate them, three carry them somewhere, one repairs the generator.
 
 Produce:
 
-- [New package](skills/new-package/SKILL.md): conda-forge/Spack → profiles → bundle → Hermes/OMP campaign.
-- [Annual bump](skills/annual-bump/SKILL.md): EasyBuild recipe → SBOM + Resolvo bump bundle → campaign.
+- [New package](skills/new-package/SKILL.md): conda-forge/Spack to profiles to bundle to Hermes/OMP campaign.
+- [Annual bump](skills/annual-bump/SKILL.md): EasyBuild recipe to SBOM + Resolvo bump bundle to campaign.
 
 Gate, before anything is built or pushed:
 
@@ -431,7 +431,7 @@ Gate, before anything is built or pushed:
 
 Carry:
 
-- [Upstream PR](skills/upstream-pr/SKILL.md): recipe set → maintainer-acceptable easybuild-easyconfigs PR, distilled from real merged and rejected PRs.
+- [Upstream PR](skills/upstream-pr/SKILL.md): recipe set to maintainer-acceptable easybuild-easyconfigs PR, distilled from real merged and rejected PRs.
 - [Site consume](skills/site-consume/SKILL.md): build an upstream recipe at a site through `--from-pr` / `--from-commit` instead of forking it into the site's repository.
 - [EESSI extend](skills/eessi-extend/SKILL.md): test inside the EESSI compatibility layer and contribute to the software-layer easystacks.
 
