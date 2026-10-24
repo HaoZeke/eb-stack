@@ -1,0 +1,4 @@
+# next generation
+# GROMACS-2025.0-foss-2025b.eb
+# OpenMPI-5.0.10-GCC-15.2.0.eb --hooks=/sw/h.py
+# CP2K-2026.1-foss-2025b.eb

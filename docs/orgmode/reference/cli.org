@@ -347,8 +347,9 @@ eb-stack stack easystack \
   [--option FILE.eb:OPTION=VALUE]...
 
 eb-stack stack sections \
-  LIST --from PREVIOUS.list --out GROUPED.list \
-  [--unfiled "New in this generation"]
+  tests/jenkins_sections/next.list \
+  --from tests/jenkins_sections/previous.list \
+  --out /tmp/grouped.list
 #+end_src
 
 ~stack sbom~ reads the easyconfigs the lock names. A runtime dependency
@@ -431,14 +432,29 @@ command line without its dashes, for example
 mapping; a file without them is a string. Stdout is
 ~easystack=<path> entries=<N> of=<packages>~.
 
-Those filenames stay in lock order. ~stack sections~ reads ~LIST~ and
-regroups its entries under the
-~#### Title ####~ headers of ~--from~. Each entry keeps its flags and
-whether it is commented out. Packages no section of ~--from~ names go
-under ~--unfiled~ (default ~New in this generation~), last. The comment
-block before the first entry of ~LIST~ stays on top. Stdout is
-~list=<path> sections=<written> of=<previous+1>~. The ~of~ count is the
-previous list's section count plus the unfiled header.
+~stack sections~ reads the build list
+and regroups its entries under the ~#### Title ####~ headers of ~--from~.
+Each entry keeps its flags and whether it is commented out. Packages no
+section of ~--from~ names go under ~--unfiled~ (default ~New in this
+generation~), last. The comment block before the first entry stays on top.
+Stdout is ~list=<path> sections=<written> of=<previous+1>~. The ~of~ count
+is the previous list's section count plus the unfiled header.
+
+The recorded lists are ~tests/jenkins_sections/previous.list~ and
+~tests/jenkins_sections/next.list~. The command in the synopsis writes:
+
+#+begin_src text
+# next generation
+
+#### MPI ####
+# OpenMPI-5.0.10-GCC-15.2.0.eb --hooks=/sw/h.py
+
+#### Chemistry ####
+# GROMACS-2025.0-foss-2025b.eb
+
+#### New in this generation ####
+# CP2K-2026.1-foss-2025b.eb
+#+end_src
 
 * ~pr-overlap~
 

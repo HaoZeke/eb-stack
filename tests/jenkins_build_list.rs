@@ -83,25 +83,14 @@ fn a_roots_only_list_holds_one_line_per_root() {
 
 #[test]
 fn sections_regroups_a_list_under_the_previous_headers() {
+    let recorded = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/jenkins_sections");
     let tmp = tempfile::tempdir().unwrap();
-    let previous = tmp.path().join("previous.list");
-    std::fs::write(
-        &previous,
-        "#### MPI ####\n# OpenMPI-4.1.5-foss-2025a.eb\n#### Chemistry ####\nGROMACS-2024.1-foss-2025a.eb\n",
-    )
-    .unwrap();
-    let list = tmp.path().join("next.list");
-    std::fs::write(
-        &list,
-        "# next generation\n# GROMACS-2025.0-foss-2025b.eb\n# OpenMPI-5.0.10-GCC-15.2.0.eb --hooks=/sw/h.py\n# CP2K-2026.1-foss-2025b.eb\n",
-    )
-    .unwrap();
     let out = tmp.path().join("grouped.list");
     let st = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
         .args(["stack", "sections"])
-        .arg(&list)
+        .arg(recorded.join("next.list"))
         .arg("--from")
-        .arg(&previous)
+        .arg(recorded.join("previous.list"))
         .arg("--out")
         .arg(&out)
         .output()
@@ -113,6 +102,6 @@ fn sections_regroups_a_list_under_the_previous_headers() {
     );
     assert_eq!(
         std::fs::read_to_string(&out).unwrap(),
-        "# next generation\n\n#### MPI ####\n# OpenMPI-5.0.10-GCC-15.2.0.eb --hooks=/sw/h.py\n\n#### Chemistry ####\n# GROMACS-2025.0-foss-2025b.eb\n\n#### New in this generation ####\n# CP2K-2026.1-foss-2025b.eb\n"
+        std::fs::read_to_string(recorded.join("grouped.list")).unwrap()
     );
 }
