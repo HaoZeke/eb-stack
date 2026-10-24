@@ -641,23 +641,34 @@ pub fn doctor_target(target: &BuildTarget) -> Result<TargetDoctorReport, TargetE
     ]
     .into_iter()
     .map(|(layer, command)| run_doctor_check(layer, command))
-    .collect::<Result<Vec<_>, _>>()?;
+    .collect();
     Ok(TargetDoctorReport {
         target: target.name.clone(),
         checks,
     })
 }
 
-fn run_doctor_check(layer: &str, command: CommandPlan) -> Result<DoctorCheck, TargetError> {
-    let output = command.execute()?;
-    Ok(DoctorCheck {
-        layer: layer.into(),
-        success: output.status.success(),
-        exit_code: output.status.code(),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        command,
-    })
+/// Probe one layer. A command that cannot be started is a failed check, not
+/// an abort: the other layers still answer, which is what an operator reads.
+fn run_doctor_check(layer: &str, command: CommandPlan) -> DoctorCheck {
+    match command.execute() {
+        Ok(output) => DoctorCheck {
+            layer: layer.into(),
+            success: output.status.success(),
+            exit_code: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            command,
+        },
+        Err(error) => DoctorCheck {
+            layer: layer.into(),
+            success: false,
+            exit_code: None,
+            stdout: String::new(),
+            stderr: error.to_string(),
+            command,
+        },
+    }
 }
 
 fn push_option(tokens: &mut Vec<String>, flag: &str, value: Option<&str>) {

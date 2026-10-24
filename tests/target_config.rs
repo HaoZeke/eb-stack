@@ -182,6 +182,74 @@ tmp_root = "/tmp"
 }
 
 #[test]
+fn doctor_reports_every_layer_when_a_probe_command_is_missing() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config = temp.path().join("targets.toml");
+    std::fs::write(
+        &config,
+        r#"
+schema_version = 1
+[[targets]]
+name = "missing-runtime"
+[targets.transport]
+kind = "local"
+[targets.executor]
+kind = "direct"
+[targets.runtime]
+kind = "podman"
+image = "localhost/missing:latest"
+command = "eb-stack-no-such-podman"
+[targets.easybuild]
+command = "true"
+robot_paths = ["/tmp"]
+work_root = "/tmp"
+tmp_root = "/tmp"
+"#,
+    )
+    .expect("config");
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let doctor = Command::new(binary)
+        .args([
+            "target",
+            "doctor",
+            "--config",
+            config.to_str().unwrap(),
+            "--target",
+            "missing-runtime",
+        ])
+        .output()
+        .expect("target doctor");
+    assert!(
+        !doctor.status.success(),
+        "a failed probe must fail the command"
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&doctor.stdout).expect("doctor JSON on stdout");
+    assert_eq!(report["ok"], false);
+    let checks = report["checks"].as_array().expect("checks");
+    assert_eq!(checks.len(), 4, "every layer is reported: {report}");
+    let by_layer = |name: &str| {
+        checks
+            .iter()
+            .find(|check| check["layer"] == name)
+            .unwrap_or_else(|| panic!("missing {name}"))
+    };
+    assert_eq!(by_layer("transport")["success"], true);
+    assert_eq!(by_layer("executor")["success"], true);
+    assert_eq!(by_layer("runtime")["success"], false);
+    assert!(
+        by_layer("runtime")["stderr"]
+            .as_str()
+            .unwrap_or("")
+            .contains("eb-stack-no-such-podman"),
+        "{}",
+        by_layer("runtime")
+    );
+    assert_eq!(by_layer("easybuild")["success"], false);
+    assert!(by_layer("runtime")["command"]["program"].is_string());
+}
+
+#[test]
 fn public_target_examples_form_a_complete_layered_target() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let base = TargetConfigLayer::from_path(&root.join("examples/targets/base.toml"))

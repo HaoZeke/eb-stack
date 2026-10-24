@@ -9,6 +9,9 @@ All notable changes to this project are documented here.
 - Recipe lint modules live under `src/eb_style/` so `sphinx-rustdocgen`
   can open them. A `#[path]` attribute is joined onto the parent file
   and the generator then fails to read the module.
+- `target doctor` reports a probe that cannot be started as a failed check
+  and still prints the other three layers. A missing `podman` or
+  `eessi_container.sh` used to abort the report before any check was shown.
 - `eb-stack easyblock-reach` keeps an `easyblock` key on a `components` or
   `exts_list` assignment the parser had to skip. GFE's component list is a
   comprehension plus a tuple, and that tuple names `CMakeMake`.
