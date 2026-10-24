@@ -193,6 +193,32 @@ impl EbProvider {
         keys
     }
 
+    /// The `recipe check` hint when `dep` exists only at SYSTEM.
+    ///
+    /// A bare tuple does not reach that recipe. Saying so here is what
+    /// `stack solve` prints; `recipe check` already does.
+    fn system_only_hint(&self, recipe: &Candidate, dep: &crate::domain::DepReq) -> Option<String> {
+        if dep.toolchain.is_some() || crate::hierarchy::is_system_toolchain(&recipe.toolchain) {
+            return None;
+        }
+        let named: Vec<&Candidate> = self
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.name == dep.name)
+            .collect();
+        if named.is_empty()
+            || named
+                .iter()
+                .any(|candidate| !crate::hierarchy::is_system_toolchain(&candidate.toolchain))
+        {
+            return None;
+        }
+        Some(crate::hierarchy::nearest_candidates_hint(
+            &dep.name,
+            &self.candidates,
+        ))
+    }
+
     /// Which resolvo package names can satisfy one dependency of one recipe.
     ///
     /// A tuple that names a toolchain asks for that level and no other,
@@ -991,9 +1017,11 @@ impl DependencyProvider for EbProvider {
         for d in c.dependencies.iter().chain(c.builddependencies.iter()) {
             let keys = self.dependency_keys(c, d);
             if keys.is_empty() {
-                let reason = self
-                    .pool
-                    .intern_string(format!("missing dependency package {}", d.name));
+                let mut text = format!("missing dependency package {}", d.name);
+                if let Some(hint) = self.system_only_hint(c, d) {
+                    text.push_str(&hint);
+                }
+                let reason = self.pool.intern_string(text);
                 return Dependencies::Unknown(reason);
             }
             // One key is the ordinary case. Several means this level carries
@@ -1821,6 +1849,35 @@ mod tests {
             cand("B", "1", None, "B-1.eb", vec![need("Eigen", "5.0.0")]),
         ];
         assert!(solve_with_resolvo(&candidates, &policy(vec!["A", "B"], vec![]), None).is_err());
+    }
+
+    /// `recipe check` tells the author to write the SYSTEM tuple. `stack
+    /// solve` has to say the same thing when that is the only candidate.
+    #[test]
+    fn a_system_only_name_says_how_to_reach_it() {
+        let mut java = cand("Java", "17", None, "Java-17.eb", vec![]);
+        java.toolchain = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let app = cand(
+            "App",
+            "1.0",
+            None,
+            "App-1.0.eb",
+            vec![DepReq {
+                name: "Java".into(),
+                version_req: "17".into(),
+                versionsuffix: None,
+                toolchain: None,
+            }],
+        );
+        let err = solve_with_resolvo(&[java, app], &policy(vec!["App"], vec![]), None)
+            .expect_err("bare Java must not solve");
+        assert!(
+            err.contains("('Java', '17', '', SYSTEM)"),
+            "stack solve does not name the SYSTEM tuple:\n{err}"
+        );
     }
 
     #[test]

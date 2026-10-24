@@ -6,6 +6,8 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `stack solve` names the SYSTEM tuple when a dependency exists only
+  there, the same hint `recipe check` prints.
 - `stack solve` does not resolve a bare dependency tuple to a SYSTEM
   recipe. A stack whose only candidate is at SYSTEM is rejected unless
   the tuple names SYSTEM or the recipe itself is SYSTEM.
