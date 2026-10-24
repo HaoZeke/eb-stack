@@ -1,16 +1,16 @@
 #+TITLE: Site R extras on EESSI
 #+OPTIONS: toc:t num:nil
 
-Turn a CRAN DESCRIPTION, CRAN JSON object, or package list into a
+Turn a Comprehensive R Archive Network (CRAN) DESCRIPTION, CRAN JSON object, or package list into a
 ~Bundle~ easyconfig with ~exts_defaultclass = 'RPackage'~. Base-R
-packages (~methods~, ~utils~, …) are dropped. ~R (>= x)~ becomes a
+packages (~methods~, ~utils~, ...) are dropped. ~R (>= x)~ becomes a
 dependency on the EasyBuild ~R~ module. Packages already listed in
 ~R-bundle-CRAN~ ~exts_list~ are satisfied as provides.
 
 * Inputs
 
 1. a DESCRIPTION file, ~cran.json~, or a one-spec-per-line package list;
-2. the EESSI robot tree;
+2. the European Environment for Scientific Software Installations (EESSI) robot tree;
 3. a stack policy that locks ~R~ and ~R-bundle-CRAN~ to the versions
    in the robot. See ~examples/stacks/eessi-r-extras.toml~.
 
@@ -83,8 +83,8 @@ Project one-offs can keep using ~R_LIBS_USER~ instead of a site bundle.
 * Dependencies that state no version
 
 A CRAN package routinely imports another by bare name, with no version at all.
-Nothing is wrong with that, but an ~exts_list~ entry needs one concrete
-version, so planning stops with
+Nothing is wrong with that, but an ~exts_list~ entry needs one
+concrete version, so planning stops with
 
 #+begin_example
 processx is not in the robot, and ">=0" names no version to install as an extension. Give the ecosystem index with --package-index, or pin the dependency
@@ -131,7 +131,7 @@ eb-stack package plan \
 The index is a control file: stanzas of ~Field: value~ separated by blank
 lines. Versions for unpinned leftovers come from it, and so do their checksums,
 since CRAN publishes an ~MD5sum~ per package and EasyBuild accepts a tagged
-~md5:~ value. It is a file, not a network call, so a plan stays reproducible
+~md5:~ value. It is a file, so a plan stays reproducible
 and works offline against a copy taken at a known time.
 
 Without an index the error above is the right outcome: installing whatever
@@ -159,5 +159,5 @@ exts_list = [
 ~('processx', '3.8.4'~ and the ~md5:~ value from the index.
 
 An already-provided import collapses to its provider instead of becoming an
-extension, through the same mechanism the Python side uses: an ~R-bundle-CRAN~
+extension, through the same mechanism Python packages use: an ~R-bundle-CRAN~
 in the robot tree satisfies a requirement for one of its ~exts_list~ entries.

@@ -132,6 +132,6 @@ version and a real easyconfig path.
 * Next steps
 
 - [[file:../reference/formats.org][Format reference]] for the exact build-list and
-  stack-diff grammar, and the CycloneDX 1.5 SBOM shape (~cyclonedx-bom~).
+  stack-diff grammar, and the CycloneDX 1.5 Software Bill of Materials (SBOM) shape (~cyclonedx-bom~).
 - [[file:solve-lock.org][Solve a consistent stack lock]] if you have not run
   ~eb-stack stack solve~ yet.

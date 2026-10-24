@@ -2,7 +2,7 @@
 #+OPTIONS: toc:t num:nil
 
 This workflow turns a foreign package recipe into a canonical manifest,
-planned SBOM, Resolvo profile locks, conventional EasyBuild recipes, and a
+planned Software Bill of Materials (SBOM), Resolvo profile locks, conventional EasyBuild recipes, and a
 persisted build-evaluation campaign. It is the workflow used for conda-forge
 eOn and Spack QMCPACK fixtures.
 
@@ -15,11 +15,11 @@ Collect these inputs:
 3. an EasyBuild robot tree, with site overlays passed after upstream;
 4. a stack-policy TOML file for preferred pins, locked pins, and exclusions.
 5. positional SHA-256 values for source artifacts whose foreign metadata has
-   only a VCS commit or tag.
+   only a version control system (VCS) commit or tag.
 
 Package TOML carries explicit foreign-to-EasyBuild aliases, package/build
 policy, and installable product choices. Each profile emits a separate ~.eb~
-file. MPI/OpenMP toolchain options alone do not create a suffix; an
+file. Message Passing Interface (MPI) and OpenMP toolchain options alone do not create a suffix; an
 independently loadable ABI or feature variant does. Parser code handles foreign
 syntax, never package names.
 
@@ -321,7 +321,7 @@ Resolution for each hole is robot-first, then:
 
 1. optional catalog override for that identity;
 2. EasyBuild recipes under easybuild source roots (annual-bump pipeline; source
-   toolchain family is preserved — a ~GCCcore~ recipe retargets to the
+   toolchain family is preserved: a ~GCCcore~ recipe retargets to the
    ~GCCcore~ member of the target hierarchy, not the composite parent);
 3. exactly one compatible conda-forge or Spack recipe under foreign roots.
 

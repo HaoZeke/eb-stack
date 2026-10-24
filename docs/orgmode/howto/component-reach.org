@@ -1,7 +1,7 @@
 #+TITLE: Which modules carry a component, and what that forces rebuilt
 #+OPTIONS: toc:t num:nil author:nil
 
-Goal: a CVE names a component and a version. List every easyconfig and
+Goal: a Common Vulnerabilities and Exposures (CVE) record names a component and a version. List every easyconfig and
 installed module in one toolchain generation that carries it, then feed
 the recipes that contain it into the rebuild closure.
 
@@ -63,7 +63,7 @@ that flag is omitted and ~EASYBUILD_FILTER_DEPS~ is set, the command
 reads the variable. The recorded command above passes neither, so every
 easyconfig in the generation is the stack.
 
-~--component~ is the name. ASCII case is ignored, so ~curl~ matches
+~--component~ is the name. Matching ignores ASCII letter case, so ~curl~ matches
 ~cURL~ and ~jupyterlab~ matches ~JupyterLab~. The match is a whole token,
 so ~jupyterlab~ does not match ~jupyterlab-server~ and ~curl~ does not
 match ~libcurl~.

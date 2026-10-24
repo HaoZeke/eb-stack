@@ -87,7 +87,7 @@ the same document.
 
 ~out/rebuilds/<YYYYMMDD>-eb-<version>-cve-patches.yml~ lists class
 must-rebuild only, with ~rebuild: true~. The date is taken from
-~--generated-at~ (or from the current UTC time). One file per EasyBuild
+~--generated-at~ (or from the current date in Coordinated Universal Time (UTC)). One file per EasyBuild
 version named by the easystack filenames. A second run replaces the
 ~rebuilds/*.yml~ files from the previous run.
 
@@ -104,7 +104,7 @@ easyconfig that put it there.
 
 ~--check-static~ needs ~--prefix~. For each remaining review dependent it
 reads defined dynamic symbols, the names ~nm -D --defined-only~ prints,
-from the installed ELF files. The patched library's names come from its
+from the installed Executable and Linkable Format (ELF) files. The patched library's names come from its
 shared objects, or from the archive members when the install has no
 shared object. A hit is must-rebuild. No hit is no-rebuild. An empty export set
 stays in review, because there was nothing to look for.

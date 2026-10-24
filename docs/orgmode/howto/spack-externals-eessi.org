@@ -14,7 +14,7 @@ checkout is the ~eessi~ branch of
 
 * What the script does
 
-~scripts/eessi-spack-externals.py~ reads the easyconfig every EESSI install
+~scripts/eessi-spack-externals.py~ reads the easyconfig that every install in the European Environment for Scientific Software Installations (EESSI)
 keeps under ~<install>/easybuild/~, walks the runtime dependency closure of the
 modules you name, and writes a Spack ~packages.yaml~:
 

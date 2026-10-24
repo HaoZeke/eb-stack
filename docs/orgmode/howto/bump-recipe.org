@@ -2,7 +2,7 @@
 #+OPTIONS: toc:t num:nil
 
 A bump is a canonical EasyBuild-origin package bundle. It emits a planned
-SBOM, a Resolvo lock, and a rewritten recipe; it does not use a separate text
+Software Bill of Materials (SBOM), a Resolvo lock, and a rewritten recipe; it does not use a separate text
 rewrite API.
 
 * Retarget the toolchain generation
@@ -45,7 +45,7 @@ eb-stack package bump \
   --out-dir /tmp/eb-stack/bundles/gromacs-dep
 #+end_src
 
-Preferred distribution pins participate in the SAT solve and may fall back.
+Preferred distribution pins participate in the Boolean satisfiability (SAT) solve and may fall back.
 Locked pins are exact constraints. Both outcomes are recorded in the profile
 lock, so a site preference never becomes an invisible post-solve edit.
 When a selected pin belongs to another toolchain generation, the emitted
@@ -72,7 +72,7 @@ empty string and records a residual. The bump never invents a digest.
 To fill the digest without a separate EasyBuild run, pass ~--fetch-checksums~.
 The bump resolves ~sources~ and ~source_urls~ at the new version, downloads
 each entry from those URLs in order, and writes the first source's SHA-256 into
-the recipe and the SBOM, which is what ~eb --inject-checksums~ does on the
+the recipe and the SBOM, matching what ~eb --inject-checksums~ does on the
 EasyBuild host. A git checkout, a missing URL or a failed download stays empty
 and is listed in ~sources.fetch.json~ and as a ~source:fetch~ residual:
 

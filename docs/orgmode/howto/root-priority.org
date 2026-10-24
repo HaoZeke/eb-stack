@@ -23,7 +23,7 @@ dependencies = [
 #+end_src
 
 Both roots cannot get their newest version at once: only one ~OpenMPI~
-version is co-selected per lock. Feasibility (resolvo's CDCL SAT core) will
+version is co-selected per lock. Feasibility, checked by resolvo's conflict-driven clause learning (CDCL) Boolean satisfiability (SAT) core, will
 happily return *a* consistent assignment, but which one depends on solver
 internals unless the policy says which root matters more. See
 [[file:../explanation/optimization-model.org][the optimization model]] for why plain SAT
@@ -44,8 +44,8 @@ feasibility is not enough here.
 With no ~root_priority~ field, priority defaults to ~roots~ list order:
 listing ~GROMACS~ first here keeps ~GROMACS 2025.0~ (and ~OpenMPI 4.1.6~),
 yielding ~LAMMPS 2023.08~. Reordering ~roots~ to ~["LAMMPS", "GROMACS"]~
-flips the outcome to ~LAMMPS 2024.08~ / ~GROMACS 2024.4~. That coupling --
-priority tied to incidental list order -- is exactly what ~root_priority~
+flips the outcome to ~LAMMPS 2024.08~ / ~GROMACS 2024.4~. That coupling
+(priority tied to incidental list order) is exactly what ~root_priority~
 lets you avoid.
 
 * With root_priority: explicit and list-order-independent

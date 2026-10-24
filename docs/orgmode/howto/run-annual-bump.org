@@ -12,7 +12,7 @@ Record:
 
 - the source and target toolchain generations;
 - upstream EasyBuild robot roots and site overlays;
-- the stack-policy TOML for site/distribution preferences;
+- the stack-policy TOML file for site/distribution preferences;
 - the public target base plus the site target layer;
 - the maintained recipe list and destination easyconfigs repository.
 
@@ -31,7 +31,7 @@ eb-stack package bump \
 #+end_src
 
 Repeat mechanically for the maintained set. Each successful bundle contains a
-manifest, planned SBOM, default profile lock, and recipe. The lock records stack
+manifest, planned Software Bill of Materials (SBOM), default profile lock, and recipe. The lock records stack
 pin fallbacks and exclusions, making generation policy reviewable.
 
 Explicit dependency toolchain families are retargeted with the parent

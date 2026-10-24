@@ -33,8 +33,8 @@ the dependencies installed, a rebuild of eOn alone takes about 2.5 minutes.
 
 * Prerequisites
 
-1. EESSI mounted at ~/cvmfs/software.eessi.io~ through the CernVM File System
-   (CVMFS). See [[*Without root][Without root]] when no
+1. EESSI mounted at ~/cvmfs/software.eessi.io~ through the CernVM File System (CVMFS).
+   See [[*Without root][Without root]] when no
    administrator can install the CVMFS client.
 2. A prefix for the installs. It must exist before ~EESSI-extend~ loads, or
    the module refuses to load:
