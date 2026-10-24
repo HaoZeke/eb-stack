@@ -635,13 +635,15 @@ enum RecipeCommand {
     },
     /// Emit the known toolchain hierarchies as JSON, parent and members.
     ///
-    /// `members` keeps the framework's order, most minimal subtoolchain first,
-    /// so a consumer reads it rather than sorting it.
+    /// Without `--export` this is the fixture generations. `--export` prints
+    /// the whole table, including the synthetic GCC-family rule. `members`
+    /// keeps the framework's order, most minimal subtoolchain first, so a
+    /// consumer reads it rather than sorting it.
     #[command(
         after_long_help = "Examples:\n  eb-stack recipe hierarchy\n  eb-stack recipe hierarchy --export"
     )]
     Hierarchy {
-        /// Emit the whole table.
+        /// Emit the whole table, including the synthetic GCC-family rule.
         #[arg(long)]
         export: bool,
     },
@@ -1657,9 +1659,21 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             );
             Ok(())
         }
-        RecipeCommand::Hierarchy { export: _ } => {
+        RecipeCommand::Hierarchy { export } => {
             use eb_stack::eb_engine_export::hierarchy_table;
-            println!("{}", serde_json::to_string_pretty(&hierarchy_table())?);
+            let table = hierarchy_table();
+            // `--export` is the spec a page embeds, the same role as
+            // `recipe templates --export`. The plain command is the lookup:
+            // fixture generations only. The GCC-family rule is synthetic,
+            // not one of those generations, so it stays on the export.
+            let value = if export {
+                table
+            } else {
+                serde_json::json!({
+                    "generations": table.get("generations").cloned().unwrap_or_default(),
+                })
+            };
+            println!("{}", serde_json::to_string_pretty(&value)?);
             Ok(())
         }
         RecipeCommand::Check {

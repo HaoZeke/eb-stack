@@ -614,6 +614,10 @@ All notable changes to this project are documented here.
 
 ### Changed
 
+- `recipe hierarchy` without `--export` prints only the known
+  generations. `--export` also prints the synthetic GCC-family rule.
+  The plain command used to print both.
+
 - Package commands, `stack solve`, the MCP tools, and
   `skills/golden-replay/replay.sh` pass `--toolchain name/version` and
   `--stack-policy`. The older spellings stay accepted, are omitted

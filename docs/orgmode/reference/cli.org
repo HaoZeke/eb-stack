@@ -217,7 +217,8 @@ eb-stack recipe easyblock --charmap
 eb-stack recipe templates --export
 eb-stack recipe templates --name NAME --version VERSION
 
-eb-stack recipe hierarchy [--export]
+eb-stack recipe hierarchy
+eb-stack recipe hierarchy --export
 
 eb-stack recipe check \
   --recipe RECIPE.eb \
@@ -246,8 +247,10 @@ after ~--~.
 ~recipe templates --export~ prints the constant table and the derived-key
 rules. With ~--name~ and ~--version~ it prints the values those rules produce
 for that pair, using the lowercased name for the forge-account defaults and
-~system~ for the toolchain. ~recipe hierarchy~ prints the known toolchain
-generations as JSON. ~--export~ is accepted and prints the same table.
+~system~ for the toolchain. ~recipe hierarchy~ prints the known fixture
+generations as JSON, parent and members, most minimal subtoolchain first.
+~--export~ prints the whole table: those generations plus the synthetic
+GCC-family rule.
 
 ~recipe lint~ prints JSON with ~clean~, ~style~ (each finding carries
 ~path~, ~line~, ~column~, ~code~, ~severity~, ~message~, and, when set,

@@ -542,3 +542,57 @@ requirements:
     assert!(recipe.contains("('CMake', '3.31.11')"), "{recipe}");
     assert!(!recipe.contains("3.18.4"), "{recipe}");
 }
+
+#[test]
+fn recipe_hierarchy_export_adds_the_synthetic_rule() {
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let plain = Command::new(binary)
+        .args(["recipe", "hierarchy"])
+        .output()
+        .expect("recipe hierarchy");
+    assert!(
+        plain.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    let plain_json: serde_json::Value =
+        serde_json::from_slice(&plain.stdout).expect("plain hierarchy json");
+    assert!(
+        plain_json.get("synthetic").is_none(),
+        "the plain command is the generation lookup:\n{plain_json}"
+    );
+    let generations = plain_json["generations"].as_array().expect("generations");
+    let foss = generations
+        .iter()
+        .find(|generation| {
+            generation["parent"]["name"] == "foss" && generation["parent"]["version"] == "2025a"
+        })
+        .expect("foss/2025a");
+    let members = foss["members"].as_array().expect("members");
+    assert_eq!(members.first().expect("first")["name"], "system");
+    assert_eq!(members.last().expect("last")["name"], "foss");
+
+    let exported = Command::new(binary)
+        .args(["recipe", "hierarchy", "--export"])
+        .output()
+        .expect("recipe hierarchy --export");
+    assert!(
+        exported.status.success(),
+        "{}",
+        String::from_utf8_lossy(&exported.stderr)
+    );
+    let export_json: serde_json::Value =
+        serde_json::from_slice(&exported.stdout).expect("exported hierarchy json");
+    assert_eq!(export_json["generations"], plain_json["generations"]);
+    let synthetic = export_json["synthetic"]
+        .as_array()
+        .expect("synthetic rules");
+    assert!(
+        synthetic.iter().any(|row| row["name"] == "GCCcore"),
+        "{export_json}"
+    );
+    assert!(
+        synthetic.iter().any(|row| row["name"] == "GCC"),
+        "{export_json}"
+    );
+}
