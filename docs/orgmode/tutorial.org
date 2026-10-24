@@ -119,7 +119,7 @@ Change the mode to ~locked~ only when the stack requires that exact candidate
 and must fail otherwise. The core + rgpot product needs no cross-generation
 pins; every dependency sits on the foss-2026.1 / GCCcore-15.2.0 generation.
 
-This matters because a version range is not build evidence. A candidate can be
+A version range is not build evidence. A candidate can be
 SAT-compatible and still fail configure, compile, link, tests, install, or
 sanity. Those outcomes belong to the campaign finding model.
 

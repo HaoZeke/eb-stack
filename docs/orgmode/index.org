@@ -38,7 +38,7 @@
 
    *New package from conda-forge/Spack?* → :doc:`howto/new-package`
 
-   *Site Python extras on EESSI?* → :doc:`howto/pypi-extend`
+   *Site Python extras on the European Environment for Scientific Software Installations (EESSI)?* → :doc:`howto/pypi-extend`
 
    *Site R extras on EESSI?* → :doc:`howto/cran-extend`
 
@@ -71,7 +71,7 @@
 .. grid:: 1 1 2 2
    :gutter: 2
 
-   .. grid-item-card:: Tutorial — package to verified build
+   .. grid-item-card:: Tutorial: package to verified build
       :link: tutorial
       :link-type: doc
 
@@ -179,7 +179,7 @@
 
 
   ~eb-stack~ parses conda-forge, Spack, and [[https://docs.easybuild.io/][EasyBuild]] recipes into one
-  canonical package plan. It emits a planned CycloneDX SBOM, materializes
+  canonical package plan. It emits a planned CycloneDX Software Bill of Materials (SBOM), materializes
   independently installable profiles, applies distribution/site preferences
   inside [[https://github.com/mamba-org/resolvo][Resolvo]], writes one lock and conventional ~.eb~ file per profile,
   and drives the resulting bundle through a persisted target-routed build
@@ -238,11 +238,11 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
 
 * Documentation map
 
-  - [[file:tutorial.org][Tutorial: foreign recipe to verified EasyBuild package]] -- start here.
-  - [[file:howto/run-annual-bump.org][How to run the annual toolchain-generation bump]] --
+  - [[file:tutorial.org][Tutorial: foreign recipe to verified EasyBuild package]]: start here.
+  - [[file:howto/run-annual-bump.org][How to run the annual toolchain-generation bump]]:
     operator guide for a whole rebuild (what it closes, the residual, the
     claim ladder, and the CI-known bumps).
-  - [[file:howto/new-package.org][Author a new package from conda-forge or Spack]] --
+  - [[file:howto/new-package.org][Author a new package from conda-forge or Spack]]:
     canonical plan + profiles + Resolvo + campaign.
   - How-to guides: [[file:howto/pypi-extend.org][site Python extras]],
     [[file:howto/cran-extend.org][site R extras]],
@@ -283,7 +283,7 @@ Rohit Goswami, eb-stack (source revision <commit>), https://github.com/HaoZeke/e
 
 * License
 
-  MIT. See [[https://github.com/HaoZeke/eb-stack/blob/main/LICENSE][LICENSE]] in the repository.
+  MIT License. See [[https://github.com/HaoZeke/eb-stack/blob/main/LICENSE][LICENSE]] in the repository.
 
 * Build these docs
 
