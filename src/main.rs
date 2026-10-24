@@ -323,6 +323,11 @@ struct ComponentReachArgs {
     /// Output directory: `component-reach.toml`, `.json`, and `.md`.
     #[arg(long, default_value = "component-reach")]
     out_dir: PathBuf,
+    /// Directory of recorded OSV responses (`queries.json` plus one body per
+    /// query). Absent, `--cve` asks api.osv.dev. Hidden: the reach tests use
+    /// it so they do not depend on the live records.
+    #[arg(long, hide = true)]
+    osv_cache: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -952,6 +957,7 @@ fn run_component_reach(args: ComponentReachArgs) -> Result<()> {
             filter_deps: args.filter_deps,
             generated_at: args.generated_at,
             out_dir: args.out_dir,
+            osv_cache: args.osv_cache,
         },
     )?;
     println!("{}", report.summary());

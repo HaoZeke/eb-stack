@@ -209,6 +209,8 @@ pub struct ComponentReachRequest {
     pub generated_at: Option<String>,
     /// Directory for `component-reach.toml`, `.json`, and `.md`.
     pub out_dir: PathBuf,
+    /// Recorded OSV responses. Absent, the command asks api.osv.dev.
+    pub osv_cache: Option<PathBuf>,
 }
 
 /// Counts `component-reach` prints.
@@ -546,6 +548,11 @@ fn cve_closure_totals(
 
 /// Write the component-reach report.
 pub fn run_component_reach(args: &ComponentReachRequest) -> Result<ComponentReachRun> {
+    if let Some(dir) = &args.osv_cache {
+        let client = crate::osv::load_recorded_osv(dir)
+            .map_err(|error| anyhow!("--osv-cache {}: {error}", dir.display()))?;
+        return run_component_reach_with(args, &client);
+    }
     run_component_reach_with(args, &crate::registry::UreqClient)
 }
 
@@ -946,6 +953,7 @@ mod tests {
                 filter_deps: Vec::new(),
                 generated_at: Some("2026-10-24T00:00:00Z".into()),
                 out_dir: out,
+                osv_cache: None,
             },
             &MapClient { pages },
         )

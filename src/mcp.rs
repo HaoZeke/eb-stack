@@ -340,6 +340,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("filter_deps", "array"),
                 ("generated_at", "string"),
                 ("out_dir", "string"),
+                ("osv_cache", "string"),
             ],
         ),
         tool(
@@ -2631,6 +2632,7 @@ fn component_reach_tool(arguments: &Value) -> Result<Value, String> {
             generated_at: optional_string(arguments, "generated_at"),
             out_dir: optional_path(arguments, "out_dir")
                 .unwrap_or_else(|| PathBuf::from("component-reach")),
+            osv_cache: optional_path(arguments, "osv_cache"),
         })
         .map_err(|error| error.to_string())?;
     let summary = report.summary();

@@ -194,6 +194,8 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- The `eb_component_reach` schema lists `osv_cache`, which the CLI
+  accepts as `--osv-cache`.
 - `scripts/fetch-upstream-trees.sh` creates a checkout of pinned easybuilders
   easyconfigs, easyblocks, and framework trees. The `Upstream trees`
   workflow sources that cache and runs `cargo test --include-ignored`
@@ -493,6 +495,13 @@ All notable changes to this project are documented here.
 - The checked-in zen4 overlap report is the 2026-10-24 cvmfs run: 28 open
   pull requests, 20 easystack records, 10 shared modules. Closed pull
   request 1728 is gone and 1692's head is `655310721787`.
+
+- The European Environment for Scientific Software Installations
+  (EESSI) 2025.06 component-reach test is ignored unless
+  `scripts/fetch-upstream-trees.sh` has checked out the pinned trees.
+  The default test run does not clone or write into the source tree.
+- `scripts/fetch-upstream-trees.sh` exports one name per pinned tree
+  and records the EESSI software-layer commit the ignored test reads.
 
 ## 0.3.0 - 2026-07-21
 

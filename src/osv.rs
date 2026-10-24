@@ -4,10 +4,11 @@
 //! versions EasyBuild actually pins are on the GHSA or RUSTSEC alias, or in
 //! `name-version` tags such as `libXpm-3.5.17`.
 
-use crate::registry::RegistryClient;
+use crate::registry::{MapClient, RegistryClient};
 use crate::version::parse_requirement;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 const OSV_VULN_URL: &str = "https://api.osv.dev/v1/vulns/";
 
@@ -155,6 +156,38 @@ pub fn resolve_vulnerability(
         notes,
         unresolved,
     })
+}
+
+/// Read OSV responses saved under `dir`.
+///
+/// `queries.json` records the date and each request URL. The named files are
+/// the bodies returned for those URLs, so a later run does not ask the network.
+pub fn load_recorded_osv(dir: &Path) -> Result<MapClient, String> {
+    let manifest_path = dir.join("queries.json");
+    let text = std::fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("read {}: {error}", manifest_path.display()))?;
+    let manifest: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| format!("parse {}: {error}", manifest_path.display()))?;
+    let queries = manifest
+        .get("queries")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| format!("{} has no queries", manifest_path.display()))?;
+    let mut pages = BTreeMap::new();
+    for query in queries {
+        let url = query
+            .get("url")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| format!("{} query has no url", manifest_path.display()))?;
+        let file = query
+            .get("file")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| format!("{} query has no file", manifest_path.display()))?;
+        let path = dir.join(file);
+        let body =
+            std::fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
+        pages.insert(url.to_string(), body);
+    }
+    Ok(MapClient { pages })
 }
 
 fn fetch_vuln(client: &dyn RegistryClient, id: &str) -> Result<serde_json::Value, String> {
@@ -524,6 +557,40 @@ mod tests {
                 .any(|item| item.contains("GIT range not parsed")),
             "{:?}",
             libxpm.unresolved
+        );
+    }
+
+    #[test]
+    fn the_recorded_eessi_advisories_resolve_offline() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/component_reach_eessi/osv");
+        let manifest = std::fs::read_to_string(dir.join("queries.json")).expect("queries");
+        assert!(manifest.contains("\"fetched\": \"2026-10-24\""));
+        let client = load_recorded_osv(&dir).expect("load recorded osv");
+        let webpki = resolve_vulnerability("CVE-2026-93599", &client).unwrap();
+        assert!(
+            webpki
+                .components
+                .iter()
+                .any(|item| item.name == "rustls-webpki" && item.ecosystem == "crates.io"),
+            "{:?}",
+            webpki.components
+        );
+        let urllib = resolve_vulnerability("CVE-2025-66471", &client).unwrap();
+        assert!(
+            urllib
+                .components
+                .iter()
+                .any(|item| item.name == "urllib3" && item.ecosystem == "PyPI"),
+            "{:?}",
+            urllib.components
+        );
+        let libxpm = resolve_vulnerability("CVE-2026-94287", &client).unwrap();
+        assert!(
+            libxpm.components.iter().any(|item| {
+                item.name == "libXpm" && item.versions.iter().any(|version| version == "3.5.17")
+            }),
+            "{:?}",
+            libxpm.components
         );
     }
 

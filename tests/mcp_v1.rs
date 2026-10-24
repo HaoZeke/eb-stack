@@ -2257,3 +2257,56 @@ fn mcp_schemas_cover_cli_flags() {
         "allowlist entries no flag uses: {unused:?}"
     );
 }
+
+/// The CLI accepts `--osv-cache`. The tool schema has to list it too.
+#[test]
+fn mcp_component_reach_lists_osv_cache() {
+    let listed = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {}
+    }))
+    .expect("tools/list");
+    let tools = listed["result"]["tools"].as_array().expect("tools");
+    let reach = tools
+        .iter()
+        .find(|tool| tool["name"] == "eb_component_reach")
+        .expect("eb_component_reach");
+    assert_eq!(
+        reach["inputSchema"]["properties"]["osv_cache"]["type"], "string",
+        "{reach}"
+    );
+    let required = reach["inputSchema"]["required"]
+        .as_array()
+        .expect("required");
+    assert!(
+        required.iter().all(|item| item != "osv_cache"),
+        "osv_cache is optional: {required:?}"
+    );
+
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_component_reach",
+            "arguments": {
+                "generation": "2026.1",
+                "easyconfigs": ["/nope-tree"],
+                "component": "curl",
+                "version": "8.17.0",
+                "osv_cache": "/nope-osv"
+            }
+        }
+    }))
+    .expect("call");
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        text.contains("--osv-cache") && text.contains("/nope-osv"),
+        "{text}"
+    );
+}

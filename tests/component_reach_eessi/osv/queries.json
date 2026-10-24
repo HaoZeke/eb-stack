@@ -1,0 +1,40 @@
+{
+  "fetched": "2026-10-24",
+  "queries": [
+    {
+      "id": "CVE-2026-93599",
+      "url": "https://api.osv.dev/v1/vulns/CVE-2026-93599",
+      "file": "CVE-2026-93599.json"
+    },
+    {
+      "id": "GHSA-82j2-j2ch-gfr8",
+      "url": "https://api.osv.dev/v1/vulns/GHSA-82j2-j2ch-gfr8",
+      "file": "GHSA-82j2-j2ch-gfr8.json"
+    },
+    {
+      "id": "RUSTSEC-2026-0104",
+      "url": "https://api.osv.dev/v1/vulns/RUSTSEC-2026-0104",
+      "file": "RUSTSEC-2026-0104.json"
+    },
+    {
+      "id": "CVE-2025-66471",
+      "url": "https://api.osv.dev/v1/vulns/CVE-2025-66471",
+      "file": "CVE-2025-66471.json"
+    },
+    {
+      "id": "GHSA-2xpw-w6gg-jr37",
+      "url": "https://api.osv.dev/v1/vulns/GHSA-2xpw-w6gg-jr37",
+      "file": "GHSA-2xpw-w6gg-jr37.json"
+    },
+    {
+      "id": "PYSEC-2026-1994",
+      "url": "https://api.osv.dev/v1/vulns/PYSEC-2026-1994",
+      "file": "PYSEC-2026-1994.json"
+    },
+    {
+      "id": "CVE-2026-94287",
+      "url": "https://api.osv.dev/v1/vulns/CVE-2026-94287",
+      "file": "CVE-2026-94287.json"
+    }
+  ]
+}

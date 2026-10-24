@@ -250,3 +250,29 @@ fn fetch_script_exports_one_name_per_pinned_tree() {
         assert!(text.contains(kept), "fetch script missing {kept}");
     }
 }
+#[test]
+fn the_eessi_reach_test_stays_off_the_network_and_the_source_tree() {
+    let text = std::fs::read_to_string(repo().join("tests/component_reach_eessi.rs"))
+        .expect("read eessi test");
+    assert!(
+        text.contains("#[ignore"),
+        "the EESSI reach test must be ignored"
+    );
+    assert!(!text.contains("git clone"), "{text}");
+    assert!(!text.contains("api.github.com"), "{text}");
+    assert!(!text.contains("CARGO_MANIFEST_DIR"), "{text}");
+    assert!(
+        !text.contains("UreqClient"),
+        "the EESSI reach test must read OSV from the recorded fixture"
+    );
+    assert!(text.contains("EB_EASYCONFIGS_DEVELOP"));
+    assert!(text.contains("EB_EESSI_SOFTWARE_LAYER"));
+    assert!(text.contains("std::env::temp_dir()"));
+    let script = std::fs::read_to_string(repo().join("scripts/fetch-upstream-trees.sh"))
+        .expect("read fetch script");
+    assert!(
+        script.contains("export EB_EESSI_SOFTWARE_LAYER="),
+        "fetch script must publish the pinned software-layer checkout"
+    );
+    assert!(script.contains("b2c10c7278f8b741f4053ddb2907dc4d062063d1"));
+}
