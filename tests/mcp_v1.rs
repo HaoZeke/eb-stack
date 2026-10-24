@@ -55,6 +55,28 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     }
     assert_eq!(names.len(), 30, "unexpected MCP tools: {names:?}");
 
+    let inspect = response["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "eb_package_inspect")
+        .expect("package inspect schema");
+    let description = inspect["description"].as_str().expect("description");
+    for format in [
+        "conda-forge",
+        "Spack",
+        "PyPI",
+        "CRAN",
+        "Cargo",
+        "LuaRocks",
+        "Raku",
+    ] {
+        assert!(
+            description.contains(format),
+            "eb_package_inspect description omits {format}: {description}"
+        );
+    }
+
     let package_bump = response["result"]["tools"]
         .as_array()
         .unwrap()

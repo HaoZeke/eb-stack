@@ -123,7 +123,7 @@ fn tool_catalog() -> Vec<Value> {
     let mut tools = vec![
         tool_with_optional(
             "eb_package_inspect",
-            "Parse a conda-forge, Spack, PyPI, or CRAN recipe into a canonical build manifest and planned CycloneDX SBOM.",
+            "Parse a conda-forge, Spack, PyPI, CRAN, Cargo, LuaRocks, or Raku recipe into a canonical build manifest and planned CycloneDX SBOM.",
             &[
                 ("source", "string"),
                 ("toolchain_version", "string"),
