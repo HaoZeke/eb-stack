@@ -13,24 +13,8 @@ use crate::{parse_easyconfig_tree, parse_easyconfig_trees, write_json_pretty};
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 
-/// A rejected command line. The CLI exits 2 when this is the cause.
-#[derive(Debug)]
-pub struct CommandUsage {
-    message: String,
-}
-
-impl std::fmt::Display for CommandUsage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for CommandUsage {}
-
 fn usage(message: impl std::fmt::Display) -> anyhow::Error {
-    anyhow::Error::new(CommandUsage {
-        message: message.to_string(),
-    })
+    crate::cli_parse::usage(message)
 }
 
 /// `--generated-at` is stored as given. An absent flag is the current UTC time.

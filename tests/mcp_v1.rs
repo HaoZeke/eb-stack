@@ -1559,7 +1559,7 @@ fn mcp_schemas_match_the_handlers_for_bump_lint_and_resolve() {
         "method": "tools/call",
         "params": {
             "name": "eb_package_bump",
-            "arguments": {"toolchain_version": "2026.1", "source": "x.eb", "easyconfigs": ["."], "out_dir": "/tmp"}
+            "arguments": {"source": "x.eb", "easyconfigs": ["."], "out_dir": "/tmp"}
         }
     }))
     .expect("bump");

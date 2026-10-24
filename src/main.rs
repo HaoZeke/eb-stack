@@ -21,36 +21,16 @@ use eb_stack::{
     SolveExtraOut, StackLock, Toolchain, UreqClient,
 };
 use std::collections::HashMap;
-use std::error::Error;
 use std::path::{Path, PathBuf};
 
-/// The command line was rejected before the work started.
-///
-/// Exit status is 2, the same status clap uses for a missing flag. A missing
-/// file, a parse failure, or a check that failed is status 1 instead.
-#[derive(Debug)]
-struct Usage {
-    message: String,
-}
-
-impl std::fmt::Display for Usage {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.message)
-    }
-}
-
-impl Error for Usage {}
-
 fn usage(message: impl std::fmt::Display) -> anyhow::Error {
-    anyhow::Error::new(Usage {
-        message: message.to_string(),
-    })
+    eb_stack::cli_parse::usage(message)
 }
 
 fn is_usage(error: &anyhow::Error) -> bool {
     error
         .chain()
-        .any(|cause| cause.is::<Usage>() || cause.is::<eb_stack::site_commands::CommandUsage>())
+        .any(|cause| cause.is::<eb_stack::cli_parse::UsageError>())
 }
 
 #[derive(Parser, Debug)]
@@ -1921,12 +1901,12 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     path
                 }
                 None => {
-                    let (name, version) = toolchain
-                        .as_deref()
-                        .and_then(|t| t.split_once('/'))
-                        .ok_or_else(|| {
-                            usage("--toolchain wants name/version, for example foss/2026.1")
-                        })?;
+                    let spec = toolchain.as_deref().ok_or_else(|| {
+                        usage("--toolchain wants name/version, for example foss/2026.1")
+                    })?;
+                    let parsed = eb_stack::cli_parse::parse_toolchain_spec(spec, "--toolchain")?;
+                    let name = parsed.name.as_str();
+                    let version = parsed.version.as_str();
                     let policy = serde_json::json!({
                         "toolchain": {"name": name, "version": version},
                         "roots": roots,
@@ -2365,19 +2345,7 @@ fn resolve_ingest_source(
 }
 
 fn parse_format(value: &str) -> Result<Option<ForeignFormat>> {
-    match value {
-        "auto" => Ok(None),
-        "conda-forge" | "conda" => Ok(Some(ForeignFormat::CondaForge)),
-        "spack" => Ok(Some(ForeignFormat::Spack)),
-        "pypi" => Ok(Some(ForeignFormat::Pypi)),
-        "cran" => Ok(Some(ForeignFormat::Cran)),
-        "cargo" | "crates" | "crates.io" => Ok(Some(ForeignFormat::Cargo)),
-        "luarocks" | "lua" => Ok(Some(ForeignFormat::Luarocks)),
-        "raku" | "perl6" => Ok(Some(ForeignFormat::Raku)),
-        _ => Err(usage(format!(
-            "--format {value}: expected auto, conda-forge, spack, pypi, cran, cargo, luarocks, or raku"
-        ))),
-    }
+    eb_stack::cli_parse::parse_foreign_format(value, "--format").map_err(anyhow::Error::from)
 }
 
 fn load_package_layers(paths: &[PathBuf]) -> Result<Vec<PackageConfigLayer>> {
@@ -2457,34 +2425,14 @@ fn resolve_toolchain(
     version: Option<&str>,
     spec: Option<&str>,
 ) -> Result<Toolchain> {
-    let Some(spec) = spec else {
-        let Some(version) = version else {
-            return Err(usage(
-                "--toolchain-version is required, or pass --toolchain name/version",
-            ));
-        };
-        if name.is_some_and(|name| name.is_empty()) {
-            return Err(usage("--toolchain-name must not be empty"));
-        }
-        let name = name.unwrap_or("foss");
-        return Ok(toolchain(name, version));
+    // Clap rejects combining --toolchain with the split flags. Inspect still
+    // carries the foss default on the name, and that default is not a second
+    // argument.
+    let (name, version) = if spec.is_some() {
+        (None, None)
+    } else {
+        (name, version)
     };
-    let Some((parsed_name, parsed_version)) = spec.split_once('/') else {
-        return Err(usage(format!(
-            "--toolchain {spec}: expected name/version, for example foss/2026.1"
-        )));
-    };
-    if parsed_name.is_empty() || parsed_version.is_empty() || parsed_version.contains('/') {
-        return Err(usage(format!(
-            "--toolchain {spec}: expected name/version, for example foss/2026.1"
-        )));
-    }
-    Ok(toolchain(parsed_name, parsed_version))
-}
-
-fn toolchain(name: &str, version: &str) -> Toolchain {
-    Toolchain {
-        name: name.to_string(),
-        version: version.to_string(),
-    }
+    eb_stack::cli_parse::resolve_toolchain(name, version, spec, true, "--toolchain")
+        .map_err(anyhow::Error::from)
 }

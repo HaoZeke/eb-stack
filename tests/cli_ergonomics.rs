@@ -447,7 +447,7 @@ fn a_rejected_command_line_exits_2_and_a_failed_check_exits_1() {
             "zlib",
         ],
         2,
-        "--toolchain wants name/version",
+        "--toolchain foss: expected name/version",
     );
     assert_status(
         &["recipe", "templates", "--name", "Foo"],

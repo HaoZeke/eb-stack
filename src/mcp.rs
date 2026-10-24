@@ -2407,16 +2407,10 @@ fn stack_solve(arguments: &Value) -> Result<Value, String> {
             let Some(spec) = toolchain.as_deref() else {
                 return Err("pass stack_policy, or toolchain as name/version with root".into());
             };
-            let Some((name, version)) = spec.split_once('/') else {
-                return Err(format!(
-                    "toolchain {spec}: expected name/version, for example foss/2026.1"
-                ));
-            };
-            if name.is_empty() || version.is_empty() || version.contains('/') {
-                return Err(format!(
-                    "toolchain {spec}: expected name/version, for example foss/2026.1"
-                ));
-            }
+            let parsed = crate::cli_parse::parse_toolchain_spec(spec, "toolchain")
+                .map_err(|error| error.to_string())?;
+            let name = parsed.name.as_str();
+            let version = parsed.version.as_str();
             generated = std::env::temp_dir().join(format!(
                 "eb-stack-policy-{name}-{version}-{}.json",
                 std::process::id()
@@ -2826,51 +2820,20 @@ fn toolchain(arguments: &Value) -> Result<Toolchain, String> {
 /// `name/version` in `toolchain`, or the split fields.
 ///
 /// Inspect and plan default a missing name to `foss`. Bump does not.
-/// An empty `toolchain_version` is kept: a SYSTEM recipe has one.
 fn resolve_mcp_toolchain(arguments: &Value, default_name: bool) -> Result<Toolchain, String> {
     let spec = optional_string(arguments, "toolchain");
     let name = optional_string(arguments, "toolchain_name");
     let version = optional_string(arguments, "toolchain_version");
-    if let Some(spec) = spec {
-        if name.is_some() || version.is_some() {
-            return Err("toolchain cannot be used with toolchain_name or toolchain_version".into());
-        }
-        let Some((parsed_name, parsed_version)) = spec.split_once('/') else {
-            return Err(format!(
-                "toolchain {spec}: expected name/version, for example foss/2026.1"
-            ));
-        };
-        if parsed_name.is_empty() || parsed_version.is_empty() || parsed_version.contains('/') {
-            return Err(format!(
-                "toolchain {spec}: expected name/version, for example foss/2026.1"
-            ));
-        }
-        return Ok(Toolchain {
-            name: parsed_name.into(),
-            version: parsed_version.into(),
-        });
-    }
-    if name.as_deref().is_some_and(|name| name.is_empty()) {
-        return Err("toolchain_name must not be empty".into());
-    }
-    match (name, version) {
-        (Some(name), Some(version)) => Ok(Toolchain { name, version }),
-        (None, Some(version)) if default_name => Ok(Toolchain {
-            name: "foss".into(),
-            version,
-        }),
-        _ if default_name => {
-            Err("toolchain_version is required, or pass toolchain as name/version".into())
-        }
-        _ => Err(
-            "toolchain_name and toolchain_version are required, or pass toolchain as name/version"
-                .into(),
-        ),
-    }
+    crate::cli_parse::resolve_toolchain(
+        name.as_deref(),
+        version.as_deref(),
+        spec.as_deref(),
+        default_name,
+        "toolchain",
+    )
+    .map_err(|error| error.to_string())
 }
 
-/// `stack_policy` is the argument `stack solve --stack-policy` takes.
-/// `policy` is that same argument.
 /// `stack_policy` is the argument `stack solve --stack-policy` takes.
 /// `policy` is that same argument, kept and warned about.
 const POLICY_ALIAS_WARNING: &str =
@@ -2911,20 +2874,8 @@ fn with_policy_warning(
 }
 
 fn foreign_format(arguments: &Value) -> Result<Option<ForeignFormat>, String> {
-    match optional_string(arguments, "format")
-        .as_deref()
-        .unwrap_or("auto")
-    {
-        "auto" => Ok(None),
-        "conda" | "conda-forge" => Ok(Some(ForeignFormat::CondaForge)),
-        "spack" => Ok(Some(ForeignFormat::Spack)),
-        "pypi" => Ok(Some(ForeignFormat::Pypi)),
-        "cran" => Ok(Some(ForeignFormat::Cran)),
-        "cargo" | "crates" | "crates.io" => Ok(Some(ForeignFormat::Cargo)),
-        "luarocks" | "lua" => Ok(Some(ForeignFormat::Luarocks)),
-        "raku" | "perl6" => Ok(Some(ForeignFormat::Raku)),
-        value => Err(format!("unsupported foreign format {value}")),
-    }
+    let value = optional_string(arguments, "format").unwrap_or_else(|| "auto".to_string());
+    crate::cli_parse::parse_foreign_format(&value, "format").map_err(|error| error.to_string())
 }
 
 fn required_string(arguments: &Value, name: &str) -> Result<String, String> {

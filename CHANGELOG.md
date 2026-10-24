@@ -552,6 +552,8 @@ All notable changes to this project are documented here.
 
 ### Changed
 
+- The CLI and the MCP tools share one usage error, one toolchain
+  parser, and one foreign-format parser.
 - `--help` for every command includes an example, and every flag has a
   description. Defaults the command applies are shown there.
 - `stack solve` reads the policy file with `--stack-policy`, the same flag
