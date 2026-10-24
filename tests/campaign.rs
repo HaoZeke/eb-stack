@@ -642,6 +642,10 @@ fn missing_easybuild_program_is_persisted_as_a_runtime_finding() {
     assert_eq!(state.findings[0].class, BuildFindingClass::Runtime);
     assert_eq!(state.findings[0].stage, "build");
     assert_eq!(state.findings[0].exit_code, Some(127));
+    assert_eq!(
+        state.findings[0].summary,
+        "runtime failure from EasyBuild command (exit 127)"
+    );
     assert!(state.findings[0].evidence.contains("eb-stack-easybuild"));
     assert!(state_path.is_file());
 }

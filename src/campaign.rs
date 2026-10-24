@@ -958,7 +958,14 @@ fn disposition(class: BuildFindingClass) -> FindingDisposition {
 }
 
 fn finding_summary(class: BuildFindingClass, exit_code: Option<i32>) -> String {
-    format!("{class:?} failure from EasyBuild command (exit {exit_code:?})")
+    let class = serde_json::to_value(class)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| "unknown".into());
+    match exit_code {
+        Some(code) => format!("{class} failure from EasyBuild command (exit {code})"),
+        None => format!("{class} failure from EasyBuild command (no exit status)"),
+    }
 }
 
 fn compact_evidence(stdout: &str, stderr: &str) -> String {
