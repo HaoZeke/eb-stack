@@ -12,6 +12,12 @@ All notable changes to this project are documented here.
 - `eb-stack easyblock-reach` keeps an `easyblock` key on a `components` or
   `exts_list` assignment the parser had to skip. GFE's component list is a
   comprehension plus a tuple, and that tuple names `CMakeMake`.
+- `eb-stack easyblock-reach` follows a nested easyblock class and a
+  module-level name bound to a class. QuantumESPRESSO's
+  `EB_QuantumESPRESSOcmake(CMakeMake)` is nested inside
+  `EB_QuantumESPRESSO`, so a change to `CMakeMake` lists that class and
+  the QuantumESPRESSO easyconfigs. A framework module still reaches the
+  easyblocks that import it and their subclasses.
 - A foreign package plan locks a generation member instead of the
   SYSTEM bootstrap of the same name when both are in the robot, which is
   the module `recipe check` accepts.

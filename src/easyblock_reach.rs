@@ -1,8 +1,11 @@
 //! Which easyblock classes a changed Python file reaches.
 //!
 //! The class hierarchy is the `class` statement, not an import of the base:
-//! `EB_GROMACS(CMakeMake)` is reached by a change to `CMakeMake`. A framework
-//! module reaches the easyblocks that import it, and then their subclasses.
+//! `EB_GROMACS(CMakeMake)` is reached by a change to `CMakeMake`. A nested
+//! class counts, and so does the class that encloses it: QuantumESPRESSO
+//! delegates to `EB_QuantumESPRESSOcmake(CMakeMake)`. A module-level name
+//! bound to a class (`Legacy = CMakeMake`) is that class. A framework module
+//! reaches the easyblocks that import it, and then their subclasses.
 //! Easyconfig matching is layered on top of this index.
 
 use crate::build_order::{module_name, reverse_closure, reverse_uses, Choice, ModuleKey};
@@ -36,6 +39,10 @@ pub struct EasyblockIndex {
     pub classes: BTreeMap<String, ClassFact>,
     /// Python module to the classes defined in files that import it.
     pub importers: BTreeMap<String, BTreeSet<String>>,
+    /// Nested class to the class whose body defines it.
+    pub enclosing: BTreeMap<String, String>,
+    /// Module-level name bound to a different class (`Legacy = CMakeMake`).
+    pub aliases: BTreeMap<String, String>,
 }
 
 /// Index every `.py` file under `roots`. Earlier roots win a class name.
@@ -50,15 +57,28 @@ pub fn index_roots(roots: &[PathBuf]) -> Result<EasyblockIndex, String> {
         let source = std::fs::read_to_string(&path)
             .map_err(|error| format!("read {}: {error}", path.display()))?;
         let module = python_module(&path);
-        let (classes, imports) =
-            read_python(&source, &path.display().to_string(), module.as_deref())
-                .map_err(|error| format!("parse {}: {error}", path.display()))?;
-        let names: Vec<String> = classes.iter().map(|(name, _)| name.clone()).collect();
-        for (name, fact) in classes {
+        let parsed = read_python(&source, &path.display().to_string(), module.as_deref())
+            .map_err(|error| format!("parse {}: {error}", path.display()))?;
+        let names: Vec<String> = parsed
+            .classes
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect();
+        for (name, fact) in parsed.classes {
             index.classes.entry(name).or_insert(fact);
         }
+        for (child, parent) in parsed.enclosing {
+            index.enclosing.entry(child).or_insert(parent);
+        }
+        for (alias, target) in parsed.aliases {
+            index.aliases.entry(alias.clone()).or_insert(target.clone());
+            index.classes.entry(alias).or_insert(ClassFact {
+                bases: vec![target],
+                ..ClassFact::default()
+            });
+        }
         if let Some(module) = module.as_deref() {
-            for imported in imports {
+            for imported in parsed.imports {
                 if imported != module {
                     index
                         .importers
@@ -123,8 +143,8 @@ pub fn affected_classes(
     source: &str,
 ) -> Result<ClassReach, String> {
     let module = python_module(path);
-    let (classes, _) = read_python(source, &path.display().to_string(), module.as_deref())?;
-    let mut changed: BTreeSet<String> = classes.into_iter().map(|(name, _)| name).collect();
+    let parsed = read_python(source, &path.display().to_string(), module.as_deref())?;
+    let mut changed: BTreeSet<String> = parsed.classes.into_iter().map(|(name, _)| name).collect();
     if let Some(module) = module {
         if let Some(users) = index.importers.get(&module) {
             changed.extend(users.iter().cloned());
@@ -134,7 +154,40 @@ pub fn affected_classes(
     for name in &changed {
         reached.extend(descendants(index, name));
     }
+    close_reached(index, &mut reached);
     Ok(ClassReach { changed, reached })
+}
+
+/// Nested classes and module-level aliases are the same easyblock at runtime.
+///
+/// `EB_QuantumESPRESSO` does not list `CMakeMake` as a base. It instantiates
+/// the nested `EB_QuantumESPRESSOcmake(CMakeMake)`, and binds that class to a
+/// module-level name. A change that reaches the nested class reaches the
+/// enclosing class and any alias.
+fn close_reached(index: &EasyblockIndex, reached: &mut BTreeSet<String>) {
+    loop {
+        let mut extra = BTreeSet::new();
+        for (nested, parent) in &index.enclosing {
+            if reached.contains(nested) && !reached.contains(parent) {
+                extra.insert(parent.clone());
+            }
+        }
+        for (alias, target) in &index.aliases {
+            if reached.contains(target) && !reached.contains(alias) {
+                extra.insert(alias.clone());
+            }
+            if reached.contains(alias) && !reached.contains(target) {
+                extra.insert(target.clone());
+            }
+        }
+        if extra.is_empty() {
+            break;
+        }
+        for name in extra {
+            reached.insert(name.clone());
+            reached.extend(descendants(index, &name));
+        }
+    }
 }
 
 /// `easybuild.tools.filetools` for `.../easybuild/tools/filetools.py`.
@@ -146,30 +199,89 @@ pub fn python_module(path: &Path) -> Option<String> {
     Some(rest.replace('/', "."))
 }
 
-type ParsedPython = (Vec<(String, ClassFact)>, BTreeSet<String>);
+struct ParsedPython {
+    classes: Vec<(String, ClassFact)>,
+    imports: BTreeSet<String>,
+    enclosing: Vec<(String, String)>,
+    aliases: Vec<(String, String)>,
+}
 
 fn read_python(source: &str, path: &str, module: Option<&str>) -> Result<ParsedPython, String> {
     let suite = ast::Suite::parse(source, path).map_err(|error| error.to_string())?;
     let mut imports = BTreeSet::new();
     collect_imports(&suite, module.unwrap_or(""), &mut imports);
-    let classes = suite
-        .iter()
-        .filter_map(|stmt| match stmt {
-            Stmt::ClassDef(class) => Some(class),
-            _ => None,
-        })
-        .map(|class| {
-            (
-                class.name.to_string(),
-                ClassFact {
-                    bases: class.bases.iter().filter_map(dotted_name).collect(),
-                    exts_default: assigned_string(&class.body, "exts_defaultclass"),
-                    component_default: assigned_string(&class.body, "default_easyblock"),
-                },
-            )
-        })
-        .collect();
-    Ok((classes, imports))
+    let mut classes = Vec::new();
+    let mut enclosing = Vec::new();
+    let mut aliases = Vec::new();
+    collect_class_defs(&suite, None, &mut classes, &mut enclosing, &mut aliases);
+    Ok(ParsedPython {
+        classes,
+        imports,
+        enclosing,
+        aliases,
+    })
+}
+
+fn collect_class_defs(
+    stmts: &[Stmt],
+    parent: Option<&str>,
+    classes: &mut Vec<(String, ClassFact)>,
+    enclosing: &mut Vec<(String, String)>,
+    aliases: &mut Vec<(String, String)>,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::ClassDef(class) => {
+                let name = class.name.to_string();
+                if let Some(parent) = parent {
+                    enclosing.push((name.clone(), parent.to_string()));
+                }
+                classes.push((
+                    name.clone(),
+                    ClassFact {
+                        bases: class.bases.iter().filter_map(dotted_name).collect(),
+                        exts_default: assigned_string(&class.body, "exts_defaultclass"),
+                        component_default: assigned_string(&class.body, "default_easyblock"),
+                    },
+                ));
+                collect_class_defs(&class.body, Some(&name), classes, enclosing, aliases);
+            }
+            Stmt::Assign(assign) => {
+                if let Some(pair) = class_alias(assign) {
+                    aliases.push(pair);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `Legacy = CMakeMake` or `Legacy = Outer.CMakeMake`, when the names differ.
+fn class_alias(assign: &ast::StmtAssign) -> Option<(String, String)> {
+    if assign.targets.len() != 1 {
+        return None;
+    }
+    let ast::Expr::Name(name) = &assign.targets[0] else {
+        return None;
+    };
+    let alias = name.id.to_string();
+    let target = class_like_name(&assign.value)?;
+    if alias == target || !is_class_name(&alias) || !is_class_name(&target) {
+        return None;
+    }
+    Some((alias, target))
+}
+
+fn is_class_name(name: &str) -> bool {
+    name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+}
+
+fn class_like_name(expr: &ast::Expr) -> Option<String> {
+    match expr {
+        ast::Expr::Name(name) => Some(name.id.to_string()),
+        ast::Expr::Attribute(attr) => Some(attr.attr.to_string()),
+        _ => None,
+    }
 }
 
 fn dotted_name(expr: &ast::Expr) -> Option<String> {
@@ -1108,6 +1220,168 @@ mod tests {
             &other_hits,
             "over.eb default_easyblock ConfigureMake bare"
         ));
+    }
+
+    #[test]
+    fn nested_class_and_alias_reach_the_enclosing_recipe() {
+        let root = tempfile::tempdir().unwrap();
+        let py = root.path().join("py");
+        let ecs = root.path().join("eb");
+        write(
+            &py,
+            "easybuild/easyblocks/generic/cmakemake.py",
+            "class CMakeMake:\n    pass\n",
+        );
+        write(
+            &py,
+            "easybuild/easyblocks/generic/configuremake.py",
+            "class ConfigureMake:\n    pass\n",
+        );
+        write(
+            &py,
+            "easybuild/easyblocks/q/quantumespresso.py",
+            "class EB_QuantumESPRESSO(EasyBlock):\n    class EB_QuantumESPRESSOcmake(CMakeMake):\n        pass\n    class EB_QuantumESPRESSOconfig(ConfigureMake):\n        pass\n\nEB_QuantumESPRESSOcmake = EB_QuantumESPRESSO.EB_QuantumESPRESSOcmake\nLegacyQE = EB_QuantumESPRESSO.EB_QuantumESPRESSOcmake\n",
+        );
+        write(
+            &py,
+            "easybuild/easyblocks/o/other.py",
+            "class EB_Other(EasyBlock):\n    class Note:\n        pass\n",
+        );
+        write(&ecs, "qe.eb", &recipe("QuantumESPRESSO", "7.5", ""));
+        write(&ecs, "legacy.eb", &recipe("legacy", "1", "LegacyQE"));
+        write(&ecs, "other.eb", &recipe("Other", "1", ""));
+        let cmake = py.join("easybuild/easyblocks/generic/cmakemake.py");
+        let report = reach(&ReachQuery {
+            roots: vec![py.clone()],
+            easyconfigs: vec![ecs.clone()],
+            changed: vec![(cmake.clone(), std::fs::read_to_string(&cmake).unwrap())],
+            installed: BTreeSet::new(),
+            reverse: false,
+            generated_at: "t".into(),
+        })
+        .unwrap();
+        assert!(report
+            .reached_classes
+            .iter()
+            .any(|name| name == "EB_QuantumESPRESSOcmake"));
+        assert!(report
+            .reached_classes
+            .iter()
+            .any(|name| name == "EB_QuantumESPRESSO"));
+        assert!(report.reached_classes.iter().any(|name| name == "LegacyQE"));
+        let qe = report
+            .hits
+            .iter()
+            .find(|hit| hit.easyconfig.ends_with("qe.eb"))
+            .expect("implied QuantumESPRESSO");
+        assert_eq!(qe.class_name, "EB_QuantumESPRESSO");
+        assert_eq!(qe.via, "implied");
+        assert!(has(&report, "legacy.eb easyblock LegacyQE "));
+        assert!(report
+            .hits
+            .iter()
+            .all(|hit| !hit.easyconfig.ends_with("other.eb")));
+        let configure = py.join("easybuild/easyblocks/generic/configuremake.py");
+        let old = reach(&ReachQuery {
+            roots: vec![py],
+            easyconfigs: vec![ecs],
+            changed: vec![(
+                configure.clone(),
+                std::fs::read_to_string(&configure).unwrap(),
+            )],
+            installed: BTreeSet::new(),
+            reverse: false,
+            generated_at: "t".into(),
+        })
+        .unwrap();
+        assert!(old.hits.iter().any(|hit| hit.easyconfig.ends_with("qe.eb")));
+        assert!(old
+            .hits
+            .iter()
+            .all(|hit| !hit.easyconfig.ends_with("legacy.eb")));
+    }
+
+    #[test]
+    fn a_component_easyblock_inside_a_skipped_list_is_a_hit() {
+        let root = tempfile::tempdir().unwrap();
+        let py = root.path().join("py");
+        let ecs = root.path().join("eb");
+        write(
+            &py,
+            "easybuild/easyblocks/generic/cmakemake.py",
+            "class CMakeMake:\n    pass\n",
+        );
+        write(
+            &ecs,
+            "gfe.eb",
+            "name = 'GFE'\nversion = '1'\ntoolchain = SYSTEM\neasyblock = 'Bundle'\ndefault_easyblock = 'Tarball'\ncomponents = [\n    ('lib', '1') for _name in ['lib']\n] + [\n    ('GFE', '1', {'preconfigopts': ' && '.join([f'rm {_name}' for _name in ['a']]) + ' && ', 'easyblock': 'CMakeMake'}),\n]\n",
+        );
+        let cmake = py.join("easybuild/easyblocks/generic/cmakemake.py");
+        let report = reach(&ReachQuery {
+            roots: vec![py],
+            easyconfigs: vec![ecs],
+            changed: vec![(cmake.clone(), std::fs::read_to_string(&cmake).unwrap())],
+            installed: BTreeSet::new(),
+            reverse: false,
+            generated_at: "t".into(),
+        })
+        .unwrap();
+        assert!(
+            has(&report, "gfe.eb component CMakeMake CMakeMake"),
+            "{:?}",
+            report.hits
+        );
+    }
+
+    #[test]
+    fn a_framework_hook_module_reaches_importers_and_subclasses() {
+        let root = tempfile::tempdir().unwrap();
+        let py = root.path().join("py");
+        let ecs = root.path().join("eb");
+        write(
+            &py,
+            "easybuild/tools/hooks.py",
+            "def run_hook():\n    return None\n",
+        );
+        write(
+            &py,
+            "easybuild/framework/easyblock.py",
+            "from easybuild.tools.hooks import run_hook\nclass EasyBlock:\n    pass\n",
+        );
+        write(
+            &py,
+            "easybuild/easyblocks/generic/configuremake.py",
+            "class ConfigureMake(EasyBlock):\n    pass\n",
+        );
+        write(
+            &py,
+            "easybuild/easyblocks/generic/pythonpackage.py",
+            "from easybuild.tools.hooks import CONFIGURE_STEP\nclass PythonPackage:\n    pass\n",
+        );
+        write(&ecs, "make.eb", &recipe("make", "1", "ConfigureMake"));
+        write(&ecs, "py.eb", &recipe("py", "1", "PythonPackage"));
+        write(&ecs, "plain.eb", &recipe("plain", "1", "Tarball"));
+        let hooks = py.join("easybuild/tools/hooks.py");
+        let report = reach(&ReachQuery {
+            roots: vec![py],
+            easyconfigs: vec![ecs],
+            changed: vec![(hooks.clone(), std::fs::read_to_string(&hooks).unwrap())],
+            installed: BTreeSet::new(),
+            reverse: false,
+            generated_at: "t".into(),
+        })
+        .unwrap();
+        assert!(report.hits.iter().any(|hit| {
+            hit.easyconfig.ends_with("make.eb") && hit.class_name == "ConfigureMake"
+        }));
+        assert!(report
+            .hits
+            .iter()
+            .any(|hit| { hit.easyconfig.ends_with("py.eb") && hit.class_name == "PythonPackage" }));
+        assert!(report
+            .hits
+            .iter()
+            .all(|hit| !hit.easyconfig.ends_with("plain.eb")));
     }
 
     #[test]

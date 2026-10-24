@@ -55,6 +55,10 @@ deleted file is read from the base so its class is still seen.
 - no ~easyblock~ line: ~EB_<Name>~ derived from the software name
 - a subclass, read from the Python ~class~ statement, so ~EB_GROMACS(CMakeMake)~
   is reached by a change to ~CMakeMake~
+- a nested class, so ~EB_QuantumESPRESSOcmake(CMakeMake)~ inside
+  ~EB_QuantumESPRESSO~ reaches the QuantumESPRESSO easyconfigs
+- a module-level alias bound to a class, so ~Legacy = CMakeMake~ is
+  ~CMakeMake~
 - an extension's own ~easyblock~, else ~EB_<extname>~ when that class
   exists, else ~exts_classmap~, else ~exts_defaultclass~
 - a component's own ~easyblock~, else ~EB_<name>~ when that class exists,
