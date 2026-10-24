@@ -6,12 +6,15 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
-- A foreign package plan locks a generation member instead of the
-  SYSTEM bootstrap of the same name when both are in the robot, which is
-  the module `recipe check` accepts.
 - Recipe lint modules live under `src/eb_style/` so `sphinx-rustdocgen`
   can open them. A `#[path]` attribute is joined onto the parent file
   and the generator then fails to read the module.
+- `eb-stack easyblock-reach` keeps an `easyblock` key on a `components` or
+  `exts_list` assignment the parser had to skip. GFE's component list is a
+  comprehension plus a tuple, and that tuple names `CMakeMake`.
+- A foreign package plan locks a generation member instead of the
+  SYSTEM bootstrap of the same name when both are in the robot, which is
+  the module `recipe check` accepts.
 - `package plan` against an overlay that is not a full robot names the
   missing package, the trees it scanned, and `--easyconfigs` or
   `--easybuild-source` with an upstream easybuild-easyconfigs tree from

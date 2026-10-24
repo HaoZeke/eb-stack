@@ -2170,8 +2170,101 @@ fn resolve_easyconfig_str_inner(
         checksum_entry_keys,
         checksums_by_filename,
     };
-    let sites = easyblock_sites_from(&parser.env, &templates);
+    let mut sites = easyblock_sites_from(&parser.env, &templates);
+    recover_named_easyblocks(&mut sites, &parser.skipped);
     Ok((resolved, parser.skipped, sites))
+}
+
+/// A `components` or `exts_list` statement the parser skipped can still name
+/// an easyblock. GFE builds that list as a comprehension plus a tuple whose
+/// `preconfigopts` is an f-string join, which is not a value we model, and
+/// the `easyblock` key would disappear with the statement.
+fn recover_named_easyblocks(sites: &mut EasyblockSites, skipped: &[SkippedStatement]) {
+    for stmt in skipped {
+        let text = stmt.text.trim_start();
+        let into_components = text.starts_with("components");
+        let into_extensions = text.starts_with("exts_list");
+        if !into_components && !into_extensions {
+            continue;
+        }
+        for class_name in easyblock_dict_literals(text) {
+            let dest = if into_components {
+                &mut sites.components
+            } else {
+                &mut sites.extensions
+            };
+            if dest
+                .iter()
+                .any(|row| row.class_name.as_deref() == Some(class_name.as_str()))
+            {
+                continue;
+            }
+            dest.push(NamedEasyblock {
+                name: class_name.clone(),
+                class_name: Some(class_name),
+            });
+        }
+    }
+}
+
+/// `'easyblock': 'CMakeMake'` and the double-quoted form, in source order.
+fn easyblock_dict_literals(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 12 < bytes.len() {
+        let quote = bytes[i];
+        if quote != b'\'' && quote != b'"' {
+            i += 1;
+            continue;
+        }
+        let rest = &text[i + 1..];
+        let Some(after_key) = rest.strip_prefix("easyblock") else {
+            i += 1;
+            continue;
+        };
+        let after_key = after_key.as_bytes();
+        if after_key.first().copied() != Some(quote) {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1 + "easyblock".len() + 1;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        if j >= bytes.len() || bytes[j] != b':' {
+            i += 1;
+            continue;
+        }
+        j += 1;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        if j >= bytes.len() || (bytes[j] != b'\'' && bytes[j] != b'"') {
+            i += 1;
+            continue;
+        }
+        let value_quote = bytes[j];
+        j += 1;
+        let start = j;
+        while j < bytes.len() && bytes[j] != value_quote {
+            j += 1;
+        }
+        if j >= bytes.len() {
+            break;
+        }
+        if let Ok(class_name) = std::str::from_utf8(&bytes[start..j]) {
+            if !class_name.is_empty()
+                && class_name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                out.push(class_name.to_string());
+            }
+        }
+        i = j + 1;
+    }
+    out
 }
 
 fn easyblock_sites_from(
@@ -4630,6 +4723,41 @@ moduleclass = 'tools'
         assert_eq!(sites.components[0].class_name.as_deref(), Some("CMakeMake"));
         assert_eq!(sites.components[1].name, "bare");
         assert_eq!(sites.components[1].class_name, None);
+    }
+
+    #[test]
+    fn a_skipped_component_list_keeps_its_easyblock_literal() {
+        let src = r#"
+name = 'GFE'
+version = '1.28.0'
+homepage = 'https://example.invalid'
+description = 'bundle'
+toolchain = SYSTEM
+easyblock = 'Bundle'
+default_easyblock = 'Tarball'
+_libs = {'gftl': ('1.17.0', 'abc')}
+components = [
+    (_name, _version, {'checksums': [_checksum]}) for _name, (_version, _checksum) in _libs.items()
+] + [
+    (name, version, {
+        'preconfigopts': ' && '.join([f'rm {_name}' for _name in _libs]) + ' && ',
+        'easyblock': 'CMakeMake',
+        'runtest': 'tests',
+    }),
+]
+moduleclass = 'tools'
+"#;
+        let (recipe, sites) = easyblock_sites(src).expect("parse");
+        assert_eq!(recipe.easyblock.as_deref(), Some("Bundle"));
+        assert_eq!(sites.default_easyblock.as_deref(), Some("Tarball"));
+        assert!(
+            sites
+                .components
+                .iter()
+                .any(|row| row.class_name.as_deref() == Some("CMakeMake")),
+            "components: {:?}",
+            sites.components
+        );
     }
 
     #[test]
