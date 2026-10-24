@@ -224,3 +224,70 @@ fn canonical_plan_writes_typed_cyclonedx_components() {
     );
     assert_eq!(distribution["hashes"][0], root["hashes"][0]);
 }
+
+#[test]
+fn package_plan_sbom_keeps_build_only_dependencies_off_depends_on() {
+    let mut plan = qmcpack_plan();
+    plan.dependencies.push(DependencyIntent {
+        id: "dep:cmake".into(),
+        name: "cmake".into(),
+        eb_name: Some("CMake".into()),
+        constraint: Some("3.27.0".into()),
+        toolchain: None,
+        roles: vec![DependencyRole::Build],
+        condition: ConditionExpr::Always,
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: Vec::new(),
+    });
+    plan.dependencies.push(DependencyIntent {
+        id: "dep:pytest".into(),
+        name: "pytest".into(),
+        eb_name: Some("pytest".into()),
+        constraint: Some("8.0.0".into()),
+        toolchain: None,
+        roles: vec![DependencyRole::Run, DependencyRole::Test],
+        condition: ConditionExpr::Always,
+        virtual_capability: None,
+        solver_excluded: false,
+        provenance: Vec::new(),
+    });
+    let sbom = package_plan_to_cyclonedx(&plan).expect("canonical SBOM");
+    let root_edge = sbom["dependencies"]
+        .as_array()
+        .expect("dependencies")
+        .iter()
+        .find(|edge| edge["ref"] == "pkg:generic/QMCPACK@4.3.0")
+        .expect("root edge");
+    let depends: Vec<&str> = root_edge["dependsOn"]
+        .as_array()
+        .expect("dependsOn")
+        .iter()
+        .filter_map(|edge| edge.as_str())
+        .collect();
+    assert!(
+        depends.contains(&"pkg:generic/HDF5@>=1.14"),
+        "a run dependency stays on dependsOn: {depends:?}"
+    );
+    assert!(
+        depends.contains(&"pkg:generic/pytest@8.0.0"),
+        "a dependency that is also a run dependency stays on dependsOn: {depends:?}"
+    );
+    assert!(
+        !depends.contains(&"pkg:generic/CMake@3.27.0"),
+        "a build-only dependency is not a dependsOn edge: {depends:?}"
+    );
+    let build = sbom["metadata"]["component"]["properties"]
+        .as_array()
+        .expect("root properties")
+        .iter()
+        .find(|property| property["name"] == "eb_stack:buildDependsOn")
+        .expect("buildDependsOn");
+    let listed = build["value"].as_str().expect("build ref list");
+    assert!(listed.contains("pkg:generic/CMake@3.27.0"), "{listed}");
+    assert!(listed.contains("pkg:generic/pytest@8.0.0"), "{listed}");
+    assert!(
+        !listed.contains("pkg:generic/HDF5@"),
+        "a run-only dependency stays off buildDependsOn: {listed}"
+    );
+}

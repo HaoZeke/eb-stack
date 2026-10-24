@@ -250,6 +250,11 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A package-plan SBOM keeps a build-only, host-only, or test-only
+  dependency off `dependsOn`. Those refs are
+  `eb_stack:buildDependsOn` on the root, the same convention a stack
+  SBOM uses. A dependency with no role, or with a run role, stays on
+  `dependsOn`.
 - `stack solve --sbom-out` reads dependency edges and source checksums
   from the easyconfigs the lock names, the same document `stack sbom`
   writes for that lock.

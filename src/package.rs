@@ -1252,12 +1252,30 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
     let mut seen_component_refs = BTreeSet::new();
     seen_component_refs.insert(root_ref.clone());
     let mut dependency_refs = Vec::new();
+    let mut runtime_refs = Vec::new();
+    let mut build_refs = Vec::new();
     for dependency in &plan.dependencies {
         let name = dependency.eb_name.as_deref().unwrap_or(&dependency.name);
         let version = dependency.constraint.as_deref().unwrap_or("unresolved");
         let reference = component_ref(name, version);
         if !dependency_refs.contains(&reference) {
             dependency_refs.push(reference.clone());
+        }
+        // Empty roles mean the recipe never said, so the edge is runtime.
+        // A build, host, or test role without run stays off dependsOn.
+        let runtime =
+            dependency.roles.is_empty() || dependency.roles.contains(&DependencyRole::Run);
+        let build_time = dependency.roles.iter().any(|role| {
+            matches!(
+                role,
+                DependencyRole::Build | DependencyRole::Host | DependencyRole::Test
+            )
+        });
+        if runtime && !runtime_refs.contains(&reference) {
+            runtime_refs.push(reference.clone());
+        }
+        if build_time && !build_refs.contains(&reference) {
+            build_refs.push(reference.clone());
         }
 
         if !seen_component_refs.insert(reference.clone()) {
@@ -1284,9 +1302,18 @@ pub fn package_plan_to_bom(plan: &PackagePlan) -> Result<Bom, PackageError> {
         components.push(component);
     }
 
+    if !build_refs.is_empty() {
+        if let Some(Properties(properties)) = components[0].properties.as_mut() {
+            properties.push(Property::new(
+                "eb_stack:buildDependsOn",
+                &build_refs.join(","),
+            ));
+        }
+    }
+
     let mut dependencies = vec![Dependency {
         dependency_ref: root_ref,
-        dependencies: dependency_refs.clone(),
+        dependencies: runtime_refs,
     }];
     dependencies.extend(
         dependency_refs
