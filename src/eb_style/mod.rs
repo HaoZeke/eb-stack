@@ -31,13 +31,9 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[path = "eb_style_diffscope.rs"]
 mod diffscope;
-#[path = "eb_style_review.rs"]
 mod review;
-#[path = "eb_style_rules.rs"]
 mod rules;
-#[path = "eb_style_vocab.rs"]
 mod vocab;
 pub use diffscope::{
     diff_scope_findings, hunks, review_item_findings, review_item_status, Hunk, ReviewItem,

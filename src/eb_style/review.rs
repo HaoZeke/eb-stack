@@ -2,7 +2,7 @@
 //!
 //! Kept beside the formatter so mechanical wrapping stays about line length.
 //! `line_is_mechanically_fixable` lives in the parent module, and the rules
-//! themselves live in `eb_style_rules.rs`.
+//! themselves live in `rules.rs`.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -932,7 +932,7 @@ mixed = f'lib/%(name)s.{SHLIB_EXT}'
 
     #[test]
     fn p7zip_stays_not_clean_without_a_base_or_when_its_lines_are_reviewed() {
-        let pre = include_str!("../fixtures/review_fix/p7zip-17.05-GCCcore-15.2.0.eb");
+        let pre = include_str!("../../fixtures/review_fix/p7zip-17.05-GCCcore-15.2.0.eb");
         // No base: both '%' lines count (no %% escapes there).
         let findings = scoped(pre, None, false, &[]);
         assert!(findings.iter().all(|finding| !finding.info), "{findings:?}");
@@ -1030,7 +1030,7 @@ mixed = f'lib/%(name)s.{SHLIB_EXT}'
     #[test]
     fn proof_fixtures_flag_leftover_percent_and_f541() {
         // Pre-review p7zip-17.05 easyconfig frozen under fixtures/review_fix.
-        let p7zip = include_str!("../fixtures/review_fix/p7zip-17.05-GCCcore-15.2.0.eb");
+        let p7zip = include_str!("../../fixtures/review_fix/p7zip-17.05-GCCcore-15.2.0.eb");
         let p7zip_findings = super::super::lint_style(p7zip);
         assert_eq!(codes_on(&p7zip_findings, 26), ["EB_FMT_PERCENT"]);
         assert_eq!(codes_on(&p7zip_findings, 43), ["EB_FMT_PERCENT"]);
@@ -1073,7 +1073,7 @@ mixed = f'lib/%(name)s.{SHLIB_EXT}'
         assert!(!super::super::findings_clean(&p7zip_findings));
         assert!(super::super::findings_error_free(&p7zip_findings));
 
-        let libgd = include_str!("../fixtures/review_fix/libgd-2.3.3-GCCcore-15.2.0.eb");
+        let libgd = include_str!("../../fixtures/review_fix/libgd-2.3.3-GCCcore-15.2.0.eb");
         let libgd_findings = super::super::lint_style(libgd);
         assert_eq!(libgd_findings.len(), 1, "{libgd_findings:?}");
         assert_eq!(libgd_findings[0].line, 31);

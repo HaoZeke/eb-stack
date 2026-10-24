@@ -14,7 +14,7 @@ perfect). `tests/lint_fixtures.rs` enforces this for every fixture, and that `li
 The expected findings were validated against the real checkers: the CI flake8 (Python 3.8,
 `--select F,W605,W291 --filename '*.eb'` with the easyconfigs setup.cfg), the framework
 `check_easyconfigs_style` (the style part of `eb --check-contrib`), and an executable Python spec of the EB_*
-rules that `src/eb_style_rules.rs` ports. Those scripts are not shipped here.
+rules that `src/eb_style/rules.rs` ports. Those scripts are not shipped here.
 
 ## What the real checkers enforce (verified, not assumed)
 
