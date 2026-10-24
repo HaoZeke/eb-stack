@@ -15,7 +15,7 @@ are deterministic bundle artifacts.
 | ~package plan~ | Materialize profiles, solve with Resolvo, and emit recipes |
 | ~package bump~ | Retarget an EasyBuild recipe and write the same canonical bundle |
 | ~recipe easyblock~ | Print the easyblock class name EasyBuild derives for a software name |
-| ~recipe templates~ | Emit template constants and derived-key rules as JSON |
+| ~recipe templates~ | Emit template constants and derived-key rules, or the values `--name` and `--version` resolve |
 | ~recipe hierarchy~ | Emit known toolchain hierarchies as JSON |
 | ~recipe check~ | Validate metadata and robot dependency availability |
 | ~recipe lint~ / ~recipe format~ | Report upstream CI, test-suite, and review findings (E999, F541, W605, W291, E501, E2xx, ~EB_*~; ~eb --check-contrib~ merged when ~eb~ is installed) or mechanically wrap E501 lines |
@@ -239,7 +239,8 @@ for that pair, using the lowercased name for the forge-account defaults and
 generations as JSON. ~--export~ is accepted and prints the same table.
 
 ~recipe lint~ prints JSON with ~clean~, ~style~ (each finding carries
-~path~, ~line~, ~column~, ~code~, ~severity~, and ~message~), ~check_contrib~,
+~path~, ~line~, ~column~, ~code~, ~severity~, ~message~, and, when set,
+~info~ and ~in_review~), ~check_contrib~,
 and ~maintainer_acceptability~. It does not rely on ~eb --check-contrib~.
 Style codes: E999 (not valid Python; the AST rules are skipped); the
 easyconfigs CI lint F541 (f-string with no placeholder), W605 (invalid escape
@@ -250,7 +251,7 @@ E225/E226/E227/E228/E231; the easyconfigs test-suite checks
 ~EB_REDEFINED_PARAM~, and ~EB_CHECKSUM_COUNT~; and the review conventions
 ~EB_FMT_MISSING_F~, ~EB_FSTRING_QUOTE_REUSE~, ~EB_TEMPLATE_UNKNOWN~ (errors)
 and ~EB_FMT_PERCENT~, ~EB_FMT_CONCAT~, ~EB_FMT_TEMPLATE_VAR~,
-~EB_SHLIB_HARDCODED~, ~EB_DEP_DUPLICATE~, ~EB_DEP_EMPTY_VERSION~ (warnings).
+~EB_SHLIB_HARDCODED~, and ~EB_DEP_DUPLICATE~ (warnings).
 ~clean~ is false while any error or any in-scope ~EB_FMT_*~ finding
 remains; ~error_free~ counts errors only. An ~EB_FMT_*~ finding with
 ~info~ true is outside the review scope (an untouched ~%%(...)s~-escaped

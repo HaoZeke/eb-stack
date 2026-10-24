@@ -37,10 +37,14 @@ All notable changes to this project are documented here.
   reaches an easyblock that imports `tools/filetools.py` when that module
   imports `tools/run.py`. An easyblock that only imports another easyblock
   is not reached that way.
+- `recipe templates --help` says `--export` prints the constant table and
+  the derived-key rules, and that `--name` with `--version` prints the
+  resolved values. `EB_DEP_EMPTY_VERSION` is an error; the command
+  reference no longer lists it as a warning.
 - `recipe easyblock` uses the framework character map. The `filetools`
-  keys written `r'\''` and `r'\\'` are the two-character strings `\'` and
-  `\\`, and `encode_string` looks up one character at a time, so `'` and
-  `\` pass through. Decoding `_apostrophe_` and `_backslash_` writes those
+  keys written `r'\''` and `r'\\'` are two-character strings, `\'` and
+  `\\`. `encode_string` looks up one character at a time, so `'` and `\`
+  pass through. Decoding `_apostrophe_` and `_backslash_` writes those
   keys back.
 - `recipe lint` JSON includes `info` and `in_review` when a finding sets
   them, the same fields `eb_recipe_lint` already returned. An
@@ -306,8 +310,9 @@ All notable changes to this project are documented here.
   and the output has a `clean` flag, false while any error or any `EB_FMT_*`
   formatting finding remains (`error_free` reports errors only); the CLI
   exits non-zero on errors only. Each EB_FMT_PERCENT finding shows the
-  f-string built from the flagged expression. `EB_DEP_EMPTY_VERSION` warns on
-  a (build)dependency with version `''`. EB_TEMPLATE_UNKNOWN knows the
+  f-string built from the flagged expression. `EB_DEP_EMPTY_VERSION` is an
+  error on a (build)dependency with version `''`. EB_TEMPLATE_UNKNOWN
+  knows the
   extension-filter templates (`%(ext_name)s`, `%(ext_version)s`, `%(src)s`)
   and easyblock-added ones, and skips Python `%`-dict keys; EB_CHECKSUM_COUNT
   counts easyblock patch options such as `patch_ctypes_ld_library_path`;

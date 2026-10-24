@@ -470,13 +470,13 @@ enum RecipeCommand {
         #[arg(long)]
         charmap: bool,
     },
-    /// Emit the template constants and the derived-key rules as JSON.
+    /// Emit template constants, derived-key rules, or resolved values.
     ///
-    /// A consumer that cannot run the parser still resolves `%(version)s` and
-    /// friends by applying these rules, which is why the rule vocabulary is
-    /// closed. Without a name and version this prints the spec; with them it
-    /// prints the resolved values, which is what a cross-check compares
-    /// against.
+    /// `--export` prints the constant table and the derived-key rules.
+    /// `--name` and `--version` together print the values those rules produce
+    /// for that pair. A consumer that cannot run the parser still resolves
+    /// `%(version)s` and friends by applying these rules, which is why the
+    /// rule vocabulary is closed.
     Templates {
         /// Software name, as the easyconfig spells `name`.
         #[arg(long, allow_hyphen_values = true)]

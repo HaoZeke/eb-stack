@@ -2,6 +2,32 @@ use std::path::PathBuf;
 use std::process::Command;
 
 #[test]
+fn recipe_templates_help_requires_export_or_name_and_version() {
+    let binary = env!("CARGO_BIN_EXE_eb-stack");
+    let help = Command::new(binary)
+        .args(["recipe", "templates", "--help"])
+        .output()
+        .expect("templates help");
+    assert!(help.status.success());
+    let stdout = String::from_utf8(help.stdout).expect("utf8 help");
+    assert!(
+        stdout.contains("`--export` prints the constant table"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("Without a name and version this prints the spec"),
+        "{stdout}"
+    );
+    let bare = Command::new(binary)
+        .args(["recipe", "templates"])
+        .output()
+        .expect("bare templates");
+    assert!(!bare.status.success());
+    let err = String::from_utf8_lossy(&bare.stderr);
+    assert!(err.contains("--name, or --export"), "{err}");
+}
+
+#[test]
 fn recipe_lint_json_marks_escaped_percent_entries_as_info() {
     let binary = env!("CARGO_BIN_EXE_eb-stack");
     let temp = tempfile::tempdir().expect("tempdir");
