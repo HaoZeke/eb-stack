@@ -306,6 +306,10 @@ All notable changes to this project are documented here.
   stack-diff labels and punctuation, `solver.criteria`, lock-SBOM
   `dependsOn` edges, policy hierarchy membership, and `stack order`,
   `stack easystack`, and `stack sections`.
+- Package plan docs list the closure files every `--easyconfigs` plan
+  writes. CRAN inspect records `RPackage`. A single PyPI plan emits
+  `PythonPackage` and depends on the bundle that already provides a
+  requirement.
 
 ### Fixed
 

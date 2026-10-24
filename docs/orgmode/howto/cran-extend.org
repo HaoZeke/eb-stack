@@ -25,7 +25,8 @@ eb-stack package inspect \
   --out-dir /tmp/jsonlite-inspect
 #+end_src
 
-~package.plan.json~ has ~origin = cran~ and ~easyblock = Bundle~.
+~package.plan.json~ has ~origin = cran~ and ~easyblock = RPackage~.
+Plan emits ~easyblock = Bundle~ with ~exts_defaultclass = RPackage~.
 
 * Plan
 

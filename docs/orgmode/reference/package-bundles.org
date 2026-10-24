@@ -11,22 +11,28 @@ authoring, and empirical build evaluation.
 BUNDLE/
   package.plan.json
   package.sbom.cdx.json
+  closure.plan.json
+  closure.sbom.cdx.json
+  build-order.json
   locks/<profile>.lock.json
   easyconfigs/<letter>/<name>/<recipe>.eb
   easyconfigs/<letter>/<name>/<patch files>
   easyblocks/<letter>/<module>.py
+  packages/<name>-<version>-<toolchain>/
 #+end_src
 
 ~package inspect~ writes only the plan and planned SBOM. ~package plan~ and
 ~package bump~ also write one lock and one EasyBuild recipe for every requested
 profile. A campaign requires at least one lock and recipe.
 
-When ~package plan~ is given ~--package-catalog~ layers, the writer emits a
-closed package bundle: root artifacts at the bundle root, companions under
-~packages/<name>-<version>-<toolchain>/~, one shared ~easyconfigs/~ overlay,
-~build-order.json~, ~closure.plan.json~, and ~closure.sbom.cdx.json~. Companion
-providers may be ~foreign~ or ~easybuild-bump~; bump companions keep
-~origin = easy-build~ and use the annual-bump emitter.
+~package plan~ writes ~closure.plan.json~, ~closure.sbom.cdx.json~, and
+~build-order.json~ whenever ~--easyconfigs~ is passed, because that tree is a
+discovery root. ~--package-catalog~ and ~--package-sources~ add further
+providers. Companions land under ~packages/<name>-<version>-<toolchain>/~,
+beside one shared ~easyconfigs/~ overlay. Companion providers may be
+~foreign~ or ~easybuild-bump~; bump companions keep ~origin = easy-build~
+and use the annual-bump emitter. ~--emit-easyblock~ does not combine with
+this writer.
 
 * Canonical package plan
 
@@ -35,7 +41,7 @@ unknown fields are rejected by the Rust model.
 
 | Field | Meaning |
 |-
-| ~origin~ | ~conda-forge~, ~spack~, or ~easy-build~ |
+| ~origin~ | ~conda-forge~, ~spack~, ~easy-build~, ~pypi~, ~cran~, ~cargo~, ~luarocks~, or ~raku~ |
 | ~package~ | Normalized name, version, homepage, description, and license |
 | ~sources~ | URLs, filenames, SHA-256 values, VCS identities, staging directories, and provenance |
 | ~dependencies~ | Names, constraints, optional explicit EasyBuild toolchains, roles, structured conditions, virtual capabilities, and provenance |

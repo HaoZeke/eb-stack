@@ -224,6 +224,10 @@ eb-stack package plan \
   --out-dir /tmp/eon
 ```
 
+Because `--easyconfigs` is also a discovery root, that plan writes
+`closure.plan.json`, `closure.sbom.cdx.json`, and `build-order.json` next to
+the manifest, even when no companion recipe was required.
+
 The shipped eOn package policy is **core + `with_rgpot`**: Fortran/CuH2
 client, readcon-core, and in-process RGPOT (engines dlopen at runtime). Fat
 metatomic/xTB/serve are off by default; conda host deps for those names are

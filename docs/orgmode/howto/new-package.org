@@ -248,8 +248,10 @@ eb-stack package plan \
   --out-dir /tmp/eon
 #+end_src
 
-The command must produce a manifest, SBOM, one lock per requested profile, and
-one recipe per profile. Run ~recipe format~, ~recipe lint~, and ~recipe check~
+The command must produce a manifest, SBOM, one lock per requested profile,
+one recipe per profile, and, because ~--easyconfigs~ is a discovery root,
+~closure.plan.json~, ~closure.sbom.cdx.json~, and ~build-order.json~.
+Run ~recipe format~, ~recipe lint~, and ~recipe check~
 against the upstream tree plus the bundle overlay.
 
 #+begin_src bash

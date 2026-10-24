@@ -92,6 +92,9 @@ The generated tree contains:
 #+begin_src text
 package.plan.json
 package.sbom.cdx.json
+closure.plan.json
+closure.sbom.cdx.json
+build-order.json
 locks/default.lock.json
 easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb
 #+end_src

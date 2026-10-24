@@ -198,6 +198,7 @@ The bundle must contain:
 
 - `package.plan.json`: canonical build manifest and residuals;
 - `package.sbom.cdx.json`: planned CycloneDX SBOM;
+- `closure.plan.json`, `closure.sbom.cdx.json`, and `build-order.json` whenever `--easyconfigs` is passed, because that tree is a discovery root;
 - `locks/<profile>.lock.json`: one Resolvo result per profile;
 - `easyconfigs/<letter>/<name>/*.eb`: one deterministic recipe per profile.
 

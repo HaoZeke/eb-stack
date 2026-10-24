@@ -92,7 +92,12 @@ the count, shape, or completeness is invalid.
 The file is either a CRAN ~PACKAGES~ index or a ~name==version~ list, one pin
 per line. A range is not a version and supplies nothing.
 
-When a direct dependency has no compatible robot candidate, optional closure
+Passing ~--easyconfigs~ always uses the closure writer, because that tree is
+also a discovery root. The bundle then contains ~closure.plan.json~,
+~closure.sbom.cdx.json~, and ~build-order.json~ even when no companion was
+needed. ~--emit-easyblock~ does not combine with that writer.
+
+When a direct dependency has no compatible robot candidate, further closure
 inputs close the hole without inventing versions:
 
 - ~--package-sources~ layers ordered EasyBuild / conda-forge / Spack / Cargo roots;
@@ -172,9 +177,15 @@ missing URL, or a failed download stays empty. The attempts are
 BUNDLE/
   package.plan.json
   package.sbom.cdx.json
+  closure.plan.json
+  closure.sbom.cdx.json
+  build-order.json
   locks/<profile>.lock.json
   easyconfigs/<letter>/<name>/<recipe>.eb
 #+end_src
+
+~package plan~ writes the three closure files whenever ~--easyconfigs~ is
+passed. ~package inspect~ writes only the plan and planned SBOM.
 
 ~package plan~ and ~package bump~ establish the *resolves* claim only when all
 requested locks and recipes are written successfully.

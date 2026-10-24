@@ -1,11 +1,14 @@
 #+TITLE: Site Python extras on EESSI
 #+OPTIONS: toc:t num:nil
 
-Turn a PyPI package or ~requirements.txt~ into a ~PythonBundle~ easyconfig
-that installs on top of EESSI. Already-shipped scientific Python
-(~numpy~ via ~SciPy-bundle~, ~soupsieve~ via ~Python-bundle-PyPI~) is
-satisfied as an ~exts_list~ provide. The emitted recipe lists the parent
-bundle as a dependency and keeps only the leftover package in ~exts_list~.
+Turn a PyPI package or ~requirements.txt~ into an easyconfig that installs
+on top of EESSI. Inspect records ~easyblock = PythonBundle~, because ingest
+does not yet know whether the package brings extensions. A plan of one
+package emits ~PythonPackage~ with its own sources. Requirements the robot
+already ships become dependencies on the providing bundle (~soupsieve~ via
+~Python-bundle-PyPI~, ~numpy~ via ~SciPy-bundle~). A plan that still has
+leftovers emits a ~PythonBundle~ and keeps only those leftovers in
+~exts_list~.
 
 Do not ~pip install --target~ and prepend ~PYTHONPATH~. That shadows
 toolchain-built extensions and has no claim on the EESSI compat layer.
@@ -51,8 +54,9 @@ eb-stack package plan \
 #+end_src
 
 The lock collapses ~soupsieve~ (when the EESSI ~Python-bundle-PyPI~
-provides it) to that bundle. The emitted recipe is a ~PythonBundle~
-whose ~exts_list~ contains ~beautifulsoup4~ only.
+provides it) to that bundle. The emitted recipe for this single package
+is a ~PythonPackage~. It depends on ~Python~ and ~Python-bundle-PyPI~
+and has no ~exts_list~.
 
 Asking for ~numpy~ (or ~scipy~, or ~torch~ / ~PyTorch~) against a robot
 that already ships the provider produces an empty delta and an
