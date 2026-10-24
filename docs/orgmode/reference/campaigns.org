@@ -75,15 +75,15 @@ is active. Keep the unfiltered state for diagnosis and handoff evidence.
     "builds": false,
     "binary_verified": false
   },
-  "current_recipe": null,
   "findings": [],
   "history": []
 }
 #+end_src
 
-Status is ~planned~, ~running~, ~failed~, or ~completed~. ~current_recipe~ is
-present while an EasyBuild recipe is active. History entries record attempt,
-status, optional recipe/profile, and a compact detail string.
+Status is ~planned~, ~running~, ~failed~, or ~completed~. ~current_recipe~
+is present while an EasyBuild recipe is active and omitted otherwise.
+History entries record the attempt, the status, an optional recipe path,
+and a compact detail string.
 
 * Claim ladder
 

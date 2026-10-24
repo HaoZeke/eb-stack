@@ -25,9 +25,10 @@ eb-stack package inspect \
   --out-dir /tmp/jsonlite-inspect
 #+end_src
 
-Inspect's ~package.plan.json~ has ~origin = cran~ and ~easyblock = RPackage~.
-A plan that still has to emit the package uses ~easyblock = Bundle~ with
-~exts_defaultclass = RPackage~.
+~package.plan.json~ has ~origin = cran~. A single package, such as
+this DESCRIPTION, has ~easyblock = RPackage~. A package whose imports
+the robot does not carry has ~easyblock = Bundle~; that choice is
+described below.
 
 * Plan
 

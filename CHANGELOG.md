@@ -122,6 +122,12 @@ All notable changes to this project are documented here.
 
 ### Documentation
 
+- The PyPI and Comprehensive R Archive Network (CRAN) how-tos describe
+  the easyblocks the planners emit.
+  The command map includes `repro summary`. The idle campaign example
+  omits `current_recipe`, which the state file omits when no recipe is
+  active.
+
 - Keep each command span on one line on the dependency-closure page, and
   put the remaining actors next to their verbs.
 

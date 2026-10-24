@@ -69,7 +69,9 @@ The extra-only ~lxml~ requirement stays a parse residual. When the robot
 does not already provide the package, the lock collapses ~soupsieve~
 (when ~Python-bundle-PyPI~ provides it) to that bundle, and the emitted
 recipe is a ~PythonPackage~ depending on ~Python~ and ~Python-bundle-PyPI~
-with no ~exts_list~.
+with no ~exts_list~. The plan's ~easyblock~ stays ~PythonBundle~; that
+class is what a multi-package overlay emits. A ~PythonBundle~ recipe is
+for a set installed together, not for a single package.
 
 Asking for ~numpy~ (or ~scipy~, or ~torch~ / ~PyTorch~) against a robot
 that already ships the provider produces an empty delta and an
