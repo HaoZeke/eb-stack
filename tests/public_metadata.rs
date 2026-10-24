@@ -228,3 +228,25 @@ fn unpublished_endpoints_are_excluded_from_external_link_checks() {
         );
     }
 }
+
+#[test]
+fn fetch_script_exports_one_name_per_pinned_tree() {
+    let text = std::fs::read_to_string(repo().join("scripts/fetch-upstream-trees.sh"))
+        .expect("read fetch script");
+    for gone in [
+        "EB_EASYCONFIGS_V541",
+        "EB_STACK_EC_DEVELOP",
+        "EB_STACK_EC_V541",
+    ] {
+        assert!(!text.contains(gone), "{gone} is still in the fetch script");
+    }
+    for kept in [
+        "EB_EASYCONFIGS_DEVELOP",
+        "EB_EASYCONFIGS_541",
+        "EB_EASYCONFIGS=",
+        "EB_EASYBLOCKS=",
+        "EB_EASYBUILD_FRAMEWORK=",
+    ] {
+        assert!(text.contains(kept), "fetch script missing {kept}");
+    }
+}

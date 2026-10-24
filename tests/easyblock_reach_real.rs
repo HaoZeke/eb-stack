@@ -1,7 +1,7 @@
 //! Real easybuild-easyblocks and easybuild-easyconfigs trees.
 //!
 //! Ignored unless run by name. Set `EB_EASYBLOCKS`, `EB_EASYCONFIGS_DEVELOP`,
-//! and `EB_EASYCONFIGS_V541`. `EB_REACH_OUT` is where the reports are written.
+//! and `EB_EASYCONFIGS_541`. `EB_REACH_OUT` is where the reports are written.
 
 use eb_stack::easyblock_reach::{reach, read_sources, write_report, ReachQuery, ReachReport};
 use std::collections::{BTreeSet, HashSet};
@@ -33,7 +33,7 @@ fn paths_of(report: &ReachReport) -> HashSet<String> {
 }
 
 #[test]
-#[ignore = "needs EB_EASYBLOCKS, EB_EASYCONFIGS_DEVELOP, and EB_EASYCONFIGS_V541"]
+#[ignore = "needs EB_EASYBLOCKS, EB_EASYCONFIGS_DEVELOP, and EB_EASYCONFIGS_541"]
 fn develop_and_v541_match_grep() {
     let blocks = env_path("EB_EASYBLOCKS");
     let out_root =
@@ -54,7 +54,7 @@ fn develop_and_v541_match_grep() {
     ];
     for (label, tree_key) in [
         ("develop", "EB_EASYCONFIGS_DEVELOP"),
-        ("v5.4.1", "EB_EASYCONFIGS_V541"),
+        ("v5.4.1", "EB_EASYCONFIGS_541"),
     ] {
         let ecs = env_path(tree_key);
         let cmake_literal = rg_files(&ecs, "easyblock\\s*=\\s*['\"]CMakeMake['\"]");

@@ -40,6 +40,12 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `scripts/fetch-upstream-trees.sh` creates a checkout of pinned easybuilders
+  easyconfigs, easyblocks, and framework trees. The `Upstream trees`
+  workflow sources that cache and runs `cargo test --include-ignored`
+  every week, on a push that changes the pinned tree list in that
+  script, and by hand.
+
 - `eb_pr_overlap`, `eb_rebuild_set`, `eb_component_reach`, and
   `eb_easyblock_reach` call the same runners as the CLI commands.
   `eb_pr_overlap` takes `kind` `software-layer` or `easyconfigs`.

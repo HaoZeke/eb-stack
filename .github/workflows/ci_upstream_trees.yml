@@ -1,0 +1,39 @@
+name: Upstream trees
+
+# The default CI does not clone easybuilders trees. This workflow runs
+# the ignored real-tree tests every week, on a push that changes the
+# pinned tree list, and by hand.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, Monday 06:00 UTC.
+    - cron: "0 6 * * 1"
+  push:
+    paths:
+      - scripts/fetch-upstream-trees.sh
+
+permissions:
+  contents: read
+
+jobs:
+  ignored:
+    name: cargo test --include-ignored
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Fetch pinned EasyBuild trees
+        run: scripts/fetch-upstream-trees.sh "${{ runner.temp }}/eb-upstream"
+      - name: Ignored tests against those trees
+        run: |
+          set -euo pipefail
+          set -a
+          # shellcheck disable=SC1091
+          source "${{ runner.temp }}/eb-upstream/env.sh"
+          set +a
+          cargo test --locked --all-targets -- --include-ignored --nocapture

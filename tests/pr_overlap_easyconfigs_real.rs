@@ -1,8 +1,8 @@
 //! Two real easyconfigs groups added since v5.4.1 that share a new module.
 //!
 //! Ignored: it parses two full easyconfigs trees. Point
-//! `EB_STACK_EC_DEVELOP` and `EB_STACK_EC_V541` at `easybuild/easyconfigs`
-//! of each checkout.
+//! `EB_EASYCONFIGS` at develop `easybuild/easyconfigs` and
+//! `EB_EASYCONFIGS_541` at the v5.4.1 checkout.
 
 use eb_stack::build_order::{module_name, ModuleKey};
 use eb_stack::parse_easyconfig_tree;
@@ -12,6 +12,16 @@ use eb_stack::pr_overlap::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+fn easyconfigs_under(key: &str) -> String {
+    let path = PathBuf::from(std::env::var(key).unwrap_or_else(|_| panic!("{key} is required")));
+    let nested = path.join("easybuild/easyconfigs");
+    if nested.is_dir() {
+        nested.display().to_string()
+    } else {
+        path.display().to_string()
+    }
+}
 
 fn config() -> OverlapConfig {
     OverlapConfig {
@@ -124,8 +134,8 @@ fn closure(start: usize, deps: &[Vec<usize>]) -> BTreeSet<usize> {
 #[ignore]
 fn two_develop_groups_share_a_new_module() {
     let started = std::time::Instant::now();
-    let develop = PathBuf::from(std::env::var("EB_STACK_EC_DEVELOP").expect("EB_STACK_EC_DEVELOP"));
-    let v541 = PathBuf::from(std::env::var("EB_STACK_EC_V541").expect("EB_STACK_EC_V541"));
+    let develop = PathBuf::from(std::env::var("EB_EASYCONFIGS").expect("EB_EASYCONFIGS"));
+    let v541 = PathBuf::from(easyconfigs_under("EB_EASYCONFIGS_541"));
     let paths = added_easyconfigs(&develop);
     assert!(paths.len() >= 2, "added {}", paths.len());
     let base = parse_easyconfig_tree(&v541).unwrap();

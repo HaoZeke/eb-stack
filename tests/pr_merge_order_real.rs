@@ -1,5 +1,11 @@
-//! Ignored. `EB_STACK_EC_DEVELOP` and `EB_STACK_EC_V541` are easyconfig trees.
-//! `EB_STACK_ZEN4` is a directory of 2026-10-22 `prs/*.toml` records.
+//! Ignored unless the pinned EasyBuild trees from `scripts/fetch-upstream-trees.sh`
+//! are present.
+//!
+//! `EB_EASYCONFIGS` is the develop `easybuild/easyconfigs` directory.
+//! `EB_EASYCONFIGS_541` is the v5.4.1 checkout; the tests join
+//! `easybuild/easyconfigs`. `EB_STACK_ZEN4` is an optional directory of `prs/*.toml`
+//! records; without it the zen4 tests build those records from the develop
+//! tree. `EB_STACK_ZEN4_PRS` is the matching pull-request JSON.
 
 use eb_stack::build_order::{closure_against_installed, module_name, Choice, ModuleKey};
 use eb_stack::dep_filter::FilterDeps;
@@ -9,7 +15,8 @@ use eb_stack::pr_overlap::{
 };
 use eb_stack::{merge_order, parse_easyconfig_tree};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 const STACK: &str = "easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.0-2026.1.yml";
@@ -17,8 +24,8 @@ const STACK: &str = "easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.0
 #[test]
 #[ignore]
 fn real_trees_build_each_module_in_one_step() {
-    let develop = std::env::var("EB_STACK_EC_DEVELOP").expect("EB_STACK_EC_DEVELOP");
-    let release = std::env::var("EB_STACK_EC_V541").expect("EB_STACK_EC_V541");
+    let develop = std::env::var("EB_EASYCONFIGS").expect("EB_EASYCONFIGS");
+    let release = easyconfigs_under("EB_EASYCONFIGS_541");
     for (label, root) in [("v5.4.1", release), ("develop", develop)] {
         let start = Instant::now();
         let parsed =
@@ -45,8 +52,87 @@ fn zen4_hunk_conflicts_from_fetched_revisions() {
     zen4_order(true);
 }
 
+fn easyconfigs_under(key: &str) -> String {
+    let path = PathBuf::from(std::env::var(key).unwrap_or_else(|_| panic!("{key} is required")));
+    let nested = path.join("easybuild/easyconfigs");
+    if nested.is_dir() {
+        nested.display().to_string()
+    } else {
+        path.display().to_string()
+    }
+}
+
+fn easyconfigs_dir() -> PathBuf {
+    let raw = std::env::var("EB_EASYCONFIGS")
+        .or_else(|_| std::env::var("EB_EASYCONFIGS_DEVELOP"))
+        .expect("EB_EASYCONFIGS or EB_EASYCONFIGS_DEVELOP");
+    let path = PathBuf::from(raw);
+    let nested = path.join("easybuild/easyconfigs");
+    if nested.is_dir() {
+        nested
+    } else {
+        path
+    }
+}
+
+/// Records and pull-request JSON built from the develop easyconfigs tree,
+/// so the zen4 tests run without a saved 2026-10-22 dump.
+fn synthesize_zen4() -> &'static (tempfile::TempDir, tempfile::TempDir) {
+    static CELL: OnceLock<(tempfile::TempDir, tempfile::TempDir)> = OnceLock::new();
+    CELL.get_or_init(|| {
+        let parsed = parse_easyconfig_tree(&easyconfigs_dir()).expect("parse develop tree");
+        let installed = installed_from_roots(&parsed.candidates);
+        let rows = closures(&parsed.candidates, &installed);
+        let (dep, apps) = chain(&rows).expect("no chain in the develop tree");
+        let mut inputs = vec![input(1, &dep.1)];
+        for (i, app) in apps.iter().enumerate() {
+            inputs.push(input((i + 2) as u64, &app.1));
+        }
+        let trees = RobotTrees {
+            base: parsed.candidates,
+            commits: BTreeMap::new(),
+        };
+        let cfg = config();
+        let records = tempfile::tempdir().expect("records");
+        let jsons = tempfile::tempdir().expect("json");
+        std::fs::create_dir(records.path().join("prs")).expect("prs");
+        for pr in &inputs {
+            let record = pr_record(pr, &trees, &installed, &cfg).expect("record");
+            std::fs::write(
+                records
+                    .path()
+                    .join("prs")
+                    .join(format!("{}.toml", record.pr)),
+                eb_stack::pr_overlap::record_to_toml(&record).expect("toml"),
+            )
+            .expect("write record");
+            std::fs::write(
+                jsons.path().join(format!("{}.json", pr.number)),
+                serde_json::to_string_pretty(pr).expect("json"),
+            )
+            .expect("write json");
+        }
+        (records, jsons)
+    })
+}
+
+fn zen4_location() -> (PathBuf, Option<PathBuf>) {
+    if let Ok(dir) = std::env::var("EB_STACK_ZEN4") {
+        return (
+            PathBuf::from(dir),
+            std::env::var("EB_STACK_ZEN4_PRS").ok().map(PathBuf::from),
+        );
+    }
+    let (records, jsons) = synthesize_zen4();
+    (
+        records.path().to_path_buf(),
+        Some(jsons.path().to_path_buf()),
+    )
+}
+
 fn zen4_order(with_revisions: bool) {
-    let dir = std::env::var("EB_STACK_ZEN4").expect("EB_STACK_ZEN4");
+    let (dir, generated_prs) = zen4_location();
+    let dir = dir.display().to_string();
     let mut records = Vec::new();
     for entry in std::fs::read_dir(Path::new(&dir).join("prs")).expect("prs") {
         let path = entry.expect("entry").path();
@@ -58,7 +144,12 @@ fn zen4_order(with_revisions: bool) {
     records.sort_by_key(|r| r.pr);
     let config = config();
     if with_revisions {
-        let fetched = std::env::var("EB_STACK_ZEN4_PRS").expect("EB_STACK_ZEN4_PRS");
+        let fetched = std::env::var("EB_STACK_ZEN4_PRS").unwrap_or_else(|_| {
+            generated_prs
+                .expect("synthesized pull-request JSON")
+                .display()
+                .to_string()
+        });
         let mut inputs = Vec::new();
         for entry in std::fs::read_dir(&fetched).expect("fetched") {
             let path = entry.expect("entry").path();

@@ -95,5 +95,9 @@ CI mirrors that gate as parallel jobs covering known bumps, packaging fixtures,
 foreign adapters, package bundles, catalog/closure/source discovery, profile
 emission, target routing, campaign state, CLI, and MCP. Optional
 `real_tree_scale` needs a local EasyBuild robot tree (`EB_EASYCONFIGS`) and is
-not required on GitHub runners. No affected suite may remain red in a
-completion claim.
+not required on GitHub runners. `scripts/fetch-upstream-trees.sh` creates a checkout of
+the pinned easybuilders trees and writes `env.sh` for that variable and for
+the ignored real-tree tests. The `Upstream trees` workflow runs
+`cargo test --include-ignored` against that cache every week, on a push
+that changes the pinned tree list in that script, and by hand. No affected
+suite may remain red in a completion claim.
