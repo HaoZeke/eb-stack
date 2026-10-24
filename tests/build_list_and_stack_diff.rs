@@ -292,3 +292,52 @@ fn stack_diff_without_a_baseline_names_the_real_flags() {
         "must not name a flag that is not accepted: {msg}"
     );
 }
+
+/// The how-to prints the build list and stack diff of its own command.
+/// A shortened sample drifts the first time someone compares a real run.
+#[test]
+fn emit_reports_howto_matches_the_gromacs_solve() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let build_list = tmp.path().join("build.list");
+    let stack_diff = tmp.path().join("stack.diff.md");
+    let status = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .current_dir(&root)
+        .args([
+            "stack",
+            "solve",
+            "--easyconfigs",
+            "fixtures/gromacs_2025_to_next/easyconfigs",
+            "--policy",
+            "fixtures/gromacs_2025_to_next/policies/prefer_newer.json",
+            "--baseline-easyconfigs",
+            "fixtures/gromacs_2025_to_next/easyconfigs",
+            "--lock-out",
+        ])
+        .arg(tmp.path().join("stack.lock.json"))
+        .arg("--sbom-out")
+        .arg(tmp.path().join("stack.cdx.json"))
+        .arg("--build-list-out")
+        .arg(&build_list)
+        .arg("--stack-diff-out")
+        .arg(&stack_diff)
+        .status()
+        .expect("spawn");
+    assert!(status.success());
+    let list = std::fs::read_to_string(&build_list).expect("build list");
+    let diff = std::fs::read_to_string(&stack_diff).expect("stack diff");
+    assert!(
+        diff.starts_with("# Stack diff\n\nBaseline (`foss-2025a`)"),
+        "{diff}"
+    );
+    let howto =
+        std::fs::read_to_string(root.join("docs/orgmode/howto/emit-reports.org")).expect("howto");
+    assert!(
+        howto.contains(list.trim_end()),
+        "emit-reports.org build list drifted from the solve:\n{list}"
+    );
+    assert!(
+        howto.contains(diff.trim_end()),
+        "emit-reports.org stack diff drifted from the solve:\n{diff}"
+    );
+}

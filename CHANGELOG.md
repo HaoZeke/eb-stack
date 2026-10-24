@@ -26,6 +26,9 @@ All notable changes to this project are documented here.
 - `stack solve` labels a baseline parsed from easyconfigs with that
   baseline's toolchain (`foss-2025a`), the same shape as the solved
   generation label.
+- The build list and stack diff in `docs/orgmode/howto/emit-reports.org`
+  are the files `stack solve` writes for the GROMACS fixture, including
+  Python and OpenMPI 5.0.3.
 - Recipe lint modules live under `src/eb_style/` so `sphinx-rustdocgen`
   can open them. A `#[path]` attribute is joined onto the parent file
   and the generator then fails to read the module.
