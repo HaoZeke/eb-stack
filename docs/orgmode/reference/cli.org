@@ -566,6 +566,21 @@ installed and orders the rest. Pull requests 11 and 13 add
 ~freetype-2.14.1-GCCcore-15.2.0.eb~. Pull request 12 adds
 ~Graphviz-14.0.2-GCCcore-15.2.0.eb~, which reaches freetype.
 
+~--impact N~ writes ~merge-impact.toml~. Repeat the flag. N has to be a
+number in the ~--pr~ input, or the error is
+~--impact 999: no pull request with that number~. The file is the effect
+of merging that pull request alone: other pull requests whose ~to_build~
+shrinks, and depends-on edges from it that resolve. It is not the residual
+after earlier steps of ~--merge-order~, and it does not write
+~merge-order.toml~ unless that flag (or ~--merged~) is also set. A number
+that is also passed to ~--merged~ is an error:
+~--impact N: already listed in --merged~. Modules those merged pull
+requests build are already installed, so they do not appear in ~shrinks~
+and those pull requests are not listed under ~affected~. For
+~--kind easyconfigs~ the records have no easystack entries, so ~resolves~
+stays empty. The recorded easyconfigs run is
+[[file:../howto/easyconfigs-pr-overlap.org][close open easybuild-easyconfigs pull requests]].
+
 * ~rebuild-set~
 
 #+begin_src bash

@@ -122,6 +122,8 @@ pub struct PrOverlapRequest {
     pub merge_order: bool,
     /// Pull requests already merged. Implies a merge order.
     pub merged: Vec<u64>,
+    /// Pull requests judged on their own. Writes `merge-impact.toml`.
+    pub impact: Vec<u64>,
     /// Repository URL for Markdown links.
     pub repo_url: Option<String>,
     /// Directory for `prs/`, `overlap.toml`, and `overlap.md`.
@@ -493,6 +495,23 @@ fn run_pr_overlap_inner(args: &PrOverlapRequest) -> Result<PrOverlapRun> {
         let mut markdown = std::fs::read_to_string(args.out_dir.join("overlap.md"))?;
         markdown.push_str(&merge_order::render_section(&order, &repo_url));
         std::fs::write(args.out_dir.join("overlap.md"), markdown)?;
+    }
+    if !args.impact.is_empty() {
+        for number in &args.impact {
+            if args.merged.contains(number) {
+                return Err(usage(format!(
+                    "--impact {number}: already listed in --merged"
+                )));
+            }
+        }
+        let report =
+            merge_order::impact_report(&records, &args.impact, &config.generated_at, &args.merged)
+                .map_err(|number| {
+                    usage(format!(
+                        "--impact {number}: no pull request with that number"
+                    ))
+                })?;
+        std::fs::write(args.out_dir.join("merge-impact.toml"), to_toml(&report)?)?;
     }
     Ok(PrOverlapRun {
         prs: prs.len(),

@@ -233,6 +233,10 @@ All notable changes to this project are documented here.
 
 - The `eb_component_reach` schema lists `osv_cache`, which the CLI
   accepts as `--osv-cache`.
+- `eb-stack pr-overlap --impact N` writes `merge-impact.toml`. For that pull
+  request alone, it names the other open pull requests whose build set
+  shrinks and the depends-on edges from it that resolve.
+
 - `scripts/fetch-upstream-trees.sh` creates a checkout of pinned easybuilders
   easyconfigs, easyblocks, and framework trees. The `Upstream trees`
   workflow sources that cache and runs `cargo test --include-ignored`

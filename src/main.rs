@@ -258,6 +258,14 @@ struct PrOverlapArgs {
     /// Pull request already merged. Repeat the flag. Implies `--merge-order`.
     #[arg(long)]
     merged: Vec<u64>,
+    /// Pull request to judge on its own. Repeat the flag.
+    ///
+    /// Writes `merge-impact.toml`: other pull requests whose build set shrinks,
+    /// or whose depends-on edge from this pull request resolves. This is the
+    /// effect of merging this pull request alone, not the residual after
+    /// earlier steps of `--merge-order`.
+    #[arg(long)]
+    impact: Vec<u64>,
     /// Repository URL used for links in the Markdown report.
     ///
     /// Defaults to `https://github.com/EESSI/software-layer`, or to
@@ -1129,6 +1137,7 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
             generated_at: args.generated_at,
             merge_order: args.merge_order,
             merged: args.merged,
+            impact: args.impact,
             repo_url: args.repo_url,
             out_dir: args.out_dir,
         }) {

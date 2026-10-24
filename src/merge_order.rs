@@ -194,6 +194,136 @@ pub fn unknown_merged(inputs: &[u64], merged: &[u64]) -> Option<u64> {
     merged.iter().copied().find(|n| !known.contains(n))
 }
 
+/// Schema of [`MergeImpactReport`].
+pub const MERGE_IMPACT_SCHEMA_VERSION: u32 = 1;
+
+/// What merging one pull request does to the others, on its own.
+///
+/// This is not the residual after earlier steps of [`plan`]. It treats this
+/// pull request's `to_build` as newly installed, after removing every module
+/// a `--merged` pull request already builds. Those pull requests are not
+/// listed in `affected`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MergeImpactReport {
+    pub schema_version: u32,
+    pub generated_at: String,
+    pub impacts: Vec<MergeImpact>,
+}
+
+/// One pull request judged on its own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MergeImpact {
+    pub pr: u64,
+    pub affected: Vec<MergeEffect>,
+}
+
+/// Another pull request whose build set or depends-on edge changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MergeEffect {
+    pub pr: u64,
+    /// Modules that leave the other pull request's `to_build`.
+    pub shrinks: Vec<String>,
+    /// Modules of a depends-on edge from the merged pull request to this one.
+    ///
+    /// The edge is the same one [`plan`] draws: the merged pull request asks
+    /// for the module by name, and this one only reaches it.
+    pub resolves: Vec<String>,
+}
+
+fn asked_modules(record: &PrRecord) -> BTreeSet<String> {
+    record
+        .entries
+        .iter()
+        .filter_map(|entry| entry_module(&entry.easyconfig))
+        .collect()
+}
+
+/// Modules of the depends-on edge from `provider` to `dependent`.
+///
+/// Empty when there is no edge. Both asking for the module is not an edge.
+fn resolves_modules(provider: &PrRecord, dependent: &PrRecord) -> Vec<String> {
+    let dependent_asks = asked_modules(dependent);
+    let mut modules: Vec<String> = asked_modules(provider)
+        .into_iter()
+        .filter(|module| {
+            dependent.to_build.iter().any(|built| built == module)
+                && !dependent_asks.contains(module)
+        })
+        .collect();
+    modules.sort();
+    modules
+}
+
+/// Pull requests a merge of `pr` changes. `None` when `pr` is not a record.
+///
+/// `merged` pull requests are already installed. Their `to_build` is
+/// removed from both sides before the intersection, and they are omitted
+/// from `affected`. That is the same installed set [`plan`] uses.
+pub fn impact(records: &[PrRecord], pr: u64, merged: &[u64]) -> Option<MergeImpact> {
+    let given = records.iter().find(|record| record.pr == pr)?;
+    let merged_set: BTreeSet<u64> = merged.iter().copied().collect();
+    let mut installed: BTreeSet<&str> = BTreeSet::new();
+    for record in records.iter().filter(|record| merged_set.contains(&record.pr)) {
+        installed.extend(record.to_build.iter().map(String::as_str));
+    }
+    let built: BTreeSet<&str> = given
+        .to_build
+        .iter()
+        .map(String::as_str)
+        .filter(|module| !installed.contains(module))
+        .collect();
+    let mut affected = Vec::new();
+    for other in records {
+        if other.pr == pr || merged_set.contains(&other.pr) {
+            continue;
+        }
+        let mut shrinks: Vec<String> = other
+            .to_build
+            .iter()
+            .filter(|module| built.contains(module.as_str()))
+            .cloned()
+            .collect();
+        shrinks.sort();
+        let resolves = resolves_modules(given, other);
+        if shrinks.is_empty() && resolves.is_empty() {
+            continue;
+        }
+        affected.push(MergeEffect {
+            pr: other.pr,
+            shrinks,
+            resolves,
+        });
+    }
+    affected.sort_by_key(|effect| effect.pr);
+    Some(MergeImpact { pr, affected })
+}
+
+/// One report for every requested pull request, in ascending number order.
+///
+/// The first unknown number is `Err`.
+pub fn impact_report(
+    records: &[PrRecord],
+    numbers: &[u64],
+    generated_at: &str,
+    merged: &[u64],
+) -> Result<MergeImpactReport, u64> {
+    let mut numbers = numbers.to_vec();
+    numbers.sort_unstable();
+    numbers.dedup();
+    let mut impacts = Vec::new();
+    for number in numbers {
+        let Some(one) = impact(records, number, merged) else {
+            return Err(number);
+        };
+        impacts.push(one);
+    }
+    Ok(MergeImpactReport {
+        schema_version: MERGE_IMPACT_SCHEMA_VERSION,
+        generated_at: generated_at.to_string(),
+        impacts,
+    })
+}
+
 /// Collisions on one easystack. The insertion point is the 0-based index of
 /// the base line before the first added line, or -1 when the addition starts
 /// at the top of the file. Identical added lines are `same-entry`.
@@ -462,6 +592,48 @@ mod tests {
         ]);
         assert_eq!(builds(&both), vec![(4, vec![shared.into()]), (8, vec!["Extra/1".into()])]);
         assert!(both.steps[0].after.is_empty(), "both ask for the module, so there is no edge");
+    }
+
+    #[test]
+    fn merging_one_pull_request_shrinks_builds_and_resolves_edges() {
+        let lib = "Lib/1.0-GCCcore-15.2.0";
+        let mid = "Mid/1.0-GCCcore-15.2.0";
+        let app = "App/2.0-GCCcore-15.2.0";
+        let records = [
+            rec(1, &[lib], &["Lib-1.0-GCCcore-15.2.0.eb"]),
+            rec(2, &[mid, lib], &["Mid-1.0-GCCcore-15.2.0.eb"]),
+            rec(3, &[app, mid, lib], &["App-2.0-GCCcore-15.2.0.eb"]),
+        ];
+        let hit = impact(&records, 1, &[]).expect("pr 1");
+        assert_eq!(
+            hit.affected.iter().map(|effect| effect.pr).collect::<Vec<_>>(),
+            [2, 3]
+        );
+        assert_eq!(hit.affected[0].shrinks, [lib]);
+        assert_eq!(hit.affected[0].resolves, [lib]);
+        assert_eq!(hit.affected[1].resolves, [lib]);
+        let mid_hit = impact(&records, 2, &[]).expect("pr 2");
+        let on_3 = mid_hit
+            .affected
+            .iter()
+            .find(|effect| effect.pr == 3)
+            .expect("pr 3");
+        assert_eq!(on_3.resolves, [mid]);
+        assert_eq!(on_3.shrinks, [lib, mid]);
+        let on_1 = mid_hit
+            .affected
+            .iter()
+            .find(|effect| effect.pr == 1)
+            .expect("pr 1");
+        assert!(on_1.resolves.is_empty());
+        assert_eq!(on_1.shrinks, [lib]);
+        assert!(impact(&records, 9, &[]).is_none());
+        let report = impact_report(&records, &[2, 1], "t", &[]).expect("report");
+        assert_eq!(
+            report.impacts.iter().map(|item| item.pr).collect::<Vec<_>>(),
+            [1, 2]
+        );
+        assert_eq!(impact_report(&records, &[9], "t", &[]), Err(9));
     }
 
     #[test]

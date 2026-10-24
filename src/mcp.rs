@@ -404,6 +404,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("generated_at", "string"),
                 ("merge_order", "boolean"),
                 ("merged", "array_int"),
+                ("impact", "array_int"),
                 ("repo_url", "string"),
                 ("out_dir", "string"),
             ],
@@ -2600,6 +2601,7 @@ fn pr_overlap(arguments: &Value) -> Result<Value, String> {
         generated_at: optional_string(arguments, "generated_at"),
         merge_order: optional_bool(arguments, "merge_order"),
         merged: u64_array(arguments, "merged")?,
+        impact: u64_array(arguments, "impact")?,
         repo_url: optional_string(arguments, "repo_url"),
         out_dir: optional_path(arguments, "out_dir").unwrap_or_else(|| PathBuf::from("pr-overlap")),
     })

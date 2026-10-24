@@ -399,6 +399,36 @@ With ~--merge-order~, ~overlap.md~ gains a Merge order table: position,
 pull request, build count, saves, and after. Conflicts follow that table
 when any were found. Without the flag the Markdown file is unchanged.
 
+** ~merge-impact.toml~
+
+Written only when ~--impact~ is passed. The same never-merge header.
+Schema ~1~. This is not the residual after earlier steps of
+~merge-order.toml~. The named pull request's ~to_build~ counts as newly
+installed, after the modules of every ~--merged~ pull request are
+removed. Those pull requests are left out of ~affected~. ~--impact N~
+when N is also ~--merged~ is an error:
+~--impact N: already listed in --merged~.
+
+| Field | Meaning |
+|-
+| ~schema_version~ | ~1~ |
+| ~generated_at~ | Same timestamp as the overlap index |
+| ~impacts~ | One entry per requested pull request, in ascending number order |
+
+Each ~[[impacts]]~ table has ~pr~ and ~affected~. Each ~[[impacts.affected]]~
+table:
+
+| Field | Meaning |
+|-
+| ~pr~ | Another pull request whose build set or depends-on edge changes |
+| ~shrinks~ | Modules that leave that pull request's ~to_build~, sorted |
+| ~resolves~ | Modules of a depends-on edge from the named pull request. It asks for the module by name, and the other only reaches it. Both asking is not an edge |
+
+An unknown number is an error before the file is written:
+~--impact N: no pull request with that number~. Easyconfigs records have
+no easystack entries, so ~resolves~ is empty for that kind and ~shrinks~
+is still the shared ~to_build~.
+
 ** Easyconfigs records (schema 2)
 
 ~--kind easyconfigs~ writes schema 2. A software-layer record stays schema

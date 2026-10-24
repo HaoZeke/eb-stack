@@ -138,3 +138,69 @@ fn the_cli_matches_the_easyconfig_fixture() {
         assert_eq!(got, want, "{name}");
     }
 }
+
+fn run_easy(out: &std::path::Path, extra: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .env_remove("EASYBUILD_FILTER_DEPS")
+        .args(["pr-overlap", "--kind", "easyconfigs", "--pr"])
+        .arg(fixtures().join("prs.json"))
+        .arg("--easyconfigs")
+        .arg(fixtures())
+        .args(["--generated-at", "2026-10-24T00:00:00Z"])
+        .args([
+            "--repo-url",
+            "https://github.com/easybuilders/easybuild-easyconfigs",
+        ])
+        .arg("--out-dir")
+        .arg(out)
+        .args(extra)
+        .output()
+        .expect("run pr-overlap")
+}
+
+/// `--impact` has to use the same installed set as `merge-order.toml`.
+#[test]
+fn impact_honours_merged_the_way_merge_order_does() {
+    let temp = tempfile::tempdir().expect("temp");
+    let out = temp.path().join("out");
+    let status = run_easy(&out, &["--merged", "7", "--impact", "8"]);
+    let err = String::from_utf8_lossy(&status.stderr);
+    assert!(status.status.success(), "{err}");
+    let order: eb_stack::merge_order::MergeOrder =
+        toml::from_str(&std::fs::read_to_string(out.join("merge-order.toml")).unwrap()).unwrap();
+    let step = order
+        .steps
+        .iter()
+        .find(|step| step.pr == 8)
+        .expect("PR 8 step");
+    assert_eq!(step.builds, vec!["User/1.0".to_string()]);
+    let report: eb_stack::merge_order::MergeImpactReport =
+        toml::from_str(&std::fs::read_to_string(out.join("merge-impact.toml")).unwrap()).unwrap();
+    let impact = report
+        .impacts
+        .iter()
+        .find(|impact| impact.pr == 8)
+        .expect("impact 8");
+    assert!(
+        impact.affected.iter().all(|effect| effect.pr != 7),
+        "merged PR 7 is still affected: {:?}",
+        impact.affected
+    );
+    for effect in &impact.affected {
+        assert!(
+            !effect.shrinks.iter().any(|module| module == "Need/1.0"),
+            "Need/1.0 is already installed by merged PR 7: {:?}",
+            impact.affected
+        );
+    }
+    let both = run_easy(
+        &temp.path().join("both"),
+        &["--merged", "7", "--impact", "7"],
+    );
+    assert_eq!(both.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&both.stderr);
+    assert!(
+        err.contains("--impact 7: already listed in --merged"),
+        "{err}"
+    );
+}
