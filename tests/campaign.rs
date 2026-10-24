@@ -817,3 +817,33 @@ fn campaign_cli_claims_and_resolves_findings_for_omp_workers() {
     assert_eq!(state["findings"][0]["status"], "resolved");
     assert_eq!(state["findings"][0]["owner"], "omp-worker-1");
 }
+
+#[test]
+fn campaign_claim_of_a_missing_state_leaves_no_lock_guard() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let state = temp.path().join("nope.json");
+    let claim = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .args([
+            "campaign",
+            "finding",
+            "claim",
+            "--state",
+            state.to_str().unwrap(),
+            "--id",
+            "FINDING",
+            "--owner",
+            "worker",
+        ])
+        .output()
+        .expect("claim command");
+    let stderr = String::from_utf8_lossy(&claim.stderr);
+    assert_eq!(claim.status.code(), Some(1), "{stderr}");
+    assert!(
+        !std::path::PathBuf::from(format!("{}.lock", state.display())).exists(),
+        "metadata left behind"
+    );
+    assert!(
+        !std::path::PathBuf::from(format!("{}.lock.guard", state.display())).exists(),
+        "guard left behind"
+    );
+}

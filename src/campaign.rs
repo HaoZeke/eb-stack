@@ -1129,7 +1129,8 @@ fn write_state(path: &Path, state: &CampaignState) -> Result<(), CampaignError> 
 
 struct CampaignLock {
     metadata_path: PathBuf,
-    _guard: std::fs::File,
+    guard_path: PathBuf,
+    guard: std::fs::File,
 }
 
 impl CampaignLock {
@@ -1176,15 +1177,20 @@ impl CampaignLock {
 
         Ok(Self {
             metadata_path,
-            _guard: guard,
+            guard_path,
+            guard,
         })
     }
 }
 
 impl Drop for CampaignLock {
     fn drop(&mut self) {
+        // Unlink while this process still holds the lock, then unlock.
+        // The next acquirer creates a new guard inode and does not inherit
+        // this one, so a failed claim cannot leave the guard behind.
         let _ = std::fs::remove_file(&self.metadata_path);
-        let _ = FileExt::unlock(&self._guard);
+        let _ = std::fs::remove_file(&self.guard_path);
+        let _ = FileExt::unlock(&self.guard);
     }
 }
 
@@ -1321,6 +1327,7 @@ mod campaign_lock_tests {
         assert!(record["process_start_ticks"].as_u64().is_some());
         drop(lock);
         assert!(!lock_path.exists());
+        assert!(!temp.path().join("campaign.json.lock.guard").exists());
     }
 
     #[test]
@@ -1348,6 +1355,7 @@ mod campaign_lock_tests {
         assert_eq!(record["pid"], std::process::id());
         drop(lock);
         assert!(!lock_path.exists());
+        assert!(!temp.path().join("campaign.json.lock.guard").exists());
     }
 
     #[test]
@@ -1362,5 +1370,18 @@ mod campaign_lock_tests {
         ));
 
         drop(lock);
+        assert!(!temp.path().join("campaign.json.lock").exists());
+        assert!(!temp.path().join("campaign.json.lock.guard").exists());
+    }
+
+    #[test]
+    fn claim_on_a_missing_state_removes_the_lock_guard() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state = temp.path().join("nope.json");
+        let error = claim_finding(&state, "FINDING", "worker").expect_err("missing state");
+        let text = error.to_string();
+        assert!(text.contains("nope.json"), "{text}");
+        assert!(!std::path::PathBuf::from(format!("{}.lock", state.display())).exists());
+        assert!(!std::path::PathBuf::from(format!("{}.lock.guard", state.display())).exists());
     }
 }

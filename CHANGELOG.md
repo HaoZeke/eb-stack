@@ -17,6 +17,8 @@ All notable changes to this project are documented here.
 - A closure SBOM keys each component, its checksums and its dependency
   entry by name, version, versionsuffix and toolchain. Two versions of
   one name keep their own edges and hashes.
+- `campaign finding claim` removes its lock guard when the claim
+  ends, including when the state file is missing.
 - `--merged N` exits 2 when pull request N has no overlap record,
   the same rejection `--impact` already used, and writes no output.
 - `recipe check --recipe` and `recipe format` name the recipe when
