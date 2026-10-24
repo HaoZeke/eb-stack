@@ -383,6 +383,9 @@ impl EasyblockReachRun {
 }
 
 /// Write the pull-request overlap report.
+///
+/// The `pr-overlap` command and the `eb_pr_overlap` MCP tool both call this,
+/// so a flag means the same thing in both places.
 pub fn run_pr_overlap(args: &PrOverlapRequest) -> Result<PrOverlapRun, PrOverlapError> {
     if args.kind == OverlapKind::SoftwareLayer && args.installed.is_none() {
         return Err(PrOverlapError::InstalledRequired);

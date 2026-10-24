@@ -2428,3 +2428,224 @@ fn mcp_component_reach_lists_osv_cache() {
         "{text}"
     );
 }
+
+#[test]
+fn mcp_pr_overlap_writes_the_same_files_as_the_command() {
+    let _guard = WORKSPACE_ENV_LOCK.lock().expect("lock");
+    let previous = std::env::var_os("EASYBUILD_FILTER_DEPS");
+    std::env::remove_var("EASYBUILD_FILTER_DEPS");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let release = root.join("tests/pr_overlap_fixtures/release");
+    let installed = root.join("tests/pr_overlap_fixtures/installed.txt");
+    let stack = "easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.0-2026.1.yml";
+    let base = "easyconfigs:\n  - zlib-1.3.1-GCCcore-15.2.0.eb\n";
+    let one = |n: u64, added: &str| {
+        json!({
+            "number": n,
+            "head_sha": format!("{n:040}"),
+            "title": format!("PR {n}"),
+            "easystacks": [{
+                "path": stack,
+                "base": base,
+                "head": format!("{base}{added}"),
+            }],
+        })
+    };
+    let prs = json!([
+        one(11, "  - freetype-2.14.1-GCCcore-15.2.0.eb\n"),
+        one(12, "  - Graphviz-14.0.2-GCCcore-15.2.0.eb\n"),
+        one(13, "  - freetype-2.14.1-GCCcore-15.2.0.eb\n"),
+    ]);
+    let temp = tempfile::tempdir().expect("temp");
+    let input = temp.path().join("prs.json");
+    std::fs::write(&input, serde_json::to_string(&prs).unwrap()).unwrap();
+    let cli_out = temp.path().join("cli");
+    let mcp_out = temp.path().join("mcp");
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .env_remove("EASYBUILD_FILTER_DEPS")
+        .args(["pr-overlap", "--pr"])
+        .arg(&input)
+        .arg("--easyconfigs")
+        .arg(&release)
+        .arg("--installed")
+        .arg(&installed)
+        .args(["--installed-label", "x86_64/amd/zen4"])
+        .args(["--generated-at", "2026-10-22T00:00:00Z"])
+        .args(["--repo-url", "https://github.com/EESSI/software-layer"])
+        .args(["--merge-order", "--impact", "11", "--out-dir"])
+        .arg(&cli_out)
+        .status()
+        .expect("cli");
+    assert!(status.success(), "cli status {status}");
+    let response = call(
+        90,
+        "eb_pr_overlap",
+        json!({
+            "pr": [input],
+            "easyconfigs": [release],
+            "installed": installed,
+            "installed_label": "x86_64/amd/zen4",
+            "generated_at": "2026-10-22T00:00:00Z",
+            "repo_url": "https://github.com/EESSI/software-layer",
+            "merge_order": true,
+            "impact": [11],
+            "out_dir": mcp_out,
+        }),
+    );
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    assert_eq!(response["result"]["structuredContent"]["records"], 3);
+    for name in [
+        "overlap.toml",
+        "overlap.md",
+        "merge-order.toml",
+        "merge-impact.toml",
+        "prs/11.toml",
+        "prs/12.toml",
+    ] {
+        let left = std::fs::read(cli_out.join(name)).unwrap_or_else(|_| panic!("cli {name}"));
+        let right = std::fs::read(mcp_out.join(name)).unwrap_or_else(|_| panic!("mcp {name}"));
+        assert_eq!(left, right, "{name}");
+    }
+    let easy = root.join("tests/pr_overlap_easyconfigs_fixtures");
+    let lib = std::fs::read_to_string(easy.join("l/Lib/Lib-1.0.eb")).unwrap();
+    let head = lib.replace("Fixture.", "Head.");
+    let easy_prs = json!([
+        {
+            "number": 1,
+            "head_sha": "1".repeat(40),
+            "title": "edit Lib",
+            "easyconfigs": [{"path": "l/Lib/Lib-1.0.eb", "base": lib, "head": head}],
+        },
+        {
+            "number": 2,
+            "head_sha": "2".repeat(40),
+            "title": "edit Lib too",
+            "easyconfigs": [{"path": "l/Lib/Lib-1.0.eb", "base": lib, "head": head}],
+        },
+    ]);
+    let easy_input = temp.path().join("easy.json");
+    std::fs::write(&easy_input, serde_json::to_string(&easy_prs).unwrap()).unwrap();
+    let easy_cli = temp.path().join("easy-cli");
+    let easy_mcp = temp.path().join("easy-mcp");
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .env_remove("EASYBUILD_FILTER_DEPS")
+        .args(["pr-overlap", "--kind", "easyconfigs", "--pr"])
+        .arg(&easy_input)
+        .arg("--easyconfigs")
+        .arg(&easy)
+        .args(["--generated-at", "2026-10-22T00:00:00Z", "--out-dir"])
+        .arg(&easy_cli)
+        .status()
+        .expect("easy cli");
+    assert!(status.success(), "easy cli {status}");
+    let response = call(
+        91,
+        "eb_pr_overlap",
+        json!({
+            "pr": [easy_input],
+            "kind": "easyconfigs",
+            "easyconfigs": [easy],
+            "generated_at": "2026-10-22T00:00:00Z",
+            "out_dir": easy_mcp,
+        }),
+    );
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let left = std::fs::read(easy_cli.join("overlap.toml")).unwrap();
+    let right = std::fs::read(easy_mcp.join("overlap.toml")).unwrap();
+    assert_eq!(left, right);
+    assert!(std::str::from_utf8(&right).unwrap().contains("same-file"));
+    let missing = call(
+        92,
+        "eb_pr_overlap",
+        json!({
+            "pr": [input],
+            "easyconfigs": [release],
+            "out_dir": temp.path().join("missing"),
+        }),
+    );
+    assert_eq!(missing["result"]["isError"], true, "{missing}");
+    if let Some(previous) = previous {
+        std::env::set_var("EASYBUILD_FILTER_DEPS", previous);
+    }
+}
+
+/// `merged` and `impact` are arrays on the CLI. A bare number is not one.
+#[test]
+fn mcp_pr_overlap_rejects_a_scalar_merged_or_impact() {
+    let scalar = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_pr_overlap",
+            "arguments": {
+                "pr": ["/nope.json"],
+                "easyconfigs": ["/nope-tree"],
+                "merged": 9,
+                "impact": 9
+            }
+        }
+    }))
+    .expect("scalar call");
+    assert_eq!(scalar["result"]["isError"], true, "{scalar}");
+    let text = scalar["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        text.contains("argument merged must be an array of integers"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("nope.json") && !text.contains("not readable"),
+        "the scalar is rejected before any file is read: {text}"
+    );
+
+    let array = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_pr_overlap",
+            "arguments": {
+                "pr": ["/nope.json"],
+                "easyconfigs": ["/nope-tree"],
+                "kind": "easyconfigs",
+                "merged": [9]
+            }
+        }
+    }))
+    .expect("array call");
+    assert_eq!(array["result"]["isError"], true, "{array}");
+    let text = array["result"]["content"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        !text.contains("must be an array of integers"),
+        "an array of integers is the accepted shape: {text}"
+    );
+    assert!(
+        text.contains("nope.json"),
+        "an integer array proceeds to the pull-request file: {text}"
+    );
+
+    let impact = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_pr_overlap",
+            "arguments": {
+                "pr": ["/nope.json"],
+                "easyconfigs": ["/nope-tree"],
+                "impact": 9
+            }
+        }
+    }))
+    .expect("impact call");
+    assert_eq!(impact["result"]["isError"], true, "{impact}");
+    let text = impact["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        text.contains("argument impact must be an array of integers"),
+        "{text}"
+    );
+}

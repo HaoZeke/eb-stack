@@ -15,6 +15,8 @@ All notable changes to this project are documented here.
   bump failed later on toolchain `-<version>`.
 - MCP `policy` warns and is still read, the same way the CLI treats
   `--policy`. `stack_policy` is the spelling to pass.
+- MCP `merged` and `impact` reject a bare number. They take an array
+  of pull-request numbers, the same shape as the repeated CLI flags.
 - A foreign package plan no longer treats a SYSTEM bootstrap recipe
   (`CMake-3.18.4`, `pkgconf-1.8.0`) as the dependency for a generation
   that already has that tool on GCCcore. A dependency that names the
@@ -245,7 +247,8 @@ All notable changes to this project are documented here.
 
 - `eb_pr_overlap`, `eb_rebuild_set`, `eb_component_reach`, and
   `eb_easyblock_reach` call the same runners as the CLI commands.
-  `eb_pr_overlap` takes `kind` `software-layer` or `easyconfigs`.
+  `eb_pr_overlap` takes `kind` `software-layer` or `easyconfigs`,
+  an easyconfigs closure, a merge order, and `--impact`.
   The reports written under `out_dir` match the CLI byte for byte.
 
 - `package bump --fetch-checksums` downloads each `sources` entry from the

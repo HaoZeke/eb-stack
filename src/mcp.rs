@@ -387,7 +387,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_pr_overlap",
-            "Close open pull requests against an installed stack and report shared builds. kind is software-layer (the default) or easyconfigs.",
+            "Close open pull requests and report shared modules, using the same writer as `eb-stack pr-overlap`. kind software-layer reads easystack additions against an installed list. kind easyconfigs reads changed .eb files and closes them over the base tree, including modules shared with other open pull requests. merge_order writes a merge order. impact names, for each given pull request, the others whose build set shrinks or whose depends-on edge from it resolves.",
             &[("pr", "array"), ("easyconfigs", "array")],
             &[
                 ("kind", "string"),
