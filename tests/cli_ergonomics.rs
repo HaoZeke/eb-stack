@@ -424,6 +424,65 @@ fn inspect_with_a_lone_toolchain_version_uses_foss() {
 }
 
 #[test]
+fn stack_solve_accepts_the_hidden_policy_alias() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let tree = temp.path().join("tree");
+    std::fs::create_dir(&tree).expect("tree");
+    let missing = temp.path().join("no-policy.toml");
+    let result = output(&[
+        "stack",
+        "solve",
+        "--easyconfigs",
+        tree.to_str().unwrap(),
+        "--policy",
+        missing.to_str().unwrap(),
+    ]);
+    let stderr = String::from_utf8(result.stderr).expect("utf8");
+    assert_eq!(
+        result.status.code(),
+        Some(1),
+        "--policy is the hidden alias, so a missing file is status 1:\n{stderr}"
+    );
+    assert!(stderr.contains(missing.to_str().unwrap()), "{stderr}");
+    assert!(
+        stderr.contains("accepted for compatibility"),
+        "the retired spelling should warn:\n{stderr}"
+    );
+    assert!(result.stdout.is_empty(), "{stderr}");
+}
+
+#[test]
+fn toolchain_spec_rejects_a_split_version() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("recipe.yaml");
+    std::fs::write(
+        &source,
+        "package:\n  name: eon\n  version: 1.0.0\nsource:\n  url: https://example.invalid/eon.tar.gz\n  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+    )
+    .expect("recipe");
+    let out = temp.path().join("out");
+    let result = output(&[
+        "package",
+        "inspect",
+        "--source",
+        source.to_str().unwrap(),
+        "--format",
+        "conda-forge",
+        "--toolchain",
+        "foss/2026.1",
+        "--toolchain-version",
+        "2025a",
+        "--out-dir",
+        out.to_str().unwrap(),
+    ]);
+    let stderr = String::from_utf8(result.stderr).expect("utf8");
+    assert_eq!(result.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("cannot be used with"), "{stderr}");
+    assert!(result.stdout.is_empty(), "{stderr}");
+    assert!(!out.exists(), "left {}", out.display());
+}
+
+#[test]
 fn an_io_error_is_printed_once() {
     let result = output(&[
         "stack",
