@@ -76,6 +76,9 @@ pub fn resolve_toolchain(
             name: "foss".into(),
             version: version.to_string(),
         }),
+        (None, None) => Err(UsageError::new(format!(
+            "{flag} is required as name/version, for example foss/2026.1"
+        ))),
         _ if default_name && flag.starts_with("--") => Err(UsageError::new(
             "--toolchain-version is required, or pass --toolchain name/version",
         )),
@@ -188,5 +191,21 @@ mod tests {
             .expect("an omitted name still defaults");
         assert_eq!(missing.name, "foss");
         assert_eq!(missing.version, "2026.1");
+    }
+
+    #[test]
+    fn no_toolchain_at_all_names_the_current_spelling() {
+        for default_name in [true, false] {
+            let cli = resolve_toolchain(None, None, None, default_name, "--toolchain");
+            assert_eq!(
+                cli.unwrap_err().to_string(),
+                "--toolchain is required as name/version, for example foss/2026.1"
+            );
+            let mcp = resolve_toolchain(None, None, None, default_name, "toolchain");
+            assert_eq!(
+                mcp.unwrap_err().to_string(),
+                "toolchain is required as name/version, for example foss/2026.1"
+            );
+        }
     }
 }

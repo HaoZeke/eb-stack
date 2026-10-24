@@ -555,7 +555,9 @@ All notable changes to this project are documented here.
 - Package commands, `stack solve`, the MCP tools, and
   `skills/golden-replay/replay.sh` pass `--toolchain name/version` and
   `--stack-policy`. The older spellings stay accepted, are omitted
-  from `--help`, and the CLI warns on the split toolchain flags.
+  from `--help`, and warn on the CLI and in the MCP result when the
+  call accepts them. The MCP package tools require a toolchain through
+  the schema's `anyOf`, and a call without one names `toolchain`.
 - The CLI and the MCP tools share one usage error, one toolchain
   parser, and one foreign-format parser.
 - `--toolchain system` and `--toolchain SYSTEM` select the SYSTEM

@@ -571,6 +571,11 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
 }
 
 fn package_inspect(arguments: &Value) -> Result<Value, String> {
+    let warning = toolchain_alias_warning(arguments, true);
+    with_policy_warning(warning.as_deref(), package_inspect_run(arguments))
+}
+
+fn package_inspect_run(arguments: &Value) -> Result<Value, String> {
     let source = required_path(arguments, "source")?;
     let toolchain = toolchain(arguments)?;
     let configs = package_layers(arguments)?;
@@ -598,6 +603,11 @@ fn package_inspect(arguments: &Value) -> Result<Value, String> {
 }
 
 fn package_plan(arguments: &Value) -> Result<Value, String> {
+    let warning = toolchain_alias_warning(arguments, true);
+    with_policy_warning(warning.as_deref(), package_plan_run(arguments))
+}
+
+fn package_plan_run(arguments: &Value) -> Result<Value, String> {
     let stack_policy = load_stack_policy(&required_path(arguments, "stack_policy")?)?;
     let request = NewPackageRequest {
         source: required_path(arguments, "source")?,
@@ -713,6 +723,11 @@ fn load_package_source_roots(arguments: &Value) -> Result<PackageSourceRoots, St
 }
 
 fn package_bump(arguments: &Value) -> Result<Value, String> {
+    let warning = toolchain_alias_warning(arguments, false);
+    with_policy_warning(warning.as_deref(), package_bump_run(arguments))
+}
+
+fn package_bump_run(arguments: &Value) -> Result<Value, String> {
     // Bump has no foss default. Inspect and plan do, which is `toolchain`.
     let target = resolve_mcp_toolchain(arguments, false)?;
     let stack_policy = if let Some(path) = optional_path(arguments, "stack_policy") {
@@ -2809,6 +2824,29 @@ fn load_stack_policy(path: &Path) -> Result<StackPolicy, String> {
 
 fn toolchain(arguments: &Value) -> Result<Toolchain, String> {
     resolve_mcp_toolchain(arguments, true)
+}
+
+/// A split pair the tool will reject is not accepted, so it is not warned.
+fn toolchain_alias_warning(arguments: &Value, default_name: bool) -> Option<String> {
+    if resolve_mcp_toolchain(arguments, default_name).is_err() {
+        return None;
+    }
+    let mut lines = Vec::new();
+    if optional_string(arguments, "toolchain_name").is_some() {
+        lines.push(
+            "warning: toolchain_name is accepted for compatibility. Use toolchain as name/version.",
+        );
+    }
+    if optional_string(arguments, "toolchain_version").is_some() {
+        lines.push(
+            "warning: toolchain_version is accepted for compatibility. Use toolchain as name/version.",
+        );
+    }
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
 }
 
 /// `name/version` in `toolchain`, or the split fields.

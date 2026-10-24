@@ -1566,8 +1566,14 @@ fn mcp_schemas_match_the_handlers_for_bump_lint_and_resolve() {
         bump["result"]["content"][0]["text"]
             .as_str()
             .unwrap_or("")
-            .contains("toolchain_name"),
+            .contains("toolchain is required as name/version"),
         "{bump}"
+    );
+    assert_eq!(
+        tool("eb_package_bump")["inputSchema"]["anyOf"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
     );
 
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1848,6 +1854,161 @@ fn mcp_policy_is_warned_like_the_cli_alias() {
         !text.contains("accepted for compatibility"),
         "passing both names is a rejection, not the alias warning: {text}"
     );
+}
+
+#[test]
+fn mcp_toolchain_fields_are_warned_like_the_cli_flags() {
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_package_inspect",
+            "arguments": {
+                "source": "/nope.yaml",
+                "out_dir": "/tmp/out",
+                "toolchain_name": "foss",
+                "toolchain_version": "2024a"
+            }
+        }
+    }))
+    .expect("inspect");
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        text.contains(
+            "warning: toolchain_name is accepted for compatibility. Use toolchain as name/version."
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "warning: toolchain_version is accepted for compatibility. Use toolchain as name/version."
+        ),
+        "{text}"
+    );
+
+    let current = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_package_inspect",
+            "arguments": {
+                "source": "/nope.yaml",
+                "out_dir": "/tmp/out",
+                "toolchain": "foss/2024a"
+            }
+        }
+    }))
+    .expect("current spelling");
+    let text = current["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        !text.contains("accepted for compatibility"),
+        "toolchain is the current spelling and is not warned: {text}"
+    );
+}
+
+#[test]
+fn mcp_rejected_toolchain_fields_are_not_called_accepted() {
+    let cases = [
+        (
+            "eb_package_inspect",
+            json!({
+                "source": "/nope.yaml",
+                "out_dir": "/tmp/out",
+                "toolchain": "foss/2024a",
+                "toolchain_name": "foss"
+            }),
+            "toolchain cannot be used with toolchain_name or toolchain_version",
+        ),
+        (
+            "eb_package_bump",
+            json!({
+                "source": "/nope.eb",
+                "easyconfigs": ["/nope"],
+                "out_dir": "/tmp/out",
+                "toolchain_version": "2024a"
+            }),
+            "toolchain_name and toolchain_version are required",
+        ),
+    ];
+    for (tool, arguments, needle) in cases {
+        let response = handle_message(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": tool, "arguments": arguments }
+        }))
+        .expect(tool);
+        assert_eq!(response["result"]["isError"], true, "{response}");
+        let text = response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("");
+        assert!(text.contains(needle), "{tool}: {text}");
+        assert!(
+            !text.contains("accepted for compatibility"),
+            "{tool} rejects the fields, so they are not accepted: {text}"
+        );
+    }
+}
+
+#[test]
+fn mcp_package_tools_declare_and_name_the_required_toolchain() {
+    let listed = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list"
+    }))
+    .expect("tools/list");
+    let cases = [
+        (
+            "eb_package_inspect",
+            json!(["toolchain_version"]),
+            json!({"source": "/nope.yaml", "out_dir": "/tmp/out"}),
+        ),
+        (
+            "eb_package_bump",
+            json!(["toolchain_name", "toolchain_version"]),
+            json!({"source": "/nope.eb", "easyconfigs": ["/nope"], "out_dir": "/tmp/out"}),
+        ),
+    ];
+    for (tool, split, arguments) in cases {
+        let schema = &listed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == tool)
+            .unwrap_or_else(|| panic!("missing {tool}"))["inputSchema"];
+        assert_eq!(
+            schema["anyOf"],
+            json!([{"required": ["toolchain"]}, {"required": split}]),
+            "{tool}"
+        );
+        let response = handle_message(&json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": { "name": tool, "arguments": arguments }
+        }))
+        .expect(tool);
+        assert_eq!(response["result"]["isError"], true, "{response}");
+        let text = response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("");
+        assert!(
+            text.contains("toolchain is required as name/version"),
+            "{tool}: {text}"
+        );
+        assert!(
+            !text.contains("toolchain_name") && !text.contains("toolchain_version"),
+            "{tool}: a missing toolchain names the listed field only: {text}"
+        );
+    }
 }
 
 #[test]
