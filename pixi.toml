@@ -27,7 +27,7 @@ sphinx-copybutton = ">=0.5.2, <1"
 sphinx-design = ">=0.6.0, <1"
 
 [feature.docs.tasks]
-mkrst = { cmd = "emacs --batch --load export.el", cwd = "docs" }
+mkrst = { cmd = "emacs -Q --batch --load export.el", cwd = "docs" }
 # Rust API: host-cargo sphinx-rustdocgen keeps native linking outside the pixi environment.
 gen-rust-api = { cmd = "bash scripts/gen-rust-api.sh", description = "Generate docs/source/crates/eb_stack via sphinx-rustdocgen" }
 sphinxbld = { cmd = "bash scripts/sphinx-build-docs.sh", depends-on = ["mkrst", "gen-rust-api"] }

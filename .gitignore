@@ -50,5 +50,9 @@ stack.diff.md
 docs/source/crates/
 .venv-docs/
 
+# Tree-local override for the pinned ox-rst fetch (GPL-2+, not vendored).
+# The default cache is $XDG_CACHE_HOME/eb-stack/ox-rst/.
+docs/.cache/
+
 # Local campaign/PR scratch
 work/

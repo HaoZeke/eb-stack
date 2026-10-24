@@ -23,6 +23,14 @@ All notable changes to this project are documented here.
   `--policy`. `stack_policy` is the spelling to pass.
 - MCP `merged` and `impact` reject a bare number. They take an array
   of pull-request numbers, the same shape as the repeated CLI flags.
+- Org export to reStructuredText resolves deferred element values
+  before ox-rst reads them, and fetches ox-rst
+  `b73eff187eebac24b457688bfd27f09eff434860` into a cache outside the
+  tree after checking its sha256. `emacs -Q` keeps a user-installed
+  Org or ox-rst from changing the build. A page that fails names its
+  file and the export exits non-zero. Org 9.7 stores `~code~` text as
+  an `org-element-deferred` object; ox-rst passes that object to a
+  string function.
 - A foreign package plan no longer treats a SYSTEM bootstrap recipe
   (`CMake-3.18.4`, `pkgconf-1.8.0`) as the dependency for a generation
   that already has that tool on GCCcore. A dependency that names the
