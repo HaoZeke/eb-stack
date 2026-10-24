@@ -6,8 +6,12 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A missing `--lock` names that path once.
 - `component-reach` rejects a purl type with no carrier model before
   it creates `--out-dir`.
+- An empty `--toolchain-name` is a usage error. 0.3.0 kept the empty
+  name: inspect wrote a manifest with no toolchain name, and bump
+  failed later on toolchain `-<version>`.
 - Recipe lint modules live under `src/eb_style/` so `sphinx-rustdocgen`
   can open them. A `#[path]` attribute is joined onto the parent file
   and the generator then fails to read the module.
@@ -494,6 +498,12 @@ All notable changes to this project are documented here.
 
 - `--help` for every command includes an example, and every flag has a
   description. Defaults the command applies are shown there.
+- `stack solve` reads the policy file with `--stack-policy`, the same flag
+  as `package plan` and `package bump`. `--policy` is that flag as well.
+  Package commands accept `--toolchain name/version`, the spelling
+  `stack solve` uses, in place of `--toolchain-name` and
+  `--toolchain-version`. An empty `--toolchain-version` is kept: a
+  SYSTEM recipe has one. Omitting the version is still rejected.
 - Help examples name `zlib`. Production source does not name a package
   the solver used to special-case.
 - The stack docs match the commands: build-list order and versions, the

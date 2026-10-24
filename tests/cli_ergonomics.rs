@@ -3,6 +3,98 @@
 use std::path::Path;
 use std::process::Command;
 
+#[test]
+fn toolchain_and_stack_policy_use_one_name_across_commands() {
+    let help = help_text(&["stack".into(), "solve".into()]);
+    assert!(
+        help.contains("--stack-policy"),
+        "stack solve help should show the shared policy flag:\n{help}"
+    );
+    assert!(
+        !help.contains("--policy "),
+        "the old spelling stays an alias and is not a second flag:\n{help}"
+    );
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let tree = temp.path().join("tree");
+    std::fs::create_dir(&tree).expect("tree");
+    let missing = temp.path().join("no-policy.toml");
+    for flag in ["--stack-policy", "--policy"] {
+        assert_status(
+            &[
+                "stack",
+                "solve",
+                "--easyconfigs",
+                tree.to_str().unwrap(),
+                flag,
+                missing.to_str().unwrap(),
+            ],
+            1,
+            missing.to_str().unwrap(),
+        );
+    }
+
+    let source = temp.path().join("recipe.yaml");
+    std::fs::write(
+        &source,
+        "package:\n  name: eon\n  version: 1.0.0\nsource:\n  url: https://example.invalid/eon.tar.gz\n  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+    )
+    .expect("recipe");
+    let out_dir = temp.path().join("bundle");
+    let ok = output(&[
+        "package",
+        "inspect",
+        "--source",
+        source.to_str().unwrap(),
+        "--format",
+        "conda-forge",
+        "--toolchain",
+        "foss/2026.1",
+        "--out-dir",
+        out_dir.to_str().unwrap(),
+    ]);
+    let stderr = String::from_utf8(ok.stderr).expect("utf8");
+    assert!(ok.status.success(), "{stderr}");
+    let plan = std::fs::read_to_string(out_dir.join("package.plan.json")).expect("plan");
+    assert!(plan.contains("2026.1"), "{plan}");
+    assert!(plan.contains("foss"), "{plan}");
+
+    assert_status(
+        &[
+            "package",
+            "inspect",
+            "--source",
+            source.to_str().unwrap(),
+            "--format",
+            "conda-forge",
+            "--toolchain",
+            "foss",
+            "--out-dir",
+            temp.path().join("bad").to_str().unwrap(),
+        ],
+        2,
+        "--toolchain foss:",
+    );
+    let both = output(&[
+        "package",
+        "inspect",
+        "--source",
+        source.to_str().unwrap(),
+        "--toolchain",
+        "foss/2026.1",
+        "--toolchain-version",
+        "2025a",
+        "--out-dir",
+        temp.path().join("both").to_str().unwrap(),
+    ]);
+    assert_eq!(both.status.code(), Some(2));
+    let stderr = String::from_utf8(both.stderr).expect("utf8");
+    assert!(
+        stderr.contains("--toolchain") && stderr.contains("cannot be used with"),
+        "{stderr}"
+    );
+}
+
 fn bin() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_eb-stack"));
     command.env("RUST_BACKTRACE", "1");
@@ -162,14 +254,152 @@ fn a_failure_names_the_problem_and_prints_no_backtrace() {
         "failures use the same prefix as clap: {stderr}"
     );
     assert!(
-        stderr.contains("/no/such/recipe.yaml"),
-        "the missing path is part of the message: {stderr}"
+        stderr.contains("--source") && stderr.contains("/no/such/recipe.yaml"),
+        "a missing file names the flag and the path: {stderr}"
     );
     assert!(
         !stderr.contains("Stack backtrace") && !stderr.contains("panicked at"),
         "a missing file is not a crash: {stderr}"
     );
     assert!(missing.stdout.is_empty(), "failures stay on stderr");
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let tree = temp.path().join("tree");
+    std::fs::create_dir(&tree).expect("tree");
+    let tree = tree.to_str().unwrap();
+    let policy = temp.path().join("nope.json");
+    let policy = policy.to_str().unwrap();
+    assert_names_flag(
+        &[
+            "stack",
+            "solve",
+            "--easyconfigs",
+            tree,
+            "--stack-policy",
+            policy,
+        ],
+        "--stack-policy",
+        policy,
+    );
+    let lock = temp.path().join("nope.lock.json");
+    let lock = lock.to_str().unwrap();
+    assert_names_flag(&["stack", "sbom", "--lock", lock], "--lock", lock);
+    assert_names_flag(&["stack", "easystack", "--lock", lock], "--lock", lock);
+    let source = temp.path().join("nope.eb");
+    let source = source.to_str().unwrap();
+    let out = temp.path().join("out");
+    let out = out.to_str().unwrap();
+    assert_names_flag(
+        &[
+            "package",
+            "bump",
+            "--source",
+            source,
+            "--toolchain",
+            "foss/2026.1",
+            "--easyconfigs",
+            tree,
+            "--out-dir",
+            out,
+        ],
+        "--source",
+        source,
+    );
+    let recipe = temp.path().join("missing.eb");
+    let recipe = recipe.to_str().unwrap();
+    assert_names_flag(&["recipe", "lint", recipe], "recipe", recipe);
+}
+
+#[test]
+fn a_missing_lock_names_the_path_once() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let lock = temp.path().join("nope.lock.json");
+    let lock = lock.to_str().unwrap();
+    let sbom_out = temp.path().join("out.cdx.json");
+    let easy_out = temp.path().join("out.yml");
+    for args in [
+        vec![
+            "stack",
+            "sbom",
+            "--lock",
+            lock,
+            "--out",
+            sbom_out.to_str().unwrap(),
+        ],
+        vec![
+            "stack",
+            "easystack",
+            "--lock",
+            lock,
+            "--out",
+            easy_out.to_str().unwrap(),
+        ],
+    ] {
+        let result = output(&args);
+        let stderr = String::from_utf8(result.stderr).expect("utf8");
+        assert_eq!(result.status.code(), Some(1), "{args:?}\n{stderr}");
+        assert!(stderr.contains("--lock"), "{stderr}");
+        assert_eq!(
+            stderr.matches(lock).count(),
+            1,
+            "the lock path is named once: {stderr}"
+        );
+        assert!(!stderr.contains("read "), "{stderr}");
+    }
+    assert!(!sbom_out.exists());
+    assert!(!easy_out.exists());
+}
+
+#[test]
+fn an_empty_toolchain_name_is_rejected() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("recipe.yaml");
+    std::fs::write(
+        &source,
+        "package:\n  name: eon\n  version: 1.0.0\nsource:\n  url: https://example.invalid/eon.tar.gz\n  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+    )
+    .expect("recipe");
+    let out = temp.path().join("out");
+    let result = output(&[
+        "package",
+        "inspect",
+        "--source",
+        source.to_str().unwrap(),
+        "--format",
+        "conda-forge",
+        "--toolchain-name",
+        "",
+        "--toolchain-version",
+        "2026.1",
+        "--out-dir",
+        out.to_str().unwrap(),
+    ]);
+    let stderr = String::from_utf8(result.stderr).expect("utf8");
+    assert_eq!(result.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("--toolchain-name must not be empty"),
+        "{stderr}"
+    );
+    assert!(result.stdout.is_empty(), "{stderr}");
+    assert!(!out.exists(), "left {}", out.display());
+}
+
+fn assert_names_flag(args: &[&str], flag: &str, path: &str) {
+    let result = output(args);
+    let stderr = String::from_utf8(result.stderr).expect("utf8");
+    assert_eq!(result.status.code(), Some(1), "args {args:?}\n{stderr}");
+    assert!(
+        stderr.contains(flag) && stderr.contains(path),
+        "a missing file names {flag} and {path}: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Stack backtrace") && !stderr.contains("panicked at"),
+        "{stderr}"
+    );
+    assert!(
+        result.stdout.is_empty(),
+        "failures stay on stderr: {stderr}"
+    );
 }
 
 fn assert_status(args: &[&str], code: i32, needle: &str) {

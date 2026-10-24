@@ -73,7 +73,7 @@ enum Command {
     )]
     Package {
         #[command(subcommand)]
-        command: PackageCommand,
+        command: Box<PackageCommand>,
     },
     /// Check and format EasyBuild recipes.
     #[command(
@@ -446,8 +446,20 @@ struct PackageInspectArgs {
     #[arg(long, default_value = "foss")]
     toolchain_name: String,
     /// Toolchain version recorded on the manifest, for example `2026.1`.
-    #[arg(long)]
-    toolchain_version: String,
+    ///
+    /// Required unless `--toolchain` is set.
+    #[arg(long, required_unless_present = "toolchain_spec")]
+    toolchain_version: Option<String>,
+    /// Target toolchain as `name/version`, for example `foss/2026.1`.
+    ///
+    /// Same spelling as `stack solve --toolchain`. Not combined with
+    /// `--toolchain-name` or `--toolchain-version`.
+    #[arg(
+        long = "toolchain",
+        value_name = "NAME/VERSION",
+        conflicts_with_all = ["toolchain_name", "toolchain_version"]
+    )]
+    toolchain_spec: Option<String>,
     /// Package-config TOML. Repeatable. Later layers override earlier ones.
     #[arg(long = "package-config")]
     package_configs: Vec<PathBuf>,
@@ -515,11 +527,25 @@ struct PackageBumpArgs {
     #[arg(long)]
     source: PathBuf,
     /// Toolchain name of the retargeted recipe.
-    #[arg(long)]
-    toolchain_name: String,
+    ///
+    /// Required unless `--toolchain` is set.
+    #[arg(long, required_unless_present = "toolchain_spec")]
+    toolchain_name: Option<String>,
     /// Toolchain version of the retargeted recipe, for example `2024a`.
-    #[arg(long)]
-    toolchain_version: String,
+    ///
+    /// Required unless `--toolchain` is set.
+    #[arg(long, required_unless_present = "toolchain_spec")]
+    toolchain_version: Option<String>,
+    /// Target toolchain as `name/version`, for example `foss/2024a`.
+    ///
+    /// Same spelling as `stack solve --toolchain`. Not combined with
+    /// `--toolchain-name` or `--toolchain-version`.
+    #[arg(
+        long = "toolchain",
+        value_name = "NAME/VERSION",
+        conflicts_with_all = ["toolchain_name", "toolchain_version"]
+    )]
+    toolchain_spec: Option<String>,
     /// Package version to write. Absent, the recipe version is kept.
     #[arg(long)]
     version: Option<String>,
@@ -704,9 +730,15 @@ struct SolveArgs {
     /// Easyconfig tree to solve. Repeatable; later trees win on one identity.
     #[arg(long, required = true)]
     easyconfigs: Vec<PathBuf>,
-    /// Policy file. Omit it and pass --toolchain and --root instead, which
-    /// is the same thing without a file to author first.
-    #[arg(long, conflicts_with_all = ["toolchain", "roots"])]
+    /// Stack policy TOML or JSON. The same file `package plan --stack-policy` reads.
+    ///
+    /// Omit it and pass `--toolchain` and `--root` instead. `--policy` is the same flag.
+    #[arg(
+        long = "stack-policy",
+        alias = "policy",
+        value_name = "FILE",
+        conflicts_with_all = ["toolchain", "roots"]
+    )]
     policy: Option<PathBuf>,
     /// Target toolchain as `name/version`, e.g. `foss/2026.1`. Used with
     /// --root in place of a policy file.
@@ -783,7 +815,7 @@ struct SolveArgs {
 enum StackCommand {
     /// Parse EasyBuild trees and solve a jointly consistent stack.
     #[command(
-        after_long_help = "Examples:\n  eb-stack stack solve --easyconfigs easyconfigs/ --toolchain foss/2026.1 --root zlib --lock-out stack.lock.json"
+        after_long_help = "Examples:\n  eb-stack stack solve --easyconfigs easyconfigs/ --toolchain foss/2026.1 --root zlib --lock-out stack.lock.json\n  eb-stack stack solve --easyconfigs easyconfigs/ --stack-policy stack.toml"
     )]
     Solve(Box<SolveArgs>),
     /// Emit CycloneDX from an existing stack lock.
@@ -988,7 +1020,7 @@ fn main() {
 
 fn dispatch() -> Result<()> {
     match Cli::parse().command {
-        Command::Package { command } => run_package(command),
+        Command::Package { command } => run_package(*command),
         Command::Recipe { command } => run_recipe(command),
         Command::Stack { command } => run_stack(command),
         Command::Target { command } => run_target(command),
@@ -1159,7 +1191,11 @@ fn run_component_reach(args: ComponentReachArgs) -> Result<()> {
 fn run_package(command: PackageCommand) -> Result<()> {
     match command {
         PackageCommand::Inspect(args) => {
-            let toolchain = toolchain(&args.toolchain_name, &args.toolchain_version);
+            let toolchain = resolve_toolchain(
+                Some(args.toolchain_name.as_str()),
+                args.toolchain_version.as_deref(),
+                args.toolchain_spec.as_deref(),
+            )?;
             let layers = load_package_layers(&args.package_configs)?;
             let format = parse_format(&args.format)?;
             let source = resolve_ingest_source(&args.source, format, &args.out_dir)?;
@@ -1178,10 +1214,11 @@ fn run_package(command: PackageCommand) -> Result<()> {
             Ok(())
         }
         PackageCommand::Plan(args) => {
-            let toolchain = toolchain(
-                &args.inspect.toolchain_name,
-                &args.inspect.toolchain_version,
-            );
+            let toolchain = resolve_toolchain(
+                Some(args.inspect.toolchain_name.as_str()),
+                args.inspect.toolchain_version.as_deref(),
+                args.inspect.toolchain_spec.as_deref(),
+            )?;
             let stack_policy = load_stack_policy(&args.stack_policy)?;
             let source_roots = load_package_source_roots(&args)?;
             let use_closure =
@@ -1278,7 +1315,16 @@ fn run_package(command: PackageCommand) -> Result<()> {
 }
 
 fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
-    let toolchain = toolchain(&args.toolchain_name, &args.toolchain_version);
+    let toolchain = resolve_toolchain(
+        args.toolchain_name.as_deref(),
+        args.toolchain_version.as_deref(),
+        args.toolchain_spec.as_deref(),
+    )?;
+    // Usage is exit 2. A missing recipe is exit 1, so a bad `--dep` is
+    // reported before the source file is read.
+    let overrides = parse_dep_overrides(&args.dependencies)?;
+    std::fs::metadata(&args.source)
+        .with_context(|| format!("--source {}", args.source.display()))?;
     let stack_policy = if let Some(path) = args.stack_policy.as_deref() {
         load_stack_policy(path)?
     } else {
@@ -1294,7 +1340,7 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
         source_checksum: args.source_checksum,
         easyconfig_roots: args.easyconfigs,
         hierarchy_fixture: args.hierarchy_fixture,
-        overrides: parse_dep_overrides(&args.dependencies)?,
+        overrides,
         stack_policy,
         strict_patches: args.strict_patches,
         package_layers: load_package_layers(&args.package_configs)?,
@@ -1683,6 +1729,12 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             Ok(())
         }
         RecipeCommand::Lint { paths, base } => {
+            if let Some(base) = base.as_deref() {
+                std::fs::metadata(base).with_context(|| format!("--base {}", base.display()))?;
+            }
+            for path in &paths {
+                std::fs::metadata(path).with_context(|| format!("recipe {}", path.display()))?;
+            }
             let path_refs = paths.iter().map(PathBuf::as_path).collect::<Vec<_>>();
             let report = match base.as_deref() {
                 Some(base) => lint_recipe_files_against(&path_refs, Some(base))?,
@@ -1839,7 +1891,11 @@ fn run_stack(command: StackCommand) -> Result<()> {
             let generated_policy = policy.is_none();
             let written_policy;
             let policy = match policy {
-                Some(path) => path,
+                Some(path) => {
+                    std::fs::metadata(&path)
+                        .with_context(|| format!("--stack-policy {}", path.display()))?;
+                    path
+                }
                 None => {
                     let (name, version) = toolchain
                         .as_deref()
@@ -2067,7 +2123,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
             Ok(())
         }
         StackCommand::Easystack { lock, out, options } => {
-            let lock: StackLock = load_json_file(&lock)?;
+            let lock: StackLock = load_lock_file(&lock)?;
             let mut parsed = eb_stack::EasystackOptions::new();
             for spec in &options {
                 let (file, rest) = spec.split_once(':').ok_or_else(|| {
@@ -2097,7 +2153,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
             Ok(())
         }
         StackCommand::Sbom { lock, out } => {
-            let loaded: StackLock = load_json_file(&lock)?;
+            let loaded: StackLock = load_lock_file(&lock)?;
             let (sbom, stats) = eb_stack::lock_to_cyclonedx_from_recipes(&loaded, &lock);
             write_json_pretty(&out, &sbom)?;
             println!(
@@ -2312,7 +2368,7 @@ fn load_package_layers(paths: &[PathBuf]) -> Result<Vec<PackageConfigLayer>> {
 
 fn load_stack_policy(path: &Path) -> Result<StackPolicy> {
     let text = std::fs::read_to_string(path)
-        .with_context(|| format!("read stack policy {}", path.display()))?;
+        .with_context(|| format!("--stack-policy {}", path.display()))?;
     if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
         serde_json::from_str(&text)
             .with_context(|| format!("parse stack policy JSON {}", path.display()))
@@ -2363,6 +2419,43 @@ fn parse_dep_overrides(values: &[String]) -> Result<HashMap<String, String>> {
         dependencies.insert(name.trim().to_string(), version.trim().to_string());
     }
     Ok(dependencies)
+}
+
+/// Read a stack lock. The path is named once, as `--lock`.
+fn load_lock_file(path: &Path) -> Result<StackLock> {
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("--lock {}", path.display()))?;
+    serde_json::from_str(&text).with_context(|| format!("--lock {}", path.display()))
+}
+
+fn resolve_toolchain(
+    name: Option<&str>,
+    version: Option<&str>,
+    spec: Option<&str>,
+) -> Result<Toolchain> {
+    let Some(spec) = spec else {
+        let Some(version) = version else {
+            return Err(usage(
+                "--toolchain-version is required, or pass --toolchain name/version",
+            ));
+        };
+        if name.is_some_and(|name| name.is_empty()) {
+            return Err(usage("--toolchain-name must not be empty"));
+        }
+        let name = name.unwrap_or("foss");
+        return Ok(toolchain(name, version));
+    };
+    let Some((parsed_name, parsed_version)) = spec.split_once('/') else {
+        return Err(usage(format!(
+            "--toolchain {spec}: expected name/version, for example foss/2026.1"
+        )));
+    };
+    if parsed_name.is_empty() || parsed_version.is_empty() || parsed_version.contains('/') {
+        return Err(usage(format!(
+            "--toolchain {spec}: expected name/version, for example foss/2026.1"
+        )));
+    }
+    Ok(toolchain(parsed_name, parsed_version))
 }
 
 fn toolchain(name: &str, version: &str) -> Toolchain {

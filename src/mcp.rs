@@ -132,6 +132,7 @@ fn tool_catalog() -> Vec<Value> {
             &[
                 ("format", "string"),
                 ("toolchain_name", "string"),
+                ("toolchain", "string"),
                 ("package_configs", "array"),
             ],
         ),
@@ -148,6 +149,7 @@ fn tool_catalog() -> Vec<Value> {
             &[
                 ("format", "string"),
                 ("toolchain_name", "string"),
+                ("toolchain", "string"),
                 ("package_configs", "array"),
                 ("source_checksums", "array"),
                 ("package_index", "string"),
@@ -171,6 +173,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("out_dir", "string"),
             ],
             &[
+                ("toolchain", "string"),
                 ("version", "string"),
                 ("source_checksum", "string"),
                 ("dependencies", "object"),
@@ -298,6 +301,7 @@ fn tool_catalog() -> Vec<Value> {
             &[("easyconfigs", "array")],
             &[
                 ("policy", "string"),
+                ("stack_policy", "string"),
                 ("toolchain", "string"),
                 ("root", "array"),
                 ("roots_from_build_list", "array"),

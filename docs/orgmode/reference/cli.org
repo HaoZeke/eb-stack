@@ -19,6 +19,8 @@ A rejected value names the flag and the value. A missing file names the flag and
 
 ~--help~ for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is ~--out-dir~. A single output file is ~--out~ (~--lock-out~ for the lock ~stack solve~ writes). ~--installed~, ~--easyconfigs~, ~--filter-deps~, and ~--generated-at~ use those names on every command that takes them.
 
+Package commands take the toolchain as ~--toolchain-name~ and ~--toolchain-version~, or as ~--toolchain name/version~, which is the spelling ~stack solve~ uses. The two forms are not combined. ~--toolchain-name~ defaults to ~foss~ on ~package inspect~ and ~package plan~.
+
 * Command map
 
 | Command | Purpose |
@@ -46,6 +48,8 @@ A rejected value names the flag and the value. A missing file names the flag and
 | ~easyblock-reach~ | Report easyconfigs and installed modules reached by an easyblock or framework change |
 
 * Package commands
+
+The toolchain is ~--toolchain~ name/version, or the split flags ~--toolchain-name~ and ~--toolchain-version~. The two forms are not combined.
 
 ** ~package inspect~
 
@@ -314,7 +318,7 @@ authored content.
 #+begin_src bash
 eb-stack stack solve \
   --easyconfigs TREE [--easyconfigs OVERLAY]... \
-  (--policy POLICY.json | --toolchain NAME/VERSION \
+  (--stack-policy POLICY.json | --toolchain NAME/VERSION \
    [--root NAME]... [--roots-from-build-list LIST]...) \
   [--baseline-easyconfigs TREE] \
   [--baseline-toolchain-version VERSION] \
@@ -356,7 +360,9 @@ writes that same document, checksums included. The MCP tool
 
 ~stack solve~ is the multi-root EasyBuild stack solver. Package-profile stack
 preferences use the TOML schema documented with the package workflow; whole
-stack solving uses the JSON ~Policy~ schema.
+stack solving uses the JSON ~Policy~ schema. The policy file is
+~--stack-policy~, the same flag ~package plan~ and ~package bump~ take.
+~--policy~ is that flag as well.
 
 The baseline is either a previous generation (~--baseline-easyconfigs~, by
 default the first ~--easyconfigs~ tree) or what a set of easystacks installs
