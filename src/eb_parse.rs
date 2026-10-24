@@ -2877,11 +2877,21 @@ pub fn check_recipe_deps(recipe: &ResolvedEasyconfig, universe: &[Candidate]) ->
                 let hier_note = hierarchy
                     .as_ref()
                     .map(|h| {
+                        let labels = if d.toolchain.is_none()
+                            && !crate::hierarchy::is_system_toolchain(&h.parent)
+                        {
+                            h.bare_tuple_labels()
+                        } else {
+                            h.member_labels()
+                        };
+                        if labels.is_empty() {
+                            return String::new();
+                        }
                         format!(
                             " (need hierarchy member of {}-{}: {})",
                             recipe.toolchain.name,
                             recipe.toolchain.version,
-                            h.member_labels().join(" < ")
+                            labels.join(" < ")
                         )
                     })
                     .unwrap_or_default();
@@ -4564,6 +4574,41 @@ builddependencies = [
             reason.contains("available at other generations")
                 && reason.contains("0.9 @ GCCcore-13.3.0"),
             "got {reason}"
+        );
+    }
+
+    #[test]
+    fn missing_bare_tuple_does_not_call_system_a_generation() {
+        let recipe = resolve_easyconfig_str(
+            "name = 'App'\nversion = '1.0'\n\
+             toolchain = {'name': 'foss', 'version': '2025b'}\n\
+             dependencies = [('Java', '17')]\n",
+        )
+        .expect("parse");
+        let java = resolve_easyconfig_str(
+            "name = 'Java'\nversion = '17'\n\
+             toolchain = SYSTEM\n\
+             dependencies = []\n",
+        )
+        .expect("parse")
+        .to_candidate();
+        let check = check_recipe_deps(&recipe, &[java]);
+        assert!(!check.ok());
+        let reason = &check.missing[0].reason;
+        assert!(
+            reason.contains("a bare tuple does not reach SYSTEM"),
+            "{reason}"
+        );
+        assert!(reason.contains("('Java', '17', '', SYSTEM)"), "{reason}");
+        assert!(!reason.contains("system <"), "{reason}");
+        assert!(!reason.contains("@ SYSTEM"), "{reason}");
+        assert!(
+            !reason.contains("available at other generations"),
+            "{reason}"
+        );
+        assert!(
+            reason.contains("GCCcore-14.3.0"),
+            "compiler members stay in the note: {reason}"
         );
     }
 

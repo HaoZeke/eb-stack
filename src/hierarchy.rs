@@ -79,35 +79,67 @@ pub enum HierarchyError {
 /// work item (bump/author from one of these) instead of a dead end. Returns
 /// an empty-or-parenthesised string safe to append to an error message.
 pub fn nearest_candidates_hint(name: &str, cands: &[Candidate]) -> String {
-    let mut seen: Vec<String> = cands
-        .iter()
-        .filter(|c| c.name == name)
-        .map(|c| {
-            let tc = if is_system_toolchain(&c.toolchain) {
-                "SYSTEM".to_string()
+    let mut generations = Vec::new();
+    let mut system = Vec::new();
+    for candidate in cands.iter().filter(|candidate| candidate.name == name) {
+        if is_system_toolchain(&candidate.toolchain) {
+            // A bare tuple inherits the parent toolchain, so a SYSTEM
+            // recipe is not a generation the dependency can fall through to.
+            let suffix = candidate.versionsuffix.as_deref().unwrap_or("");
+            let suffix_lit = if suffix.is_empty() {
+                "''".to_string()
             } else {
-                c.toolchain.label()
+                format!("'{suffix}'")
             };
-            format!(
+            system.push(format!(
+                "('{name}', '{}', {suffix_lit}, SYSTEM)",
+                candidate.version
+            ));
+        } else {
+            generations.push(format!(
                 "{}{} @ {}",
-                c.version,
-                c.versionsuffix.clone().unwrap_or_default(),
-                tc
-            )
-        })
-        .collect();
-    seen.sort();
-    seen.dedup();
-    if seen.is_empty() {
+                candidate.version,
+                candidate.versionsuffix.clone().unwrap_or_default(),
+                candidate.toolchain.label()
+            ));
+        }
+    }
+    generations.sort();
+    generations.dedup();
+    system.sort();
+    system.dedup();
+    let mut parts = Vec::new();
+    if !generations.is_empty() {
+        let extra = generations.len().saturating_sub(4);
+        let head = generations
+            .into_iter()
+            .take(4)
+            .collect::<Vec<_>>()
+            .join(", ");
+        if extra > 0 {
+            parts.push(format!(
+                "available at other generations: {head}, +{extra} more"
+            ));
+        } else {
+            parts.push(format!("available at other generations: {head}"));
+        }
+    }
+    if !system.is_empty() {
+        let extra = system.len().saturating_sub(4);
+        let head = system.into_iter().take(4).collect::<Vec<_>>().join(", ");
+        let more = if extra > 0 {
+            format!(", +{extra} more")
+        } else {
+            String::new()
+        };
+        parts.push(format!(
+            "a bare tuple does not reach SYSTEM; write {head}{more}"
+        ));
+    }
+    if parts.is_empty() {
         return " (no candidate with this name at any generation)".to_string();
     }
-    let extra = seen.len().saturating_sub(4);
-    let head = seen.into_iter().take(4).collect::<Vec<_>>().join(", ");
-    if extra > 0 {
-        format!(" (available at other generations: {head}, +{extra} more)")
-    } else {
-        format!(" (available at other generations: {head})")
-    }
+    format!(" ({})", parts.join("; "))
 }
 
 /// Dependencies nothing in the universe can satisfy, and where they do live.
@@ -215,6 +247,17 @@ impl ToolchainHierarchy {
             .collect()
     }
 
+    /// Labels a bare dependency tuple can match.
+    ///
+    /// SYSTEM is a hierarchy member, but a bare tuple does not reach it.
+    /// The recipe has to name `SYSTEM` in the tuple.
+    pub fn bare_tuple_labels(&self) -> Vec<String> {
+        self.member_labels()
+            .into_iter()
+            .filter(|label| label != "system")
+            .collect()
+    }
+
     /// Whether `tc` is a member of this generation's hierarchy.
     pub fn contains(&self, tc: &Toolchain) -> bool {
         self.members.iter().any(|m| toolchains_match(m, tc))
@@ -309,7 +352,10 @@ pub fn known_hierarchy(parent: &Toolchain) -> Option<ToolchainHierarchy> {
 /// a brand-new `foss-2026.1` must not require shipping a new fixture).
 ///
 /// Members mirror EasyBuild's `get_toolchain_hierarchy` order for foss-family
-/// generations: `system < GCCcore < GCC < gompi < gfbf < parent`. Intermediate
+/// generations: `system < GCCcore < GCC < gompi < gfbf < parent`. A bare
+/// dependency tuple does not reach `system`; recipe check omits it from
+/// the member list and, when the candidate is a SYSTEM recipe, says to
+/// write `('Name', 'version', '', SYSTEM)`. Intermediate
 /// composites are included only when their definition recipe is in the tree.
 /// GCCcore is assumed version-paired with GCC (true for all modern
 /// generations, 2020a+). Non-GCC-family parents return `None`.
