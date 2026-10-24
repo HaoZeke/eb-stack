@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::Command;
 
 #[test]
@@ -377,4 +378,116 @@ fn package_bump_cli_writes_an_sbom_resolvo_bundle() {
     assert!(output
         .join("easyconfigs/g/GROMACS/GROMACS-2024.4-foss-2024a.eb")
         .is_file());
+}
+
+/// An overlay that is not a full robot has to name the missing package and
+/// the flag that supplies an upstream easyconfigs tree.
+#[test]
+fn overlay_plan_without_cmake_names_an_upstream_easyconfigs_tree() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let output = tempfile::tempdir().expect("tempdir");
+    let result = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .args(["package", "plan", "--source"])
+        .arg(root.join("fixtures/foreign_ingest/conda_eon/recipe.yaml"))
+        .args([
+            "--format",
+            "conda-forge",
+            "--toolchain-name",
+            "foss",
+            "--toolchain-version",
+            "2026.1",
+            "--package-config",
+        ])
+        .arg(root.join("examples/packages/common.toml"))
+        .arg("--package-config")
+        .arg(root.join("examples/packages/eon.toml"))
+        .arg("--easyconfigs")
+        .arg(root.join("fixtures/eon_core_rgpot/easyconfigs"))
+        .arg("--easyconfigs")
+        .arg(root.join("fixtures/eon_foss_2026_1/easyconfigs"))
+        .arg("--stack-policy")
+        .arg(root.join("examples/stacks/eon-foss-2026.1.toml"))
+        .arg("--out-dir")
+        .arg(output.path())
+        .output()
+        .expect("package plan");
+    let err = format!(
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(!result.status.success(), "{err}");
+    assert!(err.contains("no package source for CMake"), "{err}");
+    assert!(err.contains("--easyconfigs"), "{err}");
+    assert!(err.contains("scripts/fetch-upstream-trees.sh"), "{err}");
+    assert!(err.contains("fixtures/eon_core_rgpot/easyconfigs"), "{err}");
+}
+
+/// A foreign plan must lock the generation's CMake, not the SYSTEM bootstrap,
+/// when both are in the robot. recipe check rejects the SYSTEM module.
+#[test]
+fn plan_prefers_generation_cmake_over_the_system_bootstrap() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("recipe.yaml");
+    std::fs::write(
+        &source,
+        r#"
+package:
+  name: widget
+  version: 1.0.0
+source:
+  url: https://example.invalid/widget-1.0.0.tar.gz
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+requirements:
+  host:
+    - cmake
+"#,
+    )
+    .expect("source");
+    let robot = temp.path().join("robot");
+    std::fs::create_dir(&robot).expect("robot");
+    std::fs::write(
+        robot.join("CMake-3.18.4.eb"),
+        "name = 'CMake'\nversion = '3.18.4'\ntoolchain = SYSTEM\n",
+    )
+    .expect("system cmake");
+    std::fs::write(
+        robot.join("CMake-3.31.11-GCCcore-15.2.0.eb"),
+        "name = 'CMake'\nversion = '3.31.11'\n\
+         toolchain = {'name': 'GCCcore', 'version': '15.2.0'}\n",
+    )
+    .expect("generation cmake");
+    let stack = temp.path().join("stack.toml");
+    std::fs::write(
+        &stack,
+        "schema_version = 1\nname = \"site\"\n[toolchain]\nname = \"foss\"\nversion = \"2026.1\"\n",
+    )
+    .expect("stack");
+    let output = temp.path().join("out");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let result = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .args(["package", "plan", "--source"])
+        .arg(&source)
+        .args(["--format", "conda-forge", "--toolchain-name", "foss"])
+        .args(["--toolchain-version", "2026.1", "--package-config"])
+        .arg(root.join("examples/packages/common.toml"))
+        .arg("--easyconfigs")
+        .arg(&robot)
+        .arg("--stack-policy")
+        .arg(&stack)
+        .arg("--out-dir")
+        .arg(&output)
+        .output()
+        .expect("package plan");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(result.status.success(), "{text}");
+    let recipe =
+        std::fs::read_to_string(output.join("easyconfigs/w/widget/widget-1.0.0-foss-2026.1.eb"))
+            .expect("recipe");
+    assert!(recipe.contains("('CMake', '3.31.11')"), "{recipe}");
+    assert!(!recipe.contains("3.18.4"), "{recipe}");
 }

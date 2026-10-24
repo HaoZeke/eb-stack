@@ -156,7 +156,7 @@ pub enum PackageClosureError {
         /// How many candidates matched.
         count: usize,
     },
-    #[error("no package source for {name}{version_req}")]
+    #[error("{message}")]
     /// No source recipe was found to generate a needed companion from.
     MissingSource {
         /// Package no source recipe was found for.
@@ -165,6 +165,8 @@ pub enum PackageClosureError {
         version_req: String,
         /// Sources that were considered and rejected.
         candidates: Vec<DiscoveredCandidate>,
+        /// What was scanned, and which flag supplies a tree that has the recipe.
+        message: String,
     },
     #[error("ambiguous package sources for {name}{version_req}: {count} compatible candidates")]
     /// Several source recipes match, so which to generate from is unclear.
@@ -238,6 +240,35 @@ pub enum PackageClosureError {
     #[error("aggregate package-closure SBOM: {0}")]
     /// The combined SBOM could not be produced.
     AggregateSbom(String),
+}
+
+fn explain_missing_source(
+    name: &str,
+    version_req: &str,
+    scanned: &[PathBuf],
+    same_name: usize,
+) -> String {
+    let roots = if scanned.is_empty() {
+        "no easyconfigs root".to_string()
+    } else {
+        scanned
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut message = format!(
+        "no package source for {name}{version_req}: scanned {roots} but found no compatible \
+         recipe. Pass another --easyconfigs, or --easybuild-source, pointing at an upstream \
+         easybuild-easyconfigs tree (the easybuild/easyconfigs directory from \
+         scripts/fetch-upstream-trees.sh)"
+    );
+    if same_name > 0 {
+        message.push_str(&format!(
+            "; {same_name} {name} recipe(s) in those trees do not satisfy the requirement"
+        ));
+    }
+    message
 }
 
 fn path_display(path: &[String]) -> String {
@@ -999,10 +1030,25 @@ fn resolve_provider_candidates_for_hole(
                         version: version_req,
                     }
                 } else {
+                    let same_name = source_index
+                        .easybuild_candidates()
+                        .iter()
+                        .chain(source_index.foreign_candidates())
+                        .filter(|candidate| {
+                            package_identity(&candidate.name) == package_identity(&name)
+                        })
+                        .count();
+                    let message = explain_missing_source(
+                        &name,
+                        &version_req,
+                        source_index.scanned_roots(),
+                        same_name,
+                    );
                     PackageClosureError::MissingSource {
                         name,
                         version_req,
                         candidates,
+                        message,
                     }
                 }
             }

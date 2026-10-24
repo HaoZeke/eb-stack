@@ -225,10 +225,22 @@ pub fn solve_package_profile_with_hierarchy(
     // candidates leaves the compilers unbuildable, which is most of what a
     // site builds first.
     let target_is_system = is_system_toolchain(&plan.build.toolchain);
+    let leveled_names = original_candidates
+        .iter()
+        .filter(|candidate| !is_system_toolchain(&candidate.toolchain))
+        .map(|candidate| candidate.name.clone())
+        .collect::<HashSet<_>>();
     original_candidates.retain(|candidate| {
-        target_is_system
-            || !(implicit_easybuild_dependencies.contains(&candidate.name)
-                && is_system_toolchain(&candidate.toolchain))
+        if target_is_system || !is_system_toolchain(&candidate.toolchain) {
+            return true;
+        }
+        // A generation member stands in for the SYSTEM bootstrap of the same
+        // name. recipe check refuses that SYSTEM module for an implicit
+        // dependency, so the lock must not emit it either.
+        if leveled_names.contains(&candidate.name) {
+            return false;
+        }
+        !implicit_easybuild_dependencies.contains(&candidate.name)
     });
     let mut universe = original_candidates.clone();
     for candidate in &mut universe {

@@ -320,9 +320,16 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A foreign package plan locks a generation member instead of the
+  SYSTEM bootstrap of the same name when both are in the robot, which is
+  the module `recipe check` accepts.
 - Recipe lint modules live under `src/eb_style/` so `sphinx-rustdocgen`
   can open them. A `#[path]` attribute is joined onto the parent file
   and the generator then fails to read the module.
+- `package plan` against an overlay that is not a full robot names the
+  missing package, the trees it scanned, and `--easyconfigs` or
+  `--easybuild-source` with an upstream easybuild-easyconfigs tree from
+  `scripts/fetch-upstream-trees.sh`.
 - An unknown `criteria` entry fails the solve. It used to be dropped, so a
   typo such as `-newest` solved with no optimisation criterion at all and
   the lock recorded an empty list.

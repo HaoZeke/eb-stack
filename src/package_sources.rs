@@ -137,6 +137,8 @@ pub struct PackageSourceIndex {
     easybuild_solver: Vec<Candidate>,
     foreign: Vec<DiscoveredCandidate>,
     parse_failures: Vec<SourceParseFailure>,
+    /// Easyconfigs directories and other source roots that were indexed.
+    scanned_roots: Vec<PathBuf>,
 }
 
 #[derive(Debug, Error)]
@@ -318,9 +320,17 @@ impl PackageSourceIndex {
         easybuild_candidates: &[Candidate],
         covered_easybuild_roots: &[PathBuf],
     ) -> Result<Self, PackageSourceError> {
-        let mut index = Self::default();
+        let mut index = Self {
+            scanned_roots: covered_easybuild_roots.to_vec(),
+            ..Self::default()
+        };
         for candidate in easybuild_candidates {
             index.push_easybuild_candidate(candidate.clone());
+        }
+        for root in &roots.source_roots {
+            if !index.scanned_roots.iter().any(|path| path == &root.path) {
+                index.scanned_roots.push(root.path.clone());
+            }
         }
         for root in &roots.source_roots {
             match root.kind {
@@ -350,6 +360,11 @@ impl PackageSourceIndex {
     /// Recipes that could not be parsed, so a gap can be explained.
     pub fn parse_failures(&self) -> &[SourceParseFailure] {
         &self.parse_failures
+    }
+
+    /// Directories this index was built from, in the order they were given.
+    pub fn scanned_roots(&self) -> &[PathBuf] {
+        &self.scanned_roots
     }
 
     pub(crate) fn retargeted_candidates_for_providers(
