@@ -211,3 +211,130 @@ fn a_rejected_command_line_exits_2_and_a_failed_check_exits_1() {
         "style errors",
     );
 }
+
+#[test]
+fn a_bad_input_names_the_flag_the_path_and_the_value() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let tree = temp.path().join("tree");
+    std::fs::create_dir(&tree).expect("tree");
+    let installed = temp.path().join("installed.txt");
+    std::fs::write(&installed, "zlib/1.2\n").expect("installed");
+    let pr = temp.path().join("shape.json");
+    std::fs::write(&pr, r#"{"number":"x"}"#).expect("pr");
+    assert_status(
+        &[
+            "pr-overlap",
+            "--pr",
+            pr.to_str().unwrap(),
+            "--easyconfigs",
+            tree.to_str().unwrap(),
+            "--installed",
+            installed.to_str().unwrap(),
+            "--out-dir",
+            temp.path().join("out").to_str().unwrap(),
+        ],
+        1,
+        pr.to_str().unwrap(),
+    );
+    let stderr = String::from_utf8(
+        output(&[
+            "pr-overlap",
+            "--pr",
+            pr.to_str().unwrap(),
+            "--easyconfigs",
+            tree.to_str().unwrap(),
+            "--installed",
+            installed.to_str().unwrap(),
+        ])
+        .stderr,
+    )
+    .expect("utf8");
+    assert!(
+        stderr.contains("--pr") && stderr.contains('x'),
+        "the flag and the bad value are both named: {stderr}"
+    );
+
+    assert_status(
+        &[
+            "component-reach",
+            "--component",
+            "curl",
+            "--version",
+            "not a req",
+            "--generation",
+            "2026.1",
+            "--easyconfigs",
+            tree.to_str().unwrap(),
+        ],
+        2,
+        "--version not a req:",
+    );
+    assert_status(
+        &[
+            "component-reach",
+            "--component",
+            "curl",
+            "--version",
+            "*",
+            "--generation",
+            "2026.1",
+            "--easyconfigs",
+            tree.to_str().unwrap(),
+            "--generated-at",
+            "yesterday",
+        ],
+        2,
+        "--generated-at yesterday:",
+    );
+    assert_status(
+        &[
+            "rebuild-set",
+            "--changed",
+            "/no/such/changed-list.txt",
+            "--easystack",
+            temp.path().join("missing.yml").to_str().unwrap(),
+            "--easyconfigs",
+            tree.to_str().unwrap(),
+            "--installed",
+            installed.to_str().unwrap(),
+        ],
+        1,
+        "--changed /no/such/changed-list.txt:",
+    );
+
+    let config = temp.path().join("target.toml");
+    std::fs::write(
+        &config,
+        "schema_version = 1\n[[targets]]\nname = \"local\"\n",
+    )
+    .expect("config");
+    assert_status(
+        &[
+            "target",
+            "doctor",
+            "--config",
+            config.to_str().unwrap(),
+            "--target",
+            "local",
+        ],
+        1,
+        config.to_str().unwrap(),
+    );
+
+    let out_dir = temp.path().join("is-a-directory");
+    std::fs::create_dir(&out_dir).expect("dir");
+    let lock = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/gromacs_2025_to_next/baseline.lock.json");
+    assert_status(
+        &[
+            "stack",
+            "sbom",
+            "--lock",
+            lock.to_str().unwrap(),
+            "--out",
+            out_dir.to_str().unwrap(),
+        ],
+        1,
+        out_dir.to_str().unwrap(),
+    );
+}

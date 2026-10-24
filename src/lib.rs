@@ -195,10 +195,12 @@ pub fn load_json_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> 
 /// Write pretty-printed JSON, creating the parent directory first.
 pub fn write_json_pretty(path: &Path, value: &impl serde::Serialize) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        }
     }
     let s = serde_json::to_string_pretty(value)?;
-    fs::write(path, s + "\n")?;
+    fs::write(path, s + "\n").with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
 
@@ -317,7 +319,9 @@ pub fn filter_baseline_candidates(
 /// Write text to a path, creating the parent directory first.
 pub fn write_text(path: &Path, text: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        }
     }
     fs::write(path, text).with_context(|| format!("write {}", path.display()))?;
     Ok(())

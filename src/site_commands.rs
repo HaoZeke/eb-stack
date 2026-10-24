@@ -33,6 +33,41 @@ fn usage(message: impl std::fmt::Display) -> anyhow::Error {
     })
 }
 
+/// `--generated-at` is stored as given. An absent flag is the current UTC time.
+fn generated_at(value: Option<String>, seconds: bool) -> Result<String> {
+    let Some(text) = value else {
+        return Ok(if seconds {
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        } else {
+            chrono::Utc::now().to_rfc3339()
+        });
+    };
+    chrono::DateTime::parse_from_rfc3339(&text)
+        .map_err(|error| usage(format!("--generated-at {text}: {error}")))?;
+    Ok(text)
+}
+
+/// `--version` on `component-reach`: `*`, an exact version, or a requirement.
+fn require_version_req(version: &str) -> Result<()> {
+    if version == "*" {
+        return Ok(());
+    }
+    if version.trim().is_empty() {
+        return Err(usage("--version is empty"));
+    }
+    crate::version::parse_requirement(version)
+        .map(|_| ())
+        .map_err(|error| usage(format!("--version {version}: {error}")))
+}
+
+fn listed_paths(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Which pull-request records `pr-overlap` closes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OverlapKind {
@@ -357,15 +392,17 @@ fn run_pr_overlap_inner(args: &PrOverlapRequest) -> Result<PrOverlapRun> {
     use pr_overlap::{record_to_toml, render_markdown, to_toml, PrInput};
     let mut prs: Vec<PrInput> = Vec::new();
     for path in &args.prs {
-        let text =
-            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        let value: serde_json::Value =
-            serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
-        if value.is_array() {
-            prs.extend(serde_json::from_value::<Vec<PrInput>>(value)?);
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("--pr {}: not readable", path.display()))?;
+        let value: serde_json::Value = serde_json::from_str(&text)
+            .with_context(|| format!("--pr {}: not JSON", path.display()))?;
+        let inputs: Vec<PrInput> = if value.is_array() {
+            serde_json::from_value(value)
         } else {
-            prs.push(serde_json::from_value::<PrInput>(value)?);
+            serde_json::from_value(value).map(|one| vec![one])
         }
+        .with_context(|| format!("--pr {}: pull request record", path.display()))?;
+        prs.extend(inputs);
     }
     prs.sort_by_key(|pr| pr.number);
     prs.dedup_by_key(|pr| pr.number);
@@ -389,9 +426,7 @@ fn run_pr_overlap_inner(args: &PrOverlapRequest) -> Result<PrOverlapRun> {
         installed_source: args.installed_label.clone(),
         exclude_paths: args.exclude_paths.clone(),
         include_paths: args.include_paths.clone(),
-        generated_at: args.generated_at.clone().unwrap_or_else(|| {
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-        }),
+        generated_at: generated_at(args.generated_at.clone(), true)?,
         filter_deps,
         easyblocks,
     };
@@ -479,8 +514,8 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
     let easyblocks = load_easyblock_catalog(&args.easyblocks, &args.easyblocks_commits)?;
     let mut easystacks = Vec::new();
     for path in &args.easystacks {
-        let text =
-            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("--easystack {}: not readable", path.display()))?;
         easystacks.push(StackEasystack {
             path: path.display().to_string(),
             text,
@@ -495,9 +530,7 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
         filter_deps,
         easyblocks,
         installed_source: args.installed_label.clone(),
-        generated_at: args.generated_at.clone().unwrap_or_else(|| {
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-        }),
+        generated_at: generated_at(args.generated_at.clone(), true)?,
         prefix: args.prefix.clone(),
         check_static: args.check_static,
     })
@@ -583,21 +616,28 @@ fn run_component_reach_with(
     };
     use crate::osv::{parse_purl, resolve_vulnerability};
 
+    if let Some(version) = &args.version {
+        require_version_req(version)?;
+    }
+    let generated_at = generated_at(args.generated_at.clone(), true)?;
     let trees: Vec<&Path> = args.easyconfigs.iter().map(PathBuf::as_path).collect();
-    let parsed = parse_easyconfig_trees(&trees).map_err(anyhow::Error::msg)?;
+    let parsed = parse_easyconfig_trees(&trees).map_err(|error| {
+        anyhow::Error::msg(error)
+            .context(format!("--easyconfigs {}", listed_paths(&args.easyconfigs)))
+    })?;
     let installed = args
         .installed
         .as_ref()
         .map(|path| {
             std::fs::read_to_string(path)
                 .map(|text| pr_overlap::parse_installed(&text))
-                .with_context(|| format!("read {}", path.display()))
+                .with_context(|| format!("--installed {}: not readable", path.display()))
         })
         .transpose()?;
     let mut easystacks = Vec::new();
     for path in &args.easystacks {
-        let text =
-            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("--easystack {}: not readable", path.display()))?;
         easystacks.push(StackEasystack {
             path: path.display().to_string(),
             text,
@@ -610,7 +650,8 @@ fn run_component_reach_with(
         .compat_layer
         .as_ref()
         .map(|path| {
-            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))
+            std::fs::read_to_string(path)
+                .with_context(|| format!("--compat-layer {}: not readable", path.display()))
         })
         .transpose()?
         .unwrap_or_default();
@@ -618,10 +659,6 @@ fn run_component_reach_with(
     let specs = dep_filter::specs_from_cli_or_env(&args.filter_deps);
     let filter =
         FilterDeps::parse(&specs).map_err(|error| usage(format!("--filter-deps: {error}")))?;
-    let generated_at = args
-        .generated_at
-        .clone()
-        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
     let skipped = if parsed.skipped.is_empty() {
         None
     } else {
@@ -694,6 +731,7 @@ fn run_component_reach_with(
             .clone()
             .or(parsed.version)
             .ok_or_else(|| usage("purl has no version; pass --version"))?;
+        require_version_req(&version)?;
         (
             parsed.name,
             version,
@@ -709,6 +747,7 @@ fn run_component_reach_with(
             .version
             .clone()
             .ok_or_else(|| usage("--version is required with --component"))?;
+        require_version_req(&version)?;
         (component, version, None, None)
     };
     let mut document = component_reach(&ReachQuery {
@@ -784,16 +823,14 @@ pub fn run_easyblock_reach(args: &EasyblockReachRequest) -> Result<EasyblockReac
     }
     let installed = match &args.installed {
         Some(path) => easyblock_reach::parse_installed(
-            &std::fs::read_to_string(path).with_context(|| path.display().to_string())?,
+            &std::fs::read_to_string(path)
+                .with_context(|| format!("--installed {}: not readable", path.display()))?,
         ),
         None => Default::default(),
     };
     let mut roots = args.easyblocks.clone();
     roots.extend(args.framework.iter().cloned());
-    let generated_at = args
-        .generated_at
-        .clone()
-        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let generated_at = generated_at(args.generated_at.clone(), false)?;
     let report = reach(&easyblock_reach::ReachQuery {
         roots,
         easyconfigs: args.easyconfigs.clone(),
@@ -819,7 +856,9 @@ fn load_robot_trees(
     commit_trees: &[String],
 ) -> Result<(pr_overlap::RobotTrees, usize)> {
     let trees: Vec<&Path> = easyconfigs.iter().map(PathBuf::as_path).collect();
-    let base = parse_easyconfig_trees(&trees).map_err(anyhow::Error::msg)?;
+    let base = parse_easyconfig_trees(&trees).map_err(|error| {
+        anyhow::Error::msg(error).context(format!("--easyconfigs {}", listed_paths(easyconfigs)))
+    })?;
     let skipped = base.skipped.len();
     let mut robot = pr_overlap::RobotTrees {
         base: base.candidates,
@@ -834,7 +873,8 @@ fn load_robot_trees(
                 "--commit-tree wants <commit>=<dir>, got {spec}"
             )));
         }
-        let parsed = parse_easyconfig_tree(Path::new(dir)).map_err(anyhow::Error::msg)?;
+        let parsed = parse_easyconfig_tree(Path::new(dir))
+            .map_err(|error| anyhow!(error).context(format!("--commit-tree {spec}")))?;
         robot.commits.insert(commit.to_string(), parsed.candidates);
     }
     Ok((robot, skipped))
@@ -847,14 +887,14 @@ fn load_installed_modules(
 ) -> Result<std::collections::BTreeSet<String>> {
     let mut modules = pr_overlap::parse_installed(
         &std::fs::read_to_string(installed)
-            .with_context(|| format!("read {}", installed.display()))?,
+            .with_context(|| format!("--installed {}: not readable", installed.display()))?,
     );
     let mut aliases = Vec::new();
     for path in modulerc {
         aliases.extend(
             crate::modulerc::load_modulerc(path)
                 .map_err(anyhow::Error::msg)
-                .with_context(|| format!("read modulerc {}", path.display()))?,
+                .with_context(|| format!("--installed-modulerc {}", path.display()))?,
         );
     }
     modules = crate::modulerc::apply_modulerc(&modules, &aliases);
@@ -866,7 +906,13 @@ fn read_changed_names(values: &[String]) -> Result<Vec<String>> {
     let mut out = Vec::new();
     for value in values {
         let path = Path::new(value);
-        let as_list = path.is_file() && path.extension().and_then(|ext| ext.to_str()) != Some("eb");
+        let ext_eb = path.extension().and_then(|ext| ext.to_str()) == Some("eb");
+        let as_list = path.is_file() && !ext_eb;
+        if !ext_eb && !path.is_file() && (value.contains('/') || value.contains('\\')) {
+            return Err(anyhow!(
+                "--changed {value}: not a file; a path that does not end in .eb is a list of easyconfig filenames"
+            ));
+        }
         if as_list {
             let text = std::fs::read_to_string(path)
                 .with_context(|| format!("read {}", path.display()))?;
@@ -908,7 +954,9 @@ fn load_easyblock_catalog(
     };
     if !roots.is_empty() {
         let paths: Vec<&Path> = roots.iter().map(PathBuf::as_path).collect();
-        let index = crate::eb_easyblock::index_easyblocks(&paths).map_err(anyhow::Error::msg)?;
+        let index = crate::eb_easyblock::index_easyblocks(&paths).map_err(|error| {
+            anyhow::Error::msg(error).context(format!("--easyblocks {}", listed_paths(roots)))
+        })?;
         for (class, (path, _)) in index {
             catalog.base.insert(class, path.display().to_string());
         }
@@ -924,8 +972,9 @@ fn load_easyblock_catalog(
                 "--easyblocks-commit wants <commit>=<dir>, got {spec}"
             )));
         }
-        let index =
-            crate::eb_easyblock::index_easyblocks(&[Path::new(dir)]).map_err(anyhow::Error::msg)?;
+        let index = crate::eb_easyblock::index_easyblocks(&[Path::new(dir)]).map_err(|error| {
+            anyhow::Error::msg(error).context(format!("--easyblocks-commit {spec}"))
+        })?;
         let mut classes = BTreeMap::new();
         for (class, (path, _)) in index {
             classes.insert(class, path.display().to_string());

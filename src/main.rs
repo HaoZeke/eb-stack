@@ -1493,7 +1493,14 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
                 return Ok(());
             }
             let roots = easyconfigs.iter().map(PathBuf::as_path).collect::<Vec<_>>();
-            let tree = parse_easyconfig_trees(&roots).map_err(anyhow::Error::msg)?;
+            let tree = parse_easyconfig_trees(&roots).map_err(|error| {
+                let listed = easyconfigs
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                anyhow::Error::msg(error).context(format!("--easyconfigs {listed}"))
+            })?;
             // Needs the robot tree, so it runs here rather than with the
             // text-only maintainer gates above.
             let duplicates = check_duplicate_upstream(&resolved, &tree.candidates);
@@ -1795,7 +1802,19 @@ fn run_stack(command: StackCommand) -> Result<()> {
             if generated_policy {
                 let _ = std::fs::remove_file(&policy);
             }
-            let lock = solved?;
+            let lock = solved.map_err(|error| {
+                let head = error.to_string();
+                if head.starts_with("IO ") || head.starts_with("parse ") {
+                    let listed = easyconfigs
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    error.context(format!("--easyconfigs {listed}"))
+                } else {
+                    error
+                }
+            })?;
             println!(
                 "lock={} packages={}",
                 lock_out.display(),
@@ -1812,8 +1831,14 @@ fn run_stack(command: StackCommand) -> Result<()> {
             hashes_out,
         } => {
             let trees: Vec<&Path> = easyconfigs.iter().map(PathBuf::as_path).collect();
-            let parsed =
-                eb_stack::parse_easyconfig_trees(&trees).map_err(|e| anyhow::anyhow!(e))?;
+            let parsed = eb_stack::parse_easyconfig_trees(&trees).map_err(|error| {
+                let listed = easyconfigs
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                anyhow::anyhow!(error).context(format!("--easyconfigs {listed}"))
+            })?;
             let choice = if oldest {
                 eb_stack::Choice::Oldest
             } else {
@@ -1949,7 +1974,7 @@ fn run_target(command: TargetCommand) -> Result<()> {
             let target_config = targets
                 .iter()
                 .find(|candidate| candidate.name == target)
-                .with_context(|| format!("target {target} is not configured"))?;
+                .with_context(|| format!("--target {target} is not configured"))?;
             let report = doctor_target(target_config)?;
             let ok = report.ok();
             println!(
@@ -1980,7 +2005,7 @@ fn run_campaign(command: CampaignCommand) -> Result<()> {
             let target_config = targets
                 .into_iter()
                 .find(|candidate| candidate.name == target)
-                .with_context(|| format!("target {target} is not configured"))?;
+                .with_context(|| format!("--target {target} is not configured"))?;
             let campaign = execute_campaign(&CampaignRequest {
                 bundle,
                 target: target_config,
@@ -2163,7 +2188,14 @@ fn load_targets(paths: &[PathBuf]) -> Result<Vec<BuildTarget>> {
                 .with_context(|| format!("load target config {}", path.display()))
         })
         .collect::<Result<Vec<_>>>()?;
-    resolve_target_layers(&layers).map_err(anyhow::Error::msg)
+    let listed = paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    resolve_target_layers(&layers)
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("--config {listed}"))
 }
 
 fn parse_dep_overrides(values: &[String]) -> Result<HashMap<String, String>> {

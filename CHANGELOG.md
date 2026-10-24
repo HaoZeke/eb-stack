@@ -16,6 +16,11 @@ All notable changes to this project are documented here.
 - A rejected flag or flag combination exits 2. A missing file, a parse
   failure, or a failed check exits 1. See the exit status table in
   `docs/orgmode/reference/cli.org`.
+- Input failures name the flag, the path, and the value. A pull-request
+  record that is the wrong shape names `--pr` and the file. `--version`
+  and `--generated-at` that do not parse are rejected. A `--changed`
+  path that is not a file is not treated as an easyconfig name. A write
+  that fails names the path.
 - `target doctor` reports a probe that cannot be started as a failed check
   and still prints the other three layers. A missing `podman` or
   `eessi_container.sh` used to abort the report before any check was shown.
