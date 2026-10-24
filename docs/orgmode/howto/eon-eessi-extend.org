@@ -48,37 +48,36 @@ the dependencies installed, a rebuild of eOn alone takes about 2.5 minutes.
    robot path, for recipes newer than the EasyBuild release in EESSI:
 
    #+begin_src bash
-   git clone --depth 1 -b develop \
-     https://github.com/easybuilders/easybuild-easyconfigs.git ~/src/eb-develop
+   scripts/fetch-upstream-trees.sh
+   set -a
+   source "${EB_UPSTREAM_CACHE:-$HOME/.cache/eb-stack/upstream}/env.sh"
+   set +a
+   # "$EB_EASYCONFIGS_DEVELOP" is the pinned easyconfigs checkout
    #+end_src
 
 * Build eOn with the robot
 
-~scripts/eessi-extend-eb.sh~ in this repository sources EESSI's init, loads
-~EESSI-extend~, isolates Cargo from host wrappers (for ~cargo-c~ and
-~readcon-core~), and execs ~eb~. Run it inside a batch job, not on a login node:
+~scripts/eessi-extend-eb.sh~ sources EESSI's init, loads ~EESSI-extend~,
+isolates Cargo from host wrappers, and execs ~eb~. On this checkout the
+build runs through the local Podman target, which invokes ~eb --robot~
+on the planned eOn bundle. The bundle path has to sit under
+~/tmp/eb-stack~, because that is the directory the target mounts.
 
 #+begin_src bash
-#!/bin/bash
-#SBATCH --job-name=eon-eessi-2026.06
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=32
-#SBATCH --time=01:00:00
-#SBATCH --output=%x-%j.out
-set -euo pipefail
-export EESSI_VERSION=2026.06
-export EESSI_USER_INSTALL=$HOME/EESSI
-export WORKING_DIR=/tmp/$USER/eessi-work
-mkdir -p "$EESSI_USER_INSTALL" "$WORKING_DIR"
-/path/to/eb-stack/scripts/eessi-extend-eb.sh \
-  --from-pr 26480 \
-  --robot-paths=$HOME/src/eb-develop/easybuild/easyconfigs: -r \
-  --umask=022 \
-  --parallel="$SLURM_CPUS_PER_TASK" \
-  --dump-test-report=$HOME/eon-test-report-$(date +%Y%m%d-%H%M).md \
-  eOn-2.17.10-foss-2026.1.eb
+podman build -t eb-stack-rocky9 \
+  -f skills/new-package/container/rocky9/Containerfile \
+  skills/new-package/container/rocky9
+
+eb-stack campaign run \
+  --bundle /tmp/eb-stack/bundles/eon-tutorial \
+  --config examples/targets/local-podman.toml \
+  --target local-rocky9 \
+  --state /tmp/eb-stack/bundles/eon-tutorial.campaign.json
 #+end_src
+
+Plan that bundle with the commands in [[file:../tutorial.org][the tutorial]]
+before this run. ~campaign run~ stays in the foreground and starts
+~eb --robot~ inside the image.
 
 What each option is for:
 
@@ -100,12 +99,10 @@ Build succeeded for 1 out of 1 (total: 2 mins 27 secs)
 
 * Use the installed eOn
 
+Read the campaign while it runs, from another shell:
+
 #+begin_src bash
-source /cvmfs/software.eessi.io/versions/2026.06/init/lmod/bash
-export EESSI_USER_INSTALL=$HOME/EESSI
-module load EESSI-extend        # puts the user prefix on MODULEPATH
-module load eOn/2.17.10-foss-2026.1
-eonclient --help
+eb-stack campaign status --state /tmp/eb-stack/bundles/eon-tutorial.campaign.json
 #+end_src
 
 The modules land under
@@ -124,30 +121,9 @@ EESSI and the prefix.
 
 This ran on 2026-09-25 as a 16-core Slurm job on EESSI 2026.06, with ~develop~
 at ~1916f9a9~: ~meson test --suite eon~ reported 43 passed and 0 failed.
-
-#+begin_src bash
-source /cvmfs/software.eessi.io/versions/2026.06/init/lmod/bash
-module use $HOME/EESSI/versions/2026.06/software/linux/$EESSI_SOFTWARE_SUBDIR/modules/all
-module load foss/2026.1 Meson/1.10.2-GCCcore-15.2.0 Ninja/1.13.2-GCCcore-15.2.0 \
-  CMake/4.2.1-GCCcore-15.2.0 pkgconf/2.5.1-GCCcore-15.2.0 Eigen/5.0.0-GCCcore-15.2.0 \
-  nlohmann_json/3.12.0-GCCcore-15.2.0 Rust/1.94.1-GCCcore-15.2.0 \
-  Python/3.14.2-GCCcore-15.2.0 quill/11.1.0-GCCcore-15.2.0 Highway/1.4.0-GCCcore-15.2.0 \
-  cargo-c/0.10.23-GCCcore-15.2.0 inih/62-GCCcore-15.2.0 fmt/12.2.0-GCCcore-15.2.0
-
-# Keep the host out of the build.
-export CC=gcc CXX=g++ FC=gfortran                 # no ccache or sccache wrapping
-unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER RUSTFLAGS CARGO_ENCODED_RUSTFLAGS
-WORK=/scratch/$USER/eon-dev                       # any directory outside $HOME
-export CARGO_HOME=$WORK/cargo-home
-export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
-
-cd $WORK/eOn
-meson setup $WORK/build --buildtype release -Dwith_tests=true
-meson compile -C $WORK/build
-meson test -C $WORK/build --suite eon --print-errorlogs
-#+end_src
-
-Iterate with ~meson compile -C $WORK/build~ after each edit. Nothing here
+The build directory was outside ~$HOME~, ~CC~, ~CXX~, and ~FC~ named the
+EESSI compilers, and ~CARGO_HOME~ was a fresh directory. Iterate with
+~meson compile -C $WORK/build~ after each edit. Nothing here
 installs into the EESSI prefix, so the code under development lives in the
 working tree alone. ~module use~ on the prefix does what ~module load
 EESSI-extend~ does for ~MODULEPATH~, without the EasyBuild settings that module
@@ -166,17 +142,11 @@ On EESSI 2025.06, the one Meson 1.8 module sits at ~GCCcore-14.3.0~, which means
 
 * Without root
 
-Where no administrator installs the CVMFS client, EESSI can still be mounted by
-an unprivileged user. Run ~cvmfs2~ against a private cache with ~-o libfuse=2~,
-then bind the mount at the canonical path inside a user namespace:
-
-#+begin_src bash
-cvmfs2 -o config=$HOME/.local/eessi/client.conf,libfuse=2 software.eessi.io $HOME/.local/eessi/mnt
-unshare --map-root-user --mount bash -c '
-  mount --bind $HOME/.local/eessi/mnt /cvmfs/software.eessi.io
-  source /cvmfs/software.eessi.io/versions/2026.06/init/lmod/bash
-  exec bash'
-#+end_src
+Where no administrator installs the CVMFS client, an unprivileged user runs
+~cvmfs2~ against a private cache with ~-o libfuse=2~, then bind-mounts that
+directory at the canonical path inside a user namespace. This checkout has
+~/dev/fuse~ and no ~cvmfs2~ package in its apt repositories, so the build
+above uses the local Podman target instead of that mount.
 
 The libfuse 2 path matters on some hosts: CVMFS 2.13.3's libfuse 3 path served
 directory listings but never answered a file read against fuse3 3.18.2, while

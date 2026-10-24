@@ -13,7 +13,7 @@ eb-stack package bump \
   --toolchain-name foss \
   --toolchain-version 2024a \
   --easyconfigs tests/repro_fixtures/universe_foss_2024a \
-  --out-dir /tmp/gromacs-2024a
+  --out-dir /tmp/eb-stack/bundles/gromacs-2024a
 #+end_src
 
 The solver materializes the source recipe as a default profile, derives the
@@ -24,7 +24,7 @@ build-tool scopes, matching EasyBuild's installed-module model.
 The output is:
 
 #+begin_src text
-/tmp/gromacs-2024a/
+/tmp/eb-stack/bundles/gromacs-2024a/
   package.plan.json
   package.sbom.cdx.json
   locks/default.lock.json
@@ -33,17 +33,18 @@ The output is:
 
 * Use site overlays and stack preferences
 
-Pass robot paths from general to specific:
+Pass robot paths from general to specific. An explicit override is a
+locked solver input. This fixture's universe already selects Python
+3.12.3, and ~--dep~ records that pin:
 
 #+begin_src bash
 eb-stack package bump \
-  --source GROMACS-2024.4-foss-2023b.eb \
+  --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
   --toolchain-name foss \
   --toolchain-version 2024a \
-  --easyconfigs vendor/easybuild-easyconfigs/easybuild/easyconfigs \
-  --easyconfigs site/easyconfigs \
-  --stack-policy site/foss-2024a.toml \
-  --out-dir /tmp/gromacs-2024a
+  --easyconfigs tests/repro_fixtures/universe_foss_2024a \
+  --dep Python=3.12.3 \
+  --out-dir /tmp/eb-stack/bundles/gromacs-dep
 #+end_src
 
 Preferred distribution pins participate in the SAT solve and may fall back.
@@ -54,29 +55,16 @@ dependency tuple includes that toolchain explicitly. Source dependencies that
 already use an explicit toolchain preserve their family and retarget its
 generation before solving.
 
-An explicit override is also a locked solver input:
-
-#+begin_src bash
-eb-stack package bump \
-  --source App-1.0-foss-2023b.eb \
-  --toolchain-name foss \
-  --toolchain-version 2024a \
-  --easyconfigs /path/to/robot \
-  --dep Python=3.12.3 \
-  --out-dir /tmp/app
-#+end_src
-
 * Change the application version
 
 #+begin_src bash
 eb-stack package bump \
-  --source App-1.0-foss-2023b.eb \
+  --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
   --toolchain-name foss \
   --toolchain-version 2024a \
-  --version 1.1 \
-  --source-checksum SHA256 \
-  --easyconfigs /path/to/robot \
-  --out-dir /tmp/app-1.1
+  --version 2024.5 \
+  --easyconfigs tests/repro_fixtures/universe_foss_2024a \
+  --out-dir /tmp/eb-stack/bundles/gromacs-2024.5
 #+end_src
 
 The emitter updates the package version, target toolchain, selected dependency
@@ -93,33 +81,43 @@ and is listed in ~sources.fetch.json~ and as a ~source:fetch~ residual:
 
 #+begin_src bash
 eb-stack package bump \
-  --source App-1.0-foss-2023b.eb \
+  --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
   --toolchain-name foss \
   --toolchain-version 2024a \
-  --version 1.1 \
+  --version 2024.5 \
   --fetch-checksums \
-  --easyconfigs /path/to/robot \
-  --out-dir /tmp/app-1.1
+  --easyconfigs tests/repro_fixtures/universe_foss_2024a \
+  --out-dir /tmp/eb-stack/bundles/gromacs-fetch
 #+end_src
+
+The download fills ~gromacs-2024.5.tar.gz~ in ~checksums~. The digest
+written for that tarball is
+~fecf06b186cddb942cfb42ee8da5f3eb2b9993e6acc0a2f18d14ac0b014424f3~.
 
 * Check and build
 
 #+begin_src bash
-RECIPE=/tmp/gromacs-2024a/easyconfigs/g/GROMACS/GROMACS-2024.4-foss-2024a.eb
+RECIPE=/tmp/eb-stack/bundles/gromacs-2024a/easyconfigs/g/GROMACS/GROMACS-2024.4-foss-2024a.eb
 
 eb-stack recipe format "$RECIPE"
 eb-stack recipe lint "$RECIPE"
 eb-stack recipe check \
   --recipe "$RECIPE" \
-  --easyconfigs /path/to/robot \
-  --easyconfigs /tmp/gromacs-2024a/easyconfigs
+  --easyconfigs tests/repro_fixtures/universe_foss_2024a \
+  --easyconfigs /tmp/eb-stack/bundles/gromacs-2024a/easyconfigs
+
+mkdir -p /tmp/eb-stack/robot
+rsync -a tests/repro_fixtures/universe_foss_2024a/ /tmp/eb-stack/robot/
+
+podman build -t eb-stack-rocky9 \
+  -f skills/new-package/container/rocky9/Containerfile \
+  skills/new-package/container/rocky9
 
 eb-stack campaign run \
-  --bundle /tmp/gromacs-2024a \
-  --config examples/targets/base.toml \
-  --config ~/.config/eb-stack/site.toml \
-  --target site-builder \
-  --state /tmp/gromacs-2024a.campaign.json
+  --bundle /tmp/eb-stack/bundles/gromacs-2024a \
+  --config examples/targets/local-podman.toml \
+  --target local-rocky9 \
+  --state /tmp/eb-stack/bundles/gromacs-2024a.campaign.json
 #+end_src
 
 ~package bump~ can establish *resolves*. Only the campaign's EasyBuild run can

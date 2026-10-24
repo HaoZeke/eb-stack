@@ -101,6 +101,7 @@ closure.sbom.cdx.json
 build-order.json
 locks/default.lock.json
 easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb
+easyconfigs/e/eOn/eOn-2.16.0_safemath-eigen5-core-guard.patch
 #+end_src
 
 The lock is the actual Resolvo result. Its direct dependencies name selected
@@ -173,56 +174,36 @@ container, scheduler job, or host command has stopped, then rerun with the same
 state path. The state remains the audit record; do not start a duplicate state
 for the same bundle.
 
-If the campaign fails, claim its finding before editing:
-
-#+begin_src bash
-eb-stack campaign finding claim \
-  --state "$STATE" \
-  --id attempt:1:finding:1 \
-  --owner omp-worker-1
-#+end_src
-
-Repair the layer named by the class, then record evidence:
-
-#+begin_src bash
-eb-stack campaign finding resolve \
-  --state "$STATE" \
-  --id attempt:1:finding:1 \
-  --owner omp-worker-1 \
-  --action "corrected package configuration" \
-  --evidence "recipe check and target command reproduce successfully" \
-  --change examples/packages/eon.toml
-#+end_src
-
-Run the campaign again with the same state. Successful stages supersede stale
-open findings. ~builds~ becomes true only after all emitted recipes succeed.
+If the campaign fails, ~campaign status~ prints the finding id. Claim that
+id and record the repair with the commands in
+[[file:howto/repair-campaign.org][Repair a failed campaign]]. Run the campaign
+again with the same state. Successful stages supersede stale open findings.
+~builds~ becomes true only after all emitted recipes succeed.
 ~binary_verified~ becomes true only when at least one declared verification
 command exists and all such commands succeed.
 
-* Route the same bundle to a deployed site
+* Route the same bundle again
 
-The local target is a complete public example, not a required deployment
-shape. For SSH, Slurm, or a site-owned container, copy
-~examples/targets/site.example.toml~ to a private file and fill in its host,
-durable roots, image, modules, and scheduler settings. Layer it after the
-public topology:
+The same public target runs a second time against the bundle this tutorial
+already planned. ~examples/targets/site.example.toml~ is the file to copy
+when a site fills in its own host, image, and scheduler. This checkout runs
+the local target:
 
 #+begin_src bash
 eb-stack target doctor \
-  --config examples/targets/base.toml \
-  --config ~/.config/eb-stack/site.toml \
-  --target site-builder
+  --config examples/targets/local-podman.toml \
+  --target local-rocky9
 
 eb-stack campaign run \
-  --bundle /shared/eb-stack/bundles/eon-tutorial \
-  --config examples/targets/base.toml \
-  --config ~/.config/eb-stack/site.toml \
-  --target site-builder \
-  --state /shared/eb-stack/bundles/eon-tutorial.campaign.json
+  --bundle "$BUNDLE" \
+  --config examples/targets/local-podman.toml \
+  --target local-rocky9 \
+  --state "$STATE"
 #+end_src
 
 The bundle must be visible at the same absolute path used by the selected
-runtime. Site credentials remain outside the public TOML.
+runtime. The local target mounts ~/tmp/eb-stack~, which is why ~$BUNDLE~
+lives there.
 
 * Try QMCPACK variants
 

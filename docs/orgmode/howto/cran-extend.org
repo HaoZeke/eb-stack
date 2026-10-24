@@ -12,7 +12,7 @@ dependency on the EasyBuild ~R~ module. Packages already listed in
 1. a DESCRIPTION file, ~cran.json~, or a one-spec-per-line package list;
 2. the EESSI robot tree;
 3. a stack policy that locks ~R~ and ~R-bundle-CRAN~ to the versions
-   that EESSI version ships. See ~examples/stacks/eessi-r-extras.toml~.
+   in the robot. See ~examples/stacks/eessi-r-extras.toml~.
 
 * Inspect
 
@@ -28,15 +28,19 @@ eb-stack package inspect \
 ~package.plan.json~ has ~origin = cran~. A single package, such as
 this DESCRIPTION, has ~easyblock = RPackage~, and that field stays
 ~RPackage~ after planning. The emitted recipe is a ~Bundle~ with
-~exts_defaultclass = 'RPackage'~ and the package in ~exts_list~,
-described below.
+~exts_defaultclass = 'RPackage'~ and the package in ~exts_list~.
+Base-R imports are residuals (~cran-base~). A DESCRIPTION with no
+digest is a ~checksum~ residual.
 
 * Plan
 
-Source ~env.sh~ from ~scripts/fetch-upstream-trees.sh~ first.
-The checksum below is SHA-256 of ~jsonlite_1.8.8.tar.gz~ from the CRAN
-archive (the current ~src/contrib~ URL in the fixture no longer serves
-that tarball).
+The fixture robot does not already provide jsonlite, so this command
+emits the bundle. The checksum is the placeholder stored with the
+fixture. Against easybuild-easyconfigs develop, source ~env.sh~ from
+~scripts/fetch-upstream-trees.sh~ and pass ~--easyconfigs "$EB_EASYCONFIGS"~
+with the archive digest of
+~jsonlite_1.8.8.tar.gz~. That tree already provides the package, so
+plan prints the closure and does not emit a recipe.
 
 #+begin_src bash
 eb-stack package plan \
@@ -44,15 +48,13 @@ eb-stack package plan \
   --format cran \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  --easyconfigs "$EB_EASYCONFIGS" \
+  --easyconfigs fixtures/foreign_ingest/cran_jsonlite/robot \
   --stack-policy examples/stacks/eessi-r-extras.toml \
-  --source-checksum 7de21316984c3ba3d7423d12f43d1c30c716007c5e39bf07e11885e0ceb0caa4 \
-  --out-dir /tmp/jsonlite
+  --source-checksum bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+  --out-dir /tmp/eb-stack/bundles/jsonlite
 #+end_src
 
-Against easybuild-easyconfigs develop ~981d2123dd~ the command prints
-the closure and manifest paths and does not emit a recipe. The manifest
-residual is:
+The develop run's manifest residual is:
 
 #+begin_example
 jsonlite 1.8.8 is already provided by R 4.6.1 (jsonlite 2.0.0); do not emit a pip overlay
@@ -65,17 +67,18 @@ buildable bundle without it. When the robot does not already provide
 the package, plan emits ~easyblock = Bundle~ with
 ~exts_defaultclass = RPackage~.
 
-* Install with the eessi-extend target
+* Check the recipe
 
-Same as the Python extras workflow: plan on the host, then
+Plan on the host, then confirm the recipe resolves against the same robot:
 
 #+begin_src bash
-eb-stack campaign run \
-  --bundle /tmp/jsonlite \
-  --config examples/targets/eessi-extend.toml \
-  --target eessi-extend-user \
-  --state /tmp/jsonlite.campaign.json
+eb-stack recipe check \
+  --recipe /tmp/eb-stack/bundles/jsonlite/easyconfigs/j/jsonlite/jsonlite-1.8.8-foss-2026.1.eb \
+  --easyconfigs fixtures/foreign_ingest/cran_jsonlite/robot \
+  --easyconfigs /tmp/eb-stack/bundles/jsonlite/easyconfigs
 #+end_src
+
+The check prints ~recipe resolves~ and finds ~R-4.4.2 (foss-2026.1)~.
 
 Project one-offs can keep using ~R_LIBS_USER~ instead of a site bundle.
 
@@ -86,24 +89,46 @@ Nothing is wrong with that, but an ~exts_list~ entry needs one concrete
 version, so planning stops with
 
 #+begin_example
-matrixStats is not in the robot, and ">=0" names no version to install as an
-extension. Give the ecosystem index with --package-index, or pin the dependency
+processx is not in the robot, and ">=0" names no version to install as an extension. Give the ecosystem index with --package-index, or pin the dependency
 #+end_example
 
-Give it the index CRAN publishes:
+That is what this fixture prints:
 
 #+begin_src bash
-curl -sSLO https://cran.r-project.org/src/contrib/PACKAGES
+eb-stack package plan \
+  --source fixtures/foreign_ingest/cran_unpinned/cran.json \
+  --format cran \
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  --easyconfigs fixtures/foreign_ingest/cran_bundle/robot \
+  --stack-policy examples/stacks/eessi-r-extras.toml \
+  --source-checksum dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd \
+  --out-dir /tmp/eb-stack/bundles/quartoish
+#+end_src
+
+Give it an index in the control-file shape CRAN publishes. Versions and
+~MD5sum~ values for the leftovers come from that file:
+
+#+begin_src bash
+cat > /tmp/PACKAGES <<'EOF'
+Package: processx
+Version: 3.8.4
+MD5sum: 1111111111111111111111111111abcd
+
+Package: rmarkdown
+Version: 2.27
+MD5sum: 2222222222222222222222222222abcd
+EOF
 
 eb-stack package plan \
-  --source brms/DESCRIPTION \
+  --source fixtures/foreign_ingest/cran_unpinned/cran.json \
   --format cran \
-  --toolchain-name foss --toolchain-version 2025b \
-  --easyconfigs "$EBROOTEASYBUILD/easybuild/easyconfigs" \
+  --toolchain-name foss --toolchain-version 2026.1 \
+  --easyconfigs fixtures/foreign_ingest/cran_bundle/robot \
   --stack-policy examples/stacks/eessi-r-extras.toml \
-  --package-index PACKAGES \
-  --source-checksum <sha256 of the package tarball> \
-  --out-dir /tmp/brms
+  --package-index /tmp/PACKAGES \
+  --source-checksum dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd \
+  --out-dir /tmp/eb-stack/bundles/quartoish
 #+end_src
 
 The index is a control file: stanzas of ~Field: value~ separated by blank
@@ -117,23 +142,24 @@ version happens to be current, unrecorded, is worse than stopping.
 
 * When this emits a Bundle
 
-A CRAN package whose imports the robot already carries emits one ~RPackage~
-recipe. One whose imports it does not carry emits a ~Bundle~ with
-~exts_defaultclass = 'RPackage'~ and the leftovers in ~exts_list~, the same
-shape upstream uses for ~R-bundle-CRAN~:
+Inspect records ~RPackage~. Plan emits a ~Bundle~ with
+~exts_defaultclass = 'RPackage'~ and the package, or its leftovers, in
+~exts_list~. A single package whose imports the robot already carries
+still uses that shape, because a lone ~RPackage~ recipe has nowhere to
+put a later leftover:
 
 #+begin_src python
 easyblock = 'Bundle'
 exts_defaultclass = 'RPackage'
 exts_list = [
-    ('processx', '3.8.4', {...}),
+    ('jsonlite', '1.8.8', {...}),
 ]
 #+end_src
 
-The choice is made from the plan rather than by a flag: leftovers exist or they
-do not. Both shapes are pinned by tests,
-~plan_cran_emits_a_single_r_package~ and
-~plan_cran_with_leftovers_emits_an_r_bundle~.
+~plan_cran_emits_a_single_r_package~ is jsonlite alone.
+~plan_cran_with_leftovers_emits_an_r_bundle~ puts ~processx~ and
+~rmarkdown~ in the same list. The index plan above writes
+~('processx', '3.8.4'~ and the ~md5:~ value from the index.
 
 An already-provided import collapses to its provider instead of becoming an
 extension, through the same mechanism the Python side uses: an ~R-bundle-CRAN~

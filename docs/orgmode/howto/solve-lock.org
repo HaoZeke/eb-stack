@@ -70,7 +70,7 @@ in dependency order:
 
 #+begin_src bash
 eb-stack stack order \
-  --easyconfigs /path/to/easyconfigs \
+  --easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
   --root GROMACS --root 'OpenBLAS==0.3.27' \
   --out build-order.txt \
   --easystack-out order.yml \

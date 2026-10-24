@@ -24,13 +24,11 @@ public skill.
 
 #+begin_src bash
 eb-stack package bump \
-  --source easyconfigs/g/GROMACS/GROMACS-2024.4-foss-2023b.eb \
+  --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
   --toolchain-name foss \
   --toolchain-version 2024a \
-  --easyconfigs vendor/easybuild-easyconfigs/easybuild/easyconfigs \
-  --easyconfigs site/easyconfigs \
-  --stack-policy stacks/foss-2024a.toml \
-  --out-dir work/GROMACS-2024.4-foss-2024a
+  --easyconfigs tests/repro_fixtures/universe_foss_2024a \
+  --out-dir /tmp/eb-stack/bundles/gromacs-2024a
 #+end_src
 
 Repeat mechanically for the maintained set. Each successful bundle contains a
@@ -48,14 +46,13 @@ lock selected.
 * Validate generated recipes
 
 #+begin_src bash
-eb-stack recipe format work/*/easyconfigs/*/*/*.eb
-eb-stack recipe lint work/*/easyconfigs/*/*/*.eb
+eb-stack recipe format /tmp/eb-stack/bundles/gromacs-2024a/easyconfigs/g/GROMACS/*.eb
+eb-stack recipe lint /tmp/eb-stack/bundles/gromacs-2024a/easyconfigs/g/GROMACS/*.eb
 
 eb-stack recipe check \
-  --recipe work/GROMACS-2024.4-foss-2024a/easyconfigs/g/GROMACS/GROMACS-2024.4-foss-2024a.eb \
-  --easyconfigs vendor/easybuild-easyconfigs/easybuild/easyconfigs \
-  --easyconfigs site/easyconfigs \
-  --easyconfigs work/GROMACS-2024.4-foss-2024a/easyconfigs
+  --recipe /tmp/eb-stack/bundles/gromacs-2024a/easyconfigs/g/GROMACS/GROMACS-2024.4-foss-2024a.eb \
+  --easyconfigs tests/repro_fixtures/universe_foss_2024a \
+  --easyconfigs /tmp/eb-stack/bundles/gromacs-2024a/easyconfigs
 #+end_src
 
 Resolve missing dependencies by adding a real package bundle or authored recipe.
@@ -69,14 +66,13 @@ list, or baseline diff:
 
 #+begin_src bash
 eb-stack stack solve \
-  --easyconfigs vendor/easybuild-easyconfigs/easybuild/easyconfigs \
-  --easyconfigs site/easyconfigs \
-  --policy policies/annual-foss-2024a.json \
-  --baseline-easyconfigs vendor/easybuild-easyconfigs/easybuild/easyconfigs \
-  --lock-out work/stack.lock.json \
-  --sbom-out work/stack.cdx.json \
-  --build-list-out work/build.list \
-  --stack-diff-out work/stack.diff.md
+  --easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
+  --policy fixtures/gromacs_2025_to_next/policies/prefer_newer.json \
+  --baseline-easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
+  --lock-out /tmp/annual-stack.lock.json \
+  --sbom-out /tmp/annual-stack.cdx.json \
+  --build-list-out /tmp/annual-build.list \
+  --stack-diff-out /tmp/annual-stack.diff.md
 #+end_src
 
 The whole-stack policy and package stack-policy solve related but distinct
@@ -86,10 +82,13 @@ and exclusions for one generated product profile.
 * Validate target routing
 
 #+begin_src bash
+podman build -t eb-stack-rocky9 \
+  -f skills/new-package/container/rocky9/Containerfile \
+  skills/new-package/container/rocky9
+
 eb-stack target doctor \
-  --config examples/targets/base.toml \
-  --config ~/.config/eb-stack/site.toml \
-  --target site-builder
+  --config examples/targets/local-podman.toml \
+  --target local-rocky9
 #+end_src
 
 The doctor must show healthy transport, executor, runtime, and EasyBuild
@@ -99,11 +98,10 @@ workload checks before a campaign claim is trusted.
 
 #+begin_src bash
 eb-stack campaign run \
-  --bundle work/GROMACS-2024.4-foss-2024a \
-  --config examples/targets/base.toml \
-  --config ~/.config/eb-stack/site.toml \
-  --target site-builder \
-  --state work/GROMACS-2024.4-foss-2024a.campaign.json
+  --bundle /tmp/eb-stack/bundles/gromacs-2024a \
+  --config examples/targets/local-podman.toml \
+  --target local-rocky9 \
+  --state /tmp/eb-stack/bundles/gromacs-2024a.campaign.json
 #+end_src
 
 Hermes owns the retry loop. OMP workers claim findings and repair according to

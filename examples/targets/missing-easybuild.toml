@@ -1,0 +1,20 @@
+schema_version = 1
+
+# A target whose EasyBuild program is absent. campaign run records a
+# runtime finding. The repair how-to claims and resolves that finding.
+[[targets]]
+name = "missing-eb"
+
+[targets.transport]
+kind = "local"
+
+[targets.executor]
+kind = "direct"
+
+[targets.runtime]
+kind = "host"
+
+[targets.easybuild]
+command = "/definitely/missing/eb-stack-easybuild"
+work_root = "/tmp/eb-stack-repair/work"
+tmp_root = "/tmp/eb-stack-repair/tmp"

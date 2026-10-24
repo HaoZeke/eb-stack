@@ -86,7 +86,7 @@ when that module is not installed.
 
 ~--filter-deps~ drops ~dependencies~ and ~builddependencies~ tuples before
 the walk. It leaves ~exts_list~ in place. A filtered package that a bundle
-ships as an extension still marks that bundle must-rebuild.
+includes as an extension still marks that bundle must-rebuild.
 
 A missing easyblock class is a note. The module stays in the set, because
 it is already installed. A ~from-commit~ whose tree was not passed is a
@@ -104,7 +104,7 @@ The rebuild easystack contains zlib and the bundle, each with
 ~rebuild: true~. It does not contain libpng.
 
 With ~--prefix~, the CMake row stays in review only when the installed
-zlib ships a static archive, and the reason names that archive. With
+zlib provides a static archive, and the reason names that archive. With
 ~--check-static~, CMake is must-rebuild when one of its installed ELF
 files defines an export of that archive, and no-rebuild when none of
 them does.

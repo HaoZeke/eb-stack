@@ -8,15 +8,38 @@ subclass, an extension class, or a bundle component class.
 
 * One changed file
 
+~scripts/fetch-upstream-trees.sh~ creates a checkout of the pinned trees and writes
+~env.sh~. ~EB_EASYBLOCKS~ is easybuild-easyblocks v5.4.1.
+~EB_EASYCONFIGS~ is the develop easyconfigs directory.
+~EB_EASYBUILD_FRAMEWORK~ is easybuild-framework v5.4.1. Source ~env.sh~
+and pass those paths.
+
 #+begin_src bash
+scripts/fetch-upstream-trees.sh
+set -a
+source "${EB_UPSTREAM_CACHE:-$HOME/.cache/eb-stack/upstream}/env.sh"
+set +a
+printf '%s\n' 'CMake/4.2.1-GCCcore-15.2.0' > /tmp/modules.txt
+
 eb-stack easyblock-reach \
-  --easyblocks ~/src/easybuild-easyblocks \
-  --easyconfigs ~/src/easybuild-easyconfigs \
-  --file ~/src/easybuild-easyblocks/easybuild/easyblocks/generic/cmakemake.py \
-  --installed modules.txt \
+  --easyblocks "$EB_EASYBLOCKS" \
+  --easyconfigs "$EB_EASYCONFIGS" \
+  --file "$EB_EASYBLOCKS/easybuild/easyblocks/generic/cmakemake.py" \
+  --installed /tmp/modules.txt \
   --reverse \
   --out-dir /tmp/cmakemake-reach
 #+end_src
+
+That command, against the trees `scripts/fetch-upstream-trees.sh` checked
+out on 2026-10-24, printed:
+
+#+begin_example
+easyconfigs=2352 installed=0 classes=39 reverse=5058 out=/tmp/cmakemake-reach
+#+end_example
+
+~installed~ stays 0 when the modules file does not name a reached
+module. The empty range ~HEAD..HEAD~ on that same checkout printed
+~easyconfigs=0 installed=0 classes=0 reverse=0~.
 
 ~modules.txt~ lists installed modules, one per line:
 ~name/version[-toolchain]versionsuffix~. Blank lines and ~#~ comments are
@@ -30,23 +53,28 @@ same warning as an HTML comment. Neither is a file to merge.
 
 #+begin_src bash
 eb-stack easyblock-reach \
-  --easyblocks ~/src/easybuild-easyblocks \
-  --easyconfigs ~/src/easybuild-easyconfigs \
-  --range origin/develop..HEAD
+  --easyblocks "$EB_EASYBLOCKS" \
+  --easyconfigs "$EB_EASYCONFIGS" \
+  --range HEAD..HEAD \
+  --out-dir /tmp/range-reach
 
 eb-stack easyblock-reach \
-  --easyblocks ~/src/easybuild-easyblocks \
-  --framework ~/src/easybuild-framework \
-  --easyconfigs ~/src/easybuild-easyconfigs \
-  --pr 5000 \
-  --repo ~/src/easybuild-easyblocks \
-  --base develop
+  --easyblocks "$EB_EASYBLOCKS" \
+  --framework "$EB_EASYBUILD_FRAMEWORK" \
+  --easyconfigs "$EB_EASYCONFIGS" \
+  --pr 4250 \
+  --repo "$EB_EASYBLOCKS" \
+  --base easybuild-easyblocks-v5.4.1 \
+  --out-dir /tmp/pr4250-reach
 #+end_src
 
-~--range~ is passed to ~git diff --name-only~. ~--pr~ fetches
-~refs/pull/N/head~ and diffs it against the merge-base with ~--base~
-(default ~develop~). ~--repo~ is the clone ~git~ reads; it defaults to the
-first ~--easyblocks~ path. The class hierarchy is the working tree. A
+~--range~ is passed to ~git diff --name-only~. ~HEAD..HEAD~ on the
+pinned checkout changes no file. ~--pr~ fetches ~refs/pull/N/head~ and
+diffs it against the merge-base with ~--base~ (default ~develop~). The
+pinned easyblocks checkout is the v5.4.1 tag, so pass
+~--base easybuild-easyblocks-v5.4.1~ when that is the tree ~--repo~
+has. ~--repo~ is the clone ~git~ reads; it defaults to the first
+~--easyblocks~ path. The class hierarchy is the working tree. A
 deleted file is read from the base so its class is still seen.
 
 * What counts as a use
@@ -66,7 +94,8 @@ deleted file is read from the base so its class is still seen.
 
 A class that assigns ~exts_defaultclass~ overwrites the easyconfig.
 ~PythonBundle~ assigns ~PythonPackage~, including from inside ~with~.
-For a component, ~default_easyblock~ in the easyconfig wins over the class.
+For a component, ~default_easyblock~ in the easyconfig wins over the
+class.
 
 A framework module reaches the easyblocks that import it, then their
 subclasses. Imports inside `easybuild.framework` and `easybuild.tools`

@@ -1,0 +1,13 @@
+easyblock = 'ConfigureMake'
+
+name = 'CMake'
+version = '3.31.3'
+
+homepage = 'https://cmake.org/'
+description = """CMake."""
+
+toolchain = {'name': 'GCCcore', 'version': '13.3.0'}
+
+dependencies = [('ncurses', '6.5')]
+
+moduleclass = 'devel'

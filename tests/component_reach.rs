@@ -168,6 +168,38 @@ fn cargo_and_npm_purls_do_not_match_the_curl_recipe() {
     );
 }
 
+#[test]
+fn recorded_slice_matches_the_pinned_develop_commit() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/component_reach_recorded");
+    let checks = [
+        (
+            "LICENSE",
+            "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+        ),
+        (
+            "easybuild/easyconfigs/c/cURL/cURL-8.17.0-GCCcore-15.2.0.eb",
+            "e9eea495bfa797007d602363fe99bae6f5feb7aad968c8e4cec1b1400c6a3c3d",
+        ),
+        (
+            "easybuild/easyconfigs/g/git/git-2.52.0-GCCcore-15.2.0.eb",
+            "0ceae55b53436866fab93b7c705126f0168b1d915de8164cf74bfeed9868344c",
+        ),
+    ];
+    for (rel, want) in checks {
+        let path = root.join(rel);
+        let output = Command::new("sha256sum")
+            .arg(&path)
+            .output()
+            .unwrap_or_else(|error| panic!("sha256sum {rel}: {error}"));
+        assert!(output.status.success(), "{rel}");
+        let got = String::from_utf8(output.stdout).unwrap();
+        let got = got.split_whitespace().next().unwrap_or("");
+        assert_eq!(got, want, "{rel}");
+    }
+    let licence = std::fs::read_to_string(root.join("LICENSE")).unwrap();
+    assert!(licence.contains("GNU GENERAL PUBLIC LICENSE"));
+}
+
 fn reach_purl(root: &Path, purl: &str) -> serde_json::Value {
     let out = root.join(purl.replace([':', '/', '@'], "_"));
     let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))

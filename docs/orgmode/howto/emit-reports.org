@@ -32,17 +32,28 @@ the baseline instead of an older tree:
 
 #+begin_src bash
 eb-stack stack solve \
-  --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs \
-  --toolchain foss/2026.1 --root GROMACS --root QuantumESPRESSO \
-  $(for f in software-layer/easystacks/software.eessi.io/2026.06/*.yml; do
-      echo --baseline-easystack "$f"; done) \
-  --baseline-commits-from easybuild-easyconfigs \
-  --build-list-out site.list --build-list-excludes-baseline \
-  --stack-diff-out stack.diff.md
+  --easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
+  --toolchain foss/2025b --root GROMACS \
+  --baseline-easystack fixtures/gromacs_2025_to_next/easystacks/gromacs-2024.4.yml \
+  --build-list-out /tmp/site.list \
+  --build-list-excludes-baseline \
+  --stack-diff-out /tmp/easystack.diff.md \
+  --lock-out /tmp/easystack.lock.json
 #+end_src
 
-The ~added~ and ~version-bumped~ rows are then the site layer, and
-~site.list~ holds exactly those modules in build order.
+The baseline label is the toolchain (~foss-2025b~), the same shape as the
+solved lock. ~/tmp/site.list~ contains the version-bumped modules in build
+order, and leaves out what the easystack already installs:
+
+#+begin_src text
+fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/OpenBLAS-0.3.27-foss-2025b.eb
+fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/OpenMPI-5.0.3-foss-2025b.eb
+fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/GROMACS-2025.0-foss-2025b.eb
+#+end_src
+
+~/tmp/easystack.diff.md~ opens with ~Baseline (`foss-2025b`) → solved (`foss-2025b`)~.
+Unchanged: 2 (FFTW, Python). Version-bumped: 3 (GROMACS 2024.4 to 2025.0,
+OpenBLAS 0.3.24 to 0.3.27, OpenMPI 4.1.6 to 5.0.3).
 
 * Read the build list
 

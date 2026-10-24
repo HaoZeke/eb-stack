@@ -7,23 +7,61 @@ the recipes that contain it into the rebuild closure.
 
 * Run it
 
-~EB_EASYCONFIGS~ comes from ~scripts/fetch-upstream-trees.sh~.
+The recorded slice in this checkout is enough to see the counts. The
+files are copies of easybuild-easyconfigs develop
+~981d2123dddccca9ce0b15f9eb2643e872332f5e~, the pin in
+~scripts/fetch-upstream-trees.sh~, and the upstream ~LICENSE~ is in
+that directory.
 
 #+begin_src bash
 eb-stack component-reach \
   --component curl \
   --version '>=8,<9' \
   --generation 2026.1 \
-  --easyconfigs "$EB_EASYCONFIGS" \
-  --installed installed.txt \
-  --easystack easystacks/software.eessi.io/2026.06/*.yml \
-  --easystack-url https://raw.githubusercontent.com/EESSI/software-layer/main/easystacks/software.eessi.io/2025.06/zen5/easystack-001-eb-5.2.0.yml \
-  --compat-layer compat.txt \
-  --filter-deps "$EASYBUILD_FILTER_DEPS" \
-  --out-dir out/
+  --easyconfigs tests/component_reach_recorded \
+  --out-dir /tmp/component-reach
 #+end_src
 
-Pass one of ~--component~, ~--purl~, or ~--cve~.
+The command prints:
+
+#+begin_example
+component=curl version=>=8,<9 generation=2026.1 carriers=2 changed=1 must-rebuild=1 review=0 no-rebuild=1 out=/tmp/component-reach
+#+end_example
+
+cURL 8.17.0 is the module. git 2.52.0 depends on that cURL and is the
+no-rebuild row. The same command against the pinned easyconfigs tree
+and a deployed easystack uses ~scripts/fetch-upstream-trees.sh~. Pass
+one of ~--component~, ~--purl~, or ~--cve~.
+
+#+begin_src bash
+scripts/fetch-upstream-trees.sh
+set -a
+source "${EB_UPSTREAM_CACHE:-$HOME/.cache/eb-stack/upstream}/env.sh"
+set +a
+eb-stack component-reach \
+  --component curl \
+  --version '>=8,<9' \
+  --generation 2026.1 \
+  --easyconfigs "$EB_EASYCONFIGS" \
+  --easystack "$EB_EESSI_SOFTWARE_LAYER/easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.0-2026.1.yml" \
+  --out-dir /tmp/component-reach-full
+#+end_src
+
+The command prints:
+
+#+begin_example
+component=curl version=>=8,<9 generation=2026.1 carriers=23 changed=2 must-rebuild=1 review=106 no-rebuild=16 out=/tmp/component-reach-full
+#+end_example
+
+The changed files are ~cURL-8.17.0-GCCcore-15.2.0.eb~ and
+~cargo-c-0.10.23-GCCcore-15.2.0.eb~. The must-rebuild row is
+~cURL/8.17.0-GCCcore-15.2.0~, reason ~patched easyconfig~.
+
+~--easystack~ and ~--installed~ narrow the walk to a deployed prefix.
+~--filter-deps~ drops dependency tuples before the closure walk. When
+that flag is omitted and ~EASYBUILD_FILTER_DEPS~ is set, the command
+reads the variable. The recorded command above passes neither, so every
+easyconfig in the generation is the stack.
 
 ~--component~ is the name. ASCII case is ignored, so ~curl~ matches
 ~cURL~ and ~jupyterlab~ matches ~JupyterLab~. The match is a whole token,
@@ -37,7 +75,15 @@ versions come from Open Source Vulnerabilities (OSV).
 
 ~--purl~ is a package URL, for example
 ~pkg:cargo/rustls-webpki@0.102.8~ or ~pkg:pypi/urllib3@2.5.0~. The type
-and the name are kept. A version in the URL is the requirement unless
+selects which carriers count. ~generic~ and ~github~ match the
+easyconfig name: the module, a dependency, a builddependency, a
+component, a source, or a patch. ~pypi~, ~cargo~, ~npm~, ~golang~, and
+~cran~ match an extension or a bundled component of that language.
+~cargo~ also matches a crate, and ~pypi~ also matches a wheel. Any
+other type is rejected: the command exits 2 and the error says that
+purl type has no carrier model. ~pkg:cargo/curl~ and ~pkg:npm/curl~ do
+not match the cURL easyconfig. ~--component curl~ still matches that
+recipe by name. A version in the URL is the requirement unless
 ~--version~ is also passed.
 
 ~--cve~ is a CVE id or another OSV id. The record is fetched from
@@ -47,8 +93,14 @@ range and no package. Advisory aliases (~GHSA-~, ~RUSTSEC-~, ~PYSEC-~,
 become exact versions. Git tags such as ~XORG-6_8_0~ do not. Each
 affected package is searched on its own, and a version matches when any
 of that package's requirements match or when it is one of the exact
-versions. The three output files are then one document with ~kind~ set
-to ~cve~, and ~results~ holds one reach document per package.
+versions. A range whose type is not SEMVER or ECOSYSTEM, and an event
+that does not parse as a version requirement, is listed under
+Unresolved ranges in the markdown. It is not discarded. When every
+range on a package was unparsed, that package counts as review and its
+carrier list stays empty. The three output files are then one document
+with ~kind~ set to ~cve~, and ~results~ contains one reach document per
+package. The summary line includes the closure counts ~changed~,
+~must-rebuild~, ~review~, and ~no-rebuild~.
 
 ~--generation~ is the toolchain generation, for example ~2026.1~ or
 ~2025a~. A recipe is in that generation when its toolchain version is

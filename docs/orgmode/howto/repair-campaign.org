@@ -11,14 +11,30 @@ the same state file through every retry.
 Start with a compact view, then read the complete finding before changing a
 recipe or target:
 
+The bundle is the one [[file:new-package.org][Author a new package]] writes at
+~/tmp/eb-stack/bundles/eon~. The target below names an EasyBuild program
+that is not on ~PATH~, so the attempt fails at once and the finding id
+is ~attempt:1:finding:1~.
+
 #+begin_src bash
-eb-stack campaign status --state CAMPAIGN.json |
+eb-stack campaign run \
+  --bundle /tmp/eb-stack/bundles/eon \
+  --config examples/targets/missing-easybuild.toml \
+  --target missing-eb \
+  --state /tmp/eb-stack/bundles/eon-repair.campaign.json
+
+eb-stack campaign status --state /tmp/eb-stack/bundles/eon-repair.campaign.json |
   jq '{status, attempts, claims, current_recipe,
        active_findings: [.findings[] |
          select(.status == "open" or .status == "in-progress") |
          {id, class, disposition, stage, recipe, summary, owner,
           command, exit_code, evidence}]}'
 #+end_src
+
+~campaign run~ exits 1 and prints ~campaign build failed with typed findings~.
+The status document has ~status = failed~, ~resolves = true~, ~builds = false~,
+and one open finding of class ~runtime~. The evidence names
+~/definitely/missing/eb-stack-easybuild~.
 
 The three claims are independent. A failed build can retain ~resolves: true~
 while ~builds~ and ~binary_verified~ remain false. Resolving a finding records
@@ -31,15 +47,31 @@ before diagnosing a product failure on a target whose configuration changed:
 
 #+begin_src bash
 eb-stack target doctor \
-  --config BASE.toml \
-  --config SITE.toml \
-  --target NAME
+  --config examples/targets/missing-easybuild.toml \
+  --target missing-eb
 #+end_src
 
-The doctor verifies each configured routing layer and EasyBuild availability.
-It does not build the recipe. Compare its routed runtime command with the
-failed finding, including image, mounts, working directory, environment, robot
-roots, durable build path, and temporary path.
+Doctor exits 1. stderr is:
+
+#+begin_example
+error: target missing-eb doctor failed
+#+end_example
+
+Stdout is the check JSON. The easybuild check fails, and its ~stderr~
+field is:
+
+#+begin_example
+"stderr": "spawn target command /definitely/missing/eb-stack-easybuild: No such file or directory (os error 2)"
+#+end_example
+
+It does not build the recipe. Compare that program with the failed
+finding. A healthy local target is:
+
+#+begin_src bash
+eb-stack target doctor \
+  --config examples/targets/local-podman.toml \
+  --target local-rocky9
+#+end_src
 
 Container build and install roots belong to one runtime ABI. Keep Cargo and
 other package-manager build directories outside bind-mounted personal
@@ -54,8 +86,8 @@ different repairs to the same evidence:
 
 #+begin_src bash
 eb-stack campaign finding claim \
-  --state CAMPAIGN.json \
-  --id attempt:2:finding:1 \
+  --state /tmp/eb-stack/bundles/eon-repair.campaign.json \
+  --id attempt:1:finding:1 \
   --owner hermes
 #+end_src
 
@@ -95,12 +127,13 @@ the selected dependency identity as the cause.
 For recipe changes, run the nearest mechanical checks before the campaign:
 
 #+begin_src bash
-eb-stack recipe format BUNDLE/easyconfigs/l/Leaf/Leaf-1.2.3-foss-2026.1.eb
-eb-stack recipe lint BUNDLE/easyconfigs/l/Leaf/Leaf-1.2.3-foss-2026.1.eb
+eb-stack recipe format /tmp/eb-stack/bundles/eon/easyconfigs/e/eOn/*.eb
+eb-stack recipe lint /tmp/eb-stack/bundles/eon/easyconfigs/e/eOn/*.eb
 eb-stack recipe check \
-  --recipe BUNDLE/easyconfigs/l/Leaf/Leaf-1.2.3-foss-2026.1.eb \
-  --easyconfigs /path/to/upstream/easyconfigs \
-  --easyconfigs BUNDLE/easyconfigs
+  --recipe /tmp/eb-stack/bundles/eon/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb \
+  --easyconfigs /tmp/src/easybuild-easyconfigs/easybuild/easyconfigs \
+  --easyconfigs fixtures/eon_core_rgpot/easyconfigs \
+  --easyconfigs /tmp/eb-stack/bundles/eon/easyconfigs
 #+end_src
 
 Checksum lists are positional: every source first, then every patch. A missing
@@ -119,17 +152,16 @@ every changed artifact:
 
 #+begin_src bash
 eb-stack campaign finding resolve \
-  --state CAMPAIGN.json \
-  --id attempt:2:finding:1 \
+  --state /tmp/eb-stack/bundles/eon-repair.campaign.json \
+  --id attempt:1:finding:1 \
   --owner hermes \
-  --action "isolated the target build root from host tool configuration" \
-  --evidence "target doctor passes with the neutral container work path" \
-  --change ~/.config/eb-stack/site.toml
+  --action "point the EasyBuild command at the program the target image provides" \
+  --evidence "target doctor easybuild check names the missing program" \
+  --change examples/targets/local-podman.toml
 #+end_src
 
-The resolution is an audit record. Keep precise target paths in private state
-or a private site layer; public examples should use portable placeholder paths
-and contain no credentials.
+The resolution is an audit record. The finding status becomes ~resolved~
+and the owner stays ~hermes~.
 
 * Retry the same state
 
@@ -137,11 +169,10 @@ Run the original bundle and target with the same state path:
 
 #+begin_src bash
 eb-stack campaign run \
-  --bundle BUNDLE \
-  --config BASE.toml \
-  --config SITE.toml \
-  --target NAME \
-  --state CAMPAIGN.json
+  --bundle /tmp/eb-stack/bundles/eon \
+  --config examples/targets/local-podman.toml \
+  --target local-rocky9 \
+  --state /tmp/eb-stack/bundles/eon-repair.campaign.json
 #+end_src
 
 The command stays in the foreground. Run it under the site's terminal or

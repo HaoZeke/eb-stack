@@ -73,6 +73,12 @@ All notable changes to this project are documented here.
   reaches an easyblock that imports `tools/filetools.py` when that module
   imports `tools/run.py`. An easyblock that only imports another easyblock
   is not reached that way.
+- The tutorial and how-tos run from this checkout. Upstream EasyBuild
+  trees come from `scripts/fetch-upstream-trees.sh`. `pr-overlap`,
+  `component-reach`, `rebuild-set`, the GROMACS bump, the easystack
+  diff, and the Spack externals script use files in this checkout. A
+  missing EasyBuild program is `examples/targets/missing-easybuild.toml`;
+  claiming its finding is the repair how-to.
 - `recipe templates --help` says `--export` prints the constant table and
   the derived-key rules, and that `--name` with `--version` prints the
   resolved values. `EB_DEP_EMPTY_VERSION` is an error; the command
@@ -547,6 +553,11 @@ All notable changes to this project are documented here.
   The default test run does not clone or write into the source tree.
 - `scripts/fetch-upstream-trees.sh` exports one name per pinned tree
   and records the EESSI software-layer commit the ignored test reads.
+- The component-reach how-to runs on a recorded slice of pinned
+  easybuild-easyconfigs develop `981d2123`, licence file included.
+  The easyblock-reach how-to uses the same fetch script.
+- The easyconfigs `pr-overlap` example in the CLI reference is a run
+  that writes 8 records, with paths from this checkout.
 
 ## 0.3.0 - 2026-07-21
 

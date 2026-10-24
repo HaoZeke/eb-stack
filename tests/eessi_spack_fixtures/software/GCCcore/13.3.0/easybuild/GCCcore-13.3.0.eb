@@ -1,0 +1,11 @@
+easyblock = 'Toolchain'
+
+name = 'GCCcore'
+version = '13.3.0'
+
+homepage = 'https://gcc.gnu.org/'
+description = """GNU compiler collection."""
+
+toolchain = SYSTEM
+
+moduleclass = 'compiler'

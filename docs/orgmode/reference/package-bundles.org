@@ -248,7 +248,7 @@ eb-stack recipe format BUNDLE/easyconfigs/*/*/*.eb
 eb-stack recipe lint BUNDLE/easyconfigs/*/*/*.eb
 eb-stack recipe check \
   --recipe BUNDLE/easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1.eb \
-  --easyconfigs /path/to/upstream/easyconfigs \
+  --easyconfigs tests/repro_fixtures/universe_foss_2024a \
   --easyconfigs BUNDLE/easyconfigs
 #+end_src
 
@@ -261,7 +261,7 @@ name, and with it the sanity check, follows from that value. That logic
 belongs in a software-specific easyblock, ~EB_SeisSol~, not in a hardcoded
 configure flag or a site hook.
 
-A package layer ships such an easyblock beside its easyconfigs:
+A package layer keeps such an easyblock beside its easyconfigs:
 
 #+begin_src toml
 [build]
@@ -328,7 +328,7 @@ eb-stack package plan --emit-easyblock \
   --source fixtures/foreign_ingest/spack_qmcpack/package.py \
   --package-config examples/packages/qmcpack.toml \
   --toolchain-version 2026.1 \
-  --easyconfigs /path/to/upstream/easyconfigs \
+  --easyconfigs tests/repro_fixtures/universe_foss_2024a \
   --stack-policy policy.toml \
   --out-dir BUNDLE
 #+end_src
@@ -356,7 +356,7 @@ every profile stay in the easyconfig. The recipes keep their test and sanity
 parameters, so the skeleton and the recipes agree until a human moves them.
 
 The module is a starting point. Its docstring says so, it has not been built,
-and a human completes and reviews it before it ships. The rendered text
+and a human completes and reviews it before release. The rendered text
 parses with the same reader that checks shipped modules, keeps lines within
 120 characters, and carries the EasyBuild copyright header.
 ~examples/packages/easyblocks/qmcpack.py~ shows a finished easyblock of this

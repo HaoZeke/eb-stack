@@ -75,7 +75,7 @@ eb-stack package plan \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
   [--package-config PACKAGE.toml]... \
-  [--source-checksum SHA256]... \
+  [--source-checksum DIGEST]... \
   [--package-index FILE] \
   --easyconfigs UPSTREAM \
   [--easyconfigs OVERLAY]... \
@@ -122,7 +122,7 @@ inputs close the hole without inventing versions:
 - ~--package-catalog~ layers explicit foreign or ~easybuild-bump~ providers as
   ordered overrides.
 - ~--emit-easyblock~ renders an easyblock skeleton for the package into
-  ~easyblocks/<letter>/<module>.py~, ships it with the recipes, names the
+  ~easyblocks/<letter>/<module>.py~, writes it next to the recipes, names the
   derived class as the easyblock and moves the variant options out of the
   emitted recipes. Without it a package that owes an easyblock gets a
   ~missing-easyblock~ residual. It does not combine with closure planning.
@@ -157,7 +157,7 @@ eb-stack package bump \
   --toolchain-name foss \
   --toolchain-version 2024a \
   [--version VERSION] \
-  [--source-checksum SHA256] \
+  [--source-checksum DIGEST] \
   [--dep NAME=VERSION]... \
   --easyconfigs UPSTREAM \
   [--easyconfigs OVERLAY]... \
@@ -513,20 +513,30 @@ record. ~--repo-url~ defaults to
 ~https://github.com/EESSI/software-layer~ for ~software-layer~ and to
 ~https://github.com/easybuilders/easybuild-easyconfigs~ for ~easyconfigs~.
 
-This easyconfigs command was run on the fixture tree. It wrote 6 records
-and exited 0:
+~--open OWNER/NAME~ reads the open pull requests of that repository over
+HTTPS and adds them to any ~--pr~ files. It requires ~--kind easyconfigs~.
+The repository has to be ~owner/name~. ~--base-ref~ is the git ref for the
+base text of each changed file and defaults to ~develop~. A name such as
+~release/2026.1~ is accepted. A repository or ref that fails those checks
+is an error before a request is sent and before the output directory is
+written. A failure of the request itself is reported after the request is
+sent and still writes nothing.
+
+This easyconfigs command was run on the fixture tree. It wrote 8 records
+and exited 0. The summary line was
+~prs=8 records=8 shared_modules=2 skipped_easyconfigs=0~.
 
 #+begin_src bash
-/workspace/target/debug/eb-stack pr-overlap \
+eb-stack pr-overlap \
   --kind easyconfigs \
-  --pr /tmp/ec-fixture-prs.json \
-  --easyconfigs /workspace/tests/pr_overlap_easyconfigs_fixtures \
+  --pr tests/pr_overlap_easyconfigs_fixtures/prs.json \
+  --easyconfigs tests/pr_overlap_easyconfigs_fixtures \
   --generated-at 2026-10-22T00:00:00Z \
   --repo-url https://github.com/easybuilders/easybuild-easyconfigs \
-  --out-dir /tmp/ec-fixture-out
+  --out-dir /tmp/ec-overlap
 #+end_src
 
-The JSON is the 6 pull requests built by
+The JSON is the 8 pull requests built by
 ~tests/pr_overlap_easyconfigs.rs~.
 
 The output directory holds ~prs/<N>.toml~, ~overlap.toml~, and ~overlap.md~.
@@ -645,11 +655,20 @@ the rebuild closure. See
 
 Pass ~--component~ and ~--version~, or ~--purl~, or ~--cve~. ~--version~
 is an exact version, ~*~, or a requirement such as ~>=8,<9~. With
-~--purl~ it replaces the version in the URL. ~--cve~ resolves the id
-through OSV, follows GHSA, RUSTSEC, PYSEC, and GO aliases when the CVE
-record has only a git range, and keeps named version tags such as
-~libXpm-3.5.17~. Several affected packages are written as one document
-with ~kind~ ~cve~.
+~--purl~ it replaces the version in the URL. The purl type selects the
+carriers. ~generic~ and ~github~ match the easyconfig name. ~pypi~,
+~cargo~, ~npm~, ~golang~, and ~cran~ match an extension or a bundled
+component of that language, plus a crate for ~cargo~ and a wheel for
+~pypi~. Another type exits 2: the error says that purl type has no
+carrier model. ~pkg:cargo/curl~ does not match the cURL recipe.
+~--cve~ resolves the id through Open Source Vulnerabilities (OSV), follows GitHub Security Advisory (GHSA), RUSTSEC, PYSEC, and
+GO aliases when the Common Vulnerabilities and Exposures (CVE) record has only a git range, and keeps named
+version tags such as ~libXpm-3.5.17~. A range that is not SEMVER or
+ECOSYSTEM, or an event that does not parse, is reported under
+Unresolved ranges. A package whose ranges were all unparsed counts as
+review. Several affected packages are written as one document with
+~kind~ ~cve~. The summary line includes ~changed~, ~must-rebuild~,
+~review~, and ~no-rebuild~.
 
 Names match with ASCII case folded, on a whole token. A recipe is in the
 generation when its toolchain version equals ~--generation~, or when the
@@ -688,9 +707,9 @@ and ~component-reach.md~. The TOML file starts with
 * Target commands
 
 #+begin_src bash
-eb-stack target list --config BASE.toml [--config SITE.toml]...
+eb-stack target list --config examples/targets/base.toml --config examples/targets/site.example.toml
 eb-stack target doctor \
-  --config BASE.toml [--config SITE.toml]... \
+  --config examples/targets/base.toml --config examples/targets/site.example.toml \
   --target NAME
 #+end_src
 
@@ -713,17 +732,17 @@ replacement semantics, ABI isolation, and the runnable local Podman target.
 #+begin_src bash
 eb-stack campaign run \
   --bundle BUNDLE \
-  --config BASE.toml [--config SITE.toml]... \
+  --config examples/targets/base.toml --config examples/targets/site.example.toml \
   --target NAME \
-  --state CAMPAIGN.json
+  --state /tmp/campaign.json
 
-eb-stack campaign status --state CAMPAIGN.json
+eb-stack campaign status --state /tmp/campaign.json
 
 eb-stack campaign finding claim \
-  --state CAMPAIGN.json --id FINDING --owner WORKER
+  --state /tmp/campaign.json --id FINDING --owner WORKER
 
 eb-stack campaign finding resolve \
-  --state CAMPAIGN.json --id FINDING --owner WORKER \
+  --state /tmp/campaign.json --id FINDING --owner WORKER \
   --action TEXT --evidence TEXT [--change PATH]...
 #+end_src
 

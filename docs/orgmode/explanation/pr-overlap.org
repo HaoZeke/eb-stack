@@ -105,7 +105,7 @@ END 1759 Mon Oct 19 14:08:17 UTC 2026 lines 50
 
 The command:
 
-#+begin_src bash
+#+begin_src text
 eb --easystack /tmp/easystacks-fix/1759.yml --robot --dry-run \
   --installpath /tmp/eb-empty-fix-1759 \
   --robot-paths /cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/amd/zen4/software/EasyBuild/5.4.0/easybuild/easyconfigs: \

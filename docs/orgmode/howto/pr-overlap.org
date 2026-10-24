@@ -8,15 +8,58 @@ open pull request would build.
 The inputs are the pull requests' easystack files, the release easyconfigs,
 and a list of installed modules. Nothing from a pull request is executed.
 
+* Run it on the fixture
+
+~tests/pr_overlap_fixtures/prs.json~ is pull requests 11 and 13 adding
+~freetype~, and pull request 12 adding ~Graphviz~, on the 2026.06
+easystack. The release tree and the installed list sit next to that file.
+
+#+begin_src bash
+eb-stack pr-overlap --pr tests/pr_overlap_fixtures/prs.json \
+  --easyconfigs tests/pr_overlap_fixtures/release \
+  --installed tests/pr_overlap_fixtures/installed.txt \
+  --installed-label x86_64/amd/zen4 \
+  --generated-at 2026-10-22T00:00:00Z \
+  --merge-order --merged 11 \
+  --out-dir /tmp/pr-overlap-out
+#+end_src
+
+The command prints ~prs=3 records=3 shared_modules=2~.
+~--merge-order~ writes ~/tmp/pr-overlap-out/merge-order.toml~. Position 1
+is pull request 13, which builds nothing once 11 has merged, and position
+2 is pull request 12, which still builds Graphviz.
+
+~fetch-prs.sh~ lives in this repository at
+~examples/eessi-pr-overlap/fetch-prs.sh~. It writes one JSON file per open
+pull request. Pass those files as repeated ~--pr~ arguments, and pass
+~--commit-tree NAME=DIR~ and ~--easyblocks-commit NAME=DIR~ for each
+directory it wrote. ~--easyconfigs~ is the easyconfigs tree that comes
+with the EasyBuild version the easystack names. ~--installed-modulerc~
+is that prefix's ~modules/all~. ~--filter-deps~ drops dependencies the
+way EasyBuild does; when the flag is omitted and ~EASYBUILD_FILTER_DEPS~
+is set, the command reads the variable.
+
+For a ~from-commit~ pin, ~--commit-tree~ is the whole easyconfigs tree at
+that commit. ~--easyblocks~ is the EasyBuild release's
+~easybuild/easyblocks~ package. ~--easyblocks-commit~ is the files one
+~include-easyblocks-from-commit~ touches.
+
+For another architecture, pass that architecture's installed list and
+~--include-path~ for its substring. Do not also exclude the same
+substring. ~--installed-label~ is the string recorded on the report.
+
 * Run it on a mounted stack
 
 From a clone of ~EESSI/software-layer~, with ~gh~ authenticated for public
 reads. ~EB_EASYCONFIGS~ and ~EB_EASYBLOCKS~ come from
-~scripts/fetch-upstream-trees.sh~:
+~scripts/fetch-upstream-trees.sh~. ~examples/eessi-pr-overlap/fetch-prs.sh~
+writes one JSON file per open pull request.
 
 #+begin_src bash
-source /cvmfs/software.eessi.io/versions/2026.06/init/lmod/bash
-module load EESSI-extend
+scripts/fetch-upstream-trees.sh
+set -a
+source "${EB_UPSTREAM_CACHE:-$HOME/.cache/eb-stack/upstream}/env.sh"
+set +a
 examples/eessi-pr-overlap/fetch-prs.sh EESSI/software-layer 2026.06 in/
 find "$EESSI_SOFTWARE_PATH/software" -mindepth 2 -maxdepth 2 -type d -printf '%P\n' \
   | sort > installed.txt
@@ -29,43 +72,9 @@ eb-stack pr-overlap --pr in/prs/*.json \
   --installed-modulerc "$EESSI_SOFTWARE_PATH/modules/all" \
   --filter-deps "$EASYBUILD_FILTER_DEPS" \
   --installed-label x86_64/amd/zen4 \
-  --exclude-path /accel/ --exclude-path /additional_arch/ \
-  --out-dir out/
+  --generated-at 2026-10-22T00:00:00Z \
+  --out-dir /tmp/pr-overlap-out
 #+end_src
-
-~fetch-prs.sh~ lives in this repository at
-~examples/eessi-pr-overlap/fetch-prs.sh~. ~--easyconfigs~ is the easyconfigs
-tree that comes with the EasyBuild version the easystack names. For a
-~from-commit~ pin, ~--commit-tree~ is the whole easyconfigs tree at that
-commit. ~module load EESSI-extend~ exports ~EASYBUILD_FILTER_DEPS~ for the
-loaded CPU target. Pass that value to ~--filter-deps~. When the flag is
-omitted and the variable is set, the command reads the variable.
-~--installed-modulerc~ is that prefix's ~modules/all~. ~--easyblocks~ is the
-EasyBuild release's ~easybuild/easyblocks~ package. ~--easyblocks-commit~ is
-the files one ~include-easyblocks-from-commit~ touches, which ~fetch-prs.sh~
-writes under ~in/easyblocks/<commit>/~.
-
-For an architecture the zen4 run excluded, keep that substring and use
-that architecture's installed list. Do not also exclude
-the same substring:
-
-#+begin_src bash
-eb-stack pr-overlap --pr in/prs/*.json \
-  $(for d in in/commit-trees/*/; do printf -- '--commit-tree %s=%s ' "$(basename "$d")" "$d"; done) \
-  $(for d in in/easyblocks/*/; do printf -- '--easyblocks-commit %s=%s ' "$(basename "$d")" "$d"; done) \
-  --easyconfigs "$EB_EASYCONFIGS" \
-  --easyblocks "$EB_EASYBLOCKS" \
-  --installed installed-riscv.txt \
-  --installed-modulerc /path/to/riscv64/modules/all \
-  --filter-deps "$EASYBUILD_FILTER_DEPS" \
-  --installed-label riscv64/generic \
-  --include-path /additional_arch/riscv64/ \
-  --exclude-path /accel/ \
-  --out-dir out-riscv/
-#+end_src
-
-Load ~EESSI-extend~ on that architecture before reading
-~EASYBUILD_FILTER_DEPS~. The list belongs to the loaded target.
 
 * Read which modules are shared
 
@@ -73,10 +82,12 @@ Load ~EESSI-extend~ on that architecture before reading
 Duplicates across those lines are the overlap:
 
 #+begin_src bash
-awk '/^to_build = \[\]/{next} /^to_build = \[/{f=1; next} f && /^\]/{f=0; next} f' out/prs/*.toml | sort | uniq -d
+awk '/^to_build = \[\]/{next} /^to_build = \[/{f=1; next} f && /^\]/{f=0; next} f' /tmp/pr-overlap-out/prs/*.toml | sort | uniq -d
 #+end_src
 
-~out/overlap.md~ is the same answer as a table. ~out/overlap.toml~ is the
+The shared lines from that fixture are ~freetype/2.14.1-GCCcore-15.2.0~
+and ~libpng/1.6.50-GCCcore-15.2.0~. ~/tmp/pr-overlap-out/overlap.md~ is
+the same answer as a table. ~/tmp/pr-overlap-out/overlap.toml~ is the
 index. Closed pull requests have no file: each run rewrites ~prs/~ to the
 open set.
 
@@ -120,38 +131,32 @@ requests 11 and 13 adding ~freetype-2.14.1-GCCcore-15.2.0.eb~, and pull
 request 12 adding ~Graphviz-14.0.2-GCCcore-15.2.0.eb~, on the 2026.06
 easystack from the fixture test.
 
-#+begin_src bash
-eb-stack pr-overlap --pr prs.json \
-  --easyconfigs tests/pr_overlap_fixtures/release \
-  --installed tests/pr_overlap_fixtures/installed.txt \
-  --installed-label x86_64/amd/zen4 \
-  --generated-at 2026-10-22T00:00:00Z \
-  --merge-order --merged 11 \
-  --out-dir out
-#+end_src
-
-Position 1 in that run is pull request 13, which builds nothing once 11
-has merged, and position 2 is pull request 12, which still builds Graphviz.
+The merge-order command is the one in [[*Run it on the fixture][Run it on the fixture]].
 The rule is in [[file:../explanation/pr-overlap.org][Merge order and knock-on]].
 
 * For easybuild-easyconfigs pull requests
 
-4 easyconfigs in ~tests/pr_overlap_easyconfigs_fixtures/~ and 6 pull
-requests cover a shared file, a shared module, and a dependency. The test
+4 easyconfigs in ~tests/pr_overlap_easyconfigs_fixtures/~ and 8 pull
+requests cover a shared file, a shared module, and a dependency. Pull
+request 7 adds ~Need~. Pull request 8 adds ~User~, which depends on
+~Need~, so the report records that dependency. The test
 ~tests/pr_overlap_easyconfigs.rs~ runs this command, which exited 0:
 
 #+begin_src bash
-/workspace/target/debug/eb-stack pr-overlap \
+eb-stack pr-overlap \
   --kind easyconfigs \
-  --pr /tmp/ec-fixture-prs.json \
-  --easyconfigs /workspace/tests/pr_overlap_easyconfigs_fixtures \
+  --pr tests/pr_overlap_easyconfigs_fixtures/prs.json \
+  --easyconfigs tests/pr_overlap_easyconfigs_fixtures \
   --generated-at 2026-10-22T00:00:00Z \
   --repo-url https://github.com/easybuilders/easybuild-easyconfigs \
   --out-dir /tmp/ec-fixture-out
 #+end_src
 
+The command prints ~prs=8 records=8 shared_modules=2~. The files under
+~/tmp/ec-fixture-out~ match ~tests/pr_overlap_easyconfigs_fixtures/expected/~.
+
 ~--installed~ is omitted, so ~to_build~ equals ~new_modules~. The JSON is
-the 6 pull requests the test builds. ~--repo-url~ links each pull request
+the 8 pull requests the test builds. ~--repo-url~ links each pull request
 number in ~overlap.md~.
 
 ~examples/easyconfigs-pr-overlap/fetch-prs.sh~ lists open pull requests

@@ -2,10 +2,11 @@
 #+OPTIONS: toc:t num:nil
 
 Turn a PyPI package or ~requirements.txt~ into an easyconfig that installs
-on top of EESSI. Inspect records ~easyblock = PythonBundle~, because ingest
-does not yet know whether the package brings extensions. A plan of one
-package emits ~PythonPackage~ with its own sources. Requirements the robot
-already ships become dependencies on the providing bundle (~soupsieve~ via
+on top of an EasyBuild robot. Inspect records ~easyblock = PythonBundle~,
+because ingest does not yet know whether the package brings extensions.
+A plan of one package emits ~PythonPackage~ with its own sources and does
+not write ~exts_list~. Requirements the robot already provides become
+dependencies on the providing bundle (~soupsieve~ via
 ~Python-bundle-PyPI~, ~numpy~ via ~SciPy-bundle~). A plan that still has
 leftovers emits a ~PythonBundle~ and keeps only those leftovers in
 ~exts_list~.
@@ -18,8 +19,8 @@ toolchain-built extensions and has no claim on the EESSI compat layer.
 1. Warehouse-shaped JSON (~info~ + ~urls~) or a ~requirements.txt~;
 2. the EESSI robot tree (or a fixture that mirrors its provides);
 3. a stack policy that *locks* ~Python~, ~SciPy-bundle~, and
-   ~Python-bundle-PyPI~ to the versions that EESSI version actually
-   ships. See ~examples/stacks/eessi-python-extras.toml~.
+   ~Python-bundle-PyPI~ to the versions in the robot.
+   See ~examples/stacks/eessi-python-extras.toml~.
 
 Inspect does not need a robot. Plan does.
 
@@ -51,34 +52,47 @@ eb-stack package plan \
   --format pypi \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  --easyconfigs "$EB_EASYCONFIGS" \
+  --easyconfigs fixtures/foreign_ingest/pypi_bs4/robot \
   --stack-policy examples/stacks/eessi-python-extras.toml \
-  --out-dir /tmp/bs4
+  --out-dir /tmp/eb-stack/bundles/bs4
 #+end_src
 
-Against easybuild-easyconfigs develop ~981d2123dd~ the command prints
-the closure and manifest paths and does not emit a recipe. The manifest
-residual is:
+The lock collapses ~soupsieve~ to ~Python-bundle-PyPI~. The emitted
+recipe is ~PythonPackage~, depends on ~Python 3.13.1~ and
+~Python-bundle-PyPI 2025.04~, and has no ~exts_list~. The checksum is
+the one in the fixture. The plan's ~easyblock~ stays ~PythonBundle~;
+that class is what a multi-package overlay emits. A ~PythonBundle~
+recipe is for a set installed together, not for a single package.
+
+Against easybuild-easyconfigs develop ~981d2123dd~, with ~--easyconfigs "$EB_EASYCONFIGS"~
+after sourcing ~env.sh~, the same package is already
+provided and the command does not emit a recipe. The manifest residual
+is:
 
 #+begin_example
 beautifulsoup4 4.12.3 is already provided by BeautifulSoup 4.14.3 (beautifulsoup4 4.14.3); do not emit a pip overlay
 #+end_example
 
 The evidence path is ~b/BeautifulSoup/BeautifulSoup-4.14.3-GCCcore-15.2.0.eb~.
-The extra-only ~lxml~ requirement stays a parse residual. When the robot
-does not already provide the package, the lock collapses ~soupsieve~
-(when ~Python-bundle-PyPI~ provides it) to that bundle, and the emitted
-recipe is a ~PythonPackage~ depending on ~Python~ and ~Python-bundle-PyPI~
-with no ~exts_list~. The plan's ~easyblock~ stays ~PythonBundle~; that
-class is what a multi-package overlay emits. A ~PythonBundle~ recipe is
-for a set installed together, not for a single package.
+The extra-only ~lxml~ requirement stays a parse residual.
 
-Asking for ~numpy~ (or ~scipy~, or ~torch~ / ~PyTorch~) against a robot
-that already ships the provider produces an empty delta and an
-~already-provided~ residual. The leftover package is the only thing
-emitted: a recipe that *depends* on numpy lists ~SciPy-bundle~, not a
-pip numpy. If the robot has no ~SciPy-bundle~ / ~PyTorch~, the plan
-refuses rather than emitting a ~PythonBundle~ wheel overlay.
+#+begin_src bash
+eb-stack package plan \
+  --source fixtures/foreign_ingest/pypi_numpy/numpy.json \
+  --format pypi \
+  --toolchain-name foss \
+  --toolchain-version 2026.1 \
+  --easyconfigs fixtures/foreign_ingest/pypi_numpy/robot \
+  --stack-policy examples/stacks/eessi-python-extras.toml \
+  --out-dir /tmp/eb-stack/bundles/numpy
+#+end_src
+
+Asking for ~numpy~ against a robot that already provides it writes no
+recipe. ~package.plan.json~ has an ~already-provided~ residual:
+~numpy 2.5.2 is already provided by SciPy-bundle 2025.06 (numpy 2.3.1)~.
+A recipe that depends on numpy lists ~SciPy-bundle~, not a pip numpy.
+If the robot has no ~SciPy-bundle~ / ~PyTorch~, the plan refuses rather
+than emitting a wheel overlay.
 
 A leftover that is not in EasyBuild yet (~eon-akmc~) keeps unsatisfied
 PyPI run dependencies in the same ~exts_list~. numpy still maps to
@@ -124,23 +138,33 @@ that names a range rather than a version supplies nothing, since a range is not
 a version. The same flag takes a CRAN ~PACKAGES~ file for the R side; the
 format is detected from the content.
 
-* Install with the eessi-extend target
+* Install with the local target
 
-Plan on the host. Install through ~campaign run~ and
-~examples/targets/eessi-extend.toml~ (or a site layer that sets
-~EESSI_SITE_INSTALL=1~):
+Plan on the host. Install through ~campaign run~:
 
 #+begin_src bash
+scripts/fetch-upstream-trees.sh
+set -a
+source "${EB_UPSTREAM_CACHE:-$HOME/.cache/eb-stack/upstream}/env.sh"
+set +a
+mkdir -p /tmp/eb-stack/robot /tmp/eb-stack/bundles
+rsync -a "$EB_EASYCONFIGS"/ \
+  /tmp/eb-stack/robot/
+
+podman build -t eb-stack-rocky9 \
+  -f skills/new-package/container/rocky9/Containerfile \
+  skills/new-package/container/rocky9
+
 eb-stack campaign run \
-  --bundle /tmp/bs4 \
-  --config examples/targets/eessi-extend.toml \
-  --target eessi-extend-user \
-  --state /tmp/bs4.campaign.json
+  --bundle /tmp/eb-stack/bundles/bs4 \
+  --config examples/targets/local-podman.toml \
+  --target local-rocky9 \
+  --state /tmp/eb-stack/bundles/bs4.campaign.json
 #+end_src
 
-The runtime is ~eessi_container.sh~, not the host CVMFS client. The
-wrapper ~scripts/eessi-extend-eb.sh~ loads ~EESSI-extend~ and execs
-~eb~. That claim is ~eessi-verified~.
+~examples/targets/eessi-extend.toml~ is the target whose runtime command
+is ~eessi_container.sh~. The local target above is the one this checkout
+runs. ~scripts/eessi-extend-eb.sh~ is the wrapper that target execs.
 
 User one-offs stay as ~python -m venv --system-site-packages~ on EESSI
 Python. This workflow is for a shared site or project extra.

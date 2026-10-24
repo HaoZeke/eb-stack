@@ -243,6 +243,9 @@ scripts/fetch-upstream-trees.sh
 set -a
 source "${EB_UPSTREAM_CACHE:-$HOME/.cache/eb-stack/upstream}/env.sh"
 set +a
+mkdir -p /tmp/eb-stack/robot /tmp/eb-stack/overlay /tmp/eb-stack/bundles
+rsync -a "$EB_EASYCONFIGS"/ /tmp/eb-stack/robot/
+rsync -a fixtures/eon_core_rgpot/easyconfigs/ /tmp/eb-stack/overlay/
 
 eb-stack package plan \
   --source fixtures/foreign_ingest/conda_eon/recipe.yaml \
@@ -254,20 +257,20 @@ eb-stack package plan \
   --easyconfigs "$EB_EASYCONFIGS" \
   --easyconfigs fixtures/eon_core_rgpot/easyconfigs \
   --stack-policy examples/stacks/eon-foss-2026.1.toml \
-  --out-dir /tmp/eon
+  --out-dir /tmp/eb-stack/bundles/eon
 #+end_src
 
 Against easybuild-easyconfigs develop ~981d2123dd~ that prints:
 
 #+begin_example
-closure_plan=/tmp/eon/closure.plan.json
-closure_sbom=/tmp/eon/closure.sbom.cdx.json
-build_order=/tmp/eon/build-order.json
-manifest=/tmp/eon/package.plan.json
-sbom=/tmp/eon/package.sbom.cdx.json
-lock=/tmp/eon/locks/default.lock.json
-easyconfig=/tmp/eon/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb
-patch=/tmp/eon/easyconfigs/e/eOn/eOn-2.16.0_safemath-eigen5-core-guard.patch
+closure_plan=/tmp/eb-stack/bundles/eon/closure.plan.json
+closure_sbom=/tmp/eb-stack/bundles/eon/closure.sbom.cdx.json
+build_order=/tmp/eb-stack/bundles/eon/build-order.json
+manifest=/tmp/eb-stack/bundles/eon/package.plan.json
+sbom=/tmp/eb-stack/bundles/eon/package.sbom.cdx.json
+lock=/tmp/eb-stack/bundles/eon/locks/default.lock.json
+easyconfig=/tmp/eb-stack/bundles/eon/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb
+patch=/tmp/eb-stack/bundles/eon/easyconfigs/e/eOn/eOn-2.16.0_safemath-eigen5-core-guard.patch
 #+end_example
 
 The command must produce a manifest, SBOM, one lock per requested profile,
@@ -277,13 +280,13 @@ Run ~recipe format~, ~recipe lint~, and ~recipe check~
 against the upstream tree plus the bundle overlay.
 
 #+begin_src bash
-eb-stack recipe format /tmp/eon/easyconfigs/e/eOn/*.eb
-eb-stack recipe lint /tmp/eon/easyconfigs/e/eOn/*.eb
+eb-stack recipe format /tmp/eb-stack/bundles/eon/easyconfigs/e/eOn/*.eb
+eb-stack recipe lint /tmp/eb-stack/bundles/eon/easyconfigs/e/eOn/*.eb
 eb-stack recipe check \
-  --recipe /tmp/eon/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb \
+  --recipe /tmp/eb-stack/bundles/eon/easyconfigs/e/eOn/eOn-2.16.0-foss-2026.1.eb \
   --easyconfigs "$EB_EASYCONFIGS" \
   --easyconfigs fixtures/eon_core_rgpot/easyconfigs \
-  --easyconfigs /tmp/eon/easyconfigs
+  --easyconfigs /tmp/eb-stack/bundles/eon/easyconfigs
 #+end_src
 
 ~recipe format~ prints ~rewritten=0 remaining=0~. ~recipe lint~ reports
@@ -302,15 +305,17 @@ committed per-package catalog entry:
 
 #+begin_src bash
 eb-stack package plan \
-  --source path/to/root-recipe.yaml \
+  --source fixtures/foreign_ingest/conda_eon/recipe.yaml \
   --format conda-forge \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  --source-checksum SHA256 \
+  --package-config examples/packages/common.toml \
+  --package-config examples/packages/eon.toml \
   --easyconfigs "$EB_EASYCONFIGS" \
-  --stack-policy stacks/site.toml \
-  --package-sources examples/package-sources/local-roots.toml \
-  --out-dir work/closed-root
+  --easyconfigs fixtures/eon_core_rgpot/easyconfigs \
+  --stack-policy examples/stacks/eon-foss-2026.1.toml \
+  --package-sources examples/package-sources/eon-companions.toml \
+  --out-dir /tmp/eb-stack/bundles/eon-sources
 #+end_src
 
 Or pass roots directly with ~--easybuild-source~, ~--conda-source~,
@@ -336,15 +341,17 @@ before source-root discovery.
 
 #+begin_src bash
 eb-stack package plan \
-  --source path/to/root-recipe.yaml \
+  --source fixtures/foreign_ingest/conda_eon/recipe.yaml \
   --format conda-forge \
   --toolchain-name foss \
   --toolchain-version 2026.1 \
-  --source-checksum SHA256 \
+  --package-config examples/packages/common.toml \
+  --package-config examples/packages/eon.toml \
   --easyconfigs "$EB_EASYCONFIGS" \
-  --stack-policy stacks/site.toml \
-  --package-catalog examples/package-catalog/mixed-providers.toml \
-  --out-dir work/closed-root
+  --easyconfigs fixtures/eon_core_rgpot/easyconfigs \
+  --stack-policy examples/stacks/eon-foss-2026.1.toml \
+  --package-catalog examples/package-catalog/eon.toml \
+  --out-dir /tmp/eb-stack/bundles/eon-catalog
 #+end_src
 
 Each catalog entry maps an EasyBuild provider identity to authoring inputs.
@@ -361,25 +368,27 @@ provider matching, and at most one ~source_checksums~ entry has annual-bump
 semantics. Foreign-only fields (~format~, ~package_config~, non-default
 ~profile~, multiple checksums) are typed catalog errors.
 
-Companions land under ~packages/<name>-<version>-<toolchain>/~, share one
+Companions are written under ~packages/<name>-<version>-<toolchain>/~, share one
 ~easyconfigs/~ overlay with the root, appear in topological ~build-order.json~,
 and contribute to ~closure.sbom.cdx.json~. A bumped companion whose own
 dependency is another catalog hole builds after that child and before its
-consumer. See ~examples/package-catalog/mixed-providers.toml~.
+consumer. See ~examples/package-catalog/eon.toml~.
 
 * Route the build
 
 Keep reusable topology in a public base file and site details in a later layer:
 
 #+begin_src bash
+podman build -t eb-stack-rocky9 \
+  -f skills/new-package/container/rocky9/Containerfile \
+  skills/new-package/container/rocky9
+
 eb-stack target list \
-  --config examples/targets/base.toml \
-  --config ~/.config/eb-stack/site.toml
+  --config examples/targets/local-podman.toml
 
 eb-stack target doctor \
-  --config examples/targets/base.toml \
-  --config ~/.config/eb-stack/site.toml \
-  --target site-builder
+  --config examples/targets/local-podman.toml \
+  --target local-rocky9
 #+end_src
 
 The selected target decides transport, executor, runtime, and EasyBuild
@@ -393,11 +402,10 @@ host-linked modules cannot leak into a container build. A shared
 
 #+begin_src bash
 eb-stack campaign run \
-  --bundle /tmp/eon \
-  --config examples/targets/base.toml \
-  --config ~/.config/eb-stack/site.toml \
-  --target site-builder \
-  --state /tmp/eon.campaign.json
+  --bundle /tmp/eb-stack/bundles/eon \
+  --config examples/targets/local-podman.toml \
+  --target local-rocky9 \
+  --state /tmp/eb-stack/bundles/eon.campaign.json
 #+end_src
 
 Hermes owns the campaign loop. OMP workers claim typed findings, repair the

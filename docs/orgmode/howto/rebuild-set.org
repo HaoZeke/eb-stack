@@ -7,6 +7,28 @@ link the patched package as a shared library. The set is the rebuild
 closure: every installed module that depends on the patched one within
 its toolchain generation, and no module from another generation.
 
+* Run it on the fixture
+
+#+begin_src bash
+eb-stack rebuild-set \
+  --changed tests/rebuild_set_fixtures/changed.txt \
+  --easystack tests/rebuild_set_fixtures/eessi-2026.06-eb-5.4.0-2026.1.yml \
+  --easystack tests/rebuild_set_fixtures/20261001-eb-5.4.1-zlib.yml \
+  --easyconfigs tests/rebuild_set_fixtures/release \
+  --easyblocks tests/rebuild_set_fixtures/easyblocks \
+  --installed tests/rebuild_set_fixtures/installed.txt \
+  --installed-modulerc tests/rebuild_set_fixtures/modules/all \
+  --installed-label x86_64/amd/zen4 \
+  --generated-at 2026-10-22T12:00:00Z \
+  --out-dir /tmp/rebuild-out
+#+end_src
+
+The command prints:
+
+#+begin_example
+changed=2 rows=8 must-rebuild=2 review=2 no-rebuild=4 missing=1 easystacks=2 skipped_easyconfigs=0 out=/tmp/rebuild-out
+#+end_example
+
 * Run it on a mounted stack
 
 From a clone of ~EESSI/software-layer~, with the 2026.06 stack mounted.
@@ -14,10 +36,10 @@ From a clone of ~EESSI/software-layer~, with the 2026.06 stack mounted.
 ~scripts/fetch-upstream-trees.sh~:
 
 #+begin_src bash
-source /cvmfs/software.eessi.io/versions/2026.06/init/lmod/bash
-module load EESSI-extend
-find "$EESSI_SOFTWARE_PATH/software" -mindepth 2 -maxdepth 2 -type d -printf '%P\n' \
-  | sort > installed.txt
+scripts/fetch-upstream-trees.sh
+set -a
+source "${EB_UPSTREAM_CACHE:-$HOME/.cache/eb-stack/upstream}/env.sh"
+set +a
 eb-stack rebuild-set \
   --changed changed.txt \
   --easystack easystacks/software.eessi.io/2026.06/*.yml \
@@ -29,10 +51,16 @@ eb-stack rebuild-set \
   --installed-modulerc "$EESSI_SOFTWARE_PATH/modules/all" \
   --filter-deps "$EASYBUILD_FILTER_DEPS" \
   --installed-label x86_64/amd/zen4 \
-  --prefix "$EESSI_SOFTWARE_PATH" \
-  --check-static \
-  --out-dir out/
+  --generated-at 2026-10-22T12:00:00Z \
+  --out-dir /tmp/rebuild-out
 #+end_src
+
+~--commit-tree NAME=DIR~ resolves a ~from-commit~ pin, the same way as
+~pr-overlap~. ~--filter-deps~ drops dependency tuples before the walk.
+When the flag is omitted and ~EASYBUILD_FILTER_DEPS~ is set, the command
+reads the variable. ~--prefix~ is an install prefix: for each patched
+module the command reads ~software/<name>/<version>/lib*/*.a~ there.
+~--check-static~ needs ~--prefix~.
 
 ~--changed~ is an easyconfig filename, repeated, or a file that is not an
 ~.eb~: one filename per line, blank lines and ~#~ comments skipped.
@@ -64,7 +92,7 @@ version named by the easystack filenames. A second run replaces the
 ~rebuilds/*.yml~ files from the previous run.
 
 ~--prefix~ is ~$EESSI_SOFTWARE_PATH~. For each patched module the command
-reads ~software/<name>/<version>/lib*/*.a~. A patched module that ships
+reads ~software/<name>/<version>/lib*/*.a~. A patched module with
 no static archive cannot have been linked statically, so a
 builddependency-only dependent is no-rebuild and the reason is ~no static
 archive installed~. Archives that are installed keep the row in review
@@ -77,8 +105,8 @@ easyconfig that put it there.
 ~--check-static~ needs ~--prefix~. For each remaining review dependent it
 reads defined dynamic symbols, the names ~nm -D --defined-only~ prints,
 from the installed ELF files. The patched library's names come from its
-shared objects, or from the archive members when it ships no shared
-object. A hit is must-rebuild. No hit is no-rebuild. An empty export set
+shared objects, or from the archive members when the install has no
+shared object. A hit is must-rebuild. No hit is no-rebuild. An empty export set
 stays in review, because there was nothing to look for.
 
 The symbol scan can go wrong. It sees dynamic symbols only, so a hidden,

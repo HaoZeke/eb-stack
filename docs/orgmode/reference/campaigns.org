@@ -16,12 +16,12 @@ is finding ownership in the campaign state.
 #+begin_src bash
 eb-stack campaign run \
   --bundle BUNDLE \
-  --config BASE.toml \
-  --config SITE.toml \
+  --config examples/targets/base.toml \
+  --config examples/targets/site.example.toml \
   --target NAME \
-  --state CAMPAIGN.json
+  --state /tmp/campaign.json
 
-eb-stack campaign status --state CAMPAIGN.json
+eb-stack campaign status --state /tmp/campaign.json
 #+end_src
 
 ~campaign run~ is synchronous and stays in the foreground until every recipe
@@ -46,7 +46,7 @@ findings are resolved or superseded. For a compact operator view during a long
 build:
 
 #+begin_src bash
-eb-stack campaign status --state CAMPAIGN.json |
+eb-stack campaign status --state /tmp/campaign.json |
   jq '{status, attempts, claims, current_recipe,
        active_findings: [.findings[] |
          select(.status == "open" or .status == "in-progress") |
@@ -155,7 +155,7 @@ Claim an open finding before changing state shared with another worker:
 
 #+begin_src bash
 eb-stack campaign finding claim \
-  --state CAMPAIGN.json \
+  --state /tmp/campaign.json \
   --id attempt:2:finding:1 \
   --owner omp-worker-1
 #+end_src
@@ -167,12 +167,12 @@ Record the repair and its evidence:
 
 #+begin_src bash
 eb-stack campaign finding resolve \
-  --state CAMPAIGN.json \
+  --state /tmp/campaign.json \
   --id attempt:2:finding:1 \
   --owner omp-worker-1 \
   --action "corrected the container runtime environment" \
   --evidence "target doctor and the isolated command exit successfully" \
-  --change ~/.config/eb-stack/site.toml
+  --change examples/targets/site.example.toml
 #+end_src
 
 Run the campaign again with the same state. A successful retry marks matching

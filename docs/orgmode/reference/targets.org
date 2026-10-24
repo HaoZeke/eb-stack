@@ -21,11 +21,11 @@ unsupported schema versions fail loudly.
 #+begin_src bash
 eb-stack target list \
   --config examples/targets/base.toml \
-  --config ~/.config/eb-stack/site.toml
+  --config examples/targets/site.example.toml
 
 eb-stack target doctor \
   --config examples/targets/base.toml \
-  --config ~/.config/eb-stack/site.toml \
+  --config examples/targets/site.example.toml \
   --target site-builder
 #+end_src
 
