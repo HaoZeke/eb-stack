@@ -6,9 +6,6 @@ use eb_stack::campaign::{
     claim_finding, resolve_finding, run_campaign as execute_campaign, CampaignRequest,
     CampaignStatus, FindingResolution,
 };
-use eb_stack::easyblock_reach::{
-    diff_sources, parse_installed, reach, read_sources, write_report, DiffRequest, ReachQuery,
-};
 use eb_stack::package::{StackPolicy, STACK_POLICY_SCHEMA_VERSION};
 use eb_stack::package_config::PackageConfigLayer;
 use eb_stack::package_sources::{PackageSourceRoots, SourceRootKind};
@@ -845,463 +842,102 @@ struct EasyblockReachArgs {
 }
 
 fn run_easyblock_reach(args: EasyblockReachArgs) -> Result<()> {
-    if args.file.is_empty() && args.range.is_none() && args.pr.is_none() {
-        bail!("pass --file, --range, or --pr");
-    }
-    if args.easyblocks.is_empty() && args.framework.is_empty() {
-        bail!("pass --easyblocks or --framework");
-    }
-    if args.easyconfigs.is_empty() {
-        bail!("pass --easyconfigs");
-    }
-    let mut changed = read_sources(&args.file).context("read --file")?;
-    if args.range.is_some() || args.pr.is_some() {
-        let repo = args
-            .repo
-            .clone()
-            .or_else(|| args.easyblocks.first().cloned())
-            .context("--repo or --easyblocks is the clone to diff")?;
-        changed.extend(
-            diff_sources(&DiffRequest {
-                repo,
-                range: args.range.clone(),
-                pr: args.pr,
-                remote: args.remote.clone(),
-                base: args.base.clone(),
-            })
-            .map_err(|error| anyhow::anyhow!(error.to_string()))
-            .context("diff")?,
-        );
-    }
-    let installed = match &args.installed {
-        Some(path) => parse_installed(
-            &std::fs::read_to_string(path).with_context(|| path.display().to_string())?,
-        ),
-        None => Default::default(),
-    };
-    let mut roots = args.easyblocks.clone();
-    roots.extend(args.framework.iter().cloned());
-    let generated_at = args
-        .generated_at
-        .clone()
-        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-    let report = reach(&ReachQuery {
-        roots,
-        easyconfigs: args.easyconfigs.clone(),
-        changed,
-        installed,
-        reverse: args.reverse,
-        generated_at,
-    })
-    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    write_report(&report, &args.out_dir).map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    println!(
-        "easyconfigs={} installed={} classes={} reverse={} out={}",
-        report.easyconfig_count,
-        report.installed_count,
-        report.reached_classes.len(),
-        report.reverse.len(),
-        args.out_dir.display()
-    );
+    let report = eb_stack::site_commands::run_easyblock_reach(
+        &eb_stack::site_commands::EasyblockReachRequest {
+            easyblocks: args.easyblocks,
+            framework: args.framework,
+            easyconfigs: args.easyconfigs,
+            file: args.file,
+            range: args.range,
+            pr: args.pr,
+            remote: args.remote,
+            base: args.base,
+            repo: args.repo,
+            installed: args.installed,
+            reverse: args.reverse,
+            generated_at: args.generated_at,
+            out_dir: args.out_dir,
+        },
+    )?;
+    println!("{}", report.summary());
     Ok(())
 }
 
 fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
-    use eb_stack::pr_overlap::{
-        easyconfig_record_seeing, overlap_index, pr_record, record_to_toml, render_markdown,
-        to_toml, OverlapConfig, PrInput,
-    };
-    if args.kind == OverlapKind::SoftwareLayer && args.installed.is_none() {
-        eprint!("{INSTALLED_REQUIRED}");
-        std::process::exit(2);
-    }
-    let mut prs: Vec<PrInput> = Vec::new();
-    for path in &args.prs {
-        let text =
-            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        let value: serde_json::Value =
-            serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
-        if value.is_array() {
-            prs.extend(serde_json::from_value::<Vec<PrInput>>(value)?);
-        } else {
-            prs.push(serde_json::from_value::<PrInput>(value)?);
-        }
-    }
-    prs.sort_by_key(|p| p.number);
-    prs.dedup_by_key(|p| p.number);
-
-    let (robot, skipped_easyconfigs) = load_robot_trees(&args.easyconfigs, &args.commit_trees)?;
-    let installed = match &args.installed {
-        Some(path) => Some(load_installed_modules(path, &args.installed_modulerc)?),
-        None => None,
-    };
-    let filter_specs = eb_stack::dep_filter::specs_from_cli_or_env(&args.filter_deps);
-    let filter_deps = eb_stack::dep_filter::FilterDeps::parse(&filter_specs)
-        .map_err(|error| anyhow::anyhow!("--filter-deps: {error}"))?;
-    let easyblocks = load_easyblock_catalog(&args.easyblocks, &args.easyblocks_commits)?;
-    let easyconfigs = args.kind == OverlapKind::Easyconfigs;
-    let config = OverlapConfig {
-        eessi_version: if easyconfigs {
-            String::new()
-        } else {
-            args.eessi_version.clone()
-        },
-        installed_source: args.installed_label.clone(),
-        exclude_paths: args.exclude_paths.clone(),
-        include_paths: args.include_paths.clone(),
-        generated_at: args.generated_at.clone().unwrap_or_else(|| {
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-        }),
-        filter_deps,
-        easyblocks,
-    };
-    let records: Vec<_> = if easyconfigs {
-        let installed = installed.as_ref();
-        prs.iter()
-            .filter_map(|pr| {
-                let others: Vec<_> = prs
-                    .iter()
-                    .filter(|other| other.number != pr.number)
-                    .flat_map(|other| other.easyconfigs.iter().cloned())
-                    .collect();
-                easyconfig_record_seeing(pr, &robot.base, &others, installed, &config)
-            })
-            .collect()
-    } else {
-        let installed = installed
-            .as_ref()
-            .expect("software-layer checks --installed");
-        prs.iter()
-            .filter_map(|pr| pr_record(pr, &robot, installed, &config))
-            .collect()
-    };
-    let index = overlap_index(&records, &config);
-    let repo_url = args.repo_url.clone().unwrap_or_else(|| {
-        if easyconfigs {
-            "https://github.com/easybuilders/easybuild-easyconfigs".to_string()
-        } else {
-            "https://github.com/EESSI/software-layer".to_string()
-        }
-    });
-
-    let pr_dir = args.out_dir.join("prs");
-    std::fs::create_dir_all(&pr_dir)?;
-    // A closed pull request's record goes with it: the directory holds the
-    // open set of this run and nothing else.
-    for entry in std::fs::read_dir(&pr_dir)? {
-        let path = entry?.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("toml") {
-            std::fs::remove_file(&path)?;
-        }
-    }
-    for record in &records {
-        std::fs::write(
-            pr_dir.join(format!("{}.toml", record.pr)),
-            record_to_toml(record)?,
-        )?;
-    }
-    std::fs::write(args.out_dir.join("overlap.toml"), to_toml(&index)?)?;
-    std::fs::write(
-        args.out_dir.join("overlap.md"),
-        render_markdown(&records, &index, &repo_url),
-    )?;
-    if args.merge_order || !args.merged.is_empty() {
-        if let Some(number) = eb_stack::merge_order::unknown_merged(
-            &prs.iter().map(|pr| pr.number).collect::<Vec<_>>(),
-            &args.merged,
-        ) {
-            anyhow::bail!("--merged {number}: no pull request with that number");
-        }
-        let mut order = eb_stack::merge_order::plan(&records, &index, &args.merged);
-        order.conflicts = eb_stack::merge_order::conflicts_from_records(&records);
-        std::fs::write(args.out_dir.join("merge-order.toml"), to_toml(&order)?)?;
-        let mut md = std::fs::read_to_string(args.out_dir.join("overlap.md"))?;
-        md.push_str(&eb_stack::merge_order::render_section(&order, &repo_url));
-        std::fs::write(args.out_dir.join("overlap.md"), md)?;
-    }
-    println!(
-        "prs={} records={} shared_modules={} skipped_easyconfigs={} out={}",
-        prs.len(),
-        records.len(),
-        index.shared.len(),
-        skipped_easyconfigs,
-        args.out_dir.display()
-    );
+    let report =
+        match eb_stack::site_commands::run_pr_overlap(&eb_stack::site_commands::PrOverlapRequest {
+            prs: args.prs,
+            kind: match args.kind {
+                OverlapKind::SoftwareLayer => eb_stack::site_commands::OverlapKind::SoftwareLayer,
+                OverlapKind::Easyconfigs => eb_stack::site_commands::OverlapKind::Easyconfigs,
+            },
+            easyconfigs: args.easyconfigs,
+            commit_trees: args.commit_trees,
+            installed: args.installed,
+            eessi_version: args.eessi_version,
+            installed_label: args.installed_label,
+            exclude_paths: args.exclude_paths,
+            include_paths: args.include_paths,
+            filter_deps: args.filter_deps,
+            installed_modulerc: args.installed_modulerc,
+            easyblocks: args.easyblocks,
+            easyblocks_commits: args.easyblocks_commits,
+            generated_at: args.generated_at,
+            merge_order: args.merge_order,
+            merged: args.merged,
+            repo_url: args.repo_url,
+            out_dir: args.out_dir,
+        }) {
+            Ok(report) => report,
+            Err(eb_stack::site_commands::PrOverlapError::InstalledRequired) => {
+                eprint!("{INSTALLED_REQUIRED}");
+                std::process::exit(2);
+            }
+            Err(eb_stack::site_commands::PrOverlapError::Failed(error)) => return Err(error),
+        };
+    println!("{}", report.summary());
     Ok(())
 }
 
 fn run_rebuild_set(args: RebuildSetArgs) -> Result<()> {
-    use eb_stack::rebuild_set::{
-        rebuild_easystacks, rebuild_set, render_markdown, RebuildQuery, StackEasystack,
-    };
-    let changed = read_changed_names(&args.changed)?;
-    let (robot, skipped_easyconfigs) = load_robot_trees(&args.easyconfigs, &args.commit_trees)?;
-    let installed = load_installed_modules(&args.installed, &args.installed_modulerc)?;
-    let filter_specs = eb_stack::dep_filter::specs_from_cli_or_env(&args.filter_deps);
-    let filter_deps = eb_stack::dep_filter::FilterDeps::parse(&filter_specs)
-        .map_err(|error| anyhow::anyhow!("--filter-deps: {error}"))?;
-    let easyblocks = load_easyblock_catalog(&args.easyblocks, &args.easyblocks_commits)?;
-    let mut easystacks = Vec::new();
-    for path in &args.easystacks {
-        let text =
-            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        easystacks.push(StackEasystack {
-            path: path.display().to_string(),
-            text,
-        });
-    }
-    let document = rebuild_set(&RebuildQuery {
-        base: robot.base,
-        commits: robot.commits,
-        easystacks,
-        changed,
-        installed,
-        filter_deps,
-        easyblocks,
-        installed_source: args.installed_label,
-        generated_at: args.generated_at.unwrap_or_else(|| {
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-        }),
-        prefix: args.prefix,
-        check_static: args.check_static,
-    })
-    .map_err(|error| anyhow::anyhow!(error))?;
-
-    std::fs::create_dir_all(&args.out_dir)?;
-    write_json_pretty(&args.out_dir.join("rebuild-set.json"), &document)?;
-    std::fs::write(
-        args.out_dir.join("rebuild-set.md"),
-        render_markdown(&document),
-    )?;
-    let rebuild_dir = args.out_dir.join("rebuilds");
-    std::fs::create_dir_all(&rebuild_dir)?;
-    for entry in std::fs::read_dir(&rebuild_dir)? {
-        let path = entry?.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("yml") {
-            std::fs::remove_file(&path)?;
-        }
-    }
-    let stacks = rebuild_easystacks(&document);
-    for stack in &stacks {
-        std::fs::write(rebuild_dir.join(&stack.filename), &stack.body)?;
-    }
-    println!(
-        "changed={} rows={} must-rebuild={} review={} no-rebuild={} missing={} easystacks={} skipped_easyconfigs={} out={}",
-        document.changed.len(),
-        document.rows.len(),
-        document.counts.must_rebuild,
-        document.counts.review,
-        document.counts.no_rebuild,
-        document.missing.len(),
-        stacks.len(),
-        skipped_easyconfigs,
-        args.out_dir.display()
-    );
+    let report =
+        eb_stack::site_commands::run_rebuild_set(&eb_stack::site_commands::RebuildSetRequest {
+            changed: args.changed,
+            easystacks: args.easystacks,
+            easyconfigs: args.easyconfigs,
+            commit_trees: args.commit_trees,
+            installed: args.installed,
+            installed_label: args.installed_label,
+            filter_deps: args.filter_deps,
+            installed_modulerc: args.installed_modulerc,
+            easyblocks: args.easyblocks,
+            easyblocks_commits: args.easyblocks_commits,
+            generated_at: args.generated_at,
+            prefix: args.prefix,
+            check_static: args.check_static,
+            out_dir: args.out_dir,
+        })?;
+    println!("{}", report.summary());
     Ok(())
 }
 
 fn run_component_reach(args: ComponentReachArgs) -> Result<()> {
-    use eb_stack::component_reach::{
-        component_reach, parse_compat_layer, render_markdown, to_toml, ReachQuery,
-    };
-    use eb_stack::pr_overlap::parse_installed;
-    use eb_stack::rebuild_set::StackEasystack;
-    let trees: Vec<&Path> = args.easyconfigs.iter().map(PathBuf::as_path).collect();
-    let parsed = parse_easyconfig_trees(&trees).map_err(|error| anyhow::anyhow!(error))?;
-    let installed = args
-        .installed
-        .as_ref()
-        .map(|path| {
-            std::fs::read_to_string(path)
-                .map(|text| parse_installed(&text))
-                .with_context(|| format!("read {}", path.display()))
-        })
-        .transpose()?;
-    let mut easystacks = Vec::new();
-    for path in &args.easystacks {
-        let text =
-            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        easystacks.push(StackEasystack {
-            path: path.display().to_string(),
-            text,
-        });
-    }
-    let compat_text = args
-        .compat_layer
-        .as_ref()
-        .map(|path| {
-            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))
-        })
-        .transpose()?
-        .unwrap_or_default();
-    let compat = parse_compat_layer(&compat_text);
-    let specs = eb_stack::dep_filter::specs_from_cli_or_env(&args.filter_deps);
-    let filter = eb_stack::dep_filter::FilterDeps::parse(&specs)
-        .map_err(|error| anyhow::anyhow!("--filter-deps: {error}"))?;
-    let generated_at = args
-        .generated_at
-        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    let mut document = component_reach(&ReachQuery {
-        candidates: &parsed.candidates,
-        component: &args.component,
-        version_req: &args.version,
-        generation: &args.generation,
-        installed: installed.as_ref(),
-        easystacks: &easystacks,
-        compat: &compat,
-        filter_deps: &filter,
-        generated_at: &generated_at,
-    });
-    if !parsed.skipped.is_empty() {
-        document
-            .notes
-            .push(format!("{} easyconfigs skipped", parsed.skipped.len()));
-    }
-    std::fs::create_dir_all(&args.out_dir)?;
-    std::fs::write(
-        args.out_dir.join("component-reach.toml"),
-        to_toml(&document)?,
+    let report = eb_stack::site_commands::run_component_reach(
+        &eb_stack::site_commands::ComponentReachRequest {
+            component: args.component,
+            version: args.version,
+            generation: args.generation,
+            easyconfigs: args.easyconfigs,
+            installed: args.installed,
+            easystacks: args.easystacks,
+            compat_layer: args.compat_layer,
+            filter_deps: args.filter_deps,
+            generated_at: args.generated_at,
+            out_dir: args.out_dir,
+        },
     )?;
-    write_json_pretty(&args.out_dir.join("component-reach.json"), &document)?;
-    std::fs::write(
-        args.out_dir.join("component-reach.md"),
-        render_markdown(&document),
-    )?;
-    println!(
-        "component={} version={} generation={} carriers={} changed={} must-rebuild={} review={} no-rebuild={} out={}",
-        document.component,
-        document.version_req,
-        document.generation,
-        document.carriers.len(),
-        document.changed.len(),
-        document.closure_counts.must_rebuild,
-        document.closure_counts.review,
-        document.closure_counts.no_rebuild,
-        args.out_dir.display()
-    );
+    println!("{}", report.summary());
     Ok(())
-}
-
-/// Release easyconfigs plus one tree per `--commit-tree`. The count is how
-/// many easyconfigs the parser skipped.
-fn load_robot_trees(
-    easyconfigs: &[PathBuf],
-    commit_trees: &[String],
-) -> Result<(eb_stack::pr_overlap::RobotTrees, usize)> {
-    use eb_stack::pr_overlap::RobotTrees;
-    let trees: Vec<&Path> = easyconfigs.iter().map(PathBuf::as_path).collect();
-    let base = parse_easyconfig_trees(&trees).map_err(|error| anyhow::anyhow!(error))?;
-    let skipped = base.skipped.len();
-    let mut robot = RobotTrees {
-        base: base.candidates,
-        commits: Default::default(),
-    };
-    for spec in commit_trees {
-        let (commit, dir) = spec
-            .split_once('=')
-            .ok_or_else(|| anyhow::anyhow!("--commit-tree wants <commit>=<dir>, got {spec}"))?;
-        if commit.is_empty() || dir.is_empty() {
-            anyhow::bail!("--commit-tree wants <commit>=<dir>, got {spec}");
-        }
-        let parsed = eb_stack::parse_easyconfig_tree(Path::new(dir))
-            .map_err(|error| anyhow::anyhow!(error))?;
-        robot.commits.insert(commit.to_string(), parsed.candidates);
-    }
-    Ok((robot, skipped))
-}
-
-/// Installed modules, with `module_version` aliases from the modulerc files.
-fn load_installed_modules(
-    installed: &Path,
-    modulerc: &[PathBuf],
-) -> Result<std::collections::BTreeSet<String>> {
-    let mut modules = eb_stack::pr_overlap::parse_installed(
-        &std::fs::read_to_string(installed)
-            .with_context(|| format!("read {}", installed.display()))?,
-    );
-    let mut aliases = Vec::new();
-    for path in modulerc {
-        aliases.extend(
-            eb_stack::modulerc::load_modulerc(path)
-                .map_err(|error| anyhow::anyhow!(error))
-                .with_context(|| format!("read modulerc {}", path.display()))?,
-        );
-    }
-    modules = eb_stack::modulerc::apply_modulerc(&modules, &aliases);
-    Ok(modules)
-}
-
-/// `--changed` values. A path to a non-`.eb` file is a list of filenames.
-fn read_changed_names(values: &[String]) -> Result<Vec<String>> {
-    let mut out = Vec::new();
-    for value in values {
-        let path = Path::new(value);
-        let as_list = path.is_file() && path.extension().and_then(|ext| ext.to_str()) != Some("eb");
-        if as_list {
-            let text = std::fs::read_to_string(path)
-                .with_context(|| format!("read {}", path.display()))?;
-            for line in text.lines() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    continue;
-                }
-                out.push(line.rsplit(['/', '\\']).next().unwrap_or(line).to_string());
-            }
-        } else {
-            out.push(
-                value
-                    .rsplit(['/', '\\'])
-                    .next()
-                    .unwrap_or(value)
-                    .to_string(),
-            );
-        }
-    }
-    if out.is_empty() {
-        anyhow::bail!("--changed named no easyconfig");
-    }
-    Ok(out)
-}
-
-/// Installed easyblocks plus the files each `include-easyblocks-from-commit`
-/// touches. Checking is on only when an installed package was passed: a
-/// commit directory on its own is not the set of classes EasyBuild ships.
-fn load_easyblock_catalog(
-    roots: &[PathBuf],
-    commit_specs: &[String],
-) -> Result<Option<eb_stack::pr_overlap::EasyblockCatalog>> {
-    use eb_stack::pr_overlap::EasyblockCatalog;
-    use std::collections::BTreeMap;
-    if roots.is_empty() && commit_specs.is_empty() {
-        return Ok(None);
-    }
-    let mut catalog = EasyblockCatalog {
-        check: !roots.is_empty(),
-        ..EasyblockCatalog::default()
-    };
-    if !roots.is_empty() {
-        let paths: Vec<&Path> = roots.iter().map(PathBuf::as_path).collect();
-        let index = eb_stack::eb_easyblock::index_easyblocks(&paths).map_err(anyhow::Error::msg)?;
-        for (class, (path, _)) in index {
-            catalog.base.insert(class, path.display().to_string());
-        }
-    }
-    for spec in commit_specs {
-        let (commit, dir) = spec.split_once('=').ok_or_else(|| {
-            anyhow::anyhow!("--easyblocks-commit wants <commit>=<dir>, got {spec}")
-        })?;
-        if commit.is_empty() || dir.is_empty() {
-            anyhow::bail!("--easyblocks-commit wants <commit>=<dir>, got {spec}");
-        }
-        let index = eb_stack::eb_easyblock::index_easyblocks(&[Path::new(dir)])
-            .map_err(anyhow::Error::msg)?;
-        let mut classes = BTreeMap::new();
-        for (class, (path, _)) in index {
-            classes.insert(class, path.display().to_string());
-        }
-        catalog.commits.insert(commit.to_string(), classes);
-    }
-    Ok(Some(catalog))
 }
 
 fn run_package(command: PackageCommand) -> Result<()> {
