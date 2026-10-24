@@ -1518,37 +1518,23 @@ fn run_repro(command: ReproCommand) -> Result<()> {
             ratchet,
             json,
         } => {
-            let collected = eb_stack::read_case_scores(&scores)
-                .with_context(|| format!("read repro scores from {}", scores.display()))?;
-            if collected.is_empty() {
-                anyhow::bail!(
-                    "no score artifacts in {}; run the reproduction suite with EB_REPRO_SCORES set to that directory",
-                    scores.display()
-                );
+            let report =
+                eb_stack::workflows::repro_summary(&eb_stack::workflows::ReproSummaryRequest {
+                    scores,
+                    ratchet,
+                    json,
+                })?;
+            print!("{}", report.body);
+            if !report.violations.is_empty() {
+                for violation in &report.violations {
+                    eprintln!("ratchet: {violation}");
+                }
+                bail!("{} ratchet violation(s)", report.violations.len());
             }
-            if json {
-                println!("{}", serde_json::to_string_pretty(&collected)?);
-            } else {
-                print!("{}", eb_stack::render_scoreboard_table(&collected));
+            if let Some(line) = &report.ratchet_line {
+                print!("{line}");
             }
-            let Some(ratchet_path) = ratchet else {
-                return Ok(());
-            };
-            let ratchet = eb_stack::ReproRatchet::read(&ratchet_path)
-                .with_context(|| format!("read ratchet {}", ratchet_path.display()))?;
-            let violations = eb_stack::check_ratchet(&ratchet, &collected);
-            if violations.is_empty() {
-                println!(
-                    "ratchet: {} cases hold at {}",
-                    collected.len(),
-                    ratchet.total
-                );
-                return Ok(());
-            }
-            for violation in &violations {
-                eprintln!("ratchet: {violation}");
-            }
-            anyhow::bail!("{} ratchet violation(s)", violations.len())
+            Ok(())
         }
     }
 }
@@ -1556,25 +1542,8 @@ fn run_repro(command: ReproCommand) -> Result<()> {
 fn run_recipe(command: RecipeCommand) -> Result<()> {
     match command {
         RecipeCommand::Easyblock { name, charmap } => {
-            use eb_stack::eb_easyblock::{
-                encode_class_name, EASYBLOCK_CLASS_PREFIX, STRING_ENCODING_CHARMAP,
-            };
-            if charmap {
-                let entries: Vec<_> = STRING_ENCODING_CHARMAP
-                    .iter()
-                    .map(|(from, to)| serde_json::json!({ "from": from.to_string(), "to": to }))
-                    .collect();
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "prefix": EASYBLOCK_CLASS_PREFIX,
-                        "charmap": entries,
-                    }))?
-                );
-            } else {
-                let name = name.ok_or_else(|| usage("a software name, or --charmap"))?;
-                println!("{}", encode_class_name(&name));
-            }
+            let report = eb_stack::workflows::recipe_easyblock(name.as_deref(), charmap)?;
+            print!("{}", report.stdout);
             Ok(())
         }
         RecipeCommand::Templates {
@@ -1582,98 +1551,14 @@ fn run_recipe(command: RecipeCommand) -> Result<()> {
             version,
             export,
         } => {
-            use eb_stack::eb_engine_export::{template_spec, TEMPLATE_RULES};
-            if export {
-                println!("{}", serde_json::to_string_pretty(&template_spec())?);
-                return Ok(());
-            }
-            let name = name.ok_or_else(|| usage("--name, or --export"))?;
-            let version = version.ok_or_else(|| usage("--version, or --export"))?;
-            // Resolved here by the same rules the spec publishes, so a
-            // cross-check comparing a consumer against this output is
-            // comparing against the rules and not against a second list.
-            let parts: Vec<&str> = version.split('.').collect();
-            let mut out = serde_json::Map::new();
-            for (key, rule) in TEMPLATE_RULES {
-                let mut only_if: Option<&str> = None;
-                let mut produced: Option<String> = None;
-                for clause in rule.split(';') {
-                    let (head, arg) = match clause.split_once(':') {
-                        Some((h, a)) => (h, Some(a)),
-                        None => (clause, None),
-                    };
-                    match head {
-                        "only_if_name" => only_if = arg,
-                        "field" => {
-                            produced = match arg {
-                                Some("name") => Some(name.clone()),
-                                Some("version") => Some(version.clone()),
-                                Some("versionsuffix") => Some(String::new()),
-                                Some("toolchain_name") => Some("system".to_string()),
-                                Some("toolchain_version") => Some(String::new()),
-                                _ => None,
-                            }
-                        }
-                        "lower" => produced = Some(name.to_ascii_lowercase()),
-                        "first_char" => produced = name.chars().next().map(|c| c.to_string()),
-                        "first_char_lower" => {
-                            produced = name
-                                .chars()
-                                .next()
-                                .map(|c| c.to_ascii_lowercase().to_string())
-                        }
-                        "part" => {
-                            let i: usize = arg.unwrap_or("0").parse().unwrap_or(0);
-                            produced = parts
-                                .get(i)
-                                .filter(|p| !p.is_empty())
-                                .map(|p| (*p).to_string());
-                        }
-                        "join" => {
-                            let span = arg.unwrap_or("0-0");
-                            let (a, b) = span.split_once('-').unwrap_or(("0", "0"));
-                            let a: usize = a.parse().unwrap_or(0);
-                            let b: usize = b.parse().unwrap_or(0);
-                            produced = if parts.len() > b {
-                                Some(parts[a..=b].join("."))
-                            } else {
-                                None
-                            };
-                        }
-                        "host_arch" => produced = Some(std::env::consts::ARCH.to_string()),
-                        _ => {}
-                    }
-                }
-                if let Some(gate) = only_if {
-                    if name != gate {
-                        continue;
-                    }
-                }
-                if let Some(value) = produced {
-                    out.insert((*key).to_string(), serde_json::Value::String(value));
-                }
-            }
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::Value::Object(out))?
-            );
+            let report =
+                eb_stack::workflows::recipe_templates(name.as_deref(), version.as_deref(), export)?;
+            print!("{}", report.stdout);
             Ok(())
         }
         RecipeCommand::Hierarchy { export } => {
-            use eb_stack::eb_engine_export::hierarchy_table;
-            let table = hierarchy_table();
-            // `--export` is the spec a page embeds, the same role as
-            // `recipe templates --export`. The plain command is the lookup:
-            // fixture generations only. The GCC-family rule is synthetic,
-            // not one of those generations, so it stays on the export.
-            let value = if export {
-                table
-            } else {
-                serde_json::json!({
-                    "generations": table.get("generations").cloned().unwrap_or_default(),
-                })
-            };
-            println!("{}", serde_json::to_string_pretty(&value)?);
+            let report = eb_stack::workflows::recipe_hierarchy(export)?;
+            print!("{}", report.stdout);
             Ok(())
         }
         RecipeCommand::Check {
@@ -2136,73 +2021,17 @@ fn run_stack(command: StackCommand) -> Result<()> {
             hashes_out,
             filter_deps,
         } => {
-            let trees: Vec<&Path> = easyconfigs.iter().map(PathBuf::as_path).collect();
-            let parsed = eb_stack::parse_easyconfig_trees(&trees).map_err(|error| {
-                let listed = easyconfigs
-                    .iter()
-                    .map(|path| path.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                anyhow::anyhow!(error).context(format!("--easyconfigs {listed}"))
-            })?;
-            let choice = if oldest {
-                eb_stack::Choice::Oldest
-            } else {
-                eb_stack::Choice::Newest
-            };
-            // Same filter `stack solve` applies: the flag, or
-            // EASYBUILD_FILTER_DEPS when the flag is absent. Dropping the
-            // dependency here keeps its own dependencies out of the order.
-            let mut candidates = parsed.candidates;
-            let specs = eb_stack::dep_filter::specs_from_cli_or_env(&filter_deps);
-            eb_stack::filter_deps(&mut candidates, &specs)?;
-            let order = eb_stack::build_order(&candidates, &roots, choice)
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-            std::fs::write(&out, eb_stack::format_order(&order))?;
-            let multi = eb_stack::build_order::multi_build_names(&order);
-            for (name, builds) in &multi {
-                println!("multiple builds of {name}: {}", builds.join(", "));
-            }
-            if let Some(path) = easystack_out.as_deref() {
-                // Straight from the ordered list: a lock is sorted by name so
-                // two locks diff cleanly, and writing that out would discard
-                // the sequence this command exists to produce.
-                let paths: Vec<&str> = order.iter().map(|c| c.easyconfig_path.as_str()).collect();
-                std::fs::write(
-                    path,
-                    eb_stack::easystack::easystack_from_paths(
-                        &paths,
-                        &eb_stack::EasystackOptions::new(),
-                    ),
-                )?;
-                println!("easystack={}", path.display());
-            }
-            if let Some(path) = hashes_out.as_deref() {
-                let graph = eb_stack::build_order::build_graph(&candidates, &roots, choice)
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                let sequence: Vec<eb_stack::ModuleKey> =
-                    order.iter().map(eb_stack::ModuleKey::of).collect();
-                let recipe_paths: std::collections::BTreeMap<eb_stack::ModuleKey, String> = order
-                    .iter()
-                    .map(|c| (eb_stack::ModuleKey::of(c), c.easyconfig_path.clone()))
-                    .collect();
-                let hashes = eb_stack::input_hashes(&graph, &sequence, &recipe_paths);
-                let incomplete = hashes.values().filter(|h| !h.complete).count();
-                let mut text = String::new();
-                for key in &sequence {
-                    if let Some(h) = hashes.get(key) {
-                        text.push_str(&format!("{}  {}\n", h.hash, key));
-                    }
-                }
-                std::fs::write(path, text)?;
-                println!(
-                    "hashes={} modules={} incomplete={}",
-                    path.display(),
-                    hashes.len(),
-                    incomplete
-                );
-            }
-            println!("order={} builds={}", out.display(), order.len());
+            let report =
+                eb_stack::workflows::stack_order(&eb_stack::workflows::StackOrderRequest {
+                    easyconfigs,
+                    roots,
+                    out,
+                    oldest,
+                    easystack_out,
+                    hashes_out,
+                    filter_deps,
+                })?;
+            print!("{}", report.stdout);
             Ok(())
         }
         StackCommand::Sections {
@@ -2211,50 +2040,21 @@ fn run_stack(command: StackCommand) -> Result<()> {
             unfiled,
             out,
         } => {
-            let previous = std::fs::read_to_string(&from)
-                .with_context(|| format!("reading build list {}", from.display()))?;
-            let text = std::fs::read_to_string(&list)
-                .with_context(|| format!("reading build list {}", list.display()))?;
-            let sections = eb_stack::jenkins::parse_sections(&previous);
-            let grouped = eb_stack::jenkins::group_by_sections(&text, &sections, &unfiled);
-            eb_stack::write_text(&out, &grouped)?;
-            let headers = grouped.lines().filter(|l| l.starts_with("#### ")).count();
-            println!(
-                "list={} sections={} of={}",
-                out.display(),
-                headers,
-                sections.len() + 1
-            );
+            let report =
+                eb_stack::workflows::stack_sections(&eb_stack::workflows::StackSectionsRequest {
+                    list,
+                    from,
+                    unfiled,
+                    out,
+                })?;
+            print!("{}", report.stdout);
             Ok(())
         }
         StackCommand::Easystack { lock, out, options } => {
-            let lock: StackLock = load_lock_file(&lock)?;
-            let mut parsed = eb_stack::EasystackOptions::new();
-            for spec in &options {
-                let (file, rest) = spec.split_once(':').ok_or_else(|| {
-                    usage(format!(
-                        "--option wants <file.eb>:<option>=<value>, got {spec}"
-                    ))
-                })?;
-                let (key, value) = rest.split_once('=').ok_or_else(|| {
-                    usage(format!(
-                        "--option wants <file.eb>:<option>=<value>, got {spec}"
-                    ))
-                })?;
-                parsed
-                    .entry(file.to_string())
-                    .or_default()
-                    .insert(key.to_string(), value.to_string());
-            }
-            let yaml = eb_stack::lock_to_easystack(&lock, &parsed);
-            std::fs::write(&out, &yaml)?;
-            let entries = yaml.lines().filter(|l| l.starts_with("- ")).count();
-            println!(
-                "easystack={} entries={} of={}",
-                out.display(),
-                entries,
-                lock.packages.len()
-            );
+            let report = eb_stack::workflows::stack_easystack(
+                &eb_stack::workflows::StackEasystackRequest { lock, out, options },
+            )?;
+            print!("{}", report.stdout);
             Ok(())
         }
         StackCommand::Sbom { lock, out } => {
@@ -2516,9 +2316,7 @@ fn parse_dep_overrides(values: &[String]) -> Result<HashMap<String, String>> {
 
 /// Read a stack lock. The path is named once, as `--lock`.
 fn load_lock_file(path: &Path) -> Result<StackLock> {
-    let text =
-        std::fs::read_to_string(path).with_context(|| format!("--lock {}", path.display()))?;
-    serde_json::from_str(&text).with_context(|| format!("--lock {}", path.display()))
+    eb_stack::workflows::read_lock(path)
 }
 
 fn resolve_toolchain(

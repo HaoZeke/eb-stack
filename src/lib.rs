@@ -66,6 +66,7 @@ pub mod source_tree;
 mod spack_syntax;
 pub mod target;
 pub mod version;
+pub mod workflows;
 pub mod workspace_fs;
 
 pub use artifact_class::{

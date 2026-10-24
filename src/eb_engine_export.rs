@@ -128,6 +128,77 @@ pub fn hierarchy_table() -> Value {
     })
 }
 
+/// Values the derived-key rules produce for `name` and `version`.
+///
+/// The toolchain is `system` with an empty version, which is what a
+/// consumer without a recipe universe can know. A key whose rule does
+/// not apply is left out. Python's `py*` keys are present only when
+/// `name` is `Python`.
+pub fn resolve_templates(name: &str, version: &str) -> Value {
+    let parts: Vec<&str> = version.split('.').collect();
+    let mut out = serde_json::Map::new();
+    for (key, rule) in TEMPLATE_RULES {
+        let mut only_if: Option<&str> = None;
+        let mut produced: Option<String> = None;
+        for clause in rule.split(';') {
+            let (head, arg) = match clause.split_once(':') {
+                Some((head, arg)) => (head, Some(arg)),
+                None => (clause, None),
+            };
+            match head {
+                "only_if_name" => only_if = arg,
+                "field" => {
+                    produced = match arg {
+                        Some("name") => Some(name.to_string()),
+                        Some("version") => Some(version.to_string()),
+                        Some("versionsuffix") => Some(String::new()),
+                        Some("toolchain_name") => Some("system".to_string()),
+                        Some("toolchain_version") => Some(String::new()),
+                        _ => None,
+                    }
+                }
+                "lower" => produced = Some(name.to_ascii_lowercase()),
+                "first_char" => produced = name.chars().next().map(|c| c.to_string()),
+                "first_char_lower" => {
+                    produced = name
+                        .chars()
+                        .next()
+                        .map(|c| c.to_ascii_lowercase().to_string())
+                }
+                "part" => {
+                    let index: usize = arg.unwrap_or("0").parse().unwrap_or(0);
+                    produced = parts
+                        .get(index)
+                        .filter(|part| !part.is_empty())
+                        .map(|part| (*part).to_string());
+                }
+                "join" => {
+                    let span = arg.unwrap_or("0-0");
+                    let (start, end) = span.split_once('-').unwrap_or(("0", "0"));
+                    let start: usize = start.parse().unwrap_or(0);
+                    let end: usize = end.parse().unwrap_or(0);
+                    produced = if parts.len() > end {
+                        Some(parts[start..=end].join("."))
+                    } else {
+                        None
+                    };
+                }
+                "host_arch" => produced = Some(std::env::consts::ARCH.to_string()),
+                _ => {}
+            }
+        }
+        if let Some(gate) = only_if {
+            if name != gate {
+                continue;
+            }
+        }
+        if let Some(value) = produced {
+            out.insert((*key).to_string(), Value::String(value));
+        }
+    }
+    Value::Object(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,5 +272,32 @@ mod tests {
         for expected in ["GCCcore", "GCC", "gompi", "gfbf", "foss"] {
             assert!(names.contains(&expected), "missing {expected} in {names:?}");
         }
+    }
+
+    #[test]
+    fn resolve_templates_applies_the_published_rules() {
+        let zlib = resolve_templates("zlib", "1.3.1");
+        assert_eq!(zlib["name"], "zlib");
+        assert_eq!(zlib["namelower"], "zlib");
+        assert_eq!(zlib["nameletter"], "z");
+        assert_eq!(zlib["version"], "1.3.1");
+        assert_eq!(zlib["version_major"], "1");
+        assert_eq!(zlib["version_minor"], "3");
+        assert_eq!(zlib["version_patch"], "1");
+        assert_eq!(zlib["version_major_minor"], "1.3");
+        assert_eq!(zlib["version_minor_patch"], "3.1");
+        assert_eq!(zlib["version_major_minor_patch"], "1.3.1");
+        assert_eq!(zlib["versionsuffix"], "");
+        assert_eq!(zlib["toolchain_name"], "system");
+        assert_eq!(zlib["toolchain_version"], "");
+        assert_eq!(zlib["github_account"], "zlib");
+        assert_eq!(zlib["arch"], std::env::consts::ARCH);
+        assert!(zlib.get("pyver").is_none());
+
+        let python = resolve_templates("Python", "3.11.4");
+        assert_eq!(python["pyver"], "3.11.4");
+        assert_eq!(python["pymajver"], "3");
+        assert_eq!(python["pyminver"], "11");
+        assert_eq!(python["pyshortver"], "3.11");
     }
 }

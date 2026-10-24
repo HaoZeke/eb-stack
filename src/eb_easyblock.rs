@@ -96,6 +96,18 @@ pub fn encode_class_name(name: &str) -> String {
     format!("{EASYBLOCK_CLASS_PREFIX}{}", encode_string(name))
 }
 
+/// The encoding table as the JSON document `recipe easyblock --charmap` prints.
+pub fn charmap_document() -> serde_json::Value {
+    let entries: Vec<_> = STRING_ENCODING_CHARMAP
+        .iter()
+        .map(|(from, to)| serde_json::json!({ "from": from.to_string(), "to": to }))
+        .collect();
+    serde_json::json!({
+        "prefix": EASYBLOCK_CLASS_PREFIX,
+        "charmap": entries,
+    })
+}
+
 /// Recover the software name from an encoded class name.
 ///
 /// `decode_class_name` in `easybuild.tools.filetools`. A name without the
