@@ -175,3 +175,80 @@ fn relative_easyconfig_paths_resolve_beside_the_lock_from_another_directory() {
     assert_eq!(structured["with_artifact_facts"], 1);
     assert_eq!(structured["components"], 2);
 }
+
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let dest = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &dest);
+        } else {
+            std::fs::copy(entry.path(), dest).unwrap();
+        }
+    }
+}
+
+#[test]
+fn stack_solve_sbom_out_matches_stack_sbom_for_the_same_lock() {
+    let fftw_hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let root = tempfile::tempdir().unwrap();
+    let tree = root.path().join("easyconfigs");
+    copy_dir(&easyconfigs(), &tree);
+    let fftw = tree.join("foss-2025b/FFTW-3.3.10-foss-2025b.eb");
+    let mut recipe = std::fs::read_to_string(&fftw).unwrap();
+    recipe.push_str(&format!(
+        "\nsources = ['fftw-3.3.10.tar.gz']\nchecksums = ['{fftw_hash}']\n"
+    ));
+    std::fs::write(&fftw, recipe).unwrap();
+
+    let lock = root.path().join("stack.lock.json");
+    let from_solve = root.path().join("solve.cdx.json");
+    let solved = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .args(["stack", "solve", "--easyconfigs"])
+        .arg(&tree)
+        .args([
+            "--toolchain",
+            "foss/2025b",
+            "--root",
+            "GROMACS",
+            "--lock-out",
+        ])
+        .arg(&lock)
+        .args(["--sbom-out"])
+        .arg(&from_solve)
+        .output()
+        .unwrap();
+    assert!(
+        solved.status.success(),
+        "{}",
+        String::from_utf8_lossy(&solved.stderr)
+    );
+
+    let from_sbom = root.path().join("sbom.cdx.json");
+    let emitted = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .args(["stack", "sbom", "--lock"])
+        .arg(&lock)
+        .arg("--out")
+        .arg(&from_sbom)
+        .output()
+        .unwrap();
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+
+    let mut solve_doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&from_solve).unwrap()).unwrap();
+    let mut sbom_doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&from_sbom).unwrap()).unwrap();
+    solve_doc.as_object_mut().unwrap().remove("serialNumber");
+    sbom_doc.as_object_mut().unwrap().remove("serialNumber");
+    assert_eq!(solve_doc, sbom_doc);
+    let encoded = serde_json::to_string(&solve_doc).unwrap();
+    assert!(
+        encoded.contains(fftw_hash),
+        "both documents carry the FFTW checksum"
+    );
+}

@@ -292,9 +292,9 @@ eb-stack stack sbom --lock stack.lock.json [--out stack.cdx.json]
 
 ~stack sbom~ reads the easyconfigs the lock names. A runtime dependency
 that is also selected is a CycloneDX ~dependsOn~ edge. A builddependency
-is the component property ~eb_stack:buildDependsOn~. The MCP tool
-~eb_stack_sbom~ writes that document. An unreadable path contributes no
-edge.
+is the component property ~eb_stack:buildDependsOn~. ~stack solve --sbom-out~
+writes that same document, checksums included. The MCP tool
+~eb_stack_sbom~ writes it too. An unreadable path contributes no edge.
 
 ~stack solve~ is the multi-root EasyBuild stack solver. Package-profile stack
 preferences use the TOML schema documented with the package workflow; whole

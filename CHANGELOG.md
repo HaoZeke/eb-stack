@@ -250,6 +250,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `stack solve --sbom-out` reads dependency edges and source checksums
+  from the easyconfigs the lock names, the same document `stack sbom`
+  writes for that lock.
 - A relative `easyconfig_path` in a stack lock is the recipe beside the
   lock file when that file exists, and otherwise the same path against
   the process directory. `stack sbom` and `eb_stack_sbom` share that

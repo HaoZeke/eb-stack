@@ -366,10 +366,11 @@ fn write_lock_sbom_and_extras(
 ) -> Result<()> {
     write_json_pretty(lock_out, lock)?;
     let dep_map = dep_map_from_universe(lock, universe);
-    let build_map = build_dep_map_from_universe(lock, universe);
     // SBOM is opt-in: only write when the caller supplies an output path.
+    // The document is the one `stack sbom` writes from this lock: edges and
+    // checksums come from the easyconfigs, not from the in-memory universe.
     if let Some(path) = sbom_out {
-        let sbom = lock_to_cyclonedx_with_runtime_and_build(lock, Some(&dep_map), Some(&build_map));
+        let (sbom, _stats) = lock_to_cyclonedx_from_recipes(lock, lock_out);
         write_json_pretty(path, &sbom)?;
     }
 

@@ -176,20 +176,19 @@ solver selection, not a scan of installed software.
 
 ~dependsOn~ edges:
 
-- From ~stack solve~ (universe in hand): each package's declared
-  *runtime* ~dependencies~, intersected with co-selected lock members.
-  Build-time deps (~builddependencies~) go on the component property
-  ~eb_stack:buildDependsOn~ (comma-separated refs), not the runtime graph.
-- From ~eb-stack stack sbom --lock LOCK~, and from the MCP tool
-  ~eb_stack_sbom~: the same edges, read from the easyconfigs the lock
-  names. A relative ~easyconfig_path~ is the recipe beside the lock
-  file when that file exists, and otherwise the same path against the
-  process directory. A runtime dependency that is also in the lock is a
-  ~dependsOn~ edge. A builddependency is ~eb_stack:buildDependsOn~. An
-  unreadable path contributes no edges. The document does not invent
-  all-to-all co-stack cycles. Both commands report how many recipes
-  were read. Empty ~dependsOn~ arrays may be omitted by cyclonedx-bom
-  serialization.
+- From ~stack solve --sbom-out~, ~eb-stack stack sbom --lock LOCK~, and
+  the Model Context Protocol (MCP) tool ~eb_stack_sbom~: each package's declared runtime
+  ~dependencies~, intersected with co-selected lock members, read from
+  the easyconfigs the lock names. Checksums and source URLs come from
+  those recipes too. Build-time deps (~builddependencies~) go on the
+  component property ~eb_stack:buildDependsOn~ (comma-separated refs),
+  not the runtime graph.
+  A relative ~easyconfig_path~ is the recipe beside the lock file when
+  that file exists, and otherwise the same path against the process
+  directory. An unreadable path contributes no edges. The document does
+  not invent all-to-all co-stack cycles. ~stack sbom~ and
+  ~eb_stack_sbom~ report how many recipes were read. Empty ~dependsOn~
+  arrays may be omitted by cyclonedx-bom serialization.
 
 * Pull-request build set (~eb-stack pr-overlap~)
 
