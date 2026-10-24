@@ -81,7 +81,7 @@ const CASES: &[Case] = &[
 fn known_components_in_generation_2026_1() {
     let out = std::env::var_os("EB_COMPONENT_REACH_OUT")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("target/component-reach-real"));
+        .unwrap_or_else(|| std::env::temp_dir().join("component-reach-real"));
     let trees = [
         (
             "develop",
