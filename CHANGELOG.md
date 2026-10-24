@@ -11,6 +11,8 @@ All notable changes to this project are documented here.
 - Recipe lint modules live under `src/eb_style/` so `sphinx-rustdocgen`
   can open them. A `#[path]` attribute is joined onto the parent file
   and the generator then fails to read the module.
+- `eb-stack` prints a failure as `error:` and the cause chain. A missing
+  file or a rejected value no longer appends a stack backtrace.
 - `target doctor` reports a probe that cannot be started as a failed check
   and still prints the other three layers. A missing `podman` or
   `eessi_container.sh` used to abort the report before any check was shown.

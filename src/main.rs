@@ -794,7 +794,16 @@ enum CampaignFindingCommand {
     },
 }
 
-fn main() -> Result<()> {
+fn main() {
+    if let Err(error) = dispatch() {
+        // Display, not Debug: Debug appends a stack backtrace, which is a
+        // compiler trace and not the reason the command failed.
+        eprintln!("error: {error:#}");
+        std::process::exit(1);
+    }
+}
+
+fn dispatch() -> Result<()> {
     match Cli::parse().command {
         Command::Package { command } => run_package(command),
         Command::Recipe { command } => run_recipe(command),
