@@ -599,9 +599,16 @@ pub fn dep_maps_for_lock(
 ///
 /// Each tuple is resolved with [`resolve_locked_dep`], the same walk the
 /// SBOM uses, so a build list ordered on this map puts every dependency
-/// before the module that needs it and keeps two versions of one name.
-/// `lock_file` is the path the lock was written to; relative recipe paths
-/// resolve the way [`lock_to_cyclonedx_from_recipes`] resolves them.
+/// before the module that needs it and keeps two versions of one name. A
+/// bare tuple still contributes: the walk inherits the parent toolchain, so
+/// the list waits for the selected module rather than every package that
+/// shares the name. An unreadable recipe contributes no edges. `lock_file`
+/// is the path the lock was written to; relative recipe paths resolve the
+/// way [`lock_to_cyclonedx_from_recipes`] resolves them.
+///
+/// This is what `stack solve` uses for `--build-list-out` and
+/// `--jenkins-build-list-out`. [`dep_map_from_universe`] stays for a caller
+/// that already holds the universe and has not written the recipes.
 pub fn closure_edges_for_lock(lock: &StackLock, lock_file: &Path) -> HashMap<String, Vec<String>> {
     let read = read_lock_recipes(lock, lock_directory(lock_file));
     let mut edges = read.runtime;
@@ -844,6 +851,11 @@ fn bom_to_json_value(bom: Bom) -> Value {
 /// matching the lock. Build-time deps are intentionally omitted here so SBOM
 /// `dependsOn` edges stay role-specific; use [`build_dep_map_from_universe`] for
 /// the build-time list (same shape, separate map).
+///
+/// The solve path does not call this. Its build list reads
+/// [`closure_edges_for_lock`] from the recipes the lock names. This function
+/// stays for a caller that holds the universe in memory and has no recipe
+/// files to read, which is how the JSON fixture tests build a name map.
 pub fn dep_map_from_universe(
     lock: &StackLock,
     universe: &Universe,
