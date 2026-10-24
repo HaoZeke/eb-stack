@@ -12,6 +12,13 @@ All notable changes to this project are documented here.
   from the bundled root store. The 0.26.11 compatibility crate re-exports
   that store, so the lock resolves it to 1.0.10.
 
+### Documentation
+
+- Reword the doc comments on `DiffRequest::pr` and `python_syntax_error`
+  so the generated Rust API pages are valid RST. A span that contains
+  angle brackets is left as a single backtick, and a letter glued to a
+  closing backtick is not an end-string.
+
 ### Added
 
 - `eb-stack component-reach` lists every easyconfig and installed module

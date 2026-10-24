@@ -54,10 +54,10 @@ pub struct LintOptions<'a> {
     pub file_scope: bool,
 }
 
-/// Python syntax error for `text`, as (line, column, message), or `None`.
+/// Python syntax error for `text`, as line, column, and message, or `None`.
 ///
-/// EasyBuild `exec`s an easyconfig, so a file that is not valid Python never
-/// gets as far as any other check.
+/// EasyBuild loads an easyconfig with `exec`, so a file that is not valid
+/// Python never gets as far as any other check.
 pub fn python_syntax_error(text: &str) -> Option<(usize, usize, String)> {
     match ast::Suite::parse(text, "<easyconfig>") {
         Ok(_) => None,

@@ -787,7 +787,7 @@ pub struct DiffRequest {
     pub repo: PathBuf,
     /// Passed to `git diff --name-only`, for example `base..HEAD`.
     pub range: Option<String>,
-    /// Fetch `refs/pull/<n>/head` and diff it against the merge-base with `base`.
+    /// Fetch `refs/pull/N/head` and diff it against the merge-base with `base`.
     pub pr: Option<u64>,
     /// Remote `git fetch` reads. `.` is this clone.
     pub remote: String,
