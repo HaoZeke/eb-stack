@@ -200,6 +200,13 @@ All notable changes to this project are documented here.
 
 ### Documentation
 
+- The dependency-closure page runs on recorded slices of
+  easybuild-easyconfigs develop `981d2123`, the v5.4.1 easyblocks,
+  framework, and easyconfigs tags, the conda-forge zlib feedstock at
+  `e34000ac`, and the Spack zlib package at `a19611de`.
+  `docs/examples/sbom-blast-radius` is removed. `tests/sbom_page_drift.rs`
+  reruns every command on the page.
+
 - The easyconfigs overlap how-to names `pr-overlap --open` as the command
   that fetches pull requests, and its merge-order heading names the
   easyconfigs depends-on edges. `fetch-prs.sh` is the collector for a

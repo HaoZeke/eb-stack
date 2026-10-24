@@ -1,0 +1,12 @@
+02b624e6cecb7357d6b3ea61f51681a64d3f07e628d82e3b39d31c2ac890756d  ./easyblocks/easybuild/easyblocks/generic/cmakemake.py
+f90faafa32c4c555548d89e7f6412e290bf75415b8a9d66b8115b9a457a706cd  ./easyblocks/easybuild/easyblocks/generic/configuremake.py
+efe24b18dc33ce44c0c3d521b6adc9fbb2efc31a6251a0337adda0dd8130d104  ./easyblocks/easybuild/easyblocks/g/gromacs.py
+8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643  ./easyblocks/LICENSE
+d6947db972d4baef34205bea27604017df6a5c7bcd04d1ecd6000b1680a92944  ./easyconfigs/easybuild/easyconfigs/a/ADIOS2/ADIOS2-2.10.2-foss-2025b.eb
+e72b674290223e5a7c6517616bf90678a5ff9f84b68713e7d4c4970960a51109  ./easyconfigs/easybuild/easyconfigs/g/GROMACS/GROMACS-2024.4-foss-2024a.eb
+357472a6670fff5f2918342c39e686a41c7c8fb61c1696a5f0d3493dbc870c92  ./easyconfigs/easybuild/easyconfigs/m/make/make-4.4.1-GCCcore-15.2.0.eb
+ede4b41e215a0369ca5b66e502cbd48b828e2c1f817f0807d0837d09108a4ee0  ./easyconfigs/easybuild/easyconfigs/z/zfp/zfp-1.0.1-GCCcore-15.2.0.eb
+8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643  ./easyconfigs/LICENSE
+6e99c158b2a5e9ed10dd5ab296759760182a4f2e9c0baba1dc187900629ffd4a  ./framework/easybuild/framework/easyblock.py
+8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643  ./framework/LICENSE
+d634cdc46ff5d0d7c7a1f7602dac3e3c75f8af031932e1c8764b5ab993a762cf  ./installed.txt

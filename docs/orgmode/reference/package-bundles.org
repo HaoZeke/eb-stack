@@ -248,7 +248,7 @@ eb-stack recipe format BUNDLE/easyconfigs/*/*/*.eb
 eb-stack recipe lint BUNDLE/easyconfigs/*/*/*.eb
 eb-stack recipe check \
   --recipe BUNDLE/easyconfigs/q/QMCPACK/QMCPACK-4.3.0-foss-2026.1.eb \
-  --easyconfigs tests/repro_fixtures/universe_foss_2024a \
+  --easyconfigs tests/sbom_recorded/cbc \
   --easyconfigs BUNDLE/easyconfigs
 #+end_src
 
@@ -328,7 +328,7 @@ eb-stack package plan --emit-easyblock \
   --source fixtures/foreign_ingest/spack_qmcpack/package.py \
   --package-config examples/packages/qmcpack.toml \
   --toolchain foss/2026.1 \
-  --easyconfigs tests/repro_fixtures/universe_foss_2024a \
+  --easyconfigs tests/sbom_recorded/cbc \
   --stack-policy policy.toml \
   --out-dir BUNDLE
 #+end_src

@@ -1,0 +1,12 @@
+7d77a52c2d26e2c7b022abf8fee16c43556bdecc57841e47b1b25c8d0da611ca  ./easybuild/easyconfigs/c/CMake/CMake-4.0.3-GCCcore-14.3.0.eb
+6df844bb3bbc51180446a3595c61a4ef195e5f975533a04cef76841aa763aec1  ./easybuild/easyconfigs/g/GROMACS/GROMACS-2023.1_fix_tests_for_gmx_thread_mpi.patch
+7f41bda16c9c2837624265dda4be252f655d1288ddc4486b1a2422af30d5d199  ./easybuild/easyconfigs/g/GROMACS/GROMACS-2023.1_set_omp_num_threads_env_for_ntomp_tests.patch
+df30b21352a26d8e01d693e2822db0ea45015c23f900a6ceb68522d44e6e790c  ./easybuild/easyconfigs/g/GROMACS/GROMACS-2024.1-fix-gmxapi-version.patch
+0dfa82a9425322d2b2c250d698ac2065f8c0ce0143df0057e7ec21686d60e5f7  ./easybuild/easyconfigs/g/GROMACS/GROMACS-2024.1_workaround-arm-sve512.patch
+9fbc2852de0212401804744d92968e2f6415dac0a565fdbad1cf58a95bb8ab7d  ./easybuild/easyconfigs/g/GROMACS/GROMACS-2024.4-foss-2023b.eb
+fd27d937a1c6e49f850444f5859f9584d0228f8e231af5c712b256a5a56978a9  ./easybuild/easyconfigs/m/mpi4py/mpi4py-4.1.0-gompi-2025b.eb
+3d385c72a7e9e62b5f784c124c43fe43e11aca854a3b78dd217d7597b96847d1  ./easybuild/easyconfigs/n/networkx/networkx-3.5-gfbf-2025b.eb
+bdf050b09569319c3fb836350272d685056b36c51f13bafbf9e1e81c690bd326  ./easybuild/easyconfigs/p/Python/Python-3.13.5-GCCcore-14.3.0.eb
+326afc2a35a7ea76a0a37f8aee8c310cddf0fe3973819a4d2ddeb7af078af1a6  ./easybuild/easyconfigs/s/scikit-build-core/scikit-build-core-0.11.5-GCCcore-14.3.0.eb
+d8fba11a082a0fe4b977561fe7dbe8b2b840fd87eedf18f4076f5ca66860417d  ./easybuild/easyconfigs/s/SciPy-bundle/SciPy-bundle-2025.07-gfbf-2025b.eb
+8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643  ./LICENSE
