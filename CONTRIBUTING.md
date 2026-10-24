@@ -16,7 +16,7 @@ cargo test --locked --lib
 cargo test --locked --test reproduce_real_prs --test bump_emit
 prek run -a                   # or: pixi run -e dev prek
 pixi run -e dev check         # fmt + clippy + lib tests
-pixi run -e docs docbld       # orgmode → rst → Sphinx (Shibuya)
+pixi run -e docs docbld       # orgmode to rst to Sphinx (Shibuya)
 ```
 
 Build heavy work on a remote builder when local compiles thrash the machine.
@@ -51,7 +51,7 @@ export EB_STACK_DOCS_PYTHON=$PWD/.venv-docs/bin/python
 pixi run -e docs docbld
 scripts/check-doc-links.sh docs/build
 pixi run -e docs linkcheck
-# HTML → docs/build/index.html (includes crates/eb_stack/* Rust API)
+# HTML to docs/build/index.html (includes crates/eb_stack/* Rust API)
 ```
 
 The Sphinx task treats warnings as errors. The rendered-link check rejects
@@ -67,10 +67,10 @@ Do not hand-edit generated `docs/source/**/*.rst` or `docs/source/crates/`.
 ## Packaging campaigns
 
 Follow `AGENTS.md`, `skills/annual-bump/SKILL.md` (generation rebuild), and
-`skills/new-package/SKILL.md` (conda-forge/Spack → new EasyBuild recipe). Run
+`skills/new-package/SKILL.md` (conda-forge/Spack: new EasyBuild recipe). Run
 `skills/verify-recipe/SKILL.md` over what they emit before a build or a push,
 and `skills/tool-repair/SKILL.md` when the emitted file needed a hand
-correction: a manual fix that does not come back as a regression test is a
+correction: a manual fix that does not return as a regression test is a
 defect this tool reproduces on the next run. Keep site hostnames, paths,
 credentials, scheduler sizing, and private module names in the site target
 layer. The public files contain reusable package intent and target topology.
@@ -83,8 +83,8 @@ Keep these in lockstep on every release:
 1. `Cargo.toml` / `pixi.toml` `version`
 2. `CITATION.cff` `version`
 3. `docs/source/conf.py` `release`
-4. `CHANGELOG.md` — move Unreleased notes into `## [X.Y.Z] - YYYY-MM-DD`
-5. `CITATION.cff` — add `date-released` when the version is published
+4. `CHANGELOG.md`: move Unreleased notes into `## [X.Y.Z] - YYYY-MM-DD`
+5. `CITATION.cff`: add `date-released` when the version is published
 
 Then:
 
@@ -99,5 +99,5 @@ Verify the binary surface:
 ```bash
 cargo build --release
 ./target/release/eb-stack --version
-# → eb-stack 0.3.0
+# prints eb-stack 0.3.0
 ```
