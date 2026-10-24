@@ -143,6 +143,44 @@ jobs:
             --test package_sources_discovery \
             -- --nocapture
 
+  integration:
+    name: remaining integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Every integration test that is not ignore-only
+        run: |
+          cargo test --locked \
+            --test baseline_easystack \
+            --test cli_ergonomics \
+            --test cli_reference \
+            --test component_reach \
+            --test doc_walkthrough \
+            --test easyblock_layers \
+            --test easyblock_owed \
+            --test extension_provides \
+            --test hierarchy_universe \
+            --test jenkins_build_list \
+            --test lint_fixtures \
+            --test mcp_stdio \
+            --test optimisation_criteria \
+            --test pr_merge_order \
+            --test pr_overlap \
+            --test pr_overlap_easyconfigs \
+            --test pr_overlap_easyconfigs_open \
+            --test pypi_cran_extend \
+            --test rebuild_set \
+            --test repro_scoring \
+            --test ring0_ingest_repro \
+            --test sbom_from_lock \
+            --test sbom_page_drift \
+            --test sbom_schema \
+            --test skill_easyblock_fix \
+            --test solver_completeness \
+            -- --nocapture
+
   cli-smoke:
     name: CLI smoke (package bundle + recipe checks)
     runs-on: ubuntu-latest

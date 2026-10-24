@@ -600,6 +600,10 @@ All notable changes to this project are documented here.
   The easyblock-reach how-to uses the same fetch script.
 - The easyconfigs `pr-overlap` example in the CLI reference is a run
   that writes 8 records, with paths from this checkout.
+- CI runs every integration test file. Ignore-only files are named by
+  the upstream-trees workflow, which passes `--include-ignored`.
+  `real_tree_scale` still needs a local robot tree and is not in that
+  list.
 
 ## 0.3.0 - 2026-07-21
 

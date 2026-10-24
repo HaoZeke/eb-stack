@@ -276,3 +276,46 @@ fn the_eessi_reach_test_stays_off_the_network_and_the_source_tree() {
     );
     assert!(script.contains("b2c10c7278f8b741f4053ddb2907dc4d062063d1"));
 }
+
+/// Every `tests/*.rs` binary is either named by the default CI workflow,
+/// or it is ignore-only and named by the upstream-trees workflow.
+/// `real_tree_scale` needs a local robot tree and stays off GitHub runners.
+#[test]
+fn ci_runs_every_integration_test_file() {
+    let ci = std::fs::read_to_string(repo().join(".github/workflows/ci_test.yml"))
+        .expect("read ci_test.yml");
+    let upstream = std::fs::read_to_string(repo().join(".github/workflows/ci_upstream_trees.yml"))
+        .expect("read ci_upstream_trees.yml");
+    assert!(
+        upstream.contains("--include-ignored"),
+        "upstream workflow must pass --include-ignored"
+    );
+    for entry in std::fs::read_dir(repo().join("tests")).expect("read tests") {
+        let path = entry.expect("tests entry").path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+            continue;
+        }
+        let name = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .expect("stem");
+        if name == "real_tree_scale" {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("read test");
+        let tests = source.matches("#[test]").count();
+        let ignores = source.matches("#[ignore").count();
+        let ignore_only = tests > 0 && ignores >= tests;
+        if ignore_only {
+            assert!(
+                upstream.contains(name),
+                "{name} is ignore-only and is not named by ci_upstream_trees.yml"
+            );
+        } else {
+            assert!(
+                ci.contains(&format!("--test {name}")),
+                "ci_test.yml does not run --test {name}"
+            );
+        }
+    }
+}

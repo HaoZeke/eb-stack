@@ -36,4 +36,7 @@ jobs:
           # shellcheck disable=SC1091
           source "${{ runner.temp }}/eb-upstream/env.sh"
           set +a
+          # Ignore-only integration tests. Default CI skips them.
+          # component_reach_eessi component_reach_real easyblock_reach_real
+          # pr_merge_order_real pr_overlap_easyconfigs_real
           cargo test --locked --all-targets -- --include-ignored --nocapture
