@@ -200,6 +200,10 @@ All notable changes to this project are documented here.
 
 ### Documentation
 
+- The pull-request how-to runs on recorded software-layer pull requests
+  1585 and 1728 and on the recorded open easyconfigs pull requests.
+  The reference example uses those same files.
+
 - The dependency-closure page runs on recorded slices of
   easybuild-easyconfigs develop `981d2123`, the v5.4.1 easyblocks,
   framework, and easyconfigs tags, the conda-forge zlib feedstock at
@@ -606,7 +610,7 @@ All notable changes to this project are documented here.
   easybuild-easyconfigs develop `981d2123`, licence file included.
   The easyblock-reach how-to uses the same fetch script.
 - The easyconfigs `pr-overlap` example in the CLI reference is a run
-  that writes 8 records, with paths from this checkout.
+  that writes 4 records, on the recorded open pull requests.
 - CI runs every integration test file. Ignore-only files are named by
   the upstream-trees workflow, which passes `--include-ignored`.
   `real_tree_scale` still needs a local robot tree and is not in that

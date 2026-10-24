@@ -103,18 +103,20 @@ fn report_howtos_quote_the_fixture_commands() {
         .args([
             "pr-overlap",
             "--pr",
-            "tests/pr_overlap_fixtures/prs.json",
+            "tests/pr_overlap_layer/prs.json",
             "--easyconfigs",
-            "tests/pr_overlap_fixtures/release",
+            "tests/pr_overlap_layer",
             "--installed",
-            "tests/pr_overlap_fixtures/installed.txt",
+            "tests/pr_overlap_layer/installed.txt",
             "--installed-label",
-            "x86_64/amd/zen4",
+            "none",
             "--generated-at",
-            "2026-10-22T00:00:00Z",
+            "2026-10-24T00:00:00Z",
+            "--repo-url",
+            "https://github.com/EESSI/software-layer",
+            "--eessi-version",
+            "2026.06",
             "--merge-order",
-            "--merged",
-            "11",
             "--out-dir",
         ])
         .arg(&overlap)
@@ -126,13 +128,19 @@ fn report_howtos_quote_the_fixture_commands() {
         String::from_utf8_lossy(&status.stderr)
     );
     let stdout = String::from_utf8(status.stdout).unwrap();
-    assert!(stdout.contains("prs=3"), "{stdout}");
+    assert!(
+        stdout.contains("prs=2 records=2 shared_modules=91"),
+        "{stdout}"
+    );
     let order = std::fs::read_to_string(overlap.join("merge-order.toml")).unwrap();
-    assert!(order.contains("position = 1\npr = 13\n"), "{order}");
-    assert!(order.contains("pr = 12\n"), "{order}");
+    assert!(order.contains("position = 1\npr = 1585\n"), "{order}");
+    assert!(order.contains("pr = 1728\n"), "{order}");
+    assert!(order.contains("after = [1585]"), "{order}");
     let page = std::fs::read_to_string(root().join("docs/orgmode/howto/pr-overlap.org")).unwrap();
-    assert!(page.contains("prs=3 records=3 shared_modules=2"), "{page}");
-    assert!(page.contains("tests/pr_overlap_fixtures/prs.json"));
+    assert!(page.contains("prs=2 records=2 shared_modules=91"), "{page}");
+    assert!(page.contains("tests/pr_overlap_layer/prs.json"));
+    assert!(page.contains("prs=4 records=4 shared_modules=1"));
+    assert!(page.contains("tests/pr_overlap_easyconfigs_open/prs.json"));
 
     let easy = tmp.path().join("easy");
     let status = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
@@ -143,11 +151,11 @@ fn report_howtos_quote_the_fixture_commands() {
             "--kind",
             "easyconfigs",
             "--pr",
-            "tests/pr_overlap_easyconfigs_fixtures/prs.json",
+            "tests/pr_overlap_easyconfigs_open/prs.json",
             "--easyconfigs",
-            "tests/pr_overlap_easyconfigs_fixtures",
+            "tests/pr_overlap_easyconfigs_open/tree",
             "--generated-at",
-            "2026-10-22T00:00:00Z",
+            "2026-10-24T00:00:00Z",
             "--repo-url",
             "https://github.com/easybuilders/easybuild-easyconfigs",
             "--out-dir",
@@ -162,7 +170,7 @@ fn report_howtos_quote_the_fixture_commands() {
     );
     let got = std::fs::read_to_string(easy.join("overlap.md")).unwrap();
     let want = std::fs::read_to_string(
-        root().join("tests/pr_overlap_easyconfigs_fixtures/expected/overlap.md"),
+        root().join("tests/pr_overlap_easyconfigs_open/expected/overlap.md"),
     )
     .unwrap();
     assert_eq!(got, want);

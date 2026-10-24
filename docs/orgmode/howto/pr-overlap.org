@@ -8,32 +8,52 @@ open pull request would build.
 The inputs are the pull requests' easystack files, the release easyconfigs,
 and a list of installed modules. Nothing from a pull request is executed.
 
-* Run it on the fixture
+* Run it on the recorded pull requests
 
-~tests/pr_overlap_fixtures/prs.json~ is pull requests 11 and 13 adding
-~freetype~, and pull request 12 adding ~Graphviz~, on the 2026.06
-easystack. The release tree and the installed list sit next to that file.
+~tests/pr_overlap_layer/~ records pull requests 1585 and 1728 from
+European Environment for Scientific Software Installations (EESSI) software-layer ~b2c10c7278f8b741f4053ddb2907dc4d062063d1~. Both
+change
+~easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.0-2026.1.yml~.
+1585 adds ~SciPy-bundle-2026.05-gfbf-2026.1.eb~. 1728 adds
+~PLUMED-2.10.0-foss-2026.1.eb~, and that recipe depends on SciPy-bundle
+2026.05. The easyconfigs are the 109 modules the two closures reach,
+copied from easybuild-easyconfigs develop
+~981d2123dddccca9ce0b15f9eb2643e872332f5e~. ~installed.txt~ is a comment,
+because this checkout has no mounted prefix.
+
+The 1585/1728 pair is a replay of a recorded state. Pull request 1585
+merged on 2026-09-04. The recorded base of 1728 already lists
+~SciPy-bundle-2026.05-gfbf-2026.1.eb~. The two used different bases.
+The command replays 1728's easystack against an empty ~installed.txt~,
+which is why the pair shares 91 modules. To run the same command on
+live pull requests, clone ~EESSI/software-layer~, write one JSON file
+per open pull request with ~examples/eessi-pr-overlap/fetch-prs.sh~,
+and pass the prefix's installed module list. The next section is that
+run.
 
 #+begin_src bash
-eb-stack pr-overlap --pr tests/pr_overlap_fixtures/prs.json \
-  --easyconfigs tests/pr_overlap_fixtures/release \
-  --installed tests/pr_overlap_fixtures/installed.txt \
-  --installed-label x86_64/amd/zen4 \
-  --generated-at 2026-10-22T00:00:00Z \
-  --merge-order --merged 11 \
+eb-stack pr-overlap --pr tests/pr_overlap_layer/prs.json \
+  --easyconfigs tests/pr_overlap_layer \
+  --installed tests/pr_overlap_layer/installed.txt \
+  --installed-label none \
+  --generated-at 2026-10-24T00:00:00Z \
+  --repo-url https://github.com/EESSI/software-layer \
+  --eessi-version 2026.06 \
+  --merge-order \
   --out-dir /tmp/pr-overlap-out
 #+end_src
 
-The command prints ~prs=3 records=3 shared_modules=2~.
+The command prints ~prs=2 records=2 shared_modules=91 skipped_easyconfigs=0~.
 ~--merge-order~ writes ~/tmp/pr-overlap-out/merge-order.toml~. Position 1
-is pull request 13, which builds nothing once 11 has merged, and position
-2 is pull request 12, which still builds Graphviz.
+is pull request 1585, which builds the 91 modules. Position 2 is pull
+request 1728, which builds the remaining 18 once 1585 is first, and
+~after~ is 1585.
 
 ~fetch-prs.sh~ lives in this repository at
 ~examples/eessi-pr-overlap/fetch-prs.sh~. It writes one JSON file per open
-pull request. Pass those files as repeated ~--pr~ arguments, and pass
-~--commit-tree NAME=DIR~ and ~--easyblocks-commit NAME=DIR~ for each
-directory it wrote. ~--easyconfigs~ is the easyconfigs tree that comes
+pull request from a clone. Pass those files as repeated ~--pr~ arguments,
+and pass ~--commit-tree NAME=DIR~ and ~--easyblocks-commit NAME=DIR~ for
+each directory it wrote. ~--easyconfigs~ is the easyconfigs tree that comes
 with the EasyBuild version the easystack names. ~--installed-modulerc~
 is that prefix's ~modules/all~. ~--filter-deps~ drops dependencies the
 way EasyBuild does; when the flag is omitted and ~EASYBUILD_FILTER_DEPS~
@@ -53,22 +73,23 @@ substring. ~--installed-label~ is the string recorded on the report.
 From a clone of ~EESSI/software-layer~, with ~gh~ authenticated for public
 reads. ~EB_EASYCONFIGS~ and ~EB_EASYBLOCKS~ come from
 ~scripts/fetch-upstream-trees.sh~. ~examples/eessi-pr-overlap/fetch-prs.sh~
-writes one JSON file per open pull request.
+writes one JSON file per open pull request. The outputs go under ~/tmp~
+so the checkout stays unchanged.
 
 #+begin_src bash
 scripts/fetch-upstream-trees.sh
 set -a
 source "${EB_UPSTREAM_CACHE:-$HOME/.cache/eb-stack/upstream}/env.sh"
 set +a
-examples/eessi-pr-overlap/fetch-prs.sh EESSI/software-layer 2026.06 in/
+examples/eessi-pr-overlap/fetch-prs.sh EESSI/software-layer 2026.06 /tmp/pr-overlap-in/
 find "$EESSI_SOFTWARE_PATH/software" -mindepth 2 -maxdepth 2 -type d -printf '%P\n' \
-  | sort > installed.txt
-eb-stack pr-overlap --pr in/prs/*.json \
-  $(for d in in/commit-trees/*/; do printf -- '--commit-tree %s=%s ' "$(basename "$d")" "$d"; done) \
-  $(for d in in/easyblocks/*/; do printf -- '--easyblocks-commit %s=%s ' "$(basename "$d")" "$d"; done) \
+  | sort > /tmp/pr-overlap-installed.txt
+eb-stack pr-overlap --pr /tmp/pr-overlap-in/prs/*.json \
+  $(for d in /tmp/pr-overlap-in/commit-trees/*/; do printf -- '--commit-tree %s=%s ' "$(basename "$d")" "$d"; done) \
+  $(for d in /tmp/pr-overlap-in/easyblocks/*/; do printf -- '--easyblocks-commit %s=%s ' "$(basename "$d")" "$d"; done) \
   --easyconfigs "$EB_EASYCONFIGS" \
   --easyblocks "$EB_EASYBLOCKS" \
-  --installed installed.txt \
+  --installed /tmp/pr-overlap-installed.txt \
   --installed-modulerc "$EESSI_SOFTWARE_PATH/modules/all" \
   --filter-deps "$EASYBUILD_FILTER_DEPS" \
   --installed-label x86_64/amd/zen4 \
@@ -78,18 +99,19 @@ eb-stack pr-overlap --pr in/prs/*.json \
 
 * Read which modules are shared
 
-~out/prs/<N>.toml~ lists ~to_build~ as one sorted line per module.
-Duplicates across those lines are the overlap:
+~/tmp/pr-overlap-out/prs/<N>.toml~ lists ~to_build~ as one sorted line per
+module. Duplicates across those lines are the overlap:
 
 #+begin_src bash
 awk '/^to_build = \[\]/{next} /^to_build = \[/{f=1; next} f && /^\]/{f=0; next} f' /tmp/pr-overlap-out/prs/*.toml | sort | uniq -d
 #+end_src
 
-The shared lines from that fixture are ~freetype/2.14.1-GCCcore-15.2.0~
-and ~libpng/1.6.50-GCCcore-15.2.0~. ~/tmp/pr-overlap-out/overlap.md~ is
-the same answer as a table. ~/tmp/pr-overlap-out/overlap.toml~ is the
-index. Closed pull requests have no file: each run rewrites ~prs/~ to the
-open set.
+On the recorded pair, that list has 91 modules.
+~/tmp/pr-overlap-out/overlap.md~ is the same answer as a table. The
+SciPy-bundle row names pull requests 1585 and 1728.
+~/tmp/pr-overlap-out/overlap.toml~
+is the index. Closed pull requests have no file: each run rewrites ~prs/~
+to the open set.
 
 * Wire it into CI
 
@@ -124,56 +146,49 @@ shared module overwrites the first binary, is covered in
 
 * Order the merges
 
-~--merge-order~ writes ~out/merge-order.toml~ and appends a table to
-~out/overlap.md~. ~--merged 11~ below treats pull request 11 as already
-installed, then orders the other two. The three JSON objects are pull
-requests 11 and 13 adding ~freetype-2.14.1-GCCcore-15.2.0.eb~, and pull
-request 12 adding ~Graphviz-14.0.2-GCCcore-15.2.0.eb~, on the 2026.06
-easystack from the fixture test.
-
-The merge-order command is the one in [[*Run it on the fixture][Run it on the fixture]].
-The rule is in [[file:../explanation/pr-overlap.org][Merge order and knock-on]].
+~--merge-order~ writes ~/tmp/pr-overlap-out/merge-order.toml~ and appends a
+table to ~/tmp/pr-overlap-out/overlap.md~. The command is the one in
+[[*Run it on the recorded pull requests][Run it on the recorded pull requests]].
+Position 1 is 1585 (91 modules). Position 2 is 1728 (18 modules), and
+~after~ is 1585. The rule is in
+[[file:../explanation/pr-overlap.org][Merge order and knock-on]].
 
 * What one merge changes
 
-~--impact 11~ writes ~out/merge-impact.toml~ and does not write
-~merge-order.toml~. It is the effect of merging 11 on its own, not the
-residual after earlier steps of ~--merge-order~. Pull request 12 shrinks
-by ~freetype/2.14.1-GCCcore-15.2.0~ and ~libpng/1.6.50-GCCcore-15.2.0~, and
-the depends-on edge for freetype resolves, because 11 asks for freetype
-and 12 only reaches it. Pull request 13 shrinks by the same two modules.
-Both 11 and 13 ask for freetype, so that edge does not resolve.
-~--impact 999~ exits with ~--impact 999: no pull request with that number~.
+~--impact N~ writes ~/tmp/pr-overlap-out/merge-impact.toml~ and does not
+write ~merge-order.toml~. It is the effect of merging N on its own, not
+the residual after earlier steps of ~--merge-order~. A number that is not
+in the input exits with ~--impact N: no pull request with that number~.
+The recorded command above does not pass ~--impact~.
 
 * For easybuild-easyconfigs pull requests
 
-4 easyconfigs in ~tests/pr_overlap_easyconfigs_fixtures/~ and 8 pull
-requests cover a shared file, a shared module, and a dependency. Pull
-request 7 adds ~Need~. Pull request 8 adds ~User~, which depends on
-~Need~, so the report records that dependency. The test
-~tests/pr_overlap_easyconfigs.rs~ runs this command, which exited 0:
+The recorded open pull requests are ~tests/pr_overlap_easyconfigs_open/~,
+read on 2026-10-24 and closed against develop
+~981d2123dddccca9ce0b15f9eb2643e872332f5e~.
 
 #+begin_src bash
 eb-stack pr-overlap \
   --kind easyconfigs \
-  --pr tests/pr_overlap_easyconfigs_fixtures/prs.json \
-  --easyconfigs tests/pr_overlap_easyconfigs_fixtures \
-  --generated-at 2026-10-22T00:00:00Z \
+  --pr tests/pr_overlap_easyconfigs_open/prs.json \
+  --easyconfigs tests/pr_overlap_easyconfigs_open/tree \
+  --generated-at 2026-10-24T00:00:00Z \
   --repo-url https://github.com/easybuilders/easybuild-easyconfigs \
-  --out-dir /tmp/ec-fixture-out
+  --out-dir /tmp/ec-open-out
 #+end_src
 
-The command prints ~prs=8 records=8 shared_modules=2~. The files under
-~/tmp/ec-fixture-out~ match ~tests/pr_overlap_easyconfigs_fixtures/expected/~.
+The command prints ~prs=4 records=4 shared_modules=1 skipped_easyconfigs=0~.
+The files under ~/tmp/ec-open-out~ match
+~tests/pr_overlap_easyconfigs_open/expected/~.
 
-~--installed~ is omitted, so ~to_build~ equals ~new_modules~. The JSON is
-the 8 pull requests the test builds. ~--repo-url~ links each pull request
-number in ~overlap.md~.
+~--installed~ is omitted, so ~to_build~ equals ~new_modules~. ~--repo-url~
+links each pull request number in ~overlap.md~. 22823 and 24575 share
+~Mathematica/14.2.1~.
 
-~examples/easyconfigs-pr-overlap/fetch-prs.sh~ lists open pull requests
-and reads ~.eb~ blobs under ~easybuild/easyconfigs/~. It does not check a
-pull request out. The JSON field is ~easyconfigs~, which ~--pr~ reads.
-
-Four open pull requests recorded on 2026-10-24, closed against develop
-~981d2123~, are in
-[[file:easyconfigs-pr-overlap.org][close open easybuild-easyconfigs pull requests]].
+~eb-stack pr-overlap --kind easyconfigs --open OWNER/NAME~ is the command
+that reads those pull requests. It calls ~fetch_open_easyconfig_prs~.
+~examples/easyconfigs-pr-overlap/fetch-prs.sh~ collects the same JSON with
+~gh~ and git, from a clone, and does not check a pull request out. The
+page
+[[file:easyconfigs-pr-overlap.org][close open easybuild-easyconfigs pull requests]]
+says which of the two is the one the tool calls.
