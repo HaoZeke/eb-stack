@@ -5,6 +5,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+if [[ ! -s "${ROOT}/docs/source/index.rst" ]]; then
+  echo "ERROR: docs/source/index.rst is missing or empty." >&2
+  echo "Org export did not produce the Sphinx index; sphinx-build will not run." >&2
+  exit 1
+fi
+
 pick_python() {
   if [[ -n "${EB_STACK_DOCS_PYTHON:-}" && -x "${EB_STACK_DOCS_PYTHON}" ]]; then
     echo "$EB_STACK_DOCS_PYTHON"

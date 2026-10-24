@@ -17,8 +17,21 @@ if [[ -z "$GEN" ]]; then
   fi
 fi
 
-rm -rf docs/source/crates/eb_stack
-mkdir -p docs/source/crates
+# Delete only the generated crate tree under docs/source/crates.
+crates="${ROOT}/docs/source/crates"
+dest="${crates}/eb_stack"
+mkdir -p "${crates}"
+if [[ -e "${dest}" ]]; then
+  case "${dest}" in
+    "${crates}/"*)
+      rm -r -- "${dest}"
+      ;;
+    *)
+      echo "gen-rust-api: refusing to remove ${dest}" >&2
+      exit 1
+      ;;
+  esac
+fi
 echo "using $GEN"
 "$GEN" '{"crate_name":"eb_stack","crate_dir":".","doc_dir":"docs/source/crates","force":true,"strip_src":true}'
 test -f docs/source/crates/eb_stack/lib.rst

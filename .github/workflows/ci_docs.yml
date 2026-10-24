@@ -58,6 +58,10 @@ jobs:
       - name: Assert version-one CLI and Rust API docs
         run: |
           set -euo pipefail
+          # Org export must have written the master document.  The Sphinx
+          # script refuses to run without it; keep the check here so a
+          # workflow change cannot skip it.
+          test -s docs/source/index.rst
           # Sphinx splits code literals into per-word <span class="pre"> elements,
           # so multi-word phrases only exist in the tag-stripped text.
           cli_text=$(sed -e 's/&#160;/ /g' -e 's/<[^>]*>//g' docs/build/reference/cli.html)

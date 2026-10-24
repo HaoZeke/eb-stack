@@ -23,6 +23,9 @@ All notable changes to this project are documented here.
   `--policy`. `stack_policy` is the spelling to pass.
 - MCP `merged` and `impact` reject a bare number. They take an array
   of pull-request numbers, the same shape as the repeated CLI flags.
+- The Sphinx build does not start when Org export left
+  `docs/source/index.rst` missing or empty. Rust API generation
+  deletes only the generated tree under `docs/source/crates`.
 - Org export to reStructuredText resolves deferred element values
   before ox-rst reads them, and fetches ox-rst
   `b73eff187eebac24b457688bfd27f09eff434860` into a cache outside the
