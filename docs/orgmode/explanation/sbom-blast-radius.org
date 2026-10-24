@@ -1,0 +1,588 @@
+#+TITLE: Dependency closure
+#+OPTIONS: toc:t num:nil author:nil
+
+A change to one easyconfig, one easyblock, or one bundled component is a
+question about the other modules that name it. A planned software bill of
+materials (SBOM) records that question: components, and the edges between
+them, taken from the recipes before anything is installed. The commands on
+this page answer it for the person writing an easyconfig, the person
+reviewing one, the person changing an easyblock or a framework module, the
+person triaging a Common Vulnerabilities and Exposures (CVE) entry, and
+the person who keeps a software layer building.
+
+Those questions show up for the European Environment for Scientific
+Software Installations (EESSI). Other stacks raise them too. The fixture
+trees in this repository supply the numbers, including the small
+EESSI-shaped easystacks under ~tests/~. Each command takes an easyconfigs
+tree and, where the question is a mounted prefix, a list of installed
+modules. The runs write under ~/tmp/sbom-demo~. The version string is
+~eb-stack 0.3.0~.
+
+Those runs are the short form of the same commands. The how-tos list
+every flag:
+[[file:../howto/pr-overlap.org][pull-request overlap]],
+[[file:../howto/rebuild-set.org][an in-place patch]],
+[[file:../howto/component-reach.org][a named component]],
+[[file:../howto/easyblock-reach.org][an easyblock change]], and
+[[file:../howto/bump-recipe.org][a recipe bump]]. Output fields are in
+[[file:../reference/formats.org][output formats]].
+
+* A planned stack SBOM
+
+~stack solve --sbom-out~ writes a CycloneDX 1.5 document for the selection.
+~stack sbom --lock~ writes one later, from a lock that already exists. The
+edges are not stored in the lock. Both commands read them from the
+easyconfigs the lock names. A runtime dependency that is also selected is
+a ~dependsOn~ edge. A builddependency is the component property
+~eb_stack:buildDependsOn~. An unreadable path contributes no edge. The
+document does not draw an edge from every package to every other package.
+
+The fixture ~fixtures/gromacs_2025_to_next~ solves foss-2025b against a
+foss-2025a baseline:
+
+#+begin_src bash
+eb-stack stack solve \
+  --easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
+  --policy fixtures/gromacs_2025_to_next/policies/prefer_newer.json \
+  --baseline-easyconfigs fixtures/gromacs_2025_to_next/easyconfigs \
+  --lock-out /tmp/sbom-demo/stack.lock.json \
+  --sbom-out /tmp/sbom-demo/stack.cdx.json \
+  --stack-diff-out /tmp/sbom-demo/stack.diff.md
+#+end_src
+
+#+begin_src text
+lock=/tmp/sbom-demo/stack.lock.json packages=5
+#+end_src
+
+#+begin_src bash
+eb-stack stack sbom \
+  --lock /tmp/sbom-demo/stack.lock.json \
+  --out /tmp/sbom-demo/stack-from-lock.cdx.json
+#+end_src
+
+#+begin_src text
+sbom=/tmp/sbom-demo/stack-from-lock.cdx.json components=5 with_artifact_facts=0
+#+end_src
+
+~with_artifact_facts=0~ because those five recipes do not state a checksum.
+The metadata property ~eb_stack:document_kind~ is
+~planned-sbom-from-lock~ on both files. GROMACS is the only component with
+outgoing runtime edges:
+
+#+begin_src text
+pkg:generic/GROMACS@2025.0?toolchain=foss-2025b
+  pkg:generic/Python@3.12.3?toolchain=foss-2025b
+  pkg:generic/OpenBLAS@0.3.27?toolchain=foss-2025b
+  pkg:generic/OpenMPI@5.0.3?toolchain=foss-2025b
+  pkg:generic/FFTW@3.3.10?toolchain=foss-2025b
+#+end_src
+
+The stack diff from the same solve classifies the move off the baseline.
+Its summary is 2 unchanged, 0 added, 0 removed, 3 version-bumped. The
+solve keeps the Fastest Fourier Transform in the West (FFTW) at 3.3.10,
+and it keeps Python at 3.12.3. GROMACS moves 2024.1 to 2025.0, OpenBLAS
+moves 0.3.23 to 0.3.27, and OpenMPI moves 4.1.5 to 5.0.3. That is the
+closure of one generation step: four libraries under one application, and
+three of the five packages changing version together.
+
+* A recipe bump
+
+An author retargeting one recipe gets the same kind of document for that
+recipe alone. The GROMACS 2024.4 recipe in ~tests/repro_fixtures/gromacs~,
+bumped onto foss-2024a against ~tests/repro_fixtures/universe_foss_2024a~:
+
+#+begin_src bash
+eb-stack package bump \
+  --source tests/repro_fixtures/gromacs/GROMACS-2024.4-foss-2023b.eb \
+  --toolchain-name foss \
+  --toolchain-version 2024a \
+  --easyconfigs tests/repro_fixtures/universe_foss_2024a \
+  --out-dir /tmp/sbom-demo/gromacs-bump
+#+end_src
+
+#+begin_src text
+manifest=/tmp/sbom-demo/gromacs-bump/package.plan.json
+sbom=/tmp/sbom-demo/gromacs-bump/package.sbom.cdx.json
+lock=/tmp/sbom-demo/gromacs-bump/locks/default.lock.json
+easyconfig=/tmp/sbom-demo/gromacs-bump/easyconfigs/g/GROMACS/GROMACS-2024.4-foss-2024a.eb
+#+end_src
+
+The SBOM root is GROMACS 2024.4. It has 7 components and 6 ~dependsOn~
+edges, all from that root:
+
+#+begin_src text
+pkg:generic/GROMACS@2024.4
+  pkg:generic/Python@3.12.3
+  pkg:generic/SciPy-bundle@2024.05
+  pkg:generic/networkx@3.4.2
+  pkg:generic/mpi4py@4.0.1
+  pkg:generic/CMake@3.29.3
+  pkg:generic/scikit-build-core@0.11.1
+#+end_src
+
+The metadata property ~eb-stack:document-kind~ is
+~canonical-package-plan~. The solve establishes a resolves claim for that
+bundle. It does not install the modules.
+
+* A checksum dict when the version changes
+
+The hash in that SBOM has to name the artifact the new version will fetch.
+A version bump with no new checksum clears the old digest to an empty
+string and records a residual. It does not keep the previous tarball's
+hash. A checksum dict is the case that used to drop entries: a key written
+as a percent expression, an empty digest for a second file, and a key that
+does not mention the version.
+
+~local_arch~ is a name in the input recipe, not a value this command
+computes. The empty robot directory satisfies ~--easyconfigs~. The
+toolchain is ~system~ with an empty version, which is the system toolchain
+this recipe already uses.
+
+#+begin_src text
+name = 'Pkg'
+version = '1.0.0'
+homepage = 'https://example.invalid/pkg'
+description = 'Checksum dict with a percent-expression key'
+toolchain = SYSTEM
+source_urls = ['https://mirror.example.org/src']
+sources = ['pkg-%(version)s.tar.gz']
+checksums = [{
+    'pkg-1.0.0-%s.tar.gz' % local_arch:
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'pkg-1.0.0-linux-arm64.tar.gz': '',
+    'notes.txt': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+}]
+moduleclass = 'tools'
+#+end_src
+
+#+begin_src bash
+eb-stack package bump \
+  --source /tmp/sbom-demo/ck/Pkg-1.0.0.eb \
+  --toolchain-name system \
+  --toolchain-version '' \
+  --version 1.2.3 \
+  --source-checksum dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd \
+  --easyconfigs /tmp/sbom-demo/ck/robot \
+  --out-dir /tmp/sbom-demo/ck/out
+#+end_src
+
+#+begin_src text
+manifest=/tmp/sbom-demo/ck/out/package.plan.json
+sbom=/tmp/sbom-demo/ck/out/package.sbom.cdx.json
+lock=/tmp/sbom-demo/ck/out/locks/default.lock.json
+easyconfig=/tmp/sbom-demo/ck/out/easyconfigs/p/Pkg/Pkg-1.2.3.eb
+#+end_src
+
+The emitted ~checksums~ entry is:
+
+#+begin_src text
+checksums = [{
+    'pkg-1.2.3-%s.tar.gz' % local_arch:
+        'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+    'pkg-1.2.3-linux-arm64.tar.gz': '',
+    'notes.txt': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+}]
+#+end_src
+
+The expression key is renamed to 1.2.3 and receives the new digest. The
+arm64 key is renamed and stays empty, so the old empty slot is not filled
+with the amd64 hash. ~notes.txt~ is unchanged. The SBOM root hash is
+SHA-256 ~dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd~,
+the digest that was passed in. ~sources~ is still
+~pkg-%(version)s.tar.gz~.
+
+* The tool schema and the command
+
+A reviewer passes every flag the command accepts. A client passes the same
+flags when it drives that work. Two small checks cover the recipe side.
+~recipe templates~ resolves the template table for one name and version.
+The forge accounts default to the lowercased name. ~arch~ is the machine
+the command ran on.
+
+#+begin_src bash
+eb-stack recipe templates --name cURL --version 8.17.0
+#+end_src
+
+#+begin_src text
+{
+  "arch": "x86_64",
+  "bitbucket_account": "curl",
+  "github_account": "curl",
+  "name": "cURL",
+  "nameletter": "c",
+  "nameletterlower": "c",
+  "namelower": "curl",
+  "toolchain_name": "system",
+  "toolchain_version": "",
+  "version": "8.17.0",
+  "version_major": "8",
+  "version_major_minor": "8.17",
+  "version_major_minor_patch": "8.17.0",
+  "version_minor": "17",
+  "version_minor_patch": "17.0",
+  "version_patch": "0",
+  "versionsuffix": ""
+}
+#+end_src
+
+~--require-configopt~ takes the flag as it appears in ~configopts~, dashes
+included. The recipe under ~/tmp/sbom-demo/schema/Tool-1.0.eb~ sets
+~configopts = '--with-tests'~ and uses the system toolchain. The robot
+directory is empty. ~--metadata-only~ skips the dependency walk.
+
+#+begin_src bash
+eb-stack recipe check \
+  --recipe /tmp/sbom-demo/schema/Tool-1.0.eb \
+  --easyconfigs /tmp/sbom-demo/schema/robot \
+  --require-configopt --with-tests \
+  --metadata-only
+#+end_src
+
+#+begin_src text
+maintainer_acceptability={
+  "findings": []
+}
+easyblock_resolution={
+  "bases": null,
+  "class": "ConfigureMake",
+  "defined_in": null,
+  "derived_from_name": false,
+  "extra_options": null,
+  "searched": []
+}
+recipe metadata resolves
+#+end_src
+
+The Model Context Protocol (MCP) catalog is the same surface. One
+~tools/list~ request:
+
+#+begin_src bash
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
+  | eb-stack mcp \
+  | jq -r '.result.tools[].name'
+#+end_src
+
+#+begin_src text
+eb_package_inspect
+eb_package_plan
+eb_package_bump
+eb_recipe_read
+eb_recipe_list
+eb_recipe_edit
+eb_recipe_apply_suggestion
+eb_recipe_diff
+eb_recipe_write
+eb_recipe_grep
+eb_recipe_check
+eb_recipe_lint
+eb_dep_versions
+eb_recipe_format
+eb_module_lint
+eb_easyblock_dry_run
+eb_build_log
+eb_build_test
+eb_stack_solve
+eb_stack_sbom
+eb_target_list
+eb_target_doctor
+eb_campaign_run
+eb_campaign_status
+eb_campaign_finding_claim
+eb_campaign_finding_resolve
+#+end_src
+
+That is 26 tools. ~eb_stack_solve~ exposes these properties, in the order
+~jq~ prints object keys:
+
+#+begin_src text
+baseline_also_toolchain
+baseline_commits_from
+baseline_easyconfigs
+baseline_easystack
+baseline_toolchain_version
+build_list_excludes_baseline
+build_list_out
+easyconfigs
+filter_deps
+jenkins_build_list_out
+jenkins_flags_from
+jenkins_gpu_systems
+jenkins_roots_only
+lock_out
+policy
+root
+roots_from_build_list
+sbom_out
+stack_diff_out
+toolchain
+#+end_src
+
+Each name matches one long option of ~eb-stack stack solve --help~. The
+option writes a hyphen where the property name has _. The help text has
+20 long options and no further one. ~jenkins_roots_only~ is the flag that
+writes one Jenkins line per root and leaves the dependencies to
+~eb --robot~.
+
+~eb_package_bump~ has 13 properties: ~dependencies~, ~easyconfigs~,
+~emit_easyblock~, ~fetch_checksums~, ~hierarchy_fixture~, ~out_dir~,
+~package_configs~, ~source~, ~source_checksum~, ~stack_policy~,
+~toolchain_name~, ~toolchain_version~, ~version~. ~--dep~ is
+~dependencies~. ~--package-config~ is ~package_configs~. ~--strict-patches~
+is not a property. ~eb_recipe_check~ maps ~--require-configopt~ to
+~require_configopts~ and otherwise uses the same names as its long options
+(~easyblocks~, ~easyconfigs~, ~metadata_only~, ~recipe~, ~seeded_from~,
+~seeded_git~, ~seeded_source_url~, ~source_tree~, ~strict~,
+~verify_sources~).
+
+* Pull requests
+
+A software-layer maintainer wants the shared modules. Two open pull
+requests build those modules. An easyconfig reviewer wants the shared
+files, the shared modules, and the added dependency. Two pull requests
+touch those files and modules. One pull request adds the dependency the
+other request needs. ~pr-overlap~ is that closure. ~prs/<N>.toml~ is the
+build set for pull request N. ~overlap.toml~ and ~overlap.md~ are the
+intersection.
+
+The software-layer run uses ~tests/pr_overlap_fixtures~. The pull-request
+file is the six records the integration test builds. Pull request 101 adds
+Graphviz to the 2026.06 easystack, 102 adds gnuplot, 103 adds NewThing
+pinned ~from-commit: abc~, 104 adds zlib on the rebuilds easystack, 105
+adds Graphviz on the 2025.06 easystack, and 106 adds an absent easyconfig
+pinned ~from-commit: def~. The default ~--eessi-version~ is 2026.06, so
+105 is not a record.
+
+#+begin_src bash
+eb-stack pr-overlap \
+  --pr /tmp/sbom-demo/pr/prs.json \
+  --easyconfigs tests/pr_overlap_fixtures/release \
+  --commit-tree abc=tests/pr_overlap_fixtures/commit-abc \
+  --installed tests/pr_overlap_fixtures/installed.txt \
+  --installed-label x86_64/amd/zen4 \
+  --exclude-path /accel/ \
+  --generated-at 2026-10-19T12:00:00Z \
+  --repo-url https://github.com/EESSI/software-layer \
+  --out-dir /tmp/sbom-demo/pr/out
+#+end_src
+
+#+begin_src text
+prs=6 records=5 shared_modules=2 skipped_easyconfigs=0 out=/tmp/sbom-demo/pr/out
+#+end_src
+
+The shared-module table in ~overlap.md~:
+
+#+begin_src text
+| Module | Pull requests |
+|---|---|
+| `freetype/2.14.1-GCCcore-15.2.0` | [#101](https://github.com/EESSI/software-layer/pull/101), [#102](https://github.com/EESSI/software-layer/pull/102) |
+| `libpng/1.6.50-GCCcore-15.2.0` | [#101](https://github.com/EESSI/software-layer/pull/101), [#102](https://github.com/EESSI/software-layer/pull/102), [#103](https://github.com/EESSI/software-layer/pull/103) |
+#+end_src
+
+~prs/101.toml~ starts with ~schema_version = 1~ and the generated-file
+header. Its ~to_build~ is Graphviz, freetype, and libpng.
+~already_installed~ is CMake, GCCcore, and zlib, which is where the walk
+stops. Pull request 102 still builds gnuplot and reports one unresolved
+dependency, ~Missing ==9.9~. Pull request 106 builds nothing: the
+easyconfig is not on the robot path, and the missing commit tree is a
+note.
+
+The easyconfigs kind does not need an installed list. The tree is
+~tests/pr_overlap_easyconfigs_fixtures~. Six pull requests: 1 and 2 edit
+~l/Lib/Lib-1.0.eb~, 3 and 4 add ~New~ depending on Lib, 5 adds ~Dep~, and
+6 adds ~App~ depending on Dep.
+
+#+begin_src bash
+eb-stack pr-overlap --kind easyconfigs \
+  --pr /tmp/sbom-demo/ec/prs.json \
+  --easyconfigs tests/pr_overlap_easyconfigs_fixtures \
+  --generated-at 2026-10-22T00:00:00Z \
+  --repo-url https://github.com/easybuilders/easybuild-easyconfigs \
+  --out-dir /tmp/sbom-demo/ec/out
+#+end_src
+
+#+begin_src text
+prs=6 records=6 shared_modules=1 skipped_easyconfigs=0 out=/tmp/sbom-demo/ec/out
+#+end_src
+
+~overlap.md~ lists the same file under two pull requests and the same
+new module under two pull requests. One pull request adds a dependency:
+
+#+begin_src text
+| Path | Pull requests |
+|---|---|
+| `l/Lib/Lib-1.0.eb` | [#1](https://github.com/easybuilders/easybuild-easyconfigs/pull/1), [#2](https://github.com/easybuilders/easybuild-easyconfigs/pull/2) |
+| `n/New/New-1.0.eb` | [#3](https://github.com/easybuilders/easybuild-easyconfigs/pull/3), [#4](https://github.com/easybuilders/easybuild-easyconfigs/pull/4) |
+
+| From | To | Modules |
+|---|---|---|
+| [#5](https://github.com/easybuilders/easybuild-easyconfigs/pull/5) | [#6](https://github.com/easybuilders/easybuild-easyconfigs/pull/6) | `Dep/1.0` |
+#+end_src
+
+The file links each path to
+~https://github.com/easybuilders/easybuild-easyconfigs/pull/N~. Pull
+request 1 lists reverse dependents ~Tool/1.0~ (1) and ~Wrap/1.0~ (2).
+Editing Lib reaches those modules in the base tree. This run builds
+nothing new for that pull request.
+
+* An in-place patch
+
+A CVE patch that keeps the easyconfig filename and the version still
+forces a rebuild of some installed modules and not of others.
+~rebuild-set~ closes the deployed easystacks and walks backward. The
+fixture is ~tests/rebuild_set_fixtures~. ~changed.txt~ names
+~zlib-1.3.1-GCCcore-15.2.0.eb~ and ~Absent-1.0.eb~.
+
+#+begin_src bash
+eb-stack rebuild-set \
+  --easyconfigs tests/rebuild_set_fixtures/release \
+  --installed tests/rebuild_set_fixtures/installed.txt \
+  --installed-label x86_64/amd/zen4 \
+  --generated-at 2026-10-22T12:00:00Z \
+  --changed tests/rebuild_set_fixtures/changed.txt \
+  --easystack tests/rebuild_set_fixtures/eessi-2026.06-eb-5.4.0-2026.1.yml \
+  --easystack tests/rebuild_set_fixtures/20261001-eb-5.4.1-zlib.yml \
+  --installed-modulerc tests/rebuild_set_fixtures/modules \
+  --easyblocks tests/rebuild_set_fixtures/easyblocks \
+  --out-dir /tmp/sbom-demo/rebuild
+#+end_src
+
+#+begin_src text
+changed=2 rows=8 must-rebuild=2 review=2 no-rebuild=4 missing=1 easystacks=2 skipped_easyconfigs=0 out=/tmp/sbom-demo/rebuild
+#+end_src
+
+~rebuild-set.md~ counts 2 must-rebuild, 2 review, 4 no-rebuild.
+~Absent-1.0.eb~ is the missing name. The rows for zlib are:
+
+#+begin_src text
+| Changed easyconfig | Dependent | Edge kind | Class | Reason |
+|---|---|---|---|---|
+| `zlib-1.3.1-GCCcore-15.2.0.eb` | `AppStatic/1.0-GCCcore-15.2.0` | builddependency | review | builddependency only, through libpng/1.6.50-GCCcore-15.2.0; it may have linked the patched package statically or embedded it |
+| `zlib-1.3.1-GCCcore-15.2.0.eb` | `Both/1.0-GCCcore-15.2.0` | runtime | no-rebuild | runtime dependency; links the patched package as a shared library |
+| `zlib-1.3.1-GCCcore-15.2.0.eb` | `Bundle/1.0-GCCcore-15.2.0` | extension | must-rebuild | the patched package is an extension in this bundle |
+| `zlib-1.3.1-GCCcore-15.2.0.eb` | `CMake/4.1.2-GCCcore-15.2.0` | builddependency | review | builddependency only; it may have linked the patched package statically or embedded it |
+| `zlib-1.3.1-GCCcore-15.2.0.eb` | `Graphviz/14.0.2-GCCcore-15.2.0` | runtime | no-rebuild | runtime dependency through libpng/1.6.50-GCCcore-15.2.0; links the patched package as a shared library |
+| `zlib-1.3.1-GCCcore-15.2.0.eb` | `PyApp/1.0-GCCcore-15.2.0` | runtime | no-rebuild | runtime dependency through Bundle/1.0-GCCcore-15.2.0; links the patched package as a shared library |
+| `zlib-1.3.1-GCCcore-15.2.0.eb` | `libpng/1.6.50-GCCcore-15.2.0` | runtime | no-rebuild | runtime dependency; links the patched package as a shared library |
+| `zlib-1.3.1-GCCcore-15.2.0.eb` | `zlib/1.3.1-GCCcore-15.2.0` | changed | must-rebuild | patched easyconfig |
+#+end_src
+
+A runtime dependency links the patched package as a shared library.
+Replacing that library requires no rebuild. A builddependency-only
+dependent stays in review. The graph cannot say whether the build linked
+zlib statically. The bundle contains zlib as an extension. That bundle
+must be rebuilt. The command writes one
+~rebuilds/<date>-eb-<version>-cve-patches.yml~ per EasyBuild version.
+That file lists class must-rebuild only. This run passed neither
+~--prefix~ nor ~--check-static~. The report says so.
+
+* A component named by a CVE
+
+The CVE names a component and a version. ~component-reach~ lists every
+recipe in one toolchain generation that carries that component, then feeds
+the recipes that contain the bytes into the same rebuild closure. On the
+rebuild-set tree, zlib 1.3.1 in generation 2026.1:
+
+#+begin_src bash
+eb-stack component-reach \
+  --component zlib \
+  --version 1.3.1 \
+  --generation 2026.1 \
+  --easyconfigs tests/rebuild_set_fixtures/release \
+  --installed tests/rebuild_set_fixtures/installed.txt \
+  --easystack tests/rebuild_set_fixtures/eessi-2026.06-eb-5.4.0-2026.1.yml \
+  --generated-at 2026-10-22T12:00:00Z \
+  --out-dir /tmp/sbom-demo/component-zlib
+#+end_src
+
+#+begin_src text
+component=zlib version=1.3.1 generation=2026.1 carriers=7 changed=2 must-rebuild=3 review=2 no-rebuild=5 out=/tmp/sbom-demo/component-zlib
+#+end_src
+
+The run reports seven carriers. The module itself is a carrier. Four
+dependency or builddependency rows are carriers. The bundle extension is
+a carrier. ~NotInstalled~ is a carrier, and it is not installed.
+~changed=2~ counts zlib and the bundle. A recipe counts as a patched root
+when it contains the component. A dependency on the component does not
+count as a patched root. The closure then has three must-rebuild rows.
+The bundle is both a root and an extension of zlib, which adds that extra
+must-rebuild row. Review stays 2. No-rebuild is 5, one more than
+~rebuild-set~. The bundle, taken as a root, also has PyApp as a runtime
+dependent.
+
+The component name matches as a whole token on those carriers. A
+compat-layer line counts, and a longer name does not. Two recipes plus
+~compat.txt~ containing ~curl 8.17.0~:
+
+#+begin_src bash
+eb-stack component-reach \
+  --component curl \
+  --version '*' \
+  --generation 2026.1 \
+  --easyconfigs /tmp/sbom-demo/curl \
+  --compat-layer /tmp/sbom-demo/curl/compat.txt \
+  --generated-at 2026-10-22T12:00:00Z \
+  --out-dir /tmp/sbom-demo/component-curl
+#+end_src
+
+#+begin_src text
+component=curl version=* generation=2026.1 carriers=3 changed=1 must-rebuild=1 review=0 no-rebuild=1 out=/tmp/sbom-demo/component-curl
+#+end_src
+
+The carriers are the compat-layer line (no easyconfig, no rebuild edge),
+~cURL/8.17.0-GCCcore-15.2.0~ as the module, and ~git/2-GCCcore-15.2.0~ as a
+dependency. The closure rebuilds cURL and does not rebuild git.
+
+* An easyblock or a framework module
+
+An easyblock change reaches the recipes that name that class, a subclass,
+or the implied ~EB_<Name>~ class. ~--reverse~ then lists modules that
+depend on a hit. The tree under ~/tmp/sbom-demo/ebreach/tree~ is four
+recipes and three classes. ~CMakeMake~ subclasses ~ConfigureMake~.
+~EB_GROMACS~ subclasses ~CMakeMake~. ~gromacs.eb~ has no ~easyblock~ line.
+~zlib.eb~ sets ~easyblock = 'CMakeMake'~ and is the only installed module.
+~make.eb~ sets ~ConfigureMake~. ~wrapper.eb~ depends on GROMACS. The
+changed file is ~cmakemake.py~.
+
+#+begin_src bash
+eb-stack easyblock-reach \
+  --easyblocks /tmp/sbom-demo/ebreach/tree/py \
+  --framework /tmp/sbom-demo/ebreach/tree/py \
+  --easyconfigs /tmp/sbom-demo/ebreach/tree/eb \
+  --file /tmp/sbom-demo/ebreach/tree/py/easybuild/easyblocks/generic/cmakemake.py \
+  --installed /tmp/sbom-demo/ebreach/installed.txt \
+  --reverse \
+  --generated-at 2026-10-22T00:00:00Z \
+  --out-dir /tmp/sbom-demo/ebreach/out
+#+end_src
+
+#+begin_src text
+easyconfigs=2 installed=1 classes=2 reverse=1 out=/tmp/sbom-demo/ebreach/out
+#+end_src
+
+~reach.md~ names the changed class ~CMakeMake~ and the reached classes
+~CMakeMake~ and ~EB_GROMACS~. The easyconfig table is GROMACS via
+~implied~ (not installed) and zlib via ~easyblock~ (installed). ~make~ is
+not a row: the parent class was not the change. The rebuild table is
+~wrapper/1~, kind ~runtime~.
+
+* The same document over MCP
+
+~eb_stack_sbom~ writes the CycloneDX file ~stack sbom~ writes. The
+~tools/list~ description reads: "Emit CycloneDX from an existing stack
+lock, reading dependency edges and source checksums from the easyconfigs
+the lock names." This call reads the foss-2025b lock from the first
+section:
+
+#+begin_src bash
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"eb_stack_sbom","arguments":{"lock":"/tmp/sbom-demo/stack.lock.json","out":"/tmp/sbom-demo/mcp-stack.cdx.json"}}}' \
+  | eb-stack mcp
+#+end_src
+
+#+begin_src text
+{"id":2,"jsonrpc":"2.0","result":{"content":[{"text":"{\n  \"components\": 5,\n  \"lock\": \"/tmp/sbom-demo/stack.lock.json\",\n  \"out\": \"/tmp/sbom-demo/mcp-stack.cdx.json\"\n}","type":"text"}],"isError":false,"structuredContent":{"components":5,"lock":"/tmp/sbom-demo/stack.lock.json","out":"/tmp/sbom-demo/mcp-stack.cdx.json"}}}
+#+end_src
+
+The ~dependsOn~ edges in ~/tmp/sbom-demo/mcp-stack.cdx.json~ are the same
+four edges ~stack sbom~ wrote for GROMACS 2025.0. The other four
+components have no outgoing runtime edge. Checksums stay absent, matching
+~with_artifact_facts=0~.

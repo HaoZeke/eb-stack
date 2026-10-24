@@ -54,6 +54,8 @@
 
    *Which modules carry a component?* → :doc:`howto/component-reach`
 
+   *What else does one change reach?* → :doc:`explanation/sbom-blast-radius`
+
    *CLI surface?* → :doc:`reference/cli`
 
    *Bundle schemas?* → :doc:`reference/package-bundles`
@@ -152,6 +154,7 @@
    explanation/fidelity
    explanation/pr-overlap
    explanation/rebuild-set
+   explanation/sbom-blast-radius
 
 .. toctree::
    :maxdepth: 1
@@ -262,7 +265,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [[file:explanation/fidelity.org][reproduction fidelity and limitations]],
     [[file:explanation/lifecycle.org][from recipe to installed stack]],
     [[file:explanation/pr-overlap.org][from one easystack line to a build set]],
-    [[file:explanation/rebuild-set.org][what an in-place patch forces a rebuild of]].
+    [[file:explanation/rebuild-set.org][what an in-place patch forces a rebuild of]],
+    [[file:explanation/sbom-blast-radius.org][what a dependency closure answers]].
   - Project: [[file:contributing.org][contributing]], [[file:changelog.org][changelog]].
 
 * Citation

@@ -124,7 +124,8 @@ The manual is organized around operator tasks:
 - [campaign state and typed findings](docs/orgmode/reference/campaigns.org);
 - [repair a failed campaign](docs/orgmode/howto/repair-campaign.org);
 - [command-line reference](docs/orgmode/reference/cli.org);
-- [which modules carry a component](docs/orgmode/howto/component-reach.org).
+- [which modules carry a component](docs/orgmode/howto/component-reach.org);
+- [what a dependency closure answers](docs/orgmode/explanation/sbom-blast-radius.org).
 
 The source manual lives in `docs/orgmode/`; the documentation workflow exports RST into `docs/source/` and validates the Sphinx site.
 

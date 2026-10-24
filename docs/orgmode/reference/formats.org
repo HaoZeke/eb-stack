@@ -180,9 +180,13 @@ solver selection, not a scan of installed software.
   *runtime* ~dependencies~, intersected with co-selected lock members.
   Build-time deps (~builddependencies~) go on the component property
   ~eb_stack:buildDependsOn~ (comma-separated refs), not the runtime graph.
-- From ~eb-stack stack sbom --lock LOCK~ (lock only): ~dependsOn~ is empty
-  (unknown edges). The document never invents all-to-all co-stack cycles.
-  Empty ~dependsOn~ arrays may be omitted by cyclonedx-bom serialization.
+- From ~eb-stack stack sbom --lock LOCK~, and from the MCP tool
+  ~eb_stack_sbom~: the same edges, read from the easyconfigs the lock
+  names. A runtime dependency that is also in the lock is a ~dependsOn~
+  edge. A builddependency is ~eb_stack:buildDependsOn~. An unreadable
+  path contributes no edges. The document does not invent all-to-all
+  co-stack cycles. Empty ~dependsOn~ arrays may be omitted by
+  cyclonedx-bom serialization.
 
 * Pull-request build set (~eb-stack pr-overlap~)
 

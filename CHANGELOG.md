@@ -14,6 +14,16 @@ All notable changes to this project are documented here.
 
 ### Documentation
 
+- Tighten the dependency-closure page. Spell out SBOM, CVE, and MCP on
+  first use, and rewrite the sentences a prose review flagged.
+  Command lines and recorded output are unchanged.
+- Explain what a dependency closure answers, with the fixture commands
+  for a planned stack SBOM, a recipe bump, a checksum-dict version bump,
+  the MCP schema, pull-request overlap, rebuild-set, component-reach,
+  and easyblock-reach. See
+  `docs/orgmode/explanation/sbom-blast-radius.org`. `stack sbom` and
+  `eb_stack_sbom` read dependency edges from the easyconfigs a lock
+  names.
 - Reword the doc comments on `DiffRequest::pr` and `python_syntax_error`
   so the generated Rust API pages are valid RST. A span that contains
   angle brackets is left as a single backtick, and a letter glued to a
