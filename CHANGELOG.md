@@ -262,7 +262,8 @@ All notable changes to this project are documented here.
   only a git range, and keeps named
   version tags such as `libXpm-3.5.17`. Several affected packages are
   one document with `kind` `cve`. `--easystack-url` reads a deployed
-  easystack over https.
+  easystack over https. `eb_component_reach` on `eb-stack mcp` runs
+  the same query.
 
 - `eb-stack rebuild-set` reports which installed modules an in-place
   easyconfig patch forces EESSI to rebuild. It closes the deployed

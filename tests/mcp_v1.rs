@@ -40,6 +40,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_build_test",
         "eb_stack_solve",
         "eb_stack_sbom",
+        "eb_component_reach",
         "eb_target_list",
         "eb_target_doctor",
         "eb_campaign_run",
@@ -1982,6 +1983,61 @@ fn mcp_recipe_findings_match_the_cli_on_hardcases_and_eon() {
     }
 }
 
+#[test]
+fn mcp_component_reach_accepts_a_purl() {
+    let _lock = WORKSPACE_ENV_LOCK.lock().expect("lock");
+    let previous = std::env::var("EASYBUILD_FILTER_DEPS").ok();
+    std::env::remove_var("EASYBUILD_FILTER_DEPS");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    std::fs::write(
+        root.join("cURL.eb"),
+        "name = 'cURL'\nversion = '8.17.0'\ntoolchain = {'name': 'GCCcore', 'version': '15.2.0'}\n",
+    )
+    .unwrap();
+    let out = root.join("out");
+    let response = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_component_reach",
+            "arguments": {
+                "purl": "pkg:generic/curl@8.17.0",
+                "generation": "2026.1",
+                "easyconfigs": [root],
+                "generated_at": "2026-10-22T12:00:00Z",
+                "out_dir": out
+            }
+        }
+    }))
+    .expect("component reach");
+    if let Some(value) = previous {
+        std::env::set_var("EASYBUILD_FILTER_DEPS", value);
+    }
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let body = &response["result"]["structuredContent"];
+    assert_eq!(body["component"], "curl");
+    assert_eq!(body["purl"], "pkg:generic/curl@8.17.0");
+    assert_eq!(body["carriers"][0]["role"], "module");
+    assert!(out.join("component-reach.json").is_file());
+    let refused = handle_message(&json!({
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "tools/call",
+        "params": {
+            "name": "eb_component_reach",
+            "arguments": {
+                "generation": "2026.1",
+                "easyconfigs": [root],
+                "easystack_url": ["http://example.invalid/stack.yml"]
+            }
+        }
+    }))
+    .expect("refused url");
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+}
+
 fn cli_long_flags(help: &str) -> Vec<String> {
     let mut flags = Vec::new();
     let mut options = false;
@@ -2032,6 +2088,7 @@ fn mcp_schemas_cover_cli_flags() {
         ("eb_recipe_format", "recipe format"),
         ("eb_stack_solve", "stack solve"),
         ("eb_stack_sbom", "stack sbom"),
+        ("eb_component_reach", "component-reach"),
         ("eb_target_list", "target list"),
         ("eb_target_doctor", "target doctor"),
         ("eb_campaign_run", "campaign run"),

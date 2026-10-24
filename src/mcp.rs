@@ -324,6 +324,24 @@ fn tool_catalog() -> Vec<Value> {
             &[("lock", "string")],
             &[("out", "string")],
         ),
+        tool_with_optional(
+            "eb_component_reach",
+            "List every easyconfig in one toolchain generation that carries a component, directly or as a bundle component, extension, Cargo crate, or Python wheel, and return the reverse-dependency closure. Pass component plus version, a purl, or a cve id resolved through OSV. easystack_url entries must be https. The result is the same document component-reach writes.",
+            &[("generation", "string"), ("easyconfigs", "array_min1")],
+            &[
+                ("component", "string"),
+                ("version", "string"),
+                ("purl", "string"),
+                ("cve", "string"),
+                ("installed", "string"),
+                ("easystack", "array"),
+                ("easystack_url", "array"),
+                ("compat_layer", "string"),
+                ("filter_deps", "array"),
+                ("generated_at", "string"),
+                ("out_dir", "string"),
+            ],
+        ),
         tool(
             "eb_target_list",
             "Resolve and list layered public build-target TOML configuration.",
@@ -408,27 +426,6 @@ fn tool_catalog() -> Vec<Value> {
                 ("generated_at", "string"),
                 ("prefix", "string"),
                 ("check_static", "boolean"),
-                ("out_dir", "string"),
-            ],
-        ),
-        tool_with_optional(
-            "eb_component_reach",
-            "List who carries a component in one toolchain generation and close their rebuild set.",
-            &[
-                ("component", "string"),
-                ("version", "string"),
-                ("generation", "string"),
-                ("easyconfigs", "array"),
-            ],
-            &[
-                ("purl", "string"),
-                ("cve", "string"),
-                ("installed", "string"),
-                ("easystack", "array"),
-                ("easystack_url", "array"),
-                ("compat_layer", "string"),
-                ("filter_deps", "array"),
-                ("generated_at", "string"),
                 ("out_dir", "string"),
             ],
         ),
@@ -2636,18 +2633,14 @@ fn component_reach_tool(arguments: &Value) -> Result<Value, String> {
                 .unwrap_or_else(|| PathBuf::from("component-reach")),
         })
         .map_err(|error| error.to_string())?;
-    Ok(json!({
-        "component": report.component,
-        "version": report.version,
-        "generation": report.generation,
-        "carriers": report.carriers,
-        "changed": report.changed,
-        "must_rebuild": report.must_rebuild,
-        "review": report.review,
-        "no_rebuild": report.no_rebuild,
-        "out": report.out_dir,
-        "summary": report.summary(),
-    }))
+    let summary = report.summary();
+    let out = report.out_dir.clone();
+    let mut body = report.document;
+    if let Some(object) = body.as_object_mut() {
+        object.insert("summary".to_string(), json!(summary));
+        object.insert("out".to_string(), json!(out));
+    }
+    Ok(body)
 }
 
 fn easyblock_reach_tool(arguments: &Value) -> Result<Value, String> {
