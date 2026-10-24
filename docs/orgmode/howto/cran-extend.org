@@ -26,8 +26,9 @@ eb-stack package inspect \
 #+end_src
 
 ~package.plan.json~ has ~origin = cran~. A single package, such as
-this DESCRIPTION, has ~easyblock = RPackage~. A package whose imports
-the robot does not carry has ~easyblock = Bundle~; that choice is
+this DESCRIPTION, has ~easyblock = RPackage~, and that field stays
+~RPackage~ after planning. The emitted recipe is a ~Bundle~ with
+~exts_defaultclass = 'RPackage'~ and the package in ~exts_list~,
 described below.
 
 * Plan
