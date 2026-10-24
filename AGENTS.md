@@ -4,15 +4,15 @@ Use the matching public skill and execute it through the requested claim rung:
 
 | Work | Skill |
 |---|---|
-| conda-forge or Spack → new EasyBuild package | `skills/new-package/SKILL.md` |
-| existing `.eb` → new toolchain/application version | `skills/annual-bump/SKILL.md` |
+| conda-forge or Spack: new EasyBuild package | `skills/new-package/SKILL.md` |
+| existing `.eb`: new toolchain/application version | `skills/annual-bump/SKILL.md` |
 | prove an emitted or edited recipe before building it | `skills/verify-recipe/SKILL.md` |
 | upstream easybuild-easyconfigs PR / test report | `skills/upstream-pr/SKILL.md` |
 | EasyBuild do/don't (incl. #26435 class) | `skills/easybuild-dos-donts/SKILL.md` |
 | reviewer comments on an easyconfig | `skills/easybuild-dos-donts/SKILL.md` (review-fix) |
 | an easyblock (Python module) is wrong | `skills/easyblock-fix/SKILL.md` |
 | build an upstream recipe at a site without forking it | `skills/site-consume/SKILL.md` |
-| EESSI-extend test / EESSI software-layer PR | `skills/eessi-extend/SKILL.md` |
+| EESSI-extend test / European Environment for Scientific Software Installations (EESSI) software-layer PR | `skills/eessi-extend/SKILL.md` |
 | generated output needed a hand correction | `skills/tool-repair/SKILL.md` |
 | regenerate the SeisSol golden overlay | `skills/golden-replay/SKILL.md` |
 
@@ -23,7 +23,7 @@ file had to be corrected by hand.
 ## Canonical procedure
 
 1. Run `eb-stack package inspect|plan|bump`; do not use removed flat commands.
-2. Treat `package.plan.json` as the canonical build manifest, `package.sbom.cdx.json` as the planned SBOM, and `locks/*.lock.json` as Resolvo evidence.
+2. Treat `package.plan.json` as the canonical build manifest, `package.sbom.cdx.json` as the planned Software Bill of Materials (SBOM), and `locks/*.lock.json` as Resolvo evidence.
 3. Emit one `.eb` file per product profile. Keep the default profile unsuffixed and follow neighboring GROMACS/LAMMPS conventions.
 4. Run `eb-stack recipe format|lint|check` on emitted recipes. `recipe lint`
    reports E999 (not valid Python), the easyconfigs CI lint (F541, W605, W291), the
@@ -56,7 +56,7 @@ lint findings remain, and do not comment on the PR.
 ## Non-negotiables
 
 - Dependency versions, hierarchy choices, site pins, and fallbacks belong inside Resolvo. A package-specific `--dep` override becomes a locked solver pin.
-- SAT compatibility is not build evidence. Hermes owns classified target/recipe/policy repair and repeats the campaign through verification.
+- Boolean satisfiability (SAT) compatibility is not build evidence. Hermes owns classified target/recipe/policy repair and repeats the campaign through verification.
 - Fix code and recipes under test. Never remove assertions, dependencies, checksums, sanity checks, or tests to clear a failure.
 - Run EasyBuild installs on the configured target, scheduler, and runtime. Keep `EASYBUILD_TMPDIR` on durable storage.
 - Report `resolves`, `builds`, and `binary-verified` separately. A plan establishes only `resolves`; a build without declared verification does not establish `binary-verified`. `eessi-verified` is a further rung owned by `skills/eessi-extend/SKILL.md`; a build on a normal target never establishes it.
@@ -78,14 +78,18 @@ component-reach
 mcp
 ```
 
-The Model Context Protocol (MCP) catalog mirrors the package, recipe, stack, target, and campaign
-workflows with `eb_`-prefixed tools. Easyblock dry-run, module lint, build
-log, and build test tools are MCP-only. `eb_build_test` runs only when
-`EB_STACK_ALLOW_BUILD=1`.
+The Model Context Protocol (MCP) catalog mirrors these commands,
+including pr-overlap, rebuild-set, component-reach, easyblock-reach,
+and repro summary, with `eb_`-prefixed tools. Recipe file tools
+(`eb_recipe_read`, `eb_recipe_list`, `eb_recipe_edit`,
+`eb_recipe_apply_suggestion`, `eb_recipe_diff`, `eb_recipe_write`,
+`eb_recipe_grep`, and `eb_dep_versions`), easyblock dry-run, module
+lint, build log, and build test are MCP-only. `eb_build_test` runs
+only when `EB_STACK_ALLOW_BUILD=1`.
 
 ## Tests
 
-Run Rust builds and tests on the repository’s configured build machine when local compilation is prohibited. The complete gate is:
+Run Rust builds and tests on the repository's configured build machine when local compilation is prohibited. The complete gate is:
 
 ```sh
 cargo test --locked --all-targets
