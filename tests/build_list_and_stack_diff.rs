@@ -253,3 +253,42 @@ fn cli_solve_baseline_asserts_lock_versions_and_stack_diff() {
     );
     assert!(md.contains("OpenBLAS"), "{md}");
 }
+
+/// A stack diff with no baseline must name flags the CLI actually accepts.
+#[test]
+fn stack_diff_without_a_baseline_names_the_real_flags() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    // prefer_newer.json demands a baseline via require_upgrade, which fails
+    // before the diff is written. This policy solves, then the diff refuses.
+    let policy = tmp.path().join("policy.json");
+    std::fs::write(
+        &policy,
+        r#"{"toolchain":{"name":"foss","version":"2025b"},"roots":["GROMACS"],"objective":"prefer_newer"}"#,
+    )
+    .expect("policy");
+    let err = eb_stack::solve_from_easyconfigs_with_extras(
+        &[fixture("easyconfigs").as_path()],
+        &policy,
+        None,
+        &tmp.path().join("lock.json"),
+        None,
+        SolveExtraOut {
+            stack_diff_out: Some(&tmp.path().join("diff.md")),
+            ..Default::default()
+        },
+    )
+    .expect_err("no baseline");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("--baseline-easyconfigs"),
+        "must name --baseline-easyconfigs: {msg}"
+    );
+    assert!(
+        msg.contains("--baseline-easystack"),
+        "must name --baseline-easystack: {msg}"
+    );
+    assert!(
+        !msg.contains("--baseline /"),
+        "must not name a flag that is not accepted: {msg}"
+    );
+}

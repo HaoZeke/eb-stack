@@ -395,7 +395,7 @@ fn write_lock_sbom_and_extras(
     if let Some(path) = extra.stack_diff_out {
         let Some(base) = baseline else {
             bail!(
-                "stack-diff-out requires a baseline lock (pass --baseline / --baseline-easyconfigs)"
+                "stack-diff-out requires a baseline lock (pass --baseline-easyconfigs or --baseline-easystack)"
             );
         };
         let md = format_stack_diff_markdown(base, lock);

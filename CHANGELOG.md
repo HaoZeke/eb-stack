@@ -305,6 +305,9 @@ All notable changes to this project are documented here.
 - Recipe lint modules live under `src/eb_style/` so `sphinx-rustdocgen`
   can open them. A `#[path]` attribute is joined onto the parent file
   and the generator then fails to read the module.
+- `stack-diff-out` with no baseline names `--baseline-easyconfigs` and
+  `--baseline-easystack`. The previous text told the caller to pass
+  `--baseline`, which the command line does not accept.
 - `eb_campaign_run` reports a failed campaign as a tool error. The CLI
   exits 1 after printing the state. The MCP result now sets `isError`
   and returns that same state.
