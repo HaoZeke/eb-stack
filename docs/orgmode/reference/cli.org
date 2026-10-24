@@ -19,7 +19,7 @@ A rejected value names the flag and the value. A missing file names the flag and
 
 ~--help~ for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is ~--out-dir~. A single output file is ~--out~ (~--lock-out~ for the lock ~stack solve~ writes). ~--installed~, ~--easyconfigs~, ~--filter-deps~, and ~--generated-at~ use those names on every command that takes them.
 
-Package commands take the toolchain as ~--toolchain name/version~, the spelling ~stack solve~ uses. ~--toolchain-name~ and ~--toolchain-version~ are that flag as well. The two forms are not combined. ~--toolchain-name~ defaults to ~foss~ on ~package inspect~ and ~package plan~. An empty version stays on the split flags: ~--toolchain~ wants both a name and a version.
+Package commands take the toolchain as ~--toolchain name/version~, the spelling ~stack solve~ uses. ~--toolchain system~, ~--toolchain SYSTEM~, and ~--toolchain system/~ select the SYSTEM toolchain. Its version is empty. ~package inspect~ and ~package plan~ accept a lone ~--toolchain-version~ and use ~foss~. ~package bump~ does not.
 
 * Command map
 

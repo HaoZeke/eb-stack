@@ -554,6 +554,8 @@ All notable changes to this project are documented here.
 
 - The CLI and the MCP tools share one usage error, one toolchain
   parser, and one foreign-format parser.
+- `--toolchain system` and `--toolchain SYSTEM` select the SYSTEM
+  toolchain. `system/` is the same value. The version is empty.
 - `--help` for every command includes an example, and every flag has a
   description. Defaults the command applies are shown there.
 - `stack solve` reads the policy file with `--stack-policy`, the same flag

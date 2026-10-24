@@ -95,6 +95,62 @@ fn toolchain_and_stack_policy_use_one_name_across_commands() {
     );
 }
 
+#[test]
+fn toolchain_system_is_a_name_with_an_empty_version() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("recipe.yaml");
+    std::fs::write(
+        &source,
+        "package:\n  name: eon\n  version: 1.0.0\nsource:\n  url: https://example.invalid/eon.tar.gz\n  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+    )
+    .expect("recipe");
+    for spec in ["system", "SYSTEM", "system/"] {
+        let out_dir = temp.path().join(spec.replace('/', "slash"));
+        let result = output(&[
+            "package",
+            "inspect",
+            "--source",
+            source.to_str().unwrap(),
+            "--format",
+            "conda-forge",
+            "--toolchain",
+            spec,
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+        ]);
+        let stderr = String::from_utf8(result.stderr).expect("utf8");
+        assert!(
+            result.status.success(),
+            "--toolchain {spec} should be accepted:\n{stderr}"
+        );
+        let plan = std::fs::read_to_string(out_dir.join("package.plan.json")).expect("plan");
+        assert!(
+            plan.contains("\"name\": \"system\"") && plan.contains("\"version\": \"\""),
+            "--toolchain {spec} should record the SYSTEM toolchain:\n{plan}"
+        );
+    }
+
+    let tree = temp.path().join("tree");
+    std::fs::create_dir(&tree).expect("tree");
+    let solved = output(&[
+        "stack",
+        "solve",
+        "--easyconfigs",
+        tree.to_str().unwrap(),
+        "--toolchain",
+        "SYSTEM",
+        "--root",
+        "zlib",
+    ]);
+    let stderr = String::from_utf8(solved.stderr).expect("utf8");
+    assert_ne!(
+        solved.status.code(),
+        Some(2),
+        "--toolchain SYSTEM is not a usage error:\n{stderr}"
+    );
+    assert!(!stderr.contains("expected name/version"), "{stderr}");
+}
+
 fn bin() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_eb-stack"));
     command.env("RUST_BACKTRACE", "1");

@@ -1715,6 +1715,39 @@ fn mcp_toolchain_and_stack_policy_match_the_cli_names() {
     let text = bad["result"]["content"][0]["text"].as_str().unwrap_or("");
     assert!(text.contains("toolchain foss:"), "{text}");
 
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("recipe.yaml");
+    std::fs::write(
+        &source,
+        "package:\n  name: eon\n  version: 1.0.0\nsource:\n  url: https://example.invalid/eon.tar.gz\n  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+    )
+    .expect("recipe");
+    for spec in ["system", "SYSTEM", "system/"] {
+        let out_dir = temp.path().join(spec.replace('/', "slash"));
+        let response = handle_message(&json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "eb_package_inspect",
+                "arguments": {
+                    "source": source,
+                    "format": "conda-forge",
+                    "toolchain": spec,
+                    "out_dir": out_dir,
+                }
+            }
+        }))
+        .expect("inspect system");
+        assert_eq!(response["result"]["isError"], false, "{spec} {response}");
+        let manifest = out_dir.join("package.plan.json");
+        let plan = std::fs::read_to_string(&manifest).expect("plan");
+        assert!(
+            plan.contains("\"name\": \"system\"") && plan.contains("\"version\": \"\""),
+            "{spec}: {plan}"
+        );
+    }
+
     let missing = "/no/such/stack-policy.toml";
     for key in ["stack_policy", "policy"] {
         let mut arguments = json!({"easyconfigs": ["easyconfigs"]});

@@ -90,8 +90,18 @@ pub fn resolve_toolchain(
     }
 }
 
-/// Parse `name/version`. Both halves are required.
+/// Parse `name/version`.
+///
+/// `system` and `SYSTEM`, and the same names with a trailing slash, are the
+/// SYSTEM toolchain. EasyBuild's SYSTEM constant is
+/// `{'name': 'system', 'version': 'system'}` (`easyconfig/constants.py` in
+/// framework 5.4.1). An empty version is that same toolchain: the framework
+/// treats the name `system` as SYSTEM regardless of version. `system/system`
+/// stays a name and a version, which is the constant's own spelling.
 pub fn parse_toolchain_spec(spec: &str, flag: &str) -> Result<Toolchain, UsageError> {
+    if let Some(toolchain) = system_toolchain_spec(spec) {
+        return Ok(toolchain);
+    }
     let Some((parsed_name, parsed_version)) = spec.split_once('/') else {
         return Err(UsageError::new(format!(
             "{flag} {spec}: expected name/version, for example foss/2026.1"
@@ -106,6 +116,25 @@ pub fn parse_toolchain_spec(spec: &str, flag: &str) -> Result<Toolchain, UsageEr
         name: parsed_name.to_string(),
         version: parsed_version.to_string(),
     })
+}
+
+/// `system`, `SYSTEM`, `system/`, and `SYSTEM/` are the SYSTEM toolchain
+/// with an empty version. Any other spelling returns `None`.
+fn system_toolchain_spec(spec: &str) -> Option<Toolchain> {
+    let (name, version) = match spec.split_once('/') {
+        Some((name, version)) => (name, Some(version)),
+        None => (spec, None),
+    };
+    if !name.eq_ignore_ascii_case("system") {
+        return None;
+    }
+    match version {
+        None | Some("") => Some(Toolchain {
+            name: "system".into(),
+            version: String::new(),
+        }),
+        Some(_) => None,
+    }
 }
 
 fn split_flags(flag: &str) -> (&'static str, &'static str) {

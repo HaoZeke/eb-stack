@@ -451,10 +451,11 @@ struct PackageInspectArgs {
     /// Required unless `--toolchain` is set.
     #[arg(long, required_unless_present = "toolchain_spec")]
     toolchain_version: Option<String>,
-    /// Target toolchain as `name/version`, for example `foss/2026.1`.
+    /// Target toolchain as `name/version` (`foss/2026.1`) or `system`.
     ///
-    /// Same spelling as `stack solve --toolchain`. Not combined with
-    /// `--toolchain-name` or `--toolchain-version`.
+    /// `system` and `SYSTEM` select the SYSTEM toolchain. Its version is
+    /// empty. `system/` is the same value. Same spelling as `stack solve
+    /// --toolchain`.
     #[arg(
         long = "toolchain",
         value_name = "NAME/VERSION",
@@ -537,10 +538,11 @@ struct PackageBumpArgs {
     /// Required unless `--toolchain` is set.
     #[arg(long, required_unless_present = "toolchain_spec")]
     toolchain_version: Option<String>,
-    /// Target toolchain as `name/version`, for example `foss/2024a`.
+    /// Target toolchain as `name/version` (`foss/2024a`) or `system`.
     ///
-    /// Same spelling as `stack solve --toolchain`. Not combined with
-    /// `--toolchain-name` or `--toolchain-version`.
+    /// `system` and `SYSTEM` select the SYSTEM toolchain. Its version is
+    /// empty. `system/` is the same value. Same spelling as `stack solve
+    /// --toolchain`.
     #[arg(
         long = "toolchain",
         value_name = "NAME/VERSION",
@@ -741,8 +743,10 @@ struct SolveArgs {
         conflicts_with_all = ["toolchain", "roots"]
     )]
     policy: Option<PathBuf>,
-    /// Target toolchain as `name/version`, e.g. `foss/2026.1`. Used with
-    /// --root in place of a policy file.
+    /// Target toolchain as `name/version` (`foss/2026.1`) or `system`.
+    ///
+    /// `system` and `SYSTEM` select the SYSTEM toolchain. Used with --root
+    /// in place of a policy file.
     #[arg(long)]
     toolchain: Option<String>,
     /// Application the stack exists to provide. Repeatable. Used with
