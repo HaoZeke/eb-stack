@@ -324,7 +324,7 @@ pub fn format_stack_diff_markdown(baseline: &StackLock, solved: &StackLock) -> S
     let mut out = String::new();
     out.push_str("# Stack diff\n\n");
     out.push_str(&format!(
-        "Baseline (`{base_label}`) → solved (`{sol_label}`).\n\n"
+        "Baseline (`{base_label}`) to solved (`{sol_label}`).\n\n"
     ));
     out.push_str("## Summary\n\n");
     out.push_str(&format!(
@@ -333,40 +333,40 @@ pub fn format_stack_diff_markdown(baseline: &StackLock, solved: &StackLock) -> S
     out.push_str("## Packages\n\n");
 
     for c in &changes {
-        out.push_str(&format!("### {} — {}\n\n", c.name, c.kind.as_str()));
+        out.push_str(&format!("### {}: {}\n\n", c.name, c.kind.as_str()));
         match c.kind {
             PackageChangeKind::Unchanged => {
                 out.push_str(&format!(
-                    "- Baseline: `{}` — `{}`\n- Solved: `{}` — `{}`\n\n",
-                    c.baseline_version.as_deref().unwrap_or("—"),
-                    c.baseline_easyconfig_path.as_deref().unwrap_or("—"),
-                    c.solved_version.as_deref().unwrap_or("—"),
-                    c.solved_easyconfig_path.as_deref().unwrap_or("—"),
+                    "- Baseline: `{}` (`{}`)\n- Solved: `{}` (`{}`)\n\n",
+                    c.baseline_version.as_deref().unwrap_or("none"),
+                    c.baseline_easyconfig_path.as_deref().unwrap_or("none"),
+                    c.solved_version.as_deref().unwrap_or("none"),
+                    c.solved_easyconfig_path.as_deref().unwrap_or("none"),
                 ));
             }
             PackageChangeKind::Added => {
                 out.push_str(&format!(
-                    "- Baseline: *(not present)*\n- Solved: `{}` — `{}`\n\n",
-                    c.solved_version.as_deref().unwrap_or("—"),
-                    c.solved_easyconfig_path.as_deref().unwrap_or("—"),
+                    "- Baseline: *(not present)*\n- Solved: `{}` (`{}`)\n\n",
+                    c.solved_version.as_deref().unwrap_or("none"),
+                    c.solved_easyconfig_path.as_deref().unwrap_or("none"),
                 ));
             }
             PackageChangeKind::Removed => {
                 out.push_str(&format!(
-                    "- Baseline: `{}` — `{}`\n- Solved: *(removed)*\n\n",
-                    c.baseline_version.as_deref().unwrap_or("—"),
-                    c.baseline_easyconfig_path.as_deref().unwrap_or("—"),
+                    "- Baseline: `{}` (`{}`)\n- Solved: *(removed)*\n\n",
+                    c.baseline_version.as_deref().unwrap_or("none"),
+                    c.baseline_easyconfig_path.as_deref().unwrap_or("none"),
                 ));
             }
             PackageChangeKind::VersionBumped => {
                 out.push_str(&format!(
-                    "- Baseline: `{}` — `{}`\n- Solved: `{}` — `{}`\n- Change: `{}` → `{}`\n\n",
-                    c.baseline_version.as_deref().unwrap_or("—"),
-                    c.baseline_easyconfig_path.as_deref().unwrap_or("—"),
-                    c.solved_version.as_deref().unwrap_or("—"),
-                    c.solved_easyconfig_path.as_deref().unwrap_or("—"),
-                    c.baseline_version.as_deref().unwrap_or("—"),
-                    c.solved_version.as_deref().unwrap_or("—"),
+                    "- Baseline: `{}` (`{}`)\n- Solved: `{}` (`{}`)\n- Change: `{}` to `{}`\n\n",
+                    c.baseline_version.as_deref().unwrap_or("none"),
+                    c.baseline_easyconfig_path.as_deref().unwrap_or("none"),
+                    c.solved_version.as_deref().unwrap_or("none"),
+                    c.solved_easyconfig_path.as_deref().unwrap_or("none"),
+                    c.baseline_version.as_deref().unwrap_or("none"),
+                    c.solved_version.as_deref().unwrap_or("none"),
                 ));
             }
         }
@@ -545,7 +545,9 @@ mod tests {
         assert!(md.contains("**version-bumped**: 1"), "{md}");
         assert!(md.contains("*(not present)*"), "{md}");
         assert!(md.contains("*(removed)*"), "{md}");
-        assert!(md.contains("`0.3.23` → `0.3.27`"), "{md}");
+        assert!(md.contains(") to solved ("), "{md}");
+        assert!(!md.contains("): solved ("), "{md}");
+        assert!(md.contains("`0.3.23` to `0.3.27`"), "{md}");
     }
 
     #[test]

@@ -327,7 +327,7 @@ fn emit_reports_howto_matches_the_gromacs_solve() {
     let list = std::fs::read_to_string(&build_list).expect("build list");
     let diff = std::fs::read_to_string(&stack_diff).expect("stack diff");
     assert!(
-        diff.starts_with("# Stack diff\n\nBaseline (`foss-2025a`)"),
+        diff.starts_with("# Stack diff\n\nBaseline (`foss-2025a`) to solved ("),
         "{diff}"
     );
     let howto =

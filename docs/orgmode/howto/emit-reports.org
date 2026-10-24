@@ -51,7 +51,7 @@ fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/OpenMPI-5.0.3-foss-2025b.eb
 fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/GROMACS-2025.0-foss-2025b.eb
 #+end_src
 
-~/tmp/easystack.diff.md~ opens with ~Baseline (`foss-2025b`) → solved (`foss-2025b`)~.
+~/tmp/easystack.diff.md~ opens with ~Baseline (`foss-2025b`) to solved (`foss-2025b`)~.
 Unchanged: 2 (FFTW, Python). Version-bumped: 3 (GROMACS 2024.4 to 2025.0,
 OpenBLAS 0.3.24 to 0.3.27, OpenMPI 4.1.6 to 5.0.3).
 
@@ -84,7 +84,7 @@ Every co-selected package is classified against the baseline lock as
 #+begin_src markdown
 # Stack diff
 
-Baseline (`foss-2025a`) → solved (`foss-2025b`).
+Baseline (`foss-2025a`) to solved (`foss-2025b`).
 
 ## Summary
 
@@ -95,33 +95,33 @@ Baseline (`foss-2025a`) → solved (`foss-2025b`).
 
 ## Packages
 
-### FFTW — unchanged
+### FFTW: unchanged
 
-- Baseline: `3.3.10` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025a/FFTW-3.3.10-foss-2025a.eb`
-- Solved: `3.3.10` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/FFTW-3.3.10-foss-2025b.eb`
+- Baseline: `3.3.10` (`fixtures/gromacs_2025_to_next/easyconfigs/foss-2025a/FFTW-3.3.10-foss-2025a.eb`)
+- Solved: `3.3.10` (`fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/FFTW-3.3.10-foss-2025b.eb`)
 
-### GROMACS — version-bumped
+### GROMACS: version-bumped
 
-- Baseline: `2024.1` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025a/GROMACS-2024.1-foss-2025a.eb`
-- Solved: `2025.0` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/GROMACS-2025.0-foss-2025b.eb`
-- Change: `2024.1` → `2025.0`
+- Baseline: `2024.1` (`fixtures/gromacs_2025_to_next/easyconfigs/foss-2025a/GROMACS-2024.1-foss-2025a.eb`)
+- Solved: `2025.0` (`fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/GROMACS-2025.0-foss-2025b.eb`)
+- Change: `2024.1` to `2025.0`
 
-### OpenBLAS — version-bumped
+### OpenBLAS: version-bumped
 
-- Baseline: `0.3.23` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025a/OpenBLAS-0.3.23-foss-2025a.eb`
-- Solved: `0.3.27` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/OpenBLAS-0.3.27-foss-2025b.eb`
-- Change: `0.3.23` → `0.3.27`
+- Baseline: `0.3.23` (`fixtures/gromacs_2025_to_next/easyconfigs/foss-2025a/OpenBLAS-0.3.23-foss-2025a.eb`)
+- Solved: `0.3.27` (`fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/OpenBLAS-0.3.27-foss-2025b.eb`)
+- Change: `0.3.23` to `0.3.27`
 
-### OpenMPI — version-bumped
+### OpenMPI: version-bumped
 
-- Baseline: `4.1.5` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025a/OpenMPI-4.1.5-foss-2025a.eb`
-- Solved: `5.0.3` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/OpenMPI-5.0.3-foss-2025b.eb`
-- Change: `4.1.5` → `5.0.3`
+- Baseline: `4.1.5` (`fixtures/gromacs_2025_to_next/easyconfigs/foss-2025a/OpenMPI-4.1.5-foss-2025a.eb`)
+- Solved: `5.0.3` (`fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/OpenMPI-5.0.3-foss-2025b.eb`)
+- Change: `4.1.5` to `5.0.3`
 
-### Python — unchanged
+### Python: unchanged
 
-- Baseline: `3.12.3` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025a/Python-3.12.3-foss-2025a.eb`
-- Solved: `3.12.3` — `fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/Python-3.12.3-foss-2025b.eb`
+- Baseline: `3.12.3` (`fixtures/gromacs_2025_to_next/easyconfigs/foss-2025a/Python-3.12.3-foss-2025a.eb`)
+- Solved: `3.12.3` (`fixtures/gromacs_2025_to_next/easyconfigs/foss-2025b/Python-3.12.3-foss-2025b.eb`)
 #+end_src
 
 A tree baseline and an easystack baseline are both labelled with the

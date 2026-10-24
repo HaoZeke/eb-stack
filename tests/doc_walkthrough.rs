@@ -280,7 +280,8 @@ fn report_howtos_quote_the_fixture_commands() {
     let list = std::fs::read_to_string(&list).unwrap();
     let page = std::fs::read_to_string(root().join("docs/orgmode/howto/emit-reports.org")).unwrap();
     assert!(page.contains(list.trim_end()), "{list}");
-    assert!(page.contains("Baseline (`foss-2025b`)"));
+    assert!(page.contains("Baseline (`foss-2025b`) to solved ("));
+    assert!(!page.contains("): solved ("));
 }
 
 #[test]

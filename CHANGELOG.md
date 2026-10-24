@@ -620,6 +620,10 @@ All notable changes to this project are documented here.
 
 ### Changed
 
+- `stack solve --stack-diff-out` writes ASCII: `to` between the
+  baseline and solved labels and between versions, parentheses around an
+  easyconfig path, and `none` for a missing value.
+
 - `recipe hierarchy` without `--export` prints only the known
   generations. `--export` also prints the synthetic GCC-family rule.
   The plain command used to print both.

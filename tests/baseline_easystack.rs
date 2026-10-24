@@ -43,7 +43,8 @@ fn solve(dir: &Path, extra: &[&str]) -> (std::process::Output, StackLock, StackL
     // library so the comparison is on data, not on markdown.
     let md = std::fs::read_to_string(&diff).unwrap();
     assert!(
-        md.contains("Baseline (`foss-2025b`)") && !md.contains("baseline-from-easystack"),
+        md.contains("Baseline (`foss-2025b`) to solved (")
+            && !md.contains("baseline-from-easystack"),
         "{md}"
     );
     let stacks: Vec<PathBuf> = extra
