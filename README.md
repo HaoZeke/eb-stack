@@ -15,6 +15,13 @@
 [![docs](https://img.shields.io/badge/docs-eb--stack.rgoswami.me-blue)](https://eb-stack.rgoswami.me)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+## Discovery
+
+- [llms.txt](llms.txt) indexes the manual. [llms-full.txt](llms-full.txt) repeats every page in one file.
+- [AGENTS.md](AGENTS.md) lists the build, test, lint, and docs commands.
+- The skills for inspect, plan, bump, a stack SBOM, pull-request overlap, and the stdio server are under [skills/](skills/).
+- The Model Context Protocol manifest is [server.json](server.json). Client configuration is the manual page [Model Context Protocol server](https://eb-stack.rgoswami.me/reference/mcp.html).
+
 ## Pipeline
 
 <p align="center">

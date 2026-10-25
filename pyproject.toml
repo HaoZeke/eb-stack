@@ -1,0 +1,26 @@
+[project]
+name = "eb-stack"
+version = "0.3.0"
+description = "Turn conda-forge, Spack, and EasyBuild recipes into Resolvo-solved variants, CycloneDX SBOMs, and build-evaluated package bundles"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "Rohit Goswami", email = "rgoswami@ieee.org" }]
+keywords = ["easybuild", "resolvo", "sbom", "hpc", "mcp"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: System :: Software Distribution",
+]
+
+[project.urls]
+Homepage = "https://eb-stack.rgoswami.me"
+Repository = "https://github.com/HaoZeke/eb-stack"
+Documentation = "https://eb-stack.rgoswami.me"

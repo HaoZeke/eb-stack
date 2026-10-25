@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::process::Command;
 
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -317,5 +318,189 @@ fn ci_runs_every_integration_test_file() {
                 "ci_test.yml does not run --test {name}"
             );
         }
+    }
+}
+
+/// Slugs returned by `https://crates.io/api/v1/categories` on 2026-10-25.
+const CRATES_IO_CATEGORIES: &[&str] = &[
+    "accessibility",
+    "aerospace",
+    "algorithms",
+    "api-bindings",
+    "artificial-intelligence",
+    "asynchronous",
+    "authentication",
+    "automotive",
+    "caching",
+    "command-line-interface",
+    "command-line-utilities",
+    "compilers",
+    "compression",
+    "computer-vision",
+    "concurrency",
+    "config",
+    "cryptography",
+    "data-structures",
+    "database",
+    "database-implementations",
+    "date-and-time",
+    "development-tools",
+    "email",
+    "embedded",
+    "emulators",
+    "encoding",
+    "external-ffi-bindings",
+    "filesystem",
+    "finance",
+    "game-development",
+    "game-engines",
+    "games",
+    "graphics",
+    "gui",
+    "hardware-support",
+    "internationalization",
+    "localization",
+    "mathematics",
+    "memory-management",
+    "multimedia",
+    "network-programming",
+    "no-std",
+    "os",
+    "parser-implementations",
+    "parsing",
+    "rendering",
+    "rust-patterns",
+    "science",
+    "security",
+    "simulation",
+    "template-engine",
+    "text-editors",
+    "text-processing",
+    "value-formatting",
+    "virtualization",
+    "visualization",
+    "wasm",
+    "web-programming",
+];
+
+fn string_list(value: &toml::Value) -> Vec<String> {
+    value
+        .as_array()
+        .expect("array")
+        .iter()
+        .map(|item| item.as_str().expect("string").to_string())
+        .collect()
+}
+
+/// The PyPI trove classifier list. Cached under `target/`, not stored in git.
+///
+/// `None` means the cache is missing and the download failed before any
+/// bytes arrived. A present file is returned as stored. A download that
+/// exits non-zero after writing bytes, or that exits zero with a truncated
+/// list, fails the test and does not replace the cache.
+fn pypi_classifiers() -> Option<String> {
+    let path = repo().join("target/index-fixtures/pypi-classifiers.txt");
+    if path.is_file() {
+        return Some(std::fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!("read {}: {error}", path.display());
+        }));
+    }
+    let url = "https://pypi.org/pypi?%3Aaction=list_classifiers";
+    let output = Command::new("curl")
+        .args(["-fsSL", "--retry", "3", "--retry-delay", "1", url])
+        .output()
+        .unwrap_or_else(|error| panic!("curl {url}: {error}"));
+    if !output.status.success() {
+        if output.stdout.is_empty() {
+            eprintln!(
+                "skip: {url} was not downloaded and {} is missing: {}",
+                path.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            return None;
+        }
+        panic!(
+            "partial download of {url}: curl wrote {} bytes then failed: {}",
+            output.stdout.len(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let text = String::from_utf8(output.stdout)
+        .unwrap_or_else(|error| panic!("download of {url} is not utf-8: {error}"));
+    assert!(
+        text.contains("Programming Language :: Rust"),
+        "download of {url} finished but the body is incomplete"
+    );
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .unwrap_or_else(|error| panic!("create {}: {error}", parent.display()));
+    }
+    std::fs::write(&path, &text)
+        .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+    Some(text)
+}
+
+#[test]
+fn discovery_metadata_uses_real_index_terms() {
+    let root = repo();
+    let cargo: toml::Value =
+        toml::from_str(&std::fs::read_to_string(root.join("Cargo.toml")).expect("read Cargo.toml"))
+            .expect("parse Cargo.toml");
+    let package = &cargo["package"];
+    let keywords = string_list(&package["keywords"]);
+    let categories = string_list(&package["categories"]);
+    assert_eq!(keywords, vec!["easybuild", "resolvo", "sbom", "hpc", "mcp"]);
+    assert!(keywords.len() <= 5);
+    assert_eq!(
+        categories,
+        vec![
+            "command-line-utilities",
+            "development-tools",
+            "science",
+            "parser-implementations",
+            "config",
+        ]
+    );
+    assert!(categories.len() <= 5);
+    for category in &categories {
+        assert!(
+            CRATES_IO_CATEGORIES.contains(&category.as_str()),
+            "{category} is not a crates.io category"
+        );
+    }
+
+    let python: toml::Value = toml::from_str(
+        &std::fs::read_to_string(root.join("pyproject.toml")).expect("read pyproject.toml"),
+    )
+    .expect("parse pyproject.toml");
+    let project = &python["project"];
+    assert_eq!(string_list(&project["keywords"]), keywords);
+    assert_eq!(project["version"].as_str(), package["version"].as_str());
+    let classifiers = string_list(&project["classifiers"]);
+    let Some(allowed) = pypi_classifiers() else {
+        return;
+    };
+    let allowed: std::collections::HashSet<&str> =
+        allowed.lines().filter(|line| !line.is_empty()).collect();
+    assert!(!classifiers.is_empty());
+    for classifier in &classifiers {
+        assert!(
+            allowed.contains(classifier.as_str()),
+            "{classifier} is not a PyPI classifier"
+        );
+    }
+
+    let cog = std::fs::read_to_string(root.join("cog.toml")).expect("read cog.toml");
+    assert!(cog.contains("pyproject.toml"));
+
+    let readme = std::fs::read_to_string(root.join("README.md")).expect("read README");
+    for needle in [
+        "llms.txt",
+        "llms-full.txt",
+        "AGENTS.md",
+        "server.json",
+        "skills/",
+    ] {
+        assert!(readme.contains(needle), "README must point at {needle}");
     }
 }

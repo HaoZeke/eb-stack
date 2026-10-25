@@ -405,7 +405,7 @@ def project_entries() -> list[str]:
         (
             "README",
             f"{REPO}/README.md",
-            "Install, the claim ladder, and pointers to the manual, the skills, and the Model Context Protocol server.",
+            "Install, the claim ladder, llms.txt, AGENTS.md, the skills, and the Model Context Protocol server.",
         ),
         (
             "AGENTS.md",
