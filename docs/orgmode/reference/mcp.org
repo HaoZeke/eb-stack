@@ -1,0 +1,96 @@
+#+TITLE: Model Context Protocol server
+#+OPTIONS: toc:t num:nil author:nil
+
+~eb-stack mcp~ serves the version-one commands on stdin and stdout.
+One JSON-RPC object occupies one line. ~--workspace~ sets the root for
+the recipe file tools and exports ~EB_STACK_WORKSPACE~ for that process.
+When the flag is omitted, an existing ~EB_STACK_WORKSPACE~ is kept.
+Otherwise the server uses its current directory. ~eb-stack mcp --help~
+prints those flags and exits 0.
+
+The registry manifest is ~server.json~ at the repository root. The file
+uses the 2025-12-11 server schema
+([[https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json][server.schema.json]]).
+The server name is ~io.github.HaoZeke/eb-stack~. The package is the cargo
+crate ~eb_stack~ at the version in ~Cargo.toml~, from ~https://crates.io~,
+with transport ~stdio~. One positional argument is ~mcp~. ~--workspace~
+is an optional named argument. Cargo installs the binary named
+~eb-stack~. The manifest has no runtime hint: ~cargo install~ runs once,
+and the client then runs that binary by name.
+
+* Build the binary
+
+Rust 1.88 or newer builds this tree. The binary that the snippets below
+call is ~eb-stack~.
+
+#+begin_src bash
+cargo build --locked --release
+install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
+eb-stack mcp --help
+#+end_src
+
+* Claude Desktop
+
+Claude Desktop reads ~claude_desktop_config.json~. On macOS that file is
+=~/Library/Application Support/Claude/claude_desktop_config.json=. On
+Windows it is =%APPDATA%\Claude\claude_desktop_config.json=. The
+top-level key is ~mcpServers~. Restart Claude Desktop after saving the
+file. This client does not expand =${workspaceFolder}=. Put an absolute
+path in ~--workspace~.
+
+#+begin_src json
+{
+  "mcpServers": {
+    "eb-stack": {
+      "command": "eb-stack",
+      "args": ["mcp", "--workspace", "/absolute/path/to/the/clone"]
+    }
+  }
+}
+#+end_src
+
+* Visual Studio Code and Copilot
+
+A portable file uses a top-level ~mcpServers~ object. The Visual Studio
+Code file uses a top-level ~servers~ object. Copying one file onto the
+other without changing that key drops the server.
+
+The Visual Studio Code file is ~.vscode/mcp.json~ in the workspace, or
+~mcp.json~ in the user profile. =${workspaceFolder}= expands in that
+file. ~type~ is ~stdio~.
+
+#+begin_src json
+{
+  "servers": {
+    "eb-stack": {
+      "type": "stdio",
+      "command": "eb-stack",
+      "args": ["mcp", "--workspace", "${workspaceFolder}"]
+    }
+  }
+}
+#+end_src
+
+A workspace-root ~.mcp.json~ uses ~mcpServers~. The Copilot user file
+does too. That user file is =$COPILOT_HOME/mcp-config.json=, or
+=~/.copilot/mcp-config.json= when ~COPILOT_HOME~ is unset. A portable
+file does not expand Visual Studio Code input variables. Pass an
+absolute path there.
+
+#+begin_src json
+{
+  "mcpServers": {
+    "eb-stack": {
+      "command": "eb-stack",
+      "args": ["mcp", "--workspace", "/absolute/path/to/the/clone"]
+    }
+  }
+}
+#+end_src
+
+* Tools
+
+~tools/list~ returns the workflows of ~package~, ~recipe~, ~stack~,
+~target~, ~campaign~, and ~repro~, plus ~pr-overlap~, ~rebuild-set~,
+~component-reach~, and ~easyblock-reach~. ~eb_build_test~ runs only
+when ~EB_STACK_ALLOW_BUILD=1~.

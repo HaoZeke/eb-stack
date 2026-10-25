@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.HaoZeke/eb-stack",
+  "title": "eb-stack",
+  "description": "Plan EasyBuild recipes, CycloneDX SBOMs, and Resolvo stack locks.",
+  "version": "0.3.0",
+  "websiteUrl": "https://eb-stack.rgoswami.me/",
+  "repository": {
+    "url": "https://github.com/HaoZeke/eb-stack",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "cargo",
+      "registryBaseUrl": "https://crates.io",
+      "identifier": "eb_stack",
+      "version": "0.3.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        },
+        {
+          "type": "named",
+          "name": "--workspace",
+          "description": "Root directory for the recipe file tools.",
+          "format": "filepath",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

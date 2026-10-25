@@ -60,6 +60,8 @@
 
    *CLI surface?* → :doc:`reference/cli`
 
+   *Model Context Protocol server?* → :doc:`reference/mcp`
+
    *Bundle schemas?* → :doc:`reference/package-bundles`
 
    *Build targets?* → :doc:`reference/targets`
@@ -139,6 +141,7 @@
    :caption: Reference
 
    reference/cli
+   reference/mcp
    reference/package-bundles
    reference/targets
    reference/campaigns
@@ -257,6 +260,7 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [[file:howto/rebuild-set.org][what an in-place patch forces EESSI to rebuild]],
     [[file:howto/component-reach.org][which modules carry a component]].
   - Reference: [[file:reference/cli.org][CLI]],
+    [[file:reference/mcp.org][Model Context Protocol server]],
     [[file:reference/package-bundles.org][package bundles]],
     [[file:reference/targets.org][build targets]],
     [[file:reference/campaigns.org][campaign state and findings]],
