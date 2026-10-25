@@ -1,6 +1,10 @@
 # -- Project information -----------------------------------------------------
 import os
 import shutil
+import subprocess
+import sys
+
+from docutils import nodes
 
 project = "eb-stack"
 copyright = "2026, Rohit Goswami"
@@ -56,6 +60,7 @@ Rust API (``eb_stack``)
 # -- Options for HTML output -------------------------------------------------
 html_theme = "shibuya"
 html_static_path = ["_static"]
+html_extra_path = ["_extra"]
 html_favicon = "_static/favicon.svg"
 html_title = "eb-stack documentation"
 html_baseurl = "https://eb-stack.rgoswami.me/"
@@ -113,16 +118,114 @@ html_sidebars = {
 }
 
 
+_DESCRIPTION_FALLBACK = (
+    "eb-stack plans EasyBuild recipes, writes a CycloneDX SBOM, "
+    "and solves stacks with Resolvo."
+)
+
+_SKIP_DESCRIPTION = (
+    nodes.Admonition,
+    nodes.table,
+    nodes.footnote,
+    nodes.citation,
+    nodes.figure,
+    nodes.caption,
+    nodes.legend,
+    nodes.topic,
+)
+
+
+def _skip_description(node):
+    parent = node.parent
+    while parent is not None:
+        if isinstance(parent, _SKIP_DESCRIPTION):
+            return True
+        classes = parent.get("classes", [])
+        if any(name.startswith("sd-") for name in classes):
+            return True
+        parent = parent.parent
+    return False
+
+
+def _clip_description(text):
+    text = " ".join(text.split())
+    if ". " in text:
+        first = text.split(". ", 1)[0].strip() + "."
+        if 40 <= len(first) <= 240:
+            return first
+    if len(text) <= 240:
+        return text
+    cut = text[:240]
+    if cut.count("(") > cut.count(")"):
+        paren = cut.rfind("(")
+        if paren > 40:
+            cut = cut[:paren]
+    cut = cut.rsplit(" ", 1)[0].rstrip(".,;:(")
+    return cut + "."
+
+
+def _page_description(doctree):
+    if doctree is None:
+        return _DESCRIPTION_FALLBACK
+    for paragraph in doctree.findall(nodes.paragraph):
+        if _skip_description(paragraph):
+            continue
+        raw = " ".join(paragraph.astext().split())
+        if "." not in raw or len(raw) < 40:
+            continue
+        return _clip_description(raw)
+    return _DESCRIPTION_FALLBACK
+
+
 def _tracked_source_context(app, pagename, templatename, context, doctree):
     """Route edit links to tracked Org sources, not generated RST."""
     if pagename.startswith("crates/"):
         context["page_source_suffix"] = None
     else:
         context["page_source_suffix"] = ".org"
+    meta = context.get("meta") or {}
+    context["meta"] = meta
+    if not meta.get("description"):
+        meta["description"] = _page_description(doctree)
+    markdown = os.path.join(_repo, "docs", "llm", pagename + ".md")
+    if os.path.isfile(markdown):
+        context["llm_markdown_url"] = (
+            "https://eb-stack.rgoswami.me/" + pagename + ".html.md"
+        )
+    else:
+        context["llm_markdown_url"] = ""
+
+
+def _generate_llm_pages(app):
+    """Write docs/llm from the Org manual. Those pages are not stored in git."""
+    del app
+    script = os.path.join(_repo, "scripts", "gen-llms-txt.py")
+    subprocess.check_call([sys.executable, script, "--pages-only"], cwd=_repo)
+
+
+def _publish_llm(app, exception):
+    """Copy the llms.txt index and per-page markdown into the HTML tree."""
+    if exception is not None:
+        return
+    out = app.outdir
+    for name in ("llms.txt", "llms-full.txt"):
+        shutil.copyfile(os.path.join(_repo, name), os.path.join(out, name))
+    llm = os.path.join(_repo, "docs", "llm")
+    for dirpath, _dirnames, filenames in os.walk(llm):
+        for filename in filenames:
+            if not filename.endswith(".md"):
+                continue
+            src = os.path.join(dirpath, filename)
+            rel = os.path.relpath(src, llm)
+            dest = os.path.join(out, os.path.splitext(rel)[0] + ".html.md")
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.copyfile(src, dest)
 
 
 def setup(app):
+    app.connect("builder-inited", _generate_llm_pages)
     app.connect("html-page-context", _tracked_source_context)
+    app.connect("build-finished", _publish_llm)
 
 # sphinx-sitemap
 sitemap_url_scheme = "{link}"

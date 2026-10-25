@@ -243,6 +243,12 @@ All notable changes to this project are documented here.
 
 ### Documentation
 
+- Each HTML page takes its meta description from the first body
+  paragraph. `robots.txt` names the sitemap. The build copies
+  `llms.txt`, `llms-full.txt`, and each page's markdown into the
+  site, and a page that has markdown links that file with
+  `rel="alternate"`.
+
 - `server.json` is the Model Context Protocol registry manifest for
   cargo package `eb_stack`. The manual page `reference/mcp` records
   the stdio client configuration. The README includes the visible
