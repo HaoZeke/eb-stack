@@ -15,6 +15,12 @@ Use the matching public skill and execute it through the requested claim rung:
 | EESSI-extend test / European Environment for Scientific Software Installations (EESSI) software-layer PR | `skills/eessi-extend/SKILL.md` |
 | generated output needed a hand correction | `skills/tool-repair/SKILL.md` |
 | regenerate the SeisSol golden overlay | `skills/golden-replay/SKILL.md` |
+| inspect a foreign recipe | `skills/package-inspect/SKILL.md` |
+| plan a package against a fixture robot | `skills/package-plan/SKILL.md` |
+| bump an existing easyconfig | `skills/package-bump/SKILL.md` |
+| write a CycloneDX SBOM from a stack lock | `skills/stack-sbom/SKILL.md` |
+| report modules shared by open pull requests | `skills/pr-overlap/SKILL.md` |
+| serve those commands over stdio | `skills/mcp/SKILL.md` |
 
 Two of those are gates rather than tasks and cut across the rest:
 `verify-recipe` before any build or push, `tool-repair` whenever an emitted
