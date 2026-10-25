@@ -10,8 +10,14 @@ repository = "https://github.com/HaoZeke/eb-stack"
 homepage = "https://eb-stack.rgoswami.me"
 documentation = "https://eb-stack.rgoswami.me"
 readme = "README.md"
-keywords = ["easybuild", "hpc", "resolvo", "toolchain", "sbom"]
-categories = ["command-line-utilities", "development-tools", "science"]
+keywords = ["easybuild", "resolvo", "sbom", "hpc", "mcp"]
+categories = [
+    "command-line-utilities",
+    "development-tools",
+    "science",
+    "parser-implementations",
+    "config",
+]
 exclude = [
     ".claude/",
     ".codex/",

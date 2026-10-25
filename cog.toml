@@ -6,6 +6,7 @@ tag_prefix = "v"
 pre_bump_hooks = [
     "sed -i '0,/^version = /s/^version = \".*\"/version = \"{{version}}\"/' Cargo.toml",
     "sed -i '0,/^version = /s/^version = \".*\"/version = \"{{version}}\"/' pixi.toml",
+    "sed -i '0,/^version = /s/^version = \".*\"/version = \"{{version}}\"/' pyproject.toml",
     "cargo generate-lockfile",
 ]
 

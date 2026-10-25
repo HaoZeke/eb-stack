@@ -243,6 +243,13 @@ All notable changes to this project are documented here.
 
 ### Documentation
 
+- Crate keywords are `easybuild`, `resolvo`, `sbom`, `hpc`, and `mcp`.
+  Categories add `parser-implementations` and `config` to
+  `command-line-utilities`, `development-tools`, and `science`.
+  `pyproject.toml` records the same keywords and the PyPI
+  classifiers. The README points at `llms.txt`, `AGENTS.md`, the
+  skills, and the Model Context Protocol setup.
+
 - Each HTML page takes its meta description from the first body
   paragraph. `robots.txt` names the sitemap. The build copies
   `llms.txt`, `llms-full.txt`, and each page's markdown into the
