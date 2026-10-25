@@ -165,6 +165,7 @@ jobs:
             --test hierarchy_universe \
             --test jenkins_build_list \
             --test lint_fixtures \
+            --test llms_txt \
             --test mcp_stdio \
             --test optimisation_criteria \
             --test pr_merge_order \

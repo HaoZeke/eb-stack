@@ -1,0 +1,73 @@
+# eb-stack
+
+> eb-stack parses conda-forge, Spack, PyPI, CRAN, Cargo, LuaRocks, Raku, and EasyBuild recipes into one package plan, a planned CycloneDX SBOM, Resolvo locks, and conventional EasyBuild recipes.
+
+The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or newer builds it from source. Each link below is the markdown form of a page on https://eb-stack.rgoswami.me/. `llms-full.txt` repeats those pages in one file. Contributor instructions are in AGENTS.md. The Model Context Protocol server is `eb-stack mcp`.
+
+## Getting started
+
+- [eb-stack](https://eb-stack.rgoswami.me/index.html.md): eb-stack parses conda-forge, Spack, and EasyBuild recipes into one canonical package plan.
+- [Tutorial: foreign recipe to verified EasyBuild package](https://eb-stack.rgoswami.me/tutorial.html.md): This tutorial plans conda-forge eOn, explains the artifacts, and routes the result into a build campaign.
+
+## How-to guides
+
+- [Run an annual toolchain-generation bump](https://eb-stack.rgoswami.me/howto/run-annual-bump.html.md): The annual workflow applies the canonical bump bundle to each maintained recipe, then drives every bundle through the same target-routed build campaign.
+- [Author a new package from conda-forge or Spack](https://eb-stack.rgoswami.me/howto/new-package.html.md): This workflow turns a foreign package recipe into a canonical manifest, planned Software Bill of Materials (SBOM), Resolvo profile locks, conventional EasyBuild recipes, and a persisted build-evaluation campaign.
+- [Site Python extras on EESSI](https://eb-stack.rgoswami.me/howto/pypi-extend.html.md): Turn a PyPI package or requirements.txt into an easyconfig that installs on top of an EasyBuild robot.
+- [Site R extras on EESSI](https://eb-stack.rgoswami.me/howto/cran-extend.html.md): Turn a Comprehensive R Archive Network (CRAN) DESCRIPTION, CRAN JSON object, or package list into a Bundle easyconfig with exts_defaultclass 'RPackage'.
+- [eOn on EESSI with EESSI-extend and eb --robot](https://eb-stack.rgoswami.me/howto/eon-eessi-extend.html.md): Install eOn, and the dependencies the European Environment for Scientific Software Installations (EESSI) lacks, into a user or project prefix on top of EESSI.
+- [Spack on EESSI with EESSI installs as externals](https://eb-stack.rgoswami.me/howto/spack-externals-eessi.html.md): Concretize a Spack package on top of installs that already have an easyconfig beside them.
+- [Repair a failed campaign](https://eb-stack.rgoswami.me/howto/repair-campaign.html.md): Use this procedure when eb-stack campaign run records a failed attempt.
+- [Solve a consistent stack lock](https://eb-stack.rgoswami.me/howto/solve-lock.html.md): Use stack solve for a multi-root EasyBuild generation lock.
+- [Emit a build list and stack diff](https://eb-stack.rgoswami.me/howto/emit-reports.html.md): Goal: alongside the lock, get an install-ordered build list for a build pipeline and a markdown diff you can paste straight into a pull request.
+- [Bump an existing EasyBuild recipe](https://eb-stack.rgoswami.me/howto/bump-recipe.html.md): A bump is a canonical EasyBuild-origin package bundle.
+- [Declare root priority for multi-root optimization](https://eb-stack.rgoswami.me/howto/root-priority.html.md): Goal: when a policy has more than one root and they disagree on a shared dependency's version, control which root wins the newest-version tie-break instead of leaving it to incidental list order.
+- [Which easyconfigs an easyblock change reaches](https://eb-stack.rgoswami.me/howto/easyblock-reach.html.md): A change to an easyblock, generic or software-specific, or to a framework module an easyblock imports, reaches the easyconfigs that use that class.
+- [Find shared builds across open pull requests](https://eb-stack.rgoswami.me/howto/pr-overlap.html.md): Goal: for every open pull request that changes an easystack, write what it would build on the current stack, and which of those modules more than one open pull request would build.
+- [Close open easybuild-easyconfigs pull requests](https://eb-stack.rgoswami.me/howto/easyconfigs-pr-overlap.html.md): Goal: for each open pull request on easybuild-easyconfigs, name the easyconfigs it adds or changes, the dependency closure of those files against a pinned develop tree, and the modules it shares with the other open
+- [What an in-place patch forces EESSI to rebuild](https://eb-stack.rgoswami.me/howto/rebuild-set.html.md): Goal: the patched easyconfigs keep their filenames and versions.
+- [Which modules carry a component, and what that forces rebuilt](https://eb-stack.rgoswami.me/howto/component-reach.html.md): Goal: a Common Vulnerabilities and Exposures (CVE) record names a component and a version.
+
+## Reference
+
+- [Command-line reference](https://eb-stack.rgoswami.me/reference/cli.html.md): eb-stack has six namespaced command groups (package, recipe, stack, target, campaign, repro), four reports (easyblock-reach, pr-overlap, rebuild-set, component-reach), and a Model Context Protocol (MCP) server.
+- [Package bundle reference](https://eb-stack.rgoswami.me/reference/package-bundles.html.md): package inspect, package plan, and package bump write a version-one package bundle.
+- [Build target configuration](https://eb-stack.rgoswami.me/reference/targets.html.md): A target routes one EasyBuild workload through four independent layers: transport, executor, runtime, and EasyBuild settings.
+- [Campaign state and typed findings](https://eb-stack.rgoswami.me/reference/campaigns.html.md): A campaign turns a resolved package bundle into empirical build and binary evidence on one named target.
+- [Rust API](https://eb-stack.rgoswami.me/reference/rust-api.html.md): The public Rust API follows the version-one workflow rather than the retired scaffold/auto-emitter surface.
+- [Policy JSON schema](https://eb-stack.rgoswami.me/reference/policy.html.md): A policy is the input that turns a universe of parsed easyconfig candidates into one selection.
+- [Output formats](https://eb-stack.rgoswami.me/reference/formats.html.md): - schema_version :: 1. - toolchain :: The policy's target toolchain (not necessarily every package's own toolchain field, though in practice they match). - generation_label :: Optional human label, e.g. "foss-2025b"
+
+## Explanation
+
+- [From recipe to verified package](https://eb-stack.rgoswami.me/explanation/lifecycle.html.md): The lifecycle has three claims. Treating them as one is the main source of incorrect status reports.
+- [Architecture](https://eb-stack.rgoswami.me/explanation/architecture.html.md): eb-stack separates package intent, dependency selection, recipe emission, and empirical build evidence.
+- [The optimization model](https://eb-stack.rgoswami.me/explanation/optimization-model.html.md): eb-stack uses resolvo, a conflict-driven clause learning (CDCL) Boolean satisfiability (SAT) solver, as its feasibility core.
+- [The parser approach](https://eb-stack.rgoswami.me/explanation/parser-approach.html.md): An EasyBuild easyconfig (.eb) is, syntactically, a Python source file.
+- [Reproduction fidelity and limitations](https://eb-stack.rgoswami.me/explanation/fidelity.html.md): eb-stack separates deterministic package planning from empirical build evidence.
+- [From one easystack line to a build set](https://eb-stack.rgoswami.me/explanation/pr-overlap.html.md): eb-stack pr-overlap turns each easystack line a pull request adds into the modules that line would build on the installed stack.
+- [What an in-place patch forces a rebuild of](https://eb-stack.rgoswami.me/explanation/rebuild-set.html.md): The patch keeps the easyconfig filename and the version.
+- [Dependency closure](https://eb-stack.rgoswami.me/explanation/sbom-blast-radius.html.md): A dependency closure lists every module one change reaches.
+
+## Skills
+
+- [eb-stack-annual-bump](https://github.com/HaoZeke/eb-stack/blob/main/skills/annual-bump/SKILL.md): Retarget an existing EasyBuild easyconfig to a new toolchain or application version using a canonical EasyBuild-origin manifest, CycloneDX software bill of materials (SBOM), Resolvo dependency lock, stack-policy
+- [eb-stack-easyblock-fix](https://github.com/HaoZeke/eb-stack/blob/main/skills/easyblock-fix/SKILL.md): Fix an EasyBuild easyblock (a Python module under easybuild/easyblocks/) from an issue report, prove the fix with the commands EasyBuild generates and with a build where builds are allowed, and describe it hunk by
+- [eb-stack-easybuild-dos-donts](https://github.com/HaoZeke/eb-stack/blob/main/skills/easybuild-dos-donts/SKILL.md): Do/don't list for EasyBuild easyconfigs and contributions. Distilled from rejected PR #26435, accepted rework #26480, QMCPACK #26437, merged review threads on string formatting and templates (#25561, #23349, #23528,
+- [eb-stack-eessi-extend](https://github.com/HaoZeke/eb-stack/blob/main/skills/eessi-extend/SKILL.md): Test easyconfigs inside the EESSI build environment with EESSI-extend, and contribute them to the EESSI/software-layer easystacks. Separate from the EasyBuild easyconfigs contribution path. Use after an easyconfig
+- [eb-stack-golden-replay](https://github.com/HaoZeke/eb-stack/blob/main/skills/golden-replay/SKILL.md): Regenerate the SeisSol 1.3.2 foss-2025a overlay unattended. Use after the package-bump packset pin, or to check that a tool-repair still emits the overlay.
+- [eb-stack-new-package](https://github.com/HaoZeke/eb-stack/blob/main/skills/new-package/SKILL.md): Convert a conda-forge or Spack recipe into a canonical package manifest, CycloneDX SBOM, Resolvo profile locks, separate EasyBuild easyconfigs for product variants, and a remotely built and verified campaign. Use for
+- [eb-stack-site-consume](https://github.com/HaoZeke/eb-stack/blob/main/skills/site-consume/SKILL.md): Get an easyconfig built at a site without forking it into the site's own repository, by keeping the recipe upstream and consuming it with --from-pr or --from-commit, checking the target generation is actually
+- [eb-stack-tool-repair](https://github.com/HaoZeke/eb-stack/blob/main/skills/tool-repair/SKILL.md): Treat eb-stack output as a draft, catch where the emitter is wrong rather than working around it by hand, and close the loop by fixing eb-stack with a regression test, rebuilding on the remote builder, regenerating,
+- [eb-stack-upstream-pr](https://github.com/HaoZeke/eb-stack/blob/main/skills/upstream-pr/SKILL.md): Shape eb-stack output into an easybuild-easyconfigs PR that maintainers accept. Use when drafting, reviewing, or repairing an upstream EasyBuild contribution, when a PR gets maintainer pushback, before handing
+- [eb-stack-verify-recipe](https://github.com/HaoZeke/eb-stack/blob/main/skills/verify-recipe/SKILL.md): Prove an emitted or edited easyconfig is right before spending a build on it, by checking every claim against the real artifact: source checksum recomputed from the download, every patch dry-run against the unpacked
+
+## Project
+
+- [README](https://github.com/HaoZeke/eb-stack/blob/main/README.md): Install, the claim ladder, and pointers to the manual, the skills, and the Model Context Protocol server.
+- [AGENTS.md](https://github.com/HaoZeke/eb-stack/blob/main/AGENTS.md): Build, test, lint, and documentation commands for a contributor.
+
+## Optional
+
+- [Contributing](https://eb-stack.rgoswami.me/contributing.html.md): This page mirrors the repository CONTRIBUTING.md for the documentation site.
+- [Changelog](https://eb-stack.rgoswami.me/changelog.html.md): The tagged release is 0.3.0. Cargo, CITATION, and Sphinx still report 0.3.0. Changes since that tag are the Unreleased section of CHANGELOG.md.

@@ -243,6 +243,13 @@ All notable changes to this project are documented here.
 
 ### Documentation
 
+- `scripts/gen-llms-txt.py` writes `llms.txt` and `llms-full.txt` from
+  `docs/orgmode`, plus one markdown file per page. The docs build
+  regenerates the page files. They are not stored in git. `llms.txt`
+  is the index from the llms.txt specification: a title, a short
+  summary, and lists of links to those pages. `cargo test --test
+  llms_txt` fails when the committed files drift from the manual.
+
 - Reference and explanation pages use the same checkout checks as the
   tutorial and how-tos. Bash examples name files that exist in this
   tree or under `/tmp`, and the pages drop the wording those checks

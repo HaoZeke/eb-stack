@@ -50,6 +50,13 @@ stack.diff.md
 docs/source/crates/
 .venv-docs/
 
+# Per-page markdown for the llms.txt index. The docs build runs
+# scripts/gen-llms-txt.py --pages-only. llms.txt and llms-full.txt stay tracked.
+docs/llm/
+
+# Upstream index snapshots the metadata tests download into target/.
+target/index-fixtures/
+
 # Tree-local override for the pinned ox-rst fetch (GPL-2+, not vendored).
 # The default cache is $XDG_CACHE_HOME/eb-stack/ox-rst/.
 docs/.cache/

@@ -50,6 +50,9 @@ jobs:
             'sphinx-rustdoc-postprocess>=0.1,<0.2'
           .venv-docs/bin/python -c 'import sphinxcontrib_rust; print("ok")'
 
+      - name: llms.txt matches the Org manual
+        run: python3 scripts/gen-llms-txt.py --check
+
       - name: Build documentation
         run: pixi run -e docs docbld
         env:
