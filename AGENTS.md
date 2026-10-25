@@ -87,21 +87,51 @@ and repro summary, with `eb_`-prefixed tools. Recipe file tools
 lint, build log, and build test are MCP-only. `eb_build_test` runs
 only when `EB_STACK_ALLOW_BUILD=1`.
 
-## Tests
+## Build, test, lint, and docs
 
-Run Rust builds and tests on the repository's configured build machine when local compilation is prohibited. The complete gate is:
+Rust 1.88 is the minimum. CI uses current stable. Run builds and tests on
+the repository's configured build machine when local compilation is prohibited.
 
 ```sh
+cargo fmt --all --check
+cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
+cargo package --locked
 ```
 
-CI mirrors that gate as parallel jobs covering known bumps, packaging fixtures,
-foreign adapters, package bundles, catalog/closure/source discovery, profile
-emission, target routing, campaign state, CLI, and MCP. Optional
-`real_tree_scale` needs a local EasyBuild robot tree (`EB_EASYCONFIGS`) and is
-not required on GitHub runners. `scripts/fetch-upstream-trees.sh` creates a checkout of
-the pinned easybuilders trees and writes `env.sh` for that variable and for
-the ignored real-tree tests. The `Upstream trees` workflow runs
+`cargo test --locked --lib` is the library slice. The jobs in
+`.github/workflows/ci_test.yml` split the same suite into `--test <name>`
+runs: known bumps, packaging fixtures, foreign adapters, package bundles,
+catalog/closure/source discovery, profile emission, target routing, campaign
+state, CLI, and MCP. `real_tree_scale` needs a local EasyBuild robot tree
+(`EB_EASYCONFIGS`) and is not required on GitHub runners.
+`scripts/fetch-upstream-trees.sh` creates a checkout of the pinned
+easybuilders trees and writes `env.sh` for that variable and for the ignored
+real-tree tests. The `Upstream trees` workflow runs
 `cargo test --include-ignored` against that cache every week, on a push
-that changes the pinned tree list in that script, and by hand. No affected
-suite may remain red in a completion claim.
+that changes the pinned tree list in that script, and by hand.
+
+`uvx prek run -a` runs the hooks in `prek.toml` (trailing whitespace, YAML
+and TOML, codespell, large files). That is the `Pre-checks` workflow.
+
+Docs, with pixi and Emacs:
+
+```sh
+pixi run -e docs docbld
+scripts/check-doc-links.sh docs/build
+```
+
+`pixi run -e docs docbld` exports Org to RST, generates the Rust API pages,
+and runs `scripts/sphinx-build-docs.sh`, which calls
+`sphinx-build -W --keep-going`. Without pixi, point `EB_STACK_DOCS_PYTHON`
+at a virtualenv that imports `sphinxcontrib_rust`, run
+`emacs -Q --batch --load export.el` from `docs/`, run
+`scripts/gen-rust-api.sh`, then run `scripts/sphinx-build-docs.sh`.
+
+`python3 scripts/gen-llms-txt.py --check` fails when `llms.txt` drifts from
+`docs/orgmode`. The same check is `cargo test --locked --test llms_txt`.
+
+`tests/property` and `tests/generation` are pytest modules. They read
+`EB_STACK_BIN` and `EB_EASYCONFIGS` and skip when either is unset.
+
+No affected suite may remain red in a completion claim.
