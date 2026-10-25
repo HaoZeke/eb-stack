@@ -243,6 +243,11 @@ All notable changes to this project are documented here.
 
 ### Documentation
 
+- `AGENTS.md` names the gates CI runs: `cargo fmt --all --check`,
+  `cargo clippy --locked --all-targets -- -D warnings`,
+  `cargo test --locked --all-targets`, `cargo package --locked`,
+  `uvx prek run -a`, and `pixi run -e docs docbld`.
+
 - `scripts/gen-llms-txt.py` writes `llms.txt` and `llms-full.txt` from
   `docs/orgmode`, plus one markdown file per page. The docs build
   regenerates the page files. They are not stored in git. `llms.txt`
