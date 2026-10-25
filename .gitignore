@@ -54,6 +54,8 @@ docs/source/crates/
 # scripts/gen-llms-txt.py --pages-only. llms.txt and llms-full.txt stay tracked.
 docs/llm/
 
+**/__pycache__/
+
 # Upstream index snapshots the metadata tests download into target/.
 target/index-fixtures/
 

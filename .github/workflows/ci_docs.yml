@@ -84,6 +84,17 @@ jobs:
           test -f docs/build/_static/logo-light.svg
           test -f docs/build/_static/logo-dark.svg
           grep -q logo-light docs/build/index.html || grep -q logo-dark docs/build/index.html || true
+          test -f docs/build/sitemap.xml
+          grep -q 'tutorial' docs/build/sitemap.xml
+          test -f docs/build/robots.txt
+          grep -q 'Sitemap: https://eb-stack.rgoswami.me/sitemap.xml' docs/build/robots.txt
+          grep -q 'name="description"' docs/build/index.html
+          grep -q 'rel="describedby"' docs/build/index.html
+          grep -q 'rel="alternate" type="text/markdown"' docs/build/tutorial.html
+          test -f docs/build/llms.txt
+          test -f docs/build/llms-full.txt
+          test -f docs/build/tutorial.html.md
+          test -f docs/build/reference/mcp.html.md
 
       - name: Install lychee
         uses: taiki-e/install-action@v2
