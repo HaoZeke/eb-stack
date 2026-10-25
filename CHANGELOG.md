@@ -243,6 +243,11 @@ All notable changes to this project are documented here.
 
 ### Documentation
 
+- Skills for inspect, plan, bump, a stack SBOM, pr-overlap, and the
+  Model Context Protocol server live under `skills/`. Each command in
+  those files is one the current `eb-stack` binary runs. `AGENTS.md`
+  lists them next to the packaging skills.
+
 - `AGENTS.md` names the gates CI runs: `cargo fmt --all --check`,
   `cargo clippy --locked --all-targets -- -D warnings`,
   `cargo test --locked --all-targets`, `cargo package --locked`,
