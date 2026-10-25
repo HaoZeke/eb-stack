@@ -31,6 +31,7 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or newer builds it 
 ## Reference
 
 - [Command-line reference](https://eb-stack.rgoswami.me/reference/cli.html.md): eb-stack has six namespaced command groups (package, recipe, stack, target, campaign, repro), four reports (easyblock-reach, pr-overlap, rebuild-set, component-reach), and a Model Context Protocol (MCP) server.
+- [Model Context Protocol server](https://eb-stack.rgoswami.me/reference/mcp.html.md): eb-stack mcp serves the version-one commands on stdin and stdout.
 - [Package bundle reference](https://eb-stack.rgoswami.me/reference/package-bundles.html.md): package inspect, package plan, and package bump write a version-one package bundle.
 - [Build target configuration](https://eb-stack.rgoswami.me/reference/targets.html.md): A target routes one EasyBuild workload through four independent layers: transport, executor, runtime, and EasyBuild settings.
 - [Campaign state and typed findings](https://eb-stack.rgoswami.me/reference/campaigns.html.md): A campaign turns a resolved package bundle into empirical build and binary evidence on one named target.
@@ -72,6 +73,7 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or newer builds it 
 
 - [README](https://github.com/HaoZeke/eb-stack/blob/main/README.md): Install, the claim ladder, and pointers to the manual, the skills, and the Model Context Protocol server.
 - [AGENTS.md](https://github.com/HaoZeke/eb-stack/blob/main/AGENTS.md): Build, test, lint, and documentation commands for a contributor.
+- [MCP server manifest](https://github.com/HaoZeke/eb-stack/blob/main/server.json): Registry entry for the eb-stack Model Context Protocol server.
 
 ## Optional
 

@@ -381,6 +381,8 @@ changed Python from a local clone (`refs/pull/N/head` for a pull request).
 
 ## MCP
 
+- MCP Registry name: `mcp-name: io.github.HaoZeke/eb-stack`
+
 `eb-stack mcp` exposes the version-one workflows as Model Context Protocol (MCP) tools over stdio, and one tool
 for `pr-overlap`, `rebuild-set`, `component-reach`, and `easyblock-reach`.
 `eb-stack mcp --workspace ROOT` (or `EB_STACK_WORKSPACE`) is the root for the

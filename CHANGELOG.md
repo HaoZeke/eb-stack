@@ -243,6 +243,11 @@ All notable changes to this project are documented here.
 
 ### Documentation
 
+- `server.json` is the Model Context Protocol registry manifest for
+  cargo package `eb_stack`. The manual page `reference/mcp` records
+  the stdio client configuration. The README includes the visible
+  `mcp-name: io.github.HaoZeke/eb-stack` token.
+
 - Skills for inspect, plan, bump, a stack SBOM, pr-overlap, and the
   Model Context Protocol server live under `skills/`. Each command in
   those files is one the current `eb-stack` binary runs. `AGENTS.md`

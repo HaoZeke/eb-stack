@@ -166,6 +166,7 @@ jobs:
             --test jenkins_build_list \
             --test lint_fixtures \
             --test llms_txt \
+            --test mcp_registry \
             --test mcp_stdio \
             --test optimisation_criteria \
             --test pr_merge_order \

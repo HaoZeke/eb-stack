@@ -87,6 +87,7 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [what an in-place patch forces EESSI to rebuild](https://eb-stack.rgoswami.me/howto/rebuild-set.html.md),
     [which modules carry a component](https://eb-stack.rgoswami.me/howto/component-reach.html.md).
   - Reference: [CLI](https://eb-stack.rgoswami.me/reference/cli.html.md),
+    [Model Context Protocol server](https://eb-stack.rgoswami.me/reference/mcp.html.md),
     [package bundles](https://eb-stack.rgoswami.me/reference/package-bundles.html.md),
     [build targets](https://eb-stack.rgoswami.me/reference/targets.html.md),
     [campaign state and findings](https://eb-stack.rgoswami.me/reference/campaigns.html.md),
@@ -3792,6 +3793,102 @@ takes `changes` as an optional path array. `eb_recipe_check`'s
 `easyconfigs` array has `minItems` 1. `eb_recipe_read`, `eb_recipe_list`,
 `eb_recipe_edit`, and `eb_recipe_write` edit files only inside the workspace
 root.
+
+# Model Context Protocol server
+
+`eb-stack mcp` serves the version-one commands on stdin and stdout.
+One JSON-RPC object occupies one line. `--workspace` sets the root for
+the recipe file tools and exports `EB_STACK_WORKSPACE` for that process.
+When the flag is omitted, an existing `EB_STACK_WORKSPACE` is kept.
+Otherwise the server uses its current directory. `eb-stack mcp --help`
+prints those flags and exits 0.
+
+The registry manifest is `server.json` at the repository root. The file
+uses the 2025-12-11 server schema
+([server.schema.json](https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json)).
+The server name is `io.github.HaoZeke/eb-stack`. The package is the cargo
+crate `eb_stack` at the version in `Cargo.toml`, from `https://crates.io`,
+with transport `stdio`. One positional argument is `mcp`. `--workspace`
+is an optional named argument. Cargo installs the binary named
+`eb-stack`. The manifest has no runtime hint: `cargo install` runs once,
+and the client then runs that binary by name.
+
+# Build the binary
+
+Rust 1.88 or newer builds this tree. The binary that the snippets below
+call is `eb-stack`.
+
+```bash
+cargo build --locked --release
+install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
+eb-stack mcp --help
+```
+
+# Claude Desktop
+
+Claude Desktop reads `claude_desktop_config.json`. On macOS that file is
+`~/Library/Application Support/Claude/claude_desktop_config.json`. On
+Windows it is `%APPDATA%\Claude\claude_desktop_config.json`. The
+top-level key is `mcpServers`. Restart Claude Desktop after saving the
+file. This client does not expand `${workspaceFolder}`. Put an absolute
+path in `--workspace`.
+
+```json
+{
+  "mcpServers": {
+    "eb-stack": {
+      "command": "eb-stack",
+      "args": ["mcp", "--workspace", "/absolute/path/to/the/clone"]
+    }
+  }
+}
+```
+
+# Visual Studio Code and Copilot
+
+A portable file uses a top-level `mcpServers` object. The Visual Studio
+Code file uses a top-level `servers` object. Copying one file onto the
+other without changing that key drops the server.
+
+The Visual Studio Code file is `.vscode/mcp.json` in the workspace, or
+`mcp.json` in the user profile. `${workspaceFolder}` expands in that
+file. `type` is `stdio`.
+
+```json
+{
+  "servers": {
+    "eb-stack": {
+      "type": "stdio",
+      "command": "eb-stack",
+      "args": ["mcp", "--workspace", "${workspaceFolder}"]
+    }
+  }
+}
+```
+
+A workspace-root `.mcp.json` uses `mcpServers`. The Copilot user file
+does too. That user file is `$COPILOT_HOME/mcp-config.json`, or
+``/.copilot/mcp-config.json` when `COPILOT_HOME~ is unset. A portable
+file does not expand Visual Studio Code input variables. Pass an
+absolute path there.
+
+```json
+{
+  "mcpServers": {
+    "eb-stack": {
+      "command": "eb-stack",
+      "args": ["mcp", "--workspace", "/absolute/path/to/the/clone"]
+    }
+  }
+}
+```
+
+# Tools
+
+`tools/list` returns the workflows of `package`, `recipe`, `stack`,
+`target`, `campaign`, and `repro`, plus `pr-overlap`, `rebuild-set`,
+`component-reach`, and `easyblock-reach`. `eb_build_test` runs only
+when `EB_STACK_ALLOW_BUILD=1`.
 
 # Package bundle reference
 
