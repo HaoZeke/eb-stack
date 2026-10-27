@@ -67,7 +67,7 @@ lint findings remain, and do not comment on the PR.
 ```text
 package  inspect | plan | bump
 recipe   easyblock | templates | hierarchy | check | lint | format
-stack    solve | sbom | order | easystack | sections
+stack    solve | sbom | order | easystack | sections | from-commit
 target   list | doctor
 campaign run | status | finding claim | finding resolve
 repro    summary

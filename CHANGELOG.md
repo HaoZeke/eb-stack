@@ -305,6 +305,13 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `eb-stack stack from-commit` reports each `from-commit` and
+  `include-easyblocks-from-commit` pin already contained in the EasyBuild
+  release named by `--easybuild-version` or by `eb-X.Y.Z` in the easystack
+  file name. A released pin whose easyconfig blob matches the tag can be
+  removed. A released pin whose blob differs needs a person. The command
+  exits 1 when any pin is already in the release. `eb_stack_from_commit`
+  runs the same check.
 - The `eb_component_reach` schema lists `osv_cache`, which the CLI
   accepts as `--osv-cache`.
 - `eb-stack pr-overlap --impact N` writes `merge-impact.toml`. For that pull

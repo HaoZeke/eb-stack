@@ -395,7 +395,7 @@ recipe file tools.
 - `eb_module_lint`, `eb_easyblock_dry_run`, `eb_build_log`, `eb_build_test`
   (easyblocks; `eb_build_test` only with `EB_STACK_ALLOW_BUILD=1`);
 - `eb_stack_solve`, `eb_stack_sbom`, `eb_stack_order`,
-  `eb_stack_easystack`, `eb_stack_sections`;
+  `eb_stack_easystack`, `eb_stack_sections`, `eb_stack_from_commit`;
 - `eb_component_reach` (same query as `component-reach`, including a purl or a CVE id);
 - `eb_target_list`, `eb_target_doctor`;
 - `eb_campaign_run`, `eb_campaign_status`;

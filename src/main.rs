@@ -913,6 +913,35 @@ enum StackCommand {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Report from-commit pins already contained in an EasyBuild release.
+    ///
+    /// A `from-commit` pin is checked in `--easyconfigs-repo` against the tag
+    /// `easybuild-easyconfigs-vX.Y.Z`. An `include-easyblocks-from-commit` pin
+    /// is checked in `--easyblocks-repo` against `easybuild-easyblocks-vX.Y.Z`.
+    /// The release is `--easybuild-version`, or the `eb-X.Y.Z` in the easystack
+    /// file name when that flag is omitted. The flag wins when both are set.
+    /// Exits 1 when any pin is `released`.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack from-commit --easystack 20261011-eb-5.4.0-UCX.yml --easyconfigs-repo ~/src/easybuild-easyconfigs\n  eb-stack stack from-commit --easystack rebuild.yml --easybuild-version 5.4.0 --easyconfigs-repo ~/src/easybuild-easyconfigs --json"
+    )]
+    FromCommit {
+        /// Easystack YAML to read. Repeat for more than one file.
+        #[arg(long = "easystack", required = true)]
+        easystacks: Vec<PathBuf>,
+        /// easybuild-easyconfigs checkout. Required when an entry sets `from-commit`.
+        #[arg(long)]
+        easyconfigs_repo: Option<PathBuf>,
+        /// easybuild-easyblocks checkout. Required when an entry sets
+        /// `include-easyblocks-from-commit`.
+        #[arg(long)]
+        easyblocks_repo: Option<PathBuf>,
+        /// EasyBuild release `X.Y.Z`. Overrides `eb-X.Y.Z` in the easystack file name.
+        #[arg(long)]
+        easybuild_version: Option<String>,
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -2055,6 +2084,29 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 &eb_stack::workflows::StackEasystackRequest { lock, out, options },
             )?;
             print!("{}", report.stdout);
+            Ok(())
+        }
+        StackCommand::FromCommit {
+            easystacks,
+            easyconfigs_repo,
+            easyblocks_repo,
+            easybuild_version,
+            json,
+        } => {
+            let report = eb_stack::from_commit::check(&eb_stack::from_commit::FromCommitRequest {
+                easystacks,
+                easyconfigs_repo,
+                easyblocks_repo,
+                easybuild_version,
+                json,
+            })?;
+            print!("{}", report.stdout);
+            if report.released > 0 {
+                bail!(
+                    "{} from-commit pin(s) already in the EasyBuild release",
+                    report.released
+                );
+            }
             Ok(())
         }
         StackCommand::Sbom { lock, out } => {
