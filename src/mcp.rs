@@ -366,6 +366,17 @@ fn tool_catalog() -> Vec<Value> {
             &[("unfiled", "string")],
         ),
         tool_with_optional(
+            "eb_stack_from_commit",
+            "Report from-commit and include-easyblocks-from-commit pins already contained in an EasyBuild release, as `stack from-commit` does. easybuild_version overrides eb-X.Y.Z in the easystack file name. A released pin sets blob to same or differs.",
+            &[("easystack", "array")],
+            &[
+                ("easyconfigs_repo", "string"),
+                ("easyblocks_repo", "string"),
+                ("easybuild_version", "string"),
+                ("json", "boolean"),
+            ],
+        ),
+        tool_with_optional(
             "eb_component_reach",
             "List every easyconfig in one toolchain generation that carries a component, directly or as a bundle component, extension, Cargo crate, or Python wheel, and return the reverse-dependency closure. Pass component plus version, a purl, or a cve id resolved through OSV. easystack_url entries must be https. The result is the same document component-reach writes.",
             &[("generation", "string"), ("easyconfigs", "array_min1")],
@@ -615,6 +626,7 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_stack_order" => stack_order_tool(arguments),
         "eb_stack_easystack" => stack_easystack_tool(arguments),
         "eb_stack_sections" => stack_sections_tool(arguments),
+        "eb_stack_from_commit" => stack_from_commit_tool(arguments),
         "eb_target_list" => target_list(arguments),
         "eb_target_doctor" => target_doctor(arguments),
         "eb_campaign_run" => campaign_run(arguments),
@@ -2728,6 +2740,24 @@ fn stack_easystack_tool(arguments: &Value) -> Result<Value, String> {
         "out": report.out,
         "entries": report.entries,
         "packages": report.packages,
+    }))
+}
+
+fn stack_from_commit_tool(arguments: &Value) -> Result<Value, String> {
+    let report = crate::from_commit::check(&crate::from_commit::FromCommitRequest {
+        easystacks: path_array(arguments, "easystack")?,
+        easyconfigs_repo: optional_path(arguments, "easyconfigs_repo"),
+        easyblocks_repo: optional_path(arguments, "easyblocks_repo"),
+        easybuild_version: optional_string(arguments, "easybuild_version"),
+        json: optional_bool(arguments, "json"),
+    })
+    .map_err(workflow_error)?;
+    Ok(json!({
+        "text": report.stdout,
+        "released": report.released,
+        "newer": report.newer,
+        "unknown": report.unknown,
+        "pins": report.document["pins"].clone(),
     }))
 }
 

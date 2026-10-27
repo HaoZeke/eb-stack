@@ -61,7 +61,9 @@ version whose layer carries the generation.
 
 Also check whether EESSI's bundled EasyBuild has every easyconfig in the closure
 (`eb --version` inside EESSI, then resolve). Anything newer than that release
-must come from a PR via `from-commit`.
+must come from a PR via `from-commit`. A pin whose commit is already in that
+release is reported by `eb-stack stack from-commit`
+(`docs/orgmode/howto/from-commit-released.org`).
 
 ## Initialize EESSI and install with EESSI-extend
 

@@ -46,6 +46,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "eb_stack_order",
         "eb_stack_easystack",
         "eb_stack_sections",
+        "eb_stack_from_commit",
         "eb_component_reach",
         "eb_target_list",
         "eb_target_doctor",
@@ -61,7 +62,7 @@ fn mcp_catalog_matches_the_version_one_workflows() {
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 37, "unexpected MCP tools: {names:?}");
+    assert_eq!(names.len(), 38, "unexpected MCP tools: {names:?}");
 
     let inspect = response["result"]["tools"]
         .as_array()
@@ -2436,6 +2437,7 @@ fn mcp_schemas_cover_cli_flags() {
         ("eb_stack_order", "stack order"),
         ("eb_stack_easystack", "stack easystack"),
         ("eb_stack_sections", "stack sections"),
+        ("eb_stack_from_commit", "stack from-commit"),
         ("eb_repro_summary", "repro summary"),
         ("eb_component_reach", "component-reach"),
         ("eb_target_list", "target list"),
@@ -3582,6 +3584,7 @@ fn every_cli_subcommand_has_an_mcp_tool() {
         ("eb_stack_order", &["stack", "order"]),
         ("eb_stack_easystack", &["stack", "easystack"]),
         ("eb_stack_sections", &["stack", "sections"]),
+        ("eb_stack_from_commit", &["stack", "from-commit"]),
         ("eb_target_list", &["target", "list"]),
         ("eb_target_doctor", &["target", "doctor"]),
         ("eb_campaign_run", &["campaign", "run"]),
