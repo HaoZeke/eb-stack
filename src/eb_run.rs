@@ -1260,6 +1260,8 @@ pub fn read_tail(path: &Path, max_bytes: u64) -> Result<(String, bool), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::test_support::write_executable;
     use std::sync::Mutex;
 
     static EB_BIN: Mutex<()> = Mutex::new(());
@@ -1734,15 +1736,13 @@ configure:9999: $? = 1\n";
     #[cfg(target_os = "linux")]
     #[test]
     fn a_run_stopped_at_its_limit_takes_the_processes_it_started_with_it() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().expect("tempdir");
         let fake = dir.path().join("eb");
-        std::fs::write(
+        write_executable(
             &fake,
             "#!/bin/sh\ntimeout 120 sh -c 'echo $$ > \"$0\"; exec sleep 120' \"$1\"\n",
         )
         .expect("fake eb");
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         let pidfile = dir.path().join("grandchild.pid");
         let out = dir.path().join("out.txt");
         let run = run_program(
@@ -1772,16 +1772,14 @@ configure:9999: $? = 1\n";
     #[cfg(unix)]
     #[test]
     fn run_eb_captures_output_and_stops_at_the_limit() {
-        use std::os::unix::fs::PermissionsExt;
         let _lock = EB_BIN.lock().expect("lock");
         let dir = tempfile::tempdir().expect("tempdir");
         let fake = dir.path().join("eb");
-        std::fs::write(
+        write_executable(
             &fake,
             "#!/bin/sh\necho \"args: $*\"\necho \"cwd: $(pwd -P)\"\necho oops >&2\n[ \"$1\" = slow ] && sleep 5\nexit 3\n",
         )
         .expect("fake eb");
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         std::env::set_var("EB_STACK_EB", &fake);
         let out = dir.path().join("out.txt");
         let run = run_eb(&["a".into(), "b".into()], Duration::from_secs(5), &out).expect("run");
@@ -1832,16 +1830,14 @@ configure:9999: $? = 1\n";
     #[cfg(unix)]
     #[test]
     fn build_invocation_does_not_load_the_dry_run_guard() {
-        use std::os::unix::fs::PermissionsExt;
         let _lock = EB_BIN.lock().expect("lock");
         let dir = tempfile::tempdir().expect("tempdir");
         let fake = dir.path().join("eb");
-        std::fs::write(
+        write_executable(
             &fake,
             "#!/bin/sh\nprintf 'flag=%s\\npath=%s\\n' \"$EB_STACK_KEEP_SESSION_TMP\" \"$PYTHONPATH\"\n",
         )
         .expect("fake eb");
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         std::env::remove_var("PYTHONPATH");
         let guard = dry_run_guard(dir.path()).expect("guard");
         let leaked = &guard
@@ -1880,14 +1876,13 @@ configure:9999: $? = 1\n";
     #[cfg(unix)]
     #[test]
     fn a_killed_build_leaves_its_lock_until_the_next_build() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().expect("tempdir");
         let lock = dir.path().join(".locks").join("pkg.lock");
         std::fs::create_dir_all(lock.parent().expect("parent")).expect("locks");
         let fake = dir.path().join("eb");
-        std::fs::write(
+        write_executable(
             &fake,
-            format!(
+            &format!(
                 "#!/bin/sh\nlock='{lock}'\n\
                  if [ -d \"$lock\" ]; then\n\
                  echo \"Lock $lock already exists, aborting!\"\nexit 1\nfi\n\
@@ -1899,7 +1894,6 @@ configure:9999: $? = 1\n";
             ),
         )
         .expect("fake eb");
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         let out = dir.path().join("eb.out");
         let hold = ["hold".to_string()];
         let go: [String; 0] = [];
@@ -1930,7 +1924,6 @@ configure:9999: $? = 1\n";
     #[cfg(unix)]
     #[test]
     fn a_killed_build_leaves_preexisting_locks_alone() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().join("install");
         let locks = root.join("software").join(".locks");
@@ -1945,9 +1938,9 @@ configure:9999: $? = 1\n";
         let logged = locks.join("logged.lock");
         let filled = locks.join("filled.lock");
         let fake = dir.path().join("eb");
-        std::fs::write(
+        write_executable(
             &fake,
-            format!(
+            &format!(
                 "#!/bin/sh\n\
                  mkdir -p '{fresh}' '{logged}' '{filled}'\n\
                  echo x > '{filled}/pid'\n\
@@ -1964,7 +1957,6 @@ configure:9999: $? = 1\n";
             ),
         )
         .expect("fake eb");
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         let out = dir.path().join("eb.out");
         let args = [format!("--installpath={}", root.display())];
         let run = run_eb_build(&fake, &args, Duration::from_secs(3), &out).expect("run");
