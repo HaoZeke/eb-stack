@@ -27,6 +27,7 @@ pub mod eb_template_constants;
 pub mod ecosystem;
 pub use crate::ecosystem::parse_package_index;
 mod foreign;
+pub mod from_commit;
 pub mod hierarchy;
 mod index_bump;
 pub mod input_hash;
