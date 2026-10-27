@@ -801,6 +801,8 @@ static EASYBUILD_TEMPLATES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::test_support::write_executable;
 
     fn codes_on(findings: &[StyleFinding], line: usize) -> Vec<&str> {
         findings
@@ -1119,7 +1121,7 @@ mixed = f'lib/%(name)s.{SHLIB_EXT}'
     fn check_contrib_merges_findings_and_keeps_local_on_dedup() {
         let temp = tempfile::tempdir().expect("tempdir");
         let script = temp.path().join("eb");
-        std::fs::write(
+        write_executable(
             &script,
             "#!/bin/sh\n\
 printf '%s\\n' \"$2:1:121: E501 line too long (200 > 120 characters)\"\n\
@@ -1128,9 +1130,6 @@ printf '%s\\n' \"Checksums missing for one or more sources/patches in $(basename
 exit 1\n",
         )
         .expect("script");
-        let mut permissions = std::fs::metadata(&script).expect("meta").permissions();
-        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
-        std::fs::set_permissions(&script, permissions).expect("chmod");
         let recipe = temp.path().join("long.eb");
         std::fs::write(
             &recipe,

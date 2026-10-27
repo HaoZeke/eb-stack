@@ -1,7 +1,8 @@
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+include!("support/write_executable.rs");
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -15,10 +16,7 @@ fn fake_easybuild(directory: &Path) -> PathBuf {
     let bin = directory.join("bin");
     fs::create_dir_all(&bin).expect("create fake bin");
     let eb = bin.join("eb");
-    fs::write(&eb, "#!/usr/bin/env sh\nprintf 'eb:%s\\n' \"$*\"\n").expect("write fake eb");
-    let mut permissions = fs::metadata(&eb).expect("fake eb metadata").permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&eb, permissions).expect("make fake eb executable");
+    write_executable(&eb, "#!/usr/bin/env sh\nprintf 'eb:%s\\n' \"$*\"\n").expect("write fake eb");
     bin
 }
 

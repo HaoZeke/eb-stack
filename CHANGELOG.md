@@ -6,6 +6,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- Tests that write a script and then execute it write the file from a
+  short-lived shell. A sibling fork can no longer leave that script
+  busy at exec (`Text file busy`, ETXTBSY).
 - `stack order` reads `EASYBUILD_FILTER_DEPS` when `--filter-deps` is
   omitted, and the flag wins when it is passed. The filtered dependency
   and the dependencies it would have pulled stay out of the order.

@@ -7,9 +7,10 @@ use eb_stack::target::{
     BuildTarget, EasyBuildWorkload, TargetExecutor, TargetRuntime, TargetTransport,
 };
 use std::collections::BTreeMap;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
+
+include!("support/write_executable.rs");
 
 fn target(command: &str) -> BuildTarget {
     BuildTarget {
@@ -127,17 +128,14 @@ fn campaign_interns_easybuild_command_output_before_classifying() {
     )
     .expect("nested log");
     let command = temp.path().join("fake-eb");
-    std::fs::write(
+    write_executable(
         &command,
-        format!(
+        &format!(
             "#!/bin/sh\nprintf '%s\\n' 'output (stdout + stderr)  ->  {}'\nprintf '%s\\n' 'ERROR: installation failed'\nexit 1\n",
             nested_log.display()
         ),
     )
     .expect("command");
-    let mut permissions = std::fs::metadata(&command).expect("metadata").permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&command, permissions).expect("permissions");
 
     let state = run_campaign(&CampaignRequest {
         bundle,
