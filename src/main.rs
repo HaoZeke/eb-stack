@@ -430,9 +430,33 @@ enum PackageCommand {
     Plan(PackagePlanArgs),
     /// Retarget an existing EasyBuild recipe using hierarchy + Resolvo selection.
     #[command(
-        after_long_help = "Examples:\n  eb-stack package bump --source zlib-1.3.1-foss-2023b.eb --toolchain foss/2024a --easyconfigs easyconfigs/ --out-dir bundle"
+        after_long_help = "Examples:\n  eb-stack package bump --source zlib-1.3.1-foss-2023b.eb --toolchain foss/2024a --easyconfigs easyconfigs/ --out-dir bundle\n  eb-stack package bump --source tqdm-4.67.3-GCCcore-14.3.0.eb --toolchain GCCcore/15.2.0 --latest --fetch-checksums --easyconfigs easyconfigs/ --out-dir bundle"
     )]
     Bump(PackageBumpArgs),
+    /// Report the newest stable upstream release of EasyBuild recipes.
+    ///
+    /// The backend comes from each recipe's `source_urls` (PyPI, GitHub,
+    /// GitLab, CRAN, crates.io, or the HTTP directory). Every listed version
+    /// is printed as kept, or dropped with the reason: drafts, pre-releases,
+    /// yanked releases, and the per-package override. GitHub requests send
+    /// `GITHUB_TOKEN` or `GH_TOKEN` when set.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack package latest --source easyconfigs/t/tqdm/tqdm-4.67.3-GCCcore-15.2.0.eb\n  eb-stack package latest --source a.eb --source b.eb --overrides site-overrides.toml --json"
+    )]
+    Latest(PackageLatestArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct PackageLatestArgs {
+    /// Easyconfig to check. Repeatable.
+    #[arg(long = "source", required = true)]
+    sources: Vec<PathBuf>,
+    /// Overrides TOML, applied after the ones eb-stack ships. Repeatable.
+    #[arg(long = "overrides")]
+    overrides: Vec<PathBuf>,
+    /// Print one JSON array instead of text.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -550,8 +574,15 @@ struct PackageBumpArgs {
     )]
     toolchain_spec: Option<String>,
     /// Package version to write. Absent, the recipe version is kept.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "latest")]
     version: Option<String>,
+    /// Move to the newest stable upstream release, as `package latest`
+    /// decides it from the recipe's `source_urls` and the overrides.
+    #[arg(long)]
+    latest: bool,
+    /// Overrides TOML for `--latest`, applied after the ones eb-stack ships. Repeatable.
+    #[arg(long = "overrides", requires = "latest")]
+    overrides: Vec<PathBuf>,
     /// SHA-256 of the new source. One value. `package plan` repeats this flag, once per artifact.
     #[arg(long)]
     source_checksum: Option<String>,
@@ -875,10 +906,70 @@ enum StackCommand {
         #[arg(long, value_delimiter = ',')]
         filter_deps: Vec<String>,
     },
+    /// Plan software-layer pull requests whose builds do not overlap.
+    ///
+    /// Each root's new-module set is its closure over the robot path minus the
+    /// installed modules, as `pr-overlap` computes it for one easystack line.
+    /// Roots whose sets meet ship in one pull request; a root whose set meets
+    /// an open pull request's waits for it. The rest are packed `--size` per
+    /// pull request. Each batch directory gets the EESSI easystacks, a lock, a
+    /// CycloneDX SBOM, `reproduce.sh` with this exact command and the
+    /// `eb --dry-run` lines, `batch.json`, and a pull-request body.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack batch --roots-file roots.txt --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --installed installed-zen4.txt --open-prs open-prs.json --eessi-version 2026.06 --easybuild-version 5.4.1 --generation 2026.1 --easyconfigs-repo easybuild-easyconfigs --out-dir batches"
+    )]
+    Batch {
+        /// Root easyconfig file name. Repeatable.
+        #[arg(long = "root")]
+        roots: Vec<String>,
+        /// File with one root easyconfig file name per line.
+        #[arg(long)]
+        roots_file: Option<PathBuf>,
+        /// Robot-path easyconfig tree. Repeatable; later trees win.
+        #[arg(long, required = true)]
+        easyconfigs: Vec<PathBuf>,
+        /// `<commit>=<dir>` easyconfigs for an open PR's `from-commit` pin. Repeatable.
+        #[arg(long = "commit-tree")]
+        commit_trees: Vec<String>,
+        /// Installed modules, one `Name/VersionFull` per line.
+        #[arg(long)]
+        installed: PathBuf,
+        /// Modulerc file with `module_version` aliases. Repeatable.
+        #[arg(long = "installed-modulerc")]
+        installed_modulerc: Vec<PathBuf>,
+        /// Open software-layer pull requests, `pr-overlap --pr` JSON. Repeatable.
+        #[arg(long = "open-prs")]
+        open_prs: Vec<PathBuf>,
+        /// EESSI version, `2026.06`.
+        #[arg(long)]
+        eessi_version: String,
+        /// EasyBuild release the entries are built with, `5.4.1`.
+        #[arg(long)]
+        easybuild_version: String,
+        /// Toolchain generation, `2026.1`.
+        #[arg(long)]
+        generation: String,
+        /// `--filter-deps` as EESSI-extend sets it. Absent, `EASYBUILD_FILTER_DEPS` is read.
+        #[arg(long, value_delimiter = ',')]
+        filter_deps: Vec<String>,
+        /// Most roots per pull request.
+        #[arg(long, default_value_t = 3)]
+        size: usize,
+        /// easybuild-easyconfigs checkout with release tags: a root the
+        /// release lacks gets a `from-commit` pin.
+        #[arg(long)]
+        easyconfigs_repo: Option<PathBuf>,
+        /// RFC 3339 time written into the plan. Absent is now.
+        #[arg(long)]
+        generated_at: Option<String>,
+        /// Output directory.
+        #[arg(long)]
+        out_dir: PathBuf,
+    },
     /// Write the lock as an EasyBuild easystack, the format `eb --easystack`
     /// consumes and EESSI's software layer is built from.
     #[command(
-        after_long_help = "Examples:\n  eb-stack stack easystack --lock stack.lock.json --out stack.yml"
+        after_long_help = "Examples:\n  eb-stack stack easystack --lock stack.lock.json --out stack.yml\n  eb-stack stack easystack --lock stack.lock.json --eessi-version 2026.06 --easybuild-version 5.4.1 --generation 2026.1 --out-dir software-layer"
     )]
     Easystack {
         /// Stack lock JSON written by `stack solve`.
@@ -892,6 +983,21 @@ enum StackCommand {
         /// `--option CUDA-12.8.0.eb:accept-eula-for=CUDA`. Repeatable.
         #[arg(long = "option")]
         options: Vec<String>,
+        /// Write EESSI software-layer easystacks for this EESSI version
+        /// instead of one `--out` file: one file per EasyBuild release and
+        /// generation, `001-system` for toolchain-free recipes, `accel/nvidia/`
+        /// for CUDA builds. Needs `--easybuild-version`, `--generation`, `--out-dir`.
+        #[arg(long, requires_all = ["easybuild_version", "generation", "out_dir"])]
+        eessi_version: Option<String>,
+        /// EasyBuild release the EESSI entries are built with, `5.4.1`.
+        #[arg(long, requires = "eessi_version")]
+        easybuild_version: Option<String>,
+        /// Toolchain generation of the entries, `2026.1`.
+        #[arg(long, requires = "eessi_version")]
+        generation: Option<String>,
+        /// Software-layer root to write the EESSI easystacks under.
+        #[arg(long, requires = "eessi_version")]
+        out_dir: Option<PathBuf>,
     },
     /// Regroup a Jenkins build list under the section headers of a previous
     /// one, so each package sits in the category the site already files it
@@ -920,9 +1026,11 @@ enum StackCommand {
     /// is checked in `--easyblocks-repo` against `easybuild-easyblocks-vX.Y.Z`.
     /// The release is `--easybuild-version`, or the `eb-X.Y.Z` in the easystack
     /// file name when that flag is omitted. The flag wins when both are set.
-    /// Exits 1 when any pin is `released`.
+    /// Exits 1 when any pin is `released`. With `--rewrite`, the pins whose
+    /// released file is the same are dropped from the easystacks in place,
+    /// a pin whose released file differs is kept, and the exit status is 0.
     #[command(
-        after_long_help = "Examples:\n  eb-stack stack from-commit --easystack 20261011-eb-5.4.0-UCX.yml --easyconfigs-repo ~/src/easybuild-easyconfigs\n  eb-stack stack from-commit --easystack rebuild.yml --easybuild-version 5.4.0 --easyconfigs-repo ~/src/easybuild-easyconfigs --json"
+        after_long_help = "Examples:\n  eb-stack stack from-commit --easystack 20261011-eb-5.4.0-UCX.yml --easyconfigs-repo ~/src/easybuild-easyconfigs\n  eb-stack stack from-commit --easystack rebuild.yml --easybuild-version 5.4.0 --easyconfigs-repo ~/src/easybuild-easyconfigs --json\n  eb-stack stack from-commit --easystack rebuild.yml --easyconfigs-repo ~/src/easybuild-easyconfigs --rewrite"
     )]
     FromCommit {
         /// Easystack YAML to read. Repeat for more than one file.
@@ -941,6 +1049,11 @@ enum StackCommand {
         /// Print the report as JSON.
         #[arg(long)]
         json: bool,
+        /// Drop each released pin whose file is the same in the release,
+        /// editing the easystacks in place. A pin whose released file differs
+        /// is kept.
+        #[arg(long)]
+        rewrite: bool,
     },
 }
 
@@ -1424,7 +1537,26 @@ fn run_package(command: PackageCommand) -> Result<()> {
             Ok(())
         }
         PackageCommand::Bump(args) => run_package_bump(args),
+        PackageCommand::Latest(args) => run_package_latest(args),
     }
+}
+
+fn run_package_latest(args: PackageLatestArgs) -> Result<()> {
+    let overrides = eb_stack::upstream::load_overrides(&args.overrides)?;
+    let mut reports = Vec::new();
+    for source in &args.sources {
+        let ec = eb_stack::eb_parse::resolve_easyconfig_file(source)
+            .with_context(|| format!("--source {}", source.display()))?;
+        reports.push(eb_stack::upstream::latest(&ec, &overrides, &UreqClient)?);
+    }
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&reports)?);
+    } else {
+        for report in &reports {
+            print!("{}", eb_stack::upstream::render_text(report));
+        }
+    }
+    Ok(())
 }
 
 fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
@@ -1447,10 +1579,30 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
     let options = PackageEmitOptions {
         easyblock_skeleton_root: args.emit_easyblock.then(|| args.out_dir.clone()),
     };
+    let version = if args.latest {
+        let ec = eb_stack::eb_parse::resolve_easyconfig_file(&args.source)
+            .with_context(|| format!("--source {}", args.source.display()))?;
+        let overrides = eb_stack::upstream::load_overrides(&args.overrides)?;
+        let report = eb_stack::upstream::latest(&ec, &overrides, &UreqClient)?;
+        print!("{}", eb_stack::upstream::render_text(&report));
+        match (report.state.as_str(), report.newest) {
+            ("unknown", _) | (_, None) => bail!(
+                "--latest: no upstream version decided for {} ({})",
+                ec.name,
+                report
+                    .reason
+                    .unwrap_or_else(|| "no candidates survived".into())
+            ),
+            (_, Some(newest)) if newest == ec.version => None,
+            (_, Some(newest)) => Some(newest),
+        }
+    } else {
+        args.version
+    };
     let request = BumpPackageRequest {
         source: args.source,
         toolchain,
-        version: args.version,
+        version,
         source_checksum: args.source_checksum,
         easyconfig_roots: args.easyconfigs,
         hierarchy_fixture: args.hierarchy_fixture,
@@ -2079,10 +2231,85 @@ fn run_stack(command: StackCommand) -> Result<()> {
             print!("{}", report.stdout);
             Ok(())
         }
-        StackCommand::Easystack { lock, out, options } => {
-            let report = eb_stack::workflows::stack_easystack(
-                &eb_stack::workflows::StackEasystackRequest { lock, out, options },
+        StackCommand::Batch {
+            mut roots,
+            roots_file,
+            easyconfigs,
+            commit_trees,
+            installed,
+            installed_modulerc,
+            open_prs,
+            eessi_version,
+            easybuild_version,
+            generation,
+            filter_deps,
+            size,
+            easyconfigs_repo,
+            generated_at,
+            out_dir,
+        } => {
+            if let Some(path) = roots_file {
+                let text = std::fs::read_to_string(&path)
+                    .with_context(|| format!("--roots-file {}", path.display()))?;
+                roots.extend(
+                    text.lines()
+                        .map(str::trim)
+                        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                        .map(String::from),
+                );
+            }
+            let command_line = std::env::args()
+                .map(|a| eb_stack::target::shell_quote(&a))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let run = eb_stack::site_commands::run_stack_batch(
+                &eb_stack::site_commands::StackBatchRequest {
+                    roots,
+                    easyconfigs,
+                    commit_trees,
+                    installed,
+                    installed_modulerc,
+                    open_prs,
+                    eessi_version,
+                    easybuild_version,
+                    generation,
+                    filter_deps,
+                    size,
+                    easyconfigs_repo,
+                    generated_at,
+                    command_line,
+                    out_dir,
+                },
             )?;
+            println!("{}", run.summary());
+            Ok(())
+        }
+        StackCommand::Easystack {
+            lock,
+            out,
+            options,
+            eessi_version,
+            easybuild_version,
+            generation,
+            out_dir,
+        } => {
+            let report = match (eessi_version, easybuild_version, generation, out_dir) {
+                (Some(eessi_version), Some(easybuild_version), Some(generation), Some(out_dir)) => {
+                    eb_stack::workflows::stack_easystack_eessi(
+                        &eb_stack::workflows::StackEasystackEessiRequest {
+                            lock,
+                            out_dir,
+                            eessi_version,
+                            easybuild_version,
+                            generation,
+                            options,
+                        },
+                    )?
+                }
+                _ => eb_stack::workflows::stack_easystack(
+                    &eb_stack::workflows::StackEasystackRequest { lock, out, options },
+                )?,
+            };
             print!("{}", report.stdout);
             Ok(())
         }
@@ -2092,6 +2319,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
             easyblocks_repo,
             easybuild_version,
             json,
+            rewrite,
         } => {
             let report = eb_stack::from_commit::check(&eb_stack::from_commit::FromCommitRequest {
                 easystacks,
@@ -2099,9 +2327,10 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 easyblocks_repo,
                 easybuild_version,
                 json,
+                rewrite,
             })?;
             print!("{}", report.stdout);
-            if report.released > 0 {
+            if report.released > 0 && !rewrite {
                 bail!(
                     "{} from-commit pin(s) already in the EasyBuild release",
                     report.released

@@ -43,9 +43,20 @@ pub struct UreqClient;
 impl RegistryClient for UreqClient {
     fn get(&self, url: &str) -> Result<Vec<u8>, RegistryError> {
         let agent = ureq::AgentBuilder::new().redirects(HTTP_REDIRECTS).build();
-        let response = agent
-            .get(url)
-            .set("User-Agent", HTTP_USER_AGENT)
+        let mut request = agent.get(url).set("User-Agent", HTTP_USER_AGENT);
+        // The GitHub API allows 60 anonymous requests an hour; a token from
+        // the environment lifts that for release listings. It is sent to
+        // api.github.com only.
+        if url.starts_with("https://api.github.com/") {
+            if let Some(token) = std::env::var("GITHUB_TOKEN")
+                .ok()
+                .or_else(|| std::env::var("GH_TOKEN").ok())
+                .filter(|t| !t.is_empty())
+            {
+                request = request.set("Authorization", &format!("Bearer {token}"));
+            }
+        }
+        let response = request
             .call()
             .map_err(|error| RegistryError::Fetch(format!("{url}: {error}")))?;
         let mut body = Vec::new();

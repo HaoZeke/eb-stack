@@ -797,7 +797,8 @@ fn shell_join(tokens: &[String]) -> String {
         .join(" ")
 }
 
-fn shell_quote(token: &str) -> String {
+/// Quote one argument for a POSIX shell; a plain token is left as it is.
+pub fn shell_quote(token: &str) -> String {
     if !token.is_empty()
         && token
             .chars()

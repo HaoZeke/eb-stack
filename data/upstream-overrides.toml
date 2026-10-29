@@ -1,0 +1,35 @@
+# Per-package settings for `package latest` and `package bump --latest`,
+# keyed by EasyBuild name. Each entry says why it exists.
+#
+# Fields: backend, project, include, exclude, ignored, series_policy,
+# max_major, pin, reason. `series_policy = "odd-minor-devel"` drops versions
+# whose minor number is odd. `max_major` drops a later product line that
+# reuses the name. `pin` keeps one version regardless of what upstream lists.
+
+[GStreamer]
+series_policy = "odd-minor-devel"
+reason = "GStreamer numbers development series with an odd minor (1.29.x); stable is even (1.28.x)"
+
+[GST-plugins-base]
+series_policy = "odd-minor-devel"
+reason = "GStreamer release series: odd minor is development"
+
+[GST-plugins-good]
+series_policy = "odd-minor-devel"
+reason = "GStreamer release series: odd minor is development"
+
+[GST-plugins-bad]
+series_policy = "odd-minor-devel"
+reason = "GStreamer release series: odd minor is development"
+
+[wget]
+max_major = 1
+reason = "wget 2.x is wget2, a separate program with its own easyconfig"
+
+[ncdu]
+max_major = 1
+reason = "ncdu 2.x is a Zig rewrite; the C 1.x line is still maintained"
+
+[libxsmm]
+max_major = 1
+reason = "libxsmm 2.x changes the API; CP2K builds against 1.x"

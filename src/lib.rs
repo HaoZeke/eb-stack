@@ -2,6 +2,7 @@
 #![warn(missing_docs)]
 
 pub mod artifact_class;
+pub mod batch;
 pub mod build_order;
 pub mod campaign;
 pub mod cargo;
@@ -69,6 +70,7 @@ pub mod target;
 pub mod test_selector;
 #[cfg(test)]
 mod test_support;
+pub mod upstream;
 pub mod version;
 pub mod workflows;
 pub mod workspace_fs;
