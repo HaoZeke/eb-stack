@@ -67,6 +67,10 @@ pub enum Backend {
         url: String,
         /// File name text before the version.
         prefix: String,
+        /// File name text after the version; empty matches any archive
+        /// extension.
+        #[serde(skip_serializing_if = "String::is_empty")]
+        suffix: String,
     },
 }
 
@@ -227,9 +231,15 @@ pub fn detect_backend(ec: &ResolvedEasyconfig, ov: Option<&Override>) -> Option<
         .first()
         .map(|f| file_prefix(&f.filename, &ec.version))
         .unwrap_or_else(|| format!("{}-", ec.name));
+    let suffix = ec
+        .source_files
+        .first()
+        .and_then(|f| file_suffix(&f.filename, &ec.version))
+        .unwrap_or_default();
     Some(Backend::Directory {
         url: first.clone(),
         prefix,
+        suffix,
     })
 }
 
@@ -259,6 +269,7 @@ fn backend_from_override(kind: &str, project: &str, name: &str) -> Option<Backen
             name: project.to_string(),
         },
         "directory" => Backend::Directory {
+            suffix: String::new(),
             url: project.to_string(),
             prefix: format!("{name}-"),
         },
@@ -267,6 +278,14 @@ fn backend_from_override(kind: &str, project: &str, name: &str) -> Option<Backen
 }
 
 /// The part of a source filename before its version: `FastTree-2.2.c` gives `FastTree-`.
+/// The file name text after the version, `-linux-x64.tar.xz` or
+/// `+-src.tar.gz`; `None` when the name does not hold the version.
+fn file_suffix(filename: &str, version: &str) -> Option<String> {
+    let at = filename.find(version)?;
+    let rest = &filename[at + version.len()..];
+    (!rest.is_empty()).then(|| rest.to_string())
+}
+
 fn file_prefix(filename: &str, version: &str) -> String {
     match filename.find(version) {
         Some(at) if at > 0 => filename[..at].to_string(),
@@ -440,7 +459,11 @@ pub fn list_candidates(
                 });
             }
         }
-        Backend::Directory { url, prefix } => {
+        Backend::Directory {
+            url,
+            prefix,
+            suffix,
+        } => {
             let body = client.get(url).map_err(|e| anyhow::anyhow!("{e}"))?;
             let mut pages = vec![String::from_utf8_lossy(&body).into_owned()];
             for dir in versioned_dirs(url, client) {
@@ -452,14 +475,25 @@ pub fn list_candidates(
             }
             // A dash in the version must open another number, so a platform
             // build (`blender-4.0.2-windows-x64.zip`) is not a version.
+            let tail = if suffix.is_empty() {
+                r"(?:\.tar\.gz|\.tar\.bz2|\.tar\.xz|\.tgz|\.zip|\.c|\.tar)\b".to_string()
+            } else {
+                regex::escape(suffix)
+            };
             let re = Regex::new(&format!(
-                r"{}([0-9][0-9A-Za-z._]*?(?:-[0-9][0-9A-Za-z._]*?)*)(?:\.tar\.gz|\.tar\.bz2|\.tar\.xz|\.tgz|\.zip|\.c|\.tar)\b",
+                r"{}([0-9][0-9A-Za-z._]*?(?:-[0-9][0-9A-Za-z._]*?)*){tail}",
                 regex::escape(prefix)
             ))?;
             let mut seen = std::collections::BTreeSet::new();
             for html in &pages {
                 for c in re.captures_iter(html) {
-                    let v = c[1].trim_end_matches(['.', '-', '_']).to_string();
+                    let v = c[1].trim_end_matches(['.', '-', '_']);
+                    // boost_1_92_0: underscores stand for dots.
+                    let v = if v.contains('.') {
+                        v.to_string()
+                    } else {
+                        v.replace('_', ".")
+                    };
                     if seen.insert(v.clone()) {
                         out.push(Candidate {
                             raw: v.clone(),
@@ -562,6 +596,11 @@ pub fn decide(
             Some("not a version".into())
         } else if is_prerelease(v) {
             Some("pre-release".into())
+        } else if !current.chars().any(|ch| ch.is_ascii_alphabetic())
+            && v.chars().any(|ch| ch.is_ascii_alphabetic())
+        {
+            // nccl4py-v0.6.0 in NCCL's tags, a dated build tag in flatbuffers'.
+            Some("letters where the recipe's version has none".into())
         } else if include.as_ref().is_some_and(|re| !re.is_match(v)) {
             Some("outside the include pattern".into())
         } else if exclude.as_ref().is_some_and(|re| re.is_match(v)) {
@@ -586,7 +625,11 @@ pub fn decide(
         candidates.iter().filter(|c| c.dropped.is_none()).collect();
     survivors.sort_by(|a, b| cmp_version(&b.version, &a.version).then_with(|| a.raw.cmp(&b.raw)));
     let newest = survivors.first().map(|c| c.version.clone());
-    let reason = ov.and_then(|o| o.reason.clone());
+    let reason = ov.and_then(|o| o.reason.clone()).or_else(|| {
+        candidates
+            .is_empty()
+            .then(|| "the backend listed no version of the recipe's source file".to_string())
+    });
     let (state, newest) = if let Some(pin) = ov.and_then(|o| o.pin.clone()) {
         ("pinned".to_string(), Some(pin))
     } else {
@@ -618,9 +661,10 @@ pub fn latest(
     let ov = overrides.get(&ec.name);
     let Some(backend) = detect_backend(ec, ov) else {
         let mut report = decide(&ec.name, &ec.version, "none", Vec::new(), ov)?;
-        if report.reason.is_none() {
-            report.reason = Some(no_backend_reason(ec).into());
-        }
+        report.reason = Some(
+            ov.and_then(|o| o.reason.clone())
+                .unwrap_or_else(|| no_backend_reason(ec).into()),
+        );
         return Ok(report);
     };
     let candidates = match list_candidates(&backend, &ec.name, client) {
@@ -756,6 +800,52 @@ mod tests {
                 project: "Markdown".into()
             })
         );
+    }
+
+    #[test]
+    fn a_binary_tarball_matches_its_own_suffix_and_underscores_read_as_dots() {
+        let text = "easyblock = 'Tarball'\nname = 'BLAST+'\nversion = '2.17.0'\nhomepage = 'https://example.org'\ndescription = 'x'\ntoolchain = SYSTEM\nsource_urls = ['https://ftp.example.org/blast+/']\nsources = ['ncbi-blast-%(version)s+-x64-linux.tar.gz']\n";
+        let recipe = crate::eb_parse::resolve_easyconfig_str(text).unwrap();
+        let page = r#"<a href="ncbi-blast-2.17.0+-x64-linux.tar.gz">a</a> <a href="ncbi-blast-2.18.0+-x64-linux.tar.gz">b</a> <a href="ncbi-blast-2.18.0+-src.tar.gz">c</a>"#;
+        let report = latest(
+            &recipe,
+            &BTreeMap::new(),
+            &client(&[("https://ftp.example.org/blast+/", page)]),
+        )
+        .unwrap();
+        assert_eq!(report.newest.as_deref(), Some("2.18.0"));
+
+        let boost = ec("Boost", "1.90.0", &["https://example.org/boost/"]);
+        let page = r#"<a href="Boost-1_90_0.tar.gz">a</a> <a href="Boost-1_92_0.tar.gz">b</a>"#;
+        let report = latest(
+            &boost,
+            &BTreeMap::new(),
+            &client(&[("https://example.org/boost/", page)]),
+        )
+        .unwrap();
+        assert_eq!(report.newest.as_deref(), Some("1.92.0"));
+    }
+
+    #[test]
+    fn a_tag_with_letters_is_not_a_release_of_a_numeric_version() {
+        let candidates = [
+            "2.30.4",
+            "2.30.7",
+            "4py-v0.6.0",
+            "25.12.19-2026-02-06-03fffb2",
+        ]
+        .iter()
+        .map(|v| Candidate {
+            raw: (*v).into(),
+            version: (*v).into(),
+            dropped: None,
+        })
+        .collect();
+        let report = decide("NCCL", "2.30.4", "github:NVIDIA/nccl", candidates, None).unwrap();
+        assert_eq!(report.newest.as_deref(), Some("2.30.7"));
+        let empty = decide("x", "1.0", "directory:u", Vec::new(), None).unwrap();
+        assert_eq!(empty.state, "unknown");
+        assert!(empty.reason.is_some());
     }
 
     #[test]

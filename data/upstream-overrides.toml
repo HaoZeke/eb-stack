@@ -33,3 +33,17 @@ reason = "ncdu 2.x is a Zig rewrite; the C 1.x line is still maintained"
 [libxsmm]
 max_major = 1
 reason = "libxsmm 2.x changes the API; CP2K builds against 1.x"
+
+[protobuf-python]
+backend = "pypi"
+project = "protobuf"
+reason = "the Python package has its own version line; the repository tags follow the C++ release"
+
+[flatbuffers-python]
+backend = "pypi"
+project = "flatbuffers"
+reason = "the Python package is released to PyPI"
+
+[OpenFOAM]
+exclude = "^20[0-9]{6}$"
+reason = "OpenFOAM-N repositories tag dated patch snapshots of the same major"
