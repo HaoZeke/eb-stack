@@ -926,6 +926,446 @@ pub fn run_easyblock_reach(args: &EasyblockReachRequest) -> Result<EasyblockReac
 }
 
 /// Release easyconfigs plus one tree per commit pin.
+/// Arguments for `stack batch`.
+pub struct StackBatchRequest {
+    /// Root easyconfig file names.
+    pub roots: Vec<String>,
+    /// Robot-path easyconfig trees (the easyconfigs the roots come from).
+    pub easyconfigs: Vec<PathBuf>,
+    /// `<commit>=<dir>` trees for `from-commit` pins the open PRs use.
+    pub commit_trees: Vec<String>,
+    /// Installed modules, one `Name/VersionFull` per line.
+    pub installed: PathBuf,
+    /// Modulerc files with `module_version` aliases.
+    pub installed_modulerc: Vec<PathBuf>,
+    /// Open software-layer pull requests as `pr-overlap --pr` JSON.
+    pub open_prs: Vec<PathBuf>,
+    /// EESSI version, `2026.06`.
+    pub eessi_version: String,
+    /// EasyBuild release the entries are built with, `5.4.1`.
+    pub easybuild_version: String,
+    /// Toolchain generation, `2026.1`.
+    pub generation: String,
+    /// `--filter-deps` as EESSI-extend sets it.
+    pub filter_deps: Vec<String>,
+    /// Most roots per pull request.
+    pub size: usize,
+    /// easybuild-easyconfigs checkout: a root not in the release tag gets a
+    /// `from-commit` pin to the last commit that touched its file.
+    pub easyconfigs_repo: Option<PathBuf>,
+    /// RFC 3339 time written into the plan; absent is now.
+    pub generated_at: Option<String>,
+    /// The command line, written into every reproduce script.
+    pub command_line: String,
+    /// Output directory.
+    pub out_dir: PathBuf,
+}
+
+/// What `stack batch` wrote.
+pub struct StackBatchRun {
+    pub out_dir: PathBuf,
+    pub plan: crate::batch::BatchPlan,
+    pub digest: String,
+}
+
+impl StackBatchRun {
+    /// One line for the CLI.
+    pub fn summary(&self) -> String {
+        format!(
+            "batches={} roots={} waits={} unresolved={} deployed={} digest={} out={}",
+            self.plan.batches.len(),
+            self.plan
+                .batches
+                .iter()
+                .map(|b| b.roots.len())
+                .sum::<usize>(),
+            self.plan.waits.len(),
+            self.plan.unresolved.len(),
+            self.plan.deployed.len(),
+            self.digest,
+            self.out_dir.display()
+        )
+    }
+}
+
+/// Plan dependency-disjoint software-layer pull requests and write each one's
+/// easystacks, lock, SBOM, reproduce script, and pull-request body.
+pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
+    use crate::batch::{batch_slug, plan, OpenSet, RootSet};
+    use crate::build_order::{module_name, ModuleKey};
+    use crate::domain::{Candidate, LockPackage, SolverMeta, StackLock, Toolchain};
+    use crate::easystack::{eessi_easystacks, EasystackOptions, EessiLayout};
+    use pr_overlap::{FileChange, PrInput};
+    use sha2::{Digest, Sha256};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    if args.roots.is_empty() {
+        return Err(usage("pass at least one --root or --roots-file entry"));
+    }
+    let (robot, _) = load_robot_trees(&args.easyconfigs, &args.commit_trees)?;
+    let installed = load_installed_modules(&args.installed, &args.installed_modulerc)?;
+    let filter_specs = dep_filter::specs_from_cli_or_env(&args.filter_deps);
+    let filter_deps = FilterDeps::parse(&filter_specs)
+        .map_err(|error| usage(format!("--filter-deps: {error}")))?;
+    let stamp = generated_at(args.generated_at.clone(), true)?;
+    let config = OverlapConfig {
+        eessi_version: args.eessi_version.clone(),
+        installed_source: "stack batch".into(),
+        exclude_paths: Vec::new(),
+        include_paths: Vec::new(),
+        generated_at: stamp.clone(),
+        filter_deps,
+        easyblocks: None,
+    };
+    let parent = Toolchain {
+        name: "foss".into(),
+        version: args.generation.clone(),
+    };
+    let members = crate::hierarchy::known_hierarchy(&parent)
+        .map(|h| h.member_labels())
+        .ok_or_else(|| {
+            usage(format!(
+                "--generation {} has no known toolchain hierarchy",
+                args.generation
+            ))
+        })?;
+    let layout = EessiLayout {
+        eessi_version: args.eessi_version.clone(),
+        easybuild_version: args.easybuild_version.clone(),
+        generation: args.generation.clone(),
+        members,
+    };
+
+    let mut root_names: Vec<String> = args.roots.clone();
+    root_names.sort();
+    root_names.dedup();
+    let mut root_sets = Vec::new();
+    for (i, root) in root_names.iter().enumerate() {
+        let path = layout.path_for(root).map_err(usage)?;
+        let pr = PrInput {
+            number: 1_000_000 + i as u64,
+            head_sha: String::new(),
+            title: Some(root.clone()),
+            easystacks: vec![FileChange {
+                path,
+                base: None,
+                head: Some(format!("easyconfigs:\n  - {root}\n")),
+                base_blob: None,
+                head_blob: None,
+            }],
+            files: Vec::new(),
+            easyconfigs: Vec::new(),
+        };
+        let record = pr_record(&pr, &robot, &installed, &config);
+        let (to_build, unresolved) = match record {
+            Some(r) => (r.to_build.into_iter().collect(), r.unresolved),
+            None => (Default::default(), vec!["no record".into()]),
+        };
+        root_sets.push(RootSet {
+            root: root.clone(),
+            to_build,
+            unresolved,
+        });
+    }
+
+    let mut open_inputs: Vec<PrInput> = Vec::new();
+    for path in &args.open_prs {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("--open-prs {}: not readable", path.display()))?;
+        let value: serde_json::Value = serde_json::from_str(&text)
+            .with_context(|| format!("--open-prs {}: not JSON", path.display()))?;
+        let inputs: Vec<PrInput> = if value.is_array() {
+            serde_json::from_value(value)
+        } else {
+            serde_json::from_value(value).map(|one| vec![one])
+        }
+        .with_context(|| format!("--open-prs {}: pull request record", path.display()))?;
+        open_inputs.extend(inputs);
+    }
+    open_inputs.sort_by_key(|pr| pr.number);
+    open_inputs.dedup_by_key(|pr| pr.number);
+    let open: Vec<OpenSet> = open_inputs
+        .iter()
+        .filter_map(|pr| pr_record(pr, &robot, &installed, &config))
+        .map(|r| OpenSet {
+            number: r.pr,
+            to_build: r.to_build.into_iter().collect(),
+        })
+        .collect();
+
+    let planned = plan(&root_sets, &open, args.size);
+
+    // The digest covers what decides the plan, so two runs that print the same
+    // digest planned from the same inputs.
+    let mut hasher = Sha256::new();
+    for line in [
+        format!("eessi={}", args.eessi_version),
+        format!("easybuild={}", args.easybuild_version),
+        format!("generation={}", args.generation),
+        format!("size={}", args.size),
+    ] {
+        hasher.update(line.as_bytes());
+        hasher.update(b"\n");
+    }
+    for root in &root_names {
+        hasher.update(format!("root={root}\n").as_bytes());
+    }
+    for module in &installed {
+        hasher.update(format!("installed={module}\n").as_bytes());
+    }
+    for pr in &open_inputs {
+        hasher.update(format!("open={} {}\n", pr.number, pr.head_sha).as_bytes());
+    }
+    let digest: String = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+
+    let candidates: BTreeMap<String, &Candidate> = robot
+        .base
+        .iter()
+        .map(|c| (module_name(&ModuleKey::of(c)), c))
+        .collect();
+    let by_file: BTreeMap<String, &Candidate> = robot
+        .base
+        .iter()
+        .filter_map(|c| {
+            let file = c.easyconfig_path.rsplit('/').next()?.to_string();
+            Some((file, c))
+        })
+        .collect();
+
+    std::fs::create_dir_all(&args.out_dir)
+        .with_context(|| format!("create {}", args.out_dir.display()))?;
+    let mut plan_md = format!(
+        "# Software-layer batches for EESSI {v}\n\nEasyBuild {x}, generation {g}, at most {s} roots per pull request.\nInputs digest `{digest}`.\n\n```\n{cmd}\n```\n\n",
+        v = args.eessi_version,
+        x = args.easybuild_version,
+        g = args.generation,
+        s = args.size,
+        cmd = args.command_line
+    );
+    for batch in &planned.batches {
+        let slug = batch_slug(batch);
+        let dir = args.out_dir.join(&slug);
+        std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+
+        let mut options = EasystackOptions::new();
+        let mut pins = BTreeMap::new();
+        if let Some(repo) = &args.easyconfigs_repo {
+            for root in &batch.roots {
+                if let Some(commit) = release_pin(repo, &args.easybuild_version, root)? {
+                    options
+                        .entry(root.clone())
+                        .or_default()
+                        .insert("from-commit".into(), commit.clone());
+                    pins.insert(root.clone(), commit);
+                }
+            }
+        }
+        let root_paths: Vec<&str> = batch.roots.iter().map(String::as_str).collect();
+        let stacks = eessi_easystacks(&root_paths, &options, &layout).map_err(usage)?;
+        for (rel, yaml) in &stacks {
+            crate::write_text(&dir.join("software-layer").join(rel), yaml)?;
+        }
+
+        let mut packages: Vec<LockPackage> = batch
+            .modules
+            .iter()
+            .filter_map(|m| candidates.get(m))
+            .map(|c| LockPackage {
+                name: c.name.clone(),
+                version: c.version.clone(),
+                toolchain: c.toolchain.clone(),
+                versionsuffix: c.versionsuffix.clone(),
+                easyconfig_path: c.easyconfig_path.clone(),
+            })
+            .collect();
+        packages.sort_by(|a, b| (&a.name, &a.version).cmp(&(&b.name, &b.version)));
+        let lock = StackLock {
+            schema_version: 1,
+            toolchain: parent.clone(),
+            generation_label: Some(args.generation.clone()),
+            packages,
+            solver: SolverMeta {
+                engine: "eb-stack stack batch".into(),
+                engine_version: env!("CARGO_PKG_VERSION").into(),
+                timestamp: stamp.clone(),
+                criteria: Vec::new(),
+            },
+        };
+        let lock_path = dir.join("lock.json");
+        crate::write_json_pretty(&lock_path, &lock)?;
+        let (sbom, _) = crate::sbom::lock_to_cyclonedx_from_recipes(&lock, &lock_path);
+        crate::write_json_pretty(&dir.join("sbom.cdx.json"), &sbom)?;
+
+        let toolchains: BTreeSet<String> = batch
+            .roots
+            .iter()
+            .map(|r| match by_file.get(r) {
+                Some(c) if crate::hierarchy::is_system_toolchain(&c.toolchain) => "system".into(),
+                Some(c) => format!("{}/{}", c.toolchain.name, c.toolchain.version),
+                None => "unknown".into(),
+            })
+            .collect();
+        let names: Vec<String> = batch
+            .roots
+            .iter()
+            .map(|r| match by_file.get(r) {
+                Some(c) => format!("{} {}", c.name, c.version),
+                None => r.trim_end_matches(".eb").to_string(),
+            })
+            .collect();
+        let title = format!(
+            "{{{}}}[{}] {}",
+            args.eessi_version,
+            toolchains.into_iter().collect::<Vec<_>>().join(","),
+            names.join(", ")
+        );
+        let dry_runs: Vec<String> = stacks
+            .keys()
+            .map(|rel| format!("eb --easystack {rel} --robot --dry-run"))
+            .collect();
+        let reproduce = format!(
+            "#!/bin/sh\n# Regenerate this batch: same inputs give digest {digest}.\nset -eu\n{cmd}\n\n# Inside EESSI {v} with EESSI-extend loaded, from the software-layer root:\n{dry}\n\n# The SBOM from the lock this batch wrote:\neb-stack stack sbom --lock {slug}/lock.json --out {slug}/sbom.cdx.json\n",
+            cmd = args.command_line,
+            v = args.eessi_version,
+            dry = dry_runs.join("\n"),
+        );
+        crate::write_text(&dir.join("reproduce.sh"), &reproduce)?;
+        let body = format!(
+            "{title}\n\n{n} root(s), {m} module(s) to build on top of EESSI {v}; no other open pull request builds any of them.\n\nGenerated with:\n\n```\n{cmd}\n```\n\nDry run, from the software-layer root with EESSI-extend loaded:\n\n```\n{dry}\n```\n\nModules this pull request builds:\n\n{mods}\n\nSBOM: `sbom.cdx.json` (CycloneDX), from `eb-stack stack sbom --lock lock.json`.\n",
+            n = batch.roots.len(),
+            m = batch.modules.len(),
+            v = args.eessi_version,
+            cmd = args.command_line,
+            dry = dry_runs.join("\n"),
+            mods = batch
+                .modules
+                .iter()
+                .map(|m| format!("- `{m}`"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        crate::write_text(&dir.join("pr-body.md"), &body)?;
+        crate::write_json_pretty(
+            &dir.join("batch.json"),
+            &serde_json::json!({
+                "index": batch.index,
+                "title": title,
+                "roots": batch.roots,
+                "modules": batch.modules,
+                "pins": pins,
+                "easystacks": stacks.keys().collect::<Vec<_>>(),
+                "digest": digest,
+                "command": args.command_line,
+            }),
+        )?;
+        plan_md.push_str(&format!(
+            "## {slug}\n\n{title}\n\n{} module(s) to build.\n\n",
+            batch.modules.len()
+        ));
+    }
+    if !planned.waits.is_empty() {
+        plan_md.push_str("## Waiting on open pull requests\n\n");
+        for w in &planned.waits {
+            plan_md.push_str(&format!(
+                "- `{}` waits on {}: shares {}\n",
+                w.root,
+                w.prs
+                    .iter()
+                    .map(|n| format!("#{n}"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                w.shared.join(", ")
+            ));
+        }
+        plan_md.push('\n');
+    }
+    if !planned.unresolved.is_empty() {
+        plan_md.push_str("## Unresolved\n\n");
+        for (root, missing) in &planned.unresolved {
+            plan_md.push_str(&format!("- `{root}`: {}\n", missing.join(", ")));
+        }
+        plan_md.push('\n');
+    }
+    if !planned.deployed.is_empty() {
+        plan_md.push_str("## Already installed\n\n");
+        for root in &planned.deployed {
+            plan_md.push_str(&format!("- `{root}`\n"));
+        }
+    }
+    crate::write_text(&args.out_dir.join("plan.md"), &plan_md)?;
+    crate::write_json_pretty(
+        &args.out_dir.join("plan.json"),
+        &serde_json::json!({
+            "digest": digest,
+            "command": args.command_line,
+            "generated_at": stamp,
+            "plan": planned,
+        }),
+    )?;
+    Ok(StackBatchRun {
+        out_dir: args.out_dir.clone(),
+        plan: planned,
+        digest,
+    })
+}
+
+/// The `from-commit` pin a root needs: none when the EasyBuild release tag
+/// already carries its file, else the last commit on `HEAD` that touched it.
+fn release_pin(repo: &Path, easybuild_version: &str, file: &str) -> Result<Option<String>> {
+    let git = |args: &[&str]| -> Result<String> {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .with_context(|| format!("git in {}", repo.display()))?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "git {} in {}: {}",
+                args.join(" "),
+                repo.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+    let first = file.chars().next().unwrap_or('_').to_ascii_lowercase();
+    let listed = git(&[
+        "ls-tree",
+        "-r",
+        "--name-only",
+        "HEAD",
+        &format!("easybuild/easyconfigs/{first}"),
+    ])?;
+    let Some(path) = listed.lines().find(|p| p.ends_with(&format!("/{file}"))) else {
+        return Ok(None);
+    };
+    let tag = format!("easybuild-easyconfigs-v{easybuild_version}");
+    git(&[
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        &format!("{tag}^{{commit}}"),
+    ])
+    .with_context(|| format!("--easyconfigs-repo has no tag {tag}; fetch the tags first"))?;
+    let in_release = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["cat-file", "-e", &format!("{tag}:{path}")])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if in_release {
+        return Ok(None);
+    }
+    let commit = git(&["log", "-1", "--format=%H", "HEAD", "--", path])?;
+    Ok((!commit.is_empty()).then_some(commit))
+}
+
 fn load_robot_trees(
     easyconfigs: &[PathBuf],
     commit_trees: &[String],
