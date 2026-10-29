@@ -152,7 +152,7 @@ it. See [[file:../howto/pypi-extend.org][site Python extras]].
 eb-stack package bump \
   --source RECIPE.eb \
   --toolchain foss/2024a \
-  [--version VERSION] \
+  [--version VERSION | --latest [--overrides OVERRIDES.toml]...] \
   [--source-checksum DIGEST] \
   [--dep NAME=VERSION]... \
   --easyconfigs UPSTREAM \
@@ -185,6 +185,28 @@ missing URL, or a failed download stays empty. The attempts are
 ~sources.fetch.json~ (one object per source: ~filename~, ~url~, ~sha256~,
 ~errors~) and a ~source:fetch~ residual. See
 [[file:formats.org][output formats]].
+~--latest~ takes the version ~package latest~ picks for the recipe, so it
+conflicts with ~--version~; ~--overrides~ adds override files to that
+decision. The bump fails when no stable release survives.
+
+** ~package latest~
+
+#+begin_src bash
+eb-stack package latest \
+  --source RECIPE.eb [--source OTHER.eb]... \
+  [--overrides OVERRIDES.toml]... \
+  [--json]
+#+end_src
+
+The backend is read from the recipe's ~source_urls~: PyPI, GitHub, GitLab,
+CRAN, crates.io, or an HTTP directory listing. Every listed version is
+printed as kept, or dropped with its reason: a draft, a pre-release, a
+yanked release, or the per-package override (an odd-minor development
+series, a highest allowed major). eb-stack carries
+~data/upstream-overrides.toml~; ~--overrides~ files apply after it. The
+state is ~current~, ~behind~, ~pinned~ or ~unknown~. ~--json~ prints one
+array with the same rows. GitHub requests send ~GITHUB_TOKEN~ or ~GH_TOKEN~
+when set.
 
 * Bundle layout
 
@@ -344,8 +366,31 @@ eb-stack stack order \
 
 eb-stack stack easystack \
   --lock /tmp/stack.lock.json \
-  [--out stack.yml] \
+  [--out stack.yml | --eessi-version 2026.06 --easybuild-version 5.4.1 \
+   --generation 2026.1 --out-dir SOFTWARE_LAYER] \
   [--option FILE.eb:OPTION=VALUE]...
+
+eb-stack stack gap \
+  --site SITE-MODULES.txt [--site OTHER.txt]... \
+  --installed INSTALLED.txt \
+  --easyconfigs TREE [--easyconfigs OVERLAY]... \
+  --generation 2026.1 \
+  [--exclude-file SITE-ONLY.tsv] \
+  [--filter-deps NAME,NAME...] \
+  --out-dir GAP
+
+eb-stack stack batch \
+  (--root FILE.eb... | --roots-file ROOTS.txt) \
+  --easyconfigs TREE [--easyconfigs OVERLAY]... \
+  [--commit-tree COMMIT=DIR]... \
+  --installed INSTALLED.txt [--installed-modulerc MODULERC]... \
+  [--open-prs OPEN.json]... [--open-repo EESSI/software-layer] \
+  --eessi-version 2026.06 --easybuild-version 5.4.1 --generation 2026.1 \
+  [--filter-deps NAME,NAME...] \
+  [--size 3] \
+  [--easyconfigs-repo ~/src/easybuild-easyconfigs] \
+  [--generated-at 2026-10-29T00:00:00Z] \
+  --out-dir BATCHES
 
 eb-stack stack sections \
   tests/jenkins_sections/next.list \
@@ -358,6 +403,7 @@ eb-stack stack from-commit \
   [--easybuild-version 5.4.0] \
   [--easyconfigs-repo ~/src/easybuild-easyconfigs] \
   [--easyblocks-repo ~/src/easybuild-easyblocks] \
+  [--rewrite] \
   [--json]
 #+end_src
 
@@ -440,6 +486,40 @@ command line without its dashes, for example
 ~--option CUDA-12.8.0.eb:accept-eula-for=CUDA~. A file with options is a
 mapping; a file without them is a string. Stdout is
 ~easystack=<path> entries=<N> of=<packages>~.
+~--eessi-version~ writes the EESSI software-layer layout under ~--out-dir~
+instead of one ~--out~ file:
+~easystacks/software.eessi.io/<V>/eessi-<V>-eb-<X>-<generation>.yml~ for
+the ~--generation~ toolchains, ~eessi-<V>-eb-<X>-001-system.yml~ for
+recipes on the system toolchain, and the same names under ~accel/nvidia/~
+for CUDA builds. A recipe on another generation's toolchain is an error.
+
+~stack gap~ compares the module listings a site provides (~--site~,
+repeatable, ~Name/Version~ or a bare name per line) with a stack's
+~--installed~ list. Each package is ~in-stack~ (matched without regard to
+case), ~recipe~ (the newest easyconfig on the ~--generation~ toolchains or
+the system toolchain is named), ~no-recipe~ (the newest easyconfig on any
+toolchain is named as the bump source), or ~excluded~ by a
+~--exclude-file~ line, ~name<TAB>reason~. ~--filter-deps~ names count as
+provided by the compatibility layer. The command writes ~gap.tsv~,
+~roots.txt~ for ~stack batch --roots-file~, and ~bump-sources.txt~ for
+~package bump --latest~.
+
+~stack batch~ plans software-layer pull requests whose builds do not
+overlap. A root's set is its closure over the robot path minus the
+installed modules, as ~pr-overlap~ computes it. Roots whose sets meet ship
+together; a root whose set meets an open pull request's waits for it.
+Open pull requests come from ~--open-prs~ (~pr-overlap --pr~ JSON) and
+~--open-repo~, which reads the open pull requests of that repository over
+HTTPS. ~--commit-tree~ supplies the easyconfigs an open pull request pins
+with ~from-commit~. ~--installed-modulerc~ adds ~module_version~ aliases to
+the installed list. The rest are packed ~--size~ roots per pull request in
+a fixed order, so the same inputs give the same plan. With
+~--easyconfigs-repo~, a root the ~--easybuild-version~ release lacks gets a
+~from-commit~ pin. Each ~batch-NN~ directory holds the EESSI easystacks, a
+lock, a CycloneDX SBOM, ~reproduce.sh~ with the exact command and the
+~eb --dry-run~ lines, ~batch.json~ and ~pr-body.md~. ~plan.md~ and
+~plan.json~ at the top record the waits, the unresolved roots and a SHA-256
+of the inputs. ~--generated-at~ fixes the time written into the plan.
 
 ~stack sections~ reads the build list
 and regroups its entries under the ~#### Title ####~ headers of ~--from~.
@@ -480,7 +560,9 @@ with the blob at the tag. An ~include-easyblocks-from-commit~ pin compares
 the tree of the pin with the tree of the tag, because that pin does not
 name one easyconfig. ~released~ and ~same~ can be removed. ~released~ and
 ~differs~ needs a person: the release is not the pinned file. The command
-exits 1 when ~released~ is not zero. ~--json~ prints the same report as
+exits 1 when ~released~ is not zero. ~--rewrite~ drops each ~released~
+pin with ~blob=same~ from the easystacks in place, keeps the others, and
+exits 0. ~--json~ prints the same report as
 JSON. See [[file:../howto/from-commit-released.org][from-commit pins already in an EasyBuild release]].
 
 * ~pr-overlap~
