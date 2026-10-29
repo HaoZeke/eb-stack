@@ -906,6 +906,42 @@ enum StackCommand {
         #[arg(long, value_delimiter = ',')]
         filter_deps: Vec<String>,
     },
+    /// What a site provides that a stack lacks, and the recipe that closes it.
+    ///
+    /// Every package in the `--site` module listings is `in-stack` (the
+    /// stack's `--installed` list has it, matched without regard to case),
+    /// `recipe` (an easyconfig on the generation's toolchains or the system
+    /// toolchain exists; the newest is named), `no-recipe` (the newest
+    /// easyconfig on any toolchain is named as the bump source), or
+    /// `excluded`. Writes `gap.tsv`, `roots.txt` for `stack batch
+    /// --roots-file`, and `bump-sources.txt`.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack gap --site snellius-2025.txt --site snellius-2024.txt --installed eessi-2026.06-zen4.txt --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --generation 2026.1 --exclude-file site-only.tsv --out-dir gap"
+    )]
+    Gap {
+        /// Site module listing, `Name/Version` per line or a bare name. Repeatable.
+        #[arg(long = "site", required = true)]
+        site: Vec<PathBuf>,
+        /// The stack's installed modules.
+        #[arg(long)]
+        installed: PathBuf,
+        /// Easyconfig tree to find recipes in. Repeatable.
+        #[arg(long, required = true)]
+        easyconfigs: Vec<PathBuf>,
+        /// Toolchain generation, `2026.1`.
+        #[arg(long)]
+        generation: String,
+        /// `name<TAB>reason` lines for names the stack does not carry
+        /// (licensed, vendor, site portal).
+        #[arg(long)]
+        exclude_file: Option<PathBuf>,
+        /// Names filtered to the compatibility layer. Absent, `EASYBUILD_FILTER_DEPS` is read.
+        #[arg(long, value_delimiter = ',')]
+        filter_deps: Vec<String>,
+        /// Output directory.
+        #[arg(long)]
+        out_dir: PathBuf,
+    },
     /// Plan software-layer pull requests whose builds do not overlap.
     ///
     /// Each root's new-module set is its closure over the robot path minus the
@@ -2234,6 +2270,29 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     out,
                 })?;
             print!("{}", report.stdout);
+            Ok(())
+        }
+        StackCommand::Gap {
+            site,
+            installed,
+            easyconfigs,
+            generation,
+            exclude_file,
+            filter_deps,
+            out_dir,
+        } => {
+            let run = eb_stack::site_commands::run_stack_gap(
+                &eb_stack::site_commands::StackGapRequest {
+                    site,
+                    installed,
+                    easyconfigs,
+                    generation,
+                    exclude_file,
+                    filter_deps,
+                    out_dir,
+                },
+            )?;
+            println!("{}", run.summary());
             Ok(())
         }
         StackCommand::Batch {

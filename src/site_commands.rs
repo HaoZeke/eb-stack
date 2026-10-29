@@ -926,6 +926,125 @@ pub fn run_easyblock_reach(args: &EasyblockReachRequest) -> Result<EasyblockReac
 }
 
 /// Release easyconfigs plus one tree per commit pin.
+/// Arguments for `stack gap`.
+pub struct StackGapRequest {
+    /// Site module listings (`Name/Version` lines or names). Repeatable.
+    pub site: Vec<PathBuf>,
+    /// The stack's installed modules.
+    pub installed: PathBuf,
+    /// Easyconfig trees to find recipes in.
+    pub easyconfigs: Vec<PathBuf>,
+    /// Toolchain generation, `2026.1`.
+    pub generation: String,
+    /// `name<TAB>reason` lines for names the stack does not carry.
+    pub exclude_file: Option<PathBuf>,
+    /// Names filtered to the compatibility layer, as EESSI-extend sets them.
+    pub filter_deps: Vec<String>,
+    /// Output directory.
+    pub out_dir: PathBuf,
+}
+
+/// What `stack gap` found.
+pub struct StackGapRun {
+    pub rows: Vec<crate::gap::GapRow>,
+    pub out_dir: PathBuf,
+}
+
+impl StackGapRun {
+    /// One line for the CLI.
+    pub fn summary(&self) -> String {
+        let count = |route: &str| self.rows.iter().filter(|r| r.route == route).count();
+        format!(
+            "site={} in-stack={} recipe={} no-recipe={} excluded={} out={}",
+            self.rows.len(),
+            count("in-stack"),
+            count("recipe"),
+            count("no-recipe"),
+            count("excluded"),
+            self.out_dir.display()
+        )
+    }
+}
+
+/// Compare a site's packages with a stack and name the recipe that closes
+/// each gap. Writes `gap.tsv`, `roots.txt` (the recipes on the generation,
+/// the input of `stack batch --roots-file`), and `bump-sources.txt` (the
+/// newest recipe on any toolchain for each name without one).
+pub fn run_stack_gap(args: &StackGapRequest) -> Result<StackGapRun> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut site = BTreeSet::new();
+    for path in &args.site {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("--site {}: not readable", path.display()))?;
+        site.extend(crate::gap::names_from_listing(&text));
+    }
+    let stack = crate::gap::names_from_listing(
+        &std::fs::read_to_string(&args.installed)
+            .with_context(|| format!("--installed {}: not readable", args.installed.display()))?,
+    );
+    let mut excluded = BTreeMap::new();
+    for name in dep_filter::specs_from_cli_or_env(&args.filter_deps) {
+        let name = name.split(':').next().unwrap_or(&name).to_string();
+        excluded.insert(name, "filtered to the compatibility layer".to_string());
+    }
+    if let Some(path) = &args.exclude_file {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("--exclude-file {}: not readable", path.display()))?;
+        for line in text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        {
+            let (name, reason) = line
+                .split_once(|c: char| c == '\t' || c == ' ')
+                .map(|(n, r)| (n.trim(), r.trim()))
+                .unwrap_or((line, "excluded"));
+            excluded.insert(name.to_string(), reason.to_string());
+        }
+    }
+    let trees: Vec<&Path> = args.easyconfigs.iter().map(PathBuf::as_path).collect();
+    let parsed = parse_easyconfig_trees(&trees).map_err(|error| {
+        anyhow::Error::msg(error)
+            .context(format!("--easyconfigs {}", listed_paths(&args.easyconfigs)))
+    })?;
+    let parent = crate::domain::Toolchain {
+        name: "foss".into(),
+        version: args.generation.clone(),
+    };
+    let members = crate::hierarchy::known_hierarchy(&parent)
+        .map(|h| h.member_labels())
+        .ok_or_else(|| {
+            usage(format!(
+                "--generation {} has no known toolchain hierarchy",
+                args.generation
+            ))
+        })?;
+    let rows = crate::gap::gap(&site, &stack, &parsed.candidates, &members, &excluded);
+    std::fs::create_dir_all(&args.out_dir)
+        .with_context(|| format!("create {}", args.out_dir.display()))?;
+    crate::write_text(
+        &args.out_dir.join("gap.tsv"),
+        &crate::gap::render_tsv(&rows),
+    )?;
+    let roots: Vec<&str> = rows.iter().filter_map(|r| r.recipe.as_deref()).collect();
+    crate::write_text(
+        &args.out_dir.join("roots.txt"),
+        &format!("{}\n", roots.join("\n")),
+    )?;
+    let bumps: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| r.newest_elsewhere.as_deref())
+        .collect();
+    crate::write_text(
+        &args.out_dir.join("bump-sources.txt"),
+        &format!("{}\n", bumps.join("\n")),
+    )?;
+    Ok(StackGapRun {
+        rows,
+        out_dir: args.out_dir.clone(),
+    })
+}
+
 /// Arguments for `stack batch`.
 pub struct StackBatchRequest {
     /// Root easyconfig file names.
