@@ -367,13 +367,14 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_from_commit",
-            "Report from-commit and include-easyblocks-from-commit pins already contained in an EasyBuild release, as `stack from-commit` does. easybuild_version overrides eb-X.Y.Z in the easystack file name. A released pin sets blob to same or differs.",
+            "Report from-commit and include-easyblocks-from-commit pins already contained in an EasyBuild release, as `stack from-commit` does. easybuild_version overrides eb-X.Y.Z in the easystack file name. A released pin sets blob to same or differs. rewrite drops the released pins whose file is the same, in place, and keeps the ones that differ.",
             &[("easystack", "array")],
             &[
                 ("easyconfigs_repo", "string"),
                 ("easyblocks_repo", "string"),
                 ("easybuild_version", "string"),
                 ("json", "boolean"),
+                ("rewrite", "boolean"),
             ],
         ),
         tool_with_optional(
@@ -2750,10 +2751,12 @@ fn stack_from_commit_tool(arguments: &Value) -> Result<Value, String> {
         easyblocks_repo: optional_path(arguments, "easyblocks_repo"),
         easybuild_version: optional_string(arguments, "easybuild_version"),
         json: optional_bool(arguments, "json"),
+        rewrite: optional_bool(arguments, "rewrite"),
     })
     .map_err(workflow_error)?;
     Ok(json!({
         "text": report.stdout,
+        "rewritten": report.rewritten,
         "released": report.released,
         "newer": report.newer,
         "unknown": report.unknown,

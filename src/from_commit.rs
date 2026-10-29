@@ -26,6 +26,10 @@ pub struct FromCommitRequest {
     pub easybuild_version: Option<String>,
     /// Print the report as JSON.
     pub json: bool,
+    /// Drop each pin the release already carries with the same bytes, in
+    /// place. A pin whose released file differs stays: it names the file
+    /// that was installed, and the release would build a different one.
+    pub rewrite: bool,
 }
 
 /// The report `stack from-commit` prints.
@@ -41,6 +45,8 @@ pub struct FromCommitReport {
     pub newer: usize,
     /// Pins whose commit or release tag is missing from the checkout.
     pub unknown: usize,
+    /// Pins `--rewrite` dropped from the easystacks.
+    pub rewritten: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -134,7 +140,137 @@ pub fn check(request: &FromCommitRequest) -> Result<FromCommitReport> {
         };
         rows.push(classify(repo, pin, &mut cache)?);
     }
-    render(rows, request.json)
+    let mut rewritten = 0;
+    if request.rewrite {
+        for path in &request.easystacks {
+            let shown = path.display().to_string();
+            let droppable: Vec<ReleasedPin> = rows
+                .iter()
+                .filter(|row| {
+                    row.easystack == shown
+                        && row.status == "released"
+                        && row.blob.as_deref() == Some("same")
+                })
+                .map(|row| ReleasedPin {
+                    file: row.file.clone(),
+                    key: if row.kind == Kind::Easyblocks.as_str() {
+                        Kind::Easyblocks
+                    } else {
+                        Kind::Easyconfigs
+                    },
+                    commit: row.commit.clone(),
+                })
+                .collect();
+            if droppable.is_empty() {
+                continue;
+            }
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("--easystack {}", path.display()))?;
+            let (updated, dropped) = drop_pins(&text, &droppable);
+            std::fs::write(path, updated).with_context(|| format!("write {}", path.display()))?;
+            rewritten += dropped;
+        }
+        for row in &mut rows {
+            if row.status == "released" && row.blob.as_deref() == Some("same") {
+                row.status = "dropped".into();
+            }
+        }
+    }
+    let mut report = render(rows, request.json)?;
+    report.rewritten = rewritten;
+    if request.rewrite && !request.json {
+        report.stdout.push_str(&format!("rewritten={rewritten}\n"));
+    }
+    if request.rewrite {
+        report.document["rewritten"] = json!(rewritten);
+    }
+    Ok(report)
+}
+
+/// One pin `--rewrite` removes: the entry's file, the option, and its commit.
+struct ReleasedPin {
+    file: String,
+    key: Kind,
+    commit: String,
+}
+
+/// Remove the named pins from easystack text, keeping every other line.
+///
+/// An entry is `  - FILE:` followed by its more-indented option lines. A pin
+/// line goes only when its option and commit both match, so an entry that
+/// repeats a file with another pin keeps that pin. The comment lines
+/// directly above a removed pin go with it. When nothing but `options:` and
+/// comments is left, the entry collapses to `  - FILE`. Returns the new text
+/// and the pins dropped.
+fn drop_pins(text: &str, drop: &[ReleasedPin]) -> (String, usize) {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut dropped = 0;
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let entry = line
+            .trim_start()
+            .strip_prefix("- ")
+            .and_then(|rest| rest.trim_end().strip_suffix(':'))
+            .map(str::trim);
+        let indent = line.len() - line.trim_start().len();
+        let Some(file) = entry.filter(|file| drop.iter().any(|d| d.file == *file)) else {
+            out.push(line.to_string());
+            i += 1;
+            continue;
+        };
+        let mut j = i + 1;
+        while j < lines.len() {
+            let next = lines[j];
+            let next_indent = next.len() - next.trim_start().len();
+            if next.trim().is_empty() || next_indent <= indent {
+                break;
+            }
+            j += 1;
+        }
+        let pins: Vec<(&str, &str)> = drop
+            .iter()
+            .filter(|d| d.file == file)
+            .map(|d| (d.key.as_str(), d.commit.as_str()))
+            .collect();
+        let mut block: Vec<&str> = lines[i + 1..j].to_vec();
+        let mut k = 0;
+        while k < block.len() {
+            let (key, value) = block[k]
+                .trim_start()
+                .split_once(':')
+                .map(|(k, v)| (k.trim(), v.trim()))
+                .unwrap_or(("", ""));
+            if pins.contains(&(key, value)) {
+                let mut start = k;
+                while start > 0 && block[start - 1].trim_start().starts_with('#') {
+                    start -= 1;
+                }
+                block.drain(start..=k);
+                dropped += 1;
+                k = start;
+            } else {
+                k += 1;
+            }
+        }
+        let has_option = block.iter().any(|l| {
+            let t = l.trim_start();
+            !t.starts_with('#') && t != "options:"
+        });
+        if has_option {
+            out.push(line.to_string());
+            out.extend(block.iter().map(|l| l.to_string()));
+        } else {
+            out.push(format!("{}- {file}", " ".repeat(indent)));
+        }
+        i = j;
+    }
+    let mut text_out = out.join("\n");
+    if text.ends_with('\n') {
+        text_out.push('\n');
+    }
+    (text_out, dropped)
 }
 
 fn read_pins(path: &Path, version_flag: Option<&str>) -> Result<Vec<RawPin>> {
@@ -455,6 +591,7 @@ fn render(rows: Vec<PinRow>, as_json: bool) -> Result<FromCommitReport> {
         released,
         newer,
         unknown,
+        rewritten: 0,
     })
 }
 
@@ -624,6 +761,7 @@ mod tests {
             easyblocks_repo: Some(fixture.easyblocks.clone()),
             easybuild_version: version.map(str::to_string),
             json,
+            rewrite: false,
         }
     }
 
@@ -799,6 +937,7 @@ mod tests {
             easyblocks_repo: None,
             easybuild_version: None,
             json: false,
+            rewrite: false,
         })
         .unwrap();
         assert_eq!(report.stdout, "pins=0 released=0 newer=0 unknown=0\n");
@@ -817,8 +956,52 @@ mod tests {
             easyblocks_repo: None,
             easybuild_version: None,
             json: false,
+            rewrite: false,
         })
         .unwrap_err();
         assert!(format!("{missing_repo:#}").contains("--easyconfigs-repo"));
+    }
+
+    #[test]
+    fn rewrite_drops_same_pins_and_keeps_differing_and_newer_ones() {
+        let fixture = fixture();
+        // Foo at c1 is in v5.4.0 unchanged (same); Bar at c1 was patched
+        // before the tag (differs); New at c3 is after the tag (newer).
+        let stack = write_stack(
+            &fixture.dir,
+            "20261011-eb-5.4.0-rewrite.yml",
+            &format!(
+                "# header stays\neasyconfigs:\n  - zlib-1.2.13.eb\n  - Foo-1.0.eb:\n      options:\n        # see the pull request\n        from-commit: {c1}\n  - Bar-1.0.eb:\n      options:\n        # same easyconfig as the current installations\n        from-commit: {c1}\n  - New-1.0.eb:\n      options:\n        from-commit: {c3}\n  - Foo-1.0.eb:\n      options:\n        from-commit: {c1}\n        include-easyblocks-from-commit: {b0}\n",
+                c1 = fixture.c1,
+                c3 = fixture.c3,
+                b0 = fixture.b0,
+            ),
+        );
+        let mut req = request(std::slice::from_ref(&stack), &fixture, None, false);
+        req.rewrite = true;
+        let report = check(&req).unwrap();
+        assert_eq!(report.rewritten, 2, "{}", report.stdout);
+        let text = std::fs::read_to_string(&stack).unwrap();
+        assert_eq!(
+            text,
+            format!(
+                "# header stays\neasyconfigs:\n  - zlib-1.2.13.eb\n  - Foo-1.0.eb\n  - Bar-1.0.eb:\n      options:\n        # same easyconfig as the current installations\n        from-commit: {c1}\n  - New-1.0.eb:\n      options:\n        from-commit: {c3}\n  - Foo-1.0.eb:\n      options:\n        include-easyblocks-from-commit: {b0}\n",
+                c1 = fixture.c1,
+                c3 = fixture.c3,
+                b0 = fixture.b0,
+            )
+        );
+        // The differing pins stay released: Bar's easyconfig and the
+        // easyblocks tree at b0, which v5.4.0 changed.
+        assert_eq!(report.released, 2, "{}", report.stdout);
+        assert!(
+            report.stdout.ends_with("rewritten=2\n"),
+            "{}",
+            report.stdout
+        );
+        // A second run finds nothing left to drop.
+        let again = check(&req).unwrap();
+        assert_eq!(again.rewritten, 0);
+        assert_eq!(std::fs::read_to_string(&stack).unwrap(), text);
     }
 }
