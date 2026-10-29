@@ -6,6 +6,9 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `pr-overlap --kind easyconfigs` applies `--filter-deps` before the
+  reverse walk. A filtered dependency such as Java or CUDA is left out of
+  `reverse_dependents` and does not create a `depends-on` row.
 - `pr-overlap --kind easyconfigs` puts a patched easyconfig, and every
   reverse dependent classed `must-rebuild`, into `to_build`. `review` and
   `no-rebuild` stay on the record and out of the build set. `--merge-order`

@@ -5373,6 +5373,9 @@ asks for by easystack entry.
 The other pull requests in the same run are on the robot path while
 resolving, between the base tree and this pull request's own files.
 `new_modules` is still compared to the base tree alone.
+`--filter-deps` is applied to a copy of the base tree before the reverse
+walk. A dependency it drops is not a reverse dependent and does not create
+a `depends-on` row.
 
 `overlap.toml` for this kind is schema 2 and adds `rows`. There are 4
 kinds:

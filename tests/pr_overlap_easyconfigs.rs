@@ -429,3 +429,97 @@ fn merged_and_impact_reject_the_same_recordless_pull_request() {
         assert!(!out_dir.exists(), "{flag} left {}", out_dir.display());
     }
 }
+
+fn run_tree(tree: &Path, prs: &[serde_json::Value], extra: &[&str]) -> tempfile::TempDir {
+    let temp = tempfile::tempdir().expect("temp");
+    let input = temp.path().join("prs.json");
+    std::fs::write(&input, serde_json::to_string(prs).unwrap()).unwrap();
+    let out = temp.path().join("out");
+    let status = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .env_remove("EASYBUILD_FILTER_DEPS")
+        .args(["pr-overlap", "--kind", "easyconfigs", "--pr"])
+        .arg(&input)
+        .arg("--easyconfigs")
+        .arg(tree)
+        .args(["--generated-at", "2026-10-29T00:00:00Z", "--repo-url", ""])
+        .arg("--out-dir")
+        .arg(&out)
+        .args(extra)
+        .output()
+        .expect("run pr-overlap");
+    let err = String::from_utf8_lossy(&status.stderr);
+    assert!(status.status.success(), "{err}");
+    temp
+}
+
+fn read_record(out: &Path, number: u64) -> eb_stack::pr_overlap::PrRecord {
+    toml::from_str(&std::fs::read_to_string(out.join(format!("prs/{number}.toml"))).unwrap())
+        .unwrap()
+}
+
+fn read_index(out: &Path) -> eb_stack::pr_overlap::OverlapIndex {
+    toml::from_str(&std::fs::read_to_string(out.join("overlap.toml")).unwrap()).unwrap()
+}
+
+/// `('Java', '21', '', SYSTEM)` is a reverse dependent until `--filter-deps Java`.
+#[test]
+fn filter_deps_drops_a_system_java_reverse_dependent() {
+    let tree = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pr_overlap_easyconfigs_filter");
+    let java = std::fs::read_to_string(tree.join("j/Java/Java-21.eb")).unwrap();
+    let app = std::fs::read_to_string(tree.join("a/App/App-1.0-GCCcore-15.2.0.eb")).unwrap();
+    let prs = vec![
+        pr(
+            1,
+            "patch Java",
+            "j/Java/Java-21.eb",
+            Some(&java),
+            &java.replace("Fixture.", "Head."),
+        ),
+        pr(
+            2,
+            "patch App",
+            "a/App/App-1.0-GCCcore-15.2.0.eb",
+            Some(&app),
+            &app.replace("Fixture.", "Head."),
+        ),
+    ];
+    let open = run_tree(&tree, &prs, &["--merge-order"]);
+    let out = open.path().join("out");
+    let record = read_record(&out, 1);
+    let app_dep = record
+        .reverse_dependents
+        .iter()
+        .find(|dep| dep.module.starts_with("App/"))
+        .expect("App is classified without the filter");
+    assert!(!app_dep.class.is_empty(), "{app_dep:?}");
+    let index = read_index(&out);
+    assert!(
+        index.rows.iter().any(|row| {
+            row.kind == "depends-on"
+                && row.from == Some(1)
+                && row.to == Some(2)
+                && row.modules.iter().any(|module| module.starts_with("Java/"))
+        }),
+        "missing depends-on row: {:?}",
+        index.rows
+    );
+
+    let filtered = run_tree(&tree, &prs, &["--filter-deps", "Java", "--merge-order"]);
+    let out = filtered.path().join("out");
+    let record = read_record(&out, 1);
+    assert!(
+        record
+            .reverse_dependents
+            .iter()
+            .all(|dep| !dep.module.starts_with("App/")),
+        "filtered Java still classified App: {:?}",
+        record.reverse_dependents
+    );
+    let index = read_index(&out);
+    assert!(
+        index.rows.iter().all(|row| row.kind != "depends-on"),
+        "filtered Java still created a depends-on row: {:?}",
+        index.rows
+    );
+}
+

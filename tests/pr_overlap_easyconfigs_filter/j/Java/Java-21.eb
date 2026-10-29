@@ -1,0 +1,11 @@
+easyblock = 'Toolchain'
+
+name = 'Java'
+version = '21'
+
+homepage = 'https://example.org/Java'
+description = "Fixture."
+
+toolchain = SYSTEM
+
+moduleclass = 'lang'

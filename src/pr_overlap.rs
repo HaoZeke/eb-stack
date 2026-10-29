@@ -893,7 +893,12 @@ pub fn easyconfig_record_seeing(
         }
         None => (new_modules.clone(), Vec::new()),
     };
-    let reverse_dependents = reverse_dependents(base, &overlay.changed);
+    // The reverse walk is the base tree, not the sibling-PR overlay. A
+    // `--filter-deps` name is removed from that copy first, so a Java or
+    // CUDA tuple does not become a reverse dependent or a depends-on edge.
+    let mut reverse_base = base.to_vec();
+    config.filter_deps.apply(&mut reverse_base);
+    let reverse_dependents = reverse_dependents(&reverse_base, &overlay.changed);
     let rebuilds = modules_to_rebuild(&overlay.changed, &reverse_dependents);
     let (to_build, already_installed) = with_rebuilds(to_build, already_installed, &rebuilds);
     Some(PrRecord {
