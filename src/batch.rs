@@ -33,7 +33,9 @@ pub struct RootSet {
 /// An open pull request and what it would build.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenSet {
+    /// Pull request number.
     pub number: u64,
+    /// Modules it would build.
     pub to_build: BTreeSet<String>,
 }
 
@@ -51,6 +53,7 @@ pub struct Batch {
 /// A root that waits for open pull requests.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Wait {
+    /// Root easyconfig.
     pub root: String,
     /// Open pull requests that build part of the root's set.
     pub prs: Vec<u64>,
@@ -61,7 +64,9 @@ pub struct Wait {
 /// The whole plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BatchPlan {
+    /// The pull requests to open, in order.
     pub batches: Vec<Batch>,
+    /// Roots that wait for open pull requests.
     pub waits: Vec<Wait>,
     /// Roots with requirements nothing on the robot path provides.
     pub unresolved: BTreeMap<String, Vec<String>>,

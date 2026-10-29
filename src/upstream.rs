@@ -33,17 +33,41 @@ pub const BUILTIN_OVERRIDES: &str = include_str!("../data/upstream-overrides.tom
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Backend {
     /// A PyPI project.
-    Pypi { project: String },
+    Pypi {
+        /// Project name on PyPI.
+        project: String,
+    },
     /// A GitHub repository's releases, falling back to its tags.
-    Github { owner: String, repo: String },
+    Github {
+        /// Repository owner.
+        owner: String,
+        /// Repository name.
+        repo: String,
+    },
     /// A GitLab project's releases, falling back to its tags.
-    Gitlab { host: String, path: String },
+    Gitlab {
+        /// GitLab host, `gitlab.com`.
+        host: String,
+        /// Project path, `group/project`.
+        path: String,
+    },
     /// A CRAN package.
-    Cran { package: String },
+    Cran {
+        /// Package name on CRAN.
+        package: String,
+    },
     /// A crates.io crate.
-    Crates { name: String },
+    Crates {
+        /// Crate name.
+        name: String,
+    },
     /// An HTTP directory listing, scanned for `<prefix><version><suffix>` links.
-    Directory { url: String, prefix: String },
+    Directory {
+        /// The listing URL.
+        url: String,
+        /// File name text before the version.
+        prefix: String,
+    },
 }
 
 impl Backend {
@@ -99,15 +123,20 @@ pub struct Candidate {
 /// What `package latest` decides for one recipe.
 #[derive(Debug, Clone, Serialize)]
 pub struct LatestReport {
+    /// EasyBuild name.
     pub name: String,
+    /// Version the recipe has.
     pub current: String,
+    /// Where the versions were read, `pypi:tqdm`.
     pub backend: String,
     /// The newest surviving version; absent when nothing survived.
     pub newest: Option<String>,
     /// `current`, `behind`, `pinned`, or `unknown`.
     pub state: String,
+    /// The override's reason, or why the backend could not be read.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Every version listed, kept or dropped.
     pub candidates: Vec<Candidate>,
 }
 
@@ -258,7 +287,7 @@ pub fn tag_version(tag: &str, name: &str) -> String {
     for prefix in [
         format!("{lname}-"),
         format!("{lname}_"),
-        format!("{lname}"),
+        lname.clone(),
         "release-".into(),
         "release_".into(),
         "version-".into(),

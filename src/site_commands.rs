@@ -946,7 +946,9 @@ pub struct StackGapRequest {
 
 /// What `stack gap` found.
 pub struct StackGapRun {
+    /// One row per site package.
     pub rows: Vec<crate::gap::GapRow>,
+    /// Where the files were written.
     pub out_dir: PathBuf,
 }
 
@@ -996,7 +998,7 @@ pub fn run_stack_gap(args: &StackGapRequest) -> Result<StackGapRun> {
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
         {
             let (name, reason) = line
-                .split_once(|c: char| c == '\t' || c == ' ')
+                .split_once(['\t', ' '])
                 .map(|(n, r)| (n.trim(), r.trim()))
                 .unwrap_or((line, "excluded"));
             excluded.insert(name.to_string(), reason.to_string());
@@ -1084,8 +1086,11 @@ pub struct StackBatchRequest {
 
 /// What `stack batch` wrote.
 pub struct StackBatchRun {
+    /// Where the batches were written.
     pub out_dir: PathBuf,
+    /// The plan.
     pub plan: crate::batch::BatchPlan,
+    /// Sha256 over the inputs that decide the plan.
     pub digest: String,
 }
 

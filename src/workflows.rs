@@ -327,7 +327,7 @@ pub fn stack_easystack_eessi(request: &StackEasystackEessiRequest) -> Result<Sta
         .iter()
         .map(|p| p.easyconfig_path.as_str())
         .collect();
-    let files = easystack::eessi_easystacks(&paths, &parsed, &layout).map_err(|e| usage(e))?;
+    let files = easystack::eessi_easystacks(&paths, &parsed, &layout).map_err(usage)?;
     let mut stdout = String::new();
     let mut entries = 0;
     for (rel, yaml) in &files {
