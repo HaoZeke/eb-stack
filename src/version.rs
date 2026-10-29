@@ -7,14 +7,14 @@
 //! separator that is dropped. Example: 1.0rc1 tokenizes to Num(1), Num(0),
 //! Alpha(rc), Num(1); 2025a tokenizes to Num(2025), Alpha(a).
 //!
-//! Comparison walks both token sequences position by position. Two Num
-//! tokens compare numerically; two Alpha tokens compare lexicographically
-//! (so 2025a is before 2025b). A Num against a missing token pads the
-//! missing side with zero. An Alpha against a missing token is treated as
-//! a pre-release suffix (rc, alpha, beta, or a bare trailing letter) that
-//! sorts before the side with nothing more. Mixed Num versus Alpha at the
-//! same position is rare for EasyBuild; Num sorts before Alpha there for a
-//! total deterministic order.
+//! Comparison walks both token sequences position by position, and a
+//! missing token reads as Num(0). Two Num tokens compare numerically; two
+//! Alpha tokens compare lexicographically (so 2025a is before 2025b). An
+//! Alpha sorts before any Num, so a pre-release suffix (rc, alpha, beta, or
+//! a bare trailing letter) sorts before both the side with nothing more
+//! (1.0rc1 < 1.0) and a further number (1.0rc1 < 1.0.1). Reading a missing
+//! token as Num(0) everywhere makes the order total, which a sort needs:
+//! 1.a < 1 == 1.0 and 1.a < 1.0 agree.
 
 use std::cmp::Ordering;
 
@@ -75,22 +75,12 @@ pub fn cmp_version(a: &str, b: &str) -> Ordering {
     for i in 0..n {
         let x = pa.get(i);
         let y = pb.get(i);
-        let o = match (x, y) {
-            (Some(Part::Num(x)), Some(Part::Num(y))) => x.cmp(y),
-            (Some(Part::Alpha(x)), Some(Part::Alpha(y))) => x.cmp(y),
-            // Mixed types at an aligned position: numeric sorts before
-            // alphabetic for a deterministic total order.
-            (Some(Part::Num(_)), Some(Part::Alpha(_))) => Ordering::Less,
-            (Some(Part::Alpha(_)), Some(Part::Num(_))) => Ordering::Greater,
-            // One side ran out of tokens: a numeric remainder pads the
-            // missing side with 0 (so "1.2.3" > "1.2"); an alphabetic
-            // remainder is a pre-release suffix that sorts before the
-            // side with nothing more (so "1.0rc1" < "1.0").
-            (Some(Part::Num(x)), None) => x.cmp(&0),
-            (None, Some(Part::Num(y))) => 0u64.cmp(y),
-            (Some(Part::Alpha(_)), None) => Ordering::Less,
-            (None, Some(Part::Alpha(_))) => Ordering::Greater,
-            (None, None) => Ordering::Equal,
+        const ZERO: Part = Part::Num(0);
+        let o = match (x.unwrap_or(&ZERO), y.unwrap_or(&ZERO)) {
+            (Part::Num(x), Part::Num(y)) => x.cmp(y),
+            (Part::Alpha(x), Part::Alpha(y)) => x.cmp(y),
+            (Part::Alpha(_), Part::Num(_)) => Ordering::Less,
+            (Part::Num(_), Part::Alpha(_)) => Ordering::Greater,
         };
         match o {
             Ordering::Equal => {}
@@ -490,6 +480,28 @@ mod tests {
         // before the corresponding final release.
         assert_eq!(cmp_version("1.2.3a", "1.2.3"), Ordering::Less);
         assert_eq!(cmp_version("1.2.3", "1.2.3a"), Ordering::Greater);
+    }
+
+    #[test]
+    fn the_order_is_total_so_a_sort_accepts_it() {
+        let mut versions = vec![
+            "1.a", "1", "1.0", "1.0.1", "1.0rc1", "4.0.2", "4.0.2-1", "2025a", "2025.1", "0.9.0.4",
+            "v3", "3.6b", "3.6", "1.0.0", "20260522",
+        ];
+        for a in &versions {
+            for b in &versions {
+                for c in &versions {
+                    if cmp_version(a, b) != Ordering::Greater
+                        && cmp_version(b, c) != Ordering::Greater
+                    {
+                        assert_ne!(cmp_version(a, c), Ordering::Greater, "{a} {b} {c}");
+                    }
+                }
+            }
+        }
+        versions.sort_by(|a, b| cmp_version(a, b));
+        assert_eq!(cmp_version("1.a", "1.0"), Ordering::Less);
+        assert_eq!(cmp_version("1.0rc1", "1.0.1"), Ordering::Less);
     }
 
     #[test]
