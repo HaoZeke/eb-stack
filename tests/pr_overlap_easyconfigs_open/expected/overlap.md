@@ -80,4 +80,3 @@ Changes 4 easyconfigs. Closure has 152 modules, 1 of them new. Builds 1 modules;
 - `nghttp3/1.13.1-GCCcore-13.2.0`
 
 </details>
-

@@ -132,4 +132,3 @@ Changes 1 easyconfigs. Closure has 3 modules, 2 of them new. Builds 2 modules; 0
 - `User/1.0`
 
 </details>
-

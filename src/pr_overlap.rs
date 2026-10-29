@@ -1346,7 +1346,7 @@ fn render_easyconfig_markdown(
         }
         out.push_str("\n</details>\n\n");
     }
-    out
+    single_trailing_newline(out)
 }
 
 /// The overlap report for reviewers, as Markdown.
@@ -1428,7 +1428,15 @@ pub fn render_markdown(records: &[PrRecord], index: &OverlapIndex, repo_url: &st
         }
         out.push_str("\n</details>\n\n");
     }
-    out
+    single_trailing_newline(out)
+}
+
+/// Drop the blank line a section separator leaves at the end of the file.
+fn single_trailing_newline(mut text: String) -> String {
+    while text.ends_with("\n\n") {
+        text.pop();
+    }
+    text
 }
 
 /// HTTP status and body. A 404 is [`Ok`]: a missing base file is data.
