@@ -940,6 +940,8 @@ pub struct StackBatchRequest {
     pub installed_modulerc: Vec<PathBuf>,
     /// Open software-layer pull requests as `pr-overlap --pr` JSON.
     pub open_prs: Vec<PathBuf>,
+    /// Read the open pull requests of this `OWNER/NAME` over HTTPS too.
+    pub open_repo: Option<String>,
     /// EESSI version, `2026.06`.
     pub eessi_version: String,
     /// EasyBuild release the entries are built with, `5.4.1`.
@@ -1081,6 +1083,14 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
         }
         .with_context(|| format!("--open-prs {}: pull request record", path.display()))?;
         open_inputs.extend(inputs);
+    }
+    if let Some(repo) = &args.open_repo {
+        let mut query = pr_overlap::OpenEasyconfigQuery::new(repo);
+        query.base_ref = "main".into();
+        open_inputs.extend(pr_overlap::fetch_open_software_layer_prs(
+            &pr_overlap::UreqGet,
+            &query,
+        )?);
     }
     open_inputs.sort_by_key(|pr| pr.number);
     open_inputs.dedup_by_key(|pr| pr.number);

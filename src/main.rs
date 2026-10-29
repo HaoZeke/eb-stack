@@ -173,7 +173,7 @@ struct PrOverlapArgs {
     /// Read open easyconfigs pull requests from `OWNER/NAME` over HTTPS.
     ///
     /// Requires `--kind easyconfigs`. Those pull requests are added to any
-    /// `--pr` files. No token is sent. A repository that is not `owner/name`
+    /// `--pr` files. `GITHUB_TOKEN` or `GH_TOKEN` is sent to api.github.com when set. A repository that is not `owner/name`
     /// is an error before a request is sent.
     #[arg(long)]
     open: Option<String>,
@@ -940,6 +940,11 @@ enum StackCommand {
         /// Open software-layer pull requests, `pr-overlap --pr` JSON. Repeatable.
         #[arg(long = "open-prs")]
         open_prs: Vec<PathBuf>,
+        /// Also read the open pull requests of `OWNER/NAME` over HTTPS, as
+        /// `EESSI/software-layer`. `GITHUB_TOKEN` or `GH_TOKEN` is sent to
+        /// api.github.com when set.
+        #[arg(long)]
+        open_repo: Option<String>,
         /// EESSI version, `2026.06`.
         #[arg(long)]
         eessi_version: String,
@@ -2239,6 +2244,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
             installed,
             installed_modulerc,
             open_prs,
+            open_repo,
             eessi_version,
             easybuild_version,
             generation,
@@ -2270,6 +2276,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     installed,
                     installed_modulerc,
                     open_prs,
+                    open_repo,
                     eessi_version,
                     easybuild_version,
                     generation,

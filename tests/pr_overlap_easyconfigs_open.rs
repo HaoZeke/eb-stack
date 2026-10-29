@@ -10,7 +10,8 @@
 //! public GitHub API over HTTPS, with no token.
 
 use eb_stack::pr_overlap::{
-    fetch_open_easyconfig_prs, HttpGet, HttpResponse, OpenEasyconfigQuery, UreqGet,
+    fetch_open_easyconfig_prs, fetch_open_software_layer_prs, HttpGet, HttpResponse,
+    OpenEasyconfigQuery, UreqGet,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -577,4 +578,51 @@ fn live_github_open_easyconfigs_pull_request() {
                 .or(change.base.as_ref())
                 .is_some_and(|text| text.contains("name"))
     }));
+}
+
+#[test]
+fn software_layer_reader_keeps_easystack_text_and_skips_other_prs() {
+    let repo = "acme/sl";
+    let head = sha('c');
+    let docs = sha('d');
+    let stack = "easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.1-2026.1.yml";
+    let base_text = "easyconfigs:\n  - A-1.eb\n";
+    let head_text = "easyconfigs:\n  - A-1.eb\n  - B-2.eb\n";
+    let mut pages = BTreeMap::new();
+    pages.insert(
+        format!("https://api.github.com/repos/{repo}/pulls?state=open&per_page=100&page=1"),
+        json_page(serde_json::json!([
+            {"number": 9, "title": "B 2", "head": {"sha": head}},
+            {"number": 10, "title": "docs", "head": {"sha": docs}},
+        ])),
+    );
+    pages.insert(
+        format!("https://api.github.com/repos/{repo}/pulls/9/files?per_page=100&page=1"),
+        json_page(serde_json::json!([
+            {"filename": stack, "status": "modified"},
+            {"filename": "README.md", "status": "modified"},
+        ])),
+    );
+    pages.insert(
+        format!("https://api.github.com/repos/{repo}/pulls/10/files?per_page=100&page=1"),
+        json_page(serde_json::json!([{"filename": "docs/x.md", "status": "added"}])),
+    );
+    pages.insert(
+        format!("https://raw.githubusercontent.com/{repo}/main/{stack}"),
+        (200, base_text.into()),
+    );
+    pages.insert(
+        format!("https://raw.githubusercontent.com/{repo}/{head}/{stack}"),
+        (200, head_text.into()),
+    );
+    let mut query = OpenEasyconfigQuery::new(repo);
+    query.base_ref = "main".into();
+    let prs = fetch_open_software_layer_prs(&MapGet { pages }, &query).unwrap();
+    assert_eq!(prs.len(), 1, "{prs:?}");
+    assert_eq!(prs[0].number, 9);
+    assert_eq!(prs[0].easystacks.len(), 1);
+    assert_eq!(prs[0].easystacks[0].path, stack);
+    assert_eq!(prs[0].easystacks[0].base.as_deref(), Some(base_text));
+    assert_eq!(prs[0].easystacks[0].head.as_deref(), Some(head_text));
+    assert!(prs[0].easyconfigs.is_empty());
 }

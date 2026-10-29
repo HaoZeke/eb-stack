@@ -65,7 +65,7 @@ are a subset of easybuild-easyconfigs (GPL-2.0); the license text is
 each pull request, the changed-file list. Head text is
 ~https://raw.githubusercontent.com/<owner>/<name>/<sha>/<path>~. Base
 text is the same URL with the base ref (~develop~ unless another ref is
-set). A 404 on the base means the file was added. No token is sent.
+set). A 404 on the base means the file was added. =GITHUB_TOKEN= or =GH_TOKEN= is sent to api.github.com when set.
 
 The command the tool runs is ~eb-stack pr-overlap --kind easyconfigs --open OWNER/NAME~.
 It calls ~fetch_open_easyconfig_prs~ and writes the

@@ -1691,6 +1691,16 @@ impl HttpGet for UreqGet {
         let mut request = agent.get(url).set("User-Agent", "eb-stack");
         if url.starts_with("https://api.github.com/") {
             request = request.set("Accept", "application/vnd.github+json");
+            // 60 anonymous requests an hour do not cover one listing of an
+            // active repository; a token from the environment is sent to
+            // api.github.com only.
+            if let Some(token) = std::env::var("GITHUB_TOKEN")
+                .ok()
+                .or_else(|| std::env::var("GH_TOKEN").ok())
+                .filter(|t| !t.is_empty())
+            {
+                request = request.set("Authorization", &format!("Bearer {token}"));
+            }
         }
         let response = match request.call() {
             Ok(response) => response,
@@ -2056,7 +2066,8 @@ pub fn validate_open_easyconfig_query(repo: &str, base_ref: Option<&str>) -> any
 /// `https://api.github.com`. Head text is
 /// `https://raw.githubusercontent.com/<repo>/<sha>/<path>`. Base text is the
 /// same URL with [`OpenEasyconfigQuery::base_ref`]. A 404 on the base means
-/// the file was added. No token is sent. The file text is data: nothing from
+/// the file was added. `GITHUB_TOKEN` or `GH_TOKEN` is sent to api.github.com
+/// when set. The file text is data: nothing from
 /// a pull request is executed.
 pub fn fetch_open_easyconfig_prs(
     http: &dyn HttpGet,
@@ -2073,6 +2084,60 @@ pub fn fetch_open_easyconfig_prs(
         if let Some(pr) = fetch_one_pull(http, query, pull, page_size)? {
             prs.push(pr);
         }
+    }
+    prs.sort_by_key(|pr| pr.number);
+    Ok(prs)
+}
+
+/// Read open software-layer pull requests over HTTPS: each changed easystack
+/// file under `easystacks/`, with its base text from
+/// [`OpenEasyconfigQuery::base_ref`] (`main` for EESSI/software-layer) and its
+/// head text. A pull request that changes no easystack is left out. The file
+/// text is data: nothing from a pull request is executed.
+pub fn fetch_open_software_layer_prs(
+    http: &dyn HttpGet,
+    query: &OpenEasyconfigQuery,
+) -> anyhow::Result<Vec<PrInput>> {
+    validate_open_easyconfig_query(&query.repo, Some(query.base_ref.as_str()))?;
+    let page_size = page_size_of(query)?;
+    let pulls = list_open_pulls(http, query, page_size)?;
+    let base_ref = if query.base_ref.is_empty() {
+        "main"
+    } else {
+        query.base_ref.as_str()
+    };
+    let mut prs = Vec::new();
+    for pull in &pulls {
+        if query.max_prs.is_some_and(|max| prs.len() >= max) {
+            break;
+        }
+        check_token("head sha", &pull.head.sha)?;
+        let files = list_pull_files(http, &query.repo, pull.number, page_size)?;
+        let mut easystacks = Vec::new();
+        for file in files {
+            if !(file.filename.starts_with("easystacks/") && file.filename.ends_with(".yml")) {
+                continue;
+            }
+            let base = get_raw(http, &raw_url(&query.repo, base_ref, &file.filename))?;
+            let head = if file.status == "removed" {
+                None
+            } else {
+                get_raw(http, &raw_url(&query.repo, &pull.head.sha, &file.filename))?
+            };
+            push_easyconfig(&mut easystacks, file.filename.clone(), base, head);
+        }
+        if easystacks.is_empty() {
+            continue;
+        }
+        easystacks.sort_by(|left, right| left.path.cmp(&right.path));
+        prs.push(PrInput {
+            number: pull.number,
+            head_sha: pull.head.sha.clone(),
+            title: pull.title.clone(),
+            easystacks,
+            files: Vec::new(),
+            easyconfigs: Vec::new(),
+        });
     }
     prs.sort_by_key(|pr| pr.number);
     Ok(prs)
