@@ -523,3 +523,49 @@ fn filter_deps_drops_a_system_java_reverse_dependent() {
     );
 }
 
+/// Two patches that each build a dependent of the other are one cycle.
+#[test]
+fn two_patches_that_depend_on_each_other_are_a_cycle() {
+    let tree = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pr_overlap_easyconfigs_cycle");
+    let alpha = std::fs::read_to_string(tree.join("a/Alpha/Alpha-1.0.eb")).unwrap();
+    let beta = std::fs::read_to_string(tree.join("b/Beta/Beta-1.0.eb")).unwrap();
+    let prs = vec![
+        pr(
+            1,
+            "patch Alpha",
+            "a/Alpha/Alpha-1.0.eb",
+            Some(&alpha),
+            &alpha.replace("Fixture.", "Head."),
+        ),
+        pr(
+            2,
+            "patch Beta",
+            "b/Beta/Beta-1.0.eb",
+            Some(&beta),
+            &beta.replace("Fixture.", "Head."),
+        ),
+    ];
+    let ran = run_tree(&tree, &prs, &["--merge-order"]);
+    let out = ran.path().join("out");
+    let index = read_index(&out);
+    let edges: Vec<(u64, u64)> = index
+        .rows
+        .iter()
+        .filter(|row| row.kind == "depends-on")
+        .map(|row| (row.from.unwrap(), row.to.unwrap()))
+        .collect();
+    assert!(edges.contains(&(1, 2)), "{edges:?}");
+    assert!(edges.contains(&(2, 1)), "{edges:?}");
+    let order: eb_stack::merge_order::MergeOrder =
+        toml::from_str(&std::fs::read_to_string(out.join("merge-order.toml")).unwrap()).unwrap();
+    assert_eq!(order.cycles, vec![vec![1, 2]]);
+    assert_eq!(order.steps.len(), 2);
+    assert!(
+        order
+            .steps
+            .iter()
+            .any(|step| step.reason.contains("inside a cycle")),
+        "{:?}",
+        order.steps
+    );
+}

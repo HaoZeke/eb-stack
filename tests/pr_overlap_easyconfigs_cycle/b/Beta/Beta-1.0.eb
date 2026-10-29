@@ -1,0 +1,17 @@
+easyblock = 'ConfigureMake'
+
+name = 'Beta'
+version = '1.0'
+
+homepage = 'https://example.org/Beta'
+description = "Fixture."
+
+toolchain = SYSTEM
+
+source_urls = ['https://example.org/']
+sources = ['Beta-1.0.tar.gz']
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+dependencies = [('Alpha', '1.0')]
+
+moduleclass = 'tools'
