@@ -10,7 +10,7 @@ Expected findings in bad.eb (good.eb has none for this rule):
 
 Precedent:
 
-- lexming's suggestion introduced f'%(namelower)s{'_'.join(_ver)}_...'   
+- lexming's suggestion introduced f'%(namelower)s{'_'.join(_ver)}_...'  
   https://github.com/easybuilders/easybuild-easyconfigs/pull/23528#discussion_r2426803853
 - smoors corrected it to f'%(namelower)s{"_".join(_ver)}_...'  
   https://github.com/easybuilders/easybuild-easyconfigs/pull/23528#discussion_r2431197952

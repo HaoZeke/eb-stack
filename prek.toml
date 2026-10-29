@@ -21,9 +21,13 @@ exclude = """(?x)(
 [[repos]]
 repo = "builtin"
 hooks = [
-  { id = "trailing-whitespace" },
-  { id = "end-of-file-fixer" },
-  { id = "check-yaml" },
+  # Two trailing spaces in Markdown are a hard line break.
+  # fixtures/lint_w291/bad.eb keeps its trailing spaces: that is the W291 case.
+  { id = "trailing-whitespace", args = ["--markdown-linebreak-ext=md"], exclude = "fixtures/lint_w291/bad\\.eb" },
+  # Recorded OSV responses are the bytes the API returned.
+  { id = "end-of-file-fixer", exclude = "tests/component_reach_eessi/osv/.*\\.json" },
+  # meta.yaml is a conda-forge Jinja recipe, not YAML.
+  { id = "check-yaml", exclude = "tests/sbom_recorded/foreign/conda/meta\\.yaml" },
   { id = "check-toml" },
   { id = "check-merge-conflict" },
   { id = "check-added-large-files", args = ["--maxkb=1500"] },
@@ -37,9 +41,11 @@ hooks = [
   {
     id = "codespell",
     args = [
-      "--skip=*.lock,*.svg,*.png,*.jpg,*.eb,*.patch,Cargo.lock,pixi.lock",
+      # tests/sbom_recorded is upstream EasyBuild and conda-forge text.
+      "--skip=*.lock,*.svg,*.png,*.jpg,*.eb,*.patch,Cargo.lock,pixi.lock,*sbom_recorded/*",
       "-L",
-      "unparseable,unparsable,intack,notin,thirdparty,anlysis,libray,atleast,atmost",
+      # ser: toml::ser. alo: difflib alo/ahi bounds. polute: quoted framework comment.
+      "unparseable,unparsable,intack,notin,thirdparty,anlysis,libray,atleast,atmost,ser,alo,polute",
     ],
   },
 ]
