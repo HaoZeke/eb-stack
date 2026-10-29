@@ -180,8 +180,178 @@ pub fn parse_easystack_entries(text: &str) -> Result<Vec<EasystackEntry>, serde_
     Ok(out)
 }
 
+/// Where entries go in EESSI's software layer.
+///
+/// `easystacks/software.eessi.io/<V>/eessi-<V>-eb-<X>-<generation>.yml` for the
+/// generation's toolchains, `...-001-system.yml` for toolchain-free recipes,
+/// and the same names under `accel/nvidia/` for CUDA builds. One file per
+/// EasyBuild release and generation is how the existing EESSI versions are laid
+/// out, and new entries go into the newest release's file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EessiLayout {
+    /// EESSI version, `2026.06`.
+    pub eessi_version: String,
+    /// EasyBuild release the entries are built with, `5.4.1`.
+    pub easybuild_version: String,
+    /// Toolchain generation, `2026.1`.
+    pub generation: String,
+    /// Toolchain labels of the generation: `GCCcore-15.2.0`, `foss-2026.1`, ...
+    pub members: Vec<String>,
+}
+
+/// Toolchain names whose presence in a filename means it is not a system recipe.
+const TOOLCHAIN_NAME: &str = r"-(GCCcore|GCC|foss|gompi|gfbf|intel|iimpi|iimkl|intel-compilers|lfoss|lompi|lfbf|llvm-compilers|nvompi|nvofbf|NVHPC|nvidia-compilers|iccifort|fosscuda|gcccuda)-[0-9]";
+
+impl EessiLayout {
+    /// The easystack path, relative to the software-layer root, for one easyconfig.
+    ///
+    /// Errors when the file names a toolchain outside this generation: placing
+    /// it would put a 2025b recipe into a 2026.1 file.
+    pub fn path_for(&self, file: &str) -> Result<String, String> {
+        let base = format!("easystacks/software.eessi.io/{}", self.eessi_version);
+        let sub = if file.contains("-CUDA-") {
+            "accel/nvidia/"
+        } else {
+            ""
+        };
+        let in_generation = self
+            .members
+            .iter()
+            .filter(|m| m.as_str() != "system")
+            .any(|m| file.contains(&format!("-{m}.eb")) || file.contains(&format!("-{m}-")));
+        let tail = if in_generation {
+            self.generation.clone()
+        } else if regex::Regex::new(TOOLCHAIN_NAME)
+            .expect("static pattern")
+            .is_match(file)
+        {
+            return Err(format!(
+                "{file} uses a toolchain outside generation {} ({})",
+                self.generation,
+                self.members.join(", ")
+            ));
+        } else {
+            "001-system".to_string()
+        };
+        Ok(format!(
+            "{base}/{sub}eessi-{v}-eb-{x}-{tail}.yml",
+            v = self.eessi_version,
+            x = self.easybuild_version
+        ))
+    }
+}
+
+/// Split easyconfig paths into EESSI easystack files, keeping the given order
+/// inside each file. Keys are paths relative to the software-layer root.
+pub fn eessi_easystacks(
+    paths: &[&str],
+    options: &EasystackOptions,
+    layout: &EessiLayout,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut grouped: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    for path in paths {
+        let Some(file) = easyconfig_filename(path) else {
+            continue;
+        };
+        grouped
+            .entry(layout.path_for(&file)?)
+            .or_default()
+            .push(path);
+    }
+    Ok(grouped
+        .into_iter()
+        .map(|(target, files)| (target, easystack_from_paths(&files, options)))
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn layout() -> EessiLayout {
+        EessiLayout {
+            eessi_version: "2026.06".into(),
+            easybuild_version: "5.4.1".into(),
+            generation: "2026.1".into(),
+            members: [
+                "system",
+                "GCCcore-15.2.0",
+                "GCC-15.2.0",
+                "gfbf-2026.1",
+                "gompi-2026.1",
+                "foss-2026.1",
+            ]
+            .map(String::from)
+            .to_vec(),
+        }
+    }
+
+    #[test]
+    fn eessi_layout_places_generation_system_and_cuda_entries() {
+        let l = layout();
+        let root = "easystacks/software.eessi.io/2026.06";
+        assert_eq!(
+            l.path_for("BLAST+-2.17.0-gompi-2026.1.eb").unwrap(),
+            format!("{root}/eessi-2026.06-eb-5.4.1-2026.1.yml")
+        );
+        assert_eq!(
+            l.path_for("Julia-1.13.2.eb").unwrap(),
+            format!("{root}/eessi-2026.06-eb-5.4.1-001-system.yml")
+        );
+        assert_eq!(
+            l.path_for("Maven-3.9.11-Java-21.eb").unwrap(),
+            format!("{root}/eessi-2026.06-eb-5.4.1-001-system.yml")
+        );
+        assert_eq!(
+            l.path_for("NCCL-2.30.4-GCCcore-15.2.0-CUDA-13.3.0.eb")
+                .unwrap(),
+            format!("{root}/accel/nvidia/eessi-2026.06-eb-5.4.1-2026.1.yml")
+        );
+        assert_eq!(
+            l.path_for("FastQC-0.13.0-GCCcore-15.2.0-Java-25.eb")
+                .unwrap(),
+            format!("{root}/eessi-2026.06-eb-5.4.1-2026.1.yml")
+        );
+        let err = l.path_for("Bowtie2-2.5.4-GCC-14.2.0.eb").unwrap_err();
+        assert!(err.contains("outside generation 2026.1"), "{err}");
+    }
+
+    #[test]
+    fn eessi_easystacks_split_by_file_and_keep_options() {
+        let mut options = EasystackOptions::new();
+        options.entry("Julia-1.13.2.eb".into()).or_default().insert(
+            "from-commit".into(),
+            "17c84d79a1fe815c82860acce20ba262d7dd2f49".into(),
+        );
+        let files = eessi_easystacks(
+            &[
+                "a/HMMER-3.4-gompi-2026.1.eb",
+                "j/Julia-1.13.2.eb",
+                "t/tmux-3.6b-GCCcore-15.2.0.eb",
+            ],
+            &options,
+            &layout(),
+        )
+        .unwrap();
+        assert_eq!(files.len(), 2);
+        let generation =
+            &files["easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.1-2026.1.yml"];
+        assert_eq!(
+            generation,
+            "easyconfigs:\n- HMMER-3.4-gompi-2026.1.eb\n- tmux-3.6b-GCCcore-15.2.0.eb\n"
+        );
+        let system =
+            &files["easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.1-001-system.yml"];
+        assert!(system.contains("Julia-1.13.2.eb"), "{system}");
+        assert!(
+            system.contains("from-commit: 17c84d79a1fe815c82860acce20ba262d7dd2f49"),
+            "{system}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
     use super::*;
     use crate::domain::{LockPackage, SolverMeta, Toolchain};
 

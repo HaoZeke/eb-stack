@@ -282,6 +282,98 @@ pub fn read_lock(path: &Path) -> Result<StackLock> {
     serde_json::from_str(&text).with_context(|| format!("--lock {}", path.display()))
 }
 
+/// Arguments for `stack easystack --eessi-version`.
+pub struct StackEasystackEessiRequest {
+    /// Stack lock JSON written by `stack solve`.
+    pub lock: PathBuf,
+    /// Software-layer root the easystack files are written under.
+    pub out_dir: PathBuf,
+    /// EESSI version, `2026.06`.
+    pub eessi_version: String,
+    /// EasyBuild release, `5.4.1`.
+    pub easybuild_version: String,
+    /// Toolchain generation, `2026.1`.
+    pub generation: String,
+    /// Per-easyconfig options, each `<file.eb>:<option>=<value>`.
+    pub options: Vec<String>,
+}
+
+/// Write the lock as EESSI software-layer easystacks: one file per EasyBuild
+/// release and generation, `001-system` for toolchain-free recipes, and
+/// `accel/nvidia/` for CUDA builds.
+pub fn stack_easystack_eessi(request: &StackEasystackEessiRequest) -> Result<StackEasystackReport> {
+    let lock = read_lock(&request.lock)?;
+    let parsed = parse_easystack_options(&request.options)?;
+    let parent = crate::domain::Toolchain {
+        name: "foss".into(),
+        version: request.generation.clone(),
+    };
+    let members = crate::hierarchy::known_hierarchy(&parent)
+        .map(|h| h.member_labels())
+        .ok_or_else(|| {
+            usage(format!(
+                "--generation {} has no known toolchain hierarchy",
+                request.generation
+            ))
+        })?;
+    let layout = easystack::EessiLayout {
+        eessi_version: request.eessi_version.clone(),
+        easybuild_version: request.easybuild_version.clone(),
+        generation: request.generation.clone(),
+        members,
+    };
+    let paths: Vec<&str> = lock
+        .packages
+        .iter()
+        .map(|p| p.easyconfig_path.as_str())
+        .collect();
+    let files = easystack::eessi_easystacks(&paths, &parsed, &layout).map_err(|e| usage(e))?;
+    let mut stdout = String::new();
+    let mut entries = 0;
+    for (rel, yaml) in &files {
+        let path = request.out_dir.join(rel);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+        }
+        std::fs::write(&path, yaml).with_context(|| format!("write {}", path.display()))?;
+        let n = yaml.lines().filter(|line| line.starts_with("- ")).count();
+        entries += n;
+        stdout.push_str(&format!("easystack={} entries={n}\n", path.display()));
+    }
+    let packages = lock.packages.len();
+    stdout.push_str(&format!(
+        "files={} entries={entries} of={packages}\n",
+        files.len()
+    ));
+    Ok(StackEasystackReport {
+        stdout,
+        out: request.out_dir.clone(),
+        entries,
+        packages,
+    })
+}
+
+fn parse_easystack_options(specs: &[String]) -> Result<EasystackOptions> {
+    let mut parsed = EasystackOptions::new();
+    for spec in specs {
+        let (file, rest) = spec.split_once(':').ok_or_else(|| {
+            usage(format!(
+                "--option wants <file.eb>:<option>=<value>, got {spec}"
+            ))
+        })?;
+        let (key, value) = rest.split_once('=').ok_or_else(|| {
+            usage(format!(
+                "--option wants <file.eb>:<option>=<value>, got {spec}"
+            ))
+        })?;
+        parsed
+            .entry(file.to_string())
+            .or_default()
+            .insert(key.to_string(), value.to_string());
+    }
+    Ok(parsed)
+}
+
 /// Write the lock as an easystack, attaching each `--option`.
 pub fn stack_easystack(request: &StackEasystackRequest) -> Result<StackEasystackReport> {
     let lock = read_lock(&request.lock)?;
