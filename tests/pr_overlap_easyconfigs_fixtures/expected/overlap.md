@@ -28,30 +28,42 @@ Computed 2026-10-22T00:00:00Z. 8 pull requests change an easyconfig.
 | From | To | Modules |
 |---|---|---|
 | [#7](https://github.com/easybuilders/easybuild-easyconfigs/pull/7) | [#8](https://github.com/easybuilders/easybuild-easyconfigs/pull/8) | `Need/1.0` |
+| [#1](https://github.com/easybuilders/easybuild-easyconfigs/pull/1) | [#3](https://github.com/easybuilders/easybuild-easyconfigs/pull/3) | `Lib/1.0` |
+| [#1](https://github.com/easybuilders/easybuild-easyconfigs/pull/1) | [#4](https://github.com/easybuilders/easybuild-easyconfigs/pull/4) | `Lib/1.0` |
+| [#2](https://github.com/easybuilders/easybuild-easyconfigs/pull/2) | [#3](https://github.com/easybuilders/easybuild-easyconfigs/pull/3) | `Lib/1.0` |
+| [#2](https://github.com/easybuilders/easybuild-easyconfigs/pull/2) | [#4](https://github.com/easybuilders/easybuild-easyconfigs/pull/4) | `Lib/1.0` |
 
 ## Per pull request
 
 ### [#1](https://github.com/easybuilders/easybuild-easyconfigs/pull/1) edit Lib (`1111111111`)
 
-Changes 1 easyconfigs. Closure has 1 modules, 0 of them new. Builds 0 modules; 0 reached modules are already installed.
+Changes 1 easyconfigs. Closure has 1 modules, 0 of them new. Builds 2 modules; 0 reached modules are already installed.
 
 - same-file with [#2](https://github.com/easybuilders/easybuild-easyconfigs/pull/2): `l/Lib/Lib-1.0.eb`
-- reverse dependents: `Tool/1.0` (1), `Wrap/1.0` (2)
+- [#3](https://github.com/easybuilders/easybuild-easyconfigs/pull/3) depends on this: `Lib/1.0`
+- [#4](https://github.com/easybuilders/easybuild-easyconfigs/pull/4) depends on this: `Lib/1.0`
+- reverse dependents: `Bundle/1.0` (1, must-rebuild), `Compile/1.0` (1, review), `Tool/1.0` (1, no-rebuild), `Wrap/1.0` (2, no-rebuild)
 
 <details><summary>To build</summary>
 
+- `Bundle/1.0`
+- `Lib/1.0`
 
 </details>
 
 ### [#2](https://github.com/easybuilders/easybuild-easyconfigs/pull/2) edit Lib too (`2222222222`)
 
-Changes 1 easyconfigs. Closure has 1 modules, 0 of them new. Builds 0 modules; 0 reached modules are already installed.
+Changes 1 easyconfigs. Closure has 1 modules, 0 of them new. Builds 2 modules; 0 reached modules are already installed.
 
 - same-file with [#1](https://github.com/easybuilders/easybuild-easyconfigs/pull/1): `l/Lib/Lib-1.0.eb`
-- reverse dependents: `Tool/1.0` (1), `Wrap/1.0` (2)
+- [#3](https://github.com/easybuilders/easybuild-easyconfigs/pull/3) depends on this: `Lib/1.0`
+- [#4](https://github.com/easybuilders/easybuild-easyconfigs/pull/4) depends on this: `Lib/1.0`
+- reverse dependents: `Bundle/1.0` (1, must-rebuild), `Compile/1.0` (1, review), `Tool/1.0` (1, no-rebuild), `Wrap/1.0` (2, no-rebuild)
 
 <details><summary>To build</summary>
 
+- `Bundle/1.0`
+- `Lib/1.0`
 
 </details>
 
@@ -62,6 +74,8 @@ Changes 1 easyconfigs. Closure has 2 modules, 1 of them new. Builds 1 modules; 0
 - same-file with [#4](https://github.com/easybuilders/easybuild-easyconfigs/pull/4): `n/New/New-1.0.eb`
 - same-module with [#4](https://github.com/easybuilders/easybuild-easyconfigs/pull/4): `New/1.0`
 - shared-new-module with [#4](https://github.com/easybuilders/easybuild-easyconfigs/pull/4): `New/1.0`
+- depends on [#1](https://github.com/easybuilders/easybuild-easyconfigs/pull/1): `Lib/1.0`
+- depends on [#2](https://github.com/easybuilders/easybuild-easyconfigs/pull/2): `Lib/1.0`
 
 <details><summary>To build</summary>
 
@@ -76,6 +90,8 @@ Changes 1 easyconfigs. Closure has 2 modules, 1 of them new. Builds 1 modules; 0
 - same-file with [#3](https://github.com/easybuilders/easybuild-easyconfigs/pull/3): `n/New/New-1.0.eb`
 - same-module with [#3](https://github.com/easybuilders/easybuild-easyconfigs/pull/3): `New/1.0`
 - shared-new-module with [#3](https://github.com/easybuilders/easybuild-easyconfigs/pull/3): `New/1.0`
+- depends on [#1](https://github.com/easybuilders/easybuild-easyconfigs/pull/1): `Lib/1.0`
+- depends on [#2](https://github.com/easybuilders/easybuild-easyconfigs/pull/2): `Lib/1.0`
 
 <details><summary>To build</summary>
 

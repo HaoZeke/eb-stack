@@ -205,6 +205,131 @@ fn impact_honours_merged_the_way_merge_order_does() {
     );
 }
 
+/// Patching Lib schedules the bundle that ships it, and orders that patch
+/// before a pull request that builds a module depending on Lib.
+#[test]
+fn patching_a_dependency_schedules_its_must_rebuild_dependents() {
+    let temp = tempfile::tempdir().expect("temp");
+    let out = temp.path().join("out");
+    let status = run_easy(&out, &["--merge-order", "--impact", "1"]);
+    let err = String::from_utf8_lossy(&status.stderr);
+    assert!(status.status.success(), "{err}");
+    let record: eb_stack::pr_overlap::PrRecord =
+        toml::from_str(&std::fs::read_to_string(out.join("prs/1.toml")).unwrap()).unwrap();
+    assert!(
+        record.to_build.iter().any(|module| module == "Bundle/1.0"),
+        "must-rebuild dependent missing from to_build: {:?}",
+        record.to_build
+    );
+    assert!(
+        record.to_build.iter().any(|module| module == "Lib/1.0"),
+        "patched module missing from to_build: {:?}",
+        record.to_build
+    );
+    let bundle = record
+        .reverse_dependents
+        .iter()
+        .find(|dep| dep.module == "Bundle/1.0")
+        .expect("bundle listed");
+    assert_eq!(bundle.class, "must-rebuild");
+    let order: eb_stack::merge_order::MergeOrder =
+        toml::from_str(&std::fs::read_to_string(out.join("merge-order.toml")).unwrap()).unwrap();
+    let step = order
+        .steps
+        .iter()
+        .find(|step| step.pr == 1)
+        .expect("PR 1 step");
+    assert!(
+        step.builds.iter().any(|module| module == "Bundle/1.0"),
+        "merge order did not schedule Bundle: {:?}",
+        step.builds
+    );
+    let dependent = order
+        .steps
+        .iter()
+        .find(|step| step.pr == 3)
+        .expect("PR 3 step");
+    assert_eq!(
+        dependent.after,
+        vec![1, 2],
+        "the Lib patches should order before New"
+    );
+    let report: eb_stack::merge_order::MergeImpactReport =
+        toml::from_str(&std::fs::read_to_string(out.join("merge-impact.toml")).unwrap()).unwrap();
+    let impact = report
+        .impacts
+        .iter()
+        .find(|impact| impact.pr == 1)
+        .expect("impact 1");
+    let on_new = impact
+        .affected
+        .iter()
+        .find(|effect| effect.pr == 3)
+        .expect("PR 3 affected by the Lib patch");
+    assert_eq!(on_new.resolves, vec!["Lib/1.0".to_string()]);
+    let markdown = std::fs::read_to_string(out.join("overlap.md")).unwrap();
+    assert!(markdown.contains("`Bundle/1.0` (1, must-rebuild)"));
+}
+
+/// A runtime dependent of a patched recipe is listed and is not built.
+#[test]
+fn a_no_rebuild_dependent_is_not_scheduled() {
+    let temp = tempfile::tempdir().expect("temp");
+    let out = temp.path().join("out");
+    let status = run_easy(&out, &["--merge-order", "--impact", "1"]);
+    let err = String::from_utf8_lossy(&status.stderr);
+    assert!(status.status.success(), "{err}");
+    let record: eb_stack::pr_overlap::PrRecord =
+        toml::from_str(&std::fs::read_to_string(out.join("prs/1.toml")).unwrap()).unwrap();
+    let tool = record
+        .reverse_dependents
+        .iter()
+        .find(|dep| dep.module == "Tool/1.0")
+        .expect("Tool listed");
+    assert_eq!(tool.class, "no-rebuild");
+    let wrap = record
+        .reverse_dependents
+        .iter()
+        .find(|dep| dep.module == "Wrap/1.0")
+        .expect("Wrap listed");
+    assert_eq!(wrap.class, "no-rebuild");
+    assert!(
+        !record
+            .to_build
+            .iter()
+            .any(|module| module == "Tool/1.0" || module == "Wrap/1.0"),
+        "no-rebuild dependents were scheduled: {:?}",
+        record.to_build
+    );
+    let compile = record
+        .reverse_dependents
+        .iter()
+        .find(|dep| dep.module == "Compile/1.0")
+        .expect("Compile listed");
+    assert_eq!(compile.class, "review");
+    assert!(
+        !record.to_build.iter().any(|module| module == "Compile/1.0"),
+        "review dependent was scheduled: {:?}",
+        record.to_build
+    );
+    let order: eb_stack::merge_order::MergeOrder =
+        toml::from_str(&std::fs::read_to_string(out.join("merge-order.toml")).unwrap()).unwrap();
+    for step in &order.steps {
+        assert!(
+            step.builds.iter().all(|module| module != "Tool/1.0"
+                && module != "Wrap/1.0"
+                && module != "Compile/1.0"),
+            "PR {} scheduled a dependent that is not must-rebuild: {:?}",
+            step.pr,
+            step.builds
+        );
+    }
+    let markdown = std::fs::read_to_string(out.join("overlap.md")).unwrap();
+    assert!(markdown.contains("`Tool/1.0` (1, no-rebuild)"));
+    assert!(markdown.contains("`Wrap/1.0` (2, no-rebuild)"));
+    assert!(markdown.contains("`Compile/1.0` (1, review)"));
+}
+
 /// Easyconfigs edges come from overlap `depends-on` rows.
 #[test]
 fn easyconfigs_merge_order_and_impact_follow_depends_on_rows() {

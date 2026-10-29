@@ -1,0 +1,15 @@
+easyblock = 'Bundle'
+
+name = 'Bundle'
+version = '1.0'
+
+homepage = 'https://example.org/Bundle'
+description = "Fixture."
+
+toolchain = SYSTEM
+
+exts_list = [
+    ('Lib', '1.0'),
+]
+
+moduleclass = 'lib'

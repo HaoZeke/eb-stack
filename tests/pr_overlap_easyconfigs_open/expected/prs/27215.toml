@@ -10,6 +10,9 @@ installed_source = ""
 easystack_files = []
 to_build = [
   "nghttp3/1.13.1-GCCcore-13.2.0",
+  "nghttp3/1.13.1-GCCcore-14.2.0",
+  "nghttp3/1.13.1-GCCcore-14.3.0",
+  "nghttp3/1.16.0-GCCcore-15.2.0",
 ]
 already_installed = []
 unresolved = ["nghttp3/1.13.1-GCCcore-13.2.0 needs CUnit ==2.1-3"]
@@ -41,35 +44,44 @@ module = "nghttp3/1.16.0-GCCcore-15.2.0"
 [[reverse_dependents]]
 module = "LibSoup/3.6.6-GCC-14.2.0"
 depth = 2
+class = "no-rebuild"
 
 [[reverse_dependents]]
 module = "LibSoup/3.7.1-GCCcore-15.2.0"
 depth = 2
+class = "no-rebuild"
 
 [[reverse_dependents]]
 module = "WebKitGTK+/2.50.5-GCC-14.2.0"
 depth = 3
+class = "no-rebuild"
 
 [[reverse_dependents]]
 module = "nghttp2/1.68.0-GCC-14.2.0"
 depth = 1
+class = "no-rebuild"
 
 [[reverse_dependents]]
 module = "nghttp2/1.69.0-GCCcore-15.2.0"
 depth = 1
+class = "no-rebuild"
 
 [[reverse_dependents]]
 module = "ngtcp2/1.18.0-GCCcore-14.2.0"
 depth = 1
+class = "no-rebuild"
 
 [[reverse_dependents]]
 module = "ngtcp2/1.18.0-GCCcore-14.3.0"
 depth = 1
+class = "no-rebuild"
 
 [[reverse_dependents]]
 module = "ngtcp2/1.23.0-GCCcore-15.2.0"
 depth = 1
+class = "no-rebuild"
 
 [[reverse_dependents]]
 module = "wxPython/4.2.5-gfbf-2025a"
 depth = 3
+class = "no-rebuild"

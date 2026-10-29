@@ -69,14 +69,17 @@ Changes 1 easyconfigs. Closure has 53 modules, 1 of them new. Builds 1 modules; 
 
 ### [#27215](https://github.com/easybuilders/easybuild-easyconfigs/pull/27215) {lib}[GCCcore/13.2.0] nghttp3 v1.13.1 (`6993418f56`)
 
-Changes 4 easyconfigs. Closure has 152 modules, 1 of them new. Builds 1 modules; 0 reached modules are already installed.
+Changes 4 easyconfigs. Closure has 152 modules, 1 of them new. Builds 4 modules; 0 reached modules are already installed.
 
 - shares nothing with another open pull request
 - unresolved: nghttp3/1.13.1-GCCcore-13.2.0 needs CUnit ==2.1-3
-- reverse dependents: `LibSoup/3.6.6-GCC-14.2.0` (2), `LibSoup/3.7.1-GCCcore-15.2.0` (2), `WebKitGTK+/2.50.5-GCC-14.2.0` (3), `nghttp2/1.68.0-GCC-14.2.0` (1), `nghttp2/1.69.0-GCCcore-15.2.0` (1), `ngtcp2/1.18.0-GCCcore-14.2.0` (1), `ngtcp2/1.18.0-GCCcore-14.3.0` (1), `ngtcp2/1.23.0-GCCcore-15.2.0` (1), `wxPython/4.2.5-gfbf-2025a` (3)
+- reverse dependents: `LibSoup/3.6.6-GCC-14.2.0` (2, no-rebuild), `LibSoup/3.7.1-GCCcore-15.2.0` (2, no-rebuild), `WebKitGTK+/2.50.5-GCC-14.2.0` (3, no-rebuild), `nghttp2/1.68.0-GCC-14.2.0` (1, no-rebuild), `nghttp2/1.69.0-GCCcore-15.2.0` (1, no-rebuild), `ngtcp2/1.18.0-GCCcore-14.2.0` (1, no-rebuild), `ngtcp2/1.18.0-GCCcore-14.3.0` (1, no-rebuild), `ngtcp2/1.23.0-GCCcore-15.2.0` (1, no-rebuild), `wxPython/4.2.5-gfbf-2025a` (3, no-rebuild)
 
 <details><summary>To build</summary>
 
 - `nghttp3/1.13.1-GCCcore-13.2.0`
+- `nghttp3/1.13.1-GCCcore-14.2.0`
+- `nghttp3/1.13.1-GCCcore-14.3.0`
+- `nghttp3/1.16.0-GCCcore-15.2.0`
 
 </details>

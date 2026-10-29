@@ -20,7 +20,9 @@
 //! executed, which is what lets a scheduled job on the base repository run
 //! this over pull requests from forks.
 
-use crate::build_order::{closure_against_installed, module_name, Choice, ModuleKey};
+use crate::build_order::{
+    closure_against_installed, module_name, reverse_uses, Choice, ModuleKey, UseKind,
+};
 use crate::dep_filter::FilterDeps;
 use crate::domain::Candidate;
 use crate::easystack::{parse_easystack_entries, EasystackEntry};
@@ -34,6 +36,11 @@ use std::io::Read;
 /// Schema of an easyconfigs pull-request record. A software-layer record stays
 /// at [`PR_OVERLAP_SCHEMA_VERSION`] so an existing file is unchanged.
 pub const EASYCONFIG_PR_SCHEMA_VERSION: u32 = 2;
+
+/// Same three classes as `rebuild-set`. Only `must-rebuild` joins `to_build`.
+const CLASS_NO_REBUILD: &str = "no-rebuild";
+const CLASS_REVIEW: &str = "review";
+const CLASS_MUST_REBUILD: &str = "must-rebuild";
 
 /// Schema of the per-PR record and the index. Bumped on any breaking change.
 pub const PR_OVERLAP_SCHEMA_VERSION: u32 = 1;
@@ -172,6 +179,12 @@ pub struct ReverseDependent {
     pub module: String,
     /// Shortest dependency distance from a changed file.
     pub depth: u32,
+    /// `must-rebuild`, `review`, or `no-rebuild`.
+    ///
+    /// The spellings match `rebuild-set`. `must-rebuild` is copied into
+    /// `to_build`. The other two stay on this list.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub class: String,
 }
 
 /// One easyconfig a pull request adds, changes, or deletes.
@@ -615,19 +628,15 @@ fn overlay_easyconfigs(base: &[Candidate], changes: &[FileChange]) -> Easyconfig
     }
 }
 
-fn direct_dependencies(universe: &[Candidate], candidate: &Candidate) -> Vec<ModuleKey> {
-    let start = ModuleKey::of(candidate);
-    closure_against_installed(
-        universe,
-        std::slice::from_ref(&start),
-        Choice::Newest,
-        &|key| key != &start,
-    )
-    .installed
-}
-
 /// Base-tree modules whose resolved dependency is a modified or deleted file,
 /// direct and transitive. Depth 1 depends on the file itself.
+///
+/// The class is the same split `rebuild-set` uses. A path of runtime
+/// dependencies is `no-rebuild`: the dependent links the patched package as a
+/// shared library. A path that is only builddependencies is `review`. A bundle
+/// whose `exts_list` names the patched package is `must-rebuild`, and that
+/// class wins when the bundle also links the package. A toolchain edge is not
+/// one of these uses, so a module reached only that way is left out.
 fn reverse_dependents(base: &[Candidate], changed: &[ChangedEasyconfig]) -> Vec<ReverseDependent> {
     let targets: BTreeSet<ModuleKey> = base
         .iter()
@@ -642,45 +651,156 @@ fn reverse_dependents(base: &[Candidate], changed: &[ChangedEasyconfig]) -> Vec<
     if targets.is_empty() {
         return Vec::new();
     }
-    let mut reverse: BTreeMap<ModuleKey, BTreeSet<ModuleKey>> = BTreeMap::new();
+    let uses = reverse_uses(base, Choice::Newest);
     let mut names: BTreeMap<ModuleKey, String> = BTreeMap::new();
     for candidate in base {
         let key = ModuleKey::of(candidate);
         names.insert(key.clone(), module_name(&key));
-        for dep in direct_dependencies(base, candidate) {
-            reverse.entry(dep).or_default().insert(key.clone());
-        }
     }
-    let mut depth_of: BTreeMap<ModuleKey, u32> = BTreeMap::new();
-    let mut queue: Vec<(ModuleKey, u32)> = targets.iter().cloned().map(|key| (key, 0)).collect();
+
+    // Same clean/dirty expansion as `rebuild_set`: a runtime path is explored
+    // after a build-only path, and a second runtime path is not.
+    #[derive(Default)]
+    struct Expanded {
+        dirty: bool,
+        clean: bool,
+    }
+    struct Reach {
+        depth: u32,
+        runtime_clean: bool,
+        direct_extension: bool,
+    }
+
+    let mut states: BTreeMap<ModuleKey, Reach> = BTreeMap::new();
+    let mut expanded: BTreeMap<ModuleKey, Expanded> = BTreeMap::new();
+    let mut queue: Vec<(ModuleKey, bool, u32)> =
+        targets.iter().cloned().map(|key| (key, true, 0)).collect();
     let mut head = 0;
     while head < queue.len() {
-        let (key, depth) = queue[head].clone();
+        let (node, pass_runtime, depth) = queue[head].clone();
         head += 1;
-        let Some(dependents) = reverse.get(&key) else {
+        let skip = {
+            let flag = expanded.entry(node.clone()).or_default();
+            if pass_runtime {
+                if flag.clean {
+                    true
+                } else {
+                    flag.clean = true;
+                    flag.dirty = true;
+                    false
+                }
+            } else if flag.dirty {
+                true
+            } else {
+                flag.dirty = true;
+                false
+            }
+        };
+        if skip {
+            continue;
+        }
+        let Some(edges) = uses.get(&node) else {
             continue;
         };
-        for dependent in dependents {
-            if targets.contains(dependent) || depth_of.contains_key(dependent) {
+        for edge in edges {
+            if matches!(edge.kind, UseKind::Toolchain) {
                 continue;
             }
-            let next = depth + 1;
-            depth_of.insert(dependent.clone(), next);
-            queue.push((dependent.clone(), next));
+            // An extension is the bundle that ships this package, not a
+            // bundle that ships one of its dependents.
+            if matches!(edge.kind, UseKind::Extension) && !targets.contains(&node) {
+                continue;
+            }
+            if targets.contains(&edge.dependent) {
+                continue;
+            }
+            let next_depth = depth + 1;
+            let child_pass = match edge.kind {
+                UseKind::Extension => true,
+                UseKind::Runtime => pass_runtime,
+                UseKind::BuildOnly | UseKind::Toolchain => false,
+            };
+            let state = states.entry(edge.dependent.clone()).or_insert(Reach {
+                depth: next_depth,
+                runtime_clean: false,
+                direct_extension: false,
+            });
+            if next_depth < state.depth {
+                state.depth = next_depth;
+            }
+            if matches!(edge.kind, UseKind::Extension) {
+                state.direct_extension = true;
+            }
+            if matches!(edge.kind, UseKind::Runtime) && pass_runtime {
+                state.runtime_clean = true;
+            }
+            queue.push((edge.dependent.clone(), child_pass, next_depth));
         }
     }
-    let mut out: Vec<ReverseDependent> = depth_of
+    let mut out: Vec<ReverseDependent> = states
         .into_iter()
-        .map(|(key, depth)| ReverseDependent {
-            module: names
-                .get(&key)
-                .cloned()
-                .unwrap_or_else(|| module_name(&key)),
-            depth,
+        .map(|(key, state)| {
+            let class = if state.direct_extension {
+                CLASS_MUST_REBUILD
+            } else if state.runtime_clean {
+                CLASS_NO_REBUILD
+            } else {
+                CLASS_REVIEW
+            };
+            ReverseDependent {
+                module: names
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| module_name(&key)),
+                depth: state.depth,
+                class: class.to_string(),
+            }
         })
         .collect();
     out.sort();
     out
+}
+
+/// Modules this pull request must rebuild.
+///
+/// A modified easyconfig is the patched recipe. A reverse dependent classed
+/// `must-rebuild` ships that recipe as an extension. Both join `to_build`.
+/// A deleted recipe is not built. `review` and `no-rebuild` stay off this set.
+fn modules_to_rebuild(
+    changed: &[ChangedEasyconfig],
+    reverse: &[ReverseDependent],
+) -> BTreeSet<String> {
+    let mut extra = BTreeSet::new();
+    for change in changed {
+        if change.status == "modified" {
+            if let Some(module) = &change.module {
+                extra.insert(module.clone());
+            }
+        }
+    }
+    for dep in reverse {
+        if dep.class == CLASS_MUST_REBUILD {
+            extra.insert(dep.module.clone());
+        }
+    }
+    extra
+}
+
+fn with_rebuilds(
+    to_build: Vec<String>,
+    already_installed: Vec<String>,
+    rebuilds: &BTreeSet<String>,
+) -> (Vec<String>, Vec<String>) {
+    if rebuilds.is_empty() {
+        return (to_build, already_installed);
+    }
+    let mut build: BTreeSet<String> = to_build.into_iter().collect();
+    build.extend(rebuilds.iter().cloned());
+    let already = already_installed
+        .into_iter()
+        .filter(|module| !rebuilds.contains(module))
+        .collect();
+    (build.into_iter().collect(), already)
 }
 
 /// The record for one easyconfigs pull request, or `None` when it carries no
@@ -702,6 +822,14 @@ pub fn easyconfig_record(
 /// removed. A module only they provide is still new: `new_modules` is compared
 /// to `base` alone. One pull request on its own passes an empty slice, which
 /// is [`easyconfig_record`].
+///
+/// `to_build` starts as `new_modules`, or as the closure minus `--installed`
+/// when that list is passed. [`modules_to_rebuild`] is then added, and those
+/// modules are removed from `already_installed`, so a patched recipe and a
+/// bundle that ships it are scheduled even when the name is already installed.
+/// `review` and `no-rebuild` reverse dependents stay on the record and out of
+/// `to_build`. Merge order and impact read `to_build`, so that is the set
+/// they schedule.
 pub fn easyconfig_record_seeing(
     pr: &PrInput,
     base: &[Candidate],
@@ -765,6 +893,9 @@ pub fn easyconfig_record_seeing(
         }
         None => (new_modules.clone(), Vec::new()),
     };
+    let reverse_dependents = reverse_dependents(base, &overlay.changed);
+    let rebuilds = modules_to_rebuild(&overlay.changed, &reverse_dependents);
+    let (to_build, already_installed) = with_rebuilds(to_build, already_installed, &rebuilds);
     Some(PrRecord {
         schema_version: EASYCONFIG_PR_SCHEMA_VERSION,
         pr: pr.number,
@@ -784,7 +915,7 @@ pub fn easyconfig_record_seeing(
         closure: reached,
         new_modules,
         revisions: file_revisions(pr, config),
-        reverse_dependents: reverse_dependents(base, &overlay.changed),
+        reverse_dependents,
     })
 }
 
@@ -1115,7 +1246,92 @@ fn easyconfig_rows(records: &[PrRecord]) -> Vec<OverlapRow> {
             });
         }
     }
+    // A patch has no easystack entry and the patched module is not new, so the
+    // loop above does not see it. The row is what `merge_order::plan` reads.
+    for row in patch_depends_on(records) {
+        if let Some(existing) = rows
+            .iter_mut()
+            .find(|have| have.kind == "depends-on" && have.from == row.from && have.to == row.to)
+        {
+            for module in row.modules {
+                if !existing.modules.contains(&module) {
+                    existing.modules.push(module);
+                }
+            }
+            existing.modules.sort();
+            existing.modules.dedup();
+        } else {
+            rows.push(row);
+        }
+    }
     rows
+}
+
+/// `depends-on` rows from a pull request that patches a module to a pull
+/// request that builds a dependent of it.
+///
+/// `modules` are the patched module names. The builder does not itself change
+/// them. It builds a dependent when the patched module is in its closure, or
+/// when its `to_build` contains one of the patcher's reverse dependents.
+fn patch_depends_on(records: &[PrRecord]) -> Vec<OverlapRow> {
+    let mut rows = Vec::new();
+    for patcher in records {
+        let mut patched: Vec<String> = patcher
+            .changed_easyconfigs
+            .iter()
+            .filter(|change| matches!(change.status.as_str(), "modified" | "deleted"))
+            .filter_map(|change| change.module.clone())
+            .collect();
+        patched.sort();
+        patched.dedup();
+        if patched.is_empty() {
+            continue;
+        }
+        for builder in records {
+            if builder.pr == patcher.pr {
+                continue;
+            }
+            let modules: Vec<String> = patched
+                .iter()
+                .filter(|module| builds_patched_dependent(patcher, builder, module))
+                .cloned()
+                .collect();
+            if modules.is_empty() {
+                continue;
+            }
+            rows.push(OverlapRow {
+                kind: "depends-on".to_string(),
+                prs: Vec::new(),
+                path: String::new(),
+                module: String::new(),
+                from: Some(patcher.pr),
+                to: Some(builder.pr),
+                modules,
+            });
+        }
+    }
+    rows
+}
+
+fn builds_patched_dependent(patcher: &PrRecord, builder: &PrRecord, module: &str) -> bool {
+    if builder
+        .changed_easyconfigs
+        .iter()
+        .any(|change| change.module.as_deref() == Some(module))
+    {
+        return false;
+    }
+    if !builder.to_build.iter().any(|built| built != module) {
+        return false;
+    }
+    let reaches = builder.closure.iter().any(|item| item == module);
+    let builds_reverse = builder.to_build.iter().any(|built| {
+        patcher
+            .reverse_dependents
+            .iter()
+            .any(|dep| dep.module == *built)
+    });
+    reaches || builds_reverse
 }
 
 /// A record or index as TOML, with the generated-file header.
@@ -1336,7 +1552,13 @@ fn render_easyconfig_markdown(
             let deps: Vec<String> = record
                 .reverse_dependents
                 .iter()
-                .map(|dep| format!("`{}` ({})", dep.module, dep.depth))
+                .map(|dep| {
+                    if dep.class.is_empty() {
+                        format!("`{}` ({})", dep.module, dep.depth)
+                    } else {
+                        format!("`{}` ({}, {})", dep.module, dep.depth, dep.class)
+                    }
+                })
                 .collect();
             out.push_str(&format!("- reverse dependents: {}\n", deps.join(", ")));
         }
@@ -2163,17 +2385,239 @@ entries = []
                 ReverseDependent {
                     module: "App/1.0".into(),
                     depth: 1,
+                    class: CLASS_NO_REBUILD.into(),
                 },
                 ReverseDependent {
                     module: "Tool/1.0".into(),
                     depth: 1,
+                    class: CLASS_NO_REBUILD.into(),
                 },
                 ReverseDependent {
                     module: "Wrap/1.0".into(),
                     depth: 2,
+                    class: CLASS_NO_REBUILD.into(),
                 },
             ]
         );
+    }
+
+    fn sys_parts(
+        name: &str,
+        deps: &[(&str, &str)],
+        build: &[(&str, &str)],
+        extensions: &[(&str, &str)],
+    ) -> Candidate {
+        let mut candidate = sys_cand(name, deps);
+        candidate.builddependencies = build
+            .iter()
+            .map(|(dep, version)| crate::domain::DepReq {
+                name: (*dep).into(),
+                version_req: format!("=={version}"),
+                versionsuffix: None,
+                toolchain: None,
+            })
+            .collect();
+        candidate.exts_list = extensions
+            .iter()
+            .map(|(ext_name, ext_version)| crate::domain::ExtEntry {
+                name: (*ext_name).into(),
+                version: (*ext_version).into(),
+            })
+            .collect();
+        candidate
+    }
+
+    #[test]
+    fn reverse_dependents_class_extensions_and_builddependencies() {
+        let base = vec![
+            sys_cand("Lib", &[]),
+            sys_parts("Bundle", &[], &[], &[("Lib", "1.0")]),
+            sys_parts("Compile", &[], &[("Lib", "1.0")], &[]),
+            sys_cand("Tool", &[("Lib", "1.0")]),
+        ];
+        let changed = vec![ChangedEasyconfig {
+            path: "Lib.eb".into(),
+            status: "modified".into(),
+            module: Some("Lib/1.0".into()),
+        }];
+        let found = reverse_dependents(&base, &changed);
+        let class = |name: &str| {
+            found
+                .iter()
+                .find(|dep| dep.module == name)
+                .map(|dep| dep.class.as_str())
+        };
+        assert_eq!(class("Bundle/1.0"), Some(CLASS_MUST_REBUILD));
+        assert_eq!(class("Compile/1.0"), Some(CLASS_REVIEW));
+        assert_eq!(class("Tool/1.0"), Some(CLASS_NO_REBUILD));
+    }
+
+    #[test]
+    fn a_patched_dependency_schedules_must_rebuild_dependents_only() {
+        let lib = "l/Lib/Lib-1.0.eb";
+        let base_lib = eb("Lib", "1.0", None);
+        let head_lib = base_lib.replace("description = 'x'", "description = 'patched'");
+        let bundle = "\
+easyblock = 'Bundle'\n\
+name = 'Bundle'\n\
+version = '1.0'\n\
+homepage = 'https://example.org'\n\
+description = 'x'\n\
+toolchain = SYSTEM\n\
+exts_list = [('Lib', '1.0')]\n\
+moduleclass = 'lib'\n";
+        let compile = eb("Compile", "1.0", None).replace(
+            "moduleclass = 'lib'\n",
+            "builddependencies = [('Lib', '1.0')]\nmoduleclass = 'tools'\n",
+        );
+        let tool = eb("Tool", "1.0", Some(("Lib", "1.0")));
+        let base = vec![
+            parsed(lib, &base_lib),
+            parsed("b/Bundle/Bundle-1.0.eb", bundle),
+            parsed("c/Compile/Compile-1.0.eb", &compile),
+            parsed("t/Tool/Tool-1.0.eb", &tool),
+        ];
+        let patch = PrInput {
+            number: 1,
+            head_sha: "1".repeat(40),
+            title: Some("patch Lib".into()),
+            easystacks: Vec::new(),
+            files: Vec::new(),
+            easyconfigs: vec![FileChange {
+                path: lib.into(),
+                base: Some(base_lib),
+                head: Some(head_lib),
+                base_blob: None,
+                head_blob: None,
+            }],
+        };
+        let record = easyconfig_record(&patch, &base, None, &ec_config()).expect("record");
+        assert!(record.to_build.contains(&"Lib/1.0".to_string()));
+        assert!(record.to_build.contains(&"Bundle/1.0".to_string()));
+        assert!(!record.to_build.iter().any(|module| module == "Tool/1.0"));
+        assert!(!record.to_build.iter().any(|module| module == "Compile/1.0"));
+        assert!(record
+            .reverse_dependents
+            .iter()
+            .any(|dep| { dep.module == "Tool/1.0" && dep.class == CLASS_NO_REBUILD }));
+        assert!(record
+            .reverse_dependents
+            .iter()
+            .any(|dep| { dep.module == "Compile/1.0" && dep.class == CLASS_REVIEW }));
+
+        let installed = BTreeSet::from([
+            "Lib/1.0".to_string(),
+            "Bundle/1.0".to_string(),
+            "Tool/1.0".to_string(),
+            "Compile/1.0".to_string(),
+        ]);
+        let installed_record =
+            easyconfig_record(&patch, &base, Some(&installed), &ec_config()).expect("record");
+        assert!(installed_record.to_build.contains(&"Lib/1.0".to_string()));
+        assert!(installed_record
+            .to_build
+            .contains(&"Bundle/1.0".to_string()));
+        assert!(!installed_record
+            .to_build
+            .iter()
+            .any(|module| module == "Tool/1.0"));
+        assert!(!installed_record
+            .already_installed
+            .iter()
+            .any(|module| module == "Lib/1.0" || module == "Bundle/1.0"));
+
+        let app = PrInput {
+            number: 3,
+            head_sha: "3".repeat(40),
+            title: Some("add New".into()),
+            easystacks: Vec::new(),
+            files: Vec::new(),
+            easyconfigs: vec![FileChange {
+                path: "n/New/New-1.0.eb".into(),
+                base: None,
+                head: Some(eb("New", "1.0", Some(("Lib", "1.0")))),
+                base_blob: None,
+                head_blob: None,
+            }],
+        };
+        let built = easyconfig_record(&app, &base, None, &ec_config()).expect("record");
+        let records = vec![record, built];
+        let index = overlap_index(&records, &ec_config());
+        let edge = index
+            .rows
+            .iter()
+            .find(|row| row.kind == "depends-on")
+            .expect("depends-on");
+        assert_eq!(edge.from, Some(1));
+        assert_eq!(edge.to, Some(3));
+        assert_eq!(edge.modules, vec!["Lib/1.0".to_string()]);
+        let order = crate::merge_order::plan(&records, &index, &[]);
+        let patch = order
+            .steps
+            .iter()
+            .find(|step| step.pr == 1)
+            .expect("patch step");
+        assert!(patch.builds.contains(&"Bundle/1.0".to_string()));
+        assert!(patch.builds.contains(&"Lib/1.0".to_string()));
+        assert!(!patch.builds.iter().any(|module| module == "Tool/1.0"));
+        assert!(!patch.builds.iter().any(|module| module == "Compile/1.0"));
+        let dependent = order
+            .steps
+            .iter()
+            .find(|step| step.pr == 3)
+            .expect("dependent step");
+        assert_eq!(dependent.after, vec![1]);
+        let impact = crate::merge_order::impact(&records, &index, 1, &[]).expect("impact");
+        let on_new = impact
+            .affected
+            .iter()
+            .find(|effect| effect.pr == 3)
+            .expect("new is affected");
+        assert_eq!(on_new.resolves, vec!["Lib/1.0".to_string()]);
+        assert!(on_new.shrinks.iter().all(|module| module != "Tool/1.0"));
+    }
+
+    #[test]
+    fn deleting_a_dependency_schedules_the_extension_and_not_the_runtime_user() {
+        let lib = "l/Lib/Lib-1.0.eb";
+        let base_lib = eb("Lib", "1.0", None);
+        let bundle = "\
+easyblock = 'Bundle'\n\
+name = 'Bundle'\n\
+version = '1.0'\n\
+homepage = 'https://example.org'\n\
+description = 'x'\n\
+toolchain = SYSTEM\n\
+exts_list = [('Lib', '1.0')]\n\
+moduleclass = 'lib'\n";
+        let tool = eb("Tool", "1.0", Some(("Lib", "1.0")));
+        let base = vec![
+            parsed(lib, &base_lib),
+            parsed("b/Bundle/Bundle-1.0.eb", bundle),
+            parsed("t/Tool/Tool-1.0.eb", &tool),
+        ];
+        let deletion = PrInput {
+            number: 4,
+            head_sha: "4".repeat(40),
+            title: None,
+            easystacks: Vec::new(),
+            files: Vec::new(),
+            easyconfigs: vec![FileChange {
+                path: lib.into(),
+                base: Some(base_lib),
+                head: None,
+                base_blob: None,
+                head_blob: None,
+            }],
+        };
+        let record = easyconfig_record(&deletion, &base, None, &ec_config()).expect("record");
+        assert!(!record.to_build.iter().any(|module| module == "Lib/1.0"));
+        assert!(record.to_build.contains(&"Bundle/1.0".to_string()));
+        assert!(!record.to_build.iter().any(|module| module == "Tool/1.0"));
+        assert!(record
+            .reverse_dependents
+            .iter()
+            .any(|dep| dep.module == "Tool/1.0" && dep.class == CLASS_NO_REBUILD));
     }
 
     fn ec_row(

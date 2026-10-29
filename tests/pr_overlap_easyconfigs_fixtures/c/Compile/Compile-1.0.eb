@@ -1,0 +1,17 @@
+easyblock = 'ConfigureMake'
+
+name = 'Compile'
+version = '1.0'
+
+homepage = 'https://example.org/Compile'
+description = "Fixture."
+
+toolchain = SYSTEM
+
+source_urls = ['https://example.org/']
+sources = ['Compile-1.0.tar.gz']
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+builddependencies = [('Lib', '1.0')]
+
+moduleclass = 'tools'

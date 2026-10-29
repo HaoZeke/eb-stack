@@ -4,7 +4,10 @@
 //!
 //! 1. Edge A -> B when a module in B's `to_build` is an easystack entry A adds
 //!    (A asks for it by name; B only reaches it), or when a `depends-on` row
-//!    names A as `from` and B as `to`. Edges both ways form a cycle.
+//!    names A as `from` and B as `to`. An easyconfigs record has no easystack
+//!    entries, so its edges are those rows: a pull request that adds a module,
+//!    or one that patches a module another pull request builds a dependent of.
+//!    Edges both ways form a cycle.
 //! 2. Among pull requests with no remaining incoming edge, pick the one whose
 //!    residual build set is smallest, then the lowest pull request number.
 //! 3. After picking, add its residual builds to the installed set and recompute

@@ -8,7 +8,10 @@ title = "edit Lib"
 generated_at = "2026-10-22T00:00:00Z"
 installed_source = ""
 easystack_files = []
-to_build = []
+to_build = [
+  "Bundle/1.0",
+  "Lib/1.0",
+]
 already_installed = []
 unresolved = []
 entries = []
@@ -21,9 +24,21 @@ status = "modified"
 module = "Lib/1.0"
 
 [[reverse_dependents]]
+module = "Bundle/1.0"
+depth = 1
+class = "must-rebuild"
+
+[[reverse_dependents]]
+module = "Compile/1.0"
+depth = 1
+class = "review"
+
+[[reverse_dependents]]
 module = "Tool/1.0"
 depth = 1
+class = "no-rebuild"
 
 [[reverse_dependents]]
 module = "Wrap/1.0"
 depth = 2
+class = "no-rebuild"
