@@ -168,6 +168,8 @@ fn tool_catalog() -> Vec<Value> {
                 ("toolchain", "string"),
                 ("version", "string"),
                 ("source_checksum", "string"),
+                ("latest", "boolean"),
+                ("overrides", "array"),
                 ("dependencies", "object"),
                 ("hierarchy_fixture", "string"),
                 ("stack_policy", "string"),
@@ -357,7 +359,56 @@ fn tool_catalog() -> Vec<Value> {
             "eb_stack_easystack",
             "Write a stack lock as the YAML `eb --easystack` reads, with the same per-file options as `stack easystack`.",
             &[("lock", "string")],
-            &[("out", "string"), ("option", "array")],
+            &[
+                ("out", "string"),
+                ("option", "array"),
+                ("eessi_version", "string"),
+                ("easybuild_version", "string"),
+                ("generation", "string"),
+                ("out_dir", "string"),
+            ],
+        ),
+        tool_with_optional(
+            "eb_package_latest",
+            "Report the newest stable upstream release of EasyBuild recipes, as `package latest` does: the backend comes from each recipe's source_urls, and every listed version is kept or dropped with its reason.",
+            &[("source", "array")],
+            &[("overrides", "array"), ("json", "boolean")],
+        ),
+        tool_with_optional(
+            "eb_stack_gap",
+            "Classify every package in site module listings against a stack's installed modules, as `stack gap` does: in-stack, recipe, no-recipe or excluded. Writes gap.tsv, roots.txt and bump-sources.txt under out_dir.",
+            &[
+                ("site", "array"),
+                ("installed", "string"),
+                ("easyconfigs", "array"),
+                ("generation", "string"),
+                ("out_dir", "string"),
+            ],
+            &[("exclude_file", "string"), ("filter_deps", "string")],
+        ),
+        tool_with_optional(
+            "eb_stack_batch",
+            "Plan software-layer pull requests whose builds do not overlap, as `stack batch` does. Each batch directory gets the EESSI easystacks, a lock, a CycloneDX SBOM, reproduce.sh, batch.json and a pull-request body.",
+            &[
+                ("easyconfigs", "array"),
+                ("installed", "string"),
+                ("eessi_version", "string"),
+                ("easybuild_version", "string"),
+                ("generation", "string"),
+                ("out_dir", "string"),
+            ],
+            &[
+                ("root", "array"),
+                ("roots_file", "string"),
+                ("commit_tree", "array"),
+                ("installed_modulerc", "array"),
+                ("open_prs", "array"),
+                ("open_repo", "string"),
+                ("filter_deps", "string"),
+                ("size", "integer"),
+                ("easyconfigs_repo", "string"),
+                ("generated_at", "string"),
+            ],
         ),
         tool_with_optional(
             "eb_stack_sections",
@@ -628,6 +679,9 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_stack_easystack" => stack_easystack_tool(arguments),
         "eb_stack_sections" => stack_sections_tool(arguments),
         "eb_stack_from_commit" => stack_from_commit_tool(arguments),
+        "eb_package_latest" => package_latest_tool(arguments),
+        "eb_stack_gap" => stack_gap_tool(arguments),
+        "eb_stack_batch" => stack_batch_tool(arguments),
         "eb_target_list" => target_list(arguments),
         "eb_target_doctor" => target_doctor(arguments),
         "eb_campaign_run" => campaign_run(arguments),
@@ -822,7 +876,7 @@ fn package_bump_run(arguments: &Value) -> Result<Value, String> {
     let request = BumpPackageRequest {
         source: required_path(arguments, "source")?,
         toolchain: target,
-        version: optional_string(arguments, "version"),
+        version: bump_version_argument(arguments)?,
         source_checksum: optional_string(arguments, "source_checksum"),
         easyconfig_roots: path_array(arguments, "easyconfigs")?,
         hierarchy_fixture: optional_path(arguments, "hierarchy_fixture"),
@@ -2728,13 +2782,179 @@ fn stack_order_tool(arguments: &Value) -> Result<Value, String> {
     }))
 }
 
-fn stack_easystack_tool(arguments: &Value) -> Result<Value, String> {
-    let report = crate::workflows::stack_easystack(&crate::workflows::StackEasystackRequest {
-        lock: required_path(arguments, "lock")?,
-        out: optional_path(arguments, "out")
-            .unwrap_or_else(|| PathBuf::from(crate::workflows::STACK_EASYSTACK_OUT)),
-        options: string_array(arguments, "option")?,
+/// `version`, or with `latest` the version `package latest` decides.
+fn bump_version_argument(arguments: &Value) -> Result<Option<String>, String> {
+    if !optional_bool(arguments, "latest") {
+        return Ok(optional_string(arguments, "version"));
+    }
+    if optional_string(arguments, "version").is_some() {
+        return Err("latest and version cannot both be set".into());
+    }
+    let source = required_path(arguments, "source")?;
+    let ec =
+        crate::eb_parse::resolve_easyconfig_file(&source).map_err(|error| error.to_string())?;
+    let overrides = crate::upstream::load_overrides(&path_array(arguments, "overrides")?)
+        .map_err(workflow_error)?;
+    let report = crate::upstream::latest(&ec, &overrides, &crate::registry::UreqClient)
+        .map_err(workflow_error)?;
+    crate::upstream::bump_version(&report).map_err(workflow_error)
+}
+
+fn package_latest_tool(arguments: &Value) -> Result<Value, String> {
+    let overrides = crate::upstream::load_overrides(&path_array(arguments, "overrides")?)
+        .map_err(workflow_error)?;
+    let mut reports = Vec::new();
+    for source in path_array(arguments, "source")? {
+        let ec =
+            crate::eb_parse::resolve_easyconfig_file(&source).map_err(|error| error.to_string())?;
+        reports.push(
+            crate::upstream::latest(&ec, &overrides, &crate::registry::UreqClient)
+                .map_err(workflow_error)?,
+        );
+    }
+    let text = if optional_bool(arguments, "json") {
+        serde_json::to_string_pretty(&reports).map_err(|error| error.to_string())?
+    } else {
+        reports.iter().map(crate::upstream::render_text).collect()
+    };
+    Ok(json!({
+        "text": text,
+        "reports": reports,
+    }))
+}
+
+/// A comma-separated `filter_deps` string, as the CLI flag takes it.
+fn filter_deps_argument(arguments: &Value) -> Vec<String> {
+    optional_string(arguments, "filter_deps")
+        .map(|text| {
+            text.split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn stack_gap_tool(arguments: &Value) -> Result<Value, String> {
+    let run = crate::site_commands::run_stack_gap(&crate::site_commands::StackGapRequest {
+        site: path_array(arguments, "site")?,
+        installed: required_path(arguments, "installed")?,
+        easyconfigs: path_array(arguments, "easyconfigs")?,
+        generation: required_string(arguments, "generation")?,
+        exclude_file: optional_path(arguments, "exclude_file"),
+        filter_deps: filter_deps_argument(arguments),
+        out_dir: required_path(arguments, "out_dir")?,
     })
+    .map_err(workflow_error)?;
+    Ok(json!({
+        "text": run.summary(),
+        "out_dir": run.out_dir,
+        "rows": run.rows.len(),
+    }))
+}
+
+fn stack_batch_tool(arguments: &Value) -> Result<Value, String> {
+    let mut roots = string_array(arguments, "root")?;
+    if let Some(path) = optional_path(arguments, "roots_file") {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|error| format!("roots_file {}: {error}", path.display()))?;
+        roots.extend(
+            text.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(String::from),
+        );
+    }
+    let size = optional_u64(arguments, "size")?.unwrap_or(3);
+    let request = crate::site_commands::StackBatchRequest {
+        roots,
+        easyconfigs: path_array(arguments, "easyconfigs")?,
+        commit_trees: string_array(arguments, "commit_tree")?,
+        installed: required_path(arguments, "installed")?,
+        installed_modulerc: path_array(arguments, "installed_modulerc")?,
+        open_prs: path_array(arguments, "open_prs")?,
+        open_repo: optional_string(arguments, "open_repo"),
+        eessi_version: required_string(arguments, "eessi_version")?,
+        easybuild_version: required_string(arguments, "easybuild_version")?,
+        generation: required_string(arguments, "generation")?,
+        filter_deps: filter_deps_argument(arguments),
+        size: usize::try_from(size).map_err(|error| format!("size: {error}"))?,
+        easyconfigs_repo: optional_path(arguments, "easyconfigs_repo"),
+        generated_at: optional_string(arguments, "generated_at"),
+        command_line: batch_command_line(arguments),
+        out_dir: required_path(arguments, "out_dir")?,
+    };
+    let run = crate::site_commands::run_stack_batch(&request).map_err(workflow_error)?;
+    Ok(json!({
+        "text": run.summary(),
+        "out_dir": run.out_dir,
+        "batches": run.plan.batches.len(),
+        "waits": run.plan.waits.len(),
+        "digest": run.digest,
+    }))
+}
+
+/// The `eb-stack stack batch` command an MCP call amounts to, for
+/// `reproduce.sh`.
+fn batch_command_line(arguments: &Value) -> String {
+    let mut words = vec!["eb-stack".to_string(), "stack".into(), "batch".into()];
+    let flags = [
+        ("root", "--root"),
+        ("roots_file", "--roots-file"),
+        ("easyconfigs", "--easyconfigs"),
+        ("commit_tree", "--commit-tree"),
+        ("installed", "--installed"),
+        ("installed_modulerc", "--installed-modulerc"),
+        ("open_prs", "--open-prs"),
+        ("open_repo", "--open-repo"),
+        ("eessi_version", "--eessi-version"),
+        ("easybuild_version", "--easybuild-version"),
+        ("generation", "--generation"),
+        ("filter_deps", "--filter-deps"),
+        ("size", "--size"),
+        ("easyconfigs_repo", "--easyconfigs-repo"),
+        ("generated_at", "--generated-at"),
+        ("out_dir", "--out-dir"),
+    ];
+    for (key, flag) in flags {
+        let values: Vec<String> = match arguments.get(key) {
+            Some(Value::Array(items)) => items
+                .iter()
+                .map(|item| item.as_str().map_or_else(|| item.to_string(), String::from))
+                .collect(),
+            Some(Value::String(text)) => vec![text.clone()],
+            Some(Value::Null) | None => Vec::new(),
+            Some(other) => vec![other.to_string()],
+        };
+        for value in values {
+            words.push(flag.to_string());
+            words.push(crate::target::shell_quote(&value));
+        }
+    }
+    words.join(" ")
+}
+
+fn stack_easystack_tool(arguments: &Value) -> Result<Value, String> {
+    let options = string_array(arguments, "option")?;
+    let report = match optional_string(arguments, "eessi_version") {
+        Some(eessi_version) => {
+            crate::workflows::stack_easystack_eessi(&crate::workflows::StackEasystackEessiRequest {
+                lock: required_path(arguments, "lock")?,
+                out_dir: required_path(arguments, "out_dir")?,
+                eessi_version,
+                easybuild_version: required_string(arguments, "easybuild_version")?,
+                generation: required_string(arguments, "generation")?,
+                options,
+            })
+        }
+        None => crate::workflows::stack_easystack(&crate::workflows::StackEasystackRequest {
+            lock: required_path(arguments, "lock")?,
+            out: optional_path(arguments, "out")
+                .unwrap_or_else(|| PathBuf::from(crate::workflows::STACK_EASYSTACK_OUT)),
+            options,
+        }),
+    }
     .map_err(workflow_error)?;
     Ok(json!({
         "text": report.stdout,

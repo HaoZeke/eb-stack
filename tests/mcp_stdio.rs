@@ -326,6 +326,9 @@ fn mcp_stdio_catalog_lists_the_overlap_and_reach_tools() {
         "eb_stack_sbom",
         "eb_stack_order",
         "eb_stack_easystack",
+        "eb_package_latest",
+        "eb_stack_gap",
+        "eb_stack_batch",
         "eb_stack_sections",
         "eb_stack_from_commit",
         "eb_recipe_easyblock",
@@ -335,7 +338,7 @@ fn mcp_stdio_catalog_lists_the_overlap_and_reach_tools() {
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
-    assert_eq!(names.len(), 38, "{names:?}");
+    assert_eq!(names.len(), 41, "{names:?}");
 }
 
 fn software_layer_prs() -> Vec<PrInput> {

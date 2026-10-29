@@ -561,6 +561,25 @@ pub fn latest(
 }
 
 /// One line per decision, then every candidate with what happened to it.
+/// The version `package bump --latest` moves to: `None` when the recipe
+/// already has the newest stable release.
+///
+/// # Errors
+///
+/// No backend answered, or no stable release survived the filter.
+pub fn bump_version(report: &LatestReport) -> Result<Option<String>> {
+    match (report.state.as_str(), report.newest.as_deref()) {
+        ("unknown", _) | (_, None) => anyhow::bail!(
+            "--latest: no upstream version decided for {} ({})",
+            report.name,
+            report.reason.as_deref().unwrap_or("no candidates survived")
+        ),
+        (_, Some(newest)) if newest == report.current => Ok(None),
+        (_, Some(newest)) => Ok(Some(newest.to_string())),
+    }
+}
+
+/// Render one report as the text `package latest` prints.
 pub fn render_text(report: &LatestReport) -> String {
     let mut out = format!(
         "name={} current={} newest={} state={} backend={}",

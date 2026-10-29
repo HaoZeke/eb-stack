@@ -2517,7 +2517,7 @@ are a subset of easybuild-easyconfigs (GPL-2.0); the license text is
 each pull request, the changed-file list. Head text is
 `https://raw.githubusercontent.com/<owner>/<name>/<sha>/<path>`. Base
 text is the same URL with the base ref (`develop` unless another ref is
-set). A 404 on the base means the file was added. No token is sent.
+set). A 404 on the base means the file was added. `GITHUB_TOKEN` or `GH_TOKEN` is sent to api.github.com when set.
 
 The command the tool runs is `eb-stack pr-overlap --kind easyconfigs --open OWNER/NAME`.
 It calls `fetch_open_easyconfig_prs` and writes the
@@ -3040,7 +3040,7 @@ it. See [site Python extras](https://eb-stack.rgoswami.me/../howto/pypi-extend.h
 eb-stack package bump \
   --source RECIPE.eb \
   --toolchain foss/2024a \
-  [--version VERSION] \
+  [--version VERSION | --latest [--overrides OVERRIDES.toml]...] \
   [--source-checksum DIGEST] \
   [--dep NAME=VERSION]... \
   --easyconfigs UPSTREAM \
@@ -3073,6 +3073,28 @@ missing URL, or a failed download stays empty. The attempts are
 `sources.fetch.json` (one object per source: `filename`, `url`, `sha256`,
 `errors`) and a `source:fetch` residual. See
 [output formats](https://eb-stack.rgoswami.me/formats.html.md).
+`--latest` takes the version `package latest` picks for the recipe, so it
+conflicts with `--version`; `--overrides` adds override files to that
+decision. The bump fails when no stable release survives.
+
+## `package latest`
+
+```bash
+eb-stack package latest \
+  --source RECIPE.eb [--source OTHER.eb]... \
+  [--overrides OVERRIDES.toml]... \
+  [--json]
+```
+
+The backend is read from the recipe's `source_urls`: PyPI, GitHub, GitLab,
+CRAN, crates.io, or an HTTP directory listing. Every listed version is
+printed as kept, or dropped with its reason: a draft, a pre-release, a
+yanked release, or the per-package override (an odd-minor development
+series, a highest allowed major). eb-stack carries
+`data/upstream-overrides.toml`; `--overrides` files apply after it. The
+state is `current`, `behind`, `pinned` or `unknown`. `--json` prints one
+array with the same rows. GitHub requests send `GITHUB_TOKEN` or `GH_TOKEN`
+when set.
 
 # Bundle layout
 
@@ -3232,8 +3254,31 @@ eb-stack stack order \
 
 eb-stack stack easystack \
   --lock /tmp/stack.lock.json \
-  [--out stack.yml] \
+  [--out stack.yml | --eessi-version 2026.06 --easybuild-version 5.4.1 \
+   --generation 2026.1 --out-dir SOFTWARE_LAYER] \
   [--option FILE.eb:OPTION=VALUE]...
+
+eb-stack stack gap \
+  --site SITE-MODULES.txt [--site OTHER.txt]... \
+  --installed INSTALLED.txt \
+  --easyconfigs TREE [--easyconfigs OVERLAY]... \
+  --generation 2026.1 \
+  [--exclude-file SITE-ONLY.tsv] \
+  [--filter-deps NAME,NAME...] \
+  --out-dir GAP
+
+eb-stack stack batch \
+  (--root FILE.eb... | --roots-file ROOTS.txt) \
+  --easyconfigs TREE [--easyconfigs OVERLAY]... \
+  [--commit-tree COMMIT=DIR]... \
+  --installed INSTALLED.txt [--installed-modulerc MODULERC]... \
+  [--open-prs OPEN.json]... [--open-repo EESSI/software-layer] \
+  --eessi-version 2026.06 --easybuild-version 5.4.1 --generation 2026.1 \
+  [--filter-deps NAME,NAME...] \
+  [--size 3] \
+  [--easyconfigs-repo ~/src/easybuild-easyconfigs] \
+  [--generated-at 2026-10-29T00:00:00Z] \
+  --out-dir BATCHES
 
 eb-stack stack sections \
   tests/jenkins_sections/next.list \
@@ -3246,6 +3291,7 @@ eb-stack stack from-commit \
   [--easybuild-version 5.4.0] \
   [--easyconfigs-repo ~/src/easybuild-easyconfigs] \
   [--easyblocks-repo ~/src/easybuild-easyblocks] \
+  [--rewrite] \
   [--json]
 ```
 
@@ -3328,6 +3374,40 @@ command line without its dashes, for example
 `--option CUDA-12.8.0.eb:accept-eula-for=CUDA`. A file with options is a
 mapping; a file without them is a string. Stdout is
 `easystack`<path> entries`<N> of=<packages>`.
+`--eessi-version` writes the EESSI software-layer layout under `--out-dir`
+instead of one `--out` file:
+`easystacks/software.eessi.io/<V>/eessi-<V>-eb-<X>-<generation>.yml` for
+the `--generation` toolchains, `eessi-<V>-eb-<X>-001-system.yml` for
+recipes on the system toolchain, and the same names under `accel/nvidia/`
+for CUDA builds. A recipe on another generation's toolchain is an error.
+
+`stack gap` compares the module listings a site provides (`--site`,
+repeatable, `Name/Version` or a bare name per line) with a stack's
+`--installed` list. Each package is `in-stack` (matched without regard to
+case), `recipe` (the newest easyconfig on the `--generation` toolchains or
+the system toolchain is named), `no-recipe` (the newest easyconfig on any
+toolchain is named as the bump source), or `excluded` by a
+`--exclude-file` line, `name<TAB>reason`. `--filter-deps` names count as
+provided by the compatibility layer. The command writes `gap.tsv`,
+`roots.txt` for `stack batch --roots-file`, and `bump-sources.txt` for
+`package bump --latest`.
+
+`stack batch` plans software-layer pull requests whose builds do not
+overlap. A root's set is its closure over the robot path minus the
+installed modules, as `pr-overlap` computes it. Roots whose sets meet ship
+together; a root whose set meets an open pull request's waits for it.
+Open pull requests come from `--open-prs` (`pr-overlap --pr` JSON) and
+`--open-repo`, which reads the open pull requests of that repository over
+HTTPS. `--commit-tree` supplies the easyconfigs an open pull request pins
+with `from-commit`. `--installed-modulerc` adds `module_version` aliases to
+the installed list. The rest are packed `--size` roots per pull request in
+a fixed order, so the same inputs give the same plan. With
+`--easyconfigs-repo`, a root the `--easybuild-version` release lacks gets a
+`from-commit` pin. Each `batch-NN` directory holds the EESSI easystacks, a
+lock, a CycloneDX SBOM, `reproduce.sh` with the exact command and the
+`eb --dry-run` lines, `batch.json` and `pr-body.md`. `plan.md` and
+`plan.json` at the top record the waits, the unresolved roots and a SHA-256
+of the inputs. `--generated-at` fixes the time written into the plan.
 
 `stack sections` reads the build list
 and regroups its entries under the `#### Title ####` headers of `--from`.
@@ -3368,7 +3448,9 @@ with the blob at the tag. An `include-easyblocks-from-commit` pin compares
 the tree of the pin with the tree of the tag, because that pin does not
 name one easyconfig. `released` and `same` can be removed. `released` and
 `differs` needs a person: the release is not the pinned file. The command
-exits 1 when `released` is not zero. `--json` prints the same report as
+exits 1 when `released` is not zero. `--rewrite` drops each `released`
+pin with `blob=same` from the easystacks in place, keeps the others, and
+exits 0. `--json` prints the same report as
 JSON. See [from-commit pins already in an EasyBuild release](https://eb-stack.rgoswami.me/../howto/from-commit-released.html.md).
 
 # `pr-overlap`
@@ -3920,14 +4002,12 @@ install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
 eb-stack mcp --help
 ```
 
-# Claude Desktop
+# Clients with an `mcpServers` file
 
-Claude Desktop reads `claude_desktop_config.json`. On macOS that file is
-`~/Library/Application Support/Claude/claude_desktop_config.json`. On
-Windows it is `%APPDATA%\Claude\claude_desktop_config.json`. The
-top-level key is `mcpServers`. Restart Claude Desktop after saving the
-file. This client does not expand `${workspaceFolder}`. Put an absolute
-path in `--workspace`.
+A desktop client that reads a JSON file with a top-level `mcpServers` key
+takes the entry below. Restart the client after saving the file. A client
+that does not expand `${workspaceFolder}` needs an absolute path in
+`--workspace`.
 
 ```json
 {
@@ -7909,7 +7989,7 @@ table. `reverse=0` again, for the same reason as the CMakeMake run.
 
 # The same document over MCP
 
-The Model Context Protocol (MCP) catalog has 38 tools. `tools/list` prints
+The Model Context Protocol (MCP) catalog has 41 tools. `tools/list` prints
 their names:
 
 ```bash
@@ -7944,6 +8024,9 @@ eb_stack_solve
 eb_stack_sbom
 eb_stack_order
 eb_stack_easystack
+eb_package_latest
+eb_stack_gap
+eb_stack_batch
 eb_stack_sections
 eb_stack_from_commit
 eb_component_reach
@@ -7959,7 +8042,7 @@ eb_easyblock_reach
 eb_repro_summary
 ```
 
-That is 38 tools. `eb_stack_sbom` writes the CycloneDX file `stack sbom`
+That is 41 tools. `eb_stack_sbom` writes the CycloneDX file `stack sbom`
 writes. Its `tools/list` description reads: "Emit CycloneDX from an existing
 stack lock, reading dependency edges and source checksums from the
 easyconfigs the lock names." `eb_stack_sbom` reads the Cbc lock:
@@ -8049,7 +8132,8 @@ Do not hand-edit generated `docs/source/**/*.rst` or `docs/source/crates/`.
 
 # Packaging campaigns
 
-Follow `AGENTS.md`, `skills/annual-bump/SKILL.md` (generation rebuild), and
+Follow the build, test, lint and docs commands at the repository root,
+`skills/annual-bump/SKILL.md` (generation rebuild), and
 `skills/new-package/SKILL.md` (conda-forge/Spack: new recipe). Run
 `skills/verify-recipe/SKILL.md` over what they emit before a build or a push,
 and `skills/tool-repair/SKILL.md` when the emitted file needed a hand

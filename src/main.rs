@@ -1626,17 +1626,7 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
         let overrides = eb_stack::upstream::load_overrides(&args.overrides)?;
         let report = eb_stack::upstream::latest(&ec, &overrides, &UreqClient)?;
         print!("{}", eb_stack::upstream::render_text(&report));
-        match (report.state.as_str(), report.newest) {
-            ("unknown", _) | (_, None) => bail!(
-                "--latest: no upstream version decided for {} ({})",
-                ec.name,
-                report
-                    .reason
-                    .unwrap_or_else(|| "no candidates survived".into())
-            ),
-            (_, Some(newest)) if newest == ec.version => None,
-            (_, Some(newest)) => Some(newest),
-        }
+        eb_stack::upstream::bump_version(&report)?
     } else {
         args.version
     };
