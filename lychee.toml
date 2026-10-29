@@ -13,6 +13,12 @@ exclude = [
   '^https://eb-stack\.rgoswami\.me/',
   '^https://github\.com/HaoZeke/eb-stack',
   '^https://github\.com/example/',
+  # Easyconfig and API templates, not documents. A placeholder in angle
+  # brackets is dropped when the URL is read back out of HTML, and the
+  # remainder is not a page.
+  '^https://github\.com/quarto-dev/quarto-cli/releases/download/v%\(version\)s/',
+  '^https://api\.osv\.dev/v1/vulns/',
+  '^https://api\.github\.com/repos/',
 ]
 
 exclude_path = [
