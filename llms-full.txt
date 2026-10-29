@@ -3441,8 +3441,15 @@ passed is noted as not provided.
 `--kind` selects the pull request shape. `software-layer` is the default
 and reads easystack additions. `easyconfigs` reads changed `.eb` files.
 `--installed` is required for `software-layer`. For `easyconfigs` it is
-optional: with the flag, `to_build` is the closure minus that list; without
-it, `to_build` is the modules the base tree does not provide.
+optional: with the flag, `to_build` starts as the closure minus that list;
+without it, `to_build` starts as the modules the base tree does not provide.
+A modified easyconfig, and a base-tree module classed `must-rebuild`, then
+join `to_build`, including when the module is already installed. `review`
+and `no-rebuild` reverse dependents are listed on the record and left out
+of `to_build`. A bundle whose `exts_list` names the patched package is
+`must-rebuild`. A runtime dependency is `no-rebuild`. A dependent reached
+only through builddependencies is `review`.
+
 `--eessi-version` is ignored for `easyconfigs` and is omitted from the
 record. `--repo-url` defaults to
 `https://github.com/EESSI/software-layer` for `software-layer` and to
@@ -3527,7 +3534,8 @@ requests build are already installed, so they do not appear in `shrinks`
 and those pull requests are not listed under `affected`. For
 `--kind easyconfigs`, `resolves` lists the modules on a `depends-on`
 row from that pull request, and `after` in `merge-order.toml` lists the
-pull request that adds them. The recorded easyconfigs run is
+pull request that adds them or that patches a module this pull request
+builds a dependent of. The recorded easyconfigs run is
 [close open easybuild-easyconfigs pull requests](https://eb-stack.rgoswami.me/../howto/easyconfigs-pr-overlap.html.md).
 
 # `rebuild-set`
@@ -5340,10 +5348,12 @@ changes no easyconfig and no easystack is
 Neither one creates the output
 directory or deletes files already in it. For an easyconfigs run,
 `resolves` lists the modules on a `depends-on` row from the named pull
-request. `shrinks` is the shared `to_build` that remains after `--merged`
-modules are removed. Modules from a `depends-on` row into the pull
-request are excluded from `shrinks`. A software-layer `resolves` list is
-the modules the named pull request asks for by easystack entry.
+request, including a module it patches when another pull request builds
+a dependent of that module. `shrinks` is the shared `to_build` that
+remains after `--merged` modules are removed. Modules from a
+`depends-on` row into the pull request are excluded from `shrinks`. A
+software-layer `resolves` list is the modules the named pull request
+asks for by easystack entry.
 
 ## Easyconfigs records (schema 2)
 
@@ -5357,8 +5367,8 @@ the modules the named pull request asks for by easystack entry.
 | `changed_easyconfigs` | One entry per `.eb` path: `path`, `status` (`added`, `modified`, or `deleted`), and `module` when the file parses |
 | `closure` | Every module the changed easyconfigs reach, sorted, including the pull request's own modules |
 | `new_modules` | Closure modules the base tree does not provide |
-| `reverse_dependents` | Base-tree modules that resolve a dependency to a modified or deleted file of this pull request. Each entry has `module` and `depth`. Depth 1 depends on the file itself |
-| `to_build` | Closure minus `--installed` when that flag is set; otherwise the same modules as `new_modules` |
+| `reverse_dependents` | Base-tree modules that depend on a modified or deleted file of this pull request. Each entry has `module`, `depth`, and `class`. Depth 1 depends on the file itself. `class` is `must-rebuild`, `review`, or `no-rebuild`, the same three classes as `rebuild-set.json`. A bundle whose `exts_list` names the patched package is `must-rebuild`. A runtime dependency is `no-rebuild`. A dependent reached only through builddependencies is `review`. A toolchain edge is not listed. `overlap.md` prints the module, the depth, and the class |
+| `to_build` | Closure minus `--installed` when that flag is set; otherwise the same modules as `new_modules`. A modified easyconfig, and every reverse dependent classed `must-rebuild`, is included even when that module is installed or already in the base tree. `review` and `no-rebuild` stay out of `to_build` and stay on `reverse_dependents`. A deleted easyconfig is not built. Merge order and `--impact` schedule this list |
 
 The other pull requests in the same run are on the robot path while
 resolving, between the base tree and this pull request's own files.
@@ -5372,7 +5382,7 @@ kinds:
 | `same-file` | 2 pull requests change one path. `path` is that path. `prs` lists the numbers |
 | `same-module` | 2 pull requests add easyconfigs for one module. `module` is that module |
 | `shared-new-module` | One module is in 2 pull requests' `new_modules` |
-| `depends-on` | Pull request `to` reaches a module pull request `from` adds, `to` does not also add it, and the module is in `from`'s `new_modules`. A file `from` adds for a module the base tree already provides is not a dependency. `modules` lists those modules |
+| `depends-on` | Pull request `to` reaches a module pull request `from` adds, `to` does not also add it, and the module is in `from`'s `new_modules`. A file `from` adds for a module the base tree already provides is not a dependency. The same row is written when `from` modifies or deletes a module and `to` builds a dependent of it: the module is in `to`'s closure, or `to`'s `to_build` contains one of `from`'s reverse dependents, and `to` does not itself change that module. `modules` lists the added or patched modules. `merge-order.toml` orders `from` before `to` |
 
 A software-layer index stays schema 1 and omits `rows`.
 

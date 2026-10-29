@@ -6,6 +6,11 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- `pr-overlap --kind easyconfigs` puts a patched easyconfig, and every
+  reverse dependent classed `must-rebuild`, into `to_build`. `review` and
+  `no-rebuild` stay on the record and out of the build set. `--merge-order`
+  and `--impact` schedule that set. A pull request that patches a module
+  is ordered before a pull request that builds a dependent of it.
 - Tests that write a script and then execute it write the file from a
   short-lived shell. A sibling fork can no longer leave that script
   busy at exec (`Text file busy`, ETXTBSY).

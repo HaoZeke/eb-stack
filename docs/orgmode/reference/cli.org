@@ -553,8 +553,15 @@ passed is noted as not provided.
 ~--kind~ selects the pull request shape. ~software-layer~ is the default
 and reads easystack additions. ~easyconfigs~ reads changed ~.eb~ files.
 ~--installed~ is required for ~software-layer~. For ~easyconfigs~ it is
-optional: with the flag, ~to_build~ is the closure minus that list; without
-it, ~to_build~ is the modules the base tree does not provide.
+optional: with the flag, ~to_build~ starts as the closure minus that list;
+without it, ~to_build~ starts as the modules the base tree does not provide.
+A modified easyconfig, and a base-tree module classed ~must-rebuild~, then
+join ~to_build~, including when the module is already installed. ~review~
+and ~no-rebuild~ reverse dependents are listed on the record and left out
+of ~to_build~. A bundle whose ~exts_list~ names the patched package is
+~must-rebuild~. A runtime dependency is ~no-rebuild~. A dependent reached
+only through builddependencies is ~review~.
+
 ~--eessi-version~ is ignored for ~easyconfigs~ and is omitted from the
 record. ~--repo-url~ defaults to
 ~https://github.com/EESSI/software-layer~ for ~software-layer~ and to
@@ -639,7 +646,8 @@ requests build are already installed, so they do not appear in ~shrinks~
 and those pull requests are not listed under ~affected~. For
 ~--kind easyconfigs~, ~resolves~ lists the modules on a ~depends-on~
 row from that pull request, and ~after~ in ~merge-order.toml~ lists the
-pull request that adds them. The recorded easyconfigs run is
+pull request that adds them or that patches a module this pull request
+builds a dependent of. The recorded easyconfigs run is
 [[file:../howto/easyconfigs-pr-overlap.org][close open easybuild-easyconfigs pull requests]].
 
 * ~rebuild-set~
