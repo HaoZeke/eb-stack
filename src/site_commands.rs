@@ -1490,6 +1490,7 @@ fn release_pin(repo: &Path, easybuild_version: &str, file: &str) -> Result<Optio
         .arg("-C")
         .arg(repo)
         .args(["cat-file", "-e", &format!("{tag}:{path}")])
+        .stderr(std::process::Stdio::null())
         .status()
         .map(|s| s.success())
         .unwrap_or(false);

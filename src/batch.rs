@@ -196,20 +196,23 @@ pub fn plan(roots: &[RootSet], open: &[OpenSet], size: usize) -> BatchPlan {
 /// A short file-system name for a batch: its index and first root's name.
 pub fn batch_slug(batch: &Batch) -> String {
     let first = batch.roots.first().map(String::as_str).unwrap_or("empty");
-    let name: String = first
-        .split('-')
-        .next()
-        .unwrap_or(first)
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    format!("batch-{:02}-{name}", batch.index)
+    // The EasyBuild name is every dash-separated part before the first one
+    // that opens with a digit, the version: `GST-plugins-base-1.29.2-...`.
+    let parts: Vec<&str> = first.trim_end_matches(".eb").split('-').collect();
+    let end = parts
+        .iter()
+        .skip(1)
+        .position(|p| p.starts_with(|c: char| c.is_ascii_digit()))
+        .map_or(parts.len(), |i| i + 1);
+    let mut name = String::new();
+    for c in parts[..end].join("-").chars() {
+        match c {
+            '+' => name.push_str("plus"),
+            c if c.is_ascii_alphanumeric() => name.push(c.to_ascii_lowercase()),
+            _ => name.push('-'),
+        }
+    }
+    format!("batch-{:02}-{}", batch.index, name.trim_matches('-'))
 }
 
 #[cfg(test)]
@@ -310,6 +313,19 @@ mod tests {
             roots: vec!["BLAST+-2.17.0-gompi-2026.1.eb".into()],
             modules: vec![],
         };
-        assert_eq!(batch_slug(&b), "batch-02-blast_");
+        assert_eq!(batch_slug(&b), "batch-02-blastplus");
+        let named = |root: &str| {
+            batch_slug(&Batch {
+                index: 3,
+                roots: vec![root.into()],
+                modules: vec![],
+            })
+        };
+        assert_eq!(
+            named("GST-plugins-base-1.29.2-GCCcore-15.2.0.eb"),
+            "batch-03-gst-plugins-base"
+        );
+        assert_eq!(named("zlib-ng-2.3.2-GCCcore-15.2.0.eb"), "batch-03-zlib-ng");
+        assert_eq!(named("Julia-1.13.2.eb"), "batch-03-julia");
     }
 }
