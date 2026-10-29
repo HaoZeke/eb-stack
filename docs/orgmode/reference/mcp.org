@@ -29,14 +29,12 @@ install -Dm755 target/release/eb-stack ~/.local/bin/eb-stack
 eb-stack mcp --help
 #+end_src
 
-* Claude Desktop
+* Clients with an ~mcpServers~ file
 
-Claude Desktop reads ~claude_desktop_config.json~. On macOS that file is
-=~/Library/Application Support/Claude/claude_desktop_config.json=. On
-Windows it is =%APPDATA%\Claude\claude_desktop_config.json=. The
-top-level key is ~mcpServers~. Restart Claude Desktop after saving the
-file. This client does not expand =${workspaceFolder}=. Put an absolute
-path in ~--workspace~.
+A desktop client that reads a JSON file with a top-level ~mcpServers~ key
+takes the entry below. Restart the client after saving the file. A client
+that does not expand =${workspaceFolder}= needs an absolute path in
+~--workspace~.
 
 #+begin_src json
 {
