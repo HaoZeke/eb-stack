@@ -2845,7 +2845,7 @@ are deterministic bundle artifacts.
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2.
 
 `--help` for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is `--out-dir`. A single output file is `--out` (`--lock-out` for the lock `stack solve` writes). `--installed`, `--easyconfigs`, `--filter-deps`, and `--generated-at` use those names on every command that takes them.
 
@@ -2867,6 +2867,7 @@ Package commands take the toolchain as `--toolchain name/version`, the spelling 
 | `stack order` | Sequence every pinned build a set of roots needs |
 | `stack easystack` | Write a lock as the YAML `eb --easystack` reads |
 | `stack sections` | Regroup a Jenkins build list under a previous list's headers |
+| `stack from-commit` | Report `from-commit` pins already contained in an EasyBuild release |
 | `repro summary` | Print a reproduction scoreboard from collected case scores |
 | `pr-overlap` | Close open pull-request easystack additions against an installed stack and report shared builds |
 | `rebuild-set` | Classify the installed reverse dependents of easyconfigs patched in place |
@@ -3180,6 +3181,14 @@ eb-stack stack sections \
   tests/jenkins_sections/next.list \
   --from tests/jenkins_sections/previous.list \
   --out /tmp/grouped.list
+
+eb-stack stack from-commit \
+  --easystack 20261011-eb-5.4.0-UCX.yml \
+  [--easystack OTHER.yml]... \
+  [--easybuild-version 5.4.0] \
+  [--easyconfigs-repo ~/src/easybuild-easyconfigs] \
+  [--easyblocks-repo ~/src/easybuild-easyblocks] \
+  [--json]
 ```
 
 `stack sbom` reads the easyconfigs the lock names. A runtime dependency
@@ -3285,6 +3294,24 @@ The recorded lists are `tests/jenkins_sections/previous.list` and
 #### New in this generation ####
 # CP2K-2026.1-foss-2025b.eb
 ```
+
+`stack from-commit` reads each `--easystack` and reports every `from-commit`
+and `include-easyblocks-from-commit` pin. The release is
+`--easybuild-version X.Y.Z`, or the `eb-X.Y.Z` in the file name when the
+flag is omitted. The flag overrides the file name. The tag is
+`easybuild-easyconfigs-vX.Y.Z` in `--easyconfigs-repo`, and
+`easybuild-easyblocks-vX.Y.Z` in `--easyblocks-repo`. A pin is `released`
+when that commit is an ancestor of the tag (a commit is an ancestor of
+itself), `newer` when the commit is in the checkout and is not an ancestor,
+or `unknown` when the commit or the tag is missing. `unknown` does not
+guess. A `released` `from-commit` pin also says `blob=same` or
+`blob=differs`, comparing the easyconfig blob named by the tree at the pin
+with the blob at the tag. An `include-easyblocks-from-commit` pin compares
+the tree of the pin with the tree of the tag, because that pin does not
+name one easyconfig. `released` and `same` can be removed. `released` and
+`differs` needs a person: the release is not the pinned file. The command
+exits 1 when `released` is not zero. `--json` prints the same report as
+JSON. See [from-commit pins already in an EasyBuild release](https://eb-stack.rgoswami.me/../howto/from-commit-released.html.md).
 
 # `pr-overlap`
 
@@ -3716,7 +3743,7 @@ plus sandboxed recipe and easyblock tools:
 - `eb_module_lint`, `eb_easyblock_dry_run`, `eb_build_log`, `eb_build_test`
   (easyblocks; `eb_build_test` only with `EB_STACK_ALLOW_BUILD=1`);
 - `eb_stack_solve`, `eb_stack_sbom`, `eb_stack_order`,
-  `eb_stack_easystack`, `eb_stack_sections`;
+  `eb_stack_easystack`, `eb_stack_sections`, `eb_stack_from_commit`;
 - `eb_target_list`, `eb_target_doctor`;
 - `eb_campaign_run`, `eb_campaign_status`;
 - `eb_campaign_finding_claim`, `eb_campaign_finding_resolve`;
@@ -3758,7 +3785,10 @@ synthetic GCC-family rule, the same split as `recipe hierarchy --export`.
 `filter_deps` drops the same dependencies `--filter-deps` drops.
 `eb_stack_easystack` requires `lock` and takes `out` and `option`, each
 option a `<file.eb>:<option>=<value>` string. `eb_stack_sections` requires
-`list`, `from`, and `out`, and takes `unfiled`. `eb_repro_summary`
+`list`, `from`, and `out`, and takes `unfiled`. `eb_stack_from_commit`
+requires `easystack` and takes `easyconfigs_repo`, `easyblocks_repo`,
+`easybuild_version`, and `json`. It returns the same report as
+`stack from-commit`. `eb_repro_summary`
 requires `scores` and takes `ratchet` and `json`. Each of these tools
 calls the same runner as the command of that name, and the text it
 returns is that command's stdout.
@@ -7808,7 +7838,7 @@ table. `reverse=0` again, for the same reason as the CMakeMake run.
 
 # The same document over MCP
 
-The Model Context Protocol (MCP) catalog has 37 tools. `tools/list` prints
+The Model Context Protocol (MCP) catalog has 38 tools. `tools/list` prints
 their names:
 
 ```bash
@@ -7844,6 +7874,7 @@ eb_stack_sbom
 eb_stack_order
 eb_stack_easystack
 eb_stack_sections
+eb_stack_from_commit
 eb_component_reach
 eb_target_list
 eb_target_doctor
@@ -7857,7 +7888,7 @@ eb_easyblock_reach
 eb_repro_summary
 ```
 
-That is 37 tools. `eb_stack_sbom` writes the CycloneDX file `stack sbom`
+That is 38 tools. `eb_stack_sbom` writes the CycloneDX file `stack sbom`
 writes. Its `tools/list` description reads: "Emit CycloneDX from an existing
 stack lock, reading dependency edges and source checksums from the
 easyconfigs the lock names." `eb_stack_sbom` reads the Cbc lock:
@@ -7992,3 +8023,60 @@ The version-one design provides:
 
 The scaffold/compatibility command surface is removed rather than maintained
 alongside the canonical workflow.
+
+# From-commit pins already in an EasyBuild release
+
+An easystack `from-commit` pin asks EasyBuild to take an easyconfig from
+that commit of easybuild-easyconfigs. Pin it when the file is newer than
+the EasyBuild release the stack builds with. A pin whose commit is already
+in that release does nothing. Removing it is safe only when the easyconfig
+at the pin is the same blob as at the release tag. A later edit, such as
+the glibc 2.43 patch on UCX 1.18.0 and 1.19.0, means the release file is
+not the pinned file, and a person has to decide.
+
+# Check the easystacks
+
+`--easybuild-version 5.4.0` names the release. When the flag is omitted,
+the command reads `eb-X.Y.Z` from the file name
+(`20261011-eb-5.4.0-UCX.yml`). The flag overrides the file name. With
+neither, the command exits 2 and names `--easybuild-version`.
+
+```bash
+eb-stack stack from-commit \
+  --easystack 20261011-eb-5.4.0-UCX.yml \
+  --easyconfigs-repo "$EB_EASYCONFIGS" \
+  --easyblocks-repo "$EB_EASYBLOCKS"
+```
+
+`--easyconfigs-repo` is an easybuild-easyconfigs checkout, tags included.
+`--easyblocks-repo` is the easybuild-easyblocks checkout, and it is required
+only when an entry sets `include-easyblocks-from-commit`. The tags are
+`easybuild-easyconfigs-vX.Y.Z` and `easybuild-easyblocks-vX.Y.Z`.
+
+Each pin is one line:
+
+```
+status=released blob=differs version=5.4.0 tag=easybuild-easyconfigs-v5.4.0 kind=from-commit commit=d438adc file=UCX-1.18.0-GCCcore-14.2.0.eb easystack=20261011-eb-5.4.0-UCX.yml
+pins=1 released=1 newer=0 unknown=0
+```
+
+`released` means `git merge-base --is-ancestor` says the commit is in the
+tag. `newer` means the commit is in the checkout and is not in the tag.
+`unknown` means the commit or the tag is missing. The command does not
+guess which. `reason`commit-missing` or `reason`tag-missing` says which
+one.
+
+For a `released` `from-commit` pin, `blob` compares the easyconfig blob in
+the tree at the pin with the blob at the tag. `same` means one object.
+`differs` means the path is missing on one side, the hashes differ, or
+more than one path has that filename. `released` and `same` can be
+removed. `released` and `differs` needs a person.
+
+An `include-easyblocks-from-commit` pin has no single easyconfig in that
+repository. `blob` there compares the tree of the pin with the tree of
+`easybuild-easyblocks-vX.Y.Z`. `same` means the release tree is the pinned
+tree.
+
+The command exits 0 when no pin is `released`. It exits 1 when any pin is
+`released`, including a pin whose blob is `same`. `--json` prints the same
+fields as JSON. `eb_stack_from_commit` returns that report.

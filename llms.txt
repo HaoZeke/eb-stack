@@ -27,6 +27,7 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or newer builds it 
 - [Close open easybuild-easyconfigs pull requests](https://eb-stack.rgoswami.me/howto/easyconfigs-pr-overlap.html.md): Goal: for each open pull request on easybuild-easyconfigs, name the easyconfigs it adds or changes, the dependency closure of those files against a pinned develop tree, and the modules it shares with the other open
 - [What an in-place patch forces EESSI to rebuild](https://eb-stack.rgoswami.me/howto/rebuild-set.html.md): Goal: the patched easyconfigs keep their filenames and versions.
 - [Which modules carry a component, and what that forces rebuilt](https://eb-stack.rgoswami.me/howto/component-reach.html.md): Goal: a Common Vulnerabilities and Exposures (CVE) record names a component and a version.
+- [From-commit pins already in an EasyBuild release](https://eb-stack.rgoswami.me/howto/from-commit-released.html.md): An easystack from-commit pin asks EasyBuild to take an easyconfig from that commit of easybuild-easyconfigs.
 
 ## Reference
 
