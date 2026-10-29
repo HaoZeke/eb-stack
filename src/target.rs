@@ -493,12 +493,14 @@ if [ ! -w "$tmp" ]; then
   exit 41
 fi
 kb_free="$(df -Pk "$tmp" | awk 'NR==2 {print $4}')"
+inode_total="$(df -Pi "$tmp" | awk 'NR==2 {print $2}')"
 inode_free="$(df -Pi "$tmp" | awk 'NR==2 {print $4}')"
 if [ -z "$kb_free" ] || [ "$kb_free" -le 0 ]; then
   echo "EASYBUILD_TMPDIR '$tmp' has no free space (1K blocks: ${kb_free:-unknown})" >&2
   exit 42
 fi
-if [ -z "$inode_free" ] || [ "$inode_free" -le 0 ]; then
+# btrfs and ZFS have no inode table and report 0 total and 0 free.
+if [ "${inode_total:-0}" != 0 ] && { [ -z "$inode_free" ] || [ "$inode_free" -le 0 ]; }; then
   echo "EASYBUILD_TMPDIR '$tmp' has no free inodes (${inode_free:-unknown})" >&2
   exit 43
 fi
