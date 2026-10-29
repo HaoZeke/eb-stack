@@ -210,6 +210,17 @@ pub fn detect_backend(ec: &ResolvedEasyconfig, ov: Option<&Override>) -> Option<
             });
         }
     }
+    if ec.source_urls.is_empty()
+        && matches!(
+            ec.easyblock.as_deref(),
+            Some("PythonPackage" | "CargoPythonPackage")
+        )
+    {
+        // The easyblock adds the PyPI source URL itself.
+        return Some(Backend::Pypi {
+            project: ec.name.clone(),
+        });
+    }
     let first = ec.source_urls.first()?;
     let prefix = ec
         .source_files
@@ -431,25 +442,85 @@ pub fn list_candidates(
         }
         Backend::Directory { url, prefix } => {
             let body = client.get(url).map_err(|e| anyhow::anyhow!("{e}"))?;
-            let html = String::from_utf8_lossy(&body);
+            let mut pages = vec![String::from_utf8_lossy(&body).into_owned()];
+            for dir in versioned_dirs(url, client) {
+                if dir != *url {
+                    if let Ok(body) = client.get(&dir) {
+                        pages.push(String::from_utf8_lossy(&body).into_owned());
+                    }
+                }
+            }
+            // A dash in the version must open another number, so a platform
+            // build (`blender-4.0.2-windows-x64.zip`) is not a version.
             let re = Regex::new(&format!(
-                r"{}([0-9][0-9A-Za-z.\-_]*?)(?:\.tar\.gz|\.tar\.bz2|\.tar\.xz|\.tgz|\.zip|\.c|\.tar)\b",
+                r"{}([0-9][0-9A-Za-z._]*?(?:-[0-9][0-9A-Za-z._]*?)*)(?:\.tar\.gz|\.tar\.bz2|\.tar\.xz|\.tgz|\.zip|\.c|\.tar)\b",
                 regex::escape(prefix)
             ))?;
             let mut seen = std::collections::BTreeSet::new();
-            for c in re.captures_iter(&html) {
-                let v = c[1].trim_end_matches(['.', '-', '_']).to_string();
-                if seen.insert(v.clone()) {
-                    out.push(Candidate {
-                        raw: v.clone(),
-                        version: v,
-                        dropped: None,
-                    });
+            for html in &pages {
+                for c in re.captures_iter(html) {
+                    let v = c[1].trim_end_matches(['.', '-', '_']).to_string();
+                    if seen.insert(v.clone()) {
+                        out.push(Candidate {
+                            raw: v.clone(),
+                            version: v,
+                            dropped: None,
+                        });
+                    }
                 }
             }
         }
     }
     Ok(out)
+}
+
+/// Why a recipe has no backend.
+fn no_backend_reason(ec: &ResolvedEasyconfig) -> &'static str {
+    if ec
+        .easyblock
+        .as_deref()
+        .is_some_and(|b| b.contains("Bundle"))
+    {
+        "a bundle has no upstream release of its own; its components do"
+    } else if ec.source_urls.is_empty() {
+        "the recipe names no source_urls"
+    } else {
+        "no backend reads these source_urls"
+    }
+}
+
+/// Directories beside a versioned path segment, newest first, at most two:
+/// `.../release/Blender4.0/` lists `.../release/` and keeps `Blender5.0/`
+/// and `Blender4.5/`; `.../hwloc/v2.12/downloads/` keeps the part after the
+/// segment. Empty when no segment holds a dotted version or the parent
+/// cannot be read.
+fn versioned_dirs(url: &str, client: &dyn RegistryClient) -> Vec<String> {
+    let Some(c) = Regex::new(r"^(https?://.+/)([^/]*?)(\d+(?:\.\d+)+)([^/]*)/(.*)$")
+        .unwrap()
+        .captures(url)
+    else {
+        return Vec::new();
+    };
+    let (parent, pre, post, tail) = (&c[1], &c[2], &c[4], &c[5]);
+    let Ok(body) = client.get(parent) else {
+        return Vec::new();
+    };
+    let html = String::from_utf8_lossy(&body);
+    let Ok(re) = Regex::new(&format!(
+        r#"href="(?:\./)?{}(\d+(?:\.\d+)+){}/?""#,
+        regex::escape(pre),
+        regex::escape(post)
+    )) else {
+        return Vec::new();
+    };
+    let mut versions: Vec<String> = re.captures_iter(&html).map(|v| v[1].to_string()).collect();
+    versions.sort_by(|a, b| cmp_version(b, a));
+    versions.dedup();
+    versions
+        .into_iter()
+        .take(2)
+        .map(|v| format!("{parent}{pre}{v}{post}/{tail}"))
+        .collect()
 }
 
 fn major(version: &str) -> Option<u64> {
@@ -546,7 +617,11 @@ pub fn latest(
 ) -> Result<LatestReport> {
     let ov = overrides.get(&ec.name);
     let Some(backend) = detect_backend(ec, ov) else {
-        return decide(&ec.name, &ec.version, "none", Vec::new(), ov);
+        let mut report = decide(&ec.name, &ec.version, "none", Vec::new(), ov)?;
+        if report.reason.is_none() {
+            report.reason = Some(no_backend_reason(ec).into());
+        }
+        return Ok(report);
     };
     let candidates = match list_candidates(&backend, &ec.name, client) {
         Ok(c) => c,
@@ -560,7 +635,6 @@ pub fn latest(
     decide(&ec.name, &ec.version, &backend.label(), candidates, ov)
 }
 
-/// One line per decision, then every candidate with what happened to it.
 /// The version `package bump --latest` moves to: `None` when the recipe
 /// already has the newest stable release.
 ///
@@ -579,7 +653,8 @@ pub fn bump_version(report: &LatestReport) -> Result<Option<String>> {
     }
 }
 
-/// Render one report as the text `package latest` prints.
+/// Render one report as the text `package latest` prints: one line per
+/// decision, then every candidate with what happened to it.
 pub fn render_text(report: &LatestReport) -> String {
     let mut out = format!(
         "name={} current={} newest={} state={} backend={}",
@@ -636,6 +711,64 @@ mod tests {
         .unwrap();
         assert_eq!(report.newest.as_deref(), Some("2.2"));
         assert_eq!(report.state, "behind");
+    }
+
+    #[test]
+    fn directory_walks_up_a_versioned_segment_and_skips_platform_builds() {
+        let recipe = ec(
+            "Blender",
+            "4.0.1",
+            &["https://download.example.org/release/Blender4.0/"],
+        );
+        let parent = r#"<a href="Blender3.6/">a</a> <a href="Blender4.0/">b</a> <a href="Blender4.5/">c</a> <a href="Blender5.0/">d</a>"#;
+        let v40 =
+            r#"<a href="Blender-4.0.1.tar.gz">x</a> <a href="Blender-4.0.2-windows-x64.zip">y</a>"#;
+        let v50 = r#"<a href="Blender-5.0.1.tar.gz">x</a> <a href="Blender-5.0.1-linux-x64.tar.xz">y</a>"#;
+        let report = latest(
+            &recipe,
+            &BTreeMap::new(),
+            &client(&[
+                ("https://download.example.org/release/Blender4.0/", v40),
+                ("https://download.example.org/release/", parent),
+                ("https://download.example.org/release/Blender5.0/", v50),
+                ("https://download.example.org/release/Blender4.5/", ""),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(report.newest.as_deref(), Some("5.0.1"));
+        assert!(
+            report
+                .candidates
+                .iter()
+                .all(|c| !c.version.contains("windows")),
+            "{:?}",
+            report.candidates
+        );
+    }
+
+    #[test]
+    fn a_python_package_without_source_urls_reads_pypi() {
+        let text = "easyblock = 'PythonPackage'\nname = 'Markdown'\nversion = '3.10.2'\nhomepage = 'https://example.org'\ndescription = 'x'\ntoolchain = SYSTEM\nsources = [SOURCE_TAR_GZ]\n";
+        let recipe = crate::eb_parse::resolve_easyconfig_str(text).unwrap();
+        assert_eq!(
+            detect_backend(&recipe, None),
+            Some(Backend::Pypi {
+                project: "Markdown".into()
+            })
+        );
+    }
+
+    #[test]
+    fn a_bundle_says_why_it_has_no_backend() {
+        let text = "easyblock = 'PythonBundle'\nname = 'Jupyter-bundle'\nversion = '20260909'\nhomepage = 'https://example.org'\ndescription = 'x'\ntoolchain = SYSTEM\n";
+        let recipe = crate::eb_parse::resolve_easyconfig_str(text).unwrap();
+        let report = latest(&recipe, &BTreeMap::new(), &client(&[])).unwrap();
+        assert_eq!(report.state, "unknown");
+        assert!(
+            report.reason.as_deref().unwrap_or("").contains("bundle"),
+            "{:?}",
+            report.reason
+        );
     }
 
     #[test]
