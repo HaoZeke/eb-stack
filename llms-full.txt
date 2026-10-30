@@ -89,6 +89,7 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [find from-commit pins an EasyBuild release already contains](https://eb-stack.rgoswami.me/howto/from-commit-released.html.md),
     [refuse a plan an architecture cannot build](https://eb-stack.rgoswami.me/howto/arch-unsupported.html.md),
     [find a missing patch before the bot does](https://eb-stack.rgoswami.me/howto/patch-presence.html.md).
+    [refuse entries outside the EESSI version's generations](https://eb-stack.rgoswami.me/howto/generation-lint.html.md).
   - Reference: [CLI](https://eb-stack.rgoswami.me/reference/cli.html.md),
     [Model Context Protocol server](https://eb-stack.rgoswami.me/reference/mcp.html.md),
     [package bundles](https://eb-stack.rgoswami.me/reference/package-bundles.html.md),
@@ -3553,6 +3554,119 @@ checked.
 
 See [the command-line reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
 
+# Refuse entries outside the EESSI version's generations
+
+What it does: `stack generation` reads a pull request's easystack
+changes, or easystack files, and checks every entry's toolchain against
+the toolchain generations of the EESSI version the easystack is for. It
+also fails when one pull request has easystacks for two EESSI versions,
+and when the plan adds a second version of a software in one
+generation without an explicit allow.
+
+Why you'd use it: each EESSI version is built on fixed generations.
+2023.06 carries 2022b, 2023a and 2023b. 2025.06 carries 2024a, 2025a
+and 2025b. 2026.06 carries 2026.1. Software-layer pull request 1472
+first put pv on GCCcore-12.3.0, which is 2023a, into a 2025.06
+easystack, and was later moved to 2023.06. Pull request 1834 first
+added fastp to 2025.06 and 2026.06 together, and a reviewer asked for
+one pull request per version. This check catches both before the bot
+runs.
+
+```bash
+eb-stack stack generation \
+  --pr tests/generation_lint_fixtures/prs/1472-first-push.json
+```
+
+```
+#1472: pv-1.7.24-GCCcore-12.3.0.eb in eessi-2025.06-eb-5.2.1-2025b.yml is outside EESSI 2025.06: GCCcore-12.3.0 is generation 2023a, which EESSI 2023.06 carries; 2025.06 carries 2024a, 2025a, 2025b
+outside=1 mixed=0 versions=0
+```
+
+Read the line left to right. `#1472` is the pull request.
+`pv-1.7.24-GCCcore-12.3.0.eb` is the entry it added, and
+`eessi-2025.06-eb-5.2.1-2025b.yml` is the easystack. `GCCcore-12.3.0`
+is in generation 2023a, which EESSI 2023.06 carries, so the entry
+belongs in a 2023.06 easystack. The last line counts each kind of
+finding, and any finding exits 1. The fixture is the easystack change
+at the first commit of pull request 1472. At the commit that moved pv
+to `eessi-2023.06-eb-5.4.0-2023a.yml`, the same command prints
+`outside`0 mixed`0 versions=0` and exits 0.
+
+The pull-request JSON is the shape `pr-overlap --pr` reads. Only the
+lines a pull request adds are checked. The rest of each changed file
+counts as already in the stack. To check whole easystack files
+instead, pass `--easystack`. The EESSI version is the directory under
+`software.eessi.io/`, or `eessi-<V>-eb-` in the file name. For a path
+that names neither, pass `--eessi-version`.
+
+# Two EESSI versions in one pull request
+
+```bash
+eb-stack stack generation \
+  --pr tests/generation_lint_fixtures/prs/1834-before-split.json
+```
+
+```
+#1834: the easystacks are for 2 EESSI versions: 2025.06 (eessi-2025.06-eb-5.4.1-2025b.yml), 2026.06 (eessi-2026.06-eb-5.4.1-2026.1.yml); the bot builds one EESSI version per pull request
+outside=0 mixed=1 versions=0
+```
+
+Each entry is in the right generation for its own version, so
+`outside=0`. The `mixed` line lists each version with its easystacks.
+Splitting the pull request clears it. A path that names a version
+other than `--eessi-version` is also a `mixed` finding.
+
+# A second version in one generation
+
+```bash
+eb-stack stack generation \
+  --pr tests/generation_lint_fixtures/prs/1497.json
+```
+
+```
+#1497: GROMACS has 2 versions in generation 2025b: 2025.4 (already in the stack), 2026.2 (added: GROMACS-2026.2-foss-2025b.eb); pass --allow-versions GROMACS@2025b to accept
+outside=0 mixed=0 versions=1
+```
+
+Pull request 1497 added GROMACS 2026.2 on foss-2025b to the easystack
+that already held GROMACS 2025.4. `already in the stack` marks a
+version the plan did not add. `added:` names the entries that bring
+the new one. The version is the text between the name and the
+toolchain, so a `-CUDA-12.9.1` build of a version already in the stack
+is not a second version. EESSI merged this pull request: some names
+carry several versions in a generation on purpose. The allow is where
+a reviewer records that:
+
+```bash
+eb-stack stack generation \
+  --pr tests/generation_lint_fixtures/prs/1497.json \
+  --allow-versions GROMACS@2025b
+```
+
+```
+outside=0 mixed=0 versions=0
+```
+
+`--allow-versions GROMACS` allows every generation. Only a plan that
+adds a version is judged. A pair the stack already holds, such as
+CMake 3.31.8 and 4.0.3 on GCCcore-14.3.0, does not fail a later pull
+request. To count easystacks the pull request does not touch, pass
+`--deployed` with the version's easystack directory.
+
+# Where the generations come from
+
+`data/eessi-generations.toml` lists each EESSI version's generations.
+A generation's toolchains are the foss hierarchy eb-stack carries
+(GCCcore, GCC, gfbf, gompi, foss), any toolchain whose version is the
+generation (`lompi-2025b`), and the extra toolchains the file lists,
+such as `llvm-compilers-20.1.8` for 2025b. `--generations` replaces the
+file. A toolchain that is in none of them, such as `GCCcore-11.3.0`,
+reads `is in no generation an EESSI version carries`. Toolchain-free
+entries are not checked.
+
+`eb_stack_generation` is the same check over the Model Context
+Protocol (MCP). See [the command-line reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
+
 # Command-line reference
 
 `eb-stack` has six namespaced command groups (`package`, `recipe`,
@@ -4264,6 +4378,9 @@ and a path that names another version is a `mixed` finding.
 them, for the second-version check. `--allow-versions` takes `NAME` or
 `NAME@GENERATION`. `--generations` replaces
 `data/eessi-generations.toml`.
+
+[Refuse entries outside the EESSI version's generations](https://eb-stack.rgoswami.me/../howto/generation-lint.html.md)
+shows the two-version and second-version lines.
 
 ## `stack sections`
 

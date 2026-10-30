@@ -30,6 +30,7 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or newer builds it 
 - [Find from-commit pins an EasyBuild release already contains](https://eb-stack.rgoswami.me/howto/from-commit-released.html.md): An easystack can select an easyconfig from a specific easybuild-easyconfigs commit with from-commit.
 - [Refuse a plan an architecture cannot build](https://eb-stack.rgoswami.me/howto/arch-unsupported.html.md): What it does: stack arch reads an easystack as a plan.
 - [Find a missing patch before the bot does](https://eb-stack.rgoswami.me/howto/patch-presence.html.md): What it does: stack files reads each easyconfig an easystack names and lists the files EasyBuild will look for on disk: the patches of the recipe, its extensions, and its components, patch files named only in
+- [Refuse entries outside the EESSI version's generations](https://eb-stack.rgoswami.me/howto/generation-lint.html.md): What it does: stack generation reads a pull request's easystack changes, or easystack files, and checks every entry's toolchain against the toolchain generations of the EESSI version the easystack is for.
 
 ## Reference
 

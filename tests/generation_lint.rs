@@ -214,6 +214,39 @@ fn usage_errors_exit_2() {
 }
 
 #[test]
+fn the_howto_quotes_the_output_of_each_command() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let page = std::fs::read_to_string(root.join("docs/orgmode/howto/generation-lint.org"))
+        .expect("how-to page");
+    let mut rest = page.as_str();
+    let mut checked = 0;
+    while let Some(start) = rest.find("#+begin_src bash\n") {
+        rest = &rest[start + "#+begin_src bash\n".len()..];
+        let end = rest.find("#+end_src").expect("bash block closed");
+        let words: Vec<&str> = rest[..end]
+            .split_whitespace()
+            .filter(|word| *word != "\\")
+            .collect();
+        rest = &rest[end..];
+        let open = rest
+            .find("#+begin_example\n")
+            .expect("example after command");
+        rest = &rest[open + "#+begin_example\n".len()..];
+        let close = rest.find("#+end_example").expect("example closed");
+        let quoted = &rest[..close];
+        assert_eq!(words.first(), Some(&"eb-stack"), "{words:?}");
+        let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+            .current_dir(&root)
+            .args(&words[1..])
+            .output()
+            .expect("run eb-stack");
+        assert_eq!(text(&output.stdout), quoted, "{words:?}");
+        checked += 1;
+    }
+    assert_eq!(checked, 4);
+}
+
+#[test]
 fn the_mcp_tool_refuses_the_same_plans() {
     let call = |arguments: serde_json::Value| {
         handle_message(&json!({

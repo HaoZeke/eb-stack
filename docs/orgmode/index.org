@@ -61,6 +61,7 @@
    *A plan an architecture cannot build?* → :doc:`howto/arch-unsupported`
 
    *A patch the bot will not find?* → :doc:`howto/patch-presence`
+   *An easystack entry outside its EESSI version's generations?* → :doc:`howto/generation-lint`
 
    *Dependency closure of one change?* → :doc:`explanation/sbom-blast-radius`
 
@@ -144,6 +145,7 @@
    howto/from-commit-released
    howto/arch-unsupported
    howto/patch-presence
+   howto/generation-lint
 
 .. toctree::
    :maxdepth: 2
@@ -271,6 +273,7 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [[file:howto/from-commit-released.org][find from-commit pins an EasyBuild release already contains]],
     [[file:howto/arch-unsupported.org][refuse a plan an architecture cannot build]],
     [[file:howto/patch-presence.org][find a missing patch before the bot does]].
+    [[file:howto/generation-lint.org][refuse entries outside the EESSI version's generations]].
   - Reference: [[file:reference/cli.org][CLI]],
     [[file:reference/mcp.org][Model Context Protocol server]],
     [[file:reference/package-bundles.org][package bundles]],

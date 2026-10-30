@@ -711,6 +711,9 @@ them, for the second-version check. ~--allow-versions~ takes ~NAME~ or
 ~NAME@GENERATION~. ~--generations~ replaces
 ~data/eessi-generations.toml~.
 
+[[file:../howto/generation-lint.org][Refuse entries outside the EESSI version's generations]]
+shows the two-version and second-version lines.
+
 ** ~stack sections~
 
 ~stack sections~ reads the build list
