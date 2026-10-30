@@ -408,6 +408,11 @@ pub fn plan_package_bump_fetching(
     apply_index_rewrites(&mut bundle, request, &fetched, client);
     prune_settled_checksum_warnings(&mut bundle);
     let new_version = request.version.as_deref().unwrap_or_default();
+    let prior_version = std::fs::read_to_string(&request.source)
+        .ok()
+        .and_then(|text| resolve_easyconfig_str(&text).ok())
+        .map(|recipe| recipe.version);
+    crate::patch_apply::decide_extension_patches(&mut bundle, prior_version.as_deref(), client);
     let undecided = crate::patch_apply::decide_from_source(&mut bundle, new_version, &fetched);
     crate::package_workflow::refresh_bump_sbom(&mut bundle)?;
     if request.strict_patches && !undecided.is_empty() {

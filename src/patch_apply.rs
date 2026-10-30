@@ -27,6 +27,38 @@ use crate::package::ResidualSeverity;
 use crate::package_workflow::PackageBundle;
 use crate::source_fetch::SourceFetch;
 
+/// A directory under the system temporary directory, removed on drop, that
+/// holds the unpacked source while the patches are tried.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new() -> std::io::Result<Self> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default();
+        let path = std::env::temp_dir().join(format!(
+            "eb-stack-patch-{}-{nanos}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&path)?;
+        Ok(Self(path))
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// What the new source says about one patch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SourceVerdict {
@@ -372,14 +404,16 @@ pub(crate) fn decide_from_source(
     let Some(bytes) = source.bytes.as_deref() else {
         return undecided_names(bundle);
     };
-    let Ok(scratch) = tempfile::tempdir() else {
+    let Ok(scratch) = Scratch::new() else {
         return undecided_names(bundle);
     };
     let root = match unpack(&source.filename, bytes, scratch.path()) {
         Ok(root) => root,
         Err(_) => return undecided_names(bundle),
     };
+    let label = format!("{} source", source.filename);
     let mut dropped = Vec::new();
+    let mut judged = 0usize;
     for entry in &entries {
         let is_open = open.iter().any(|candidate| candidate.name == entry.name);
         let path = bundle
@@ -401,43 +435,8 @@ pub(crate) fn decide_from_source(
         if !is_open {
             continue;
         }
-        let (decision, evidence, severity) = match &verdict {
-            SourceVerdict::Applies(level) => (
-                "carry",
-                format!("applies to the {} source at -p{level}", source.filename),
-                ResidualSeverity::Mechanical,
-            ),
-            SourceVerdict::Upstream(level) => (
-                "drop",
-                format!(
-                    "the {} source already contains it: it reverse-applies at -p{level}",
-                    source.filename
-                ),
-                ResidualSeverity::Mechanical,
-            ),
-            SourceVerdict::TargetsGone(files) => (
-                "drop",
-                format!(
-                    "no file it modifies exists in the {} source ({})",
-                    source.filename,
-                    files.join(", ")
-                ),
-                ResidualSeverity::Mechanical,
-            ),
-            SourceVerdict::CopyOnly => (
-                "carry",
-                "copied into the build directory, not applied".to_string(),
-                ResidualSeverity::Mechanical,
-            ),
-            SourceVerdict::Fails(lines) => (
-                "undecided",
-                format!(
-                    "does not apply to the {} source and does not reverse-apply: {lines}",
-                    source.filename
-                ),
-                ResidualSeverity::Judgment,
-            ),
-        };
+        judged += 1;
+        let (decision, evidence, severity) = verdict_record(&verdict, &label);
         if decision == "drop" {
             dropped.push(entry.name.clone());
         }
@@ -462,20 +461,188 @@ pub(crate) fn decide_from_source(
             .patches
             .retain(|patch| !dropped.contains(&patch.filename));
     }
-    let undecided = undecided_names(bundle);
-    let decided_all = bundle
-        .plan
-        .residuals
-        .iter()
-        .filter(|residual| residual.category == "patch-decision")
-        .all(|residual| !residual.summary.starts_with("undecided "));
-    if decided_all {
+    // Per-patch source evidence supersedes the blanket review warning, as a
+    // sibling's patch list does; a patch the source leaves undecided keeps
+    // its own judgment record.
+    if judged == open.len() {
         bundle.plan.residuals.retain(|residual| {
             !(residual.category == "bump-warning"
                 && residual.summary.contains("patches were not modified"))
         });
     }
-    undecided
+    undecided_names(bundle)
+}
+
+/// Judge the patches of the extension that is the package itself against
+/// the extension archive at the new version, as [`decide_from_source`] does
+/// for the recipe's own `patches`. EasyBuild applies them in the unpacked
+/// extension, so a bump that moves the extension moves the evidence too.
+pub(crate) fn decide_extension_patches(
+    bundle: &mut PackageBundle,
+    prior_version: Option<&str>,
+    client: &dyn crate::registry::RegistryClient,
+) {
+    let Some(easyconfig) = bundle.easyconfigs.first() else {
+        return;
+    };
+    let text = easyconfig.text.clone();
+    let Ok(recipe) = resolve_easyconfig_str(&text) else {
+        return;
+    };
+    if prior_version.is_none_or(|prior| prior == recipe.version) {
+        return;
+    }
+    let Some(own) = crate::index_bump::own_extension(&text, client) else {
+        return;
+    };
+    let raw = &text[own.span.0..own.span.1];
+    let Some((patch_start, patch_end)) = crate::index_bump::dict_list_span(raw, "patches") else {
+        return;
+    };
+    let body = &raw[patch_start..patch_end];
+    let entries: Vec<(PatchEntry, (usize, usize))> = entry_spans(body)
+        .into_iter()
+        .filter_map(|(s, e)| {
+            let entry = strip_comments(&body[s..e]);
+            let name = first_literal(&entry)?;
+            Some((parse_entry(entry.trim(), &name), (s, e)))
+        })
+        .collect();
+    if entries.is_empty() {
+        return;
+    }
+    let Ok(scratch) = Scratch::new() else {
+        return;
+    };
+    let label = format!("{} {} extension archive", recipe.name, recipe.version);
+    let root = match unpack("extension.tar.gz", &own.archive, scratch.path()) {
+        Ok(root) => root,
+        Err(_) => return,
+    };
+    let mut dropped: Vec<String> = Vec::new();
+    for (index, (entry, _)) in entries.iter().enumerate() {
+        let path = bundle
+            .plan
+            .build
+            .patches
+            .iter()
+            .find(|patch| patch.filename == entry.name)
+            .and_then(|patch| {
+                patch
+                    .resolved_source
+                    .clone()
+                    .or_else(|| patch.source.as_ref().map(PathBuf::from))
+            });
+        let (decision, evidence, severity) = match path {
+            None => (
+                "undecided",
+                "the patch file is not beside the source recipe".to_string(),
+                ResidualSeverity::Judgment,
+            ),
+            Some(path) => verdict_record(&judge(entry, &path, &root), &label),
+        };
+        if decision == "drop" {
+            dropped.push(entry.name.clone());
+        }
+        bundle.plan.residuals.push(crate::package::Residual {
+            id: format!("patch-decision:extension:{index}"),
+            stage: crate::package::ResidualStage::Emit,
+            category: "patch-decision".into(),
+            severity,
+            summary: format!("{decision} {}: {evidence}", entry.name),
+            evidence: None,
+            provenance: None,
+        });
+    }
+    if dropped.is_empty() {
+        return;
+    }
+    let mut rewritten = raw.to_string();
+    for key in ["checksums", "patches"] {
+        let Some((start, end)) = crate::index_bump::dict_list_span(&rewritten, key) else {
+            continue;
+        };
+        let list = rewritten[start..end].to_string();
+        let remove: Vec<(usize, usize)> = entry_spans(&list)
+            .into_iter()
+            .filter(|(s, e)| {
+                let own_text = &list[*s..*e];
+                let trailing = list[*e..].lines().next().unwrap_or("");
+                dropped.iter().any(|name| {
+                    own_text.contains(name.as_str()) || trailing.contains(name.as_str())
+                })
+            })
+            .collect();
+        let cut = remove_spans(&list, &remove);
+        rewritten = format!("{}{}{}", &rewritten[..start], cut, &rewritten[end..]);
+    }
+    if let Ok(empty) = regex::Regex::new(r#"\n[ \t]*['"]patches['"]\s*:\s*\[\s*\],?"#) {
+        rewritten = empty.replace(&rewritten, "").into_owned();
+    }
+    if let Some(easyconfig) = bundle.easyconfigs.first_mut() {
+        easyconfig.text = format!(
+            "{}{}{}",
+            &text[..own.span.0],
+            rewritten,
+            &text[own.span.1..]
+        );
+    }
+    bundle
+        .plan
+        .build
+        .patches
+        .retain(|patch| !dropped.contains(&patch.filename));
+}
+
+/// First quoted literal of an entry: the patch name of a string, tuple or
+/// `{'name': ...}` dict entry.
+fn first_literal(entry: &str) -> Option<String> {
+    let trimmed = entry.trim();
+    if trimmed.starts_with('{') {
+        return dict_value(trimmed, "name").map(|value| unquote(&value));
+    }
+    let pattern = regex::Regex::new(r#"'([^'\n]*)'|"([^"\n]*)""#).ok()?;
+    let caps = pattern.captures(trimmed)?;
+    caps.get(1)
+        .or_else(|| caps.get(2))
+        .map(|m| m.as_str().to_string())
+}
+
+/// Decision, evidence and severity for one source verdict.
+fn verdict_record(
+    verdict: &SourceVerdict,
+    label: &str,
+) -> (&'static str, String, ResidualSeverity) {
+    match verdict {
+        SourceVerdict::Applies(level) => (
+            "carry",
+            format!("applies to the {label} at -p{level}"),
+            ResidualSeverity::Mechanical,
+        ),
+        SourceVerdict::Upstream(level) => (
+            "drop",
+            format!("the {label} already contains it: it reverse-applies at -p{level}"),
+            ResidualSeverity::Mechanical,
+        ),
+        SourceVerdict::TargetsGone(files) => (
+            "drop",
+            format!(
+                "no file it modifies exists in the {label} ({})",
+                files.join(", ")
+            ),
+            ResidualSeverity::Mechanical,
+        ),
+        SourceVerdict::CopyOnly => (
+            "carry",
+            "copied into the build directory, not applied".to_string(),
+            ResidualSeverity::Mechanical,
+        ),
+        SourceVerdict::Fails(lines) => (
+            "undecided",
+            format!("does not apply to the {label} and does not reverse-apply: {lines}"),
+            ResidualSeverity::Judgment,
+        ),
+    }
 }
 
 fn undecided_names(bundle: &PackageBundle) -> Vec<String> {
@@ -566,7 +733,7 @@ fn literal_names(entry: &str, name: &str, recipe: &crate::eb_parse::ResolvedEasy
     let Ok(literal) = regex::Regex::new(r#"'([^'\n]*)'|"([^"\n]*)""#) else {
         return false;
     };
-    literal.captures_iter(entry).any(|caps| {
+    let named = literal.captures_iter(entry).any(|caps| {
         let inner = caps
             .get(1)
             .or_else(|| caps.get(2))
@@ -577,7 +744,8 @@ fn literal_names(entry: &str, name: &str, recipe: &crate::eb_parse::ResolvedEasy
             .replace("%(name)s", &recipe.name)
             .replace("%(version)s", &recipe.version);
         expanded == name
-    })
+    });
+    named
 }
 
 /// Cut list entries out of a list body. An entry alone on its lines goes
@@ -632,7 +800,7 @@ mod tests {
 
     #[test]
     fn entries_read_levels_opts_and_copies() {
-        let text = "name = 'Pkg'\nversion = '2.0'\n\
+        let text = "name = 'Pkg'\nversion = '2.0'\ntoolchain = SYSTEM\n\
             patches = [\n    'a.patch',\n    ('b.patch', 1),\n    ('c.txt', 'sub'),\n    \
             {'name': 'd.patch', 'opts': '--binary', 'level': 2},\n]\n";
         let entries = patch_entries(text);
@@ -669,7 +837,7 @@ mod tests {
 
     #[test]
     fn a_dropped_patch_leaves_patches_and_its_checksum() {
-        let text = "name = 'Pkg'\nversion = '2.0'\n\
+        let text = "name = 'Pkg'\nversion = '2.0'\ntoolchain = SYSTEM\n\
             sources = ['pkg-2.0.tar.gz']\n\
             patches = [\n    'Pkg-1.0_a.patch',\n    'Pkg-1.0_b.patch',\n]\n\
             checksums = [\n    {'pkg-2.0.tar.gz': 'aa'},\n    {'Pkg-1.0_a.patch': 'bb'},\n    \
@@ -685,7 +853,7 @@ mod tests {
 
     #[test]
     fn dropping_every_patch_removes_the_list_and_positional_checksums() {
-        let text = "name = 'Pkg'\nversion = '2.0'\n\
+        let text = "name = 'Pkg'\nversion = '2.0'\ntoolchain = SYSTEM\n\
             sources = ['pkg-2.0.tar.gz']\n\
             patches = ['Pkg_one.patch',\n           'Pkg_two.patch']\n\
             checksums = [\n    'aa',  # pkg-2.0.tar.gz\n    'bb',  # Pkg_one.patch\n    'cc',  # Pkg_two.patch\n]\n\

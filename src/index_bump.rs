@@ -1161,7 +1161,7 @@ fn last_quoted_span(text: &str) -> Option<(usize, usize)> {
 
 /// Body span, between the brackets, of the list a dict key names inside an
 /// extension tuple: `'checksums': [ ... ]`.
-fn dict_list_span(raw: &str, key: &str) -> Option<(usize, usize)> {
+pub(crate) fn dict_list_span(raw: &str, key: &str) -> Option<(usize, usize)> {
     let pattern = regex::Regex::new(&format!(r#"['"]{key}['"]\s*:\s*\["#)).ok()?;
     let open = pattern.find(raw)?.end();
     let mut depth = 1i32;
@@ -1386,6 +1386,41 @@ fn residual(
         evidence,
         provenance: None,
     }
+}
+
+/// The `exts_list` entry that is the package itself, `(name, version, {...})`
+/// or a literal spelling of both, with the archive it downloads.
+pub(crate) struct OwnExtension {
+    /// Byte span of the entry in the recipe text.
+    pub span: (usize, usize),
+    /// The extension archive at the recipe's version.
+    pub archive: Vec<u8>,
+}
+
+/// Find the extension that is the package being bumped and download the
+/// archive EasyBuild would unpack for it, from its own `source_urls` or the
+/// index the easyblock uses.
+pub(crate) fn own_extension(text: &str, client: &dyn RegistryClient) -> Option<OwnExtension> {
+    let recipe = crate::eb_parse::resolve_easyconfig_str(text).ok()?;
+    let index = extension_index(text, &recipe)?;
+    let (start, end) = easyconfig_list_span(text, "exts_list").ok().flatten()?;
+    let body = &text[start..end];
+    for (entry_start, entry_end) in top_level_spans(body) {
+        let entry_start = entry_start + leading_comment_len(&body[entry_start..entry_end]);
+        let raw = &body[entry_start..entry_end];
+        let Some(draft) = parse_ext_tuple(raw, &recipe, None) else {
+            continue;
+        };
+        if draft.name != recipe.name || draft.version != recipe.version {
+            continue;
+        }
+        let archive = download_extension(client, index, &draft, &draft.version, &recipe).ok()?;
+        return Some(OwnExtension {
+            span: (start + entry_start, start + entry_end),
+            archive,
+        });
+    }
+    None
 }
 
 #[cfg(test)]
