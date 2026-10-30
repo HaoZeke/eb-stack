@@ -472,7 +472,13 @@ pub fn upsert_raw_assignment(src: &str, key: &str, rhs: &str) -> Result<String, 
     if let Some(at) = src.find("\nmoduleclass") {
         let mut out = String::with_capacity(src.len() + line.len() + 2);
         out.push_str(&src[..at]);
-        out.push_str("\n\n");
+        // One blank line before the new assignment: the recipe may already
+        // end its last block with one.
+        out.push_str(if src[..at].ends_with('\n') {
+            "\n"
+        } else {
+            "\n\n"
+        });
         out.push_str(&line);
         out.push_str(&src[at..]);
         return Ok(out);
@@ -3180,6 +3186,12 @@ moduleclass = 'tools'
         assert!(
             inserted.find("options =").expect("options")
                 < inserted.find("moduleclass").expect("moduleclass")
+        );
+        let spaced = "name = 'App'\nruntest = True\n\nmoduleclass = 'tools'\n";
+        assert_eq!(
+            upsert_raw_assignment(spaced, "sanity_check_commands", "['app --version']")
+                .expect("insert"),
+            "name = 'App'\nruntest = True\n\nsanity_check_commands = ['app --version']\n\nmoduleclass = 'tools'\n"
         );
     }
 
