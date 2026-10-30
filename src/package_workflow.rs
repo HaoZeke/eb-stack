@@ -1489,11 +1489,20 @@ pub fn complete_package_bump_with_options(
             .as_ref()
             .and_then(|build| build.config_options.clone())
     }) {
-        let joined = config_options.join(" ");
-        let rhs = crate::package_emit::render_easyconfig_value(
-            &crate::package::EasyconfigValue::String(joined),
-            0,
-        );
+        // One option per `+=` line when the set does not fit one line.
+        let last = config_options.len().saturating_sub(1);
+        let fragments: Vec<String> = config_options
+            .iter()
+            .enumerate()
+            .map(|(index, option)| {
+                if index == last {
+                    option.clone()
+                } else {
+                    format!("{option} ")
+                }
+            })
+            .collect();
+        let rhs = crate::eb_emit::concat_assignment_rhs("configopts", &fragments);
         result.text = crate::eb_emit::upsert_raw_assignment(&result.text, "configopts", &rhs)
             .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     }
