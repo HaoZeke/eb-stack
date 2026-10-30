@@ -434,19 +434,97 @@ fn replace_empty_key(text: &str, key: &str, digest: &str) -> String {
     text
 }
 
+/// What the emitted recipe already says about one later source's digest.
+enum StatedChecksum {
+    /// The recipe states this digest: the download confirms it.
+    Matches,
+    /// The recipe keys an empty entry by this file: the digest can go in.
+    EmptyNamed,
+    /// The recipe states another digest, or none that can be found.
+    Other,
+}
+
+fn stated_checksum(
+    recipe: &ResolvedEasyconfig,
+    index: usize,
+    filename: &str,
+    digest: &str,
+) -> StatedChecksum {
+    let named = recipe
+        .checksums_by_filename
+        .iter()
+        .find(|(key, _)| key.as_str() == filename || expand_checksum_key(key, recipe) == filename)
+        .map(|(_, value)| value.as_str());
+    match named {
+        Some(value) if value.eq_ignore_ascii_case(digest) => return StatedChecksum::Matches,
+        Some("") => return StatedChecksum::EmptyNamed,
+        Some(_) => return StatedChecksum::Other,
+        None => {}
+    }
+    // A purely positional list lines up with `sources`, entry for entry.
+    let positional = !recipe.checksum_entry_keys.is_empty()
+        && recipe.checksum_entry_keys.iter().all(Vec::is_empty);
+    if positional
+        && recipe
+            .checksums
+            .get(index)
+            .is_some_and(|value| value.eq_ignore_ascii_case(digest))
+    {
+        return StatedChecksum::Matches;
+    }
+    StatedChecksum::Other
+}
+
+/// Residuals for every source after the first `applied` ones.
+///
+/// A later source keeps the digest the recipe states for it. When the
+/// download hashes to that digest the entry is confirmed, not a residual;
+/// when the recipe keys an empty entry by the file, the digest is written
+/// there. Only a digest the recipe contradicts, or cannot be matched to an
+/// entry, stays a residual.
 fn push_fetch_residuals(bundle: &mut PackageBundle, fetched: &[SourceFetch], applied: usize) {
+    let recipe = bundle
+        .easyconfigs
+        .first()
+        .and_then(|easyconfig| resolve_easyconfig_str(&easyconfig.text).ok());
     for (index, fetch) in fetched.iter().enumerate().skip(applied) {
         let (summary, evidence) = match &fetch.sha256 {
-            Some(digest) => (
-                format!(
-                    "source {} was downloaded but only the first source checksum is rewritten",
-                    fetch.filename
-                ),
-                format!(
-                    "sha256 {digest} from {}",
-                    fetch.url.as_deref().unwrap_or("")
-                ),
-            ),
+            Some(digest) => {
+                let stated = recipe
+                    .as_ref()
+                    .map(|recipe| stated_checksum(recipe, index, &fetch.filename, digest))
+                    .unwrap_or(StatedChecksum::Other);
+                match stated {
+                    StatedChecksum::Matches => continue,
+                    StatedChecksum::EmptyNamed => {
+                        if let (Some(recipe), Some(easyconfig)) =
+                            (recipe.as_ref(), bundle.easyconfigs.first_mut())
+                        {
+                            let updated = replace_empty_named_checksum(
+                                &easyconfig.text,
+                                recipe,
+                                &fetch.filename,
+                                digest,
+                            );
+                            if updated != easyconfig.text {
+                                easyconfig.text = updated;
+                                continue;
+                            }
+                        }
+                    }
+                    StatedChecksum::Other => {}
+                }
+                (
+                    format!(
+                        "source {} was downloaded but the recipe states no matching checksum for it",
+                        fetch.filename
+                    ),
+                    format!(
+                        "sha256 {digest} from {}",
+                        fetch.url.as_deref().unwrap_or("")
+                    ),
+                )
+            }
             None => (
                 format!(
                     "source {} could not be downloaded and hashed",
@@ -669,5 +747,62 @@ checksums = [{
         let fetched = fetch_sources(&recipe, &MapClient::default());
         assert!(fetched[1].sha256.is_none());
         assert!(fetched[1].errors[0].starts_with("git_config"));
+    }
+
+    const SECOND_SOURCE: &str = "\
+name = 'gc'
+version = '8.2.12'
+local_libatomic_version = '7.8.2'
+toolchain = SYSTEM
+source_urls = ['https://example.org/']
+sources = [SOURCE_TAR_GZ, 'libatomic_ops-%s.tar.gz' % local_libatomic_version]
+checksums = [
+    {'gc-8.2.12.tar.gz': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'},
+    {'libatomic_ops-7.8.2.tar.gz': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'},
+]
+";
+
+    #[test]
+    fn a_second_source_whose_download_matches_the_stated_digest_is_confirmed() {
+        let recipe = resolve_easyconfig_str(SECOND_SOURCE).unwrap();
+        let digest = "b".repeat(64);
+        assert!(matches!(
+            stated_checksum(&recipe, 1, "libatomic_ops-7.8.2.tar.gz", &digest),
+            StatedChecksum::Matches
+        ));
+        assert!(matches!(
+            stated_checksum(&recipe, 1, "libatomic_ops-7.8.2.tar.gz", &"c".repeat(64)),
+            StatedChecksum::Other
+        ));
+    }
+
+    #[test]
+    fn a_second_source_with_an_empty_named_entry_can_take_the_digest() {
+        let text = SECOND_SOURCE.replace(&"b".repeat(64), "");
+        let recipe = resolve_easyconfig_str(&text).unwrap();
+        assert!(matches!(
+            stated_checksum(&recipe, 1, "libatomic_ops-7.8.2.tar.gz", &"c".repeat(64)),
+            StatedChecksum::EmptyNamed
+        ));
+    }
+
+    #[test]
+    fn a_positional_second_checksum_is_matched_by_position() {
+        let text = "\
+name = 'gc'
+version = '8.2.12'
+toolchain = SYSTEM
+source_urls = ['https://example.org/']
+sources = [SOURCE_TAR_GZ, 'libatomic_ops-7.8.2.tar.gz']
+checksums = [
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+]
+";
+        let recipe = resolve_easyconfig_str(text).unwrap();
+        assert!(matches!(
+            stated_checksum(&recipe, 1, "libatomic_ops-7.8.2.tar.gz", &"b".repeat(64)),
+            StatedChecksum::Matches
+        ));
     }
 }
