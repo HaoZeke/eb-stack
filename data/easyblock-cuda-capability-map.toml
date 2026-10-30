@@ -1,0 +1,12 @@
+# Known easyblock-level CUDA compute-capability map limits.
+#
+# This table tracks capabilities that fail even before compile-time because an
+# easyblock does not map the requested architecture to build-system flags.
+
+[[entry]]
+name = "LAMMPS"
+unsupported = ["9.0a", "12.0f"]
+reason = "LAMMPS easyblock has no mapping for these compute capabilities"
+sources = [
+  "https://github.com/EESSI/software-layer/pull/1461",
+]

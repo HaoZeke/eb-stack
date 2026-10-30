@@ -1,0 +1,23 @@
+# CUDA toolkit support for compute-capability requests in easyconfigs.
+#
+# Source notes:
+# - NVIDIA CUDA Toolkit release-note "Deprecated and Dropped Features" tables.
+# - EESSI/software-layer pull request 1461 failure logs captured in
+#   re-audit-failures.md (12.0f on CUDA 12.6, and 9.0a checked in the same run).
+
+[[entry]]
+cuda = "12.6"
+supported = ["8.0", "8.6", "8.7", "8.9", "9.0"]
+dropped = ["9.0a", "12.0f"]
+sources = [
+  "https://github.com/EESSI/software-layer/pull/1461",
+  "https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html",
+]
+
+[[entry]]
+cuda = "13.1"
+supported = ["8.0", "8.6", "8.7", "8.9", "9.0", "9.0a", "10.0", "10.0a", "10.1", "10.1a", "12.0", "12.0a", "12.0f"]
+dropped = []
+sources = [
+  "https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html",
+]

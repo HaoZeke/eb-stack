@@ -10,6 +10,7 @@ pub mod cargo;
 pub mod cli_parse;
 pub mod component_reach;
 pub mod cran;
+pub mod cuda_cc;
 pub mod dep_filter;
 pub mod dep_versions;
 pub mod domain;

@@ -90,6 +90,7 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [refuse a plan an architecture cannot build](https://eb-stack.rgoswami.me/howto/arch-unsupported.html.md),
     [find a missing patch before the bot does](https://eb-stack.rgoswami.me/howto/patch-presence.html.md).
     [refuse entries outside the EESSI version's generations](https://eb-stack.rgoswami.me/howto/generation-lint.html.md).
+    [check CUDA compute-capability mismatches in a plan](https://eb-stack.rgoswami.me/howto/cuda-compute-capabilities.html.md).
   - Reference: [CLI](https://eb-stack.rgoswami.me/reference/cli.html.md),
     [Model Context Protocol server](https://eb-stack.rgoswami.me/reference/mcp.html.md),
     [package bundles](https://eb-stack.rgoswami.me/reference/package-bundles.html.md),
@@ -3667,6 +3668,47 @@ entries are not checked.
 `eb_stack_generation` is the same check over the Model Context
 Protocol (MCP). See [the command-line reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
 
+# Check CUDA compute capabilities in an easystack plan
+
+What it does: `stack cuda-cc` reads one or more easystacks as a plan,
+closes their dependencies on the robot tree, keeps the CUDA-dependent
+easyconfigs, and checks each `cuda_compute_capabilities` list against:
+
+- the CUDA toolkit version that recipe depends on;
+- EESSI accelerator target requirements (for example zen4 and grace);
+- known easyblock map limits (for example LAMMPS in software-layer #1461).
+
+Why you'd use it: this catches the PR-1461 failure class before the bot
+runs, where capability requests such as `9.0a` or `12.0f` do not match
+the selected CUDA release or target matrix.
+
+```bash
+eb-stack stack cuda-cc \
+  --easystack tests/cuda_cc_fixtures/easystacks/pr-1461-failing.yml \
+  --easyconfigs tests/cuda_cc_fixtures/easyconfigs
+```
+
+The command prints:
+
+```
+LAMMPS-2025.1-foss-2026.1-CUDA-12.6.0.eb: CUDA 12.6 drops compute capabilities 12.0f, 9.0a (software-layer #1461)
+LAMMPS-2025.1-foss-2026.1-CUDA-12.6.0.eb: CUDA 12.6 is below grace-cc90 minimum CUDA 13.1 (software-layer #1461)
+LAMMPS-2025.1-foss-2026.1-CUDA-12.6.0.eb: LAMMPS easyblock map rejects compute capabilities 12.0f, 9.0a: LAMMPS easyblock has no mapping for these compute capabilities (software-layer #1461)
+LAMMPS-2025.1-foss-2026.1-CUDA-12.6.0.eb: missing target capabilities 9.0 for zen4-cc90 (x86_64/amd/zen4) (software-layer #1461)
+checked=1 findings=4 targets=2
+```
+
+Each line names the easyconfig file and one incompatible combination.
+`checked=` is how many CUDA-dependent recipes had an explicit
+`cuda_compute_capabilities` list. `findings=` is how many failures were
+found. Any finding makes the command exit 1.
+
+Use `--target` to check a subset of targets. Use `--cuda-table`,
+`--accelerator-targets`, and `--easyblock-map` to replace the bundled
+tables.
+
+See [the command-line reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
+
 # Command-line reference
 
 `eb-stack` has six namespaced command groups (`package`, `recipe`,
@@ -3709,6 +3751,7 @@ Package commands take the toolchain as `--toolchain name/version`, the spelling 
 | `stack arch` | Refuse a plan an architecture cannot build, and flag entries never installed there |
 | `stack files` | Find the patch and source files an easystack's easyconfigs need that no tree has |
 | `stack generation` | Refuse easystack entries outside their EESSI version's toolchain generations |
+| `stack cuda-cc` | Refuse CUDA compute-capability combinations a plan cannot build on EESSI accelerator targets |
 | `repro summary` | Print a reproduction scoreboard from collected case scores |
 | `pr-overlap` | Close open pull-request easystack additions against an installed stack and report shared builds |
 | `rebuild-set` | Classify the installed reverse dependents of easyconfigs patched in place |
@@ -4125,6 +4168,14 @@ eb-stack stack generation \
   [--allow-versions NAME@GENERATION]... \
   [--generations TABLE.toml]
 
+eb-stack stack cuda-cc \
+  --easystack EASYSTACK.yml [--easystack OTHER.yml]... \
+  --easyconfigs TREE [--easyconfigs OVERLAY]... \
+  [--target TARGET]... \
+  [--cuda-table TABLE.toml] \
+  [--accelerator-targets TARGETS.toml] \
+  [--easyblock-map MAP.toml]
+
 eb-stack stack sections \
   tests/jenkins_sections/next.list \
   --from tests/jenkins_sections/previous.list \
@@ -4381,6 +4432,27 @@ them, for the second-version check. `--allow-versions` takes `NAME` or
 
 [Refuse entries outside the EESSI version's generations](https://eb-stack.rgoswami.me/../howto/generation-lint.html.md)
 shows the two-version and second-version lines.
+
+## `stack cuda-cc`
+
+What it does: checks CUDA compute-capability requests in the easystack
+closure. For each CUDA-dependent easyconfig with
+`cuda_compute_capabilities`, it compares that list against the selected
+CUDA version, the EESSI accelerator target table, and known easyblock
+mapping limits.
+
+Why you'd use it: software-layer pull request 1461 failed on capability
+combinations that did not fit the CUDA release and target matrix.
+
+The command exits 1 when any finding is present. Stdout lines name the
+easyconfig file and the failing combination, then end with
+`checked`<N> findings`<M> targets=<K>`. `--target` repeats and limits
+the accelerator targets checked. With no `--target`, every bundled
+target is checked. `--cuda-table`, `--accelerator-targets`, and
+`--easyblock-map` replace the bundled data files.
+
+[Check CUDA compute capabilities in an easystack plan](https://eb-stack.rgoswami.me/../howto/cuda-compute-capabilities.html.md)
+shows a short real output and how to read it.
 
 ## `stack sections`
 
@@ -4955,7 +5027,10 @@ same report as `stack arch`, with `parse_failed` and `source_findings`,
 and a hit is a tool error. `eb_stack_files` requires `easystack` and takes
 `easyconfigs`, `commit_tree`, `easyconfigs_repo`, `sourcepath`, and
 `path_map`. It returns the same report as `stack files`, and a missing
-file is a tool error. `eb_stack_generation` takes `easystack`, `pr`,
+file is a tool error. `eb_stack_cuda_cc` requires `easystack` and `easyconfigs`,
+and takes `target`, `cuda_table`, `accelerator_targets`, and
+`easyblock_map`. It returns the same report as `stack cuda-cc`, and a
+finding is a tool error. `eb_stack_generation` takes `easystack`, `pr`,
 `eessi_version`, `deployed`, `allow_versions`, and `generations`, and
 needs one `easystack` or `pr`. It returns the same report as
 `stack generation`, and a finding is a tool error.
@@ -8801,6 +8876,7 @@ eb_stack_batch
 eb_stack_arch
 eb_stack_files
 eb_stack_generation
+eb_stack_cuda_cc
 eb_stack_sections
 eb_stack_from_commit
 eb_component_reach

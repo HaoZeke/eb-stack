@@ -455,6 +455,17 @@ fn tool_catalog() -> Vec<Value> {
             ],
         ),
         tool_with_optional(
+            "eb_stack_cuda_cc",
+            "Validate CUDA compute-capability requests in CUDA-dependent easyconfigs of an easystack closure, as `stack cuda-cc` does: compare cuda_compute_capabilities against CUDA support, EESSI accelerator targets, and known easyblock map limits.",
+            &[("easystack", "array_min1"), ("easyconfigs", "array_min1")],
+            &[
+                ("target", "array"),
+                ("cuda_table", "string"),
+                ("accelerator_targets", "string"),
+                ("easyblock_map", "string"),
+            ],
+        ),
+        tool_with_optional(
             "eb_stack_sections",
             "Regroup a Jenkins build list under the section headers of a previous list, as `stack sections` does.",
             &[("list", "string"), ("from", "string"), ("out", "string")],
@@ -732,6 +743,7 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_stack_arch" => stack_arch_tool(arguments),
         "eb_stack_files" => stack_files_tool(arguments),
         "eb_stack_generation" => stack_generation_tool(arguments),
+        "eb_stack_cuda_cc" => stack_cuda_cc_tool(arguments),
         "eb_target_list" => target_list(arguments),
         "eb_target_doctor" => target_doctor(arguments),
         "eb_campaign_run" => campaign_run(arguments),
@@ -3102,6 +3114,25 @@ fn stack_generation_tool(arguments: &Value) -> Result<Value, String> {
         "outside": report.of(FindingKind::Outside),
         "mixed": report.of(FindingKind::Mixed),
         "versions": report.of(FindingKind::Versions),
+    }))
+}
+
+fn stack_cuda_cc_tool(arguments: &Value) -> Result<Value, String> {
+    let report = crate::cuda_cc::run_cuda_cc_check(&crate::cuda_cc::CudaCcRequest {
+        easystacks: path_array(arguments, "easystack")?,
+        easyconfigs: path_array(arguments, "easyconfigs")?,
+        targets: string_array(arguments, "target")?,
+        cuda_table: optional_path(arguments, "cuda_table"),
+        accelerator_targets: optional_path(arguments, "accelerator_targets"),
+        easyblock_map: optional_path(arguments, "easyblock_map"),
+    })
+    .map_err(workflow_error)?;
+    if !report.findings.is_empty() {
+        return Err(report.findings.join("\n"));
+    }
+    Ok(json!({
+        "text": report.stdout,
+        "findings": report.findings,
     }))
 }
 

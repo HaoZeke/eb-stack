@@ -41,6 +41,7 @@ Package commands take the toolchain as ~--toolchain name/version~, the spelling 
 | ~stack arch~ | Refuse a plan an architecture cannot build, and flag entries never installed there |
 | ~stack files~ | Find the patch and source files an easystack's easyconfigs need that no tree has |
 | ~stack generation~ | Refuse easystack entries outside their EESSI version's toolchain generations |
+| ~stack cuda-cc~ | Refuse CUDA compute-capability combinations a plan cannot build on EESSI accelerator targets |
 | ~repro summary~ | Print a reproduction scoreboard from collected case scores |
 | ~pr-overlap~ | Close open pull-request easystack additions against an installed stack and report shared builds |
 | ~rebuild-set~ | Classify the installed reverse dependents of easyconfigs patched in place |
@@ -457,6 +458,14 @@ eb-stack stack generation \
   [--allow-versions NAME@GENERATION]... \
   [--generations TABLE.toml]
 
+eb-stack stack cuda-cc \
+  --easystack EASYSTACK.yml [--easystack OTHER.yml]... \
+  --easyconfigs TREE [--easyconfigs OVERLAY]... \
+  [--target TARGET]... \
+  [--cuda-table TABLE.toml] \
+  [--accelerator-targets TARGETS.toml] \
+  [--easyblock-map MAP.toml]
+
 eb-stack stack sections \
   tests/jenkins_sections/next.list \
   --from tests/jenkins_sections/previous.list \
@@ -713,6 +722,27 @@ them, for the second-version check. ~--allow-versions~ takes ~NAME~ or
 
 [[file:../howto/generation-lint.org][Refuse entries outside the EESSI version's generations]]
 shows the two-version and second-version lines.
+
+** ~stack cuda-cc~
+
+What it does: checks CUDA compute-capability requests in the easystack
+closure. For each CUDA-dependent easyconfig with
+~cuda_compute_capabilities~, it compares that list against the selected
+CUDA version, the EESSI accelerator target table, and known easyblock
+mapping limits.
+
+Why you'd use it: software-layer pull request 1461 failed on capability
+combinations that did not fit the CUDA release and target matrix.
+
+The command exits 1 when any finding is present. Stdout lines name the
+easyconfig file and the failing combination, then end with
+~checked=<N> findings=<M> targets=<K>~. ~--target~ repeats and limits
+the accelerator targets checked. With no ~--target~, every bundled
+target is checked. ~--cuda-table~, ~--accelerator-targets~, and
+~--easyblock-map~ replace the bundled data files.
+
+[[file:../howto/cuda-compute-capabilities.org][Check CUDA compute capabilities in an easystack plan]]
+shows a short real output and how to read it.
 
 ** ~stack sections~
 
@@ -1287,7 +1317,10 @@ same report as ~stack arch~, with ~parse_failed~ and ~source_findings~,
 and a hit is a tool error. ~eb_stack_files~ requires ~easystack~ and takes
 ~easyconfigs~, ~commit_tree~, ~easyconfigs_repo~, ~sourcepath~, and
 ~path_map~. It returns the same report as ~stack files~, and a missing
-file is a tool error. ~eb_stack_generation~ takes ~easystack~, ~pr~,
+file is a tool error. ~eb_stack_cuda_cc~ requires ~easystack~ and ~easyconfigs~,
+and takes ~target~, ~cuda_table~, ~accelerator_targets~, and
+~easyblock_map~. It returns the same report as ~stack cuda-cc~, and a
+finding is a tool error. ~eb_stack_generation~ takes ~easystack~, ~pr~,
 ~eessi_version~, ~deployed~, ~allow_versions~, and ~generations~, and
 needs one ~easystack~ or ~pr~. It returns the same report as
 ~stack generation~, and a finding is a tool error.

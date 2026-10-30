@@ -1,0 +1,18 @@
+# EESSI accelerator targets and the CUDA compute capabilities they build for.
+#
+# Source notes:
+# - EESSI/software-layer pull request 1461 bot failures and maintainer thread.
+# - EESSI accelerator target naming from software-layer easystacks and bot labels.
+
+[[target]]
+name = "zen4-cc90"
+arch = "x86_64/amd/zen4"
+required = ["9.0"]
+sources = ["https://github.com/EESSI/software-layer/pull/1461"]
+
+[[target]]
+name = "grace-cc90"
+arch = "aarch64/nvidia/grace"
+required = ["9.0"]
+min_cuda = "13.1"
+sources = ["https://github.com/EESSI/software-layer/pull/1461"]

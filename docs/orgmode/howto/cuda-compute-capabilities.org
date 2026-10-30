@@ -1,0 +1,41 @@
+#+TITLE: Check CUDA compute capabilities in an easystack plan
+#+OPTIONS: toc:t num:nil author:nil
+
+What it does: ~stack cuda-cc~ reads one or more easystacks as a plan,
+closes their dependencies on the robot tree, keeps the CUDA-dependent
+easyconfigs, and checks each ~cuda_compute_capabilities~ list against:
+
+- the CUDA toolkit version that recipe depends on;
+- EESSI accelerator target requirements (for example zen4 and grace);
+- known easyblock map limits (for example LAMMPS in software-layer #1461).
+
+Why you'd use it: this catches the PR-1461 failure class before the bot
+runs, where capability requests such as ~9.0a~ or ~12.0f~ do not match
+the selected CUDA release or target matrix.
+
+#+begin_src bash
+eb-stack stack cuda-cc \
+  --easystack tests/cuda_cc_fixtures/easystacks/pr-1461-failing.yml \
+  --easyconfigs tests/cuda_cc_fixtures/easyconfigs
+#+end_src
+
+The command prints:
+
+#+begin_example
+LAMMPS-2025.1-foss-2026.1-CUDA-12.6.0.eb: CUDA 12.6 drops compute capabilities 12.0f, 9.0a (software-layer #1461)
+LAMMPS-2025.1-foss-2026.1-CUDA-12.6.0.eb: CUDA 12.6 is below grace-cc90 minimum CUDA 13.1 (software-layer #1461)
+LAMMPS-2025.1-foss-2026.1-CUDA-12.6.0.eb: LAMMPS easyblock map rejects compute capabilities 12.0f, 9.0a: LAMMPS easyblock has no mapping for these compute capabilities (software-layer #1461)
+LAMMPS-2025.1-foss-2026.1-CUDA-12.6.0.eb: missing target capabilities 9.0 for zen4-cc90 (x86_64/amd/zen4) (software-layer #1461)
+checked=1 findings=4 targets=2
+#+end_example
+
+Each line names the easyconfig file and one incompatible combination.
+~checked=~ is how many CUDA-dependent recipes had an explicit
+~cuda_compute_capabilities~ list. ~findings=~ is how many failures were
+found. Any finding makes the command exit 1.
+
+Use ~--target~ to check a subset of targets. Use ~--cuda-table~,
+~--accelerator-targets~, and ~--easyblock-map~ to replace the bundled
+tables.
+
+See [[file:../reference/cli.org][the command-line reference]].

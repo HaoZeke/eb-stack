@@ -1,0 +1,9 @@
+name = 'LAMMPS'
+version = '2025.1'
+versionsuffix = '-CUDA-12.6.0'
+toolchain = {'name': 'foss', 'version': '2026.1'}
+easyblock = 'LAMMPS'
+dependencies = [
+    ('CUDA', '12.6.0'),
+]
+cuda_compute_capabilities = ['9.0a', '12.0f']

@@ -1208,6 +1208,35 @@ enum StackCommand {
         #[arg(long)]
         generations: Option<PathBuf>,
     },
+    /// Validate CUDA compute-capability requests in CUDA-dependent entries.
+    ///
+    /// For each CUDA-dependent easyconfig in the easystack closure, compares
+    /// `cuda_compute_capabilities` against the selected CUDA version, bundled
+    /// EESSI accelerator targets, and known easyblock map limits.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack cuda-cc --easystack eessi-2026.06-eb-5.4.0-2026.1.yml --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs\n  eb-stack stack cuda-cc --easystack eessi-2026.06-eb-5.4.0-2026.1.yml --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --target zen4-cc90 --target grace-cc90"
+    )]
+    CudaCc {
+        /// Easystack whose entries are the plan. Repeatable.
+        #[arg(long, required = true)]
+        easystack: Vec<PathBuf>,
+        /// Robot tree the dependency closure is read from. Repeatable.
+        #[arg(long, required = true)]
+        easyconfigs: Vec<PathBuf>,
+        /// EESSI accelerator target to check. Repeatable. Absent checks all
+        /// bundled targets.
+        #[arg(long = "target")]
+        target: Vec<String>,
+        /// Replace the bundled CUDA support table.
+        #[arg(long = "cuda-table")]
+        cuda_table: Option<PathBuf>,
+        /// Replace the bundled accelerator target table.
+        #[arg(long = "accelerator-targets")]
+        accelerator_targets: Option<PathBuf>,
+        /// Replace the bundled easyblock capability-map table.
+        #[arg(long = "easyblock-map")]
+        easyblock_map: Option<PathBuf>,
+    },
     /// Write the lock as an EasyBuild easystack, the format `eb --easystack`
     /// consumes and EESSI's software layer is built from.
     #[command(
@@ -2688,6 +2717,28 @@ fn run_stack(command: StackCommand) -> Result<()> {
                         .collect::<Vec<_>>()
                         .join("\n")
                 );
+            }
+            Ok(())
+        }
+        StackCommand::CudaCc {
+            easystack,
+            easyconfigs,
+            target,
+            cuda_table,
+            accelerator_targets,
+            easyblock_map,
+        } => {
+            let report = eb_stack::cuda_cc::run_cuda_cc_check(&eb_stack::cuda_cc::CudaCcRequest {
+                easystacks: easystack,
+                easyconfigs,
+                targets: target,
+                cuda_table,
+                accelerator_targets,
+                easyblock_map,
+            })?;
+            print!("{}", report.stdout);
+            if !report.findings.is_empty() {
+                bail!("{}", report.findings.join("\n"));
             }
             Ok(())
         }

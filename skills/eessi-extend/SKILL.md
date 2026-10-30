@@ -277,6 +277,23 @@ second version of a name in one generation. Keep it only when that is
 intended, and record it with `--allow-versions NAME@GENERATION`. The
 how-to is `docs/orgmode/howto/generation-lint.org`.
 
+## CUDA compute-capability gate, before the bot
+
+CUDA entries in a shared easystack must request capabilities that match
+both the CUDA release and the EESSI accelerator targets:
+
+```sh
+eb-stack stack cuda-cc \
+  --easystack easystacks/software.eessi.io/2026.06/accel/nvidia/eessi-2026.06-eb-5.4.0-2026.1.yml \
+  --easyconfigs "$EB_EASYCONFIGS"
+```
+
+Any finding exits 1 and names the easyconfig and incompatible capability.
+The check uses `data/cuda-capabilities.toml`,
+`data/eessi-accelerator-targets.toml`, and
+`data/easyblock-cuda-capability-map.toml`. The how-to is
+`docs/orgmode/howto/cuda-compute-capabilities.org`.
+
 ## Contribution policy gates
 
 Per <https://eessi.io/docs/adding_software/contribution_policy>, before opening

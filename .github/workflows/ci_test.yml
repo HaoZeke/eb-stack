@@ -159,6 +159,7 @@ jobs:
             --test build_list_and_bare_tuple \
             --test cli_ergonomics \
             --test cli_reference \
+            --test cuda_cc \
             --test component_reach \
             --test doc_walkthrough \
             --test easyblock_layers \

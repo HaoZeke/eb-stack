@@ -385,6 +385,12 @@ All notable changes to this project are documented here.
   #1497 (a second GROMACS on foss-2025b). The foss-2022b and foss-2023a
   hierarchies are now built in. `eb_stack_generation` runs the same
   check.
+- `eb-stack stack cuda-cc` checks the `cuda_compute_capabilities` of
+  each CUDA-dependent easyconfig in an easystack's closure against the
+  CUDA release it depends on, the EESSI accelerator targets in
+  `data/eessi-accelerator-targets.toml`, and the easyblock mapping limits
+  in `data/easyblock-cuda-capability-map.toml` (software-layer #1461).
+  Any finding exits 1. `eb_stack_cuda_cc` runs the same check.
 - `eb-stack stack arch --easyconfigs` parses each easyconfig once per
   architecture, so a file the plan names that fails to parse on one
   architecture is a `parse_failed` line and exits 1 (software-layer
