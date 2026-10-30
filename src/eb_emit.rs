@@ -721,6 +721,13 @@ fn assign_string_raw(src: &str, key: &str) -> Option<String> {
     None
 }
 
+/// The recipe text with its `version = '...'` literal replaced, nothing else
+/// changed. Re-resolving that text says which values the recipe derives from
+/// its own version.
+pub(crate) fn rewrite_version_assignment(src: &str, version: &str) -> Result<String, EmitError> {
+    rewrite_string_assign(src, "version", version)
+}
+
 /// Rewrite `key = '...'` or `key = "..."` keeping the original quote style.
 fn rewrite_string_assign(src: &str, key: &str, new_val: &str) -> Result<String, EmitError> {
     // No backreferences (regex crate): match single- and double-quoted forms.

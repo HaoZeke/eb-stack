@@ -660,6 +660,13 @@ struct PackageBumpArgs {
     /// files are gone.
     #[arg(long = "fetch-checksums")]
     fetch_checksums: bool,
+    /// Leave a dependency the recipe derives from its own version, such as
+    /// `('Boost', version)`, unbumped when the tree lacks it at the new
+    /// version. By default that dependency is bumped too, from the tree's
+    /// recipe of the same name in the target hierarchy, into the same
+    /// overlay, and listed in `companions.json`.
+    #[arg(long = "no-companions")]
+    no_companions: bool,
     /// Directory for the manifest, planned SBOM, locks, and recipes.
     #[arg(long)]
     out_dir: PathBuf,
@@ -1833,6 +1840,7 @@ fn run_package(command: PackageCommand) -> Result<()> {
             }
             let options = PackageEmitOptions {
                 easyblock_skeleton_root: args.emit_easyblock.then(|| args.inspect.out_dir.clone()),
+                ..Default::default()
             };
             if !use_closure {
                 let bundle = plan_new_package_with(&request, &options)?;
@@ -1942,6 +1950,7 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
     };
     let options = PackageEmitOptions {
         easyblock_skeleton_root: args.emit_easyblock.then(|| args.out_dir.clone()),
+        ..Default::default()
     };
     let version = if args.latest {
         let ec = eb_stack::eb_parse::resolve_easyconfig_file(&args.source)
@@ -1965,24 +1974,45 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
         strict_patches: args.strict_patches,
         package_layers: load_package_layers(&args.package_configs)?,
     };
-    let (bundle, fetched) = if args.fetch_checksums {
-        let decisions = eb_stack::source_fetch::BumpDecisions {
-            drop_patches: parse_patch_drops(&args.drop_patches)?,
-            latest_secondary: args.latest_secondary,
-            overrides: if args.latest_secondary {
-                eb_stack::upstream::load_overrides(&args.overrides)?
-            } else {
-                Default::default()
-            },
-        };
-        eb_stack::source_fetch::plan_package_bump_fetching_with(
-            &request,
-            &options,
-            &UreqClient,
-            &decisions,
-        )?
+    let decisions = eb_stack::source_fetch::BumpDecisions {
+        drop_patches: parse_patch_drops(&args.drop_patches)?,
+        latest_secondary: args.latest_secondary,
+        overrides: if args.latest_secondary {
+            eb_stack::upstream::load_overrides(&args.overrides)?
+        } else {
+            Default::default()
+        },
+    };
+    let (bundle, fetched) = if args.no_companions {
+        if args.fetch_checksums {
+            eb_stack::source_fetch::plan_package_bump_fetching_with(
+                &request,
+                &options,
+                &UreqClient,
+                &decisions,
+            )?
+        } else {
+            (plan_package_bump_with(&request, &options)?, Vec::new())
+        }
     } else {
-        (plan_package_bump_with(&request, &options)?, Vec::new())
+        let client: Option<&dyn eb_stack::registry::RegistryClient> =
+            args.fetch_checksums.then_some(&UreqClient);
+        let planned = eb_stack::bump_companion::plan_package_bump_with_companions_deciding(
+            &request, &options, client, &decisions,
+        )?;
+        if !planned.companions.is_empty() {
+            let written = eb_stack::bump_companion::write_companions(
+                &planned.root,
+                &planned.companions,
+                &args.out_dir,
+            )?;
+            for path in &written.easyconfigs {
+                println!("companion={}", path.display());
+            }
+            println!("companions={}", written.record.display());
+            println!("build_order={}", written.build_order.display());
+        }
+        (planned.root, planned.fetched)
     };
     let written = write_package_bundle(&bundle, &args.out_dir)?;
     if !fetched.is_empty() {

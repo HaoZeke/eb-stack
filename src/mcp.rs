@@ -852,6 +852,7 @@ fn package_plan_run(arguments: &Value) -> Result<Value, String> {
     if !use_closure {
         let options = PackageEmitOptions {
             easyblock_skeleton_root: emit_easyblock.then(|| output.clone()),
+            ..Default::default()
         };
         let bundle =
             plan_new_package_with(&request, &options).map_err(|error| error.to_string())?;
@@ -964,6 +965,7 @@ fn package_bump_run(arguments: &Value) -> Result<Value, String> {
         easyblock_skeleton_root: optional_bool(arguments, "emit_easyblock")
             .then(|| required_path(arguments, "out_dir"))
             .transpose()?,
+        ..Default::default()
     };
     let request = BumpPackageRequest {
         source: required_path(arguments, "source")?,

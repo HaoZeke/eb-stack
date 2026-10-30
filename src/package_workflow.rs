@@ -3,7 +3,8 @@
 use crate::domain::Toolchain;
 use crate::eb_emit::{emit_next_generation_from_path, EmitParams};
 use crate::eb_parse::{
-    easyconfig_letter_dir, parse_easyconfig_trees, resolve_easyconfig_file, ResolvedDep,
+    easyconfig_letter_dir, parse_easyconfig_trees, resolve_easyconfig_file, resolve_easyconfig_str,
+    ResolvedDep, ResolvedEasyconfig,
 };
 use crate::foreign::{parse_foreign_path, ForeignFormat};
 use crate::hierarchy::{filter_candidates_in_hierarchy, hierarchy_for_with_tree};
@@ -106,6 +107,10 @@ pub struct PackageEmitOptions {
     /// `easyblocks/<letter>/<module>.py`. `None` leaves the plan's easyblock
     /// as it is and raises the `missing-easyblock` residual when one is owed.
     pub easyblock_skeleton_root: Option<PathBuf>,
+    /// Recipes planned beside this one and not yet in any robot tree, such as
+    /// a companion bump a dependency needs. The solve sees them as candidates
+    /// alongside the parsed trees.
+    pub extra_candidates: Vec<crate::domain::Candidate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1170,6 +1175,7 @@ pub fn prepare_package_bump(
         request.version.as_deref(),
         request.source_checksum.as_deref(),
     );
+    pin_version_derived_dependencies(&mut plan, request, &resolved);
     apply_dependency_overrides(&mut plan, &request.overrides);
     apply_package_layers(&mut plan, &request.package_layers)
         .map_err(|error| PackageWorkflowError::Config(error.to_string()))?;
@@ -1177,6 +1183,80 @@ pub fn prepare_package_bump(
     let sbom = package_plan_to_cyclonedx(&plan)
         .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
     Ok((plan, sbom))
+}
+
+/// Pin each dependency whose version the recipe computes from its own
+/// `version` to what that expression gives at the new version.
+///
+/// `('Boost', version)` in the Boost Python bindings and `('protobuf', version[2:])`
+/// in protobuf-python move with the package: the emitted text keeps the
+/// expression, so at 1.92.0 the recipe asks for Boost 1.92.0 whatever the
+/// plan locks. Read as the value it had at the old version, the lock and the
+/// SBOM named the old Boost while the recipe needed a Boost the tree may not
+/// have. Re-resolving the text with only the version literal changed finds
+/// these dependencies without evaluating Python: a dependency whose resolved
+/// version moves with it is derived from it.
+fn pin_version_derived_dependencies(
+    plan: &mut PackagePlan,
+    request: &BumpPackageRequest,
+    resolved: &ResolvedEasyconfig,
+) {
+    for (name, version) in version_derived_dependencies(request, resolved) {
+        for dependency in &mut plan.dependencies {
+            let identity = dependency.eb_name.as_deref().unwrap_or(&dependency.name);
+            if identity == name {
+                dependency.constraint = Some(format!("=={version}"));
+            }
+        }
+    }
+}
+
+/// Dependencies whose resolved version changes when only the recipe's
+/// `version` literal changes, with the version each resolves to at the
+/// requested one. Empty for a toolchain-only bump, or when the version is not
+/// a literal the text can be re-resolved with.
+pub fn version_derived_dependencies(
+    request: &BumpPackageRequest,
+    resolved: &ResolvedEasyconfig,
+) -> Vec<(String, String)> {
+    let Some(new_version) = request.version.as_deref() else {
+        return Vec::new();
+    };
+    if new_version == resolved.version {
+        return Vec::new();
+    }
+    let Ok(text) = std::fs::read_to_string(&request.source) else {
+        return Vec::new();
+    };
+    let Ok(rewritten) = crate::eb_emit::rewrite_version_assignment(&text, new_version) else {
+        return Vec::new();
+    };
+    let Ok(moved) = resolve_easyconfig_str(&rewritten) else {
+        return Vec::new();
+    };
+    let before = resolved
+        .dependencies
+        .iter()
+        .chain(resolved.builddependencies.iter());
+    let after = moved
+        .dependencies
+        .iter()
+        .chain(moved.builddependencies.iter())
+        .collect::<Vec<_>>();
+    let mut derived = Vec::new();
+    for old in before {
+        let Some(new) = after.iter().find(|new| new.name == old.name) else {
+            continue;
+        };
+        if new.version != old.version
+            && !derived
+                .iter()
+                .any(|(name, _): &(String, String)| *name == old.name)
+        {
+            derived.push((old.name.clone(), new.version.clone()));
+        }
+    }
+    derived
 }
 
 /// Make each `--dep` override the dependency's own constraint as well.
@@ -1695,7 +1775,9 @@ pub fn plan_package_bump_with(
     let tree = parse_easyconfig_trees(&roots)
         .map_err(|error| PackageWorkflowError::Robot(error.to_string()))?;
     let stack_policy = stack_policy_with_bump_overrides(&request.stack_policy, &request.overrides);
-    complete_package_bump_with_options(request, plan, &tree.candidates, &stack_policy, options)
+    let mut candidates = tree.candidates;
+    candidates.extend(options.extra_candidates.iter().cloned());
+    complete_package_bump_with_options(request, plan, &candidates, &stack_policy, options)
 }
 
 fn package_plan_from_easyconfig(

@@ -6,6 +6,7 @@ pub mod arch_support;
 pub mod artifact_class;
 pub mod batch;
 pub mod build_order;
+pub mod bump_companion;
 pub mod campaign;
 pub mod cargo;
 pub mod cli_parse;

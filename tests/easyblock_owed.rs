@@ -314,6 +314,7 @@ fn emit_easyblock_ships_the_module_and_the_recipes_lean_on_it() {
 
     let options = PackageEmitOptions {
         easyblock_skeleton_root: Some(output.clone()),
+        ..Default::default()
     };
     let bundle = plan_new_package_with(&qmcpack_request(robot), &options).expect("plan QMCPACK");
 
