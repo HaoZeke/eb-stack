@@ -2505,6 +2505,9 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 },
             )?;
             print!("{}", report.stdout);
+            if !report.parse_failed.is_empty() {
+                bail!("{}", report.parse_failed.join("\n"));
+            }
             if !report.unsupported.is_empty() {
                 bail!("{}", report.unsupported.join("\n"));
             }

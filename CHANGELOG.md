@@ -363,6 +363,10 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `eb-stack stack arch --easyconfigs` parses each easyconfig once per
+  architecture, so a file the plan names that fails to parse on one
+  architecture is a `parse_failed` line and exits 1 (software-layer
+  #1798, Go on riscv64). `eb_stack_arch` returns `parse_failed`.
 - `eb-stack stack arch` refuses a plan that includes, or depends on, an
   entry an architecture cannot build. The message names the entry and
   the architecture. `data/arch-unsupported.toml` is the list: GDRCopy on

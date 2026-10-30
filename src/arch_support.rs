@@ -14,7 +14,7 @@ use crate::build_order::{closure_against_installed, reverse_uses, Choice, Module
 use crate::cli_parse::usage;
 use crate::domain::Candidate;
 use crate::easystack::{parse_easystack_entries, EasystackEntry};
-use crate::eb_parse::parse_easyconfig_trees;
+use crate::eb_parse::parse_easyconfig_trees_for_arch;
 use crate::pr_overlap::parse_installed;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -508,6 +508,8 @@ pub struct ArchCheckRequest {
 pub struct ArchCheckReport {
     /// Stdout, including the count line.
     pub stdout: String,
+    /// Arch-specific parse failures for easystack entries.
+    pub parse_failed: Vec<String>,
     /// Unsupported-entry lines. Non-empty fails the command.
     pub unsupported: Vec<String>,
     /// Cheap-check lines. Non-empty fails the command.
@@ -539,44 +541,89 @@ pub fn run_arch_check(request: &ArchCheckRequest) -> Result<ArchCheckReport> {
         starts.extend(entries.into_iter().map(|entry| entry.file));
     }
 
-    let candidates;
-    let candidate_slice: &[Candidate] = if request.easyconfigs.is_empty() {
-        &[]
+    let (parse_failed, unsupported): (Vec<String>, Vec<String>) = if request.easyconfigs.is_empty()
+    {
+        let plan_hits = unsupported_in_plan(&list, &request.arches, &[], &starts);
+        (Vec::new(), plan_hits.iter().map(PlanHit::message).collect())
     } else {
         let trees: Vec<&Path> = request.easyconfigs.iter().map(PathBuf::as_path).collect();
-        candidates = parse_easyconfig_trees(&trees).map_err(|error| {
-            anyhow::Error::msg(error).context(format!(
-                "--easyconfigs {}",
-                request
-                    .easyconfigs
-                    .iter()
-                    .map(|path| path.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))
-        })?;
-        &candidates.candidates
+        let parse_arches = parse_arch_families(request);
+        let start_files: BTreeSet<String> = starts.iter().map(|entry| basename(entry)).collect();
+        let mut parse_failed = Vec::new();
+        let mut unsupported = Vec::new();
+        for arch in &parse_arches {
+            let parsed = parse_easyconfig_trees_for_arch(&trees, arch).map_err(|error| {
+                anyhow::Error::msg(error).context(format!(
+                    "--easyconfigs {}",
+                    request
+                        .easyconfigs
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            })?;
+            for skipped in &parsed.skipped {
+                let file = basename(&skipped.path);
+                if !start_files.contains(&file) {
+                    continue;
+                }
+                parse_failed.push(format!(
+                    "{file} failed to parse on {arch}: {}",
+                    skipped.error
+                ));
+            }
+            let hits = unsupported_in_plan(
+                &list,
+                std::slice::from_ref(arch),
+                &parsed.candidates,
+                &starts,
+            );
+            unsupported.extend(hits.into_iter().map(|hit| hit.message()));
+        }
+        parse_failed.sort();
+        parse_failed.dedup();
+        unsupported.sort();
+        unsupported.dedup();
+        (parse_failed, unsupported)
     };
-
-    let plan_hits = unsupported_in_plan(&list, &request.arches, candidate_slice, &starts);
-    let unsupported: Vec<String> = plan_hits.iter().map(PlanHit::message).collect();
 
     let flagged = cheap_flags(request, &list, &starts)?;
     let mut stdout = String::new();
-    for line in unsupported.iter().chain(flagged.iter()) {
+    for line in parse_failed
+        .iter()
+        .chain(unsupported.iter())
+        .chain(flagged.iter())
+    {
         stdout.push_str(line);
         stdout.push('\n');
     }
     stdout.push_str(&format!(
-        "unsupported={} flagged={}\n",
+        "parse_failed={} unsupported={} flagged={}\n",
+        parse_failed.len(),
         unsupported.len(),
         flagged.len()
     ));
     Ok(ArchCheckReport {
         stdout,
+        parse_failed,
         unsupported,
         flagged,
     })
+}
+
+fn parse_arch_families(request: &ArchCheckRequest) -> Vec<String> {
+    if request.arches.is_empty() {
+        return vec!["x86_64".into(), "aarch64".into(), "riscv64".into()];
+    }
+    let mut families: Vec<String> = request
+        .arches
+        .iter()
+        .map(|arch| arch_family(arch).to_string())
+        .collect();
+    families.sort();
+    families.dedup();
+    families
 }
 
 fn cheap_flags(

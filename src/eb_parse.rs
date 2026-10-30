@@ -296,6 +296,7 @@ struct Parser<'a> {
     src: &'a [u8],
     pos: usize,
     env: HashMap<String, Value>,
+    arch: String,
     /// Statements the tolerant loop could not represent. Collected always;
     /// only `--strict` callers ask for them.
     skipped: Vec<SkippedStatement>,
@@ -306,7 +307,7 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn new(src: &'a str) -> Self {
+    fn new(src: &'a str, arch: &str) -> Self {
         let mut env = HashMap::new();
         // Seed full EasyBuild TEMPLATE_CONSTANTS (%(…)s applied later).
         for (name, value) in EB_TEMPLATE_CONSTANTS {
@@ -316,6 +317,7 @@ impl<'a> Parser<'a> {
             src: src.as_bytes(),
             pos: 0,
             env,
+            arch: arch.to_string(),
             skipped: Vec::new(),
             depth: 0,
         }
@@ -369,10 +371,14 @@ impl<'a> Parser<'a> {
                 break;
             }
             if self.at_control_keyword() {
-                // `if ARCH == 'x86_64':` is how a recipe adds a dependency for
-                // one architecture. The body is ordinary easyconfig text; only
-                // the guard was unmodeled, which dropped that dependency.
-                if self.enter_true_arch_if() {
+                // `if ARCH == 'x86_64':` is how a recipe adds a dependency or
+                // a source name for one architecture, and the `else` is the
+                // name used on every other architecture. Kaleido's wheel and
+                // Go's tarball are selected that way. The guard was
+                // unmodeled, which dropped the assignment, and a `sources`
+                // line that then names the missing variable cannot be planned
+                // with.
+                if self.take_arch_branch() {
                     continue;
                 }
                 self.skip_compound_or_line();
@@ -429,32 +435,73 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// Enter `if ARCH == '<this host>':` and leave the body to be parsed.
+    /// Enter the `if` / `elif` / `else` arm that applies to this architecture.
     ///
-    /// Any other `if` stays unconsumed so [`Self::skip_compound_or_line`] can
-    /// drop it, which is what a guard for a different architecture needs.
-    fn enter_true_arch_if(&mut self) -> bool {
-        let saved = self.pos;
-        let Some(nl) = self.src[self.pos..]
-            .iter()
-            .position(|&c| c == b'\n')
-            .map(|i| self.pos + i)
-        else {
+    /// Returns false, with the cursor unmoved, when the statement is not an
+    /// `ARCH` comparison this parser can decide. The caller then skips the
+    /// whole compound, which is what a guard written for something other
+    /// than the architecture needs.
+    ///
+    /// A true arm is left for the main loop to parse. A false arm is
+    /// skipped, and so is every later `elif` that is also false. `else`
+    /// runs only when no earlier arm matched. A true `if` does not consume
+    /// the `else`: the main loop skips that compound on the next iteration,
+    /// so the other architecture's assignment is not also applied.
+    fn take_arch_branch(&mut self) -> bool {
+        let Some(header) = self.peek_header() else {
             return false;
         };
-        let Ok(line) = std::str::from_utf8(&self.src[self.pos..nl]) else {
-            return false;
-        };
-        let code = line.split('#').next().unwrap_or("").trim();
-        let host = std::env::consts::ARCH;
-        let matches =
-            code == format!("if ARCH == '{host}':") || code == format!("if ARCH == \"{host}\":");
-        if !matches {
-            self.pos = saved;
+        if !header.starts_with("if ") {
             return false;
         }
-        self.pos = nl + 1;
+        let Some(holds) = arch_header_holds(&header, &self.arch) else {
+            return false;
+        };
+        self.consume_line();
+        if holds {
+            return true;
+        }
+        self.skip_indented_body();
+        loop {
+            self.skip_ws();
+            let Some(header) = self.peek_header() else {
+                break;
+            };
+            if header == "else:" {
+                self.consume_line();
+                return true;
+            }
+            if header.starts_with("elif ") {
+                let Some(holds) = arch_header_holds(&header, &self.arch) else {
+                    break;
+                };
+                self.consume_line();
+                if holds {
+                    return true;
+                }
+                self.skip_indented_body();
+                continue;
+            }
+            break;
+        }
         true
+    }
+
+    /// The current line, trimmed, without consuming it.
+    fn peek_header(&self) -> Option<String> {
+        let rest = self.src.get(self.pos..)?;
+        let end = rest.iter().position(|&c| c == b'\n').unwrap_or(rest.len());
+        let line = std::str::from_utf8(&rest[..end]).ok()?;
+        Some(line.trim().to_string())
+    }
+
+    /// Move past the current physical line.
+    fn consume_line(&mut self) {
+        if let Some(rel) = self.src[self.pos..].iter().position(|&c| c == b'\n') {
+            self.pos += rel + 1;
+        } else {
+            self.pos = self.src.len();
+        }
     }
 
     /// `name.append(value)` on a list or tuple already assigned.
@@ -558,7 +605,11 @@ impl<'a> Parser<'a> {
     fn skip_compound_or_line(&mut self) {
         // Consume until end of logical line (bracket-aware).
         let _ = self.skip_one_statement();
-        // Skip following indented body lines (Python-style).
+        self.skip_indented_body();
+    }
+
+    /// Skip the indented body that follows a header the caller already consumed.
+    fn skip_indented_body(&mut self) {
         loop {
             let saved = self.pos;
             // Count leading spaces/tabs on the next line.
@@ -668,6 +719,12 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         let name = self.parse_ident()?;
         self.skip_ws();
+        // `_a, _b = version.split('_')` is how SPM takes the release and the
+        // update out of one version string. The names are bound before the
+        // source list is built from them.
+        if self.peek() == Some(b',') {
+            return self.finish_unpack(name);
+        }
         // Support `=` and `+=` (string append used in real easyconfigs).
         let aug_add = if self.peek() == Some(b'+') && self.src.get(self.pos + 1) == Some(&b'=') {
             self.pos += 2;
@@ -703,6 +760,43 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         if self.peek() == Some(b';') {
             self.pos += 1;
+        }
+        Ok(())
+    }
+
+    /// `a, b = sequence`. The sequence has to have one value per name.
+    fn finish_unpack(&mut self, first: String) -> Result<(), String> {
+        let mut names = vec![first];
+        while self.peek() == Some(b',') {
+            self.pos += 1;
+            self.skip_ws();
+            if self.peek() == Some(b'=') {
+                break;
+            }
+            names.push(self.parse_ident()?);
+            self.skip_ws();
+        }
+        if self.bump() != Some(b'=') {
+            return Err(self.err("expected '=' in an unpacking assignment"));
+        }
+        let value = self.parse_expr()?;
+        let items = match value {
+            Value::List(items) | Value::Tuple(items) => items,
+            other => {
+                return Err(self.err(format!(
+                    "unpacking assignment needs a sequence, got {other:?}"
+                )))
+            }
+        };
+        if items.len() != names.len() {
+            return Err(self.err(format!(
+                "unpacking assignment expected {} value(s), got {}",
+                names.len(),
+                items.len()
+            )));
+        }
+        for (name, item) in names.into_iter().zip(items) {
+            self.env.insert(name, item);
         }
         Ok(())
     }
@@ -746,10 +840,11 @@ impl<'a> Parser<'a> {
 
     /// One `.method(args)` call on a value already parsed.
     ///
-    /// Only the string methods recipes use to derive one field from another:
-    /// `zmqversion.split('.')[0]` and `'.'.join(parts)`, plus case and
-    /// replacement. Anything else is an error, because a method whose result
-    /// is guessed would put a wrong version in a field.
+    /// String methods derive one field from another: `zmqversion.split('.')[0]`,
+    /// `'.'.join(parts)`, `str.format`, plus case and replacement. A dict's
+    /// `.get` is how Go, Anaconda3 and cuTENSOR pick the architecture token
+    /// in a tarball name. Anything else is an error, because a method whose
+    /// result is guessed would put a wrong version in a field.
     fn parse_method_call(&mut self, receiver: Value) -> Result<Value, String> {
         let name = self.parse_ident()?;
         self.skip_ws();
@@ -757,14 +852,25 @@ impl<'a> Parser<'a> {
             return Err(self.err(format!("method {name} is not called")));
         }
         self.depth += 1;
-        let mut args = Vec::new();
+        let mut positional = Vec::new();
+        let mut keywords = Vec::new();
+        let mut saw_keyword = false;
         loop {
             self.skip_ws();
             if self.peek() == Some(b')') {
                 self.pos += 1;
                 break;
             }
-            args.push(self.parse_expr()?);
+            if let Some((key, value)) = self.parse_keyword_arg()? {
+                saw_keyword = true;
+                keywords.push((key, value));
+            } else if saw_keyword {
+                return Err(self.err(format!(
+                    "positional argument follows a keyword in .{name}()"
+                )));
+            } else {
+                positional.push(self.parse_expr()?);
+            }
             self.skip_ws();
             match self.peek() {
                 Some(b',') => self.pos += 1,
@@ -781,7 +887,29 @@ impl<'a> Parser<'a> {
             }
         }
         self.depth -= 1;
-        string_method(&receiver, &name, &args).map_err(|e| self.err(e))
+        call_method(&receiver, &name, &positional, &keywords).map_err(|e| self.err(e))
+    }
+
+    /// `name=expr` as one keyword argument, or `None` when the argument is
+    /// positional. The cursor is unchanged when it is not a keyword.
+    fn parse_keyword_arg(&mut self) -> Result<Option<(String, Value)>, String> {
+        let saved = self.pos;
+        let name = match self.parse_ident() {
+            Ok(name) => name,
+            Err(_) => {
+                self.pos = saved;
+                return Ok(None);
+            }
+        };
+        self.skip_ws();
+        let is_keyword = self.peek() == Some(b'=') && self.src.get(self.pos + 1) != Some(&b'=');
+        if !is_keyword {
+            self.pos = saved;
+            return Ok(None);
+        }
+        self.pos += 1;
+        let value = self.parse_expr()?;
+        Ok(Some((name, value)))
     }
 
     /// A primary and any `[...]` subscripts applied to it.
@@ -790,7 +918,13 @@ impl<'a> Parser<'a> {
     /// are how recipes derive one field from another, and a parser that stops
     /// at the bracket loses the whole dependency list.
     fn parse_postfix(&mut self) -> Result<Value, String> {
-        let mut val = self.parse_primary()?;
+        // `int(text)` is a call, not a name. EvidentialGene indexes a month
+        // table with `int(version.split('.')[1])`.
+        let mut val = if self.looking_at_call("int") {
+            self.parse_int_call()?
+        } else {
+            self.parse_primary()?
+        };
         loop {
             let before_ws = self.pos;
             self.skip_ws();
@@ -848,25 +982,26 @@ impl<'a> Parser<'a> {
             let before_ws = self.pos;
             self.skip_ws();
             let crossed_line = self.src[before_ws..self.pos].contains(&b'\n');
+            // Adjacent string literals are one string in Python, which is how
+            // easyconfigs keep a long command under the line limit. An f-string
+            // counts: RDKit writes an extract command as parenthesized
+            // `f'...' f'...'` pieces. Inside brackets they may span lines;
+            // outside them Python needs the literals on one logical line, and
+            // joining across a newline there would swallow the next statement.
+            let join_strings = matches!(left, Value::Str(_))
+                && (self.depth > 0 || !crossed_line)
+                && (matches!(self.peek(), Some(b'\'' | b'"')) || self.starts_fstring());
+            if join_strings {
+                let right = self.parse_postfix()?;
+                left = match (left, right) {
+                    (Value::Str(a), Value::Str(b)) => Value::Str(a + &b),
+                    (a, b) => {
+                        return Err(self.err(format!("unsupported implicit concat: {a:?} {b:?}")));
+                    }
+                };
+                continue;
+            }
             match self.peek() {
-                // Adjacent string literals are one string in Python, which is how
-                // easyconfigs keep a long command under the line limit. Inside
-                // brackets they may span lines; outside them Python needs the
-                // literals on one logical line, and joining across a newline
-                // there would swallow the next statement.
-                Some(b'\'') | Some(b'"')
-                    if matches!(left, Value::Str(_)) && (self.depth > 0 || !crossed_line) =>
-                {
-                    let right = self.parse_postfix()?;
-                    left = match (left, right) {
-                        (Value::Str(a), Value::Str(b)) => Value::Str(a + &b),
-                        (a, b) => {
-                            return Err(
-                                self.err(format!("unsupported implicit concat: {a:?} {b:?}"))
-                            );
-                        }
-                    };
-                }
                 Some(b'+') => {
                     self.pos += 1;
                     let right = self.parse_postfix()?;
@@ -1010,6 +1145,7 @@ impl<'a> Parser<'a> {
             src: fragment.as_bytes(),
             pos: 0,
             env: self.env.clone(),
+            arch: self.arch.clone(),
             skipped: Vec::new(),
             // A fragment sits inside braces, so the bracket-sensitive rules
             // behave as if nested, which is what it is.
@@ -1062,8 +1198,10 @@ impl<'a> Parser<'a> {
             };
             let expr = tail[1..end].trim();
             // A conversion or a format spec would change the text, and
-            // guessing at one would put a wrong value in a field.
-            if expr.contains('!') || expr.contains(':') {
+            // guessing at one would put a wrong value in a field. A colon
+            // inside brackets is a slice, which QuantumESPRESSO uses to
+            // take the short hash of a git commit: `{local_hash[:8]}`.
+            if field_has_format_spec(expr) {
                 return Err(self.err(format!("f-string field {expr} carries a format spec")));
             }
             // Anything else is an ordinary expression, and the parser already
@@ -1126,7 +1264,7 @@ impl<'a> Parser<'a> {
             "SYSTEM" => Ok(system_toolchain_value()),
             // The machine's architecture, which a recipe uses bare as well as
             // through `%(arch)s`: IJulia asks for Julia at `-linux-%s' % ARCH`.
-            "ARCH" => Ok(Value::Str(std::env::consts::ARCH.to_string())),
+            "ARCH" => Ok(Value::Str(self.arch.clone())),
             other => {
                 if let Some(v) = self.env.get(other) {
                     Ok(v.clone())
@@ -1137,12 +1275,182 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `name(` with `name` as a whole identifier, not a prefix of a longer one.
+    fn looking_at_call(&self, name: &str) -> bool {
+        let mut i = self.pos;
+        while matches!(self.src.get(i), Some(c) if c.is_ascii_whitespace()) {
+            i += 1;
+        }
+        let bytes = name.as_bytes();
+        if !self.src[i..].starts_with(bytes) {
+            return false;
+        }
+        let after = i + bytes.len();
+        if matches!(self.src.get(after), Some(c) if c.is_ascii_alphanumeric() || *c == b'_') {
+            return false;
+        }
+        let mut j = after;
+        while matches!(self.src.get(j), Some(c) if c.is_ascii_whitespace()) {
+            j += 1;
+        }
+        self.src.get(j) == Some(&b'(')
+    }
+
+    fn parse_int_call(&mut self) -> Result<Value, String> {
+        let name = self.parse_ident()?;
+        if name != "int" {
+            return Err(self.err(format!("expected int(), got {name}")));
+        }
+        self.skip_ws();
+        if self.bump() != Some(b'(') {
+            return Err(self.err("expected '(' after int"));
+        }
+        self.depth += 1;
+        let arg = self.parse_expr()?;
+        self.skip_ws();
+        if self.peek() == Some(b',') {
+            return Err(self.err("int() with a base is not supported"));
+        }
+        if self.bump() != Some(b')') {
+            return Err(self.err("expected ')' after int()"));
+        }
+        self.depth -= 1;
+        match arg {
+            Value::Int(i) => Ok(Value::Int(i)),
+            Value::Str(text) => text
+                .parse::<i64>()
+                .map(Value::Int)
+                .map_err(|_| self.err(format!("int() cannot read '{text}'"))),
+            other => Err(self.err(format!("int() argument is {other:?}"))),
+        }
+    }
+
+    /// Byte offset of a `for` that starts a comprehension, at bracket depth 0.
+    ///
+    /// The closer of the list ends the search: a `for` after it belongs to
+    /// another statement.
+    fn comprehension_for(&self, from: usize) -> Option<usize> {
+        let mut i = from;
+        let mut depth = 0i32;
+        let mut quote: Option<u8> = None;
+        let mut escape = false;
+        while i < self.src.len() {
+            let c = self.src[i];
+            if let Some(q) = quote {
+                if escape {
+                    escape = false;
+                } else if c == b'\\' {
+                    escape = true;
+                } else if c == q {
+                    quote = None;
+                }
+                i += 1;
+                continue;
+            }
+            match c {
+                b'\'' | b'"' => {
+                    quote = Some(c);
+                    i += 1;
+                }
+                b'(' | b'[' | b'{' => {
+                    depth += 1;
+                    i += 1;
+                }
+                b')' | b']' | b'}' => {
+                    if depth == 0 {
+                        return None;
+                    }
+                    depth -= 1;
+                    i += 1;
+                }
+                _ if depth == 0 && self.keyword_at(i, "for") => return Some(i),
+                _ => i += 1,
+            }
+        }
+        None
+    }
+
+    fn keyword_at(&self, at: usize, keyword: &str) -> bool {
+        let bytes = keyword.as_bytes();
+        if !self.src[at..].starts_with(bytes) {
+            return false;
+        }
+        let prev_ok = at == 0 || {
+            let prev = self.src[at - 1];
+            !prev.is_ascii_alphanumeric() && prev != b'_'
+        };
+        let next = at + bytes.len();
+        let next_ok = self
+            .src
+            .get(next)
+            .is_none_or(|c| !c.is_ascii_alphanumeric() && *c != b'_');
+        prev_ok && next_ok
+    }
+
+    /// `[expr for name in seq]`. The element is parsed once per item, after
+    /// the name is bound, because it refers to that name.
+    fn eval_list_comprehension(&mut self, elem_at: usize, for_at: usize) -> Result<Value, String> {
+        let depth = self.depth;
+        self.pos = for_at;
+        let kw = self.parse_ident()?;
+        if kw != "for" {
+            return Err(self.err("expected for in a comprehension"));
+        }
+        let var = self.parse_ident()?;
+        self.skip_ws();
+        let inn = self.parse_ident()?;
+        if inn != "in" {
+            return Err(self.err("expected in in a comprehension"));
+        }
+        let iterable = self.parse_expr()?;
+        self.skip_ws();
+        if self.keyword_at(self.pos, "if") {
+            return Err(self.err("a comprehension filter is not read"));
+        }
+        if self.bump() != Some(b']') {
+            return Err(self.err("a comprehension is not closed by ']'"));
+        }
+        let end = self.pos;
+        let items = match iterable {
+            Value::List(items) | Value::Tuple(items) => items,
+            other => {
+                return Err(self.err(format!("a comprehension iterates {other:?}")));
+            }
+        };
+        let mut out = Vec::with_capacity(items.len());
+        for item in items {
+            let previous = self.env.insert(var.clone(), item);
+            self.pos = elem_at;
+            self.depth = depth;
+            let value = self.parse_expr();
+            match previous {
+                Some(old) => {
+                    self.env.insert(var.clone(), old);
+                }
+                None => {
+                    self.env.remove(&var);
+                }
+            }
+            out.push(value?);
+        }
+        self.pos = end;
+        self.depth = depth - 1;
+        Ok(Value::List(out))
+    }
+
     fn parse_list(&mut self) -> Result<Value, String> {
         self.skip_ws();
         if self.bump() != Some(b'[') {
             return Err(self.err("expected '['"));
         }
         self.depth += 1;
+        self.skip_ws();
+        if self.peek() != Some(b']') {
+            let elem_at = self.pos;
+            if let Some(for_at) = self.comprehension_for(elem_at) {
+                return self.eval_list_comprehension(elem_at, for_at);
+            }
+        }
         let mut items = Vec::new();
         loop {
             self.skip_ws();
@@ -1348,6 +1656,223 @@ fn string_method(receiver: &Value, name: &str, args: &[Value]) -> Result<Value, 
     }
 }
 
+/// Dispatch a method call. Keyword arguments are only meaningful to
+/// `str.format` (`'{local_name}'.format(local_name=local_name)` is how
+/// Mamba names its installer). Every other method is positional.
+fn call_method(
+    receiver: &Value,
+    name: &str,
+    positional: &[Value],
+    keywords: &[(String, Value)],
+) -> Result<Value, String> {
+    match receiver {
+        Value::Dict(entries) => {
+            if !keywords.is_empty() {
+                return Err(format!("method .{name}() on a dict does not take keywords"));
+            }
+            dict_method(entries, name, positional)
+        }
+        Value::Str(text) if name == "format" => {
+            python_format(text, positional, keywords).map(Value::Str)
+        }
+        other => {
+            if !keywords.is_empty() {
+                return Err(format!("method .{name}() does not take keyword arguments"));
+            }
+            string_method(other, name, positional)
+        }
+    }
+}
+
+/// `mapping.get(key)` and `mapping.get(key, default)`.
+///
+/// Go writes `{'aarch64': 'arm64', 'x86_64': 'amd64'}.get(ARCH, ARCH)` so a
+/// machine that is not in the dict keeps its own architecture name. A missing
+/// key with no default is `None`: formatting that is an error rather than an
+/// invented filename.
+fn dict_method(entries: &[(String, Value)], name: &str, args: &[Value]) -> Result<Value, String> {
+    match name {
+        "get" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(format!(
+                    "dict.get takes a key and an optional default, got {} args",
+                    args.len()
+                ));
+            }
+            let key = match &args[0] {
+                Value::Str(text) => text,
+                other => return Err(format!("dict.get key is not a string: {other:?}")),
+            };
+            if let Some((_, value)) = entries.iter().find(|(candidate, _)| candidate == key) {
+                return Ok(value.clone());
+            }
+            if args.len() == 2 {
+                Ok(args[1].clone())
+            } else {
+                Ok(Value::None)
+            }
+        }
+        _ => Err(format!("unsupported method .{name}() on a dict")),
+    }
+}
+
+/// Whether `{field}` carries a conversion or a format spec at bracket depth 0.
+///
+/// `{local_hash[:8]}` is a slice. `{value:.2f}` and `{value!s}` would change
+/// the text, and guessing at either would put a wrong value in a field.
+fn field_has_format_spec(field: &str) -> bool {
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    for c in field.chars() {
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' => quote = Some(c),
+            '[' | '(' | '{' => depth += 1,
+            ']' | ')' | '}' if depth > 0 => depth -= 1,
+            '!' | ':' if depth == 0 => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+fn is_py_ident(text: &str) -> bool {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn format_argument(value: &Value) -> Result<String, String> {
+    match value {
+        Value::Str(text) => Ok(text.clone()),
+        Value::Int(i) => Ok(i.to_string()),
+        other => Err(format!("format argument is {other:?}")),
+    }
+}
+
+/// Python `str.format` for the field shapes easyconfigs use: `{}`, `{0}` and
+/// `{name}`. `{{` and `}}` are escapes. A format spec is refused.
+fn python_format(
+    fmt: &str,
+    positional: &[Value],
+    keywords: &[(String, Value)],
+) -> Result<String, String> {
+    let chars: Vec<char> = fmt.chars().collect();
+    let mut out = String::with_capacity(fmt.len());
+    let mut i = 0;
+    let mut auto = 0usize;
+    let mut saw_auto = false;
+    let mut saw_index = false;
+    while i < chars.len() {
+        if chars[i] == '{' {
+            if chars.get(i + 1) == Some(&'{') {
+                out.push('{');
+                i += 2;
+                continue;
+            }
+            let start = i + 1;
+            let mut j = start;
+            let mut depth = 0i32;
+            let mut quote: Option<char> = None;
+            let mut closed = false;
+            while j < chars.len() {
+                let c = chars[j];
+                if let Some(q) = quote {
+                    if c == q {
+                        quote = None;
+                    }
+                    j += 1;
+                    continue;
+                }
+                match c {
+                    '\'' | '"' => quote = Some(c),
+                    '[' | '(' | '{' => {
+                        depth += 1;
+                        j += 1;
+                    }
+                    ']' | ')' | '}' if depth > 0 => {
+                        depth -= 1;
+                        j += 1;
+                    }
+                    '}' => {
+                        closed = true;
+                        break;
+                    }
+                    _ => j += 1,
+                }
+            }
+            if !closed {
+                return Err("unterminated { in format".into());
+            }
+            let raw: String = chars[start..j].iter().collect();
+            if field_has_format_spec(&raw) {
+                return Err(format!("format field {{{raw}}} carries a format spec"));
+            }
+            let field = raw.trim();
+            let value = if field.is_empty() {
+                if saw_index {
+                    return Err("format mixes automatic and manual field numbering".into());
+                }
+                saw_auto = true;
+                let value = positional.get(auto).ok_or_else(|| {
+                    format!(
+                        "format field {{}} is past the {} positional argument(s)",
+                        positional.len()
+                    )
+                })?;
+                auto += 1;
+                value
+            } else if field.chars().all(|c| c.is_ascii_digit()) {
+                if saw_auto {
+                    return Err("format mixes automatic and manual field numbering".into());
+                }
+                saw_index = true;
+                let index: usize = field
+                    .parse()
+                    .map_err(|_| format!("format index {field} is not a number"))?;
+                positional.get(index).ok_or_else(|| {
+                    format!(
+                        "format field {{{field}}} is past the {} positional argument(s)",
+                        positional.len()
+                    )
+                })?
+            } else if is_py_ident(field) {
+                keywords
+                    .iter()
+                    .find(|(key, _)| key == field)
+                    .map(|(_, value)| value)
+                    .ok_or_else(|| format!("format field {{{field}}} has no keyword argument"))?
+            } else {
+                return Err(format!(
+                    "format field {{{field}}} is not an index or a name"
+                ));
+            };
+            out.push_str(&format_argument(value)?);
+            i = j + 1;
+            continue;
+        }
+        if chars[i] == '}' {
+            if chars.get(i + 1) == Some(&'}') {
+                out.push('}');
+                i += 2;
+                continue;
+            }
+            return Err("unmatched } in format".into());
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    Ok(out)
+}
+
 /// Python's `x[i]` and `x[a:b]` over a string or a sequence.
 ///
 /// An index outside the value is an error rather than a clamp: the recipe
@@ -1510,11 +2035,104 @@ fn version_part_templates(version: &str) -> HashMap<String, String> {
     out
 }
 
+fn host_arch() -> &'static str {
+    std::env::consts::ARCH
+}
+
+fn arch_spellings(arch: &str) -> Vec<&str> {
+    let mut out = vec![arch];
+    match arch {
+        "aarch64" => out.push("AArch64"),
+        "AArch64" => out.push("aarch64"),
+        "powerpc64" | "powerpc64le" => out.push("POWER"),
+        "POWER" => {
+            out.push("powerpc64");
+            out.push("powerpc64le");
+        }
+        _ => {}
+    }
+    out
+}
+
+/// A quoted Python string, single or double quotes, with nothing else in it.
+fn unquote_py(text: &str) -> Option<&str> {
+    let text = text.trim();
+    let bytes = text.as_bytes();
+    if bytes.len() >= 2
+        && ((bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'')
+            || (bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"'))
+    {
+        Some(&text[1..text.len() - 1])
+    } else {
+        None
+    }
+}
+
+/// Whether `if ARCH == 'x86_64':`, `elif ARCH != "aarch64":` or
+/// `if ARCH in ('aarch64', 'riscv64'):` is true for `arch`.
+///
+/// `None` means the header is not an architecture comparison this parser
+/// can decide. Spelling aliases (`aarch64` / `AArch64`, `POWER`) count as
+/// the same machine.
+fn arch_header_holds(header: &str, arch: &str) -> Option<bool> {
+    let header = header.trim();
+    let header = header.strip_suffix(':')?.trim();
+    let rest = header
+        .strip_prefix("if ")
+        .or_else(|| header.strip_prefix("elif "))?
+        .trim();
+    let rest = rest.strip_prefix("ARCH")?;
+    let rest = rest.trim_start();
+    let (op, rhs) = if let Some(rhs) = rest.strip_prefix("==") {
+        ("==", rhs.trim())
+    } else if let Some(rhs) = rest.strip_prefix("!=") {
+        ("!=", rhs.trim())
+    } else {
+        let rhs = rest.strip_prefix("in")?;
+        let rhs = rhs.trim_start();
+        if rhs.starts_with(['(', '[']) {
+            ("in", rhs)
+        } else {
+            return None;
+        }
+    };
+    let spellings = arch_spellings(arch);
+    let matches = |name: &str| spellings.contains(&name);
+    match op {
+        "==" => Some(matches(unquote_py(rhs)?)),
+        "!=" => Some(!matches(unquote_py(rhs)?)),
+        "in" => {
+            let body = rhs
+                .strip_prefix('(')
+                .and_then(|text| text.strip_suffix(')'))
+                .or_else(|| {
+                    rhs.strip_prefix('[')
+                        .and_then(|text| text.strip_suffix(']'))
+                })?;
+            let mut hit = false;
+            let mut any = false;
+            for part in body.split(',') {
+                let part = part.trim();
+                if part.is_empty() {
+                    continue;
+                }
+                any = true;
+                if matches(unquote_py(part)?) {
+                    hit = true;
+                }
+            }
+            any.then_some(hit)
+        }
+        _ => None,
+    }
+}
+
 fn build_templates(
     name: &str,
     version: &str,
     versionsuffix: &str,
     tc: &Toolchain,
+    arch: &str,
 ) -> HashMap<String, String> {
     let mut tv = HashMap::new();
     tv.insert("name".into(), name.to_string());
@@ -1541,7 +2159,7 @@ fn build_templates(
     // versionsuffix: LDC 0.17.6 is carried as `-x86_64` and asked for as
     // `-%(arch)s`, so leaving it unexpanded makes one unreachable from the
     // other.
-    tv.insert("arch".into(), std::env::consts::ARCH.to_string());
+    tv.insert("arch".into(), arch.to_string());
     // Python's own recipe defines the py* templates from its version, which is
     // right only for Python itself. Everything else gets them from the Python
     // it depends on, and a recipe with no Python dependency has no business
@@ -1743,19 +2361,14 @@ fn value_to_toolchain(val: &Value, ctx: &str) -> Result<Toolchain, String> {
 /// the `Java/1.8` wrapper points at a different JDK on x86_64, POWER and
 /// AArch64. Nine recipes upstream use it, and each one that cannot be read
 /// takes its whole recipe with it.
-fn arch_specific_version(entries: &[(String, Value)]) -> Result<String, String> {
-    let host = match std::env::consts::ARCH {
-        "x86_64" => "x86_64",
-        "aarch64" => "AArch64",
-        "powerpc64" | "powerpc64le" => "POWER",
-        other => other,
-    };
+fn arch_specific_version(entries: &[(String, Value)], arch: &str) -> Result<String, String> {
+    let spellings = arch_spellings(arch);
     let mut fallback = None;
     for (key, value) in entries {
         let Some(arch) = key.strip_prefix("arch=") else {
             return Err(format!("dependency version dict has a non-arch key {key}"));
         };
-        if arch == host {
+        if spellings.contains(&arch) {
             return value.expect_str("dep.version");
         }
         if arch == "*" {
@@ -1764,11 +2377,14 @@ fn arch_specific_version(entries: &[(String, Value)]) -> Result<String, String> 
     }
     match fallback {
         Some(value) => value.expect_str("dep.version"),
-        None => Err(format!("no dependency version for {host}")),
+        None => Err(format!(
+            "no dependency version for {}",
+            spellings.first().copied().unwrap_or("ARCH")
+        )),
     }
 }
 
-fn value_to_dep(val: &Value) -> Result<ResolvedDep, String> {
+fn value_to_dep(val: &Value, arch: &str) -> Result<ResolvedDep, String> {
     // Filename form: 'OpenMPI-4.1.6-foss-2025b.eb'
     if let Value::Str(s) = val {
         if let Some(dep) = parse_dep_filename(s) {
@@ -1785,7 +2401,7 @@ fn value_to_dep(val: &Value) -> Result<ResolvedDep, String> {
     }
     let name = items[0].expect_str("dep.name")?;
     let version = match &items[1] {
-        Value::Dict(entries) => arch_specific_version(entries)?,
+        Value::Dict(entries) => arch_specific_version(entries, arch)?,
         other => other.expect_str("dep.version")?,
     };
     let mut versionsuffix = None;
@@ -1946,19 +2562,36 @@ impl std::fmt::Display for SkippedStatement {
 pub fn resolve_easyconfig_str_reporting(
     src: &str,
 ) -> Result<(ResolvedEasyconfig, Vec<SkippedStatement>), ParseError> {
-    resolve_easyconfig_str_inner(src).map(|(recipe, skipped, _)| (recipe, skipped))
+    resolve_easyconfig_str_reporting_for_arch(src, host_arch())
+}
+
+/// As [`resolve_easyconfig_str_reporting`], with an explicit ARCH value.
+pub fn resolve_easyconfig_str_reporting_for_arch(
+    src: &str,
+    arch: &str,
+) -> Result<(ResolvedEasyconfig, Vec<SkippedStatement>), ParseError> {
+    resolve_easyconfig_str_inner(src, arch).map(|(recipe, skipped, _)| (recipe, skipped))
 }
 
 /// As [`resolve_easyconfig_file`], also returning the skipped statements.
 pub fn resolve_easyconfig_file_reporting(
     path: &Path,
 ) -> Result<(ResolvedEasyconfig, Vec<SkippedStatement>), ParseError> {
+    resolve_easyconfig_file_reporting_for_arch(path, host_arch())
+}
+
+/// As [`resolve_easyconfig_file_reporting`], with an explicit ARCH value.
+pub fn resolve_easyconfig_file_reporting_for_arch(
+    path: &Path,
+    arch: &str,
+) -> Result<(ResolvedEasyconfig, Vec<SkippedStatement>), ParseError> {
     let raw =
         std::fs::read_to_string(path).map_err(|e| ParseError::Io(path.display().to_string(), e))?;
-    let (mut resolved, skipped) = resolve_easyconfig_str_reporting(&raw).map_err(|e| match e {
-        ParseError::Parse(_, msg) => ParseError::Parse(path.display().to_string(), msg),
-        other => other,
-    })?;
+    let (mut resolved, skipped) =
+        resolve_easyconfig_str_reporting_for_arch(&raw, arch).map_err(|e| match e {
+            ParseError::Parse(_, msg) => ParseError::Parse(path.display().to_string(), msg),
+            other => other,
+        })?;
     resolved.easyconfig_path = path.display().to_string();
     Ok((resolved, skipped))
 }
@@ -1969,7 +2602,15 @@ pub fn resolve_easyconfig_file_reporting(
 /// recipe still resolves. Use [`resolve_easyconfig_str_reporting`] when you
 /// need to know what was skipped.
 pub fn resolve_easyconfig_str(src: &str) -> Result<ResolvedEasyconfig, ParseError> {
-    resolve_easyconfig_str_inner(src).map(|(resolved, _, _)| resolved)
+    resolve_easyconfig_str_for_arch(src, host_arch())
+}
+
+/// As [`resolve_easyconfig_str`], with an explicit ARCH value.
+pub fn resolve_easyconfig_str_for_arch(
+    src: &str,
+    arch: &str,
+) -> Result<ResolvedEasyconfig, ParseError> {
+    resolve_easyconfig_str_inner(src, arch).map(|(resolved, _, _)| resolved)
 }
 
 /// An extension or bundle component, and the easyblock it names itself.
@@ -2002,14 +2643,15 @@ pub struct EasyblockSites {
 
 /// The recipe plus the easyblock each extension and component resolves to.
 pub fn easyblock_sites(src: &str) -> Result<(ResolvedEasyconfig, EasyblockSites), ParseError> {
-    resolve_easyconfig_str_inner(src).map(|(recipe, _, sites)| (recipe, sites))
+    resolve_easyconfig_str_inner(src, host_arch()).map(|(recipe, _, sites)| (recipe, sites))
 }
 
 fn resolve_easyconfig_str_inner(
     src: &str,
+    arch: &str,
 ) -> Result<(ResolvedEasyconfig, Vec<SkippedStatement>, EasyblockSites), ParseError> {
     let cleaned = strip_comments(src);
-    let mut parser = Parser::new(&cleaned);
+    let mut parser = Parser::new(&cleaned, arch);
     parser
         .parse_file()
         .map_err(|e| ParseError::Parse("<string>".into(), e))?;
@@ -2043,7 +2685,7 @@ fn resolve_easyconfig_str_inner(
         .map_err(|e| ParseError::Parse("<string>".into(), e))?;
 
     let vs_for_templates = versionsuffix_raw.clone().unwrap_or_default();
-    let mut templates = build_templates(&name, &version, &vs_for_templates, &toolchain);
+    let mut templates = build_templates(&name, &version, &vs_for_templates, &toolchain, arch);
     // The defaults in build_templates are what EasyBuild uses when the recipe
     // leaves the parameter unset. An assignment has to win, or GITHUB_SOURCE
     // points at the lowercased software name instead of the account the recipe
@@ -2060,6 +2702,7 @@ fn resolve_easyconfig_str_inner(
         &version,
         versionsuffix.as_deref().unwrap_or(""),
         &toolchain,
+        arch,
     );
     overlay_config_templates(&mut templates, &parser.env);
 
@@ -2080,13 +2723,18 @@ fn resolve_easyconfig_str_inner(
     // `versionsuffix` belongs to the same rule: it is part of the module name,
     // so a suffix that was assigned and not read gives the recipe a different
     // identity than the one it will install under.
-    for field in ["dependencies", "builddependencies", "versionsuffix"] {
+    for field in [
+        "dependencies",
+        "builddependencies",
+        "versionsuffix",
+        "sources",
+    ] {
         if assigns_at_top_level(src, field) && !parser.env.contains_key(field) {
             return Err(ParseError::Parse(
                 "<string>".into(),
                 format!(
                     "{field} is assigned but could not be read, so planning with this \
-                     recipe would get its identity or its dependencies wrong"
+                     recipe would get its identity, dependencies, or sources wrong"
                 ),
             ));
         }
@@ -2095,13 +2743,13 @@ fn resolve_easyconfig_str_inner(
     let dependencies = value_list_as_slice(deps_val.as_ref())
         .map_err(|e| ParseError::Parse("<string>".into(), e))?
         .iter()
-        .map(value_to_dep)
+        .map(|entry| value_to_dep(entry, arch))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| ParseError::Parse("<string>".into(), e))?;
     let builddependencies = value_list_as_slice(build_val.as_ref())
         .map_err(|e| ParseError::Parse("<string>".into(), e))?
         .iter()
-        .map(value_to_dep)
+        .map(|entry| value_to_dep(entry, arch))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| ParseError::Parse("<string>".into(), e))?;
     // What a recipe depends on defines templates the recipe itself uses, so
@@ -2119,7 +2767,7 @@ fn resolve_easyconfig_str_inner(
             value_list_as_slice(applied.as_ref())
                 .map_err(|e| ParseError::Parse("<string>".into(), e))?
                 .iter()
-                .map(value_to_dep)
+                .map(|entry| value_to_dep(entry, arch))
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| ParseError::Parse("<string>".into(), e))
         };
@@ -2627,9 +3275,17 @@ fn checksum_strings_from_value(v: &Value) -> Vec<String> {
 
 /// Resolve one `.eb` file to fully expanded fields.
 pub fn resolve_easyconfig_file(path: &Path) -> Result<ResolvedEasyconfig, ParseError> {
+    resolve_easyconfig_file_for_arch(path, host_arch())
+}
+
+/// As [`resolve_easyconfig_file`], with an explicit ARCH value.
+pub fn resolve_easyconfig_file_for_arch(
+    path: &Path,
+    arch: &str,
+) -> Result<ResolvedEasyconfig, ParseError> {
     let raw =
         std::fs::read_to_string(path).map_err(|e| ParseError::Io(path.display().to_string(), e))?;
-    let mut resolved = resolve_easyconfig_str(&raw).map_err(|e| match e {
+    let mut resolved = resolve_easyconfig_str_for_arch(&raw, arch).map_err(|e| match e {
         ParseError::Parse(_, msg) => ParseError::Parse(path.display().to_string(), msg),
         other => other,
     })?;
@@ -2639,7 +3295,12 @@ pub fn resolve_easyconfig_file(path: &Path) -> Result<ResolvedEasyconfig, ParseE
 
 /// Parse one `.eb` file into a solver-facing [`Candidate`].
 pub fn parse_easyconfig_file(path: &Path) -> Result<Candidate, ParseError> {
-    Ok(resolve_easyconfig_file(path)?.to_candidate())
+    parse_easyconfig_file_for_arch(path, host_arch())
+}
+
+/// As [`parse_easyconfig_file`], with an explicit ARCH value.
+pub fn parse_easyconfig_file_for_arch(path: &Path, arch: &str) -> Result<Candidate, ParseError> {
+    Ok(resolve_easyconfig_file_for_arch(path, arch)?.to_candidate())
 }
 
 /// One easyconfig path that could not be parsed into a candidate.
@@ -2697,6 +3358,14 @@ impl ParseTreeResult {
 /// [`ParseTreeResult::skipped`] so callers can report coverage without
 /// aborting a real multi-thousand-file tree on the first bad recipe.
 pub fn parse_easyconfig_tree(root: &Path) -> Result<ParseTreeResult, ParseError> {
+    parse_easyconfig_tree_for_arch(root, host_arch())
+}
+
+/// As [`parse_easyconfig_tree`], with an explicit ARCH value.
+pub fn parse_easyconfig_tree_for_arch(
+    root: &Path,
+    arch: &str,
+) -> Result<ParseTreeResult, ParseError> {
     let mut out = ParseTreeResult::default();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -2708,7 +3377,7 @@ pub fn parse_easyconfig_tree(root: &Path) -> Result<ParseTreeResult, ParseError>
             if p.is_dir() {
                 stack.push(p);
             } else if p.extension().and_then(|s| s.to_str()) == Some("eb") {
-                match parse_easyconfig_file(&p) {
+                match parse_easyconfig_file_for_arch(&p, arch) {
                     Ok(c) => out.candidates.push(c),
                     Err(e) => out.skipped.push(SkippedEasyconfig {
                         path: p.display().to_string(),
@@ -3066,10 +3735,18 @@ pub fn merge_candidates_with_precedence(layers: &[Vec<Candidate>]) -> Vec<Candid
 /// Parse multiple easyconfig trees and merge with later-path precedence.
 /// Skipped paths from every tree are retained.
 pub fn parse_easyconfig_trees(roots: &[&Path]) -> Result<ParseTreeResult, ParseError> {
+    parse_easyconfig_trees_for_arch(roots, host_arch())
+}
+
+/// As [`parse_easyconfig_trees`], with an explicit ARCH value.
+pub fn parse_easyconfig_trees_for_arch(
+    roots: &[&Path],
+    arch: &str,
+) -> Result<ParseTreeResult, ParseError> {
     let mut acc = ParseTreeResult::default();
     let mut layers: Vec<Vec<Candidate>> = Vec::with_capacity(roots.len());
     for root in roots {
-        let r = parse_easyconfig_tree(root)?;
+        let r = parse_easyconfig_tree_for_arch(root, arch)?;
         layers.push(r.candidates);
         acc.skipped.extend(r.skipped);
     }
@@ -3701,6 +4378,154 @@ dependencies = [('Java', '21', '', SYSTEM)]\nmoduleclass = 'devel'\n";
     }
 
     #[test]
+    fn explicit_arch_parsing_catches_missing_local_arch_keys() {
+        let src = "name = 'Go'\nversion = '1.26.7'\ntoolchain = SYSTEM\n\
+                   local_archs = {'aarch64': 'arm64', 'x86_64': 'amd64'}\n\
+                   sources = ['go%%(version)s.linux-%s.tar.gz' % local_archs[ARCH]]\n";
+        let x86 = resolve_easyconfig_str_for_arch(src, "x86_64").expect("x86_64 parse");
+        assert_eq!(x86.name, "Go");
+        let riscv = resolve_easyconfig_str_for_arch(src, "riscv64");
+        assert!(
+            riscv.is_err(),
+            "riscv64 must fail when local_archs lacks it"
+        );
+    }
+
+    /// Go, Anaconda3, Miniforge3 and cuTENSOR name the tarball with a
+    /// per-architecture dict and a `%s` source list. `.get(ARCH, ARCH)`
+    /// keeps the architecture name when the dict has no entry, which is how
+    /// the riscv64 tarball is spelled. A source line that still cannot be
+    /// evaluated stays a parse failure.
+    #[test]
+    fn a_per_arch_sources_dict_and_a_templated_source_list_are_read() {
+        let src = "name = 'Go'\nversion = '1.26.7'\ntoolchain = SYSTEM\n\
+                   local_arch = {'aarch64': 'arm64', 'x86_64': 'amd64'}.get(ARCH, ARCH)\n\
+                   sources = ['go%%(version)s.linux-%s.tar.gz' % local_arch]\n";
+        let x86 = resolve_easyconfig_str_for_arch(src, "x86_64").expect("x86_64");
+        assert_eq!(x86.source_files[0].filename, "go1.26.7.linux-amd64.tar.gz");
+        let arm = resolve_easyconfig_str_for_arch(src, "aarch64").expect("aarch64");
+        assert_eq!(arm.source_files[0].filename, "go1.26.7.linux-arm64.tar.gz");
+        let riscv = resolve_easyconfig_str_for_arch(src, "riscv64").expect("default is ARCH");
+        assert_eq!(
+            riscv.source_files[0].filename,
+            "go1.26.7.linux-riscv64.tar.gz"
+        );
+
+        let unreadable = "name = 'X'\nversion = '1'\ntoolchain = SYSTEM\n\
+                          sources = [version.center(4)]\n";
+        let err = resolve_easyconfig_str(unreadable).unwrap_err().to_string();
+        assert!(
+            err.contains("sources is assigned but could not be read"),
+            "{err}"
+        );
+    }
+
+    /// Java builds the tarball name with `str.format`. Kaleido picks the
+    /// manylinux tag in the `else` of an `ARCH` guard. QuantumESPRESSO takes
+    /// a short commit hash with an f-string slice.
+    #[test]
+    fn format_else_and_fstring_slices_read_real_source_names() {
+        let java = "name = 'Java'\n\
+                    _java_version = '21'\n\
+                    _patch_version = '2'\n\
+                    _build_version = '13'\n\
+                    version = f'{_java_version}.0.{_patch_version}'\n\
+                    toolchain = SYSTEM\n\
+                    _tarball_tmpl = f'OpenJDK{_java_version}U-jdk_{{}}_linux_hotspot_{version}_{_build_version}.tar.gz'\n\
+                    sources = [_tarball_tmpl.format('%(jdkarch)s')]\n";
+        let parsed = resolve_easyconfig_str(java).expect("Java format");
+        assert_eq!(
+            parsed.source_files[0].filename,
+            "OpenJDK21U-jdk_%(jdkarch)s_linux_hotspot_21.0.2_13.tar.gz"
+        );
+
+        let kaleido = "name = 'Kaleido'\nversion = '0.2.1'\n\
+                       toolchain = {'name': 'GCCcore', 'version': '14.3.0'}\n\
+                       if ARCH == 'aarch64':\n    \
+                       local_manylinux = 'manylinux2014'\n\
+                       else:\n    \
+                       local_manylinux = 'manylinux1'\n\
+                       sources = [f'%(namelower)s-%(version)s-py2.py3-none-{local_manylinux}_%(arch)s.whl']\n";
+        let x86 = resolve_easyconfig_str_for_arch(kaleido, "x86_64").expect("Kaleido else");
+        assert_eq!(
+            x86.source_files[0].filename,
+            "kaleido-0.2.1-py2.py3-none-manylinux1_x86_64.whl"
+        );
+        let arm = resolve_easyconfig_str_for_arch(kaleido, "aarch64").expect("Kaleido if");
+        assert_eq!(
+            arm.source_files[0].filename,
+            "kaleido-0.2.1-py2.py3-none-manylinux2014_aarch64.whl"
+        );
+
+        let qe = "name = 'QuantumESPRESSO'\nversion = '7.5'\n\
+                  toolchain = {'name': 'foss', 'version': '2025b'}\n\
+                  local_lapack_hash = '12d825396fcef1e0a1b27be9f119f9e554621e55'\n\
+                  sources = [{'filename': f'lapack-{local_lapack_hash[:8]}.tar.xz'}]\n";
+        let parsed = resolve_easyconfig_str(qe).expect("QE slice");
+        assert_eq!(parsed.source_files[0].filename, "lapack-12d82539.tar.xz");
+
+        // RDKit's extract command is parenthesized adjacent f-strings. The
+        // second piece begins with `f`, so it is not a bare quote.
+        let rdkit = "name = 'RDKit'\nversion = '2026.03.4'\n\
+                     toolchain = {'name': 'foss', 'version': '2025b'}\n\
+                     _version = version.replace('.', '_')\n\
+                     _ext = f'%(builddir)s/rdkit-Release_{_version}/External/INCHI-API'\n\
+                     sources = [\n\
+                         f'Release_{_version}.tar.gz',\n\
+                         {\n\
+                             'filename': 'INCHI-1-SRC.zip',\n\
+                             'extract_cmd': (\n\
+                                 f'rm -rf {_ext}/src && '\n\
+                                 f'unzip -q %s -d {_ext}'\n\
+                             ),\n\
+                         },\n\
+                     ]\n";
+        let parsed = resolve_easyconfig_str(rdkit).expect("RDKit f-strings");
+        assert_eq!(parsed.source_files[0].filename, "Release_2026_03_4.tar.gz");
+        assert_eq!(parsed.source_files[1].filename, "INCHI-1-SRC.zip");
+    }
+
+    /// EvidentialGene indexes a month table with `int()`. Geant4 and PovChem
+    /// build `sources` with a comprehension. SPM unpacks one version into the
+    /// two names the tarballs use.
+    #[test]
+    fn int_unpack_and_source_comprehensions_are_read() {
+        let evigene = "name = 'EvidentialGene'\nversion = '2018.01.01'\n\
+                       toolchain = SYSTEM\n\
+                       local_month = ['', 'jan', 'feb', 'mar', 'apr', 'may', 'jun', \
+                       'jul', 'aug', 'sep', 'oct', 'nov', 'dec']\n\
+                       local_dlver = version.split('.')[0][-2:] + \
+                       local_month[int(version.split('.')[1])] + version.split('.')[2]\n\
+                       sources = ['evigene%s.tar' % local_dlver]\n";
+        let parsed = resolve_easyconfig_str(evigene).expect("EvidentialGene");
+        assert_eq!(parsed.source_files[0].filename, "evigene18jan01.tar");
+
+        let geant = "name = 'Geant4-data'\nversion = '11.1'\ntoolchain = SYSTEM\n\
+                     local_datasets = [\n\
+                         ('G4NDL', '4.7', 'G4NDL', 'G4NEUTRONHPDATA'),\n\
+                         ('G4EMLOW', '8.2', 'G4EMLOW', 'G4LEDATA'),\n\
+                     ]\n\
+                     sources = ['%s.%s.tar.gz' % (x[2], x[1]) for x in local_datasets]\n";
+        let parsed = resolve_easyconfig_str(geant).expect("Geant4-data");
+        assert_eq!(parsed.source_files[0].filename, "G4NDL.4.7.tar.gz");
+        assert_eq!(parsed.source_files[1].filename, "G4EMLOW.8.2.tar.gz");
+
+        let spm = "name = 'SPM'\nversion = '12.5_r7771'\ntoolchain = SYSTEM\n\
+                   _spm_majmin_ver, _spm_update_ver = version.split('_')\n\
+                   sources = ['%%(namelower)s%s.zip' % _spm_majmin_ver]\n";
+        let parsed = resolve_easyconfig_str(spm).expect("SPM");
+        assert_eq!(parsed.source_files[0].filename, "spm12.5.zip");
+
+        let povchem = "name = 'PovChem1'\nversion = '1.0'\ntoolchain = SYSTEM\n\
+                       _source_list = ['povchem.c', 'povchem.cfg']\n\
+                       sources = [{'filename': x, 'extract_cmd': f'cp %s {x}'} \
+                       for x in _source_list]\n";
+        let parsed = resolve_easyconfig_str(povchem).expect("PovChem");
+        assert_eq!(parsed.source_files[0].filename, "povchem.c");
+        assert_eq!(parsed.source_files[1].filename, "povchem.cfg");
+    }
+
+    #[test]
     fn a_versionsuffix_built_with_string_methods_is_read() {
         let src = "name = 'PyZMQ'\nversion = '2.2.0.1'\n\
                    toolchain = {'name': 'goolf', 'version': '1.4.10'}\n\
@@ -4086,7 +4911,7 @@ dependencies = [('Java', '21', '', SYSTEM)]\nmoduleclass = 'devel'\n";
         // is deliberately tolerant and swallows these, so this exercises the
         // helper directly: the value is that a malformed span cannot abort a
         // process that embeds the parser.
-        let mut parser = Parser::new("name = 'X'\nversion = '1'\n");
+        let mut parser = Parser::new("name = 'X'\nversion = '1'\n", host_arch());
         parser.pos = 12;
         let err = parser.slice_str(usize::MAX).unwrap_err();
         assert!(err.starts_with("line "), "no line number in {err:?}");

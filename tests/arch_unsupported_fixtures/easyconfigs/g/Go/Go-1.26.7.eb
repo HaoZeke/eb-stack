@@ -1,0 +1,12 @@
+easyblock = 'Tarball'
+
+name = 'Go'
+version = '1.26.7'
+
+toolchain = SYSTEM
+
+local_archs = {'aarch64': 'arm64', 'x86_64': 'amd64'}
+sources = ['go%%(version)s.linux-%s.tar.gz' % local_archs[ARCH]]
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+moduleclass = 'compiler'

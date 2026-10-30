@@ -1346,7 +1346,7 @@ mod tests {
     }
 
     #[test]
-    fn a_component_easyblock_inside_a_skipped_list_is_a_hit() {
+    fn a_component_easyblock_inside_a_comprehension_is_a_hit() {
         let root = tempfile::tempdir().unwrap();
         let py = root.path().join("py");
         let ecs = root.path().join("eb");
@@ -1371,7 +1371,7 @@ mod tests {
         })
         .unwrap();
         assert!(
-            has(&report, "gfe.eb component CMakeMake CMakeMake"),
+            has(&report, "gfe.eb component CMakeMake GFE"),
             "{:?}",
             report.hits
         );

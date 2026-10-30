@@ -3300,7 +3300,7 @@ The command prints:
 ```
 GDRCopy-2.5.2-GCCcore-15.2.0.eb is unsupported on riscv64: needs CUDA; gdrconfig.h errors with architecture is not supported (software-layer #1775, #1822)
 GDRCopy-2.5.2-GCCcore-15.2.0.eb is flagged on riscv64: it has never been installed there and is not in the riscv64 additional_arch easystack
-unsupported=1 flagged=1
+parse_failed=0 unsupported=1 flagged=1
 ```
 
 The first line is the hard failure. `GDRCopy-2.5.2-GCCcore-15.2.0.eb` is
@@ -3311,7 +3311,8 @@ exits 1, and the error repeats that line.
 The second line is the cheap check, and it does not read recipes. The
 entry is in the shared easystack, `--installed` has no
 `GDRCopy/2.5.2-GCCcore-15.2.0` line, and `--additional-arch` does not
-name the file. `unsupported`` and `flagged`` are the two counts.
+name the file. `parse_failed``, `unsupported``, and `flagged=` are the
+three counts.
 `--unsupported` replaces the bundled list.
 
 A plan that only depends on the entry names the depender. This
@@ -3326,7 +3327,7 @@ eb-stack stack arch \
 
 ```
 GDRCopy-2.5.2-GCCcore-15.2.0.eb is unsupported on riscv64: needs CUDA; gdrconfig.h errors with architecture is not supported (software-layer #1775, #1822) (required by nvtop-3.3.2-GCCcore-15.2.0.eb)
-unsupported=1 flagged=0
+parse_failed=0 unsupported=1 flagged=0
 ```
 
 `(required by nvtop-3.3.2-GCCcore-15.2.0.eb)` means the plan did not
@@ -3344,13 +3345,32 @@ eb-stack stack arch \
 
 ```
 bwa-mem2-2.3-GCC-14.3.0.eb is unsupported on aarch64: the Makefile passes -msse and -msse2, which aarch64 gcc rejects (software-layer #1876)
-unsupported=1 flagged=0
+parse_failed=0 unsupported=1 flagged=0
 ```
 
 `--arch aarch64/neoverse_v1` is the same family as `--arch aarch64`.
 The family is the text before the first slash. With no `--arch`, every
 family in the list is checked. `--arch x86_64` does not reject GDRCopy:
 the list has no x86_64 entry for it.
+
+The command also parses each easyconfig for each target architecture
+(`x86_64`, `aarch64`, `riscv64` by default, or the families named with
+`--arch`). A file named in the plan that parses on one architecture but
+not another is reported before any bot build. Software-layer pull
+request 1798 failed this way: `Go-1.26.7.eb` used an ARCH-indexed map
+that had no `riscv64` entry.
+
+```bash
+eb-stack stack arch \
+  --arch riscv64 \
+  --easystack tests/arch_unsupported_fixtures/easystacks/go-1.26.7.yml \
+  --easyconfigs tests/arch_unsupported_fixtures/easyconfigs
+```
+
+```
+Go-1.26.7.eb failed to parse on riscv64: parse <string>: line 8: key 'riscv64' not in dict
+parse_failed=1 unsupported=0 flagged=0
+```
 
 An entry that is in the `additional_arch` easystack is not flagged,
 even when it has never been installed. It is still unsupported when
@@ -3966,7 +3986,7 @@ eb-stack stack arch \
 ```
 GDRCopy-2.5.2-GCCcore-15.2.0.eb is unsupported on riscv64: needs CUDA; gdrconfig.h errors with architecture is not supported (software-layer #1775, #1822)
 GDRCopy-2.5.2-GCCcore-15.2.0.eb is flagged on riscv64: it has never been installed there and is not in the riscv64 additional_arch easystack
-unsupported=1 flagged=1
+parse_failed=0 unsupported=1 flagged=1
 ```
 
 The unsupported line names the entry and the architecture, and the
@@ -3981,6 +4001,9 @@ every family in the list. `--installed` and `--additional-arch` take a
 bare path for one architecture, or `riscv64=path` when several are
 checked. `--unsupported` replaces `data/arch-unsupported.toml`. The
 same refusal runs inside `stack batch` before a plan is written.
+With `--easyconfigs`, each file the plan names is parsed once per
+architecture, and a file that fails to parse on one is a
+`parse_failed` line that exits 1.
 
 [Refuse a plan an architecture cannot build](https://eb-stack.rgoswami.me/../howto/arch-unsupported.html.md)
 shows the dependency line and the bwa-mem2 line.
@@ -4549,8 +4572,8 @@ requires `easystack` and takes `easyconfigs_repo`, `easyblocks_repo`,
 `easybuild_version`, and `json`. It returns the same report as
 `stack from-commit`. `eb_stack_arch` requires `easystack` and takes
 `arch`, `easyconfigs`, `installed`, `additional_arch`, and
-`unsupported`. It returns the same report as `stack arch`, and a hit is
-a tool error. `eb_stack_batch` takes `arch` and `unsupported` and
+`unsupported`. It returns the same report as `stack arch`, with
+`parse_failed`, and a hit is a tool error. `eb_stack_batch` takes `arch` and `unsupported` and
 refuses the plan the same way. `eb_repro_summary`
 requires `scores` and takes `ratchet` and `json`. Each of these tools
 calls the same runner as the command of that name, and the text it

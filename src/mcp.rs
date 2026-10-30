@@ -416,7 +416,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_arch",
-            "Refuse a plan an architecture cannot build, as `stack arch` does. An entry in the unsupported list fails the plan when the easystack names it or a dependency closes over it. With installed, an entry that architecture has never installed, and that is not in additional_arch, is flagged.",
+            "Refuse a plan an architecture cannot build, as `stack arch` does. Every easyconfig named in the plan is parsed per architecture, so an ARCH-conditional parse failure is reported before a build. An entry in the unsupported list fails the plan when the easystack names it or a dependency closes over it. With installed, an entry that architecture has never installed, and that is not in additional_arch, is flagged.",
             &[("easystack", "array_min1")],
             &[
                 ("arch", "array"),
@@ -2984,11 +2984,14 @@ fn stack_arch_tool(arguments: &Value) -> Result<Value, String> {
         unsupported: optional_path(arguments, "unsupported"),
     })
     .map_err(workflow_error)?;
-    let failed = !report.unsupported.is_empty() || !report.flagged.is_empty();
+    let failed = !report.parse_failed.is_empty()
+        || !report.unsupported.is_empty()
+        || !report.flagged.is_empty();
     if failed {
         return Err(report
-            .unsupported
+            .parse_failed
             .iter()
+            .chain(report.unsupported.iter())
             .chain(report.flagged.iter())
             .cloned()
             .collect::<Vec<_>>()
@@ -2996,6 +2999,7 @@ fn stack_arch_tool(arguments: &Value) -> Result<Value, String> {
     }
     Ok(json!({
         "text": report.stdout,
+        "parse_failed": report.parse_failed,
         "unsupported": report.unsupported,
         "flagged": report.flagged,
     }))

@@ -591,7 +591,7 @@ eb-stack stack arch \
 #+begin_example
 GDRCopy-2.5.2-GCCcore-15.2.0.eb is unsupported on riscv64: needs CUDA; gdrconfig.h errors with architecture is not supported (software-layer #1775, #1822)
 GDRCopy-2.5.2-GCCcore-15.2.0.eb is flagged on riscv64: it has never been installed there and is not in the riscv64 additional_arch easystack
-unsupported=1 flagged=1
+parse_failed=0 unsupported=1 flagged=1
 #+end_example
 
 The unsupported line names the entry and the architecture, and the
@@ -606,6 +606,9 @@ every family in the list. ~--installed~ and ~--additional-arch~ take a
 bare path for one architecture, or ~riscv64=path~ when several are
 checked. ~--unsupported~ replaces ~data/arch-unsupported.toml~. The
 same refusal runs inside ~stack batch~ before a plan is written.
+With ~--easyconfigs~, each file the plan names is parsed once per
+architecture, and a file that fails to parse on one is a
+~parse_failed~ line that exits 1.
 
 [[file:../howto/arch-unsupported.org][Refuse a plan an architecture cannot build]]
 shows the dependency line and the bwa-mem2 line.
@@ -1174,8 +1177,8 @@ requires ~easystack~ and takes ~easyconfigs_repo~, ~easyblocks_repo~,
 ~easybuild_version~, and ~json~. It returns the same report as
 ~stack from-commit~. ~eb_stack_arch~ requires ~easystack~ and takes
 ~arch~, ~easyconfigs~, ~installed~, ~additional_arch~, and
-~unsupported~. It returns the same report as ~stack arch~, and a hit is
-a tool error. ~eb_stack_batch~ takes ~arch~ and ~unsupported~ and
+~unsupported~. It returns the same report as ~stack arch~, with
+~parse_failed~, and a hit is a tool error. ~eb_stack_batch~ takes ~arch~ and ~unsupported~ and
 refuses the plan the same way. ~eb_repro_summary~
 requires ~scores~ and takes ~ratchet~ and ~json~. Each of these tools
 calls the same runner as the command of that name, and the text it

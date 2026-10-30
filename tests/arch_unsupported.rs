@@ -54,7 +54,10 @@ fn a_shared_plan_that_includes_gdrcopy_fails_on_riscv64() {
     let flagged = "GDRCopy-2.5.2-GCCcore-15.2.0.eb is flagged on riscv64: it has never been installed there and is not in the riscv64 additional_arch easystack";
     assert!(stdout.contains(unsupported), "{stdout}");
     assert!(stdout.contains(flagged), "{stdout}");
-    assert!(stdout.contains("unsupported=1 flagged=1\n"), "{stdout}");
+    assert!(
+        stdout.contains("parse_failed=0 unsupported=1 flagged=1\n"),
+        "{stdout}"
+    );
     assert!(stderr.contains(unsupported), "{stderr}");
     assert!(!stdout.contains("required by"), "{stdout}");
 }
@@ -82,7 +85,10 @@ fn a_plan_that_only_depends_on_gdrcopy_names_the_depender() {
         stdout.contains("(required by nvtop-3.3.2-GCCcore-15.2.0.eb)"),
         "{stdout}"
     );
-    assert!(stdout.contains("unsupported=1 flagged=0\n"), "{stdout}");
+    assert!(
+        stdout.contains("parse_failed=0 unsupported=1 flagged=0\n"),
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -131,7 +137,10 @@ fn bwa_mem2_fails_on_aarch64_and_zlib_does_not() {
         "stdout:\n{stdout}\nstderr:\n{}",
         text(&zlib.stderr)
     );
-    assert!(stdout.contains("unsupported=0 flagged=0\n"), "{stdout}");
+    assert!(
+        stdout.contains("parse_failed=0 unsupported=0 flagged=0\n"),
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -160,7 +169,10 @@ fn an_additional_arch_entry_is_not_flagged_and_x86_64_can_plan_gdrcopy() {
         !stdout.contains("is flagged on"),
         "additional_arch suppresses the cheap check:\n{stdout}"
     );
-    assert!(stdout.contains("unsupported=1 flagged=0\n"), "{stdout}");
+    assert!(
+        stdout.contains("parse_failed=0 unsupported=1 flagged=0\n"),
+        "{stdout}"
+    );
 
     let x86 = run(&[
         "stack",
@@ -182,7 +194,10 @@ fn an_additional_arch_entry_is_not_flagged_and_x86_64_can_plan_gdrcopy() {
         "stdout:\n{stdout}\nstderr:\n{}",
         text(&x86.stderr)
     );
-    assert!(stdout.contains("unsupported=0 flagged=0\n"), "{stdout}");
+    assert!(
+        stdout.contains("parse_failed=0 unsupported=0 flagged=0\n"),
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -191,6 +206,35 @@ fn a_missing_easystack_is_a_usage_error() {
     let stderr = text(&output.stderr);
     assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(stderr.contains("--easystack"), "{stderr}");
+}
+
+#[test]
+fn go_local_archs_missing_riscv64_is_reported_before_the_build() {
+    let output = run(&[
+        "stack",
+        "arch",
+        "--arch",
+        "riscv64",
+        "--easystack",
+        fixture("easystacks/go-1.26.7.yml").to_str().unwrap(),
+        "--easyconfigs",
+        fixture("easyconfigs").to_str().unwrap(),
+    ]);
+    let stdout = text(&output.stdout);
+    let stderr = text(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains("Go-1.26.7.eb failed to parse on riscv64:"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("parse_failed=1 unsupported=0 flagged=0\n"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains("Go-1.26.7.eb failed to parse on riscv64:"),
+        "{stderr}"
+    );
 }
 
 #[test]
