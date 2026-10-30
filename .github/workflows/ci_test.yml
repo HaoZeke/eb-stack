@@ -189,6 +189,7 @@ jobs:
             --test skill_easyblock_fix \
             --test solver_completeness \
             --test stack_order_filter \
+            --test source_probe \
             -- --nocapture
 
   cli-smoke:

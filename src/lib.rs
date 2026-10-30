@@ -68,6 +68,7 @@ pub mod sbom;
 pub mod select;
 pub mod site_commands;
 pub mod source_fetch;
+pub mod source_probe;
 pub mod source_tree;
 mod spack_syntax;
 pub mod target;
@@ -99,10 +100,12 @@ pub use eb_parse::{
     candidate_matches_dep, check_recipe_deps, easyconfig_basename, easyconfig_letter_dir,
     existing_versions, filter_toolchain, filter_toolchain_hierarchy, lock_from_candidates,
     merge_candidates_with_precedence, packaging_gate, parse_easyconfig_file, parse_easyconfig_tree,
-    parse_easyconfig_trees, resolve_easyconfig_file, resolve_easyconfig_file_reporting,
-    resolve_easyconfig_str, resolve_easyconfig_str_reporting, validate_lock_deps,
-    version_field_to_req, ExistingVersionsQuery, MissingDep, ParseTreeResult, RecipeDepCheck,
-    ResolvedDep, ResolvedEasyconfig, ResolvedExt, SkippedEasyconfig, SkippedStatement,
+    parse_easyconfig_trees, resolve_easyconfig_file, resolve_easyconfig_file_for_arch,
+    resolve_easyconfig_file_reporting, resolve_easyconfig_file_reporting_for_arch,
+    resolve_easyconfig_str, resolve_easyconfig_str_for_arch, resolve_easyconfig_str_reporting,
+    resolve_easyconfig_str_reporting_for_arch, validate_lock_deps, version_field_to_req,
+    ExistingVersionsQuery, MissingDep, ParseTreeResult, RecipeDepCheck, ResolvedDep,
+    ResolvedEasyconfig, ResolvedExt, SkippedEasyconfig, SkippedStatement,
 };
 pub use eb_style::{
     blocks_clean, findings_clean, findings_error_free, format_style, format_style_file,

@@ -1,0 +1,11 @@
+name = 'Kaleido'
+version = '0.2.1'
+homepage = 'https://github.com/plotly/Kaleido'
+description = """Fixture from software-layer PR #1670: wheel naming differs by architecture
+(`manylinux1` on x86_64 vs `manylinux2014` on aarch64/riscv64), and the bot failed fetch."""
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+
+manylinux = {'x86_64': '1', 'aarch64': '2014', 'riscv64': '2014'}
+
+source_urls = ['__BASE_URL__/']
+sources = ['kaleido-%(version)s-manylinux%s-%(arch)s.whl' % manylinux[ARCH]]

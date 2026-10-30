@@ -120,4 +120,47 @@ list. The cheap check is what flags a shared entry before that first
 bot run, while it has never been installed on the architecture and is
 not in that architecture's ~additional_arch~ easystack.
 
+* Per-architecture source probe
+
+What it does: ~--probe-sources~ resolves each planned easyconfig's
+~source_urls~ and ~sources~ for ~x86_64~, ~aarch64~, and ~riscv64~, then
+probes every concrete URL with HEAD and a ranged GET fallback
+(~Range: bytes=0-0~). It reports ~unreachable~ when no architecture can
+reach a source, and ~arch-missing~ when one architecture can reach it
+but another cannot. A file already reported as ~parse_failed~ on an
+architecture is not probed there.
+
+Why you'd use it: software-layer pull request 1670 failed because the
+Kaleido wheel naming differed by architecture. The plan parsed and
+closed, then the bot burned a full round failing to fetch source files
+on non-x86 targets. The probe catches that before the bot run.
+
+#+begin_src bash
+eb-stack stack arch \
+  --arch x86_64 \
+  --easystack tests/source_probe_fixtures/easystacks/kaleido.yml \
+  --easyconfigs tests/source_probe_fixtures/easyconfigs \
+  --probe-sources
+#+end_src
+
+The fixture's ~source_urls~ is ~__BASE_URL__/~. ~tests/source_probe.rs~
+and ~tests/doc_walkthrough.rs~ copy the tree, put the address of a
+local server that has only the x86_64 wheel in place of
+~__BASE_URL__~, and run this command on the copy. With the address
+written back as ~__BASE_URL__~, the command prints:
+
+#+begin_example
+Kaleido-0.2.1-GCCcore-15.2.0.eb source kaleido-0.2.1-manylinux2014-aarch64.whl is arch-missing on aarch64: __BASE_URL__/kaleido-0.2.1-manylinux2014-aarch64.whl (attempt 1/3 HEAD=status:404 RANGE=status:404)
+Kaleido-0.2.1-GCCcore-15.2.0.eb source kaleido-0.2.1-manylinux2014-riscv64.whl is arch-missing on riscv64: __BASE_URL__/kaleido-0.2.1-manylinux2014-riscv64.whl (attempt 1/3 HEAD=status:404 RANGE=status:404)
+parse_failed=0 unsupported=0 flagged=0 source_unreachable=0 source_arch_missing=2
+#+end_example
+
+How to read it: each line names the easyconfig, the concrete source file
+for that architecture, and the probe outcome. ~arch-missing~ means at
+least one target architecture resolved a matching source URL while this
+architecture did not. ~source_unreachable~ and ~source_arch_missing~ in
+the count line summarize the two source-probe classes. The command
+exits 1. ~--probe-retries~ (default 2) and ~--probe-timeout-s~
+(default 8) tune the network check.
+
 See [[file:../reference/cli.org][the command-line reference]].

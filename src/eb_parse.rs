@@ -2643,7 +2643,15 @@ pub struct EasyblockSites {
 
 /// The recipe plus the easyblock each extension and component resolves to.
 pub fn easyblock_sites(src: &str) -> Result<(ResolvedEasyconfig, EasyblockSites), ParseError> {
-    resolve_easyconfig_str_inner(src, host_arch()).map(|(recipe, _, sites)| (recipe, sites))
+    easyblock_sites_for_arch(src, host_arch())
+}
+
+/// As [`easyblock_sites`], with an explicit ARCH value.
+pub fn easyblock_sites_for_arch(
+    src: &str,
+    arch: &str,
+) -> Result<(ResolvedEasyconfig, EasyblockSites), ParseError> {
+    resolve_easyconfig_str_inner(src, arch).map(|(recipe, _, sites)| (recipe, sites))
 }
 
 fn resolve_easyconfig_str_inner(

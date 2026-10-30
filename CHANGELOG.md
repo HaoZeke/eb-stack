@@ -366,7 +366,12 @@ All notable changes to this project are documented here.
 - `eb-stack stack arch --easyconfigs` parses each easyconfig once per
   architecture, so a file the plan names that fails to parse on one
   architecture is a `parse_failed` line and exits 1 (software-layer
-  #1798, Go on riscv64). `eb_stack_arch` returns `parse_failed`.
+  #1798, Go on riscv64). `--probe-sources` resolves each planned
+  easyconfig's sources for x86_64, aarch64, and riscv64 and probes the
+  URLs with HEAD and a ranged GET fallback, reporting `unreachable` and
+  `arch-missing` sources (software-layer #1670, Kaleido). The probe is
+  opt-in because it makes network requests. `eb_stack_arch` returns
+  `parse_failed` and `source_findings`.
 - `eb-stack stack arch` refuses a plan that includes, or depends on, an
   entry an architecture cannot build. The message names the entry and
   the architecture. `data/arch-unsupported.toml` is the list: GDRCopy on

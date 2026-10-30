@@ -477,6 +477,101 @@ fn the_repair_howto_quotes_the_doctor_error_it_prints() {
     assert!(stderr.contains(&quoted), "page: {quoted}\nstderr: {stderr}");
 }
 
+/// Serves the Kaleido x86_64 wheel and nothing else, so aarch64 and riscv64
+/// are `arch-missing`, the shape of software-layer #1670.
+fn kaleido_server() -> (String, std::thread::JoinHandle<()>, std::net::SocketAddr) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let worker = std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let mut buffer = [0u8; 4096];
+            let read = stream.read(&mut buffer).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            let mut first = request.lines().next().unwrap_or("").split_whitespace();
+            let (method, path) = (first.next().unwrap_or(""), first.next().unwrap_or(""));
+            if method == "STOP" {
+                break;
+            }
+            let status = match (method, path) {
+                ("HEAD", "/kaleido-0.2.1-manylinux1-x86_64.whl") => "200 OK",
+                ("GET", "/kaleido-0.2.1-manylinux1-x86_64.whl") => "206 Partial Content",
+                _ => "404 Not Found",
+            };
+            let _ = stream.write_all(
+                format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            );
+        }
+    });
+    (format!("http://{addr}"), worker, addr)
+}
+
+/// `arch-unsupported.org` quotes the source-probe output with the server
+/// address written as the fixture's `__BASE_URL__`.
+#[test]
+fn the_source_probe_howto_quotes_the_output_it_prints() {
+    use std::io::Write;
+    let (base_url, worker, addr) = kaleido_server();
+    let tmp = tempfile::tempdir().expect("temp");
+    let recipe_rel = "k/Kaleido/Kaleido-0.2.1-GCCcore-15.2.0.eb";
+    let fixture = root().join("tests/source_probe_fixtures/easyconfigs");
+    let tree = tmp.path().join("easyconfigs");
+    std::fs::create_dir_all(tree.join("k/Kaleido")).unwrap();
+    let recipe = std::fs::read_to_string(fixture.join(recipe_rel)).unwrap();
+    std::fs::write(
+        tree.join(recipe_rel),
+        recipe.replace("__BASE_URL__", &base_url),
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .current_dir(root())
+        .args([
+            "stack",
+            "arch",
+            "--arch",
+            "x86_64",
+            "--easystack",
+            "tests/source_probe_fixtures/easystacks/kaleido.yml",
+            "--easyconfigs",
+        ])
+        .arg(&tree)
+        .arg("--probe-sources")
+        .output()
+        .expect("run eb-stack");
+    if let Ok(mut stop) = std::net::TcpStream::connect(addr) {
+        let _ = stop.write_all(b"STOP / HTTP/1.1\r\n\r\n");
+    }
+    let _ = worker.join();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout)
+        .unwrap()
+        .replace(&base_url, "__BASE_URL__");
+    let page =
+        std::fs::read_to_string(root().join("docs/orgmode/howto/arch-unsupported.org")).unwrap();
+    let section = page
+        .split("* Per-architecture source probe\n")
+        .nth(1)
+        .expect("source probe section");
+    assert!(
+        section.contains("--easyconfigs tests/source_probe_fixtures/easyconfigs"),
+        "{section}"
+    );
+    let quoted = section
+        .split("#+begin_example\n")
+        .nth(1)
+        .and_then(|rest| rest.split("#+end_example").next())
+        .unwrap();
+    assert_eq!(quoted, stdout, "page:\n{quoted}\nstdout:\n{stdout}");
+    assert!(!quoted.contains("127.0.0.1"), "{quoted}");
+}
+
 fn run_to(args: &[&str], out: &Path) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_eb-stack"))
         .current_dir(root())

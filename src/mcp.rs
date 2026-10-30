@@ -416,7 +416,7 @@ fn tool_catalog() -> Vec<Value> {
         ),
         tool_with_optional(
             "eb_stack_arch",
-            "Refuse a plan an architecture cannot build, as `stack arch` does. Every easyconfig named in the plan is parsed per architecture, so an ARCH-conditional parse failure is reported before a build. An entry in the unsupported list fails the plan when the easystack names it or a dependency closes over it. With installed, an entry that architecture has never installed, and that is not in additional_arch, is flagged.",
+            "Refuse a plan an architecture cannot build, as `stack arch` does. Every easyconfig named in the plan is parsed per architecture, so an ARCH-conditional parse failure is reported before a build. An entry in the unsupported list fails the plan when the easystack names it or a dependency closes over it. With installed, an entry that architecture has never installed, and that is not in additional_arch, is flagged. With probe_sources, source_urls and sources are resolved per architecture (x86_64, aarch64, riscv64) and probed by HEAD with ranged GET fallback.",
             &[("easystack", "array_min1")],
             &[
                 ("arch", "array"),
@@ -424,6 +424,9 @@ fn tool_catalog() -> Vec<Value> {
                 ("installed", "array"),
                 ("additional_arch", "array"),
                 ("unsupported", "string"),
+                ("probe_sources", "boolean"),
+                ("probe_retries", "integer"),
+                ("probe_timeout_s", "integer"),
             ],
         ),
         tool_with_optional(
@@ -2975,6 +2978,9 @@ fn batch_command_line(arguments: &Value) -> String {
 }
 
 fn stack_arch_tool(arguments: &Value) -> Result<Value, String> {
+    let probe_sources = optional_bool(arguments, "probe_sources");
+    let probe_retries = optional_u64(arguments, "probe_retries")?.unwrap_or(2) as u32;
+    let probe_timeout_s = optional_u64(arguments, "probe_timeout_s")?.unwrap_or(8);
     let report = crate::arch_support::run_arch_check(&crate::arch_support::ArchCheckRequest {
         arches: string_array(arguments, "arch")?,
         easystacks: path_array(arguments, "easystack")?,
@@ -2982,17 +2988,27 @@ fn stack_arch_tool(arguments: &Value) -> Result<Value, String> {
         installed: string_array(arguments, "installed")?,
         additional: string_array(arguments, "additional_arch")?,
         unsupported: optional_path(arguments, "unsupported"),
+        source_probe: probe_sources.then(|| crate::arch_support::SourceProbeRequest {
+            arches: crate::source_probe::DEFAULT_TARGET_ARCHES
+                .iter()
+                .map(|arch| arch.to_string())
+                .collect(),
+            retries: probe_retries,
+            timeout: std::time::Duration::from_secs(probe_timeout_s),
+        }),
     })
     .map_err(workflow_error)?;
     let failed = !report.parse_failed.is_empty()
         || !report.unsupported.is_empty()
-        || !report.flagged.is_empty();
+        || !report.flagged.is_empty()
+        || !report.source_findings.is_empty();
     if failed {
         return Err(report
             .parse_failed
             .iter()
             .chain(report.unsupported.iter())
             .chain(report.flagged.iter())
+            .chain(report.source_findings.iter())
             .cloned()
             .collect::<Vec<_>>()
             .join("\n"));
@@ -3002,6 +3018,7 @@ fn stack_arch_tool(arguments: &Value) -> Result<Value, String> {
         "parse_failed": report.parse_failed,
         "unsupported": report.unsupported,
         "flagged": report.flagged,
+        "source_findings": report.source_findings,
     }))
 }
 

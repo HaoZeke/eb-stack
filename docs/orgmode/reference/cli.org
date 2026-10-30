@@ -15,7 +15,7 @@ are deterministic bundle artifacts.
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
 
 ~--help~ for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is ~--out-dir~. A single output file is ~--out~ (~--lock-out~ for the lock ~stack solve~ writes). ~--installed~, ~--easyconfigs~, ~--filter-deps~, and ~--generated-at~ use those names on every command that takes them.
 
@@ -435,7 +435,10 @@ eb-stack stack arch \
   [--easyconfigs TREE]... \
   [--installed INSTALLED.txt | --installed riscv64=INSTALLED.txt]... \
   [--additional-arch FILE.yml | --additional-arch riscv64=DIR]... \
-  [--unsupported LIST.toml]
+  [--unsupported LIST.toml] \
+  [--probe-sources] \
+  [--probe-retries N] \
+  [--probe-timeout-s SECONDS]
 
 eb-stack stack sections \
   tests/jenkins_sections/next.list \
@@ -609,6 +612,9 @@ same refusal runs inside ~stack batch~ before a plan is written.
 With ~--easyconfigs~, each file the plan names is parsed once per
 architecture, and a file that fails to parse on one is a
 ~parse_failed~ line that exits 1.
+~--probe-sources~ adds a per-architecture source URL probe over
+~x86_64~, ~aarch64~, and ~riscv64~ with HEAD and ranged GET fallback.
+~--probe-retries~ and ~--probe-timeout-s~ tune that network check.
 
 [[file:../howto/arch-unsupported.org][Refuse a plan an architecture cannot build]]
 shows the dependency line and the bwa-mem2 line.
@@ -1176,9 +1182,10 @@ option a ~<file.eb>:<option>=<value>~ string. ~eb_stack_sections~ requires
 requires ~easystack~ and takes ~easyconfigs_repo~, ~easyblocks_repo~,
 ~easybuild_version~, and ~json~. It returns the same report as
 ~stack from-commit~. ~eb_stack_arch~ requires ~easystack~ and takes
-~arch~, ~easyconfigs~, ~installed~, ~additional_arch~, and
-~unsupported~. It returns the same report as ~stack arch~, with
-~parse_failed~, and a hit is a tool error. ~eb_stack_batch~ takes ~arch~ and ~unsupported~ and
+~arch~, ~easyconfigs~, ~installed~, ~additional_arch~, ~unsupported~,
+~probe_sources~, ~probe_retries~, and ~probe_timeout_s~. It returns the
+same report as ~stack arch~, with ~parse_failed~ and ~source_findings~,
+and a hit is a tool error. ~eb_stack_batch~ takes ~arch~ and ~unsupported~ and
 refuses the plan the same way. ~eb_repro_summary~
 requires ~scores~ and takes ~ratchet~ and ~json~. Each of these tools
 calls the same runner as the command of that name, and the text it

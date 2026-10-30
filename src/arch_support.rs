@@ -20,6 +20,7 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// The list shipped with eb-stack.
 pub const BUNDLED_UNSUPPORTED: &str = include_str!("../data/arch-unsupported.toml");
@@ -502,6 +503,18 @@ pub struct ArchCheckRequest {
     pub additional: Vec<String>,
     /// Override `data/arch-unsupported.toml`.
     pub unsupported: Option<PathBuf>,
+    /// Optional per-architecture source probe.
+    pub source_probe: Option<SourceProbeRequest>,
+}
+
+/// Arguments for the optional source probe of `stack arch`.
+pub struct SourceProbeRequest {
+    /// Architectures to probe with per-arch template expansion.
+    pub arches: Vec<String>,
+    /// Extra probe attempts after the first one.
+    pub retries: u32,
+    /// Per-request timeout.
+    pub timeout: Duration,
 }
 
 /// What `stack arch` prints.
@@ -514,6 +527,8 @@ pub struct ArchCheckReport {
     pub unsupported: Vec<String>,
     /// Cheap-check lines. Non-empty fails the command.
     pub flagged: Vec<String>,
+    /// Source probe findings. Non-empty fails the command.
+    pub source_findings: Vec<String>,
 }
 
 /// Check a plan against the unsupported list, and flag shared entries the
@@ -541,6 +556,12 @@ pub fn run_arch_check(request: &ArchCheckRequest) -> Result<ArchCheckReport> {
         starts.extend(entries.into_iter().map(|entry| entry.file));
     }
 
+    if request.source_probe.is_some() && request.easyconfigs.is_empty() {
+        return Err(usage("--probe-sources needs --easyconfigs"));
+    }
+
+    let mut plan_files: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut failed_pairs: BTreeSet<(String, String)> = BTreeSet::new();
     let (parse_failed, unsupported): (Vec<String>, Vec<String>) = if request.easyconfigs.is_empty()
     {
         let plan_hits = unsupported_in_plan(&list, &request.arches, &[], &starts);
@@ -572,6 +593,7 @@ pub fn run_arch_check(request: &ArchCheckRequest) -> Result<ArchCheckReport> {
                     "{file} failed to parse on {arch}: {}",
                     skipped.error
                 ));
+                failed_pairs.insert((file, arch.clone()));
             }
             let hits = unsupported_in_plan(
                 &list,
@@ -580,6 +602,9 @@ pub fn run_arch_check(request: &ArchCheckRequest) -> Result<ArchCheckReport> {
                 &starts,
             );
             unsupported.extend(hits.into_iter().map(|hit| hit.message()));
+            if request.source_probe.is_some() {
+                plan_files.extend(plan_easyconfig_paths(&parsed.candidates, &starts));
+            }
         }
         parse_failed.sort();
         parse_failed.dedup();
@@ -589,27 +614,90 @@ pub fn run_arch_check(request: &ArchCheckRequest) -> Result<ArchCheckReport> {
     };
 
     let flagged = cheap_flags(request, &list, &starts)?;
+    let source_findings = match &request.source_probe {
+        Some(probe) => probe_plan_sources(probe, &plan_files, &failed_pairs)?,
+        None => Vec::new(),
+    };
     let mut stdout = String::new();
     for line in parse_failed
         .iter()
         .chain(unsupported.iter())
         .chain(flagged.iter())
+        .chain(source_findings.iter())
     {
         stdout.push_str(line);
         stdout.push('\n');
     }
     stdout.push_str(&format!(
-        "parse_failed={} unsupported={} flagged={}\n",
+        "parse_failed={} unsupported={} flagged={}",
         parse_failed.len(),
         unsupported.len(),
         flagged.len()
     ));
+    if request.source_probe.is_some() {
+        let source_unreachable = source_findings
+            .iter()
+            .filter(|line| line.contains(" is unreachable "))
+            .count();
+        let source_arch_missing = source_findings
+            .iter()
+            .filter(|line| line.contains(" is arch-missing "))
+            .count();
+        stdout.push_str(&format!(
+            " source_unreachable={source_unreachable} source_arch_missing={source_arch_missing}"
+        ));
+    }
+    stdout.push('\n');
     Ok(ArchCheckReport {
         stdout,
         parse_failed,
         unsupported,
         flagged,
+        source_findings,
     })
+}
+
+/// Probe each plan file on every probe architecture it parsed on. A pair
+/// already reported in `parse_failed` has no sources to resolve.
+fn probe_plan_sources(
+    probe: &SourceProbeRequest,
+    plan_files: &BTreeSet<PathBuf>,
+    failed_pairs: &BTreeSet<(String, String)>,
+) -> Result<Vec<String>> {
+    let options = crate::source_probe::ProbeOptions {
+        retries: probe.retries,
+        timeout: probe.timeout,
+    };
+    let mut findings = Vec::new();
+    for path in plan_files {
+        let file = basename(&path.display().to_string());
+        let arches: Vec<String> = probe
+            .arches
+            .iter()
+            .filter(|arch| !failed_pairs.contains(&(file.clone(), arch_family(arch).to_string())))
+            .cloned()
+            .collect();
+        if arches.is_empty() {
+            continue;
+        }
+        findings.extend(
+            crate::source_probe::probe_easyconfig_sources(
+                std::slice::from_ref(path),
+                &arches,
+                &options,
+            )
+            .map_err(|error| anyhow::anyhow!("source probe: {error}"))?,
+        );
+    }
+    findings.sort_by(|a, b| {
+        (&a.easyconfig, &a.source, &a.arch, &a.kind).cmp(&(
+            &b.easyconfig,
+            &b.source,
+            &b.arch,
+            &b.kind,
+        ))
+    });
+    Ok(findings.iter().map(|finding| finding.message()).collect())
 }
 
 fn parse_arch_families(request: &ArchCheckRequest) -> Vec<String> {
@@ -624,6 +712,29 @@ fn parse_arch_families(request: &ArchCheckRequest) -> Vec<String> {
     families.sort();
     families.dedup();
     families
+}
+
+fn plan_easyconfig_paths(candidates: &[Candidate], starts: &[String]) -> Vec<PathBuf> {
+    let by_file = index_by_file(candidates);
+    let by_key: BTreeMap<ModuleKey, &Candidate> = candidates
+        .iter()
+        .map(|candidate| (ModuleKey::of(candidate), candidate))
+        .collect();
+    let mut start_keys: Vec<ModuleKey> = Vec::new();
+    for start in starts {
+        let file = basename(start);
+        if let Some(candidate) = by_file.get(&file) {
+            start_keys.push(ModuleKey::of(candidate));
+        }
+    }
+    let closure = closure_against_installed(candidates, &start_keys, Choice::Newest, &|_| false);
+    let mut paths = BTreeSet::new();
+    for key in closure.to_build {
+        if let Some(candidate) = by_key.get(&key) {
+            paths.insert(PathBuf::from(candidate.easyconfig_path.clone()));
+        }
+    }
+    paths.into_iter().collect()
 }
 
 fn cheap_flags(

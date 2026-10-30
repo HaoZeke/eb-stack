@@ -1112,6 +1112,26 @@ enum StackCommand {
         /// Replace the bundled unsupported list.
         #[arg(long)]
         unsupported: Option<PathBuf>,
+        /// Probe source URLs for x86_64, aarch64, and riscv64 before build.
+        ///
+        /// This is opt-in because it performs network requests (HEAD plus
+        /// ranged GET fallback) against every resolved source URL in the plan.
+        #[arg(long = "probe-sources")]
+        probe_sources: bool,
+        /// Extra attempts after the first source probe request.
+        #[arg(
+            long = "probe-retries",
+            default_value_t = 2,
+            requires = "probe_sources"
+        )]
+        probe_retries: u32,
+        /// Timeout in seconds for one source probe request.
+        #[arg(
+            long = "probe-timeout-s",
+            default_value_t = 8,
+            requires = "probe_sources"
+        )]
+        probe_timeout_s: u64,
     },
     /// Write the lock as an EasyBuild easystack, the format `eb --easystack`
     /// consumes and EESSI's software layer is built from.
@@ -2493,6 +2513,9 @@ fn run_stack(command: StackCommand) -> Result<()> {
             installed,
             additional_arch,
             unsupported,
+            probe_sources,
+            probe_retries,
+            probe_timeout_s,
         } => {
             let report = eb_stack::arch_support::run_arch_check(
                 &eb_stack::arch_support::ArchCheckRequest {
@@ -2502,6 +2525,16 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     installed,
                     additional: additional_arch,
                     unsupported,
+                    source_probe: probe_sources.then(|| {
+                        eb_stack::arch_support::SourceProbeRequest {
+                            arches: eb_stack::source_probe::DEFAULT_TARGET_ARCHES
+                                .iter()
+                                .map(|arch| arch.to_string())
+                                .collect(),
+                            retries: probe_retries,
+                            timeout: std::time::Duration::from_secs(probe_timeout_s),
+                        }
+                    }),
                 },
             )?;
             print!("{}", report.stdout);
@@ -2513,6 +2546,9 @@ fn run_stack(command: StackCommand) -> Result<()> {
             }
             if !report.flagged.is_empty() {
                 bail!("{}", report.flagged.join("\n"));
+            }
+            if !report.source_findings.is_empty() {
+                bail!("{}", report.source_findings.join("\n"));
             }
             Ok(())
         }
