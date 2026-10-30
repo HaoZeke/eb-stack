@@ -178,7 +178,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("fetch_checksums", "boolean"),
                 ("strict_patches", "boolean"),
                 ("latest_secondary", "boolean"),
-                ("drop_patches", "object"),
+                ("drop_patch", "object"),
             ],
         ),
         tool_with_optional(
@@ -908,7 +908,7 @@ fn package_bump_run(arguments: &Value) -> Result<Value, String> {
     let (bundle, fetched) = if optional_bool(arguments, "fetch_checksums") {
         let latest_secondary = optional_bool(arguments, "latest_secondary");
         let mut drop_patches: Vec<(String, String)> =
-            string_map(arguments, "drop_patches")?.into_iter().collect();
+            string_map(arguments, "drop_patch")?.into_iter().collect();
         drop_patches.sort();
         let decisions = crate::source_fetch::BumpDecisions {
             drop_patches,

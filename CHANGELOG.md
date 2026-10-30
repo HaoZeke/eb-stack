@@ -6,6 +6,11 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- A version bump moves the file name in a positional checksum's trailing
+  comment to the new version.
+- A package-config layer parameter replaces the recipe's whole value: the
+  old value's `+=` continuations are removed, and a `concat` value that does
+  not fit one line is written as `key =` then `key +=` lines.
 - `pr-overlap --kind easyconfigs` applies `--filter-deps` before the
   reverse walk. A filtered dependency such as Java or CUDA is left out of
   `reverse_dependents` and does not create a `depends-on` row.
@@ -359,6 +364,18 @@ All notable changes to this project are documented here.
   never been installed on that architecture, and is not in its
   `additional_arch` easystack, is flagged. `stack batch` uses the same
   list before it writes a plan. `eb_stack_arch` runs the same check.
+- `package bump --fetch-checksums` decides three more patch cases from the
+  new source: a patch that only creates files the release already contains, a patch
+  whose changes the release carries under different surrounding lines, and
+  a patch that only pins `bazel_dep` modules `MODULE.bazel` declares itself.
+- `package bump --fetch-checksums` replaces a patch the new source leaves
+  undecided with a rebased file named for the new release
+  (`<Name>-<version>_<description>.patch`) found beside the source recipe or
+  under `<letter>/<Name>` of an `--easyconfigs` root, when that file applies.
+- `package bump --drop-patch NAME=REASON` records an operator's patch drop
+  with its reason; `--latest-secondary` moves `local_*`-versioned later
+  sources (gc's `libatomic_ops`) to their newest stable release. The MCP bump
+  tool takes `drop_patch` and `latest_secondary`.
 - `eb-stack stack from-commit` reports each `from-commit` and
   `include-easyblocks-from-commit` pin already contained in the EasyBuild
   release named by `--easybuild-version` or by `eb-X.Y.Z` in the easystack

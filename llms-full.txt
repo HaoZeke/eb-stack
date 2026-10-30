@@ -3538,7 +3538,7 @@ eb-stack package bump \
   [--package-config PACKAGE.toml]... \
   [--strict-patches] \
   [--emit-easyblock] \
-  [--fetch-checksums] \
+  [--fetch-checksums [--latest-secondary] [--drop-patch NAME=REASON]...] \
   --out-dir BUNDLE
 ```
 
@@ -3569,7 +3569,26 @@ tried the way EasyBuild's patch step applies it (`patch -p<level>` at the
 level EasyBuild guesses, in recipe order): a patch that applies is carried,
 one that reverse-applies or whose modified files are all gone is dropped from
 `patches` and `checksums`, and anything else stays an undecided
-`patch-decision` residual naming the failed hunks. The patches of an
+`patch-decision` residual naming the failed hunks. Three cases that
+neither apply nor reverse-apply are still decided from the source: a patch
+that only creates files the release already contains, a patch whose every change block's
+new lines stand in the target file while its removed lines do not (the
+release made the change under different surrounding lines), and a patch that
+only pins `bazel_dep` modules `MODULE.bazel` already declares. Each is
+dropped with the file and line or the declared version as evidence. A patch
+still undecided is replaced by a rebased file named for the new release,
+`<Name>-<version>_<description>.patch` or the old name with its version
+replaced, when one sits beside the source recipe or under `<letter>/<Name>`
+of an `--easyconfigs` root and applies; the recipe entry, its checksum and
+the bundle take the new file. `--drop-patch NAME=REASON` (repeatable) drops a
+patch the operator decided against, the recipe's or its own extension's, and
+records the reason beside what the source alone said; a name the recipe does
+not list fails the bump. `--latest-secondary` moves each later source whose
+version a `local_*` variable holds (gc's `libatomic_ops`) to its newest
+stable release, read with the `package latest` backends from the source URLs
+that carry that version and keyed by the component name in `--overrides`;
+the variable, checksum and plan digest move together and a
+`secondary-source` residual records the move. The patches of an
 extension that is the package itself are tried against its new archive. See
 [output formats](https://eb-stack.rgoswami.me/formats.html.md).
 `--latest` takes the version `package latest` picks for the recipe, so it
@@ -4547,7 +4566,8 @@ planning. `eb_package_plan` also takes `package_index`, a CRAN
 `--package-index`. `eb_package_bump` optionals include `version`,
 `source_checksum`, `dependencies` (object map), `hierarchy_fixture`,
 `stack_policy`, `package_configs`, `emit_easyblock`, `fetch_checksums`,
-and `strict_patches`.
+`strict_patches`, `latest_secondary`, and `drop_patch` (object map from
+patch name to reason).
 `strict_patches` fails the bump when a patch's fate cannot be decided,
 as `--strict-patches` does. `fetch_checksums` downloads the new source
 and writes its SHA-256, as `--fetch-checksums` does.
