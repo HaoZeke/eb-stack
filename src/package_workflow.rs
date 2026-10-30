@@ -189,7 +189,7 @@ fn materialize_foreign_local_patches(
     Ok(())
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut checksum = String::with_capacity(64);
     for byte in digest {
@@ -2242,6 +2242,10 @@ pub enum PackageWorkflowError {
     /// not be decided from tree evidence.
     #[error("undecided patches after version bump: {0}")]
     UndecidedPatches(String),
+    /// An operator patch drop names a patch the recipe does not list, so the
+    /// decision it records would describe nothing.
+    #[error("--drop-patch names patches the recipe does not list: {0}")]
+    UnknownPatchDrop(String),
     /// The number of positional checksums does not match the artifact count.
     #[error(
         "source checksum override count mismatch: expected {expected} positional SHA-256 values, got {actual}"

@@ -375,8 +375,58 @@ pub fn plan_package_bump_fetching(
     options: &PackageEmitOptions,
     client: &dyn RegistryClient,
 ) -> Result<(PackageBundle, Vec<SourceFetch>), PackageWorkflowError> {
+    plan_package_bump_fetching_with(request, options, client, &BumpDecisions::default())
+}
+
+/// What a fetching bump takes from its operator rather than from evidence.
+#[derive(Debug, Clone, Default)]
+pub struct BumpDecisions {
+    /// Patches to drop, by file name, each with the reason the plan records.
+    /// A name the recipe does not list fails the bump.
+    pub drop_patches: Vec<(String, String)>,
+    /// Move every later source whose version a `local_*` variable holds to
+    /// its newest stable upstream release, read the way `package latest`
+    /// reads the package's own.
+    pub latest_secondary: bool,
+    /// Upstream overrides for those sources, keyed by the component name
+    /// that precedes the version in the file name (`libatomic_ops`).
+    pub overrides: std::collections::BTreeMap<String, crate::upstream::Override>,
+}
+
+/// [`plan_package_bump_fetching`] with the operator's decisions.
+///
+/// A patch the source leaves undecided is replaced by a rebased file named
+/// for the new release (`<Name>-<version>_<description>.patch`, or the old
+/// name with its version replaced) when one sits beside the source recipe or
+/// under `<letter>/<Name>` of an easyconfigs root and applies to the new
+/// source. `decisions.drop_patches` then drop what the operator decided,
+/// with the reason in the plan, and `decisions.latest_secondary` moves
+/// version-pinned later sources (see [`bump_secondary_sources`]).
+pub fn plan_package_bump_fetching_with(
+    request: &BumpPackageRequest,
+    options: &PackageEmitOptions,
+    client: &dyn RegistryClient,
+    decisions: &BumpDecisions,
+) -> Result<(PackageBundle, Vec<SourceFetch>), PackageWorkflowError> {
     if request.version.is_none() || request.source_checksum.is_some() {
-        return Ok((plan_package_bump_with(request, options)?, Vec::new()));
+        let mut bundle = plan_package_bump_with(request, options)?;
+        let mut fetched = Vec::new();
+        if decisions.latest_secondary {
+            bump_secondary_sources(&mut bundle, client, &decisions.overrides, &mut fetched);
+            crate::package_workflow::refresh_bump_sbom(&mut bundle)?;
+        }
+        if !decisions.drop_patches.is_empty() {
+            let names: Vec<&str> = decisions
+                .drop_patches
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect();
+            return Err(PackageWorkflowError::UnknownPatchDrop(format!(
+                "{} (patch drops are decided against a fetched new release)",
+                names.join(", ")
+            )));
+        }
+        return Ok((bundle, fetched));
     }
     // Strict patch mode is judged after the new source has had its say: a
     // patch the tree cannot decide may still apply, or be upstream.
@@ -405,6 +455,9 @@ pub fn plan_package_bump_fetching(
         }
     };
     fill_empty_named_checksums(&mut bundle, client, &mut fetched);
+    if decisions.latest_secondary {
+        bump_secondary_sources(&mut bundle, client, &decisions.overrides, &mut fetched);
+    }
     apply_index_rewrites(&mut bundle, request, &fetched, client);
     prune_settled_checksum_warnings(&mut bundle);
     let new_version = request.version.as_deref().unwrap_or_default();
@@ -412,13 +465,259 @@ pub fn plan_package_bump_fetching(
         .ok()
         .and_then(|text| resolve_easyconfig_str(&text).ok())
         .map(|recipe| recipe.version);
-    crate::patch_apply::decide_extension_patches(&mut bundle, prior_version.as_deref(), client);
-    let undecided = crate::patch_apply::decide_from_source(&mut bundle, new_version, &fetched);
+    let inputs = crate::patch_apply::PatchInputs {
+        rebased_dirs: rebased_patch_dirs(request, &bundle.plan.package.name),
+        drops: decisions.drop_patches.clone(),
+    };
+    let mut used_drops = Vec::new();
+    crate::patch_apply::decide_extension_patches(
+        &mut bundle,
+        prior_version.as_deref(),
+        client,
+        &inputs,
+        &mut used_drops,
+    );
+    let undecided = crate::patch_apply::decide_from_source(
+        &mut bundle,
+        new_version,
+        &fetched,
+        &inputs,
+        &mut used_drops,
+    );
+    let unknown: Vec<&str> = decisions
+        .drop_patches
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .filter(|name| !used_drops.iter().any(|used| used == name))
+        .collect();
+    if !unknown.is_empty() {
+        return Err(PackageWorkflowError::UnknownPatchDrop(unknown.join(", ")));
+    }
     crate::package_workflow::refresh_bump_sbom(&mut bundle)?;
     if request.strict_patches && !undecided.is_empty() {
         return Err(PackageWorkflowError::UndecidedPatches(undecided.join(", ")));
     }
     Ok((bundle, fetched))
+}
+
+/// Where a patch rebased on the new release may sit: beside the source
+/// recipe, then at `<letter>/<Name>` under each easyconfigs root, the
+/// layout EasyBuild's robot path search expects.
+fn rebased_patch_dirs(request: &BumpPackageRequest, name: &str) -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(parent) = request.source.parent() {
+        dirs.push(parent.to_path_buf());
+    }
+    let letter = crate::eb_parse::easyconfig_letter_dir(name);
+    for root in &request.easyconfig_roots {
+        let dir = root.join(&letter).join(name);
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs
+}
+
+/// Move each later source whose version a `local_*` variable holds to its
+/// newest stable upstream release.
+///
+/// A source after the first counts when its file name holds the value of a
+/// version-valued `local_*` assignment and the `sources` list names that
+/// variable: gc's `'libatomic_ops-%s.tar.gz' % local_libatomic_version`.
+/// The component is the file name before the version (`libatomic_ops`), and
+/// its releases are read with the backends of [`crate::upstream`] from the
+/// `source_urls` that carry the version, keyed by the component in
+/// `overrides`. A newer release rewrites the variable, downloads the new
+/// file, and writes its digest where the old one was. Each source gets a
+/// `secondary-source` record: the move, that it is current, or why no
+/// version could be decided.
+pub fn bump_secondary_sources(
+    bundle: &mut PackageBundle,
+    client: &dyn RegistryClient,
+    overrides: &std::collections::BTreeMap<String, crate::upstream::Override>,
+    fetched: &mut Vec<SourceFetch>,
+) {
+    let Some(text) = bundle.easyconfigs.first().map(|ec| ec.text.clone()) else {
+        return;
+    };
+    let Ok(recipe) = resolve_easyconfig_str(&text) else {
+        return;
+    };
+    let Ok(local) =
+        regex::Regex::new(r#"(?m)^(local_[A-Za-z0-9_]+)[ \t]*=[ \t]*['"]([0-9][^'"\n]*)['"]"#)
+    else {
+        return;
+    };
+    let sources_text = crate::eb_emit::easyconfig_list_span(&text, "sources")
+        .ok()
+        .flatten()
+        .map(|(start, end)| text[start..end].to_string())
+        .unwrap_or_default();
+    let locals: Vec<(String, String)> = local
+        .captures_iter(&text)
+        .map(|caps| (caps[1].to_string(), caps[2].to_string()))
+        .filter(|(variable, _)| sources_text.contains(variable.as_str()))
+        .collect();
+    let mut text = text;
+    for (index, file) in recipe.source_files.iter().enumerate().skip(1) {
+        let Some((variable, current)) = locals
+            .iter()
+            .find(|(_, value)| file.filename.contains(value.as_str()))
+        else {
+            continue;
+        };
+        let at = file.filename.find(current.as_str()).unwrap_or(0);
+        let component = file.filename[..at].trim_end_matches(['-', '_']).to_string();
+        if component.is_empty() {
+            continue;
+        }
+        let bases: Vec<String> = if file.source_urls.is_empty() {
+            recipe.source_urls.clone()
+        } else {
+            file.source_urls.clone()
+        };
+        let own: Vec<String> = bases
+            .iter()
+            .filter(|base| base.contains(current.as_str()))
+            .cloned()
+            .collect();
+        let mut synthetic = recipe.clone();
+        synthetic.name = component.clone();
+        synthetic.version = current.clone();
+        synthetic.source_urls = if own.is_empty() { bases } else { own };
+        synthetic.source_files = vec![file.clone()];
+        synthetic.homepage = None;
+        synthetic.easyblock = None;
+        let mut record = |severity: ResidualSeverity, summary: String, evidence: Option<String>| {
+            bundle.plan.residuals.push(Residual {
+                id: format!("secondary-source:{index}"),
+                stage: ResidualStage::Normalize,
+                category: "secondary-source".into(),
+                severity,
+                summary,
+                evidence,
+                provenance: None,
+            });
+        };
+        let report = match crate::upstream::latest(&synthetic, overrides, client) {
+            Ok(report) => report,
+            Err(error) => {
+                record(
+                    ResidualSeverity::Judgment,
+                    format!("{component} {current}: no upstream version decided"),
+                    Some(format!("{error:#}")),
+                );
+                continue;
+            }
+        };
+        let newest = match crate::upstream::bump_version(&report) {
+            Ok(Some(newest)) => newest,
+            Ok(None) => {
+                record(
+                    ResidualSeverity::Mechanical,
+                    format!(
+                        "{component} {current} is the newest stable release on {}",
+                        report.backend
+                    ),
+                    None,
+                );
+                continue;
+            }
+            Err(error) => {
+                record(
+                    ResidualSeverity::Judgment,
+                    format!("{component} {current}: no upstream version decided"),
+                    Some(format!("{error:#}")),
+                );
+                continue;
+            }
+        };
+        if crate::version::cmp_version(&newest, current) != std::cmp::Ordering::Greater {
+            continue;
+        }
+        let assignment = format!(
+            r#"(?m)^({}[ \t]*=[ \t]*['"]){}(['"])"#,
+            regex::escape(variable),
+            regex::escape(current)
+        );
+        let Ok(assignment) = regex::Regex::new(&assignment) else {
+            continue;
+        };
+        let moved = assignment
+            .replace(&text, |caps: &regex::Captures| {
+                format!("{}{newest}{}", &caps[1], &caps[2])
+            })
+            .into_owned();
+        let Ok(moved_recipe) = resolve_easyconfig_str(&moved) else {
+            continue;
+        };
+        let Some(new_file) = moved_recipe.source_files.get(index) else {
+            continue;
+        };
+        let mut fetch = SourceFetch {
+            filename: new_file.filename.clone(),
+            url: None,
+            sha256: None,
+            errors: Vec::new(),
+            bytes: None,
+            respelled: None,
+        };
+        for url in source_download_urls(&moved_recipe, new_file) {
+            match client.get(&url) {
+                Ok(bytes) if !bytes.is_empty() => {
+                    fetch.sha256 = Some(sha256_hex(&bytes));
+                    fetch.url = Some(url);
+                    fetch.bytes = Some(bytes);
+                    break;
+                }
+                Ok(_) => fetch.errors.push(format!("{url}: empty body")),
+                Err(error) => fetch.errors.push(error.to_string()),
+            }
+        }
+        let Some(digest) = fetch.sha256.clone() else {
+            record(
+                ResidualSeverity::Blocking,
+                format!(
+                    "{component} {current} -> {newest}: the new source {} could not be downloaded",
+                    new_file.filename
+                ),
+                Some(fetch.errors.join("; ")),
+            );
+            continue;
+        };
+        text = crate::patch_apply::replace_checksum(
+            &moved,
+            &recipe,
+            &file.filename,
+            &new_file.filename,
+            &digest,
+            index,
+        );
+        record(
+            ResidualSeverity::Mechanical,
+            format!(
+                "{component} {current} -> {newest}: newest stable release on {}",
+                report.backend
+            ),
+            Some(format!(
+                "sha256 {digest} from {}",
+                fetch.url.as_deref().unwrap_or("")
+            )),
+        );
+        if let Some(source) = bundle.plan.sources.get_mut(index) {
+            source.sha256 = Some(digest);
+        }
+        // What the fetch said about the old file no longer describes the
+        // recipe.
+        bundle.plan.residuals.retain(|residual| {
+            !(residual.category == "checksum" && residual.summary.contains(&file.filename))
+        });
+        fetched.retain(|seen| seen.filename != file.filename);
+        fetched.push(fetch);
+    }
+    if let Some(easyconfig) = bundle.easyconfigs.first_mut() {
+        easyconfig.text = text;
+    }
 }
 
 /// Versions, crate lists, and extension checksums an index can decide.

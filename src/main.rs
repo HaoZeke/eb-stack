@@ -600,9 +600,28 @@ struct PackageBumpArgs {
     /// decides it from the recipe's `source_urls` and the overrides.
     #[arg(long)]
     latest: bool,
-    /// Overrides TOML for `--latest`, applied after the ones eb-stack ships. Repeatable.
-    #[arg(long = "overrides", requires = "latest")]
+    /// Overrides TOML for `--latest` and `--latest-secondary`, applied after
+    /// the ones eb-stack ships. Repeatable. A later source is keyed by the
+    /// component its file name starts with (`libatomic_ops`).
+    #[arg(long = "overrides")]
     overrides: Vec<PathBuf>,
+    /// Move every later source whose version a `local_*` variable holds
+    /// (gc's `libatomic_ops-%s.tar.gz` % `local_libatomic_version`) to its
+    /// newest stable upstream release, read as `--latest` reads the
+    /// package's own, and write its digest. Each move is recorded as a
+    /// `secondary-source` residual.
+    #[arg(long = "latest-secondary", requires = "fetch_checksums")]
+    latest_secondary: bool,
+    /// Drop a patch the operator decided against, as `NAME=REASON`.
+    /// Repeatable. The reason is recorded in the patch decision beside what
+    /// the new source alone said. A name the recipe or its own extension
+    /// does not list fails the bump.
+    #[arg(
+        long = "drop-patch",
+        value_name = "NAME=REASON",
+        requires = "fetch_checksums"
+    )]
+    drop_patches: Vec<String>,
     /// SHA-256 of the new source. One value. `package plan` repeats this flag, once per artifact.
     #[arg(long)]
     source_checksum: Option<String>,
@@ -1733,7 +1752,21 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
         package_layers: load_package_layers(&args.package_configs)?,
     };
     let (bundle, fetched) = if args.fetch_checksums {
-        eb_stack::source_fetch::plan_package_bump_fetching(&request, &options, &UreqClient)?
+        let decisions = eb_stack::source_fetch::BumpDecisions {
+            drop_patches: parse_patch_drops(&args.drop_patches)?,
+            latest_secondary: args.latest_secondary,
+            overrides: if args.latest_secondary {
+                eb_stack::upstream::load_overrides(&args.overrides)?
+            } else {
+                Default::default()
+            },
+        };
+        eb_stack::source_fetch::plan_package_bump_fetching_with(
+            &request,
+            &options,
+            &UreqClient,
+            &decisions,
+        )?
     } else {
         (plan_package_bump_with(&request, &options)?, Vec::new())
     };
@@ -1756,6 +1789,24 @@ fn run_package_bump(args: PackageBumpArgs) -> Result<()> {
         println!("easyblock={}", path.display());
     }
     Ok(())
+}
+
+/// `--drop-patch NAME=REASON` values, in order. Both sides must be present:
+/// a drop without a reason records a decision nobody can review.
+fn parse_patch_drops(values: &[String]) -> Result<Vec<(String, String)>> {
+    values
+        .iter()
+        .map(|value| {
+            let (name, reason) = value
+                .split_once('=')
+                .ok_or_else(|| anyhow::anyhow!("--drop-patch {value}: expected NAME=REASON"))?;
+            let (name, reason) = (name.trim(), reason.trim());
+            if name.is_empty() || reason.is_empty() {
+                anyhow::bail!("--drop-patch {value}: both NAME and REASON are required");
+            }
+            Ok((name.to_string(), reason.to_string()))
+        })
+        .collect()
 }
 
 /// Say which easyblock class the recipe resolves to and where it is defined.

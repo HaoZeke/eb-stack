@@ -270,3 +270,256 @@ fn the_bumped_extensions_own_patches_are_judged_against_its_new_sdist() {
     assert!(text.contains("6666666666"), "{text}");
     assert!(!text.contains("aaaaaaaaaa"), "{text}");
 }
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+const REBASED: &str = "--- delta-2.0.orig/util.c\n+++ delta-2.0/util.c\n@@ -1,3 +1,3 @@\n int util(void) {\n-  return 2;\n+  return 3;\n }\n";
+
+fn patch_summaries(bundle: &eb_stack::PackageBundle) -> Vec<String> {
+    bundle
+        .plan
+        .residuals
+        .iter()
+        .filter(|residual| residual.category == "patch-decision")
+        .map(|residual| residual.summary.clone())
+        .collect()
+}
+
+#[test]
+fn a_rebased_patch_beside_the_recipe_replaces_the_one_that_conflicts() {
+    let temp = tempfile::tempdir().unwrap();
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).unwrap();
+    let source = write_fixture(temp.path());
+    fs::write(temp.path().join("Delta-2.0_conflicts.patch"), REBASED).unwrap();
+    let (bundle, _) = plan_package_bump_fetching(
+        &request(&source, &robot, true),
+        &PackageEmitOptions::default(),
+        &client(),
+    )
+    .expect("the rebased patch settles the only undecided one");
+    let summaries = patch_summaries(&bundle);
+    assert!(
+        summaries.iter().any(|s| s.starts_with(
+            "replace Delta-1.0_conflicts.patch: with Delta-2.0_conflicts.patch, which applies to \
+             the delta-2.0.tar.gz source at -p1"
+        )),
+        "{summaries:?}"
+    );
+    let text = &bundle.easyconfigs[0].text;
+    let digest = sha256_hex(REBASED.as_bytes());
+    assert!(text.contains("'Delta-2.0_conflicts.patch',\n"), "{text}");
+    assert!(
+        text.contains(&format!("{{'Delta-2.0_conflicts.patch': '{digest}'}}")),
+        "{text}"
+    );
+    assert!(!text.contains("Delta-1.0_conflicts.patch"), "{text}");
+    assert!(!text.contains("4444444444"), "{text}");
+    let artifact = bundle
+        .plan
+        .build
+        .patches
+        .iter()
+        .find(|patch| patch.filename == "Delta-2.0_conflicts.patch")
+        .expect("the plan carries the rebased patch");
+    assert_eq!(artifact.sha256.as_deref(), Some(digest.as_str()));
+    assert_eq!(
+        artifact.resolved_source.as_deref(),
+        Some(temp.path().join("Delta-2.0_conflicts.patch").as_path())
+    );
+}
+
+#[test]
+fn a_rebased_patch_is_found_under_an_easyconfigs_root_and_must_apply() {
+    let temp = tempfile::tempdir().unwrap();
+    let robot = temp.path().join("robot");
+    let overlay = temp.path().join("overlay");
+    fs::create_dir_all(&robot).unwrap();
+    fs::create_dir_all(overlay.join("d/Delta")).unwrap();
+    let source = write_fixture(temp.path());
+    // A rebased file that does not apply settles nothing.
+    fs::write(
+        overlay.join("d/Delta/Delta-2.0_conflicts.patch"),
+        "--- a/util.c\n+++ b/util.c\n@@ -1,3 +1,3 @@\n int nothing(void) {\n-  return 9;\n+  return 10;\n }\n",
+    )
+    .unwrap();
+    let mut req = request(&source, &robot, false);
+    req.easyconfig_roots.push(overlay.clone());
+    let (bundle, _) =
+        plan_package_bump_fetching(&req, &PackageEmitOptions::default(), &client()).expect("bump");
+    let summaries = patch_summaries(&bundle);
+    assert!(
+        summaries
+            .iter()
+            .any(|s| s.starts_with("undecided Delta-1.0_conflicts.patch")
+                && s.contains("the rebased Delta-2.0_conflicts.patch does not settle it either")),
+        "{summaries:?}"
+    );
+    fs::write(overlay.join("d/Delta/Delta-2.0_conflicts.patch"), REBASED).unwrap();
+    let (bundle, _) =
+        plan_package_bump_fetching(&req, &PackageEmitOptions::default(), &client()).expect("bump");
+    let summaries = patch_summaries(&bundle);
+    assert!(
+        summaries
+            .iter()
+            .any(|s| s
+                .starts_with("replace Delta-1.0_conflicts.patch: with Delta-2.0_conflicts.patch")),
+        "{summaries:?}"
+    );
+}
+
+#[test]
+fn an_operator_drop_is_recorded_with_its_reason_and_an_unknown_name_fails() {
+    use eb_stack::source_fetch::{plan_package_bump_fetching_with, BumpDecisions};
+    let temp = tempfile::tempdir().unwrap();
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).unwrap();
+    let source = write_fixture(temp.path());
+    let decisions = BumpDecisions {
+        drop_patches: vec![(
+            "Delta-1.0_conflicts.patch".into(),
+            "fixed upstream by commit abc123".into(),
+        )],
+        ..BumpDecisions::default()
+    };
+    let (bundle, _) = plan_package_bump_fetching_with(
+        &request(&source, &robot, true),
+        &PackageEmitOptions::default(),
+        &client(),
+        &decisions,
+    )
+    .expect("the operator settles the only undecided patch");
+    let decision = bundle
+        .plan
+        .residuals
+        .iter()
+        .find(|residual| {
+            residual
+                .summary
+                .starts_with("drop Delta-1.0_conflicts.patch")
+        })
+        .expect("the drop is recorded");
+    assert!(
+        decision.summary.contains(
+            "fixed upstream by commit abc123 (operator decision; the source alone: \
+             does not apply to the delta-2.0.tar.gz source"
+        ),
+        "{}",
+        decision.summary
+    );
+    assert_eq!(decision.severity, ResidualSeverity::Mechanical);
+    let text = &bundle.easyconfigs[0].text;
+    assert!(!text.contains("Delta-1.0_conflicts.patch"), "{text}");
+    assert!(!text.contains("4444444444"), "{text}");
+
+    let unknown = BumpDecisions {
+        drop_patches: vec![("Delta-1.0_typo.patch".into(), "a reason".into())],
+        ..BumpDecisions::default()
+    };
+    let error = plan_package_bump_fetching_with(
+        &request(&source, &robot, false),
+        &PackageEmitOptions::default(),
+        &client(),
+        &unknown,
+    )
+    .expect_err("a drop that names nothing fails");
+    assert!(
+        error.to_string().contains("Delta-1.0_typo.patch"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_secondary_source_moves_to_its_newest_stable_release() {
+    use eb_stack::source_fetch::{plan_package_bump_fetching_with, BumpDecisions};
+    let temp = tempfile::tempdir().unwrap();
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).unwrap();
+    let source = temp.path().join("Gamma-1.0-GCCcore-15.2.0.eb");
+    fs::write(
+        &source,
+        "easyblock = 'ConfigureMake'\nname = 'Gamma'\nversion = '1.0'\n\
+         local_extra_version = '1.1'\n\
+         homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+         toolchain = {'name': 'GCCcore', 'version': '15.2.0'}\n\
+         source_urls = [\n    'https://example.invalid/src/',\n    \
+         'https://github.com/acme/extra/releases/download/v%s/' % local_extra_version,\n]\n\
+         sources = [\n    SOURCELOWER_TAR_GZ,\n    'extra-%s.tar.gz' % local_extra_version,\n]\n\
+         checksums = [\n    {'gamma-1.0.tar.gz': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'},\n    \
+         {'extra-1.1.tar.gz': 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'},\n]\n\
+         moduleclass = 'tools'\n",
+    )
+    .unwrap();
+    let extra = tar_gz(&[("extra-1.2/README", "extra 1.2\n")]);
+    let mut client = MapClient::default();
+    client.pages.insert(
+        "https://example.invalid/src/gamma-2.0.tar.gz".into(),
+        tar_gz(&[("gamma-2.0/main.c", NEW_MAIN)]),
+    );
+    client.pages.insert(
+        "https://api.github.com/repos/acme/extra/releases?per_page=100".into(),
+        br#"[{"tag_name": "v1.1"}, {"tag_name": "v1.2"}, {"tag_name": "v2.0rc1", "prerelease": true}]"#
+            .to_vec(),
+    );
+    client.pages.insert(
+        "https://github.com/acme/extra/releases/download/v1.2/extra-1.2.tar.gz".into(),
+        extra.clone(),
+    );
+    let decisions = BumpDecisions {
+        latest_secondary: true,
+        ..BumpDecisions::default()
+    };
+    let (bundle, fetched) = plan_package_bump_fetching_with(
+        &request(&source, &robot, false),
+        &PackageEmitOptions::default(),
+        &client,
+        &decisions,
+    )
+    .expect("bump");
+    let text = &bundle.easyconfigs[0].text;
+    let digest = sha256_hex(&extra);
+    assert!(text.contains("local_extra_version = '1.2'\n"), "{text}");
+    assert!(
+        text.contains(&format!("{{'extra-1.2.tar.gz': '{digest}'}}")),
+        "{text}"
+    );
+    assert!(!text.contains("eeeeeeeeee"), "{text}");
+    let moved = bundle
+        .plan
+        .residuals
+        .iter()
+        .find(|residual| residual.category == "secondary-source")
+        .expect("the move is recorded");
+    assert_eq!(
+        moved.summary,
+        "extra 1.1 -> 1.2: newest stable release on github:acme/extra"
+    );
+    assert_eq!(moved.severity, ResidualSeverity::Mechanical);
+    // The old file's download failure is not a residual of the new recipe.
+    assert!(
+        !bundle
+            .plan
+            .residuals
+            .iter()
+            .any(|residual| residual.summary.contains("extra-1.1.tar.gz")),
+        "{:?}",
+        bundle.plan.residuals
+    );
+    assert!(fetched
+        .iter()
+        .any(|fetch| fetch.filename == "extra-1.2.tar.gz"
+            && fetch.sha256.as_deref() == Some(digest.as_str())));
+    assert!(!fetched
+        .iter()
+        .any(|fetch| fetch.filename == "extra-1.1.tar.gz"));
+    assert_eq!(
+        bundle.plan.sources[1].sha256.as_deref(),
+        Some(digest.as_str())
+    );
+}

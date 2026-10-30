@@ -177,6 +177,8 @@ fn tool_catalog() -> Vec<Value> {
                 ("emit_easyblock", "boolean"),
                 ("fetch_checksums", "boolean"),
                 ("strict_patches", "boolean"),
+                ("latest_secondary", "boolean"),
+                ("drop_patches", "object"),
             ],
         ),
         tool_with_optional(
@@ -904,10 +906,25 @@ fn package_bump_run(arguments: &Value) -> Result<Value, String> {
         package_layers: package_layers(arguments)?,
     };
     let (bundle, fetched) = if optional_bool(arguments, "fetch_checksums") {
-        crate::source_fetch::plan_package_bump_fetching(
+        let latest_secondary = optional_bool(arguments, "latest_secondary");
+        let mut drop_patches: Vec<(String, String)> =
+            string_map(arguments, "drop_patches")?.into_iter().collect();
+        drop_patches.sort();
+        let decisions = crate::source_fetch::BumpDecisions {
+            drop_patches,
+            latest_secondary,
+            overrides: if latest_secondary {
+                crate::upstream::load_overrides(&path_array(arguments, "overrides")?)
+                    .map_err(|error| format!("{error:#}"))?
+            } else {
+                Default::default()
+            },
+        };
+        crate::source_fetch::plan_package_bump_fetching_with(
             &request,
             &options,
             &crate::registry::UreqClient,
+            &decisions,
         )
     } else {
         plan_package_bump_with(&request, &options).map(|bundle| (bundle, Vec::new()))

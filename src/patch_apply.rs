@@ -632,18 +632,77 @@ fn residual_prefixes(name: &str) -> [String; 2] {
     ]
 }
 
+/// What the operator brings to a bump's patch decisions besides the source.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PatchInputs {
+    /// Directories searched, in order, for a patch rebased on the new
+    /// release: the source recipe's own directory, then
+    /// `<letter>/<Name>` under each easyconfigs root.
+    pub rebased_dirs: Vec<PathBuf>,
+    /// Patches the operator drops, by file name, with the reason recorded
+    /// in the plan.
+    pub drops: Vec<(String, String)>,
+}
+
+impl PatchInputs {
+    fn drop_reason(&self, name: &str) -> Option<&str> {
+        self.drops
+            .iter()
+            .find(|(drop, _)| drop == name)
+            .map(|(_, reason)| reason.as_str())
+    }
+}
+
+/// The names a patch rebased on `new_version` would carry: EasyBuild's
+/// `<Name>-<version>_<description>.patch`, and the old file's own spelling
+/// with the version replaced. Empty when the old name holds no version
+/// followed by a description.
+pub(crate) fn rebased_names(old: &str, name: &str, new_version: &str) -> Vec<String> {
+    let Ok(shape) = regex::Regex::new(
+        r"^(?P<head>.+?[-_])(?P<version>\d[0-9A-Za-z.+]*?)(?P<sep>[-_])(?P<desc>[A-Za-z].*)\.patch$",
+    ) else {
+        return Vec::new();
+    };
+    let Some(caps) = shape.captures(old) else {
+        return Vec::new();
+    };
+    let desc = &caps["desc"];
+    let mut names = vec![format!("{name}-{new_version}_{desc}.patch")];
+    let own = format!("{}{new_version}{}{desc}.patch", &caps["head"], &caps["sep"]);
+    if !names.contains(&own) {
+        names.push(own);
+    }
+    names.retain(|candidate| candidate != old);
+    names
+}
+
+/// The first rebased file for `old` in `dirs`.
+fn find_rebased(old: &str, name: &str, new_version: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    let names = rebased_names(old, name, new_version);
+    dirs.iter()
+        .flat_map(|dir| names.iter().map(move |candidate| dir.join(candidate)))
+        .find(|path| path.is_file())
+}
+
 /// Revisit every patch the tree could not decide against the downloaded
 /// source, rewrite the recipe for the ones the source drops, and replace
-/// their decision records. Returns the names still undecided.
+/// their decision records. A patch the source leaves undecided is replaced
+/// by a rebased file found through `inputs` when that file applies. An
+/// operator drop in `inputs` wins over the source and is recorded with its
+/// reason; the names it consumed are pushed to `used_drops`. Returns the
+/// names still undecided.
 pub(crate) fn decide_from_source(
     bundle: &mut PackageBundle,
     new_version: &str,
     fetched: &[SourceFetch],
+    inputs: &PatchInputs,
+    used_drops: &mut Vec<String>,
 ) -> Vec<String> {
     let Some(easyconfig) = bundle.easyconfigs.first() else {
         return Vec::new();
     };
     let entries = patch_entries(&easyconfig.text);
+    let package = bundle.plan.package.name.clone();
     let open: Vec<&PatchEntry> = entries
         .iter()
         .filter(|entry| {
@@ -658,7 +717,10 @@ pub(crate) fn decide_from_source(
             })
         })
         .collect();
-    if open.is_empty() {
+    let operator = entries
+        .iter()
+        .any(|entry| inputs.drop_reason(&entry.name).is_some());
+    if open.is_empty() && !operator {
         return undecided_names(bundle);
     }
     let Some(source) = fetched.first() else {
@@ -676,6 +738,7 @@ pub(crate) fn decide_from_source(
     };
     let label = format!("{} source", source.filename);
     let mut dropped = Vec::new();
+    let mut replaced: Vec<(String, String, String, PathBuf)> = Vec::new();
     let mut judged = 0usize;
     for entry in &entries {
         let is_open = open.iter().any(|candidate| candidate.name == entry.name);
@@ -695,23 +758,104 @@ pub(crate) fn decide_from_source(
             continue;
         };
         let verdict = judge(entry, &path, &root);
-        if !is_open {
+        let (mut decision, mut evidence, mut severity) = verdict_record(&verdict, &label);
+        if let Some(reason) = inputs.drop_reason(&entry.name) {
+            used_drops.push(entry.name.clone());
+            decision = "drop";
+            evidence = format!("{reason} (operator decision; the source alone: {evidence})");
+            severity = ResidualSeverity::Mechanical;
+        } else if !is_open {
             continue;
+        } else if matches!(verdict, SourceVerdict::Fails(_)) {
+            if let Some(rebased) =
+                find_rebased(&entry.name, &package, new_version, &inputs.rebased_dirs)
+            {
+                let rebased_name = rebased
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                match judge(entry, &rebased, &root) {
+                    SourceVerdict::Applies(level) => {
+                        if let Ok(bytes) = std::fs::read(&rebased) {
+                            let digest = crate::package_workflow::sha256_hex(&bytes);
+                            let failed = evidence
+                                .split_once("does not reverse-apply: ")
+                                .map(|(_, lines)| lines.to_string())
+                                .unwrap_or_else(|| evidence.clone());
+                            replaced.push((
+                                entry.name.clone(),
+                                rebased_name.clone(),
+                                digest,
+                                rebased.clone(),
+                            ));
+                            decision = "replace";
+                            evidence = format!(
+                                "with {rebased_name}, which applies to the {label} at -p{level} \
+                                 (the old patch: {failed})"
+                            );
+                            severity = ResidualSeverity::Mechanical;
+                        }
+                    }
+                    other => {
+                        let (_, rebased_evidence, _) = verdict_record(&other, &label);
+                        evidence = format!(
+                            "{evidence}; the rebased {rebased_name} does not settle it either: \
+                             {rebased_evidence}"
+                        );
+                    }
+                }
+            }
         }
-        judged += 1;
-        let (decision, evidence, severity) = verdict_record(&verdict, &label);
+        if is_open {
+            judged += 1;
+        }
         if decision == "drop" {
             dropped.push(entry.name.clone());
         }
         let prefixes = residual_prefixes(&entry.name);
-        if let Some(residual) = bundle.plan.residuals.iter_mut().find(|residual| {
+        let summary = format!("{decision} {}: {evidence}", entry.name);
+        let named = format!("{}: ", entry.name);
+        let existing = bundle.plan.residuals.iter_mut().find(|residual| {
             residual.category == "patch-decision"
-                && prefixes
+                && (prefixes
                     .iter()
                     .any(|prefix| residual.summary.starts_with(prefix))
-        }) {
-            residual.summary = format!("{decision} {}: {evidence}", entry.name);
-            residual.severity = severity;
+                    || residual
+                        .summary
+                        .split_once(' ')
+                        .is_some_and(|(_, rest)| rest.starts_with(&named)))
+        });
+        match existing {
+            Some(residual) => {
+                residual.summary = summary;
+                residual.severity = severity;
+            }
+            None => bundle.plan.residuals.push(crate::package::Residual {
+                id: format!("patch-decision:operator:{}", entry.name),
+                stage: crate::package::ResidualStage::Emit,
+                category: "patch-decision".into(),
+                severity,
+                summary,
+                evidence: None,
+                provenance: None,
+            }),
+        }
+    }
+    for (old, new, digest, path) in &replaced {
+        if let Some(easyconfig) = bundle.easyconfigs.first_mut() {
+            easyconfig.text = replace_patch(&easyconfig.text, old, new, digest);
+        }
+        if let Some(patch) = bundle
+            .plan
+            .build
+            .patches
+            .iter_mut()
+            .find(|patch| &patch.filename == old)
+        {
+            patch.filename = new.clone();
+            patch.sha256 = Some(digest.clone());
+            patch.source = Some(path.display().to_string());
+            patch.resolved_source = Some(path.clone());
         }
     }
     if !dropped.is_empty() {
@@ -744,6 +888,8 @@ pub(crate) fn decide_extension_patches(
     bundle: &mut PackageBundle,
     prior_version: Option<&str>,
     client: &dyn crate::registry::RegistryClient,
+    inputs: &PatchInputs,
+    used_drops: &mut Vec<String>,
 ) {
     let Some(easyconfig) = bundle.easyconfigs.first() else {
         return;
@@ -796,7 +942,7 @@ pub(crate) fn decide_extension_patches(
                     .clone()
                     .or_else(|| patch.source.as_ref().map(PathBuf::from))
             });
-        let (decision, evidence, severity) = match path {
+        let (mut decision, mut evidence, mut severity) = match path {
             None => (
                 "undecided",
                 "the patch file is not beside the source recipe".to_string(),
@@ -804,6 +950,12 @@ pub(crate) fn decide_extension_patches(
             ),
             Some(path) => verdict_record(&judge(entry, &path, &root), &label),
         };
+        if let Some(reason) = inputs.drop_reason(&entry.name) {
+            used_drops.push(entry.name.clone());
+            decision = "drop";
+            evidence = format!("{reason} (operator decision; the source alone: {evidence})");
+            severity = ResidualSeverity::Mechanical;
+        }
         if decision == "drop" {
             dropped.push(entry.name.clone());
         }
@@ -1019,6 +1171,130 @@ pub(crate) fn remove_patches(text: &str, names: &[String]) -> String {
     out
 }
 
+/// Rewrite the `checksums` entry of the file `old` to name `new` with
+/// `digest`. The entry is found by its key, by a comment naming the file,
+/// or, in a purely positional list, at `position` (sources first, then
+/// patches). A dict entry keeps its place and is wrapped the way the
+/// easyconfigs tree wraps a long one; a positional entry keeps its comment
+/// with the new name. `recipe` is `text` resolved.
+pub(crate) fn replace_checksum(
+    text: &str,
+    recipe: &crate::eb_parse::ResolvedEasyconfig,
+    old: &str,
+    new: &str,
+    digest: &str,
+    position: usize,
+) -> String {
+    let Ok(literal) = regex::Regex::new(r#"'([^'\n]*)'|"([^"\n]*)""#) else {
+        return text.to_string();
+    };
+    let Ok(Some((start, end))) = crate::eb_emit::easyconfig_list_span(text, "checksums") else {
+        return text.to_string();
+    };
+    let body = &text[start..end];
+    let spans = entry_spans(body);
+    let positional = recipe.checksum_entry_keys.iter().all(Vec::is_empty)
+        && spans.len() == recipe.sources_count + recipe.patch_names.len();
+    let by_name = spans.iter().position(|(s, e)| {
+        let own = &body[*s..*e];
+        let trailing = body[*e..].lines().next().unwrap_or("");
+        literal_names(own, old, recipe) || own.contains(old) || trailing.contains(old)
+    });
+    let found = by_name.or_else(|| positional.then_some(position));
+    let Some((s, e)) = found.and_then(|index| spans.get(index).copied()) else {
+        return text.to_string();
+    };
+    let entry = &body[s..e];
+    let replacement = if let Some(open) = entry.find('{') {
+        let close = entry.rfind('}').unwrap_or(entry.len() - 1);
+        let column = s - body[..s].rfind('\n').map(|at| at + 1).unwrap_or(0);
+        let inline = format!("{{'{new}': '{digest}'}}");
+        let dict = if column + inline.len() + 1 > 120 {
+            format!("{{'{new}':\n{} '{digest}'}}", " ".repeat(column))
+        } else {
+            inline
+        };
+        format!(
+            "{}{dict}{}",
+            &entry[..open],
+            entry[close + 1..].replace(old, new)
+        )
+    } else {
+        // A positional entry: its first literal is the digest, and a comment
+        // after it may name the file.
+        match literal.find(entry) {
+            Some(found) => format!(
+                "{}'{digest}'{}",
+                &entry[..found.start()],
+                entry[found.end()..].replace(old, new)
+            ),
+            None => entry.to_string(),
+        }
+    };
+    let line_end = body[e..].find('\n').map(|at| e + at).unwrap_or(body.len());
+    let trailing = body[e..line_end].replace(old, new);
+    format!(
+        "{}{}{}{}{}{}",
+        &text[..start],
+        &body[..s],
+        replacement,
+        trailing,
+        &body[line_end..],
+        &text[end..]
+    )
+}
+
+/// Put `new` with `digest` where the recipe lists the patch `old`: its
+/// `patches` entry keeps its tuple or dict shape and its `%(name)s` prefix,
+/// and its `checksums` entry names the new file and digest (see
+/// [`replace_checksum`]).
+pub(crate) fn replace_patch(text: &str, old: &str, new: &str, digest: &str) -> String {
+    let Ok(recipe) = resolve_easyconfig_str(text) else {
+        return text.to_string();
+    };
+    let Some(patch_index) = recipe.patch_names.iter().position(|name| name == old) else {
+        return text.to_string();
+    };
+    let Ok(literal) = regex::Regex::new(r#"'([^'\n]*)'|"([^"\n]*)""#) else {
+        return text.to_string();
+    };
+    let mut out = replace_checksum(
+        text,
+        &recipe,
+        old,
+        new,
+        digest,
+        recipe.sources_count + patch_index,
+    );
+    if let Ok(Some((start, end))) = crate::eb_emit::easyconfig_list_span(&out, "patches") {
+        let body = out[start..end].to_string();
+        let spans = entry_spans(&body);
+        if let Some((s, e)) = spans.get(patch_index).copied() {
+            let entry = &body[s..e];
+            if let Some(found) = literal.find(entry) {
+                let quoted = found.as_str();
+                let inner = &quoted[1..quoted.len() - 1];
+                let spelled = match inner.strip_prefix("%(name)s") {
+                    Some(_) => new
+                        .strip_prefix(recipe.name.as_str())
+                        .map(|rest| format!("%(name)s{rest}"))
+                        .unwrap_or_else(|| new.to_string()),
+                    None => new.to_string(),
+                };
+                let quote = &quoted[..1];
+                let rewritten_entry = format!(
+                    "{}{quote}{spelled}{quote}{}",
+                    &entry[..found.start()],
+                    &entry[found.end()..]
+                );
+                let rewritten = format!("{}{}{}", &body[..s], rewritten_entry, &body[e..]);
+                out = format!("{}{}{}", &out[..start], rewritten, &out[end..]);
+            }
+        }
+    }
+    out
+}
+
 /// Whether a checksum entry's key spells `name`, literally or through the
 /// name and version templates.
 fn literal_names(entry: &str, name: &str, recipe: &crate::eb_parse::ResolvedEasyconfig) -> bool {
@@ -1214,6 +1490,76 @@ mod tests {
             opts: None,
             copy_only: false,
         }
+    }
+
+    #[test]
+    fn a_rebased_name_keeps_the_description_and_takes_the_new_version() {
+        assert_eq!(
+            rebased_names(
+                "UCX-CUDA-1.18.0_link_against_existing_UCX_libs.patch",
+                "UCX-CUDA",
+                "1.22.0"
+            ),
+            vec!["UCX-CUDA-1.22.0_link_against_existing_UCX_libs.patch".to_string()]
+        );
+        assert_eq!(
+            rebased_names(
+                "RStudio-Server-2026.06.0+242_fix-fmt-include-order.patch",
+                "RStudio-Server",
+                "2026.10.1+239"
+            ),
+            vec!["RStudio-Server-2026.10.1+239_fix-fmt-include-order.patch".to_string()]
+        );
+        assert_eq!(
+            rebased_names("bazel-7.7.0-bazel_features.patch", "Bazel", "9.3.1"),
+            vec![
+                "Bazel-9.3.1_bazel_features.patch".to_string(),
+                "bazel-9.3.1-bazel_features.patch".to_string()
+            ]
+        );
+        assert_eq!(
+            rebased_names(
+                "Wannier90_3.1.0_fix_mpi_include.patch",
+                "Wannier90",
+                "4.0.3"
+            ),
+            vec![
+                "Wannier90-4.0.3_fix_mpi_include.patch".to_string(),
+                "Wannier90_4.0.3_fix_mpi_include.patch".to_string()
+            ]
+        );
+        assert!(rebased_names("fix_env.patch", "Pkg", "2.0").is_empty());
+    }
+
+    #[test]
+    fn a_replaced_patch_keeps_its_entry_shape_and_takes_the_new_digest() {
+        let text = "name = 'Pkg'\nversion = '2.0'\ntoolchain = SYSTEM\n\
+            sources = ['pkg-2.0.tar.gz']\n\
+            patches = ['%(name)s-1.0_fix.patch', ('Pkg-1.0_keep.patch', 1)]\n\
+            checksums = [\n    {'pkg-2.0.tar.gz': 'aa'},\n    {'Pkg-1.0_fix.patch':\n     'bb'},\n    \
+            {'Pkg-1.0_keep.patch': 'cc'},\n]\nmoduleclass = 'tools'\n";
+        let out = replace_patch(text, "Pkg-1.0_fix.patch", "Pkg-2.0_fix.patch", "dd");
+        assert!(
+            out.contains("patches = ['%(name)s-2.0_fix.patch', ('Pkg-1.0_keep.patch', 1)]"),
+            "{out}"
+        );
+        assert!(out.contains("    {'Pkg-2.0_fix.patch': 'dd'},\n"), "{out}");
+        assert!(!out.contains("'bb'"), "{out}");
+        assert!(out.contains("{'Pkg-1.0_keep.patch': 'cc'}"), "{out}");
+        let recipe = resolve_easyconfig_str(&out).unwrap();
+        assert_eq!(recipe.patch_names[0], "Pkg-2.0_fix.patch");
+
+        let positional = "name = 'Pkg'\nversion = '2.0'\ntoolchain = SYSTEM\n\
+            sources = ['pkg-2.0.tar.gz']\npatches = [('Pkg-1.0_fix.patch', 1)]\n\
+            checksums = [\n    'aa',  # pkg-2.0.tar.gz\n    'bb',  # Pkg-1.0_fix.patch\n]\n\
+            moduleclass = 'tools'\n";
+        let out = replace_patch(positional, "Pkg-1.0_fix.patch", "Pkg-2.0_fix.patch", "dd");
+        assert!(
+            out.contains("patches = [('Pkg-2.0_fix.patch', 1)]"),
+            "{out}"
+        );
+        assert!(out.contains("    'dd',  # Pkg-2.0_fix.patch\n"), "{out}");
+        assert!(out.contains("    'aa',  # pkg-2.0.tar.gz\n"), "{out}");
     }
 
     #[test]

@@ -106,6 +106,8 @@ fn mcp_catalog_matches_the_version_one_workflows() {
         "emit_easyblock",
         "fetch_checksums",
         "strict_patches",
+        "latest_secondary",
+        "drop_patches",
         "toolchain",
     ] {
         assert!(
