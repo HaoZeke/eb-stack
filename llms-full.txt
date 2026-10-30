@@ -1644,6 +1644,7 @@ compiler, linker, test, or runtime evidence.
 | `link` | ABI, selected libraries, and link interface | Easyconfig, patch, dependency, or target environment |
 | `test` | Failing product assertion and runtime environment | Product repair or target environment |
 | `install` | Install paths, permissions, and EasyBlock behavior | Easyconfig or target filesystem |
+| `license` | EULA refusal and the dependency that carries it | Site decision on `--accept-eula-for`; nothing in the recipe |
 | `sanity` | Declared files, commands, and loaded module | Easyconfig or profile verification command |
 | `resource` | Kernel/scheduler evidence and parallelism | Executor allocation or `EASYBUILD_PARALLEL` |
 | `timeout` | Routed timeout and scheduler wall time | Executor or target policy |
@@ -4181,6 +4182,7 @@ eb-stack package bump \
   [--strict-patches] \
   [--emit-easyblock] \
   [--fetch-checksums [--latest-secondary] [--drop-patch NAME=REASON]...] \
+  [--no-companions] \
   --out-dir BUNDLE
 ```
 
@@ -4237,6 +4239,25 @@ as RStudio-Server's `local_git_rev` must; a commit that is not the old tag's
 is left as written, and each case is a `release-commit` residual. The patches of an
 extension that is the package itself are tried against its new archive. See
 [output formats](https://eb-stack.rgoswami.me/formats.html.md).
+For a `PythonPackage` or `CargoPythonPackage` recipe, the new source's own
+`pyproject.toml` decides what the build needs: each `[build-system] requires`
+entry a recipe dependency does not already bundle (the Python module carries
+`setuptools` and `wheel`) becomes a build dependency on the module of that
+name in the target hierarchy, and one with no such module is a
+`build-requirement-unmapped` residual. A `maturin` or `setuptools-rust` build
+with a `Cargo.lock` also gets `Rust`, the recipe becomes a
+`CargoPythonPackage`, and `crates` is written from that lock.
+A dependency whose version the recipe writes in terms of its own, as
+`('Boost', version)` or `('protobuf', version[2:])`, is pinned at the version
+that expression gives after the bump. When the tree lacks that version and
+carries the dependency at another version in the target hierarchy, the
+dependency is bumped too, from that recipe and at its own toolchain level, into
+the same `easyconfigs/` overlay; its plan, SBOM and lock go under
+`packages/NAME-VERSION-TOOLCHAIN/`. `companions.json` names each one, its
+source recipe, and the package that needed it, and `build-order.json` lists
+the companions before the root so `campaign run` builds them first.
+`--no-companions` leaves such a dependency for the
+`version-bump-dropped-dep` residual instead.
 `--latest` takes the version `package latest` picks for the recipe, so it
 conflicts with `--version`; `--overrides` adds override files to that
 decision. The bump fails when no stable release survives.
@@ -6329,6 +6350,7 @@ classification so the finding reflects the actual compiler or runtime error.
 | `link` | requires-judgment | Link interface, library order, ABI, or dependency selection |
 | `test` | requires-judgment | Product behavior, test environment, or test-specific dependency |
 | `install` | requires-judgment | EasyBuild install logic, paths, or permissions |
+| `license` | requires-judgment | The site accepts or declines the licence (`--accept-eula-for`); never a recipe repair |
 | `sanity` | requires-judgment | Sanity paths or profile verification command |
 | `resource` | retryable | CPU, memory, GPU, filesystem, or scheduler sizing |
 | `timeout` | retryable | Routed timeout or scheduler wall time |
@@ -6808,6 +6830,26 @@ writes lock order, which is sorted by package name.
 The same build-list lines as the input, regrouped under `#### Title ####`
 headers taken from `--from`. Commented-out lines stay commented out.
 Packages the previous list does not name go under the `--unfiled` header.
+
+# Companion bumps (`companions.json`)
+
+Written by `package bump` when the bumped recipe needed a dependency bumped
+with it. A JSON array, in build order:
+
+```json
+[
+  {
+    "name": "Boost",
+    "version": "1.92.0",
+    "toolchain": "GCCcore/15.2.0",
+    "source": "easybuild/easyconfigs/b/Boost/Boost-1.90.0-GCCcore-15.2.0.eb",
+    "required_by": "Boost.Python-NumPy"
+  }
+]
+```
+
+`source` is the recipe the companion was bumped from. `build-order.json` in
+the same bundle lists each companion's recipe before the root's.
 
 # Source fetch (`sources.fetch.json`)
 

@@ -136,6 +136,7 @@ classification so the finding reflects the actual compiler or runtime error.
 | ~link~ | requires-judgment | Link interface, library order, ABI, or dependency selection |
 | ~test~ | requires-judgment | Product behavior, test environment, or test-specific dependency |
 | ~install~ | requires-judgment | EasyBuild install logic, paths, or permissions |
+| ~license~ | requires-judgment | The site accepts or declines the licence (~--accept-eula-for~); never a recipe repair |
 | ~sanity~ | requires-judgment | Sanity paths or profile verification command |
 | ~resource~ | retryable | CPU, memory, GPU, filesystem, or scheduler sizing |
 | ~timeout~ | retryable | Routed timeout or scheduler wall time |

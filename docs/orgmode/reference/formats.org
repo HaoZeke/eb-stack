@@ -259,6 +259,26 @@ The same build-list lines as the input, regrouped under ~#### Title ####~
 headers taken from ~--from~. Commented-out lines stay commented out.
 Packages the previous list does not name go under the ~--unfiled~ header.
 
+* Companion bumps (~companions.json~)
+
+Written by ~package bump~ when the bumped recipe needed a dependency bumped
+with it. A JSON array, in build order:
+
+#+begin_src json
+[
+  {
+    "name": "Boost",
+    "version": "1.92.0",
+    "toolchain": "GCCcore/15.2.0",
+    "source": "easybuild/easyconfigs/b/Boost/Boost-1.90.0-GCCcore-15.2.0.eb",
+    "required_by": "Boost.Python-NumPy"
+  }
+]
+#+end_src
+
+~source~ is the recipe the companion was bumped from. ~build-order.json~ in
+the same bundle lists each companion's recipe before the root's.
+
 * Source fetch (~sources.fetch.json~)
 
 Written by ~package bump --fetch-checksums~ when at least one source was

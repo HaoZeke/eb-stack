@@ -169,6 +169,7 @@ eb-stack package bump \
   [--strict-patches] \
   [--emit-easyblock] \
   [--fetch-checksums [--latest-secondary] [--drop-patch NAME=REASON]...] \
+  [--no-companions] \
   --out-dir BUNDLE
 #+end_src
 
@@ -225,6 +226,25 @@ as RStudio-Server's ~local_git_rev~ must; a commit that is not the old tag's
 is left as written, and each case is a ~release-commit~ residual. The patches of an
 extension that is the package itself are tried against its new archive. See
 [[file:formats.org][output formats]].
+For a ~PythonPackage~ or ~CargoPythonPackage~ recipe, the new source's own
+~pyproject.toml~ decides what the build needs: each ~[build-system] requires~
+entry a recipe dependency does not already bundle (the Python module carries
+~setuptools~ and ~wheel~) becomes a build dependency on the module of that
+name in the target hierarchy, and one with no such module is a
+~build-requirement-unmapped~ residual. A ~maturin~ or ~setuptools-rust~ build
+with a ~Cargo.lock~ also gets ~Rust~, the recipe becomes a
+~CargoPythonPackage~, and ~crates~ is written from that lock.
+A dependency whose version the recipe writes in terms of its own, as
+~('Boost', version)~ or ~('protobuf', version[2:])~, is pinned at the version
+that expression gives after the bump. When the tree lacks that version and
+carries the dependency at another version in the target hierarchy, the
+dependency is bumped too, from that recipe and at its own toolchain level, into
+the same ~easyconfigs/~ overlay; its plan, SBOM and lock go under
+~packages/NAME-VERSION-TOOLCHAIN/~. ~companions.json~ names each one, its
+source recipe, and the package that needed it, and ~build-order.json~ lists
+the companions before the root so ~campaign run~ builds them first.
+~--no-companions~ leaves such a dependency for the
+~version-bump-dropped-dep~ residual instead.
 ~--latest~ takes the version ~package latest~ picks for the recipe, so it
 conflicts with ~--version~; ~--overrides~ adds override files to that
 decision. The bump fails when no stable release survives.

@@ -114,6 +114,7 @@ compiler, linker, test, or runtime evidence.
 | ~link~ | ABI, selected libraries, and link interface | Easyconfig, patch, dependency, or target environment |
 | ~test~ | Failing product assertion and runtime environment | Product repair or target environment |
 | ~install~ | Install paths, permissions, and EasyBlock behavior | Easyconfig or target filesystem |
+| ~license~ | EULA refusal and the dependency that carries it | Site decision on ~--accept-eula-for~; nothing in the recipe |
 | ~sanity~ | Declared files, commands, and loaded module | Easyconfig or profile verification command |
 | ~resource~ | Kernel/scheduler evidence and parallelism | Executor allocation or ~EASYBUILD_PARALLEL~ |
 | ~timeout~ | Routed timeout and scheduler wall time | Executor or target policy |
