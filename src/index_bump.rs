@@ -1050,35 +1050,212 @@ fn replace_extension_checksum(
     new_version: &str,
     digest: &str,
 ) -> String {
-    let mut text = if !old_version.is_empty() && old_version != new_version {
-        raw.replace(old_version, new_version)
+    // A patch file keeps the name it ships under, even when that name
+    // embeds the old version; every other literal moves to the new one.
+    let text = if !old_version.is_empty() && old_version != new_version {
+        rename_non_patch_literals(raw, old_version, new_version)
     } else {
         raw.to_string()
     };
-    let pattern = regex::Regex::new(r#"['"][0-9a-fA-F]{64}['"]"#).ok();
-    let Some(pattern) = pattern else {
+    // The archive checksum is the first entry of the extension's own
+    // `checksums` list that is not keyed to, or commented as, a patch:
+    // EasyBuild lists source checksums before patch checksums. The bump may
+    // have emptied the archive entry, so the first literal digest left can
+    // be a patch's; position, not the first 64-hex literal, decides.
+    let Some((body_start, body_end)) = dict_list_span(&text, "checksums") else {
         return text;
     };
-    // Replace the first archive checksum. A patch digest sits next to a
-    // `.patch` key and is not the sdist.
-    if let Some(found) = pattern.find(&text) {
-        let window_start = found.start().saturating_sub(80);
-        let window = &text[window_start..found.start()];
-        if window.contains(".patch") || window.contains(".diff") {
-            if let Some(next) = pattern.find_at(&text, found.end()) {
-                let start = next.start();
-                let end = next.end();
-                let quote = text[start..].chars().next().unwrap_or('\'');
-                text.replace_range(start..end, &format!("{quote}{digest}{quote}"));
-                return text;
-            }
+    let body = &text[body_start..body_end];
+    for (start, end) in top_level_spans(body) {
+        let entry = &body[start..end];
+        let own_start = leading_comment_len(entry);
+        let own = &entry[own_start..];
+        let trailing = body[end..]
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim_start_matches(',');
+        if names_patch(own) || names_patch(trailing) {
+            continue;
         }
-        let start = found.start();
-        let end = found.end();
-        let quote = text[start..].chars().next().unwrap_or('\'');
-        text.replace_range(start..end, &format!("{quote}{digest}{quote}"));
+        let Some((value_start, value_end)) = last_quoted_span(own) else {
+            return text;
+        };
+        let absolute = body_start + start + own_start;
+        let mut out = String::with_capacity(text.len() + digest.len());
+        out.push_str(&text[..absolute + value_start]);
+        out.push_str(digest);
+        out.push_str(&text[absolute + value_end..]);
+        return out;
     }
     text
+}
+
+/// Whether text names a patch file: a `.patch` or `.diff` key, or a
+/// trailing comment naming one, as positional checksum lists write it.
+fn names_patch(text: &str) -> bool {
+    text.contains(".patch") || text.contains(".diff")
+}
+
+/// Length of the comment and blank lines that open a list entry span: the
+/// comment trailing the previous entry lands there when the list is split.
+fn leading_comment_len(entry: &str) -> usize {
+    let mut offset = 0usize;
+    for line in entry.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            offset += line.len();
+        } else {
+            let lead = line.len() - line.trim_start().len();
+            return offset + lead;
+        }
+    }
+    offset.min(entry.len())
+}
+
+/// Replace `old` with `new` inside every quoted literal and comment that
+/// does not name a patch file.
+fn rename_non_patch_literals(raw: &str, old: &str, new: &str) -> String {
+    let Ok(pattern) = regex::Regex::new(r#"'[^'\n]*'|"[^"\n]*"|#[^\n]*"#) else {
+        return raw.to_string();
+    };
+    pattern
+        .replace_all(raw, |caps: &regex::Captures| {
+            let literal = &caps[0];
+            if names_patch(literal) {
+                literal.to_string()
+            } else {
+                literal.replace(old, new)
+            }
+        })
+        .into_owned()
+}
+
+/// Byte span of the contents of the last quoted string in `text`, ignoring
+/// anything after a `#` comment.
+fn last_quoted_span(text: &str) -> Option<(usize, usize)> {
+    let mut quote: Option<(u8, usize)> = None;
+    let mut found = None;
+    let mut escaped = false;
+    for (index, &byte) in text.as_bytes().iter().enumerate() {
+        match quote {
+            Some((active, open)) => {
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == active {
+                    found = Some((open + 1, index));
+                    quote = None;
+                }
+            }
+            None => match byte {
+                b'#' => break,
+                b'\'' | b'"' => quote = Some((byte, index)),
+                _ => {}
+            },
+        }
+    }
+    found
+}
+
+/// Body span, between the brackets, of the list a dict key names inside an
+/// extension tuple: `'checksums': [ ... ]`.
+fn dict_list_span(raw: &str, key: &str) -> Option<(usize, usize)> {
+    let pattern = regex::Regex::new(&format!(r#"['"]{key}['"]\s*:\s*\["#)).ok()?;
+    let open = pattern.find(raw)?.end();
+    let mut depth = 1i32;
+    let mut scan = Scanner::default();
+    for (index, &byte) in raw.as_bytes().iter().enumerate().skip(open) {
+        if !scan.code(byte) {
+            continue;
+        }
+        match byte {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((open, index));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Trimmed byte spans of the top-level comma-separated entries of a list
+/// body, split the way [`split_top_level`] splits it.
+fn top_level_spans(body: &str) -> Vec<(usize, usize)> {
+    fn push(body: &str, from: usize, to: usize, out: &mut Vec<(usize, usize)>) {
+        let piece = &body[from..to];
+        let lead = piece.len() - piece.trim_start().len();
+        let trail = piece.len() - piece.trim_end().len();
+        if lead + trail < piece.len() {
+            out.push((from + lead, to - trail));
+        }
+    }
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0i32;
+    let mut scan = Scanner::default();
+    for (index, &byte) in body.as_bytes().iter().enumerate() {
+        if !scan.code(byte) {
+            continue;
+        }
+        match byte {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' if depth > 0 => depth -= 1,
+            b',' if depth == 0 => {
+                push(body, start, index, &mut out);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    push(body, start, body.len(), &mut out);
+    out
+}
+
+/// Byte-wise Python lexer state: quotes and `#` comments.
+#[derive(Default)]
+struct Scanner {
+    quote: Option<u8>,
+    escaped: bool,
+    comment: bool,
+}
+
+impl Scanner {
+    /// Feed one byte; true when it is code outside a string or comment.
+    fn code(&mut self, byte: u8) -> bool {
+        if self.comment {
+            if byte == b'\n' {
+                self.comment = false;
+            }
+            return false;
+        }
+        if let Some(active) = self.quote {
+            if self.escaped {
+                self.escaped = false;
+            } else if byte == b'\\' {
+                self.escaped = true;
+            } else if byte == active {
+                self.quote = None;
+            }
+            return false;
+        }
+        match byte {
+            b'#' => {
+                self.comment = true;
+                false
+            }
+            b'\'' | b'"' => {
+                self.quote = Some(byte);
+                false
+            }
+            _ => true,
+        }
+    }
 }
 
 fn assignment_text(text: &str, key: &str) -> Option<String> {
@@ -1374,6 +1551,55 @@ moduleclass = 'lib'
             "{rewritten}"
         );
         assert!(rewritten.contains("('other', '1.0.0'"), "{rewritten}");
+    }
+
+    #[test]
+    fn an_emptied_archive_checksum_is_filled_and_patch_digests_stay() {
+        let raw = "(name, version, {
+        'patches': [
+            ('Widget-0.3.2_avx.patch', 1),
+            {'name': 'Widget-1.0.0_fix.patch', 'opts': '--binary'},
+        ],
+        'checksums': [
+            {'Widget-2.0.0.tar.gz': ''},
+            {'Widget-0.3.2_avx.patch': '1111111111111111111111111111111111111111111111111111111111111111'},
+            {'Widget-1.0.0_fix.patch':
+             '2222222222222222222222222222222222222222222222222222222222222222'},
+        ],
+    })";
+        let digest = "3333333333333333333333333333333333333333333333333333333333333333";
+        let out = replace_extension_checksum(raw, "1.0.0", "2.0.0", digest);
+        assert!(
+            out.contains(&format!("{{'Widget-2.0.0.tar.gz': '{digest}'}}")),
+            "{out}"
+        );
+        assert!(out.contains("'1111111111111111111111111111111111111111111111111111111111111111'"));
+        assert!(out.contains("'2222222222222222222222222222222222222222222222222222222222222222'"));
+        assert!(out.contains("'Widget-1.0.0_fix.patch'"), "{out}");
+    }
+
+    #[test]
+    fn a_positional_archive_checksum_ahead_of_commented_patches_is_replaced() {
+        let raw = "('other', '1.0.0', {
+        'patches': ['other-1.0.0_fix.patch'],
+        'checksums': [
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',  # other-1.0.0.tar.gz
+            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',  # other-1.0.0_fix.patch
+        ],
+    })";
+        let digest = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let out = replace_extension_checksum(raw, "1.0.0", "2.0.0", digest);
+        assert!(
+            out.contains(&format!("'{digest}',  # other-2.0.0.tar.gz")),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',  # other-1.0.0_fix.patch"
+            ),
+            "{out}"
+        );
+        assert!(out.contains("['other-1.0.0_fix.patch']"), "{out}");
     }
 
     #[test]
