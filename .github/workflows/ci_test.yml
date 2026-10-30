@@ -164,6 +164,7 @@ jobs:
             --test easyblock_layers \
             --test easyblock_owed \
             --test extension_provides \
+            --test fetch_prs_script \
             --test from_commit \
             --test hierarchy_universe \
             --test jenkins_build_list \

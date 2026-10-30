@@ -12,6 +12,9 @@ set -euo pipefail
 
 repo=$1
 out=$2
+# Rewrite outputs from scratch on every run, so closed pull requests do not
+# persist from stale raw/ and prs/ directories.
+rm -rf "$out/raw" "$out/prs"
 mkdir -p "$out/prs"
 rm -f "$out/refspecs"
 prefix="easybuild/easyconfigs/"
