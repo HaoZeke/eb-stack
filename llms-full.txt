@@ -86,7 +86,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [close open easyconfigs pull requests](https://eb-stack.rgoswami.me/howto/easyconfigs-pr-overlap.html.md),
     [what an in-place patch forces EESSI to rebuild](https://eb-stack.rgoswami.me/howto/rebuild-set.html.md),
     [which modules carry a component](https://eb-stack.rgoswami.me/howto/component-reach.html.md),
-    [which from-commit pins a release already contains](https://eb-stack.rgoswami.me/howto/from-commit-released.html.md).
+    [which from-commit pins a release already contains](https://eb-stack.rgoswami.me/howto/from-commit-released.html.md),
+    [refuse a plan an architecture cannot build](https://eb-stack.rgoswami.me/howto/arch-unsupported.html.md).
   - Reference: [CLI](https://eb-stack.rgoswami.me/reference/cli.html.md),
     [Model Context Protocol server](https://eb-stack.rgoswami.me/reference/mcp.html.md),
     [package bundles](https://eb-stack.rgoswami.me/reference/package-bundles.html.md),
@@ -2976,6 +2977,109 @@ The command exits 0 when no pin is `released`. It exits 1 when any pin is
 `released`, including a pin whose blob is `same`. `--json` prints the same
 fields as JSON. `eb_stack_from_commit` returns that report.
 
+# Refuse a plan an architecture cannot build
+
+What it does: `stack arch` reads an easystack as a plan. With
+`--easyconfigs` it also closes the dependencies. An entry the
+architecture cannot build fails the command. The message names that
+entry and the architecture.
+
+Why you'd use it: a shared EESSI easystack is built on every CPU
+architecture. GDRCopy needs CUDA, and its header rejects riscv64.
+Software-layer pull request 1775 added other lines to
+`eessi-2026.06-eb-5.4.0-2026.1.yml`, and the riscv64 bot failed on the
+GDRCopy line that was already there. Pull request 1822 tried GDRCopy
+on riscv64 alone and failed the same way. Pull request 1876 failed
+bwa-mem2 on aarch64 because the Makefile passes `-msse`.
+
+```bash
+eb-stack stack arch \
+  --arch riscv64 \
+  --easystack tests/arch_unsupported_fixtures/easystacks/eessi-2026.06-eb-5.4.0-2026.1.yml \
+  --easyconfigs tests/arch_unsupported_fixtures/easyconfigs \
+  --installed tests/arch_unsupported_fixtures/installed-riscv64.txt \
+  --additional-arch tests/arch_unsupported_fixtures/additional_arch/riscv64/generic/eessi-2026.06-eb-5.4.0-2026.1.yml
+```
+
+The command prints:
+
+```
+GDRCopy-2.5.2-GCCcore-15.2.0.eb is unsupported on riscv64: needs CUDA; gdrconfig.h errors with architecture is not supported (software-layer #1775, #1822)
+GDRCopy-2.5.2-GCCcore-15.2.0.eb is flagged on riscv64: it has never been installed there and is not in the riscv64 additional_arch easystack
+unsupported=1 flagged=1
+```
+
+The first line is the hard failure. `GDRCopy-2.5.2-GCCcore-15.2.0.eb` is
+the entry. `riscv64` is the architecture. The reason and the pull
+request numbers come from `data/arch-unsupported.toml`. The command
+exits 1, and the error repeats that line.
+
+The second line is the cheap check, and it does not read recipes. The
+entry is in the shared easystack, `--installed` has no
+`GDRCopy/2.5.2-GCCcore-15.2.0` line, and `--additional-arch` does not
+name the file. `unsupported`` and `flagged`` are the two counts.
+`--unsupported` replaces the bundled list.
+
+A plan that only depends on the entry names the depender. This
+easystack lists nvtop, and nvtop depends on GDRCopy:
+
+```bash
+eb-stack stack arch \
+  --arch riscv64 \
+  --easystack tests/arch_unsupported_fixtures/easystacks/nvtop-only.yml \
+  --easyconfigs tests/arch_unsupported_fixtures/easyconfigs
+```
+
+```
+GDRCopy-2.5.2-GCCcore-15.2.0.eb is unsupported on riscv64: needs CUDA; gdrconfig.h errors with architecture is not supported (software-layer #1775, #1822) (required by nvtop-3.3.2-GCCcore-15.2.0.eb)
+unsupported=1 flagged=0
+```
+
+`(required by nvtop-3.3.2-GCCcore-15.2.0.eb)` means the plan did not
+name GDRCopy. The closure did. `flagged=0` is the cheap check staying
+quiet, because `--installed` was not passed.
+
+bwa-mem2 is the aarch64 entry:
+
+```bash
+eb-stack stack arch \
+  --arch aarch64 \
+  --easystack tests/arch_unsupported_fixtures/easystacks/bwa-mem2.yml \
+  --easyconfigs tests/arch_unsupported_fixtures/easyconfigs
+```
+
+```
+bwa-mem2-2.3-GCC-14.3.0.eb is unsupported on aarch64: the Makefile passes -msse and -msse2, which aarch64 gcc rejects (software-layer #1876)
+unsupported=1 flagged=0
+```
+
+`--arch aarch64/neoverse_v1` is the same family as `--arch aarch64`.
+The family is the text before the first slash. With no `--arch`, every
+family in the list is checked. `--arch x86_64` does not reject GDRCopy:
+the list has no x86_64 entry for it.
+
+An entry that is in the `additional_arch` easystack is not flagged,
+even when it has never been installed. It is still unsupported when
+the list says so. Passing `--installed` with more than one `--arch`
+needs a prefix, `riscv64=installed-riscv64.txt`. The same prefix form
+works for `--additional-arch`. A directory is every easystack under it.
+
+`stack batch` uses the same list before it writes a plan. A root that
+includes GDRCopy, or depends on it, exits 1 and does not write
+`plan.json`. `--arch` limits that check to one family. With no
+`--arch`, every family in the list is checked, because the batch is a
+shared easystack.
+
+Software-layer pull request 1623 added waLBerla 7.2. The bot failed on
+aarch64 neoverse_v1, a64fx, and nvidia/grace because `SIMDAlignment()`
+was not constexpr under SVE. The from-commit pin a69e693 patches that,
+and the bot then succeeded on those targets. waLBerla is not in the
+list. The cheap check is what flags a shared entry before that first
+bot run, while it has never been installed on the architecture and is
+not in that architecture's `additional_arch` easystack.
+
+See [the command-line reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
+
 # Command-line reference
 
 `eb-stack` has six namespaced command groups (`package`, `recipe`,
@@ -2992,7 +3096,7 @@ are deterministic bundle artifacts.
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
 
 `--help` for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is `--out-dir`. A single output file is `--out` (`--lock-out` for the lock `stack solve` writes). `--installed`, `--easyconfigs`, `--filter-deps`, and `--generated-at` use those names on every command that takes them.
 
@@ -3015,6 +3119,7 @@ Package commands take the toolchain as `--toolchain name/version`, the spelling 
 | `stack easystack` | Write a lock as the YAML `eb --easystack` reads |
 | `stack sections` | Regroup a Jenkins build list under a previous list's headers |
 | `stack from-commit` | Report `from-commit` pins already contained in an EasyBuild release |
+| `stack arch` | Refuse a plan an architecture cannot build, and flag entries never installed there |
 | `repro summary` | Print a reproduction scoreboard from collected case scores |
 | `pr-overlap` | Close open pull-request easystack additions against an installed stack and report shared builds |
 | `rebuild-set` | Classify the installed reverse dependents of easyconfigs patched in place |
@@ -3378,7 +3483,17 @@ eb-stack stack batch \
   [--size 3] \
   [--easyconfigs-repo ~/src/easybuild-easyconfigs] \
   [--generated-at 2026-10-29T00:00:00Z] \
+  [--arch riscv64]... \
+  [--unsupported LIST.toml] \
   --out-dir BATCHES
+
+eb-stack stack arch \
+  --easystack EASYSTACK.yml [--easystack OTHER.yml]... \
+  [--arch riscv64]... \
+  [--easyconfigs TREE]... \
+  [--installed INSTALLED.txt | --installed riscv64=INSTALLED.txt]... \
+  [--additional-arch FILE.yml | --additional-arch riscv64=DIR]... \
+  [--unsupported LIST.toml]
 
 eb-stack stack sections \
   tests/jenkins_sections/next.list \
@@ -3508,6 +3623,50 @@ lock, a CycloneDX SBOM, `reproduce.sh` with the exact command and the
 `eb --dry-run` lines, `batch.json` and `pr-body.md`. `plan.md` and
 `plan.json` at the top record the waits, the unresolved roots and a SHA-256
 of the inputs. `--generated-at` fixes the time written into the plan.
+`--arch` limits the unsupported-entry check to that family. With no
+`--arch`, every family in the bundled list is checked. `--unsupported`
+replaces that list. A hit exits 1 and writes nothing.
+
+## `stack arch`
+
+What it does: judge an easystack as a plan for one or more CPU
+architectures. An entry the architecture cannot build fails the
+command, whether the easystack names it or a dependency closes over it.
+
+Why you'd use it: a shared EESSI easystack is built on every
+architecture. GDRCopy in that file fails the riscv64 bot even when the
+pull request added other lines.
+
+```bash
+eb-stack stack arch \
+  --arch riscv64 \
+  --easystack tests/arch_unsupported_fixtures/easystacks/eessi-2026.06-eb-5.4.0-2026.1.yml \
+  --easyconfigs tests/arch_unsupported_fixtures/easyconfigs \
+  --installed tests/arch_unsupported_fixtures/installed-riscv64.txt \
+  --additional-arch tests/arch_unsupported_fixtures/additional_arch/riscv64/generic/eessi-2026.06-eb-5.4.0-2026.1.yml
+```
+
+```
+GDRCopy-2.5.2-GCCcore-15.2.0.eb is unsupported on riscv64: needs CUDA; gdrconfig.h errors with architecture is not supported (software-layer #1775, #1822)
+GDRCopy-2.5.2-GCCcore-15.2.0.eb is flagged on riscv64: it has never been installed there and is not in the riscv64 additional_arch easystack
+unsupported=1 flagged=1
+```
+
+The unsupported line names the entry and the architecture, and the
+command exits 1. The flagged line is the cheap check: the entry is in
+the shared easystack, the installed list has never had that module, and
+the `--additional-arch` easystack does not name the file. `required by`
+on an unsupported line names the plan entry that pulled the dependency
+in. The plan itself did not name the unsupported entry. `--easystack` is the plan. `--easyconfigs` is the robot
+tree for that closure. `--arch` repeats; a target such as
+`riscv64/generic` uses the family before the slash. No `--arch` checks
+every family in the list. `--installed` and `--additional-arch` take a
+bare path for one architecture, or `riscv64=path` when several are
+checked. `--unsupported` replaces `data/arch-unsupported.toml`. The
+same refusal runs inside `stack batch` before a plan is written.
+
+[Refuse a plan an architecture cannot build](https://eb-stack.rgoswami.me/../howto/arch-unsupported.html.md)
+shows the dependency line and the bwa-mem2 line.
 
 `stack sections` reads the build list
 and regroups its entries under the `#### Title ####` headers of `--from`.
@@ -4049,7 +4208,11 @@ option a `<file.eb>:<option>=<value>` string. `eb_stack_sections` requires
 `list`, `from`, and `out`, and takes `unfiled`. `eb_stack_from_commit`
 requires `easystack` and takes `easyconfigs_repo`, `easyblocks_repo`,
 `easybuild_version`, and `json`. It returns the same report as
-`stack from-commit`. `eb_repro_summary`
+`stack from-commit`. `eb_stack_arch` requires `easystack` and takes
+`arch`, `easyconfigs`, `installed`, `additional_arch`, and
+`unsupported`. It returns the same report as `stack arch`, and a hit is
+a tool error. `eb_stack_batch` takes `arch` and `unsupported` and
+refuses the plan the same way. `eb_repro_summary`
 requires `scores` and takes `ratchet` and `json`. Each of these tools
 calls the same runner as the command of that name, and the text it
 returns is that command's stdout.
@@ -8152,7 +8315,7 @@ table. `reverse=0` again, for the same reason as the CMakeMake run.
 
 # The same document over MCP
 
-The Model Context Protocol (MCP) catalog has 41 tools. `tools/list` prints
+The Model Context Protocol (MCP) catalog has 42 tools. `tools/list` prints
 their names:
 
 ```bash
@@ -8190,6 +8353,7 @@ eb_stack_easystack
 eb_package_latest
 eb_stack_gap
 eb_stack_batch
+eb_stack_arch
 eb_stack_sections
 eb_stack_from_commit
 eb_component_reach
@@ -8205,7 +8369,7 @@ eb_easyblock_reach
 eb_repro_summary
 ```
 
-That is 41 tools. `eb_stack_sbom` writes the CycloneDX file `stack sbom`
+That is 42 tools. `eb_stack_sbom` writes the CycloneDX file `stack sbom`
 writes. Its `tools/list` description reads: "Emit CycloneDX from an existing
 stack lock, reading dependency edges and source checksums from the
 easyconfigs the lock names." `eb_stack_sbom` reads the Cbc lock:

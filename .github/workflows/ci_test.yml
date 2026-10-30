@@ -154,6 +154,7 @@ jobs:
       - name: Every integration test that is not ignore-only
         run: |
           cargo test --locked \
+            --test arch_unsupported \
             --test baseline_easystack \
             --test build_list_and_bare_tuple \
             --test cli_ergonomics \

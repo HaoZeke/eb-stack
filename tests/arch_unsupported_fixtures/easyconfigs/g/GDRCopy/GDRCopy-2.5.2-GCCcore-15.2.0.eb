@@ -1,0 +1,15 @@
+easyblock = 'ConfigureMake'
+
+name = 'GDRCopy'
+version = '2.5.2'
+
+homepage = 'https://github.com/NVIDIA/gdrcopy'
+description = """Low-latency GPU memory copy. Needs CUDA, and the upstream header rejects an architecture it does not know."""
+
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+
+source_urls = ['https://github.com/NVIDIA/gdrcopy/archive/']
+sources = ['v%(version)s.tar.gz']
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+moduleclass = 'lib'

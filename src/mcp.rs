@@ -408,6 +408,20 @@ fn tool_catalog() -> Vec<Value> {
                 ("size", "integer"),
                 ("easyconfigs_repo", "string"),
                 ("generated_at", "string"),
+                ("arch", "array"),
+                ("unsupported", "string"),
+            ],
+        ),
+        tool_with_optional(
+            "eb_stack_arch",
+            "Refuse a plan an architecture cannot build, as `stack arch` does. An entry in the unsupported list fails the plan when the easystack names it or a dependency closes over it. With installed, an entry that architecture has never installed, and that is not in additional_arch, is flagged.",
+            &[("easystack", "array_min1")],
+            &[
+                ("arch", "array"),
+                ("easyconfigs", "array"),
+                ("installed", "array"),
+                ("additional_arch", "array"),
+                ("unsupported", "string"),
             ],
         ),
         tool_with_optional(
@@ -684,6 +698,7 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_package_latest" => package_latest_tool(arguments),
         "eb_stack_gap" => stack_gap_tool(arguments),
         "eb_stack_batch" => stack_batch_tool(arguments),
+        "eb_stack_arch" => stack_arch_tool(arguments),
         "eb_target_list" => target_list(arguments),
         "eb_target_doctor" => target_doctor(arguments),
         "eb_campaign_run" => campaign_run(arguments),
@@ -2884,6 +2899,8 @@ fn stack_batch_tool(arguments: &Value) -> Result<Value, String> {
         size: usize::try_from(size).map_err(|error| format!("size: {error}"))?,
         easyconfigs_repo: optional_path(arguments, "easyconfigs_repo"),
         generated_at: optional_string(arguments, "generated_at"),
+        arches: string_array(arguments, "arch")?,
+        unsupported: optional_path(arguments, "unsupported"),
         command_line: batch_command_line(arguments),
         out_dir: required_path(arguments, "out_dir")?,
     };
@@ -2917,6 +2934,8 @@ fn batch_command_line(arguments: &Value) -> String {
         ("size", "--size"),
         ("easyconfigs_repo", "--easyconfigs-repo"),
         ("generated_at", "--generated-at"),
+        ("arch", "--arch"),
+        ("unsupported", "--unsupported"),
         ("out_dir", "--out-dir"),
     ];
     for (key, flag) in flags {
@@ -2935,6 +2954,33 @@ fn batch_command_line(arguments: &Value) -> String {
         }
     }
     words.join(" ")
+}
+
+fn stack_arch_tool(arguments: &Value) -> Result<Value, String> {
+    let report = crate::arch_support::run_arch_check(&crate::arch_support::ArchCheckRequest {
+        arches: string_array(arguments, "arch")?,
+        easystacks: path_array(arguments, "easystack")?,
+        easyconfigs: optional_paths(arguments, "easyconfigs")?,
+        installed: string_array(arguments, "installed")?,
+        additional: string_array(arguments, "additional_arch")?,
+        unsupported: optional_path(arguments, "unsupported"),
+    })
+    .map_err(workflow_error)?;
+    let failed = !report.unsupported.is_empty() || !report.flagged.is_empty();
+    if failed {
+        return Err(report
+            .unsupported
+            .iter()
+            .chain(report.flagged.iter())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+    Ok(json!({
+        "text": report.stdout,
+        "unsupported": report.unsupported,
+        "flagged": report.flagged,
+    }))
 }
 
 fn stack_easystack_tool(arguments: &Value) -> Result<Value, String> {

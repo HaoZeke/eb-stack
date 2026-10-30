@@ -69,7 +69,7 @@ enum Command {
     )]
     Stack {
         #[command(subcommand)]
-        command: StackCommand,
+        command: Box<StackCommand>,
     },
     /// Inspect declarative build targets.
     #[command(
@@ -867,6 +867,71 @@ struct SolveArgs {
     stack_diff_out: Option<PathBuf>,
 }
 
+#[derive(clap::Args, Debug)]
+struct BatchArgs {
+    /// Root easyconfig file name. Repeatable.
+    #[arg(long = "root")]
+    roots: Vec<String>,
+    /// File with one root easyconfig file name per line.
+    #[arg(long)]
+    roots_file: Option<PathBuf>,
+    /// Robot-path easyconfig tree. Repeatable; later trees win.
+    #[arg(long, required = true)]
+    easyconfigs: Vec<PathBuf>,
+    /// Commit and directory for an open pull request's from-commit pin,
+    /// as `COMMIT=DIR`. Repeatable.
+    #[arg(long = "commit-tree")]
+    commit_trees: Vec<String>,
+    /// Installed modules, one `Name/VersionFull` per line.
+    #[arg(long)]
+    installed: PathBuf,
+    /// Modulerc file with `module_version` aliases. Repeatable.
+    #[arg(long = "installed-modulerc")]
+    installed_modulerc: Vec<PathBuf>,
+    /// Open software-layer pull requests, `pr-overlap --pr` JSON. Repeatable.
+    #[arg(long = "open-prs")]
+    open_prs: Vec<PathBuf>,
+    /// Also read the open pull requests of `OWNER/NAME` over HTTPS, as
+    /// `EESSI/software-layer`. `GITHUB_TOKEN` or `GH_TOKEN` is sent to
+    /// api.github.com when set.
+    #[arg(long)]
+    open_repo: Option<String>,
+    /// EESSI version, `2026.06`.
+    #[arg(long)]
+    eessi_version: String,
+    /// EasyBuild release the entries are built with, `5.4.1`.
+    #[arg(long)]
+    easybuild_version: String,
+    /// Toolchain generation, `2026.1`.
+    #[arg(long)]
+    generation: String,
+    /// `--filter-deps` as EESSI-extend sets it. Absent, `EASYBUILD_FILTER_DEPS` is read.
+    #[arg(long, value_delimiter = ',')]
+    filter_deps: Vec<String>,
+    /// Most roots per pull request.
+    #[arg(long, default_value_t = 3)]
+    size: usize,
+    /// Architecture to judge the plan against, `riscv64` or
+    /// `aarch64/generic`. Repeatable. Absent checks every architecture
+    /// in the unsupported list, because a shared easystack is built on
+    /// each of them.
+    #[arg(long = "arch")]
+    arch: Vec<String>,
+    /// Replace the bundled per-architecture unsupported list.
+    #[arg(long)]
+    unsupported: Option<PathBuf>,
+    /// easybuild-easyconfigs checkout with release tags: a root the
+    /// release lacks gets a `from-commit` pin.
+    #[arg(long)]
+    easyconfigs_repo: Option<PathBuf>,
+    /// RFC 3339 time written into the plan. Absent is now.
+    #[arg(long)]
+    generated_at: Option<String>,
+    /// Output directory.
+    #[arg(long)]
+    out_dir: PathBuf,
+}
+
 #[derive(Subcommand, Debug)]
 enum StackCommand {
     /// Parse EasyBuild trees and solve a jointly consistent stack.
@@ -972,58 +1037,56 @@ enum StackCommand {
     #[command(
         after_long_help = "Examples:\n  eb-stack stack batch --roots-file roots.txt --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --installed installed-zen4.txt --open-prs open-prs.json --eessi-version 2026.06 --easybuild-version 5.4.1 --generation 2026.1 --easyconfigs-repo easybuild-easyconfigs --out-dir batches"
     )]
-    Batch {
-        /// Root easyconfig file name. Repeatable.
-        #[arg(long = "root")]
-        roots: Vec<String>,
-        /// File with one root easyconfig file name per line.
-        #[arg(long)]
-        roots_file: Option<PathBuf>,
-        /// Robot-path easyconfig tree. Repeatable; later trees win.
+    /// Plan software-layer pull requests whose builds do not overlap.
+    ///
+    /// Each root's new-module set is its closure over the robot path minus the
+    /// installed modules, as `pr-overlap` computes it for one easystack line.
+    /// Roots whose sets meet ship in one pull request; a root whose set meets
+    /// an open pull request's waits for it. The rest are packed `--size` per
+    /// pull request. Each batch directory gets the EESSI easystacks, a lock, a
+    /// CycloneDX SBOM, `reproduce.sh` with this exact command and the
+    /// `eb --dry-run` lines, `batch.json`, and a pull-request body.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack batch --roots-file roots.txt --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs --installed installed-zen4.txt --open-prs open-prs.json --eessi-version 2026.06 --easybuild-version 5.4.1 --generation 2026.1 --easyconfigs-repo easybuild-easyconfigs --out-dir batches"
+    )]
+    Batch(Box<BatchArgs>),
+    /// Refuse a plan an architecture cannot build, and flag shared entries
+    /// that architecture has never installed.
+    ///
+    /// An entry in `data/arch-unsupported.toml` fails the plan when the
+    /// easystack names it or a dependency closes over it. The message names
+    /// the easyconfig and the architecture. With `--installed`, an entry the
+    /// architecture has never installed, and that is not in `--additional-arch`,
+    /// is flagged.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack arch --arch riscv64 --easystack eessi-2026.06-eb-5.4.0-2026.1.yml --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs\n  eb-stack stack arch --arch riscv64 --easystack eessi-2026.06-eb-5.4.0-2026.1.yml --installed installed-riscv64.txt --additional-arch additional_arch/riscv64"
+    )]
+    Arch {
+        /// Architecture family, `riscv64`, or a target such as
+        /// `riscv64/generic`. Repeatable. Absent checks every architecture
+        /// in the unsupported list.
+        #[arg(long = "arch")]
+        arch: Vec<String>,
+        /// Easystack whose entries are the plan. Repeatable.
         #[arg(long, required = true)]
+        easystack: Vec<PathBuf>,
+        /// Robot tree the dependency closure is read from. Repeatable.
+        /// Absent checks only the filenames the easystack names.
+        #[arg(long)]
         easyconfigs: Vec<PathBuf>,
-        /// `<commit>=<dir>` easyconfigs for an open PR's `from-commit` pin. Repeatable.
-        #[arg(long = "commit-tree")]
-        commit_trees: Vec<String>,
-        /// Installed modules, one `Name/VersionFull` per line.
+        /// Installed modules for the cheap check, one `Name/VersionFull` per
+        /// line. A bare path applies to the sole `--arch`. `riscv64=path`
+        /// binds the file to that architecture. Repeatable.
+        #[arg(long = "installed")]
+        installed: Vec<String>,
+        /// That architecture's `additional_arch` easystack, or a directory of
+        /// them. A bare path applies to the sole `--arch`. `riscv64=path`
+        /// binds it. Repeatable.
+        #[arg(long = "additional-arch")]
+        additional_arch: Vec<String>,
+        /// Replace the bundled unsupported list.
         #[arg(long)]
-        installed: PathBuf,
-        /// Modulerc file with `module_version` aliases. Repeatable.
-        #[arg(long = "installed-modulerc")]
-        installed_modulerc: Vec<PathBuf>,
-        /// Open software-layer pull requests, `pr-overlap --pr` JSON. Repeatable.
-        #[arg(long = "open-prs")]
-        open_prs: Vec<PathBuf>,
-        /// Also read the open pull requests of `OWNER/NAME` over HTTPS, as
-        /// `EESSI/software-layer`. `GITHUB_TOKEN` or `GH_TOKEN` is sent to
-        /// api.github.com when set.
-        #[arg(long)]
-        open_repo: Option<String>,
-        /// EESSI version, `2026.06`.
-        #[arg(long)]
-        eessi_version: String,
-        /// EasyBuild release the entries are built with, `5.4.1`.
-        #[arg(long)]
-        easybuild_version: String,
-        /// Toolchain generation, `2026.1`.
-        #[arg(long)]
-        generation: String,
-        /// `--filter-deps` as EESSI-extend sets it. Absent, `EASYBUILD_FILTER_DEPS` is read.
-        #[arg(long, value_delimiter = ',')]
-        filter_deps: Vec<String>,
-        /// Most roots per pull request.
-        #[arg(long, default_value_t = 3)]
-        size: usize,
-        /// easybuild-easyconfigs checkout with release tags: a root the
-        /// release lacks gets a `from-commit` pin.
-        #[arg(long)]
-        easyconfigs_repo: Option<PathBuf>,
-        /// RFC 3339 time written into the plan. Absent is now.
-        #[arg(long)]
-        generated_at: Option<String>,
-        /// Output directory.
-        #[arg(long)]
-        out_dir: PathBuf,
+        unsupported: Option<PathBuf>,
     },
     /// Write the lock as an EasyBuild easystack, the format `eb --easystack`
     /// consumes and EESSI's software layer is built from.
@@ -1302,7 +1365,7 @@ fn dispatch() -> Result<()> {
     match Cli::parse().command {
         Command::Package { command } => run_package(*command),
         Command::Recipe { command } => run_recipe(command),
-        Command::Stack { command } => run_stack(command),
+        Command::Stack { command } => run_stack(*command),
         Command::Target { command } => run_target(command),
         Command::Campaign { command } => run_campaign(command),
         Command::Repro { command } => run_repro(command),
@@ -2305,24 +2368,27 @@ fn run_stack(command: StackCommand) -> Result<()> {
             println!("{}", run.summary());
             Ok(())
         }
-        StackCommand::Batch {
-            mut roots,
-            roots_file,
-            easyconfigs,
-            commit_trees,
-            installed,
-            installed_modulerc,
-            open_prs,
-            open_repo,
-            eessi_version,
-            easybuild_version,
-            generation,
-            filter_deps,
-            size,
-            easyconfigs_repo,
-            generated_at,
-            out_dir,
-        } => {
+        StackCommand::Batch(args) => {
+            let BatchArgs {
+                mut roots,
+                roots_file,
+                easyconfigs,
+                commit_trees,
+                installed,
+                installed_modulerc,
+                open_prs,
+                open_repo,
+                eessi_version,
+                easybuild_version,
+                generation,
+                filter_deps,
+                size,
+                arch,
+                unsupported,
+                easyconfigs_repo,
+                generated_at,
+                out_dir,
+            } = *args;
             if let Some(path) = roots_file {
                 let text = std::fs::read_to_string(&path)
                     .with_context(|| format!("--roots-file {}", path.display()))?;
@@ -2353,11 +2419,40 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     size,
                     easyconfigs_repo,
                     generated_at,
+                    arches: arch,
+                    unsupported,
                     command_line,
                     out_dir,
                 },
             )?;
             println!("{}", run.summary());
+            Ok(())
+        }
+        StackCommand::Arch {
+            arch,
+            easystack,
+            easyconfigs,
+            installed,
+            additional_arch,
+            unsupported,
+        } => {
+            let report = eb_stack::arch_support::run_arch_check(
+                &eb_stack::arch_support::ArchCheckRequest {
+                    arches: arch,
+                    easystacks: easystack,
+                    easyconfigs,
+                    installed,
+                    additional: additional_arch,
+                    unsupported,
+                },
+            )?;
+            print!("{}", report.stdout);
+            if !report.unsupported.is_empty() {
+                bail!("{}", report.unsupported.join("\n"));
+            }
+            if !report.flagged.is_empty() {
+                bail!("{}", report.flagged.join("\n"));
+            }
             Ok(())
         }
         StackCommand::Easystack {

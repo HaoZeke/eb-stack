@@ -1,0 +1,17 @@
+easyblock = 'CMakeMake'
+
+name = 'nvtop'
+version = '3.3.2'
+
+homepage = 'https://github.com/Syllo/nvtop'
+description = """Fixture. Depends on GDRCopy, so a plan that names only nvtop still builds GDRCopy."""
+
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+
+source_urls = ['https://github.com/Syllo/nvtop/archive/']
+sources = ['%(version)s.tar.gz']
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+dependencies = [('GDRCopy', '2.5.2')]
+
+moduleclass = 'tools'

@@ -1,0 +1,15 @@
+easyblock = 'MakeCp'
+
+name = 'bwa-mem2'
+version = '2.3'
+
+homepage = 'https://github.com/bwa-mem2/bwa-mem2'
+description = """Fixture. The upstream Makefile passes -msse, which aarch64 gcc rejects."""
+
+toolchain = {'name': 'GCC', 'version': '14.3.0'}
+
+source_urls = ['https://github.com/bwa-mem2/bwa-mem2/releases/download/v%(version)s/']
+sources = ['Source_code_including_submodules.tar.gz']
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+moduleclass = 'bio'

@@ -1,0 +1,103 @@
+#+TITLE: Refuse a plan an architecture cannot build
+#+OPTIONS: toc:t num:nil author:nil
+
+What it does: ~stack arch~ reads an easystack as a plan. With
+~--easyconfigs~ it also closes the dependencies. An entry the
+architecture cannot build fails the command. The message names that
+entry and the architecture.
+
+Why you'd use it: a shared EESSI easystack is built on every CPU
+architecture. GDRCopy needs CUDA, and its header rejects riscv64.
+Software-layer pull request 1775 added other lines to
+~eessi-2026.06-eb-5.4.0-2026.1.yml~, and the riscv64 bot failed on the
+GDRCopy line that was already there. Pull request 1822 tried GDRCopy
+on riscv64 alone and failed the same way. Pull request 1876 failed
+bwa-mem2 on aarch64 because the Makefile passes ~-msse~.
+
+#+begin_src bash
+eb-stack stack arch \
+  --arch riscv64 \
+  --easystack tests/arch_unsupported_fixtures/easystacks/eessi-2026.06-eb-5.4.0-2026.1.yml \
+  --easyconfigs tests/arch_unsupported_fixtures/easyconfigs \
+  --installed tests/arch_unsupported_fixtures/installed-riscv64.txt \
+  --additional-arch tests/arch_unsupported_fixtures/additional_arch/riscv64/generic/eessi-2026.06-eb-5.4.0-2026.1.yml
+#+end_src
+
+The command prints:
+
+#+begin_example
+GDRCopy-2.5.2-GCCcore-15.2.0.eb is unsupported on riscv64: needs CUDA; gdrconfig.h errors with architecture is not supported (software-layer #1775, #1822)
+GDRCopy-2.5.2-GCCcore-15.2.0.eb is flagged on riscv64: it has never been installed there and is not in the riscv64 additional_arch easystack
+unsupported=1 flagged=1
+#+end_example
+
+The first line is the hard failure. ~GDRCopy-2.5.2-GCCcore-15.2.0.eb~ is
+the entry. ~riscv64~ is the architecture. The reason and the pull
+request numbers come from ~data/arch-unsupported.toml~. The command
+exits 1, and the error repeats that line.
+
+The second line is the cheap check, and it does not read recipes. The
+entry is in the shared easystack, ~--installed~ has no
+~GDRCopy/2.5.2-GCCcore-15.2.0~ line, and ~--additional-arch~ does not
+name the file. ~unsupported=~ and ~flagged=~ are the two counts.
+~--unsupported~ replaces the bundled list.
+
+A plan that only depends on the entry names the depender. This
+easystack lists nvtop, and nvtop depends on GDRCopy:
+
+#+begin_src bash
+eb-stack stack arch \
+  --arch riscv64 \
+  --easystack tests/arch_unsupported_fixtures/easystacks/nvtop-only.yml \
+  --easyconfigs tests/arch_unsupported_fixtures/easyconfigs
+#+end_src
+
+#+begin_example
+GDRCopy-2.5.2-GCCcore-15.2.0.eb is unsupported on riscv64: needs CUDA; gdrconfig.h errors with architecture is not supported (software-layer #1775, #1822) (required by nvtop-3.3.2-GCCcore-15.2.0.eb)
+unsupported=1 flagged=0
+#+end_example
+
+~(required by nvtop-3.3.2-GCCcore-15.2.0.eb)~ means the plan did not
+name GDRCopy. The closure did. ~flagged=0~ is the cheap check staying
+quiet, because ~--installed~ was not passed.
+
+bwa-mem2 is the aarch64 entry:
+
+#+begin_src bash
+eb-stack stack arch \
+  --arch aarch64 \
+  --easystack tests/arch_unsupported_fixtures/easystacks/bwa-mem2.yml \
+  --easyconfigs tests/arch_unsupported_fixtures/easyconfigs
+#+end_src
+
+#+begin_example
+bwa-mem2-2.3-GCC-14.3.0.eb is unsupported on aarch64: the Makefile passes -msse and -msse2, which aarch64 gcc rejects (software-layer #1876)
+unsupported=1 flagged=0
+#+end_example
+
+~--arch aarch64/neoverse_v1~ is the same family as ~--arch aarch64~.
+The family is the text before the first slash. With no ~--arch~, every
+family in the list is checked. ~--arch x86_64~ does not reject GDRCopy:
+the list has no x86_64 entry for it.
+
+An entry that is in the ~additional_arch~ easystack is not flagged,
+even when it has never been installed. It is still unsupported when
+the list says so. Passing ~--installed~ with more than one ~--arch~
+needs a prefix, ~riscv64=installed-riscv64.txt~. The same prefix form
+works for ~--additional-arch~. A directory is every easystack under it.
+
+~stack batch~ uses the same list before it writes a plan. A root that
+includes GDRCopy, or depends on it, exits 1 and does not write
+~plan.json~. ~--arch~ limits that check to one family. With no
+~--arch~, every family in the list is checked, because the batch is a
+shared easystack.
+
+Software-layer pull request 1623 added waLBerla 7.2. The bot failed on
+aarch64 neoverse_v1, a64fx, and nvidia/grace because ~SIMDAlignment()~
+was not constexpr under SVE. The from-commit pin a69e693 patches that,
+and the bot then succeeded on those targets. waLBerla is not in the
+list. The cheap check is what flags a shared entry before that first
+bot run, while it has never been installed on the architecture and is
+not in that architecture's ~additional_arch~ easystack.
+
+See [[file:../reference/cli.org][the command-line reference]].

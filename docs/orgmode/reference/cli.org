@@ -15,7 +15,7 @@ are deterministic bundle artifacts.
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
 
 ~--help~ for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is ~--out-dir~. A single output file is ~--out~ (~--lock-out~ for the lock ~stack solve~ writes). ~--installed~, ~--easyconfigs~, ~--filter-deps~, and ~--generated-at~ use those names on every command that takes them.
 
@@ -38,6 +38,7 @@ Package commands take the toolchain as ~--toolchain name/version~, the spelling 
 | ~stack easystack~ | Write a lock as the YAML ~eb --easystack~ reads |
 | ~stack sections~ | Regroup a Jenkins build list under a previous list's headers |
 | ~stack from-commit~ | Report ~from-commit~ pins already contained in an EasyBuild release |
+| ~stack arch~ | Refuse a plan an architecture cannot build, and flag entries never installed there |
 | ~repro summary~ | Print a reproduction scoreboard from collected case scores |
 | ~pr-overlap~ | Close open pull-request easystack additions against an installed stack and report shared builds |
 | ~rebuild-set~ | Classify the installed reverse dependents of easyconfigs patched in place |
@@ -401,7 +402,17 @@ eb-stack stack batch \
   [--size 3] \
   [--easyconfigs-repo ~/src/easybuild-easyconfigs] \
   [--generated-at 2026-10-29T00:00:00Z] \
+  [--arch riscv64]... \
+  [--unsupported LIST.toml] \
   --out-dir BATCHES
+
+eb-stack stack arch \
+  --easystack EASYSTACK.yml [--easystack OTHER.yml]... \
+  [--arch riscv64]... \
+  [--easyconfigs TREE]... \
+  [--installed INSTALLED.txt | --installed riscv64=INSTALLED.txt]... \
+  [--additional-arch FILE.yml | --additional-arch riscv64=DIR]... \
+  [--unsupported LIST.toml]
 
 eb-stack stack sections \
   tests/jenkins_sections/next.list \
@@ -531,6 +542,50 @@ lock, a CycloneDX SBOM, ~reproduce.sh~ with the exact command and the
 ~eb --dry-run~ lines, ~batch.json~ and ~pr-body.md~. ~plan.md~ and
 ~plan.json~ at the top record the waits, the unresolved roots and a SHA-256
 of the inputs. ~--generated-at~ fixes the time written into the plan.
+~--arch~ limits the unsupported-entry check to that family. With no
+~--arch~, every family in the bundled list is checked. ~--unsupported~
+replaces that list. A hit exits 1 and writes nothing.
+
+** ~stack arch~
+
+What it does: judge an easystack as a plan for one or more CPU
+architectures. An entry the architecture cannot build fails the
+command, whether the easystack names it or a dependency closes over it.
+
+Why you'd use it: a shared EESSI easystack is built on every
+architecture. GDRCopy in that file fails the riscv64 bot even when the
+pull request added other lines.
+
+#+begin_src bash
+eb-stack stack arch \
+  --arch riscv64 \
+  --easystack tests/arch_unsupported_fixtures/easystacks/eessi-2026.06-eb-5.4.0-2026.1.yml \
+  --easyconfigs tests/arch_unsupported_fixtures/easyconfigs \
+  --installed tests/arch_unsupported_fixtures/installed-riscv64.txt \
+  --additional-arch tests/arch_unsupported_fixtures/additional_arch/riscv64/generic/eessi-2026.06-eb-5.4.0-2026.1.yml
+#+end_src
+
+#+begin_example
+GDRCopy-2.5.2-GCCcore-15.2.0.eb is unsupported on riscv64: needs CUDA; gdrconfig.h errors with architecture is not supported (software-layer #1775, #1822)
+GDRCopy-2.5.2-GCCcore-15.2.0.eb is flagged on riscv64: it has never been installed there and is not in the riscv64 additional_arch easystack
+unsupported=1 flagged=1
+#+end_example
+
+The unsupported line names the entry and the architecture, and the
+command exits 1. The flagged line is the cheap check: the entry is in
+the shared easystack, the installed list has never had that module, and
+the ~--additional-arch~ easystack does not name the file. ~required by~
+on an unsupported line names the plan entry that pulled the dependency
+in. The plan itself did not name the unsupported entry. ~--easystack~ is the plan. ~--easyconfigs~ is the robot
+tree for that closure. ~--arch~ repeats; a target such as
+~riscv64/generic~ uses the family before the slash. No ~--arch~ checks
+every family in the list. ~--installed~ and ~--additional-arch~ take a
+bare path for one architecture, or ~riscv64=path~ when several are
+checked. ~--unsupported~ replaces ~data/arch-unsupported.toml~. The
+same refusal runs inside ~stack batch~ before a plan is written.
+
+[[file:../howto/arch-unsupported.org][Refuse a plan an architecture cannot build]]
+shows the dependency line and the bwa-mem2 line.
 
 ~stack sections~ reads the build list
 and regroups its entries under the ~#### Title ####~ headers of ~--from~.
@@ -1072,7 +1127,11 @@ option a ~<file.eb>:<option>=<value>~ string. ~eb_stack_sections~ requires
 ~list~, ~from~, and ~out~, and takes ~unfiled~. ~eb_stack_from_commit~
 requires ~easystack~ and takes ~easyconfigs_repo~, ~easyblocks_repo~,
 ~easybuild_version~, and ~json~. It returns the same report as
-~stack from-commit~. ~eb_repro_summary~
+~stack from-commit~. ~eb_stack_arch~ requires ~easystack~ and takes
+~arch~, ~easyconfigs~, ~installed~, ~additional_arch~, and
+~unsupported~. It returns the same report as ~stack arch~, and a hit is
+a tool error. ~eb_stack_batch~ takes ~arch~ and ~unsupported~ and
+refuses the plan the same way. ~eb_repro_summary~
 requires ~scores~ and takes ~ratchet~ and ~json~. Each of these tools
 calls the same runner as the command of that name, and the text it
 returns is that command's stdout.

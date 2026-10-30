@@ -1182,6 +1182,11 @@ pub struct StackBatchRequest {
     pub easyconfigs_repo: Option<PathBuf>,
     /// RFC 3339 time written into the plan; absent is now.
     pub generated_at: Option<String>,
+    /// Architecture families to judge the plan against. Empty checks every
+    /// family in the unsupported list.
+    pub arches: Vec<String>,
+    /// Replace the bundled unsupported list.
+    pub unsupported: Option<PathBuf>,
     /// The command line, written into every reproduce script.
     pub command_line: String,
     /// Output directory.
@@ -1270,6 +1275,25 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
     let mut root_names: Vec<String> = args.roots.clone();
     root_names.sort();
     root_names.dedup();
+    let unsupported = match &args.unsupported {
+        Some(path) => crate::arch_support::UnsupportedList::load(path)?,
+        None => crate::arch_support::UnsupportedList::bundled()?,
+    };
+    let hits = crate::arch_support::unsupported_in_plan(
+        &unsupported,
+        &args.arches,
+        &robot.base,
+        &root_names,
+    );
+    if !hits.is_empty() {
+        return Err(anyhow!(
+            "{}",
+            hits.iter()
+                .map(|hit| hit.message())
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
     let mut root_sets = Vec::new();
     for (i, root) in root_names.iter().enumerate() {
         let path = layout.path_for(root).map_err(usage)?;

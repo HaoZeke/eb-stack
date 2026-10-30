@@ -351,6 +351,14 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- `eb-stack stack arch` refuses a plan that includes, or depends on, an
+  entry an architecture cannot build. The message names the entry and
+  the architecture. `data/arch-unsupported.toml` is the list: GDRCopy on
+  riscv64 (software-layer #1775 and #1822) and bwa-mem2 on aarch64
+  (#1876). With `--installed`, an entry in a shared easystack that has
+  never been installed on that architecture, and is not in its
+  `additional_arch` easystack, is flagged. `stack batch` uses the same
+  list before it writes a plan. `eb_stack_arch` runs the same check.
 - `eb-stack stack from-commit` reports each `from-commit` and
   `include-easyblocks-from-commit` pin already contained in the EasyBuild
   release named by `--easybuild-version` or by `eb-X.Y.Z` in the easystack

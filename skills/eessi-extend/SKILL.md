@@ -208,6 +208,29 @@ respect the compatibility-layer sysroot.
 A software-layer PR may be opened while the easyconfigs PR is still open, but
 **deployment only happens after the EasyBuild PR is merged**.
 
+## Architecture gate, before the bot
+
+A shared easystack is built on every CPU architecture. Check it before
+opening the software-layer pull request:
+
+```sh
+eb-stack stack arch \
+  --arch riscv64 \
+  --easystack easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.0-2026.1.yml \
+  --easyconfigs "$EB_EASYCONFIGS" \
+  --installed installed-riscv64.txt \
+  --additional-arch easystacks/software.eessi.io/2026.06/additional_arch/riscv64
+```
+
+An `unsupported` line names the entry and the architecture and the
+command exits 1. GDRCopy is on that list for riscv64 (it needs CUDA;
+software-layer #1775 and #1822). bwa-mem2 is on it for aarch64 (the
+Makefile passes `-msse`; #1876). A `flagged` line is the cheap check: the
+entry has never been installed on that architecture and is not in its
+`additional_arch` easystack. `stack batch` applies the unsupported list
+before it writes a plan. The how-to is
+`docs/orgmode/howto/arch-unsupported.org`.
+
 ## Contribution policy gates
 
 Per <https://eessi.io/docs/adding_software/contribution_policy>, before opening

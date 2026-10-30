@@ -58,6 +58,8 @@
 
    *From-commit pins already in an EasyBuild release?* → :doc:`howto/from-commit-released`
 
+   *A plan an architecture cannot build?* → :doc:`howto/arch-unsupported`
+
    *Dependency closure of one change?* → :doc:`explanation/sbom-blast-radius`
 
    *CLI surface?* → :doc:`reference/cli`
@@ -138,6 +140,7 @@
    howto/rebuild-set
    howto/component-reach
    howto/from-commit-released
+   howto/arch-unsupported
 
 .. toctree::
    :maxdepth: 2
@@ -262,7 +265,8 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [[file:howto/easyconfigs-pr-overlap.org][close open easyconfigs pull requests]],
     [[file:howto/rebuild-set.org][what an in-place patch forces EESSI to rebuild]],
     [[file:howto/component-reach.org][which modules carry a component]],
-    [[file:howto/from-commit-released.org][which from-commit pins a release already contains]].
+    [[file:howto/from-commit-released.org][which from-commit pins a release already contains]],
+    [[file:howto/arch-unsupported.org][refuse a plan an architecture cannot build]].
   - Reference: [[file:reference/cli.org][CLI]],
     [[file:reference/mcp.org][Model Context Protocol server]],
     [[file:reference/package-bundles.org][package bundles]],

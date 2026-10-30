@@ -1,6 +1,7 @@
 //! EasyBuild stack lock: parse `.eb` files, resolvo SAT co-select, planned SBOM.
 #![warn(missing_docs)]
 
+pub mod arch_support;
 pub mod artifact_class;
 pub mod batch;
 pub mod build_order;

@@ -1,0 +1,28 @@
+# Packages an architecture cannot build.
+#
+# A plan that includes one of these, or depends on one, fails. The name is
+# the EasyBuild name, so every version is covered. `sources` are the
+# EESSI software-layer pull requests whose bot runs are the evidence.
+#
+# software-layer #1623 added waLBerla 7.2. The bot failed on
+# aarch64/neoverse_v1, aarch64/a64fx, and aarch64/nvidia/grace because
+# SIMDAlignment() was not constexpr under SVE. The from-commit pin
+# a69e693 (easybuild-easyconfigs #26930) patches that, and the bot then
+# succeeded on those targets on 2026-10-09. waLBerla is not an entry.
+
+[[entry]]
+arch = "riscv64"
+name = "GDRCopy"
+reason = "needs CUDA; gdrconfig.h errors with architecture is not supported"
+sources = [
+  "https://github.com/EESSI/software-layer/pull/1775",
+  "https://github.com/EESSI/software-layer/pull/1822",
+]
+
+[[entry]]
+arch = "aarch64"
+name = "bwa-mem2"
+reason = "the Makefile passes -msse and -msse2, which aarch64 gcc rejects"
+sources = [
+  "https://github.com/EESSI/software-layer/pull/1876",
+]

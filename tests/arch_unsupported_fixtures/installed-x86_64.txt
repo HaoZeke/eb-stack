@@ -1,0 +1,11 @@
+GDRCopy/2.5.2-GCCcore-15.2.0
+SIONlib/1.7.7-GCCcore-15.2.0-tools
+OTF2/3.2-GCCcore-15.2.0
+OPARI2/2.0.10-GCCcore-15.2.0
+Score-P/10.1-gompi-2026.1
+libdwarf/2.3.1-GCCcore-15.2.0
+gperftools/2.18.1-GCCcore-15.2.0
+GDB/17.2-GCCcore-15.2.0
+nvtop/3.3.2-GCCcore-15.2.0
+likwid/5.5.1-GCC-15.2.0
+zlib/1.3.1-GCCcore-15.2.0
