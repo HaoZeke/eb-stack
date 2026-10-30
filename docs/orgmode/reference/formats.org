@@ -363,7 +363,7 @@ file text when the fetch stored it. ~base_blob~ and ~head_blob~ are the git
 blob ids of those bytes. A later merge-order reads this text, so the hunk
 check does not need the original JSON. Omitted when the run stored none.
 
-A worked record from an open 2026.06 pull request is in
+A worked example on a test fixture is in
 [[file:../explanation/pr-overlap.org][from one easystack line to a build set]].
 
 ** ~overlap.toml~

@@ -50,13 +50,13 @@
 
    *Shared builds across open pull requests?* → :doc:`howto/pr-overlap`
 
-   *Open easyconfigs pull requests?* → :doc:`howto/easyconfigs-pr-overlap`
+   *Find open easybuild-easyconfigs pull requests that add the same software?* → :doc:`howto/easyconfigs-pr-overlap`
 
    *What an in-place patch forces EESSI to rebuild?* → :doc:`howto/rebuild-set`
 
    *Which modules carry a component?* → :doc:`howto/component-reach`
 
-   *From-commit pins already in an EasyBuild release?* → :doc:`howto/from-commit-released`
+   *Find from-commit pins an EasyBuild release already contains?* → :doc:`howto/from-commit-released`
 
    *A plan an architecture cannot build?* → :doc:`howto/arch-unsupported`
 
@@ -262,10 +262,10 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [[file:howto/root-priority.org][declare root priority]],
     [[file:howto/easyblock-reach.org][which easyconfigs an easyblock change reaches]],
     [[file:howto/pr-overlap.org][find shared builds across open pull requests]],
-    [[file:howto/easyconfigs-pr-overlap.org][close open easyconfigs pull requests]],
+    [[file:howto/easyconfigs-pr-overlap.org][find open easybuild-easyconfigs pull requests that add the same software]],
     [[file:howto/rebuild-set.org][what an in-place patch forces EESSI to rebuild]],
     [[file:howto/component-reach.org][which modules carry a component]],
-    [[file:howto/from-commit-released.org][which from-commit pins a release already contains]],
+    [[file:howto/from-commit-released.org][find from-commit pins an EasyBuild release already contains]],
     [[file:howto/arch-unsupported.org][refuse a plan an architecture cannot build]].
   - Reference: [[file:reference/cli.org][CLI]],
     [[file:reference/mcp.org][Model Context Protocol server]],

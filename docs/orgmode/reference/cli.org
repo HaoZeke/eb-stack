@@ -618,18 +618,19 @@ flag is omitted. The flag overrides the file name. The tag is
 ~easybuild-easyconfigs-vX.Y.Z~ in ~--easyconfigs-repo~, and
 ~easybuild-easyblocks-vX.Y.Z~ in ~--easyblocks-repo~. A pin is ~released~
 when that commit is an ancestor of the tag (a commit is an ancestor of
-itself), ~newer~ when the commit is in the checkout and is not an ancestor,
-or ~unknown~ when the commit or the tag is missing. ~unknown~ does not
-guess. A ~released~ ~from-commit~ pin also says ~blob=same~ or
-~blob=differs~, comparing the easyconfig blob named by the tree at the pin
-with the blob at the tag. An ~include-easyblocks-from-commit~ pin compares
-the tree of the pin with the tree of the tag, because that pin does not
-name one easyconfig. ~released~ and ~same~ can be removed. ~released~ and
-~differs~ needs a person: the release is not the pinned file. The command
-exits 1 when ~released~ is not zero. ~--rewrite~ drops each ~released~
-pin with ~blob=same~ from the easystacks in place, keeps the others, and
-exits 0. ~--json~ prints the same report as
-JSON. See [[file:../howto/from-commit-released.org][from-commit pins already in an EasyBuild release]].
+itself), ~newer~ when the commit is in the checkout and is not an ancestor
+of the tag (later, or on another line of history), or ~unknown~ when the
+commit or the tag is missing. ~unknown~ does not guess. A ~released~
+~from-commit~ pin also says ~blob=same~ or ~blob=differs~, comparing the
+easyconfig blob named by the tree at the pin with the blob at the tag. An
+~include-easyblocks-from-commit~ pin compares the tree of the pin with the
+tree of the tag, because that pin does not name one easyconfig. ~released~
+and ~same~ can be removed. ~released~ and ~differs~ needs a person: the
+release is not the pinned file. The command exits 1 when ~released~ is not
+zero, and also when the check itself fails. ~--rewrite~ drops each
+~released~ pin with ~blob=same~ from the easystacks in place, keeps the
+others, and exits 0. ~--json~ prints the same report as JSON. See
+[[file:../howto/from-commit-released.org][find from-commit pins an EasyBuild release already contains]].
 
 * ~pr-overlap~
 
@@ -809,7 +810,7 @@ and those pull requests are not listed under ~affected~. For
 row from that pull request, and ~after~ in ~merge-order.toml~ lists the
 pull request that adds them or that patches a module this pull request
 builds a dependent of. The recorded easyconfigs run is
-[[file:../howto/easyconfigs-pr-overlap.org][close open easybuild-easyconfigs pull requests]].
+[[file:../howto/easyconfigs-pr-overlap.org][find open easybuild-easyconfigs pull requests that add the same software]].
 
 * ~rebuild-set~
 

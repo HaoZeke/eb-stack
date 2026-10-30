@@ -23,11 +23,11 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or newer builds it 
 - [Bump an existing EasyBuild recipe](https://eb-stack.rgoswami.me/howto/bump-recipe.html.md): A bump is a canonical EasyBuild-origin package bundle.
 - [Declare root priority for multi-root optimization](https://eb-stack.rgoswami.me/howto/root-priority.html.md): Goal: when a policy has more than one root and they disagree on a shared dependency's version, control which root wins the newest-version tie-break instead of leaving it to incidental list order.
 - [Which easyconfigs an easyblock change reaches](https://eb-stack.rgoswami.me/howto/easyblock-reach.html.md): A change to an easyblock, generic or software-specific, or to a framework module an easyblock imports, reaches the easyconfigs that use that class.
-- [Find shared builds across open pull requests](https://eb-stack.rgoswami.me/howto/pr-overlap.html.md): Goal: for every open pull request that changes an easystack, write what it would build on the current stack, and which of those modules more than one open pull request would build.
-- [Close open easybuild-easyconfigs pull requests](https://eb-stack.rgoswami.me/howto/easyconfigs-pr-overlap.html.md): Goal: for each open pull request on easybuild-easyconfigs, name the easyconfigs it adds or changes, the dependency closure of those files against a pinned develop tree, and the modules it shares with the other open
+- [Find shared builds across open pull requests](https://eb-stack.rgoswami.me/howto/pr-overlap.html.md): Two open pull requests on the European Environment for Scientific Software Installations (EESSI) software-layer often build the same dependency.
+- [Find open easybuild-easyconfigs pull requests that add the same software](https://eb-stack.rgoswami.me/howto/easyconfigs-pr-overlap.html.md): Two open pull requests (PRs) on easybuild-easyconfigs sometimes add the same easyconfig, or need the same new dependency.
 - [What an in-place patch forces EESSI to rebuild](https://eb-stack.rgoswami.me/howto/rebuild-set.html.md): Goal: the patched easyconfigs keep their filenames and versions.
 - [Which modules carry a component, and what that forces rebuilt](https://eb-stack.rgoswami.me/howto/component-reach.html.md): Goal: a Common Vulnerabilities and Exposures (CVE) record names a component and a version.
-- [From-commit pins already in an EasyBuild release](https://eb-stack.rgoswami.me/howto/from-commit-released.html.md): An easystack from-commit pin asks EasyBuild to take an easyconfig from that commit of easybuild-easyconfigs.
+- [Find from-commit pins an EasyBuild release already contains](https://eb-stack.rgoswami.me/howto/from-commit-released.html.md): An easystack can select an easyconfig from a specific easybuild-easyconfigs commit with from-commit.
 - [Refuse a plan an architecture cannot build](https://eb-stack.rgoswami.me/howto/arch-unsupported.html.md): What it does: stack arch reads an easystack as a plan.
 
 ## Reference
@@ -48,7 +48,7 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or newer builds it 
 - [The optimization model](https://eb-stack.rgoswami.me/explanation/optimization-model.html.md): eb-stack uses resolvo, a conflict-driven clause learning (CDCL) Boolean satisfiability (SAT) solver, as its feasibility core.
 - [The parser approach](https://eb-stack.rgoswami.me/explanation/parser-approach.html.md): An EasyBuild easyconfig (.eb) is, syntactically, a Python source file.
 - [Reproduction fidelity and limitations](https://eb-stack.rgoswami.me/explanation/fidelity.html.md): eb-stack separates deterministic package planning from empirical build evidence.
-- [From one easystack line to a build set](https://eb-stack.rgoswami.me/explanation/pr-overlap.html.md): eb-stack pr-overlap turns each easystack line a pull request adds into the modules that line would build on the installed stack.
+- [From one easystack line to a build set](https://eb-stack.rgoswami.me/explanation/pr-overlap.html.md): eb-stack pr-overlap lists the modules a pull request would build, starting from the easystack lines it adds.
 - [What an in-place patch forces a rebuild of](https://eb-stack.rgoswami.me/explanation/rebuild-set.html.md): The patch keeps the easyconfig filename and the version.
 - [Dependency closure](https://eb-stack.rgoswami.me/explanation/sbom-blast-radius.html.md): A dependency closure lists every module one change reaches.
 

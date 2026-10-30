@@ -748,7 +748,7 @@ None.
 22823 and 24575 both add ~Mathematica-14.2.1.eb~. That is the one shared
 module. The depends-on section is empty. The per-pull-request sections of
 the same file are in
-[[file:../howto/easyconfigs-pr-overlap.org][close open easybuild-easyconfigs pull requests]].
+[[file:../howto/easyconfigs-pr-overlap.org][find open easybuild-easyconfigs pull requests that add the same software]].
 
 * An in-place patch
 

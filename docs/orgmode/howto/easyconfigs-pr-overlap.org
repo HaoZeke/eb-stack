@@ -1,27 +1,30 @@
-#+TITLE: Close open easybuild-easyconfigs pull requests
+#+TITLE: Find open easybuild-easyconfigs pull requests that add the same software
 #+OPTIONS: toc:t num:nil author:nil
 
-Goal: for each open pull request on easybuild-easyconfigs, name the
-easyconfigs it adds or changes, the dependency closure of those files
-against a pinned develop tree, and the modules it shares with the other
-open pull requests.
+Two open pull requests (PRs) on easybuild-easyconfigs sometimes add the
+same easyconfig, or need the same new dependency.
+~eb-stack pr-overlap --kind easyconfigs~ reads the changed ~.eb~ files
+and reports the new modules each PR would build. The report then names
+each file and module that two or more PRs add. Compare those pull
+requests before you merge.
 
-The file text is data. Nothing from a pull request is executed, and
-nothing is posted back to the pull request.
+Run it before you merge a batch of open easybuild-easyconfigs PRs, or when
+a review needs to see whether another open PR already adds the same
+software. The command reads easyconfig text as data and leaves the pull
+requests untouched. Two build jobs that install into the same prefix
+can overwrite a shared module: the later install wins.
 
-* Recorded open pull requests
+For each PR, dependency resolution starts with the tree passed through
+~--easyconfigs~. Easyconfigs from the other input PRs are also visible,
+below the current PR's own changes. This lets the report detect when
+one PR supplies a dependency needed by another.
 
-On 2026-10-24 the public GitHub API had these four open pull requests.
-develop was ~981d2123dddccca9ce0b15f9eb2643e872332f5e~.
+* Run the recorded pull requests
 
-| Number | Head | Change |
-|-
-| 22823 | ~251770fd65~ | added ~Mathematica-14.2.1.eb~ |
-| 24575 | ~26cbff81cb~ | added the same path |
-| 27131 | ~dc56db8eae~ | added ~aria2-1.37.0-GCCcore-15.2.0.eb~ |
-| 27215 | ~6993418f56~ | added ~nghttp3-1.13.1-GCCcore-13.2.0.eb~ and modified three nghttp3 files |
-
-~tests/pr_overlap_easyconfigs_open.rs~ runs:
+~tests/pr_overlap_easyconfigs_open/~ records four open PRs from
+2026-10-24. The files under ~tree/~ are a subset of easybuild-easyconfigs
+at the commit named in ~develop-sha~, enough to follow the dependencies
+of these four PRs.
 
 #+begin_src bash
 eb-stack pr-overlap --kind easyconfigs \
@@ -29,63 +32,175 @@ eb-stack pr-overlap --kind easyconfigs \
   --easyconfigs tests/pr_overlap_easyconfigs_open/tree \
   --generated-at 2026-10-24T00:00:00Z \
   --repo-url https://github.com/easybuilders/easybuild-easyconfigs \
-  --out-dir /tmp/ec-open-out
+  --merge-order \
+  --out-dir /tmp/ec-order-out
 #+end_src
 
-The command printed ~prs=4 records=4 shared_modules=1 skipped_easyconfigs=0~
-and exited 0. ~--installed~ is omitted, so ~to_build~ is ~new_modules~.
+It prints one line and exits 0.
 
-22823 and 24575 both add
-~easybuild/easyconfigs/m/Mathematica/Mathematica-14.2.1.eb~. The module is
-~Mathematica/14.2.1~. ~overlap.toml~ records three rows for that pair:
-~same-file~, ~same-module~, and ~shared-new-module~. The file is not on
-that develop commit, so each closure is the one new module.
+#+begin_example
+prs=4 records=4 shared_modules=1 skipped_easyconfigs=0 out=/tmp/ec-order-out
+#+end_example
 
-27131 adds ~aria2/1.37.0-GCCcore-15.2.0~. The closure has 53 modules and
-one of them is new. Nothing is unresolved.
+| Field | Meaning |
+|-
+| ~prs~ | Pull requests read. |
+| ~records~ | Pull requests that changed an easyconfig. |
+| ~shared_modules~ | Modules in more than one build set. |
+| ~skipped_easyconfigs~ | Easyconfig files in the tree the parser could not read. |
+| ~out~ | Directory with the Markdown report, the index, and the per-PR records. |
 
-27215 changes four nghttp3 easyconfigs. The closure has 152 modules. The
-new module is ~nghttp3/1.13.1-GCCcore-13.2.0~. The record says
-~nghttp3/1.13.1-GCCcore-13.2.0 needs CUnit ==2.1-3~. Reverse dependents
-include LibSoup, WebKitGTK+, nghttp2, ngtcp2, and
-~wxPython/4.2.5-gfbf-2025a~.
+This run passes no ~--installed~ list. The build set is then every
+closure module missing from the base tree, plus every easyconfig the PR
+edits. The run writes
+~/tmp/ec-order-out/overlap.md~, ~overlap.toml~, ~merge-order.toml~,
+and one ~prs/<N>.toml~ per PR. After a short header, ~overlap.md~ names the
+shared file first.
 
-The checked-in tree is those closure modules plus ~gfbf-2025a.eb~.
-wxPython is built with gfbf 2025a, and that definition pins GCC 14.2.0,
-which is how LibSoup at GCC 14.2.0 stays on the reverse-dependency walk.
-The bytes under ~tests/pr_overlap_easyconfigs_open/expected/~ are the same
-bytes this command wrote against the full develop tree. The ~.eb~ files
-are a subset of easybuild-easyconfigs (GPL-2.0); the license text is
-~tests/pr_overlap_easyconfigs_open/EASYCONFIGS-GPLv2.txt~.
+#+begin_src text
+## same-file
 
-* Read the pull requests over HTTPS
+| Path | Pull requests |
+|---|---|
+| `easybuild/easyconfigs/m/Mathematica/Mathematica-14.2.1.eb` | [#22823](https://github.com/easybuilders/easybuild-easyconfigs/pull/22823), [#24575](https://github.com/easybuilders/easybuild-easyconfigs/pull/24575) |
 
-~fetch_open_easyconfig_prs~ GETs
-~https://api.github.com/repos/<owner>/<name>/pulls?state=open~ and, for
-each pull request, the changed-file list. Head text is
-~https://raw.githubusercontent.com/<owner>/<name>/<sha>/<path>~. Base
-text is the same URL with the base ref (~develop~ unless another ref is
-set). A 404 on the base means the file was added. =GITHUB_TOKEN= or =GH_TOKEN= is sent to api.github.com when set.
+#+end_src
 
-The command the tool runs is ~eb-stack pr-overlap --kind easyconfigs --open OWNER/NAME~.
-It calls ~fetch_open_easyconfig_prs~ and writes the
-same records as ~--pr~. ~--base-ref~ is the base ref in the raw URL
-(~develop~ when the flag is omitted). The ignored test
-~live_github_open_easyconfigs_pull_request~ calls the same function
-against ~easybuilders/easybuild-easyconfigs~, one list page, one pull
-request, and one easyconfig file.
+* Read the report
 
-~examples/easyconfigs-pr-overlap/fetch-prs.sh~ is the clone-side collector.
-It uses ~gh~ and git to write the same JSON, and it does not check a pull
-request out. Use it when the inputs already come from a local clone. Use
-~--open~ when the command should fetch the pull requests itself.
+A PR's closure is every module its changed easyconfigs depend on,
+directly or through other dependencies. The build set (~to_build~) is
+the modules it would still build. With no installed list, that is the
+modules the base tree does not already have ("new" in the report) and
+the easyconfigs the PR edits. The
+same terms for an easystack line are in
+[[file:../explanation/pr-overlap.org][from one easystack line to a build set]].
 
-* Easyconfigs merge order
+Start with the four sections at the top of ~overlap.md~. Then read the
+section for the PR under review.
 
-~--merge-order~ and ~--impact~ answer a different question: in which
-order to merge open pull requests, and which other build sets one merge
-changes. For an easyconfigs run the edges are the ~depends-on~ rows in
-~overlap.toml~ from the same run. ~after~ lists the pull request that
-adds the module, and ~resolves~ lists those modules. The software-layer
-run is
+- ~same-file~ means two PRs change the same path. Here 22823 and 24575
+  both add ~Mathematica-14.2.1.eb~. Compare the file contents and review
+  status, choose the PR to keep, then close or rebase the duplicate
+  before merging.
+- ~same-module~ means two PRs produce the same module name, even if
+  their paths differ. Compare the recipes and coordinate the PRs so
+  only the intended recipe is built and installed.
+- ~shared-new-module~ is a module that is new in more than one closure.
+  The next section of the report repeats ~Mathematica/14.2.1~, because
+  the base tree does not already provide it. That is the one module
+  counted in ~shared_modules~.
+- ~depends-on~ is ~None~ in this run. A row there means one PR's closure
+  needs a module that another open PR adds. The PR that adds the module
+  comes first.
+
+The summary line below each PR heading reports how many easyconfigs
+changed, how many modules the dependency walk reached, how many are new
+to the base tree, and how many would be built. In that line, "new"
+means the base tree does not already contain the module, while "Builds"
+is the build set. With no installed list, a large closure can still
+build one module.
+
+22823 and 24575 each have a closure of one new module,
+~Mathematica/14.2.1~. 27131 adds aria2: closure 53, one new,
+~aria2/1.37.0-GCCcore-15.2.0~. 27215 changes four nghttp3 easyconfigs.
+All four are in its build set: one added file, and three edited files
+that the base tree already has. An edited easyconfig is always rebuilt, so it
+stays in the build set even though it is not new. The closure has 152
+modules and one new module, ~nghttp3/1.13.1-GCCcore-13.2.0~, which needs
+~CUnit ==2.1-3~. The build list still names that module, and the
+requirement is ~unresolved~. Until an easyconfig for that CUnit version
+is in the tree, treat the build set as incomplete. Look for an open PR
+that adds CUnit, or ask the author to add it. The reverse-dependents
+line shows what the edits affect, for example
+~`nghttp2/1.69.0-GCCcore-15.2.0` (1, no-rebuild)~. The number is how
+many dependency hops that module is from the changed file: 1 means it
+depends on it directly. The word is the rebuild class. ~must-rebuild~
+dependents join the build set, while ~review~ and ~no-rebuild~ ones are
+listed for you to check. Every dependent here is ~no-rebuild~. The checked-in copy of
+this run is ~tests/pr_overlap_easyconfigs_open/expected/overlap.md~.
+
+Investigate every ~unresolved~ item before relying on a closure. Review
+reverse dependents as compatibility and rebuild candidates. A closure or a
+proposed order does not show that an easyconfig builds or passes its
+tests.
+
+A closure also counts modules that are already installed. To drop
+those from the build set, pass ~--installed~ with one ~Name/version~
+per line. Each run rewrites ~prs/~ to hold only the PRs
+of that run.
+
+* Fetch open pull requests
+
+~examples/easyconfigs-pr-overlap/fetch-prs.sh~ in the eb-stack checkout
+writes one JSON file per open PR that changes an easyconfig. Run it
+from a clone of easybuild-easyconfigs whose ~origin~ is that
+repository, with ~gh~ authenticated for public reads. Set
+~EB_STACK_CHECKOUT~ to the eb-stack checkout. The script reads base
+text from ~develop~ and does not check a PR out.
+
+#+begin_src bash
+: "${EB_STACK_CHECKOUT:?set this to an eb-stack checkout}"
+"$EB_STACK_CHECKOUT/examples/easyconfigs-pr-overlap/fetch-prs.sh" \
+  easybuilders/easybuild-easyconfigs /tmp/ec-in
+#+end_src
+
+Pass ~/tmp/ec-in/prs/*.json~ as ~--pr~, with ~--easyconfigs~ set to a
+checkout of the base tree. ~--base-ref~ selects the base-file text
+downloaded by ~--open~ and defaults to ~develop~. It does not select or
+validate the checkout passed through ~--easyconfigs~. Use a checkout
+and a base ref for the same revision. ~--repo-url~ defaults to
+~https://github.com/easybuilders/easybuild-easyconfigs~ for this kind.
+If ~EASYBUILD_FILTER_DEPS~ is set and you omit ~--filter-deps~, the
+command drops those dependencies. The recorded run had the variable
+unset.
+
+~--open OWNER/NAME~ reads the open PRs over HTTPS. When
+~GITHUB_TOKEN~ or ~GH_TOKEN~ is set, the command sends it to
+api.github.com. Without a token GitHub allows 60 API calls an hour, and
+the command makes at least one call per open PR, so an unauthenticated
+run suits a repository with a few dozen open PRs at most. For
+easybuild-easyconfigs, which has hundreds, set a token or use
+~fetch-prs.sh~ above. This command writes the same report, fetched by
+~--open~:
+
+#+begin_src bash
+eb-stack pr-overlap --kind easyconfigs \
+  --open easybuilders/easybuild-easyconfigs \
+  --easyconfigs "$EB_EASYCONFIGS" \
+  --out-dir /tmp/ec-live
+#+end_src
+
+* Choose a merge order
+
+~--merge-order~ on the command above writes ~merge-order.toml~ and
+appends this table to ~overlap.md~:
+
+#+begin_src text
+## Merge order
+
+| Position | PR | Builds | Saves | After |
+|---|---|---|---|---|
+| 1 | [#22823](https://github.com/easybuilders/easybuild-easyconfigs/pull/22823) | 1 | [#24575](https://github.com/easybuilders/easybuild-easyconfigs/pull/24575) (`Mathematica/14.2.1`) |  |
+| 2 | [#24575](https://github.com/easybuilders/easybuild-easyconfigs/pull/24575) | 0 |  |  |
+| 3 | [#27131](https://github.com/easybuilders/easybuild-easyconfigs/pull/27131) | 1 |  |  |
+| 4 | [#27215](https://github.com/easybuilders/easybuild-easyconfigs/pull/27215) | 4 |  |  |
+#+end_src
+
+Builds is how many modules that PR still has left to build once earlier
+rows are done. Position 1 builds ~Mathematica/14.2.1~. In the Saves cell,
+PR 24575 drops that module, and position 2 has nothing left to
+build. That row is the ~same-file~ duplicate: compare
+the files, keep one PR, and close or rebase the other. It is not a
+second module to install. Position 3 builds aria2, and position 4 builds the four nghttp3 modules.
+After is blank because no PR needs a module that only another open PR
+adds. When a ~depends-on~ row exists, After names the PR that adds the
+module. When two or more PRs could go next, the fewest modules left to
+build wins, then the lowest PR number. Module names are in
+~merge-order.toml~.
+
+~--impact N~ writes ~merge-impact.toml~ for that PR alone. For easystack
+changes on a European Environment for Scientific Software
+Installations (EESSI) software-layer repository, and for the
+~--impact~ fields, see
 [[file:pr-overlap.org][find shared builds across open pull requests]].

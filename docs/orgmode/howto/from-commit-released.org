@@ -1,57 +1,146 @@
-#+TITLE: From-commit pins already in an EasyBuild release
+#+TITLE: Find from-commit pins an EasyBuild release already contains
 #+OPTIONS: toc:t num:nil author:nil
 
-An easystack ~from-commit~ pin asks EasyBuild to take an easyconfig from
-that commit of easybuild-easyconfigs. Pin it when the file is newer than
-the EasyBuild release the stack builds with. A pin whose commit is already
-in that release does nothing. Removing it is safe only when the easyconfig
-at the pin is the same blob as at the release tag. A later edit, such as
-the glibc 2.43 patch on UCX 1.18.0 and 1.19.0, means the release file is
-not the pinned file, and a person has to decide.
+An easystack can select an easyconfig from a specific
+easybuild-easyconfigs commit with ~from-commit~. You add the pin when
+that file is newer than the EasyBuild release the stack uses. Once a
+later release contains the commit, check the file too. A later commit
+may have changed it, and then removing the pin changes the build. ~eb-stack stack from-commit~
+reports whether each pin commit is in the release and whether the
+pinned file is identical to the release file.
 
-* Check the easystacks
+Run it before you delete ~from-commit~ lines after an EasyBuild
+release. A CI job can fail on the same command. Exit status 1 means a
+pin is already in the release, or that the check itself failed. The
+counts line tells those two apart.
 
-~--easybuild-version 5.4.0~ names the release. When the flag is omitted,
-the command reads ~eb-X.Y.Z~ from the file name
-(~20261011-eb-5.4.0-UCX.yml~). The flag overrides the file name. With
-neither, the command exits 2 and names ~--easybuild-version~.
+* Check one pin
 
-#+begin_src bash
-eb-stack stack from-commit \
-  --easystack 20261011-eb-5.4.0-UCX.yml \
-  --easyconfigs-repo "$EB_EASYCONFIGS" \
-  --easyblocks-repo "$EB_EASYBLOCKS"
+Save this fixture as ~/tmp/20261011-eb-5.4.0-UCX.yml~. The file name
+contains ~eb-5.4.0~, so omit ~--easybuild-version~. The pin is the
+commit that merged a fix to the Unified Communication X library, easybuild-easyconfigs pull request 24388.
+~$EB_EASYCONFIGS~ is a clone of easybuild-easyconfigs that has the tag
+~easybuild-easyconfigs-v5.4.0~. A blobless clone (~git clone~ with
+~--filter=blob:none~) is enough once it contains the pin commit and
+that tag. ~scripts/fetch-upstream-trees.sh~ clones v5.4.1, and that
+clone still has the v5.4.0 tag.
+
+#+begin_src yaml
+easyconfigs:
+  - UCX-1.18.0-GCCcore-14.2.0.eb:
+      options:
+        from-commit: d438adc699f5ff35d866d9045f0aae663a0913cb
 #+end_src
 
-~--easyconfigs-repo~ is an easybuild-easyconfigs checkout, tags included.
-~--easyblocks-repo~ is the easybuild-easyblocks checkout, and it is required
-only when an entry sets ~include-easyblocks-from-commit~. The tags are
-~easybuild-easyconfigs-vX.Y.Z~ and ~easybuild-easyblocks-vX.Y.Z~.
+#+begin_src bash
+cd /tmp
+eb-stack stack from-commit \
+  --easystack 20261011-eb-5.4.0-UCX.yml \
+  --easyconfigs-repo "$EB_EASYCONFIGS"
+#+end_src
 
-Each pin is one line:
+That command printed:
 
 #+begin_example
-status=released blob=differs version=5.4.0 tag=easybuild-easyconfigs-v5.4.0 kind=from-commit commit=d438adc file=UCX-1.18.0-GCCcore-14.2.0.eb easystack=20261011-eb-5.4.0-UCX.yml
+status=released blob=differs version=5.4.0 tag=easybuild-easyconfigs-v5.4.0 kind=from-commit commit=d438adc699f5ff35d866d9045f0aae663a0913cb file=UCX-1.18.0-GCCcore-14.2.0.eb easystack=20261011-eb-5.4.0-UCX.yml
 pins=1 released=1 newer=0 unknown=0
 #+end_example
 
-~released~ means ~git merge-base --is-ancestor~ says the commit is in the
-tag. ~newer~ means the commit is in the checkout and is not in the tag.
-~unknown~ means the commit or the tag is missing. The command does not
-guess which. ~reason=commit-missing~ or ~reason=tag-missing~ says which
-one.
+The process exited 1. Standard error was:
 
-For a ~released~ ~from-commit~ pin, ~blob~ compares the easyconfig blob in
-the tree at the pin with the blob at the tag. ~same~ means one object.
-~differs~ means the path is missing on one side, the hashes differ, or
-more than one path has that filename. ~released~ and ~same~ can be
-removed. ~released~ and ~differs~ needs a person.
+#+begin_example
+error: 1 from-commit pin(s) already in the EasyBuild release
+#+end_example
 
-An ~include-easyblocks-from-commit~ pin has no single easyconfig in that
-repository. ~blob~ there compares the tree of the pin with the tree of
-~easybuild-easyblocks-vX.Y.Z~. ~same~ means the release tree is the pinned
-tree.
+~released~ means the pin commit is an ancestor of the tag
+~easybuild-easyconfigs-v5.4.0~. A commit is an ancestor of itself, so a
+pin of the tag commit is ~released~ too. ~blob=same~ means the file at
+the pin and the file in the release have the same bytes.
+~blob=differs~ means they are not. This file changed once in between:
+commit ~0c9d4a8a28a0~ added the glibc 2.43 patch to
+~UCX-1.18.0-GCCcore-14.2.0.eb~. The last line counts the pins in each
+state.
 
-The command exits 0 when no pin is ~released~. It exits 1 when any pin is
-~released~, including a pin whose blob is ~same~. ~--json~ prints the same
-fields as JSON. ~eb_stack_from_commit~ returns that report.
+Compare the two files with:
+
+#+begin_src bash
+git -C "$EB_EASYCONFIGS" diff --unified=0 d438adc699f5ff35d866d9045f0aae663a0913cb easybuild-easyconfigs-v5.4.0 \
+  -- easybuild/easyconfigs/u/UCX/UCX-1.18.0-GCCcore-14.2.0.eb
+#+end_src
+
+That command printed:
+
+#+begin_example
+diff --git a/easybuild/easyconfigs/u/UCX/UCX-1.18.0-GCCcore-14.2.0.eb b/easybuild/easyconfigs/u/UCX/UCX-1.18.0-GCCcore-14.2.0.eb
+index 6c73e9f0df..cff427c9dc 100644
+--- a/easybuild/easyconfigs/u/UCX/UCX-1.18.0-GCCcore-14.2.0.eb
++++ b/easybuild/easyconfigs/u/UCX/UCX-1.18.0-GCCcore-14.2.0.eb
+@@ -19,0 +20 @@ patches = [
++    'UCX-1.18.0_fix-glibc-2.43-compile-failure.patch',
+@@ -24,0 +26,2 @@ checksums = [
++    {'UCX-1.18.0_fix-glibc-2.43-compile-failure.patch':
++     'c67b2070a65e8217b7c6f9d9a6a13ff11141bacfed395d551376432428348a9c'},
+#+end_example
+
+Removing the pin switches the build to the release file. Here the
+release file has the pinned fix plus a later glibc 2.43 patch, so
+removing the pin is the normal choice. Keep the pin only if the
+build depends on the file exactly as pinned.
+
+| What the line says | What you do |
+|-
+| ~released~ and ~blob=same~ | Remove the pin. The release file is the pinned file. |
+| ~released~ and ~blob=differs~ | Compare the pinned file with the release file. Remove the pin only if the release version is the one to build; otherwise keep the pin and document why. |
+| ~newer~ | The commit exists but is not an ancestor of the release tag. Despite the label, it may be later or on another line of history. Keep the pin unless you verify that the intended recipe is available another way. |
+| ~unknown~ | Read ~reason~. ~reason=commit-missing~ or ~reason=tag-missing~ names what to fetch. ~unknown~ on its own exits 0 and is not evidence that the pin is still needed. |
+
+~newer~ and ~unknown~ lines have no ~blob~ field. ~differs~ also means
+the filename is missing on one side, or the filename matches more than
+one path. A ~released~ pin with ~blob=same~ still exits 1. Remove the
+pin when you want exit 0, or pass ~--rewrite~. ~--rewrite~ deletes
+each ~released~ pin with ~blob=same~ from the easystack in place,
+prints those rows as ~status=dropped~, adds a ~rewritten=N~ line, and
+exits 0. It leaves every other pin in the file.
+
+* Exit status
+
+| Exit | When |
+|-
+| 0 | No pin is ~released~: every pin is ~newer~ or ~unknown~, or the files have no pins. |
+| 1 | A pin is ~released~ and ~--rewrite~ is not set (standard error: ~N from-commit pin(s) already in the EasyBuild release~), or the check failed: an easystack that cannot be read, a ~--easyconfigs-repo~ that is not a git checkout, or a git error. |
+| 2 | Bad command line: no ~--easystack~ flag, a version not in ~X.Y.Z~ form, a file with pins but no ~eb-X.Y.Z~ in its name and no ~--easybuild-version~, or no ~--easyconfigs-repo~ / ~--easyblocks-repo~ flag when a pin needs one. |
+
+In CI, tell the two kinds of exit 1 apart by the counts line. A
+released pin prints ~pins=... released=N~ on standard output, and a
+failed check prints no counts line. ~unknown~ exits 0, so also fail
+the job when ~unknown=~ is not 0. On a partial clone, a missing commit
+can make git try to download it. That exits 1 with the git error and
+no counts line. A pin-free easystack needs neither a version nor
+repository arguments and reports zero pins.
+
+* Flags
+
+~--easybuild-version 5.4.0~ sets the release. When the flag is omitted,
+the command reads ~eb-X.Y.Z~ from the file name. The flag overrides the
+file name. The easyconfigs tag is ~easybuild-easyconfigs-vX.Y.Z~ in
+~--easyconfigs-repo~. The check reads object hashes from git tree
+metadata. The blobless clone above is enough for that.
+
+Pass ~--easyblocks-repo~ only when an entry sets
+~include-easyblocks-from-commit~. The tag is
+~easybuild-easyblocks-vX.Y.Z~. For these pins ~blob~ compares two whole
+trees, at the pin and at the tag. ~same~ means the whole easyblocks repository is
+identical at the pin and the tag, which is rare. Expect ~differs~ for
+these pins and compare the easyblock files the pin added.
+
+Repeat ~--easystack~ for more than one file. Each pin is one line, and
+the commit text is the text from the easystack. ~--json~ prints the
+same fields as JSON. The Model Context Protocol (MCP) tool
+~eb_stack_from_commit~ returns that report. A ~from-commit~ pin also
+changes what ~pr-overlap~ builds: pass that commit's tree as
+~--commit-tree~. See
+[[file:pr-overlap.org][find shared builds across open pull requests]].
+
+After changing the easystack, rerun ~stack from-commit~, then run the
+normal EasyBuild easystack dry run. Commit containment and blob
+equality are source checks, not build evidence.
