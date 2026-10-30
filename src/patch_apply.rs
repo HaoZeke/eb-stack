@@ -68,6 +68,17 @@ pub(crate) enum SourceVerdict {
     Upstream(u32),
     /// None of the files it modifies exists in the source.
     TargetsGone(Vec<String>),
+    /// The patch only creates files, and the source already has every one
+    /// of them: the release ships what the patch added.
+    Shipped(Vec<String>),
+    /// Neither direction applies, yet every change block's new lines stand
+    /// in the target file and its removed lines do not: the release carries
+    /// the change with different lines around it. Each entry is `path:line`.
+    Moved(Vec<String>),
+    /// The patch only adds `bazel_dep` pins to `MODULE.bazel` for modules
+    /// the release already declares, as `(module, declared version)`.
+    /// Bazel refuses a second `bazel_dep` on one module.
+    PinDeclared(Vec<(String, String)>),
     /// Neither direction applies; the lines `patch` reported.
     Fails(String),
     /// The entry only copies a file into the build directory.
@@ -169,25 +180,40 @@ fn unquote(value: &str) -> String {
 }
 
 /// Files a patch creates or modifies, from its `+++` lines, as EasyBuild's
-/// `det_patched_files` reads them. The flag is true when the matching `---`
-/// side is `/dev/null`, so the patch creates the file.
+/// `det_patched_files` reads them. The flag is true when the patch creates
+/// the file: the matching `---` side is `/dev/null`, or, as `diff -N`
+/// writes it, the file's only hunk starts from an empty original
+/// (`@@ -0,0 ...`).
 pub(crate) fn patched_files(patch: &str) -> Vec<(String, bool)> {
-    let mut out = Vec::new();
+    let mut out: Vec<(String, bool)> = Vec::new();
     let mut previous_minus: Option<String> = None;
+    // The entry the next hunk header belongs to, and how many hunks it had.
+    let mut open: Option<(usize, usize)> = None;
     for line in patch.lines() {
         if let Some(rest) = line.strip_prefix("--- ") {
             previous_minus = rest.split_whitespace().next().map(str::to_string);
         } else if let Some(rest) = line.strip_prefix("+++ ") {
+            open = None;
             if let Some(path) = rest.split_whitespace().next() {
                 if path == "/dev/null" {
                     continue;
                 }
                 let created = previous_minus.as_deref() == Some("/dev/null");
-                if !out.iter().any(|(seen, _): &(String, bool)| seen == path) {
+                if !out.iter().any(|(seen, _)| seen == path) {
                     out.push((path.to_string(), created));
+                    open = Some((out.len() - 1, 0));
                 }
             }
             previous_minus = None;
+        } else if line.starts_with("@@ ") {
+            if let Some((index, hunks)) = open.as_mut() {
+                *hunks += 1;
+                if *hunks == 1 && line.starts_with("@@ -0,0 ") {
+                    out[*index].1 = true;
+                } else if *hunks > 1 {
+                    out[*index].1 = false;
+                }
+            }
         }
     }
     out
@@ -314,6 +340,16 @@ pub(crate) fn judge(entry: &PatchEntry, patch_path: &Path, root: &Path) -> Sourc
     if reverse {
         return SourceVerdict::Upstream(level);
     }
+    if let Some(shipped) = created_files_shipped(&files, level, root) {
+        return SourceVerdict::Shipped(shipped);
+    }
+    let parsed = parse_unified(&text);
+    if let Some(pins) = pins_declared(&parsed, level, root) {
+        return SourceVerdict::PinDeclared(pins);
+    }
+    if let Some(locations) = changes_present(&parsed, level, root) {
+        return SourceVerdict::Moved(locations);
+    }
     let (_, verbose) = run_patch(root, patch_path, level, &["--dry-run", "-N", "-f"], opts);
     let reason = failure_lines(&verbose);
     let reason = if reason.is_empty() {
@@ -326,6 +362,226 @@ pub(crate) fn judge(entry: &PatchEntry, patch_path: &Path, root: &Path) -> Sourc
     } else {
         reason
     })
+}
+
+/// `path` with its first `level` components removed, as `patch -p` reads it.
+fn strip_level(path: &str, level: u32) -> Option<String> {
+    let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    let level = level as usize;
+    (parts.len() > level).then(|| parts[level..].join("/"))
+}
+
+/// The files a creation-only patch adds, when the source already has every
+/// one of them. `None` when the patch modifies an existing file as well,
+/// since then the source having the new files says nothing about the rest.
+fn created_files_shipped(files: &[(String, bool)], level: u32, root: &Path) -> Option<Vec<String>> {
+    if files.is_empty() || !files.iter().all(|(_, created)| *created) {
+        return None;
+    }
+    let mut shipped = Vec::new();
+    for (file, _) in files {
+        let relative = strip_level(file, level)?;
+        if !root.join(&relative).is_file() {
+            return None;
+        }
+        shipped.push(relative);
+    }
+    Some(shipped)
+}
+
+/// One run of `-` and `+` lines in a hunk, between context lines.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct ChangeBlock {
+    removed: Vec<String>,
+    added: Vec<String>,
+}
+
+/// The change blocks of one file in a unified diff.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct FileChanges {
+    /// The `+++` path as written.
+    path: String,
+    blocks: Vec<ChangeBlock>,
+}
+
+/// Read a unified diff into per-file change blocks. Headers, `diff` lines
+/// and prose around the hunks are skipped.
+fn parse_unified(patch: &str) -> Vec<FileChanges> {
+    let mut files: Vec<FileChanges> = Vec::new();
+    let mut in_hunk = false;
+    let mut current: Option<ChangeBlock> = None;
+    let flush = |files: &mut Vec<FileChanges>, current: &mut Option<ChangeBlock>| {
+        if let (Some(block), Some(file)) = (current.take(), files.last_mut()) {
+            if !block.removed.is_empty() || !block.added.is_empty() {
+                file.blocks.push(block);
+            }
+        }
+    };
+    let mut lines = patch.lines().peekable();
+    while let Some(line) = lines.next() {
+        if line.starts_with("--- ") && lines.peek().is_some_and(|next| next.starts_with("+++ ")) {
+            flush(&mut files, &mut current);
+            let plus = lines.next().unwrap_or_default();
+            let path = plus[4..]
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_string();
+            files.push(FileChanges {
+                path,
+                blocks: Vec::new(),
+            });
+            in_hunk = false;
+            continue;
+        }
+        if line.starts_with("@@") {
+            flush(&mut files, &mut current);
+            in_hunk = true;
+            continue;
+        }
+        if !in_hunk {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix('-') {
+            current
+                .get_or_insert_with(ChangeBlock::default)
+                .removed
+                .push(rest.to_string());
+        } else if let Some(rest) = line.strip_prefix('+') {
+            current
+                .get_or_insert_with(ChangeBlock::default)
+                .added
+                .push(rest.to_string());
+        } else if line.starts_with(' ') || line.is_empty() {
+            flush(&mut files, &mut current);
+        } else if line.starts_with('\\') {
+            continue;
+        } else {
+            flush(&mut files, &mut current);
+            in_hunk = false;
+        }
+    }
+    flush(&mut files, &mut current);
+    files
+}
+
+/// First line (1-based) at which `needle` stands as consecutive lines of
+/// `haystack`, comparing without trailing whitespace.
+fn find_block(haystack: &[&str], needle: &[String]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    (0..=haystack.len() - needle.len())
+        .find(|start| {
+            needle
+                .iter()
+                .zip(&haystack[*start..])
+                .all(|(want, have)| want.trim_end() == have.trim_end())
+        })
+        .map(|start| start + 1)
+}
+
+/// A line that identifies its place: more than punctuation and a keyword.
+fn distinctive(line: &str) -> bool {
+    line.trim().chars().filter(|c| c.is_alphanumeric()).count() >= 6
+}
+
+/// Where the source already carries every change block of the patch: the
+/// new lines stand together in the target file and the removed lines do not.
+/// A block that only removes lines, or adds nothing distinctive, cannot be
+/// located this way, so it leaves the patch undecided.
+fn changes_present(files: &[FileChanges], level: u32, root: &Path) -> Option<Vec<String>> {
+    if files.is_empty() {
+        return None;
+    }
+    let mut locations = Vec::new();
+    for file in files {
+        if file.blocks.is_empty() {
+            return None;
+        }
+        let relative = strip_level(&file.path, level)?;
+        let text = std::fs::read_to_string(root.join(&relative)).ok()?;
+        let lines: Vec<&str> = text.lines().collect();
+        for block in &file.blocks {
+            if !block.added.iter().any(|line| distinctive(line)) {
+                return None;
+            }
+            let at = find_block(&lines, &block.added)?;
+            if find_block(&lines, &block.removed).is_some() {
+                return None;
+            }
+            locations.push(format!("{relative}:{at}"));
+        }
+    }
+    Some(locations)
+}
+
+/// `bazel_dep(name = "X", version = "V")` declarations in a MODULE.bazel text.
+fn bazel_deps(text: &str) -> Vec<(String, String)> {
+    let Ok(dep) = regex::Regex::new(
+        r#"(?s)bazel_dep\(\s*name\s*=\s*"([^"]+)"\s*,\s*version\s*=\s*"([^"]*)""#,
+    ) else {
+        return Vec::new();
+    };
+    dep.captures_iter(text)
+        .map(|caps| (caps[1].to_string(), caps[2].to_string()))
+        .collect()
+}
+
+/// Strip `#` comments from Starlark lines that hold no string with a `#`.
+fn starlark_code(line: &str) -> &str {
+    match line.find('#') {
+        Some(at) if !line[..at].contains('"') => &line[..at],
+        _ => line,
+    }
+}
+
+/// The modules a patch pins in `MODULE.bazel` when that is all it does and
+/// the release declares every one of them itself. Each pin is answered with
+/// the version the release declares.
+fn pins_declared(files: &[FileChanges], level: u32, root: &Path) -> Option<Vec<(String, String)>> {
+    let [file] = files else {
+        return None;
+    };
+    let relative = strip_level(&file.path, level)?;
+    if relative != "MODULE.bazel" || file.blocks.is_empty() {
+        return None;
+    }
+    let mut added = String::new();
+    for block in &file.blocks {
+        if !block.removed.is_empty() {
+            return None;
+        }
+        for line in &block.added {
+            added.push_str(starlark_code(line));
+            added.push('\n');
+        }
+    }
+    let call = regex::Regex::new(
+        r#"(?s)(bazel_dep|single_version_override)\(\s*(?:name|module_name)\s*=\s*"([^"]+)"[^()]*\)"#,
+    )
+    .ok()?;
+    let mut modules: Vec<String> = Vec::new();
+    for caps in call.captures_iter(&added) {
+        let module = caps[2].to_string();
+        if !modules.contains(&module) {
+            modules.push(module);
+        }
+    }
+    if modules.is_empty() || !call.replace_all(&added, "").trim().is_empty() {
+        return None;
+    }
+    let release = std::fs::read_to_string(root.join(&relative)).ok()?;
+    let declared = bazel_deps(&release);
+    modules
+        .into_iter()
+        .map(|module| {
+            declared
+                .iter()
+                .find(|(name, _)| *name == module)
+                .map(|(name, version)| (name.clone(), version.clone()))
+        })
+        .collect()
 }
 
 /// Unpack `bytes` saved as `filename` under `into`, and return the
@@ -639,6 +895,35 @@ fn verdict_record(
             ),
             ResidualSeverity::Mechanical,
         ),
+        SourceVerdict::Shipped(files) => (
+            "drop",
+            format!(
+                "it only creates files the {label} already ships ({})",
+                files.join(", ")
+            ),
+            ResidualSeverity::Mechanical,
+        ),
+        SourceVerdict::Moved(locations) => (
+            "drop",
+            format!(
+                "the {label} already carries each change with different lines around it \
+                 (new lines at {}, removed lines absent)",
+                locations.join(", ")
+            ),
+            ResidualSeverity::Mechanical,
+        ),
+        SourceVerdict::PinDeclared(pins) => (
+            "drop",
+            format!(
+                "it only pins modules the {label} declares itself in MODULE.bazel ({}); \
+                 Bazel refuses a second bazel_dep on one module",
+                pins.iter()
+                    .map(|(module, version)| format!("bazel_dep {module} {version}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            ResidualSeverity::Mechanical,
+        ),
         SourceVerdict::CopyOnly => (
             "carry",
             "copied into the build directory, not applied".to_string(),
@@ -920,5 +1205,163 @@ mod tests {
             judge(&entry, &gone, &root),
             SourceVerdict::TargetsGone(vec!["pkg/plugins/x.c".into()])
         );
+    }
+
+    fn plain_entry(level: Option<u32>) -> PatchEntry {
+        PatchEntry {
+            name: "fix.patch".into(),
+            level,
+            opts: None,
+            copy_only: false,
+        }
+    }
+
+    #[test]
+    fn a_diff_n_hunk_from_an_empty_original_marks_a_created_file() {
+        let patch = "--- old/a/new.inc\t1970-01-01 01:00:00\n+++ new/a/new.inc\t2024-02-14\n\
+            @@ -0,0 +1,2 @@\n+one\n+two\n--- old/a/x.c\n+++ new/a/x.c\n@@ -1,2 +1,2 @@\n-a\n+b\n c\n";
+        assert_eq!(
+            patched_files(patch),
+            vec![
+                ("new/a/new.inc".to_string(), true),
+                ("new/a/x.c".to_string(), false)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_creation_patch_whose_file_the_release_ships_is_dropped() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("pkg-2.0");
+        std::fs::create_dir_all(root.join("include")).unwrap();
+        std::fs::write(root.join("include/extra.inc"), "release\ncontent\n").unwrap();
+        let patch = temp.path().join("create.patch");
+        std::fs::write(
+            &patch,
+            "--- old/include/extra.inc\t1970-01-01 01:00:00\n+++ new/include/extra.inc\t2024-01-01\n\
+             @@ -0,0 +1,2 @@\n+patched\n+content\n",
+        )
+        .unwrap();
+        assert_eq!(
+            judge(&plain_entry(Some(1)), &patch, &root),
+            SourceVerdict::Shipped(vec!["include/extra.inc".into()])
+        );
+        // A patch that also modifies an existing file is not decided by the
+        // created file alone.
+        std::fs::write(root.join("main.c"), "int x;\n").unwrap();
+        let mixed = temp.path().join("mixed.patch");
+        std::fs::write(
+            &mixed,
+            "--- old/include/extra.inc\t1970-01-01 01:00:00\n+++ new/include/extra.inc\t2024-01-01\n\
+             @@ -0,0 +1,1 @@\n+patched\n--- old/main.c\n+++ new/main.c\n@@ -1 +1 @@\n-int y;\n+int z;\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            judge(&plain_entry(Some(1)), &mixed, &root),
+            SourceVerdict::Fails(_)
+        ));
+    }
+
+    #[test]
+    fn a_change_the_release_carries_under_moved_context_is_dropped() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("pkg-2.0");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("CMakeLists.txt"),
+            "add_subdirectory(ext)\n\n# Bundled headers win over system ones.\n\
+             # (several lines of new commentary)\ninclude_directories(BEFORE \"${FMT_SOURCE_DIR}/include\")\n\n\
+             add_subdirectory(shared_core)\n",
+        )
+        .unwrap();
+        let patch = temp.path().join("moved.patch");
+        std::fs::write(
+            &patch,
+            "--- a/CMakeLists.txt\n+++ b/CMakeLists.txt\n@@ -1,7 +1,7 @@\n \n # external libraries\n \
+             add_subdirectory(ext)\n-include_directories(SYSTEM \"${FMT_SOURCE_DIR}/include\")\n\
+             +include_directories(BEFORE \"${FMT_SOURCE_DIR}/include\")\n \n # shared library\n \
+             add_subdirectory(shared_core)\n",
+        )
+        .unwrap();
+        assert_eq!(
+            judge(&plain_entry(None), &patch, &root),
+            SourceVerdict::Moved(vec!["CMakeLists.txt:5".into()])
+        );
+        // The removed line still standing means the change is not in.
+        std::fs::write(
+            root.join("CMakeLists.txt"),
+            "foo()\ninclude_directories(SYSTEM \"${FMT_SOURCE_DIR}/include\")\n\
+             include_directories(BEFORE \"${FMT_SOURCE_DIR}/include\")\nbar()\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            judge(&plain_entry(None), &patch, &root),
+            SourceVerdict::Fails(_)
+        ));
+        // A change of a line that is not distinctive is never located.
+        std::fs::write(root.join("CMakeLists.txt"), "x\n}\ny\n").unwrap();
+        let brace = temp.path().join("brace.patch");
+        std::fs::write(
+            &brace,
+            "--- a/CMakeLists.txt\n+++ b/CMakeLists.txt\n@@ -1,7 +1,7 @@\n a1\n a2\n a3\n-);\n+}\n b1\n b2\n b3\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            judge(&plain_entry(None), &brace, &root),
+            SourceVerdict::Fails(_)
+        ));
+    }
+
+    #[test]
+    fn a_module_pin_the_release_declares_is_dropped() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("bazel-9.0");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("MODULE.bazel"),
+            "module(\n    name = \"bazel\",\n)\n\n# deps\n\
+             bazel_dep(name = \"abseil-cpp\", version = \"20250814.1\")\n\
+             bazel_dep(name = \"bazel_features\", version = \"1.42.1\")\n",
+        )
+        .unwrap();
+        let pin = "--- a/MODULE.bazel\n+++ b/MODULE.bazel\n@@ -10,7 +10,15 @@ module(\n \
+             # =====\n # Bazel module dependencies\n # =====\n \n+# Pin bazel_features for Bazel 7.x\n\
+             +bazel_dep(name = \"bazel_features\", version = \"1.21.0\")\n+\n+single_version_override(\n\
+             +    module_name = \"bazel_features\",\n+    version = \"1.21.0\",\n+)\n+\n \
+             bazel_dep(name = \"rules_license\", version = \"0.0.7\")\n \
+             bazel_dep(name = \"bazel_skylib\", version = \"1.7.1\")\n \
+             bazel_dep(name = \"protobuf\", version = \"21.7\")\n";
+        let patch = temp.path().join("pin.patch");
+        std::fs::write(&patch, pin).unwrap();
+        assert_eq!(
+            judge(&plain_entry(Some(1)), &patch, &root),
+            SourceVerdict::PinDeclared(vec![("bazel_features".into(), "1.42.1".into())])
+        );
+        // A pin of a module the release does not declare is a real change.
+        std::fs::write(
+            root.join("MODULE.bazel"),
+            "module(\n    name = \"bazel\",\n)\n\nbazel_dep(name = \"abseil-cpp\", version = \"1\")\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            judge(&plain_entry(Some(1)), &patch, &root),
+            SourceVerdict::Fails(_)
+        ));
+        // Anything besides pins in the added lines is a real change too.
+        std::fs::write(
+            root.join("MODULE.bazel"),
+            "bazel_dep(name = \"bazel_features\", version = \"1.42.1\")\n",
+        )
+        .unwrap();
+        let other = temp.path().join("other.patch");
+        std::fs::write(
+            &other,
+            pin.replace("+)\n+\n", "+)\n+register_toolchains(\"//x\")\n"),
+        )
+        .unwrap();
+        assert!(matches!(
+            judge(&plain_entry(Some(1)), &other, &root),
+            SourceVerdict::Fails(_)
+        ));
     }
 }
