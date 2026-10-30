@@ -284,6 +284,15 @@ plan. Planning fails when no included module defines the class the recipe
 resolves to: the class named by ~build.easyblock~, or the class EasyBuild
 derives from the software name when none is named.
 
+~build.config_options~ replaces the recipe's ~configopts~; when the options
+do not fit one line they are written one per ~configopts +=~ line.
+~build.extra_config_options~ keeps the recipe's own ~configopts~, whatever
+expression builds it, and adds one ~configopts +=~ line per option after its
+last statement, every layer's list in layer order. A bump also writes a
+layer's ~dependencies.requirements~ with the ~build~ role into
+~builddependencies~ when the recipe does not name them, and a layer
+parameter replaces the recipe's whole value, ~+=~ continuations included.
+
 EasyBuild finds a software-specific easyblock by name, and its own easyconfigs
 never spell it out, so when ~build.easyblock~ equals the derived class
 (~EB_SeisSol~ for SeisSol) the emitted recipe has no ~easyblock~ line.

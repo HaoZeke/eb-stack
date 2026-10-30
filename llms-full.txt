@@ -3588,7 +3588,11 @@ version a `local_*` variable holds (gc's `libatomic_ops`) to its newest
 stable release, read with the `package latest` backends from the source URLs
 that carry that version and keyed by the component name in `--overrides`;
 the variable, checksum and plan digest move together and a
-`secondary-source` residual records the move. The patches of an
+`secondary-source` residual records the move. A `local_*` variable holding a
+40-hex commit that is the commit of the old release's GitHub tag (the first
+source's archive name with the old version) moves to the new tag's commit,
+as RStudio-Server's `local_git_rev` must; a commit that is not the old tag's
+is left as written, and each case is a `release-commit` residual. The patches of an
 extension that is the package itself are tried against its new archive. See
 [output formats](https://eb-stack.rgoswami.me/formats.html.md).
 `--latest` takes the version `package latest` picks for the recipe, so it
@@ -4962,6 +4966,15 @@ with their bases and `extra_options` keys, under `build.easyblocks` in the
 plan. Planning fails when no included module defines the class the recipe
 resolves to: the class named by `build.easyblock`, or the class EasyBuild
 derives from the software name when none is named.
+
+`build.config_options` replaces the recipe's `configopts`; when the options
+do not fit one line they are written one per `configopts +=` line.
+`build.extra_config_options` keeps the recipe's own `configopts`, whatever
+expression builds it, and adds one `configopts +=` line per option after its
+last statement, every layer's list in layer order. A bump also writes a
+layer's `dependencies.requirements` with the `build` role into
+`builddependencies` when the recipe does not name them, and a layer
+parameter replaces the recipe's whole value, `+=` continuations included.
 
 EasyBuild finds a software-specific easyblock by name, and its own easyconfigs
 never spell it out, so when `build.easyblock` equals the derived class

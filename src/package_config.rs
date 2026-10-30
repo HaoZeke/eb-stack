@@ -78,6 +78,11 @@ pub struct BuildPatch {
     /// Configure flags, replacing any extracted set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_options: Option<Vec<String>>,
+    /// Configure flags added after the recipe's own, for a bump whose recipe
+    /// builds `configopts` from an expression a replacement would lose.
+    /// Each layer's list is appended in layer order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_config_options: Option<Vec<String>>,
     /// EasyBuild moduleclass, e.g. `lib`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moduleclass: Option<String>,

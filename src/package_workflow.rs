@@ -1506,6 +1506,21 @@ pub fn complete_package_bump_with_options(
         result.text = crate::eb_emit::upsert_raw_assignment(&result.text, "configopts", &rhs)
             .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     }
+    let extra: Vec<String> = request
+        .package_layers
+        .iter()
+        .filter_map(|layer| {
+            layer
+                .build
+                .as_ref()
+                .and_then(|build| build.extra_config_options.clone())
+        })
+        .flatten()
+        .collect();
+    if !extra.is_empty() {
+        result.text = crate::eb_emit::append_configopts(&result.text, &extra)
+            .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+    }
     if let Some(profile) = plan.profiles.iter().find(|profile| profile.default) {
         if !profile.toolchain_options.is_empty() {
             let table = profile

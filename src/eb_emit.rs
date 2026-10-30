@@ -504,6 +504,72 @@ pub fn concat_assignment_rhs(key: &str, fragments: &[String]) -> String {
     rhs
 }
 
+/// End of the Python statement whose value starts at `start`: the first
+/// newline outside strings and brackets, past it.
+fn statement_end(src: &str, start: usize) -> usize {
+    let bytes = src.as_bytes();
+    let mut depth = 0i32;
+    let mut in_string: Option<u8> = None;
+    let mut in_comment = false;
+    let mut i = start;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if in_comment {
+            if c == b'\n' {
+                in_comment = false;
+                if depth <= 0 {
+                    return i + 1;
+                }
+            }
+        } else if let Some(quote) = in_string {
+            if c == b'\\' {
+                i += 1;
+            } else if c == quote {
+                in_string = None;
+            }
+        } else {
+            match c {
+                b'\'' | b'"' => in_string = Some(c),
+                b'#' => in_comment = true,
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => depth -= 1,
+                b'\\' if bytes.get(i + 1) == Some(&b'\n') => i += 1,
+                b'\n' if depth <= 0 => return i + 1,
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    bytes.len()
+}
+
+/// Add `options` after the recipe's own `configopts`, one `configopts +=`
+/// line each after its last statement, whatever expression builds it. A
+/// recipe without `configopts` gets the options as its value.
+pub fn append_configopts(src: &str, options: &[String]) -> Result<String, EmitError> {
+    let re = regex::Regex::new(r"(?m)^configopts[ \t]*\+?=[ \t]*")
+        .map_err(|e| EmitError::Rewrite(e.to_string()))?;
+    let Some(last) = re.find_iter(src).last() else {
+        let fragments: Vec<String> = options.iter().map(|option| format!("{option} ")).collect();
+        let joined = fragments.concat();
+        let rhs = format!("'{}'", joined.trim_end().replace('\'', "\\'"));
+        return upsert_raw_assignment(src, "configopts", &rhs);
+    };
+    let end = statement_end(src, last.end());
+    let lines: String = options
+        .iter()
+        .map(|option| format!("configopts += ' {}'\n", option.replace('\'', "\\'")))
+        .collect();
+    let mut out = String::with_capacity(src.len() + lines.len() + 1);
+    out.push_str(&src[..end]);
+    if !src[..end].ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&lines);
+    out.push_str(&src[end..]);
+    Ok(out)
+}
+
 /// Remove every `key += ...` statement, through the end of its line.
 fn remove_augmented_assignments(src: &str, key: &str) -> Result<String, EmitError> {
     let re = regex::Regex::new(&format!(
@@ -3142,6 +3208,37 @@ moduleclass = 'tools'
             insert_build_dependency(none, "CMake", "4.2.1").expect("insert"),
             "name = 'x'\nbuilddependencies = [\n    ('CMake', '4.2.1'),\n]\ndependencies = [('Python', '3.14.2')]\nmoduleclass = 'tools'\n"
         );
+    }
+
+    #[test]
+    fn extra_configure_options_follow_the_recipes_own_expression() {
+        let src = "\
+configopts = \" \".join([
+    \"-DA=1\",
+    \"-DHASH=\" + local_git_rev
+])
+
+sanity_check_commands = ['x']
+";
+        let out =
+            append_configopts(src, &["-DB=2".to_string(), "-DC=3".to_string()]).expect("append");
+        assert_eq!(
+            out,
+            "\
+configopts = \" \".join([
+    \"-DA=1\",
+    \"-DHASH=\" + local_git_rev
+])
+configopts += ' -DB=2'
+configopts += ' -DC=3'
+
+sanity_check_commands = ['x']
+"
+        );
+        let none = "name = 'x'\nmoduleclass = 'tools'\n";
+        assert!(append_configopts(none, &["-DB=2".to_string()])
+            .expect("insert")
+            .contains("configopts = '-DB=2'\n"));
     }
 
     #[test]

@@ -213,7 +213,11 @@ version a ~local_*~ variable holds (gc's ~libatomic_ops~) to its newest
 stable release, read with the ~package latest~ backends from the source URLs
 that carry that version and keyed by the component name in ~--overrides~;
 the variable, checksum and plan digest move together and a
-~secondary-source~ residual records the move. The patches of an
+~secondary-source~ residual records the move. A ~local_*~ variable holding a
+40-hex commit that is the commit of the old release's GitHub tag (the first
+source's archive name with the old version) moves to the new tag's commit,
+as RStudio-Server's ~local_git_rev~ must; a commit that is not the old tag's
+is left as written, and each case is a ~release-commit~ residual. The patches of an
 extension that is the package itself are tried against its new archive. See
 [[file:formats.org][output formats]].
 ~--latest~ takes the version ~package latest~ picks for the recipe, so it

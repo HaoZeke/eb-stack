@@ -523,3 +523,79 @@ fn a_secondary_source_moves_to_its_newest_stable_release() {
         Some(digest.as_str())
     );
 }
+
+#[test]
+fn a_local_commit_of_the_old_release_tag_moves_to_the_new_tags_commit() {
+    let temp = tempfile::tempdir().unwrap();
+    let robot = temp.path().join("robot");
+    fs::create_dir_all(&robot).unwrap();
+    let old = "d1dc28bb95f3e35b4c9d1d7536cb1da6de4d7aa7";
+    let new = "0b06695c24e10f6de6b9166c35ae24804c21f95f";
+    let source = temp.path().join("Delta-1.0+7-GCCcore-15.2.0.eb");
+    fs::write(
+        &source,
+        format!(
+            "easyblock = 'CMakeMake'\nname = 'Delta'\nversion = '1.0+7'\n\
+             local_git_rev = '{old}'\n\
+             homepage = 'https://example.invalid/'\ndescription = 'Synthetic package'\n\
+             toolchain = {{'name': 'GCCcore', 'version': '15.2.0'}}\n\
+             source_urls = ['https://github.com/acme/delta/archive']\n\
+             sources = ['v%(version)s.tar.gz']\n\
+             checksums = [\n    {{'v1.0+7.tar.gz': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}},\n]\n\
+             configopts = '-DREV=' + local_git_rev\n\
+             moduleclass = 'tools'\n"
+        ),
+    )
+    .unwrap();
+    let mut client = MapClient::default();
+    client.pages.insert(
+        "https://github.com/acme/delta/archive/v2.0+3.tar.gz".into(),
+        tar_gz(&[("delta-2.0-3/main.c", NEW_MAIN)]),
+    );
+    client.pages.insert(
+        "https://api.github.com/repos/acme/delta/commits/v1.0%2B7".into(),
+        format!("{{\"sha\": \"{old}\"}}").into_bytes(),
+    );
+    client.pages.insert(
+        "https://api.github.com/repos/acme/delta/commits/v2.0%2B3".into(),
+        format!("{{\"sha\": \"{new}\"}}").into_bytes(),
+    );
+    let mut req = request(&source, &robot, false);
+    req.version = Some("2.0+3".into());
+    let (bundle, _) =
+        plan_package_bump_fetching(&req, &PackageEmitOptions::default(), &client).expect("bump");
+    let text = &bundle.easyconfigs[0].text;
+    assert!(
+        text.contains(&format!("local_git_rev = '{new}'\n")),
+        "{text}"
+    );
+    assert!(!text.contains(old), "{text}");
+    let moved = bundle
+        .plan
+        .residuals
+        .iter()
+        .find(|residual| residual.category == "release-commit")
+        .expect("the move is recorded");
+    assert_eq!(moved.severity, ResidualSeverity::Mechanical);
+    assert_eq!(
+        moved.summary,
+        "local_git_rev d1dc28bb95f3 -> 0b06695c24e1: the commit of acme/delta v2.0+3, \
+         as d1dc28bb95f3 was of v1.0+7"
+    );
+
+    // A pin that is not the old release's commit is left as written.
+    client.pages.insert(
+        "https://api.github.com/repos/acme/delta/commits/v1.0%2B7".into(),
+        br#"{"sha": "1111111111111111111111111111111111111111"}"#.to_vec(),
+    );
+    let (bundle, _) =
+        plan_package_bump_fetching(&req, &PackageEmitOptions::default(), &client).expect("bump");
+    assert!(bundle.easyconfigs[0].text.contains(old));
+    assert!(bundle
+        .plan
+        .residuals
+        .iter()
+        .any(|residual| residual.category == "release-commit"
+            && residual.severity == ResidualSeverity::Judgment
+            && residual.summary.contains("left as written")));
+}

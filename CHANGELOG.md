@@ -8,6 +8,13 @@ All notable changes to this project are documented here.
 
 - A version bump moves the file name in a positional checksum's trailing
   comment to the new version.
+- A version bump moves a `local_*` commit that is the old release tag's
+  commit to the new tag's commit (RStudio-Server's `local_git_rev` named the
+  previous release).
+- A bump writes a package-config layer's build requirement into
+  `builddependencies`, and splits a layer's long `config_options` into
+  `configopts +=` lines. `build.extra_config_options` adds options after the
+  recipe's own `configopts` expression.
 - A package-config layer parameter replaces the recipe's whole value: the
   old value's `+=` continuations are removed, and a `concat` value that does
   not fit one line is written as `key =` then `key +=` lines.

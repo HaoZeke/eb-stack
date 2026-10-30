@@ -465,6 +465,9 @@ pub fn plan_package_bump_fetching_with(
         .ok()
         .and_then(|text| resolve_easyconfig_str(&text).ok())
         .map(|recipe| recipe.version);
+    if let Some(prior) = prior_version.as_deref() {
+        bump_release_commits(&mut bundle, client, prior, new_version);
+    }
     let inputs = crate::patch_apply::PatchInputs {
         rebased_dirs: rebased_patch_dirs(request, &bundle.plan.package.name),
         drops: decisions.drop_patches.clone(),
@@ -516,6 +519,173 @@ fn rebased_patch_dirs(request: &BumpPackageRequest, name: &str) -> Vec<std::path
         }
     }
     dirs
+}
+
+/// The commit a GitHub ref names, from the commits endpoint.
+fn github_commit(
+    client: &dyn RegistryClient,
+    owner: &str,
+    repo: &str,
+    reference: &str,
+) -> Result<String, String> {
+    let encoded = reference.replace('+', "%2B");
+    let url = format!("https://api.github.com/repos/{owner}/{repo}/commits/{encoded}");
+    let body = client
+        .get(&url)
+        .map_err(|error| format!("{url}: {error}"))?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|error| format!("{url}: {error}"))?;
+    value["sha"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| format!("{url}: no sha in the response"))
+}
+
+/// Move a `local_*` variable that pins the old release's commit to the new
+/// release's commit.
+///
+/// RStudio-Server writes the commit of its release tag into the build
+/// (`local_git_rev`, passed as `RSTUDIO_GIT_REVISION_HASH`); a version bump
+/// that keeps it names the old release's commit in the new build. A
+/// 40-hex `local_*` value is moved only when it is the commit of the old
+/// release's tag, the tag being the first source's archive name (as the
+/// GitHub `archive/` URL names it) with the new version replaced by the old
+/// one. Anything else is reported, never guessed.
+pub fn bump_release_commits(
+    bundle: &mut PackageBundle,
+    client: &dyn RegistryClient,
+    old_version: &str,
+    new_version: &str,
+) {
+    if old_version.is_empty() || old_version == new_version {
+        return;
+    }
+    let Some(text) = bundle.easyconfigs.first().map(|ec| ec.text.clone()) else {
+        return;
+    };
+    let Ok(local) =
+        regex::Regex::new(r#"(?m)^(local_[A-Za-z0-9_]+)[ \t]*=[ \t]*['"]([0-9a-f]{40})['"]"#)
+    else {
+        return;
+    };
+    let pins: Vec<(String, String)> = local
+        .captures_iter(&text)
+        .map(|caps| (caps[1].to_string(), caps[2].to_string()))
+        .collect();
+    if pins.is_empty() {
+        return;
+    }
+    let Ok(recipe) = resolve_easyconfig_str(&text) else {
+        return;
+    };
+    let github = regex::Regex::new(r"^https?://(?:www\.)?github\.com/([^/]+)/([^/#?]+)").ok();
+    let repository = recipe
+        .source_files
+        .first()
+        .map(|file| {
+            if file.source_urls.is_empty() {
+                recipe.source_urls.clone()
+            } else {
+                file.source_urls.clone()
+            }
+        })
+        .unwrap_or_default()
+        .iter()
+        .find_map(|url| {
+            github.as_ref()?.captures(url).map(|caps| {
+                (
+                    caps[1].to_string(),
+                    caps[2].trim_end_matches(".git").to_string(),
+                )
+            })
+        });
+    let new_ref = recipe.source_files.first().and_then(|file| {
+        let name = file.download_filename.as_str();
+        [".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".zip"]
+            .iter()
+            .find_map(|extension| name.strip_suffix(extension))
+            .filter(|reference| reference.contains(new_version))
+            .map(str::to_string)
+    });
+    let mut record = |severity: ResidualSeverity, summary: String, evidence: Option<String>| {
+        bundle.plan.residuals.push(Residual {
+            id: format!("release-commit:{}", bundle.plan.residuals.len()),
+            stage: ResidualStage::Normalize,
+            category: "release-commit".into(),
+            severity,
+            summary,
+            evidence,
+            provenance: None,
+        });
+    };
+    let (Some((owner, repo)), Some(new_ref)) = (repository, new_ref) else {
+        for (variable, _) in &pins {
+            record(
+                ResidualSeverity::Judgment,
+                format!(
+                    "{variable} pins a commit, and the first source is not a GitHub release \
+                     archive to read the new release's commit from"
+                ),
+                None,
+            );
+        }
+        return;
+    };
+    let old_ref = new_ref.replace(new_version, old_version);
+    let mut text = text;
+    for (variable, value) in &pins {
+        let old_commit = match github_commit(client, &owner, &repo, &old_ref) {
+            Ok(commit) => commit,
+            Err(error) => {
+                record(
+                    ResidualSeverity::Judgment,
+                    format!("{variable}: the commit of {owner}/{repo} {old_ref} could not be read"),
+                    Some(error),
+                );
+                continue;
+            }
+        };
+        if &old_commit != value {
+            record(
+                ResidualSeverity::Judgment,
+                format!(
+                    "{variable} pins {value}, which is not the commit of the old release \
+                     {old_ref} ({old_commit}); left as written"
+                ),
+                None,
+            );
+            continue;
+        }
+        let new_commit = match github_commit(client, &owner, &repo, &new_ref) {
+            Ok(commit) => commit,
+            Err(error) => {
+                record(
+                    ResidualSeverity::Blocking,
+                    format!(
+                        "{variable} pins the old release's commit, and the commit of \
+                         {owner}/{repo} {new_ref} could not be read"
+                    ),
+                    Some(error),
+                );
+                continue;
+            }
+        };
+        // The hash is unique in the recipe; a comment repeating it moves too.
+        text = text.replace(value.as_str(), &new_commit);
+        record(
+            ResidualSeverity::Mechanical,
+            format!(
+                "{variable} {} -> {}: the commit of {owner}/{repo} {new_ref}, as {} was of {old_ref}",
+                &value[..12],
+                &new_commit[..12],
+                &value[..12]
+            ),
+            None,
+        );
+    }
+    if let Some(easyconfig) = bundle.easyconfigs.first_mut() {
+        easyconfig.text = text;
+    }
 }
 
 /// Move each later source whose version a `local_*` variable holds to its
