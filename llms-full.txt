@@ -2022,6 +2022,13 @@ The download fills `gromacs-2024.5.tar.gz` in `checksums`. The digest
 written for that tarball is
 `fecf06b186cddb942cfb42ee8da5f3eb2b9993e6acc0a2f18d14ac0b014424f3`.
 
+With the source downloaded, the bump also tries every patch the tree cannot
+decide against it, as EasyBuild's patch step will. A patch that applies stays,
+one the release already contains or whose files are gone leaves `patches` and
+`checksums`, and one that conflicts stays as an `undecided` `patch-decision`
+residual that names the failed hunks. Such a patch needs a version rebased on
+the new release before the recipe builds.
+
 # Check and build
 
 ```bash
@@ -3064,14 +3071,25 @@ clears the old digest and produces a visible residual, because source bytes
 cannot be inferred safely. `--package-config` is repeatable and applies after
 the source recipe is parsed, as it does for `package plan`. `--strict-patches`
 fails the bump when a patch's fate across a version change cannot be decided
-from the tree; without it the patch is carried and a `patch-decision` residual
-records the review flag. `--emit-easyblock` is the same flag as on `package plan`.
+from the tree, or, with `--fetch-checksums`, from the new source; without it
+the patch is carried and a `patch-decision` residual records the review flag.
+`--emit-easyblock` is the same flag as on `package plan`.
 `--fetch-checksums` downloads each `sources` entry from the recipe's
 `source_urls` when the version changed and `--source-checksum` was omitted,
-and writes that SHA-256 into the recipe and the SBOM. A git checkout, a
-missing URL, or a failed download stays empty. The attempts are
-`sources.fetch.json` (one object per source: `filename`, `url`, `sha256`,
-`errors`) and a `source:fetch` residual. See
+and writes that SHA-256 into the recipe and the SBOM. An archive URL that
+404s under the recipe's tag spelling is tried with the leading `v` added or
+removed, and the `sources` entry is rewritten to the name that served it. A
+later source whose bytes match the digest the recipe states is confirmed. A
+git checkout, a missing URL, or a failed download stays empty. The attempts
+are `sources.fetch.json` (one object per source: `filename`, `url`, `sha256`,
+`errors`, and `respelled` when the tag spelling changed) and a `source:fetch`
+residual. With the new source unpacked, each patch the tree cannot decide is
+tried the way EasyBuild's patch step applies it (`patch -p<level>` at the
+level EasyBuild guesses, in recipe order): a patch that applies is carried,
+one that reverse-applies or whose modified files are all gone is dropped from
+`patches` and `checksums`, and anything else stays an undecided
+`patch-decision` residual naming the failed hunks. The patches of an
+extension that is the package itself are tried against its new archive. See
 [output formats](https://eb-stack.rgoswami.me/formats.html.md).
 `--latest` takes the version `package latest` picks for the recipe, so it
 conflicts with `--version`; `--overrides` adds override files to that
@@ -5272,8 +5290,10 @@ considered. A JSON array:
 ```
 
 `url` and `sha256` are omitted when there is nothing to report. `errors`
-is omitted when the download succeeded. The downloaded bytes are not
-stored in this file.
+is omitted when the download succeeded. `respelled` appears when the archive
+host served the release under the other spelling of its tag, as
+`{"from": "1.0.10.tar.gz", "to": "v1.0.10.tar.gz"}`; the recipe's `sources`
+entry then names `to`. The downloaded bytes are not stored in this file.
 
 # Reproduction scores (`repro summary`)
 

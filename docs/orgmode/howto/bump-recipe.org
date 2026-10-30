@@ -90,6 +90,13 @@ The download fills ~gromacs-2024.5.tar.gz~ in ~checksums~. The digest
 written for that tarball is
 ~fecf06b186cddb942cfb42ee8da5f3eb2b9993e6acc0a2f18d14ac0b014424f3~.
 
+With the source downloaded, the bump also tries every patch the tree cannot
+decide against it, as EasyBuild's patch step will. A patch that applies stays,
+one the release already contains or whose files are gone leaves ~patches~ and
+~checksums~, and one that conflicts stays as an ~undecided~ ~patch-decision~
+residual that names the failed hunks. Such a patch needs a version rebased on
+the new release before the recipe builds.
+
 * Check and build
 
 #+begin_src bash

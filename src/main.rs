@@ -599,7 +599,8 @@ struct PackageBumpArgs {
     #[arg(long)]
     stack_policy: Option<PathBuf>,
     /// Fail when a patch's fate across the version bump cannot be decided
-    /// from tree evidence, instead of carrying it with a review flag.
+    /// from tree evidence or, with `--fetch-checksums`, from the new source,
+    /// instead of carrying it with a review flag.
     #[arg(long)]
     strict_patches: bool,
     /// Package-config TOML applied after the source recipe is parsed. Repeatable.
@@ -612,7 +613,10 @@ struct PackageBumpArgs {
     /// On a version bump without `--source-checksum`, download the new
     /// source from the recipe's `source_urls` and write its SHA-256, as
     /// `eb --inject-checksums` does. Anything that cannot be fetched is left
-    /// empty and reported in `sources.fetch.json` and as a residual.
+    /// empty and reported in `sources.fetch.json` and as a residual. Patches
+    /// the tree cannot decide are then tried against the unpacked source:
+    /// carried when they apply, dropped when they reverse-apply or their
+    /// files are gone.
     #[arg(long = "fetch-checksums")]
     fetch_checksums: bool,
     /// Directory for the manifest, planned SBOM, locks, and recipes.

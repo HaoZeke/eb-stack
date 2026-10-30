@@ -276,8 +276,10 @@ considered. A JSON array:
 #+end_src
 
 ~url~ and ~sha256~ are omitted when there is nothing to report. ~errors~
-is omitted when the download succeeded. The downloaded bytes are not
-stored in this file.
+is omitted when the download succeeded. ~respelled~ appears when the archive
+host served the release under the other spelling of its tag, as
+~{"from": "1.0.10.tar.gz", "to": "v1.0.10.tar.gz"}~; the recipe's ~sources~
+entry then names ~to~. The downloaded bytes are not stored in this file.
 
 * Reproduction scores (~repro summary~)
 
