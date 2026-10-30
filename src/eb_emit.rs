@@ -412,8 +412,11 @@ pub fn insert_runtime_dependency(
 }
 
 /// Replace `key = ...` with `key = {rhs}`, or insert the assignment before
-/// `moduleclass` when the source never declared it.
+/// `moduleclass` when the source never declared it. `rhs` is the whole
+/// value: every `key += ...` continuation of the old one is removed.
 pub fn upsert_raw_assignment(src: &str, key: &str, rhs: &str) -> Result<String, EmitError> {
+    let without_continuations = remove_augmented_assignments(src, key)?;
+    let src = without_continuations.as_str();
     if let Some((start, end)) = find_assignment_span(src, key)? {
         let head = &src[start..end];
         let eq = head
@@ -443,6 +446,45 @@ pub fn upsert_raw_assignment(src: &str, key: &str, rhs: &str) -> Result<String, 
         out.push('\n');
     }
     out.push_str(&line);
+    Ok(out)
+}
+
+/// `key = 'a'` then `key += 'b'` lines, the way the easyconfigs tree splits
+/// a long string, when the fragments do not fit one line; a single
+/// fragment, or a short join, is one literal. The result is a right-hand
+/// side for [`upsert_raw_assignment`].
+pub fn concat_assignment_rhs(key: &str, fragments: &[String]) -> String {
+    let quote =
+        |fragment: &str| format!("'{}'", fragment.replace('\\', "\\\\").replace('\'', "\\'"));
+    let joined = quote(&fragments.concat());
+    if fragments.len() < 2 || key.len() + 3 + joined.len() <= 120 {
+        return joined;
+    }
+    let mut rhs = quote(&fragments[0]);
+    for fragment in &fragments[1..] {
+        rhs.push('\n');
+        rhs.push_str(&format!("{key} += {}", quote(fragment)));
+    }
+    rhs
+}
+
+/// Remove every `key += ...` statement, through the end of its line.
+fn remove_augmented_assignments(src: &str, key: &str) -> Result<String, EmitError> {
+    let re = regex::Regex::new(&format!(
+        r"(?m)^[ \t]*{}[ \t]*\+=[ \t]*",
+        regex::escape(key)
+    ))
+    .map_err(|e| EmitError::Rewrite(e.to_string()))?;
+    let mut out = src.to_string();
+    while let Some(found) = re.find(&out) {
+        let (start, value) = (found.start(), found.end());
+        let end = scan_python_value(out.as_bytes(), value)?;
+        let line_end = out[end..]
+            .find('\n')
+            .map(|at| end + at + 1)
+            .unwrap_or(out.len());
+        out.replace_range(start..line_end, "");
+    }
     Ok(out)
 }
 
@@ -3018,6 +3060,44 @@ moduleclass = 'tools'
         assert!(
             inserted.find("options =").expect("options")
                 < inserted.find("moduleclass").expect("moduleclass")
+        );
+    }
+
+    #[test]
+    fn upsert_raw_assignment_drops_the_old_values_continuations() {
+        let src = "\
+name = 'App'
+version = '1.0'
+prebuildopts = 'make lib && '
+prebuildopts += 'mv a b && '
+buildopts = 'all '
+buildopts += 'COMMS=%s' % local_comms
+moduleclass = 'tools'
+";
+        let rhs = concat_assignment_rhs(
+            "prebuildopts",
+            &[
+                "touch make.inc && make staticlib F90=$F90_SEQ FCOPTS=\"$FFLAGS\" LDOPTS=\"$FFLAGS $LDFLAGS\" && "
+                    .to_string(),
+                "mv libwannier.a libwannier-serial.a && make clean && ".to_string(),
+            ],
+        );
+        let out = upsert_raw_assignment(src, "prebuildopts", &rhs).expect("replace");
+        let out = upsert_raw_assignment(&out, "buildopts", "'wannier post'").expect("replace");
+        assert_eq!(
+            out,
+            "\
+name = 'App'
+version = '1.0'
+prebuildopts = 'touch make.inc && make staticlib F90=$F90_SEQ FCOPTS=\"$FFLAGS\" LDOPTS=\"$FFLAGS $LDFLAGS\" && '
+prebuildopts += 'mv libwannier.a libwannier-serial.a && make clean && '
+buildopts = 'wannier post'
+moduleclass = 'tools'
+"
+        );
+        assert_eq!(
+            concat_assignment_rhs("x", &["a ".to_string(), "b".to_string()]),
+            "'a b'"
         );
     }
 

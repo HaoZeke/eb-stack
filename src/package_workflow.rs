@@ -1458,7 +1458,14 @@ pub fn complete_package_bump_with_options(
         .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     }
     for (name, value) in &plan.build.easyconfig_parameters {
-        let rhs = crate::package_emit::render_easyconfig_value(value, 0);
+        // A concatenation keeps its fragments as `+=` lines when they do not
+        // fit one, as the easyconfigs tree writes a long command.
+        let rhs = match value {
+            crate::package::EasyconfigValue::Concat(fragments) => {
+                crate::eb_emit::concat_assignment_rhs(name, &fragments.concat)
+            }
+            _ => crate::package_emit::render_easyconfig_value(value, 0),
+        };
         result.text = crate::eb_emit::upsert_raw_assignment(&result.text, name, &rhs)
             .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     }
