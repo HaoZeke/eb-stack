@@ -1597,10 +1597,28 @@ fn rewrite_source_checksum(
         (value.text, value.stale, value.note)
     };
 
+    // A positional entry names its file in a trailing comment
+    // (`'…',  # pkg-1.0.tar.gz`); the comment follows the file to the new
+    // version, or it would name the old release beside the new digest.
+    let after = list_open_end + elem_end;
+    let line_end = src[after..]
+        .find('\n')
+        .map(|at| after + at)
+        .unwrap_or(src.len());
+    let tail = &src[after..line_end];
+    let tail = match tail.find('#') {
+        Some(hash) if !old_version.is_empty() && old_version != new_version => format!(
+            "{}{}",
+            &tail[..hash],
+            tail[hash..].replace(old_version, new_version)
+        ),
+        _ => tail.to_string(),
+    };
     let mut out = String::with_capacity(src.len() + 16);
     out.push_str(&src[..list_open_end + start]);
     out.push_str(&new_elem);
-    out.push_str(&src[list_open_end + elem_end..]);
+    out.push_str(&tail);
+    out.push_str(&src[line_end..]);
     Ok(ChecksumRewrite {
         text: out,
         stale,
@@ -3060,6 +3078,26 @@ moduleclass = 'tools'
         assert!(
             inserted.find("options =").expect("options")
                 < inserted.find("moduleclass").expect("moduleclass")
+        );
+    }
+
+    #[test]
+    fn a_positional_checksum_comment_follows_the_new_version() {
+        let src = "\
+checksums = [
+    'aaaa',  # wannier90-3.1.0.tar.gz
+    'bbbb',  # Wannier90_3.1.0_fix.patch
+]
+";
+        let out = rewrite_source_checksum(src, "3.1.0", "4.0.3", Some("cccc")).expect("rewrite");
+        assert_eq!(
+            out.text,
+            "\
+checksums = [
+    'cccc',  # wannier90-4.0.3.tar.gz
+    'bbbb',  # Wannier90_3.1.0_fix.patch
+]
+"
         );
     }
 
