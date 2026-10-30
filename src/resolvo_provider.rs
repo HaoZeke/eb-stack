@@ -156,6 +156,28 @@ impl EbProvider {
         Some(rest.split("==").next().unwrap_or(rest))
     }
 
+    /// The newest candidate under `key` that `range` admits. Ranks ascend
+    /// with version, so that is the highest admitted rank.
+    fn newest_in(&self, key: &str, range: &Ranges<u32>) -> Option<usize> {
+        self.ranks
+            .get(key)?
+            .iter()
+            .filter(|(rank, _)| range.contains(rank))
+            .max_by_key(|(rank, _)| *rank)
+            .map(|(_, index)| *index)
+    }
+
+    /// Two candidates in rank order: version, then versionsuffix.
+    fn cmp_candidates(&self, a: usize, b: usize) -> std::cmp::Ordering {
+        let (a, b) = (&self.candidates[a], &self.candidates[b]);
+        cmp_version(&a.version, &b.version).then_with(|| {
+            a.versionsuffix
+                .as_deref()
+                .unwrap_or("")
+                .cmp(b.versionsuffix.as_deref().unwrap_or(""))
+        })
+    }
+
     /// Whether `key` has a candidate that satisfies `dep`'s version and suffix.
     fn version_hits(&self, key: &str, dep: &crate::domain::DepReq) -> bool {
         self.range_matching(
@@ -1028,7 +1050,7 @@ impl DependencyProvider for EbProvider {
             // more than one build that satisfies the tuple. dependency_keys
             // already kept the parent-first hit, so the union is not a search
             // across the rest of the hierarchy.
-            let mut sets = Vec::new();
+            let mut sets: Vec<(VersionSetId, Option<usize>)> = Vec::new();
             for key in &keys {
                 let Some(&dep_name_id) = self.name_ids.get(key) else {
                     continue;
@@ -1042,7 +1064,8 @@ impl DependencyProvider for EbProvider {
                 if range == Ranges::empty() {
                     continue;
                 }
-                sets.push(self.pool.intern_version_set(dep_name_id, range));
+                let newest = self.newest_in(key, &range);
+                sets.push((self.pool.intern_version_set(dep_name_id, range), newest));
             }
             if sets.is_empty() {
                 // A tuple that names a toolchain may point outside this
@@ -1068,12 +1091,29 @@ impl DependencyProvider for EbProvider {
                                 d.versionsuffix.as_deref(),
                             );
                             if range != Ranges::empty() {
-                                sets.push(self.pool.intern_version_set(dep_name_id, range));
+                                let newest = self.newest_in(key, &range);
+                                sets.push((
+                                    self.pool.intern_version_set(dep_name_id, range),
+                                    newest,
+                                ));
                             }
                         }
                     }
                 }
             }
+            // Resolvo tries a union's version sets in the order they are
+            // given, and sort_candidates only orders the candidates inside
+            // one set. Where each set is one package per version, as SYSTEM
+            // keys CUDA and Java, the set order is the version preference:
+            // left in robot-tree order, an unconstrained CUDA takes whichever
+            // release was read first, which is the oldest.
+            sets.sort_by(|(_, a), (_, b)| match (a, b) {
+                (Some(a), Some(b)) => self.cmp_candidates(*b, *a),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            });
+            let sets: Vec<VersionSetId> = sets.into_iter().map(|(set, _)| set).collect();
             let Some((first, rest)) = sets.split_first() else {
                 let reason = self.pool.intern_string(format!(
                     "unresolved dependency {} {} from {}={}",
@@ -1878,6 +1918,54 @@ mod tests {
             err.contains("('Java', '17', '', SYSTEM)"),
             "stack solve does not name the SYSTEM tuple:\n{err}"
         );
+    }
+
+    /// SYSTEM carries every CUDA and Java release side by side, and each
+    /// version there is its own package. An unconstrained dependency on one
+    /// of them is a union over those packages, and the newest has to win the
+    /// way it does for a name with one package: a retargeted recipe takes
+    /// the CUDA its new generation ships, not whichever release the robot
+    /// tree happened to list first.
+    #[test]
+    fn an_unconstrained_system_dependency_takes_the_newest_release() {
+        let system = Toolchain {
+            name: "system".into(),
+            version: "system".into(),
+        };
+        let release = |version: &str| {
+            let mut candidate = cand("CUDA", version, None, &format!("CUDA-{version}.eb"), vec![]);
+            candidate.toolchain = system.clone();
+            candidate
+        };
+        for order in [
+            ["11.3.1", "12.9.1", "13.4.1"],
+            ["12.9.1", "13.4.1", "11.3.1"],
+            ["13.4.1", "11.3.1", "12.9.1"],
+        ] {
+            let mut candidates: Vec<Candidate> = order.iter().map(|v| release(v)).collect();
+            candidates.push(cand(
+                "App",
+                "1.0",
+                None,
+                "App-1.0.eb",
+                vec![DepReq {
+                    name: "CUDA".into(),
+                    version_req: ">=0".into(),
+                    versionsuffix: None,
+                    toolchain: Some(system.clone()),
+                }],
+            ));
+            let selected = solve_with_resolvo(&candidates, &policy(vec!["App"], vec![]), None)
+                .expect("an unconstrained SYSTEM dependency solves");
+            let cuda = selected
+                .iter()
+                .find(|candidate| candidate.name == "CUDA")
+                .expect("CUDA is selected");
+            assert_eq!(
+                cuda.version, "13.4.1",
+                "candidate order {order:?} picked an older CUDA"
+            );
+        }
     }
 
     #[test]
