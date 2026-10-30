@@ -162,7 +162,9 @@ api.github.com. Without a token GitHub allows 60 API calls an hour, and
 the command makes at least one call per open PR, so an unauthenticated
 run suits a repository with a few dozen open PRs at most. For
 easybuild-easyconfigs, which has hundreds, set a token or use
-~fetch-prs.sh~ above. This command writes the same report, fetched by
+~fetch-prs.sh~ above. A pull request with more than 3000 changed files is
+still included. The record notes ~truncated at GitHub's limit~ and lists
+the files GitHub returned. This command writes the same report, fetched by
 ~--open~:
 
 #+begin_src bash

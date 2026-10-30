@@ -365,6 +365,7 @@ fn software_layer_prs() -> Vec<PrInput> {
             easystacks: vec![change(STACK, "  - Graphviz-14.0.2-GCCcore-15.2.0.eb\n")],
             files: Vec::new(),
             easyconfigs: Vec::new(),
+            file_list_truncated: false,
         },
         PrInput {
             number: 102,
@@ -373,6 +374,7 @@ fn software_layer_prs() -> Vec<PrInput> {
             easystacks: vec![change(STACK, "  - gnuplot-6.0.3-GCCcore-15.2.0.eb\n")],
             files: Vec::new(),
             easyconfigs: Vec::new(),
+            file_list_truncated: false,
         },
     ]
 }
@@ -444,6 +446,7 @@ fn mcp_stdio_pr_overlap_easyconfigs_matches_the_cli() {
             base_blob: None,
             head_blob: None,
         }],
+        file_list_truncated: false,
     }];
     let temp = tempfile::tempdir().expect("tempdir");
     let input = temp.path().join("prs.json");

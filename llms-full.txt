@@ -2761,7 +2761,9 @@ api.github.com. Without a token GitHub allows 60 API calls an hour, and
 the command makes at least one call per open PR, so an unauthenticated
 run suits a repository with a few dozen open PRs at most. For
 easybuild-easyconfigs, which has hundreds, set a token or use
-`fetch-prs.sh` above. This command writes the same report, fetched by
+`fetch-prs.sh` above. A pull request with more than 3000 changed files is
+still included. The record notes `truncated at GitHub's limit` and lists
+the files GitHub returned. This command writes the same report, fetched by
 `--open`:
 
 ```bash
@@ -5038,7 +5040,10 @@ base text of each changed file and defaults to `develop`. A name such as
 `release/2026.1` is accepted. A repository or ref that fails those checks
 is an error before a request is sent and before the output directory is
 written. A failure of the request itself is reported after the request is
-sent and still writes nothing.
+sent and still writes nothing. GitHub's changed-file list stops at 3000
+files, which is 30 pages when each page holds 100. That cap is not a
+failed request: the pull request is kept, its record notes
+`truncated at GitHub's limit`, and only the files GitHub returned are read.
 
 This easyconfigs command was run on the recorded open pull requests. It
 wrote 4 records and exited 0. The summary line was
@@ -6872,7 +6877,7 @@ overlap report.
 | `to_build` | Module names that would be built, sorted, one per line |
 | `already_installed` | Installed modules the walk reached and stopped at, sorted |
 | `unresolved` | Requirements no easyconfig on the robot path satisfies, and `easyblock <class> missing` when `--easyblocks` was passed and no passed tree defines that class |
-| `notes` | Present when the run recorded one: a class supplied by an `include-easyblocks-from-commit` tree, a commit an entry names whose tree was not passed, or an `include-easyblocks-from-pr`. Omitted when empty |
+| `notes` | Present when the run recorded one: a class supplied by an `include-easyblocks-from-commit` tree, a commit an entry names whose tree was not passed, an `include-easyblocks-from-pr`, or `truncated at GitHub's limit` when the changed-file list stopped at GitHub's 3000-file cap. Omitted when empty |
 | `entries` | The easystack lines the pull request adds |
 | `build_scope` | `changed-easystack` when `--bot-build-set` or `--arch-installed` closed every head entry. Omitted for the added-lines default |
 | `carried` | Head entries in `to_build` that this pull request did not add. Omitted when empty |
@@ -7024,6 +7029,7 @@ asks for by easystack entry.
 | `new_modules` | Closure modules the base tree does not provide |
 | `reverse_dependents` | Base-tree modules that depend on a modified or deleted file of this pull request. Each entry has `module`, `depth`, and `class`. Depth 1 depends on the file itself. `class` is `must-rebuild`, `review`, or `no-rebuild`, the same three classes as `rebuild-set.json`. A bundle whose `exts_list` names the patched package is `must-rebuild`. A runtime dependency is `no-rebuild`. A dependent reached only through builddependencies is `review`. A toolchain edge is not listed. `overlap.md` prints the module, the depth, and the class |
 | `to_build` | Closure minus `--installed` when that flag is set; otherwise the same modules as `new_modules`. A modified easyconfig, and every reverse dependent classed `must-rebuild`, is included even when that module is installed or already in the base tree. `review` and `no-rebuild` stay out of `to_build` and stay on `reverse_dependents`. A deleted easyconfig is not built. Merge order and `--impact` schedule this list |
+| `notes` | `truncated at GitHub's limit` when `--open` stopped at GitHub's 3000-file cap. The changed files are the ones GitHub returned. Omitted when empty |
 
 The other pull requests in the same run are on the robot path while
 resolving, between the base tree and this pull request's own files.

@@ -94,6 +94,7 @@ fn pr(number: u64, files: &[FileChange]) -> PrInput {
         easystacks: Vec::new(),
         files: Vec::new(),
         easyconfigs: files.to_vec(),
+        file_list_truncated: false,
     }
 }
 

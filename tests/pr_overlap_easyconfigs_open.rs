@@ -10,8 +10,8 @@
 //! public GitHub API over HTTPS, with no token.
 
 use eb_stack::pr_overlap::{
-    fetch_open_easyconfig_prs, fetch_open_software_layer_prs, HttpGet, HttpResponse,
-    OpenEasyconfigQuery, UreqGet,
+    easyconfig_record, fetch_open_easyconfig_prs, fetch_open_software_layer_prs, HttpGet,
+    HttpResponse, OpenEasyconfigQuery, OverlapConfig, UreqGet, GITHUB_PR_FILES_TRUNCATED,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -82,6 +82,16 @@ fn recorded_open_pull_requests_match_the_full_develop_run() {
 
 struct MapGet {
     pages: BTreeMap<String, (u16, String)>,
+    links: BTreeMap<String, String>,
+}
+
+impl MapGet {
+    fn from_pages(pages: BTreeMap<String, (u16, String)>) -> Self {
+        Self {
+            pages,
+            links: BTreeMap::new(),
+        }
+    }
 }
 
 impl HttpGet for MapGet {
@@ -91,6 +101,7 @@ impl HttpGet for MapGet {
             .map(|(status, body)| HttpResponse {
                 status: *status,
                 body: body.as_bytes().to_vec(),
+                link: self.links.get(url).cloned(),
             })
             .ok_or_else(|| format!("missing {url}"))
     }
@@ -175,7 +186,7 @@ fn https_reader_pages_the_open_list_and_keeps_easyconfig_text() {
 
     let mut query = OpenEasyconfigQuery::new(repo);
     query.page_size = Some(2);
-    let prs = fetch_open_easyconfig_prs(&MapGet { pages }, &query).unwrap();
+    let prs = fetch_open_easyconfig_prs(&MapGet::from_pages(pages), &query).unwrap();
     assert_eq!(
         prs.iter().map(|pr| pr.number).collect::<Vec<_>>(),
         vec![7, 12]
@@ -238,7 +249,7 @@ fn https_reader_stops_at_the_requested_page_and_file_caps() {
     capped.max_pages = Some(1);
     capped.max_prs = Some(1);
     capped.max_files = Some(1);
-    let prs = fetch_open_easyconfig_prs(&MapGet { pages }, &capped).unwrap();
+    let prs = fetch_open_easyconfig_prs(&MapGet::from_pages(pages), &capped).unwrap();
     assert_eq!(prs.len(), 1);
     assert_eq!(prs[0].number, 1);
     assert_eq!(prs[0].easyconfigs.len(), 1);
@@ -266,7 +277,7 @@ fn https_reader_does_not_read_past_max_pages() {
     let mut query = OpenEasyconfigQuery::new("acme/ec");
     query.page_size = Some(2);
     query.max_pages = Some(1);
-    let prs = fetch_open_easyconfig_prs(&MapGet { pages }, &query).unwrap();
+    let prs = fetch_open_easyconfig_prs(&MapGet::from_pages(pages), &query).unwrap();
     assert!(prs.is_empty());
 }
 
@@ -298,7 +309,7 @@ fn https_reader_accepts_base_ref_with_slashes() {
     );
     let mut query = OpenEasyconfigQuery::new(repo);
     query.base_ref = "release/2026.1".into();
-    let prs = fetch_open_easyconfig_prs(&MapGet { pages }, &query)
+    let prs = fetch_open_easyconfig_prs(&MapGet::from_pages(pages), &query)
         .expect("base refs with slashes are valid git refs");
     assert_eq!(prs.len(), 1);
     assert_eq!(prs[0].number, 11);
@@ -316,14 +327,9 @@ fn https_reader_rejects_a_base_ref_that_is_not_a_git_ref() {
     ] {
         let mut query = OpenEasyconfigQuery::new("acme/ec");
         query.base_ref = base_ref.into();
-        let error = fetch_open_easyconfig_prs(
-            &MapGet {
-                pages: BTreeMap::new(),
-            },
-            &query,
-        )
-        .expect_err(base_ref)
-        .to_string();
+        let error = fetch_open_easyconfig_prs(&MapGet::from_pages(BTreeMap::new()), &query)
+            .expect_err(base_ref)
+            .to_string();
         assert!(
             !error.contains("missing https://"),
             "{base_ref} reached the network client: {error}"
@@ -335,14 +341,9 @@ fn https_reader_rejects_a_base_ref_that_is_not_a_git_ref() {
 #[test]
 fn https_reader_rejects_a_repo_that_is_not_owner_name() {
     let query = OpenEasyconfigQuery::new("nope");
-    let error = fetch_open_easyconfig_prs(
-        &MapGet {
-            pages: BTreeMap::new(),
-        },
-        &query,
-    )
-    .unwrap_err()
-    .to_string();
+    let error = fetch_open_easyconfig_prs(&MapGet::from_pages(BTreeMap::new()), &query)
+        .unwrap_err()
+        .to_string();
     assert!(
         error.contains("owner/name") || error.contains("repo"),
         "{error}"
@@ -489,7 +490,7 @@ moduleclass = 'lib'\n";
     let out = temp.path().join("out");
     let report = eb_stack::site_commands::run_pr_overlap_with(
         &open_request(&out, repo, None),
-        &MapGet { pages },
+        &MapGet::from_pages(pages),
     )
     .expect("open fetch");
     assert_eq!(report.prs, 1);
@@ -504,9 +505,7 @@ fn open_runner_rejects_a_base_ref_before_any_request() {
     let out = temp.path().join("out");
     let error = match eb_stack::site_commands::run_pr_overlap_with(
         &open_request(&out, "acme/ec", Some("foo..bar")),
-        &MapGet {
-            pages: BTreeMap::new(),
-        },
+        &MapGet::from_pages(BTreeMap::new()),
     ) {
         Ok(_) => panic!("bad ref was accepted"),
         Err(error) => error.to_string(),
@@ -542,6 +541,183 @@ fn mcp_open_rejects_a_repo_before_writing() {
         .unwrap_or("");
     assert!(text.contains("owner/name"), "{text}");
     assert_eq!(dir_file_count(&out), 0, "{out:?}");
+}
+
+fn files_url(repo: &str, number: u64, page_size: usize, page: usize) -> String {
+    format!(
+        "https://api.github.com/repos/{repo}/pulls/{number}/files?per_page={page_size}&page={page}"
+    )
+}
+
+#[test]
+fn https_reader_reads_a_file_list_past_twenty_pages() {
+    let repo = "acme/ec";
+    let head = sha('p');
+    let file = "easybuild/easyconfigs/l/Lib/Lib-1.0.eb";
+    let mut pages = BTreeMap::new();
+    pages.insert(
+        format!("https://api.github.com/repos/{repo}/pulls?state=open&per_page=1&page=1"),
+        json_page(serde_json::json!([
+            {"number": 21, "title": "many files", "head": {"sha": head}},
+        ])),
+    );
+    pages.insert(
+        format!("https://api.github.com/repos/{repo}/pulls?state=open&per_page=1&page=2"),
+        json_page(serde_json::json!([])),
+    );
+    for page in 1..=21 {
+        let filename = if page == 21 {
+            file.to_string()
+        } else {
+            format!("notes/{page}.md")
+        };
+        pages.insert(
+            files_url(repo, 21, 1, page),
+            json_page(serde_json::json!([{"filename": filename, "status": "added"}])),
+        );
+    }
+    pages.insert(files_url(repo, 21, 1, 22), json_page(serde_json::json!([])));
+    pages.insert(
+        format!("https://raw.githubusercontent.com/{repo}/{head}/{file}"),
+        (200, "name = 'Lib'\n".into()),
+    );
+    pages.insert(
+        format!("https://raw.githubusercontent.com/{repo}/develop/{file}"),
+        (404, "missing".into()),
+    );
+    let mut query = OpenEasyconfigQuery::new(repo);
+    query.page_size = Some(1);
+    let prs = fetch_open_easyconfig_prs(&MapGet::from_pages(pages), &query).unwrap();
+    assert_eq!(prs.len(), 1, "{prs:?}");
+    assert!(!prs[0].file_list_truncated);
+    assert_eq!(prs[0].easyconfigs.len(), 1);
+    assert_eq!(prs[0].easyconfigs[0].path, file);
+}
+
+#[test]
+fn https_reader_stops_on_a_full_page_when_the_link_header_has_no_next() {
+    let repo = "acme/ec";
+    let head = sha('r');
+    let file = "easybuild/easyconfigs/l/Lib/Lib-1.0.eb";
+    let mut pages = BTreeMap::new();
+    let mut links = BTreeMap::new();
+    pages.insert(
+        format!("https://api.github.com/repos/{repo}/pulls?state=open&per_page=2&page=1"),
+        json_page(serde_json::json!([
+            {"number": 22, "title": "full last page", "head": {"sha": head}},
+        ])),
+    );
+    let first = files_url(repo, 22, 2, 1);
+    let second = files_url(repo, 22, 2, 2);
+    pages.insert(
+        first.clone(),
+        json_page(serde_json::json!([
+            {"filename": "README.md", "status": "modified"},
+            {"filename": "NOTES.md", "status": "modified"},
+        ])),
+    );
+    links.insert(
+        first,
+        format!("<{second}>; rel=\"next\", <{second}>; rel=\"last\""),
+    );
+    links.insert(second.clone(), format!("<{second}>; rel=\"last\""));
+    pages.insert(
+        second,
+        json_page(serde_json::json!([
+            {"filename": file, "status": "added"},
+            {"filename": "docs/x.md", "status": "added"},
+        ])),
+    );
+    pages.insert(
+        format!("https://raw.githubusercontent.com/{repo}/{head}/{file}"),
+        (200, "name = 'Lib'\n".into()),
+    );
+    pages.insert(
+        format!("https://raw.githubusercontent.com/{repo}/develop/{file}"),
+        (404, "missing".into()),
+    );
+    let mut query = OpenEasyconfigQuery::new(repo);
+    query.page_size = Some(2);
+    let prs = fetch_open_easyconfig_prs(&MapGet { pages, links }, &query)
+        .expect("a full last page with no rel=next ends the list");
+    assert_eq!(prs.len(), 1);
+    assert!(!prs[0].file_list_truncated);
+    assert_eq!(prs[0].easyconfigs[0].path, file);
+}
+
+#[test]
+fn https_reader_reports_a_file_list_truncated_at_githubs_limit() {
+    let repo = "acme/ec";
+    let head = sha('q');
+    let file = "easybuild/easyconfigs/l/Lib/Lib-1.0.eb";
+    let mut pages = BTreeMap::new();
+    let mut links = BTreeMap::new();
+    pages.insert(
+        format!("https://api.github.com/repos/{repo}/pulls?state=open&per_page=2&page=1"),
+        json_page(serde_json::json!([
+            {"number": 30, "title": "capped", "head": {"sha": head}},
+        ])),
+    );
+    let page1 = files_url(repo, 30, 2, 1);
+    let page2 = files_url(repo, 30, 2, 2);
+    let page3 = files_url(repo, 30, 2, 3);
+    pages.insert(
+        page1.clone(),
+        json_page(serde_json::json!([
+            {"filename": file, "status": "added"},
+            {"filename": "README.md", "status": "modified"},
+        ])),
+    );
+    links.insert(page1, format!("<{page2}>; rel=\"next\""));
+    pages.insert(
+        page2.clone(),
+        json_page(serde_json::json!([
+            {"filename": "a.md", "status": "added"},
+            {"filename": "b.md", "status": "added"},
+        ])),
+    );
+    links.insert(page2, format!("<{page3}>; rel=\"next\""));
+    pages.insert(
+        page3,
+        (
+            422,
+            "{\"message\":\"In order to keep the API fast for everyone, pagination is limited for this resource. Responses include a maximum of 3000 files.\",\"documentation_url\":\"https://docs.github.com/rest/pulls/pulls#list-pull-requests-files\"}".into(),
+        ),
+    );
+    pages.insert(
+        format!("https://raw.githubusercontent.com/{repo}/{head}/{file}"),
+        (200, "name = 'Lib'\n".into()),
+    );
+    pages.insert(
+        format!("https://raw.githubusercontent.com/{repo}/develop/{file}"),
+        (404, "missing".into()),
+    );
+    let mut query = OpenEasyconfigQuery::new(repo);
+    query.page_size = Some(2);
+    let prs = fetch_open_easyconfig_prs(&MapGet { pages, links }, &query)
+        .expect("GitHub's file cap is a truncated result");
+    assert_eq!(prs.len(), 1, "{prs:?}");
+    assert!(prs[0].file_list_truncated);
+    assert_eq!(prs[0].number, 30);
+    assert_eq!(prs[0].easyconfigs.len(), 1);
+    assert_eq!(prs[0].easyconfigs[0].path, file);
+    let record = easyconfig_record(
+        &prs[0],
+        &[],
+        None,
+        &OverlapConfig {
+            eessi_version: String::new(),
+            installed_source: String::new(),
+            exclude_paths: Vec::new(),
+            include_paths: Vec::new(),
+            generated_at: "2026-10-24T00:00:00Z".into(),
+            filter_deps: eb_stack::dep_filter::FilterDeps::empty(),
+            easyblocks: None,
+            build_scope: eb_stack::pr_overlap::BuildScope::Added,
+        },
+    )
+    .expect("record");
+    assert_eq!(record.notes, [GITHUB_PR_FILES_TRUNCATED]);
 }
 
 #[test]
@@ -619,7 +795,7 @@ fn software_layer_reader_keeps_easystack_text_and_skips_other_prs() {
     );
     let mut query = OpenEasyconfigQuery::new(repo);
     query.base_ref = "main".into();
-    let prs = fetch_open_software_layer_prs(&MapGet { pages }, &query).unwrap();
+    let prs = fetch_open_software_layer_prs(&MapGet::from_pages(pages), &query).unwrap();
     assert_eq!(prs.len(), 1, "{prs:?}");
     assert_eq!(prs[0].number, 9);
     assert_eq!(prs[0].easystacks.len(), 1);

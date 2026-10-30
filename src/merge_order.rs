@@ -792,6 +792,7 @@ mod tests {
                 base_blob: None,
                 head_blob: None,
             }],
+            file_list_truncated: false,
         };
         let found = easystack_conflicts(&[
             pr(1, "a\nb\nX\nc\n"),

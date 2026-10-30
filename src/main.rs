@@ -174,7 +174,9 @@ struct PrOverlapArgs {
     ///
     /// Requires `--kind easyconfigs`. Those pull requests are added to any
     /// `--pr` files. `GITHUB_TOKEN` or `GH_TOKEN` is sent to api.github.com when set. A repository that is not `owner/name`
-    /// is an error before a request is sent.
+    /// is an error before a request is sent. A changed-file list that stops
+    /// at GitHub's limit of 3000 files is kept; the record notes
+    /// `truncated at GitHub's limit`.
     #[arg(long)]
     open: Option<String>,
     /// Git ref for the base text of files read by `--open`.

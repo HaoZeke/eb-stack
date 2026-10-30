@@ -1366,6 +1366,7 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
             }],
             files: Vec::new(),
             easyconfigs: Vec::new(),
+            file_list_truncated: false,
         };
         let record = pr_record(&pr, &robot, &installed, &config);
         let (to_build, unresolved) = match record {

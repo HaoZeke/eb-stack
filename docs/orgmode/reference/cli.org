@@ -1028,7 +1028,10 @@ base text of each changed file and defaults to ~develop~. A name such as
 ~release/2026.1~ is accepted. A repository or ref that fails those checks
 is an error before a request is sent and before the output directory is
 written. A failure of the request itself is reported after the request is
-sent and still writes nothing.
+sent and still writes nothing. GitHub's changed-file list stops at 3000
+files, which is 30 pages when each page holds 100. That cap is not a
+failed request: the pull request is kept, its record notes
+~truncated at GitHub's limit~, and only the files GitHub returned are read.
 
 This easyconfigs command was run on the recorded open pull requests. It
 wrote 4 records and exited 0. The summary line was
