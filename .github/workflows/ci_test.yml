@@ -120,6 +120,8 @@ jobs:
             --test package_workflow \
             --test bump_workflow \
             --test bump_source_patches \
+            --test bump_companion \
+            --test bump_build_backend \
             --test stack_policy \
             --test canonical_cli \
             --test source_artifact_class \
