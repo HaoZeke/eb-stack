@@ -1053,7 +1053,7 @@ pub struct StackBatchRequest {
     pub roots: Vec<String>,
     /// Robot-path easyconfig trees (the easyconfigs the roots come from).
     pub easyconfigs: Vec<PathBuf>,
-    /// `<commit>=<dir>` trees for `from-commit` pins the open PRs use.
+    /// Commit=directory trees for from-commit pins the open pull requests use.
     pub commit_trees: Vec<String>,
     /// Installed modules, one `Name/VersionFull` per line.
     pub installed: PathBuf,
