@@ -555,7 +555,7 @@ fn closures_by_changed(document: &RebuildDocument) -> BTreeMap<String, ModuleClo
             }
             let class = row.class.as_str();
             let entry = slot.entry(row.dependent.clone()).or_insert(class);
-            if class_strength(class) > class_strength(*entry) {
+            if class_strength(class) > class_strength(entry) {
                 *entry = class;
             }
         }

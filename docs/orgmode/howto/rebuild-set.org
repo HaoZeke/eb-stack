@@ -78,6 +78,40 @@ prefix's ~modules/all~. ~--easyblocks~ is the EasyBuild release's
 ~easybuild/easyblocks~ package. A missing class is recorded. The module
 stays in the set, because it is already installed.
 
+* Rank scanner findings by rebuild cost
+
+A scanner export names the modules that carry a vulnerable package. Pass
+it as ~--findings~ instead of ~--changed~. A site that installs from build
+lists has no easystack, so leave ~--easystack~ out: the installed list is
+the stack.
+
+#+begin_src bash
+eb-stack rebuild-set \
+  --findings tests/rebuild_set_fixtures/findings.csv \
+  --easyconfigs tests/rebuild_set_fixtures/release \
+  --installed tests/rebuild_set_fixtures/installed.txt \
+  --installed-label x86_64/amd/zen4 \
+  --generated-at 2026-10-22T12:00:00Z \
+  --out-dir /tmp/findings-out
+#+end_src
+
+The command prints:
+
+#+begin_example
+changed=2 rows=10 must-rebuild=3 review=2 no-rebuild=5 missing=0 easystacks=1 skipped_easyconfigs=0 findings_modules=2 out=/tmp/findings-out
+#+end_example
+
+~findings.md~ ranks each module by weighted score per in-place rebuild:
+
+#+begin_example
+| Rank | Module | Highest | C | H | M | L | Fixed | Score | In place | Bump | Value |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | `zlib/1.3.1-GCCcore-15.2.0` | Critical | 1 | 0 | 0 | 1 | 1/2 | 11 | 4 | 8 | 2.75 |
+| 2 | `libpng/1.6.50-GCCcore-15.2.0` | High | 0 | 1 | 0 | 0 | 1/1 | 5 | 2 | 3 | 2.50 |
+#+end_example
+
+A backported zlib patch rebuilds 4 modules; a zlib version bump rebuilds 8.
+
 * Read the three files
 
 ~out/rebuild-set.md~ is the table: changed easyconfig, dependent, edge

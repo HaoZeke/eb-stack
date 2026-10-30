@@ -2878,6 +2878,40 @@ prefix's `modules/all`. `--easyblocks` is the EasyBuild release's
 `easybuild/easyblocks` package. A missing class is recorded. The module
 stays in the set, because it is already installed.
 
+# Rank scanner findings by rebuild cost
+
+A scanner export names the modules that carry a vulnerable package. Pass
+it as `--findings` instead of `--changed`. A site that installs from build
+lists has no easystack, so leave `--easystack` out: the installed list is
+the stack.
+
+```bash
+eb-stack rebuild-set \
+  --findings tests/rebuild_set_fixtures/findings.csv \
+  --easyconfigs tests/rebuild_set_fixtures/release \
+  --installed tests/rebuild_set_fixtures/installed.txt \
+  --installed-label x86_64/amd/zen4 \
+  --generated-at 2026-10-22T12:00:00Z \
+  --out-dir /tmp/findings-out
+```
+
+The command prints:
+
+```
+changed=2 rows=10 must-rebuild=3 review=2 no-rebuild=5 missing=0 easystacks=1 skipped_easyconfigs=0 findings_modules=2 out=/tmp/findings-out
+```
+
+`findings.md` ranks each module by weighted score per in-place rebuild:
+
+```
+| Rank | Module | Highest | C | H | M | L | Fixed | Score | In place | Bump | Value |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | `zlib/1.3.1-GCCcore-15.2.0` | Critical | 1 | 0 | 0 | 1 | 1/2 | 11 | 4 | 8 | 2.75 |
+| 2 | `libpng/1.6.50-GCCcore-15.2.0` | High | 0 | 1 | 0 | 0 | 1/1 | 5 | 2 | 3 | 2.50 |
+```
+
+A backported zlib patch rebuilds 4 modules; a zlib version bump rebuilds 8.
+
 # Read the three files
 
 `out/rebuild-set.md` is the table: changed easyconfig, dependent, edge
@@ -4153,8 +4187,8 @@ builds a dependent of. The recorded easyconfigs run is
 
 ```bash
 eb-stack rebuild-set \
-  --changed FILE.eb [--changed FILE.eb]... \
-  --easystack STACK.yml [--easystack STACK.yml]... \
+  (--changed FILE.eb [--changed FILE.eb]... | --findings findings.csv) \
+  [--easystack STACK.yml]... \
   --easyconfigs TREE [--easyconfigs TREE]... \
   [--commit-tree COMMIT=DIR]... \
   --installed installed.txt \
@@ -4182,6 +4216,27 @@ skipped. The basename is what is matched. A filename that is not in the
 deployed graph is listed under `missing` and has no row.
 
 `--easystack` is a deployed easystack, repeated. Every entry is a root.
+Without it, every installed module is a root, read as the easyconfig
+`Name-VersionFull.eb`. That is the stack of a site that installs from
+build lists instead of easystacks.
+
+`--findings` is a vulnerability scanner export: comma-separated with a
+header, columns `severity`, `vuln_id`, `package`, and `used_in` required,
+`version`, `fixed_in`, and `fix_state` read when present. `used_in` lists
+modules separated by `;`. Every installed module it names is added to
+`--changed` as `Name-VersionFull.eb`, and `findings.json`, `findings.md`,
+and `findings.csv` are written beside the rebuild set. A module that is not
+installed is listed and has no closure. An export that names no installed
+module is status 2.
+
+Each module with a finding gets two costs. `in_place` is the module, the
+bundles that ship it, and its review dependents: what a backported patch
+that keeps the version rebuilds. `bump` is the module and every installed
+dependent: what a new version rebuilds, since EasyBuild writes each
+dependency version into the dependent's module file and run path. The
+score weighs a unique id Critical 10, High 5, Medium 2, Low 1, and
+modules are ranked by score per in-place rebuild. Totals per severity
+take the union over the modules with a finding at that severity or above.
 `--easyconfigs`, `--commit-tree`, `--installed`, `--filter-deps`,
 `--installed-modulerc`, `--easyblocks`, and `--easyblocks-commit` mean the
 same as for `pr-overlap`. `--filter-deps` drops dependency tuples and does
@@ -6064,6 +6119,36 @@ the filenames whose exports were defined.
 `rebuild-set.md` is the same rows as a table, the counts line, the missing
 filenames, and each note as `- note:`.
 
+## `findings.json`, `findings.md`, `findings.csv`
+
+Written when `--findings` is passed.
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | `1` |
+| `generated_at` | Same as `rebuild-set.json` |
+| `installed_source` | Same as `rebuild-set.json` |
+| `rows` | Rows in the export |
+| `ids` | Unique advisory ids in the export |
+| `modules` | Installed modules with a finding |
+| `totals` | One entry per severity, Critical first: `ids` and `modules` at exactly that severity, `modules_highest` whose worst finding is that severity, `modules_at_or_above`, and the unions `in_place_at_or_above` and `bump_at_or_above` |
+| `ranked` | One entry per installed module with a finding, by `value_per_rebuild`, then `score`, then name |
+| `not_installed` | Modules the export names that are not installed |
+| `not_in_graph` | Installed modules with a finding whose easyconfig is not on the robot path. They have no `closure` |
+
+A ranked entry has `module`, `easyconfig`, `highest`, `counts` (unique ids
+per severity: `critical`, `high`, `medium`, `low`, `negligible`, `other`),
+`findings`, `fixed`, `not_fixed`, `unknown_fix`, `packages`, `score`,
+`value_per_rebuild`, and `closure`. The closure has `must_rebuild` (the
+module and bundles that ship it), `review`, `runtime`, `in_place`
+(`must_rebuild + review`), `bump` (the module plus every dependent),
+`dependents`, and `in_place_dependents`. An id listed twice for one
+module counts once, at its worst severity.
+
+`findings.md` is the totals table and the ranked table. `findings.csv` is
+one line per ranked module with the same counts, `packages` and
+`dependents` joined by `;`.
+
 ## `rebuilds/<YYYYMMDD>-eb-<version>-cve-patches.yml`
 
 Class `must-rebuild` only. Entries are sorted by filename. `rebuild: true`
@@ -7220,6 +7305,22 @@ includes as an extension still marks that bundle must-rebuild.
 A missing easyblock class is a note. The module stays in the set, because
 it is already installed. A `from-commit` whose tree was not passed is a
 note, and the release tree is used for that pin.
+
+# Scanner findings
+
+`--findings` turns a scanner export into the changed list: every installed
+module it names. The rebuild set is then read twice per module. A
+backported patch that keeps the version replaces files under the same
+module path, so the cost is the must-rebuild and review rows. A new
+version is a new path. EasyBuild writes each dependency version into the
+dependent's module file and run path, so the cost is the module and every
+installed dependent, runtime and builddependency alike. The ratio between
+the two is the case for backports over bumps, per module.
+
+A site that installs from build lists has no easystack. Without
+`--easystack`, the installed list is the stack: each module is read as the
+easyconfig its name gives, and a module that no easyconfig matches is
+listed as unresolved.
 
 # Example
 
