@@ -590,7 +590,15 @@ pub fn decide(
         .and_then(|o| o.exclude.as_deref())
         .map(Regex::new)
         .transpose()?;
+    // A package revision on the tag (NCCL's v2.32.3-1) is not part of a
+    // version written without a dash.
+    let revision = Regex::new(r"^([0-9][0-9.]*[0-9])-[0-9]+$").unwrap();
     for c in candidates.iter_mut().filter(|c| c.dropped.is_none()) {
+        if !current.contains('-') {
+            if let Some(base) = revision.captures(&c.version).map(|m| m[1].to_string()) {
+                c.version = base;
+            }
+        }
         let v = c.version.as_str();
         c.dropped = if v.is_empty() || !v.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
             Some("not a version".into())
@@ -623,7 +631,15 @@ pub fn decide(
     }
     let mut survivors: Vec<&Candidate> =
         candidates.iter().filter(|c| c.dropped.is_none()).collect();
-    survivors.sort_by(|a, b| cmp_version(&b.version, &a.version).then_with(|| a.raw.cmp(&b.raw)));
+    // Equal versions (3.26 and 3.26.0) resolve to the spelling with as many
+    // parts as the recipe's version.
+    let parts = |v: &str| v.split(['.', '-', '_']).count();
+    let want = parts(current);
+    survivors.sort_by(|a, b| {
+        cmp_version(&b.version, &a.version)
+            .then_with(|| (parts(&a.version) != want).cmp(&(parts(&b.version) != want)))
+            .then_with(|| a.raw.cmp(&b.raw))
+    });
     let newest = survivors.first().map(|c| c.version.clone());
     let reason = ov.and_then(|o| o.reason.clone()).or_else(|| {
         candidates
@@ -843,6 +859,26 @@ mod tests {
         .collect();
         let report = decide("NCCL", "2.30.4", "github:NVIDIA/nccl", candidates, None).unwrap();
         assert_eq!(report.newest.as_deref(), Some("2.30.7"));
+        let tags = |list: &[&str]| -> Vec<Candidate> {
+            list.iter()
+                .map(|v| Candidate {
+                    raw: (*v).into(),
+                    version: (*v).into(),
+                    dropped: None,
+                })
+                .collect()
+        };
+        let revised = decide("NCCL", "2.30.4", "g", tags(&["2.30.4-1", "2.32.3-1"]), None).unwrap();
+        assert_eq!(revised.newest.as_deref(), Some("2.32.3"));
+        let petsc = decide(
+            "PETSc",
+            "3.25.0",
+            "d",
+            tags(&["3.26", "3.26.0", "3.25.0"]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(petsc.newest.as_deref(), Some("3.26.0"));
         let empty = decide("x", "1.0", "directory:u", Vec::new(), None).unwrap();
         assert_eq!(empty.state, "unknown");
         assert!(empty.reason.is_some());
