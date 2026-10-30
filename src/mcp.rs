@@ -543,6 +543,7 @@ fn tool_catalog() -> Vec<Value> {
             ],
             &[
                 ("commit_tree", "array"),
+                ("findings", "string"),
                 ("installed_label", "string"),
                 ("filter_deps", "array"),
                 ("installed_modulerc", "array"),
@@ -3133,6 +3134,7 @@ fn rebuild_set_tool(arguments: &Value) -> Result<Value, String> {
     let report = crate::site_commands::run_rebuild_set(&crate::site_commands::RebuildSetRequest {
         changed: string_array(arguments, "changed")?,
         easystacks: path_array(arguments, "easystack")?,
+        findings: optional_path(arguments, "findings"),
         easyconfigs: path_array(arguments, "easyconfigs")?,
         commit_trees: string_array(arguments, "commit_tree")?,
         installed: required_path(arguments, "installed")?,

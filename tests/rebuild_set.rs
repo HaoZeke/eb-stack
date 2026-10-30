@@ -457,3 +457,141 @@ fn file_body<'a>(run: &'a Run, name: &str) -> &'a str {
 fn json_of(run: &Run) -> serde_json::Value {
     serde_json::from_str(file_body(run, "rebuild-set.json")).expect("json")
 }
+
+#[test]
+fn without_an_easystack_the_installed_modules_are_the_roots() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let with_stack = args_with(&["--easystack".into(), stack().display().to_string()]);
+    let borrowed: Vec<&str> = with_stack.iter().map(String::as_str).collect();
+    let from_stack = json_of(&invoke(&borrowed, &temp.path().join("stack")));
+
+    let plain = common_args();
+    let borrowed: Vec<&str> = plain.iter().map(String::as_str).collect();
+    let from_installed = json_of(&invoke(&borrowed, &temp.path().join("installed")));
+
+    assert_eq!(
+        from_installed["easystacks"],
+        serde_json::json!(["installed modules"])
+    );
+    assert_eq!(from_installed["counts"], from_stack["counts"]);
+    let rows = |value: &serde_json::Value| -> Vec<(String, String, String)> {
+        value["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| {
+                (
+                    row["changed"].as_str().unwrap().to_string(),
+                    row["dependent"].as_str().unwrap().to_string(),
+                    row["class"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(rows(&from_installed), rows(&from_stack));
+    assert_eq!(from_installed["counts"]["must-rebuild"], 2);
+    assert_eq!(from_installed["counts"]["review"], 2);
+    assert_eq!(from_installed["counts"]["no-rebuild"], 4);
+}
+
+#[test]
+fn a_findings_export_is_ranked_by_score_per_in_place_rebuild() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let out = temp.path().join("out");
+    let args = [
+        "--easyconfigs".to_string(),
+        fixtures().join("release").display().to_string(),
+        "--installed".into(),
+        fixtures().join("installed.txt").display().to_string(),
+        "--installed-label".into(),
+        "x86_64/amd/zen4".into(),
+        "--generated-at".into(),
+        "2026-10-22T12:00:00Z".into(),
+        "--findings".into(),
+        fixtures().join("findings.csv").display().to_string(),
+    ];
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    let run = invoke(&borrowed, &out);
+    assert!(
+        run.stdout.contains("changed=2") && run.stdout.contains("findings_modules=2"),
+        "{}",
+        run.stdout
+    );
+    let names: Vec<&str> = run.files.iter().map(|(name, _)| name.as_str()).collect();
+    for expected in [
+        "findings.csv",
+        "findings.json",
+        "findings.md",
+        "rebuild-set.json",
+    ] {
+        assert!(names.contains(&expected), "{names:?}");
+    }
+
+    let value: serde_json::Value =
+        serde_json::from_str(file_body(&run, "findings.json")).expect("findings json");
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["rows"], 3);
+    assert_eq!(value["ids"], 3);
+    assert_eq!(value["modules"], 2);
+    assert_eq!(
+        value["not_installed"],
+        serde_json::json!(["NotInstalled/1.0-GCCcore-15.2.0"])
+    );
+    let ranked = value["ranked"].as_array().expect("ranked");
+    assert_eq!(ranked[0]["module"], "zlib/1.3.1-GCCcore-15.2.0");
+    assert_eq!(ranked[0]["score"], 11);
+    assert_eq!(ranked[0]["closure"]["must_rebuild"], 2);
+    assert_eq!(ranked[0]["closure"]["review"], 2);
+    assert_eq!(ranked[0]["closure"]["runtime"], 4);
+    assert_eq!(ranked[0]["closure"]["in_place"], 4);
+    assert_eq!(ranked[0]["closure"]["bump"], 8);
+    assert_eq!(ranked[0]["value_per_rebuild"], 2.75);
+    assert_eq!(ranked[1]["module"], "libpng/1.6.50-GCCcore-15.2.0");
+    assert_eq!(ranked[1]["closure"]["in_place"], 2);
+    assert_eq!(ranked[1]["closure"]["bump"], 3);
+    assert_eq!(
+        ranked[1]["closure"]["in_place_dependents"],
+        serde_json::json!(["AppStatic/1.0-GCCcore-15.2.0"])
+    );
+
+    let totals = value["totals"].as_array().expect("totals");
+    assert_eq!(totals[0]["severity"], "Critical");
+    assert_eq!(totals[0]["in_place_at_or_above"], 4);
+    assert_eq!(totals[0]["bump_at_or_above"], 8);
+    assert_eq!(totals[1]["severity"], "High");
+    assert_eq!(totals[1]["modules_at_or_above"], 2);
+    assert_eq!(totals[1]["in_place_at_or_above"], 5);
+    assert_eq!(totals[1]["bump_at_or_above"], 8);
+
+    let csv = file_body(&run, "findings.csv");
+    assert!(csv.lines().nth(1).unwrap().starts_with(
+        "1,zlib/1.3.1-GCCcore-15.2.0,zlib-1.3.1-GCCcore-15.2.0.eb,Critical,1,0,0,1,0,2,1,0,1,11,2,2,4,4,8,2.75,"
+    ));
+    assert!(file_body(&run, "findings.md").contains("| Critical | 1 | 1 | 1 | 1 | 4 | 8 |"));
+}
+
+#[test]
+fn a_findings_export_that_names_no_installed_module_is_a_usage_error() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let csv = temp.path().join("findings.csv");
+    std::fs::write(
+        &csv,
+        "severity,vuln_id,package,used_in\nHigh,CVE-1,x,Gone/1.0\n",
+    )
+    .expect("write");
+    let output = Command::new(env!("CARGO_BIN_EXE_eb-stack"))
+        .args(["rebuild-set", "--easyconfigs"])
+        .arg(fixtures().join("release"))
+        .arg("--installed")
+        .arg(fixtures().join("installed.txt"))
+        .arg("--findings")
+        .arg(&csv)
+        .arg("--out-dir")
+        .arg(temp.path().join("out"))
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("--findings names no installed module")
+    );
+}

@@ -535,6 +535,36 @@ the filenames whose exports were defined.
 ~rebuild-set.md~ is the same rows as a table, the counts line, the missing
 filenames, and each note as ~- note:~.
 
+** ~findings.json~, ~findings.md~, ~findings.csv~
+
+Written when ~--findings~ is passed.
+
+| Field | Meaning |
+|-
+| ~schema_version~ | ~1~ |
+| ~generated_at~ | Same as ~rebuild-set.json~ |
+| ~installed_source~ | Same as ~rebuild-set.json~ |
+| ~rows~ | Rows in the export |
+| ~ids~ | Unique advisory ids in the export |
+| ~modules~ | Installed modules with a finding |
+| ~totals~ | One entry per severity, Critical first: ~ids~ and ~modules~ at exactly that severity, ~modules_highest~ whose worst finding is that severity, ~modules_at_or_above~, and the unions ~in_place_at_or_above~ and ~bump_at_or_above~ |
+| ~ranked~ | One entry per installed module with a finding, by ~value_per_rebuild~, then ~score~, then name |
+| ~not_installed~ | Modules the export names that are not installed |
+| ~not_in_graph~ | Installed modules with a finding whose easyconfig is not on the robot path. They have no ~closure~ |
+
+A ranked entry has ~module~, ~easyconfig~, ~highest~, ~counts~ (unique ids
+per severity: ~critical~, ~high~, ~medium~, ~low~, ~negligible~, ~other~),
+~findings~, ~fixed~, ~not_fixed~, ~unknown_fix~, ~packages~, ~score~,
+~value_per_rebuild~, and ~closure~. The closure has ~must_rebuild~ (the
+module and bundles that ship it), ~review~, ~runtime~, ~in_place~
+(~must_rebuild + review~), ~bump~ (the module plus every dependent),
+~dependents~, and ~in_place_dependents~. An id listed twice for one
+module counts once, at its worst severity.
+
+~findings.md~ is the totals table and the ranked table. ~findings.csv~ is
+one line per ranked module with the same counts, ~packages~ and
+~dependents~ joined by ~;~.
+
 ** ~rebuilds/<YYYYMMDD>-eb-<version>-cve-patches.yml~
 
 Class ~must-rebuild~ only. Entries are sorted by filename. ~rebuild: true~

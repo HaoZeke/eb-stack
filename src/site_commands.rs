@@ -173,8 +173,10 @@ impl PrOverlapRun {
 pub struct RebuildSetRequest {
     /// Patched easyconfig filenames, or a list file.
     pub changed: Vec<String>,
-    /// Deployed easystacks.
+    /// Deployed easystacks. Empty means every installed module is a root.
     pub easystacks: Vec<PathBuf>,
+    /// Scanner findings export. Each installed module it names is patched.
+    pub findings: Option<PathBuf>,
     /// Easyconfig trees, later ones taking precedence.
     pub easyconfigs: Vec<PathBuf>,
     /// Commit=directory trees for from-commit pins.
@@ -219,6 +221,8 @@ pub struct RebuildSetRun {
     pub easystacks: usize,
     /// Easyconfigs the parser skipped.
     pub skipped_easyconfigs: usize,
+    /// Installed modules with a finding, when `--findings` was given.
+    pub findings_modules: Option<usize>,
     /// Directory the report was written to.
     pub out_dir: PathBuf,
 }
@@ -226,8 +230,12 @@ pub struct RebuildSetRun {
 impl RebuildSetRun {
     /// The line `eb-stack rebuild-set` prints.
     pub fn summary(&self) -> String {
+        let findings = self
+            .findings_modules
+            .map(|count| format!(" findings_modules={count}"))
+            .unwrap_or_default();
         format!(
-            "changed={} rows={} must-rebuild={} review={} no-rebuild={} missing={} easystacks={} skipped_easyconfigs={} out={}",
+            "changed={} rows={} must-rebuild={} review={} no-rebuild={} missing={} easystacks={} skipped_easyconfigs={}{findings} out={}",
             self.changed,
             self.rows,
             self.must_rebuild,
@@ -684,9 +692,33 @@ fn run_pr_overlap_inner(
 
 /// Write the rebuild-set report.
 pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
-    let changed = read_changed_names(&args.changed)?;
-    let (robot, skipped_easyconfigs) = load_robot_trees(&args.easyconfigs, &args.commit_trees)?;
     let installed = load_installed_modules(&args.installed, &args.installed_modulerc)?;
+    let findings = match &args.findings {
+        Some(path) => Some(
+            crate::findings::parse_findings_csv(
+                &std::fs::read_to_string(path)
+                    .with_context(|| format!("--findings {}: not readable", path.display()))?,
+            )
+            .map_err(|error| usage(format!("--findings {}: {error}", path.display())))?,
+        ),
+        None => None,
+    };
+    let mut changed = if args.changed.is_empty() {
+        Vec::new()
+    } else {
+        read_changed_names(&args.changed)?
+    };
+    if let Some(findings) = &findings {
+        changed.extend(crate::findings::changed_easyconfigs(findings, &installed));
+    }
+    if changed.is_empty() {
+        return Err(usage(if findings.is_some() {
+            "--findings names no installed module"
+        } else {
+            "--changed named no easyconfig"
+        }));
+    }
+    let (robot, skipped_easyconfigs) = load_robot_trees(&args.easyconfigs, &args.commit_trees)?;
     let filter_specs = dep_filter::specs_from_cli_or_env(&args.filter_deps);
     let filter_deps = FilterDeps::parse(&filter_specs)
         .map_err(|error| usage(format!("--filter-deps: {error}")))?;
@@ -700,12 +732,15 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
             text,
         });
     }
+    if easystacks.is_empty() {
+        easystacks.push(crate::findings::installed_easystack(&installed));
+    }
     let document = rebuild_set::rebuild_set(&rebuild_set::RebuildQuery {
         base: robot.base,
         commits: robot.commits,
         easystacks,
         changed,
-        installed,
+        installed: installed.clone(),
         filter_deps,
         easyblocks,
         installed_source: args.installed_label.clone(),
@@ -736,6 +771,22 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
     for stack in &stacks {
         std::fs::write(rebuild_dir.join(&stack.filename), &stack.body)?;
     }
+    let findings_modules = match &findings {
+        Some(findings) => {
+            let summary = crate::findings::summarize(findings, &installed, &document);
+            write_json_pretty(&args.out_dir.join("findings.json"), &summary)?;
+            std::fs::write(
+                args.out_dir.join("findings.md"),
+                crate::findings::render_markdown(&summary),
+            )?;
+            std::fs::write(
+                args.out_dir.join("findings.csv"),
+                crate::findings::render_csv(&summary),
+            )?;
+            Some(summary.modules)
+        }
+        None => None,
+    };
     Ok(RebuildSetRun {
         changed: document.changed.len(),
         rows: document.rows.len(),
@@ -745,6 +796,7 @@ pub fn run_rebuild_set(args: &RebuildSetRequest) -> Result<RebuildSetRun> {
         missing: document.missing.len(),
         easystacks: stacks.len(),
         skipped_easyconfigs,
+        findings_modules,
         out_dir: args.out_dir.clone(),
     })
 }

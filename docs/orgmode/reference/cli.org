@@ -816,8 +816,8 @@ builds a dependent of. The recorded easyconfigs run is
 
 #+begin_src bash
 eb-stack rebuild-set \
-  --changed FILE.eb [--changed FILE.eb]... \
-  --easystack STACK.yml [--easystack STACK.yml]... \
+  (--changed FILE.eb [--changed FILE.eb]... | --findings findings.csv) \
+  [--easystack STACK.yml]... \
   --easyconfigs TREE [--easyconfigs TREE]... \
   [--commit-tree COMMIT=DIR]... \
   --installed installed.txt \
@@ -845,6 +845,27 @@ skipped. The basename is what is matched. A filename that is not in the
 deployed graph is listed under ~missing~ and has no row.
 
 ~--easystack~ is a deployed easystack, repeated. Every entry is a root.
+Without it, every installed module is a root, read as the easyconfig
+~Name-VersionFull.eb~. That is the stack of a site that installs from
+build lists instead of easystacks.
+
+~--findings~ is a vulnerability scanner export: comma-separated with a
+header, columns ~severity~, ~vuln_id~, ~package~, and ~used_in~ required,
+~version~, ~fixed_in~, and ~fix_state~ read when present. ~used_in~ lists
+modules separated by ~;~. Every installed module it names is added to
+~--changed~ as ~Name-VersionFull.eb~, and ~findings.json~, ~findings.md~,
+and ~findings.csv~ are written beside the rebuild set. A module that is not
+installed is listed and has no closure. An export that names no installed
+module is status 2.
+
+Each module with a finding gets two costs. ~in_place~ is the module, the
+bundles that ship it, and its review dependents: what a backported patch
+that keeps the version rebuilds. ~bump~ is the module and every installed
+dependent: what a new version rebuilds, since EasyBuild writes each
+dependency version into the dependent's module file and run path. The
+score weighs a unique id Critical 10, High 5, Medium 2, Low 1, and
+modules are ranked by score per in-place rebuild. Totals per severity
+take the union over the modules with a finding at that severity or above.
 ~--easyconfigs~, ~--commit-tree~, ~--installed~, ~--filter-deps~,
 ~--installed-modulerc~, ~--easyblocks~, and ~--easyblocks-commit~ mean the
 same as for ~pr-overlap~. ~--filter-deps~ drops dependency tuples and does

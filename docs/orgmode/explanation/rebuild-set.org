@@ -92,6 +92,22 @@ A missing easyblock class is a note. The module stays in the set, because
 it is already installed. A ~from-commit~ whose tree was not passed is a
 note, and the release tree is used for that pin.
 
+* Scanner findings
+
+~--findings~ turns a scanner export into the changed list: every installed
+module it names. The rebuild set is then read twice per module. A
+backported patch that keeps the version replaces files under the same
+module path, so the cost is the must-rebuild and review rows. A new
+version is a new path. EasyBuild writes each dependency version into the
+dependent's module file and run path, so the cost is the module and every
+installed dependent, runtime and builddependency alike. The ratio between
+the two is the case for backports over bumps, per module.
+
+A site that installs from build lists has no easystack. Without
+~--easystack~, the installed list is the stack: each module is read as the
+easyconfig its name gives, and a module that no easyconfig matches is
+listed as unresolved.
+
 * Example
 
 Patch ~zlib-1.3.1-GCCcore-15.2.0.eb~. ~libpng~ depends on zlib, so libpng

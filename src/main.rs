@@ -289,12 +289,18 @@ struct PrOverlapArgs {
 struct RebuildSetArgs {
     /// Patched easyconfig filename. Repeatable. A value that is a file and
     /// does not end in `.eb` is read as a list, one filename per line.
-    #[arg(long = "changed", required = true)]
+    #[arg(long = "changed", required_unless_present = "findings")]
     changed: Vec<String>,
     /// Deployed easystack. Repeatable. `from-commit` is resolved with
-    /// `--commit-tree`, the same way as `pr-overlap`.
-    #[arg(long = "easystack", required = true)]
+    /// `--commit-tree`, the same way as `pr-overlap`. Without it, every
+    /// installed module is a root, read as `Name-VersionFull.eb`.
+    #[arg(long = "easystack")]
     easystacks: Vec<PathBuf>,
+    /// Vulnerability scanner export (CSV with `severity`, `vuln_id`,
+    /// `package`, and `used_in`). Every installed module in `used_in` is
+    /// patched; writes `findings.json`, `findings.md`, and `findings.csv`.
+    #[arg(long)]
+    findings: Option<PathBuf>,
     /// Easyconfig tree of the EasyBuild release the stack uses. Repeatable;
     /// later trees take precedence.
     #[arg(long, required = true)]
@@ -1496,6 +1502,7 @@ fn run_rebuild_set(args: RebuildSetArgs) -> Result<()> {
         eb_stack::site_commands::run_rebuild_set(&eb_stack::site_commands::RebuildSetRequest {
             changed: args.changed,
             easystacks: args.easystacks,
+            findings: args.findings,
             easyconfigs: args.easyconfigs,
             commit_trees: args.commit_trees,
             installed: args.installed,
