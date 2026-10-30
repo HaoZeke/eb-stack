@@ -116,6 +116,23 @@ pub struct PrInput {
     pub easyconfigs: Vec<FileChange>,
 }
 
+/// Which easystack lines seed a software-layer closure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BuildScope {
+    /// Entries present at head and absent from base.
+    #[default]
+    Added,
+    /// Every entry at the head of each changed easystack.
+    ///
+    /// This is what the EESSI bot builds: the whole changed file, not only
+    /// the lines the pull request adds. An entry that is already installed
+    /// is still a leaf.
+    ChangedEasystack,
+}
+
+/// `build_scope` written on a record when [`BuildScope::ChangedEasystack`] ran.
+pub const CHANGED_EASYSTACK_SCOPE: &str = "changed-easystack";
+
 /// Settings shared by every record of one run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OverlapConfig {
@@ -136,6 +153,28 @@ pub struct OverlapConfig {
     pub filter_deps: FilterDeps,
     /// Easyblock classes to resolve. `None` skips the check.
     pub easyblocks: Option<EasyblockCatalog>,
+    /// Which easystack lines seed the closure. Added lines unless a bot
+    /// build set was requested.
+    pub build_scope: BuildScope,
+}
+
+/// One architecture's build set for a pull request.
+///
+/// Present when `--arch-installed` names more than one architecture. A single
+/// installed list keeps that set in [`PrRecord::to_build`] instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchBuildSet {
+    /// Label from `--arch-installed`, for example `riscv64`.
+    pub arch: String,
+    /// Modules the bot would build on this architecture, sorted.
+    pub to_build: Vec<String>,
+    /// Installed modules the walk reached and stopped at, sorted.
+    pub already_installed: Vec<String>,
+    /// Requirements no easyconfig on the robot path satisfies.
+    pub unresolved: Vec<String>,
+    /// Head entries in `to_build` that this pull request did not add.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carried: Vec<String>,
 }
 
 /// Easyblock classes a run can see.
@@ -256,6 +295,18 @@ pub struct PrRecord {
     /// or deletes, nearest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reverse_dependents: Vec<ReverseDependent>,
+    /// `changed-easystack` when the closure started from every head entry.
+    /// Empty, and omitted, for the added-lines default.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub build_scope: String,
+    /// Head entries in `to_build` that this pull request did not add.
+    /// Empty, and omitted, for the added-lines default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carried: Vec<String>,
+    /// One build set per architecture. Empty, and omitted, for a single
+    /// installed list, whose set is `to_build`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub build_sets: Vec<ArchBuildSet>,
 }
 
 /// Robot-path trees: the release tree, and per `from-commit` the easyconfigs
@@ -292,18 +343,27 @@ pub fn eb_version_of(path: &str) -> Option<String> {
     (!version.is_empty()).then_some(version)
 }
 
+fn parsed_entries(text: &Option<String>) -> Vec<EasystackEntry> {
+    text.as_deref()
+        .map(|body| parse_easystack_entries(body).unwrap_or_default())
+        .unwrap_or_default()
+}
+
 /// Entries present at head and not on base, in head order.
 pub fn added_entries(change: &EasystackChange) -> Vec<EasystackEntry> {
-    let parse = |text: &Option<String>| {
-        text.as_deref()
-            .map(|t| parse_easystack_entries(t).unwrap_or_default())
-            .unwrap_or_default()
-    };
-    let base = parse(&change.base);
-    parse(&change.head)
+    let base = parsed_entries(&change.base);
+    parsed_entries(&change.head)
         .into_iter()
-        .filter(|e| !base.contains(e))
+        .filter(|entry| !base.contains(entry))
         .collect()
+}
+
+/// Every easystack entry at head, in head order.
+///
+/// A deleted file has no head text, so it contributes nothing. The bot does
+/// not build a file the pull request removes.
+pub fn head_entries(change: &EasystackChange) -> Vec<EasystackEntry> {
+    parsed_entries(&change.head)
 }
 
 /// Read an installed-module list: one `Name/VersionFull` per line, as listed
@@ -390,12 +450,17 @@ pub fn pr_record(
             continue;
         }
         let added = added_entries(change);
-        if added.is_empty() {
+        let seeds = match config.build_scope {
+            BuildScope::Added => added.clone(),
+            BuildScope::ChangedEasystack => head_entries(change),
+        };
+        if seeds.is_empty() {
             continue;
         }
         files.push(change.path.clone());
         let rebuild = change.path.contains("/rebuilds/");
-        for entry in added {
+        let added_files: BTreeSet<&str> = added.iter().map(|entry| entry.file.as_str()).collect();
+        for entry in &seeds {
             groups
                 .entry((entry.from_commit.clone(), rebuild))
                 .or_default()
@@ -403,7 +468,10 @@ pub fn pr_record(
                     file: entry.file.clone(),
                     easyblock_commit: entry.include_easyblocks_from_commit.clone(),
                     easyblock_pr: entry.include_easyblocks_from_pr.clone(),
+                    carried: !added_files.contains(entry.file.as_str()),
                 });
+        }
+        for entry in added {
             entries.push(RecordEntry {
                 easystack: change.path.clone(),
                 easyconfig: entry.file,
@@ -412,7 +480,7 @@ pub fn pr_record(
             });
         }
     }
-    if entries.is_empty() {
+    if files.is_empty() {
         return None;
     }
 
@@ -420,6 +488,7 @@ pub fn pr_record(
     let mut already = BTreeSet::new();
     let mut unresolved = BTreeSet::new();
     let mut notes = BTreeSet::new();
+    let mut carried = BTreeSet::new();
     for ((commit, rebuild), group) in &groups {
         let merged;
         let raw: &[Candidate] = match commit.as_ref().and_then(|c| trees.commits.get(c)) {
@@ -484,6 +553,17 @@ pub fn pr_record(
             &mut notes,
         );
         to_build.extend(kept.into_iter().map(|key| module_name(&key)));
+        for start in group {
+            if !start.carried {
+                continue;
+            }
+            if let Some(candidate) = find_start(universe, &start.file) {
+                let name = module_name(&ModuleKey::of(candidate));
+                if to_build.contains(&name) {
+                    carried.insert(name);
+                }
+            }
+        }
         already.extend(closure.installed.iter().map(module_name));
         for requirement in closure.unresolved {
             unresolved.insert(format!(
@@ -514,7 +594,83 @@ pub fn pr_record(
         closure: Vec::new(),
         new_modules: Vec::new(),
         reverse_dependents: Vec::new(),
+        build_scope: match config.build_scope {
+            BuildScope::Added => String::new(),
+            BuildScope::ChangedEasystack => CHANGED_EASYSTACK_SCOPE.to_string(),
+        },
+        carried: carried.into_iter().collect(),
+        build_sets: Vec::new(),
     })
+}
+
+/// Fold per-architecture records into one record per pull request.
+///
+/// One architecture is returned unchanged, so `to_build` stays that
+/// architecture's build set and merge order reads it directly. Two or more
+/// move each build set onto `build_sets` and leave the top-level `to_build`
+/// empty. The architecture order is the order of `groups`.
+pub fn combine_arch_records(groups: Vec<(String, Vec<PrRecord>)>) -> Vec<PrRecord> {
+    let Some((_, first)) = groups.first() else {
+        return Vec::new();
+    };
+    if groups.len() == 1 {
+        return first.clone();
+    }
+    let joined = groups
+        .iter()
+        .map(|(arch, _)| arch.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut out = Vec::new();
+    for record in first {
+        let mut notes = BTreeSet::new();
+        notes.extend(record.notes.iter().cloned());
+        let mut build_sets = Vec::new();
+        for (arch, records) in &groups {
+            let Some(other) = records.iter().find(|item| item.pr == record.pr) else {
+                continue;
+            };
+            notes.extend(other.notes.iter().cloned());
+            build_sets.push(ArchBuildSet {
+                arch: arch.clone(),
+                to_build: other.to_build.clone(),
+                already_installed: other.already_installed.clone(),
+                unresolved: other.unresolved.clone(),
+                carried: other.carried.clone(),
+            });
+        }
+        let mut combined = record.clone();
+        combined.installed_source = joined.clone();
+        combined.to_build.clear();
+        combined.already_installed.clear();
+        combined.unresolved.clear();
+        combined.carried.clear();
+        combined.notes = notes.into_iter().collect();
+        combined.build_sets = build_sets;
+        out.push(combined);
+    }
+    out
+}
+
+/// Records whose `to_build` is the build set for `arch`.
+///
+/// Merge order and impact read `to_build`. A multi-architecture record keeps
+/// each architecture on `build_sets`, so this view is what those two consume.
+pub fn records_for_arch(records: &[PrRecord], arch: &str) -> Vec<PrRecord> {
+    records
+        .iter()
+        .filter_map(|record| {
+            let set = record.build_sets.iter().find(|set| set.arch == arch)?;
+            let mut copy = record.clone();
+            copy.to_build = set.to_build.clone();
+            copy.already_installed = set.already_installed.clone();
+            copy.unresolved = set.unresolved.clone();
+            copy.carried = set.carried.clone();
+            copy.installed_source = arch.to_string();
+            copy.build_sets.clear();
+            Some(copy)
+        })
+        .collect()
 }
 
 /// Path key used to match a pull-request path to a parsed easyconfig path.
@@ -921,14 +1077,20 @@ pub fn easyconfig_record_seeing(
         new_modules,
         revisions: file_revisions(pr, config),
         reverse_dependents,
+        build_scope: String::new(),
+        carried: Vec::new(),
+        build_sets: Vec::new(),
     })
 }
 
-/// One added easystack line and the easyblock source it names.
+/// One easystack line and the easyblock source it names.
 struct Start {
     file: String,
     easyblock_commit: Option<String>,
     easyblock_pr: Option<String>,
+    /// True when the line was already on the base. The module is carried
+    /// into `to_build` only when this architecture has not installed it.
+    carried: bool,
 }
 
 fn easyblock_class(candidate: &Candidate) -> String {
@@ -1071,6 +1233,18 @@ pub struct OverlapRow {
     pub modules: Vec<String>,
 }
 
+/// Shared modules on one architecture.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchOverlap {
+    /// Label from `--arch-installed`.
+    pub arch: String,
+    /// Module to the pull requests that would build it, for modules more than
+    /// one would build.
+    pub shared: BTreeMap<String, Vec<u64>>,
+    /// Per pull request, the other pull requests it shares modules with.
+    pub pairs: BTreeMap<String, BTreeMap<String, Vec<String>>>,
+}
+
 /// Shared to-build modules across records.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OverlapIndex {
@@ -1095,37 +1269,88 @@ pub struct OverlapIndex {
     /// software-layer run, which keeps the schema 1 field set.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rows: Vec<OverlapRow>,
+    /// Per-architecture overlap. Empty, and omitted, for a single installed list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arches: Vec<ArchOverlap>,
 }
 
-/// Intersect the to-build sets of every record.
-pub fn overlap_index(records: &[PrRecord], config: &OverlapConfig) -> OverlapIndex {
+struct ShareMaps {
+    shared: BTreeMap<String, Vec<u64>>,
+    pairs: BTreeMap<String, BTreeMap<String, Vec<String>>>,
+}
+
+fn share_maps(rows: impl IntoIterator<Item = (u64, Vec<String>)>) -> ShareMaps {
     let mut by_module: BTreeMap<String, BTreeSet<u64>> = BTreeMap::new();
-    for r in records {
-        for m in &r.to_build {
-            by_module.entry(m.clone()).or_default().insert(r.pr);
+    for (pr, modules) in rows {
+        for module in modules {
+            by_module.entry(module).or_default().insert(pr);
         }
     }
     let shared: BTreeMap<String, Vec<u64>> = by_module
         .into_iter()
         .filter(|(_, prs)| prs.len() > 1)
-        .map(|(m, prs)| (m, prs.into_iter().collect()))
+        .map(|(module, prs)| (module, prs.into_iter().collect()))
         .collect();
     let mut pairs: BTreeMap<u64, BTreeMap<u64, Vec<String>>> = BTreeMap::new();
     for (module, prs) in &shared {
-        for a in prs {
-            for b in prs {
-                if a != b {
+        for left in prs {
+            for right in prs {
+                if left != right {
                     pairs
-                        .entry(*a)
+                        .entry(*left)
                         .or_default()
-                        .entry(*b)
+                        .entry(*right)
                         .or_default()
                         .push(module.clone());
                 }
             }
         }
     }
-    let mut prs: Vec<u64> = records.iter().map(|r| r.pr).collect();
+    let pairs = pairs
+        .into_iter()
+        .map(|(left, row)| {
+            (
+                left.to_string(),
+                row.into_iter()
+                    .map(|(right, modules)| (right.to_string(), modules))
+                    .collect(),
+            )
+        })
+        .collect();
+    ShareMaps { shared, pairs }
+}
+
+fn arch_overlaps(records: &[PrRecord]) -> Vec<ArchOverlap> {
+    let Some(sample) = records.iter().find(|record| !record.build_sets.is_empty()) else {
+        return Vec::new();
+    };
+    sample
+        .build_sets
+        .iter()
+        .map(|set| set.arch.clone())
+        .map(|arch| {
+            let rows = records.iter().filter_map(|record| {
+                let set = record.build_sets.iter().find(|set| set.arch == arch)?;
+                Some((record.pr, set.to_build.clone()))
+            });
+            let maps = share_maps(rows);
+            ArchOverlap {
+                arch,
+                shared: maps.shared,
+                pairs: maps.pairs,
+            }
+        })
+        .collect()
+}
+
+/// Intersect the to-build sets of every record.
+pub fn overlap_index(records: &[PrRecord], config: &OverlapConfig) -> OverlapIndex {
+    let maps = share_maps(
+        records
+            .iter()
+            .map(|record| (record.pr, record.to_build.clone())),
+    );
+    let mut prs: Vec<u64> = records.iter().map(|record| record.pr).collect();
     prs.sort_unstable();
     prs.dedup();
     let easyconfigs = records.iter().any(|record| record.kind == "easyconfigs");
@@ -1139,21 +1364,14 @@ pub fn overlap_index(records: &[PrRecord], config: &OverlapConfig) -> OverlapInd
         eessi_version: config.eessi_version.clone(),
         installed_source: config.installed_source.clone(),
         prs,
-        shared,
-        pairs: pairs
-            .into_iter()
-            .map(|(a, m)| {
-                (
-                    a.to_string(),
-                    m.into_iter().map(|(b, v)| (b.to_string(), v)).collect(),
-                )
-            })
-            .collect(),
+        shared: maps.shared,
+        pairs: maps.pairs,
         rows: if easyconfigs {
             easyconfig_rows(records)
         } else {
             Vec::new()
         },
+        arches: arch_overlaps(records),
     }
 }
 
@@ -1350,30 +1568,39 @@ pub fn to_toml<T: Serialize>(value: &T) -> Result<String, toml::ser::Error> {
 /// would build. `git diff` shows a deploy dropping that line, and
 /// `sort | uniq -d` across the `to_build` lines is the overlap.
 pub fn record_to_toml(record: &PrRecord) -> Result<String, toml::ser::Error> {
-    let mut modules = record.to_build.clone();
-    modules.sort();
+    let mut lists = Vec::new();
+    let mut top = record.to_build.clone();
+    top.sort();
+    lists.push(top);
+    for set in &record.build_sets {
+        let mut modules = set.to_build.clone();
+        modules.sort();
+        lists.push(modules);
+    }
     let mut without = record.clone();
     without.to_build.clear();
-    let body = expand_to_build(&toml::to_string(&without)?, &modules);
+    for set in &mut without.build_sets {
+        set.to_build.clear();
+    }
+    let body = expand_to_build(&toml::to_string(&without)?, &lists);
     Ok(format!("{GENERATED_HEADER}\n{body}"))
 }
 
-/// Replace the empty `to_build` array left by [`record_to_toml`] with one
-/// quoted module per line. Any other empty array is left alone.
-fn expand_to_build(text: &str, modules: &[String]) -> String {
-    let mut out = String::with_capacity(text.len() + modules.len() * 48);
-    let mut replaced = false;
+/// Replace each empty `to_build` array left by [`record_to_toml`] with one
+/// quoted module per line, in the order the arrays were cleared. Any other
+/// empty array is left alone.
+fn expand_to_build(text: &str, lists: &[Vec<String>]) -> String {
+    let mut out = String::with_capacity(text.len() + lists.len() * 48);
+    let mut index = 0;
     for line in text.lines() {
-        if !replaced && line == "to_build = []" {
-            replaced = true;
+        if line == "to_build = []" {
+            let modules = lists.get(index).map(Vec::as_slice).unwrap_or(&[]);
+            index += 1;
             out.push_str(&render_to_build(modules));
             continue;
         }
         out.push_str(line);
         out.push('\n');
-    }
-    if !replaced {
-        out.push_str(&render_to_build(modules));
     }
     out
 }
@@ -1584,6 +1811,9 @@ pub fn render_markdown(records: &[PrRecord], index: &OverlapIndex, repo_url: &st
     if records.iter().any(|record| record.kind == "easyconfigs") {
         return render_easyconfig_markdown(records, index, repo_url);
     }
+    if records.iter().any(|record| !record.build_sets.is_empty()) {
+        return render_arch_markdown(records, index, repo_url);
+    }
     let link = |n: u64| {
         if repo_url.is_empty() {
             format!("#{n}")
@@ -1603,6 +1833,14 @@ pub fn render_markdown(records: &[PrRecord], index: &OverlapIndex, repo_url: &st
         index.installed_source,
         records.len()
     ));
+    if records
+        .iter()
+        .any(|record| record.build_scope == CHANGED_EASYSTACK_SCOPE)
+    {
+        out.push_str(
+            "The build set is every entry at the head of each changed easystack, plus dependencies that are not installed.\n\n",
+        );
+    }
     out.push_str("## Modules more than one pull request would build\n\n");
     if index.shared.is_empty() {
         out.push_str("None.\n\n");
@@ -1629,6 +1867,17 @@ pub fn render_markdown(records: &[PrRecord], index: &OverlapIndex, repo_url: &st
             r.to_build.len(),
             r.already_installed.len()
         ));
+        if !r.carried.is_empty() {
+            let list = r
+                .carried
+                .iter()
+                .map(|module| format!("`{module}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!(
+                "Already in the changed easystack and not installed: {list}.\n\n"
+            ));
+        }
         if let Some(others) = index.pairs.get(&r.pr.to_string()) {
             for (other, modules) in others {
                 let n: u64 = other.parse().unwrap_or_default();
@@ -1654,6 +1903,91 @@ pub fn render_markdown(records: &[PrRecord], index: &OverlapIndex, repo_url: &st
             out.push_str(&format!("- `{m}`\n"));
         }
         out.push_str("\n</details>\n\n");
+    }
+    single_trailing_newline(out)
+}
+
+fn render_arch_markdown(records: &[PrRecord], index: &OverlapIndex, repo_url: &str) -> String {
+    let mut out = String::new();
+    out.push_str("<!-- Generated by `eb-stack pr-overlap`. This branch is never merged. -->\n");
+    out.push_str(&format!(
+        "# Shared builds between open pull requests ({})\n\n",
+        index.eessi_version
+    ));
+    out.push_str(&format!(
+        "Computed {}. {} pull requests change an easystack for this version. For each architecture, the build set is every entry at the head of each changed easystack, plus dependencies that are not installed.\n\n",
+        index.generated_at, records.len()
+    ));
+    let mut sorted: Vec<&PrRecord> = records.iter().collect();
+    sorted.sort_by_key(|record| record.pr);
+    for arch in &index.arches {
+        out.push_str(&format!("## {}\n\n", arch.arch));
+        out.push_str(&format!("Modules installed for `{}`.\n\n", arch.arch));
+        out.push_str("### Modules more than one pull request would build\n\n");
+        if arch.shared.is_empty() {
+            out.push_str("None.\n\n");
+        } else {
+            out.push_str("| Module | Pull requests |\n|---|---|\n");
+            for (module, prs) in &arch.shared {
+                let prs: Vec<String> = prs.iter().map(|n| pr_link(repo_url, *n)).collect();
+                out.push_str(&format!("| `{module}` | {} |\n", prs.join(", ")));
+            }
+            out.push('\n');
+        }
+        out.push_str("### Per pull request\n\n");
+        for record in &sorted {
+            let Some(set) = record.build_sets.iter().find(|set| set.arch == arch.arch) else {
+                continue;
+            };
+            let short: String = record.head_sha.chars().take(10).collect();
+            out.push_str(&format!(
+                "#### {} {} (`{short}`)\n\n",
+                pr_link(repo_url, record.pr),
+                record.title.as_deref().unwrap_or("")
+            ));
+            out.push_str(&format!(
+                "Builds {} modules; {} reached modules are already installed.\n\n",
+                set.to_build.len(),
+                set.already_installed.len()
+            ));
+            if !set.carried.is_empty() {
+                let list = set
+                    .carried
+                    .iter()
+                    .map(|module| format!("`{module}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                out.push_str(&format!(
+                    "Already in the changed easystack and not installed: {list}.\n\n"
+                ));
+            }
+            if let Some(others) = arch.pairs.get(&record.pr.to_string()) {
+                for (other, modules) in others {
+                    let number: u64 = other.parse().unwrap_or_default();
+                    let list: Vec<String> =
+                        modules.iter().map(|module| format!("`{module}`")).collect();
+                    out.push_str(&format!(
+                        "- shares {} with {}: {}\n",
+                        modules.len(),
+                        pr_link(repo_url, number),
+                        list.join(", ")
+                    ));
+                }
+            } else {
+                out.push_str("- shares nothing with another open pull request\n");
+            }
+            for item in &set.unresolved {
+                out.push_str(&format!("- unresolved: {item}\n"));
+            }
+            for note in &record.notes {
+                out.push_str(&format!("- note: {note}\n"));
+            }
+            out.push_str("\n<details><summary>To build</summary>\n\n");
+            for module in &set.to_build {
+                out.push_str(&format!("- `{module}`\n"));
+            }
+            out.push_str("\n</details>\n\n");
+        }
     }
     single_trailing_newline(out)
 }
@@ -2183,6 +2517,53 @@ mod tests {
     }
 
     #[test]
+    fn a_changed_easystack_builds_entries_the_pull_request_did_not_add() {
+        let old = parsed("Old-1.0.eb", &eb("Old", "1.0", Some(("Lib", "1.0"))));
+        let lib = parsed("Lib-1.0.eb", &eb("Lib", "1.0", None));
+        let new = parsed("New-1.0.eb", &eb("New", "1.0", None));
+        let trees = RobotTrees {
+            base: vec![old, lib, new],
+            commits: Default::default(),
+        };
+        let path = "easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.0-2026.1.yml";
+        let base = "easyconfigs:\n  - Old-1.0.eb\n";
+        let head = "easyconfigs:\n  - Old-1.0.eb\n  - New-1.0.eb\n";
+        let input = PrInput {
+            number: 1775,
+            head_sha: "abc".into(),
+            title: Some("add New".into()),
+            easystacks: vec![EasystackChange {
+                path: path.into(),
+                base: Some(base.into()),
+                head: Some(head.into()),
+                base_blob: None,
+                head_blob: None,
+            }],
+            files: Vec::new(),
+            easyconfigs: Vec::new(),
+        };
+        let mut config = ec_config();
+        let empty = BTreeSet::new();
+        let added = pr_record(&input, &trees, &empty, &config).expect("added lines");
+        assert_eq!(added.to_build, ["New/1.0"]);
+        assert!(added.carried.is_empty());
+        assert_eq!(added.entries.len(), 1);
+
+        config.build_scope = BuildScope::ChangedEasystack;
+        let bot = pr_record(&input, &trees, &empty, &config).expect("whole file");
+        assert_eq!(bot.to_build, ["Lib/1.0", "New/1.0", "Old/1.0"]);
+        assert_eq!(bot.carried, ["Old/1.0"]);
+        assert_eq!(bot.entries[0].easyconfig, "New-1.0.eb");
+        assert_eq!(bot.build_scope, CHANGED_EASYSTACK_SCOPE);
+
+        let installed = BTreeSet::from(["Old/1.0".to_string()]);
+        let present = pr_record(&input, &trees, &installed, &config).expect("old installed");
+        assert_eq!(present.to_build, ["New/1.0"]);
+        assert!(present.carried.is_empty());
+        assert_eq!(present.already_installed, ["Old/1.0"]);
+    }
+
+    #[test]
     fn to_build_is_one_sorted_line_per_module() {
         let record = PrRecord {
             schema_version: 1,
@@ -2204,6 +2585,9 @@ mod tests {
             closure: Vec::new(),
             new_modules: Vec::new(),
             reverse_dependents: Vec::new(),
+            build_scope: String::new(),
+            carried: Vec::new(),
+            build_sets: Vec::new(),
         };
         let text = record_to_toml(&record).expect("toml");
         let a = text.find("  \"a/1\",\n").expect("a on its own line");
@@ -2259,6 +2643,7 @@ moduleclass = 'lib'\n"
             generated_at: "2026-10-22T00:00:00Z".into(),
             filter_deps: crate::dep_filter::FilterDeps::empty(),
             easyblocks: None,
+            build_scope: BuildScope::Added,
         }
     }
 
@@ -2716,6 +3101,9 @@ moduleclass = 'lib'\n";
             new_modules: new_modules.iter().map(|s| (*s).to_string()).collect(),
             reverse_dependents: Vec::new(),
             revisions: Vec::new(),
+            build_scope: String::new(),
+            carried: Vec::new(),
+            build_sets: Vec::new(),
         }
     }
 

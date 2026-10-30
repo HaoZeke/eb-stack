@@ -269,6 +269,20 @@ struct PrOverlapArgs {
     /// Output directory: `prs/<N>.toml`, `overlap.toml`, `overlap.md`.
     #[arg(long, default_value = "pr-overlap")]
     out_dir: PathBuf,
+    /// Close every entry of each changed easystack, not only added lines.
+    ///
+    /// The EESSI bot builds every entry of a changed easystack that is not
+    /// installed yet. With one `--installed` list, that set is `to_build`.
+    /// `--arch-installed` implies this flag.
+    #[arg(long)]
+    bot_build_set: bool,
+    /// Installed modules for one architecture, as `ARCH=FILE`. Repeatable.
+    ///
+    /// Implies `--bot-build-set`. Each file is one `Name/VersionFull` per
+    /// line, the same as `--installed`. The name before `=` is the label
+    /// recorded for that architecture. Replaces `--installed`.
+    #[arg(long = "arch-installed")]
+    arch_installed: Vec<String>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -1400,6 +1414,8 @@ fn run_pr_overlap(args: PrOverlapArgs) -> Result<()> {
             out_dir: args.out_dir,
             open_repo: args.open,
             base_ref: args.base_ref,
+            bot_build_set: args.bot_build_set,
+            arch_installed: args.arch_installed,
         }) {
             Ok(report) => report,
             Err(eb_stack::site_commands::PrOverlapError::InstalledRequired) => {

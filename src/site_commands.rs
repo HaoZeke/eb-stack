@@ -133,6 +133,12 @@ pub struct PrOverlapRequest {
     pub open_repo: Option<String>,
     /// Git ref for the base text of [`Self::open_repo`]. `None` is `develop`.
     pub base_ref: Option<String>,
+    /// Close every head entry of each changed easystack, not only added lines.
+    ///
+    /// Implied by [`Self::arch_installed`].
+    pub bot_build_set: bool,
+    /// Installed modules for one architecture, `ARCH=FILE`. Repeatable.
+    pub arch_installed: Vec<String>,
 }
 
 /// Counts `pr-overlap` prints on its one summary line.
@@ -405,7 +411,27 @@ pub fn run_pr_overlap_with(
             "--open needs --kind easyconfigs",
         )));
     }
-    if args.kind == OverlapKind::SoftwareLayer && args.installed.is_none() {
+    if (args.bot_build_set || !args.arch_installed.is_empty())
+        && args.kind != OverlapKind::SoftwareLayer
+    {
+        return Err(PrOverlapError::Failed(usage(
+            "--bot-build-set and --arch-installed are only for --kind software-layer",
+        )));
+    }
+    if !args.arch_installed.is_empty() && args.installed.is_some() {
+        return Err(PrOverlapError::Failed(usage(
+            "--arch-installed replaces --installed; pass every architecture as ARCH=FILE",
+        )));
+    }
+    if !args.arch_installed.is_empty() && !args.installed_label.is_empty() {
+        return Err(PrOverlapError::Failed(usage(
+            "--installed-label applies to --installed; each --arch-installed name is the label",
+        )));
+    }
+    if args.kind == OverlapKind::SoftwareLayer
+        && args.installed.is_none()
+        && args.arch_installed.is_empty()
+    {
         return Err(PrOverlapError::InstalledRequired);
     }
     run_pr_overlap_inner(args, http).map_err(PrOverlapError::Failed)
@@ -454,7 +480,7 @@ fn run_pr_overlap_inner(
         .map_err(|error| usage(format!("--filter-deps: {error}")))?;
     let easyblocks = load_easyblock_catalog(&args.easyblocks, &args.easyblocks_commits)?;
     let easyconfigs = args.kind == OverlapKind::Easyconfigs;
-    let config = OverlapConfig {
+    let mut config = OverlapConfig {
         eessi_version: if easyconfigs {
             String::new()
         } else {
@@ -466,6 +492,7 @@ fn run_pr_overlap_inner(
         generated_at: generated_at(args.generated_at.clone(), true)?,
         filter_deps,
         easyblocks,
+        build_scope: pr_overlap::BuildScope::Added,
     };
     let records: Vec<_> = if easyconfigs {
         let installed = installed.as_ref();
@@ -480,12 +507,30 @@ fn run_pr_overlap_inner(
             })
             .collect()
     } else {
-        let installed = installed
-            .as_ref()
-            .expect("software-layer checks --installed");
-        prs.iter()
-            .filter_map(|pr| pr_record(pr, &robot, installed, &config))
-            .collect()
+        let lists = installed_architectures(args, installed)?;
+        let scope = if args.bot_build_set || !args.arch_installed.is_empty() {
+            pr_overlap::BuildScope::ChangedEasystack
+        } else {
+            pr_overlap::BuildScope::Added
+        };
+        let mut groups = Vec::new();
+        for (arch, modules) in &lists {
+            let mut one = config.clone();
+            one.installed_source = arch.clone();
+            one.build_scope = scope;
+            let arch_records: Vec<_> = prs
+                .iter()
+                .filter_map(|pr| pr_record(pr, &robot, modules, &one))
+                .collect();
+            groups.push((arch.clone(), arch_records));
+        }
+        let records = pr_overlap::combine_arch_records(groups);
+        if records.iter().any(|record| !record.build_sets.is_empty()) {
+            if let Some(source) = records.first() {
+                config.installed_source = source.installed_source.clone();
+            }
+        }
+        records
     };
     let index = overlap_index(&records, &config);
     let repo_url = args.repo_url.clone().unwrap_or_else(|| {
@@ -521,15 +566,69 @@ fn run_pr_overlap_inner(
             }
         }
     }
+    let multi_arch = records.iter().any(|record| !record.build_sets.is_empty());
+    let arch_names: Vec<String> = records
+        .iter()
+        .find(|record| !record.build_sets.is_empty())
+        .map(|record| {
+            record
+                .build_sets
+                .iter()
+                .map(|set| set.arch.clone())
+                .collect()
+        })
+        .unwrap_or_default();
     let order = if write_order {
-        let mut order = merge_order::plan(&records, &index, &args.merged);
-        order.conflicts = merge_order::conflicts_from_records(&records);
-        Some(order)
+        if multi_arch {
+            let mut arches = Vec::new();
+            for arch in &arch_names {
+                let view = pr_overlap::records_for_arch(&records, arch);
+                let view_index = overlap_index(&view, &config);
+                let one = merge_order::plan(&view, &view_index, &args.merged);
+                arches.push(merge_order::ArchMerge {
+                    arch: arch.clone(),
+                    steps: one.steps,
+                    cycles: one.cycles,
+                });
+            }
+            let mut order = merge_order::plan(&[], &index, &args.merged);
+            order.conflicts = merge_order::conflicts_from_records(&records);
+            order.arches = arches;
+            Some(order)
+        } else {
+            let mut order = merge_order::plan(&records, &index, &args.merged);
+            order.conflicts = merge_order::conflicts_from_records(&records);
+            Some(order)
+        }
     } else {
         None
     };
     let impact = if args.impact.is_empty() {
         None
+    } else if multi_arch {
+        let mut arches = Vec::new();
+        for arch in &arch_names {
+            let view = pr_overlap::records_for_arch(&records, arch);
+            let view_index = overlap_index(&view, &config);
+            let one = merge_order::impact_report(
+                &view,
+                &view_index,
+                &args.impact,
+                &config.generated_at,
+                &args.merged,
+            )
+            .map_err(|number| usage(rejected_pull_request("--impact", number, &input_numbers)))?;
+            arches.push(merge_order::ArchImpact {
+                arch: arch.clone(),
+                impacts: one.impacts,
+            });
+        }
+        Some(merge_order::MergeImpactReport {
+            schema_version: merge_order::MERGE_IMPACT_SCHEMA_VERSION,
+            generated_at: config.generated_at.clone(),
+            impacts: Vec::new(),
+            arches,
+        })
     } else {
         Some(
             merge_order::impact_report(
@@ -572,7 +671,11 @@ fn run_pr_overlap_inner(
     Ok(PrOverlapRun {
         prs: prs.len(),
         records: records.len(),
-        shared_modules: index.shared.len(),
+        shared_modules: if index.arches.is_empty() {
+            index.shared.len()
+        } else {
+            index.arches.iter().map(|arch| arch.shared.len()).sum()
+        },
         skipped_easyconfigs,
         out_dir: args.out_dir.clone(),
     })
@@ -1142,6 +1245,7 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
         generated_at: stamp.clone(),
         filter_deps,
         easyblocks: None,
+        build_scope: pr_overlap::BuildScope::Added,
     };
     let parent = Toolchain {
         name: "foss".into(),
@@ -1528,6 +1632,45 @@ fn load_robot_trees(
         robot.commits.insert(commit.to_string(), parsed.candidates);
     }
     Ok((robot, skipped))
+}
+
+/// Installed lists for a software-layer run, in the order they were given.
+///
+/// `--arch-installed` is one list per architecture and implies the bot build
+/// set. Otherwise the single `--installed` list is used, labeled by
+/// `--installed-label`.
+fn installed_architectures(
+    args: &PrOverlapRequest,
+    installed: Option<std::collections::BTreeSet<String>>,
+) -> Result<Vec<(String, std::collections::BTreeSet<String>)>> {
+    use std::collections::BTreeSet;
+    if !args.arch_installed.is_empty() {
+        let mut seen = BTreeSet::new();
+        let mut lists = Vec::new();
+        for spec in &args.arch_installed {
+            let (arch, path) = spec
+                .split_once('=')
+                .ok_or_else(|| usage(format!("--arch-installed wants ARCH=FILE, got {spec}")))?;
+            let label_ok = !arch.is_empty()
+                && arch
+                    .chars()
+                    .all(|c| c.is_ascii_graphic() && c != '"' && c != '\\');
+            if !label_ok || path.is_empty() {
+                return Err(usage(format!(
+                    "--arch-installed wants ARCH=FILE, got {spec}"
+                )));
+            }
+            if !seen.insert(arch.to_string()) {
+                return Err(usage(format!("--arch-installed {arch} was given twice")));
+            }
+            let modules = load_installed_modules(Path::new(path), &args.installed_modulerc)
+                .with_context(|| format!("--arch-installed {spec}"))?;
+            lists.push((arch.to_string(), modules));
+        }
+        return Ok(lists);
+    }
+    let modules = installed.expect("software-layer checks --installed");
+    Ok(vec![(args.installed_label.clone(), modules)])
 }
 
 /// Installed modules, with `module_version` aliases from the modulerc files.

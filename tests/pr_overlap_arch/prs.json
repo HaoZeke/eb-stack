@@ -1,0 +1,26 @@
+[
+  {
+    "number": 1775,
+    "head_sha": "0000000000000000000000000000000000001775",
+    "title": "add nvtop",
+    "easystacks": [
+      {
+        "path": "easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.0-2026.1.yml",
+        "base": "easyconfigs:\n  - zlib-1.3.1-GCCcore-15.2.0.eb\n  - GDRCopy-2.5.2-GCCcore-15.2.0.eb\n",
+        "head": "easyconfigs:\n  - zlib-1.3.1-GCCcore-15.2.0.eb\n  - GDRCopy-2.5.2-GCCcore-15.2.0.eb\n  - nvtop-3.3.2-GCCcore-15.2.0.eb\n"
+      }
+    ]
+  },
+  {
+    "number": 1800,
+    "head_sha": "0000000000000000000000000000000000001800",
+    "title": "add likwid",
+    "easystacks": [
+      {
+        "path": "easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.0-2026.1.yml",
+        "base": "easyconfigs:\n  - zlib-1.3.1-GCCcore-15.2.0.eb\n  - GDRCopy-2.5.2-GCCcore-15.2.0.eb\n",
+        "head": "easyconfigs:\n  - zlib-1.3.1-GCCcore-15.2.0.eb\n  - GDRCopy-2.5.2-GCCcore-15.2.0.eb\n  - likwid-5.5.1-GCCcore-15.2.0.eb\n"
+      }
+    ]
+  }
+]

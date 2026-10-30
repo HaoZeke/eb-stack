@@ -1,0 +1,15 @@
+easyblock = 'ConfigureMake'
+
+name = 'likwid'
+version = '5.5.1'
+
+homepage = 'https://example.org/likwid'
+description = "Fixture for the per-architecture build set."
+
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+
+source_urls = ['https://example.org/']
+sources = [SOURCE_TAR_GZ]
+checksums = ['0000000000000000000000000000000000000000000000000000000000000000']
+
+moduleclass = 'tools'

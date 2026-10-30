@@ -389,5 +389,6 @@ fn config() -> OverlapConfig {
         generated_at: "2026-10-22T00:00:00Z".into(),
         filter_deps: FilterDeps::empty(),
         easyblocks: None,
+        build_scope: eb_stack::pr_overlap::BuildScope::Added,
     }
 }

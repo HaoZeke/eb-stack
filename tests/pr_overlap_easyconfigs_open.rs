@@ -380,6 +380,8 @@ fn open_request(
         out_dir: out.to_path_buf(),
         open_repo: Some(repo.into()),
         base_ref: base_ref.map(str::to_string),
+        bot_build_set: false,
+        arch_installed: Vec::new(),
     }
 }
 

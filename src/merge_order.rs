@@ -37,6 +37,18 @@ pub struct MergeOrder {
     pub steps: Vec<MergeStep>,
     pub cycles: Vec<Vec<u64>>,
     pub conflicts: Vec<EasystackConflict>,
+    /// Per-architecture orders. Empty when the run used one installed list,
+    /// in which case `steps` is that list's order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arches: Vec<ArchMerge>,
+}
+
+/// Merge order for one architecture.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchMerge {
+    pub arch: String,
+    pub steps: Vec<MergeStep>,
+    pub cycles: Vec<Vec<u64>>,
 }
 
 /// One pull request after every earlier step has merged.
@@ -206,6 +218,7 @@ pub fn plan(records: &[PrRecord], index: &OverlapIndex, merged: &[u64]) -> Merge
         steps,
         cycles,
         conflicts: Vec::new(),
+        arches: Vec::new(),
     }
 }
 
@@ -228,6 +241,17 @@ pub const MERGE_IMPACT_SCHEMA_VERSION: u32 = 1;
 pub struct MergeImpactReport {
     pub schema_version: u32,
     pub generated_at: String,
+    pub impacts: Vec<MergeImpact>,
+    /// Per-architecture impacts. Empty when the run used one installed list,
+    /// in which case `impacts` is that list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arches: Vec<ArchImpact>,
+}
+
+/// What merging the named pull requests does on one architecture.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchImpact {
+    pub arch: String,
     pub impacts: Vec<MergeImpact>,
 }
 
@@ -377,6 +401,7 @@ pub fn impact_report(
         schema_version: MERGE_IMPACT_SCHEMA_VERSION,
         generated_at: generated_at.to_string(),
         impacts,
+        arches: Vec::new(),
     })
 }
 
@@ -498,28 +523,22 @@ pub fn render_section(order: &MergeOrder, repo_url: &str) -> String {
             format!("[#{n}]({}/pull/{n})", repo_url.trim_end_matches('/'))
         }
     };
-    let mut out = String::from(
-        "## Merge order\n\n| Position | PR | Builds | Saves | After |\n|---|---|---|---|---|\n",
-    );
-    for step in &order.steps {
-        let saves = step
-            .saves
-            .iter()
-            .map(|saved| {
-                let mods = saved.modules.iter().map(|m| format!("`{m}`")).collect::<Vec<_>>().join(", ");
-                format!("{} ({mods})", link(saved.pr))
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
-        let after = step.after.iter().copied().map(link).collect::<Vec<_>>().join(", ");
-        out.push_str(&format!(
-            "| {} | {} | {} | {saves} | {after} |\n",
-            step.position,
-            link(step.pr),
-            step.builds.len()
-        ));
+    let mut out = String::new();
+    if order.arches.is_empty() {
+        out.push_str(&render_steps("## Merge order", &order.steps, &link));
+    } else {
+        for arch in &order.arches {
+            let heading = format!("## Merge order ({})", arch.arch);
+            out.push_str(&render_steps(&heading, &arch.steps, &link));
+            if !arch.cycles.is_empty() {
+                for cycle in &arch.cycles {
+                    let list = cycle.iter().copied().map(&link).collect::<Vec<_>>().join(", ");
+                    out.push_str(&format!("Cycle: {list}.\n"));
+                }
+                out.push('\n');
+            }
+        }
     }
-    out.push('\n');
     if !order.merged.is_empty() {
         let list = order.merged.iter().copied().map(link).collect::<Vec<_>>().join(", ");
         out.push_str(&format!("Treated as merged: {list}.\n\n"));
@@ -539,6 +558,32 @@ pub fn render_section(order: &MergeOrder, repo_url: &str) -> String {
         }
         out.push('\n');
     }
+    out
+}
+
+fn render_steps(heading: &str, steps: &[MergeStep], link: &dyn Fn(u64) -> String) -> String {
+    let mut out = format!(
+        "{heading}\n\n| Position | PR | Builds | Saves | After |\n|---|---|---|---|---|\n"
+    );
+    for step in steps {
+        let saves = step
+            .saves
+            .iter()
+            .map(|saved| {
+                let mods = saved.modules.iter().map(|m| format!("`{m}`")).collect::<Vec<_>>().join(", ");
+                format!("{} ({mods})", link(saved.pr))
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let after = step.after.iter().copied().map(link).collect::<Vec<_>>().join(", ");
+        out.push_str(&format!(
+            "| {} | {} | {} | {saves} | {after} |\n",
+            step.position,
+            link(step.pr),
+            step.builds.len()
+        ));
+    }
+    out.push('\n');
     out
 }
 
@@ -568,6 +613,9 @@ mod tests {
             closure: Vec::new(),
             new_modules: Vec::new(),
             reverse_dependents: Vec::new(),
+            build_scope: String::new(),
+            carried: Vec::new(),
+            build_sets: Vec::new(),
             entries: asked.iter().map(|file| RecordEntry {
                 easystack: "s.yml".into(),
                 easyconfig: (*file).to_string(),
@@ -588,6 +636,7 @@ mod tests {
                 generated_at: "2026-10-22T00:00:00Z".into(),
                 filter_deps: FilterDeps::empty(),
                 easyblocks: None,
+                build_scope: crate::pr_overlap::BuildScope::Added,
             },
         )
     }
@@ -718,6 +767,7 @@ mod tests {
             generated_at: "2026-10-22T00:00:00Z".into(),
             filter_deps: FilterDeps::empty(),
             easyblocks: None,
+            build_scope: crate::pr_overlap::BuildScope::Added,
         });
         let order = plan(&records, &index, &[1]);
         assert_eq!(order.merged, [1]);

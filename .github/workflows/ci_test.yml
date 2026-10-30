@@ -173,6 +173,7 @@ jobs:
             --test optimisation_criteria \
             --test pr_merge_order \
             --test pr_overlap \
+            --test pr_overlap_arch \
             --test pr_overlap_easyconfigs \
             --test pr_overlap_easyconfigs_open \
             --test pypi_cran_extend \
