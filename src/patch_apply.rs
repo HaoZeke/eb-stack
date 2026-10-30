@@ -244,6 +244,8 @@ fn failure_lines(output: &str) -> String {
                 || line.contains("can't find file")
                 || line.contains("Reversed (or previously applied)")
                 || line.contains("could not run")
+                || line.contains("would create the file")
+                || line.contains("which already exists")
                 || line.starts_with("checking file")
         })
         .collect();
@@ -314,8 +316,13 @@ pub(crate) fn judge(entry: &PatchEntry, patch_path: &Path, root: &Path) -> Sourc
     }
     let (_, verbose) = run_patch(root, patch_path, level, &["--dry-run", "-N", "-f"], opts);
     let reason = failure_lines(&verbose);
-    SourceVerdict::Fails(if reason.is_empty() {
+    let reason = if reason.is_empty() {
         failure_lines(&forward_output)
+    } else {
+        reason
+    };
+    SourceVerdict::Fails(if reason.is_empty() {
+        format!("patch -p{level} exited non-zero without naming a hunk")
     } else {
         reason
     })
