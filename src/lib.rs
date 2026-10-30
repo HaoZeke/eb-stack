@@ -38,6 +38,7 @@ pub mod jenkins;
 pub mod luarocks;
 mod manifest;
 pub mod mcp;
+mod patch_apply;
 #[rustfmt::skip]
 pub mod merge_order;
 pub mod miner;

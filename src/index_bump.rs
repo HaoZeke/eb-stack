@@ -1099,7 +1099,7 @@ fn names_patch(text: &str) -> bool {
 
 /// Length of the comment and blank lines that open a list entry span: the
 /// comment trailing the previous entry lands there when the list is split.
-fn leading_comment_len(entry: &str) -> usize {
+pub(crate) fn leading_comment_len(entry: &str) -> usize {
     let mut offset = 0usize;
     for line in entry.split_inclusive('\n') {
         let trimmed = line.trim();
@@ -1186,7 +1186,7 @@ fn dict_list_span(raw: &str, key: &str) -> Option<(usize, usize)> {
 
 /// Trimmed byte spans of the top-level comma-separated entries of a list
 /// body, split the way [`split_top_level`] splits it.
-fn top_level_spans(body: &str) -> Vec<(usize, usize)> {
+pub(crate) fn top_level_spans(body: &str) -> Vec<(usize, usize)> {
     fn push(body: &str, from: usize, to: usize, out: &mut Vec<(usize, usize)>) {
         let piece = &body[from..to];
         let lead = piece.len() - piece.trim_start().len();

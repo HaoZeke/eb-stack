@@ -1586,6 +1586,17 @@ pub fn complete_package_bump_with_options(
     })
 }
 
+/// Write the bump's planned SBOM again from its plan and lock, after a step
+/// past the solve (a patch the new source drops) changed the plan.
+pub(crate) fn refresh_bump_sbom(bundle: &mut PackageBundle) -> Result<(), PackageWorkflowError> {
+    let Some(lock) = bundle.locks.first() else {
+        return Ok(());
+    };
+    bundle.sbom = package_plan_to_cyclonedx(&plan_with_locked_versions(&bundle.plan, lock))
+        .map_err(|error| PackageWorkflowError::Sbom(error.to_string()))?;
+    Ok(())
+}
+
 /// The plan as the SBOM should describe it once the solve has run: every
 /// dependency the lock selected carries the selected version.
 ///
