@@ -196,6 +196,22 @@ and libpng, and the freetype row resolves for 12 only, because 13 asks
 for freetype itself. A number outside the input exits 2 and names it:
 ~--merged 999: no pull request with that number~.
 
+An easyconfigs pull request has no easystack entries, so rule 1 reads
+its ~depends-on~ rows instead. Each row runs from pull request A to pull
+request B and has one of two causes. In the first, A adds a module. B's
+closure needs that module, and B does not add it. In the second, A edits
+or deletes an easyconfig, and B builds a dependent of that module
+without changing it. B builds a dependent when the module is in B's
+closure, or when B's ~to_build~ lists one of A's reverse dependents. The
+edited easyconfig joins A's ~to_build~ because A edits it. The rebuild
+classes apply to A's reverse dependents. A bundle whose ~exts_list~
+names that package is ~must-rebuild~, and it joins A's ~to_build~ even
+when the bundle is already installed. A runtime dependent is
+~no-rebuild~, and a dependent reached only through builddependencies is
+~review~. Both are listed under reverse dependents with depth and class,
+and neither is scheduled. A toolchain edge is not listed. ~--impact A~
+lists the edited module under ~resolves~ for B.
+
 ~merge-order.toml~ and the last table in ~overlap.md~ also list
 easystack edits that will collide in git. ~same-entry~ means two pull
 requests add the identical line. ~same-insertion~ means they add lines

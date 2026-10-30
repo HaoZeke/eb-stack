@@ -2684,9 +2684,10 @@ section for the PR under review.
   The next section of the report repeats `Mathematica/14.2.1`, because
   the base tree does not already provide it. That is the one module
   counted in `shared_modules`.
-- `depends-on` is `None` in this run. A row there means one PR's closure
-  needs a module that another open PR adds. The PR that adds the module
-  comes first.
+- `depends-on` is `None` in this run. A row there means one PR has to
+  wait for another open PR. Either the other PR adds a module this
+  PR's closure needs, or it edits or deletes a module this PR builds a
+  dependent of. The PR that adds or edits the module comes first.
 
 The summary line below each PR heading reports how many easyconfigs
 changed, how many modules the dependency walk reached, how many are new
@@ -2788,8 +2789,11 @@ build. That row is the `same-file` duplicate: compare
 the files, keep one PR, and close or rebase the other. It is not a
 second module to install. Position 3 builds aria2, and position 4 builds the four nghttp3 modules.
 After is blank because no PR needs a module that only another open PR
-adds. When a `depends-on` row exists, After names the PR that adds the
-module. When two or more PRs could go next, the fewest modules left to
+adds. When a `depends-on` row exists, After names the PR that adds or
+edits the module, and `--impact` on that PR lists the module under
+`resolves`. 27215 edits three nghttp3 files. No other PR here builds
+a dependent of them, so no row starts at 27215. When two or more
+PRs could go next, the fewest modules left to
 build wins, then the lowest PR number. Module names are in
 `merge-order.toml`.
 
@@ -7165,6 +7169,22 @@ installed. `--impact 11` shrinks pull requests 12 and 13 by freetype
 and libpng, and the freetype row resolves for 12 only, because 13 asks
 for freetype itself. A number outside the input exits 2 and names it:
 `--merged 999: no pull request with that number`.
+
+An easyconfigs pull request has no easystack entries, so rule 1 reads
+its `depends-on` rows instead. Each row runs from pull request A to pull
+request B and has one of two causes. In the first, A adds a module. B's
+closure needs that module, and B does not add it. In the second, A edits
+or deletes an easyconfig, and B builds a dependent of that module
+without changing it. B builds a dependent when the module is in B's
+closure, or when B's `to_build` lists one of A's reverse dependents. The
+edited easyconfig joins A's `to_build` because A edits it. The rebuild
+classes apply to A's reverse dependents. A bundle whose `exts_list`
+names that package is `must-rebuild`, and it joins A's `to_build` even
+when the bundle is already installed. A runtime dependent is
+`no-rebuild`, and a dependent reached only through builddependencies is
+`review`. Both are listed under reverse dependents with depth and class,
+and neither is scheduled. A toolchain edge is not listed. `--impact A`
+lists the edited module under `resolves` for B.
 
 `merge-order.toml` and the last table in `overlap.md` also list
 easystack edits that will collide in git. `same-entry` means two pull

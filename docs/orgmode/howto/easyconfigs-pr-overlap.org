@@ -90,9 +90,10 @@ section for the PR under review.
   The next section of the report repeats ~Mathematica/14.2.1~, because
   the base tree does not already provide it. That is the one module
   counted in ~shared_modules~.
-- ~depends-on~ is ~None~ in this run. A row there means one PR's closure
-  needs a module that another open PR adds. The PR that adds the module
-  comes first.
+- ~depends-on~ is ~None~ in this run. A row there means one PR has to
+  wait for another open PR. Either the other PR adds a module this
+  PR's closure needs, or it edits or deletes a module this PR builds a
+  dependent of. The PR that adds or edits the module comes first.
 
 The summary line below each PR heading reports how many easyconfigs
 changed, how many modules the dependency walk reached, how many are new
@@ -194,8 +195,11 @@ build. That row is the ~same-file~ duplicate: compare
 the files, keep one PR, and close or rebase the other. It is not a
 second module to install. Position 3 builds aria2, and position 4 builds the four nghttp3 modules.
 After is blank because no PR needs a module that only another open PR
-adds. When a ~depends-on~ row exists, After names the PR that adds the
-module. When two or more PRs could go next, the fewest modules left to
+adds. When a ~depends-on~ row exists, After names the PR that adds or
+edits the module, and ~--impact~ on that PR lists the module under
+~resolves~. 27215 edits three nghttp3 files. No other PR here builds
+a dependent of them, so no row starts at 27215. When two or more
+PRs could go next, the fewest modules left to
 build wins, then the lowest PR number. Module names are in
 ~merge-order.toml~.
 
