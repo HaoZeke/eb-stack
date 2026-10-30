@@ -253,6 +253,30 @@ found by the component install (easybuild-framework#5133, #1398). A
 fetch the pin, or pass `--path-map`. The how-to is
 `docs/orgmode/howto/patch-presence.org`.
 
+## Generation gate, before the bot
+
+Each EESSI version carries fixed toolchain generations: 2023.06 has
+2022b, 2023a and 2023b, 2025.06 has 2024a, 2025a and 2025b, and 2026.06
+has 2026.1. Check the pull request's easystack changes against them,
+using the JSON `examples/eessi-pr-overlap/fetch-prs.sh` writes:
+
+```sh
+eb-stack stack generation \
+  --pr in/prs/1472.json \
+  --deployed easystacks/software.eessi.io/2025.06
+```
+
+Only the lines the pull request adds are judged. `--easystack FILE`
+judges every line of a file instead. `fetch-prs.sh` keeps one EESSI
+version's easystacks, so the two-version check needs JSON that lists
+every changed easystack. An `outside` line names an entry whose toolchain belongs to another
+version (software-layer #1472 put GCCcore-12.3.0 into 2025.06). A `mixed`
+line means the easystacks are for two EESSI versions; open one pull
+request per version (#1834). A `versions` line means the plan adds a
+second version of a name in one generation. Keep it only when that is
+intended, and record it with `--allow-versions NAME@GENERATION`. The
+how-to is `docs/orgmode/howto/generation-lint.org`.
+
 ## Contribution policy gates
 
 Per <https://eessi.io/docs/adding_software/contribution_policy>, before opening
