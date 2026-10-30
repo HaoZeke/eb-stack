@@ -1457,6 +1457,20 @@ pub fn complete_package_bump_with_options(
         )
         .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     }
+    // A build requirement a package-config layer adds (a new build backend,
+    // say) is in the lock and nowhere in the recipe until it is written.
+    for dependency in lock
+        .dependencies
+        .iter()
+        .filter(|dependency| dependency.build)
+    {
+        result.text = crate::eb_emit::insert_build_dependency(
+            &result.text,
+            &dependency.name,
+            &dependency.version,
+        )
+        .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
+    }
     for (name, value) in &plan.build.easyconfig_parameters {
         // A concatenation keeps its fragments as `+=` lines when they do not
         // fit one, as the easyconfigs tree writes a long command.

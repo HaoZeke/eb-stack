@@ -411,6 +411,42 @@ pub fn insert_runtime_dependency(
     Ok(out)
 }
 
+/// Insert a build dependency tuple if that name is not already declared:
+/// appended to `builddependencies`, or a new list before `dependencies`
+/// (else before `moduleclass`). A one-line list becomes one entry per line.
+pub fn insert_build_dependency(src: &str, name: &str, version: &str) -> Result<String, EmitError> {
+    let already = src.contains(&format!("('{name}'")) || src.contains(&format!("(\"{name}\""));
+    if already {
+        return Ok(src.to_string());
+    }
+    let line = format!("    ('{name}', '{version}'),\n");
+    if let Some((open, close)) = find_list_span(src, "builddependencies")? {
+        let body = &src[open..close];
+        let entries = body.trim().trim_end_matches(',').trim();
+        let rebuilt = if entries.is_empty() {
+            format!("\n{line}")
+        } else if body.contains('\n') {
+            let kept = body.trim_end();
+            let comma = if kept.ends_with(',') { "" } else { "," };
+            format!("{kept}{comma}\n{line}")
+        } else {
+            format!("\n    {entries},\n{line}")
+        };
+        return Ok(format!("{}{}{}", &src[..open], rebuilt, &src[close..]));
+    }
+    let block = format!("builddependencies = [\n{line}]\n");
+    let anchor = regex::Regex::new(r"(?m)^dependencies[ \t]*=")
+        .map_err(|e| EmitError::Rewrite(e.to_string()))?;
+    let at = anchor
+        .find(src)
+        .map(|found| found.start())
+        .or_else(|| src.find("\nmoduleclass").map(|at| at + 1));
+    Ok(match at {
+        Some(at) => format!("{}{block}{}", &src[..at], &src[at..]),
+        None => format!("{src}\n{block}"),
+    })
+}
+
 /// Replace `key = ...` with `key = {rhs}`, or insert the assignment before
 /// `moduleclass` when the source never declared it. `rhs` is the whole
 /// value: every `key += ...` continuation of the old one is removed.
@@ -3078,6 +3114,33 @@ moduleclass = 'tools'
         assert!(
             inserted.find("options =").expect("options")
                 < inserted.find("moduleclass").expect("moduleclass")
+        );
+    }
+
+    #[test]
+    fn a_build_dependency_is_appended_or_gets_its_own_list() {
+        let one_line = "name = 'x'\nbuilddependencies = [('poetry', '2.3.4')]\ndependencies = [\n    ('Python', '3.14.2'),\n]\nmoduleclass = 'tools'\n";
+        let out = insert_build_dependency(one_line, "scikit-build-core", "0.12.2").expect("insert");
+        assert!(
+            out.contains(
+                "builddependencies = [\n    ('poetry', '2.3.4'),\n    ('scikit-build-core', '0.12.2'),\n]\n"
+            ),
+            "{out}"
+        );
+        assert_eq!(
+            insert_build_dependency(&out, "poetry", "9").expect("again"),
+            out,
+            "a declared name is left alone"
+        );
+        let multi = "builddependencies = [\n    ('binutils', '2.45')\n]\n";
+        assert_eq!(
+            insert_build_dependency(multi, "CMake", "4.2.1").expect("insert"),
+            "builddependencies = [\n    ('binutils', '2.45'),\n    ('CMake', '4.2.1'),\n]\n"
+        );
+        let none = "name = 'x'\ndependencies = [('Python', '3.14.2')]\nmoduleclass = 'tools'\n";
+        assert_eq!(
+            insert_build_dependency(none, "CMake", "4.2.1").expect("insert"),
+            "name = 'x'\nbuilddependencies = [\n    ('CMake', '4.2.1'),\n]\ndependencies = [('Python', '3.14.2')]\nmoduleclass = 'tools'\n"
         );
     }
 
