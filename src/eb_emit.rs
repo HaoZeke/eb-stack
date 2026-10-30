@@ -283,6 +283,9 @@ pub fn emit_next_generation(source: &str, params: &EmitParams) -> Result<EmitRes
                 ));
             }
         }
+        if let Some(old_v) = source_version.as_deref() {
+            text = pin_patch_version_templates(&text, old_v)?;
+        }
         if list_is_nonempty(&text, "patches") {
             warnings.push(format!(
                 "patches were not modified for version bump to {app_version}: \
@@ -893,6 +896,52 @@ fn find_list_span(src: &str, key: &str) -> Result<Option<(usize, usize)>, EmitEr
         return Err(EmitError::Rewrite(format!("unclosed {key} list")));
     }
     Ok(Some((list_open_end, i)))
+}
+
+/// Spell `%(version)s` in patch file names as the version the patch files
+/// were written for.
+///
+/// A patch is a file in the tree named for the release it was made against:
+/// `%(name)s-%(version)s_fix-ssl.patch` resolves to
+/// `libwebsockets-4.5.8_fix-ssl.patch`. After a version bump the template
+/// resolves to a file nobody wrote, so EasyBuild cannot find the patch the
+/// recipe still means. The `patches` list and every patch-named checksum key
+/// keep the old version as a literal; whether the patch still applies is a
+/// separate decision.
+pub(crate) fn pin_patch_version_templates(
+    src: &str,
+    old_version: &str,
+) -> Result<String, EmitError> {
+    let mut text = src.to_string();
+    for (key, patch_names_only) in [("patches", false), ("checksums", true)] {
+        if let Some((start, end)) = find_list_span(&text, key)? {
+            let body = &text[start..end];
+            if body.contains("%(version)s") {
+                let pinned = pin_in_patch_literals(body, old_version, patch_names_only);
+                text = format!("{}{}{}", &text[..start], pinned, &text[end..]);
+            }
+        }
+    }
+    Ok(text)
+}
+
+/// Replace `%(version)s` with `old_version` inside quoted literals. With
+/// `patch_names_only`, only literals naming a `.patch` or `.diff` change.
+fn pin_in_patch_literals(body: &str, old_version: &str, patch_names_only: bool) -> String {
+    let Ok(literal) = regex::Regex::new(r#"'[^'\n]*'|"[^"\n]*""#) else {
+        return body.to_string();
+    };
+    literal
+        .replace_all(body, |caps: &regex::Captures| {
+            let quoted = &caps[0];
+            let names_patch = quoted.contains(".patch") || quoted.contains(".diff");
+            if patch_names_only && !names_patch {
+                quoted.to_string()
+            } else {
+                quoted.replace("%(version)s", old_version)
+            }
+        })
+        .into_owned()
 }
 
 /// Whether `key = [ ... ]` exists in `src` and has at least one non-whitespace
@@ -3045,5 +3094,35 @@ toolchain = {'name': 'GCC', 'version': '14.3.0'}\n";
         };
         let r = emit_next_generation(src, &params).expect("emit");
         assert_eq!(r.filename, "Libint-2.11.1-GCC-15.2.0-lmax-6-cp2k.eb");
+    }
+}
+
+#[cfg(test)]
+mod patch_template_tests {
+    use super::pin_patch_version_templates;
+
+    #[test]
+    fn a_version_templated_patch_name_keeps_the_release_it_was_written_for() {
+        let src = "version = '5.0.0'
+sources = ['v%(version)s.tar.gz']
+patches = [
+    '%(name)s-%(version)s_fix-ssl.patch',
+    ('%(name)s-%(version)s_other.patch', 1),
+]
+checksums = [
+    {'v%(version)s.tar.gz': 'aa'},
+    {'%(name)s-%(version)s_fix-ssl.patch': 'bb'},
+]
+";
+        let out = pin_patch_version_templates(src, "4.5.8").expect("pin");
+        assert!(out.contains("'%(name)s-4.5.8_fix-ssl.patch',"), "{out}");
+        assert!(out.contains("('%(name)s-4.5.8_other.patch', 1)"), "{out}");
+        assert!(
+            out.contains("{'%(name)s-4.5.8_fix-ssl.patch': 'bb'}"),
+            "{out}"
+        );
+        // The source archive follows the bump.
+        assert!(out.contains("{'v%(version)s.tar.gz': 'aa'}"), "{out}");
+        assert!(out.contains("sources = ['v%(version)s.tar.gz']"), "{out}");
     }
 }
