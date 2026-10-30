@@ -98,4 +98,3 @@ Already in the changed easystack and not installed: `GDRCopy/2.5.2-GCCcore-15.2.
 | Easystack | Pull requests | Kind |
 |---|---|---|
 | `easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.0-2026.1.yml` | [#1775](https://github.com/EESSI/software-layer/pull/1775), [#1800](https://github.com/EESSI/software-layer/pull/1800) | same-insertion |
-

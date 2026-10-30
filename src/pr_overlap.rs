@@ -1993,7 +1993,12 @@ fn render_arch_markdown(records: &[PrRecord], index: &OverlapIndex, repo_url: &s
 }
 
 /// Drop the blank line a section separator leaves at the end of the file.
-fn single_trailing_newline(mut text: String) -> String {
+///
+/// The body writers call this before the merge-order section is appended.
+/// The finished overlap report has to be trimmed again: a per-arch report
+/// appends that section last, and its final table separator would otherwise
+/// leave a blank line.
+pub(crate) fn single_trailing_newline(mut text: String) -> String {
     while text.ends_with("\n\n") {
         text.pop();
     }

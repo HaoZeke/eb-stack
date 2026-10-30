@@ -441,7 +441,7 @@ fn run_pr_overlap_inner(
     args: &PrOverlapRequest,
     http: &dyn pr_overlap::HttpGet,
 ) -> Result<PrOverlapRun> {
-    use pr_overlap::{record_to_toml, render_markdown, to_toml, PrInput};
+    use pr_overlap::{record_to_toml, render_markdown, single_trailing_newline, to_toml, PrInput};
     if let Some(repo) = &args.open_repo {
         pr_overlap::validate_open_easyconfig_query(repo, args.base_ref.as_deref())
             .map_err(usage)?;
@@ -661,6 +661,7 @@ fn run_pr_overlap_inner(
     if let Some(order) = &order {
         markdown.push_str(&merge_order::render_section(order, &repo_url));
     }
+    let markdown = single_trailing_newline(markdown);
     std::fs::write(args.out_dir.join("overlap.md"), markdown)?;
     if let Some(order) = &order {
         std::fs::write(args.out_dir.join("merge-order.toml"), to_toml(order)?)?;
