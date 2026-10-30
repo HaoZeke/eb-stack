@@ -442,6 +442,19 @@ fn tool_catalog() -> Vec<Value> {
             ],
         ),
         tool_with_optional(
+            "eb_stack_generation",
+            "Refuse easystack entries outside their EESSI version's toolchain generations, easystacks for two EESSI versions in one pull request, and a second version of a software in one generation, as `stack generation` does. Pass easystack files or pr JSON in the pr-overlap shape; with pr only the added lines are checked. deployed easystacks count as already in the stack. allow_versions takes NAME or NAME@GENERATION. Any finding is a tool error.",
+            &[],
+            &[
+                ("easystack", "array"),
+                ("pr", "array"),
+                ("eessi_version", "string"),
+                ("deployed", "array"),
+                ("allow_versions", "array"),
+                ("generations", "string"),
+            ],
+        ),
+        tool_with_optional(
             "eb_stack_sections",
             "Regroup a Jenkins build list under the section headers of a previous list, as `stack sections` does.",
             &[("list", "string"), ("from", "string"), ("out", "string")],
@@ -718,6 +731,7 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_stack_batch" => stack_batch_tool(arguments),
         "eb_stack_arch" => stack_arch_tool(arguments),
         "eb_stack_files" => stack_files_tool(arguments),
+        "eb_stack_generation" => stack_generation_tool(arguments),
         "eb_target_list" => target_list(arguments),
         "eb_target_doctor" => target_doctor(arguments),
         "eb_campaign_run" => campaign_run(arguments),
@@ -3061,6 +3075,33 @@ fn stack_files_tool(arguments: &Value) -> Result<Value, String> {
         "unchecked": report.unchecked,
         "easyconfigs": report.checked,
         "files": report.files,
+    }))
+}
+
+fn stack_generation_tool(arguments: &Value) -> Result<Value, String> {
+    use crate::generation_lint::{run_generation_lint, FindingKind, GenerationLintRequest};
+    let report = run_generation_lint(&GenerationLintRequest {
+        easystacks: optional_paths(arguments, "easystack")?,
+        prs: optional_paths(arguments, "pr")?,
+        eessi_version: optional_string(arguments, "eessi_version"),
+        deployed: optional_paths(arguments, "deployed")?,
+        allow_versions: string_array(arguments, "allow_versions")?,
+        generations: optional_path(arguments, "generations"),
+    })
+    .map_err(workflow_error)?;
+    if !report.findings.is_empty() {
+        return Err(report
+            .findings
+            .iter()
+            .map(|f| f.message.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+    Ok(json!({
+        "text": report.stdout,
+        "outside": report.of(FindingKind::Outside),
+        "mixed": report.of(FindingKind::Mixed),
+        "versions": report.of(FindingKind::Versions),
     }))
 }
 

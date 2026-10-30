@@ -1,0 +1,12 @@
+{
+  "number": 1472,
+  "head_sha": "7e229c2f5cd99e3da905920018fc4579998b91a4",
+  "title": "{2023.06}[foss/2023a] pv 1.7.24",
+  "easystacks": [
+    {
+      "path": "easystacks/software.eessi.io/2023.06/eessi-2023.06-eb-5.4.0-2023a.yml",
+      "base": "easyconfigs:\n  - torchvision-0.16.0-foss-2023a.eb\n",
+      "head": "easyconfigs:\n  - torchvision-0.16.0-foss-2023a.eb\n  - pv-1.7.24-GCCcore-12.3.0.eb\n"
+    }
+  ]
+}

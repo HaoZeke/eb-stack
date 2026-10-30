@@ -15,7 +15,7 @@ are deterministic bundle artifacts.
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails ~recipe lint~ or ~recipe check~ is status 1: the files were read and the check failed. ~stack from-commit~ is status 1 when any pin is ~released~, and status 0 when every pin is ~newer~ or ~unknown~ or the files name no pin. A file name with no ~eb-X.Y.Z~, and no ~--easybuild-version~, is status 2. ~stack arch~ is status 1 when an entry is unsupported or flagged, or when ~--probe-sources~ reports ~unreachable~ or ~arch-missing~ sources. ~stack files~ is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are ~no_url~ or ~unchecked~. ~stack generation~ is status 1 on any finding, and status 2 when an easystack path names no EESSI version and ~--eessi-version~ is absent. ~stack batch~ is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
 
 ~--help~ for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is ~--out-dir~. A single output file is ~--out~ (~--lock-out~ for the lock ~stack solve~ writes). ~--installed~, ~--easyconfigs~, ~--filter-deps~, and ~--generated-at~ use those names on every command that takes them.
 
@@ -40,6 +40,7 @@ Package commands take the toolchain as ~--toolchain name/version~, the spelling 
 | ~stack from-commit~ | Report ~from-commit~ pins already contained in an EasyBuild release |
 | ~stack arch~ | Refuse a plan an architecture cannot build, and flag entries never installed there |
 | ~stack files~ | Find the patch and source files an easystack's easyconfigs need that no tree has |
+| ~stack generation~ | Refuse easystack entries outside their EESSI version's toolchain generations |
 | ~repro summary~ | Print a reproduction scoreboard from collected case scores |
 | ~pr-overlap~ | Close open pull-request easystack additions against an installed stack and report shared builds |
 | ~rebuild-set~ | Classify the installed reverse dependents of easyconfigs patched in place |
@@ -449,6 +450,13 @@ eb-stack stack files \
   [--sourcepath DIR]... \
   [--path-map FROM=TO]...
 
+eb-stack stack generation \
+  (--easystack EASYSTACK.yml | --pr PR.json)... \
+  [--eessi-version 2025.06] \
+  [--deployed DIR]... \
+  [--allow-versions NAME@GENERATION]... \
+  [--generations TABLE.toml]
+
 eb-stack stack sections \
   tests/jenkins_sections/next.list \
   --from tests/jenkins_sections/previous.list \
@@ -667,6 +675,41 @@ under the component's name (easybuild-framework#5133).
 
 [[file:../howto/patch-presence.org][Find a missing patch before the bot does]]
 shows the component case and the reprod case.
+
+** ~stack generation~
+
+What it does: check each easystack entry's toolchain against the
+generations of the EESSI version the easystack is for. It also refuses
+easystacks for two EESSI versions in one pull request, and a second
+version of a software in one generation that nobody allowed.
+
+Why you'd use it: EESSI 2025.06 carries 2024a, 2025a and 2025b. A
+2023a recipe in a 2025.06 easystack fails on every architecture, and
+the bot builds one EESSI version per pull request.
+
+#+begin_src bash
+eb-stack stack generation \
+  --pr tests/generation_lint_fixtures/prs/1472-first-push.json
+#+end_src
+
+#+begin_example
+#1472: pv-1.7.24-GCCcore-12.3.0.eb in eessi-2025.06-eb-5.2.1-2025b.yml is outside EESSI 2025.06: GCCcore-12.3.0 is generation 2023a, which EESSI 2023.06 carries; 2025.06 carries 2024a, 2025a, 2025b
+outside=1 mixed=0 versions=0
+#+end_example
+
+The line names the entry, the easystack, the generation the toolchain
+is in, and the EESSI version that carries it. The command exits 1.
+~--easystack~ takes easystack files, and every entry in them is the
+plan. ~--pr~ takes pull-request JSON in the ~pr-overlap --pr~ shape.
+Only the lines a pull request adds are checked there, and the rest of
+each changed file counts as already in the stack. The EESSI version is
+the directory under ~software.eessi.io/~, or ~eessi-<V>-eb-~ in the
+file name. ~--eessi-version~ is used for a path that names neither,
+and a path that names another version is a ~mixed~ finding.
+~--deployed~ takes easystacks already in the stack, or a directory of
+them, for the second-version check. ~--allow-versions~ takes ~NAME~ or
+~NAME@GENERATION~. ~--generations~ replaces
+~data/eessi-generations.toml~.
 
 ** ~stack sections~
 
@@ -1241,7 +1284,11 @@ same report as ~stack arch~, with ~parse_failed~ and ~source_findings~,
 and a hit is a tool error. ~eb_stack_files~ requires ~easystack~ and takes
 ~easyconfigs~, ~commit_tree~, ~easyconfigs_repo~, ~sourcepath~, and
 ~path_map~. It returns the same report as ~stack files~, and a missing
-file is a tool error. ~eb_stack_batch~ takes ~arch~ and ~unsupported~ and
+file is a tool error. ~eb_stack_generation~ takes ~easystack~, ~pr~,
+~eessi_version~, ~deployed~, ~allow_versions~, and ~generations~, and
+needs one ~easystack~ or ~pr~. It returns the same report as
+~stack generation~, and a finding is a tool error.
+~eb_stack_batch~ takes ~arch~ and ~unsupported~ and
 refuses the plan the same way. ~eb_repro_summary~
 requires ~scores~ and takes ~ratchet~ and ~json~. Each of these tools
 calls the same runner as the command of that name, and the text it

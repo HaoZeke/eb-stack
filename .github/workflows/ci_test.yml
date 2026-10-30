@@ -166,6 +166,7 @@ jobs:
             --test extension_provides \
             --test fetch_prs_script \
             --test from_commit \
+            --test generation_lint \
             --test hierarchy_universe \
             --test jenkins_build_list \
             --test lint_fixtures \

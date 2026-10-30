@@ -372,6 +372,19 @@ All notable changes to this project are documented here.
   and #1048), and a component patch beside a pinned bundle is reported
   under easybuild-framework#5133 (#1398). A source with no URL is a
   `no_url` warning. `eb_stack_files` runs the same check.
+- `eb-stack stack generation` refuses an easystack entry whose toolchain
+  is outside the generations of its EESSI version, naming the generation
+  and the version that carries it. `data/eessi-generations.toml` is the
+  table: 2023.06 carries 2022b, 2023a and 2023b, 2025.06 carries 2024a,
+  2025a and 2025b, 2026.06 carries 2026.1. It also refuses easystacks for
+  two EESSI versions in one pull request, and a plan that adds a second
+  version of a software in one generation unless `--allow-versions`
+  names it. `--pr` reads `pr-overlap --pr` JSON and checks only the
+  added lines. The fixtures are software-layer #1472 (pv on
+  GCCcore-12.3.0 in 2025.06), #1834 (fastp for 2025.06 and 2026.06) and
+  #1497 (a second GROMACS on foss-2025b). The foss-2022b and foss-2023a
+  hierarchies are now built in. `eb_stack_generation` runs the same
+  check.
 - `eb-stack stack arch --easyconfigs` parses each easyconfig once per
   architecture, so a file the plan names that fails to parse on one
   architecture is a `parse_failed` line and exits 1 (software-layer

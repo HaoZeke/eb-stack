@@ -1,0 +1,43 @@
+# Toolchain generations each EESSI version carries.
+#
+# An easystack entry on a toolchain outside its EESSI version's
+# generations cannot go into that version. A generation's toolchains are
+# the foss hierarchy eb-stack ships (GCCcore, GCC, gfbf, gompi, foss),
+# any toolchain whose version is the generation (lfoss-2025b,
+# lompi-2026.1), and the `toolchains` listed under `[[generation]]`.
+#
+# software-layer #1472: "2023.06 supports EasyBuild toolchains foss
+# 2022b, 2023a, and 2023b, while EESSI 2025.06 only supports foss 2024a,
+# 2025a, and 2025b". The 2026.06 easystacks are all eessi-2026.06-eb-*-2026.1.
+
+[[version]]
+eessi = "2023.06"
+generations = ["2022b", "2023a", "2023b"]
+sources = [
+  "https://github.com/EESSI/software-layer/pull/1472#issuecomment-4251688042",
+]
+
+[[version]]
+eessi = "2025.06"
+generations = ["2024a", "2025a", "2025b"]
+sources = [
+  "https://github.com/EESSI/software-layer/pull/1472#issuecomment-4251688042",
+]
+
+[[version]]
+eessi = "2026.06"
+generations = ["2026.1"]
+sources = [
+  "https://github.com/EESSI/software-layer/tree/main/easystacks/software.eessi.io/2026.06",
+]
+
+# llvm-compilers is the compiler under lompi and lfoss. Its version is an
+# LLVM release, not a generation, so it is listed by hand.
+
+[[generation]]
+name = "2025b"
+toolchains = ["llvm-compilers-20.1.8"]
+
+[[generation]]
+name = "2026.1"
+toolchains = ["llvm-compilers-21.1.8"]

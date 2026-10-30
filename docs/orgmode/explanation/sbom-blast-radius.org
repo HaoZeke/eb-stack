@@ -998,6 +998,7 @@ eb_stack_gap
 eb_stack_batch
 eb_stack_arch
 eb_stack_files
+eb_stack_generation
 eb_stack_sections
 eb_stack_from_commit
 eb_component_reach

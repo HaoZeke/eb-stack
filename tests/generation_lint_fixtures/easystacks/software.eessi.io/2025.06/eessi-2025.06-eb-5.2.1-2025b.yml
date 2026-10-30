@@ -1,0 +1,5 @@
+easyconfigs:
+  - BCFtools-1.22-GCC-14.3.0.eb
+  - GDRCopy-2.5-GCCcore-14.3.0.eb
+  - JUBE-2.7.1-GCCcore-14.3.0.eb
+  - pv-1.7.24-GCCcore-12.3.0.eb

@@ -14,6 +14,7 @@
 use crate::domain::StackLock;
 use serde_yaml::{Mapping, Value};
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 /// Per-easyconfig `eb` options, keyed by the easyconfig filename they apply to.
 ///
@@ -214,8 +215,54 @@ pub struct EessiLayout {
     pub members: Vec<String>,
 }
 
-/// Toolchain names whose presence in a filename means it is not a system recipe.
-const TOOLCHAIN_NAME: &str = r"-(GCCcore|GCC|foss|gompi|gfbf|intel|iimpi|iimkl|intel-compilers|lfoss|lompi|lfbf|llvm-compilers|nvompi|nvofbf|NVHPC|nvidia-compilers|iccifort|fosscuda|gcccuda)-[0-9]";
+/// Toolchain names whose presence in a filename means it is not a system
+/// recipe, followed by the toolchain version up to the next dash.
+static TOOLCHAIN_IN_FILENAME: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"-(GCCcore|GCC|foss|gompi|gfbf|intel|iimpi|iimkl|intel-compilers|lfoss|lompi|lfbf|llvm-compilers|nvompi|nvofbf|NVHPC|nvidia-compilers|iccifort|fosscuda|gcccuda)-([0-9][^-]*)")
+        .expect("static pattern")
+});
+
+/// An easyconfig filename split at its toolchain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilenameToolchain {
+    /// EasyBuild name, `CMake`.
+    pub name: String,
+    /// Version, the text between the name and the toolchain: `4.0.3`.
+    pub version: String,
+    /// Toolchain label, `GCCcore-14.3.0`.
+    pub toolchain: String,
+}
+
+/// The toolchain an easyconfig filename names, with the name and version in
+/// front of it. `None` for a system recipe, whose filename names no toolchain.
+///
+/// EasyBuild writes `<name>-<version>-<toolchain>-<toolchainversion><suffix>.eb`.
+/// The name ends before the first dash-separated part that opens with a digit.
+/// A version that does not open with one (`buildenv-default-foss-2025b.eb`,
+/// `OpenFOAM-v2506-foss-2025a.eb`) is the part right before the toolchain.
+pub fn filename_toolchain(file: &str) -> Option<FilenameToolchain> {
+    let base = file.rsplit(['/', '\\']).next().unwrap_or(file);
+    let stem = base.strip_suffix(".eb").unwrap_or(base);
+    let found = TOOLCHAIN_IN_FILENAME.captures(stem)?;
+    let whole = found.get(0)?;
+    let toolchain = format!("{}-{}", &found[1], &found[2]);
+    let parts: Vec<&str> = stem[..whole.start()].split('-').collect();
+    let version_at = parts
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find(|(_, part)| part.starts_with(|c: char| c.is_ascii_digit()))
+        .map(|(index, _)| index)
+        .unwrap_or(parts.len().saturating_sub(1));
+    if version_at == 0 {
+        return None;
+    }
+    Some(FilenameToolchain {
+        name: parts[..version_at].join("-"),
+        version: parts[version_at..].join("-"),
+        toolchain,
+    })
+}
 
 impl EessiLayout {
     /// The easystack path, relative to the software-layer root, for one easyconfig.
@@ -236,10 +283,7 @@ impl EessiLayout {
             .any(|m| file.contains(&format!("-{m}.eb")) || file.contains(&format!("-{m}-")));
         let tail = if in_generation {
             self.generation.clone()
-        } else if regex::Regex::new(TOOLCHAIN_NAME)
-            .expect("static pattern")
-            .is_match(file)
-        {
+        } else if TOOLCHAIN_IN_FILENAME.is_match(file) {
             return Err(format!(
                 "{file} uses a toolchain outside generation {} ({})",
                 self.generation,
@@ -329,6 +373,39 @@ mod tests {
         );
         let err = l.path_for("Bowtie2-2.5.4-GCC-14.2.0.eb").unwrap_err();
         assert!(err.contains("outside generation 2026.1"), "{err}");
+    }
+
+    #[test]
+    fn filename_toolchain_splits_name_version_and_toolchain() {
+        let split = |file: &str| filename_toolchain(file).map(|t| (t.name, t.version, t.toolchain));
+        let owned = |a: &str, b: &str, c: &str| Some((a.into(), b.into(), c.into()));
+        assert_eq!(
+            split("pv-1.7.24-GCCcore-12.3.0.eb"),
+            owned("pv", "1.7.24", "GCCcore-12.3.0")
+        );
+        assert_eq!(
+            split("GROMACS-2026.2-foss-2025b-CUDA-12.9.1.eb"),
+            owned("GROMACS", "2026.2", "foss-2025b")
+        );
+        assert_eq!(
+            split("BWA-0.7.17-20220923-GCCcore-12.3.0.eb"),
+            owned("BWA", "0.7.17-20220923", "GCCcore-12.3.0")
+        );
+        assert_eq!(
+            split("OpenBLAS-0.3.32-llvm-compilers-21.1.8.eb"),
+            owned("OpenBLAS", "0.3.32", "llvm-compilers-21.1.8")
+        );
+        assert_eq!(
+            split("buildenv-default-foss-2025b.eb"),
+            owned("buildenv", "default", "foss-2025b")
+        );
+        assert_eq!(
+            split("OpenFOAM-v2506-foss-2025a.eb"),
+            owned("OpenFOAM", "v2506", "foss-2025a")
+        );
+        assert_eq!(split("Julia-1.13.2.eb"), None);
+        assert_eq!(split("Maven-3.9.11-Java-21.eb"), None);
+        assert_eq!(split("foss-2025b.eb"), None);
     }
 
     #[test]

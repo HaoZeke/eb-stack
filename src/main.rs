@@ -1172,6 +1172,42 @@ enum StackCommand {
         #[arg(long = "path-map")]
         path_map: Vec<String>,
     },
+    /// Refuse easystack entries outside their EESSI version's toolchain
+    /// generations, easystacks for two EESSI versions in one pull request,
+    /// and a second version of a software in one generation.
+    ///
+    /// `data/eessi-generations.toml` maps each EESSI version to its
+    /// generations: 2023.06 to 2022b, 2023a and 2023b, 2025.06 to 2024a,
+    /// 2025a and 2025b. The EESSI version comes from the easystack path. With
+    /// `--pr`, only the lines each pull request adds are checked, and the rest
+    /// of the file counts as already in the stack. Exits 1 on any finding.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack generation --easystack easystacks/software.eessi.io/2025.06/eessi-2025.06-eb-5.4.1-2025b.yml\n  eb-stack stack generation --pr pr-1472.json\n  eb-stack stack generation --pr pr.json --deployed easystacks/software.eessi.io/2025.06 --allow-versions CMake@2025b"
+    )]
+    Generation {
+        /// Easystack whose entries are the plan. Repeatable.
+        #[arg(long)]
+        easystack: Vec<PathBuf>,
+        /// Pull-request JSON, the `pr-overlap --pr` shape. Each pull request
+        /// is checked on its own. Repeatable.
+        #[arg(long)]
+        pr: Vec<PathBuf>,
+        /// EESSI version, `2025.06`, for an easystack path that names none.
+        /// A path that names another version is a finding.
+        #[arg(long)]
+        eessi_version: Option<String>,
+        /// Easystacks already deployed, or a directory of them, for the
+        /// second-version check. Repeatable.
+        #[arg(long)]
+        deployed: Vec<PathBuf>,
+        /// Name allowed more than one version, as `NAME` or
+        /// `NAME@GENERATION`. Repeatable.
+        #[arg(long = "allow-versions")]
+        allow_versions: Vec<String>,
+        /// Replace the bundled generation table.
+        #[arg(long)]
+        generations: Option<PathBuf>,
+    },
     /// Write the lock as an EasyBuild easystack, the format `eb --easystack`
     /// consumes and EESSI's software layer is built from.
     #[command(
@@ -2617,6 +2653,38 @@ fn run_stack(command: StackCommand) -> Result<()> {
                         .missing
                         .iter()
                         .map(|missing| missing.message.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+            }
+            Ok(())
+        }
+        StackCommand::Generation {
+            easystack,
+            pr,
+            eessi_version,
+            deployed,
+            allow_versions,
+            generations,
+        } => {
+            let report = eb_stack::generation_lint::run_generation_lint(
+                &eb_stack::generation_lint::GenerationLintRequest {
+                    easystacks: easystack,
+                    prs: pr,
+                    eessi_version,
+                    deployed,
+                    allow_versions,
+                    generations,
+                },
+            )?;
+            print!("{}", report.stdout);
+            if !report.findings.is_empty() {
+                bail!(
+                    "{}",
+                    report
+                        .findings
+                        .iter()
+                        .map(|f| f.message.as_str())
                         .collect::<Vec<_>>()
                         .join("\n")
                 );

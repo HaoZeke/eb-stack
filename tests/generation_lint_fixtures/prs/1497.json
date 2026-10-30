@@ -1,0 +1,12 @@
+{
+  "number": 1497,
+  "head_sha": "a01346d44996e8d9a809ab94874069bd990e16d1",
+  "title": "{2025.06}[2025b] GROMACS 2026.2",
+  "easystacks": [
+    {
+      "path": "easystacks/software.eessi.io/2025.06/eessi-2025.06-eb-5.3.0-2025b.yml",
+      "base": "easyconfigs:\n  - networkx-3.5-gfbf-2025b.eb\n  - GROMACS-2025.4-foss-2025b.eb:\n      options:\n          # see https://github.com/easybuilders/easybuild-easyconfigs/pull/24956\n          from-commit: a3bb54895c3de5600fdfd2893a818378daebc7ee\n  - QuantumESPRESSO-7.5-foss-2025b.eb\n  - SentencePiece-0.2.1-GCC-14.3.0.eb\n",
+      "head": "easyconfigs:\n  - networkx-3.5-gfbf-2025b.eb\n  - GROMACS-2025.4-foss-2025b.eb:\n      options:\n          # see https://github.com/easybuilders/easybuild-easyconfigs/pull/24956\n          from-commit: a3bb54895c3de5600fdfd2893a818378daebc7ee\n  - QuantumESPRESSO-7.5-foss-2025b.eb\n  - SentencePiece-0.2.1-GCC-14.3.0.eb\n  - GROMACS-2026.2-foss-2025b.eb:\n      options:\n        # see https://github.com/easybuilders/easybuild-easyconfigs/pull/25879\n        from-commit: 9320dfe8ae6f45d37edd0ef52be37e7d3668d298\n        # see https://github.com/easybuilders/easybuild-easyblocks/pull/3531\n        include-easyblocks-from-commit: cfb6f93bfae8bef5d8996ae6696defcafbf0d4ad\n"
+    }
+  ]
+}

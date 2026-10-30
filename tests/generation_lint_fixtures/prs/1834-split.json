@@ -1,0 +1,12 @@
+{
+  "number": 1834,
+  "head_sha": "df748c0214d2ad95f199afccb156060ea34fb25d",
+  "title": "{2025.06}[GCC/14.3.0] fastp 1.1.0",
+  "easystacks": [
+    {
+      "path": "easystacks/software.eessi.io/2025.06/eessi-2025.06-eb-5.4.1-2025b.yml",
+      "base": null,
+      "head": "easyconfigs:\n  - fastp-1.1.0-GCC-14.3.0.eb\n"
+    }
+  ]
+}

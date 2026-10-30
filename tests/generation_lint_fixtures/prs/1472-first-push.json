@@ -1,0 +1,12 @@
+{
+  "number": 1472,
+  "head_sha": "89f075f07c5a59164dedcf0cacf56f466aa77cc1",
+  "title": "{2025.06}[GCC/12.3.0] pv 1.7.24",
+  "easystacks": [
+    {
+      "path": "easystacks/software.eessi.io/2025.06/eessi-2025.06-eb-5.2.1-2025b.yml",
+      "base": "easyconfigs:\n  - BCFtools-1.22-GCC-14.3.0.eb\n  - GDRCopy-2.5-GCCcore-14.3.0.eb\n  - JUBE-2.7.1-GCCcore-14.3.0.eb\n",
+      "head": "easyconfigs:\n  - BCFtools-1.22-GCC-14.3.0.eb\n  - GDRCopy-2.5-GCCcore-14.3.0.eb\n  - JUBE-2.7.1-GCCcore-14.3.0.eb\n  - pv-1.7.24-GCCcore-12.3.0.eb\n"
+    }
+  ]
+}
