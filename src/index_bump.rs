@@ -191,7 +191,7 @@ fn cargo_archive(
     }
 }
 
-fn files_in_archive(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
+pub(crate) fn files_in_archive(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
     let owned;
     let tar_bytes: &[u8] = if bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b {
         let mut decoder = flate2::read::GzDecoder::new(bytes);

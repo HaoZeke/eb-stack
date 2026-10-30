@@ -439,6 +439,22 @@ pub fn plan_package_bump_fetching_with(
     let recipe = resolve_easyconfig_str(&emitted.text)
         .map_err(|error| PackageWorkflowError::EasyBuild(error.to_string()))?;
     let mut fetched = fetch_sources(&recipe, client);
+    // What the new release's own pyproject.toml says it needs to build.
+    let declared = crate::build_backend::installs_one_python_project(&recipe)
+        .then(|| {
+            fetched
+                .iter()
+                .filter_map(|fetch| fetch.bytes.as_deref())
+                .find_map(crate::build_backend::declared_build)
+        })
+        .flatten();
+    let mut build_residuals = Vec::new();
+    if let Some(declared) = &declared {
+        let (layer, mapped) =
+            crate::build_backend::build_requirement_layer(&lenient, &recipe, declared)?;
+        lenient.package_layers.extend(layer);
+        build_residuals = crate::build_backend::unmapped_residuals(&mapped);
+    }
     let mut bundle = match fetched.first().and_then(|fetch| fetch.sha256.clone()) {
         Some(digest) => {
             let mut again = lenient.clone();
@@ -454,9 +470,13 @@ pub fn plan_package_bump_fetching_with(
             bundle
         }
     };
+    bundle.plan.residuals.extend(build_residuals);
     fill_empty_named_checksums(&mut bundle, client, &mut fetched);
     if decisions.latest_secondary {
         bump_secondary_sources(&mut bundle, client, &decisions.overrides, &mut fetched);
+    }
+    if let Some(declared) = &declared {
+        crate::build_backend::adopt_cargo_build(&mut bundle, declared)?;
     }
     apply_index_rewrites(&mut bundle, request, &fetched, client);
     prune_settled_checksum_warnings(&mut bundle);
