@@ -119,6 +119,7 @@ jobs:
             --test profile_emission \
             --test package_workflow \
             --test bump_workflow \
+            --test bump_source_patches \
             --test stack_policy \
             --test canonical_cli \
             --test source_artifact_class \
