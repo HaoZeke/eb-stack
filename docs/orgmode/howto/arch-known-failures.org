@@ -1,0 +1,111 @@
+#+TITLE: Warn about known per-architecture failures
+#+OPTIONS: toc:t num:nil author:nil
+
+What it does: ~stack known-failures~ reads an easystack as a plan, closes
+its dependencies over ~--easyconfigs~, and warns about every entry a bot
+run has already failed on one of the architectures you name. Each warning
+names the easyconfig, the targets, the symptom, and the remedy the
+maintainers chose, as easyconfig text.
+
+Why you'd use it: these entries build. They fail on one target, in a
+test, a test timeout, a fetch, or a sanity check, and the usual first
+answer in the pull request is a rerun. Software-layer pull request 1670
+added MultiQC 1.28. MultiQC depends on Kaleido 0.2.1, and the aarch64
+bots could not fetch its wheel: the easyconfig asked for
+~manylinux1_aarch64~, and PyPI only has ~manylinux2014~ for aarch64.
+
+#+begin_src bash
+eb-stack stack known-failures \
+  --arch aarch64 \
+  --easystack tests/arch_known_failures_fixtures/easystacks/1670-first/eessi-2025.06-eb-5.4.0-2024a.yml \
+  --easyconfigs tests/arch_known_failures_fixtures/easyconfigs
+#+end_src
+
+The command prints:
+
+#+begin_example
+Kaleido-0.2.1-GCCcore-13.3.0.eb on aarch64: known fetch failure: kaleido-0.2.1-py2.py3-none-manylinux1_aarch64.whl does not exist; the aarch64 wheel is manylinux2014 (required by MultiQC-1.28-gfbf-2024a.eb)
+  remedy: make the wheel an ARCH conditional: local_manylinux = 'manylinux2014' if ARCH == 'aarch64' else 'manylinux1', with one checksum per wheel
+  seen in: software-layer #1670; easybuild-easyconfigs #26981
+known=1 remedied=0
+#+end_example
+
+The first line is the warning. ~Kaleido-0.2.1-GCCcore-13.3.0.eb~ is the
+easyconfig that fails, ~aarch64~ is where, and ~fetch failure~ is the
+phase. ~required by~ says the plan did not name Kaleido; MultiQC's closure
+did. ~remedy:~ is what to change in the easyconfig. ~seen in:~ is where the
+table entry came from. ~known=1~ counts the warnings. The command exits 0:
+the warning is for the pull request description, or for a fix before the
+bot runs.
+
+The table is ~data/arch-known-failures.toml~. Every entry cites the
+software-layer pull request and comment it came from.
+
+* A remedy that is already in place
+
+Pull request 1670 was merged with Kaleido pinned to the easyconfigs
+commit that has the fix:
+
+#+begin_src bash
+eb-stack stack known-failures \
+  --arch aarch64 \
+  --easystack tests/arch_known_failures_fixtures/easystacks/1670/eessi-2025.06-eb-5.4.0-2024a.yml \
+  --easyconfigs tests/arch_known_failures_fixtures/easyconfigs
+#+end_src
+
+#+begin_example
+Kaleido-0.2.1-GCCcore-13.3.0.eb on aarch64: known fetch failure, remedied: from-commit be78248 carries the remedy
+known=0 remedied=1
+#+end_example
+
+A ~from-commit~ or ~include-easyblocks-from-commit~ pin listed in the
+entry's ~fixed_by~ makes the line ~remedied:~. So does an easyconfig in
+~--easyconfigs~ that already contains the entry's ~fixed_marker~: the
+fixed Kaleido easyconfig has ~manylinux2014~, and the fixed waLBerla 7.2
+easyconfig has the new checksum of its SVE constexpr patch.
+
+* A failure an EESSI hook causes
+
+EESSI's ~inject_gpu_property~ hook moves CUDA from ~dependencies~ to
+~builddependencies~. EasyBuild 5.4 no longer loads build dependencies for
+the sanity check, so the GROMACS easyblock thinks it built without CUDA
+and looks for ~bin/gmx_d~. That failed pull request 1658 on zen5:
+
+#+begin_src bash
+eb-stack stack known-failures \
+  --arch x86_64/amd/zen5 \
+  --easystack tests/arch_known_failures_fixtures/easystacks/1658-first/accel/nvidia/eessi-2026.06-eb-5.4.0-2026.1.yml \
+  --easyconfigs tests/arch_known_failures_fixtures/easyconfigs
+#+end_src
+
+#+begin_example
+GROMACS-2026.3-foss-2026.1-CUDA-13.3.0.eb on x86_64/amd/zen5: known sanity check failure: CUDA is only a build dependency after the hook, EasyBuild 5.4 does not load it for the sanity check, and the easyblock then expects bin/gmx_d
+  caused by: the EESSI inject_gpu_property hook
+  remedy: pin include-easyblocks-from-commit f6f23d4, whose GROMACS easyblock checks 'CUDA' in the dependency names instead of the loaded module
+  seen in: software-layer #1658; easybuild-easyblocks #4234
+known=1 remedied=0
+#+end_example
+
+~caused by:~ names the hook. The entry has ~requires_dependency = "CUDA"~,
+so a GROMACS without CUDA is not warned about, and ~min_easybuild =
+"5.4.0"~, so an easystack named ~eb-5.3.0~ is not either.
+~--easybuild-version~ overrides the version in the file name. On other
+entries, ~in EESSI:~ names the hook that already applies the remedy, such
+as ~pre_single_extension_orjson~ for the a64fx orjson test.
+
+* Choosing architectures
+
+~--arch~ repeats and takes a target or a family. ~--arch aarch64~ meets
+every aarch64 target in the table, and the line names the target, as in
+~aarch64/a64fx~. No ~--arch~ checks every architecture the table names.
+~--installed~ drops modules that are already installed, because the bot
+does not rebuild them. ~--eessi-version~ overrides the ~eessi-YYYY.MM~
+in the file name. The haswell rustc segfault entry is for 2025.06 only.
+
+~stack batch~ runs the same check for each batch it writes. The warnings
+go into ~pr-body.md~ and ~batch.json~, and ~plan.md~ counts them.
+~--known-failures~ replaces the table on both commands.
+
+See [[file:../reference/cli.org][the command-line reference]] and
+[[file:arch-unsupported.org][refuse a plan an architecture cannot build]]
+for entries that cannot build at all.

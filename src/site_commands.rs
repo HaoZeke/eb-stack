@@ -1229,6 +1229,8 @@ pub struct StackBatchRequest {
     pub arches: Vec<String>,
     /// Replace the bundled unsupported list.
     pub unsupported: Option<PathBuf>,
+    /// Replace the bundled known-failure table.
+    pub known_failures: Option<PathBuf>,
     /// The command line, written into every reproduce script.
     pub command_line: String,
     /// Output directory.
@@ -1336,6 +1338,14 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
                 .join("\n")
         ));
     }
+    let known_failures = match &args.known_failures {
+        Some(path) => crate::arch_known_failures::KnownFailureList::load(path)?,
+        None => crate::arch_known_failures::KnownFailureList::bundled()?,
+    };
+    let known_context = crate::arch_known_failures::PlanContext {
+        eessi_version: Some(args.eessi_version.clone()),
+        easybuild_version: Some(args.easybuild_version.clone()),
+    };
     let mut root_sets = Vec::new();
     for (i, root) in root_names.iter().enumerate() {
         let path = layout.path_for(root).map_err(usage)?;
@@ -1461,6 +1471,28 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
         }
         let root_paths: Vec<&str> = batch.roots.iter().map(String::as_str).collect();
         let stacks = eessi_easystacks(&root_paths, &options, &layout).map_err(usage)?;
+        let plan_entries: Vec<crate::easystack::EasystackEntry> = batch
+            .roots
+            .iter()
+            .map(|root| crate::easystack::EasystackEntry {
+                file: root.clone(),
+                from_commit: pins.get(root).cloned(),
+                include_easyblocks_from_commit: None,
+                include_easyblocks_from_pr: None,
+            })
+            .collect();
+        let known: Vec<crate::arch_known_failures::KnownHit> =
+            crate::arch_known_failures::known_failures_in_plan(
+                &known_failures,
+                &args.arches,
+                &robot.base,
+                &plan_entries,
+                &known_context,
+                &|key| installed.contains(&module_name(key)),
+            )
+            .into_iter()
+            .filter(|hit| hit.remedied.is_none())
+            .collect();
         for (rel, yaml) in &stacks {
             crate::write_text(&dir.join("software-layer").join(rel), yaml)?;
         }
@@ -1529,7 +1561,7 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
             dry = dry_runs.join("\n"),
         );
         crate::write_text(&dir.join("reproduce.sh"), &reproduce)?;
-        let body = format!(
+        let mut body = format!(
             "{title}\n\n{n} root(s), {m} module(s) to build on top of EESSI {v}; no other open pull request builds any of them.\n\nGenerated with:\n\n```\n{cmd}\n```\n\nDry run, from the software-layer root with EESSI-extend loaded:\n\n```\n{dry}\n```\n\nModules this pull request builds:\n\n{mods}\n\nSBOM: `sbom.cdx.json` (CycloneDX), from `eb-stack stack sbom --lock lock.json`.\n",
             n = batch.roots.len(),
             m = batch.modules.len(),
@@ -1543,6 +1575,16 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
                 .collect::<Vec<_>>()
                 .join("\n"),
         );
+        if !known.is_empty() {
+            body.push_str(
+                "\nKnown per-architecture failures, from `eb-stack stack known-failures`:\n\n```\n",
+            );
+            for hit in &known {
+                body.push_str(&hit.message());
+                body.push('\n');
+            }
+            body.push_str("```\n");
+        }
         crate::write_text(&dir.join("pr-body.md"), &body)?;
         crate::write_json_pretty(
             &dir.join("batch.json"),
@@ -1552,6 +1594,7 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
                 "roots": batch.roots,
                 "modules": batch.modules,
                 "pins": pins,
+                "known_failures": known,
                 "easystacks": stacks.keys().collect::<Vec<_>>(),
                 "digest": digest,
                 "command": args.command_line,
@@ -1561,6 +1604,12 @@ pub fn run_stack_batch(args: &StackBatchRequest) -> Result<StackBatchRun> {
             "## {slug}\n\n{title}\n\n{} module(s) to build.\n\n",
             batch.modules.len()
         ));
+        if !known.is_empty() {
+            plan_md.push_str(&format!(
+                "{} known per-architecture failure(s); `pr-body.md` has the remedies.\n\n",
+                known.len()
+            ));
+        }
     }
     if !planned.waits.is_empty() {
         plan_md.push_str("## Waiting on open pull requests\n\n");

@@ -32,6 +32,7 @@ The binary is `eb-stack`. The crate is `eb_stack`. Rust 1.88 or newer builds it 
 - [Find a missing patch before the bot does](https://eb-stack.rgoswami.me/howto/patch-presence.html.md): What it does: stack files reads each easyconfig an easystack names and lists the files EasyBuild will look for on disk: the patches of the recipe, its extensions, and its components, patch files named only in
 - [Refuse entries outside the EESSI version's generations](https://eb-stack.rgoswami.me/howto/generation-lint.html.md): What it does: stack generation reads a pull request's easystack changes, or easystack files, and checks every entry's toolchain against the toolchain generations of the EESSI version the easystack is for.
 - [Check CUDA compute capabilities in an easystack plan](https://eb-stack.rgoswami.me/howto/cuda-compute-capabilities.html.md): What it does: stack cuda-cc reads one or more easystacks as a plan, closes their dependencies on the robot tree, keeps the CUDA-dependent easyconfigs, and checks each cuda_compute_capabilities list against:
+- [Warn about known per-architecture failures](https://eb-stack.rgoswami.me/howto/arch-known-failures.html.md): What it does: stack known-failures reads an easystack as a plan, closes its dependencies over --easyconfigs, and warns about every entry a bot run has already failed on one of the architectures you name.
 
 ## Reference
 

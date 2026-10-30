@@ -400,6 +400,20 @@ All notable changes to this project are documented here.
   `arch-missing` sources (software-layer #1670, Kaleido). The probe is
   opt-in because it makes network requests. `eb_stack_arch` returns
   `parse_failed` and `source_findings`.
+- `eb-stack stack known-failures` warns when a plan includes, or depends
+  on, an easyconfig a bot run has already failed on one architecture,
+  and prints the established easyconfig remedy as text.
+  `data/arch-known-failures.toml` is the table, each entry citing the
+  software-layer pull request it came from: waLBerla 7.2 on the SVE
+  targets (#1623), Kaleido 0.2.1 on aarch64 (#1670), numba 0.62.0 test
+  failures on a64fx and timeouts on zen2 and sapphirerapids (#1683),
+  orjson on a64fx (#1871, #1829), uv 0.10.9 on a64fx and uv and uv-build
+  on the 2025.06 haswell nodes (#1668, #1871), and the GROMACS sanity
+  check that EESSI's CUDA demotion hook breaks under EasyBuild 5.4
+  (#1658). A pin that carries the fix, or an easyconfig that already
+  has it, is reported as remedied. `stack batch` writes the warnings
+  into each `pr-body.md` and `batch.json`. `eb_stack_known_failures`
+  runs the same check.
 - `eb-stack stack arch` refuses a plan that includes, or depends on, an
   entry an architecture cannot build. The message names the entry and
   the architecture. `data/arch-unsupported.toml` is the list: GDRCopy on

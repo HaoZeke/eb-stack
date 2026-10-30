@@ -322,7 +322,7 @@ fn resolve_version(path: &Path, version_flag: Option<&str>) -> Result<String> {
 }
 
 /// `eb-X.Y.Z` in a file name, not as the tail of a longer token such as `web-`.
-fn version_in_file_name(name: &str) -> Option<String> {
+pub(crate) fn version_in_file_name(name: &str) -> Option<String> {
     let mut rest = name;
     while let Some(index) = rest.find("eb-") {
         let boundary = index == 0 || !rest.as_bytes()[index - 1].is_ascii_alphanumeric();

@@ -945,6 +945,10 @@ struct BatchArgs {
     /// Replace the bundled per-architecture unsupported list.
     #[arg(long)]
     unsupported: Option<PathBuf>,
+    /// Replace the bundled known-failure table whose warnings go into each
+    /// pull-request body.
+    #[arg(long)]
+    known_failures: Option<PathBuf>,
     /// easybuild-easyconfigs checkout with release tags: a root the
     /// release lacks gets a `from-commit` pin.
     #[arg(long)]
@@ -1236,6 +1240,47 @@ enum StackCommand {
         /// Replace the bundled easyblock capability-map table.
         #[arg(long = "easyblock-map")]
         easyblock_map: Option<PathBuf>,
+    },
+    /// Warn about known per-architecture failures a plan includes or
+    /// depends on, and print the established easyconfig remedy.
+    ///
+    /// An entry in `data/arch-known-failures.toml` builds, but a bot run on
+    /// one target has failed its fetch, build, tests, or sanity check. Each
+    /// warning names the easyconfig, the architectures, the symptom, the
+    /// remedy as easyconfig text, and the EESSI hook that applies it, if
+    /// one does. A from-commit or include-easyblocks-from-commit pin that
+    /// carries the fix, or an easyconfig that already has it, is reported
+    /// as remedied. The command exits 0 either way.
+    #[command(
+        after_long_help = "Examples:\n  eb-stack stack known-failures --arch aarch64/a64fx --easystack eessi-2026.06-eb-5.4.1-2026.1.yml --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs\n  eb-stack stack known-failures --easystack eessi-2025.06-eb-5.4.0-2025b.yml --installed installed-zen4.txt --easyconfigs easybuild-easyconfigs/easybuild/easyconfigs"
+    )]
+    KnownFailures {
+        /// Target, `aarch64/a64fx`, or family, `aarch64`. Repeatable.
+        /// Absent checks every architecture in the table.
+        #[arg(long = "arch")]
+        arch: Vec<String>,
+        /// Easystack whose entries are the plan. Repeatable.
+        #[arg(long, required = true)]
+        easystack: Vec<PathBuf>,
+        /// Robot tree the dependency closure is read from. Repeatable.
+        /// Absent checks only the filenames the easystack names.
+        #[arg(long)]
+        easyconfigs: Vec<PathBuf>,
+        /// Installed modules, one `Name/VersionFull` per line. An installed
+        /// module is not rebuilt, so it is not warned about.
+        #[arg(long)]
+        installed: Option<PathBuf>,
+        /// Replace the bundled known-failure table.
+        #[arg(long)]
+        known_failures: Option<PathBuf>,
+        /// EESSI version, `2025.06`. Overrides `eessi-YYYY.MM` in each
+        /// easystack file name.
+        #[arg(long)]
+        eessi_version: Option<String>,
+        /// EasyBuild release `X.Y.Z`. Overrides `eb-X.Y.Z` in each
+        /// easystack file name.
+        #[arg(long)]
+        easybuild_version: Option<String>,
     },
     /// Write the lock as an EasyBuild easystack, the format `eb --easystack`
     /// consumes and EESSI's software layer is built from.
@@ -2567,6 +2612,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                 size,
                 arch,
                 unsupported,
+                known_failures,
                 easyconfigs_repo,
                 generated_at,
                 out_dir,
@@ -2603,6 +2649,7 @@ fn run_stack(command: StackCommand) -> Result<()> {
                     generated_at,
                     arches: arch,
                     unsupported,
+                    known_failures,
                     command_line,
                     out_dir,
                 },
@@ -2740,6 +2787,29 @@ fn run_stack(command: StackCommand) -> Result<()> {
             if !report.findings.is_empty() {
                 bail!("{}", report.findings.join("\n"));
             }
+            Ok(())
+        }
+        StackCommand::KnownFailures {
+            arch,
+            easystack,
+            easyconfigs,
+            installed,
+            known_failures,
+            eessi_version,
+            easybuild_version,
+        } => {
+            let report = eb_stack::arch_known_failures::run_known_failures(
+                &eb_stack::arch_known_failures::KnownFailuresRequest {
+                    arches: arch,
+                    easystacks: easystack,
+                    easyconfigs,
+                    installed,
+                    known_failures,
+                    eessi_version,
+                    easybuild_version,
+                },
+            )?;
+            print!("{}", report.stdout);
             Ok(())
         }
         StackCommand::Easystack {

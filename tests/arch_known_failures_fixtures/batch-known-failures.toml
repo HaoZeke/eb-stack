@@ -1,0 +1,12 @@
+# A table for the stack batch test. The arch_unsupported fixture tree
+# resolves completely, so stack batch writes a pull-request body for it.
+# GDRCopy is not known to fail on x86_64; this entry only shows where the
+# warning lands.
+[[entry]]
+id = "gdrcopy-batch-fixture"
+names = ["GDRCopy"]
+arches = ["x86_64/amd/zen4"]
+phase = "test"
+symptom = "fixture symptom"
+remedy = "fixture remedy"
+sources = ["https://github.com/EESSI/software-layer/pull/1775"]

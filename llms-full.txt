@@ -91,6 +91,7 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [find a missing patch before the bot does](https://eb-stack.rgoswami.me/howto/patch-presence.html.md).
     [refuse entries outside the EESSI version's generations](https://eb-stack.rgoswami.me/howto/generation-lint.html.md).
     [check CUDA compute-capability mismatches in a plan](https://eb-stack.rgoswami.me/howto/cuda-compute-capabilities.html.md).
+    [warn about known per-architecture failures](https://eb-stack.rgoswami.me/howto/arch-known-failures.html.md).
   - Reference: [CLI](https://eb-stack.rgoswami.me/reference/cli.html.md),
     [Model Context Protocol server](https://eb-stack.rgoswami.me/reference/mcp.html.md),
     [package bundles](https://eb-stack.rgoswami.me/reference/package-bundles.html.md),
@@ -3709,6 +3710,117 @@ tables.
 
 See [the command-line reference](https://eb-stack.rgoswami.me/../reference/cli.html.md).
 
+# Warn about known per-architecture failures
+
+What it does: `stack known-failures` reads an easystack as a plan, closes
+its dependencies over `--easyconfigs`, and warns about every entry a bot
+run has already failed on one of the architectures you name. Each warning
+names the easyconfig, the targets, the symptom, and the remedy the
+maintainers chose, as easyconfig text.
+
+Why you'd use it: these entries build. They fail on one target, in a
+test, a test timeout, a fetch, or a sanity check, and the usual first
+answer in the pull request is a rerun. Software-layer pull request 1670
+added MultiQC 1.28. MultiQC depends on Kaleido 0.2.1, and the aarch64
+bots could not fetch its wheel: the easyconfig asked for
+`manylinux1_aarch64`, and PyPI only has `manylinux2014` for aarch64.
+
+```bash
+eb-stack stack known-failures \
+  --arch aarch64 \
+  --easystack tests/arch_known_failures_fixtures/easystacks/1670-first/eessi-2025.06-eb-5.4.0-2024a.yml \
+  --easyconfigs tests/arch_known_failures_fixtures/easyconfigs
+```
+
+The command prints:
+
+```
+Kaleido-0.2.1-GCCcore-13.3.0.eb on aarch64: known fetch failure: kaleido-0.2.1-py2.py3-none-manylinux1_aarch64.whl does not exist; the aarch64 wheel is manylinux2014 (required by MultiQC-1.28-gfbf-2024a.eb)
+  remedy: make the wheel an ARCH conditional: local_manylinux = 'manylinux2014' if ARCH == 'aarch64' else 'manylinux1', with one checksum per wheel
+  seen in: software-layer #1670; easybuild-easyconfigs #26981
+known=1 remedied=0
+```
+
+The first line is the warning. `Kaleido-0.2.1-GCCcore-13.3.0.eb` is the
+easyconfig that fails, `aarch64` is where, and `fetch failure` is the
+phase. `required by` says the plan did not name Kaleido; MultiQC's closure
+did. `remedy:` is what to change in the easyconfig. `seen in:` is where the
+table entry came from. `known=1` counts the warnings. The command exits 0:
+the warning is for the pull request description, or for a fix before the
+bot runs.
+
+The table is `data/arch-known-failures.toml`. Every entry cites the
+software-layer pull request and comment it came from.
+
+# A remedy that is already in place
+
+Pull request 1670 was merged with Kaleido pinned to the easyconfigs
+commit that has the fix:
+
+```bash
+eb-stack stack known-failures \
+  --arch aarch64 \
+  --easystack tests/arch_known_failures_fixtures/easystacks/1670/eessi-2025.06-eb-5.4.0-2024a.yml \
+  --easyconfigs tests/arch_known_failures_fixtures/easyconfigs
+```
+
+```
+Kaleido-0.2.1-GCCcore-13.3.0.eb on aarch64: known fetch failure, remedied: from-commit be78248 carries the remedy
+known=0 remedied=1
+```
+
+A `from-commit` or `include-easyblocks-from-commit` pin listed in the
+entry's `fixed_by` makes the line `remedied:`. So does an easyconfig in
+`--easyconfigs` that already contains the entry's `fixed_marker`: the
+fixed Kaleido easyconfig has `manylinux2014`, and the fixed waLBerla 7.2
+easyconfig has the new checksum of its SVE constexpr patch.
+
+# A failure an EESSI hook causes
+
+EESSI's `inject_gpu_property` hook moves CUDA from `dependencies` to
+`builddependencies`. EasyBuild 5.4 no longer loads build dependencies for
+the sanity check, so the GROMACS easyblock thinks it built without CUDA
+and looks for `bin/gmx_d`. That failed pull request 1658 on zen5:
+
+```bash
+eb-stack stack known-failures \
+  --arch x86_64/amd/zen5 \
+  --easystack tests/arch_known_failures_fixtures/easystacks/1658-first/accel/nvidia/eessi-2026.06-eb-5.4.0-2026.1.yml \
+  --easyconfigs tests/arch_known_failures_fixtures/easyconfigs
+```
+
+```
+GROMACS-2026.3-foss-2026.1-CUDA-13.3.0.eb on x86_64/amd/zen5: known sanity check failure: CUDA is only a build dependency after the hook, EasyBuild 5.4 does not load it for the sanity check, and the easyblock then expects bin/gmx_d
+  caused by: the EESSI inject_gpu_property hook
+  remedy: pin include-easyblocks-from-commit f6f23d4, whose GROMACS easyblock checks 'CUDA' in the dependency names instead of the loaded module
+  seen in: software-layer #1658; easybuild-easyblocks #4234
+known=1 remedied=0
+```
+
+`caused by:` names the hook. The entry has `requires_dependency = "CUDA"`,
+so a GROMACS without CUDA is not warned about, and ~min_easybuild =
+"5.4.0"`, so an easystack named `eb-5.3.0~ is not either.
+`--easybuild-version` overrides the version in the file name. On other
+entries, `in EESSI:` names the hook that already applies the remedy, such
+as `pre_single_extension_orjson` for the a64fx orjson test.
+
+# Choosing architectures
+
+`--arch` repeats and takes a target or a family. `--arch aarch64` meets
+every aarch64 target in the table, and the line names the target, as in
+`aarch64/a64fx`. No `--arch` checks every architecture the table names.
+`--installed` drops modules that are already installed, because the bot
+does not rebuild them. `--eessi-version` overrides the `eessi-YYYY.MM`
+in the file name. The haswell rustc segfault entry is for 2025.06 only.
+
+`stack batch` runs the same check for each batch it writes. The warnings
+go into `pr-body.md` and `batch.json`, and `plan.md` counts them.
+`--known-failures` replaces the table on both commands.
+
+See [the command-line reference](https://eb-stack.rgoswami.me/../reference/cli.html.md) and
+[refuse a plan an architecture cannot build](https://eb-stack.rgoswami.me/arch-unsupported.html.md)
+for entries that cannot build at all.
+
 # Command-line reference
 
 `eb-stack` has six namespaced command groups (`package`, `recipe`,
@@ -3725,7 +3837,7 @@ are deterministic bundle artifacts.
 | 1 | The work was attempted and failed: a missing or unreadable file, a document that does not parse, a check that found errors, a network fetch that failed, a doctor probe, or a campaign whose build failed |
 | 2 | The command line was rejected before that work: a missing or unknown flag (clap), or a flag value or combination the command does not accept |
 
-A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged, or when `--probe-sources` reports `unreachable` or `arch-missing` sources. `stack files` is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are `no_url` or `unchecked`. `stack generation` is status 1 on any finding, and status 2 when an easystack path names no EESSI version and `--eessi-version` is absent. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
+A rejected value names the flag and the value. A missing file names the flag and the path. Status 2 is the same status clap already uses. A recipe that fails `recipe lint` or `recipe check` is status 1: the files were read and the check failed. `stack from-commit` is status 1 when any pin is `released`, and status 0 when every pin is `newer` or `unknown` or the files name no pin. A file name with no `eb-X.Y.Z`, and no `--easybuild-version`, is status 2. `stack arch` is status 1 when an entry is unsupported or flagged, or when `--probe-sources` reports `unreachable` or `arch-missing` sources. `stack files` is status 1 when a patch or an easyconfig is missing, and status 0 when the only lines are `no_url` or `unchecked`. `stack generation` is status 1 on any finding, and status 2 when an easystack path names no EESSI version and `--eessi-version` is absent. `stack known-failures` is status 0 when it prints warnings: they are advice for the pull request, not a refusal. `stack batch` is status 1 when the plan includes, or depends on, an entry the architecture cannot build.
 
 `--help` for every command has an example and a description of every flag. A default that the command applies is printed in that help. A directory that receives several artifacts is `--out-dir`. A single output file is `--out` (`--lock-out` for the lock `stack solve` writes). `--installed`, `--easyconfigs`, `--filter-deps`, and `--generated-at` use those names on every command that takes them.
 
@@ -3752,6 +3864,7 @@ Package commands take the toolchain as `--toolchain name/version`, the spelling 
 | `stack files` | Find the patch and source files an easystack's easyconfigs need that no tree has |
 | `stack generation` | Refuse easystack entries outside their EESSI version's toolchain generations |
 | `stack cuda-cc` | Refuse CUDA compute-capability combinations a plan cannot build on EESSI accelerator targets |
+| `stack known-failures` | Warn about known per-architecture test, build, fetch and sanity failures in a plan, with the easyconfig remedy |
 | `repro summary` | Print a reproduction scoreboard from collected case scores |
 | `pr-overlap` | Close open pull-request easystack additions against an installed stack and report shared builds |
 | `rebuild-set` | Classify the installed reverse dependents of easyconfigs patched in place |
@@ -4140,6 +4253,7 @@ eb-stack stack batch \
   [--generated-at 2026-10-29T00:00:00Z] \
   [--arch riscv64]... \
   [--unsupported LIST.toml] \
+  [--known-failures TABLE.toml] \
   --out-dir BATCHES
 
 eb-stack stack arch \
@@ -4175,6 +4289,14 @@ eb-stack stack cuda-cc \
   [--cuda-table TABLE.toml] \
   [--accelerator-targets TARGETS.toml] \
   [--easyblock-map MAP.toml]
+
+eb-stack stack known-failures \
+  --easystack EASYSTACK.yml [--easystack OTHER.yml]... \
+  [--arch aarch64/a64fx]... \
+  [--easyconfigs TREE]... \
+  [--installed INSTALLED.txt] \
+  [--known-failures TABLE.toml] \
+  [--eessi-version 2025.06] [--easybuild-version 5.4.0]
 
 eb-stack stack sections \
   tests/jenkins_sections/next.list \
@@ -4306,7 +4428,13 @@ lock, a CycloneDX SBOM, `reproduce.sh` with the exact command and the
 of the inputs. `--generated-at` fixes the time written into the plan.
 `--arch` limits the unsupported-entry check to that family. With no
 `--arch`, every family in the bundled list is checked. `--unsupported`
-replaces that list. A hit exits 1 and writes nothing.
+replaces that list. A hit exits 1 and writes nothing. The same `--arch`
+values select the known per-architecture failures each batch includes or
+depends on. `pr-body.md` gets a "Known per-architecture failures" block
+with each warning and its remedy, `batch.json` lists them under
+`known_failures`, and `plan.md` counts them per batch. A failure whose
+remedy is already pinned or in the easyconfig is left out.
+`--known-failures` replaces `data/arch-known-failures.toml`.
 
 ## `stack arch`
 
@@ -4453,6 +4581,61 @@ target is checked. `--cuda-table`, `--accelerator-targets`, and
 
 [Check CUDA compute capabilities in an easystack plan](https://eb-stack.rgoswami.me/../howto/cuda-compute-capabilities.html.md)
 shows a short real output and how to read it.
+
+## `stack known-failures`
+
+What it does: read an easystack as a plan and warn about each entry, or
+dependency, that a bot run has already failed on one of the requested
+architectures. The warning names the easyconfig, the targets, the
+symptom, the established remedy as easyconfig text, and the EESSI hook
+that applies it.
+
+Why you'd use it: an entry can build on fourteen targets and fail its
+tests on the fifteenth. Software-layer pull request 1829 added
+AITW-aiida-wood-permeability. Its closure builds orjson, and the orjson
+tests fail on a64fx because the build container gives UTC an hour's
+offset. The table already knew that from pull request 1871.
+
+```bash
+eb-stack stack known-failures \
+  --arch aarch64/a64fx \
+  --easystack tests/arch_known_failures_fixtures/easystacks/1829/eessi-2026.06-eb-5.4.1-2026.1.yml \
+  --easyconfigs tests/arch_known_failures_fixtures/easyconfigs
+```
+
+```
+orjson-3.11.8-GCCcore-15.2.0.eb on aarch64/a64fx: known test failure: test_datetime_zoneinfo_utc fails: the a64fx build container gives ZoneInfo('UTC') a +01:00 offset (required by AITW-aiida-wood-permeability-0.3.0-foss-2026.1.eb)
+  remedy: append -k "not test_datetime_zoneinfo_utc" to the orjson pytest runtest on a64fx
+  in EESSI: the pre_single_extension_orjson hook applies it
+  seen in: software-layer #1871, #1829; software-layer-scripts #330
+known=1 remedied=0
+```
+
+The first line is the warning: the easyconfig, the targets, the phase
+(fetch, build, test, test timeout, or sanity check), and the symptom.
+`required by` names the plan entry whose closure brought it in.
+`remedy:` is the text to put in the easyconfig. `in EESSI:` names the
+software-layer-scripts hook that already applies it, and `caused by:`
+names a hook whose rewrite is the cause. `seen in:` lists the pull
+requests. A pin in the easystack (`from-commit` or
+`include-easyblocks-from-commit`) that carries the fix, or an
+easyconfig that already contains it, turns the line into one
+`remedied:` line. `known`` counts warnings and `remedied`` counts
+those. The command exits 0 either way.
+
+`--arch` takes a target (`aarch64/a64fx`) or a family (`aarch64`), and
+repeats. A family meets each of its targets. No `--arch` checks every
+architecture in the table. `--easyconfigs` is the robot tree for the
+closure and for the extension and marker checks; without it, only the
+file names in the easystack are matched. `--installed` lists modules
+that are not rebuilt, so they are not warned about. `--eessi-version`
+and `--easybuild-version` override `eessi-YYYY.MM` and `eb-X.Y.Z` in
+the easystack file name, which gate entries such as the 2025.06 haswell
+segfault and the EasyBuild 5.4 GROMACS sanity check.
+`--known-failures` replaces `data/arch-known-failures.toml`.
+
+[Warn about known per-architecture failures](https://eb-stack.rgoswami.me/../howto/arch-known-failures.html.md)
+covers the remedied lines and the GROMACS hook entry.
 
 ## `stack sections`
 
@@ -5034,8 +5217,14 @@ finding is a tool error. `eb_stack_generation` takes `easystack`, `pr`,
 `eessi_version`, `deployed`, `allow_versions`, and `generations`, and
 needs one `easystack` or `pr`. It returns the same report as
 `stack generation`, and a finding is a tool error.
-`eb_stack_batch` takes `arch` and `unsupported` and
-refuses the plan the same way. `eb_repro_summary`
+`eb_stack_known_failures` requires `easystack` and takes `arch`,
+`easyconfigs`, `installed`, `known_failures`, `eessi_version`, and
+`easybuild_version`. It returns `text`, the `stack known-failures`
+stdout, and `hits`, one object per line. Warnings are not a tool error.
+`eb_stack_batch` takes `arch`, `unsupported`,
+and `known_failures`. It refuses an unsupported plan the same way and
+writes the same warnings.
+`eb_repro_summary`
 requires `scores` and takes `ratchet` and `json`. Each of these tools
 calls the same runner as the command of that name, and the text it
 returns is that command's stdout.
@@ -8877,6 +9066,7 @@ eb_stack_arch
 eb_stack_files
 eb_stack_generation
 eb_stack_cuda_cc
+eb_stack_known_failures
 eb_stack_sections
 eb_stack_from_commit
 eb_component_reach

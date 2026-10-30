@@ -139,7 +139,7 @@ pub fn module_from_filename(filename: &str) -> Option<String> {
     Some(format!("{name}/{versionfull}"))
 }
 
-fn split_easyconfig_filename(filename: &str) -> Option<(String, String)> {
+pub(crate) fn split_easyconfig_filename(filename: &str) -> Option<(String, String)> {
     let base = filename.rsplit(['/', '\\']).next().unwrap_or(filename);
     let stem = base.strip_suffix(".eb").unwrap_or(base);
     let parts: Vec<&str> = stem.split('-').collect();
@@ -343,7 +343,7 @@ fn record_dependency(
 }
 
 /// Start entries that reach `hit` through modules in the plan's closure.
-fn plan_requirers(
+pub(crate) fn plan_requirers(
     hit: &ModuleKey,
     starts: &BTreeSet<ModuleKey>,
     in_closure: &BTreeSet<ModuleKey>,
@@ -375,15 +375,17 @@ fn plan_requirers(
     found
 }
 
-fn index_by_file(candidates: &[Candidate]) -> BTreeMap<String, &Candidate> {
+pub(crate) fn index_by_file(candidates: &[Candidate]) -> BTreeMap<String, &Candidate> {
     let mut out = BTreeMap::new();
-    for candidate in candidates {
+    // Robot paths are ordered by precedence; keep the first match in that
+    // order when duplicate filenames exist across trees.
+    for candidate in candidates.iter().rev() {
         out.insert(basename(&candidate.easyconfig_path), candidate);
     }
     out
 }
 
-fn basename(path: &str) -> String {
+pub(crate) fn basename(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
 }
 

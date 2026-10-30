@@ -1,0 +1,210 @@
+# Known per-architecture failures of entries that do build, and their remedy.
+#
+# EESSI builds one easystack on every CPU target. An entry can build on
+# most targets and still fail its fetch, its build, its tests, or its
+# sanity check on one of them. That is not an unsupported entry
+# (data/arch-unsupported.toml): the entry builds once the remedy is in the
+# easyconfig, in a from-commit pin, or in an EESSI hook. `stack
+# known-failures` warns before the bot runs and prints the remedy as text.
+#
+# Fields:
+#   id                   short unique handle
+#   names                EasyBuild names; an extension of that name in an
+#                        exts_list matches too
+#   versions             versions seen failing; absent is every version
+#   arches               targets (aarch64/a64fx), families (aarch64), or *
+#   phase                fetch, build, test, timeout, or sanity
+#   symptom              what the bot log shows
+#   remedy               the established remedy, as easyconfig text
+#   hook                 EESSI software-layer-scripts hook that applies it
+#   caused_by_hook       EESSI hook whose rewrite of the easyconfig causes
+#                        the failure
+#   requires_dependency  only when the easyconfig depends on this name
+#   min_easybuild        only from this EasyBuild release (eb-X.Y.Z in the
+#                        easystack file name)
+#   eessi_versions       only for these EESSI versions (eessi-YYYY.MM in
+#                        the easystack file name)
+#   fixed_by             commits whose from-commit or
+#                        include-easyblocks-from-commit pin carries the remedy
+#   fixed_marker         text that is in the easyconfig once the remedy is
+#   sources              the pull requests and comments that are the evidence
+
+# software-layer #1623 added waLBerla 7.2. Neves-P, 2026-09-22: the
+# constexpr patch "doesn't cover ARM builds"; the neoverse_v1 log ends in
+# "SIMDAlignment() called in a constant expression" with
+# -msve-vector-bits=256.
+# https://github.com/EESSI/software-layer/pull/1623#issuecomment-5778146646
+# easybuild-easyconfigs ad6355e2d8 extends walberla-gcc14-constexpr-fix.patch
+# to the __ARM_FEATURE_SVE_BITS branch, and 8a688f3038 changes its checksum
+# from 06de936c... to 0d1d7ff8.... #1623 merged with from-commit a69e693,
+# which carries both.
+[[entry]]
+id = "walberla-sve-constexpr"
+names = ["waLBerla"]
+versions = ["7.2"]
+arches = ["aarch64/neoverse_v1", "aarch64/a64fx", "aarch64/nvidia/grace"]
+phase = "build"
+symptom = "SIMDAlignment() is not constexpr on the SVE branch, so Field.impl.h does not compile"
+remedy = "use the walberla-gcc14-constexpr-fix.patch that also casts __ARM_FEATURE_SVE_BITS (checksum 0d1d7ff8...), as from-commit a69e693 does"
+fixed_by = ["a69e69347c4a4d4b625ff4cf37b6160374506612"]
+fixed_marker = "0d1d7ff87d54a3860c1f85b9969a510946480f7b699710fa582ce9b9d217f620"
+sources = [
+  "https://github.com/EESSI/software-layer/pull/1623#issuecomment-5581779327",
+  "https://github.com/EESSI/software-layer/pull/1623#issuecomment-5778146646",
+  "https://github.com/easybuilders/easybuild-easyconfigs/pull/26930",
+]
+
+# software-layer #1670 added MultiQC 1.28, which depends on Kaleido 0.2.1.
+# bedroge, 2026-09-23: the grace build "failed to download the kaleido
+# wheel": the aarch64 wheel on PyPI is manylinux2014, the easyconfig asks
+# for manylinux1 on both architectures.
+# https://github.com/EESSI/software-layer/pull/1670#issuecomment-5792928060
+# easybuild-easyconfigs #26981 (merged 2026-10-20) makes the wheel name an
+# ARCH conditional; #1670 pinned its branch head be78248.
+[[entry]]
+id = "kaleido-aarch64-wheel"
+names = ["Kaleido"]
+versions = ["0.2.1"]
+arches = ["aarch64"]
+phase = "fetch"
+symptom = "kaleido-0.2.1-py2.py3-none-manylinux1_aarch64.whl does not exist; the aarch64 wheel is manylinux2014"
+remedy = "make the wheel an ARCH conditional: local_manylinux = 'manylinux2014' if ARCH == 'aarch64' else 'manylinux1', with one checksum per wheel"
+fixed_by = [
+  "be7824829994ef42abd2427a37adb17cde694e36",
+  "dfca903bb01bb7d6eecbcfc441701bc7737ef023",
+]
+fixed_marker = "manylinux2014"
+sources = [
+  "https://github.com/EESSI/software-layer/pull/1670#issuecomment-5792928060",
+  "https://github.com/EESSI/software-layer/pull/1670#issuecomment-5890927178",
+  "https://github.com/easybuilders/easybuild-easyconfigs/pull/26981",
+]
+
+# software-layer #1683 added numba 0.62.0. bedroge, 2026-10-03: with a
+# longer timeout, "these two tests actually fail on a64fx". The pull request
+# is still open; no remedy has landed.
+# https://github.com/EESSI/software-layer/pull/1683#issuecomment-5969027852
+[[entry]]
+id = "numba-a64fx-sum-axis"
+names = ["numba"]
+versions = ["0.62.0"]
+arches = ["aarch64/a64fx"]
+phase = "test"
+symptom = "test_sum_axis_dtype_kws and test_sum_axis_kws1 in numba.tests.test_array_methods fail"
+remedy = "skip those two tests in the numba runtest on a64fx only; an easyconfig ARCH == 'aarch64' conditional would also skip them on neoverse and grace, where they pass, so key the skip on the CPU target in a hook, as pre_single_extension_orjson does"
+sources = [
+  "https://github.com/EESSI/software-layer/pull/1683#issuecomment-5969027852",
+]
+
+# The same pull request timed out on zen2 and sapphirerapids. bedroge,
+# 2026-10-01: an interactive zen2 build without the container passed, so
+# "it's the container + overlay causing things to be slow". 2026-10-03:
+# "Increasing the timeout solved the issue for zen2 and sapphirerapids".
+# The pin moved to software-layer-scripts ce20b65, "increase numba timeout
+# to 600s", in the pre_single_extension_numba hook.
+# https://github.com/EESSI/software-layer/pull/1683#issuecomment-5933055329
+[[entry]]
+id = "numba-test-timeout"
+names = ["numba"]
+versions = ["0.62.0"]
+arches = ["x86_64/amd/zen2", "x86_64/intel/sapphirerapids"]
+phase = "timeout"
+symptom = "numba test subprocesses hit the 30 s and 60 s timeouts in numba/tests/support.py in the bot container"
+remedy = "prefix the numba runtest with sed -i 's/timeout=[3,6]0/timeout=600/g' on numba/tests/support.py in the test install dir"
+hook = "pre_single_extension_numba"
+fixed_marker = "timeout=600"
+sources = [
+  "https://github.com/EESSI/software-layer/pull/1683#issuecomment-5933055329",
+  "https://github.com/EESSI/software-layer/pull/1683#issuecomment-5969027852",
+  "https://github.com/EESSI/software-layer-scripts/commit/ce20b65f518b28c51e1b2fdf38ac262148bd0e9f",
+]
+
+# software-layer #1871 (aiida, 2025.06), Crivella, 2026-10-28: "a64fx is
+# failing with a timezone error"; in the bot container ZoneInfo("UTC") has
+# offset 1:00:00. #1829 (2026.06) hit it again through pymatgen's orjson.
+# software-layer-scripts #330 adds pre_single_extension_orjson.
+# https://github.com/EESSI/software-layer/pull/1871#issuecomment-6467091351
+# https://github.com/EESSI/software-layer/pull/1829#issuecomment-6475355042
+[[entry]]
+id = "orjson-a64fx-zoneinfo-utc"
+names = ["orjson"]
+arches = ["aarch64/a64fx"]
+phase = "test"
+symptom = "test_datetime_zoneinfo_utc fails: the a64fx build container gives ZoneInfo('UTC') a +01:00 offset"
+remedy = "append -k \"not test_datetime_zoneinfo_utc\" to the orjson pytest runtest on a64fx"
+hook = "pre_single_extension_orjson"
+fixed_marker = "test_datetime_zoneinfo_utc"
+sources = [
+  "https://github.com/EESSI/software-layer/pull/1871#issuecomment-6467091351",
+  "https://github.com/EESSI/software-layer/pull/1871#issuecomment-6475983835",
+  "https://github.com/EESSI/software-layer/pull/1829#issuecomment-6475355042",
+  "https://github.com/EESSI/software-layer-scripts/pull/330",
+]
+
+# software-layer #1668 added uv 0.10.9. Neves-P, 2026-09-25: "there is
+# indeed a problem when SOURCE_DATE_EPOCH is not set in A64FX builds";
+# maturin uses it for wheel timestamps. software-layer-scripts #308 sets it
+# from the newest file mtime in the uv source archive.
+# https://github.com/EESSI/software-layer/pull/1668#issuecomment-5831828034
+[[entry]]
+id = "uv-a64fx-source-date-epoch"
+names = ["uv"]
+versions = ["0.10.9"]
+arches = ["aarch64/a64fx"]
+phase = "build"
+symptom = "maturin crashes writing the wheel because SOURCE_DATE_EPOCH is not set in the a64fx build"
+remedy = "export SOURCE_DATE_EPOCH in preinstallopts, from the newest file mtime in uv-0.10.9.tar.gz"
+hook = "pre_prepare_hook_uv_source_date_epoch"
+fixed_marker = "SOURCE_DATE_EPOCH"
+sources = [
+  "https://github.com/EESSI/software-layer/pull/1668#issuecomment-5831828034",
+  "https://github.com/EESSI/software-layer-scripts/pull/308",
+]
+
+# The haswell bot segfaults in rustc for uv (#1668, bedroge 2026-10-02) and
+# for uv-build (#1871, Crivella 2026-10-27), and earlier in #1543. Other
+# haswell hosts do not reproduce it (EESSI support work item 270).
+# software-layer-scripts #329 adds pre_cargo_python_package_2025: on 2025.06
+# haswell it sets -C target-cpu=haswell and retries the install ten times.
+# https://github.com/EESSI/software-layer/pull/1668#issuecomment-5952212703
+# https://github.com/EESSI/software-layer/pull/1871#issuecomment-6441762518
+[[entry]]
+id = "cargo-haswell-sigsegv"
+names = ["uv", "uv-build"]
+arches = ["x86_64/intel/haswell"]
+eessi_versions = ["2025.06"]
+phase = "build"
+symptom = "rustc segfaults (SIGSEGV, signal 11) on random crates on the 2025.06 haswell build nodes"
+remedy = "set -C target-cpu=haswell in RUSTFLAGS and wrap the install in a retry loop in preinstallopts"
+hook = "pre_cargo_python_package_2025"
+sources = [
+  "https://github.com/EESSI/software-layer/pull/1668#issuecomment-5952212703",
+  "https://github.com/EESSI/software-layer/pull/1871#issuecomment-6441762518",
+  "https://github.com/EESSI/software-layer-scripts/pull/329",
+]
+
+# An EESSI hook rewrite, not a CPU target. inject_gpu_property in
+# software-layer-scripts eb_hooks.py moves CUDA and cuDNN from dependencies
+# to builddependencies. EasyBuild 5.4.0 no longer loads build dependencies
+# in the sanity check, so the GROMACS easyblock's get_software_root('CUDA')
+# is empty and it expects bin/gmx_d. software-layer #1658, bedroge
+# 2026-09-18, on x86_64/amd/zen5 with nvidia/cc120. easybuild-easyblocks
+# #4234 checks the dependency list instead; #1658 pins it as
+# include-easyblocks-from-commit f6f23d4.
+# https://github.com/EESSI/software-layer/pull/1658#issuecomment-5726559720
+[[entry]]
+id = "gromacs-cuda-demoted"
+names = ["GROMACS"]
+arches = ["*"]
+phase = "sanity"
+requires_dependency = "CUDA"
+min_easybuild = "5.4.0"
+symptom = "CUDA is only a build dependency after the hook, EasyBuild 5.4 does not load it for the sanity check, and the easyblock then expects bin/gmx_d"
+remedy = "pin include-easyblocks-from-commit f6f23d4, whose GROMACS easyblock checks 'CUDA' in the dependency names instead of the loaded module"
+caused_by_hook = "inject_gpu_property"
+fixed_by = ["f6f23d4674dbc684aff706abc5f436363ba3edcf"]
+sources = [
+  "https://github.com/EESSI/software-layer/pull/1658#issuecomment-5726559720",
+  "https://github.com/EESSI/software-layer/pull/1658#issuecomment-5752463813",
+  "https://github.com/easybuilders/easybuild-easyblocks/pull/4234",
+]

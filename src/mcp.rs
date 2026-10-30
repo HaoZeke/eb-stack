@@ -412,6 +412,7 @@ fn tool_catalog() -> Vec<Value> {
                 ("generated_at", "string"),
                 ("arch", "array"),
                 ("unsupported", "string"),
+                ("known_failures", "string"),
             ],
         ),
         tool_with_optional(
@@ -463,6 +464,19 @@ fn tool_catalog() -> Vec<Value> {
                 ("cuda_table", "string"),
                 ("accelerator_targets", "string"),
                 ("easyblock_map", "string"),
+            ],
+        ),
+        tool_with_optional(
+            "eb_stack_known_failures",
+            "Warn about known per-architecture failures a plan includes or depends on, as `stack known-failures` does. Each warning names the easyconfig, the architectures, the symptom, the established easyconfig remedy as text, and the EESSI hook that applies it. A pin or easyconfig that already carries the fix is reported as remedied. Warnings are not a tool error.",
+            &[("easystack", "array_min1")],
+            &[
+                ("arch", "array"),
+                ("easyconfigs", "array"),
+                ("installed", "string"),
+                ("known_failures", "string"),
+                ("eessi_version", "string"),
+                ("easybuild_version", "string"),
             ],
         ),
         tool_with_optional(
@@ -744,6 +758,7 @@ fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         "eb_stack_files" => stack_files_tool(arguments),
         "eb_stack_generation" => stack_generation_tool(arguments),
         "eb_stack_cuda_cc" => stack_cuda_cc_tool(arguments),
+        "eb_stack_known_failures" => stack_known_failures_tool(arguments),
         "eb_target_list" => target_list(arguments),
         "eb_target_doctor" => target_doctor(arguments),
         "eb_campaign_run" => campaign_run(arguments),
@@ -2961,6 +2976,7 @@ fn stack_batch_tool(arguments: &Value) -> Result<Value, String> {
         generated_at: optional_string(arguments, "generated_at"),
         arches: string_array(arguments, "arch")?,
         unsupported: optional_path(arguments, "unsupported"),
+        known_failures: optional_path(arguments, "known_failures"),
         command_line: batch_command_line(arguments),
         out_dir: required_path(arguments, "out_dir")?,
     };
@@ -2996,6 +3012,7 @@ fn batch_command_line(arguments: &Value) -> String {
         ("generated_at", "--generated-at"),
         ("arch", "--arch"),
         ("unsupported", "--unsupported"),
+        ("known_failures", "--known-failures"),
         ("out_dir", "--out-dir"),
     ];
     for (key, flag) in flags {
@@ -3133,6 +3150,25 @@ fn stack_cuda_cc_tool(arguments: &Value) -> Result<Value, String> {
     Ok(json!({
         "text": report.stdout,
         "findings": report.findings,
+    }))
+}
+
+fn stack_known_failures_tool(arguments: &Value) -> Result<Value, String> {
+    let report = crate::arch_known_failures::run_known_failures(
+        &crate::arch_known_failures::KnownFailuresRequest {
+            arches: string_array(arguments, "arch")?,
+            easystacks: path_array(arguments, "easystack")?,
+            easyconfigs: optional_paths(arguments, "easyconfigs")?,
+            installed: optional_path(arguments, "installed"),
+            known_failures: optional_path(arguments, "known_failures"),
+            eessi_version: optional_string(arguments, "eessi_version"),
+            easybuild_version: optional_string(arguments, "easybuild_version"),
+        },
+    )
+    .map_err(workflow_error)?;
+    Ok(json!({
+        "text": report.stdout,
+        "hits": report.hits,
     }))
 }
 

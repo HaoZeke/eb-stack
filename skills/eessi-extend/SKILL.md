@@ -294,6 +294,27 @@ The check uses `data/cuda-capabilities.toml`,
 `data/easyblock-cuda-capability-map.toml`. The how-to is
 `docs/orgmode/howto/cuda-compute-capabilities.org`.
 
+Then check the same easystack for failures a bot run has already seen on
+one target:
+
+```sh
+eb-stack stack known-failures \
+  --easystack easystacks/software.eessi.io/2026.06/eessi-2026.06-eb-5.4.1-2026.1.yml \
+  --easyconfigs "$EB_EASYCONFIGS" \
+  --installed installed-a64fx.txt \
+  --arch aarch64/a64fx
+```
+
+Each warning names the easyconfig, the targets, the symptom, a `remedy:`
+line with the easyconfig change (a `runtest` skip, a `preinstallopts`
+line, an `ARCH` conditional, or a pin), and the EESSI hook that applies
+it, if one does. Put the remedy in the easyconfig, or the warning in the
+pull request description, before the bot runs. Do not answer a known
+failure with a rerun. A `remedied:` line means a pin or the easyconfig
+already carries the fix. The command exits 0. The table is
+`data/arch-known-failures.toml`, and the how-to is
+`docs/orgmode/howto/arch-known-failures.org`.
+
 ## Contribution policy gates
 
 Per <https://eessi.io/docs/adding_software/contribution_policy>, before opening

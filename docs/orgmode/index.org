@@ -63,6 +63,7 @@
    *A patch the bot will not find?* → :doc:`howto/patch-presence`
    *An easystack entry outside its EESSI version's generations?* → :doc:`howto/generation-lint`
    *CUDA compute-capability mismatches in a plan?* → :doc:`howto/cuda-compute-capabilities`
+   *A test that fails on one architecture?* → :doc:`howto/arch-known-failures`
 
    *Dependency closure of one change?* → :doc:`explanation/sbom-blast-radius`
 
@@ -148,6 +149,7 @@
    howto/patch-presence
    howto/generation-lint
    howto/cuda-compute-capabilities
+   howto/arch-known-failures
 
 .. toctree::
    :maxdepth: 2
@@ -277,6 +279,7 @@ python3 -m json.tool /tmp/eon-inspect/package.sbom.cdx.json >/dev/null
     [[file:howto/patch-presence.org][find a missing patch before the bot does]].
     [[file:howto/generation-lint.org][refuse entries outside the EESSI version's generations]].
     [[file:howto/cuda-compute-capabilities.org][check CUDA compute-capability mismatches in a plan]].
+    [[file:howto/arch-known-failures.org][warn about known per-architecture failures]].
   - Reference: [[file:reference/cli.org][CLI]],
     [[file:reference/mcp.org][Model Context Protocol server]],
     [[file:reference/package-bundles.org][package bundles]],
