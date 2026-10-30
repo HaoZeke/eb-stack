@@ -1835,6 +1835,12 @@ fn package_plan_from_easyconfig(
 /// version constraint states what the package actually needs; when the plan
 /// carries one, that constraint is the one to keep.
 fn is_generation_retarget(source: &Toolchain, target: &Toolchain) -> bool {
+    // SYSTEM has one generation however its version is spelled: a recipe
+    // reads as `system/system` and `--toolchain system` as `system/`.
+    let system = |t: &Toolchain| t.name.eq_ignore_ascii_case("system");
+    if system(source) && system(target) {
+        return false;
+    }
     !source.name.eq_ignore_ascii_case(&target.name) || source.version != target.version
 }
 
@@ -2423,6 +2429,39 @@ pub enum PackageWorkflowError {
         /// Root it had to stay within.
         root: PathBuf,
     },
+}
+
+#[cfg(test)]
+mod retarget_tests {
+    use super::is_generation_retarget;
+    use crate::domain::Toolchain;
+
+    fn tc(name: &str, version: &str) -> Toolchain {
+        Toolchain {
+            name: name.into(),
+            version: version.into(),
+        }
+    }
+
+    #[test]
+    fn system_to_system_is_one_generation_however_it_is_spelled() {
+        assert!(!is_generation_retarget(
+            &tc("system", "system"),
+            &tc("system", "")
+        ));
+        assert!(!is_generation_retarget(
+            &tc("SYSTEM", ""),
+            &tc("system", "system")
+        ));
+        assert!(is_generation_retarget(
+            &tc("system", "system"),
+            &tc("GCCcore", "15.2.0")
+        ));
+        assert!(is_generation_retarget(
+            &tc("GCCcore", "14.3.0"),
+            &tc("GCCcore", "15.2.0")
+        ));
+    }
 }
 
 #[cfg(test)]
