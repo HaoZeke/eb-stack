@@ -75,6 +75,10 @@ pub enum BuildFindingClass {
     Test,
     /// The install step failed.
     Install,
+    /// EasyBuild refused to install software whose licence (an end user
+    /// license agreement) the configuration has not accepted. Accepting it is
+    /// the site's decision, never a repair.
+    License,
     /// EasyBuild's sanity check failed: it built but is not usable.
     Sanity,
     /// The job ran out of memory, disk, or another quota.
@@ -935,6 +939,21 @@ pub fn classify_build_failure(
     exit_code: Option<i32>,
 ) -> BuildFindingClass {
     let text = format!("{stage}\n{stdout}\n{stderr}").to_ascii_lowercase();
+    // EasyBuild wraps its messages at 80 columns, so a phrase can straddle a
+    // line break; the flattened text reads them whole.
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    // `--accept-eula-for` is only ever printed as the way out of this refusal.
+    let license_refused = flat.contains("end user license agreement (eula)")
+        && flat.contains("is currently not accepted")
+        || flat.contains("add --accept-eula-for=");
+    // The robot could not find a recipe or module for a dependency, before
+    // anything was built: `ERROR: Missing dependencies: Boost/1.92.0-gfbf-2026.1
+    // (no easyconfig file or existing module found)`. A PEP 517 backend that
+    // is not installed is the same gap one level down.
+    let unresolved_dependency = flat.contains("missing dependencies:")
+        || flat.contains("irresolvable dependencies encountered")
+        || flat.contains("no easyconfig file or existing module found")
+        || flat.contains("backendunavailable: cannot import");
     let missing_executable = text.contains("no such file or directory")
         && (text.contains("could not execute process")
             || text.contains("never executed")
@@ -977,6 +996,10 @@ pub fn classify_build_failure(
         || text.contains("killed signal terminated program")
     {
         BuildFindingClass::Resource
+    } else if license_refused {
+        BuildFindingClass::License
+    } else if unresolved_dependency {
+        BuildFindingClass::DependencyMissing
     } else if (text.contains("glibc_") && text.contains("not found")) || missing_executable {
         BuildFindingClass::Runtime
     } else if checksum_failure {
@@ -1003,6 +1026,8 @@ pub fn classify_build_failure(
         BuildFindingClass::Test
     } else if text.contains("sanity check failed") {
         BuildFindingClass::Sanity
+    } else if let Some(class) = easybuild_failed_step(&flat) {
+        class
     } else if text.contains("error:")
         || text.contains("compilation terminated")
         || stage.eq_ignore_ascii_case("build") && text.contains("make") && text.contains("***")
@@ -1017,6 +1042,36 @@ pub fn classify_build_failure(
     } else {
         BuildFindingClass::Unknown
     }
+}
+
+/// The class of the EasyBuild step a failed installation names:
+/// `FAILED: Installation ended unsuccessfully: shell command '...' failed with
+/// exit code 2 in install step for PuLP-4.2.0-foss-2026.1.eb`. EasyBuild's
+/// `ERROR:` banner is printed for a failure in any step, so it says nothing
+/// about compiling; the step does.
+fn easybuild_failed_step(flat: &str) -> Option<BuildFindingClass> {
+    const STEPS: &[(&str, BuildFindingClass)] = &[
+        ("fetch", BuildFindingClass::Source),
+        ("extract", BuildFindingClass::Source),
+        ("patch", BuildFindingClass::Patch),
+        ("configure", BuildFindingClass::Configure),
+        ("build", BuildFindingClass::Compile),
+        ("test", BuildFindingClass::Test),
+        ("install", BuildFindingClass::Install),
+        ("sanity check", BuildFindingClass::Sanity),
+        ("sanitycheck", BuildFindingClass::Sanity),
+    ];
+    let failure = flat.find("installation ended unsuccessfully")?;
+    let message = &flat[failure..];
+    STEPS
+        .iter()
+        .filter_map(|(step, class)| {
+            message
+                .find(&format!(" in {step} step"))
+                .map(|at| (at, *class))
+        })
+        .min_by_key(|(at, _)| *at)
+        .map(|(_, class)| class)
 }
 
 fn record_target_command_failure(

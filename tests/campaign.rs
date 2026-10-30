@@ -102,6 +102,110 @@ fn failure_classifier_preserves_the_build_error_domain() {
     }
 }
 
+/// EasyBuild 5.4.1 output recorded from EESSI 2026.06 builds, paths
+/// shortened. The robot stops before building anything.
+const MISSING_DEPENDENCY_OUTPUT: &str = "\
+== found valid index for
+/cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/amd/zen5/softwar
+e/EasyBuild/5.4.1/easybuild/easyconfigs, so using it...
+== Running parse hook for FFTW-3.3.10-GCC-15.2.0.eb...
+
+
+ERROR: Missing dependencies: Boost/1.92.0-gfbf-2026.1 (no easyconfig file or existing module found)
+
+== resolving dependencies ...
+== eb rc=31
+";
+
+/// A CUDA dependency refused at its fetch step, wrapped at 80 columns.
+const EULA_OUTPUT: &str = "\
+== processing EasyBuild easyconfig
+/build/easyconfigs/c/CUDA/CUDA
+-13.3.0.eb
+== building and installing CUDA/13.3.0...
+  >> installation prefix:
+/build/software/CUDA/13.3.0
+== fetching files and verifying checksums...
+== Running pre-fetch hook...
+== ... (took < 1 sec)
+== FAILED: Installation ended unsuccessfully: The End User License Agreement
+(EULA) for CUDA is currently not accepted!
+(see https://docs.nvidia.com/cuda/eula/index.html for more information)
+You should either:
+- add --accept-eula-for=CUDA to the 'eb' command;
+- update your EasyBuild configuration to always accept the EULA for CUDA;
+- add 'accept_eula = True' to the easyconfig file you are using;
+ (took 0 secs)
+== Results of the build can be found in the log file(s)
+/build/tmp/easybuild-CUDA-13.3.0-20261029.202708.tDYAy.log
+== Running post-easyblock hook...
+== Build succeeded for 0 out of 3 (total: 2 secs)
+== Summary:
+   * [FAILED]  CUDA/13.3.0
+   * [FAILED]  UCX-CUDA/1.20.0-GCCcore-15.2.0-CUDA-13.3.0
+   * [FAILED]  NCCL/2.32.3-GCCcore-15.2.0-CUDA-13.3.0
+== eb rc=1
+";
+
+/// A pip install that stopped in the install step; the `ERROR:` banner is
+/// EasyBuild's for any failed step.
+const INSTALL_STEP_OUTPUT: &str = "\
+== testing...
+== Running pre-test hook...
+== ... (took < 1 sec)
+== installing...
+
+
+ERROR: Shell command failed!
+    full command              ->
+/software/Python/3.14.2-GCCcore-15.2.0/bin/python -m pip install
+--prefix=/build/software/PuLP/4.2.0-foss-2026.1  --verbose --no-deps
+--ignore-installed --no-index --no-build-isolation .
+    exit code                 ->  2
+== ... (took 1 secs)
+== FAILED: Installation ended unsuccessfully: shell command 'python ...' failed
+with exit code 2 in install step for PuLP-4.2.0-foss-2026.1.eb (took 3 secs)
+== Summary:
+   * [FAILED]  PuLP/4.2.0-foss-2026.1
+== eb rc=1
+";
+
+#[test]
+fn a_missing_dependency_from_the_robot_is_not_a_compile_failure() {
+    assert_eq!(
+        classify_build_failure("build", MISSING_DEPENDENCY_OUTPUT, "", Some(31)),
+        BuildFindingClass::DependencyMissing
+    );
+    let backend = "pip._vendor.pyproject_hooks._impl.BackendUnavailable: Cannot import 'maturin'\nERROR: Shell command failed!";
+    assert_eq!(
+        classify_build_failure("build", backend, "", Some(1)),
+        BuildFindingClass::DependencyMissing
+    );
+}
+
+#[test]
+fn an_unaccepted_eula_is_a_license_finding_for_a_human() {
+    let class = classify_build_failure("build", EULA_OUTPUT, "", Some(1));
+    assert_eq!(class, BuildFindingClass::License);
+    assert_eq!(
+        serde_json::to_value(class).expect("class"),
+        serde_json::json!("license")
+    );
+}
+
+#[test]
+fn the_failed_easybuild_step_names_the_class() {
+    assert_eq!(
+        classify_build_failure("build", INSTALL_STEP_OUTPUT, "", Some(1)),
+        BuildFindingClass::Install
+    );
+    let configure = INSTALL_STEP_OUTPUT.replace("in install step", "in configure step");
+    assert_eq!(
+        classify_build_failure("build", &configure, "", Some(1)),
+        BuildFindingClass::Configure
+    );
+}
+
 #[test]
 fn campaign_interns_easybuild_command_output_before_classifying() {
     let temp = tempfile::tempdir().expect("tempdir");
